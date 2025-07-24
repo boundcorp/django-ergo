@@ -7,6 +7,19 @@ ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHON_VERSION=3.9.11
 ENV VENV_NAME=django-ergo_env
 
+# Update package list and install basic dependencies first
+RUN apt-get update && apt-get install -y \
+    wget \
+    gnupg \
+    lsb-release \
+    ca-certificates \
+    apt-transport-https \
+    && rm -rf /var/lib/apt/lists/*
+
+# Add PostgreSQL 17 repository
+RUN sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list' && \
+    wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | apt-key add -
+
 # Update package list and install system dependencies
 RUN apt-get update && apt-get install -y \
     python3 \
@@ -16,17 +29,12 @@ RUN apt-get update && apt-get install -y \
     build-essential \
     git \
     curl \
-    wget \
     vim \
     nano \
     tree \
     htop \
     unzip \
     software-properties-common \
-    apt-transport-https \
-    ca-certificates \
-    gnupg \
-    lsb-release \
     libssl-dev \
     libffi-dev \
     libreadline-dev \
@@ -39,9 +47,20 @@ RUN apt-get update && apt-get install -y \
     libxml2-dev \
     libxmlsec1-dev \
     liblzma-dev \
+    postgresql-17 \
+    postgresql-server-dev-17 \
+    postgresql-17-pgvector \
     && rm -rf /var/lib/apt/lists/*
 
+# Initialize PostgreSQL 17 and configure pgvector
+RUN mkdir -p /var/run/postgresql && chown -R postgres:postgres /var/run/postgresql && \
+    rm -rf /var/lib/postgresql/17/main && \
+    su - postgres -c "/usr/lib/postgresql/17/bin/initdb -D /var/lib/postgresql/17/main" && \
+    echo "host all  all    0.0.0.0/0  md5" >> /var/lib/postgresql/17/main/pg_hba.conf && \
+    echo "listen_addresses='*'" >> /var/lib/postgresql/17/main/postgresql.conf
+
 # Set up UV and Python environment for ubuntu user
+RUN usermod -aG sudo ubuntu
 USER ubuntu
 WORKDIR /home/ubuntu
 
@@ -82,8 +101,27 @@ RUN uv pip install \
     django-coverage-plugin \
     pytest-django
 
+# Create startup script for PostgreSQL and pgvector
+RUN echo '#!/bin/bash\n\
+# Start PostgreSQL service\n\
+sudo service postgresql start\n\
+\n\
+# Wait for PostgreSQL to be ready\n\
+until sudo -u postgres pg_isready -h localhost; do\n\
+  echo "Waiting for PostgreSQL to be ready..."\n\
+  sleep 1\n\
+done\n\
+\n\
+# Create default database and enable pgvector extension\n\
+sudo -u postgres createdb django_ergo 2>/dev/null || true\n\
+sudo -u postgres psql -d django_ergo -c "CREATE EXTENSION IF NOT EXISTS vector;" 2>/dev/null || true\n\
+\n\
+# Keep container running\n\
+exec "$@"' > /home/ubuntu/start.sh && \
+chmod +x /home/ubuntu/start.sh
+
 # Expose common development ports
 EXPOSE 8000 3000 5432 6379
 
 # Default command
-CMD ["/bin/bash"]
+CMD ["/home/ubuntu/start.sh", "/bin/bash"]
