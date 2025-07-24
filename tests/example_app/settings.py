@@ -66,10 +66,10 @@ DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.postgresql",
         "NAME": "django_ergo",
-        "USER": "postgres",
+        "USER": "ubuntu",
         "PASSWORD": "",
-        "HOST": "localhost",
-        "PORT": "5432",
+        "HOST": "",  # Empty string means Unix socket
+        "PORT": "",  # Empty string means default port
     }
 }
 
