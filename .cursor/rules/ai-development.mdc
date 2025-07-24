@@ -1,0 +1,172 @@
+# AI/ML Development Standards
+
+## Core AI Principles
+
+- Design for explainability and interpretability
+- Implement proper data validation and preprocessing
+- Handle uncertainty and confidence scoring
+- Use appropriate evaluation metrics
+- Document model assumptions and limitations
+- Plan for model versioning and updates
+
+## Knowledge Management
+
+- Structure knowledge in semantic, searchable formats
+- Implement proper indexing for fast retrieval
+- Use embeddings for semantic similarity when appropriate
+- Handle multilingual content gracefully
+- Implement proper knowledge graph relationships
+- Cache frequently accessed knowledge
+
+## Data Processing
+
+- Validate all input data before processing
+- Handle missing or corrupted data gracefully
+- Implement proper data pipelines with error handling
+- Use streaming for large datasets
+- Implement proper data versioning
+- Log data transformations for reproducibility
+
+## Model Integration
+
+- Abstract model interfaces for easy swapping
+- Implement proper model loading and caching
+- Handle model failures gracefully with fallbacks
+- Use async processing for expensive operations
+- Implement proper rate limiting for API calls
+- Monitor model performance and drift
+
+## Performance Optimization
+
+- Use batch processing where possible
+- Implement proper caching strategies
+- Use connection pooling for external services
+- Optimize database queries for knowledge retrieval
+- Implement proper pagination for large results
+- Use background tasks for heavy processing
+
+## Security & Privacy
+
+- Sanitize all user inputs
+- Implement proper access controls for knowledge
+- Use encryption for sensitive data
+- Audit knowledge access and modifications
+- Implement proper data retention policies
+- Handle PII appropriately
+
+## Testing AI Components
+
+- Test with diverse datasets
+- Implement regression tests for model outputs
+- Test edge cases and error conditions
+- Mock external AI services in tests
+- Test performance under load
+- Validate output quality metrics
+
+## Example
+
+<example>
+from __future__ import annotations
+
+import logging
+from typing import Optional, List, Dict, Any
+from dataclasses import dataclass
+from uuid import UUID
+
+logger = logging.getLogger(__name__)
+
+@dataclass
+class KnowledgeEntry:
+    """Structured knowledge entry with metadata."""
+    id: UUID
+    content: str
+    embedding: Optional[List[float]] = None
+    confidence: float = 0.0
+    tags: List[str] = None
+    source: Optional[str] = None
+    
+    def __post_init__(self):
+        if self.tags is None:
+            self.tags = []
+
+class KnowledgeRetriever:
+    """Retrieves relevant knowledge entries using semantic search."""
+    
+    def __init__(self, embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"):
+        self.embedding_model = embedding_model
+        self._cache: Dict[str, List[KnowledgeEntry]] = {}
+    
+    async def retrieve_similar(
+        self,
+        query: str,
+        limit: int = 10,
+        min_confidence: float = 0.5
+    ) -> List[KnowledgeEntry]:
+        """Retrieve knowledge entries similar to the query.
+        
+        Args:
+            query: Search query
+            limit: Maximum number of results
+            min_confidence: Minimum confidence threshold
+            
+        Returns:
+            List of relevant knowledge entries
+            
+        Raises:
+            ValueError: If query is empty
+            RuntimeError: If embedding model fails
+        """
+        if not query.strip():
+            raise ValueError("Query cannot be empty")
+        
+        try:
+            # Check cache first
+            cache_key = f"{query}:{limit}:{min_confidence}"
+            if cache_key in self._cache:
+                logger.debug(f"Cache hit for query: {query}")
+                return self._cache[cache_key]
+            
+            # Generate query embedding
+            query_embedding = await self._get_embedding(query)
+            
+            # Retrieve and rank entries
+            entries = await self._search_by_embedding(
+                query_embedding, limit, min_confidence
+            )
+            
+            # Cache results
+            self._cache[cache_key] = entries
+            
+            logger.info(f"Retrieved {len(entries)} entries for query: {query}")
+            return entries
+            
+        except Exception as e:
+            logger.error(f"Failed to retrieve knowledge for query '{query}': {e}")
+            raise RuntimeError(f"Knowledge retrieval failed: {e}") from e
+    
+    async def _get_embedding(self, text: str) -> List[float]:
+        """Generate embedding for text."""
+        # Implementation would use actual embedding model
+        return [0.1] * 384  # Placeholder
+    
+    async def _search_by_embedding(
+        self, 
+        embedding: List[float], 
+        limit: int, 
+        min_confidence: float
+    ) -> List[KnowledgeEntry]:
+        """Search knowledge base by embedding similarity."""
+        # Implementation would perform actual similarity search
+        return []  # Placeholder
+</example>
+
+<example type="invalid">
+# Avoid - no error handling, no typing, no caching, no logging
+def get_knowledge(query):
+    results = []
+    # Direct database query without optimization
+    for item in db.all():
+        if query in item.content:
+            results.append(item)
+    return results[:10]
+</example>

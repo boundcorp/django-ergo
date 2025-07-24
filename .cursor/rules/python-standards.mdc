@@ -1,0 +1,119 @@
+# Python Development Standards
+
+## Code Style
+
+- Follow PEP 8 style guidelines strictly
+- Use Black for code formatting (configured in pre-commit)
+- Use Ruff for linting (configured in pyproject.toml)
+- Maximum line length: 88 characters (Black default)
+- Use double quotes for strings consistently
+
+## Type Hints
+
+- Always use type hints for function parameters and return values
+- Use `from __future__ import annotations` for forward references
+- Use generic types from `typing` module appropriately
+- Use `Optional[T]` or `T | None` for nullable types
+- Use `Union` sparingly, prefer specific types
+
+## Function and Class Design
+
+- Write clear, descriptive docstrings using Google or NumPy style
+- Keep functions small and focused (single responsibility)
+- Use descriptive variable and function names
+- Prefer composition over inheritance
+- Use dataclasses for simple data containers
+
+## Error Handling
+
+- Use specific exception types, not generic `Exception`
+- Always handle exceptions at the appropriate level
+- Use context managers (`with` statements) for resource management
+- Log errors with appropriate levels
+- Provide meaningful error messages
+
+## Import Organization
+
+- Group imports: standard library, third-party, local
+- Use absolute imports over relative imports
+- Sort imports alphabetically within groups
+- Use `from __future__ import annotations` when needed
+
+## Testing Standards
+
+- Write tests for all public functions and methods
+- Use descriptive test method names
+- Follow AAA pattern: Arrange, Act, Assert
+- Use pytest fixtures for setup/teardown
+- Mock external dependencies
+
+## Performance Considerations
+
+- Use list comprehensions over loops when appropriate
+- Use generators for large datasets
+- Profile code before optimizing
+- Use appropriate data structures (set for membership tests, dict for lookups)
+
+## Example
+
+<example>
+from __future__ import annotations
+
+from typing import Optional
+from uuid import UUID
+
+class KnowledgeProcessor:
+    """Processes AI knowledge base entries."""
+    
+    def __init__(self, max_entries: int = 1000) -> None:
+        self.max_entries = max_entries
+        self._cache: dict[UUID, str] = {}
+    
+    def process_entry(
+        self, 
+        entry_id: UUID, 
+        content: str,
+        tags: Optional[list[str]] = None
+    ) -> dict[str, any]:
+        """Process a knowledge base entry.
+        
+        Args:
+            entry_id: Unique identifier for the entry
+            content: Entry content to process
+            tags: Optional list of tags
+            
+        Returns:
+            Processed entry data
+            
+        Raises:
+            ValueError: If content is empty
+        """
+        if not content.strip():
+            raise ValueError("Content cannot be empty")
+            
+        tags = tags or []
+        processed_content = self._clean_content(content)
+        
+        return {
+            "id": entry_id,
+            "content": processed_content,
+            "tags": tags,
+            "word_count": len(processed_content.split())
+        }
+    
+    def _clean_content(self, content: str) -> str:
+        """Clean and normalize content."""
+        return content.strip().lower()
+</example>
+
+<example type="invalid">
+# Avoid - no type hints, poor naming, no docstrings
+def proc(data, x=None):
+    if not data:
+        return None
+    result = {}
+    result['data'] = data.strip()
+    if x:
+        result['x'] = x
+    return result
+</example>

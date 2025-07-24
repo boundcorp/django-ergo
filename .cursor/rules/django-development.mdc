@@ -1,0 +1,89 @@
+# Django Development Standards
+
+## Core Principles
+
+- Follow Django's "Convention over Configuration" philosophy
+- Use Django's built-in features before creating custom solutions
+- Maintain backward compatibility with Django 4.2+ as specified in pyproject.toml
+- Follow Django's security best practices
+- Use Django's ORM efficiently to avoid N+1 queries
+
+## Model Guidelines
+
+- Always inherit from appropriate base classes (TimeStampedMixin is already available)
+- Use UUIDField as primary key for new models (following existing pattern)
+- Define `__str__` methods for all models
+- Use proper field types and constraints
+- Add model-level validation when appropriate
+- Use related_name for foreign keys to avoid conflicts
+
+## View Guidelines
+
+- Use class-based views for complex logic
+- Use function-based views for simple operations
+- Always handle exceptions gracefully
+- Use Django's built-in authentication and permissions
+- Return appropriate HTTP status codes
+- Use Django's pagination for list views
+
+## Settings Management
+
+- Use the existing namespaced settings pattern (DJANGO_ERGO)
+- Define defaults in DEFAULTS dictionary
+- Use IMPORT_STRINGS for importable settings
+- Document removed settings in REMOVED_SETTINGS
+- Use environment variables for sensitive data
+
+## URL Configuration
+
+- Use meaningful URL names
+- Group related URLs using include()
+- Use path() over url() (Django 2.0+ style)
+- Follow RESTful conventions where appropriate
+
+## Testing
+
+- Write tests for all models, views, and utilities
+- Use Django's TestCase or TransactionTestCase
+- Mock external dependencies
+- Test both success and failure scenarios
+- Maintain the current 97% coverage standard
+
+## Code Quality
+
+- Follow PEP 8 style guidelines
+- Use type hints for function parameters and return values
+- Write docstrings for all public methods and classes
+- Use Django's built-in validators
+- Handle migrations properly
+
+## Example
+
+<example>
+# Good Django model
+class KnowledgeBase(TimeStampedMixin):
+    """AI Knowledge base entry."""
+    
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    title = models.CharField(max_length=255, help_text="Knowledge base title")
+    content = models.TextField(help_text="Main content")
+    tags = models.ManyToManyField('Tag', blank=True, related_name='knowledge_bases')
+    
+    class Meta:
+        ordering = ['-created']
+        verbose_name = "Knowledge Base Entry"
+        verbose_name_plural = "Knowledge Base Entries"
+    
+    def __str__(self):
+        return self.title
+</example>
+
+<example type="invalid">
+# Avoid - missing proper inheritance, no UUID, poor naming
+class kb(models.Model):
+    name = models.CharField(max_length=50)  # Too short
+    data = models.TextField()  # Vague field name
+    # Missing __str__ method
+    # No help_text
+    # No proper primary key
+</example>

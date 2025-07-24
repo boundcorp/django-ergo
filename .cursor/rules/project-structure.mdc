@@ -1,0 +1,145 @@
+# Project Structure Standards
+
+## Package Layout
+
+- Follow Python package best practices with src/ layout
+- Use pyproject.toml for modern Python packaging
+- Maintain clear separation between source code and configuration
+- Keep tests in separate directory structure
+- Use requirements/ directory for dependency management
+
+## Django App Structure
+
+```
+src/django_ergo/
+├── __init__.py          # Package initialization
+├── apps.py              # Django app configuration
+├── models.py            # Data models
+├── views.py             # View logic
+├── urls.py              # URL routing
+├── admin.py             # Django admin configuration
+├── settings.py          # App-specific settings
+├── utils.py             # Utility functions
+├── mixins.py            # Reusable model/view mixins
+├── migrations/          # Database migrations
+├── static/              # Static files
+└── templates/           # Django templates
+```
+
+## Configuration Files
+
+- `pyproject.toml` - Primary project configuration
+- `Makefile` - Development commands and automation
+- `.pre-commit-config.yaml` - Code quality automation
+- `requirements/` - Dependency management by environment
+- `.editorconfig` - Editor consistency
+- `conftest.py` - Test configuration
+
+## Directory Organization
+
+- `src/` - Source code (follows src layout pattern)
+- `tests/` - Test files mirroring src structure
+- `requirements/` - Environment-specific dependencies
+- `.cursor/` - Cursor AI configuration and rules
+- `docs/` - Documentation (when added)
+
+## File Naming Conventions
+
+- Use snake_case for Python files and directories
+- Use descriptive names that indicate purpose
+- Group related functionality in modules
+- Use `__init__.py` for package/module initialization
+- Prefix private modules with underscore when appropriate
+
+## Import Organization
+
+- Use absolute imports from package root
+- Group imports: standard library, third-party, local
+- Use `from django_ergo import ...` for internal imports
+- Avoid circular imports through careful module design
+- Use `__all__` to control public API
+
+## Settings Architecture
+
+- Use namespaced settings (DJANGO_ERGO)
+- Provide sensible defaults in DEFAULTS dict
+- Support string import notation for classes
+- Document removed settings for migration guidance
+- Use environment variables for deployment-specific config
+
+## Migration Strategy
+
+- Keep migrations focused and atomic
+- Test migrations with realistic data
+- Document complex migrations
+- Use RunPython for data migrations when needed
+- Maintain backward compatibility
+
+## Static Files Organization
+
+```
+static/django_ergo/
+├── css/
+├── js/
+├── images/
+└── fonts/
+```
+
+## Template Organization
+
+```
+templates/django_ergo/
+├── base.html
+├── components/
+└── pages/
+```
+
+## Example
+
+<example>
+# Good project structure additions
+src/django_ergo/
+├── ai/
+│   ├── __init__.py
+│   ├── models.py          # AI-specific models
+│   ├── embeddings.py      # Embedding utilities
+│   └── knowledge.py       # Knowledge management
+├── api/
+│   ├── __init__.py
+│   ├── serializers.py     # DRF serializers
+│   ├── views.py           # API views
+│   └── urls.py            # API URLs
+└── management/
+    └── commands/
+        ├── __init__.py
+        └── import_knowledge.py  # Custom management command
+
+# Good import structure
+from __future__ import annotations
+
+import uuid
+from typing import Optional, List
+
+from django.db import models
+from django.contrib.auth import get_user_model
+
+from django_ergo.mixins import TimeStampedMixin
+from django_ergo.ai.embeddings import generate_embedding
+
+User = get_user_model()
+</example>
+
+<example type="invalid">
+# Avoid - poor organization, mixing concerns
+src/django_ergo/
+├── everything.py          # Monolithic file
+├── stuff/                 # Vague naming
+│   └── things.py          # Unclear purpose
+└── temp_file.py           # Temporary files in source
+
+# Avoid - poor imports
+import *  # Wildcard imports
+from django_ergo.models import MyModel
+from django_ergo.ai.models import AIModel  # Circular import risk
+from ..utils import helper  # Relative imports
+</example>
