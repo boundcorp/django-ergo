@@ -10,10 +10,11 @@
   - Add proper database migrations and indexes
 
 - [ ] **Workflow Engine Improvements**
-  - Rewrite WorkflowEngine for better error handling and recovery
-  - Implement workflow state persistence and resumption
-  - Add workflow execution metrics and monitoring
-  - Create workflow configuration validation
+  - Implement OpenAI agent context serialization to ChatMessage for pause/resume
+  - Create tool approval system with "approved tools" vs "ask tools" (default: ask)
+  - Build approval workflow: save context → fire event → wait for approval → resume
+  - Add tool whitelisting mechanism for apps to approve specific tools
+  - Implement workflow state persistence and resumption capabilities
 
 - [ ] **Tool System Enhancement**
   - Design declarative tool configuration system
@@ -22,11 +23,18 @@
   - Create tool registry with automatic discovery
 
 ### Knowledge Management
-- [ ] **Search Performance**
-  - Optimize hybrid search implementation
-  - Add search result caching layer
-  - Implement search analytics and logging
-  - Create search performance benchmarks
+- [ ] **Pluggable Embedding System**
+  - Create abstract embedding provider interface
+  - Implement OpenAI embeddings provider (default)
+  - Add settings-based provider switching mechanism
+  - Support custom embeddings loading (like test fixtures)
+  - Build both on-demand and background task embedding generation
+
+- [ ] **Knowledge Base Management**
+  - Design flatfile export/import system for agentic processing
+  - Create utilities for KB create/update/diff/build operations
+  - Optimize hybrid search implementation with caching
+  - Build knowledge base dumping and restoration tools
 
 - [ ] **Content Processing**
   - Enhance document ingestion pipeline
@@ -44,11 +52,11 @@
 ## Feature Development (Medium Priority)
 
 ### MCP Integration
-- [ ] **MCP Protocol Implementation**
-  - Implement MCP client for tool discovery
-  - Create MCP server to expose Ergo capabilities
-  - Add MCP tool registration and management
-  - Ensure MCP protocol compliance
+- [ ] **MCP Tool Utilities** 
+  - Create reusable MCP tool classes for knowledge base search (search_user_kb, search_garden_kb, etc.)
+  - Build utilities for exporting these as REST endpoints
+  - Create helper functions for Django apps to build their own MCP servers
+  - Document patterns for common MCP server compositions (2-3 knowledgebases)
 
 - [ ] **Agent Development Tools**
   - Create agent builder interface

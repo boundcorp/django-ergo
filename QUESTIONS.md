@@ -2,29 +2,32 @@
 
 ## Architecture & Design Questions
 
-### 1. Model Context Protocol (MCP) Integration
-- **Q**: What specific MCP tools should Django Ergo expose as a server? Should we focus on knowledge search, workflow execution, or both?
-- **Q**: How deep should the MCP integration go? Should users be able to discover and install MCP tools dynamically, or start with a curated set?
-- **Q**: Should Django Ergo act as both MCP client and server, or focus on one role initially?
-- **Q**: How do we handle MCP tool authentication and permissions in a multi-user Django context?
+### 1. Model Context Protocol (MCP) Integration ✅ RESOLVED
+- **DECISION**: Ergo provides reusable tools for Django app authors to build their own MCP servers
+- **DECISION**: Focus on utilities like search_user_kb, search_grower_kb, etc. that export as REST endpoints
+- **DECISION**: Apps handle auth/permissions, framework provides the utilities
+- **DECISION**: Framework provides MCP server building blocks, apps compose their own servers
 
-### 2. Knowledge Base Architecture
-- **Q**: The prototype uses hexadecimal hierarchy codes - is this the best approach for v1.0, or should we consider alternatives like nested sets or materialized paths?
-- **Q**: How should we handle knowledge base versioning and change tracking? Should we implement git-like versioning?
-- **Q**: What's the optimal strategy for embedding generation - on-demand, background tasks, or real-time with caching?
-- **Q**: Should we support multiple embedding models (OpenAI, local models, etc.) and let users choose based on privacy/cost preferences?
+### 2. Knowledge Base Architecture ✅ PARTIALLY RESOLVED
+- **DECISION**: Easy-to-manage KB that can be dumped to flatfiles and managed by agentic processes
+- **DECISION**: No versioning initially (avoid complexity)
+- **DECISION**: Pluggable embeddings - users can bring their own, settings-based provider switching (OpenAI default)
+- **DECISION**: Support both on-demand embedding and background tasks
+- **DECISION**: Allow loading custom embeddings (like test fixtures)
+- **Q**: Hierarchy organization - should we keep hexadecimal codes or use alternative structure?
 
-### 3. Workflow Engine Design
-- **Q**: Should workflows be defined in Python code, YAML configuration files, or a visual workflow builder interface?
-- **Q**: How complex should workflow state management be? Do we need full state machines or simpler progress tracking?
-- **Q**: Should we support workflow versioning so users can A/B test different agent approaches?
-- **Q**: What's the right abstraction level for tools - should they be Python functions, classes, or something more declarative?
+### 3. Workflow Engine Design ✅ RESOLVED
+- **DECISION**: Workflows defined in Python code
+- **DECISION**: Serialize OpenAI agent context and save to ChatMessage for resume/continue capability
+- **DECISION**: Tool approval system: "approved tools" vs "ask tools" (default: ask)
+- **DECISION**: Tool approval flow: save context → fire generic event → wait for user approval → resume
+- **DECISION**: Apps can whitelist/approve specific tools to skip approval process
 
-### 4. Multi-tenancy & Permissions
-- **Q**: How granular should permissions be? Per-knowledgebase, per-workflow, per-tool, or all of the above?
-- **Q**: Should we support organization-level accounts with team collaboration features, or focus on individual users initially?
-- **Q**: How do we handle shared knowledge bases while maintaining privacy for personal content?
-- **Q**: What's the right approach for handling enterprise features like SSO and compliance?
+### 4. Multi-tenancy & Permissions ✅ RESOLVED
+- **DECISION**: Permissions managed by the apps, not the framework
+- **DECISION**: App builders decide which users can use which knowledgebases
+- **DECISION**: App builders decide which users can update/ingest into which knowledgebases
+- **DECISION**: Framework provides the tools, apps implement the permission logic
 
 ## Technical Implementation Questions
 

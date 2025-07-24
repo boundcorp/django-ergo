@@ -82,12 +82,12 @@ Showcases multi-tier knowledge architecture with:
 4. **Search Performance** - Optimize hybrid search and add caching
 5. **Public API Design** - Create clean, documented APIs
 
-### Questions Requiring Decision (from QUESTIONS.md)
-1. **MCP Integration Depth** - How comprehensive should MCP support be initially?
-2. **Database Strategy** - PostgreSQL-only or support multiple databases?
-3. **LLM Provider Support** - Which providers to support out of the box?
-4. **Deployment Strategy** - PyPI package, Docker images, or hosted SaaS?
-5. **Target Audience** - Optimize for developers or end-users?
+### Key Architectural Decisions Made ✅
+1. **MCP Integration** - Ergo provides reusable tools for Django apps to build their own MCP servers (search_user_kb, search_garden_kb, etc.)
+2. **Embeddings** - Pluggable system with OpenAI default, settings-based switching, custom embeddings support
+3. **Workflows** - Python-based with OpenAI agent context serialization and tool approval system (approved vs ask tools)
+4. **Knowledge Bases** - Easy flatfile export/import for agentic processing, no versioning initially
+5. **Permissions** - Managed by apps, not framework - apps decide user access patterns
 
 ## Architecture Recommendations
 
@@ -98,11 +98,11 @@ Showcases multi-tier knowledge architecture with:
 - Preserve extensible tool system architecture
 
 ### Strategic Enhancements for v1.0
-- **MCP Integration**: Full Model Context Protocol support for tool discovery
-- **Performance Optimization**: Multi-level caching and query optimization
-- **Security Framework**: Tool sandboxing and fine-grained permissions
-- **Developer Tools**: Django management commands and admin enhancements
-- **Documentation**: Comprehensive API docs and tutorials
+- **MCP Tool Utilities**: Reusable tools for Django apps to build MCP servers with utilities like search_user_kb
+- **Pluggable Embeddings**: Provider interface with OpenAI default, settings switching, custom embeddings support
+- **Workflow Context Management**: OpenAI agent serialization with tool approval system (approved vs ask tools)
+- **Knowledge Base Tools**: Flatfile export/import for agentic processing with create/update/diff/build utilities
+- **Performance Optimization**: Multi-level caching and efficient embedding generation
 
 ## Success Metrics
 

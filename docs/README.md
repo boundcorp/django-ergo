@@ -15,6 +15,14 @@ Comprehensive analysis of the existing prototype in `old-code-inspiration/`, inc
 - Strengths and areas for improvement
 - Recommendations for v1.0 direction
 
+#### [ARCHITECTURE_DECISIONS.md](../ARCHITECTURE_DECISIONS.md)
+Key architectural decisions made for Django Ergo v1.0:
+- MCP integration strategy (reusable tools for Django apps)
+- Pluggable embedding system with OpenAI default
+- Workflow engine with context serialization and tool approval
+- Knowledge base management for agentic processing
+- App-level permissions model
+
 #### [ROADMAP.md](../ROADMAP.md)
 Strategic roadmap for Django Ergo v1.0 development:
 - 6-phase development plan over 24 weeks

@@ -100,14 +100,14 @@ This document analyzes the existing prototype architecture found in the `old-cod
 
 ## Recommended v1.0 Direction
 
-Based on this analysis, Django Ergo v1.0 should:
+Based on this analysis and stakeholder input, Django Ergo v1.0 should:
 
 1. **Preserve Core Architecture**: Keep the workflow engine, tool system, and knowledge management approach
-2. **Improve APIs**: Create clean, documented public APIs for all major components
-3. **Enhance Configuration**: Move to declarative configuration for workflows and tools
-4. **Add Monitoring**: Built-in logging, metrics, and debugging capabilities
-5. **Strengthen Security**: Proper permission system for tool execution
-6. **Performance Optimization**: Efficient embedding generation and caching
-7. **Better Testing**: Comprehensive test suite and development tools
+2. **MCP Integration**: Provide reusable tools for Django apps to build their own MCP servers with utilities like search_user_kb, search_garden_kb
+3. **Pluggable Embeddings**: Support multiple embedding providers with settings-based switching, custom embeddings, and both on-demand/background generation
+4. **Workflow Context Management**: Implement OpenAI agent context serialization for pause/resume capabilities with tool approval system
+5. **Knowledge Base Tools**: Easy flatfile export/import for agentic processing with create/update/diff/build utilities
+6. **App-Level Permissions**: Framework provides tools, apps handle permissions and access control
+7. **Performance Optimization**: Efficient embedding generation and caching
 
 The prototype demonstrates a solid architectural foundation that can support the envisioned personal goals tracking and garden management applications while providing the flexibility needed for diverse use cases.

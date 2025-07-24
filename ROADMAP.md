@@ -39,14 +39,14 @@ Django Ergo v1.0 will be a production-ready Django library for building AI-power
   - Better error handling for embedding failures
 
 #### 1.2 Workflow Engine v2
-- [ ] **Core Engine**: Rewrite workflow engine with improved architecture
-  - Better error handling and recovery
-  - Workflow state persistence
-  - Improved async support
-- [ ] **Tool System v2**: 
-  - Declarative tool configuration
-  - Enhanced permission system
-  - Tool validation and sandboxing
+- [ ] **Context Serialization**: Implement OpenAI agent context serialization to ChatMessage
+  - Enable pause/resume workflows at any point
+  - Maintain conversation state across sessions
+  - Support workflow interruption and continuation
+- [ ] **Tool Approval System**: 
+  - "Approved tools" vs "ask tools" (default: ask)
+  - Save context → fire event → wait for approval → resume flow
+  - Tool whitelisting mechanism for apps
 - [ ] **Multi-Agent Support**: 
   - Agent handoff improvements
   - State management between agents
@@ -60,7 +60,14 @@ Django Ergo v1.0 will be a production-ready Django library for building AI-power
 
 ### Phase 2: Knowledge Management Enhancement (Weeks 5-8)
 
-#### 2.1 Advanced Search
+#### 2.1 Pluggable Embedding System
+- [ ] **Embedding Provider Interface**: Abstract interface for different embedding providers
+- [ ] **OpenAI Provider**: Default OpenAI embeddings implementation
+- [ ] **Settings-Based Switching**: Configure embedding provider through Django settings
+- [ ] **Custom Embeddings**: Support loading custom embeddings (like test fixtures)
+- [ ] **Background Tasks**: Both on-demand and background embedding generation
+
+#### 2.2 Advanced Search
 - [ ] **Hybrid Search v2**: Improve search performance and relevance
 - [ ] **Search Analytics**: Track search patterns and performance
 - [ ] **Faceted Search**: Support for filtering and categorization
@@ -75,19 +82,19 @@ Django Ergo v1.0 will be a production-ready Django library for building AI-power
 - [ ] **Automatic Categorization**: ML-based content classification
 - [ ] **Duplicate Detection**: Prevent duplicate content ingestion
 
-#### 2.3 Knowledge Organization
-- [ ] **Improved Hierarchy**: Better hierarchy management
-- [ ] **Tagging System**: Support for tags and categories
+#### 2.3 Knowledge Base Management
+- [ ] **Flatfile Export/Import**: Easy dumping and restoration for agentic processing
+- [ ] **KB Utilities**: Create/update/diff/build operations for knowledge bases
+- [ ] **Agentic Integration**: Tools for agents to manage and reorganize knowledge bases
 - [ ] **Content Relationships**: Links and references between articles
-- [ ] **Version Control**: Track changes to knowledge content
 
 ### Phase 3: MCP Integration (Weeks 9-12)
 
-#### 3.1 MCP Protocol Support
-- [ ] **MCP Client**: Implement MCP client for tool discovery
-- [ ] **MCP Server**: Expose Ergo capabilities as MCP server
-- [ ] **Tool Registration**: Dynamic tool discovery and registration
-- [ ] **Protocol Validation**: Ensure MCP compliance
+#### 3.1 MCP Tool Utilities
+- [ ] **Reusable MCP Tools**: Create utilities like search_user_kb, search_garden_kb for Django apps
+- [ ] **REST Endpoint Builders**: Tools for exporting MCP capabilities as REST endpoints
+- [ ] **MCP Server Helpers**: Utilities for Django apps to build their own MCP servers
+- [ ] **Documentation**: Patterns for common MCP server compositions (2-3 knowledgebases)
 
 #### 3.2 Workflow Integration
 - [ ] **MCP Workflows**: Workflows that use MCP tools
