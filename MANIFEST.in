@@ -1,0 +1,8 @@
+include AUTHORS.md
+include HISTORY.md
+include LICENSE
+include README.md
+
+# recursive-include requirements/ *.txt
+
+# recursive-include src/django_ergo/data/ *.toml

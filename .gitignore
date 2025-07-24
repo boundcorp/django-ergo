@@ -1,0 +1,34 @@
+# System
+*.DS_Store
+.python-version
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+
+# Editor
+.vscode/
+
+# Environments
+.env
+.venv
+env/
+venv/
+
+# Django stuff
+*.log
+db.sqlite3
+
+# Testing leftovers
+.coverage
+.ruff_cache/
+.tox/
+htmlcov/
+
+# Project Specific
+node_modules/

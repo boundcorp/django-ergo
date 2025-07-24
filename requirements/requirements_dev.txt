@@ -1,0 +1,14 @@
+twine  # https://github.com/pypa/twine
+wheel  # https://github.com/pypa/wheel
+build  # https://github.com/pypa/build
+
+# Django
+# ------------------------------------------------------------------------------
+# Bare minimum requirements to provide us similar env to Cookiecutter Django.
+django>=4.2.9,<5.0  # https://github.com/django/django
+django-environ  # https://github.com/joke2k/django-environ
+django-extensions  # https://github.com/django-extensions/django-extensions
+
+# X Studios
+# ------------------------------------------------------------------------------
+pip-freezer  # https://github.com/tsantor/pip-freezer
