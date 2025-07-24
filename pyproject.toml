@@ -36,7 +36,24 @@ Changelog = "https://github.com/boundcorp/django-ergo/blob/master/HISTORY.md"
 # django_ergo = "django_ergo.cli:run"
 
 [project.optional-dependencies]
-dev = []
+dev = [
+    "twine",
+    "wheel", 
+    "build",
+    "django>=4.2.9,<5.0",
+    "django-environ",
+    "django-extensions",
+    "pip-freezer",
+    "pytest",
+    "pytest-mock",
+    "ruff",
+    "coverage",
+    "djlint",
+    "pre-commit",
+    "factory-boy",
+    "django-coverage-plugin",
+    "pytest-django",
+]
 
 [tool.setuptools.packages.find]
 # https://setuptools.pypa.io/en/latest/userguide/datafiles.html

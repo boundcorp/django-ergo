@@ -28,7 +28,7 @@ venv=django-ergo_env
 # -----------------------------------------------------------------------------
 
 env:  ## Create virtual environment
-	pyenv virtualenv ${python_version} ${venv} && pyenv local ${venv}
+	uv venv && make pip_install
 
 env_remove:  ## Remove virtual environment
 	pyenv uninstall -f ${venv}
@@ -46,9 +46,9 @@ pyenv_rehash:	## Rehash pyenv
 # -----------------------------------------------------------------------------
 
 pip_install:  ## Install requirements
-	python3 -m pip install --upgrade pip
+	uv pip install --upgrade pip
 	@for file in $$(ls requirements/*.txt); do \
-			python3 -m pip install -r $$file; \
+			uv pip install -r $$file; \
 	done
 	pre-commit install
 
