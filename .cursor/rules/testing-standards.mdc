@@ -1,0 +1,212 @@
+# Testing Standards
+
+## Testing Philosophy
+
+- Maintain 97% code coverage as current standard
+- Write tests before or alongside code (TDD approach)
+- Test behavior, not implementation details
+- Use descriptive test names that explain the scenario
+- Test both happy path and edge cases
+- Mock external dependencies to ensure test isolation
+
+## Test Structure
+
+- Follow AAA pattern: Arrange, Act, Assert
+- Use pytest as the primary testing framework
+- Group related tests in classes when appropriate
+- Use fixtures for common setup and teardown
+- Keep tests independent and deterministic
+- Use parametrized tests for multiple scenarios
+
+## Django Testing
+
+- Use Django's TestCase for database-dependent tests
+- Use TransactionTestCase for transaction testing
+- Use SimpleTestCase for non-database tests
+- Test models, views, forms, and utilities separately
+- Use Django's test client for integration tests
+- Test migrations when they contain data transformations
+
+## Test Coverage
+
+- Aim for 97% coverage across all modules
+- Test all public methods and functions
+- Test error conditions and exception handling
+- Test edge cases and boundary conditions
+- Use coverage reports to identify untested code
+- Exclude only truly untestable code from coverage
+
+## Mocking and Fixtures
+
+- Mock external API calls and services
+- Use pytest fixtures for reusable test data
+- Create factory functions for model instances
+- Mock time-dependent functionality
+- Use context managers for temporary state changes
+- Mock file system operations in tests
+
+## Performance Testing
+
+- Test performance-critical code paths
+- Use timing assertions for performance requirements
+- Test with realistic data volumes
+- Profile tests that run slowly
+- Use database query counting for ORM efficiency
+- Test caching behavior
+
+## AI/ML Testing
+
+- Test with diverse and representative datasets
+- Validate model outputs within expected ranges
+- Test error handling for model failures
+- Mock expensive AI operations in unit tests
+- Test data preprocessing and validation
+- Verify embedding generation and similarity calculations
+
+## Example
+
+<example>
+import pytest
+from unittest.mock import Mock, patch
+from django.test import TestCase
+from django.core.exceptions import ValidationError
+from uuid import uuid4
+
+from django_ergo.models import MyModel
+from django_ergo.utils import KnowledgeProcessor
+
+
+class TestMyModel(TestCase):
+    """Test cases for MyModel."""
+    
+    def setUp(self):
+        """Set up test data."""
+        self.model_data = {
+            'name': 'Test Knowledge Entry',
+        }
+    
+    def test_create_model_success(self):
+        """Test successful model creation."""
+        # Arrange
+        name = "Test Entry"
+        
+        # Act
+        model = MyModel.objects.create(name=name)
+        
+        # Assert
+        assert model.id is not None
+        assert model.name == name
+        assert str(model) == name
+        assert model.created is not None
+    
+    def test_model_str_representation(self):
+        """Test model string representation."""
+        # Arrange
+        model = MyModel(name="Test Name")
+        
+        # Act & Assert
+        assert str(model) == "Test Name"
+    
+    @pytest.mark.parametrize("invalid_name", [
+        "",  # Empty string
+        "a" * 256,  # Too long
+        None,  # None value
+    ])
+    def test_create_model_invalid_name(self, invalid_name):
+        """Test model creation with invalid names."""
+        # Arrange
+        data = self.model_data.copy()
+        data['name'] = invalid_name
+        
+        # Act & Assert
+        with pytest.raises(ValidationError):
+            model = MyModel(**data)
+            model.full_clean()
+
+
+class TestKnowledgeProcessor:
+    """Test cases for KnowledgeProcessor."""
+    
+    @pytest.fixture
+    def processor(self):
+        """Create a KnowledgeProcessor instance."""
+        return KnowledgeProcessor(max_entries=100)
+    
+    @pytest.fixture
+    def sample_entry(self):
+        """Create sample entry data."""
+        return {
+            'entry_id': uuid4(),
+            'content': 'This is test content',
+            'tags': ['test', 'sample']
+        }
+    
+    def test_process_entry_success(self, processor, sample_entry):
+        """Test successful entry processing."""
+        # Act
+        result = processor.process_entry(**sample_entry)
+        
+        # Assert
+        assert result['id'] == sample_entry['entry_id']
+        assert result['content'] == sample_entry['content'].strip().lower()
+        assert result['tags'] == sample_entry['tags']
+        assert result['word_count'] == 4
+    
+    def test_process_entry_empty_content_raises_error(self, processor):
+        """Test that empty content raises ValueError."""
+        # Arrange
+        entry_data = {
+            'entry_id': uuid4(),
+            'content': '   ',  # Only whitespace
+            'tags': []
+        }
+        
+        # Act & Assert
+        with pytest.raises(ValueError, match="Content cannot be empty"):
+            processor.process_entry(**entry_data)
+    
+    def test_process_entry_no_tags_defaults_to_empty_list(self, processor):
+        """Test that missing tags defaults to empty list."""
+        # Arrange
+        entry_data = {
+            'entry_id': uuid4(),
+            'content': 'Test content'
+        }
+        
+        # Act
+        result = processor.process_entry(**entry_data)
+        
+        # Assert
+        assert result['tags'] == []
+    
+    @patch('django_ergo.utils.external_api_call')
+    def test_process_with_external_service_mock(self, mock_api, processor):
+        """Test processing with mocked external service."""
+        # Arrange
+        mock_api.return_value = {'status': 'success'}
+        entry_data = {
+            'entry_id': uuid4(),
+            'content': 'Test content'
+        }
+        
+        # Act
+        result = processor.process_entry(**entry_data)
+        
+        # Assert
+        assert result is not None
+        mock_api.assert_called_once()
+</example>
+
+<example type="invalid">
+# Avoid - poor test structure, no assertions, unclear names
+def test_model():
+    m = MyModel()
+    m.name = "test"
+    # No assertions
+    
+def test_processor():
+    p = KnowledgeProcessor()
+    result = p.process_entry("test")
+    # No proper setup or assertions
+    # Missing required parameters
+</example>

@@ -1,0 +1,140 @@
+# Code Quality Standards
+
+## Development Tools
+
+- Use pre-commit hooks for automated code quality checks
+- Configure Ruff for fast Python linting
+- Use Black for consistent code formatting
+- Use prettier for JSON, YAML, and Markdown formatting
+- Run django-upgrade to maintain modern Django patterns
+- Use mypy for static type checking
+
+## Pre-commit Configuration
+
+- Run all checks before commits
+- Exclude migration files and docs from most checks
+- Use consistent Python version (3.11) across tools
+- Include security checks (detect-private-key)
+- Format configuration files (JSON, YAML, TOML)
+- Check for common issues (trailing whitespace, large files)
+
+## Code Formatting
+
+- Use Black with 88-character line length
+- Use double quotes for strings consistently
+- Group imports: standard library, third-party, local
+- Sort imports alphabetically within groups
+- Use trailing commas in multi-line structures
+- Format docstrings consistently
+
+## Linting Standards
+
+- Fix all Ruff errors and warnings
+- Use type hints for all function signatures
+- Follow PEP 8 naming conventions
+- Avoid unused imports and variables
+- Use f-strings for string formatting
+- Prefer pathlib over os.path for file operations
+
+## Documentation Standards
+
+- Write docstrings for all public classes and functions
+- Use Google or NumPy docstring format
+- Include type information in docstrings
+- Document complex algorithms and business logic
+- Keep README and documentation up to date
+- Use meaningful variable and function names
+
+## Performance Standards
+
+- Profile code before optimizing
+- Use appropriate data structures
+- Avoid premature optimization
+- Cache expensive computations when appropriate
+- Use database query optimization
+- Monitor memory usage for large datasets
+
+## Security Standards
+
+- Validate all user inputs
+- Use parameterized queries to prevent SQL injection
+- Store secrets in environment variables
+- Use HTTPS for all external communications
+- Implement proper authentication and authorization
+- Log security-relevant events
+
+## Makefile Targets
+
+- Provide consistent development commands
+- Use virtual environments (uv venv)
+- Include database management commands
+- Provide testing and coverage commands
+- Include deployment and build commands
+- Document all available targets
+
+## Example
+
+<example>
+# Good pyproject.toml configuration
+[tool.ruff]
+target-version = "py38"
+line-length = 88
+select = [
+    "E",  # pycodestyle errors
+    "W",  # pycodestyle warnings
+    "F",  # pyflakes
+    "I",  # isort
+    "B",  # flake8-bugbear
+    "C4", # flake8-comprehensions
+    "UP", # pyupgrade
+]
+ignore = [
+    "E501",  # line too long (handled by black)
+    "B008",  # do not perform function calls in argument defaults
+]
+
+[tool.ruff.per-file-ignores]
+"__init__.py" = ["F401"]  # Allow unused imports in __init__.py
+"tests/**/*.py" = ["B011"]  # Allow assert False in tests
+
+[tool.black]
+line-length = 88
+target-version = ['py38', 'py39', 'py310', 'py311']
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+  migrations/
+  | venv/
+  | .venv/
+)/
+'''
+
+[tool.coverage.run]
+source = "src"
+omit = [
+    "*/migrations/*",
+    "*/tests/*",
+    "*/venv/*",
+    "manage.py",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+]
+</example>
+
+<example type="invalid">
+# Avoid - inconsistent configuration, missing tools
+[tool.ruff]
+# No target version specified
+line-length = 120  # Different from Black
+select = ["E", "W"]  # Too minimal
+
+# Missing Black configuration
+# Missing coverage configuration
+# No per-file ignores for different needs
+</example>
