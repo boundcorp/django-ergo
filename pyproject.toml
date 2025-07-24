@@ -53,6 +53,7 @@ dev = [
     "factory-boy",
     "django-coverage-plugin",
     "pytest-django",
+    "psycopg2-binary",
 ]
 
 [tool.setuptools.packages.find]
