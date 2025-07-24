@@ -34,6 +34,7 @@ RUN apt-get update && apt-get install -y \
     tree \
     htop \
     unzip \
+    sudo \
     software-properties-common \
     libssl-dev \
     libffi-dev \
