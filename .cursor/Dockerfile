@@ -61,7 +61,8 @@ RUN mkdir -p /var/run/postgresql && chown -R postgres:postgres /var/run/postgres
     echo "listen_addresses='*'" >> /var/lib/postgresql/17/main/postgresql.conf
 
 # Set up UV and Python environment for ubuntu user
-RUN usermod -aG sudo ubuntu
+RUN usermod -aG sudo ubuntu && \
+    echo "ubuntu ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers.d/ubuntu
 USER ubuntu
 WORKDIR /home/ubuntu
 
