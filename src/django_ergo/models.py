@@ -4,10 +4,10 @@ from typing import Optional, List, Dict, Any
 
 from django.db import models
 from django.contrib.auth import get_user_model
-# from pgvector.django import VectorField, CosineDistance
+from pgvector.django import VectorField, CosineDistance
 
 from django_ergo.mixins import TimeStampedMixin
-# from django_ergo.fields import SummarizedVectorField, generate_embedding
+from django_ergo.fields import SemanticTextField, semantic_search, vector_search, generate_embedding
 
 User = get_user_model()
 
@@ -114,36 +114,126 @@ class Knowledgebase(TimeStampedMixin):
 
 
 class ArticleQuerySet(models.QuerySet):
-    """Custom QuerySet for Article model with search capabilities."""
+    """Custom QuerySet for Article model with advanced semantic search capabilities."""
     
-    def hybrid_search(self, query_text: str, top_k: int = 10):
+    def semantic_search_content(self, query_text: str, top_k: int = 10):
         """
-        Perform a hybrid search combining PostgreSQL full-text and embedding similarity.
-        
-        For SQLite development, this is simplified to text search only.
+        Perform semantic search on article content.
         
         Args:
             query_text: User's search query
             top_k: Number of results to return
             
         Returns:
-            QuerySet: Top-k relevant results, balanced between text and semantic search.
+            QuerySet: Results ordered by semantic similarity to content
         """
-        # For SQLite development - simple text search
-        return (
-            self.filter(
-                models.Q(title__icontains=query_text) |
-                models.Q(content__icontains=query_text) |
-                models.Q(summary__icontains=query_text)
-            )[:top_k]
+        return SemanticTextField.search_field(
+            self.model, 'content', query_text, top_k
         )
+    
+    def semantic_search_summary(self, query_text: str, top_k: int = 10):
+        """
+        Perform semantic search on article summaries.
         
-        # For PostgreSQL with pgvector (commented out for dev):
-        # embedding = generate_embedding(query_text)
-        # return (
-        #     self.annotate(semantic_distance=CosineDistance("embedding", embedding))
-        #     .order_by("semantic_distance")[:top_k]
-        # )
+        Args:
+            query_text: User's search query
+            top_k: Number of results to return
+            
+        Returns:
+            QuerySet: Results ordered by semantic similarity to summary
+        """
+        return SemanticTextField.search_field(
+            self.model, 'summary', query_text, top_k
+        )
+    
+    def multi_field_semantic_search(self, query_text: str, top_k: int = 10, weights=None):
+        """
+        Perform semantic search across multiple fields with optional weighting.
+        
+        Args:
+            query_text: User's search query
+            top_k: Number of results to return
+            weights: Dict with field weights, e.g. {'content': 0.7, 'summary': 0.3}
+            
+        Returns:
+            QuerySet: Combined results from multiple semantic fields
+        """
+        if weights is None:
+            weights = {'content': 0.6, 'summary': 0.4}
+            
+        # Generate embedding using the modular function
+        query_vector = generate_embedding(query_text)
+        
+        # Use the modular approach for weighted search
+        return self.multi_field_vector_search(query_vector, top_k, weights)
+    
+    def multi_field_vector_search(self, query_vector: List[float], top_k: int = 10, weights=None):
+        """
+        Perform vector search across multiple fields with optional weighting using a pre-computed vector.
+        
+        Args:
+            query_vector: Pre-computed embedding vector
+            top_k: Number of results to return
+            weights: Dict with field weights, e.g. {'content': 0.7, 'summary': 0.3}
+            
+        Returns:
+            QuerySet: Combined results from multiple semantic fields
+        """
+        if weights is None:
+            weights = {'content': 0.6, 'summary': 0.4}
+        
+        # Build weighted semantic distance calculation
+        content_distance = CosineDistance("content_embedding", query_vector) * weights.get('content', 0.6)
+        summary_distance = CosineDistance("summary_embedding", query_vector) * weights.get('summary', 0.4)
+        
+        return (
+            self.exclude(content_embedding__isnull=True, summary_embedding__isnull=True)
+            .annotate(
+                content_distance=content_distance,
+                summary_distance=summary_distance,
+                combined_distance=content_distance + summary_distance
+            )
+            .order_by("combined_distance")[:top_k]
+        )
+    
+    def vector_search_content(self, query_vector: List[float], top_k: int = 10):
+        """
+        Perform low-level vector search on article content using a pre-computed vector.
+        
+        Args:
+            query_vector: Pre-computed embedding vector
+            top_k: Number of results to return
+            
+        Returns:
+            QuerySet: Results ordered by semantic similarity to content
+        """
+        return vector_search(self.model, 'content_embedding', query_vector, top_k)
+    
+    def vector_search_summary(self, query_vector: List[float], top_k: int = 10):
+        """
+        Perform low-level vector search on article summaries using a pre-computed vector.
+        
+        Args:
+            query_vector: Pre-computed embedding vector
+            top_k: Number of results to return
+            
+        Returns:
+            QuerySet: Results ordered by semantic similarity to summary
+        """
+        return vector_search(self.model, 'summary_embedding', query_vector, top_k)
+    
+    def hybrid_search(self, query_text: str, top_k: int = 10):
+        """
+        Legacy hybrid search method - now uses multi-field semantic search.
+        
+        Args:
+            query_text: User's search query
+            top_k: Number of results to return
+            
+        Returns:
+            QuerySet: Top-k relevant results using multi-field semantic search
+        """
+        return self.multi_field_semantic_search(query_text, top_k)
 
     def by_hierarchy_prefix(self, prefix: str):
         """Get articles by hierarchy code prefix."""
@@ -155,6 +245,7 @@ class ArticleQuerySet(models.QuerySet):
             {
                 "title": article.title,
                 "content": article.content,
+                "summary": article.summary,
                 "hierarchy_code": article.hierarchy_code,
                 "id": str(article.id),
             }
@@ -185,10 +276,10 @@ class Article(TimeStampedMixin):
         help_text="The hierarchy code of the article, e.g. '012' (0th chapter, 1st section, 2nd sub-section) or 'C3' (12th chapter, 3rd sub-section)"
     )
     title = models.CharField(max_length=512)
-    content = models.TextField()  # Simplified for SQLite
-    # content = SummarizedVectorField()  # For PostgreSQL
-    # embedding = VectorField(dimensions=1536, null=True, editable=False)  # For PostgreSQL
-    summary = models.TextField(null=True, blank=True)
+    content = SemanticTextField(help_text="Main article content")
+    content_embedding = VectorField(dimensions=1536, null=True, blank=True, editable=False, help_text="Auto-generated embedding for content")
+    summary = SemanticTextField(null=True, blank=True, help_text="Article summary")
+    summary_embedding = VectorField(dimensions=1536, null=True, blank=True, editable=False, help_text="Auto-generated embedding for summary")
 
     objects = ArticleQuerySet.as_manager()
 

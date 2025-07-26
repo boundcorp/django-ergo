@@ -62,23 +62,23 @@ WSGI_APPLICATION = "tests.example_app.wsgi.application"
 # Database
 # https://docs.djangoproject.com/en/1.9/ref/settings/#databases
 
-# Use SQLite for development
+# Use PostgreSQL with pgvector for production features
 DATABASES = {
     "default": {
-        "ENGINE": "django.db.backends.sqlite3",
-        "NAME": BASE_DIR.parent / "db.sqlite3",
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": "django_ergo",
+        "USER": "ubuntu",
+        "PASSWORD": "",
+        "HOST": "",  # Empty string means Unix socket
+        "PORT": "",  # Empty string means default port
     }
 }
 
-# For PostgreSQL with pgvector (commented out for dev)
+# SQLite for development (switched to PostgreSQL)
 # DATABASES = {
 #     "default": {
-#         "ENGINE": "django.db.backends.postgresql",
-#         "NAME": "django_ergo",
-#         "USER": "ubuntu",
-#         "PASSWORD": "",
-#         "HOST": "",  # Empty string means Unix socket
-#         "PORT": "",  # Empty string means default port
+#         "ENGINE": "django.db.backends.sqlite3",
+#         "NAME": BASE_DIR.parent / "db.sqlite3",
 #     }
 # }
 
