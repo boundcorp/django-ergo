@@ -5,6 +5,24 @@
 
 set -e
 
+# Create log file with timestamp
+LOG_FILE="/workspace/.cursor/startup.log"
+mkdir -p "$(dirname "$LOG_FILE")"
+
+# Function to log with timestamp
+log_with_timestamp() {
+    while IFS= read -r line; do
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] $line" | tee -a "$LOG_FILE"
+    done
+}
+
+# Redirect all output to both terminal and log file
+exec > >(log_with_timestamp)
+exec 2>&1
+
+echo "🚀 Django-ergo startup script started"
+echo "📝 Logging to: $LOG_FILE"
+
 echo "🚀 Starting postgres..."
 sudo service postgresql start
 echo "🚀 Waiting for postgres to be ready..."
