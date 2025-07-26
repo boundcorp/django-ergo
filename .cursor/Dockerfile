@@ -6,6 +6,7 @@ ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHON_VERSION=3.9.11
 ENV VENV_NAME=django-ergo_env
+ENV VIRTUAL_ENV=/home/ubuntu/.venv
 
 # Update package list and install basic dependencies first
 RUN apt-get update && apt-get install -y \
@@ -80,6 +81,7 @@ RUN export VENV_ROOT="/home/ubuntu/.venv" && \
 RUN echo 'export PATH="/home/ubuntu/.local/bin:$PATH"' >> ~/.bashrc && \
     echo 'export PYTHONPATH="/home/ubuntu:$PYTHONPATH"' >> ~/.bashrc && \
     echo 'export VENV_ROOT="/home/ubuntu/.venv"' >> ~/.bashrc && \
+    echo 'export VIRTUAL_ENV="/home/ubuntu/.venv"' >> ~/.bashrc && \
     echo 'export PATH="$VENV_ROOT/bin:$PATH"' >> ~/.bashrc
 
 # Upgrade pip and install wheel
@@ -105,46 +107,5 @@ RUN uv pip install \
     pytest-django \
     psycopg2-binary
 
-# Create startup script for PostgreSQL and pgvector
-RUN echo '#!/bin/bash\n\
-# Start PostgreSQL service\n\
-sudo service postgresql start\n\
-\n\
-# Wait for PostgreSQL to be ready\n\
-until sudo -u postgres pg_isready -h localhost; do\n\
-  echo "Waiting for PostgreSQL to be ready..."\n\
-  sleep 1\n\
-done\n\
-\n\
-# Configure PostgreSQL authentication for local connections\n\
-sudo bash -c "cat > /var/lib/postgresql/17/main/pg_hba.conf << EOF\n\
-# TYPE  DATABASE        USER            ADDRESS                 METHOD\n\
-local   all             all                                     trust\n\
-host    all             all             127.0.0.1/32            trust\n\
-host    all             all             ::1/128                 trust\n\
-host    all             all             0.0.0.0/0               md5\n\
-EOF"\n\
-\n\
-# Restart PostgreSQL to apply config changes\n\
-sudo service postgresql restart\n\
-\n\
-# Wait for PostgreSQL to be ready again\n\
-until sudo -u postgres pg_isready; do\n\
-  echo "Waiting for PostgreSQL to restart..."\n\
-  sleep 1\n\
-done\n\
-\n\
-# Create ubuntu superuser and database\n\
-sudo -u postgres createuser --superuser ubuntu 2>/dev/null || true\n\
-createdb django_ergo 2>/dev/null || true\n\
-psql -d django_ergo -c "CREATE EXTENSION IF NOT EXISTS vector;" 2>/dev/null || true\n\
-\n\
-# Keep container running\n\
-exec "$@"' > /home/ubuntu/start.sh && \
-chmod +x /home/ubuntu/start.sh
-
 # Expose common development ports
 EXPOSE 8000 3000 5432 6379
-
-# Default command
-CMD ["/home/ubuntu/start.sh", "/bin/bash"]

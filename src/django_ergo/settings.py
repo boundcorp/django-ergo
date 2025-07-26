@@ -4,7 +4,7 @@ DJANGO_ERGO setting. For example your project's
 `settings.py` file might look like this:
 
 DJANGO_ERGO = {
-    "MY_MODEL": "django_ergo.models.MyModel"
+    "WORKFLOW_MODEL": "django_ergo.models.Workflow"
 }
 
 This module provides the `api_settings` object, that is used to access
@@ -17,14 +17,13 @@ from django.test.signals import setting_changed
 from django.utils.module_loading import import_string
 
 DEFAULTS = {
-    "MY_MODEL": "django_ergo.models.MyModel",  # example only
-    "FOO": "bar",  # example only
+    "WORKFLOW_MODEL": "django_ergo.models.Workflow",  # example only
 }
 
 
 # List of settings that may be in string import notation.
 IMPORT_STRINGS = [
-    "MY_MODEL",  # example only as it will be imported as a class
+    "WORKFLOW_MODEL",  # example only as it will be imported as a class
 ]
 
 

@@ -114,6 +114,12 @@ coverage_skip:  ## Run tests with coverage and skip covered
 open_coverage:  ## Open coverage report
 	open htmlcov/index.html
 
+build_devcontainer:
+	docker build -t django-ergo-test -f .cursor/Dockerfile .
+
+test_coverage_in_devcontainer: ## Build container and run tests with coverage using start.sh
+	docker run --rm -v $(shell pwd):/workspace -w /workspace django-ergo-test /bin/bash -c 'bash .cursor/start.sh && export PATH="/home/ubuntu/.local/bin:$$PATH" && export VENV_ROOT="/home/ubuntu/.venv" && export PATH="$$VENV_ROOT/bin:$$PATH" && export COVERAGE_FILE="/tmp/.coverage" && pytest -v --ds=tests.example_app.settings --cov=src/django_ergo --cov-report=html:/tmp/htmlcov && echo "✅ Tests completed! Copying coverage report..." && cp -r /tmp/htmlcov /workspace/ 2>/dev/null || true'
+
 # -----------------------------------------------------------------------------
 # Ruff
 # -----------------------------------------------------------------------------

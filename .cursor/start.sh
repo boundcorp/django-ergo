@@ -13,7 +13,6 @@ until sudo -u postgres pg_isready -h localhost; do
   sleep 1
 done
 
-
 echo "🚀 Setting up django-ergo project..."
 
 # Ensure we're in the project directory
@@ -22,29 +21,32 @@ if [ ! -f "manage.py" ]; then
     exit 1
 fi
 
-# Activate virtual environment if not already active
-if [[ "$VIRTUAL_ENV" == "" ]]; then
-    echo "📦 Activating virtual environment..."
-    source ~/.bashrc
-    eval "$(pyenv init -)"
-    pyenv activate django-ergo_env || pyenv local django-ergo_env
-fi
+# Set up environment for uv and virtual environment
+echo "📦 Setting up environment..."
+export PATH="/home/ubuntu/.local/bin:$PATH"
+export VENV_ROOT="/home/ubuntu/.venv"
+export PATH="$VENV_ROOT/bin:$PATH"
+export PYTHONPATH="/workspace/src:$PYTHONPATH"
 
-# Install project in editable mode
-echo "📦 Installing project in editable mode..."
-python3 -m pip install -e .
+# Clean up any problematic coverage files
+echo "🧹 Cleaning up coverage files..."
+rm -f /workspace/.coverage* /workspace/htmlcov/* 2>/dev/null || true
+
+# Install test dependencies directly without editable install
+echo "📦 Installing test dependencies..."
+uv pip install pytest pytest-django pytest-cov coverage django psycopg2-binary
 
 # Install pre-commit hooks
 echo "🔧 Installing pre-commit hooks..."
-pre-commit install
+pre-commit install || echo "⚠️ Pre-commit install failed, continuing..."
 
 # Run migrations
 echo "🗄️ Running database migrations..."
-python3 manage.py migrate
+python manage.py migrate --settings=tests.example_app.settings
 
 # Create superuser if it doesn't exist
 echo "👤 Creating superuser (if needed)..."
-python3 manage.py shell -c "
+python manage.py shell --settings=tests.example_app.settings -c "
 from django.contrib.auth import get_user_model
 User = get_user_model()
 if not User.objects.filter(is_superuser=True).exists():
@@ -54,12 +56,9 @@ else:
     print('Superuser already exists')
 "
 
-# Run tests to verify setup
-echo "🧪 Running tests to verify setup..."
-python3 -m pytest -vx
-
 echo "✅ Setup complete! You can now:"
-echo "  - Run tests: make pytest"
-echo "  - Start server: make serve"
-echo "  - Run linting: make ruff_check"
-echo "  - Format code: make ruff_format" 
+echo "  - Run tests: pytest -v --ds=tests.example_app.settings"
+echo "  - Run tests with coverage: pytest -v --ds=tests.example_app.settings --cov=src/django_ergo --cov-report=html"
+echo "  - Start server: python manage.py runserver --settings=tests.example_app.settings"
+echo "  - Run linting: ruff check ."
+echo "  - Format code: ruff format ."

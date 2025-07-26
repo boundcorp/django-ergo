@@ -16,15 +16,12 @@ jobs:
       
     - name: Build Docker container
       run: |
-        docker build -t django-ergo-test -f .cursor/Dockerfile .
+        make build_devcontainer
+
         
     - name: Run tests with coverage in container
       run: |
-        docker run --rm -v ${{ github.workspace }}:/workspace -w /workspace django-ergo-test /bin/bash -c '
-          bash .cursor/start.sh
-          echo "Running tests with coverage..."
-          pytest -v --ds=tests.example_app.settings --cov=tests.example_app --cov-report=html
-          '
+        make test_coverage_in_devcontainer
 
     - name: Upload coverage reports
       uses: actions/upload-artifact@v4
