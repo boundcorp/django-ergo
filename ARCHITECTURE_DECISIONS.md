@@ -66,7 +66,7 @@ This document captures the key architectural decisions made for Django Ergo v1.0
 - Framework provides the tools, apps implement permission logic
 - No built-in permission system at the Ergo level
 
-**Rationale**: Different applications have vastly different permission needs. A personal goals app has different requirements than a multi-tenant garden management system. Apps are better positioned to implement appropriate permissions.
+**Rationale**: Different applications have vastly different permission needs. A single-user productivity app has different requirements than a multi-tenant collaborative system. Apps are better positioned to implement appropriate permissions.
 
 ## Implementation Priorities
 

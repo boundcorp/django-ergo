@@ -2,135 +2,168 @@
 
 ## Overview
 
-This documentation provides a comprehensive guide for Django Ergo v1.0 development, including architectural analysis, roadmaps, product specifications, and development guidelines.
+This documentation provides a comprehensive guide for Django Ergo v1.0 development, including architectural decisions, current status, development tasks, and product specifications.
 
-## Document Structure
+## 📋 Core Project Documents
 
-### Core Planning Documents
+### Current Status & Planning
+- **[STATUS.md](../STATUS.md)** - 🚨 **SINGLE SOURCE OF TRUTH** for current project state
+- **[TODO.md](../TODO.md)** - Streamlined development tasks organized by priority
+- **[HISTORY.md](../HISTORY.md)** - Project evolution with actual git history and milestones
+- **[QUESTIONS.md](../QUESTIONS.md)** - Active questions needing decisions (cleaned up)
 
-#### [ARCHITECTURE_ANALYSIS.md](../ARCHITECTURE_ANALYSIS.md)
-Comprehensive analysis of the existing prototype in `old-code-inspiration/`, including:
-- Core models and architecture patterns
-- Key features and technical approach
-- Strengths and areas for improvement
-- Recommendations for v1.0 direction
+### Architecture & Decisions
+- **[ARCHITECTURE_ANALYSIS.md](../ARCHITECTURE_ANALYSIS.md)** - Analysis of prototype and architectural foundation
+- **[ARCHITECTURE_DECISIONS.md](../ARCHITECTURE_DECISIONS.md)** - Key architectural decisions made for v1.0
+- **[ROADMAP.md](../ROADMAP.md)** - 24-week strategic development roadmap
 
-#### [ARCHITECTURE_DECISIONS.md](../ARCHITECTURE_DECISIONS.md)
-Key architectural decisions made for Django Ergo v1.0:
-- MCP integration strategy (reusable tools for Django apps)
-- Pluggable embedding system with OpenAI default
-- Workflow engine with context serialization and tool approval
-- Knowledge base management for agentic processing
-- App-level permissions model
+### Product Specifications
+- **[Personal Goals App](product/personal-goals-app.md)** - AI-powered personal productivity system
+- **[Garden Management App](product/garden-management-app.md)** - Multi-tier garden knowledge system
 
-#### [ROADMAP.md](../ROADMAP.md)
-Strategic roadmap for Django Ergo v1.0 development:
-- 6-phase development plan over 24 weeks
-- Detailed milestones and deliverables
-- Success metrics and risk mitigation
-- Post-v1.0 considerations
+## 🎯 Quick Start Guide
 
-#### [TODO.md](../TODO.md)
-Comprehensive task lists organized by priority:
-- Immediate next steps (High Priority)
-- Feature development (Medium Priority)
-- Technical debt and maintenance (Lower Priority)
-- Research and experimentation (Future)
+### For New Contributors
+1. **Read [STATUS.md](../STATUS.md)** - Understand current project state
+2. **Check [TODO.md](../TODO.md)** - Find tasks matching your expertise  
+3. **Review [ARCHITECTURE_ANALYSIS.md](../ARCHITECTURE_ANALYSIS.md)** - Understand the foundation
+4. **Ask questions** - Add to [QUESTIONS.md](../QUESTIONS.md) if anything is unclear
 
-#### [QUESTIONS.md](../QUESTIONS.md)
-Open questions requiring clarification or further discussion:
-- Architecture and design decisions
-- Technical implementation choices
-- Product and user experience considerations
-- Business and community strategy
+### For Development
+```bash
+# Get started immediately
+python manage.py runserver
+# Visit http://127.0.0.1:8000/admin/ (admin/admin123)
 
-### Product Documentation
+# Key commands
+make pytest          # Run tests
+make migrations      # Create migrations
+make coverage        # Test coverage
+```
 
-#### [Personal Goals Tracking App](product/personal-goals-app.md)
-Complete product specification for a personal goals tracking application:
-- AI-powered coaching and accountability
-- Personal and global knowledge bases
-- Workflow definitions and tool implementations
-- User experience design and success metrics
+## 📚 Recently Consolidated (January 2025)
 
-#### [Garden Management Software](product/garden-management-app.md)
-Comprehensive specification for garden management software:
-- Multi-tier knowledge base system (system/garden/personal)
-- Garden planning, plant care, and harvest optimization workflows
-- Advanced AI tools for problem diagnosis and planning
-- IoT integration and community features
+### What Changed ✅
+- **Removed redundancy**: Deleted `PROGRESS_SUMMARY.md` and `SUMMARY.md` 
+- **Created [STATUS.md](../STATUS.md)**: New single source of truth for project state
+- **Cleaned [QUESTIONS.md](../QUESTIONS.md)**: Moved resolved questions to archive, focused on active decisions
+- **Streamlined [TODO.md](../TODO.md)**: Reduced from 299 lines to focused actionable tasks
+- **Updated [HISTORY.md](../HISTORY.md)**: Added actual project evolution and git history
 
-### Development Guidelines
+### Key Insights from Consolidation
+The project had accumulated extensive documentation that wasn't being actively maintained or referenced. The consolidation focused on:
+- **Reducing cognitive overhead** while maintaining useful context
+- **Creating clear entry points** for new contributors
+- **Focusing on actively used documents** rather than generating context for LLMs
+- **Maintaining historical decisions** while emphasizing current priorities
 
-#### [Project Organization Rules](../.cursor/rules/project-organization.md)
-Guidelines for maintaining project organization and workflow:
-- Living documents approach and maintenance rules
-- Task management workflow and priorities
-- Development practices and quality standards
-- Future agent onboarding and contribution guidelines
+## 🏗️ Architecture Highlights
 
-## Key Insights from Analysis
+### Core Strengths (Preserved from Prototype)
+- **Self-contained workflow engine** without external agent library dependencies
+- **Multi-tenant design** with owner-based knowledge bases for scalability
+- **Hybrid search system** combining PostgreSQL full-text and vector similarity
+- **Extensible tool system** with function decorators and automatic discovery
+- **Django-native integration** using ORM patterns and conventions
 
-### Architectural Strengths
-1. **Self-Contained Design**: No hard dependencies on external agent frameworks
-2. **Django Integration**: Deep integration with Django ORM and patterns
-3. **Multi-Tenant Architecture**: Owner-based knowledge bases for scalability
-4. **Hybrid Search**: Combines PostgreSQL full-text and vector similarity search
-5. **Extensible Tool System**: Function decorators and registry-based tool management
+### v1.0 Enhancements (Decided)
+- **MCP Integration**: Reusable tools for Django apps to build MCP servers
+- **Pluggable Embeddings**: Provider interface with OpenAI default, custom embeddings support
+- **Workflow Context Management**: OpenAI agent serialization with pause/resume and tool approval
+- **Knowledge Base Tools**: Flatfile export/import for agentic processing
+- **App-level Permissions**: Framework provides tools, apps handle permissions
+- **Database**: PostgreSQL only with pgvector for embeddings
+- **LLM Provider**: OpenAI only for v1.0
 
-### Recommended v1.0 Focus Areas
-1. **Clean APIs**: Well-documented public APIs for all major components
-2. **MCP Integration**: Full Model Context Protocol support for tool discovery
-3. **Performance**: Optimized embedding generation and search caching
-4. **Security**: Tool execution sandboxing and permission systems
-5. **Developer Experience**: Comprehensive documentation and examples
+## 📋 Current Development Phase
 
-### Example Application Strategy
-The two example applications demonstrate Django Ergo's capabilities across different domains:
-- **Personal Goals App**: Single-user knowledge base with coaching workflows
-- **Garden Management**: Multi-tier knowledge system with environmental data integration
+### Phase 3: Production Features (Current)
+**Goal**: Making the system production-ready with real embeddings, OpenAI integration, and public APIs.
 
-Both applications showcase the power of combining AI workflows with domain-specific knowledge management.
+**Immediate Priorities**:
+1. **PostgreSQL + pgvector** - Enable real semantic search
+2. **OpenAI Integration** - Configure real API usage  
+3. **REST APIs** - Design and implement public APIs
 
-## Development Approach
+**Previous Completed Phases**:
+- ✅ **Phase 1**: Prototype Analysis - Understanding existing architecture
+- ✅ **Phase 2**: Foundation Building - Core models, tools, and admin interface
 
-### Living Documents Methodology
-This project uses a living documents approach where documentation evolves alongside development:
-- **TODO.md** tracks all development tasks with priorities
-- **QUESTIONS.md** captures decisions requiring stakeholder input
-- **ROADMAP.md** provides strategic direction and milestones
-- **ARCHITECTURE_ANALYSIS.md** records architectural decisions and rationale
+## 🧪 Testing & Quality Status
 
-### Collaborative Development
-Future agents and contributors should:
-1. Read ARCHITECTURE_ANALYSIS.md to understand the foundation
-2. Review ROADMAP.md for current development phase
-3. Check TODO.md for available tasks
-4. Add questions to QUESTIONS.md when clarification is needed
-5. Update documents as work progresses
+### Current Implementation
+- **Dual-tier OpenAI testing**: Test mode (free) + production mode (real API)
+- **6 working tools**: Knowledge base search and management tools
+- **Sample data**: 2 knowledge bases, 6 articles, 1 workflow
+- **Admin interface**: Full Django admin with custom views
 
-## Getting Started
+### Quality Metrics
+- **Models**: 5 core models implemented and tested
+- **Tool Registry**: 6 tools discovered and working correctly
+- **Test Coverage**: Basic functionality verified, expanding toward 90%
+- **Development Speed**: ~2 hours for complete foundation implementation
 
-For developers beginning work on Django Ergo:
+## 🔧 Development Infrastructure
 
-1. **Understand the Foundation**: Review ARCHITECTURE_ANALYSIS.md
-2. **Know the Direction**: Study ROADMAP.md for the current phase
-3. **Pick Up Tasks**: Check TODO.md for work matching your expertise
-4. **Ask Questions**: Use QUESTIONS.md for anything unclear
-5. **Follow Guidelines**: Use .cursor/rules/ for development standards
+### Environment Setup
+- **Container**: Complete Dockerfile with Ubuntu 24.04 + Python 3.9.11
+- **Dependencies**: All requirements via UV package manager
+- **Database**: SQLite (development) → PostgreSQL + pgvector (production)
+- **Tools**: Ruff, pytest, coverage, pre-commit hooks configured
 
-## Success Metrics
+### AI Development Rules
+- **Cursor Configuration**: Complete setup in `.cursor/` with development standards
+- **Testing Strategy**: Dual-tier OpenAI testing to balance cost and coverage
+- **Code Quality**: Automated formatting, linting, and testing pipeline
+
+## 📈 Success Metrics & Targets
 
 ### Technical Goals
-- Sub-100ms average response time for simple queries
-- 99.9% uptime for core services
-- Support for 1M+ articles per knowledge base
-- 90%+ code test coverage
+- **Performance**: Sub-100ms average response time for simple queries
+- **Reliability**: 99.9% uptime for core services  
+- **Scalability**: Support for 1M+ articles per knowledge base
+- **Test Coverage**: 90%+ code coverage maintained
 
 ### Adoption Goals
-- Complete API documentation with examples
-- At least 3 complete example applications
-- 100+ GitHub stars, 10+ contributors
-- 50+ production deployments
+- **Documentation**: Complete API documentation with practical examples
+- **Examples**: At least 3 complete example applications demonstrating capabilities
+- **Community**: 100+ GitHub stars, 10+ active contributors
+- **Usage**: 50+ production deployments across different use cases
 
-This documentation structure provides a comprehensive foundation for building Django Ergo v1.0 while maintaining flexibility to adapt based on user feedback and changing requirements.
+## 🚀 Future Vision
+
+Django Ergo v1.0 will provide Django developers with powerful building blocks for creating intelligent, knowledge-aware applications. The system balances:
+
+- **Flexibility** for diverse use cases vs **sensible defaults** for quick starts
+- **Powerful AI capabilities** vs **predictable, reliable behavior**
+- **Sophisticated features** vs **Django-native simplicity**
+- **Framework approach** vs **complete platform solution**
+
+The goal is to make it easy for Django developers to add AI-powered knowledge management to their applications without requiring deep AI expertise.
+
+---
+
+## 📞 Quick Reference
+
+### Essential Links
+- **[STATUS.md](../STATUS.md)** - Current state and next steps
+- **[TODO.md](../TODO.md)** - Available tasks and priorities
+- **Admin Interface**: http://127.0.0.1:8000/admin/ (admin/admin123)
+
+### Key Commands
+```bash
+# Development
+make serve                           # Start development server
+make pytest                          # Run tests  
+make coverage                        # Test coverage
+python manage.py create_sample_data  # Generate sample data
+
+# Quality
+make ruff_check                      # Code linting
+make ruff_format                     # Code formatting
+make migrations                      # Create Django migrations
+```
+
+---
+
+*This documentation is actively maintained and reflects the current state of Django Ergo development. Last updated: January 2025*

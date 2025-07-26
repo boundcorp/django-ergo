@@ -1,299 +1,162 @@
-# Django Ergo TODO Lists
+# Django Ergo - Development Tasks
 
-## ✅ COMPLETED TASKS (Latest Session)
+## 🎯 IMMEDIATE NEXT STEPS (Current Sprint)
 
-### Core Architecture ✅
-- [x] **Migrate Models from Prototype** ✅ COMPLETED
-  - ✅ Clean up and refactor UserChat, ChatMessage models
-  - ✅ Enhance Workflow model with better configuration options
-  - ✅ Improve Knowledgebase and Article models with performance optimizations
-  - ✅ Add proper database migrations and indexes
-  - ✅ Added workflow state persistence for pause/resume
-  - ✅ Enhanced with OpenAI agent context serialization
-
-- [x] **Basic Workflow Engine** ✅ COMPLETED
-  - ✅ Implement basic workflow processing framework
-  - ✅ Create tool approval system structure (approved vs ask tools)
-  - ✅ Add workflow state persistence and resumption capabilities
-  - ✅ Development mode implementation (OpenAI integration commented for dev)
-
-- [x] **Tool System Foundation** ✅ COMPLETED
-  - ✅ Design declarative tool configuration system
-  - ✅ Implement tool registry with automatic discovery
-  - ✅ Add tool validation and permission framework
-  - ✅ Create knowledge base tools (search_user_kb, search_garden_kb, etc.)
-
-- [x] **Admin Interface** ✅ COMPLETED
-  - ✅ Enhanced Django admin for all Ergo models
-  - ✅ Create custom admin views for workflow management
-  - ✅ Add knowledgebase management interface
-  - ✅ Implement user chat history management
-
-- [x] **Development Setup** ✅ COMPLETED
-  - ✅ Database migrations created and applied
-  - ✅ Sample data management command
-  - ✅ SQLite development configuration
-  - ✅ Admin user creation and test data
-
-## 🚧 IN PROGRESS / NEXT PRIORITIES
-
-### Knowledge Management
-- [ ] **Pluggable Embedding System** (NEXT)
-  - Create abstract embedding provider interface
-  - Implement OpenAI embeddings provider (default)
-  - Add settings-based provider switching mechanism
-  - Support custom embeddings loading (like test fixtures)
-  - Build both on-demand and background task embedding generation
-
-- [ ] **PostgreSQL + pgvector Setup** (NEXT)
-  - Enable pgvector fields for production use
-  - Implement actual SummarizedVectorField functionality
-  - Add hybrid search with semantic similarity
-  - Optimize embedding generation pipeline
-
-### API Development
-- [ ] **Public API Design** (HIGH PRIORITY)
-  - Design RESTful APIs for all major components
-  - Create API authentication and authorization
-  - Add API rate limiting and throttling
-  - Implement API versioning strategy
-
-## Immediate Next Steps (High Priority)
-
-### Workflow Engine Improvements
+### Production Readiness
+- [ ] **Enable PostgreSQL + pgvector** 
+  - Switch from SQLite to PostgreSQL for development
+  - Enable SummarizedVectorField with real embeddings
+  - Implement hybrid search with semantic similarity
 - [ ] **OpenAI Integration**
-  - Uncomment and properly configure OpenAI client
-  - Implement proper tool execution with OpenAI function calling
-  - Add error handling for API failures
-  - Create approval workflow: save context → fire event → wait for approval → resume
+  - Uncomment OpenAI client configuration
+  - Implement real tool execution with function calling
+  - Add error handling and fallback behavior
+- [ ] **API Development**
+  - Design REST APIs for core models
+  - Add authentication and permissions
+  - Create API documentation
 
-- [ ] **Tool System Enhancement**
-  - Add tool whitelisting mechanism for apps to approve specific tools
-  - Implement tool sandboxing framework
-  - Create tool registry with automatic discovery
-  - Add comprehensive error handling
+## 🏗️ CORE FEATURES (Next 4-6 weeks)
 
 ### Knowledge Management
-- [ ] **Knowledge Base Management**
-  - Design flatfile export/import system for agentic processing
-  - Create utilities for KB create/update/diff/build operations
-  - Optimize hybrid search implementation with caching
-  - Build knowledge base dumping and restoration tools
+- [ ] **Pluggable Embedding System**
+  - Create abstract embedding provider interface
+  - Implement OpenAI provider (default)
+  - Add settings-based provider switching
+  - Support custom embeddings for testing
+- [ ] **Enhanced Search**
+  - Optimize hybrid search performance
+  - Add caching for embeddings and results
+  - Implement search analytics and suggestions
 
-- [ ] **Content Processing**
-  - Enhance document ingestion pipeline
-  - Add support for multiple file formats (PDF, Word, HTML)
-  - Implement content validation and quality checks
-  - Create automatic categorization system
+### Workflow Engine
+- [ ] **Tool Approval System**
+  - Build approval workflow: save context → event → wait → resume
+  - Add tool whitelisting for apps
+  - Implement tool sandboxing framework
+- [ ] **Context Management**
+  - Improve OpenAI agent context serialization
+  - Add workflow pause/resume capabilities
+  - Handle workflow state persistence
 
-## Feature Development (Medium Priority)
+### Developer Experience
+- [ ] **Admin Enhancements**
+  - Add workflow execution monitoring
+  - Create knowledge base management tools
+  - Implement user chat history viewer
+- [ ] **Testing Framework**
+  - Expand test coverage to 90%+
+  - Add integration tests for workflows
+  - Create test fixtures for development
 
-### MCP Integration
-- [ ] **MCP Tool Utilities** 
-  - Create reusable MCP tool classes for knowledge base search (search_user_kb, search_garden_kb, etc.)
-  - Build utilities for exporting these as REST endpoints
-  - Create helper functions for Django apps to build their own MCP servers
-  - Document patterns for common MCP server compositions (2-3 knowledgebases)
+## 📚 DOCUMENTATION & EXAMPLES (Ongoing)
 
-- [ ] **Agent Development Tools**
-  - Create agent builder interface
-  - Develop agent templates for common use cases
-  - Implement agent performance monitoring
-  - Add agent marketplace/registry concept
-
-### User Experience
-- [ ] **Developer Tools**
-  - Create Django management commands for common operations
-  - Add debug tools and utilities
-  - Implement testing framework and fixtures
-  - Create development setup automation
-
-### Performance & Security
-- [ ] **Caching Strategy**
-  - Implement multi-level caching for embeddings
-  - Add search result caching
-  - Create cache invalidation strategies
-  - Optimize database query patterns
-
-- [ ] **Security Enhancements**
-  - Implement fine-grained permission system
-  - Add tool execution sandboxing
-  - Create audit logging for security events
-  - Ensure GDPR compliance features
-
-## Documentation & Examples (Medium Priority)
-
-### Documentation
+### Essential Documentation
 - [ ] **API Documentation**
-  - Complete API reference documentation
-  - Add code examples for all major APIs
-  - Create integration guides for popular packages
-  - Write architecture deep-dive documentation
-
-- [ ] **Tutorials & Guides**
-  - Create getting started tutorial
-  - Write workflow development guide
-  - Add knowledgebase management tutorial
-  - Create tool development documentation
+  - Complete API reference with examples
+  - Add authentication and usage guides
+  - Create integration tutorials
+- [ ] **Developer Guides**
+  - Getting started tutorial
+  - Workflow development guide
+  - Tool creation documentation
 
 ### Example Applications
-- [ ] **Personal Goals Tracking App**
-  - Implement user goal model and APIs
-  - Create goal tracking workflow
-  - Add daily check-in functionality
-  - Implement progress analytics
+- [ ] **Example Application 1**
+  - Implement core functionality demonstrating single-user workflows
+  - Add AI-powered conversation features
+  - Create sample data and setup scripts
+- [ ] **Example Application 2**
+  - Build multi-tier knowledge system example
+  - Implement complex workflow orchestration
+  - Demonstrate advanced tool integration
 
-- [ ] **Garden Management System**
-  - Create garden and plant models
-  - Implement multi-tier knowledge system
-  - Add seasonal planning workflows
-  - Create plant care reminders
+## 🔧 INFRASTRUCTURE (Later)
 
-## Technical Debt & Maintenance (Lower Priority)
+### Performance & Monitoring
+- [ ] **Caching Strategy**
+  - Multi-level caching for embeddings
+  - Search result caching with Redis
+  - Cache invalidation strategies
+- [ ] **Monitoring & Logging**
+  - Structured logging throughout system
+  - Performance metrics collection
+  - Health check endpoints
 
-### Code Quality
-- [ ] **Test Coverage**
-  - Achieve 90%+ test coverage
-  - Add integration tests for all workflows
-  - Create performance benchmarks
-  - Implement automated testing pipeline
+### Security & Compliance
+- [ ] **Permission System**
+  - Fine-grained tool permissions
+  - User access control framework
+  - Audit logging for security events
+- [ ] **Tool Sandboxing**
+  - Secure execution environment
+  - Resource limits and timeouts
+  - Input validation and sanitization
 
-- [ ] **Code Organization**
-  - Refactor legacy code from prototype
-  - Standardize coding patterns and conventions
-  - Add comprehensive docstrings
-  - Implement automated code quality checks
+## ✅ COMPLETED (Recent)
 
-### Infrastructure
-- [ ] **Deployment & Operations**
-  - Create Docker containers for easy deployment
-  - Add Kubernetes deployment manifests
-  - Implement health checks and monitoring
-  - Create backup and disaster recovery procedures
+### Core Foundation ✅
+- ✅ **Models Migrated**: All prototype models enhanced and working
+- ✅ **Tool System**: 6 knowledge base tools with registry
+- ✅ **Workflow Engine**: Basic processing with state persistence
+- ✅ **Admin Interface**: Full Django admin integration
+- ✅ **Testing Infrastructure**: Dual-tier OpenAI testing setup
+- ✅ **Development Environment**: Complete Cursor setup
 
-- [ ] **CI/CD Pipeline**
-  - Set up GitHub Actions for automated testing
-  - Add automated security scans
-  - Implement automated deployment to staging
-  - Create release automation
+### Architecture Decisions ✅  
+- ✅ **MCP Strategy**: Reusable tools for Django apps
+- ✅ **Embedding System**: Pluggable providers decided
+- ✅ **Workflow Design**: Python-based with context serialization
+- ✅ **Permissions Model**: App-level rather than framework
+- ✅ **Database**: PostgreSQL only with pgvector
+- ✅ **LLM Provider**: OpenAI only for v1.0
 
-## Research & Experimentation (Future)
+## 📋 ARCHIVED TASKS
 
-### Advanced Features
-- [ ] **Machine Learning Enhancements**
-  - Experiment with better embedding models
-  - Implement automatic content categorization
-  - Add recommendation systems for knowledge discovery
-  - Explore few-shot learning for specialized domains
+<details>
+<summary>Click to view archived/completed tasks</summary>
 
-- [ ] **Multi-modal Support**
-  - Add image and audio processing capabilities
-  - Implement vision-language model integration
-  - Create multimedia knowledge articles
-  - Add voice interface support
+### Database & Migrations ✅
+- ✅ Clean up and refactor UserChat, ChatMessage models
+- ✅ Enhance Workflow model with better configuration
+- ✅ Improve Knowledgebase and Article models
+- ✅ Add proper database migrations and indexes
+- ✅ SQLite development configuration
 
-### Ecosystem Integration
-- [ ] **Third-party Integrations**
-  - Slack and Discord bot integration
-  - Email processing and response
-  - Calendar integration for scheduling
-  - Cloud storage connectors (Google Drive, Dropbox)
+### Tool Development ✅
+- ✅ Design declarative tool configuration system
+- ✅ Implement tool registry with automatic discovery
+- ✅ Add tool validation and permission framework
+- ✅ Create knowledge base tools (search_user_kb, etc.)
 
-- [ ] **Enterprise Features**
-  - Single Sign-On (SSO) integration
-  - Advanced user management and roles
-  - Compliance and audit features
-  - Multi-tenant architecture improvements
+### Sample Data & Testing ✅
+- ✅ Sample data management command
+- ✅ Admin user creation (admin/admin123)
+- ✅ Basic functionality testing and verification
+- ✅ OpenAI testing with fixtures
 
-## Specific Technical Tasks
-
-### Database & Storage
-- [ ] Fix SummarizedVectorField implementation for production use
-- [ ] Optimize Article model queries with proper indexing
-- [ ] Implement connection pooling and query optimization
-- [ ] Add database backup and restoration procedures
-- [ ] Create data migration scripts from prototype
-
-### Async & Concurrency
-- [ ] Improve async support throughout the codebase
-- [ ] Add background task processing with Celery
-- [ ] Implement async workflow execution
-- [ ] Add concurrent safety for multi-user scenarios
-- [ ] Create async-safe logging and monitoring
-
-### Error Handling & Monitoring
-- [ ] Implement comprehensive error tracking
-- [ ] Add structured logging throughout the system
-- [ ] Create health check endpoints
-- [ ] Add performance metrics collection
-- [ ] Implement alerting for critical errors
-
-### Configuration & Settings
-- [ ] Create comprehensive Django settings for Ergo
-- [ ] Add environment-based configuration
-- [ ] Implement feature flags for gradual rollouts
-- [ ] Create configuration validation and testing
-- [ ] Add configuration documentation and examples
-
-## Dependencies & Requirements
-- [ ] Audit and update all Python dependencies
-- [ ] Ensure compatibility with latest Django versions
-- [ ] Add support for multiple PostgreSQL versions
-- [ ] Test compatibility with different Python versions
-- [ ] Document minimum system requirements
-
-## Community & Adoption
-- [ ] Create contributor guidelines and documentation
-- [ ] Set up issue and PR templates
-- [ ] Create community discussion forums
-- [ ] Add code of conduct and governance model
-- [ ] Plan conference talks and blog posts
+</details>
 
 ---
 
-## Notes for Future Agents
+## 📝 Task Management Notes
 
-### Working with TODOs
-1. **Prioritization**: Focus on High Priority items first
-2. **Dependencies**: Check for dependencies between tasks
-3. **Documentation**: Update documentation as you complete tasks
-4. **Testing**: Add tests for all new functionality
-5. **Code Review**: Follow established patterns and conventions
+### Working on Tasks
+1. **Pick tasks** matching your expertise from "Immediate Next Steps"
+2. **Break large tasks** into smaller actionable items
+3. **Update progress** by moving items between sections
+4. **Document decisions** and add new tasks as discovered
+5. **Test thoroughly** and update documentation
 
-### Task Management
-- Move completed items to a DONE.md file
-- Add new tasks as they are discovered
-- Update priorities based on user feedback
-- Break large tasks into smaller, manageable pieces
-- Document any assumptions or decisions made
+### Priority Guidelines
+- **🎯 Immediate**: Critical for current development
+- **🏗️ Core**: Important for v1.0 functionality  
+- **📚 Documentation**: Essential for adoption
+- **🔧 Infrastructure**: Future scalability and operations
 
-### Communication
-- Update QUESTIONS.md when you need clarification
-- Add to ROADMAP.md if scope changes significantly
-- Keep stakeholders informed of progress and blockers
-- Document any technical decisions in architecture docs
+### Current Focus
+We're in **Phase 3: Production Features** - making the system production-ready with real embeddings, OpenAI integration, and public APIs.
 
-This TODO list should be treated as a living document that evolves with the project needs and priorities.
+---
 
-## Current Development Status
-
-### What's Working Now ✅
-- ✅ Django Ergo models with SQLite support
-- ✅ Admin interface for all models
-- ✅ Basic workflow engine (development mode)
-- ✅ Tool registry and knowledge base tools
-- ✅ Sample data creation
-- ✅ Database migrations
-
-### Ready for Testing 🧪
-You can now run:
-```bash
-python manage.py runserver
-```
-And visit http://127.0.0.1:8000/admin/ with admin/admin123 to explore the system.
-
-### Next Session Priorities 🎯
-1. Enable PostgreSQL + pgvector for production embeddings
-2. Implement OpenAI integration for real AI conversations
-3. Create REST APIs for external access
-4. Add comprehensive testing suite
+*This TODO list is actively maintained. Completed items are moved to archives, new tasks are added as discovered.*

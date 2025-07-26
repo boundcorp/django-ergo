@@ -1,146 +1,91 @@
-# Django Ergo - Questions for Further Discussion
+# Django Ergo - Active Questions & Decisions
 
-## Architecture & Design Questions
+## 🚨 ACTIVE QUESTIONS (Need Decisions)
 
-### 1. Model Context Protocol (MCP) Integration ✅ RESOLVED
-- **DECISION**: Ergo provides reusable tools for Django app authors to build their own MCP servers
-- **DECISION**: Focus on utilities like search_user_kb, search_grower_kb, etc. that export as REST endpoints
-- **DECISION**: Apps handle auth/permissions, framework provides the utilities
-- **DECISION**: Framework provides MCP server building blocks, apps compose their own servers
-
-### 2. Knowledge Base Architecture ✅ PARTIALLY RESOLVED
-- **DECISION**: Easy-to-manage KB that can be dumped to flatfiles and managed by agentic processes
-- **DECISION**: No versioning initially (avoid complexity)
-- **DECISION**: Pluggable embeddings - users can bring their own, settings-based provider switching (OpenAI default)
-- **DECISION**: Support both on-demand embedding and background tasks
-- **DECISION**: Allow loading custom embeddings (like test fixtures)
-- **Q**: Hierarchy organization - should we keep hexadecimal codes or use alternative structure?
-
-### 3. Workflow Engine Design ✅ RESOLVED
-- **DECISION**: Workflows defined in Python code
-- **DECISION**: Serialize OpenAI agent context and save to ChatMessage for resume/continue capability
-- **DECISION**: Tool approval system: "approved tools" vs "ask tools" (default: ask)
-- **DECISION**: Tool approval flow: save context → fire generic event → wait for user approval → resume
-- **DECISION**: Apps can whitelist/approve specific tools to skip approval process
-
-### 4. Multi-tenancy & Permissions ✅ RESOLVED
-- **DECISION**: Permissions managed by the apps, not the framework
-- **DECISION**: App builders decide which users can use which knowledgebases
-- **DECISION**: App builders decide which users can update/ingest into which knowledgebases
-- **DECISION**: Framework provides the tools, apps implement the permission logic
-
-## Technical Implementation Questions
-
-### 5. Database & Performance
-- **Q**: Should we support databases other than PostgreSQL, or require pgvector for the embedding functionality?
-- **Q**: What's the right caching strategy for embeddings and search results? Redis, database-level, or application-level caching?
-- **Q**: How do we handle database migrations when the knowledge base schema evolves?
-- **Q**: Should we implement database sharding or partitioning strategies for large deployments?
-
-### 6. LLM Integration
-- **Q**: Which LLM providers should we support out of the box? OpenAI, Anthropic, local models, or a pluggable system?
-- **Q**: How do we handle LLM cost management and usage tracking for hosted deployments?
-- **Q**: Should we support fine-tuning or prompt optimization based on user interactions?
-- **Q**: What's the right fallback strategy when LLM services are unavailable?
-
-### 7. Security & Privacy
-- **Q**: How do we implement proper sandboxing for custom tools, especially if they execute arbitrary code?
-- **Q**: What data encryption requirements should we support (at rest, in transit, field-level)?
-- **Q**: How do we handle compliance requirements like GDPR, HIPAA, or SOC 2?
-- **Q**: Should we support on-premises deployment for organizations with strict data requirements?
-
-### 8. API Design
-- **Q**: Should we prioritize REST APIs, GraphQL, or both for the public API?
-- **Q**: How do we version APIs as the system evolves? URL versioning, header versioning, or schema evolution?
-- **Q**: What authentication methods should we support (API keys, OAuth, JWT, Django sessions)?
-- **Q**: How do we handle rate limiting and abuse prevention for hosted deployments?
-
-## Product & User Experience Questions
-
-### 9. Target Audience
-- **Q**: Should we optimize for developer users building AI apps, or end-users who want to use pre-built intelligent applications?
-- **Q**: What's the right balance between powerful configuration options and out-of-the-box simplicity?
+### User Experience & Features  
 - **Q**: Should we include a visual workflow builder, or is code-based configuration sufficient for v1.0?
-- **Q**: How do we handle different skill levels - novice vs expert Django developers?
+- **Q**: How should users interact with knowledge bases - chat interfaces, traditional search, or both?
+- **Q**: Should example apps be separate Django projects or integrated into main package?
 
-### 10. Example Applications
-- **Q**: For the personal goals app - should we integrate with existing productivity tools (Todoist, Notion, etc.) or build standalone?
-- **Q**: For the garden management app - what level of IoT integration should we support (weather stations, soil sensors, irrigation systems)?
-- **Q**: Should these example apps be separate Django projects or integrated into the main Ergo package?
-- **Q**: How detailed should the example apps be - simple demos or production-ready applications?
-
-### 11. Knowledge Management UX
-- **Q**: How should users interact with their knowledge bases? Through chat interfaces, traditional search, or both?
-- **Q**: Should we provide automatic knowledge extraction from documents, or require manual curation?
-- **Q**: How do we help users organize large knowledge bases without becoming overwhelming?
-- **Q**: What's the right balance between AI-generated and human-curated content?
-
-### 12. Deployment & Distribution
-- **Q**: Should Django Ergo be distributed as a PyPI package, Docker images, or both?
+### Deployment & Distribution
+- **Q**: Should Django Ergo be distributed as PyPI package, Docker images, or both?
 - **Q**: Do we need a hosted SaaS version, or focus on self-hosted deployments initially?
-- **Q**: What deployment documentation is needed - Docker Compose, Kubernetes, cloud provider guides?
-- **Q**: How do we handle dependencies like pgvector that require system-level installation?
+- **Q**: What deployment documentation is needed - Docker Compose, Kubernetes, cloud guides?
 
-## Business & Community Questions
+## 📋 RESOLVED DECISIONS ✅
 
-### 13. Open Source Strategy
-- **Q**: What should be open source vs potentially premium features (advanced analytics, enterprise auth, etc.)?
-- **Q**: How do we build a sustainable community around the project?
-- **Q**: Should we accept external contributors immediately or establish the core first?
-- **Q**: What governance model works best for this type of project?
+### Architecture & Core Design ✅
+- **DECIDED**: **MCP Integration** - Ergo provides reusable tools for Django apps to build their own MCP servers
+- **DECIDED**: **Embeddings** - Pluggable system with OpenAI default, settings-based switching, custom embeddings support  
+- **DECIDED**: **Workflows** - Python-based with OpenAI agent context serialization and tool approval system
+- **DECIDED**: **Knowledge Bases** - Easy flatfile export/import for agentic processing, no versioning initially
+- **DECIDED**: **Permissions** - Managed by apps, not framework - apps decide user access patterns
 
-### 14. Documentation & Learning
-- **Q**: What types of documentation are most important - API docs, tutorials, architectural guides, or video content?
-- **Q**: Should we create a dedicated documentation site or use GitHub wikis/README files?
-- **Q**: What examples and tutorials would be most valuable for adoption?
-- **Q**: How do we balance comprehensive documentation with keeping it maintainable?
+### Development Approach ✅
+- **DECIDED**: **Framework Strategy** - Building blocks for Django developers, not complete platform
+- **DECIDED**: **Tool System** - "Approved tools" vs "ask tools" with approval flow and app whitelisting
+- **DECIDED**: **Agent Architecture** - Self-contained workflow engine without external dependencies
+- **DECIDED**: **Multi-tenancy** - Owner-based knowledge bases for scalability
 
-### 15. Integration Ecosystem  
-- **Q**: Which Django packages should we prioritize integration with (DRF, Celery, django-extensions, etc.)?
-- **Q**: Should we build integrations with popular AI/ML tools (LangChain, LlamaIndex, etc.) or remain independent?
-- **Q**: What external services are worth integrating with (Zapier, Discord, Slack)?
-- **Q**: How do we handle version compatibility across the Django ecosystem?
+### Technical Implementation ✅
+- **DECIDED**: **Database** - PostgreSQL only, require pgvector for embedding functionality
+- **DECIDED**: **Embedding Storage** - Save embeddings in database fields (not external storage)
+- **DECIDED**: **LLM Provider** - OpenAI only for v1.0 (can add others later)
 
-## Research & Future Direction Questions
+## 🔬 RESEARCH NEEDED
 
-### 16. Advanced AI Features
-- **Q**: Should we explore multi-modal AI capabilities (vision, audio) or focus on text-based interactions initially?
-- **Q**: Is there value in supporting multiple AI agents working together, or is single-agent sufficient for v1.0?
-- **Q**: Should we implement reinforcement learning from user feedback to improve responses over time?
-- **Q**: How important is explainable AI - should we provide insights into how recommendations are generated?
+### Performance & Scalability
+- **Research**: What are realistic performance targets for different deployment sizes?
+- **Research**: Should we implement horizontal scaling from start or optimize for single-server?
+- **Research**: How to benchmark and maintain performance as codebase grows?
 
-### 17. Performance & Scalability
-- **Q**: What are realistic performance targets for different deployment sizes (single user, team, enterprise)?
-- **Q**: Should we implement horizontal scaling features from the start or optimize for single-server deployments?
-- **Q**: What monitoring and observability features are essential vs nice-to-have?
-- **Q**: How do we benchmark and maintain performance as the codebase grows?
+### Security Considerations
+- **Research**: How to implement proper sandboxing for custom tools?
+- **Research**: What data encryption requirements should we support?
+- **Research**: How to handle compliance (GDPR, HIPAA, SOC 2)?
 
-### 18. Innovation Opportunities
-- **Q**: Are there unique features that would differentiate Django Ergo from existing AI development frameworks?
-- **Q**: Should we explore novel approaches to knowledge representation or stick with proven vector embeddings?
-- **Q**: What research opportunities exist for collaboration with academic institutions?
-- **Q**: How do we stay current with rapidly evolving AI capabilities and standards?
+### Community & Ecosystem
+- **Research**: Which Django packages should we prioritize integration with?
+- **Research**: What governance model works best for this type of project?
+- **Research**: How to build sustainable community around the project?
+
+## 📈 FUTURE CONSIDERATIONS
+
+### Advanced Features (Post v1.0)
+- Multi-modal AI capabilities (vision, audio)
+- Multiple AI agents working together
+- Reinforcement learning from user feedback
+- Advanced analytics and recommendations
+
+### Enterprise Features
+- Single Sign-On (SSO) integration
+- Advanced user management and roles
+- Compliance and audit features
+- Multi-tenant architecture improvements
 
 ---
 
-## Notes for Addressing Questions
+## Decision Process Guidelines
 
-### Prioritization Framework
-1. **Critical for MVP**: Questions that must be answered before starting development
-2. **Important for v1.0**: Questions that affect v1.0 architecture but can be decided during development  
-3. **Future Considerations**: Questions that can be deferred but should be kept in mind for architectural decisions
+### For Active Questions
+1. **Research** existing solutions and best practices
+2. **Prototype** complex decisions with proof-of-concepts  
+3. **Gather feedback** from potential users
+4. **Document** decisions and rationale
+5. **Plan for evolution** - avoid painting into corners
 
-### Decision Process
-- Research existing solutions and best practices
-- Create prototypes or proof-of-concepts for complex decisions
-- Gather feedback from potential users and contributors
-- Document decisions and rationale for future reference
-- Plan for evolution - avoid decisions that paint us into corners
+### Adding New Questions
+- Check if it's already resolved in the archive above
+- Be specific about what decision is needed
+- Include context about why the decision matters
+- Tag with priority: 🚨 Active, 🔬 Research, 📈 Future
 
 ### Regular Review
-- Revisit questions monthly during development
-- Add new questions as they arise from implementation experience
-- Remove or archive questions once resolved
-- Keep stakeholders informed of major decisions and their implications
+- Monthly review during development
+- Archive resolved questions
+- Update priorities based on current phase
+- Keep stakeholders informed of major decisions
 
-This questions document should evolve throughout the development process, helping ensure we make thoughtful decisions about Django Ergo's architecture and features.
+---
+
+*This document focuses on questions that actively need decisions. Historical questions and extensive analysis have been moved to archive sections to maintain clarity.*

@@ -15,8 +15,8 @@ Django Ergo v1.0 will be a production-ready Django library for building AI-power
 - **Security**: Proper permission systems and tool execution sandboxing
 
 ### Target Applications
-- Personal productivity and goal tracking systems
-- Domain-specific knowledge management (e.g., gardening, research)
+- Single-user productivity and knowledge management systems
+- Domain-specific knowledge management applications
 - Multi-user collaborative intelligence platforms
 - Custom AI agent development frameworks
 
@@ -144,9 +144,9 @@ Django Ergo v1.0 will be a production-ready Django library for building AI-power
 
 #### 5.3 Examples and Templates
 - [ ] **Example Applications**: 
-  - Personal goals tracking app
-  - Garden management system
-  - Research knowledge base
+  - Single-user productivity system
+  - Multi-tier knowledge management system
+  - Research and documentation platform
 - [ ] **Project Templates**: Django project templates with Ergo
 - [ ] **Integration Examples**: Examples with popular Django packages
 
