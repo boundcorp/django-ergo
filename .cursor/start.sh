@@ -5,6 +5,15 @@
 
 set -e
 
+echo "🚀 Starting postgres..."
+sudo service postgresql start
+echo "🚀 Waiting for postgres to be ready..."
+until sudo -u postgres pg_isready -h localhost; do
+  echo "Waiting for PostgreSQL to be ready..."
+  sleep 1
+done
+
+
 echo "🚀 Setting up django-ergo project..."
 
 # Ensure we're in the project directory
