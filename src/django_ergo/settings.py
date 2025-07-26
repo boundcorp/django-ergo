@@ -18,6 +18,12 @@ from django.utils.module_loading import import_string
 
 DEFAULTS = {
     "WORKFLOW_MODEL": "django_ergo.models.Workflow",  # example only
+    # OpenAI Configuration
+    "OPENAI_API_KEY": None,  # Can be overridden by environment variable
+    "OPENAI_MODEL": "gpt-4o-mini",
+    "OPENAI_TEMPERATURE": 0.7,
+    "OPENAI_MAX_TOKENS": None,
+    "OPENAI_TIMEOUT": 30,
 }
 
 

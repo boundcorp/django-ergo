@@ -6,12 +6,17 @@ with tool execution, state management, and pause/resume capabilities.
 """
 
 import json
+import os
 from typing import Dict, Any, List, Optional, Callable
 from dataclasses import dataclass
 from django.contrib.auth import get_user_model
 from django_ergo.models import UserChat, ChatMessage, Workflow, MessageType, MessageRole
 from django_ergo.tools import tool_registry
-# import openai  # Commented out for development
+from django_ergo.settings import api_settings
+
+# OpenAI is a strict requirement - no graceful fallbacks
+# The system is designed around OpenAI Python agents and requires OpenAI API access
+import openai
 
 User = get_user_model()
 
@@ -42,8 +47,26 @@ class WorkflowEngine:
     """
     
     def __init__(self):
-        # self.openai_client = openai.OpenAI()  # Commented out for development
-        pass
+        self.model = api_settings.OPENAI_MODEL
+        self.temperature = api_settings.OPENAI_TEMPERATURE
+        self.max_tokens = api_settings.OPENAI_MAX_TOKENS
+        self.timeout = api_settings.OPENAI_TIMEOUT
+        
+        # Get API key from environment or settings - fail if not found
+        api_key = os.getenv("OPENAI_API_KEY") or api_settings.OPENAI_API_KEY
+        if not api_key:
+            raise ValueError(
+                "OpenAI API key is required but not found. "
+                "Set OPENAI_API_KEY environment variable or configure it in DJANGO_ERGO settings."
+            )
+        
+        try:
+            self.openai_client = openai.OpenAI(
+                api_key=api_key,
+                timeout=self.timeout
+            )
+        except Exception as e:
+            raise ValueError(f"Failed to initialize OpenAI client: {e}")
     
     def process_message(
         self, 
@@ -119,49 +142,41 @@ class WorkflowEngine:
         Returns:
             Dictionary with response content and metadata
         """
-        # For development - return a simple response
+        # Build conversation history
+        messages = self._build_conversation_history(context)
+        
+        # Get available tools for this workflow
+        tools = self._get_workflow_tools(context.workflow)
+        
+        # Make OpenAI API call
+        response = self.openai_client.chat.completions.create(
+            model=self.model,
+            messages=messages,
+            tools=tools if tools else None,
+            tool_choice="auto" if tools else None,
+            temperature=self.temperature,
+            max_tokens=self.max_tokens
+        )
+        
+        message = response.choices[0].message
+        
+        # Handle tool calls
+        if message.tool_calls:
+            return self._handle_tool_calls(context, message, response)
+        
+        # Regular text response
         return {
-            "content": f"This is a development response to: {context.current_message.content}",
+            "content": message.content or "",
             "metadata": {
-                "model": "development",
-                "development": True
+                "model": self.model,
+                "usage": response.usage.model_dump() if response.usage else {}
+            },
+            "agent_context": {
+                "messages": messages,
+                "last_response": message.model_dump()
             }
         }
         
-        # Actual OpenAI implementation (commented out for development):
-        # # Build conversation history
-        # messages = self._build_conversation_history(context)
-        # 
-        # # Get available tools for this workflow
-        # tools = self._get_workflow_tools(context.workflow)
-        # 
-        # # Make OpenAI API call
-        # response = self.openai_client.chat.completions.create(
-        #     model="gpt-4o-mini",
-        #     messages=messages,
-        #     tools=tools if tools else None,
-        #     tool_choice="auto" if tools else None
-        # )
-        # 
-        # message = response.choices[0].message
-        # 
-        # # Handle tool calls
-        # if message.tool_calls:
-        #     return self._handle_tool_calls(context, message, response)
-        # 
-        # # Regular text response
-        # return {
-        #     "content": message.content or "",
-        #     "metadata": {
-        #         "model": "gpt-4o-mini",
-        #         "usage": response.usage.model_dump() if response.usage else {}
-        #     },
-        #     "agent_context": {
-        #         "messages": messages,
-        #         "last_response": message.model_dump()
-        #     }
-        # }
-    
     def _build_conversation_history(self, context: WorkflowContext) -> List[Dict[str, Any]]:
         """
         Build conversation history for OpenAI API.
@@ -337,7 +352,7 @@ class WorkflowEngine:
             "content": message.content or "Tool execution completed.",
             "metadata": {
                 "tool_calls_executed": len(tool_results),
-                "model": "gpt-4o-mini"
+                "model": self.model
             }
         }
     
@@ -356,43 +371,35 @@ class WorkflowEngine:
         Returns:
             Dictionary with final response
         """
-        # For development - return simple response
+        # Build messages including tool results
+        messages = self._build_conversation_history(context)
+        
+        # Add tool results
+        for result in tool_results:
+            messages.append({
+                "role": "tool",
+                "tool_call_id": result["tool_call_id"],
+                "content": json.dumps(result["result"])
+            })
+        
+        # Get final response
+        response = self.openai_client.chat.completions.create(
+            model=self.model,
+            messages=messages,
+            temperature=self.temperature,
+            max_tokens=self.max_tokens
+        )
+        
+        message = response.choices[0].message
+        
         return {
-            "content": f"Processed {len(tool_results)} tool results",
+            "content": message.content or "",
             "metadata": {
-                "model": "development",
-                "tool_results_processed": len(tool_results)
+                "model": self.model,
+                "tool_results_processed": len(tool_results),
+                "usage": response.usage.model_dump() if response.usage else {}
             }
         }
-        
-        # Actual implementation (commented out for development):
-        # # Build messages including tool results
-        # messages = self._build_conversation_history(context)
-        # 
-        # # Add tool results
-        # for result in tool_results:
-        #     messages.append({
-        #         "role": "tool",
-        #         "tool_call_id": result["tool_call_id"],
-        #         "content": json.dumps(result["result"])
-        #     })
-        # 
-        # # Get final response
-        # response = self.openai_client.chat.completions.create(
-        #     model="gpt-4o-mini",
-        #     messages=messages
-        # )
-        # 
-        # message = response.choices[0].message
-        # 
-        # return {
-        #     "content": message.content or "",
-        #     "metadata": {
-        #         "model": "gpt-4o-mini",
-        #         "tool_results_processed": len(tool_results),
-        #         "usage": response.usage.model_dump() if response.usage else {}
-        #     }
-        # }
     
     def approve_tool_execution(
         self, 
