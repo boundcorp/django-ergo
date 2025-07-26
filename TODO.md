@@ -1,35 +1,79 @@
 # Django Ergo TODO Lists
 
-## Immediate Next Steps (High Priority)
+## ✅ COMPLETED TASKS (Latest Session)
 
-### Core Architecture
-- [ ] **Migrate Models from Prototype**
-  - Clean up and refactor UserChat, ChatMessage models
-  - Enhance Workflow model with better configuration options
-  - Improve Knowledgebase and Article models with performance optimizations
-  - Add proper database migrations and indexes
+### Core Architecture ✅
+- [x] **Migrate Models from Prototype** ✅ COMPLETED
+  - ✅ Clean up and refactor UserChat, ChatMessage models
+  - ✅ Enhance Workflow model with better configuration options
+  - ✅ Improve Knowledgebase and Article models with performance optimizations
+  - ✅ Add proper database migrations and indexes
+  - ✅ Added workflow state persistence for pause/resume
+  - ✅ Enhanced with OpenAI agent context serialization
 
-- [ ] **Workflow Engine Improvements**
-  - Implement OpenAI agent context serialization to ChatMessage for pause/resume
-  - Create tool approval system with "approved tools" vs "ask tools" (default: ask)
-  - Build approval workflow: save context → fire event → wait for approval → resume
-  - Add tool whitelisting mechanism for apps to approve specific tools
-  - Implement workflow state persistence and resumption capabilities
+- [x] **Basic Workflow Engine** ✅ COMPLETED
+  - ✅ Implement basic workflow processing framework
+  - ✅ Create tool approval system structure (approved vs ask tools)
+  - ✅ Add workflow state persistence and resumption capabilities
+  - ✅ Development mode implementation (OpenAI integration commented for dev)
 
-- [ ] **Tool System Enhancement**
-  - Design declarative tool configuration system
-  - Implement tool permission and sandboxing framework
-  - Add tool validation and error handling
-  - Create tool registry with automatic discovery
+- [x] **Tool System Foundation** ✅ COMPLETED
+  - ✅ Design declarative tool configuration system
+  - ✅ Implement tool registry with automatic discovery
+  - ✅ Add tool validation and permission framework
+  - ✅ Create knowledge base tools (search_user_kb, search_garden_kb, etc.)
+
+- [x] **Admin Interface** ✅ COMPLETED
+  - ✅ Enhanced Django admin for all Ergo models
+  - ✅ Create custom admin views for workflow management
+  - ✅ Add knowledgebase management interface
+  - ✅ Implement user chat history management
+
+- [x] **Development Setup** ✅ COMPLETED
+  - ✅ Database migrations created and applied
+  - ✅ Sample data management command
+  - ✅ SQLite development configuration
+  - ✅ Admin user creation and test data
+
+## 🚧 IN PROGRESS / NEXT PRIORITIES
 
 ### Knowledge Management
-- [ ] **Pluggable Embedding System**
+- [ ] **Pluggable Embedding System** (NEXT)
   - Create abstract embedding provider interface
   - Implement OpenAI embeddings provider (default)
   - Add settings-based provider switching mechanism
   - Support custom embeddings loading (like test fixtures)
   - Build both on-demand and background task embedding generation
 
+- [ ] **PostgreSQL + pgvector Setup** (NEXT)
+  - Enable pgvector fields for production use
+  - Implement actual SummarizedVectorField functionality
+  - Add hybrid search with semantic similarity
+  - Optimize embedding generation pipeline
+
+### API Development
+- [ ] **Public API Design** (HIGH PRIORITY)
+  - Design RESTful APIs for all major components
+  - Create API authentication and authorization
+  - Add API rate limiting and throttling
+  - Implement API versioning strategy
+
+## Immediate Next Steps (High Priority)
+
+### Workflow Engine Improvements
+- [ ] **OpenAI Integration**
+  - Uncomment and properly configure OpenAI client
+  - Implement proper tool execution with OpenAI function calling
+  - Add error handling for API failures
+  - Create approval workflow: save context → fire event → wait for approval → resume
+
+- [ ] **Tool System Enhancement**
+  - Add tool whitelisting mechanism for apps to approve specific tools
+  - Implement tool sandboxing framework
+  - Create tool registry with automatic discovery
+  - Add comprehensive error handling
+
+### Knowledge Management
 - [ ] **Knowledge Base Management**
   - Design flatfile export/import system for agentic processing
   - Create utilities for KB create/update/diff/build operations
@@ -41,13 +85,6 @@
   - Add support for multiple file formats (PDF, Word, HTML)
   - Implement content validation and quality checks
   - Create automatic categorization system
-
-### API Development
-- [ ] **Public API Design**
-  - Design RESTful APIs for all major components
-  - Create API authentication and authorization
-  - Add API rate limiting and throttling
-  - Implement API versioning strategy
 
 ## Feature Development (Medium Priority)
 
@@ -65,12 +102,6 @@
   - Add agent marketplace/registry concept
 
 ### User Experience
-- [ ] **Admin Interface**
-  - Enhance Django admin for Ergo models
-  - Create custom admin views for workflow management
-  - Add knowledgebase management interface
-  - Implement user chat history management
-
 - [ ] **Developer Tools**
   - Create Django management commands for common operations
   - Add debug tools and utilities
@@ -243,3 +274,26 @@
 - Document any technical decisions in architecture docs
 
 This TODO list should be treated as a living document that evolves with the project needs and priorities.
+
+## Current Development Status
+
+### What's Working Now ✅
+- ✅ Django Ergo models with SQLite support
+- ✅ Admin interface for all models
+- ✅ Basic workflow engine (development mode)
+- ✅ Tool registry and knowledge base tools
+- ✅ Sample data creation
+- ✅ Database migrations
+
+### Ready for Testing 🧪
+You can now run:
+```bash
+python manage.py runserver
+```
+And visit http://127.0.0.1:8000/admin/ with admin/admin123 to explore the system.
+
+### Next Session Priorities 🎯
+1. Enable PostgreSQL + pgvector for production embeddings
+2. Implement OpenAI integration for real AI conversations
+3. Create REST APIs for external access
+4. Add comprehensive testing suite

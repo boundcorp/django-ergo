@@ -62,16 +62,25 @@ WSGI_APPLICATION = "tests.example_app.wsgi.application"
 # Database
 # https://docs.djangoproject.com/en/1.9/ref/settings/#databases
 
+# Use SQLite for development
 DATABASES = {
     "default": {
-        "ENGINE": "django.db.backends.postgresql",
-        "NAME": "django_ergo",
-        "USER": "ubuntu",
-        "PASSWORD": "",
-        "HOST": "",  # Empty string means Unix socket
-        "PORT": "",  # Empty string means default port
+        "ENGINE": "django.db.backends.sqlite3",
+        "NAME": BASE_DIR.parent / "db.sqlite3",
     }
 }
+
+# For PostgreSQL with pgvector (commented out for dev)
+# DATABASES = {
+#     "default": {
+#         "ENGINE": "django.db.backends.postgresql",
+#         "NAME": "django_ergo",
+#         "USER": "ubuntu",
+#         "PASSWORD": "",
+#         "HOST": "",  # Empty string means Unix socket
+#         "PORT": "",  # Empty string means default port
+#     }
+# }
 
 # Internationalization
 # https://docs.djangoproject.com/en/1.9/topics/i18n/
@@ -90,3 +99,6 @@ STATIC_URL = "/static/"
 DJANGO_ERGO = {
     "FOO": "newvalue"
 }
+
+# Default Auto Field
+DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
