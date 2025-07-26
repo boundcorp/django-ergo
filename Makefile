@@ -186,7 +186,56 @@ twine_check: dist ## Twine check
 
 # END - Generic commands
 # -----------------------------------------------------------------------------
-# Project Specific
+# Project Specific - OpenAI Testing
 # -----------------------------------------------------------------------------
 
-# Add project specific targets here
+# Two-tier OpenAI testing system
+tests_openai_real:  ## Run tests against real OpenAI API (costs credits) - generates fixtures
+	@echo "🚨 WARNING: This will make real OpenAI API calls and cost credits!"
+	@echo "Press Ctrl+C within 5 seconds to cancel..."
+	@sleep 5
+	TEST_OPENAI=true pytest -v -m "openai_real" --ds=tests.example_app.settings
+
+tests_openai_mocked:  ## Run OpenAI tests using saved fixtures (fast, no API costs)
+	pytest -v -m "openai_mocked" --ds=tests.example_app.settings
+
+tests_openai_all:  ## Run all OpenAI tests (both real API and mocked)
+	pytest -v -m "openai" --ds=tests.example_app.settings
+
+# Development container testing with OpenAI
+tests_with_costs_in_devcontainer:  ## Build container and run costly OpenAI tests to generate fixtures
+	@echo "🚨 WARNING: This will make real OpenAI API calls and cost credits!"
+	@echo "Make sure OPENAI_API_KEY is set in your environment"
+	@echo "Press Ctrl+C within 5 seconds to cancel..."
+	@sleep 5
+	docker run --rm -v $(shell pwd):/workspace -w /workspace \
+		-e OPENAI_API_KEY="$(OPENAI_API_KEY)" \
+		-e TEST_OPENAI=true \
+		django-ergo-test /bin/bash -c '\
+		bash .cursor/start.sh && \
+		export PATH="/home/ubuntu/.local/bin:$$PATH" && \
+		export VENV_ROOT="/home/ubuntu/.venv" && \
+		export PATH="$$VENV_ROOT/bin:$$PATH" && \
+		pytest -v -m "openai_real" --ds=tests.example_app.settings && \
+		echo "✅ Costly tests completed! Fixtures generated." && \
+		echo "Now run: make tests_openai_mocked for fast testing"'
+
+tests_fast_in_devcontainer:  ## Build container and run fast OpenAI tests using fixtures
+	docker run --rm -v $(shell pwd):/workspace -w /workspace django-ergo-test /bin/bash -c '\
+		bash .cursor/start.sh && \
+		export PATH="/home/ubuntu/.local/bin:$$PATH" && \
+		export VENV_ROOT="/home/ubuntu/.venv" && \
+		export PATH="$$VENV_ROOT/bin:$$PATH" && \
+		pytest -v -m "openai_mocked" --ds=tests.example_app.settings'
+
+# Fixture management
+clean_openai_fixtures:  ## Remove all OpenAI test fixtures
+	rm -rf tests/fixtures/openai/
+	@echo "🧹 OpenAI fixtures cleaned. Run tests_openai_real to regenerate."
+
+list_openai_fixtures:  ## List all saved OpenAI fixtures
+	@echo "📁 OpenAI test fixtures:"
+	@find tests/fixtures/openai -name "*.json" 2>/dev/null | sort || echo "No fixtures found"
+
+# Project Specific - Other
+# Add other project specific targets here
