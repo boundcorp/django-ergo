@@ -1,0 +1,139 @@
+{% extends "admin/base_site.html" %}
+{% load i18n admin_urls static admin_modify %}
+
+{% block title %}{{ title }} | {{ site_title|default:_('Django site admin') }}{% endblock %}
+
+{% block extrahead %}
+{{ block.super }}
+<style>
+    .stats-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 20px;
+        margin: 20px 0;
+    }
+    .stat-card {
+        background: #f8f9fa;
+        border: 1px solid #dee2e6;
+        border-radius: 8px;
+        padding: 20px;
+        text-align: center;
+    }
+    .stat-number {
+        font-size: 2em;
+        font-weight: bold;
+        color: #28a745;
+        margin-bottom: 10px;
+    }
+    .stat-label {
+        color: #6c757d;
+        font-weight: 500;
+    }
+    .activity-chart {
+        background: white;
+        border: 1px solid #dee2e6;
+        border-radius: 8px;
+        padding: 20px;
+        margin: 20px 0;
+    }
+    .message-type-list {
+        list-style: none;
+        padding: 0;
+    }
+    .message-type-list li {
+        padding: 8px 12px;
+        margin: 5px 0;
+        background: #f8f9fa;
+        border-radius: 4px;
+        display: flex;
+        justify-content: space-between;
+    }
+    .workflow-info {
+        background: #e3f2fd;
+        border: 1px solid #90caf9;
+        border-radius: 8px;
+        padding: 20px;
+        margin-bottom: 20px;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<h1>{{ title }}</h1>
+
+<div class="workflow-info">
+    <h3>{{ workflow.name }}</h3>
+    <p><strong>Status:</strong> 
+        {% if workflow.is_active %}
+            <span style="color: green;">🟢 Active</span>
+        {% else %}
+            <span style="color: red;">🔴 Inactive</span>
+        {% endif %}
+    </p>
+    <p><strong>Description:</strong> {{ workflow.description|default:"No description provided" }}</p>
+    <p><strong>Instructions:</strong> {{ workflow.instructions|truncatechars:200 }}</p>
+</div>
+
+<div class="stats-grid">
+    <div class="stat-card">
+        <div class="stat-number">{{ statistics.total_chats }}</div>
+        <div class="stat-label">Total Chats</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-number">{{ statistics.active_chats }}</div>
+        <div class="stat-label">Active Chats</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-number">{{ statistics.total_messages }}</div>
+        <div class="stat-label">Total Messages</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-number">{{ statistics.tool_executions }}</div>
+        <div class="stat-label">Tool Executions</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-number">{{ statistics.approval_requests }}</div>
+        <div class="stat-label">Approval Requests</div>
+    </div>
+</div>
+
+<div class="activity-chart">
+    <h3>Recent Activity (Last 7 Days)</h3>
+    {% if recent_activity %}
+        <div style="display: flex; align-items: end; gap: 10px; height: 200px; padding: 20px 0;">
+            {% for day in recent_activity %}
+                <div style="display: flex; flex-direction: column; align-items: center;">
+                    <div style="background: #007cba; width: 30px; height: {{ day.count|mul:5 }}px; margin-bottom: 5px; border-radius: 2px;"></div>
+                    <small>{{ day.created_at__date|date:"M d" }}</small>
+                    <small>{{ day.count }}</small>
+                </div>
+            {% endfor %}
+        </div>
+    {% else %}
+        <p style="color: #6c757d; text-align: center; padding: 40px;">No recent activity</p>
+    {% endif %}
+</div>
+
+<div class="activity-chart">
+    <h3>Message Type Distribution</h3>
+    {% if message_types %}
+        <ul class="message-type-list">
+            {% for msg_type in message_types %}
+                <li>
+                    <span>{{ msg_type.message_type|capfirst }}</span>
+                    <span><strong>{{ msg_type.count }}</strong></span>
+                </li>
+            {% endfor %}
+        </ul>
+    {% else %}
+        <p style="color: #6c757d; text-align: center; padding: 40px;">No messages yet</p>
+    {% endif %}
+</div>
+
+<div style="margin-top: 30px;">
+    <a href="{% url 'admin:django_ergo_workflow_changelist' %}" class="button default">← Back to Workflows</a>
+    <a href="{% url 'admin:django_ergo_workflow_change' workflow.id %}" class="button">Edit Workflow</a>
+    <a href="{% url 'admin:django_ergo_workflow_execution_stats' workflow.id %}" class="button" target="_blank">📈 JSON Stats</a>
+</div>
+
+{% endblock %}

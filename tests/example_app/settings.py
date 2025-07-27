@@ -28,8 +28,8 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
-    "django.middleware.security.SecurityMiddleware",
     "corsheaders.middleware.CorsMiddleware",
+    "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -43,9 +43,7 @@ ROOT_URLCONF = "tests.example_app.urls"
 TEMPLATES = [
     {
         "BACKEND": "django.template.backends.django.DjangoTemplates",
-        "DIRS": [
-            BASE_DIR / "templates",
-        ],
+        "DIRS": [],
         "APP_DIRS": True,
         "OPTIONS": {
             "context_processors": [
@@ -54,63 +52,62 @@ TEMPLATES = [
                 "django.contrib.auth.context_processors.auth",
                 "django.contrib.messages.context_processors.messages",
             ],
-            "debug": DEBUG,
         },
     },
 ]
 
-WSGI_APPLICATION = "tests.example_app.wsgi.application"
+WSGI_APPLICATION = "example.wsgi.application"
 
-# Database
-# https://docs.djangoproject.com/en/1.9/ref/settings/#databases
-
-# Use PostgreSQL with pgvector for production features
+# Database - MUST use PostgreSQL for testing (pgvector dependency)
+# NEVER use SQLite - django-ergo requires PostgreSQL + pgvector extension
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.postgresql",
-        "NAME": "django_ergo",
-        "USER": "ubuntu",
+        "NAME": "django_ergo_test",
+        "USER": "postgres",
         "PASSWORD": "",
-        "HOST": "",  # Empty string means Unix socket
-        "PORT": "",  # Empty string means default port
+        "HOST": "localhost",
+        "PORT": "5432",
+        "TEST": {
+            "NAME": "test_django_ergo",
+        },
+        "OPTIONS": {
+            "options": "-c default_transaction_isolation=read_committed"
+        },
     }
 }
 
-# SQLite for development (switched to PostgreSQL)
-# DATABASES = {
-#     "default": {
-#         "ENGINE": "django.db.backends.sqlite3",
-#         "NAME": BASE_DIR.parent / "db.sqlite3",
-#     }
-# }
-
-# Internationalization
-# https://docs.djangoproject.com/en/1.9/topics/i18n/
-
-LANGUAGE_CODE = "en-us"
-
-TIME_ZONE = "America/New_York"
-
-# Static files (CSS, JavaScript, Images)
-# https://docs.djangoproject.com/en/1.9/howto/static-files/
-
-STATIC_URL = "/static/"
-
-
-# User override settings for our package
-DJANGO_ERGO = {
-    "FOO": "newvalue"
-}
-
-# Default Auto Field
-DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
-
-# CORS Configuration for development
-CORS_ALLOWED_ORIGINS = [
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-    "http://localhost:8000",
-    "http://127.0.0.1:8000",
+# Password validation
+AUTH_PASSWORD_VALIDATORS = [
+    {
+        "NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator",
+    },
+    {
+        "NAME": "django.contrib.auth.password_validation.MinimumLengthValidator",
+    },
+    {
+        "NAME": "django.contrib.auth.password_validation.CommonPasswordValidator",
+    },
+    {
+        "NAME": "django.contrib.auth.password_validation.NumericPasswordValidator",
+    },
 ]
 
-CORS_ALLOW_CREDENTIALS = True
+# Internationalization
+LANGUAGE_CODE = "en-us"
+TIME_ZONE = "UTC"
+USE_I18N = True
+USE_L10N = True
+USE_TZ = False  # Keep False to avoid Django 5.0 warning
+
+# Static files (CSS, JavaScript, Images)
+STATIC_URL = "/static/"
+
+# Default primary key field type
+DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+# CORS Settings
+CORS_ALLOW_ALL_ORIGINS = True
+
+# django-ergo specific settings for testing
+USE_TZ = False

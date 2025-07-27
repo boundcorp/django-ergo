@@ -1,0 +1,194 @@
+{% extends "admin/base_site.html" %}
+{% load i18n admin_urls static admin_modify %}
+
+{% block title %}{{ title }} | {{ site_title|default:_('Django site admin') }}{% endblock %}
+
+{% block extrahead %}
+{{ block.super }}
+<style>
+    .chat-header {
+        background: #f0f8ff;
+        border: 1px solid #b3d9ff;
+        border-radius: 8px;
+        padding: 20px;
+        margin-bottom: 20px;
+    }
+    .stats-overview {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 15px;
+        margin: 20px 0;
+    }
+    .stat-item {
+        background: #f8f9fa;
+        border: 1px solid #dee2e6;
+        border-radius: 6px;
+        padding: 15px;
+        text-align: center;
+    }
+    .stat-number {
+        font-size: 1.5em;
+        font-weight: bold;
+        color: #007cba;
+        margin-bottom: 5px;
+    }
+    .message-container {
+        background: white;
+        border: 1px solid #dee2e6;
+        border-radius: 8px;
+        margin: 20px 0;
+        max-height: 600px;
+        overflow-y: auto;
+    }
+    .message {
+        border-bottom: 1px solid #f0f0f0;
+        padding: 15px 20px;
+    }
+    .message:last-child {
+        border-bottom: none;
+    }
+    .message-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 10px;
+        font-size: 0.9em;
+    }
+    .message-type {
+        padding: 2px 8px;
+        border-radius: 12px;
+        font-size: 0.8em;
+        font-weight: bold;
+        text-transform: uppercase;
+    }
+    .message-type.user_input {
+        background: #e3f2fd;
+        color: #1976d2;
+    }
+    .message-type.assistant_message {
+        background: #e8f5e8;
+        color: #388e3c;
+    }
+    .message-type.tool_response {
+        background: #fff3e0;
+        color: #f57c00;
+    }
+    .message-type.tool_approval_request {
+        background: #fce4ec;
+        color: #c2185b;
+    }
+    .message-type.error {
+        background: #ffebee;
+        color: #d32f2f;
+    }
+    .message-content {
+        background: #fafafa;
+        border-radius: 4px;
+        padding: 10px;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+        line-height: 1.5;
+        white-space: pre-wrap;
+        word-wrap: break-word;
+    }
+    .message-metadata {
+        margin-top: 10px;
+        font-size: 0.8em;
+        color: #6c757d;
+        background: #f8f9fa;
+        padding: 5px 10px;
+        border-radius: 4px;
+    }
+    .role-user {
+        border-left: 4px solid #2196f3;
+    }
+    .role-assistant {
+        border-left: 4px solid #4caf50;
+    }
+    .role-tool {
+        border-left: 4px solid #ff9800;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<h1>{{ title }}</h1>
+
+<div class="chat-header">
+    <h3>{{ userchat.title }}</h3>
+    <p><strong>User:</strong> {{ userchat.user.username }} ({{ userchat.user.email }})</p>
+    <p><strong>Workflow:</strong> {{ userchat.workflow.name }}</p>
+    <p><strong>Status:</strong> 
+        {% if userchat.is_active %}
+            <span style="color: green;">🟢 Active</span>
+        {% else %}
+            <span style="color: gray;">⚫ Inactive</span>
+        {% endif %}
+    </p>
+    <p><strong>Created:</strong> {{ userchat.created_at|date:"F d, Y H:i" }}</p>
+</div>
+
+<div class="stats-overview">
+    <div class="stat-item">
+        <div class="stat-number">{{ message_stats.total }}</div>
+        <div>Total Messages</div>
+    </div>
+    {% for role, count in message_stats.by_role.items %}
+        <div class="stat-item">
+            <div class="stat-number">{{ count }}</div>
+            <div>{{ role|capfirst }} Messages</div>
+        </div>
+    {% endfor %}
+</div>
+
+<div style="margin: 20px 0;">
+    <h3>Message Types</h3>
+    <div style="display: flex; flex-wrap: wrap; gap: 10px;">
+        {% for msg_type, count in message_stats.by_type.items %}
+            <div style="background: #f8f9fa; padding: 8px 12px; border-radius: 4px; border: 1px solid #dee2e6;">
+                <strong>{{ msg_type|capfirst }}:</strong> {{ count }}
+            </div>
+        {% endfor %}
+    </div>
+</div>
+
+<div class="message-container">
+    <h3 style="padding: 15px 20px; margin: 0; background: #f8f9fa; border-bottom: 1px solid #dee2e6;">
+        Conversation History ({{ messages|length }} message{{ messages|length|pluralize }})
+    </h3>
+    
+    {% if messages %}
+        {% for message in messages %}
+            <div class="message role-{{ message.role }}">
+                <div class="message-header">
+                    <div>
+                        <span class="message-type {{ message.message_type }}">{{ message.message_type }}</span>
+                        <strong style="margin-left: 10px;">{{ message.role|capfirst }}</strong>
+                    </div>
+                    <div style="color: #6c757d;">
+                        {{ message.created_at|date:"M d, Y H:i:s" }}
+                    </div>
+                </div>
+                
+                <div class="message-content">{{ message.content|default:"(No content)" }}</div>
+                
+                {% if message.metadata %}
+                    <div class="message-metadata">
+                        <strong>Metadata:</strong> {{ message.metadata|pprint }}
+                    </div>
+                {% endif %}
+            </div>
+        {% endfor %}
+    {% else %}
+        <div style="padding: 40px; text-align: center; color: #6c757d;">
+            No messages in this chat yet.
+        </div>
+    {% endif %}
+</div>
+
+<div style="margin-top: 30px;">
+    <a href="{% url 'admin:django_ergo_userchat_changelist' %}" class="button default">← Back to Chats</a>
+    <a href="{% url 'admin:django_ergo_userchat_change' userchat.id %}" class="button">Edit Chat</a>
+    <a href="{% url 'admin:django_ergo_userchat_export_history' userchat.id %}" class="button" target="_blank">📁 Export JSON</a>
+</div>
+
+{% endblock %}
