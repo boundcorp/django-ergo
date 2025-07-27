@@ -64,6 +64,23 @@ results = Article.objects.multi_field_semantic_search(
 - 🛠️ **Modular functions** - Low-level and high-level search APIs
 - ⚡ **Performance optimized** - Efficient vector operations with pgvector
 
+## 📚 Example Applications
+
+Django Ergo ships with fully-featured example Django apps that illustrate different ways to combine semantic search, workflows, and tool-based function calling.
+
+### 1. EcomDBAdmin
+A minimal e-commerce back-office demonstrating how large-language-model agents can safely query and update a relational database.
+
+Key capabilities:
+- **Orders model** storing basic order information (number, customer, total, status, timestamps).
+- **SQLSelectTool** – read-only tool that allows the agent to issue whitelisted `SELECT` statements without human intervention.
+- **SQLWriteTool** – write tool (`INSERT`/`UPDATE`/`DELETE`) that is executed only after human approval, showcasing the framework’s built-in approval workflow.
+- **DBAdmin workflow** that turns natural-language questions like “What were yesterday’s cancelled orders?” into the appropriate SQL tool calls and LLM-generated summaries.
+- Shared knowledge base **“Shop Wiki”** providing general store policies, naming conventions, etc., which the agent can reference in its answers.
+- Fixtures containing a few historical chat sessions where a user corrected the model. These conversations are automatically ingested into the knowledge base by a dedicated `UserChatHistoryKBIngestion` helper so the agent keeps getting better over time.
+
+Additional example apps (multi-KB orchestration, advanced tool chaining, etc.) will follow in future releases.
+
 ## Quickstart
 
 Install django-ergo:

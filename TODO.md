@@ -69,14 +69,18 @@
   - Tool creation documentation
 
 ### Example Applications
-- [ ] **Example Application 1**
-  - Implement core functionality demonstrating single-user workflows
-  - Add AI-powered conversation features
-  - Create sample data and setup scripts
-- [ ] **Example Application 2**
-  - Build multi-tier knowledge system example
-  - Implement complex workflow orchestration
-  - Demonstrate advanced tool integration
+- [ ] **EcomDBAdmin**
+  - Create `Orders` model (order_number, customer_name, total_amount, status, created_at)
+  - Implement read-only `SQLSelectTool` (whitelisted `SELECT` statements)
+  - Implement write `SQLWriteTool` (INSERT/UPDATE/DELETE) that requires human approval
+  - Build `DBAdmin` workflow that routes natural-language queries through the SQL tools
+  - Use shared knowledge base **Shop Wiki** for contextual answers
+  - Seed project with fixtures: sample conversations + corrections showcasing KB learning
+  - Implement `UserChatHistoryKBIngestion` helper that converts chat history to KB articles
+- [ ] **Example Application 2 _(TBD)_**
+  - Placeholder – explore multi-knowledge-base orchestration
+- [ ] **Example Application 3 _(TBD)_**
+  - Placeholder – advanced tool integration showcase
 
 ## 🔧 INFRASTRUCTURE (Later)
 
