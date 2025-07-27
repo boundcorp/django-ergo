@@ -1,17 +1,17 @@
 # Testing
 # ------------------------------------------------------------------------------
-pytest  # https://github.com/pytest-dev/pytest
-pytest-mock  # https://github.com/pytest-dev/pytest-mock
+pytest==8.4.1  # https://github.com/pytest-dev/pytest
+pytest-mock==3.14.1  # https://github.com/pytest-dev/pytest-mock
 
 # Code quality
 # ------------------------------------------------------------------------------
-ruff  # https://github.com/astral-sh/ruff
-coverage  # https://github.com/nedbat/coveragepy
-djlint  # https://github.com/Riverside-Healthcare/djLint
+ruff==0.12.5  # https://github.com/astral-sh/ruff
+coverage==7.10.0  # https://github.com/nedbat/coveragepy
+djlint==1.36.4  # https://github.com/Riverside-Healthcare/djLint
 pre-commit  # https://github.com/pre-commit/pre-commit
 
 # Django
 # ------------------------------------------------------------------------------
 factory-boy  # https://github.com/FactoryBoy/factory_boy
 django-coverage-plugin  # https://github.com/nedbat/django_coverage_plugin
-pytest-django  # https://github.com/pytest-dev/pytest-django
+pytest-django==4.11.1  # https://github.com/pytest-dev/pytest-django
