@@ -30,18 +30,21 @@
   - ✅ Support custom embeddings for testing
 - [x] **Enhanced Search** ✅
   - ✅ Optimize hybrid search performance with pgvector indexes
-  - [ ] Add caching for embeddings and results
+  - ✅ Caching strategy decision: Apps handle their own embedding/result caching
   - [ ] Implement search analytics and suggestions
 
 ### Workflow Engine
-- [ ] **Tool Approval System**
-  - Build approval workflow: save context → event → wait → resume
-  - Add tool whitelisting for apps
-  - Implement tool sandboxing framework
-- [ ] **Context Management**
-  - Improve OpenAI agent context serialization
-  - Add workflow pause/resume capabilities
-  - Handle workflow state persistence
+- [x] **Tool Approval System** ✅
+  - ✅ Build approval workflow: save context → event → wait → resume
+  - ✅ Add tool whitelisting for apps  
+  - ✅ Implement Django signals for approval events
+  - ✅ Create new message types for approval workflow
+  - ✅ Add context serialization for pause/resume
+  - ✅ Demonstration tools with approval requirements
+- [x] **Context Management** ✅
+  - ✅ OpenAI agent context serialization
+  - ✅ Workflow pause/resume capabilities
+  - ✅ Workflow state persistence
 
 ### Developer Experience
 - [ ] **Admin Enhancements**
@@ -78,10 +81,10 @@
 ## 🔧 INFRASTRUCTURE (Later)
 
 ### Performance & Monitoring
-- [ ] **Caching Strategy**
-  - Multi-level caching for embeddings
-  - Search result caching with Redis
-  - Cache invalidation strategies
+- [ ] **Application-Level Caching** (Framework provides utilities only)
+  - Caching utilities and helpers for apps
+  - Cache invalidation helper functions
+  - Performance monitoring tools
 - [ ] **Monitoring & Logging**
   - Structured logging throughout system
   - Performance metrics collection

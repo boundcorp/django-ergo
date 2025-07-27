@@ -10,6 +10,7 @@ import os
 from typing import Dict, Any, List, Optional, Callable
 from dataclasses import dataclass
 from django.contrib.auth import get_user_model
+from django.dispatch import Signal
 from django_ergo.models import UserChat, ChatMessage, Workflow, MessageType, MessageRole
 from django_ergo.tools import tool_registry
 from django_ergo.settings import api_settings
@@ -19,6 +20,11 @@ from django_ergo.settings import api_settings
 import openai
 
 User = get_user_model()
+
+# Workflow approval signals
+tool_approval_requested = Signal()  # Fired when tool approval is needed
+workflow_paused = Signal()  # Fired when workflow is paused for approval
+workflow_resumed = Signal()  # Fired when workflow resumes after approval
 
 
 @dataclass
@@ -35,6 +41,16 @@ class WorkflowContext:
             self.state = {}
 
 
+@dataclass
+class ApprovalRequest:
+    """Represents a tool approval request."""
+    tool_call_id: str
+    tool_name: str
+    arguments: Dict[str, Any]
+    context: WorkflowContext
+    serialized_state: Dict[str, Any]
+
+
 class WorkflowEngine:
     """
     Main workflow engine for processing chat messages.
@@ -44,6 +60,7 @@ class WorkflowEngine:
     - Tool execution with approval system
     - Workflow state persistence and resumption
     - Context serialization for pause/resume
+    - Tool approval events and whitelisting
     """
     
     def __init__(self):
@@ -80,59 +97,131 @@ class WorkflowEngine:
         Args:
             chat: The user chat
             message_content: The user's message content
-            resume_from_message: Optional message to resume from
+            resume_from_message: Optional message to resume from (for approval flows)
             
         Returns:
-            The assistant's response message
+            ChatMessage: The response message (may be approval request)
         """
-        # Create user message if not resuming
-        if not resume_from_message:
-            user_message = chat.add_message(
-                message_type=MessageType.USER_INPUT,
-                content=message_content,
-                role=MessageRole.USER
-            )
-        else:
-            user_message = resume_from_message
-        
-        # Create workflow context
         context = WorkflowContext(
             user=chat.user,
             chat=chat,
             workflow=chat.workflow,
-            current_message=user_message,
             state=chat.get_workflow_state()
         )
         
+        # Check if we're resuming from an approval
+        if resume_from_message:
+            return self._resume_from_approval(context, resume_from_message, message_content)
+        
+        # Create user message
+        user_message = chat.add_message(
+            message_type=MessageType.USER_INPUT,
+            content=message_content,
+            role=MessageRole.USER
+        )
+        context.current_message = user_message
+        
         try:
-            # Process through AI agent
-            response = self._process_with_agent(context)
-            
-            # Create assistant response message
-            assistant_message = chat.add_message(
-                message_type=MessageType.ASSISTANT_MESSAGE,
-                content=response["content"],
-                role=MessageRole.ASSISTANT,
-                metadata=response.get("metadata", {})
-            )
-            
-            # Save agent context for potential resume
-            if "agent_context" in response:
-                assistant_message.save_agent_context(response["agent_context"])
-            
-            return assistant_message
-            
+            return self._process_with_agent(context)
         except Exception as e:
-            # Create error message
-            error_message = chat.add_message(
+            return chat.add_message(
                 message_type=MessageType.ERROR,
-                content=f"Error processing message: {str(e)}",
-                role=MessageRole.SYSTEM,
-                metadata={"error": str(e), "error_type": type(e).__name__}
+                content=f"Workflow error: {str(e)}",
+                role=MessageRole.ASSISTANT,
+                metadata={"error_type": "workflow_error", "original_error": str(e)}
             )
-            return error_message
     
-    def _process_with_agent(self, context: WorkflowContext) -> Dict[str, Any]:
+    def approve_tool_execution(
+        self,
+        chat: UserChat, 
+        approval_message: ChatMessage,
+        approved_tools: List[str],
+        denied_tools: List[str] = None
+    ) -> ChatMessage:
+        """
+        Approve or deny tool execution and resume workflow.
+        
+        Args:
+            chat: The user chat
+            approval_message: The message containing approval request  
+            approved_tools: List of tool call IDs that are approved
+            denied_tools: List of tool call IDs that are denied
+            
+        Returns:
+            ChatMessage: The workflow continuation response
+        """
+        if denied_tools is None:
+            denied_tools = []
+            
+        # Create approval response message
+        approval_response = chat.add_message(
+            message_type=MessageType.TOOL_APPROVAL_RESPONSE,
+            content=f"Approved: {len(approved_tools)} tools, Denied: {len(denied_tools)} tools",
+            role=MessageRole.USER,
+            metadata={
+                "approved_tools": approved_tools,
+                "denied_tools": denied_tools,
+                "original_approval_id": str(approval_message.id)
+            }
+        )
+        
+        # Resume workflow from saved context
+        return self._resume_from_approval_response(chat, approval_message, approval_response)
+    
+    def get_tool_whitelist(self, workflow: Workflow) -> List[str]:
+        """
+        Get the tool whitelist for a workflow.
+        Apps can configure which tools are pre-approved.
+        
+        Args:
+            workflow: The workflow to check
+            
+        Returns:
+            List[str]: List of pre-approved tool names
+        """
+        tools_config = workflow.tools_config or {}
+        return tools_config.get("approved_tools", [])
+    
+    def is_tool_whitelisted(self, workflow: Workflow, tool_name: str) -> bool:
+        """
+        Check if a tool is whitelisted for automatic approval.
+        
+        Args:
+            workflow: The workflow to check
+            tool_name: Name of the tool
+            
+        Returns:
+            bool: True if tool is whitelisted
+        """
+        whitelist = self.get_tool_whitelist(workflow)
+        return tool_name in whitelist
+    
+    def serialize_workflow_context(self, context: WorkflowContext, openai_messages: List[Dict]) -> Dict[str, Any]:
+        """
+        Serialize workflow context for pause/resume functionality.
+        
+        Args:
+            context: Current workflow context
+            openai_messages: OpenAI conversation messages
+            
+        Returns:
+            Dict containing serialized context
+        """
+        return {
+            "workflow_id": str(context.workflow.id),
+            "chat_id": str(context.chat.id),
+            "user_id": str(context.user.id),
+            "openai_messages": openai_messages,
+            "workflow_state": context.state,
+            "model_config": {
+                "model": self.model,
+                "temperature": self.temperature,
+                "max_tokens": self.max_tokens
+            },
+            "timestamp": context.current_message.created_at.isoformat() if context.current_message else None
+        }
+    
+    def _process_with_agent(self, context: WorkflowContext) -> ChatMessage:
         """
         Process the message with an OpenAI agent.
         
@@ -140,52 +229,80 @@ class WorkflowEngine:
             context: Workflow context
             
         Returns:
-            Dictionary with response content and metadata
+            ChatMessage: The assistant's response message (may be approval request)
         """
-        # Build conversation history
-        messages = self._build_conversation_history(context)
+        # Build conversation history for OpenAI (including system message)
+        messages = self._build_openai_conversation_history(context)
         
         # Get available tools for this workflow
         tools = self._get_workflow_tools(context.workflow)
         
-        # Make OpenAI API call
-        response = self.openai_client.chat.completions.create(
-            model=self.model,
-            messages=messages,
-            tools=tools if tools else None,
-            tool_choice="auto" if tools else None,
-            temperature=self.temperature,
-            max_tokens=self.max_tokens
-        )
-        
-        message = response.choices[0].message
-        
-        # Handle tool calls
-        if message.tool_calls:
-            return self._handle_tool_calls(context, message, response)
-        
-        # Regular text response
-        return {
-            "content": message.content or "",
-            "metadata": {
-                "model": self.model,
-                "usage": response.usage.model_dump() if response.usage else {}
-            },
-            "agent_context": {
-                "messages": messages,
-                "last_response": message.model_dump()
-            }
-        }
-        
-    def _build_conversation_history(self, context: WorkflowContext) -> List[Dict[str, Any]]:
+        try:
+            # Make OpenAI API call
+            response = self.openai_client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                tools=tools if tools else None,
+                tool_choice="auto" if tools else None,
+                temperature=self.temperature,
+                max_tokens=self.max_tokens
+            )
+            
+            message = response.choices[0].message
+            
+            # Handle tool calls
+            if message.tool_calls:
+                tool_response = self._handle_tool_calls(context, message, response)
+                
+                # If it's an approval request, return the approval message
+                if tool_response.get("approval_request"):
+                    return context.chat.messages.filter(
+                        message_type=MessageType.TOOL_APPROVAL_REQUEST
+                    ).last()
+                
+                # Otherwise continue with tool results and create assistant message
+                assistant_message = context.chat.add_message(
+                    message_type=MessageType.ASSISTANT_MESSAGE,
+                    content=tool_response["content"],
+                    role=MessageRole.ASSISTANT,
+                    metadata=tool_response.get("metadata", {})
+                )
+                return assistant_message
+            
+            # Handle regular response - create assistant message
+            assistant_message = context.chat.add_message(
+                message_type=MessageType.ASSISTANT_MESSAGE,
+                content=message.content or "I apologize, but I couldn't generate a response.",
+                role=MessageRole.ASSISTANT,
+                metadata={
+                    "model": self.model,
+                    "usage": response.usage.model_dump() if response.usage else {}
+                }
+            )
+            return assistant_message
+            
+        except Exception as e:
+            error_message = context.chat.add_message(
+                message_type=MessageType.ERROR,
+                content=f"I encountered an error: {str(e)}",
+                role=MessageRole.ASSISTANT,
+                metadata={
+                    "error": str(e),
+                    "model": self.model,
+                    "error_type": "agent_processing_error"
+                }
+            )
+            return error_message
+    
+    def _build_openai_conversation_history(self, context: WorkflowContext) -> List[Dict[str, Any]]:
         """
-        Build conversation history for OpenAI API.
+        Build conversation history for OpenAI API calls.
         
         Args:
             context: Workflow context
             
         Returns:
-            List of messages in OpenAI format
+            List of messages in OpenAI format including system message
         """
         messages = []
         
@@ -215,6 +332,41 @@ class WorkflowEngine:
                     "role": "tool",
                     "content": msg.content,
                     "tool_call_id": msg.get_metadata("tool_call_id", "")
+                })
+        
+        return messages
+        
+    def _build_conversation_history(self, context: WorkflowContext) -> List[Dict]:
+        """
+        Build conversation history for context serialization.
+        
+        Args:
+            context: Workflow context
+            
+        Returns:
+            List of conversation messages in OpenAI format
+        """
+        messages = []
+        
+        # Get recent messages from chat
+        chat_messages = context.chat.get_context_messages(limit=20)
+        
+        for msg in reversed(chat_messages):  # Reverse to get chronological order
+            if msg.message_type == MessageType.USER_INPUT:
+                messages.append({
+                    "role": "user",
+                    "content": msg.content
+                })
+            elif msg.message_type == MessageType.ASSISTANT_MESSAGE:
+                messages.append({
+                    "role": "assistant", 
+                    "content": msg.content
+                })
+            elif msg.message_type == MessageType.TOOL_RESPONSE:
+                messages.append({
+                    "role": "tool",
+                    "content": msg.content,
+                    "tool_call_id": msg.get_metadata("tool_call_id")
                 })
         
         return messages
@@ -264,7 +416,7 @@ class WorkflowEngine:
         response: Any
     ) -> Dict[str, Any]:
         """
-        Handle tool calls from the AI agent.
+        Handle tool calls from the AI agent with approval workflow support.
         
         Args:
             context: Workflow context
@@ -284,25 +436,37 @@ class WorkflowEngine:
             except json.JSONDecodeError:
                 arguments = {}
             
-            # Check if tool requires approval
+            # Check tool configuration
             tool_config = tool_registry.get_tool(tool_name)
-            if tool_config and tool_config.requires_approval:
+            
+            # Check if tool is whitelisted for auto-approval
+            is_whitelisted = self.is_tool_whitelisted(context.workflow, tool_name)
+            
+            # Determine if approval is needed
+            needs_approval = (
+                tool_config and 
+                tool_config.requires_approval and 
+                not is_whitelisted
+            )
+            
+            if needs_approval:
                 # Save tool call for approval
                 pending_approvals.append({
                     "tool_call_id": tool_call.id,
                     "tool_name": tool_name,
                     "arguments": arguments,
+                    "description": tool_config.description if tool_config else "Unknown tool",
                     "requires_approval": True
                 })
                 continue
             
-            # Execute tool
+            # Execute tool (auto-approved or whitelisted)
             try:
                 result = tool_registry.execute_tool(
                     name=tool_name,
                     user=context.user,
                     arguments=arguments,
-                    approved=True  # Auto-approved for non-approval tools
+                    approved=True
                 )
                 
                 tool_results.append({
@@ -318,7 +482,9 @@ class WorkflowEngine:
                     metadata={
                         "tool_name": tool_name,
                         "tool_call_id": tool_call.id,
-                        "arguments": arguments
+                        "arguments": arguments,
+                        "auto_approved": not needs_approval,
+                        "whitelisted": is_whitelisted
                     }
                 )
                 
@@ -329,23 +495,12 @@ class WorkflowEngine:
                     "result": error_result
                 })
         
-        # If there are pending approvals, return approval request
+        # If there are pending approvals, create approval request
         if pending_approvals:
-            return {
-                "content": "Some tools require approval before execution. Please approve the following actions:",
-                "metadata": {
-                    "pending_approvals": pending_approvals,
-                    "requires_user_approval": True
-                },
-                "agent_context": {
-                    "tool_calls": message.tool_calls,
-                    "pending_approvals": pending_approvals
-                }
-            }
+            return self._create_approval_request(context, message, response, pending_approvals)
         
         # Continue conversation with tool results
         if tool_results:
-            # Add tool results to conversation and get final response
             return self._continue_with_tool_results(context, tool_results)
         
         return {
@@ -355,6 +510,105 @@ class WorkflowEngine:
                 "model": self.model
             }
         }
+    
+    def _create_approval_request(
+        self, 
+        context: WorkflowContext, 
+        message: Any, 
+        response: Any, 
+        pending_approvals: List[Dict]
+    ) -> Dict[str, Any]:
+        """
+        Create an approval request with serialized context for pause/resume.
+        
+        Args:
+            context: Workflow context
+            message: OpenAI message with tool calls
+            response: Full OpenAI response
+            pending_approvals: List of tools pending approval
+            
+        Returns:
+            Dictionary with approval request content and serialized context
+        """
+        # Build conversation history for serialization
+        messages_history = self._build_conversation_history(context)
+        
+        # Serialize context for pause/resume
+        serialized_context = self.serialize_workflow_context(context, messages_history)
+        
+        # Create approval request message
+        approval_content = self._format_approval_request(pending_approvals)
+        
+        approval_message = context.chat.add_message(
+            message_type=MessageType.TOOL_APPROVAL_REQUEST,
+            content=approval_content,
+            role=MessageRole.ASSISTANT,
+            metadata={
+                "pending_approvals": pending_approvals,
+                "requires_user_approval": True,
+                "tool_call_count": len(pending_approvals)
+            }
+        )
+        
+        # Save serialized context to approval message
+        approval_message.save_agent_context(serialized_context)
+        
+        # Save workflow state
+        context.chat.save_workflow_state(context.state)
+        
+        # Fire signals for external handling
+        tool_approval_requested.send(
+            sender=self.__class__,
+            context=context,
+            pending_approvals=pending_approvals,
+            approval_message=approval_message
+        )
+        
+        workflow_paused.send(
+            sender=self.__class__,
+            context=context,
+            approval_message=approval_message
+        )
+        
+        return {
+            "content": approval_content,
+            "metadata": {
+                "pending_approvals": pending_approvals,
+                "requires_user_approval": True,
+                "approval_message_id": str(approval_message.id),
+                "serialized_context": serialized_context
+            },
+            "approval_request": True
+        }
+    
+    def _format_approval_request(self, pending_approvals: List[Dict]) -> str:
+        """
+        Format approval request content for user display.
+        
+        Args:
+            pending_approvals: List of tools pending approval
+            
+        Returns:
+            Formatted approval request message
+        """
+        lines = ["🔒 **Tool Approval Required**", ""]
+        lines.append("The following tools require your approval before execution:")
+        lines.append("")
+        
+        for i, approval in enumerate(pending_approvals, 1):
+            tool_name = approval["tool_name"]
+            description = approval.get("description", "No description available")
+            arguments = approval["arguments"]
+            
+            lines.append(f"**{i}. {tool_name}**")
+            lines.append(f"   - Description: {description}")
+            lines.append(f"   - Arguments: {json.dumps(arguments, indent=2)}")
+            lines.append("")
+        
+        lines.append("Please review and approve or deny these tool executions.")
+        lines.append("Use the approval interface or respond with your decision.")
+        
+        return "\n".join(lines)
     
     def _continue_with_tool_results(
         self, 
@@ -401,82 +655,141 @@ class WorkflowEngine:
             }
         }
     
-    def approve_tool_execution(
-        self, 
-        chat: UserChat, 
-        message: ChatMessage, 
-        approved_tools: List[str]
-    ) -> ChatMessage:
+    def _resume_from_approval(self, context: WorkflowContext, resume_message: ChatMessage, message_content: str) -> ChatMessage:
         """
-        Execute approved tools and continue the conversation.
-        
-        Args:
-            chat: The user chat
-            message: The message with pending tool approvals
-            approved_tools: List of approved tool call IDs
-            
-        Returns:
-            The assistant's response after tool execution
+        Resume workflow from an approval message.
         """
-        agent_context = message.get_agent_context()
-        pending_approvals = agent_context.get("pending_approvals", [])
-        
-        # Execute approved tools
-        tool_results = []
-        for approval in pending_approvals:
-            if approval["tool_call_id"] in approved_tools:
-                try:
-                    result = tool_registry.execute_tool(
-                        name=approval["tool_name"],
-                        user=chat.user,
-                        arguments=approval["arguments"],
-                        approved=True
+        # Deserialize context from the message
+        try:
+            serialized_context = json.loads(resume_message.content)
+            workflow_id = serialized_context.get("workflow_id")
+            chat_id = serialized_context.get("chat_id")
+            user_id = serialized_context.get("user_id")
+            openai_messages = serialized_context.get("openai_messages")
+            workflow_state = serialized_context.get("workflow_state")
+            model_config = serialized_context.get("model_config")
+            timestamp = serialized_context.get("timestamp")
+
+            if not all([workflow_id, chat_id, user_id, openai_messages, workflow_state]):
+                raise ValueError("Invalid serialized context in approval message.")
+
+            # Reconstruct context
+            context.workflow = Workflow.objects.get(id=workflow_id)
+            context.chat = UserChat.objects.get(id=chat_id)
+            context.user = User.objects.get(id=user_id)
+            context.state = workflow_state
+            context.current_message = resume_message
+
+            # Re-add messages to context.chat
+            for msg_data in openai_messages:
+                if msg_data["role"] == "user":
+                    context.chat.add_message(
+                        message_type=MessageType.USER_INPUT,
+                        content=msg_data["content"],
+                        role=MessageRole.USER
                     )
-                    
-                    tool_results.append({
-                        "tool_call_id": approval["tool_call_id"],
-                        "result": result
-                    })
-                    
-                    # Create tool response message
-                    chat.add_message(
+                elif msg_data["role"] == "assistant":
+                    context.chat.add_message(
+                        message_type=MessageType.ASSISTANT_MESSAGE,
+                        content=msg_data["content"],
+                        role=MessageRole.ASSISTANT
+                    )
+                elif msg_data["role"] == "tool":
+                    context.chat.add_message(
                         message_type=MessageType.TOOL_RESPONSE,
-                        content=json.dumps(result),
+                        content=msg_data["content"],
                         role=MessageRole.TOOL,
-                        metadata={
-                            "tool_name": approval["tool_name"],
-                            "tool_call_id": approval["tool_call_id"],
-                            "arguments": approval["arguments"],
-                            "approved": True
-                        }
+                        metadata={"tool_call_id": msg_data["tool_call_id"]}
                     )
-                    
-                except Exception as e:
-                    error_result = {"error": str(e)}
-                    tool_results.append({
-                        "tool_call_id": approval["tool_call_id"],
-                        "result": error_result
-                    })
-        
-        # Continue conversation with approved tool results
-        context = WorkflowContext(
-            user=chat.user,
-            chat=chat,
-            workflow=chat.workflow,
-            current_message=message
-        )
-        
-        response = self._continue_with_tool_results(context, tool_results)
-        
-        # Create final assistant message
-        assistant_message = chat.add_message(
-            message_type=MessageType.ASSISTANT_MESSAGE,
-            content=response["content"],
-            role=MessageRole.ASSISTANT,
-            metadata=response.get("metadata", {})
-        )
-        
-        return assistant_message
+
+            # Update workflow state in the chat
+            context.chat.update_workflow_state(context.state)
+
+            # Create a new user message for the resumed workflow
+            user_message = context.chat.add_message(
+                message_type=MessageType.USER_INPUT,
+                content=message_content,
+                role=MessageRole.USER
+            )
+            context.current_message = user_message
+
+            return self._process_with_agent(context)
+        except Exception as e:
+            return context.chat.add_message(
+                message_type=MessageType.ERROR,
+                content=f"Error resuming workflow from approval: {str(e)}",
+                role=MessageRole.ASSISTANT,
+                metadata={"error_type": "resume_error", "original_error": str(e)}
+            )
+
+    def _resume_from_approval_response(self, chat: UserChat, approval_message: ChatMessage, approval_response: ChatMessage) -> ChatMessage:
+        """
+        Resume workflow from an approval response message.
+        """
+        # Deserialize context from the message
+        try:
+            serialized_context = json.loads(approval_response.content)
+            workflow_id = serialized_context.get("workflow_id")
+            chat_id = serialized_context.get("chat_id")
+            user_id = serialized_context.get("user_id")
+            openai_messages = serialized_context.get("openai_messages")
+            workflow_state = serialized_context.get("workflow_state")
+            model_config = serialized_context.get("model_config")
+            timestamp = serialized_context.get("timestamp")
+
+            if not all([workflow_id, chat_id, user_id, openai_messages, workflow_state]):
+                raise ValueError("Invalid serialized context in approval response message.")
+
+            # Reconstruct context
+            context = WorkflowContext(
+                user=User.objects.get(id=user_id),
+                chat=UserChat.objects.get(id=chat_id),
+                workflow=Workflow.objects.get(id=workflow_id),
+                state=workflow_state,
+                current_message=approval_response
+            )
+
+            # Re-add messages to context.chat
+            for msg_data in openai_messages:
+                if msg_data["role"] == "user":
+                    context.chat.add_message(
+                        message_type=MessageType.USER_INPUT,
+                        content=msg_data["content"],
+                        role=MessageRole.USER
+                    )
+                elif msg_data["role"] == "assistant":
+                    context.chat.add_message(
+                        message_type=MessageType.ASSISTANT_MESSAGE,
+                        content=msg_data["content"],
+                        role=MessageRole.ASSISTANT
+                    )
+                elif msg_data["role"] == "tool":
+                    context.chat.add_message(
+                        message_type=MessageType.TOOL_RESPONSE,
+                        content=msg_data["content"],
+                        role=MessageRole.TOOL,
+                        metadata={"tool_call_id": msg_data["tool_call_id"]}
+                    )
+
+            # Update workflow state in the chat
+            context.chat.update_workflow_state(context.state)
+
+            # Create a new user message for the resumed workflow
+            user_message = context.chat.add_message(
+                message_type=MessageType.USER_INPUT,
+                content=approval_message.content, # Use the original approval message content
+                role=MessageRole.USER
+            )
+            context.current_message = user_message
+
+            return self._process_with_agent(context)
+        except Exception as e:
+            return chat.add_message(
+                message_type=MessageType.ERROR,
+                content=f"Error resuming workflow from approval response: {str(e)}",
+                role=MessageRole.ASSISTANT,
+                metadata={"error_type": "resume_error", "original_error": str(e)}
+            )
 
 
 # Global workflow engine instance

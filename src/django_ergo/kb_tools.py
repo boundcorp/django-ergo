@@ -9,6 +9,7 @@ from typing import List, Dict, Any, Optional
 from django.contrib.auth import get_user_model
 from django_ergo.models import Knowledgebase, Article
 from django_ergo.tools import tool
+from django_ergo.tools import tool_registry
 
 User = get_user_model()
 
@@ -312,4 +313,89 @@ def create_article(
         "hierarchy_code": article.hierarchy_code,
         "knowledgebase": kb.name,
         "message": "Article created successfully"
+    }
+
+
+@tool_registry.register_tool(
+    name="delete_user_article",
+    description="Delete an article from the user's knowledge base. This action is destructive and requires approval.",
+    requires_approval=True,  # This tool requires approval
+    readonly=False
+)
+def delete_user_article(user, article_id: str):
+    """
+    Delete an article from the user's knowledge base.
+    This tool requires approval before execution.
+    
+    Args:
+        user: The user making the request
+        article_id: ID of the article to delete
+        
+    Returns:
+        dict: Deletion confirmation with details
+    """
+    from django_ergo.models import Article
+    
+    try:
+        # Find the article
+        article = Article.objects.get(id=article_id, knowledgebase__owner_id=str(user.id))
+        article_title = article.title
+        article_kb = article.knowledgebase.name
+        
+        # Delete the article
+        article.delete()
+        
+        return {
+            "success": True,
+            "message": f"Successfully deleted article '{article_title}' from knowledge base '{article_kb}'",
+            "deleted_article": {
+                "id": article_id,
+                "title": article_title,
+                "knowledgebase": article_kb
+            }
+        }
+        
+    except Article.DoesNotExist:
+        return {
+            "success": False,
+            "error": f"Article with ID '{article_id}' not found or you don't have permission to delete it"
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": f"Failed to delete article: {str(e)}"
+        }
+
+
+@tool_registry.register_tool(
+    name="send_email_notification",
+    description="Send an email notification to external recipients. Requires approval for security.",
+    requires_approval=True,  # This tool requires approval
+    readonly=False
+)
+def send_email_notification(user, recipient: str, subject: str, message: str):
+    """
+    Send an email notification to external recipients.
+    This tool requires approval before execution for security reasons.
+    
+    Args:
+        user: The user making the request
+        recipient: Email address of the recipient
+        subject: Email subject line
+        message: Email message content
+        
+    Returns:
+        dict: Email sending status
+    """
+    # Note: This is a demonstration tool - in production you'd integrate with actual email service
+    return {
+        "success": True,
+        "message": f"Email notification sent successfully",
+        "email_details": {
+            "recipient": recipient,
+            "subject": subject,
+            "message": message,
+            "sender": user.email if hasattr(user, 'email') else 'system@example.com',
+            "status": "simulated_sent"
+        }
     }
