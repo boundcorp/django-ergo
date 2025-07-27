@@ -59,11 +59,6 @@ from django.db import models
 from django.conf import settings
 from pgvector.django import VectorField, CosineDistance
 from typing import Optional, Dict, Any, List
-import openai
-import os
-
-# Configure OpenAI client
-openai.api_key = os.getenv("OPENAI_API_KEY", "test-key-for-development")
 
 
 def generate_summary(
@@ -80,6 +75,14 @@ def generate_summary(
     Returns:
         str: Generated summary
     """
+    # Import here to avoid circular imports
+    import openai
+    import os
+    
+    # Configure OpenAI client - this still uses direct OpenAI for now
+    # TODO: Consider making summary generation pluggable as well
+    openai.api_key = os.getenv("OPENAI_API_KEY", "test-key-for-development")
+    
     messages: List[Dict[str, Any]] = [
         {
             "role": "system",
@@ -112,25 +115,21 @@ def generate_summary(
 
 def generate_embedding(text: str) -> List[float]:
     """
-    Generate embeddings using OpenAI's text-embedding-3-small model.
-    Returns a 1536-dimensional vector.
+    Generate embeddings using the configured embedding provider.
     
     Args:
         text: The text to embed
         
     Returns:
-        List[float]: 1536-dimensional embedding vector
+        List[float]: Embedding vector (dimensions depend on provider)
+        
+    Raises:
+        EmbeddingError: If embedding generation fails
     """
-    try:
-        response = openai.embeddings.create(
-            model="text-embedding-3-small", 
-            input=text, 
-            encoding_format="float"
-        )
-        return response.data[0].embedding
-    except Exception as e:
-        print(f"Error generating embedding: {e}")
-        raise e
+    from django_ergo.embedding_providers import get_embedding_provider
+    
+    provider = get_embedding_provider()
+    return provider.generate_embedding(text)
 
 
 def vector_search(model_class, vector_field_name: str, query_vector: List[float], top_k: int = 10):
@@ -201,7 +200,7 @@ class SemanticTextField(models.TextField):
     
     def __init__(self, *args, **kwargs):
         # Custom options for embedding generation
-        self.generate_embedding_func = kwargs.pop("generate_embedding", generate_embedding)
+        self.generate_embedding_func = kwargs.pop("generate_embedding", None)
         self.auto_embed = kwargs.pop("auto_embed", True)
         
         super().__init__(*args, **kwargs)
@@ -225,8 +224,14 @@ class SemanticTextField(models.TextField):
         
         if has_changed:
             try:
-                # Generate embedding vector
-                embedding = self.generate_embedding_func(current_text)
+                # Generate embedding vector using custom function or provider system
+                if self.generate_embedding_func:
+                    embedding = self.generate_embedding_func(current_text)
+                else:
+                    # Use the pluggable provider system
+                    from django_ergo.embedding_providers import get_embedding_provider
+                    provider = get_embedding_provider()
+                    embedding = provider.generate_embedding(current_text)
                 
                 # Set embedding field on model instance (expecting {field_name}_embedding)
                 embedding_field_name = f"{self.attname}_embedding"
