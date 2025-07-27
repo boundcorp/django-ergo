@@ -17,7 +17,13 @@ classifiers = [
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
 ]
-dependencies = []
+dependencies = [
+    "django>=4.2.9,<5.0",
+    "django-environ",
+    "psycopg2-binary", 
+    "pgvector",
+    "openai",
+]
 
 dynamic = ["version", "readme"]
 requires-python = ">=3.8"
@@ -54,6 +60,11 @@ dev = [
     "django-coverage-plugin",
     "pytest-django",
     "psycopg2-binary",
+    # API Example Dependencies
+    "django-ninja>=1.1.0",
+    "pydantic>=2.0.0",
+    "python-jose[cryptography]>=3.3.0",
+    "django-cors-headers>=4.3.0",
 ]
 
 [tool.setuptools.packages.find]
