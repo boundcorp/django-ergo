@@ -99,9 +99,85 @@ class OpenAITestManager:
 openai_test_manager = OpenAITestManager()
 
 
+def openai_mocked(fixture_name: str):
+    """
+    Decorator for mocked OpenAI tests that automatically loads fixtures.
+    
+    Args:
+        fixture_name: Name of the fixture file to load
+        
+    Usage:
+        @openai_mocked("tool_approval")
+        def test_tool_approval_flow(self, fixture):
+            # fixture is automatically loaded and passed as argument
+            response = engine.process_message(self.chat, fixture.input_data["message"])
+            assert response.message_type == MessageType.TOOL_APPROVAL_REQUEST
+    """
+    def decorator(test_func):
+        def wrapper(*args, **kwargs):
+            fixture = openai_test_manager.load_fixture(fixture_name)
+            if not fixture:
+                pytest.fail(
+                    f"Required fixture '{fixture_name}' not found. "
+                    f"Generate it by running: TEST_OPENAI=true pytest -m openai_real"
+                )
+            
+            # Mock the appropriate OpenAI API call based on fixture endpoint
+            mock_response = openai_test_manager.create_mock_response(fixture)
+            
+            if fixture.api_endpoint == "chat.completions":
+                with patch('openai.chat.completions.create', return_value=mock_response):
+                    return test_func(*args, fixture=fixture, **kwargs)
+            elif fixture.api_endpoint == "embeddings":
+                with patch('openai.embeddings.create', return_value=mock_response):
+                    return test_func(*args, fixture=fixture, **kwargs)
+            else:
+                pytest.fail(f"Unknown API endpoint in fixture: {fixture.api_endpoint}")
+        
+        # Preserve test function metadata
+        wrapper.__name__ = test_func.__name__
+        wrapper.__doc__ = test_func.__doc__
+        return wrapper
+    
+    return decorator
+
+
+def openai_real(fixture_name: str, api_endpoint: str):
+    """
+    Decorator for real OpenAI API tests that generate fixtures.
+    
+    Args:
+        fixture_name: Name of the fixture file to save
+        api_endpoint: OpenAI API endpoint ("chat.completions" or "embeddings")
+        
+    Usage:
+        @openai_real("tool_approval", "chat.completions")
+        def test_tool_approval_flow_real(self):
+            response = engine.process_message(self.chat, "Create an article")
+            # Fixture is automatically saved after test completes
+    """
+    def decorator(test_func):
+        def wrapper(*args, **kwargs):
+            if not openai_test_manager.should_use_real_api():
+                pytest.skip("TEST_OPENAI not set - skipping costly API test")
+            
+            # Run the test and let it handle fixture saving manually
+            # (The test function should call save_openai_fixture itself)
+            return test_func(*args, **kwargs)
+        
+        # Preserve test function metadata
+        wrapper.__name__ = test_func.__name__
+        wrapper.__doc__ = test_func.__doc__
+        return wrapper
+    
+    return decorator
+
+
 def openai_integration_test(test_name: str, api_endpoint: str):
     """
-    Decorator for OpenAI integration tests.
+    Legacy decorator for OpenAI integration tests.
+    
+    DEPRECATED: Use @openai_real() and @openai_mocked() decorators instead.
     
     Creates two test variants:
     - One that uses real API when TEST_OPENAI=true
@@ -120,7 +196,7 @@ def openai_integration_test(test_name: str, api_endpoint: str):
             """Test that uses saved fixtures to mock OpenAI API."""
             fixture = openai_test_manager.load_fixture(test_name)
             if not fixture:
-                pytest.skip(f"No fixture found for {test_name} - run with TEST_OPENAI=true first")
+                pytest.fail(f"Required fixture '{test_name}' not found - run with TEST_OPENAI=true first")
             
             # Mock the appropriate OpenAI API call
             mock_response = openai_test_manager.create_mock_response(fixture)

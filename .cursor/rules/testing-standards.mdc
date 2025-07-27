@@ -27,6 +27,20 @@
 - Use Django's test client for integration tests
 - Test migrations when they contain data transformations
 
+### PostgreSQL Testing Requirements
+
+**NEVER use SQLite for testing** - django-ergo has deep dependencies on PostgreSQL:
+- **pgvector extension** for vector embeddings and similarity search
+- **PostgreSQL-specific SQL** in migrations (HNSW indexes, vector operations)
+- **Hybrid search functionality** requires PostgreSQL + pgvector
+- **Vector similarity operations** are PostgreSQL-only
+
+Always use PostgreSQL for testing:
+- Test database: `test_django_ergo` 
+- Must have pgvector extension installed
+- Use same PostgreSQL version as production
+- Test migrations include PostgreSQL-specific operations
+
 ## Test Coverage
 
 - Aim for 97% coverage across all modules
@@ -62,6 +76,67 @@
 - Mock expensive AI operations in unit tests
 - Test data preprocessing and validation
 - Verify embedding generation and similarity calculations
+
+## OpenAI Integration Testing (Hybrid Approach)
+
+Use a **dual-tier testing system** for OpenAI and expensive AI operations:
+
+### Tier 1: Fast Unit Tests (Default)
+- Use `@pytest.mark.openai_mocked` for mocked tests
+- Use saved fixtures from `tests/fixtures/openai/`
+- Run by default in CI/development (no API costs)
+- Test core logic, parameter handling, error conditions
+- Examples: tool registry, parameter extraction, validation
+
+### Tier 2: Real API Tests (Cost-Controlled)
+- Use `@pytest.mark.openai_real` for real API tests
+- Only run when `TEST_OPENAI=true` environment variable is set
+- Generate and save fixtures for Tier 1 tests
+- Test actual OpenAI integration, tool calling, response handling
+- Examples: workflow engine, tool approval, conversation flow
+
+### Implementation Pattern
+
+```python
+from tests.openai_test_utils import openai_mocked, openai_real, save_openai_fixture
+
+class TestWorkflowEngine(TestCase):
+    
+    @pytest.mark.openai_real
+    @openai_real("tool_approval", "chat.completions")
+    def test_tool_approval_real_api(self):
+        """Test tool approval with real OpenAI API (generates fixture)."""
+        # Actual OpenAI API call
+        response = self.engine.process_message(self.chat, "Create an article")
+        
+        # Save fixture for mocked tests
+        input_data = {"message": "Create an article", "workflow": self.workflow.name}
+        save_openai_fixture("tool_approval", input_data, response, "chat.completions")
+        
+        # Assertions
+        assert response.message_type == MessageType.TOOL_APPROVAL_REQUEST
+    
+    @pytest.mark.openai_mocked  
+    @openai_mocked("tool_approval")
+    def test_tool_approval_mocked(self, fixture):
+        """Test tool approval with saved fixture (fast, no cost)."""
+        # Fixture is automatically loaded and passed as argument
+        # OpenAI API is automatically mocked based on fixture.api_endpoint
+        
+        response = self.engine.process_message(self.chat, fixture.input_data["message"])
+        
+        assert response.message_type == MessageType.TOOL_APPROVAL_REQUEST
+        assert response.content == fixture.response_data["content"]
+```
+
+### Guidelines
+- **Core business logic**: Simple unit tests with basic mocking
+- **OpenAI interactions**: Use dual-tier system with `@openai_real()` and `@openai_mocked()` decorators
+- **Fixture requirements**: Mocked tests REQUIRE fixtures (pytest.fail if missing, not skip)
+- **Run real API tests**: Only before major releases or when fixtures are missing
+- **Fixture management**: Commit fixtures to version control for team consistency
+- **Cost control**: Default to mocked tests, explicit opt-in for real API
+- **Database**: ALWAYS use PostgreSQL (never SQLite) - pgvector dependency is critical
 
 ## Example
 
