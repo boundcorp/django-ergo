@@ -255,41 +255,55 @@ class ArticleQuerySet(models.QuerySet):
 
 class Article(TimeStampedMixin):
     """
-    An article or document in a knowledgebase.
-
-    An article has a title (short synopsis, up to 100 tokens), and a content (longer text, up to 10,000 tokens).
-
-    Each article has a hierarchy code, which is a string of digits and letters that represent the article's position in the knowledgebase (0-indexed hexadecimal).
-    For example, the article with hierarchy code "C3" is the 3rd article in the 12th chapter of the knowledgebase.
-    We can retrieve full articles by their hierarchy code, search for articles by semantic similarity, or request an index of articles in a given chapter.
+    A model to store a knowledge base article.
+    Each article has both semantic text fields and their corresponding embeddings.
+    Optimized with pgvector indexes for high-performance semantic search.
     """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    knowledgebase = models.ForeignKey(
-        Knowledgebase, 
-        on_delete=models.CASCADE, 
-        related_name="articles"
-    )
     hierarchy_code = models.CharField(
         max_length=16,
-        db_index=True,
         default="0",
+        db_index=True,
         help_text="The hierarchy code of the article, e.g. '012' (0th chapter, 1st section, 2nd sub-section) or 'C3' (12th chapter, 3rd sub-section)"
     )
     title = models.CharField(max_length=512)
+    
+    # Semantic text fields with automatic embedding generation
     content = SemanticTextField(help_text="Main article content")
-    content_embedding = VectorField(dimensions=1536, null=True, blank=True, editable=False, help_text="Auto-generated embedding for content")
+    content_embedding = VectorField(
+        dimensions=1536, 
+        null=True, 
+        blank=True, 
+        editable=False,
+        help_text="Auto-generated embedding for content"
+    )
+    
     summary = SemanticTextField(null=True, blank=True, help_text="Article summary")
-    summary_embedding = VectorField(dimensions=1536, null=True, blank=True, editable=False, help_text="Auto-generated embedding for summary")
+    summary_embedding = VectorField(
+        dimensions=1536, 
+        null=True, 
+        blank=True, 
+        editable=False,
+        help_text="Auto-generated embedding for summary"
+    )
+    
+    knowledgebase = models.ForeignKey(
+        Knowledgebase,
+        on_delete=models.CASCADE,
+        related_name="articles"
+    )
 
     objects = ArticleQuerySet.as_manager()
 
     class Meta:
         ordering = ["hierarchy_code"]
+        unique_together = [["knowledgebase", "hierarchy_code"]]
         indexes = [
             models.Index(fields=["knowledgebase", "hierarchy_code"]),
             models.Index(fields=["hierarchy_code"]),
         ]
-        unique_together = [["knowledgebase", "hierarchy_code"]]
+        # Database settings for vector search optimization
+        db_table_comment = "Articles with semantic embeddings and pgvector indexes for fast similarity search"
 
     def __str__(self):
         return f"{self.hierarchy_code}: {self.title}"
