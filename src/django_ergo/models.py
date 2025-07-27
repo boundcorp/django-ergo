@@ -26,6 +26,10 @@ class MessageType(models.TextChoices):
     ASSISTANT_MESSAGE = "assistant_message", "Assistant Message"
     TOOL_REQUEST = "tool_request", "Tool Request"
     TOOL_RESPONSE = "tool_response", "Tool Response"
+    TOOL_APPROVAL_REQUEST = "tool_approval_request", "Tool Approval Request"
+    TOOL_APPROVAL_RESPONSE = "tool_approval_response", "Tool Approval Response"
+    WORKFLOW_PAUSED = "workflow_paused", "Workflow Paused"
+    WORKFLOW_RESUMED = "workflow_resumed", "Workflow Resumed"
     SYSTEM_MESSAGE = "system_message", "System Message"
     ERROR = "error", "Error"
 
@@ -37,7 +41,7 @@ class Workflow(TimeStampedMixin):
     """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(
-        max_length=255, 
+        max_length=255,
         help_text="Human-readable name for the workflow"
     )
     description = models.TextField(
@@ -47,11 +51,11 @@ class Workflow(TimeStampedMixin):
         help_text="System instructions for the AI agent"
     )
     tools_config = models.JSONField(
-        default=dict, 
+        default=dict,
         help_text="Configuration for tools available to this workflow"
     )
     is_active = models.BooleanField(
-        default=True, 
+        default=True,
         help_text="Whether this workflow is available for use"
     )
 
@@ -78,9 +82,9 @@ class Knowledgebase(TimeStampedMixin):
     name = models.CharField(max_length=255)
     description = models.TextField()
     owner_id = models.CharField(
-        max_length=255, 
-        null=True, 
-        blank=True, 
+        max_length=255,
+        null=True,
+        blank=True,
         db_index=True,
         help_text="Owner identifier for multi-tenant support"
     )
@@ -115,77 +119,77 @@ class Knowledgebase(TimeStampedMixin):
 
 class ArticleQuerySet(models.QuerySet):
     """Custom QuerySet for Article model with advanced semantic search capabilities."""
-    
+
     def semantic_search_content(self, query_text: str, top_k: int = 10):
         """
         Perform semantic search on article content.
-        
+
         Args:
             query_text: User's search query
             top_k: Number of results to return
-            
+
         Returns:
             QuerySet: Results ordered by semantic similarity to content
         """
         return SemanticTextField.search_field(
             self.model, 'content', query_text, top_k
         )
-    
+
     def semantic_search_summary(self, query_text: str, top_k: int = 10):
         """
         Perform semantic search on article summaries.
-        
+
         Args:
             query_text: User's search query
             top_k: Number of results to return
-            
+
         Returns:
             QuerySet: Results ordered by semantic similarity to summary
         """
         return SemanticTextField.search_field(
             self.model, 'summary', query_text, top_k
         )
-    
+
     def multi_field_semantic_search(self, query_text: str, top_k: int = 10, weights=None):
         """
         Perform semantic search across multiple fields with optional weighting.
-        
+
         Args:
             query_text: User's search query
             top_k: Number of results to return
             weights: Dict with field weights, e.g. {'content': 0.7, 'summary': 0.3}
-            
+
         Returns:
             QuerySet: Combined results from multiple semantic fields
         """
         if weights is None:
             weights = {'content': 0.6, 'summary': 0.4}
-            
+
         # Generate embedding using the modular function
         query_vector = generate_embedding(query_text)
-        
+
         # Use the modular approach for weighted search
         return self.multi_field_vector_search(query_vector, top_k, weights)
-    
+
     def multi_field_vector_search(self, query_vector: List[float], top_k: int = 10, weights=None):
         """
         Perform vector search across multiple fields with optional weighting using a pre-computed vector.
-        
+
         Args:
             query_vector: Pre-computed embedding vector
             top_k: Number of results to return
             weights: Dict with field weights, e.g. {'content': 0.7, 'summary': 0.3}
-            
+
         Returns:
             QuerySet: Combined results from multiple semantic fields
         """
         if weights is None:
             weights = {'content': 0.6, 'summary': 0.4}
-        
+
         # Build weighted semantic distance calculation
         content_distance = CosineDistance("content_embedding", query_vector) * weights.get('content', 0.6)
         summary_distance = CosineDistance("summary_embedding", query_vector) * weights.get('summary', 0.4)
-        
+
         return (
             self.exclude(content_embedding__isnull=True, summary_embedding__isnull=True)
             .annotate(
@@ -195,41 +199,41 @@ class ArticleQuerySet(models.QuerySet):
             )
             .order_by("combined_distance")[:top_k]
         )
-    
+
     def vector_search_content(self, query_vector: List[float], top_k: int = 10):
         """
         Perform low-level vector search on article content using a pre-computed vector.
-        
+
         Args:
             query_vector: Pre-computed embedding vector
             top_k: Number of results to return
-            
+
         Returns:
             QuerySet: Results ordered by semantic similarity to content
         """
         return vector_search(self.model, 'content_embedding', query_vector, top_k)
-    
+
     def vector_search_summary(self, query_vector: List[float], top_k: int = 10):
         """
         Perform low-level vector search on article summaries using a pre-computed vector.
-        
+
         Args:
             query_vector: Pre-computed embedding vector
             top_k: Number of results to return
-            
+
         Returns:
             QuerySet: Results ordered by semantic similarity to summary
         """
         return vector_search(self.model, 'summary_embedding', query_vector, top_k)
-    
+
     def hybrid_search(self, query_text: str, top_k: int = 10):
         """
         Legacy hybrid search method - now uses multi-field semantic search.
-        
+
         Args:
             query_text: User's search query
             top_k: Number of results to return
-            
+
         Returns:
             QuerySet: Top-k relevant results using multi-field semantic search
         """
@@ -267,26 +271,26 @@ class Article(TimeStampedMixin):
         help_text="The hierarchy code of the article, e.g. '012' (0th chapter, 1st section, 2nd sub-section) or 'C3' (12th chapter, 3rd sub-section)"
     )
     title = models.CharField(max_length=512)
-    
+
     # Semantic text fields with automatic embedding generation
     content = SemanticTextField(help_text="Main article content")
     content_embedding = VectorField(
-        dimensions=1536, 
-        null=True, 
-        blank=True, 
+        dimensions=1536,
+        null=True,
+        blank=True,
         editable=False,
         help_text="Auto-generated embedding for content"
     )
-    
+
     summary = SemanticTextField(null=True, blank=True, help_text="Article summary")
     summary_embedding = VectorField(
-        dimensions=1536, 
-        null=True, 
-        blank=True, 
+        dimensions=1536,
+        null=True,
+        blank=True,
         editable=False,
         help_text="Auto-generated embedding for summary"
     )
-    
+
     knowledgebase = models.ForeignKey(
         Knowledgebase,
         on_delete=models.CASCADE,
@@ -328,12 +332,12 @@ class UserChat(TimeStampedMixin):
         help_text="The workflow that processes messages in this chat"
     )
     title = models.CharField(
-        max_length=255, 
-        default="New Chat", 
+        max_length=255,
+        default="New Chat",
         help_text="Title of the chat conversation"
     )
     is_active = models.BooleanField(
-        default=True, 
+        default=True,
         help_text="Whether this chat is currently active"
     )
     metadata = models.JSONField(
@@ -390,6 +394,11 @@ class UserChat(TimeStampedMixin):
     def get_workflow_state(self) -> Dict[str, Any]:
         """Get saved workflow state."""
         return self.workflow_state or {}
+    
+    def update_workflow_state(self, state: Dict[str, Any]) -> None:
+        """Update workflow state for the chat."""
+        self.workflow_state = state
+        self.save(update_fields=["workflow_state", "updated_at"])
 
 
 class ChatMessage(TimeStampedMixin):
@@ -405,7 +414,7 @@ class ChatMessage(TimeStampedMixin):
         help_text="The chat this message belongs to"
     )
     message_type = models.CharField(
-        max_length=20,
+        max_length=30,
         choices=MessageType.choices,
         help_text="Type of message (user input, assistant response, tool call, etc.)"
     )
@@ -445,9 +454,9 @@ class ChatMessage(TimeStampedMixin):
         self.save(update_fields=["metadata"])
 
     def add_tool_call(
-        self, 
-        tool_name: str, 
-        arguments: Dict[str, Any], 
+        self,
+        tool_name: str,
+        arguments: Dict[str, Any],
         result: Optional[Any] = None,
         requires_approval: bool = False
     ) -> None:
