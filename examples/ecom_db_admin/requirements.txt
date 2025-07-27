@@ -1,0 +1,13 @@
+# Django and core dependencies
+Django>=4.2,<5.0
+psycopg2-binary>=2.9
+python-dotenv>=1.0
+
+# Django Ergo (install from parent directory in development)
+# In production, use: django-ergo>=1.0
+-e ../../
+
+# Additional dependencies
+pgvector>=0.2.0
+openai>=1.0.0
+django-ninja>=1.0.0

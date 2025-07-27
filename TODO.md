@@ -69,14 +69,47 @@
   - Tool creation documentation
 
 ### Example Applications
-- [ ] **Example Application 1**
-  - Implement core functionality demonstrating single-user workflows
-  - Add AI-powered conversation features
-  - Create sample data and setup scripts
-- [ ] **Example Application 2**
-  - Build multi-tier knowledge system example
-  - Implement complex workflow orchestration
-  - Demonstrate advanced tool integration
+- [ ] **EcomDBAdmin** - Database Admin Assistant
+  - Simple e-commerce Orders model with product catalog
+  - DBAdmin helper workflow for natural language queries
+  - Read-only SELECT tool (whitelisted, no approval needed)
+  - Write tool for INSERT/UPDATE/DELETE (requires approval)
+  - Shared "Shop Wiki" knowledge base
+  - Seed data with past conversations showing corrections
+  - UserChatHistoryKBIngestion helper for learning from conversations
+  - Demonstrates: Tool approval, KB learning, semantic search
+  
+- [ ] **CustomerSupport** - Multi-tier Knowledge System
+  - Hierarchical KB structure: Company → Department → Team
+  - Role-based access to different knowledge tiers
+  - Workflow escalation between support levels
+  - Auto-categorization of new articles
+  - Demonstrates: Complex KB relationships, permissions
+  
+- [ ] **ProjectAssistant** - Developer Workflow Automation
+  - Code review workflow with tool integration
+  - Documentation generation from code comments
+  - Task tracking with semantic search
+  - Git integration for context awareness
+  - Demonstrates: External tool integration, complex workflows
+
+- [ ] **VanillaChat** - Basic Chat Interface (To be deprecated)
+  - Simple single-user chat with KB
+  - Basic tool examples
+  - Minimal UI for testing
+  - Will be replaced by features in other examples
+
+### Example Infrastructure
+- [ ] **Shared Example Utilities**
+  - Common base models and mixins
+  - Shared authentication setup
+  - Example data generators
+  - Testing utilities for examples
+- [ ] **Example Documentation**
+  - Individual README for each example
+  - Setup and usage instructions
+  - Architecture diagrams
+  - Learning objectives for each example
 
 ## 🔧 INFRASTRUCTURE (Later)
 

@@ -101,6 +101,42 @@ urlpatterns = [
 ]
 ```
 
+## 📚 Example Applications
+
+Django Ergo comes with several example applications demonstrating different use cases and features:
+
+### 🛍️ EcomDBAdmin - Database Admin Assistant
+A natural language database admin tool for e-commerce data:
+- **Features**: Query your database using plain English, automatic SQL generation, approval workflows for writes
+- **Demonstrates**: Tool approval system, KB learning from corrections, semantic search integration
+- **Use Case**: Business analysts querying sales data, automated reporting, data corrections
+
+### 🎧 CustomerSupport - Multi-tier Knowledge System  
+Hierarchical knowledge management for support teams:
+- **Features**: Department/team knowledge bases, role-based access, workflow escalation
+- **Demonstrates**: Complex KB relationships, permission systems, workflow orchestration
+- **Use Case**: Customer support teams, internal documentation, knowledge sharing
+
+### 💻 ProjectAssistant - Developer Workflow Automation
+AI-powered development assistant:
+- **Features**: Code review workflows, documentation generation, semantic task search
+- **Demonstrates**: External tool integration, complex multi-step workflows
+- **Use Case**: Development teams, code documentation, task management
+
+### 💬 VanillaChat - Basic Chat Interface
+Simple chat example for testing (will be deprecated):
+- **Features**: Basic chat UI, simple KB integration, minimal tool examples
+- **Note**: Features being distributed to other more comprehensive examples
+
+Each example includes:
+- Complete Django application structure
+- Sample data and fixtures
+- Setup instructions
+- Architecture documentation
+- Test suites
+
+See the `examples/` directory for full source code and individual READMEs.
+
 ## Development
 
 ```bash
