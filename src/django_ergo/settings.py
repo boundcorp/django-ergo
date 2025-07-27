@@ -24,12 +24,21 @@ DEFAULTS = {
     "OPENAI_TEMPERATURE": 0.7,
     "OPENAI_MAX_TOKENS": None,
     "OPENAI_TIMEOUT": 30,
+    
+    # Embedding Provider Configuration
+    "EMBEDDING_PROVIDER": "django_ergo.embedding_providers.OpenAIEmbeddingProvider",
+    "EMBEDDING_PROVIDER_CONFIG": {
+        "model": "text-embedding-3-small",
+        "api_key": None,  # Falls back to OPENAI_API_KEY env var
+        "timeout": 30,
+    },
 }
 
 
 # List of settings that may be in string import notation.
 IMPORT_STRINGS = [
     "WORKFLOW_MODEL",  # example only as it will be imported as a class
+    "EMBEDDING_PROVIDER",  # Import embedding provider class
 ]
 
 

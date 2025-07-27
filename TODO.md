@@ -23,11 +23,11 @@
 ## 🏗️ CORE FEATURES (Next 4-6 weeks)
 
 ### Knowledge Management
-- [ ] **Pluggable Embedding System**
-  - Create abstract embedding provider interface
-  - Implement OpenAI provider (default)
-  - Add settings-based provider switching
-  - Support custom embeddings for testing
+- [x] **Pluggable Embedding System** ✅
+  - ✅ Create abstract embedding provider interface
+  - ✅ Implement OpenAI provider (default)
+  - ✅ Add settings-based provider switching
+  - ✅ Support custom embeddings for testing
 - [ ] **Enhanced Search**
   - Optimize hybrid search performance
   - Add caching for embeddings and results
