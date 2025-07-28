@@ -255,94 +255,148 @@ Online orders can be placed 24/7''',
     
     def _create_chat_history(self, user, kb):
         """Create sample chat history with corrections."""
-        # Chat 1: Return policy correction
+        # Chat 1: Timezone correction scenario (the key requirement)
         chat1 = UserChat.objects.create(
+            user=user,
+            title='Daily sales inquiry with timezone correction'
+        )
+        
+        ChatMessage.objects.create(
+            chat=chat1,
+            role='user',
+            content="get me today's sales"
+        )
+        
+        ChatMessage.objects.create(
+            chat=chat1,
+            role='assistant',
+            content="I'll retrieve today's sales data. Using UTC timezone, here are the results: Total sales: $3,247.89 across 23 orders."
+        )
+        
+        ChatMessage.objects.create(
+            chat=chat1,
+            role='user',
+            content="no, sorry, my shop is in EST"
+        )
+        
+        ChatMessage.objects.create(
+            chat=chat1,
+            role='assistant',
+            content="Thank you for the correction! I'll update my knowledge to use EST timezone for your shop. Let me recalculate today's sales using EST timezone."
+        )
+        
+        # Chat 2: Return policy correction
+        chat2 = UserChat.objects.create(
             user=user,
             title='Return policy inquiry'
         )
         
         ChatMessage.objects.create(
-            chat=chat1,
+            chat=chat2,
             role='user',
             content='What is your return policy?'
         )
         
         ChatMessage.objects.create(
-            chat=chat1,
+            chat=chat2,
             role='assistant',
             content='Our return policy allows customers to return items within 30 days of purchase for a full refund. Items must be in original condition with packaging.'
         )
         
         ChatMessage.objects.create(
-            chat=chat1,
+            chat=chat2,
             role='user',
             content='Actually, we changed it to 45 days last month for the holiday season'
         )
         
         ChatMessage.objects.create(
-            chat=chat1,
+            chat=chat2,
             role='assistant',
             content='Thank you for the correction! I\'ll update my knowledge. The return policy now allows 45 days for returns during the holiday season.'
         )
         
-        # Chat 2: Shipping rate correction
-        chat2 = UserChat.objects.create(
+        # Chat 3: Shipping rate correction
+        chat3 = UserChat.objects.create(
             user=user,
             title='Shipping information'
         )
         
         ChatMessage.objects.create(
-            chat=chat2,
+            chat=chat3,
             role='user',
             content='How much is standard shipping?'
         )
         
         ChatMessage.objects.create(
-            chat=chat2,
+            chat=chat3,
             role='assistant',
             content='Standard shipping is $5.99 for orders under $50, and free for orders over $50.'
         )
         
         ChatMessage.objects.create(
-            chat=chat2,
+            chat=chat3,
             role='user',
             content='No, it\'s free for orders over $75 now, not $50'
         )
         
         ChatMessage.objects.create(
-            chat=chat2,
+            chat=chat3,
             role='assistant',
             content='I apologize for the error. You\'re correct - standard shipping is now free for orders over $75, not $50.'
         )
         
-        # Chat 3: Business hours correction
-        chat3 = UserChat.objects.create(
+        # Chat 4: Business hours correction
+        chat4 = UserChat.objects.create(
             user=user,
             title='Customer service hours'
         )
         
         ChatMessage.objects.create(
-            chat=chat3,
+            chat=chat4,
             role='user',
             content='What are your customer service hours?'
         )
         
         ChatMessage.objects.create(
-            chat=chat3,
+            chat=chat4,
             role='assistant',
             content='Our customer service is available Monday-Friday 9 AM to 6 PM EST, and Saturday 10 AM to 4 PM EST. We\'re closed on Sundays.'
         )
         
         ChatMessage.objects.create(
-            chat=chat3,
+            chat=chat4,
             role='user',
             content='That\'s outdated, we now offer Sunday support from 12 PM to 5 PM EST'
         )
         
         ChatMessage.objects.create(
-            chat=chat3,
+            chat=chat4,
             role='assistant',
             content='Thank you for updating me! Customer service is now also available on Sundays from 12 PM to 5 PM EST.'
         )
         
-        self.stdout.write('Created sample chat history with corrections')
+        # Chat 5: Another sales query to test learning
+        chat5 = UserChat.objects.create(
+            user=user,
+            title='Weekly sales report request'
+        )
+        
+        ChatMessage.objects.create(
+            chat=chat5,
+            role='user',
+            content="Can you get me this week's sales?"
+        )
+        
+        ChatMessage.objects.create(
+            chat=chat5,
+            role='assistant',
+            content="I'll generate this week's sales report using EST timezone as configured for your shop. This week's total: $18,423.45 across 142 orders."
+        )
+        
+        ChatMessage.objects.create(
+            chat=chat5,
+            role='user',
+            content="Perfect, that looks correct now with the timezone fix"
+        )
+        
+        self.stdout.write('Created sample chat history with timezone and other corrections')

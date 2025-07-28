@@ -123,4 +123,17 @@ def register_workflows():
     """Register all workflows for this app."""
     # This would typically be called from apps.py ready() method
     from django_ergo.workflow_engine import workflow_registry
+    
+    # Register the DB admin workflow
     workflow_registry.register('db_admin', DBAdminWorkflow)
+    
+    # Register ingestion workflows
+    from .ingestion import (
+        ChatHistoryIngestionWorkflow,
+        DocumentIngestionWorkflow,
+        KnowledgeBaseReviewWorkflow
+    )
+    
+    workflow_registry.register('chat_history_ingestion', ChatHistoryIngestionWorkflow)
+    workflow_registry.register('document_ingestion', DocumentIngestionWorkflow)
+    workflow_registry.register('kb_review', KnowledgeBaseReviewWorkflow)

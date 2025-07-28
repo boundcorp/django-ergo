@@ -1,24 +1,23 @@
 """
-Chat history ingestion for learning from user corrections.
+Ingestion workflows for learning from various content sources.
 """
-import re
 import logging
-from typing import List, Dict, Any, Optional, Tuple
+import re
+from typing import Dict, Any, Optional, List
 from django.contrib.auth.models import User
-from django_ergo.models import UserChat, ChatMessage, Knowledgebase, Article
+from django_ergo.models import Workflow, Knowledgebase, UserChat, ChatMessage
+from django_ergo.workflow_engine import BaseWorkflowEngine
 
 logger = logging.getLogger(__name__)
 
 
-class UserChatHistoryKBIngestion:
-    """
-    Ingests chat history to extract facts and corrections for knowledge base updates.
+class ChatHistoryIngestionWorkflow(BaseWorkflowEngine):
+    """Workflow for ingesting chat history to learn facts and corrections."""
     
-    This helper identifies when users correct the assistant's responses and 
-    automatically creates or updates knowledge base articles with the corrected information.
-    """
+    name = "chat_history_ingestion"
+    description = "Learn facts and corrections from user chat history"
     
-    # Patterns that indicate a correction
+    # Patterns that indicate corrections or facts
     CORRECTION_PATTERNS = [
         r"actually[,\s]+(.+)",
         r"no[,\s]+(?:it's|its|it is)\s+(.+)",
@@ -28,219 +27,311 @@ class UserChatHistoryKBIngestion:
         r"(?:you're|youre|you are)\s+wrong[,\s]+(.+)",
         r"(?:that's|thats)\s+outdated[,\s]+(.+)",
         r"(?:we changed|it changed|now it's|now its)\s+(.+)",
+        r"(?:my|our)\s+(.+)\s+(?:is|are)\s+(.+)",  # "my shop is in EST"
     ]
     
-    # Topics to categorize corrections
-    TOPIC_KEYWORDS = {
-        'return_policy': ['return', 'refund', 'exchange', 'days', 'policy'],
-        'shipping': ['shipping', 'delivery', 'ship', 'deliver', 'transit'],
-        'pricing': ['price', 'cost', 'discount', 'sale', 'coupon'],
-        'inventory': ['stock', 'inventory', 'available', 'quantity', 'in stock'],
-        'product_info': ['product', 'item', 'description', 'feature', 'specification'],
-        'business_hours': ['hours', 'open', 'closed', 'business hours', 'schedule'],
-        'contact': ['contact', 'email', 'phone', 'support', 'customer service'],
+    FACT_PATTERNS = [
+        r"(?:my|our)\s+(.+?)\s+(?:is|are)\s+(.+)",  # "my shop is in EST"
+        r"(?:the|this)\s+(.+?)\s+(?:is|are)\s+(.+)",  # "the timezone is EST"
+        r"(?:we|i)\s+(?:use|have|operate in)\s+(.+)",  # "we operate in EST"
+    ]
+    
+    def get_system_prompt(self) -> str:
+        """Get the system prompt for chat history ingestion."""
+        return """You are a knowledge extraction assistant. Your job is to analyze chat conversations and extract important facts and corrections to update the knowledge base.
+
+Look for:
+1. User corrections to assistant responses
+2. Important facts about the business (timezone, policies, procedures)
+3. Context that would help future queries
+
+When you find corrections or facts, use the update_article tool to create or update knowledge base articles.
+
+For corrections:
+- Create articles titled like "Business Context - [Topic]"
+- Include both the original incorrect information and the correction
+- Note when the correction was made
+
+For facts:
+- Create articles about specific business aspects
+- Use clear titles like "Shop Configuration - Timezone" or "Business Hours"
+- Include detailed context
+
+Be thorough but focused on actionable information that would help answer future queries correctly."""
+    
+    def get_available_tools(self) -> list:
+        """Return tools available for this workflow."""
+        return [
+            'create_article',
+            'update_article',
+            'search_user_kb',
+            'get_kb_table_of_contents'
+        ]
+    
+    def process(self, user: User, prompt: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Process chat history ingestion request."""
+        if context is None:
+            context = {}
+        
+        # Extract parameters from prompt
+        kb_name = context.get('kb_name', 'Shop Wiki')
+        topic = context.get('topic', 'general business information')
+        chat_ids = context.get('chat_ids', [])
+        
+        # Get or create the knowledge base
+        kb, _ = Knowledgebase.objects.get_or_create(
+            name=kb_name,
+            defaults={
+                'description': f'Knowledge base for {topic}',
+                'owner': user
+            }
+        )
+        context['knowledgebase_id'] = kb.id
+        
+        # Prepare chat history for analysis
+        if chat_ids:
+            chats = UserChat.objects.filter(id__in=chat_ids, user=user)
+        else:
+            chats = UserChat.objects.filter(user=user)
+        
+        chat_content = self._format_chat_history(chats)
+        
+        # Create the full prompt for the AI
+        full_prompt = f"""Analyze the following chat history and extract facts about {topic}:
+
+{chat_content}
+
+Focus on corrections, business context, and factual information that would help answer future queries about {topic}.
+
+Create or update knowledge base articles with this information."""
+        
+        return super().process(user, full_prompt, context)
+    
+    def _format_chat_history(self, chats: List[UserChat]) -> str:
+        """Format chat history for analysis."""
+        formatted_content = []
+        
+        for chat in chats:
+            formatted_content.append(f"=== Chat: {chat.title} ===")
+            messages = chat.messages.order_by('created_at')
+            
+            for msg in messages:
+                role_label = msg.role.upper()
+                formatted_content.append(f"{role_label}: {msg.content}")
+            
+            formatted_content.append("")  # Empty line between chats
+        
+        return "\n".join(formatted_content)
+
+
+class DocumentIngestionWorkflow(BaseWorkflowEngine):
+    """Workflow for ingesting documents/PDFs/transcripts to learn about specific topics."""
+    
+    name = "document_ingestion"
+    description = "Learn from documents, PDFs, and transcripts about specific topics"
+    
+    def get_system_prompt(self) -> str:
+        """Get the system prompt for document ingestion."""
+        return """You are a document analysis assistant. Your job is to extract relevant information from documents and create knowledge base articles.
+
+When analyzing documents:
+1. Break down complex information into focused articles
+2. Use clear, descriptive titles
+3. Extract key facts, procedures, and policies
+4. Create hierarchical articles for complex topics
+5. Include relevant quotes or references where helpful
+
+Create multiple articles if the document covers several distinct topics. Each article should be focused on a specific aspect of the subject matter.
+
+Use the create_article tool to add new knowledge to the knowledge base."""
+    
+    def get_available_tools(self) -> list:
+        """Return tools available for this workflow."""
+        return [
+            'create_article',
+            'update_article',
+            'search_user_kb',
+            'get_kb_table_of_contents'
+        ]
+    
+    def process(self, user: User, prompt: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Process document ingestion request."""
+        if context is None:
+            context = {}
+        
+        # Extract parameters
+        kb_name = context.get('kb_name', 'Document Knowledge Base')
+        topic = context.get('topic', 'general information')
+        document_content = context.get('document_content', '')
+        
+        # Get or create the knowledge base
+        kb, _ = Knowledgebase.objects.get_or_create(
+            name=kb_name,
+            defaults={
+                'description': f'Knowledge extracted from documents about {topic}',
+                'owner': user
+            }
+        )
+        context['knowledgebase_id'] = kb.id
+        
+        # Create the full prompt
+        full_prompt = f"""Analyze the following document content and extract information about {topic}:
+
+=== DOCUMENT CONTENT ===
+{document_content}
+
+=== INSTRUCTIONS ===
+{prompt}
+
+Create focused knowledge base articles covering the key information from this document."""
+        
+        return super().process(user, full_prompt, context)
+
+
+class KnowledgeBaseReviewWorkflow(BaseWorkflowEngine):
+    """Workflow for reviewing and improving existing knowledge base articles."""
+    
+    name = "kb_review"
+    description = "Review and improve existing knowledge base articles"
+    
+    def get_system_prompt(self) -> str:
+        """Get the system prompt for KB review."""
+        return """You are a knowledge base review assistant. Your job is to analyze existing articles and improve them.
+
+When reviewing articles:
+1. Check for outdated information
+2. Identify gaps or missing details
+3. Improve clarity and organization
+4. Add cross-references where helpful
+5. Consolidate duplicate information
+6. Update with new insights or corrections
+
+Use the update_article tool to improve existing articles or create_article for new supplementary content.
+
+Be thorough but conservative - only make changes that clearly improve the knowledge base."""
+    
+    def get_available_tools(self) -> list:
+        """Return tools available for this workflow."""
+        return [
+            'create_article',
+            'update_article',
+            'search_user_kb',
+            'get_kb_table_of_contents',
+            'get_article_by_hierarchy'
+        ]
+    
+    def process(self, user: User, prompt: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Process KB review request."""
+        if context is None:
+            context = {}
+        
+        # Extract parameters
+        kb_name = context.get('kb_name', 'Shop Wiki')
+        focus_area = context.get('focus_area', 'general review')
+        
+        # Get the knowledge base
+        try:
+            kb = Knowledgebase.objects.get(name=kb_name, owner=user)
+        except Knowledgebase.DoesNotExist:
+            return {"error": f"Knowledge base '{kb_name}' not found"}
+        
+        context['knowledgebase_id'] = kb.id
+        
+        # Create the full prompt
+        full_prompt = f"""Review the knowledge base '{kb_name}' focusing on {focus_area}.
+
+Instructions: {prompt}
+
+First, get the table of contents to understand the current structure, then review relevant articles and suggest improvements."""
+        
+        return super().process(user, full_prompt, context)
+
+
+def run_chat_history_ingestion(
+    user: User,
+    kb_name: str = "Shop Wiki",
+    topic: str = "business context",
+    chat_ids: Optional[List[str]] = None
+) -> Dict[str, Any]:
+    """
+    Run chat history ingestion workflow.
+    
+    Args:
+        user: User performing the ingestion
+        kb_name: Name of the knowledge base to update
+        topic: Topic to focus on when extracting information
+        chat_ids: Optional list of specific chat IDs to analyze
+    
+    Returns:
+        Dictionary with ingestion results
+    """
+    workflow = ChatHistoryIngestionWorkflow()
+    
+    context = {
+        'kb_name': kb_name,
+        'topic': topic,
+        'chat_ids': chat_ids or []
     }
     
-    def __init__(self, knowledgebase: Knowledgebase):
-        self.knowledgebase = knowledgebase
+    prompt = f"Extract and learn facts about {topic} from the chat history"
     
-    def ingest_user_chat(self, chat: UserChat) -> List[Article]:
-        """
-        Ingest a single chat conversation and extract corrections.
-        
-        Returns a list of created or updated articles.
-        """
-        corrections = self._extract_corrections(chat)
-        articles = []
-        
-        for correction in corrections:
-            article = self._create_or_update_article(correction)
-            if article:
-                articles.append(article)
-        
-        return articles
-    
-    def ingest_all_chats(self, user: Optional[User] = None) -> Dict[str, Any]:
-        """
-        Ingest all chat history, optionally filtered by user.
-        
-        Returns statistics about the ingestion process.
-        """
-        query = UserChat.objects.all()
-        if user:
-            query = query.filter(user=user)
-        
-        stats = {
-            'chats_processed': 0,
-            'corrections_found': 0,
-            'articles_created': 0,
-            'articles_updated': 0,
-            'errors': 0
-        }
-        
-        for chat in query:
-            try:
-                articles = self.ingest_user_chat(chat)
-                stats['chats_processed'] += 1
-                
-                for article in articles:
-                    if article._state.adding:  # New article
-                        stats['articles_created'] += 1
-                    else:
-                        stats['articles_updated'] += 1
-                
-                corrections = self._extract_corrections(chat)
-                stats['corrections_found'] += len(corrections)
-                
-            except Exception as e:
-                logger.error(f"Error ingesting chat {chat.id}: {str(e)}")
-                stats['errors'] += 1
-        
-        return stats
-    
-    def _extract_corrections(self, chat: UserChat) -> List[Dict[str, Any]]:
-        """Extract corrections from a chat conversation."""
-        corrections = []
-        messages = list(chat.messages.order_by('created_at'))
-        
-        for i in range(1, len(messages)):
-            current_msg = messages[i]
-            
-            # Only look at user messages
-            if current_msg.role != 'user':
-                continue
-            
-            # Check if this message contains a correction
-            correction_match = self._is_correction(current_msg.content)
-            if not correction_match:
-                continue
-            
-            # Find the previous assistant message being corrected
-            assistant_msg = None
-            for j in range(i - 1, -1, -1):
-                if messages[j].role == 'assistant':
-                    assistant_msg = messages[j]
-                    break
-            
-            if not assistant_msg:
-                continue
-            
-            # Extract the topic from both messages
-            topic = self._categorize_topic(
-                assistant_msg.content + " " + current_msg.content
-            )
-            
-            corrections.append({
-                'original_statement': self._extract_key_statement(assistant_msg.content),
-                'correction': correction_match,
-                'topic': topic,
-                'user_message': current_msg.content,
-                'assistant_message': assistant_msg.content,
-                'timestamp': current_msg.created_at
-            })
-        
-        return corrections
-    
-    def _is_correction(self, message: str) -> Optional[str]:
-        """Check if a message contains a correction and extract it."""
-        message_lower = message.lower()
-        
-        for pattern in self.CORRECTION_PATTERNS:
-            match = re.search(pattern, message_lower, re.IGNORECASE | re.DOTALL)
-            if match:
-                return match.group(1).strip()
-        
-        return None
-    
-    def _categorize_topic(self, text: str) -> str:
-        """Categorize the topic of a correction."""
-        text_lower = text.lower()
-        
-        # Count keyword matches for each topic
-        topic_scores = {}
-        for topic, keywords in self.TOPIC_KEYWORDS.items():
-            score = sum(1 for keyword in keywords if keyword in text_lower)
-            if score > 0:
-                topic_scores[topic] = score
-        
-        # Return the topic with the highest score
-        if topic_scores:
-            return max(topic_scores, key=topic_scores.get)
-        
-        return 'general'
-    
-    def _extract_key_statement(self, text: str) -> str:
-        """Extract the key statement from assistant's message."""
-        # Look for sentences containing key information
-        sentences = text.split('.')
-        
-        # Prioritize sentences with numbers, policies, or specific claims
-        for sentence in sentences:
-            if any(word in sentence.lower() for word in ['policy', 'days', 'hours', 'price', '%']):
-                return sentence.strip()
-        
-        # Return the first substantial sentence
-        for sentence in sentences:
-            if len(sentence.strip()) > 20:
-                return sentence.strip()
-        
-        return text[:200] + "..." if len(text) > 200 else text
-    
-    def _create_or_update_article(self, correction: Dict[str, Any]) -> Optional[Article]:
-        """Create or update a knowledge base article from a correction."""
-        try:
-            # Generate a title for the article
-            title = f"{correction['topic'].replace('_', ' ').title()} - Updated Information"
-            
-            # Check if an article already exists for this topic
-            existing_article = Article.objects.filter(
-                knowledgebase=self.knowledgebase,
-                title__icontains=correction['topic'].replace('_', ' ')
-            ).first()
-            
-            if existing_article:
-                # Update existing article
-                existing_article.content += f"\n\n**Update ({correction['timestamp'].strftime('%Y-%m-%d')}):**\n"
-                existing_article.content += f"- Previous information: {correction['original_statement']}\n"
-                existing_article.content += f"- Corrected information: {correction['correction']}\n"
-                existing_article.save()
-                return existing_article
-            else:
-                # Create new article
-                content = f"**Topic**: {correction['topic'].replace('_', ' ').title()}\n\n"
-                content += f"**Current Information**: {correction['correction']}\n\n"
-                content += f"**History**:\n"
-                content += f"- Original statement: {correction['original_statement']}\n"
-                content += f"- Corrected on: {correction['timestamp'].strftime('%Y-%m-%d')}\n"
-                content += f"- User correction: \"{correction['user_message']}\"\n"
-                
-                article = Article.objects.create(
-                    knowledgebase=self.knowledgebase,
-                    title=title,
-                    content=content,
-                    tags=[correction['topic'], 'correction', 'user_feedback']
-                )
-                return article
-                
-        except Exception as e:
-            logger.error(f"Error creating/updating article: {str(e)}")
-            return None
+    return workflow.process(user, prompt, context)
 
 
-def run_ingestion(knowledgebase_name: str = "Shop Wiki") -> Dict[str, Any]:
+def run_document_ingestion(
+    user: User,
+    document_content: str,
+    topic: str,
+    kb_name: str = "Document Knowledge Base",
+    instructions: str = "Extract key information and create knowledge base articles"
+) -> Dict[str, Any]:
     """
-    Run the ingestion process on all chat history.
+    Run document ingestion workflow.
     
-    This is typically called from a management command or scheduled task.
+    Args:
+        user: User performing the ingestion
+        document_content: The content of the document to analyze
+        topic: Topic/subject of the document
+        kb_name: Name of the knowledge base to update
+        instructions: Specific instructions for what to extract
+    
+    Returns:
+        Dictionary with ingestion results
     """
-    try:
-        kb = Knowledgebase.objects.get(name=knowledgebase_name)
-    except Knowledgebase.DoesNotExist:
-        logger.error(f"Knowledgebase '{knowledgebase_name}' not found")
-        return {'error': f"Knowledgebase '{knowledgebase_name}' not found"}
+    workflow = DocumentIngestionWorkflow()
     
-    ingestion = UserChatHistoryKBIngestion(kb)
-    stats = ingestion.ingest_all_chats()
+    context = {
+        'kb_name': kb_name,
+        'topic': topic,
+        'document_content': document_content
+    }
     
-    logger.info(f"Ingestion complete: {stats}")
-    return stats
+    return workflow.process(user, instructions, context)
+
+
+def run_kb_review(
+    user: User,
+    kb_name: str = "Shop Wiki",
+    focus_area: str = "general review",
+    instructions: str = "Review articles for accuracy and completeness"
+) -> Dict[str, Any]:
+    """
+    Run knowledge base review workflow.
+    
+    Args:
+        user: User performing the review
+        kb_name: Name of the knowledge base to review
+        focus_area: Specific area to focus the review on
+        instructions: Specific instructions for the review
+    
+    Returns:
+        Dictionary with review results
+    """
+    workflow = KnowledgeBaseReviewWorkflow()
+    
+    context = {
+        'kb_name': kb_name,
+        'focus_area': focus_area
+    }
+    
+    return workflow.process(user, instructions, context)
