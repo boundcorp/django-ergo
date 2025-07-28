@@ -125,27 +125,38 @@ def modify_database(user, query: str, explanation: str, affected_table: str):
 def get_database_schema() -> List[Dict[str, Any]]:
     """Get the schema information for all tables in the database."""
     with connection.cursor() as cursor:
-        # Get all tables
+        # Get all tables for PostgreSQL
         cursor.execute("""
-            SELECT name FROM sqlite_master 
-            WHERE type='table' 
-            AND name NOT LIKE 'sqlite_%'
-            ORDER BY name
+            SELECT table_name 
+            FROM information_schema.tables 
+            WHERE table_schema = 'public' 
+            AND table_type = 'BASE TABLE'
+            ORDER BY table_name
         """)
         tables = [row[0] for row in cursor.fetchall()]
         
         schema_info = []
         for table in tables:
-            # Get columns for each table
-            cursor.execute(f"PRAGMA table_info({table})")
+            # Get columns for each table using PostgreSQL information_schema
+            cursor.execute("""
+                SELECT 
+                    column_name,
+                    data_type,
+                    is_nullable,
+                    column_default
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+                AND table_name = %s
+                ORDER BY ordinal_position
+            """, [table])
             
             columns = []
             for col in cursor.fetchall():
                 columns.append({
-                    'name': col[1],
-                    'type': col[2],
-                    'nullable': not col[3],  # notnull field is inverted
-                    'default': col[4]
+                    'name': col[0],
+                    'type': col[1],
+                    'nullable': col[2] == 'YES',
+                    'default': col[3]
                 })
             
             schema_info.append({

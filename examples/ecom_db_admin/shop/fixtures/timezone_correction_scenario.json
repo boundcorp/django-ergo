@@ -1,0 +1,142 @@
+[
+  {
+    "model": "auth.user",
+    "pk": 1,
+    "fields": {
+      "username": "shop_owner",
+      "first_name": "Shop",
+      "last_name": "Owner",
+      "email": "owner@example.com",
+      "is_staff": false,
+      "is_active": true,
+      "date_joined": "2024-01-01T10:00:00Z"
+    }
+  },
+  {
+    "model": "django_ergo.knowledgebase",
+    "pk": 1,
+    "fields": {
+      "name": "Shop Wiki",
+      "description": "E-commerce store configuration and policies",
+      "owner": 1,
+      "created_at": "2024-01-01T10:00:00Z",
+      "updated_at": "2024-01-01T10:00:00Z"
+    }
+  },
+  {
+    "model": "django_ergo.workflow",
+    "pk": 1,
+    "fields": {
+      "name": "DB Admin Assistant",
+      "description": "Natural language database administration assistant",
+      "instructions": "You are a database administration assistant...",
+      "owner": 1,
+      "knowledgebase": 1,
+      "tools_config": {
+        "available_tools": ["query_database", "modify_database", "search_user_kb"],
+        "approved_tools": ["query_database", "search_user_kb"]
+      },
+      "created_at": "2024-01-01T10:00:00Z",
+      "updated_at": "2024-01-01T10:00:00Z"
+    }
+  },
+  {
+    "model": "django_ergo.userchat",
+    "pk": 1,
+    "fields": {
+      "user": 1,
+      "workflow": 1,
+      "title": "Daily sales inquiry with timezone correction",
+      "created_at": "2024-01-01T10:00:00Z",
+      "updated_at": "2024-01-01T10:05:00Z"
+    }
+  },
+  {
+    "model": "django_ergo.chatmessage",
+    "pk": 1,
+    "fields": {
+      "chat": 1,
+      "message_type": "user_input",
+      "role": "user",
+      "content": "get me today's sales",
+      "created_at": "2024-01-01T10:00:00Z"
+    }
+  },
+  {
+    "model": "django_ergo.chatmessage",
+    "pk": 2,
+    "fields": {
+      "chat": 1,
+      "message_type": "assistant_message",
+      "role": "assistant",
+      "content": "I'll retrieve today's sales data using UTC timezone. Here are the results: Total sales: $3,247.89 across 23 orders.",
+      "created_at": "2024-01-01T10:01:00Z"
+    }
+  },
+  {
+    "model": "django_ergo.chatmessage",
+    "pk": 3,
+    "fields": {
+      "chat": 1,
+      "message_type": "user_input",
+      "role": "user",
+      "content": "no, sorry, my shop is in EST",
+      "created_at": "2024-01-01T10:02:00Z"
+    }
+  },
+  {
+    "model": "django_ergo.chatmessage",
+    "pk": 4,
+    "fields": {
+      "chat": 1,
+      "message_type": "assistant_message",
+      "role": "assistant",
+      "content": "Thank you for the correction! I'll update my knowledge to use EST timezone for your shop. Let me recalculate today's sales using EST timezone.",
+      "created_at": "2024-01-01T10:03:00Z"
+    }
+  },
+  {
+    "model": "django_ergo.userchat",
+    "pk": 2,
+    "fields": {
+      "user": 1,
+      "workflow": 1,
+      "title": "Weekly sales report request",
+      "created_at": "2024-01-02T10:00:00Z",
+      "updated_at": "2024-01-02T10:02:00Z"
+    }
+  },
+  {
+    "model": "django_ergo.chatmessage",
+    "pk": 5,
+    "fields": {
+      "chat": 2,
+      "message_type": "user_input",
+      "role": "user",
+      "content": "Can you get me this week's sales?",
+      "created_at": "2024-01-02T10:00:00Z"
+    }
+  },
+  {
+    "model": "django_ergo.chatmessage",
+    "pk": 6,
+    "fields": {
+      "chat": 2,
+      "message_type": "assistant_message",
+      "role": "assistant",
+      "content": "I'll generate this week's sales report using EST timezone as configured for your shop. This week's total: $18,423.45 across 142 orders.",
+      "created_at": "2024-01-02T10:01:00Z"
+    }
+  },
+  {
+    "model": "django_ergo.chatmessage",
+    "pk": 7,
+    "fields": {
+      "chat": 2,
+      "message_type": "user_input",
+      "role": "user",
+      "content": "Perfect, that looks correct now with the timezone fix",
+      "created_at": "2024-01-02T10:02:00Z"
+    }
+  }
+]
