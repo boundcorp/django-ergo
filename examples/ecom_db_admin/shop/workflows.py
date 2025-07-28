@@ -5,35 +5,29 @@ import logging
 from typing import Dict, Any, Optional
 from django.contrib.auth.models import User
 from django_ergo.models import Workflow, Knowledgebase
-from django_ergo.workflow_engine import BaseWorkflowEngine
+from django_ergo.workflow_engine import workflow_engine
 from .tools import get_database_schema
 
 logger = logging.getLogger(__name__)
 
 
-class DBAdminWorkflow(BaseWorkflowEngine):
-    """Workflow for converting natural language queries to SQL and executing them."""
+def get_db_admin_system_prompt() -> str:
+    """Get the system prompt with database schema information."""
+    # Get current database schema
+    schema = get_database_schema()
     
-    name = "db_admin_workflow"
-    description = "Natural language database administration assistant"
+    # Format schema for the prompt
+    schema_text = "DATABASE SCHEMA:\n\n"
+    for table_info in schema:
+        schema_text += f"Table: {table_info['table']}\n"
+        schema_text += "Columns:\n"
+        for col in table_info['columns']:
+            nullable = "NULL" if col['nullable'] else "NOT NULL"
+            default = f" DEFAULT {col['default']}" if col['default'] else ""
+            schema_text += f"  - {col['name']} ({col['type']}) {nullable}{default}\n"
+        schema_text += "\n"
     
-    def get_system_prompt(self) -> str:
-        """Get the system prompt with database schema information."""
-        # Get current database schema
-        schema = get_database_schema()
-        
-        # Format schema for the prompt
-        schema_text = "DATABASE SCHEMA:\n\n"
-        for table_info in schema:
-            schema_text += f"Table: {table_info['table']}\n"
-            schema_text += "Columns:\n"
-            for col in table_info['columns']:
-                nullable = "NULL" if col['nullable'] else "NOT NULL"
-                default = f" DEFAULT {col['default']}" if col['default'] else ""
-                schema_text += f"  - {col['name']} ({col['type']}) {nullable}{default}\n"
-            schema_text += "\n"
-        
-        return f"""You are a database administration assistant for an e-commerce system.
+    return f"""You are a database administration assistant for an e-commerce system.
 Your role is to help users query and manage their database using natural language.
 
 {schema_text}
@@ -54,86 +48,80 @@ The Shop Wiki knowledge base contains information about:
 - Common customer questions and answers
 
 Use this knowledge to provide context when answering questions."""
+
+
+def create_db_admin_workflow(user: User, name: str = "DB Admin Assistant") -> Workflow:
+    """Create a database admin workflow for a user."""
+    # Get or create the Shop Wiki knowledge base
+    shop_wiki, _ = Knowledgebase.objects.get_or_create(
+        name="Shop Wiki",
+        defaults={
+            'description': "E-commerce store policies, procedures, and business knowledge",
+            'owner': user
+        }
+    )
     
-    def get_available_tools(self) -> list:
-        """Return the tools available for this workflow."""
-        return [
-            'shop.tools.query_database',
-            'shop.tools.modify_database',
-            'search_knowledgebase',  # From django_ergo
-        ]
+    workflow = Workflow.objects.create(
+        name=name,
+        description="Natural language database administration assistant",
+        instructions=get_db_admin_system_prompt(),
+        owner=user,
+        tools_config={
+            "available_tools": [
+                'shop.tools.query_database',
+                'shop.tools.modify_database',
+                'search_user_kb',
+            ],
+            "approved_tools": [
+                'shop.tools.query_database',  # Read-only queries don't need approval
+                'search_user_kb',
+            ]
+        },
+        knowledgebase=shop_wiki
+    )
     
-    def process(self, user: User, prompt: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """Process a database admin request."""
-        # Get or create the Shop Wiki knowledge base
-        shop_wiki, _ = Knowledgebase.objects.get_or_create(
-            name="Shop Wiki",
-            defaults={
-                'description': "E-commerce store policies, procedures, and business knowledge",
-                'owner': user
-            }
-        )
-        
-        # Set the knowledge base in context
-        if context is None:
-            context = {}
-        context['knowledgebase_id'] = shop_wiki.id
-        
-        # Use the parent class process method which handles the full workflow
-        return super().process(user, prompt, context)
+    return workflow
+
+
+def format_query_results(results: Dict[str, Any]) -> str:
+    """Format database query results for display."""
+    if not results.get('success'):
+        return f"❌ Query failed: {results.get('error', 'Unknown error')}"
     
-    def format_query_results(self, results: Dict[str, Any]) -> str:
-        """Format database query results for display."""
-        if not results.get('success'):
-            return f"❌ Query failed: {results.get('error', 'Unknown error')}"
-        
-        if results.get('row_count', 0) == 0:
-            return "No results found."
-        
-        # Format as a simple table
-        output = [f"Found {results['row_count']} results:\n"]
-        
-        if results.get('truncated'):
-            output.append("(Showing first 100 rows)\n")
-        
-        # Get results
-        rows = results.get('results', [])
-        if not rows:
-            return "No data to display."
-        
-        # Get column names
-        columns = list(rows[0].keys())
-        
-        # Simple text table
-        output.append(" | ".join(columns))
-        output.append("-" * (len(" | ".join(columns))))
-        
-        for row in rows[:10]:  # Show first 10 rows in formatted output
-            values = [str(row.get(col, '')) for col in columns]
-            output.append(" | ".join(values))
-        
-        if len(rows) > 10:
-            output.append(f"\n... and {len(rows) - 10} more rows")
-        
-        return "\n".join(output)
+    if results.get('row_count', 0) == 0:
+        return "No results found."
+    
+    # Format as a simple table
+    output = [f"Found {results['row_count']} results:\n"]
+    
+    if results.get('truncated'):
+        output.append("(Showing first 100 rows)\n")
+    
+    # Get results
+    rows = results.get('results', [])
+    if not rows:
+        return "No data to display."
+    
+    # Get column names
+    columns = list(rows[0].keys())
+    
+    # Simple text table
+    output.append(" | ".join(columns))
+    output.append("-" * (len(" | ".join(columns))))
+    
+    for row in rows[:10]:  # Show first 10 rows in formatted output
+        values = [str(row.get(col, '')) for col in columns]
+        output.append(" | ".join(values))
+    
+    if len(rows) > 10:
+        output.append(f"\n... and {len(rows) - 10} more rows")
+    
+    return "\n".join(output)
 
 
 # Register the workflow
 def register_workflows():
     """Register all workflows for this app."""
-    # This would typically be called from apps.py ready() method
-    from django_ergo.workflow_engine import workflow_registry
-    
-    # Register the DB admin workflow
-    workflow_registry.register('db_admin', DBAdminWorkflow)
-    
-    # Register ingestion workflows
-    from .ingestion import (
-        ChatHistoryIngestionWorkflow,
-        DocumentIngestionWorkflow,
-        KnowledgeBaseReviewWorkflow
-    )
-    
-    workflow_registry.register('chat_history_ingestion', ChatHistoryIngestionWorkflow)
-    workflow_registry.register('document_ingestion', DocumentIngestionWorkflow)
-    workflow_registry.register('kb_review', KnowledgeBaseReviewWorkflow)
+    # For now, workflows are created on-demand rather than pre-registered
+    # This matches the existing Django Ergo pattern
+    pass
