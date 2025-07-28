@@ -1,0 +1,201 @@
+[
+{
+  "model": "auth.user",
+  "pk": 1,
+  "fields": {
+    "password": "",
+    "last_login": null,
+    "is_superuser": false,
+    "username": "shop_owner",
+    "first_name": "Shop",
+    "last_name": "Owner",
+    "email": "owner@example.com",
+    "is_staff": false,
+    "is_active": true,
+    "date_joined": "2025-07-28T01:21:57.735Z",
+    "groups": [],
+    "user_permissions": []
+  }
+},
+{
+  "model": "django_ergo.knowledgebase",
+  "pk": "a9fae5ce-d8ad-41a2-a94d-8508fbd9c5cc",
+  "fields": {
+    "created_at": "2025-07-28T01:22:39.279Z",
+    "updated_at": "2025-07-28T01:22:39.279Z",
+    "name": "Shop Wiki",
+    "description": "E-commerce store policies, procedures, and business knowledge",
+    "owner_id": "1",
+    "workflows": [
+      "83a772df-219f-47d8-ab73-388e0f648a6d",
+      "bfba0bfc-9336-4408-b52a-8f5833679d71",
+      "564a848a-7781-416b-80f4-ec5797c6c6fd",
+      "8fb4c05c-3060-487c-9950-174040435ee6"
+    ]
+  }
+},
+{
+  "model": "django_ergo.workflow",
+  "pk": "8fb4c05c-3060-487c-9950-174040435ee6",
+  "fields": {
+    "created_at": "2025-07-28T01:41:23.024Z",
+    "updated_at": "2025-07-28T01:41:23.024Z",
+    "name": "DB Admin Assistant",
+    "description": "Natural language database administration assistant",
+    "instructions": "You are a database administration assistant for an e-commerce system.\nYour role is to help users query and manage their database using natural language.\n\nDATABASE SCHEMA:\n\nTable: auth_group\nColumns:\n  - id (integer) NOT NULL\n  - name (character varying) NOT NULL\n\nTable: auth_group_permissions\nColumns:\n  - id (bigint) NOT NULL\n  - group_id (integer) NOT NULL\n  - permission_id (integer) NOT NULL\n\nTable: auth_permission\nColumns:\n  - id (integer) NOT NULL\n  - name (character varying) NOT NULL\n  - content_type_id (integer) NOT NULL\n  - codename (character varying) NOT NULL\n\nTable: auth_user\nColumns:\n  - id (integer) NOT NULL\n  - password (character varying) NOT NULL\n  - last_login (timestamp with time zone) NULL\n  - is_superuser (boolean) NOT NULL\n  - username (character varying) NOT NULL\n  - first_name (character varying) NOT NULL\n  - last_name (character varying) NOT NULL\n  - email (character varying) NOT NULL\n  - is_staff (boolean) NOT NULL\n  - is_active (boolean) NOT NULL\n  - date_joined (timestamp with time zone) NOT NULL\n\nTable: auth_user_groups\nColumns:\n  - id (bigint) NOT NULL\n  - user_id (integer) NOT NULL\n  - group_id (integer) NOT NULL\n\nTable: auth_user_user_permissions\nColumns:\n  - id (bigint) NOT NULL\n  - user_id (integer) NOT NULL\n  - permission_id (integer) NOT NULL\n\nTable: django_admin_log\nColumns:\n  - id (integer) NOT NULL\n  - action_time (timestamp with time zone) NOT NULL\n  - object_id (text) NULL\n  - object_repr (character varying) NOT NULL\n  - action_flag (smallint) NOT NULL\n  - change_message (text) NOT NULL\n  - content_type_id (integer) NULL\n  - user_id (integer) NOT NULL\n\nTable: django_content_type\nColumns:\n  - id (integer) NOT NULL\n  - app_label (character varying) NOT NULL\n  - model (character varying) NOT NULL\n\nTable: django_ergo_article\nColumns:\n  - created_at (timestamp with time zone) NOT NULL\n  - updated_at (timestamp with time zone) NOT NULL\n  - id (uuid) NOT NULL\n  - hierarchy_code (character varying) NOT NULL\n  - title (character varying) NOT NULL\n  - content (text) NOT NULL\n  - content_embedding (USER-DEFINED) NULL\n  - summary (text) NULL\n  - summary_embedding (USER-DEFINED) NULL\n  - knowledgebase_id (uuid) NOT NULL\n\nTable: django_ergo_chatmessage\nColumns:\n  - created_at (timestamp with time zone) NOT NULL\n  - updated_at (timestamp with time zone) NOT NULL\n  - id (uuid) NOT NULL\n  - message_type (character varying) NOT NULL\n  - role (character varying) NOT NULL\n  - content (text) NOT NULL\n  - metadata (jsonb) NOT NULL\n  - agent_context (jsonb) NOT NULL\n  - chat_id (uuid) NOT NULL\n\nTable: django_ergo_knowledgebase\nColumns:\n  - created_at (timestamp with time zone) NOT NULL\n  - updated_at (timestamp with time zone) NOT NULL\n  - id (uuid) NOT NULL\n  - name (character varying) NOT NULL\n  - description (text) NOT NULL\n  - owner_id (character varying) NULL\n\nTable: django_ergo_knowledgebase_workflows\nColumns:\n  - id (bigint) NOT NULL\n  - knowledgebase_id (uuid) NOT NULL\n  - workflow_id (uuid) NOT NULL\n\nTable: django_ergo_userchat\nColumns:\n  - created_at (timestamp with time zone) NOT NULL\n  - updated_at (timestamp with time zone) NOT NULL\n  - id (uuid) NOT NULL\n  - title (character varying) NOT NULL\n  - is_active (boolean) NOT NULL\n  - metadata (jsonb) NOT NULL\n  - workflow_state (jsonb) NOT NULL\n  - user_id (integer) NOT NULL\n  - workflow_id (uuid) NOT NULL\n\nTable: django_ergo_workflow\nColumns:\n  - created_at (timestamp with time zone) NOT NULL\n  - updated_at (timestamp with time zone) NOT NULL\n  - id (uuid) NOT NULL\n  - name (character varying) NOT NULL\n  - description (text) NOT NULL\n  - instructions (text) NOT NULL\n  - tools_config (jsonb) NOT NULL\n  - is_active (boolean) NOT NULL\n\nTable: django_migrations\nColumns:\n  - id (bigint) NOT NULL\n  - app (character varying) NOT NULL\n  - name (character varying) NOT NULL\n  - applied (timestamp with time zone) NOT NULL\n\nTable: django_session\nColumns:\n  - session_key (character varying) NOT NULL\n  - session_data (text) NOT NULL\n  - expire_date (timestamp with time zone) NOT NULL\n\n\n\nIMPORTANT GUIDELINES:\n1. For read operations (SELECT), use the 'query_database' tool\n2. For write operations (INSERT, UPDATE, DELETE), use the 'modify_database' tool\n3. Always explain what the query does in plain language\n4. Be careful with DELETE and UPDATE operations - confirm the WHERE clause\n5. When showing results, format them clearly and highlight important information\n6. If a query might affect many rows, warn the user\n7. For complex queries, break down what each part does\n\nThe Shop Wiki knowledge base contains information about:\n- Store policies (return policy, shipping, etc.)\n- Business rules and procedures\n- Product categories and classifications\n- Common customer questions and answers\n\nUse this knowledge to provide context when answering questions.",
+    "tools_config": {
+      "available_tools": [
+        "shop.tools.query_database",
+        "shop.tools.modify_database",
+        "search_user_kb"
+      ],
+      "approved_tools": [
+        "shop.tools.query_database",
+        "search_user_kb"
+      ]
+    },
+    "is_active": true
+  }
+},
+{
+  "model": "django_ergo.userchat",
+  "pk": "50b6c3d4-b4bd-4822-b663-7ba6c003ffe8",
+  "fields": {
+    "created_at": "2025-07-28T01:41:23.030Z",
+    "updated_at": "2025-07-28T01:41:23.030Z",
+    "user": 1,
+    "workflow": "8fb4c05c-3060-487c-9950-174040435ee6",
+    "title": "Daily sales inquiry with timezone correction",
+    "is_active": true,
+    "metadata": {},
+    "workflow_state": {}
+  }
+},
+{
+  "model": "django_ergo.userchat",
+  "pk": "5f6e33a6-1b5f-41d6-bb29-036b29b2833a",
+  "fields": {
+    "created_at": "2025-07-28T01:41:23.040Z",
+    "updated_at": "2025-07-28T01:41:23.040Z",
+    "user": 1,
+    "workflow": "8fb4c05c-3060-487c-9950-174040435ee6",
+    "title": "Follow-up sales query",
+    "is_active": true,
+    "metadata": {},
+    "workflow_state": {}
+  }
+},
+{
+  "model": "django_ergo.chatmessage",
+  "pk": "5723713e-952f-45d2-8ce2-4964b77dba9c",
+  "fields": {
+    "created_at": "2025-07-28T01:41:23.032Z",
+    "updated_at": "2025-07-28T01:41:23.032Z",
+    "chat": "50b6c3d4-b4bd-4822-b663-7ba6c003ffe8",
+    "message_type": "user_input",
+    "role": "user",
+    "content": "get me today's sales",
+    "metadata": {},
+    "agent_context": {}
+  }
+},
+{
+  "model": "django_ergo.chatmessage",
+  "pk": "fe0e11d8-414b-4217-8fea-63dbe80eb812",
+  "fields": {
+    "created_at": "2025-07-28T01:41:23.034Z",
+    "updated_at": "2025-07-28T01:41:23.034Z",
+    "chat": "50b6c3d4-b4bd-4822-b663-7ba6c003ffe8",
+    "message_type": "assistant_message",
+    "role": "assistant",
+    "content": "I'll get today's sales data using UTC timezone. Here are the results: Total: $2,456.78 from 15 orders.",
+    "metadata": {},
+    "agent_context": {}
+  }
+},
+{
+  "model": "django_ergo.chatmessage",
+  "pk": "08ef0be2-4ab7-4eef-840b-e659aeef7fc7",
+  "fields": {
+    "created_at": "2025-07-28T01:41:23.036Z",
+    "updated_at": "2025-07-28T01:41:23.036Z",
+    "chat": "50b6c3d4-b4bd-4822-b663-7ba6c003ffe8",
+    "message_type": "user_input",
+    "role": "user",
+    "content": "no, sorry, my shop is in EST",
+    "metadata": {},
+    "agent_context": {}
+  }
+},
+{
+  "model": "django_ergo.chatmessage",
+  "pk": "db2a72fb-b00b-4473-b54a-3af2ee19a0fb",
+  "fields": {
+    "created_at": "2025-07-28T01:41:23.038Z",
+    "updated_at": "2025-07-28T01:41:23.038Z",
+    "chat": "50b6c3d4-b4bd-4822-b663-7ba6c003ffe8",
+    "message_type": "assistant_message",
+    "role": "assistant",
+    "content": "Thank you for the correction! I'll update my knowledge to use EST timezone for your shop's operations.",
+    "metadata": {},
+    "agent_context": {}
+  }
+},
+{
+  "model": "django_ergo.chatmessage",
+  "pk": "baba235d-33bd-4317-9c42-1138db02c056",
+  "fields": {
+    "created_at": "2025-07-28T01:41:23.043Z",
+    "updated_at": "2025-07-28T01:41:23.043Z",
+    "chat": "5f6e33a6-1b5f-41d6-bb29-036b29b2833a",
+    "message_type": "user_input",
+    "role": "user",
+    "content": "get me today's sales",
+    "metadata": {},
+    "agent_context": {}
+  }
+},
+{
+  "model": "django_ergo.chatmessage",
+  "pk": "07710fa0-6e47-4452-b627-d79a9b4ecfdd",
+  "fields": {
+    "created_at": "2025-07-28T01:41:23.044Z",
+    "updated_at": "2025-07-28T01:41:23.044Z",
+    "chat": "5f6e33a6-1b5f-41d6-bb29-036b29b2833a",
+    "message_type": "assistant_message",
+    "role": "assistant",
+    "content": "Getting today's sales using EST timezone for your shop. Total: $2,789.45 from 18 orders.",
+    "metadata": {},
+    "agent_context": {}
+  }
+},
+{
+  "model": "django_ergo.chatmessage",
+  "pk": "0fceddba-6199-4726-8cda-667c5135b623",
+  "fields": {
+    "created_at": "2025-07-28T01:41:23.046Z",
+    "updated_at": "2025-07-28T01:41:23.046Z",
+    "chat": "5f6e33a6-1b5f-41d6-bb29-036b29b2833a",
+    "message_type": "user_input",
+    "role": "user",
+    "content": "Perfect, that's the correct timezone now",
+    "metadata": {},
+    "agent_context": {}
+  }
+},
+{
+  "model": "django_ergo.article",
+  "pk": "f1712b1e-e50f-43b5-b610-70991bd8e5df",
+  "fields": {
+    "created_at": "2025-07-28T01:22:39.346Z",
+    "updated_at": "2025-07-28T01:22:39.346Z",
+    "hierarchy_code": "TZ1",
+    "title": "Shop Timezone Configuration",
+    "content": "**Shop Timezone Setting**: Eastern Standard Time (EST)\n\nThe shop operates in EST timezone. This is critical for all time-sensitive operations including:\n- Sales reports and analytics\n- Order timestamps\n- Business hours calculations\n\n**Correction History**:\n- Initially system assumed UTC timezone\n- User corrected during sales inquiry: \"no, sorry, my shop is in EST\"\n- Updated: All operations should use EST, not UTC\n\n**Important**: When processing \"today's sales\" or similar time-based queries, \nalways use EST timezone for this shop.",
+    "content_embedding": null,
+    "summary": null,
+    "summary_embedding": null,
+    "knowledgebase": "a9fae5ce-d8ad-41a2-a94d-8508fbd9c5cc"
+  }
+}
+]

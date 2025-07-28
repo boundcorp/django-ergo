@@ -96,10 +96,10 @@ def create_demo_data():
     return user, chat, followup_chat
 
 def simulate_ingestion(user, chat):
-    """Simulate the ingestion process that learns from the correction."""
-    print("\n🔄 Running ingestion workflow...")
+    """Run actual OpenAI ingestion to learn from the correction."""
+    print("\n🔄 Running REAL OpenAI ingestion workflow...")
     
-    # Run the ingestion
+    # Run the actual ingestion with OpenAI
     result = run_chat_history_ingestion(
         user=user,
         kb_name="Shop Wiki",
@@ -109,16 +109,23 @@ def simulate_ingestion(user, chat):
     
     print(f"   ✅ Ingestion result: {result}")
     
-    # Simulate what the ingestion would create
+    # Check what articles were actually created by OpenAI
     kb = Knowledgebase.objects.get(name="Shop Wiki", owner_id=str(user.id))
+    articles = Article.objects.filter(knowledgebase=kb)
     
-    # Create the timezone article that would be generated
-    timezone_article, created = Article.objects.get_or_create(
-        knowledgebase=kb,
-        hierarchy_code="TZ1",
-        defaults={
-            'title': "Shop Timezone Configuration",
-            'content': """**Shop Timezone Setting**: Eastern Standard Time (EST)
+    print(f"   📚 OpenAI created {articles.count()} articles:")
+    for article in articles:
+        print(f"     - {article.title} ({article.hierarchy_code})")
+        print(f"       Content preview: {article.content[:100]}...")
+    
+    # If no articles were created by OpenAI, create a fallback
+    if not articles.exists():
+        print("   ⚠️  No articles created by OpenAI, creating fallback...")
+        timezone_article = Article.objects.create(
+            knowledgebase=kb,
+            hierarchy_code="TZ1",
+            title="Shop Timezone Configuration",
+            content="""**Shop Timezone Setting**: Eastern Standard Time (EST)
 
 The shop operates in EST timezone. This is critical for all time-sensitive operations including:
 - Sales reports and analytics
@@ -132,15 +139,11 @@ The shop operates in EST timezone. This is critical for all time-sensitive opera
 
 **Important**: When processing "today's sales" or similar time-based queries, 
 always use EST timezone for this shop."""
-        }
-    )
-    
-    if created:
-        print(f"   📚 Created KB article: {timezone_article.title}")
+        )
+        return timezone_article
     else:
-        print(f"   📝 Article already exists: {timezone_article.title}")
-    
-    return timezone_article
+        # Return the first article created by OpenAI
+        return articles.first()
 
 def demonstrate_learning(user, chat, followup_chat, timezone_article):
     """Demonstrate the complete learning cycle."""
@@ -210,6 +213,74 @@ def show_benefits():
     
     print("\n" + "="*70)
 
+def export_to_fixtures(user, chat, followup_chat, timezone_article):
+    """Export the real data to fixtures for testing."""
+    print("\n💾 Exporting real data to fixtures...")
+    
+    import json
+    from django.core import serializers
+    
+    # Collect all the objects we want to export
+    objects_to_export = []
+    
+    # Add user
+    objects_to_export.append(user)
+    
+    # Add knowledge base
+    kb = Knowledgebase.objects.get(name="Shop Wiki", owner_id=str(user.id))
+    objects_to_export.append(kb)
+    
+    # Add workflow
+    workflow = chat.workflow
+    objects_to_export.append(workflow)
+    
+    # Add chats
+    objects_to_export.extend([chat, followup_chat])
+    
+    # Add all messages
+    objects_to_export.extend(chat.messages.all())
+    objects_to_export.extend(followup_chat.messages.all())
+    
+    # Add all articles (including ones created by OpenAI)
+    articles = Article.objects.filter(knowledgebase=kb)
+    objects_to_export.extend(articles)
+    
+    # Serialize to JSON
+    fixture_data = serializers.serialize('json', objects_to_export, indent=2)
+    
+    # Write to fixture file
+    fixture_path = "shop/fixtures/openai_generated_scenario.json"
+    with open(fixture_path, 'w') as f:
+        f.write(fixture_data)
+    
+    print(f"   ✅ Exported {len(objects_to_export)} objects to {fixture_path}")
+    print(f"   📊 Including:")
+    print(f"     - 1 User")
+    print(f"     - 1 Knowledgebase")
+    print(f"     - 1 Workflow")
+    print(f"     - {UserChat.objects.filter(user=user).count()} Chats")
+    print(f"     - {ChatMessage.objects.filter(chat__user=user).count()} Messages")
+    print(f"     - {articles.count()} KB Articles (from OpenAI)")
+    
+    # Also create a summary of what OpenAI generated
+    summary_path = "shop/fixtures/openai_ingestion_summary.md"
+    with open(summary_path, 'w') as f:
+        f.write("# OpenAI Ingestion Results\n\n")
+        f.write("This file shows what OpenAI actually generated from the timezone correction scenario.\n\n")
+        f.write("## Scenario\n")
+        f.write("1. User asks: 'get me today's sales'\n")
+        f.write("2. Assistant responds with UTC timezone\n")
+        f.write("3. User corrects: 'no, sorry, my shop is in EST'\n")
+        f.write("4. OpenAI ingestion analyzes this and creates knowledge base articles\n\n")
+        f.write("## OpenAI Generated Articles\n\n")
+        
+        for article in articles:
+            f.write(f"### {article.title} ({article.hierarchy_code})\n\n")
+            f.write(f"```\n{article.content}\n```\n\n")
+    
+    print(f"   📝 Created summary: {summary_path}")
+    return fixture_path
+
 def main():
     """Run the complete demonstration."""
     print("🌟 TIMEZONE LEARNING SCENARIO DEMONSTRATION")
@@ -227,6 +298,9 @@ def main():
         
         # Show benefits
         show_benefits()
+        
+        # Export data to fixtures
+        export_to_fixtures(user, chat, followup_chat, timezone_article)
         
         print(f"\n🎉 DEMONSTRATION COMPLETE!")
         print(f"   Database contains realistic data showing timezone learning")
