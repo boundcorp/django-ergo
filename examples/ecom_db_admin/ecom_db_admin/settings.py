@@ -4,6 +4,7 @@ Django settings for ecom_db_admin project.
 
 import os
 from pathlib import Path
+import sys
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -71,8 +72,14 @@ DATABASES = {
         'PASSWORD': os.environ.get('DB_PASSWORD', 'postgres'),
         'HOST': os.environ.get('DB_HOST', 'localhost'),
         'PORT': os.environ.get('DB_PORT', '5432'),
+        'TEST': {
+            'NAME': 'test_ecom_db_admin',
+        },
     }
 }
+
+# Custom test runner to ensure pgvector extension
+TEST_RUNNER = 'ecom_db_admin.test_runner.PgvectorTestRunner'
 
 # Password validation
 AUTH_PASSWORD_VALIDATORS = [

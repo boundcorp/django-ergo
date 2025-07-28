@@ -33,13 +33,11 @@ def create_chat_history_ingestion_workflow(
     topic: str = "business configuration"
 ) -> Workflow:
     """Create a chat history ingestion workflow."""
-    
-    # Get or create the knowledge base
     kb, _ = Knowledgebase.objects.get_or_create(
         name=kb_name,
         defaults={
             'description': f'Knowledge base for {topic}',
-            'owner': user
+            'owner_id': str(user.id)
         }
     )
     
@@ -68,7 +66,6 @@ Be thorough but focused on actionable information that would help answer future 
         name=f"Chat History Ingestion - {topic}",
         description=f"Learn facts and corrections from user chat history about {topic}",
         instructions=system_prompt,
-        owner=user,
         tools_config={
             "available_tools": [
                 'create_article',
@@ -82,10 +79,10 @@ Be thorough but focused on actionable information that would help answer future 
                 'search_user_kb',
                 'get_kb_table_of_contents'
             ]
-        },
-        knowledgebase=kb
+        }
     )
     
+    workflow.knowledgebases.add(kb)
     return workflow
 
 
@@ -139,53 +136,36 @@ Create or update knowledge base articles with this information."""
     }
 
 
-def run_document_ingestion(
+def create_document_ingestion_workflow(
     user: User,
     document_content: str,
     topic: str,
-    kb_name: str = "Document Knowledge Base",
-    instructions: str = "Extract key information and create knowledge base articles"
-) -> Dict[str, Any]:
-    """
-    Run document ingestion workflow.
-    
-    Args:
-        user: User performing the ingestion
-        document_content: The content of the document to analyze
-        topic: Topic/subject of the document
-        kb_name: Name of the knowledge base to update
-        instructions: Specific instructions for what to extract
-    
-    Returns:
-        Dictionary with ingestion results
-    """
-    # Get or create knowledge base
+    kb_name: str = "Shop Wiki",
+    instructions: str = ""
+) -> Workflow:
+    """Create a document ingestion workflow."""
     kb, _ = Knowledgebase.objects.get_or_create(
         name=kb_name,
         defaults={
-            'description': f'Knowledge extracted from documents about {topic}',
-            'owner': user
+            'description': f'Knowledge base for {topic}',
+            'owner_id': str(user.id)
         }
     )
     
-    system_prompt = """You are a document analysis assistant. Your job is to extract relevant information from documents and create knowledge base articles.
+    system_prompt = f"""You are a document analysis assistant. Your job is to analyze the provided document and extract important information about {topic}.
 
-When analyzing documents:
-1. Break down complex information into focused articles
-2. Use clear, descriptive titles
-3. Extract key facts, procedures, and policies
-4. Create hierarchical articles for complex topics
-5. Include relevant quotes or references where helpful
+Document content to analyze:
+{document_content}
 
-Create multiple articles if the document covers several distinct topics. Each article should be focused on a specific aspect of the subject matter.
+{instructions}
 
-Use the create_article tool to add new knowledge to the knowledge base."""
+Use the create_article tool to create knowledge base articles based on the document content.
+Focus on actionable information that would help answer future queries correctly."""
     
     workflow = Workflow.objects.create(
         name=f"Document Ingestion - {topic}",
-        description=f"Learn from documents about {topic}",
+        description=f"Learn from document content about {topic}",
         instructions=system_prompt,
-        owner=user,
         tools_config={
             "available_tools": [
                 'create_article',
@@ -195,88 +175,61 @@ Use the create_article tool to add new knowledge to the knowledge base."""
             ],
             "approved_tools": [
                 'create_article',
-                'update_article', 
+                'update_article',
                 'search_user_kb',
                 'get_kb_table_of_contents'
             ]
-        },
-        knowledgebase=kb
+        }
     )
     
-    return {
-        "success": True,
-        "message": "Document ingestion workflow created",
-        "workflow_id": str(workflow.id),
-        "kb_name": kb_name,
-        "topic": topic,
-        "document_size": len(document_content)
-    }
+    workflow.knowledgebases.add(kb)
+    return workflow
 
 
-def run_kb_review(
+def create_knowledge_base_review_workflow(
     user: User,
-    kb_name: str = "Shop Wiki",
-    focus_area: str = "general review",
-    instructions: str = "Review articles for accuracy and completeness"
-) -> Dict[str, Any]:
-    """
-    Run knowledge base review workflow.
+    kb_name: str,
+    focus_area: str,
+    instructions: str = ""
+) -> Workflow:
+    """Create a knowledge base review workflow."""
+    kb, _ = Knowledgebase.objects.get_or_create(
+        name=kb_name,
+        defaults={
+            'description': f'Knowledge base for {focus_area}',
+            'owner_id': str(user.id)
+        }
+    )
     
-    Args:
-        user: User performing the review
-        kb_name: Name of the knowledge base to review
-        focus_area: Specific area to focus the review on
-        instructions: Specific instructions for the review
-    
-    Returns:
-        Dictionary with review results
-    """
-    try:
-        kb = Knowledgebase.objects.get(name=kb_name, owner=user)
-    except Knowledgebase.DoesNotExist:
-        return {"error": f"Knowledge base '{kb_name}' not found"}
-    
-    system_prompt = """You are a knowledge base review assistant. Your job is to analyze existing articles and improve them.
+    system_prompt = f"""You are a knowledge base review assistant. Your job is to review existing knowledge base articles and improve them based on the focus area: {focus_area}.
 
-When reviewing articles:
-1. Check for outdated information
-2. Identify gaps or missing details
-3. Improve clarity and organization
-4. Add cross-references where helpful
-5. Consolidate duplicate information
-6. Update with new insights or corrections
+{instructions}
 
-Use the update_article tool to improve existing articles or create_article for new supplementary content.
+Use the search_user_kb and get_kb_table_of_contents tools to explore existing content.
+Use the update_article tool to improve existing articles.
+Use the create_article tool to add missing information.
 
-Be thorough but conservative - only make changes that clearly improve the knowledge base."""
+Focus on ensuring the knowledge base is comprehensive and accurate for queries about {focus_area}."""
     
     workflow = Workflow.objects.create(
         name=f"KB Review - {focus_area}",
-        description=f"Review and improve articles in {kb_name}",
+        description=f"Review and improve knowledge base articles about {focus_area}",
         instructions=system_prompt,
-        owner=user,
         tools_config={
             "available_tools": [
                 'create_article',
                 'update_article',
                 'search_user_kb',
-                'get_kb_table_of_contents',
-                'get_article_by_hierarchy'
+                'get_kb_table_of_contents'
             ],
             "approved_tools": [
+                'create_article',
                 'update_article',
-                'search_user_kb', 
-                'get_kb_table_of_contents',
-                'get_article_by_hierarchy'
+                'search_user_kb',
+                'get_kb_table_of_contents'
             ]
-        },
-        knowledgebase=kb
+        }
     )
     
-    return {
-        "success": True,
-        "message": "KB review workflow created",
-        "workflow_id": str(workflow.id),
-        "kb_name": kb_name,
-        "focus_area": focus_area
-    }
+    workflow.knowledgebases.add(kb)
+    return workflow

@@ -52,20 +52,15 @@ Use this knowledge to provide context when answering questions."""
 
 def create_db_admin_workflow(user: User, name: str = "DB Admin Assistant") -> Workflow:
     """Create a database admin workflow for a user."""
-    # Get or create the Shop Wiki knowledge base
     shop_wiki, _ = Knowledgebase.objects.get_or_create(
         name="Shop Wiki",
-        defaults={
-            'description': "E-commerce store policies, procedures, and business knowledge",
-            'owner': user
-        }
+        defaults={'description': "E-commerce store policies, procedures, and business knowledge", 'owner_id': str(user.id)}
     )
     
     workflow = Workflow.objects.create(
         name=name,
         description="Natural language database administration assistant",
         instructions=get_db_admin_system_prompt(),
-        owner=user,
         tools_config={
             "available_tools": [
                 'shop.tools.query_database',
@@ -73,12 +68,14 @@ def create_db_admin_workflow(user: User, name: str = "DB Admin Assistant") -> Wo
                 'search_user_kb',
             ],
             "approved_tools": [
-                'shop.tools.query_database',  # Read-only queries don't need approval
+                'shop.tools.query_database',
                 'search_user_kb',
             ]
-        },
-        knowledgebase=shop_wiki
+        }
     )
+    
+    # Associate workflow with knowledge base
+    workflow.knowledgebases.add(shop_wiki)
     
     return workflow
 
