@@ -358,15 +358,21 @@ class SimpleThumbsFeedback:
         """Generate recommendations for improving the system"""
         recommendations = []
         
-        insights = self.get_learning_insights()
+        # Calculate stats directly to avoid recursion
+        positive_count = len([d for d in self.learning_data if d['type'] == 'positive_feedback'])
+        negative_count = len([d for d in self.learning_data if d['type'] == 'negative_feedback'])
+        total_feedback = len(self.learning_data)
+        approval_rate = positive_count / total_feedback if total_feedback > 0 else 0
         
-        if insights['approval_rate'] < 0.7:
+        responses_needing_review = self._get_responses_needing_review()
+        
+        if approval_rate < 0.7:
             recommendations.append("Consider improving response quality - approval rate is below 70%")
         
-        if len(insights['responses_needing_review']) > 0:
-            recommendations.append(f"{len(insights['responses_needing_review'])} responses need expert review")
+        if len(responses_needing_review) > 0:
+            recommendations.append(f"{len(responses_needing_review)} responses need expert review")
         
-        if insights['negative_count'] > insights['positive_count']:
+        if negative_count > positive_count:
             recommendations.append("More negative than positive feedback - investigate common issues")
         
         return recommendations
