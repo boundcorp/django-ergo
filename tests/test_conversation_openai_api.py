@@ -109,7 +109,7 @@ class TestOpenAIAPIEngineAttributes:
             await engine.send(None, "hello")
 
         with pytest.raises(NotImplementedError):
-            asyncio.get_event_loop().run_until_complete(_run())
+            asyncio.run(_run())
 
     def test_submit_tool_result_raises_not_implemented(self, engine):
         import asyncio
@@ -118,7 +118,7 @@ class TestOpenAIAPIEngineAttributes:
             await engine.submit_tool_result(None, "call_1", "result")
 
         with pytest.raises(NotImplementedError):
-            asyncio.get_event_loop().run_until_complete(_run())
+            asyncio.run(_run())
 
 
 # ---------------------------------------------------------------------------
