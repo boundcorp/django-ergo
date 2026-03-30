@@ -8,7 +8,7 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-SECRET_KEY = "fqr1#2lon7^(e#_4vg2*zi#30y36#^46!k(-9hr2uu&j+@l0jx"  # noqa: S105
+SECRET_KEY = "fqr1#2lon7^(e#_4vg2*zi#30y36#^46!k(-9hr2uu&j+@l0jx"
 
 DEBUG = True
 
@@ -65,15 +65,13 @@ DATABASES = {
         "ENGINE": "django.db.backends.postgresql",
         "NAME": "django_ergo_test",
         "USER": "postgres",
-        "PASSWORD": "",
+        "PASSWORD": "postgres",
         "HOST": "localhost",
         "PORT": "5432",
         "TEST": {
             "NAME": "test_django_ergo",
         },
-        "OPTIONS": {
-            "options": "-c default_transaction_isolation=read_committed"
-        },
+        "OPTIONS": {},
     }
 }
 
@@ -97,7 +95,6 @@ AUTH_PASSWORD_VALIDATORS = [
 LANGUAGE_CODE = "en-us"
 TIME_ZONE = "UTC"
 USE_I18N = True
-USE_L10N = True
 USE_TZ = False  # Keep False to avoid Django 5.0 warning
 
 # Static files (CSS, JavaScript, Images)
