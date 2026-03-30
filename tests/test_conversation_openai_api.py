@@ -102,23 +102,17 @@ class TestOpenAIAPIEngineAttributes:
         assert engine.get_tool_adapter() is not None  # engine is usable
         assert vars(engine).get("_client") is None
 
-    def test_send_raises_not_implemented(self, engine):
-        import asyncio
+    def test_send_is_async_generator(self, engine):
+        """send() must be an async generator function (real implementation)."""
+        import inspect
 
-        async def _run():
-            await engine.send(None, "hello")
+        assert inspect.isasyncgenfunction(engine.send)
 
-        with pytest.raises(NotImplementedError):
-            asyncio.run(_run())
+    def test_submit_tool_result_is_async_generator(self, engine):
+        """submit_tool_result() must be an async generator function (real implementation)."""
+        import inspect
 
-    def test_submit_tool_result_raises_not_implemented(self, engine):
-        import asyncio
-
-        async def _run():
-            await engine.submit_tool_result(None, "call_1", "result")
-
-        with pytest.raises(NotImplementedError):
-            asyncio.run(_run())
+        assert inspect.isasyncgenfunction(engine.submit_tool_result)
 
 
 # ---------------------------------------------------------------------------

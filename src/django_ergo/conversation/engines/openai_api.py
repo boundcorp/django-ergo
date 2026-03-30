@@ -83,10 +83,74 @@ class OpenAIAPIEngine(Engine):
     async def close_session(self, session) -> None:
         """No-op — OpenAI API is stateless."""
 
+    async def _call_and_persist(
+        self, session, seq: int
+    ) -> AsyncIterator[EngineResponse]:
+        """Rebuild history, call the API, persist the assistant reply, and yield responses."""
+        import json
+
+        from django_ergo.conversation.models import OpenAIMessage
+
+        messages = self.reconstruct_messages(session)
+        tools = self.get_tools_schema(session.workflow) if session.workflow else None
+
+        kwargs: dict = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": self.temperature,
+        }
+        if self.max_tokens:
+            kwargs["max_tokens"] = self.max_tokens
+        if tools:
+            kwargs["tools"] = tools
+            kwargs["tool_choice"] = "auto"
+
+        response = await self._get_client().chat.completions.create(**kwargs)
+        choice = response.choices[0]
+        msg = choice.message
+
+        await OpenAIMessage.objects.acreate(
+            session=session,
+            role="assistant",
+            content=msg.content,
+            tool_calls=[tc.model_dump() for tc in msg.tool_calls]
+            if msg.tool_calls
+            else None,
+            sequence=seq,
+            input_tokens=response.usage.prompt_tokens if response.usage else None,
+            output_tokens=response.usage.completion_tokens if response.usage else None,
+        )
+
+        if msg.content:
+            yield EngineResponse(event_type="text", raw={}, text=msg.content)
+
+        if msg.tool_calls:
+            for tc in msg.tool_calls:
+                yield EngineResponse(
+                    event_type="tool_use",
+                    raw=tc.model_dump(),
+                    tool_use={
+                        "id": tc.id,
+                        "name": tc.function.name,
+                        "input": json.loads(tc.function.arguments),
+                    },
+                )
+
+        yield EngineResponse(
+            event_type="done", raw={"finish_reason": choice.finish_reason}
+        )
+
     async def send(self, session, message: str) -> AsyncIterator[EngineResponse]:
-        """Not yet implemented — integration tests cover this separately."""
-        msg = "OpenAIAPIEngine.send() is not yet implemented"
-        raise NotImplementedError(msg)
+        """Persist the user message, call the API, and yield response events."""
+        from django_ergo.conversation.models import OpenAIMessage
+
+        seq = await session.openai_messages.acount()
+        await OpenAIMessage.objects.acreate(
+            session=session, role="user", content=message, sequence=seq
+        )
+
+        async for event in self._call_and_persist(session, seq + 1):
+            yield event
 
     async def submit_tool_result(
         self,
@@ -95,9 +159,20 @@ class OpenAIAPIEngine(Engine):
         result: Any,
         is_error: bool = False,
     ) -> AsyncIterator[EngineResponse]:
-        """Not yet implemented — integration tests cover this separately."""
-        msg = "OpenAIAPIEngine.submit_tool_result() is not yet implemented"
-        raise NotImplementedError(msg)
+        """Persist the tool result, call the API again, and yield response events."""
+        from django_ergo.conversation.models import OpenAIMessage
+
+        seq = await session.openai_messages.acount()
+        await OpenAIMessage.objects.acreate(
+            session=session,
+            role="tool",
+            content=str(result),
+            tool_call_id=tool_use_id,
+            sequence=seq,
+        )
+
+        async for event in self._call_and_persist(session, seq + 1):
+            yield event
 
     async def generate(
         self,
