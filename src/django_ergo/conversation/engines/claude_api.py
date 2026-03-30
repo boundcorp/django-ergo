@@ -114,3 +114,65 @@ class ClaudeAPIEngine(Engine):
             "Use integration tests once the streaming implementation is ready."
         )
         raise NotImplementedError(msg)
+
+    async def generate(
+        self,
+        prompt: str,
+        workflow=None,
+        system: str | None = None,
+        response_model: type | None = None,
+    ) -> EngineResponse:
+        """One-shot generation without a session — useful for typed/structured outputs."""
+        client = self._get_client()
+        kwargs = {
+            "model": self.model,
+            "max_tokens": self.max_tokens,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        sys_prompt = system or (workflow.instructions if workflow else None)
+        if sys_prompt:
+            kwargs["system"] = sys_prompt
+
+        if response_model is not None:
+            schema = response_model.model_json_schema()
+            kwargs["tools"] = [
+                {
+                    "name": "structured_output",
+                    "description": f"Return a {response_model.__name__} object",
+                    "input_schema": schema,
+                }
+            ]
+            kwargs["tool_choice"] = {"type": "tool", "name": "structured_output"}
+        elif workflow:
+            tools = self.get_tools_schema(workflow)
+            if tools:
+                kwargs["tools"] = tools
+
+        response = await client.messages.create(**kwargs)
+
+        if response_model is not None:
+            for block in response.content:
+                if block.type == "tool_use" and block.name == "structured_output":
+                    parsed = response_model.model_validate(block.input)
+                    return EngineResponse(
+                        event_type="done",
+                        raw={
+                            "parsed": parsed,
+                            "usage": {
+                                "input_tokens": response.usage.input_tokens,
+                                "output_tokens": response.usage.output_tokens,
+                            },
+                        },
+                    )
+
+        text = "".join(block.text for block in response.content if block.type == "text")
+        return EngineResponse(
+            event_type="done",
+            raw={
+                "usage": {
+                    "input_tokens": response.usage.input_tokens,
+                    "output_tokens": response.usage.output_tokens,
+                }
+            },
+            text=text,
+        )

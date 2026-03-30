@@ -7,12 +7,11 @@ from typing import Any
 
 from django_ergo.conversation.adapters import OpenAIToolAdapter
 from django_ergo.conversation.engine import Engine
+from django_ergo.conversation.engine import EngineResponse
 from django_ergo.tools import tool_registry
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
-
-    from django_ergo.conversation.engine import EngineResponse
 
 
 class OpenAIAPIEngine(Engine):
@@ -32,6 +31,10 @@ class OpenAIAPIEngine(Engine):
     @property
     def client(self):
         """Lazy-initialise the OpenAI client."""
+        return self._get_client()
+
+    def _get_client(self):
+        """Return the OpenAI client, initialising it lazily."""
         if self._client is None:
             import openai
 
@@ -95,3 +98,79 @@ class OpenAIAPIEngine(Engine):
         """Not yet implemented — integration tests cover this separately."""
         msg = "OpenAIAPIEngine.submit_tool_result() is not yet implemented"
         raise NotImplementedError(msg)
+
+    async def generate(
+        self,
+        prompt: str,
+        workflow=None,
+        system: str | None = None,
+        response_model: type | None = None,
+    ) -> EngineResponse:
+        """One-shot generation without a session — useful for typed/structured outputs."""
+        import json
+
+        messages = []
+        sys_prompt = system or (workflow.instructions if workflow else None)
+        if sys_prompt:
+            messages.append({"role": "system", "content": sys_prompt})
+        messages.append({"role": "user", "content": prompt})
+
+        kwargs = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": self.temperature,
+        }
+        if self.max_tokens:
+            kwargs["max_tokens"] = self.max_tokens
+
+        if response_model is not None:
+            schema = response_model.model_json_schema()
+            kwargs["tools"] = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "structured_output",
+                        "description": f"Return a {response_model.__name__} object",
+                        "parameters": schema,
+                    },
+                }
+            ]
+            kwargs["tool_choice"] = {
+                "type": "function",
+                "function": {"name": "structured_output"},
+            }
+        elif workflow:
+            tools = self.get_tools_schema(workflow)
+            if tools:
+                kwargs["tools"] = tools
+                kwargs["tool_choice"] = "auto"
+
+        response = await self._get_client().chat.completions.create(**kwargs)
+        choice = response.choices[0]
+        msg = choice.message
+
+        if response_model is not None and msg.tool_calls:
+            tc = msg.tool_calls[0]
+            raw_args = json.loads(tc.function.arguments)
+            parsed = response_model.model_validate(raw_args)
+            return EngineResponse(
+                event_type="done",
+                raw={
+                    "parsed": parsed,
+                    "usage": {
+                        "prompt_tokens": response.usage.prompt_tokens,
+                        "completion_tokens": response.usage.completion_tokens,
+                    },
+                },
+            )
+
+        return EngineResponse(
+            event_type="done",
+            raw={
+                "usage": {
+                    "prompt_tokens": response.usage.prompt_tokens,
+                    "completion_tokens": response.usage.completion_tokens,
+                }
+            },
+            text=msg.content,
+        )

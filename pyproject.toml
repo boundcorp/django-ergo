@@ -59,6 +59,7 @@ dev = [
     "factory-boy",
     "django-coverage-plugin",
     "pytest-django",
+    "pytest-asyncio",
     "psycopg2-binary",
     # API Example Dependencies
     "django-ninja>=1.1.0",
