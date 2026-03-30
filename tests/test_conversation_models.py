@@ -5,16 +5,16 @@ ConversationSession, ClaudeMessage, ClaudeContentBlock, OpenAIMessage
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
-from django_ergo.conversation import ClaudeContentBlock
-from django_ergo.conversation import ClaudeMessage
-from django_ergo.conversation import ClaudeMessageRole
-from django_ergo.conversation import ContentBlockType
-from django_ergo.conversation import ConversationSession
-from django_ergo.conversation import EngineType
-from django_ergo.conversation import OpenAIMessage
-from django_ergo.conversation import OpenAIMessageRole
-from django_ergo.conversation import SessionStatus
-from django_ergo.conversation import TransportType
+from django_ergo.conversation.models import ClaudeContentBlock
+from django_ergo.conversation.models import ClaudeMessage
+from django_ergo.conversation.models import ClaudeMessageRole
+from django_ergo.conversation.models import ContentBlockType
+from django_ergo.conversation.models import ConversationSession
+from django_ergo.conversation.models import EngineType
+from django_ergo.conversation.models import OpenAIMessage
+from django_ergo.conversation.models import OpenAIMessageRole
+from django_ergo.conversation.models import SessionStatus
+from django_ergo.conversation.models import TransportType
 from django_ergo.models import Workflow
 
 User = get_user_model()

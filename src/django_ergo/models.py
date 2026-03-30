@@ -501,10 +501,3 @@ class ChatMessage(TimeStampedMixin):
     def is_assistant_message(self) -> bool:
         """Check if this is an assistant message."""
         return self.message_type == MessageType.ASSISTANT_MESSAGE
-
-
-# Import conversation models to ensure they're registered with the app
-from django_ergo.conversation.models import ClaudeContentBlock  # noqa: E402, F401
-from django_ergo.conversation.models import ClaudeMessage  # noqa: E402, F401
-from django_ergo.conversation.models import ConversationSession  # noqa: E402, F401
-from django_ergo.conversation.models import OpenAIMessage  # noqa: E402, F401
