@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add lossless, engine-native conversation storage with Claude CLI and API engines, tool adapters, session lifecycle management, and conversation import.
+**Goal:** Add lossless, engine-native conversation storage with Claude CLI and API engines, tool adapters, session lifecycle management, conversation import, and one-shot typed generation.
 
 **Architecture:** Layered protocol — storage models at bottom, engine ABC in the middle, session manager and tool adapters on top, importers alongside. New code lives in `src/django_ergo/conversation/` subpackage. Existing models/code untouched.
 
@@ -38,9 +38,14 @@ tests/
 ├── test_conversation_models.py  # Model creation, relationships, ordering
 ├── test_conversation_adapters.py # Tool adapter schema conversion
 ├── test_conversation_engine.py  # Engine ABC contract, reconstruct_messages
+├── test_conversation_claude_api.py # ClaudeAPIEngine reconstruct + tools
+├── test_conversation_claude_cli.py # ClaudeCLIEngine health check, failover
+├── test_conversation_openai_api.py # OpenAIAPIEngine reconstruct
 ├── test_conversation_runner.py  # run_conversation_turn with mock engine
 ├── test_conversation_manager.py # SessionManager lifecycle, failover
 ├── test_conversation_import.py  # Importer parsing, format detection
+├── test_conversation_generate.py # Engine.generate() one-shot typed output
+├── test_import_command.py       # Management command
 ```
 
 ---
@@ -701,6 +706,21 @@ class Engine(ABC):
     @abstractmethod
     def get_tool_adapter(self):
         """Return the ToolAdapter for this engine."""
+
+    async def generate(
+        self,
+        prompt: str,
+        workflow: Workflow | None = None,
+        system: str | None = None,
+        response_model: type | None = None,
+    ) -> EngineResponse:
+        """One-shot generation. No session required.
+
+        If response_model is provided (a Pydantic BaseModel subclass),
+        forces structured output via tool_use and returns parsed result
+        in EngineResponse.raw["parsed"].
+        """
+        raise NotImplementedError("This engine does not support one-shot generation")
 ```
 
 - [ ] **Step 4: Run tests to verify they pass**
@@ -3277,4 +3297,334 @@ Expected: All existing tests still pass, all new conversation tests pass
 ```bash
 git add pyproject.toml
 git commit -m "chore: add pytest-asyncio for async engine tests"
+```
+
+---
+
+### Task 12: One-Shot Typed Generation (Engine.generate)
+
+Adds `generate()` to both Claude and OpenAI engines for one-shot typed output — e.g., "given this prompt and a Pydantic model, return structured data." No session lifecycle needed.
+
+**Files:**
+- Modify: `src/django_ergo/conversation/engines/claude_api.py`
+- Modify: `src/django_ergo/conversation/engines/openai_api.py`
+- Test: `tests/test_conversation_generate.py`
+
+- [ ] **Step 1: Write failing tests for generate()**
+
+```python
+# tests/test_conversation_generate.py
+"""Tests for Engine.generate() — one-shot typed output."""
+import pytest
+import json
+from unittest.mock import AsyncMock, MagicMock, patch
+from pydantic import BaseModel
+
+from django_ergo.conversation.engines.claude_api import ClaudeAPIEngine
+from django_ergo.conversation.engines.openai_api import OpenAIAPIEngine
+from django_ergo.conversation.engine import EngineResponse
+
+
+class MovieReview(BaseModel):
+    title: str
+    rating: float
+    summary: str
+
+
+class TestClaudeAPIGenerate:
+    @pytest.mark.asyncio
+    async def test_generate_text(self):
+        engine = ClaudeAPIEngine(config={"api_key": "test-key"})
+
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(type="text", text="Hello!")]
+        mock_response.stop_reason = "end_turn"
+        mock_response.usage = MagicMock(input_tokens=10, output_tokens=5)
+
+        with patch.object(engine, "_get_client") as mock_client:
+            mock_client.return_value.messages.create = AsyncMock(return_value=mock_response)
+
+            result = await engine.generate("Say hello")
+
+        assert result.event_type == "done"
+        assert result.text == "Hello!"
+
+    @pytest.mark.asyncio
+    async def test_generate_with_response_model(self):
+        engine = ClaudeAPIEngine(config={"api_key": "test-key"})
+
+        # Claude returns structured output via tool_use
+        tool_input = {"title": "Inception", "rating": 9.5, "summary": "Mind-bending thriller"}
+        mock_tool_block = MagicMock(
+            type="tool_use", id="toolu_01", name="structured_output", input=tool_input
+        )
+        mock_response = MagicMock()
+        mock_response.content = [mock_tool_block]
+        mock_response.stop_reason = "tool_use"
+        mock_response.usage = MagicMock(input_tokens=10, output_tokens=50)
+
+        with patch.object(engine, "_get_client") as mock_client:
+            mock_client.return_value.messages.create = AsyncMock(return_value=mock_response)
+
+            result = await engine.generate(
+                "Review Inception", response_model=MovieReview
+            )
+
+        assert result.event_type == "done"
+        parsed = result.raw["parsed"]
+        assert isinstance(parsed, MovieReview)
+        assert parsed.title == "Inception"
+        assert parsed.rating == 9.5
+
+    @pytest.mark.asyncio
+    async def test_generate_with_system_prompt(self):
+        engine = ClaudeAPIEngine(config={"api_key": "test-key"})
+
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(type="text", text="I am a pirate assistant!")]
+        mock_response.stop_reason = "end_turn"
+        mock_response.usage = MagicMock(input_tokens=10, output_tokens=5)
+
+        with patch.object(engine, "_get_client") as mock_client:
+            mock_client.return_value.messages.create = AsyncMock(return_value=mock_response)
+
+            result = await engine.generate("Who are you?", system="You are a pirate.")
+
+        # Verify system was passed
+        call_kwargs = mock_client.return_value.messages.create.call_args.kwargs
+        assert call_kwargs["system"] == "You are a pirate."
+
+
+class TestOpenAIAPIGenerate:
+    @pytest.mark.asyncio
+    async def test_generate_text(self):
+        engine = OpenAIAPIEngine(config={"api_key": "test-key"})
+
+        mock_choice = MagicMock()
+        mock_choice.message.content = "Hello!"
+        mock_choice.message.tool_calls = None
+        mock_choice.finish_reason = "stop"
+        mock_response = MagicMock()
+        mock_response.choices = [mock_choice]
+        mock_response.usage = MagicMock(prompt_tokens=10, completion_tokens=5)
+
+        with patch.object(engine, "_get_client") as mock_client:
+            mock_client.return_value.chat.completions.create = AsyncMock(
+                return_value=mock_response
+            )
+
+            result = await engine.generate("Say hello")
+
+        assert result.event_type == "done"
+        assert result.text == "Hello!"
+
+    @pytest.mark.asyncio
+    async def test_generate_with_response_model(self):
+        engine = OpenAIAPIEngine(config={"api_key": "test-key"})
+
+        # OpenAI returns structured output via function call
+        tool_call = MagicMock()
+        tool_call.id = "call_abc"
+        tool_call.function.name = "structured_output"
+        tool_call.function.arguments = json.dumps(
+            {"title": "Inception", "rating": 9.5, "summary": "Mind-bending thriller"}
+        )
+
+        mock_choice = MagicMock()
+        mock_choice.message.content = None
+        mock_choice.message.tool_calls = [tool_call]
+        mock_choice.finish_reason = "tool_calls"
+        mock_response = MagicMock()
+        mock_response.choices = [mock_choice]
+        mock_response.usage = MagicMock(prompt_tokens=10, completion_tokens=50)
+
+        with patch.object(engine, "_get_client") as mock_client:
+            mock_client.return_value.chat.completions.create = AsyncMock(
+                return_value=mock_response
+            )
+
+            result = await engine.generate(
+                "Review Inception", response_model=MovieReview
+            )
+
+        parsed = result.raw["parsed"]
+        assert isinstance(parsed, MovieReview)
+        assert parsed.title == "Inception"
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `cd /home/linked/p/boundcorp/django-ergo && python -m pytest tests/test_conversation_generate.py -v`
+Expected: FAIL — `generate()` raises `NotImplementedError`
+
+- [ ] **Step 3: Implement generate() on ClaudeAPIEngine**
+
+Add to `src/django_ergo/conversation/engines/claude_api.py`:
+```python
+    async def generate(
+        self,
+        prompt: str,
+        workflow: Workflow | None = None,
+        system: str | None = None,
+        response_model: type | None = None,
+    ) -> EngineResponse:
+        client = self._get_client()
+
+        kwargs = {
+            "model": self.model,
+            "max_tokens": self.max_tokens,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+
+        # System prompt — from arg or workflow
+        sys_prompt = system or (workflow.instructions if workflow else None)
+        if sys_prompt:
+            kwargs["system"] = sys_prompt
+
+        # Structured output via tool_use forcing
+        if response_model is not None:
+            schema = response_model.model_json_schema()
+            kwargs["tools"] = [
+                {
+                    "name": "structured_output",
+                    "description": f"Return a {response_model.__name__} object",
+                    "input_schema": schema,
+                }
+            ]
+            kwargs["tool_choice"] = {"type": "tool", "name": "structured_output"}
+
+        # Add workflow tools if present and no response_model
+        elif workflow:
+            tools = self.get_tools_schema(workflow)
+            if tools:
+                kwargs["tools"] = tools
+
+        response = await client.messages.create(**kwargs)
+
+        # Parse response
+        if response_model is not None:
+            # Find tool_use block and parse
+            for block in response.content:
+                if block.type == "tool_use" and block.name == "structured_output":
+                    parsed = response_model.model_validate(block.input)
+                    return EngineResponse(
+                        event_type="done",
+                        raw={
+                            "parsed": parsed,
+                            "usage": {
+                                "input_tokens": response.usage.input_tokens,
+                                "output_tokens": response.usage.output_tokens,
+                            },
+                        },
+                        text=None,
+                    )
+
+        # Plain text response
+        text = "".join(
+            block.text for block in response.content if block.type == "text"
+        )
+        return EngineResponse(
+            event_type="done",
+            raw={
+                "usage": {
+                    "input_tokens": response.usage.input_tokens,
+                    "output_tokens": response.usage.output_tokens,
+                },
+            },
+            text=text,
+        )
+```
+
+- [ ] **Step 4: Implement generate() on OpenAIAPIEngine**
+
+Add to `src/django_ergo/conversation/engines/openai_api.py`:
+```python
+    async def generate(
+        self,
+        prompt: str,
+        workflow: Workflow | None = None,
+        system: str | None = None,
+        response_model: type | None = None,
+    ) -> EngineResponse:
+        client = self._get_client()
+
+        messages = []
+        sys_prompt = system or (workflow.instructions if workflow else None)
+        if sys_prompt:
+            messages.append({"role": "system", "content": sys_prompt})
+        messages.append({"role": "user", "content": prompt})
+
+        kwargs = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": self.temperature,
+        }
+        if self.max_tokens:
+            kwargs["max_tokens"] = self.max_tokens
+
+        # Structured output via function calling
+        if response_model is not None:
+            schema = response_model.model_json_schema()
+            kwargs["tools"] = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "structured_output",
+                        "description": f"Return a {response_model.__name__} object",
+                        "parameters": schema,
+                    },
+                }
+            ]
+            kwargs["tool_choice"] = {
+                "type": "function",
+                "function": {"name": "structured_output"},
+            }
+        elif workflow:
+            tools = self.get_tools_schema(workflow)
+            if tools:
+                kwargs["tools"] = tools
+                kwargs["tool_choice"] = "auto"
+
+        response = await client.chat.completions.create(**kwargs)
+        choice = response.choices[0]
+        msg = choice.message
+
+        if response_model is not None and msg.tool_calls:
+            tc = msg.tool_calls[0]
+            raw_args = json.loads(tc.function.arguments)
+            parsed = response_model.model_validate(raw_args)
+            return EngineResponse(
+                event_type="done",
+                raw={
+                    "parsed": parsed,
+                    "usage": {
+                        "prompt_tokens": response.usage.prompt_tokens,
+                        "completion_tokens": response.usage.completion_tokens,
+                    },
+                },
+                text=None,
+            )
+
+        return EngineResponse(
+            event_type="done",
+            raw={
+                "usage": {
+                    "prompt_tokens": response.usage.prompt_tokens,
+                    "completion_tokens": response.usage.completion_tokens,
+                },
+            },
+            text=msg.content,
+        )
+```
+
+- [ ] **Step 5: Run tests to verify they pass**
+
+Run: `cd /home/linked/p/boundcorp/django-ergo && python -m pytest tests/test_conversation_generate.py -v`
+Expected: All PASS
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/django_ergo/conversation/engines/claude_api.py src/django_ergo/conversation/engines/openai_api.py tests/test_conversation_generate.py
+git commit -m "feat: add Engine.generate() for one-shot typed outputs via tool_use forcing"
 ```
