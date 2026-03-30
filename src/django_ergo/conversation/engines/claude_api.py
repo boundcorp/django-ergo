@@ -27,11 +27,11 @@ class ClaudeAPIEngine(Engine):
         self._adapter = ClaudeToolAdapter()
 
     def _get_client(self):
-        """Lazily initialize the Anthropic client."""
+        """Lazily initialize the Anthropic async client."""
         if self._client is None:
             import anthropic
 
-            self._client = anthropic.Anthropic(api_key=self.api_key)
+            self._client = anthropic.AsyncAnthropic(api_key=self.api_key)
         return self._client
 
     def get_tool_adapter(self) -> ClaudeToolAdapter:
@@ -93,13 +93,94 @@ class ClaudeAPIEngine(Engine):
         """No-op: the API is stateless, nothing to clean up."""
         return
 
-    async def send(self, session, message: str) -> AsyncIterator[EngineResponse]:
-        # TODO: implement streaming send using self._get_client()
-        msg = (
-            "ClaudeAPIEngine.send() is not yet implemented. "
-            "Use integration tests once the streaming implementation is ready."
+    async def _process_response(
+        self, session, seq: int
+    ) -> AsyncIterator[EngineResponse]:
+        """Call the API with current session history and persist + yield response blocks."""
+        from django_ergo.conversation.models import ClaudeContentBlock
+        from django_ergo.conversation.models import ClaudeMessage
+
+        messages = self.reconstruct_messages(session)
+        tools = self.get_tools_schema(session.workflow) if session.workflow else None
+
+        kwargs: dict[str, Any] = {
+            "model": self.model,
+            "max_tokens": self.max_tokens,
+            "messages": messages,
+        }
+        if session.workflow and session.workflow.instructions:
+            kwargs["system"] = session.workflow.instructions
+        if tools:
+            kwargs["tools"] = tools
+
+        client = self._get_client()
+        response = await client.messages.create(**kwargs)
+
+        assistant_msg = await ClaudeMessage.objects.acreate(
+            session=session,
+            role="assistant",
+            sequence=seq,
+            stop_reason=response.stop_reason,
+            input_tokens=response.usage.input_tokens,
+            output_tokens=response.usage.output_tokens,
         )
-        raise NotImplementedError(msg)
+
+        for block_seq, block in enumerate(response.content):
+            if block.type == "text":
+                await ClaudeContentBlock.objects.acreate(
+                    message=assistant_msg,
+                    block_type="text",
+                    sequence=block_seq,
+                    text=block.text,
+                )
+                yield EngineResponse(
+                    event_type="text", raw={"type": "text"}, text=block.text
+                )
+            elif block.type == "tool_use":
+                await ClaudeContentBlock.objects.acreate(
+                    message=assistant_msg,
+                    block_type="tool_use",
+                    sequence=block_seq,
+                    tool_use_id=block.id,
+                    tool_name=block.name,
+                    tool_input=block.input,
+                )
+                yield EngineResponse(
+                    event_type="tool_use",
+                    raw={"type": "tool_use"},
+                    tool_use={"id": block.id, "name": block.name, "input": block.input},
+                )
+            elif block.type == "thinking":
+                await ClaudeContentBlock.objects.acreate(
+                    message=assistant_msg,
+                    block_type="thinking",
+                    sequence=block_seq,
+                    thinking=block.thinking,
+                )
+                yield EngineResponse(
+                    event_type="thinking",
+                    raw={"type": "thinking"},
+                    thinking=block.thinking,
+                )
+
+        yield EngineResponse(
+            event_type="done", raw={"stop_reason": response.stop_reason}
+        )
+
+    async def send(self, session, message: str) -> AsyncIterator[EngineResponse]:
+        from django_ergo.conversation.models import ClaudeContentBlock
+        from django_ergo.conversation.models import ClaudeMessage
+
+        seq = await session.claude_messages.acount()
+        user_msg = await ClaudeMessage.objects.acreate(
+            session=session, role="user", sequence=seq
+        )
+        await ClaudeContentBlock.objects.acreate(
+            message=user_msg, block_type="text", sequence=0, text=message
+        )
+
+        async for event in self._process_response(session, seq + 1):
+            yield event
 
     async def submit_tool_result(
         self,
@@ -108,12 +189,24 @@ class ClaudeAPIEngine(Engine):
         result: Any,
         is_error: bool = False,
     ) -> AsyncIterator[EngineResponse]:
-        # TODO: implement tool result submission and continuation streaming
-        msg = (
-            "ClaudeAPIEngine.submit_tool_result() is not yet implemented. "
-            "Use integration tests once the streaming implementation is ready."
+        from django_ergo.conversation.models import ClaudeContentBlock
+        from django_ergo.conversation.models import ClaudeMessage
+
+        seq = await session.claude_messages.acount()
+        result_msg = await ClaudeMessage.objects.acreate(
+            session=session, role="user", sequence=seq
         )
-        raise NotImplementedError(msg)
+        await ClaudeContentBlock.objects.acreate(
+            message=result_msg,
+            block_type="tool_result",
+            sequence=0,
+            tool_result_for=tool_use_id,
+            tool_result_content=str(result),
+            is_error=is_error,
+        )
+
+        async for event in self._process_response(session, seq + 1):
+            yield event
 
     async def generate(
         self,
@@ -124,7 +217,7 @@ class ClaudeAPIEngine(Engine):
     ) -> EngineResponse:
         """One-shot generation without a session — useful for typed/structured outputs."""
         client = self._get_client()
-        kwargs = {
+        kwargs: dict[str, Any] = {
             "model": self.model,
             "max_tokens": self.max_tokens,
             "messages": [{"role": "user", "content": prompt}],

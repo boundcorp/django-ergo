@@ -421,10 +421,14 @@ class TestLifecycleMethods:
         result = await engine.close_session(session)
         assert result is None
 
-    async def test_send_raises_not_implemented(self, engine, session):
-        with pytest.raises(NotImplementedError):
-            await engine.send(session, "hello")
+    async def test_send_is_async_generator(self, engine):
+        """send() is an async generator (not a coroutine that raises NotImplementedError)."""
+        import inspect
 
-    async def test_submit_tool_result_raises_not_implemented(self, engine, session):
-        with pytest.raises(NotImplementedError):
-            await engine.submit_tool_result(session, "toolu_01", "result")
+        assert inspect.isasyncgenfunction(engine.send)
+
+    async def test_submit_tool_result_is_async_generator(self, engine):
+        """submit_tool_result() is an async generator."""
+        import inspect
+
+        assert inspect.isasyncgenfunction(engine.submit_tool_result)
