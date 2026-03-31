@@ -66,6 +66,8 @@ dev = [
     "pytest-django",
     "pytest-asyncio",
     "psycopg2-binary",
+    "pgserver",
+    "python-dotenv",
     # API Example Dependencies
     "django-ninja>=1.1.0",
     "pydantic>=2.0.0",
