@@ -142,6 +142,13 @@ class ClaudeCLIEngine(Engine):
                 usage = msg_data.get("usage", {})
                 assistant_msg.input_tokens = usage.get("input_tokens")
                 assistant_msg.output_tokens = usage.get("output_tokens")
+                assistant_msg.model_name = msg_data.get("model")
+                assistant_msg.cache_creation_input_tokens = usage.get(
+                    "cache_creation_input_tokens"
+                )
+                assistant_msg.cache_read_input_tokens = usage.get(
+                    "cache_read_input_tokens"
+                )
                 await assistant_msg.asave()
 
                 yield EngineResponse(

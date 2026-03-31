@@ -123,6 +123,13 @@ class ClaudeAPIEngine(Engine):
             stop_reason=response.stop_reason,
             input_tokens=response.usage.input_tokens,
             output_tokens=response.usage.output_tokens,
+            model_name=self.model,
+            cache_creation_input_tokens=getattr(
+                response.usage, "cache_creation_input_tokens", None
+            ),
+            cache_read_input_tokens=getattr(
+                response.usage, "cache_read_input_tokens", None
+            ),
         )
 
         for block_seq, block in enumerate(response.content):

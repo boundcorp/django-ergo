@@ -53,6 +53,9 @@ class ClaudeCLIImporter:
                 stop_reason=message_obj.get("stop_reason"),
                 input_tokens=usage.get("input_tokens"),
                 output_tokens=usage.get("output_tokens"),
+                model_name=message_obj.get("model"),
+                cache_creation_input_tokens=usage.get("cache_creation_input_tokens"),
+                cache_read_input_tokens=usage.get("cache_read_input_tokens"),
             )
 
             content = message_obj.get("content", "")

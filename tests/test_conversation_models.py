@@ -196,6 +196,34 @@ class ClaudeMessageTestCase(TestCase):
         self.assertEqual(msg.input_tokens, 100)
         self.assertEqual(msg.output_tokens, 250)
 
+    def test_claude_message_cost_tracking_fields(self):
+        """Test creating a ClaudeMessage with cost tracking fields."""
+        msg = ClaudeMessage.objects.create(
+            session=self.session,
+            role=ClaudeMessageRole.ASSISTANT,
+            sequence=1,
+            stop_reason="end_turn",
+            input_tokens=500,
+            output_tokens=300,
+            model_name="claude-3-5-sonnet-20241022",
+            cache_creation_input_tokens=100,
+            cache_read_input_tokens=50,
+        )
+        self.assertEqual(msg.model_name, "claude-3-5-sonnet-20241022")
+        self.assertEqual(msg.cache_creation_input_tokens, 100)
+        self.assertEqual(msg.cache_read_input_tokens, 50)
+
+    def test_claude_message_cost_tracking_fields_default_null(self):
+        """Test that cost tracking fields default to None."""
+        msg = ClaudeMessage.objects.create(
+            session=self.session,
+            role=ClaudeMessageRole.USER,
+            sequence=0,
+        )
+        self.assertIsNone(msg.model_name)
+        self.assertIsNone(msg.cache_creation_input_tokens)
+        self.assertIsNone(msg.cache_read_input_tokens)
+
     def test_claude_message_ordering_by_sequence(self):
         """Test that messages are ordered by sequence."""
         ClaudeMessage.objects.create(
@@ -433,6 +461,29 @@ class OpenAIMessageTestCase(TestCase):
         self.assertEqual(msg.tool_calls, tool_calls)
         self.assertEqual(msg.input_tokens, 50)
         self.assertEqual(msg.output_tokens, 120)
+
+    def test_openai_message_model_name_field(self):
+        """Test creating an OpenAIMessage with the model_name cost tracking field."""
+        msg = OpenAIMessage.objects.create(
+            session=self.session,
+            role=OpenAIMessageRole.ASSISTANT,
+            content="Hello!",
+            sequence=1,
+            input_tokens=10,
+            output_tokens=5,
+            model_name="gpt-4o",
+        )
+        self.assertEqual(msg.model_name, "gpt-4o")
+
+    def test_openai_message_model_name_defaults_null(self):
+        """Test that model_name defaults to None on OpenAIMessage."""
+        msg = OpenAIMessage.objects.create(
+            session=self.session,
+            role=OpenAIMessageRole.USER,
+            content="Hi there",
+            sequence=0,
+        )
+        self.assertIsNone(msg.model_name)
 
     def test_tool_response_message(self):
         """Test creating a tool response message."""

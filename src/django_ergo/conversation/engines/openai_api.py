@@ -119,6 +119,7 @@ class OpenAIAPIEngine(Engine):
             sequence=seq,
             input_tokens=response.usage.prompt_tokens if response.usage else None,
             output_tokens=response.usage.completion_tokens if response.usage else None,
+            model_name=self.model,
         )
 
         if msg.content:

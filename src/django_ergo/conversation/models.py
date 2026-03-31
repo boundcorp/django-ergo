@@ -90,6 +90,9 @@ class ClaudeMessage(TimeStampedMixin):
     stop_reason = models.CharField(max_length=30, null=True, blank=True)  # noqa: DJ001
     input_tokens = models.IntegerField(null=True, blank=True)
     output_tokens = models.IntegerField(null=True, blank=True)
+    model_name = models.CharField(max_length=100, null=True, blank=True)  # noqa: DJ001
+    cache_creation_input_tokens = models.IntegerField(null=True, blank=True)
+    cache_read_input_tokens = models.IntegerField(null=True, blank=True)
     sequence = models.IntegerField()
 
     class Meta:
@@ -175,6 +178,7 @@ class OpenAIMessage(TimeStampedMixin):
     function_name = models.CharField(max_length=255, null=True, blank=True)  # noqa: DJ001
     input_tokens = models.IntegerField(null=True, blank=True)
     output_tokens = models.IntegerField(null=True, blank=True)
+    model_name = models.CharField(max_length=100, null=True, blank=True)  # noqa: DJ001
     sequence = models.IntegerField()
 
     class Meta:
