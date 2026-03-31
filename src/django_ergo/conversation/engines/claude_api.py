@@ -8,6 +8,8 @@ from typing import Any
 from django_ergo.conversation.adapters import ClaudeToolAdapter
 from django_ergo.conversation.engine import Engine
 from django_ergo.conversation.engine import EngineResponse
+from django_ergo.conversation.telemetry import record_usage
+from django_ergo.conversation.telemetry import trace_engine_call
 from django_ergo.tools import tool_registry
 
 if TYPE_CHECKING:
@@ -100,79 +102,103 @@ class ClaudeAPIEngine(Engine):
         from django_ergo.conversation.models import ClaudeContentBlock
         from django_ergo.conversation.models import ClaudeMessage
 
-        messages = self.reconstruct_messages(session)
-        tools = self.get_tools_schema(session.workflow) if session.workflow else None
+        with trace_engine_call(
+            operation="send",
+            engine_type=self.engine_type,
+            model=self.model,
+            session_id=str(session.id) if session else "",
+            transport_type="api",
+            max_tokens=self.max_tokens,
+        ) as span:
+            messages = self.reconstruct_messages(session)
+            tools = (
+                self.get_tools_schema(session.workflow) if session.workflow else None
+            )
 
-        kwargs: dict[str, Any] = {
-            "model": self.model,
-            "max_tokens": self.max_tokens,
-            "messages": messages,
-        }
-        if session.workflow and session.workflow.instructions:
-            kwargs["system"] = session.workflow.instructions
-        if tools:
-            kwargs["tools"] = tools
+            kwargs: dict[str, Any] = {
+                "model": self.model,
+                "max_tokens": self.max_tokens,
+                "messages": messages,
+            }
+            if session.workflow and session.workflow.instructions:
+                kwargs["system"] = session.workflow.instructions
+            if tools:
+                kwargs["tools"] = tools
 
-        client = self._get_client()
-        response = await client.messages.create(**kwargs)
+            client = self._get_client()
+            response = await client.messages.create(**kwargs)
 
-        assistant_msg = await ClaudeMessage.objects.acreate(
-            session=session,
-            role="assistant",
-            sequence=seq,
-            stop_reason=response.stop_reason,
-            input_tokens=response.usage.input_tokens,
-            output_tokens=response.usage.output_tokens,
-            model_name=self.model,
-            cache_creation_input_tokens=getattr(
-                response.usage, "cache_creation_input_tokens", None
-            ),
-            cache_read_input_tokens=getattr(
-                response.usage, "cache_read_input_tokens", None
-            ),
-        )
+            record_usage(
+                span,
+                input_tokens=response.usage.input_tokens,
+                output_tokens=response.usage.output_tokens,
+                cache_creation=getattr(
+                    response.usage, "cache_creation_input_tokens", None
+                ),
+                cache_read=getattr(response.usage, "cache_read_input_tokens", None),
+            )
 
-        for block_seq, block in enumerate(response.content):
-            if block.type == "text":
-                await ClaudeContentBlock.objects.acreate(
-                    message=assistant_msg,
-                    block_type="text",
-                    sequence=block_seq,
-                    text=block.text,
-                )
-                yield EngineResponse(
-                    event_type="text", raw={"type": "text"}, text=block.text
-                )
-            elif block.type == "tool_use":
-                await ClaudeContentBlock.objects.acreate(
-                    message=assistant_msg,
-                    block_type="tool_use",
-                    sequence=block_seq,
-                    tool_use_id=block.id,
-                    tool_name=block.name,
-                    tool_input=block.input,
-                )
-                yield EngineResponse(
-                    event_type="tool_use",
-                    raw={"type": "tool_use"},
-                    tool_use={"id": block.id, "name": block.name, "input": block.input},
-                )
-            elif block.type == "thinking":
-                await ClaudeContentBlock.objects.acreate(
-                    message=assistant_msg,
-                    block_type="thinking",
-                    sequence=block_seq,
-                    thinking=block.thinking,
-                )
-                yield EngineResponse(
-                    event_type="thinking",
-                    raw={"type": "thinking"},
-                    thinking=block.thinking,
-                )
+            assistant_msg = await ClaudeMessage.objects.acreate(
+                session=session,
+                role="assistant",
+                sequence=seq,
+                stop_reason=response.stop_reason,
+                input_tokens=response.usage.input_tokens,
+                output_tokens=response.usage.output_tokens,
+                model_name=self.model,
+                cache_creation_input_tokens=getattr(
+                    response.usage, "cache_creation_input_tokens", None
+                ),
+                cache_read_input_tokens=getattr(
+                    response.usage, "cache_read_input_tokens", None
+                ),
+            )
 
-        yield EngineResponse(
-            event_type="done", raw={"stop_reason": response.stop_reason}
-        )
+            for block_seq, block in enumerate(response.content):
+                if block.type == "text":
+                    await ClaudeContentBlock.objects.acreate(
+                        message=assistant_msg,
+                        block_type="text",
+                        sequence=block_seq,
+                        text=block.text,
+                    )
+                    yield EngineResponse(
+                        event_type="text", raw={"type": "text"}, text=block.text
+                    )
+                elif block.type == "tool_use":
+                    await ClaudeContentBlock.objects.acreate(
+                        message=assistant_msg,
+                        block_type="tool_use",
+                        sequence=block_seq,
+                        tool_use_id=block.id,
+                        tool_name=block.name,
+                        tool_input=block.input,
+                    )
+                    yield EngineResponse(
+                        event_type="tool_use",
+                        raw={"type": "tool_use"},
+                        tool_use={
+                            "id": block.id,
+                            "name": block.name,
+                            "input": block.input,
+                        },
+                    )
+                elif block.type == "thinking":
+                    await ClaudeContentBlock.objects.acreate(
+                        message=assistant_msg,
+                        block_type="thinking",
+                        sequence=block_seq,
+                        thinking=block.thinking,
+                    )
+                    yield EngineResponse(
+                        event_type="thinking",
+                        raw={"type": "thinking"},
+                        thinking=block.thinking,
+                    )
+
+            yield EngineResponse(
+                event_type="done", raw={"stop_reason": response.stop_reason}
+            )
 
     async def send(self, session, message: str) -> AsyncIterator[EngineResponse]:
         from django_ergo.conversation.models import ClaudeContentBlock
@@ -223,56 +249,75 @@ class ClaudeAPIEngine(Engine):
         response_model: type | None = None,
     ) -> EngineResponse:
         """One-shot generation without a session — useful for typed/structured outputs."""
-        client = self._get_client()
-        kwargs: dict[str, Any] = {
-            "model": self.model,
-            "max_tokens": self.max_tokens,
-            "messages": [{"role": "user", "content": prompt}],
-        }
-        sys_prompt = system or (workflow.instructions if workflow else None)
-        if sys_prompt:
-            kwargs["system"] = sys_prompt
+        with trace_engine_call(
+            operation="generate",
+            engine_type=self.engine_type,
+            model=self.model,
+            transport_type="api",
+            max_tokens=self.max_tokens,
+        ) as span:
+            client = self._get_client()
+            kwargs: dict[str, Any] = {
+                "model": self.model,
+                "max_tokens": self.max_tokens,
+                "messages": [{"role": "user", "content": prompt}],
+            }
+            sys_prompt = system or (workflow.instructions if workflow else None)
+            if sys_prompt:
+                kwargs["system"] = sys_prompt
 
-        if response_model is not None:
-            schema = response_model.model_json_schema()
-            kwargs["tools"] = [
-                {
-                    "name": "structured_output",
-                    "description": f"Return a {response_model.__name__} object",
-                    "input_schema": schema,
-                }
-            ]
-            kwargs["tool_choice"] = {"type": "tool", "name": "structured_output"}
-        elif workflow:
-            tools = self.get_tools_schema(workflow)
-            if tools:
-                kwargs["tools"] = tools
+            if response_model is not None:
+                schema = response_model.model_json_schema()
+                kwargs["tools"] = [
+                    {
+                        "name": "structured_output",
+                        "description": f"Return a {response_model.__name__} object",
+                        "input_schema": schema,
+                    }
+                ]
+                kwargs["tool_choice"] = {"type": "tool", "name": "structured_output"}
+            elif workflow:
+                tools = self.get_tools_schema(workflow)
+                if tools:
+                    kwargs["tools"] = tools
 
-        response = await client.messages.create(**kwargs)
+            response = await client.messages.create(**kwargs)
 
-        if response_model is not None:
-            for block in response.content:
-                if block.type == "tool_use" and block.name == "structured_output":
-                    parsed = response_model.model_validate(block.input)
-                    return EngineResponse(
-                        event_type="done",
-                        raw={
-                            "parsed": parsed,
-                            "usage": {
-                                "input_tokens": response.usage.input_tokens,
-                                "output_tokens": response.usage.output_tokens,
+            record_usage(
+                span,
+                input_tokens=response.usage.input_tokens,
+                output_tokens=response.usage.output_tokens,
+                cache_creation=getattr(
+                    response.usage, "cache_creation_input_tokens", None
+                ),
+                cache_read=getattr(response.usage, "cache_read_input_tokens", None),
+            )
+
+            if response_model is not None:
+                for block in response.content:
+                    if block.type == "tool_use" and block.name == "structured_output":
+                        parsed = response_model.model_validate(block.input)
+                        return EngineResponse(
+                            event_type="done",
+                            raw={
+                                "parsed": parsed,
+                                "usage": {
+                                    "input_tokens": response.usage.input_tokens,
+                                    "output_tokens": response.usage.output_tokens,
+                                },
                             },
-                        },
-                    )
+                        )
 
-        text = "".join(block.text for block in response.content if block.type == "text")
-        return EngineResponse(
-            event_type="done",
-            raw={
-                "usage": {
-                    "input_tokens": response.usage.input_tokens,
-                    "output_tokens": response.usage.output_tokens,
-                }
-            },
-            text=text,
-        )
+            text = "".join(
+                block.text for block in response.content if block.type == "text"
+            )
+            return EngineResponse(
+                event_type="done",
+                raw={
+                    "usage": {
+                        "input_tokens": response.usage.input_tokens,
+                        "output_tokens": response.usage.output_tokens,
+                    }
+                },
+                text=text,
+            )

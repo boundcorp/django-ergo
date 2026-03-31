@@ -11,6 +11,8 @@ from django_ergo.conversation.adapters import ClaudeToolAdapter
 from django_ergo.conversation.engine import Engine
 from django_ergo.conversation.engine import EngineResponse
 from django_ergo.conversation.engine import TransportFailover
+from django_ergo.conversation.telemetry import record_usage
+from django_ergo.conversation.telemetry import trace_engine_call
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -105,7 +107,7 @@ class ClaudeCLIEngine(Engine):
         return None
 
     async def _read_response(
-        self, assistant_msg: ClaudeMessage, start_block_seq: int
+        self, assistant_msg: ClaudeMessage, start_block_seq: int, span=None
     ) -> AsyncIterator[EngineResponse]:
         """Read NDJSON lines from subprocess stdout, persist blocks, yield events."""
         block_seq = start_block_seq
@@ -151,6 +153,14 @@ class ClaudeCLIEngine(Engine):
                 )
                 await assistant_msg.asave()
 
+                record_usage(
+                    span,
+                    input_tokens=usage.get("input_tokens"),
+                    output_tokens=usage.get("output_tokens"),
+                    cache_creation=usage.get("cache_creation_input_tokens"),
+                    cache_read=usage.get("cache_read_input_tokens"),
+                )
+
                 yield EngineResponse(
                     event_type="done", raw={"stop_reason": msg_data.get("stop_reason")}
                 )
@@ -171,27 +181,36 @@ class ClaudeCLIEngine(Engine):
                 original="cli", fallback="api", reason="CLI process not running"
             )
 
-        # Persist user message
-        seq = await session.claude_messages.acount()
-        user_msg = await ClaudeMessage.objects.acreate(
-            session=session, role="user", sequence=seq
-        )
-        await ClaudeContentBlock.objects.acreate(
-            message=user_msg, block_type="text", sequence=0, text=message
-        )
+        with trace_engine_call(
+            operation="send",
+            engine_type=self.engine_type,
+            model=self.config.get("model", ""),
+            session_id=str(session.id) if session else "",
+            transport_type="cli",
+        ) as span:
+            # Persist user message
+            seq = await session.claude_messages.acount()
+            user_msg = await ClaudeMessage.objects.acreate(
+                session=session, role="user", sequence=seq
+            )
+            await ClaudeContentBlock.objects.acreate(
+                message=user_msg, block_type="text", sequence=0, text=message
+            )
 
-        # Write to subprocess stdin
-        self.process.stdin.write((message + "\n").encode())
-        await self.process.stdin.drain()
+            # Write to subprocess stdin
+            self.process.stdin.write((message + "\n").encode())
+            await self.process.stdin.drain()
 
-        # Read NDJSON response lines and collect content blocks
-        assistant_msg = await ClaudeMessage.objects.acreate(
-            session=session, role="assistant", sequence=seq + 1
-        )
-        block_seq = 0
+            # Read NDJSON response lines and collect content blocks
+            assistant_msg = await ClaudeMessage.objects.acreate(
+                session=session, role="assistant", sequence=seq + 1
+            )
+            block_seq = 0
 
-        async for response in self._read_response(assistant_msg, block_seq):
-            yield response
+            async for response in self._read_response(
+                assistant_msg, block_seq, span=span
+            ):
+                yield response
 
     async def submit_tool_result(
         self,
@@ -204,38 +223,45 @@ class ClaudeCLIEngine(Engine):
         from django_ergo.conversation.models import ClaudeContentBlock
         from django_ergo.conversation.models import ClaudeMessage
 
-        # Persist tool result
-        seq = await session.claude_messages.acount()
-        result_msg = await ClaudeMessage.objects.acreate(
-            session=session, role="user", sequence=seq
-        )
-        await ClaudeContentBlock.objects.acreate(
-            message=result_msg,
-            block_type="tool_result",
-            sequence=0,
-            tool_result_for=tool_use_id,
-            tool_result_content=str(result),
-            is_error=is_error,
-        )
+        with trace_engine_call(
+            operation="submit_tool_result",
+            engine_type=self.engine_type,
+            model=self.config.get("model", ""),
+            session_id=str(session.id) if session else "",
+            transport_type="cli",
+        ) as span:
+            # Persist tool result
+            seq = await session.claude_messages.acount()
+            result_msg = await ClaudeMessage.objects.acreate(
+                session=session, role="user", sequence=seq
+            )
+            await ClaudeContentBlock.objects.acreate(
+                message=result_msg,
+                block_type="tool_result",
+                sequence=0,
+                tool_result_for=tool_use_id,
+                tool_result_content=str(result),
+                is_error=is_error,
+            )
 
-        # Send tool result to subprocess
-        tool_result_json = json.dumps(
-            {
-                "type": "tool_result",
-                "tool_use_id": tool_use_id,
-                "content": str(result),
-                "is_error": is_error,
-            }
-        )
-        self.process.stdin.write((tool_result_json + "\n").encode())
-        await self.process.stdin.drain()
+            # Send tool result to subprocess
+            tool_result_json = json.dumps(
+                {
+                    "type": "tool_result",
+                    "tool_use_id": tool_use_id,
+                    "content": str(result),
+                    "is_error": is_error,
+                }
+            )
+            self.process.stdin.write((tool_result_json + "\n").encode())
+            await self.process.stdin.drain()
 
-        # Read continuation
-        assistant_msg = await ClaudeMessage.objects.acreate(
-            session=session, role="assistant", sequence=seq + 1
-        )
-        async for response in self._read_response(assistant_msg, 0):
-            yield response
+            # Read continuation
+            assistant_msg = await ClaudeMessage.objects.acreate(
+                session=session, role="assistant", sequence=seq + 1
+            )
+            async for response in self._read_response(assistant_msg, 0, span=span):
+                yield response
 
     def get_tools_schema(self, workflow: Workflow) -> list[dict]:
         from django_ergo.tools import tool_registry

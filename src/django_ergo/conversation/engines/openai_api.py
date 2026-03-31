@@ -8,6 +8,8 @@ from typing import Any
 from django_ergo.conversation.adapters import OpenAIToolAdapter
 from django_ergo.conversation.engine import Engine
 from django_ergo.conversation.engine import EngineResponse
+from django_ergo.conversation.telemetry import record_usage
+from django_ergo.conversation.telemetry import trace_engine_call
 from django_ergo.tools import tool_registry
 
 if TYPE_CHECKING:
@@ -91,55 +93,75 @@ class OpenAIAPIEngine(Engine):
 
         from django_ergo.conversation.models import OpenAIMessage
 
-        messages = self.reconstruct_messages(session)
-        tools = self.get_tools_schema(session.workflow) if session.workflow else None
+        with trace_engine_call(
+            operation="send",
+            engine_type=self.engine_type,
+            model=self.model,
+            session_id=str(session.id) if session else "",
+            transport_type="api",
+            max_tokens=self.max_tokens,
+        ) as span:
+            messages = self.reconstruct_messages(session)
+            tools = (
+                self.get_tools_schema(session.workflow) if session.workflow else None
+            )
 
-        kwargs: dict = {
-            "model": self.model,
-            "messages": messages,
-            "temperature": self.temperature,
-        }
-        if self.max_tokens:
-            kwargs["max_tokens"] = self.max_tokens
-        if tools:
-            kwargs["tools"] = tools
-            kwargs["tool_choice"] = "auto"
+            kwargs: dict = {
+                "model": self.model,
+                "messages": messages,
+                "temperature": self.temperature,
+            }
+            if self.max_tokens:
+                kwargs["max_tokens"] = self.max_tokens
+            if tools:
+                kwargs["tools"] = tools
+                kwargs["tool_choice"] = "auto"
 
-        response = await self._get_client().chat.completions.create(**kwargs)
-        choice = response.choices[0]
-        msg = choice.message
+            response = await self._get_client().chat.completions.create(**kwargs)
+            choice = response.choices[0]
+            msg = choice.message
 
-        await OpenAIMessage.objects.acreate(
-            session=session,
-            role="assistant",
-            content=msg.content,
-            tool_calls=[tc.model_dump() for tc in msg.tool_calls]
-            if msg.tool_calls
-            else None,
-            sequence=seq,
-            input_tokens=response.usage.prompt_tokens if response.usage else None,
-            output_tokens=response.usage.completion_tokens if response.usage else None,
-            model_name=self.model,
-        )
+            record_usage(
+                span,
+                input_tokens=response.usage.prompt_tokens if response.usage else None,
+                output_tokens=response.usage.completion_tokens
+                if response.usage
+                else None,
+            )
 
-        if msg.content:
-            yield EngineResponse(event_type="text", raw={}, text=msg.content)
+            await OpenAIMessage.objects.acreate(
+                session=session,
+                role="assistant",
+                content=msg.content,
+                tool_calls=[tc.model_dump() for tc in msg.tool_calls]
+                if msg.tool_calls
+                else None,
+                sequence=seq,
+                input_tokens=response.usage.prompt_tokens if response.usage else None,
+                output_tokens=response.usage.completion_tokens
+                if response.usage
+                else None,
+                model_name=self.model,
+            )
 
-        if msg.tool_calls:
-            for tc in msg.tool_calls:
-                yield EngineResponse(
-                    event_type="tool_use",
-                    raw=tc.model_dump(),
-                    tool_use={
-                        "id": tc.id,
-                        "name": tc.function.name,
-                        "input": json.loads(tc.function.arguments),
-                    },
-                )
+            if msg.content:
+                yield EngineResponse(event_type="text", raw={}, text=msg.content)
 
-        yield EngineResponse(
-            event_type="done", raw={"finish_reason": choice.finish_reason}
-        )
+            if msg.tool_calls:
+                for tc in msg.tool_calls:
+                    yield EngineResponse(
+                        event_type="tool_use",
+                        raw=tc.model_dump(),
+                        tool_use={
+                            "id": tc.id,
+                            "name": tc.function.name,
+                            "input": json.loads(tc.function.arguments),
+                        },
+                    )
+
+            yield EngineResponse(
+                event_type="done", raw={"finish_reason": choice.finish_reason}
+            )
 
     async def send(self, session, message: str) -> AsyncIterator[EngineResponse]:
         """Persist the user message, call the API, and yield response events."""
@@ -185,68 +207,83 @@ class OpenAIAPIEngine(Engine):
         """One-shot generation without a session — useful for typed/structured outputs."""
         import json
 
-        messages = []
-        sys_prompt = system or (workflow.instructions if workflow else None)
-        if sys_prompt:
-            messages.append({"role": "system", "content": sys_prompt})
-        messages.append({"role": "user", "content": prompt})
+        with trace_engine_call(
+            operation="generate",
+            engine_type=self.engine_type,
+            model=self.model,
+            transport_type="api",
+            max_tokens=self.max_tokens,
+        ) as span:
+            messages = []
+            sys_prompt = system or (workflow.instructions if workflow else None)
+            if sys_prompt:
+                messages.append({"role": "system", "content": sys_prompt})
+            messages.append({"role": "user", "content": prompt})
 
-        kwargs = {
-            "model": self.model,
-            "messages": messages,
-            "temperature": self.temperature,
-        }
-        if self.max_tokens:
-            kwargs["max_tokens"] = self.max_tokens
-
-        if response_model is not None:
-            schema = response_model.model_json_schema()
-            kwargs["tools"] = [
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "structured_output",
-                        "description": f"Return a {response_model.__name__} object",
-                        "parameters": schema,
-                    },
-                }
-            ]
-            kwargs["tool_choice"] = {
-                "type": "function",
-                "function": {"name": "structured_output"},
+            kwargs = {
+                "model": self.model,
+                "messages": messages,
+                "temperature": self.temperature,
             }
-        elif workflow:
-            tools = self.get_tools_schema(workflow)
-            if tools:
-                kwargs["tools"] = tools
-                kwargs["tool_choice"] = "auto"
+            if self.max_tokens:
+                kwargs["max_tokens"] = self.max_tokens
 
-        response = await self._get_client().chat.completions.create(**kwargs)
-        choice = response.choices[0]
-        msg = choice.message
+            if response_model is not None:
+                schema = response_model.model_json_schema()
+                kwargs["tools"] = [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "structured_output",
+                            "description": f"Return a {response_model.__name__} object",
+                            "parameters": schema,
+                        },
+                    }
+                ]
+                kwargs["tool_choice"] = {
+                    "type": "function",
+                    "function": {"name": "structured_output"},
+                }
+            elif workflow:
+                tools = self.get_tools_schema(workflow)
+                if tools:
+                    kwargs["tools"] = tools
+                    kwargs["tool_choice"] = "auto"
 
-        if response_model is not None and msg.tool_calls:
-            tc = msg.tool_calls[0]
-            raw_args = json.loads(tc.function.arguments)
-            parsed = response_model.model_validate(raw_args)
+            response = await self._get_client().chat.completions.create(**kwargs)
+            choice = response.choices[0]
+            msg = choice.message
+
+            record_usage(
+                span,
+                input_tokens=response.usage.prompt_tokens if response.usage else None,
+                output_tokens=response.usage.completion_tokens
+                if response.usage
+                else None,
+            )
+
+            if response_model is not None and msg.tool_calls:
+                tc = msg.tool_calls[0]
+                raw_args = json.loads(tc.function.arguments)
+                parsed = response_model.model_validate(raw_args)
+                return EngineResponse(
+                    event_type="done",
+                    raw={
+                        "parsed": parsed,
+                        "usage": {
+                            "prompt_tokens": response.usage.prompt_tokens,
+                            "completion_tokens": response.usage.completion_tokens,
+                        },
+                    },
+                )
+
             return EngineResponse(
                 event_type="done",
                 raw={
-                    "parsed": parsed,
                     "usage": {
                         "prompt_tokens": response.usage.prompt_tokens,
                         "completion_tokens": response.usage.completion_tokens,
-                    },
+                    }
                 },
+                text=msg.content,
             )
-
-        return EngineResponse(
-            event_type="done",
-            raw={
-                "usage": {
-                    "prompt_tokens": response.usage.prompt_tokens,
-                    "completion_tokens": response.usage.completion_tokens,
-                }
-            },
-            text=msg.content,
-        )
