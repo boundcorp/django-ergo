@@ -24,7 +24,11 @@ DEFAULTS = {
     "OPENAI_TEMPERATURE": 0.7,
     "OPENAI_MAX_TOKENS": None,
     "OPENAI_TIMEOUT": 30,
-    
+    # Telemetry Configuration
+    "TELEMETRY_ENABLED": False,
+    "TELEMETRY_SERVICE_NAME": "django-ergo",
+    "TELEMETRY_EXPORTER": "console",
+    "TELEMETRY_OTLP_ENDPOINT": "http://localhost:4317",
     # Embedding Provider Configuration
     "EMBEDDING_PROVIDER": "django_ergo.embedding_providers.OpenAIEmbeddingProvider",
     "EMBEDDING_PROVIDER_CONFIG": {
