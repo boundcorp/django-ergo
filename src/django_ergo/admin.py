@@ -179,7 +179,7 @@ class WorkflowAdmin(admin.ModelAdmin):
         context = {
             "workflow": workflow,
             "title": f"Workflow Monitoring: {workflow.name}",
-            "opts": self.model._meta,
+            "opts": self.model._meta,  # noqa: SLF001
             "has_view_permission": True,
             "statistics": {
                 "total_chats": total_chats,
@@ -306,9 +306,9 @@ class KnowledgebaseAdmin(admin.ModelAdmin):
             for article in obj.articles.all()
         )
 
-        if total_chars > 1000000:  # 1M chars
-            return format_html("{:.1f}M chars", total_chars / 1000000)
-        elif total_chars > 1000:  # 1K chars
+        if total_chars > 1_000_000:  # noqa: PLR2004
+            return format_html("{:.1f}M chars", total_chars / 1_000_000)
+        if total_chars > 1000:  # noqa: PLR2004
             return format_html("{:.1f}K chars", total_chars / 1000)
         return f"{total_chars} chars"
 
@@ -392,7 +392,7 @@ class KnowledgebaseAdmin(admin.ModelAdmin):
         context = {
             "knowledgebase": kb,
             "title": f"Manage Knowledge Base: {kb.name}",
-            "opts": self.model._meta,
+            "opts": self.model._meta,  # noqa: SLF001
             "has_change_permission": True,
             "statistics": {
                 "total_articles": total_articles,
@@ -504,7 +504,7 @@ class ArticleAdmin(admin.ModelAdmin):
     @admin.display(description="Title")
     def title_truncated(self, obj):
         """Display truncated title."""
-        if len(obj.title) > 50:
+        if len(obj.title) > 50:  # noqa: PLR2004
             return obj.title[:47] + "..."
         return obj.title
 
@@ -522,7 +522,7 @@ class ArticleAdmin(admin.ModelAdmin):
     def content_length(self, obj):
         """Display content length."""
         length = len(obj.content or "")
-        if length > 1000:
+        if length > 1000:  # noqa: PLR2004
             return format_html("{:.1f}K chars", length / 1000)
         return f"{length} chars"
 
@@ -585,7 +585,7 @@ class UserChatAdmin(admin.ModelAdmin):
     @admin.display(description="Title")
     def title_truncated(self, obj):
         """Display truncated title."""
-        if len(obj.title) > 30:
+        if len(obj.title) > 30:  # noqa: PLR2004
             return obj.title[:27] + "..."
         return obj.title
 
@@ -669,7 +669,7 @@ class UserChatAdmin(admin.ModelAdmin):
         context = {
             "userchat": chat,
             "title": f"Chat History: {chat.title}",
-            "opts": self.model._meta,
+            "opts": self.model._meta,  # noqa: SLF001
             "has_view_permission": True,
             "messages": messages,
             "message_stats": message_stats,
@@ -747,7 +747,7 @@ class ChatMessageAdmin(admin.ModelAdmin):
     @admin.display(description="Content")
     def content_truncated(self, obj):
         """Display truncated content."""
-        if len(obj.content) > 50:
+        if len(obj.content) > 50:  # noqa: PLR2004
             return obj.content[:47] + "..."
         return obj.content
 
@@ -806,11 +806,11 @@ try:
         def content_preview(self, obj):
             if obj.block_type == "text":
                 return (obj.text or "")[:120]
-            elif obj.block_type == "thinking":
+            if obj.block_type == "thinking":
                 return f"[thinking: {len(obj.thinking or '')} chars]"
-            elif obj.block_type == "tool_use":
+            if obj.block_type == "tool_use":
                 return f"[{obj.tool_name}]"
-            elif obj.block_type == "tool_result":
+            if obj.block_type == "tool_result":
                 tag = " ERR" if obj.is_error else ""
                 return f"[result{tag}: {len(str(obj.tool_result_content or ''))} chars]"
             return "—"
@@ -862,7 +862,7 @@ try:
                 return project
             summary = obj.metadata.get("summary", "")
             if summary:
-                return summary[:100] + "..." if len(summary) > 100 else summary
+                return summary[:100] + "..." if len(summary) > 100 else summary  # noqa: PLR2004
             keys = list(obj.metadata.keys())
             return ", ".join(keys[:4]) if keys else "—"
 
@@ -874,19 +874,18 @@ try:
 
             transcript = []
             for msg in messages:
-                blocks = []
-                for block in msg.content_blocks.order_by("sequence"):
-                    blocks.append(
-                        {
-                            "type": block.block_type,
-                            "text": block.text,
-                            "thinking": block.thinking,
-                            "tool_name": block.tool_name,
-                            "tool_input": block.tool_input,
-                            "tool_result_content": block.tool_result_content,
-                            "is_error": block.is_error,
-                        }
-                    )
+                blocks = [
+                    {
+                        "type": block.block_type,
+                        "text": block.text,
+                        "thinking": block.thinking,
+                        "tool_name": block.tool_name,
+                        "tool_input": block.tool_input,
+                        "tool_result_content": block.tool_result_content,
+                        "is_error": block.is_error,
+                    }
+                    for block in msg.content_blocks.order_by("sequence")
+                ]
                 transcript.append(
                     {
                         "sequence": msg.sequence,
@@ -912,7 +911,7 @@ try:
                 "session": session,
                 "transcript": transcript,
                 "summary": session.metadata.get("summary", ""),
-                "opts": self.model._meta,
+                "opts": self.model._meta,  # noqa: SLF001
             }
             return TemplateResponse(
                 request, "admin/django_ergo/conversation_transcript.html", context
