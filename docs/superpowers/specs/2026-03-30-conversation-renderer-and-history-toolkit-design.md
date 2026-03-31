@@ -29,7 +29,7 @@ A class with configurable detail levels that renders conversations for LLM consu
 
 | Level | Name | What's included | Token ratio |
 |-------|------|----------------|-------------|
-| 0 | `headline` | Title or first user message truncated to ~100 chars | ~1% |
+| 0 | `headline` | Session slug + last prompt from metadata (if available from CLI import), else first user message truncated to ~100 chars | ~1% |
 | 1 | `skeleton` | User messages + assistant text. Tool calls as `[tool_call #N: Name(key_args)]`. Tool results as `[tool_result #N: (X lines)]`. Thinking omitted. All messages numbered. | ~10-15% |
 | 2 | `full` | Everything verbatim — text, tool_use with inputs, tool_result with outputs, thinking blocks | 100% |
 
@@ -214,6 +214,23 @@ src/django_ergo/conversation/
 ├── pipelines.py         # Updated to use renderer
 ├── runner.py            # Updated with extra_tools parameter
 ```
+
+---
+
+## CLI Import Metadata Extraction
+
+The Claude CLI importer should extract additional metadata from session files:
+
+- **`slug`** — human-readable session identifier (e.g., `"sorted-brewing-mitten"`), present on most messages. Stored in `session.metadata["slug"]`.
+- **`last-prompt`** — the last user message text, stored as a separate JSONL event with `type: "last-prompt"`. Stored in `session.metadata["last_prompt"]`.
+- **`turn_duration`** events — `system` type messages with `subtype: "turn_duration"` containing `durationMs` and `messageCount`. Could be aggregated into `session.metadata["total_duration_ms"]`.
+
+The `headline` renderer uses these when available:
+1. If `session.metadata["last_prompt"]` exists → use it (truncated)
+2. Else if `session.metadata["slug"]` exists → use it as a fallback label
+3. Else → first user message text truncated to ~100 chars
+
+Note: Claude CLI does NOT store pre-written summaries. The session picker in the CLI likely generates descriptions on the fly. If a summary is needed, use the `custom` renderer strategy with an LLM call and cache the result.
 
 ---
 
