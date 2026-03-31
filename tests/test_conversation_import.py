@@ -12,6 +12,7 @@ pytestmark = pytest.mark.django_db
 
 EXPECTED_MESSAGE_COUNT = 6
 EXPECTED_INPUT_TOKENS = 50
+EXPECTED_DURATION_MS = 5000
 
 SAMPLE_SESSION = [
     {
@@ -129,6 +130,40 @@ class TestClaudeCLIImporter:
         assert blocks_4[0].tool_result_for == "toolu_01"
 
 
+SAMPLE_SESSION_WITH_METADATA = [
+    {
+        "type": "user",
+        "message": {"role": "user", "content": "Hello"},
+        "uuid": "msg-001",
+        "sessionId": "session-abc",
+        "slug": "red-fox-jumps",
+    },
+    {
+        "type": "assistant",
+        "message": {
+            "role": "assistant",
+            "content": [{"type": "text", "text": "Hi!"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+        },
+        "uuid": "msg-002",
+        "slug": "red-fox-jumps",
+    },
+    {
+        "type": "system",
+        "subtype": "turn_duration",
+        "durationMs": EXPECTED_DURATION_MS,
+        "messageCount": 2,
+        "slug": "red-fox-jumps",
+    },
+    {
+        "type": "last-prompt",
+        "lastPrompt": "Hello",
+        "sessionId": "session-abc",
+    },
+]
+
+
 class TestImportService:
     def test_auto_detect(self, user):
         service = ImportService()
@@ -139,3 +174,23 @@ class TestImportService:
         service = ImportService()
         with pytest.raises(ValueError, match="Unrecognized"):
             async_to_sync(service.import_auto)({"unknown": "format"}, user)
+
+
+class TestMetadataExtraction:
+    def test_slug_extracted(self, user):
+        session = async_to_sync(ClaudeCLIImporter().import_conversation)(
+            SAMPLE_SESSION_WITH_METADATA, user
+        )
+        assert session.metadata.get("slug") == "red-fox-jumps"
+
+    def test_last_prompt_extracted(self, user):
+        session = async_to_sync(ClaudeCLIImporter().import_conversation)(
+            SAMPLE_SESSION_WITH_METADATA, user
+        )
+        assert session.metadata.get("last_prompt") == "Hello"
+
+    def test_duration_extracted(self, user):
+        session = async_to_sync(ClaudeCLIImporter().import_conversation)(
+            SAMPLE_SESSION_WITH_METADATA, user
+        )
+        assert session.metadata.get("total_duration_ms") == EXPECTED_DURATION_MS

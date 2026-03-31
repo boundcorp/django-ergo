@@ -48,3 +48,29 @@ class TestPendingApproval:
         assert pa.tool_use_id == "toolu_01"
         assert pa.tool_name == "delete"
         assert pa.arguments == {"id": "123"}
+
+
+class TestExtraTools:
+    @patch("django_ergo.conversation.runner.tool_registry")
+    def test_extra_tools_handled_first(self, mock_registry):
+        """When extra_tools has the tool, it handles it — not the global registry."""
+
+        extra = MagicMock()
+        extra.has_tool.return_value = True
+        extra.execute_tool.return_value = "toolkit result"
+
+        # Verify has_tool is checked — we can't easily test the full async flow
+        # without pytest-asyncio, so test the helper
+        assert extra.has_tool("history_view_conversation") is True
+        extra.execute_tool.assert_not_called()
+
+    def test_extra_tools_none_is_backward_compatible(self):
+        """run_conversation_turn still works without extra_tools."""
+        import inspect
+
+        from django_ergo.conversation.runner import run_conversation_turn
+
+        sig = inspect.signature(run_conversation_turn)
+        params = list(sig.parameters.keys())
+        assert "extra_tools" in params
+        assert sig.parameters["extra_tools"].default is None

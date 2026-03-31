@@ -82,15 +82,20 @@ class TestFormatConversation:
             {"role": "assistant", "content": [{"type": "text", "text": "Hi there!"}]},
         ]
         result = _format_conversation_as_text(messages)
-        assert "[USER]: Hello" in result
-        assert "[ASSISTANT]: Hi there!" in result
+        assert "[msg #0 USER]: Hello" in result
+        assert "[msg #1 ASSISTANT]: Hi there!" in result
 
     def test_tool_use_and_result(self):
         messages = [
             {
                 "role": "assistant",
                 "content": [
-                    {"type": "tool_use", "name": "Bash", "input": {"command": "ls"}},
+                    {
+                        "type": "tool_use",
+                        "id": "t1",
+                        "name": "Bash",
+                        "input": {"command": "ls"},
+                    },
                 ],
             },
             {
@@ -106,8 +111,8 @@ class TestFormatConversation:
             },
         ]
         result = _format_conversation_as_text(messages)
-        assert "[ASSISTANT tool_use]: Bash(" in result
-        assert "[TOOL_RESULT]: file.txt" in result
+        assert "[msg #0 ASSISTANT tool_call #1]: Bash(" in result
+        assert "[msg #1 TOOL_RESULT #1]: file.txt" in result
 
     def test_tool_result_error(self):
         messages = [
@@ -124,7 +129,8 @@ class TestFormatConversation:
             },
         ]
         result = _format_conversation_as_text(messages)
-        assert "[TOOL_RESULT ERROR]: not found" in result
+        assert "[msg #0 TOOL_RESULT #?" in result
+        assert "ERROR" in result
 
     def test_thinking_block(self):
         messages = [
@@ -137,8 +143,8 @@ class TestFormatConversation:
             },
         ]
         result = _format_conversation_as_text(messages)
-        assert "[ASSISTANT thinking]: Let me analyze..." in result
-        assert "[ASSISTANT]: Here's my answer." in result
+        assert "[msg #0 ASSISTANT thinking]: Let me analyze..." in result
+        assert "[msg #0 ASSISTANT]: Here's my answer." in result
 
     def test_string_content(self):
         """OpenAI-style messages with plain string content."""
@@ -147,8 +153,8 @@ class TestFormatConversation:
             {"role": "assistant", "content": "Hi!"},
         ]
         result = _format_conversation_as_text(messages)
-        assert "[USER]: Hello" in result
-        assert "[ASSISTANT]: Hi!" in result
+        assert "[msg #0 USER]: Hello" in result
+        assert "[msg #1 ASSISTANT]: Hi!" in result
 
 
 class TestRunConversationPipeline:
@@ -174,7 +180,7 @@ class TestRunConversationPipeline:
         engine.generate.assert_awaited_once()
         call_kwargs = engine.generate.call_args.kwargs
         assert "conversation transcript" in call_kwargs["prompt"].lower()
-        assert "[USER]: Hello" in call_kwargs["prompt"]
+        assert "[msg #0 USER]: Hello" in call_kwargs["prompt"]
         assert call_kwargs["system"] == "Summarize this."
         assert call_kwargs["response_model"] is None
         assert result.text == "Summary of the conversation."
@@ -270,3 +276,47 @@ class TestCompactConversation:
         call_kwargs = engine.generate.call_args.kwargs
         assert call_kwargs["system"] == COMPACT_SYSTEM
         assert call_kwargs["response_model"] is CompactedConversation
+
+
+class TestRendererIntegration:
+    def test_pipeline_uses_skeleton_by_default(self, session_with_messages):
+        engine = MagicMock()
+        engine.reconstruct_messages.return_value = [
+            {"role": "user", "content": [{"type": "text", "text": "Hello"}]},
+        ]
+        engine.generate = AsyncMock(
+            return_value=EngineResponse(event_type="done", text="Summary"),
+        )
+
+        async_to_sync(run_conversation_pipeline)(
+            session_with_messages,
+            engine,
+            system="Summarize.",
+        )
+
+        call_kwargs = engine.generate.call_args.kwargs
+        # Should use skeleton format (numbered messages)
+        assert "[msg #0" in call_kwargs["prompt"]
+
+    def test_pipeline_accepts_custom_renderer(self, session_with_messages):
+        from django_ergo.conversation.renderer import ConversationRenderer
+
+        engine = MagicMock()
+        engine.reconstruct_messages.return_value = [
+            {"role": "user", "content": [{"type": "text", "text": "Hello"}]},
+        ]
+        engine.generate = AsyncMock(
+            return_value=EngineResponse(event_type="done", text="Summary"),
+        )
+
+        renderer = ConversationRenderer(detail="full")
+        async_to_sync(run_conversation_pipeline)(
+            session_with_messages,
+            engine,
+            system="Summarize.",
+            renderer=renderer,
+        )
+
+        call_kwargs = engine.generate.call_args.kwargs
+        # Full detail should be in prompt
+        assert "[msg #0" in call_kwargs["prompt"]
