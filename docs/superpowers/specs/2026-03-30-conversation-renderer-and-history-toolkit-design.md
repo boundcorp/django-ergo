@@ -29,7 +29,7 @@ A class with configurable detail levels that renders conversations for LLM consu
 
 | Level | Name | What's included | Token ratio |
 |-------|------|----------------|-------------|
-| 0 | `headline` | Session slug + last prompt from metadata (if available from CLI import), else first user message truncated to ~100 chars | ~1% |
+| 0 | `headline` | Slug + last prompt (if available) + first user message truncated to 1000 chars. All additive. | ~2-5% |
 | 1 | `skeleton` | User messages + assistant text. Tool calls as `[tool_call #N: Name(key_args)]`. Tool results as `[tool_result #N: (X lines)]`. Thinking omitted. All messages numbered. | ~10-15% |
 | 2 | `full` | Everything verbatim — text, tool_use with inputs, tool_result with outputs, thinking blocks | 100% |
 
@@ -225,10 +225,14 @@ The Claude CLI importer should extract additional metadata from session files:
 - **`last-prompt`** — the last user message text, stored as a separate JSONL event with `type: "last-prompt"`. Stored in `session.metadata["last_prompt"]`.
 - **`turn_duration`** events — `system` type messages with `subtype: "turn_duration"` containing `durationMs` and `messageCount`. Could be aggregated into `session.metadata["total_duration_ms"]`.
 
-The `headline` renderer uses these when available:
-1. If `session.metadata["last_prompt"]` exists → use it (truncated)
-2. Else if `session.metadata["slug"]` exists → use it as a fallback label
-3. Else → first user message text truncated to ~100 chars
+The `headline` renderer includes all available metadata plus the first user message:
+
+```
+[slug: sorted-brewing-mitten] [last_prompt: "hey ptal ergo code and get a feel..."]
+First message: hi ptal ergo code and get a feel for what we are doing here ... we have a framework for kbs and semantic retrieval ... (truncated to 1000 chars)
+```
+
+All three are additive — slug and last_prompt provide quick identifiers, the first message (truncated to 1000 chars) gives enough context to understand what the conversation was about without reading the whole thing.
 
 Note: Claude CLI does NOT store pre-written summaries. The session picker in the CLI likely generates descriptions on the fly. If a summary is needed, use the `custom` renderer strategy with an LLM call and cache the result.
 
