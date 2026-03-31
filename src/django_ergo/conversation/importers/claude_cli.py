@@ -18,14 +18,37 @@ class ClaudeCLIImporter:
             for msg in data
         )
 
+    def _extract_metadata(self, data: list[dict]) -> tuple[str, dict]:
+        """Extract session ID and metadata from JSONL data."""
+        session_id = ""
+        slug = None
+        last_prompt = None
+        total_duration_ms = 0
+
+        for msg in data:
+            if not session_id and (sid := msg.get("sessionId")):
+                session_id = sid
+            if not slug and (s := msg.get("slug")):
+                slug = s
+            if msg.get("type") == "last-prompt":
+                last_prompt = msg.get("lastPrompt")
+            if msg.get("type") == "system" and msg.get("subtype") == "turn_duration":
+                total_duration_ms += msg.get("durationMs", 0)
+
+        metadata = {"imported_from": "cli_session"}
+        if slug:
+            metadata["slug"] = slug
+        if last_prompt:
+            metadata["last_prompt"] = last_prompt
+        if total_duration_ms:
+            metadata["total_duration_ms"] = total_duration_ms
+
+        return session_id, metadata
+
     async def import_conversation(
         self, data: list[dict], user, workflow=None
     ) -> ConversationSession:
-        session_id = ""
-        for msg in data:
-            if sid := msg.get("sessionId"):
-                session_id = sid
-                break
+        session_id, metadata = self._extract_metadata(data)
 
         session = await ConversationSession.objects.acreate(
             user=user,
@@ -34,7 +57,7 @@ class ClaudeCLIImporter:
             transport_type="cli",
             status="paused",
             session_id=session_id,
-            metadata={"imported_from": "cli_session"},
+            metadata=metadata,
         )
 
         for seq, msg_data in enumerate(data):
