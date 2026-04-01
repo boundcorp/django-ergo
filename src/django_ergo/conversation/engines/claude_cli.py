@@ -171,7 +171,10 @@ class ClaudeCLIEngine(Engine):
                 break
 
     async def send(
-        self, session: ConversationSession, message: str
+        self,
+        session: ConversationSession,
+        message: str,
+        additional_tools: list[dict] | None = None,
     ) -> AsyncIterator[EngineResponse]:
         from django_ergo.conversation.models import ClaudeContentBlock
         from django_ergo.conversation.models import ClaudeMessage
@@ -212,13 +215,13 @@ class ClaudeCLIEngine(Engine):
             ):
                 yield response
 
-    async def submit_tool_result(
+    async def submit_tool_result(  # noqa: PLR0913
         self,
         session: ConversationSession,
         tool_use_id: str,
         result: Any,
-        *,
         is_error: bool = False,
+        additional_tools: list[dict] | None = None,
     ) -> AsyncIterator[EngineResponse]:
         from django_ergo.conversation.models import ClaudeContentBlock
         from django_ergo.conversation.models import ClaudeMessage

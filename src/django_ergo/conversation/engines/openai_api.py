@@ -86,7 +86,7 @@ class OpenAIAPIEngine(Engine):
         """No-op — OpenAI API is stateless."""
 
     async def _call_and_persist(
-        self, session, seq: int
+        self, session, seq: int, additional_tools: list[dict] | None = None
     ) -> AsyncIterator[EngineResponse]:
         """Rebuild history, call the API, persist the assistant reply, and yield responses."""
         import json
@@ -105,6 +105,8 @@ class OpenAIAPIEngine(Engine):
             tools = (
                 self.get_tools_schema(session.workflow) if session.workflow else None
             )
+            if additional_tools:
+                tools = (tools or []) + additional_tools
 
             kwargs: dict = {
                 "model": self.model,
@@ -163,7 +165,9 @@ class OpenAIAPIEngine(Engine):
                 event_type="done", raw={"finish_reason": choice.finish_reason}
             )
 
-    async def send(self, session, message: str) -> AsyncIterator[EngineResponse]:
+    async def send(
+        self, session, message: str, additional_tools: list[dict] | None = None
+    ) -> AsyncIterator[EngineResponse]:
         """Persist the user message, call the API, and yield response events."""
         from django_ergo.conversation.models import OpenAIMessage
 
@@ -172,15 +176,16 @@ class OpenAIAPIEngine(Engine):
             session=session, role="user", content=message, sequence=seq
         )
 
-        async for event in self._call_and_persist(session, seq + 1):
+        async for event in self._call_and_persist(session, seq + 1, additional_tools):
             yield event
 
-    async def submit_tool_result(
+    async def submit_tool_result(  # noqa: PLR0913
         self,
         session,
         tool_use_id: str,
         result: Any,
         is_error: bool = False,
+        additional_tools: list[dict] | None = None,
     ) -> AsyncIterator[EngineResponse]:
         """Persist the tool result, call the API again, and yield response events."""
         from django_ergo.conversation.models import OpenAIMessage
@@ -194,7 +199,7 @@ class OpenAIAPIEngine(Engine):
             sequence=seq,
         )
 
-        async for event in self._call_and_persist(session, seq + 1):
+        async for event in self._call_and_persist(session, seq + 1, additional_tools):
             yield event
 
     async def generate(

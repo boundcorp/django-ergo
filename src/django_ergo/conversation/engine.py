@@ -48,12 +48,19 @@ class Engine(ABC):
         """Resume an existing session from DB state."""
 
     @abstractmethod
-    async def send(self, session, message: str) -> AsyncIterator[EngineResponse]:
+    async def send(
+        self, session, message: str, additional_tools: list[dict] | None = None
+    ) -> AsyncIterator[EngineResponse]:
         """Send a message, yield streaming responses."""
 
     @abstractmethod
-    async def submit_tool_result(
-        self, session, tool_use_id: str, result: Any, is_error: bool = False
+    async def submit_tool_result(  # noqa: PLR0913
+        self,
+        session,
+        tool_use_id: str,
+        result: Any,
+        is_error: bool = False,
+        additional_tools: list[dict] | None = None,
     ) -> AsyncIterator[EngineResponse]:
         """Submit a tool result, yield assistant continuation."""
 

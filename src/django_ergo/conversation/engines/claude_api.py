@@ -96,7 +96,7 @@ class ClaudeAPIEngine(Engine):
         return
 
     async def _process_response(
-        self, session, seq: int
+        self, session, seq: int, additional_tools: list[dict] | None = None
     ) -> AsyncIterator[EngineResponse]:
         """Call the API with current session history and persist + yield response blocks."""
         from django_ergo.conversation.models import ClaudeContentBlock
@@ -114,6 +114,8 @@ class ClaudeAPIEngine(Engine):
             tools = (
                 self.get_tools_schema(session.workflow) if session.workflow else None
             )
+            if additional_tools:
+                tools = (tools or []) + additional_tools
 
             kwargs: dict[str, Any] = {
                 "model": self.model,
@@ -200,7 +202,9 @@ class ClaudeAPIEngine(Engine):
                 event_type="done", raw={"stop_reason": response.stop_reason}
             )
 
-    async def send(self, session, message: str) -> AsyncIterator[EngineResponse]:
+    async def send(
+        self, session, message: str, additional_tools: list[dict] | None = None
+    ) -> AsyncIterator[EngineResponse]:
         from django_ergo.conversation.models import ClaudeContentBlock
         from django_ergo.conversation.models import ClaudeMessage
 
@@ -212,15 +216,16 @@ class ClaudeAPIEngine(Engine):
             message=user_msg, block_type="text", sequence=0, text=message
         )
 
-        async for event in self._process_response(session, seq + 1):
+        async for event in self._process_response(session, seq + 1, additional_tools):
             yield event
 
-    async def submit_tool_result(
+    async def submit_tool_result(  # noqa: PLR0913
         self,
         session,
         tool_use_id: str,
         result: Any,
         is_error: bool = False,
+        additional_tools: list[dict] | None = None,
     ) -> AsyncIterator[EngineResponse]:
         from django_ergo.conversation.models import ClaudeContentBlock
         from django_ergo.conversation.models import ClaudeMessage
@@ -238,7 +243,7 @@ class ClaudeAPIEngine(Engine):
             is_error=is_error,
         )
 
-        async for event in self._process_response(session, seq + 1):
+        async for event in self._process_response(session, seq + 1, additional_tools):
             yield event
 
     async def generate(
