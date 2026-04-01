@@ -64,3 +64,23 @@ class TestEngineABC:
     def test_generate_default_raises(self):
         """generate() has a default impl that raises NotImplementedError."""
         assert hasattr(Engine, "generate")
+
+
+class TestEngineAdditionalTools:
+    def test_send_accepts_additional_tools(self):
+        """Engine.send() signature includes additional_tools parameter."""
+        import inspect
+
+        sig = inspect.signature(Engine.send)
+        params = list(sig.parameters.keys())
+        assert "additional_tools" in params
+        assert sig.parameters["additional_tools"].default is None
+
+    def test_submit_tool_result_accepts_additional_tools(self):
+        """Engine.submit_tool_result() signature includes additional_tools parameter."""
+        import inspect
+
+        sig = inspect.signature(Engine.submit_tool_result)
+        params = list(sig.parameters.keys())
+        assert "additional_tools" in params
+        assert sig.parameters["additional_tools"].default is None

@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from django_ergo.conversation.renderer import ConversationRenderer
+from django_ergo.conversation.toolkit import Toolkit
 
 if TYPE_CHECKING:
     from django_ergo.conversation.adapters import ToolAdapter
@@ -86,7 +87,7 @@ TOOLKIT_TOOLS = [
 TOOL_NAMES = {t["name"] for t in TOOLKIT_TOOLS}
 
 
-class ChatWithHistoryToolkit:
+class ChatWithHistoryToolkit(Toolkit):
     """Scoped toolkit for chatting about past conversations with drill-down tools."""
 
     def __init__(
