@@ -2,7 +2,7 @@
 {% load i18n %}
 {% block title %}
     {{ title }}
-{% endblock content %}
+{% endblock title %}
 {% block extrahead %}
     {{ block.super }}
     <style>
@@ -29,7 +29,7 @@
   .meta { color: #999; font-size: 11px; }
   details > summary { cursor: pointer; user-select: none; }
     </style>
-{% endblock content %}
+{% endblock extrahead %}
 {% block content %}
     <div class="transcript">
         <h2>{{ session.metadata.project_name|default:session.session_id }}</h2>
