@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     from django_ergo.conversation.engine import Engine
     from django_ergo.conversation.engine import EngineResponse
     from django_ergo.conversation.models import ConversationSession
-    from django_ergo.conversation.toolkits import ChatWithHistoryToolkit
+    from django_ergo.conversation.toolkit import Toolkit
 
 
 @dataclass
@@ -37,22 +37,55 @@ def _tool_requires_approval(tool_name: str, workflow) -> bool:
     return True
 
 
+def _collect_toolkit_schemas(
+    toolkits: list[Toolkit],
+    adapter,
+) -> list[dict]:
+    """Collect tool schemas from all toolkits for engine injection."""
+    schemas = []
+    for toolkit in toolkits:
+        schemas.extend(toolkit.get_tools_schema(adapter))
+    return schemas
+
+
+def _find_toolkit_for_tool(
+    toolkits: list[Toolkit],
+    tool_name: str,
+) -> Toolkit | None:
+    """Find the first toolkit that handles the given tool name."""
+    for toolkit in toolkits:
+        if toolkit.has_tool(tool_name):
+            return toolkit
+    return None
+
+
 async def run_conversation_turn(
     engine: Engine,
     session: ConversationSession,
     message: str,
-    extra_tools: ChatWithHistoryToolkit | None = None,
+    extra_tools: list[Toolkit] | None = None,
 ) -> AsyncIterator[EngineResponse | PendingApproval]:
     adapter = engine.get_tool_adapter()
-    async for response in engine.send(session, message):
+    toolkits = extra_tools or []
+    additional_tool_schemas = (
+        _collect_toolkit_schemas(toolkits, adapter) if toolkits else None
+    )
+
+    async for response in engine.send(
+        session, message, additional_tools=additional_tool_schemas
+    ):
         if response.event_type == "tool_use":
             name, args = adapter.parse_tool_call(response.tool_use)
 
-            # Check extra_tools first (e.g., history toolkit)
-            if extra_tools and extra_tools.has_tool(name):
-                result = extra_tools.execute_tool(name, args)
+            # Check toolkits first (e.g., KB toolkit, history toolkit)
+            toolkit = _find_toolkit_for_tool(toolkits, name)
+            if toolkit is not None:
+                result = toolkit.execute_tool(name, args)
                 async for continuation in engine.submit_tool_result(
-                    session, response.tool_use["id"], result
+                    session,
+                    response.tool_use["id"],
+                    result,
+                    additional_tools=additional_tool_schemas,
                 ):
                     yield continuation
                 continue
@@ -66,7 +99,10 @@ async def run_conversation_turn(
                 name=name, user=session.user, arguments=args, approved=True
             )
             async for continuation in engine.submit_tool_result(
-                session, response.tool_use["id"], result
+                session,
+                response.tool_use["id"],
+                result,
+                additional_tools=additional_tool_schemas,
             ):
                 yield continuation
         else:
