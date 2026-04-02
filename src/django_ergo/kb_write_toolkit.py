@@ -1,0 +1,232 @@
+"""KBWriteToolkit — scoped write tools for a single knowledgebase."""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+from django_ergo.conversation.toolkit import Toolkit
+
+if TYPE_CHECKING:
+    from django_ergo.conversation.adapters import ToolAdapter
+    from django_ergo.models import Knowledgebase
+
+
+def _next_hex_code(existing_codes: set[str]) -> str:
+    """Find the next available single-char hex code (0-9, A-F, then 10+)."""
+    for i in range(256):
+        code = format(i, "X")
+        if code not in existing_codes:
+            return code
+    msg = "No available hierarchy codes"
+    raise ValueError(msg)
+
+
+def _next_child_code(parent_code: str, existing_codes: set[str]) -> str:
+    """Find the next available child code under a parent."""
+    for i in range(256):
+        suffix = format(i, "X")
+        code = f"{parent_code}{suffix}"
+        if code not in existing_codes:
+            return code
+    msg = f"No available child codes under '{parent_code}'"
+    raise ValueError(msg)
+
+
+KB_WRITE_TOOLS = [
+    {
+        "name": "kb_create_article",
+        "description": "Create a new article in the knowledge base",
+        "parameters": {
+            "title": {
+                "type": "string",
+                "required": True,
+                "description": "Article title",
+            },
+            "content": {
+                "type": "string",
+                "required": True,
+                "description": "Article content",
+            },
+            "hierarchy_code": {
+                "type": "string",
+                "required": False,
+                "description": "Explicit hierarchy code for placement. Conflicts if already taken.",
+            },
+            "parent_code": {
+                "type": "string",
+                "required": False,
+                "description": "Place as child of this article. Auto-generates sub-code.",
+            },
+            "summary": {
+                "type": "string",
+                "required": False,
+                "description": "Article summary",
+            },
+        },
+    },
+    {
+        "name": "kb_update_article",
+        "description": "Update an existing article's title, content, or summary",
+        "parameters": {
+            "hierarchy_code": {
+                "type": "string",
+                "required": True,
+                "description": "Hierarchy code of the article to update",
+            },
+            "title": {
+                "type": "string",
+                "required": False,
+                "description": "New title",
+            },
+            "content": {
+                "type": "string",
+                "required": False,
+                "description": "New content",
+            },
+            "summary": {
+                "type": "string",
+                "required": False,
+                "description": "New summary",
+            },
+        },
+    },
+    {
+        "name": "kb_delete_article",
+        "description": "Delete an article from the knowledge base",
+        "parameters": {
+            "hierarchy_code": {
+                "type": "string",
+                "required": True,
+                "description": "Hierarchy code of the article to delete",
+            },
+        },
+    },
+]
+
+KB_WRITE_TOOL_NAMES = {t["name"] for t in KB_WRITE_TOOLS}
+
+
+class KBWriteToolkit(Toolkit):
+    """Scoped toolkit for writing articles to a single knowledgebase."""
+
+    def __init__(self, knowledgebase: Knowledgebase):
+        self.knowledgebase = knowledgebase
+
+    def has_tool(self, tool_name: str) -> bool:
+        return tool_name in KB_WRITE_TOOL_NAMES
+
+    def get_tools_schema(self, adapter: ToolAdapter) -> list[dict]:
+        from django_ergo.tools import ToolConfig
+
+        schemas = []
+        for tool_def in KB_WRITE_TOOLS:
+            config = ToolConfig(
+                name=tool_def["name"],
+                description=tool_def["description"],
+                parameters=tool_def["parameters"],
+                requires_approval=True,
+                readonly=False,
+            )
+            schemas.append(adapter.to_engine_schema(config))
+        return schemas
+
+    def execute_tool(self, tool_name: str, arguments: dict) -> str:
+        if tool_name == "kb_create_article":
+            return self._create_article(arguments)
+        if tool_name == "kb_update_article":
+            return self._update_article(arguments)
+        if tool_name == "kb_delete_article":
+            return self._delete_article(arguments)
+        msg = f"Unknown tool: {tool_name}"
+        raise ValueError(msg)
+
+    def render_overview(self) -> str:
+        kb = self.knowledgebase
+        article_count = kb.articles.count()
+        return (
+            f"=== KB Write Access: {kb.name} (kb_id: {kb.id}) ===\n"
+            f"Articles: {article_count}\n"
+            f"Available tools: kb_create_article, kb_update_article, kb_delete_article\n"
+            f"Note: All write operations require approval."
+        )
+
+    def _create_article(self, args: dict) -> str:
+        from django_ergo.models import Article
+
+        title = args["title"]
+        content = args["content"]
+        summary = args.get("summary")
+        hierarchy_code = args.get("hierarchy_code")
+        parent_code = args.get("parent_code")
+        kb = self.knowledgebase
+
+        if hierarchy_code and parent_code:
+            msg = "Provide hierarchy_code or parent_code, not both"
+            raise ValueError(msg)
+
+        existing_codes = set(kb.articles.values_list("hierarchy_code", flat=True))
+
+        if hierarchy_code:
+            if hierarchy_code in existing_codes:
+                msg = f"Article with code '{hierarchy_code}' already exists in '{kb.name}'"
+                raise ValueError(msg)
+        elif parent_code:
+            child_codes = {
+                c
+                for c in existing_codes
+                if c.startswith(parent_code) and len(c) == len(parent_code) + 1
+            }
+            hierarchy_code = _next_child_code(parent_code, child_codes)
+        else:
+            top_level_codes = {c for c in existing_codes if len(c) == 1}
+            hierarchy_code = _next_hex_code(top_level_codes)
+
+        create_kwargs = {
+            "knowledgebase": kb,
+            "title": title,
+            "content": content,
+            "hierarchy_code": hierarchy_code,
+        }
+        if summary:
+            create_kwargs["summary"] = summary
+
+        Article.objects.create(**create_kwargs)
+        return f'Created article {hierarchy_code}: "{title}" in {kb.name}'
+
+    def _update_article(self, args: dict) -> str:
+        hierarchy_code = args["hierarchy_code"]
+        kb = self.knowledgebase
+
+        updatable = {k: args[k] for k in ("title", "content", "summary") if k in args}
+        if not updatable:
+            msg = (
+                "No fields to update. Provide at least one of: title, content, summary"
+            )
+            raise ValueError(msg)
+
+        try:
+            article = kb.articles.get(hierarchy_code=hierarchy_code)
+        except kb.articles.model.DoesNotExist:
+            msg = f"Article '{hierarchy_code}' not found in '{kb.name}'"
+            raise ValueError(msg) from None
+
+        for field, value in updatable.items():
+            setattr(article, field, value)
+        article.save(update_fields=list(updatable.keys()))
+
+        fields_str = ", ".join(updatable.keys())
+        return f"Updated article {hierarchy_code} in {kb.name}: {fields_str}"
+
+    def _delete_article(self, args: dict) -> str:
+        hierarchy_code = args["hierarchy_code"]
+        kb = self.knowledgebase
+
+        try:
+            article = kb.articles.get(hierarchy_code=hierarchy_code)
+        except kb.articles.model.DoesNotExist:
+            msg = f"Article '{hierarchy_code}' not found in '{kb.name}'"
+            raise ValueError(msg) from None
+
+        title = article.title
+        article.delete()
+        return f'Deleted article {hierarchy_code}: "{title}" from {kb.name}'
