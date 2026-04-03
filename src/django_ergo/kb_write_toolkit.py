@@ -1,4 +1,8 @@
-"""KBWriteToolkit — scoped write tools for a single knowledgebase."""
+"""KBWriteToolkit — scoped write tools for a single knowledgebase.
+
+Also provides module-level create_article(), update_article(), delete_article()
+functions used by both KBWriteToolkit and KBSuggestToolkit.
+"""
 
 from __future__ import annotations
 
@@ -31,6 +35,107 @@ def _next_child_code(parent_code: str, existing_codes: set[str]) -> str:
     msg = f"No available child codes under '{parent_code}'"
     raise ValueError(msg)
 
+
+# ---------------------------------------------------------------------------
+# Shared write functions — used by KBWriteToolkit and KBSuggestToolkit
+# ---------------------------------------------------------------------------
+
+
+def create_article(  # noqa: PLR0913
+    kb: Knowledgebase,
+    title: str,
+    content: str,
+    hierarchy_code: str | None = None,
+    parent_code: str | None = None,
+    summary: str | None = None,
+) -> str:
+    """Create an article in the KB. Returns confirmation string."""
+    from django_ergo.models import Article
+
+    if hierarchy_code and parent_code:
+        msg = "Provide hierarchy_code or parent_code, not both"
+        raise ValueError(msg)
+
+    existing_codes = set(kb.articles.values_list("hierarchy_code", flat=True))
+
+    if hierarchy_code:
+        if hierarchy_code in existing_codes:
+            msg = f"Article with code '{hierarchy_code}' already exists in '{kb.name}'"
+            raise ValueError(msg)
+    elif parent_code:
+        child_codes = {
+            c
+            for c in existing_codes
+            if c.startswith(parent_code) and len(c) == len(parent_code) + 1
+        }
+        hierarchy_code = _next_child_code(parent_code, child_codes)
+    else:
+        top_level_codes = {c for c in existing_codes if len(c) == 1}
+        hierarchy_code = _next_hex_code(top_level_codes)
+
+    create_kwargs: dict = {
+        "knowledgebase": kb,
+        "title": title,
+        "content": content,
+        "hierarchy_code": hierarchy_code,
+    }
+    if summary:
+        create_kwargs["summary"] = summary
+
+    Article.objects.create(**create_kwargs)
+    return f'Created article {hierarchy_code}: "{title}" in {kb.name}'
+
+
+def update_article(
+    kb: Knowledgebase,
+    hierarchy_code: str,
+    title: str | None = None,
+    content: str | None = None,
+    summary: str | None = None,
+) -> str:
+    """Update an existing article. Returns confirmation string."""
+    updatable = {}
+    if title is not None:
+        updatable["title"] = title
+    if content is not None:
+        updatable["content"] = content
+    if summary is not None:
+        updatable["summary"] = summary
+
+    if not updatable:
+        msg = "No fields to update. Provide at least one of: title, content, summary"
+        raise ValueError(msg)
+
+    try:
+        article = kb.articles.get(hierarchy_code=hierarchy_code)
+    except kb.articles.model.DoesNotExist:
+        msg = f"Article '{hierarchy_code}' not found in '{kb.name}'"
+        raise ValueError(msg) from None
+
+    for field, value in updatable.items():
+        setattr(article, field, value)
+    article.save(update_fields=list(updatable.keys()))
+
+    fields_str = ", ".join(updatable.keys())
+    return f"Updated article {hierarchy_code} in {kb.name}: {fields_str}"
+
+
+def delete_article(kb: Knowledgebase, hierarchy_code: str) -> str:
+    """Delete an article. Returns confirmation string."""
+    try:
+        article = kb.articles.get(hierarchy_code=hierarchy_code)
+    except kb.articles.model.DoesNotExist:
+        msg = f"Article '{hierarchy_code}' not found in '{kb.name}'"
+        raise ValueError(msg) from None
+
+    title = article.title
+    article.delete()
+    return f'Deleted article {hierarchy_code}: "{title}" from {kb.name}'
+
+
+# ---------------------------------------------------------------------------
+# Tool definitions
+# ---------------------------------------------------------------------------
 
 KB_WRITE_TOOLS = [
     {
@@ -132,11 +237,27 @@ class KBWriteToolkit(Toolkit):
 
     def execute_tool(self, tool_name: str, arguments: dict) -> str:
         if tool_name == "kb_create_article":
-            return self._create_article(arguments)
+            return create_article(
+                self.knowledgebase,
+                title=arguments["title"],
+                content=arguments["content"],
+                hierarchy_code=arguments.get("hierarchy_code"),
+                parent_code=arguments.get("parent_code"),
+                summary=arguments.get("summary"),
+            )
         if tool_name == "kb_update_article":
-            return self._update_article(arguments)
+            return update_article(
+                self.knowledgebase,
+                hierarchy_code=arguments["hierarchy_code"],
+                title=arguments.get("title"),
+                content=arguments.get("content"),
+                summary=arguments.get("summary"),
+            )
         if tool_name == "kb_delete_article":
-            return self._delete_article(arguments)
+            return delete_article(
+                self.knowledgebase,
+                hierarchy_code=arguments["hierarchy_code"],
+            )
         msg = f"Unknown tool: {tool_name}"
         raise ValueError(msg)
 
@@ -149,84 +270,3 @@ class KBWriteToolkit(Toolkit):
             f"Available tools: kb_create_article, kb_update_article, kb_delete_article\n"
             f"Note: All write operations require approval."
         )
-
-    def _create_article(self, args: dict) -> str:
-        from django_ergo.models import Article
-
-        title = args["title"]
-        content = args["content"]
-        summary = args.get("summary")
-        hierarchy_code = args.get("hierarchy_code")
-        parent_code = args.get("parent_code")
-        kb = self.knowledgebase
-
-        if hierarchy_code and parent_code:
-            msg = "Provide hierarchy_code or parent_code, not both"
-            raise ValueError(msg)
-
-        existing_codes = set(kb.articles.values_list("hierarchy_code", flat=True))
-
-        if hierarchy_code:
-            if hierarchy_code in existing_codes:
-                msg = f"Article with code '{hierarchy_code}' already exists in '{kb.name}'"
-                raise ValueError(msg)
-        elif parent_code:
-            child_codes = {
-                c
-                for c in existing_codes
-                if c.startswith(parent_code) and len(c) == len(parent_code) + 1
-            }
-            hierarchy_code = _next_child_code(parent_code, child_codes)
-        else:
-            top_level_codes = {c for c in existing_codes if len(c) == 1}
-            hierarchy_code = _next_hex_code(top_level_codes)
-
-        create_kwargs = {
-            "knowledgebase": kb,
-            "title": title,
-            "content": content,
-            "hierarchy_code": hierarchy_code,
-        }
-        if summary:
-            create_kwargs["summary"] = summary
-
-        Article.objects.create(**create_kwargs)
-        return f'Created article {hierarchy_code}: "{title}" in {kb.name}'
-
-    def _update_article(self, args: dict) -> str:
-        hierarchy_code = args["hierarchy_code"]
-        kb = self.knowledgebase
-
-        updatable = {k: args[k] for k in ("title", "content", "summary") if k in args}
-        if not updatable:
-            msg = (
-                "No fields to update. Provide at least one of: title, content, summary"
-            )
-            raise ValueError(msg)
-
-        try:
-            article = kb.articles.get(hierarchy_code=hierarchy_code)
-        except kb.articles.model.DoesNotExist:
-            msg = f"Article '{hierarchy_code}' not found in '{kb.name}'"
-            raise ValueError(msg) from None
-
-        for field, value in updatable.items():
-            setattr(article, field, value)
-        article.save(update_fields=list(updatable.keys()))
-
-        fields_str = ", ".join(updatable.keys())
-        return f"Updated article {hierarchy_code} in {kb.name}: {fields_str}"
-
-    def _delete_article(self, args: dict) -> str:
-        hierarchy_code = args["hierarchy_code"]
-        kb = self.knowledgebase
-
-        try:
-            article = kb.articles.get(hierarchy_code=hierarchy_code)
-        except kb.articles.model.DoesNotExist:
-            msg = f"Article '{hierarchy_code}' not found in '{kb.name}'"
-            raise ValueError(msg) from None
-
-        title = article.title
-        article.delete()
-        return f'Deleted article {hierarchy_code}: "{title}" from {kb.name}'
