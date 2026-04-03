@@ -189,3 +189,31 @@ class OpenAIMessage(TimeStampedMixin):
 
     def __str__(self):
         return f"{self.session} - {self.role} [{self.sequence}]"
+
+
+class KBUsageMode(models.TextChoices):
+    READ = "read", "Read"
+    WRITE = "write", "Write"
+    SUGGEST = "suggest", "Suggest"
+
+
+class ConversationKBUsage(TimeStampedMixin):
+    """Tracks which knowledgebases are used in which conversations and how."""
+
+    session = models.ForeignKey(
+        ConversationSession,
+        on_delete=models.CASCADE,
+        related_name="kb_usages",
+    )
+    knowledgebase = models.ForeignKey(
+        "django_ergo.Knowledgebase",
+        on_delete=models.CASCADE,
+        related_name="conversation_usages",
+    )
+    mode = models.CharField(max_length=10, choices=KBUsageMode.choices)
+
+    class Meta:
+        unique_together = [["session", "knowledgebase", "mode"]]
+
+    def __str__(self):
+        return f"{self.session_id} -> {self.knowledgebase_id} ({self.mode})"

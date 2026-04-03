@@ -122,6 +122,9 @@ class KBSuggestToolkit(Toolkit):
         msg = f"Unknown tool: {tool_name}"
         raise ValueError(msg)
 
+    def get_bound_knowledgebases(self) -> list[tuple]:
+        return [(self.knowledgebase, "suggest")]
+
     def render_overview(self) -> str:
         kb = self.knowledgebase
         article_count = kb.articles.count()

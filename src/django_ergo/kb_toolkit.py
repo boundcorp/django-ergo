@@ -111,6 +111,9 @@ class KBToolkit(Toolkit):
         msg = f"Unknown tool: {tool_name}"
         raise ValueError(msg)
 
+    def get_bound_knowledgebases(self) -> list[tuple]:
+        return [(kb, "read") for kb in self.knowledgebases.values()]
+
     def render_overview(self) -> str:
         parts = []
         for kb_id, kb in self.knowledgebases.items():
