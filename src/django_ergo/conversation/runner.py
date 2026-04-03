@@ -59,6 +59,22 @@ def _find_toolkit_for_tool(
     return None
 
 
+async def _record_kb_usage(
+    session: ConversationSession,
+    toolkits: list[Toolkit],
+) -> None:
+    """Record KB usage for all toolkits bound to knowledgebases."""
+    from django_ergo.conversation.models import ConversationKBUsage
+
+    for toolkit in toolkits:
+        for kb, mode in toolkit.get_bound_knowledgebases():
+            await ConversationKBUsage.objects.aget_or_create(
+                session=session,
+                knowledgebase=kb,
+                mode=mode,
+            )
+
+
 async def run_conversation_turn(
     engine: Engine,
     session: ConversationSession,
@@ -70,6 +86,8 @@ async def run_conversation_turn(
     additional_tool_schemas = (
         _collect_toolkit_schemas(toolkits, adapter) if toolkits else None
     )
+    if toolkits:
+        await _record_kb_usage(session, toolkits)
 
     async for response in engine.send(
         session, message, additional_tools=additional_tool_schemas
