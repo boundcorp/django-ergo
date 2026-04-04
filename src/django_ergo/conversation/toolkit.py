@@ -33,3 +33,10 @@ class Toolkit(ABC):
     @abstractmethod
     def render_overview(self) -> str:
         """Render initial context for the agent (e.g., TOC, summaries)."""
+
+    def get_bound_knowledgebases(self) -> list[tuple]:
+        """Return [(knowledgebase, mode), ...] for usage tracking.
+
+        Override in KB toolkits. Default returns empty list.
+        """
+        return []

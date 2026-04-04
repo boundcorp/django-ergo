@@ -134,3 +134,11 @@ class TestHelperFunctions:
 
         result = _find_toolkit_for_tool([toolkit_a], "unknown")
         assert result is None
+
+
+class TestRunnerRecordsUsage:
+    def test_record_kb_usage_function(self):
+        """_record_kb_usage exists and is importable."""
+        from django_ergo.conversation.runner import _record_kb_usage
+
+        assert callable(_record_kb_usage)
