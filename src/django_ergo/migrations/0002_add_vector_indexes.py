@@ -48,19 +48,28 @@ class Migration(migrations.Migration):
             reverse_sql="DROP INDEX IF EXISTS django_ergo_article_summary_embedding_ivfflat_idx;"
         ),
         
-        # Add composite index for knowledgebase filtering with vector search
+        # Add partial index on knowledgebase_id for rows with embeddings.
+        # This helps the query planner filter by KB before the HNSW index kicks in.
+        # NOTE: Cannot use btree on vector columns — only index the FK.
         migrations.RunSQL(
-            "CREATE INDEX CONCURRENTLY IF NOT EXISTS django_ergo_article_kb_content_hnsw_idx "
-            "ON django_ergo_article (knowledgebase_id, content_embedding) "
+            "CREATE INDEX CONCURRENTLY IF NOT EXISTS django_ergo_article_kb_has_content_idx "
+            "ON django_ergo_article (knowledgebase_id) "
             "WHERE content_embedding IS NOT NULL;",
-            reverse_sql="DROP INDEX IF EXISTS django_ergo_article_kb_content_hnsw_idx;"
+            reverse_sql="DROP INDEX IF EXISTS django_ergo_article_kb_has_content_idx;"
         ),
-        
-        # Add composite index for knowledgebase filtering with summary search
         migrations.RunSQL(
-            "CREATE INDEX CONCURRENTLY IF NOT EXISTS django_ergo_article_kb_summary_hnsw_idx "
-            "ON django_ergo_article (knowledgebase_id, summary_embedding) "
+            "CREATE INDEX CONCURRENTLY IF NOT EXISTS django_ergo_article_kb_has_summary_idx "
+            "ON django_ergo_article (knowledgebase_id) "
             "WHERE summary_embedding IS NOT NULL;",
-            reverse_sql="DROP INDEX IF EXISTS django_ergo_article_kb_summary_hnsw_idx;"
+            reverse_sql="DROP INDEX IF EXISTS django_ergo_article_kb_has_summary_idx;"
+        ),
+        # Drop the old broken composite indexes if they exist (from prior runs)
+        migrations.RunSQL(
+            "DROP INDEX IF EXISTS django_ergo_article_kb_content_hnsw_idx;",
+            reverse_sql="SELECT 1;",
+        ),
+        migrations.RunSQL(
+            "DROP INDEX IF EXISTS django_ergo_article_kb_summary_hnsw_idx;",
+            reverse_sql="SELECT 1;",
         ),
     ]
