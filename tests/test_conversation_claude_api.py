@@ -78,8 +78,8 @@ class TestEngineRegistry:
             "django_ergo.conversation.engines.claude_api.ClaudeAPIEngine"
         )
 
-    def test_claude_cli_registered(self):
-        assert ("claude", "cli") in ENGINE_REGISTRY
+    def test_claude_cli_not_registered(self):
+        assert ("claude", "cli") not in ENGINE_REGISTRY
 
     def test_openai_api_registered(self):
         assert ("openai", "api") in ENGINE_REGISTRY
@@ -106,7 +106,7 @@ class TestClaudeAPIEngineInit:
         assert e.api_key is None
 
     def test_client_not_eagerly_initialized(self, engine):
-        assert engine._client is None  # noqa: SLF001
+        assert engine._client is None
 
     def test_get_tool_adapter_returns_claude_adapter(self, engine):
         from django_ergo.conversation.adapters import ClaudeToolAdapter
@@ -356,7 +356,7 @@ class TestGetToolsSchema:
                 }
             },
         )
-        tool_registry._tools["_test_claude_api_tool"] = test_tool  # noqa: SLF001
+        tool_registry._tools["_test_claude_api_tool"] = test_tool
 
         workflow.tools_config = {"enabled_tools": ["_test_claude_api_tool"]}
         workflow.save()
@@ -371,7 +371,7 @@ class TestGetToolsSchema:
             assert "query" in schema["input_schema"]["properties"]
         finally:
             # Clean up the temporary tool
-            tool_registry._tools.pop("_test_claude_api_tool", None)  # noqa: SLF001
+            tool_registry._tools.pop("_test_claude_api_tool", None)
 
     def test_unknown_tool_names_are_skipped(self, engine, workflow):
         """Tools that are not in the registry are silently skipped."""
@@ -388,7 +388,7 @@ class TestGetToolsSchema:
             description="Format check tool",
             parameters={},
         )
-        tool_registry._tools["_test_claude_format_tool"] = test_tool  # noqa: SLF001
+        tool_registry._tools["_test_claude_format_tool"] = test_tool
 
         workflow.tools_config = {"enabled_tools": ["_test_claude_format_tool"]}
         workflow.save()
@@ -400,7 +400,7 @@ class TestGetToolsSchema:
             assert "input_schema" in result[0]
             assert "function" not in result[0]
         finally:
-            tool_registry._tools.pop("_test_claude_format_tool", None)  # noqa: SLF001
+            tool_registry._tools.pop("_test_claude_format_tool", None)
 
 
 # ---------------------------------------------------------------------------

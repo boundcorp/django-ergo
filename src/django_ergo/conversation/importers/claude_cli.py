@@ -54,7 +54,7 @@ class ClaudeCLIImporter:
             user=user,
             workflow=workflow,
             engine_type="claude",
-            transport_type="cli",
+            transport_type="api",
             status="paused",
             session_id=session_id,
             metadata=metadata,

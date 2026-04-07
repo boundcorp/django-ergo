@@ -25,6 +25,7 @@ class OpenAIAPIEngine(Engine):
         self.config = config
         self.model = config.get("model", "gpt-4o")
         self.api_key = config.get("api_key")
+        self.base_url = config.get("base_url")
         self.temperature = config.get("temperature", 0.7)
         self.max_tokens = config.get("max_tokens", 4096)
         self._client = None
@@ -40,7 +41,12 @@ class OpenAIAPIEngine(Engine):
         if self._client is None:
             import openai
 
-            self._client = openai.AsyncOpenAI(api_key=self.api_key)
+            kwargs = {}
+            if self.api_key:
+                kwargs["api_key"] = self.api_key
+            if self.base_url:
+                kwargs["base_url"] = self.base_url
+            self._client = openai.AsyncOpenAI(**kwargs)
         return self._client
 
     def get_tool_adapter(self) -> OpenAIToolAdapter:

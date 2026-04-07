@@ -3,7 +3,6 @@
 import pytest
 from django_ergo.conversation.engine import Engine
 from django_ergo.conversation.engine import EngineResponse
-from django_ergo.conversation.engine import TransportFailover
 
 
 class TestEngineResponse:
@@ -32,14 +31,6 @@ class TestEngineResponse:
     def test_default_raw(self):
         r = EngineResponse(event_type="text")
         assert r.raw == {}
-
-
-class TestTransportFailover:
-    def test_attributes(self):
-        exc = TransportFailover(original="cli", fallback="api", reason="CLI not found")
-        assert exc.original == "cli"
-        assert exc.fallback == "api"
-        assert "CLI not found" in str(exc)
 
 
 class TestEngineABC:
