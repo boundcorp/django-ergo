@@ -1,4 +1,4 @@
-"""Session manager — orchestrates engine lifecycle and failover."""
+"""Session manager — orchestrates engine lifecycle."""
 
 from __future__ import annotations
 
@@ -6,14 +6,13 @@ from typing import TYPE_CHECKING
 
 from django.utils.module_loading import import_string
 
-from django_ergo.conversation.engine import Engine
-from django_ergo.conversation.engine import TransportFailover
 from django_ergo.conversation.engines import ENGINE_REGISTRY
 from django_ergo.conversation.models import ConversationSession
 
 if TYPE_CHECKING:
     from uuid import UUID
 
+    from django_ergo.conversation.engine import Engine
     from django_ergo.models import Workflow
 
 
@@ -47,13 +46,7 @@ class SessionManager:
         if session.id in self._active_engines:
             return self._active_engines[session.id]
         engine = self._build_engine(session)
-        try:
-            await engine.resume_session(session)
-        except TransportFailover as f:
-            session.transport_type = f.fallback
-            await session.asave()
-            engine = self._build_engine(session)
-            await engine.resume_session(session)
+        await engine.resume_session(session)
         self._active_engines[session.id] = engine
         return engine
 

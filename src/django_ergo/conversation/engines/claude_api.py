@@ -24,6 +24,7 @@ class ClaudeAPIEngine(Engine):
     def __init__(self, config: dict):
         self.model = config.get("model", "claude-3-5-sonnet-20241022")
         self.api_key = config.get("api_key")
+        self.base_url = config.get("base_url")
         self.max_tokens = config.get("max_tokens", 8192)
         self._client = None
         self._adapter = ClaudeToolAdapter()
@@ -33,7 +34,12 @@ class ClaudeAPIEngine(Engine):
         if self._client is None:
             import anthropic
 
-            self._client = anthropic.AsyncAnthropic(api_key=self.api_key)
+            kwargs = {}
+            if self.api_key:
+                kwargs["api_key"] = self.api_key
+            if self.base_url:
+                kwargs["base_url"] = self.base_url
+            self._client = anthropic.AsyncAnthropic(**kwargs)
         return self._client
 
     def get_tool_adapter(self) -> ClaudeToolAdapter:

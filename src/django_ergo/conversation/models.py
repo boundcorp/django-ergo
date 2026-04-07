@@ -15,7 +15,6 @@ class EngineType(models.TextChoices):
 
 
 class TransportType(models.TextChoices):
-    CLI = "cli", "CLI"
     API = "api", "API"
 
 

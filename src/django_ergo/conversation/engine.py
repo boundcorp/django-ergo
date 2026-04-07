@@ -24,16 +24,6 @@ class EngineResponse:
     thinking: str | None = None
 
 
-class TransportFailover(Exception):  # noqa: N818
-    """Raised when a transport fails and should be swapped."""
-
-    def __init__(self, original: str, fallback: str, reason: str):
-        self.original = original
-        self.fallback = fallback
-        msg = f"Transport failover {original} -> {fallback}: {reason}"
-        super().__init__(msg)
-
-
 class Engine(ABC):
     """Abstract engine protocol. All engines implement this interface."""
 
