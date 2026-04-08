@@ -1,0 +1,178 @@
+[
+  {
+    "model": "auth.user",
+    "pk": 1,
+    "fields": {
+      "username": "shop_owner",
+      "first_name": "Shop",
+      "last_name": "Owner",
+      "email": "owner@example.com",
+      "is_staff": false,
+      "is_active": true,
+      "date_joined": "2024-01-01T10:00:00Z",
+      "password": "pbkdf2_sha256$600000$test$hash"
+    }
+  },
+  {
+    "model": "django_ergo.knowledgebase",
+    "pk": "11111111-1111-1111-1111-111111111111",
+    "fields": {
+      "name": "Shop Wiki",
+      "description": "E-commerce store configuration and policies",
+      "owner_id": "1",
+      "created_at": "2024-01-01T10:00:00Z",
+      "updated_at": "2024-01-01T10:00:00Z"
+    }
+  },
+  {
+    "model": "django_ergo.workflow",
+    "pk": "22222222-2222-2222-2222-222222222222",
+    "fields": {
+      "name": "DB Admin Assistant",
+      "description": "Natural language database administration assistant",
+      "instructions": "You are a database administration assistant for an e-commerce system...",
+      "owner_id": "1",
+      "tools_config": {
+        "available_tools": ["query_database", "modify_database", "search_user_kb"],
+        "approved_tools": ["query_database", "search_user_kb"]
+      },
+      "created_at": "2024-01-01T10:00:00Z",
+      "updated_at": "2024-01-01T10:00:00Z"
+    }
+  },
+  {
+    "model": "django_ergo.userchat",
+    "pk": "33333333-3333-3333-3333-333333333333",
+    "fields": {
+      "user": 1,
+      "workflow": "22222222-2222-2222-2222-222222222222",
+      "title": "Daily sales inquiry with timezone correction",
+      "created_at": "2024-01-01T10:00:00Z",
+      "updated_at": "2024-01-01T10:05:00Z"
+    }
+  },
+  {
+    "model": "django_ergo.chatmessage",
+    "pk": "44444444-4444-4444-4444-444444444444",
+    "fields": {
+      "chat": "33333333-3333-3333-3333-333333333333",
+      "message_type": "user_input",
+      "role": "user",
+      "content": "get me today's sales",
+      "created_at": "2024-01-01T10:00:00Z"
+    }
+  },
+  {
+    "model": "django_ergo.chatmessage",
+    "pk": "55555555-5555-5555-5555-555555555555",
+    "fields": {
+      "chat": "33333333-3333-3333-3333-333333333333",
+      "message_type": "assistant_message",
+      "role": "assistant",
+      "content": "I'll get today's sales data using UTC timezone. Here are the results: Total: $2,456.78 from 15 orders.",
+      "created_at": "2024-01-01T10:01:00Z"
+    }
+  },
+  {
+    "model": "django_ergo.chatmessage",
+    "pk": "66666666-6666-6666-6666-666666666666",
+    "fields": {
+      "chat": "33333333-3333-3333-3333-333333333333",
+      "message_type": "user_input",
+      "role": "user",
+      "content": "no, sorry, my shop is in EST",
+      "created_at": "2024-01-01T10:02:00Z"
+    }
+  },
+  {
+    "model": "django_ergo.chatmessage",
+    "pk": "77777777-7777-7777-7777-777777777777",
+    "fields": {
+      "chat": "33333333-3333-3333-3333-333333333333",
+      "message_type": "assistant_message",
+      "role": "assistant",
+      "content": "Thank you for the correction! I'll update my knowledge to use EST timezone for your shop's operations.",
+      "created_at": "2024-01-01T10:03:00Z"
+    }
+  },
+  {
+    "model": "django_ergo.userchat",
+    "pk": "88888888-8888-8888-8888-888888888888",
+    "fields": {
+      "user": 1,
+      "workflow": "22222222-2222-2222-2222-222222222222",
+      "title": "Follow-up sales query",
+      "created_at": "2024-01-02T10:00:00Z",
+      "updated_at": "2024-01-02T10:02:00Z"
+    }
+  },
+  {
+    "model": "django_ergo.chatmessage",
+    "pk": "99999999-9999-9999-9999-999999999999",
+    "fields": {
+      "chat": "88888888-8888-8888-8888-888888888888",
+      "message_type": "user_input",
+      "role": "user",
+      "content": "get me today's sales",
+      "created_at": "2024-01-02T10:00:00Z"
+    }
+  },
+  {
+    "model": "django_ergo.chatmessage",
+    "pk": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+    "fields": {
+      "chat": "88888888-8888-8888-8888-888888888888",
+      "message_type": "assistant_message",
+      "role": "assistant",
+      "content": "Getting today's sales using EST timezone for your shop. Total: $2,789.45 from 18 orders.",
+      "created_at": "2024-01-02T10:01:00Z"
+    }
+  },
+  {
+    "model": "django_ergo.chatmessage",
+    "pk": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+    "fields": {
+      "chat": "88888888-8888-8888-8888-888888888888",
+      "message_type": "user_input",
+      "role": "user",
+      "content": "Perfect, that's the correct timezone now",
+      "created_at": "2024-01-02T10:02:00Z"
+    }
+  },
+  {
+    "model": "django_ergo.article",
+    "pk": "cccccccc-cccc-cccc-cccc-cccccccccccc",
+    "fields": {
+      "knowledgebase": "11111111-1111-1111-1111-111111111111",
+      "title": "Shop Timezone Configuration",
+      "content": "**Shop Timezone Setting**: Eastern Standard Time (EST)\n\nThe shop operates in EST timezone. This is critical for all time-sensitive operations including:\n- Sales reports and analytics\n- Order timestamps\n- Business hours calculations\n\n**Correction History**:\n- Initially system assumed UTC timezone\n- User corrected during sales inquiry: \"no, sorry, my shop is in EST\"\n- Updated: All operations should use EST, not UTC\n\n**Important**: When processing \"today's sales\" or similar time-based queries, always use EST timezone for this shop.",
+      "hierarchy_code": "TZ1",
+      "created_at": "2024-01-01T11:00:00Z",
+      "updated_at": "2024-01-01T11:00:00Z"
+    }
+  },
+  {
+    "model": "django_ergo.article",
+    "pk": "dddddddd-dddd-dddd-dddd-dddddddddddd",
+    "fields": {
+      "knowledgebase": "11111111-1111-1111-1111-111111111111",
+      "title": "Business Hours",
+      "content": "Shop hours: 9 AM to 5 PM EST, Monday through Friday. Note: All times are in EST as specified by the shop owner.",
+      "hierarchy_code": "BH1",
+      "created_at": "2024-01-01T11:00:00Z",
+      "updated_at": "2024-01-01T11:00:00Z"
+    }
+  },
+  {
+    "model": "django_ergo.article",
+    "pk": "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee",
+    "fields": {
+      "knowledgebase": "11111111-1111-1111-1111-111111111111",
+      "title": "Return Policy",
+      "content": "Return policy: 30 days for full refund. Items must be in original condition.",
+      "hierarchy_code": "RP1",
+      "created_at": "2024-01-01T11:00:00Z",
+      "updated_at": "2024-01-01T11:00:00Z"
+    }
+  }
+]

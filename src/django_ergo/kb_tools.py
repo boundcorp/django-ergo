@@ -48,28 +48,35 @@ def search_user_kb(
         return []
     
     # Search across all user's knowledge bases
-    articles = Article.objects.filter(
-        knowledgebase__in=kbs
-    ).hybrid_search(query, top_k=top_k)
-    
     results = []
-    for article in articles:
-        results.append({
-            "id": str(article.id),
-            "title": article.title,
-            "content": article.content,
-            "summary": article.summary or "",
-            "hierarchy_code": article.hierarchy_code,
-            "knowledgebase": article.knowledgebase.name,
-            "knowledgebase_id": str(article.knowledgebase.id),
-        })
+    for kb in kbs:
+        # Use Article's semantic search capability if available
+        try:
+            articles = Article.objects.filter(knowledgebase=kb).semantic_search_content(query)[:top_k]
+        except AttributeError:
+            # Fallback to simple text search if semantic search not available
+            articles = Article.objects.filter(
+                knowledgebase=kb,
+                content__icontains=query
+            )[:top_k]
+        
+        for article in articles:
+            results.append({
+                "id": str(article.id),
+                "title": article.title,
+                "content": article.content[:500] + "..." if len(article.content) > 500 else article.content,
+                "summary": article.summary or "",
+                "hierarchy_code": article.hierarchy_code,
+                "knowledgebase": kb.name,
+                "knowledgebase_id": str(kb.id),
+            })
     
-    return results
+    return results[:top_k]
 
 
 @tool(
     name="search_garden_kb",
-    description="Search articles in garden-related knowledge bases",
+    description="Search the garden knowledgebase for articles about plants, gardening, and related topics",
     readonly=True
 )
 def search_garden_kb(
@@ -78,54 +85,53 @@ def search_garden_kb(
     top_k: int = 5
 ) -> List[Dict[str, Any]]:
     """
-    Search articles in garden-related knowledge bases.
+    Search articles in garden knowledge bases.
     
     Args:
-        user: The user making the search
-        query: Search query
+        user: The user making the search request
+        query: Search query about gardening topics
         top_k: Number of results to return
         
     Returns:
-        List of matching articles from garden knowledge bases
+        List of matching garden articles
     """
-    # Search in knowledge bases with garden-related names
+    # Look for garden-related knowledge bases
     garden_kbs = Knowledgebase.objects.filter(
         name__icontains="garden"
-    ).union(
-        Knowledgebase.objects.filter(
-            name__icontains="plant"
-        )
-    ).union(
-        Knowledgebase.objects.filter(
-            description__icontains="garden"
-        )
     )
     
     if not garden_kbs.exists():
         return []
     
-    articles = Article.objects.filter(
-        knowledgebase__in=garden_kbs
-    ).hybrid_search(query, top_k=top_k)
-    
     results = []
-    for article in articles:
-        results.append({
-            "id": str(article.id),
-            "title": article.title,
-            "content": article.content,
-            "summary": article.summary or "",
-            "hierarchy_code": article.hierarchy_code,
-            "knowledgebase": article.knowledgebase.name,
-            "knowledgebase_id": str(article.knowledgebase.id),
-        })
+    for kb in garden_kbs:
+        # Use semantic search if available
+        try:
+            articles = Article.objects.filter(knowledgebase=kb).semantic_search_content(query)[:top_k]
+        except AttributeError:
+            # Fallback to text search
+            articles = Article.objects.filter(
+                knowledgebase=kb,
+                content__icontains=query
+            )[:top_k]
+        
+        for article in articles:
+            results.append({
+                "id": str(article.id),
+                "title": article.title,
+                "content": article.content[:500] + "..." if len(article.content) > 500 else article.content,
+                "summary": article.summary or "",
+                "hierarchy_code": article.hierarchy_code,
+                "knowledgebase": kb.name,
+                "knowledgebase_id": str(kb.id),
+            })
     
-    return results
+    return results[:top_k]
 
 
 @tool(
     name="get_kb_table_of_contents",
-    description="Get table of contents for a knowledge base",
+    description="Get the table of contents for a specific knowledge base",
     readonly=True
 )
 def get_kb_table_of_contents(
@@ -133,14 +139,14 @@ def get_kb_table_of_contents(
     kb_name: str
 ) -> Dict[str, Any]:
     """
-    Get table of contents for a knowledge base.
+    Get the table of contents for a knowledge base.
     
     Args:
-        user: The user requesting the TOC
+        user: The user requesting the table of contents
         kb_name: Name of the knowledge base
         
     Returns:
-        Dictionary with table of contents and metadata
+        Dictionary with table of contents information
     """
     try:
         kb = Knowledgebase.objects.get(
@@ -150,24 +156,23 @@ def get_kb_table_of_contents(
     except Knowledgebase.DoesNotExist:
         return {"error": f"Knowledge base '{kb_name}' not found"}
     
-    # Get top-level articles (single character hierarchy codes)
-    top_level_articles = kb.articles.filter(
-        hierarchy_code__regex=r'^.$'
-    ).order_by('hierarchy_code')
+    # Get all articles ordered by hierarchy
+    articles = kb.articles.order_by('hierarchy_code')
     
     toc_entries = []
-    for article in top_level_articles:
+    for article in articles:
         toc_entries.append({
             "hierarchy_code": article.hierarchy_code,
             "title": article.title,
+            "summary": article.summary or "",
             "id": str(article.id),
         })
     
     return {
         "knowledgebase": kb.name,
-        "knowledgebase_id": str(kb.id),
         "description": kb.description,
-        "table_of_contents": toc_entries,
+        "article_count": len(toc_entries),
+        "table_of_contents": toc_entries
     }
 
 
@@ -190,7 +195,7 @@ def get_article_by_hierarchy(
         hierarchy_code: Hierarchy code of the article
         
     Returns:
-        Dictionary with article data
+        Dictionary with article information
     """
     try:
         kb = Knowledgebase.objects.get(
@@ -313,6 +318,71 @@ def create_article(
         "hierarchy_code": article.hierarchy_code,
         "knowledgebase": kb.name,
         "message": "Article created successfully"
+    }
+
+
+@tool(
+    name="update_article",
+    description="Update an existing article in a knowledge base",
+    requires_approval=True
+)
+def update_article(
+    user: User,
+    kb_name: str,
+    hierarchy_code: str,
+    title: Optional[str] = None,
+    content: Optional[str] = None,
+    append_content: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Update an existing article in a knowledge base.
+    
+    Args:
+        user: The user updating the article
+        kb_name: Name of the knowledge base
+        hierarchy_code: Hierarchy code of the article to update
+        title: New title (optional)
+        content: New content (optional, replaces existing content)
+        append_content: Content to append to existing content (optional)
+        
+    Returns:
+        Dictionary with updated article information
+    """
+    try:
+        kb = Knowledgebase.objects.get(
+            name__iexact=kb_name,
+            owner_id=str(user.id)
+        )
+        article = kb.articles.get(hierarchy_code=hierarchy_code)
+    except (Knowledgebase.DoesNotExist, Article.DoesNotExist):
+        return {"error": f"Article '{hierarchy_code}' not found in knowledge base '{kb_name}'"}
+    
+    # Update fields if provided
+    updated_fields = []
+    
+    if title is not None:
+        article.title = title
+        updated_fields.append("title")
+    
+    if content is not None:
+        article.content = content
+        updated_fields.append("content")
+    elif append_content is not None:
+        article.content = article.content + "\n\n" + append_content
+        updated_fields.append("content (appended)")
+    
+    if not updated_fields:
+        return {"error": "No updates provided. Specify title, content, or append_content."}
+    
+    article.save()
+    
+    return {
+        "id": str(article.id),
+        "title": article.title,
+        "hierarchy_code": article.hierarchy_code,
+        "knowledgebase": kb.name,
+        "updated_fields": updated_fields,
+        "message": f"Article updated successfully. Updated: {', '.join(updated_fields)}"
     }
 
 
