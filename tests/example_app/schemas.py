@@ -1,31 +1,39 @@
-from typing import List, Optional, Dict, Any
-from datetime import datetime
-from pydantic import BaseModel, Field, ConfigDict
-from uuid import UUID
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+from typing import Any
+
+from pydantic import BaseModel
+from pydantic import ConfigDict
+from pydantic import Field
+
+if TYPE_CHECKING:
+    from datetime import datetime
+    from uuid import UUID
 
 
 # Response schemas
 class WorkflowSchema(BaseModel):
     model_config = ConfigDict(from_attributes=True)
-    
+
     id: UUID
     name: str
     description: str
     instructions: str
-    tools_config: Dict[str, Any]
+    tools_config: dict[str, Any]
     is_active: bool
     created_at: datetime
     updated_at: datetime
-    knowledgebases_list: List[str] = Field(alias="get_knowledgebases_list")
+    knowledgebases_list: list[str] = Field(alias="get_knowledgebases_list")
 
 
 class KnowledgebaseSchema(BaseModel):
     model_config = ConfigDict(from_attributes=True)
-    
+
     id: UUID
     name: str
     description: str
-    owner_id: Optional[str] = None
+    owner_id: str | None = None
     created_at: datetime
     updated_at: datetime
     article_count: int = Field(default=0)
@@ -33,21 +41,21 @@ class KnowledgebaseSchema(BaseModel):
 
 class ArticleSchema(BaseModel):
     model_config = ConfigDict(from_attributes=True)
-    
+
     id: UUID
     knowledgebase: UUID
     knowledgebase_name: str = Field(alias="knowledgebase.name")
     hierarchy_code: str
     title: str
     content: str
-    summary: Optional[str] = None
+    summary: str | None = None
     created_at: datetime
     updated_at: datetime
 
 
 class UserChatSchema(BaseModel):
     model_config = ConfigDict(from_attributes=True)
-    
+
     id: UUID
     user: int
     user_username: str = Field(alias="user.username")
@@ -55,30 +63,30 @@ class UserChatSchema(BaseModel):
     workflow_name: str = Field(alias="workflow.name")
     title: str
     is_active: bool
-    metadata: Dict[str, Any]
+    metadata: dict[str, Any]
     created_at: datetime
     updated_at: datetime
     message_count: int = Field(default=0)
-    last_message_at: Optional[datetime] = None
+    last_message_at: datetime | None = None
 
 
 class ChatMessageSchema(BaseModel):
     model_config = ConfigDict(from_attributes=True)
-    
+
     id: UUID
     chat: UUID
     chat_title: str = Field(alias="chat.title")
     message_type: str
     role: str
     content: str
-    metadata: Dict[str, Any]
+    metadata: dict[str, Any]
     created_at: datetime
     updated_at: datetime
 
 
 class UserSchema(BaseModel):
     model_config = ConfigDict(from_attributes=True)
-    
+
     id: int
     username: str
     email: str
@@ -92,30 +100,30 @@ class WorkflowCreateSchema(BaseModel):
     name: str = Field(max_length=255)
     description: str
     instructions: str
-    tools_config: Optional[Dict[str, Any]] = Field(default_factory=dict)
+    tools_config: dict[str, Any] | None = Field(default_factory=dict)
     is_active: bool = True
-    knowledgebases: Optional[List[UUID]] = Field(default_factory=list)
+    knowledgebases: list[UUID] | None = Field(default_factory=list)
 
 
 class WorkflowUpdateSchema(BaseModel):
-    name: Optional[str] = Field(None, max_length=255)
-    description: Optional[str] = None
-    instructions: Optional[str] = None
-    tools_config: Optional[Dict[str, Any]] = None
-    is_active: Optional[bool] = None
-    knowledgebases: Optional[List[UUID]] = None
+    name: str | None = Field(None, max_length=255)
+    description: str | None = None
+    instructions: str | None = None
+    tools_config: dict[str, Any] | None = None
+    is_active: bool | None = None
+    knowledgebases: list[UUID] | None = None
 
 
 class KnowledgebaseCreateSchema(BaseModel):
     name: str = Field(max_length=255)
     description: str
-    workflows: Optional[List[UUID]] = Field(default_factory=list)
+    workflows: list[UUID] | None = Field(default_factory=list)
 
 
 class KnowledgebaseUpdateSchema(BaseModel):
-    name: Optional[str] = Field(None, max_length=255)
-    description: Optional[str] = None
-    workflows: Optional[List[UUID]] = None
+    name: str | None = Field(None, max_length=255)
+    description: str | None = None
+    workflows: list[UUID] | None = None
 
 
 class ArticleCreateSchema(BaseModel):
@@ -123,43 +131,45 @@ class ArticleCreateSchema(BaseModel):
     hierarchy_code: str = Field(max_length=16)
     title: str = Field(max_length=512)
     content: str
-    summary: Optional[str] = None
+    summary: str | None = None
 
 
 class ArticleUpdateSchema(BaseModel):
-    hierarchy_code: Optional[str] = Field(None, max_length=16)
-    title: Optional[str] = Field(None, max_length=512)
-    content: Optional[str] = None
-    summary: Optional[str] = None
+    hierarchy_code: str | None = Field(None, max_length=16)
+    title: str | None = Field(None, max_length=512)
+    content: str | None = None
+    summary: str | None = None
 
 
 class ArticleSearchSchema(BaseModel):
     query: str = Field(description="Search query text for semantic search")
-    top_k: int = Field(default=10, ge=1, le=50, description="Number of results to return (1-50)")
+    top_k: int = Field(
+        default=10, ge=1, le=50, description="Number of results to return (1-50)"
+    )
     search_type: str = Field(
         default="multi_field",
         description="Type of semantic search to perform",
-        pattern="^(content|summary|multi_field)$"
+        pattern="^(content|summary|multi_field)$",
     )
 
 
 class UserChatCreateSchema(BaseModel):
     workflow: UUID
     title: str = Field(default="New Chat", max_length=255)
-    metadata: Optional[Dict[str, Any]] = Field(default_factory=dict)
+    metadata: dict[str, Any] | None = Field(default_factory=dict)
 
 
 class UserChatUpdateSchema(BaseModel):
-    title: Optional[str] = Field(None, max_length=255)
-    is_active: Optional[bool] = None
-    metadata: Optional[Dict[str, Any]] = None
+    title: str | None = Field(None, max_length=255)
+    is_active: bool | None = None
+    metadata: dict[str, Any] | None = None
 
 
 class ChatMessageCreateSchema(BaseModel):
     message_type: str
     role: str
     content: str
-    metadata: Optional[Dict[str, Any]] = Field(default_factory=dict)
+    metadata: dict[str, Any] | None = Field(default_factory=dict)
 
 
 # Authentication schemas
@@ -179,7 +189,7 @@ class ArticleSearchResponseSchema(BaseModel):
     query: str
     search_type: str
     count: int
-    results: List[ArticleSchema]
+    results: list[ArticleSchema]
 
 
 class TableOfContentsResponseSchema(BaseModel):
@@ -188,11 +198,11 @@ class TableOfContentsResponseSchema(BaseModel):
 
 class PaginatedResponseSchema(BaseModel):
     count: int
-    next: Optional[str] = None
-    previous: Optional[str] = None
-    results: List[Any]
+    next: str | None = None
+    previous: str | None = None
+    results: list[Any]
 
 
 class ErrorSchema(BaseModel):
     detail: str
-    code: Optional[str] = None
+    code: str | None = None

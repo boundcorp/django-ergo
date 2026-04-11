@@ -64,43 +64,43 @@ from uuid import UUID
 
 class KnowledgeProcessor:
     """Processes AI knowledge base entries."""
-    
+
     def __init__(self, max_entries: int = 1000) -> None:
         self.max_entries = max_entries
         self._cache: dict[UUID, str] = {}
-    
+
     def process_entry(
-        self, 
-        entry_id: UUID, 
+        self,
+        entry_id: UUID,
         content: str,
         tags: Optional[list[str]] = None
     ) -> dict[str, any]:
         """Process a knowledge base entry.
-        
+
         Args:
             entry_id: Unique identifier for the entry
             content: Entry content to process
             tags: Optional list of tags
-            
+
         Returns:
             Processed entry data
-            
+
         Raises:
             ValueError: If content is empty
         """
         if not content.strip():
             raise ValueError("Content cannot be empty")
-            
+
         tags = tags or []
         processed_content = self._clean_content(content)
-        
+
         return {
             "id": entry_id,
             "content": processed_content,
             "tags": tags,
             "word_count": len(processed_content.split())
         }
-    
+
     def _clean_content(self, content: str) -> str:
         """Clean and normalize content."""
         return content.strip().lower()

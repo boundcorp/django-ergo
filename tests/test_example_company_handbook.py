@@ -140,7 +140,7 @@ class TestCompanyHandbookSetup:
     def test_three_conversations_created(
         self, alice_arch_chat, bob_deploy_chat, bob_onboarding_chat
     ):
-        assert ConversationSession.objects.filter(status="completed").count() == 3  # noqa: PLR2004
+        assert ConversationSession.objects.filter(status="completed").count() == 3
 
     def test_history_toolkit_sees_all(
         self, alice_arch_chat, bob_deploy_chat, bob_onboarding_chat
@@ -212,7 +212,7 @@ class TestHandbookAbsorption:
                                 "hierarchy_code": "0",
                             },
                         )
-                    elif call_count["n"] == 2:  # noqa: PLR2004
+                    elif call_count["n"] == 2:
                         tk.execute_tool(
                             "kb_suggest_create",
                             {
@@ -241,7 +241,7 @@ class TestHandbookAbsorption:
             suggestions.apply_suggestions()
 
         # Verify the handbook
-        assert handbook_kb.articles.count() == 3  # noqa: PLR2004
+        assert handbook_kb.articles.count() == 3
         titles = list(
             handbook_kb.articles.order_by("hierarchy_code").values_list(
                 "title", flat=True
@@ -340,7 +340,7 @@ class TestHandbookWithSuggestionReview:
 
         # Admin reviews — keep architecture, reject joke
         all_suggestions = suggestions.get_suggestions()
-        assert len(all_suggestions) == 2  # noqa: PLR2004
+        assert len(all_suggestions) == 2
 
         # Only apply the first suggestion (architecture)
         results = suggestions.apply_suggestions(indices=[0])

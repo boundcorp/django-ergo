@@ -9,6 +9,7 @@ Django Ergo is an AI Knowledgebase Toolkit for Django that provides semantic sea
 ## Development Commands
 
 ### Environment Setup
+
 ```bash
 # 1. Copy environment variables template and configure
 cp .env.example .env
@@ -19,7 +20,7 @@ make env               # Create virtual environment with uv
 make pip_install       # Install all dependencies
 
 # 3. Set up database
-make migrations        # Create database migrations  
+make migrations        # Create database migrations
 make migrate          # Apply migrations
 make superuser        # Create Django superuser
 
@@ -28,6 +29,7 @@ make serve            # Run dev server at 127.0.0.1:8000
 ```
 
 ### Testing
+
 ```bash
 make pytest                      # Run standard tests
 make pytest_verbose             # Run tests with verbose output
@@ -44,12 +46,14 @@ pytest tests/test_specific.py::TestClass::test_method -v
 ```
 
 ### Code Quality
+
 ```bash
 make ruff_format        # Format code with ruff
 make ruff_check        # Check code style with ruff
 ```
 
 ### Build & Release
+
 ```bash
 make dist               # Build distribution packages
 make twine_check       # Check package validity
@@ -81,14 +85,16 @@ make twine_upload      # Upload to PyPI
 ### Search Architecture
 
 Multiple search levels provide flexibility:
+
 1. High-level `semantic_search()` - auto-embeds queries
-2. Low-level `vector_search()` - uses pre-computed vectors  
+2. Low-level `vector_search()` - uses pre-computed vectors
 3. Field helpers like `SemanticTextField.search_field()`
 4. QuerySet methods for multi-field weighted search
 
 ### Embedding System
 
 Fully pluggable with provider interface:
+
 - Default: OpenAI `text-embedding-3-small`
 - Configured via `DJANGO_ERGO['EMBEDDING_PROVIDER']` setting
 - Custom providers implement `BaseEmbeddingProvider` interface
@@ -111,6 +117,7 @@ Database credentials are stored in `.env` file (copy from `.env.example`). The t
 ## Testing Strategy
 
 **Two-tier OpenAI testing**:
+
 - Real API tests generate fixtures (costs credits)
 - Mocked tests use saved fixtures (fast, free)
 - Set `TEST_OPENAI=true` environment variable for real API tests
@@ -120,17 +127,20 @@ Database credentials are stored in `.env` file (copy from `.env.example`). The t
 ## Common Development Tasks
 
 ### Adding a New Semantic Field
+
 1. Add `SemanticTextField` to model
 2. Add corresponding `VectorField` with same name + `_embedding` suffix
 3. Run migrations
 4. Embeddings generate automatically on save
 
 ### Creating a Tool
+
 1. Define tool function with proper signature
 2. Register with `@tool_registry.register` decorator
 3. Configure approval requirements in workflow tools_config
 
 ### Working with Knowledge Bases
+
 - Use admin interface for manual management
 - Use `kb_tools` module for programmatic access
 - Export/import via flatfile utilities for agentic processing

@@ -11,6 +11,7 @@ This document captures the key architectural decisions made for Django Ergo v1.0
 **Decision**: Ergo provides reusable tools for Django app authors to build their own MCP servers
 
 **Details**:
+
 - Focus on utilities like `search_user_kb`, `search_grower_kb`, `search_garden_kb`
 - Export capabilities as REST endpoints
 - Apps handle authentication and permissions
@@ -23,6 +24,7 @@ This document captures the key architectural decisions made for Django Ergo v1.0
 **Decision**: Embeddings are fully pluggable with multiple provider support
 
 **Details**:
+
 - Abstract embedding provider interface
 - OpenAI embeddings as default provider
 - Settings-based provider switching (`ERGO_EMBEDDING_PROVIDER = 'openai'`)
@@ -36,6 +38,7 @@ This document captures the key architectural decisions made for Django Ergo v1.0
 **Decision**: Python-based workflows with OpenAI agent context serialization and tool approval system
 
 **Details**:
+
 - Workflows defined in Python code (not YAML or visual builders)
 - Serialize OpenAI agent context to ChatMessage for pause/resume capability
 - Tool approval system: "approved tools" vs "ask tools" (default: ask)
@@ -49,6 +52,7 @@ This document captures the key architectural decisions made for Django Ergo v1.0
 **Decision**: Easy-to-manage KBs designed for agentic processing
 
 **Details**:
+
 - Flatfile export/import capabilities for agentic processing
 - Utilities for create/update/diff/build operations
 - No versioning system initially (avoid complexity)
@@ -61,6 +65,7 @@ This document captures the key architectural decisions made for Django Ergo v1.0
 **Decision**: Permissions managed by applications, not the framework
 
 **Details**:
+
 - App builders decide which users can use which knowledgebases
 - App builders decide which users can update/ingest into knowledgebases
 - Framework provides the tools, apps implement permission logic
@@ -71,16 +76,19 @@ This document captures the key architectural decisions made for Django Ergo v1.0
 ## Implementation Priorities
 
 ### Phase 1: Core Foundation
+
 1. **OpenAI Context Serialization**: Enable pause/resume workflows
 2. **Tool Approval System**: Safe tool execution with approval mechanisms
 3. **Pluggable Embeddings**: Provider interface with OpenAI default
 
 ### Phase 2: Knowledge Management
+
 1. **Flatfile Export/Import**: KB management for agentic processing
 2. **MCP Tool Utilities**: Reusable search tools for Django apps
 3. **Performance Optimization**: Caching and efficient operations
 
 ### Phase 3: Developer Experience
+
 1. **Documentation**: Comprehensive guides and examples
 2. **Testing Framework**: Test utilities and fixtures
 3. **Admin Interface**: Enhanced Django admin integration
@@ -88,18 +96,23 @@ This document captures the key architectural decisions made for Django Ergo v1.0
 ## Design Principles
 
 ### 1. Framework, Not Platform
+
 Ergo provides powerful building blocks that Django developers compose into their own applications. It's not a complete platform but a toolkit.
 
 ### 2. Agent-Friendly Architecture
+
 The system is designed with AI agents as first-class users. Knowledge bases can be managed programmatically, workflows can be paused and resumed, and tools can be composed dynamically.
 
 ### 3. Django Integration
+
 Deep integration with Django patterns, ORM, and ecosystem. Feels natural to Django developers rather than like a foreign system.
 
 ### 4. Flexibility Over Convention
+
 While providing sensible defaults, the system prioritizes flexibility. Apps can override, extend, or replace most behaviors.
 
 ### 5. Production Ready
+
 Built for real applications with performance, reliability, and maintainability in mind from the start.
 
 ## Open Questions Remaining

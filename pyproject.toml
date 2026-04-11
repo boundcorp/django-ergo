@@ -147,6 +147,7 @@ exclude = [
   "venv",
   "*/migrations/*.py",
   "staticfiles/*",
+  "old-code-inspiration/*",
 ]
 # Same as Django: https://github.com/cookiecutter/cookiecutter-django/issues/4792.
 line-length = 88
@@ -246,6 +247,9 @@ dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
   "T201",   # Print statements are acceptable in tests (e.g. fixture generation output)
   "PLR2004", # Magic values are acceptable in tests (e.g. embedding dimensions)
 ]
+"src/django_ergo/approval_demo.py" = [
+  "T201",    # Print statements expected in demo script
+]
 "examples/**/*.py" = [
   "INP001",  # Examples are not a package
   "T201",    # Print statements expected in examples
@@ -258,6 +262,8 @@ dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
   "DTZ005",  # Naive datetime acceptable in examples
   "PERF401", # List comprehension style acceptable in examples
   "F841",    # Unused variable acceptable in examples
+  "TRY003",  # Long exception messages acceptable in examples
+  "EM102",   # f-string exception messages acceptable in examples
 ]
 
 [tool.ruff.format]
@@ -268,3 +274,6 @@ line-ending = "auto"
 
 [tool.ruff.lint.isort]
 force-single-line = true
+
+[tool.djlint]
+ignore = "H021"

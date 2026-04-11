@@ -5,33 +5,39 @@ This directory contains Cursor AI rules that help maintain code quality, consist
 ## Rules Overview
 
 ### 1. `django-development.mdc`
-**Type**: Auto-attached (globs-based)  
-**Applies to**: Django-specific Python files  
+
+**Type**: Auto-attached (globs-based)
+**Applies to**: Django-specific Python files
 **Purpose**: Django framework best practices, model design, view patterns, and Django-specific conventions.
 
 ### 2. `python-standards.mdc`
-**Type**: Auto-attached (globs-based)  
-**Applies to**: All Python files  
+
+**Type**: Auto-attached (globs-based)
+**Applies to**: All Python files
 **Purpose**: Modern Python coding standards, type hints, error handling, and code organization.
 
 ### 3. `ai-development.mdc`
-**Type**: Auto-attached (globs-based)  
-**Applies to**: AI/ML related files  
+
+**Type**: Auto-attached (globs-based)
+**Applies to**: AI/ML related files
 **Purpose**: AI/ML development best practices, knowledge management, embeddings, and performance optimization.
 
 ### 4. `testing-standards.mdc`
-**Type**: Auto-attached (globs-based)  
-**Applies to**: Test files  
+
+**Type**: Auto-attached (globs-based)
+**Applies to**: Test files
 **Purpose**: Comprehensive testing standards to maintain 97% code coverage, pytest best practices, and Django testing patterns.
 
 ### 5. `code-quality.mdc`
-**Type**: Always applied  
-**Applies to**: All contexts  
+
+**Type**: Always applied
+**Applies to**: All contexts
 **Purpose**: Code quality tools configuration, pre-commit hooks, linting, formatting, and development workflow standards.
 
 ### 6. `project-structure.mdc`
-**Type**: Agent-requested  
-**Applies to**: When making structural decisions  
+
+**Type**: Agent-requested
+**Applies to**: When making structural decisions
 **Purpose**: Project organization, file naming conventions, directory structure, and architectural guidance.
 
 ## Rule Types Explained
@@ -71,8 +77,9 @@ alwaysApply: true/false
 ## Coverage
 
 These rules cover:
+
 - ✅ Django framework best practices
-- ✅ Modern Python development standards  
+- ✅ Modern Python development standards
 - ✅ AI/ML development patterns
 - ✅ Comprehensive testing strategies
 - ✅ Code quality and tooling

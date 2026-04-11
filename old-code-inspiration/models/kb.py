@@ -1,7 +1,8 @@
 from django.db import models
+from papa.apps.ergo.fields import SummarizedVectorField
+from papa.apps.ergo.fields import generate_embedding
 from papa.utils.models import TimestampMixin
 from pgvector.django import CosineDistance
-from papa.apps.ergo.fields import SummarizedVectorField, generate_embedding
 from pgvector.django import VectorField
 
 
@@ -15,7 +16,7 @@ class KnowledgeBaseManager(models.Manager):
         )
 
 
-class KnowledgeBaseSearchMixin(object):
+class KnowledgeBaseSearchMixin:
     def hybrid_search(self, query_text):
         """
         Perform a hybrid search combining PostgreSQL full-text and embedding similarity.

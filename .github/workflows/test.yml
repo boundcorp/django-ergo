@@ -2,41 +2,40 @@ name: Tests
 
 on:
   push:
-    branches: [ main, master, develop ]
+    branches: [main, master, develop]
   pull_request:
-    branches: [ main, master, develop ]
+    branches: [main, master, develop]
 
 jobs:
   test:
     runs-on: ubuntu-latest
-    
+
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Build Docker container
-      run: |
-        make build_devcontainer
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-        
-    - name: Run tests with coverage in container
-      run: |
-        make test_coverage_in_devcontainer
+      - name: Build Docker container
+        run: |
+          make build_devcontainer
 
-    - name: Upload coverage reports
-      uses: actions/upload-artifact@v4
-      if: always()
-      with:
-        name: coverage-report
-        path: htmlcov/
-        retention-days: 30
-        
-    - name: Upload test results
-      uses: actions/upload-artifact@v4
-      if: always()
-      with:
-        name: test-results
-        path: |
-          .coverage
-          htmlcov/
-        retention-days: 30
+      - name: Run tests with coverage in container
+        run: |
+          make test_coverage_in_devcontainer
+
+      - name: Upload coverage reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-report
+          path: htmlcov/
+          retention-days: 30
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results
+          path: |
+            .coverage
+            htmlcov/
+          retention-days: 30

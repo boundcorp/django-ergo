@@ -5,13 +5,15 @@ This module provides integration with OpenAI Agents for LLM-powered chat respons
 Based on the OpenAI Agents customer_service example.
 """
 
-import os
 import logging
-from typing import Any, Dict, List, Optional
+import os
 from dataclasses import dataclass
+from typing import Any
 
 try:
-    from openai_agents import Agent, AgentConfig, AgentResponse
+    from openai_agents import Agent
+    from openai_agents import AgentConfig
+    from openai_agents import AgentResponse
     from openai_agents.tools import Tool
 
     OPENAI_AGENTS_AVAILABLE = True
@@ -22,8 +24,11 @@ except ImportError:
     AgentResponse = None
     Tool = None
 
-from ..models import Workflow, UserChat, ChatMessage, MessageType, MessageRole
-from .engine import WorkflowContext, WorkflowResult
+from ..models import ChatMessage
+from ..models import UserChat
+from ..models import Workflow
+from .engine import WorkflowContext
+from .engine import WorkflowResult
 
 logger = logging.getLogger(__name__)
 
@@ -33,10 +38,10 @@ class OpenAIAgentConfig:
     """Configuration for OpenAI Agent integration."""
 
     model: str = "gpt-4o-mini"
-    api_key: Optional[str] = None
-    system_prompt: Optional[str] = None
+    api_key: str | None = None
+    system_prompt: str | None = None
     temperature: float = 0.7
-    max_tokens: Optional[int] = None
+    max_tokens: int | None = None
     tools_enabled: bool = True
 
 
@@ -53,15 +58,13 @@ if Tool is not None:
             """Run the tool and return the result as a string."""
             try:
                 result = await self.ergo_tool.execute(self.context, **kwargs)
-                if isinstance(result, list):
-                    return str(result)
-                elif isinstance(result, dict):
+                if isinstance(result, dict | list):
                     return str(result)
                 else:
                     return str(result)
             except Exception as e:
                 logger.error(f"Error running tool {self.name}: {e}")
-                return f"Error: {str(e)}"
+                return f"Error: {e!s}"
 else:
     # Fallback class when OpenAI Agents is not available
     class ErgoOpenAITool:
@@ -82,7 +85,7 @@ class OpenAIAgentWorkflow:
 
     def __init__(self, config: OpenAIAgentConfig):
         self.config = config
-        self.agent: Optional[Agent] = None
+        self.agent: Agent | None = None
         self._setup_agent()
 
     def _setup_agent(self):
@@ -120,7 +123,7 @@ class OpenAIAgentWorkflow:
             logger.error(f"Error setting up OpenAI Agent: {e}")
             self.agent = None
 
-    def add_ergo_tools(self, ergo_tools: List[Any]):
+    def add_ergo_tools(self, ergo_tools: list[Any]):
         """Add Ergo tools to the OpenAI Agent."""
         if not self.agent or not OPENAI_AGENTS_AVAILABLE:
             return
@@ -144,8 +147,8 @@ class OpenAIAgentWorkflow:
     async def generate_response(
         self,
         user_message: str,
-        context_messages: Optional[List[ChatMessage]] = None,
-        workflow_context: Optional[WorkflowContext] = None,
+        context_messages: list[ChatMessage] | None = None,
+        workflow_context: WorkflowContext | None = None,
     ) -> WorkflowResult:
         """
         Generate a response using the OpenAI Agent.
@@ -226,7 +229,7 @@ class OpenAIAgentWorkflow:
 
 
 def create_openai_agent_workflow(
-    workflow: Workflow, config: Optional[OpenAIAgentConfig] = None
+    workflow: Workflow, config: OpenAIAgentConfig | None = None
 ) -> OpenAIAgentWorkflow:
     """
     Create an OpenAI Agent workflow from an Ergo workflow.
@@ -254,8 +257,8 @@ def create_openai_agent_workflow(
 async def process_message_with_openai_agent(
     chat: UserChat,
     user_message: str,
-    context_messages: Optional[List[ChatMessage]] = None,
-    config: Optional[OpenAIAgentConfig] = None,
+    context_messages: list[ChatMessage] | None = None,
+    config: OpenAIAgentConfig | None = None,
 ) -> WorkflowResult:
     """
     Process a message using OpenAI Agents.

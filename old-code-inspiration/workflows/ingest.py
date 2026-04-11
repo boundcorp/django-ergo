@@ -1,13 +1,14 @@
 import json
-from typing import Any, Dict, List, OrderedDict, Union, Protocol, Optional
-from abc import ABC, abstractmethod
-from papa.apps.ergo.models import Knowledgebase
+from collections import OrderedDict
+from typing import Any
+from typing import Protocol
 
-from agents import Agent, Runner, function_tool
-from functools import wraps
-from pydantic import BaseModel
-import inspect
+from agents import Agent
+from agents import Runner
+from agents import function_tool
 from asgiref.sync import sync_to_async
+from papa.apps.ergo.models import Knowledgebase
+from pydantic import BaseModel
 
 
 # Protocols for better testability
@@ -17,14 +18,14 @@ class AgentRunner(Protocol):
     async def run(
         self,
         agent: Agent,
-        input_data: Union[str, List[Dict[str, Any]]],
+        input_data: str | list[dict[str, Any]],
         max_turns: int = 25,
     ) -> Any: ...
 
     def run_sync(
         self,
         agent: Agent,
-        input_data: Union[str, List[Dict[str, Any]]],
+        input_data: str | list[dict[str, Any]],
         max_turns: int = 25,
     ) -> Any: ...
 
@@ -32,7 +33,7 @@ class AgentRunner(Protocol):
 class ContentProcessor(Protocol):
     """Protocol for content processing to allow different implementations."""
 
-    async def process_content(self, content: str) -> List[Dict[str, Any]]: ...
+    async def process_content(self, content: str) -> list[dict[str, Any]]: ...
 
 
 class KnowledgebaseRepository(Protocol):
@@ -43,8 +44,8 @@ class KnowledgebaseRepository(Protocol):
     async def get_table_of_contents(self, kb: Knowledgebase) -> str: ...
 
     async def create_articles(
-        self, kb: Knowledgebase, articles: List["AddKnowledgebaseArticle"]
-    ) -> List[Any]: ...
+        self, kb: Knowledgebase, articles: list["AddKnowledgebaseArticle"]
+    ) -> list[Any]: ...
 
 
 # Data models
@@ -59,8 +60,8 @@ class IngestResult(BaseModel):
 
     success: bool
     articles_created: int
-    errors: List[str] = []
-    details: Dict[str, Any] = {}
+    errors: list[str] = []
+    details: dict[str, Any] = {}
 
 
 # Concrete implementations
@@ -70,7 +71,7 @@ class DefaultAgentRunner:
     async def run(
         self,
         agent: Agent,
-        input_data: Union[str, List[Dict[str, Any]]],
+        input_data: str | list[dict[str, Any]],
         max_turns: int = 25,
     ) -> Any:
         return await Runner.run(agent, input_data, max_turns=max_turns)  # type: ignore
@@ -78,7 +79,7 @@ class DefaultAgentRunner:
     def run_sync(
         self,
         agent: Agent,
-        input_data: Union[str, List[Dict[str, Any]]],
+        input_data: str | list[dict[str, Any]],
         max_turns: int = 25,
     ) -> Any:
         return Runner.run_sync(agent, input_data, max_turns=max_turns)  # type: ignore
@@ -94,8 +95,8 @@ class DefaultKnowledgebaseRepository:
         return await sync_to_async(kb.get_table_of_contents)()
 
     async def create_articles(
-        self, kb: Knowledgebase, articles: List[AddKnowledgebaseArticle]
-    ) -> List[Any]:
+        self, kb: Knowledgebase, articles: list[AddKnowledgebaseArticle]
+    ) -> list[Any]:
         created_articles = []
         for article in articles:
             created = await kb.articles.acreate(
@@ -113,7 +114,7 @@ class DefaultContentProcessor:
     def __init__(self, agent: Agent):
         self.agent = agent
 
-    async def process_content(self, content: str) -> List[Dict[str, Any]]:
+    async def process_content(self, content: str) -> list[dict[str, Any]]:
         # This would contain the logic for processing content with the agent
         # For now, return a simple structure
         return [{"content": content, "role": "user"}]
@@ -126,27 +127,27 @@ class AgentWorkflow:
     def __init__(
         self,
         agent: Agent,
-        runner: Optional[AgentRunner] = None,
-        content_processor: Optional[ContentProcessor] = None,
+        runner: AgentRunner | None = None,
+        content_processor: ContentProcessor | None = None,
     ):
         self.agent = agent
         self.runner = runner or DefaultAgentRunner()
         self.content_processor = content_processor or DefaultContentProcessor(agent)
         self.prefetch_content: OrderedDict[str, Any] = OrderedDict()
 
-    def run(self, input_data: Union[str, List[Dict[str, Any]]]) -> Any:
+    def run(self, input_data: str | list[dict[str, Any]]) -> Any:
         """Run the workflow synchronously."""
         processed_input = self._prepare_input(input_data)
         return self.runner.run_sync(self.agent, processed_input, max_turns=25)
 
-    async def run_async(self, input_data: Union[str, List[Dict[str, Any]]]) -> Any:
+    async def run_async(self, input_data: str | list[dict[str, Any]]) -> Any:
         """Run the workflow asynchronously."""
         processed_input = self._prepare_input(input_data)
         return await self.runner.run(self.agent, processed_input, max_turns=25)
 
     def _prepare_input(
-        self, input_data: Union[str, List[Dict[str, Any]]]
-    ) -> List[Dict[str, Any]]:
+        self, input_data: str | list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
         """Prepare input data for the agent."""
         if isinstance(input_data, str):
             input_data = [{"content": input_data, "role": "user"}]
@@ -171,9 +172,9 @@ class IngestKnowledgeBase(AgentWorkflow):
     def __init__(
         self,
         target_kb: Knowledgebase,
-        other_kbs: List[Knowledgebase],
-        runner: Optional[AgentRunner] = None,
-        repository: Optional[KnowledgebaseRepository] = None,
+        other_kbs: list[Knowledgebase],
+        runner: AgentRunner | None = None,
+        repository: KnowledgebaseRepository | None = None,
     ):
         self.target_kb = target_kb
         self.other_kbs = other_kbs
@@ -191,7 +192,7 @@ class IngestKnowledgeBase(AgentWorkflow):
             return await self.about_kbs()
 
         @function_tool
-        async def add_knowledgebase_articles(articles: List[AddKnowledgebaseArticle]):
+        async def add_knowledgebase_articles(articles: list[AddKnowledgebaseArticle]):
             return await self.add_knowledgebase_articles(articles)
 
         return Agent(
@@ -258,8 +259,8 @@ Your job is to extract and preserve the original factual content from source mat
         """
 
     async def add_knowledgebase_articles(
-        self, articles: List[AddKnowledgebaseArticle]
-    ) -> List[Any]:
+        self, articles: list[AddKnowledgebaseArticle]
+    ) -> list[Any]:
         """Add articles to the knowledgebase. Extracted for better testability."""
         print(
             f"Adding {len(articles)} articles to knowledgebase: {[article.hierarchy_code for article in articles]}"
@@ -308,7 +309,7 @@ Your job is to extract and preserve the original factual content from source mat
 class FactExtractionAgent(AgentWorkflow):
     """Dedicated agent for extracting atomic, verifiable facts from content."""
 
-    def __init__(self, runner: Optional[AgentRunner] = None):
+    def __init__(self, runner: AgentRunner | None = None):
         # Create agent with fact extraction tools
         agent = self._create_agent()
         super().__init__(agent, runner=runner)
@@ -317,7 +318,7 @@ class FactExtractionAgent(AgentWorkflow):
         """Create the fact extraction agent with tools."""
 
         @function_tool
-        async def extract_facts(content: str) -> List[str]:
+        async def extract_facts(content: str) -> list[str]:
             """Extract atomic, verifiable facts from the given content."""
             return await self._extract_facts_from_content(content)
 
@@ -365,7 +366,7 @@ Your job is to extract atomic, verifiable facts from source materials. Each fact
 </fact quality guidelines>
 """
 
-    async def _extract_facts_from_content(self, content: str) -> List[str]:
+    async def _extract_facts_from_content(self, content: str) -> list[str]:
         """Extract facts from content using the agent."""
         try:
             result = await self.run_async(content)
@@ -384,6 +385,6 @@ Your job is to extract atomic, verifiable facts from source materials. Each fact
             print(f"Error extracting facts: {e}")
             return []
 
-    async def extract_facts(self, content: str) -> List[str]:
+    async def extract_facts(self, content: str) -> list[str]:
         """Public method to extract facts from content."""
         return await self._extract_facts_from_content(content)

@@ -9,12 +9,14 @@ This document analyzes the existing prototype architecture found in the `old-cod
 ### Core Models
 
 #### 1. User Chat System
+
 - **UserChat**: Individual chat sessions owned by users, associated with specific workflows
 - **ChatMessage**: Typed messages supporting multiple roles (user, assistant, system, tool)
 - **MessageType**: Enumeration for message types (user_input, assistant_message, tool_request, tool_response, system_message, error)
 - **MessageRole**: User, Assistant, System, Tool roles
 
 #### 2. Knowledge Management
+
 - **Knowledgebase**: Hierarchical collections of articles with owner_id support for multi-tenancy
 - **Article**: Documents with:
   - Hierarchical organization using hexadecimal codes (e.g., "C3" = 12th chapter, 3rd sub-section)
@@ -24,6 +26,7 @@ This document analyzes the existing prototype architecture found in the `old-cod
   - Custom `SummarizedVectorField` for automatic embedding generation
 
 #### 3. Workflow Engine
+
 - **Workflow**: Defines AI logic, tools, and knowledgebase access
 - **WorkflowEngine**: Self-contained system without external agent library dependencies
 - **Tool System**: Extensible framework for AI agent capabilities
@@ -32,29 +35,34 @@ This document analyzes the existing prototype architecture found in the `old-cod
 ### Key Features
 
 #### 1. Hybrid Search
+
 - Combines PostgreSQL full-text search with pgvector similarity search
 - Optimized for both semantic and keyword-based queries
 - Hierarchical browsing with efficient index retrieval
 
 #### 2. Multi-Agent Workflows
+
 - **ResearchAgent**: Readonly operations for information gathering
 - **ActorAgent**: Performs actions with side effects (requires user approval)
 - Agent handoff capabilities between different specialized agents
 - State management across agent transitions
 
 #### 3. Document Ingestion
+
 - **IngestKnowledgeBase**: Automated document processing workflow
 - **FactExtractionAgent**: Structured information extraction
 - Automatic article creation with hierarchy assignment
 - Integration with external knowledgebases for context
 
 #### 4. Tool Architecture
+
 - **ToolRegistryBase**: Base class for organizing tools and resources
 - **ModelToolset**: Tool collections with user context binding
 - Separation between "tools" (side effects) and "resources" (readonly)
 - Function decorators for easy tool registration
 
 #### 5. LLM Integration
+
 - OpenAI integration with fallback behavior
 - Support for multiple LLM providers
 - Async/await support throughout the system
@@ -63,18 +71,21 @@ This document analyzes the existing prototype architecture found in the `old-cod
 ### Technical Architecture
 
 #### Database Design
+
 - PostgreSQL with pgvector extension for embeddings
 - Django ORM with custom fields (VectorField, SummarizedVectorField)
 - Timestamp mixins for audit trails
 - JSON fields for flexible metadata storage
 
 #### Async Support
+
 - Native async/await throughout the workflow engine
 - ASGI-compatible design
 - Sync-to-async adapters for Django ORM operations
 - Background task support
 
 #### Dependency Injection
+
 - Protocol-based design for testability
 - Pluggable components (AgentRunner, ContentProcessor, KnowledgebaseRepository)
 - Configurable tool loading and agent creation

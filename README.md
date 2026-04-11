@@ -40,7 +40,7 @@ class Article(models.Model):
 results = semantic_search(Article, 'content_embedding', 'machine learning')
 
 # 2. Low-level vector search (use pre-computed vectors)
-vector = generate_embedding('AI development') 
+vector = generate_embedding('AI development')
 results = vector_search(Article, 'summary_embedding', vector)
 
 # 3. Field helper methods
@@ -49,14 +49,15 @@ results = SemanticTextField.search_field(Article, 'content', 'Django')
 # 4. QuerySet methods with advanced features
 results = Article.objects.semantic_search_content('programming')
 results = Article.objects.multi_field_semantic_search(
-    'AI development', 
+    'AI development',
     weights={'content': 0.7, 'summary': 0.3}
 )
 ```
 
 ### Modular Architecture Benefits
+
 - 🎯 **Multiple embeddings per model** - Each semantic field gets its own embedding
-- 🔍 **Field-specific search** - Search content vs summary independently  
+- 🔍 **Field-specific search** - Search content vs summary independently
 - ⚖️ **Weighted multi-field search** - Combine fields with custom weights
 - 🏗️ **Auto-generated fields** - No manual embedding field management
 - 🔄 **Automatic updates** - Embeddings regenerate when content changes

@@ -63,17 +63,17 @@
 # Good Django model
 class KnowledgeBase(TimeStampedMixin):
     """AI Knowledge base entry."""
-    
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     title = models.CharField(max_length=255, help_text="Knowledge base title")
     content = models.TextField(help_text="Main content")
     tags = models.ManyToManyField('Tag', blank=True, related_name='knowledge_bases')
-    
+
     class Meta:
         ordering = ['-created']
         verbose_name = "Knowledge Base Entry"
         verbose_name_plural = "Knowledge Base Entries"
-    
+
     def __str__(self):
         return self.title
 </example>

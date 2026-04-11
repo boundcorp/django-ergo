@@ -79,7 +79,7 @@ class TestConversationKBUsageModel:
             knowledgebase=kb,
             mode=KBUsageMode.WRITE,
         )
-        assert ConversationKBUsage.objects.filter(session=session).count() == 2  # noqa: PLR2004
+        assert ConversationKBUsage.objects.filter(session=session).count() == 2
 
     def test_session_reverse_relation(self, session, kb):
         ConversationKBUsage.objects.create(
@@ -122,7 +122,7 @@ class TestToolkitGetBoundKnowledgebases:
         )
         toolkit = KBToolkit(knowledgebases=[kb2, kb3])
         bindings = toolkit.get_bound_knowledgebases()
-        assert len(bindings) == 2  # noqa: PLR2004
+        assert len(bindings) == 2
         assert all(mode == "read" for _, mode in bindings)
 
     def test_kb_write_toolkit_returns_write(self, kb):

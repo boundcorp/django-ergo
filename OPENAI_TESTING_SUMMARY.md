@@ -54,7 +54,7 @@ Successfully implemented a comprehensive **two-tier testing system** for OpenAI 
 # Fast development testing (no costs)
 make tests_openai_mocked
 
-# Costly fixture generation (use sparingly)  
+# Costly fixture generation (use sparingly)
 make tests_openai_real
 
 # Run all OpenAI tests
@@ -85,18 +85,20 @@ make clean_openai_fixtures
 ## Two-Tier System Design
 
 ### Tier 1: Real API Tests (`openai_real`)
+
 ```python
 @pytest.mark.openai_real
 def test_generate_summary_real_api(self):
     if not openai_test_manager.should_use_real_api():
         pytest.skip("TEST_OPENAI not set - skipping costly API test")
-    
+
     result = generate_summary("Test text")
     # Save fixture for mocked test
     save_openai_fixture("test_name", input_data, response, "chat.completions")
 ```
 
 **Characteristics:**
+
 - 💰 Costs real money (OpenAI API credits)
 - 🐌 Slow (network calls)
 - 🔄 Runs only when `TEST_OPENAI=true`
@@ -104,21 +106,23 @@ def test_generate_summary_real_api(self):
 - ⚠️ 5-second warning before execution
 
 ### Tier 2: Mocked Tests (`openai_mocked`)
+
 ```python
 @pytest.mark.openai_mocked
 def test_generate_summary_mocked(self):
     fixture = openai_test_manager.load_fixture("test_name")
     if not fixture:
         pytest.skip("No fixture found - run with TEST_OPENAI=true first")
-    
+
     mock_response = openai_test_manager.create_mock_response(fixture)
     with patch('openai.chat.completions.create', return_value=mock_response):
         result = generate_summary(fixture.input_data["text"])
-    
+
     assert result == fixture.response_data["content"]
 ```
 
 **Characteristics:**
+
 - 🆓 Completely free (no API calls)
 - ⚡ Fast (milliseconds)
 - 🔄 Runs always, uses saved fixtures
@@ -128,6 +132,7 @@ def test_generate_summary_mocked(self):
 ## Cost Management Features
 
 ### 🚨 Built-in Safeguards
+
 1. **5-second warning** before real API tests run
 2. **Environment variable gating** (`TEST_OPENAI=true` required)
 3. **Clear cost warnings** in all commands and documentation
@@ -135,6 +140,7 @@ def test_generate_summary_mocked(self):
 5. **Explicit command separation** (real vs mocked)
 
 ### 📊 Usage Patterns
+
 - **Daily Development**: 99% mocked tests (`make tests_openai_mocked`)
 - **Fixture Generation**: Occasional real tests (`make tests_openai_real`)
 - **CI/CD Pipelines**: Only mocked tests (fast + free)
@@ -143,11 +149,13 @@ def test_generate_summary_mocked(self):
 ## Integration Points Covered
 
 ### ✅ Currently Active
+
 1. **Text Summarization** (`django_ergo.fields.generate_summary`)
 2. **Text Embeddings** (`django_ergo.fields.generate_embedding`)
 3. **Custom Django Field** (`SummarizedVectorField`)
 
 ### 🔄 Prepared for Future
+
 1. **Workflow Engine** (when OpenAI integration is uncommented)
 2. **Tool Execution** (function calling)
 3. **OpenAI Agents** (from old-code-inspiration)
@@ -156,6 +164,7 @@ def test_generate_summary_mocked(self):
 ## Developer Workflow
 
 ### For New OpenAI Features:
+
 1. Write both `@pytest.mark.openai_real` and `@pytest.mark.openai_mocked` tests
 2. Run `make tests_openai_real` ONCE to generate fixtures
 3. Commit fixtures to git
@@ -163,12 +172,14 @@ def test_generate_summary_mocked(self):
 5. Regenerate fixtures only when OpenAI APIs change
 
 ### For Daily Development:
+
 1. Always run `make tests_openai_mocked` first
 2. Fast feedback loop with no API costs
 3. Full business logic coverage
 4. Perfect for TDD workflows
 
 ### For CI/CD:
+
 1. Use only mocked tests in automated pipelines
 2. Fast builds with zero external dependencies
 3. Consistent results across environments
@@ -186,6 +197,7 @@ def test_generate_summary_mocked(self):
 ## Files Created/Modified
 
 ### New Files:
+
 - `tests/openai_test_utils.py` - Core testing infrastructure
 - `tests/test_openai_fields.py` - Field function tests
 - `tests/test_openai_workflow.py` - Workflow engine tests
@@ -196,6 +208,7 @@ def test_generate_summary_mocked(self):
 - `OPENAI_TESTING_SUMMARY.md` - This summary
 
 ### Modified Files:
+
 - `Makefile` - Added OpenAI testing commands
 - (No changes to existing application code)
 

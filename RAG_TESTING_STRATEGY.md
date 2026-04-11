@@ -1,15 +1,18 @@
 # RAG System Testing Strategy & Design
+
 ## Self-Learning Knowledge Base for LLMs with Limited Context Windows
 
 ## 1. System Architecture Goals
 
 ### Core Objectives
+
 - **Context Window Optimization**: Efficiently work within 100k-2M token limits
 - **Self-Learning**: Automatically improve knowledge base quality over time
 - **Robust RAG Pipeline**: Production-ready retrieval-augmented generation
 - **Tool Integration**: Seamless LLM tool usage for knowledge operations
 
 ### Key Components
+
 1. **Smart Chunking System**: Context-aware document splitting
 2. **Hybrid Search**: Combining semantic, keyword, and metadata search
 3. **Relevance Feedback Loop**: Learn from user interactions and LLM responses
@@ -20,52 +23,55 @@
 ### 2.1 Unit Tests
 
 #### Embedding & Vector Operations
+
 ```python
 # tests/test_embeddings_advanced.py
 class TestEmbeddingOperations:
     def test_chunk_size_optimization(self):
         """Test that chunks stay within token limits"""
-        
+
     def test_semantic_similarity_threshold(self):
         """Verify similarity scoring accuracy"""
-        
+
     def test_embedding_cache_performance(self):
         """Test caching reduces API calls"""
-        
+
     def test_batch_embedding_generation(self):
         """Test efficient batch processing"""
 ```
 
 #### Chunking Strategies
+
 ```python
 # tests/test_chunking.py
 class TestChunkingStrategies:
     def test_semantic_chunking(self):
         """Test paragraph/section-aware chunking"""
-        
+
     def test_overlap_handling(self):
         """Test chunk overlap for context preservation"""
-        
+
     def test_metadata_preservation(self):
         """Ensure metadata travels with chunks"""
-        
+
     def test_dynamic_chunk_sizing(self):
         """Test adaptive chunk sizes based on content type"""
 ```
 
 #### Retrieval Quality
+
 ```python
 # tests/test_retrieval.py
 class TestRetrievalQuality:
     def test_hybrid_search_ranking(self):
         """Test combination of semantic + keyword search"""
-        
+
     def test_reranking_pipeline(self):
         """Test post-retrieval reranking"""
-        
+
     def test_negative_sampling(self):
         """Test handling of irrelevant results"""
-        
+
     def test_diversity_in_results(self):
         """Ensure diverse, non-redundant results"""
 ```
@@ -73,35 +79,37 @@ class TestRetrievalQuality:
 ### 2.2 Integration Tests
 
 #### Knowledge Base Operations
+
 ```python
 # tests/test_kb_integration.py
 class TestKnowledgeBaseIntegration:
     def test_document_ingestion_pipeline(self):
         """Full pipeline: document → chunks → embeddings → storage"""
-        
+
     def test_incremental_updates(self):
         """Test adding/updating documents without full reindex"""
-        
+
     def test_cross_kb_search(self):
         """Test searching across multiple knowledge bases"""
-        
+
     def test_kb_merging_and_deduplication(self):
         """Test combining knowledge bases intelligently"""
 ```
 
 #### LLM Integration
+
 ```python
 # tests/test_llm_integration.py
 class TestLLMIntegration:
     def test_context_window_management(self):
         """Test staying within token limits"""
-        
+
     def test_prompt_construction(self):
         """Test effective prompt building with retrieved context"""
-        
+
     def test_tool_calling_flow(self):
         """Test LLM using KB tools effectively"""
-        
+
     def test_streaming_responses(self):
         """Test handling streaming with retrieval"""
 ```
@@ -113,13 +121,13 @@ class TestLLMIntegration:
 class TestPerformance:
     def test_retrieval_latency(self):
         """Measure retrieval speed at scale"""
-        
+
     def test_concurrent_searches(self):
         """Test system under concurrent load"""
-        
+
     def test_memory_usage(self):
         """Monitor memory consumption with large KBs"""
-        
+
     def test_cache_effectiveness(self):
         """Measure cache hit rates and impact"""
 ```
@@ -127,6 +135,7 @@ class TestPerformance:
 ## 3. Example Layouts
 
 ### 3.1 Basic RAG Application
+
 ```python
 # examples/basic_rag_app.py
 """
@@ -161,6 +170,7 @@ response = rag.query(
 ```
 
 ### 3.2 Multi-Tier Knowledge System
+
 ```python
 # examples/multi_tier_knowledge.py
 """
@@ -194,6 +204,7 @@ results = knowledge_system.search(
 ```
 
 ### 3.3 Self-Learning System
+
 ```python
 # examples/self_learning_kb.py
 """
@@ -211,13 +222,13 @@ class AdaptiveKnowledgeBase(SelfLearningKB):
         else:
             # Learn what wasn't helpful
             self.record_negative_feedback(query, results)
-    
+
     def on_llm_response(self, query, context, response):
         """Learn from LLM's usage of context"""
         # Track which chunks LLM actually used
         used_chunks = self.extract_citations(response)
         self.update_chunk_relevance(used_chunks)
-    
+
     def periodic_optimization(self):
         """Run periodic optimization tasks"""
         self.recompute_embeddings_for_popular_queries()
@@ -226,6 +237,7 @@ class AdaptiveKnowledgeBase(SelfLearningKB):
 ```
 
 ### 3.4 Human Reinforcement Learning with Voting System
+
 ```python
 # examples/voting_feedback_system.py
 """
@@ -239,15 +251,15 @@ class VotingBasedRAG:
         self.kb = knowledge_base
         self.voting_manager = ResponseVotingManager()
         self.feedback_collector = VotingFeedbackCollector()
-    
+
     def generate_response_with_voting(self, query, user_id):
         """Generate response with voting interface for human feedback"""
         # Get retrieval results
         retrieved_chunks = self.search(query)
-        
+
         # Generate LLM response
         llm_response = self.generate_llm_response(query, retrieved_chunks)
-        
+
         # Create votable response
         response_id = self.voting_manager.create_votable_response(
             query=query,
@@ -255,17 +267,17 @@ class VotingBasedRAG:
             llm_response=llm_response,
             user_id=user_id
         )
-        
+
         # Create voting interface
         voting_interface = self.create_voting_interface(response_id)
-        
+
         return {
             'response': llm_response,
             'response_id': response_id,
             'voting_interface': voting_interface,
             'current_votes': self.get_current_votes(response_id)
         }
-    
+
     def create_voting_interface(self, response_id):
         """Create comprehensive voting interface"""
         return {
@@ -297,7 +309,7 @@ class VotingBasedRAG:
                 'comment_voting_enabled': True
             }
         }
-    
+
     def process_upvote(self, response_id, user_id, vote_type='overall'):
         """Process upvote for response or specific aspect"""
         vote_data = {
@@ -307,18 +319,18 @@ class VotingBasedRAG:
             'vote_value': 1,
             'timestamp': datetime.now()
         }
-        
+
         # Record vote
         self.voting_manager.record_vote(vote_data)
-        
+
         # Update learning models based on positive feedback
         self.update_positive_signals(response_id, vote_type)
-        
+
         # Boost relevance of sources used in upvoted response
         self.boost_source_relevance(response_id, boost_factor=1.1)
-        
+
         return self.get_updated_scores(response_id)
-    
+
     def process_downvote(self, response_id, user_id, vote_type='overall'):
         """Process downvote for response or specific aspect"""
         vote_data = {
@@ -328,22 +340,22 @@ class VotingBasedRAG:
             'vote_value': -1,
             'timestamp': datetime.now()
         }
-        
+
         # Record vote
         self.voting_manager.record_vote(vote_data)
-        
+
         # Update learning models based on negative feedback
         self.update_negative_signals(response_id, vote_type)
-        
+
         # Decrease relevance of sources used in downvoted response
         self.decrease_source_relevance(response_id, decrease_factor=0.9)
-        
+
         # Flag for expert review if heavily downvoted
         if self.get_downvote_ratio(response_id) > 0.7:
             self.flag_for_expert_review(response_id)
-        
+
         return self.get_updated_scores(response_id)
-    
+
     def process_source_vote(self, chunk_id, user_id, vote_value, aspect='relevance'):
         """Process vote on specific source/chunk"""
         source_vote = {
@@ -353,17 +365,17 @@ class VotingBasedRAG:
             'vote_value': vote_value,
             'timestamp': datetime.now()
         }
-        
+
         self.voting_manager.record_source_vote(source_vote)
-        
+
         # Update chunk ranking based on votes
         self.update_chunk_ranking(chunk_id, aspect, vote_value)
-        
+
         return self.get_chunk_scores(chunk_id)
 
 class CommentSystem:
     """Handles comments and threaded discussions on responses"""
-    
+
     def add_comment(self, response_id, user_id, comment_text, parent_comment_id=None):
         """Add comment to response with optional threading"""
         comment = {
@@ -374,14 +386,14 @@ class CommentSystem:
             'timestamp': datetime.now(),
             'votes': {'upvotes': 0, 'downvotes': 0}
         }
-        
+
         comment_id = self.store_comment(comment)
-        
+
         # Extract learning signals from comment
         self.extract_learning_signals(comment_text, response_id)
-        
+
         return comment_id
-    
+
     def vote_on_comment(self, comment_id, user_id, vote_value):
         """Vote on comment quality"""
         comment_vote = {
@@ -390,30 +402,30 @@ class CommentSystem:
             'vote_value': vote_value,
             'timestamp': datetime.now()
         }
-        
+
         self.store_comment_vote(comment_vote)
-        
+
         # High-voted comments can influence learning
         if self.get_comment_score(comment_id) > 5:
             self.incorporate_comment_feedback(comment_id)
-    
+
     def extract_learning_signals(self, comment_text, response_id):
         """Extract actionable feedback from comment text"""
         # Use NLP to identify specific feedback types
         feedback_types = self.analyze_comment_sentiment(comment_text)
-        
+
         if 'missing_information' in feedback_types:
             self.flag_knowledge_gap(response_id, comment_text)
-        
+
         if 'factual_error' in feedback_types:
             self.flag_accuracy_issue(response_id, comment_text)
-        
+
         if 'suggestion' in feedback_types:
             self.extract_improvement_suggestion(response_id, comment_text)
 
 class LearningCycleManager:
     """Manages learning cycles based on voting patterns and comments"""
-    
+
     def analyze_voting_patterns(self, time_period='7d'):
         """Analyze voting patterns to identify learning opportunities"""
         patterns = {
@@ -423,30 +435,30 @@ class LearningCycleManager:
             'source_reliability_scores': self.calculate_source_reliability(),
             'user_expertise_scores': self.calculate_user_expertise()
         }
-        
+
         return patterns
-    
+
     def trigger_learning_cycle(self, trigger_type='weekly'):
         """Trigger learning cycle based on accumulated feedback"""
         # Collect all votes and comments since last cycle
         feedback_data = self.collect_feedback_since_last_cycle()
-        
+
         # Update retrieval models
         self.update_retrieval_models(feedback_data)
-        
+
         # Update ranking algorithms
         self.update_ranking_algorithms(feedback_data)
-        
+
         # Update query expansion rules
         self.update_query_expansion(feedback_data)
-        
+
         # Generate learning cycle report
         return self.generate_learning_report(feedback_data)
-    
+
     def create_targeted_improvement_tasks(self, voting_analysis):
         """Create specific improvement tasks based on voting patterns"""
         tasks = []
-        
+
         # Address heavily downvoted content
         for response in voting_analysis['heavily_downvoted_responses']:
             tasks.append({
@@ -455,7 +467,7 @@ class LearningCycleManager:
                 'priority': 'high',
                 'suggested_actions': self.suggest_improvements(response)
             })
-        
+
         # Boost successful patterns
         for query in voting_analysis['highly_upvoted_queries']:
             tasks.append({
@@ -464,11 +476,12 @@ class LearningCycleManager:
                 'priority': 'medium',
                 'success_factors': query['success_factors']
             })
-        
+
         return tasks
 ```
 
 ### 3.5 Context-Aware Chunking
+
 ```python
 # examples/smart_chunking.py
 """
@@ -481,15 +494,15 @@ chunker = SmartChunker(
     # Semantic boundaries
     respect_paragraphs=True,
     respect_sections=True,
-    
+
     # Size constraints
     min_chunk_tokens=100,
     max_chunk_tokens=512,
     target_chunk_tokens=256,
-    
+
     # Overlap for context
     overlap_tokens=50,
-    
+
     # Special handling
     code_block_handling="preserve",
     table_handling="linearize",
@@ -507,22 +520,23 @@ chunks = chunker.process_document(
 
 ### Core Functionality Tests
 
-| Component | Test Type | Coverage Target | Priority |
-|-----------|-----------|-----------------|----------|
-| Document Ingestion | Unit | 95% | High |
-| Chunking Strategies | Unit | 90% | High |
-| Embedding Generation | Unit | 95% | High |
-| Vector Search | Integration | 85% | High |
-| Hybrid Search | Integration | 85% | High |
-| Context Window Management | Integration | 90% | Critical |
-| LLM Tool Integration | Integration | 80% | High |
-| Feedback Loop | Integration | 75% | Medium |
-| Performance | Load | N/A | Medium |
-| Cache System | Unit | 85% | Medium |
+| Component                 | Test Type   | Coverage Target | Priority |
+| ------------------------- | ----------- | --------------- | -------- |
+| Document Ingestion        | Unit        | 95%             | High     |
+| Chunking Strategies       | Unit        | 90%             | High     |
+| Embedding Generation      | Unit        | 95%             | High     |
+| Vector Search             | Integration | 85%             | High     |
+| Hybrid Search             | Integration | 85%             | High     |
+| Context Window Management | Integration | 90%             | Critical |
+| LLM Tool Integration      | Integration | 80%             | High     |
+| Feedback Loop             | Integration | 75%             | Medium   |
+| Performance               | Load        | N/A             | Medium   |
+| Cache System              | Unit        | 85%             | Medium   |
 
 ### Use Case Coverage
 
 #### 4.1 Question Answering
+
 - Simple factual questions
 - Multi-hop reasoning questions
 - Questions requiring context synthesis
@@ -530,6 +544,7 @@ chunks = chunker.process_document(
 - Questions requiring specific document sections
 
 #### 4.2 Document Search
+
 - Keyword search
 - Semantic search
 - Metadata filtering
@@ -537,6 +552,7 @@ chunks = chunker.process_document(
 - Cross-reference search
 
 #### 4.3 Knowledge Management
+
 - Document CRUD operations
 - Batch ingestion
 - Incremental updates
@@ -544,6 +560,7 @@ chunks = chunker.process_document(
 - Access control
 
 #### 4.4 Self-Learning
+
 - Relevance feedback incorporation
 - Query expansion learning
 - Document ranking optimization
@@ -551,6 +568,7 @@ chunks = chunker.process_document(
 - Duplicate detection and merging
 
 ### 4.5 Human Reinforcement Learning
+
 - Thumbs up/thumbs down response flagging
 - Source-level thumbs up/down voting
 - Comment system with voting
@@ -563,6 +581,7 @@ chunks = chunker.process_document(
 ## 5. Testing Data Strategy
 
 ### 5.1 Synthetic Test Data
+
 ```python
 # tests/fixtures/synthetic_data.py
 def generate_test_documents():
@@ -594,19 +613,20 @@ def generate_test_documents():
 ```
 
 ### 5.2 Edge Cases
+
 ```python
 # tests/fixtures/edge_cases.py
 EDGE_CASES = [
     # Empty or minimal content
     {"content": "", "expected": "handle_gracefully"},
     {"content": "a", "expected": "minimum_chunk_size"},
-    
+
     # Extremely long content
     {"content": "x" * 1000000, "expected": "chunk_appropriately"},
-    
+
     # Special characters and languages
     {"content": "数学 🔬 εψιλον", "expected": "preserve_unicode"},
-    
+
     # Malformed documents
     {"content": "incomplete JSON: {", "expected": "error_handling"},
 ]
@@ -615,17 +635,18 @@ EDGE_CASES = [
 ## 6. Benchmarking Suite
 
 ### 6.1 Retrieval Quality Metrics
+
 ```python
 # tests/benchmarks/retrieval_quality.py
 class RetrievalBenchmarks:
     metrics = [
         "precision@k",
-        "recall@k", 
+        "recall@k",
         "mrr",  # Mean Reciprocal Rank
         "ndcg",  # Normalized Discounted Cumulative Gain
         "map",  # Mean Average Precision
     ]
-    
+
     def benchmark_retrieval(self, test_queries, ground_truth):
         """Run comprehensive retrieval benchmarks"""
         results = {}
@@ -639,18 +660,19 @@ class RetrievalBenchmarks:
 ```
 
 ### 6.2 System Performance Metrics
+
 ```python
 # tests/benchmarks/performance.py
 class PerformanceBenchmarks:
     def benchmark_ingestion_speed(self):
         """Documents per second ingestion rate"""
-        
+
     def benchmark_search_latency(self):
         """P50, P95, P99 search latencies"""
-        
+
     def benchmark_memory_efficiency(self):
         """Memory usage per 1M documents"""
-        
+
     def benchmark_concurrent_users(self):
         """System behavior under load"""
 ```
@@ -658,6 +680,7 @@ class PerformanceBenchmarks:
 ## 7. Continuous Testing Strategy
 
 ### 7.1 Automated Testing Pipeline
+
 ```yaml
 # .github/workflows/test.yml
 name: RAG System Tests
@@ -669,7 +692,7 @@ jobs:
     steps:
       - name: Run unit tests
         run: pytest tests/unit -v --cov=django_ergo.rag
-  
+
   integration-tests:
     runs-on: ubuntu-latest
     services:
@@ -678,7 +701,7 @@ jobs:
     steps:
       - name: Run integration tests
         run: pytest tests/integration -v
-  
+
   performance-tests:
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -688,6 +711,7 @@ jobs:
 ```
 
 ### 7.2 Quality Gates
+
 - Minimum 85% code coverage
 - All retrieval metrics above baseline
 - No performance regression > 10%
@@ -696,6 +720,7 @@ jobs:
 ## 8. Documentation and Examples
 
 ### Required Examples
+
 1. **Quick Start**: 5-minute setup and first query
 2. **Advanced Chunking**: Custom chunking strategies
 3. **Multi-Language**: Handling multiple languages
@@ -706,6 +731,7 @@ jobs:
 8. **Production Deployment**: Scaling considerations
 
 ### Test Documentation
+
 - Test purpose and coverage
 - How to run specific test suites
 - How to add new test cases

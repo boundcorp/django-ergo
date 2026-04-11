@@ -1,7 +1,7 @@
-from django.db import models
+from typing import Any
+
 from django.contrib.auth import get_user_model
-from typing import Optional, List, Dict, Any
-import json
+from django.db import models
 
 User = get_user_model()
 
@@ -92,11 +92,11 @@ class Workflow(models.Model):
     def __str__(self):
         return self.name
 
-    def get_tools_config(self) -> Dict[str, Any]:
+    def get_tools_config(self) -> dict[str, Any]:
         """Get the tools configuration as a dictionary."""
         return self.tools_config or {}
 
-    def get_knowledgebases_list(self) -> List[str]:
+    def get_knowledgebases_list(self) -> list[str]:
         """Get list of knowledgebase names this workflow can access."""
         return [kb.name for kb in self.knowledgebases.all()]
 
@@ -138,7 +138,7 @@ class UserChat(models.Model):
     def __str__(self):
         return f"{self.user.username}: {self.title}"
 
-    def get_messages(self) -> List["ChatMessage"]:
+    def get_messages(self) -> list["ChatMessage"]:
         """Get all messages in this chat, ordered by creation time."""
         return list(self.messages.all().order_by("created_at"))
 
@@ -147,7 +147,7 @@ class UserChat(models.Model):
         message_type: str,
         content: str,
         role: str = "user",
-        metadata: Optional[Dict] = None,
+        metadata: dict | None = None,
     ) -> "ChatMessage":
         """Add a new message to this chat."""
         return self.messages.create(
@@ -157,7 +157,7 @@ class UserChat(models.Model):
             metadata=metadata or {},
         )
 
-    def get_context_messages(self, limit: int = 10) -> List["ChatMessage"]:
+    def get_context_messages(self, limit: int = 10) -> list["ChatMessage"]:
         """Get recent messages for context, excluding system messages."""
         return list(
             self.messages.exclude(message_type=MessageType.SYSTEM_MESSAGE).order_by(
@@ -210,7 +210,7 @@ class ChatMessage(models.Model):
         self.save(update_fields=["metadata"])
 
     def add_tool_call(
-        self, tool_name: str, arguments: Dict[str, Any], result: Optional[Any] = None
+        self, tool_name: str, arguments: dict[str, Any], result: Any | None = None
     ) -> None:
         """Add tool call information to metadata."""
         tool_calls = self.metadata.get("tool_calls", [])

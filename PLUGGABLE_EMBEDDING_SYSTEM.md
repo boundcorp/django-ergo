@@ -5,6 +5,7 @@ We've successfully implemented a **pluggable embedding system** for Django Ergo!
 ## ✅ What's Implemented
 
 ### 1. Abstract Embedding Provider Interface
+
 - `EmbeddingProvider` base class with standard interface
 - All providers implement `generate_embedding()` and `get_dimensions()`
 - Clean error handling with `EmbeddingError`
@@ -12,24 +13,28 @@ We've successfully implemented a **pluggable embedding system** for Django Ergo!
 ### 2. Three Built-in Providers
 
 #### OpenAI Provider (Default)
+
 ```python
 # Uses OpenAI's text-embedding-3-small model
 # Requires OPENAI_API_KEY environment variable or config
 ```
 
-#### Deterministic Provider  
+#### Deterministic Provider
+
 ```python
 # Generates deterministic embeddings for testing
 # Perfect for CI/CD and development environments
 ```
 
 #### Custom Provider
+
 ```python
 # Load pre-computed embeddings from fixtures
 # Great for testing with known data
 ```
 
 ### 3. Settings-based Configuration
+
 ```python
 # In your Django settings
 DJANGO_ERGO = {
@@ -45,6 +50,7 @@ DJANGO_ERGO = {
 ## 🚀 Usage Examples
 
 ### Switching to Deterministic Provider for Development
+
 ```python
 DJANGO_ERGO = {
     'EMBEDDING_PROVIDER': 'django_ergo.embedding_providers.DeterministicEmbeddingProvider',
@@ -56,6 +62,7 @@ DJANGO_ERGO = {
 ```
 
 ### Using Custom Embeddings for Testing
+
 ```python
 DJANGO_ERGO = {
     'EMBEDDING_PROVIDER': 'django_ergo.embedding_providers.CustomEmbeddingProvider',
@@ -70,6 +77,7 @@ DJANGO_ERGO = {
 ```
 
 ### Direct Usage in Code
+
 ```python
 from django_ergo.embedding_providers import get_embedding_provider
 
@@ -121,6 +129,7 @@ article.save()  # Uses configured embedding provider
 ## 🚀 What's Next?
 
 The pluggable embedding system opens the door for:
+
 - Adding Hugging Face Transformers provider
 - Local model providers (sentence-transformers)
 - Cached embedding providers

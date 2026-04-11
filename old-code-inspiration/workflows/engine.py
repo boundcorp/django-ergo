@@ -5,18 +5,21 @@ This module provides a self-contained workflow system for processing chat messag
 with AI agents, without dependencies on external agent libraries.
 """
 
-import asyncio
-import json
-from typing import Any, Dict, List, Optional, Protocol, Union
-from dataclasses import dataclass, field
-from abc import ABC, abstractmethod
 import logging
+from abc import ABC
+from abc import abstractmethod
+from dataclasses import dataclass
+from dataclasses import field
+from typing import Any
 
-from django.contrib.auth import get_user_model
-from django.db import transaction
 from asgiref.sync import sync_to_async
+from django.contrib.auth import get_user_model
 
-from ..models import Workflow, UserChat, ChatMessage, MessageType, MessageRole
+from ..models import ChatMessage
+from ..models import MessageRole
+from ..models import MessageType
+from ..models import UserChat
+from ..models import Workflow
 from ..models.kb import Knowledgebase
 
 User = get_user_model()
@@ -30,8 +33,8 @@ class WorkflowContext:
     user: User
     chat: UserChat
     workflow: Workflow
-    knowledgebases: List[Knowledgebase] = field(default_factory=list)
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    knowledgebases: list[Knowledgebase] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -40,10 +43,10 @@ class WorkflowResult:
 
     success: bool
     message: str
-    content: Optional[str] = None
-    tool_calls: List[Dict[str, Any]] = field(default_factory=list)
-    metadata: Dict[str, Any] = field(default_factory=dict)
-    error: Optional[str] = None
+    content: str | None = None
+    tool_calls: list[dict[str, Any]] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
+    error: str | None = None
 
 
 class Tool(ABC):
@@ -56,9 +59,8 @@ class Tool(ABC):
     @abstractmethod
     async def execute(self, context: WorkflowContext, **kwargs) -> Any:
         """Execute the tool with given context and arguments."""
-        pass
 
-    def get_schema(self) -> Dict[str, Any]:
+    def get_schema(self) -> dict[str, Any]:
         """Get the tool's schema for documentation."""
         return {
             "name": self.name,
@@ -78,7 +80,7 @@ class KnowledgebaseSearchTool(Tool):
 
     async def execute(
         self, context: WorkflowContext, query: str, top_k: int = 5
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Search knowledgebases for relevant content."""
         results = []
 
@@ -107,7 +109,7 @@ class WorkflowEngine:
     """Main workflow engine for processing chat messages."""
 
     def __init__(self):
-        self.tools: Dict[str, Tool] = {}
+        self.tools: dict[str, Tool] = {}
         self._register_default_tools()
 
     def _register_default_tools(self):
@@ -122,7 +124,7 @@ class WorkflowEngine:
         self,
         chat: UserChat,
         user_message: str,
-        context_messages: Optional[List[ChatMessage]] = None,
+        context_messages: list[ChatMessage] | None = None,
     ) -> WorkflowResult:
         """
         Process a user message through the workflow.
@@ -174,7 +176,7 @@ class WorkflowEngine:
             logger.error(f"Error processing message: {e}")
             error_msg = await sync_to_async(chat.add_message)(
                 message_type=MessageType.ERROR,
-                content=f"Error processing message: {str(e)}",
+                content=f"Error processing message: {e!s}",
                 role=MessageRole.ASSISTANT,
             )
 
@@ -202,7 +204,7 @@ class WorkflowEngine:
         self,
         context: WorkflowContext,
         user_message: str,
-        context_messages: Optional[List[ChatMessage]] = None,
+        context_messages: list[ChatMessage] | None = None,
     ) -> WorkflowResult:
         """
         Execute the workflow logic.
@@ -272,7 +274,7 @@ class WorkflowEngine:
         self,
         context: WorkflowContext,
         user_message: str,
-        search_results: List[Dict[str, Any]],
+        search_results: list[dict[str, Any]],
         conversation_context: str,
     ) -> str:
         """
@@ -285,10 +287,8 @@ class WorkflowEngine:
 
         # Try to use OpenAI Agents if available
         try:
-            from .openai_agent import (
-                OpenAIAgentConfig,
-                process_message_with_openai_agent,
-            )
+            from .openai_agent import OpenAIAgentConfig
+            from .openai_agent import process_message_with_openai_agent
 
             # Create OpenAI Agent config
             config = OpenAIAgentConfig(
@@ -348,7 +348,7 @@ workflow_engine = WorkflowEngine()
 async def process_chat_message(
     chat: UserChat,
     user_message: str,
-    context_messages: Optional[List[ChatMessage]] = None,
+    context_messages: list[ChatMessage] | None = None,
 ) -> WorkflowResult:
     """
     Convenience function to process a chat message.
@@ -368,7 +368,7 @@ def create_default_workflow(
     name: str,
     description: str,
     instructions: str,
-    knowledgebases: Optional[List[Knowledgebase]] = None,
+    knowledgebases: list[Knowledgebase] | None = None,
 ) -> Workflow:
     """
     Create a default workflow with basic configuration.

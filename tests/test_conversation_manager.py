@@ -29,7 +29,7 @@ class TestBuildEngine:
             transport_type="api",
             status="active",
         )
-        engine = manager._build_engine(session)  # noqa: SLF001
+        engine = manager._build_engine(session)
         assert engine.engine_type == "claude"
 
     def test_invalid_engine(self, manager, user):
@@ -40,7 +40,7 @@ class TestBuildEngine:
             status="active",
         )
         with pytest.raises(ValueError, match="No engine registered"):
-            manager._build_engine(session)  # noqa: SLF001
+            manager._build_engine(session)
 
     def test_passes_metadata_as_config(self, manager, user):
         session = ConversationSession.objects.create(
@@ -50,7 +50,7 @@ class TestBuildEngine:
             status="active",
             metadata={"model": "claude-opus-4-6", "api_key": "test-key"},
         )
-        engine = manager._build_engine(session)  # noqa: SLF001
+        engine = manager._build_engine(session)
         assert engine.model == "claude-opus-4-6"
 
 
@@ -63,6 +63,6 @@ class TestCachedEngines:
             status="active",
         )
         mock_engine = MagicMock()
-        manager._active_engines[session.id] = mock_engine  # noqa: SLF001
+        manager._active_engines[session.id] = mock_engine
         # get_engine is async, so just test the cache dict directly
-        assert session.id in manager._active_engines  # noqa: SLF001
+        assert session.id in manager._active_engines

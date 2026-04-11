@@ -1,13 +1,13 @@
 import functools
 import inspect
-from typing import Any, Callable, Dict, List
+from collections.abc import Callable
+from typing import Any
 
 from django.http import HttpRequest
-
 from papa.apps.users.models import User
 
 
-class ToolRegistryBase(object):
+class ToolRegistryBase:
     tools: list[Callable] = []
     resources: list[Callable] = []
 
@@ -69,8 +69,8 @@ class UserToolRegistry(ToolRegistryBase):
 
 def modify_function_signature(
     func: Callable,
-    add_annotations: Dict[str, Any],
-    remove_annotations: List[str] | None = None,
+    add_annotations: dict[str, Any],
+    remove_annotations: list[str] | None = None,
 ) -> Callable:
     remove_annotations = remove_annotations or []
     original_signature = inspect.signature(func)
@@ -90,8 +90,8 @@ def modify_function_signature(
         for param in original_signature.parameters.values()
         if param.name not in remove_annotations
     ]
-    setattr(func, "__signature__", original_signature.replace(parameters=params))
-    setattr(func, "__annotations__", annotations)
+    func.__signature__ = original_signature.replace(parameters=params)
+    func.__annotations__ = annotations
     return func
 
 

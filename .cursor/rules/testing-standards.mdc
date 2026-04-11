@@ -36,7 +36,7 @@
 - **Vector similarity operations** are PostgreSQL-only
 
 Always use PostgreSQL for testing:
-- Test database: `test_django_ergo` 
+- Test database: `test_django_ergo`
 - Must have pgvector extension installed
 - Use same PostgreSQL version as production
 - Test migrations include PostgreSQL-specific operations
@@ -101,30 +101,30 @@ Use a **dual-tier testing system** for OpenAI and expensive AI operations:
 from tests.openai_test_utils import openai_mocked, openai_real, save_openai_fixture
 
 class TestWorkflowEngine(TestCase):
-    
+
     @pytest.mark.openai_real
     @openai_real("tool_approval", "chat.completions")
     def test_tool_approval_real_api(self):
         """Test tool approval with real OpenAI API (generates fixture)."""
         # Actual OpenAI API call
         response = self.engine.process_message(self.chat, "Create an article")
-        
+
         # Save fixture for mocked tests
         input_data = {"message": "Create an article", "workflow": self.workflow.name}
         save_openai_fixture("tool_approval", input_data, response, "chat.completions")
-        
+
         # Assertions
         assert response.message_type == MessageType.TOOL_APPROVAL_REQUEST
-    
-    @pytest.mark.openai_mocked  
+
+    @pytest.mark.openai_mocked
     @openai_mocked("tool_approval")
     def test_tool_approval_mocked(self, fixture):
         """Test tool approval with saved fixture (fast, no cost)."""
         # Fixture is automatically loaded and passed as argument
         # OpenAI API is automatically mocked based on fixture.api_endpoint
-        
+
         response = self.engine.process_message(self.chat, fixture.input_data["message"])
-        
+
         assert response.message_type == MessageType.TOOL_APPROVAL_REQUEST
         assert response.content == fixture.response_data["content"]
 ```
@@ -153,35 +153,35 @@ from django_ergo.utils import KnowledgeProcessor
 
 class TestMyModel(TestCase):
     """Test cases for MyModel."""
-    
+
     def setUp(self):
         """Set up test data."""
         self.model_data = {
             'name': 'Test Knowledge Entry',
         }
-    
+
     def test_create_model_success(self):
         """Test successful model creation."""
         # Arrange
         name = "Test Entry"
-        
+
         # Act
         model = MyModel.objects.create(name=name)
-        
+
         # Assert
         assert model.id is not None
         assert model.name == name
         assert str(model) == name
         assert model.created is not None
-    
+
     def test_model_str_representation(self):
         """Test model string representation."""
         # Arrange
         model = MyModel(name="Test Name")
-        
+
         # Act & Assert
         assert str(model) == "Test Name"
-    
+
     @pytest.mark.parametrize("invalid_name", [
         "",  # Empty string
         "a" * 256,  # Too long
@@ -192,7 +192,7 @@ class TestMyModel(TestCase):
         # Arrange
         data = self.model_data.copy()
         data['name'] = invalid_name
-        
+
         # Act & Assert
         with pytest.raises(ValidationError):
             model = MyModel(**data)
@@ -201,12 +201,12 @@ class TestMyModel(TestCase):
 
 class TestKnowledgeProcessor:
     """Test cases for KnowledgeProcessor."""
-    
+
     @pytest.fixture
     def processor(self):
         """Create a KnowledgeProcessor instance."""
         return KnowledgeProcessor(max_entries=100)
-    
+
     @pytest.fixture
     def sample_entry(self):
         """Create sample entry data."""
@@ -215,18 +215,18 @@ class TestKnowledgeProcessor:
             'content': 'This is test content',
             'tags': ['test', 'sample']
         }
-    
+
     def test_process_entry_success(self, processor, sample_entry):
         """Test successful entry processing."""
         # Act
         result = processor.process_entry(**sample_entry)
-        
+
         # Assert
         assert result['id'] == sample_entry['entry_id']
         assert result['content'] == sample_entry['content'].strip().lower()
         assert result['tags'] == sample_entry['tags']
         assert result['word_count'] == 4
-    
+
     def test_process_entry_empty_content_raises_error(self, processor):
         """Test that empty content raises ValueError."""
         # Arrange
@@ -235,11 +235,11 @@ class TestKnowledgeProcessor:
             'content': '   ',  # Only whitespace
             'tags': []
         }
-        
+
         # Act & Assert
         with pytest.raises(ValueError, match="Content cannot be empty"):
             processor.process_entry(**entry_data)
-    
+
     def test_process_entry_no_tags_defaults_to_empty_list(self, processor):
         """Test that missing tags defaults to empty list."""
         # Arrange
@@ -247,13 +247,13 @@ class TestKnowledgeProcessor:
             'entry_id': uuid4(),
             'content': 'Test content'
         }
-        
+
         # Act
         result = processor.process_entry(**entry_data)
-        
+
         # Assert
         assert result['tags'] == []
-    
+
     @patch('django_ergo.utils.external_api_call')
     def test_process_with_external_service_mock(self, mock_api, processor):
         """Test processing with mocked external service."""
@@ -263,10 +263,10 @@ class TestKnowledgeProcessor:
             'entry_id': uuid4(),
             'content': 'Test content'
         }
-        
+
         # Act
         result = processor.process_entry(**entry_data)
-        
+
         # Assert
         assert result is not None
         mock_api.assert_called_once()
@@ -278,7 +278,7 @@ def test_model():
     m = MyModel()
     m.name = "test"
     # No assertions
-    
+
 def test_processor():
     p = KnowledgeProcessor()
     result = p.process_entry("test")

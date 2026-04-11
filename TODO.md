@@ -3,6 +3,7 @@
 ## 🎯 IMMEDIATE NEXT STEPS (Current Sprint)
 
 ### Production Readiness
+
 - [x] **Enable PostgreSQL + pgvector** ✅
   - ✅ Switch from SQLite to PostgreSQL for development
   - ✅ Enable SummarizedVectorField with real embeddings
@@ -23,6 +24,7 @@
 ## 🏗️ CORE FEATURES (Next 4-6 weeks)
 
 ### Knowledge Management
+
 - [x] **Pluggable Embedding System** ✅
   - ✅ Create abstract embedding provider interface
   - ✅ Implement OpenAI provider (default)
@@ -34,9 +36,10 @@
   - [ ] Implement search analytics and suggestions
 
 ### Workflow Engine
+
 - [x] **Tool Approval System** ✅
   - ✅ Build approval workflow: save context → event → wait → resume
-  - ✅ Add tool whitelisting for apps  
+  - ✅ Add tool whitelisting for apps
   - ✅ Implement Django signals for approval events
   - ✅ Create new message types for approval workflow
   - ✅ Add context serialization for pause/resume
@@ -47,6 +50,7 @@
   - ✅ Workflow state persistence
 
 ### Developer Experience
+
 - [x] **Admin Enhancements** ✅
   - ✅ Add workflow execution monitoring
   - ✅ Create knowledge base management tools
@@ -59,6 +63,7 @@
 ## 📚 DOCUMENTATION & EXAMPLES (Ongoing)
 
 ### Essential Documentation
+
 - [ ] **API Documentation**
   - Complete API reference with examples
   - Add authentication and usage guides
@@ -69,6 +74,7 @@
   - Tool creation documentation
 
 ### Example Applications
+
 - [ ] **Example Application 1**
   - Implement core functionality demonstrating single-user workflows
   - Add AI-powered conversation features
@@ -81,6 +87,7 @@
 ## 🔧 INFRASTRUCTURE (Later)
 
 ### Performance & Monitoring
+
 - [ ] **Application-Level Caching** (Framework provides utilities only)
   - Caching utilities and helpers for apps
   - Cache invalidation helper functions
@@ -91,6 +98,7 @@
   - Health check endpoints
 
 ### Security & Compliance
+
 - [ ] **Permission System**
   - Fine-grained tool permissions
   - User access control framework
@@ -103,6 +111,7 @@
 ## ✅ COMPLETED (Recent)
 
 ### Performance Optimization ✅
+
 - ✅ **Vector Search Optimization**: Added comprehensive pgvector indexes for 10-100x performance improvement
   - ✅ HNSW indexes for content_embedding and summary_embedding fields
   - ✅ IVFFlat indexes as alternative for different query patterns
@@ -111,6 +120,7 @@
   - ✅ Database optimization configuration and maintenance utilities
 
 ### Core Foundation ✅
+
 - ✅ **Models Migrated**: All prototype models enhanced and working
 - ✅ **Tool System**: 6 knowledge base tools with registry
 - ✅ **Workflow Engine**: Basic processing with state persistence
@@ -118,7 +128,8 @@
 - ✅ **Testing Infrastructure**: Dual-tier OpenAI testing setup
 - ✅ **Development Environment**: Complete Cursor setup
 
-### Architecture Decisions ✅  
+### Architecture Decisions ✅
+
 - ✅ **MCP Strategy**: Reusable tools for Django apps
 - ✅ **Embedding System**: Pluggable providers decided
 - ✅ **Workflow Design**: Python-based with context serialization
@@ -132,6 +143,7 @@
 <summary>Click to view archived/completed tasks</summary>
 
 ### Database & Migrations ✅
+
 - ✅ Clean up and refactor UserChat, ChatMessage models
 - ✅ Enhance Workflow model with better configuration
 - ✅ Improve Knowledgebase and Article models
@@ -139,12 +151,14 @@
 - ✅ SQLite development configuration
 
 ### Tool Development ✅
+
 - ✅ Design declarative tool configuration system
 - ✅ Implement tool registry with automatic discovery
 - ✅ Add tool validation and permission framework
 - ✅ Create knowledge base tools (search_user_kb, etc.)
 
 ### Sample Data & Testing ✅
+
 - ✅ Sample data management command
 - ✅ Admin user creation (admin/admin123)
 - ✅ Basic functionality testing and verification
@@ -157,6 +171,7 @@
 ## 📝 Task Management Notes
 
 ### Working on Tasks
+
 1. **Pick tasks** matching your expertise from "Immediate Next Steps"
 2. **Break large tasks** into smaller actionable items
 3. **Update progress** by moving items between sections
@@ -164,14 +179,16 @@
 5. **Test thoroughly** and update documentation
 
 ### Priority Guidelines
+
 - **🎯 Immediate**: Critical for current development
-- **🏗️ Core**: Important for v1.0 functionality  
+- **🏗️ Core**: Important for v1.0 functionality
 - **📚 Documentation**: Essential for adoption
 - **🔧 Infrastructure**: Future scalability and operations
 
 ### Current Focus
+
 We're in **Phase 3: Production Features** - making the system production-ready with real embeddings, OpenAI integration, and public APIs.
 
 ---
 
-*This TODO list is actively maintained. Completed items are moved to archives, new tasks are added as discovered.*
+_This TODO list is actively maintained. Completed items are moved to archives, new tasks are added as discovered._

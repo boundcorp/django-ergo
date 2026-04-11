@@ -1,12 +1,11 @@
-import asyncio
 from dataclasses import dataclass
-from typing import List
-from llama_index.core.agent.workflow import FunctionAgent, AgentWorkflow
+
+from llama_index.core.agent.workflow import AgentWorkflow
+from llama_index.core.agent.workflow import FunctionAgent
 from llama_index.core.workflow import Context
 from llama_index.llms.openai import OpenAI
-import yaml
-
-from papa.apps.ergo.tools import ToolRegistryBase, user_tools
+from papa.apps.ergo.tools import ToolRegistryBase
+from papa.apps.ergo.tools import user_tools
 from papa.apps.users.models import User
 
 llm = OpenAI(model="gpt-4o-mini")
@@ -47,9 +46,9 @@ async def agent_reply_to_user(ctx: Context, message: str):
 class GeniusAgent:
     name: str
     description: str
-    instructions: List[str]
-    can_handoff_to: List[str]
-    toolsets: List[ToolRegistryBase]
+    instructions: list[str]
+    can_handoff_to: list[str]
+    toolsets: list[ToolRegistryBase]
     readonly: bool = False
 
     def system_prompt(self):
@@ -153,13 +152,11 @@ def build_genius_workflow(user: User):
     )
 
 
-from llama_index.core.agent.workflow import (
-    AgentInput,
-    AgentOutput,
-    ToolCall,
-    ToolCallResult,
-    AgentStream,
-)
+from llama_index.core.agent.workflow import AgentInput
+from llama_index.core.agent.workflow import AgentOutput
+from llama_index.core.agent.workflow import AgentStream
+from llama_index.core.agent.workflow import ToolCall
+from llama_index.core.agent.workflow import ToolCallResult
 
 
 async def main():

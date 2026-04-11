@@ -97,12 +97,12 @@ class TestClaudeAPIEngineInit:
     def test_config_stored(self, engine):
         assert engine.model == "claude-3-5-sonnet-20241022"
         assert engine.api_key == "test-key"
-        assert engine.max_tokens == 1024  # noqa: PLR2004
+        assert engine.max_tokens == 1024
 
     def test_default_config(self):
         e = ClaudeAPIEngine(config={})
         assert e.model == "claude-3-5-sonnet-20241022"
-        assert e.max_tokens == 8192  # noqa: PLR2004
+        assert e.max_tokens == 8192
         assert e.api_key is None
 
     def test_client_not_eagerly_initialized(self, engine):
@@ -154,7 +154,7 @@ class TestReconstructMessages:
 
         result = engine.reconstruct_messages(session)
 
-        assert len(result) == 2  # noqa: PLR2004
+        assert len(result) == 2
         assert result[0]["role"] == "user"
         assert result[0]["content"] == [{"type": "text", "text": "Hello, Claude!"}]
         assert result[1]["role"] == "assistant"
@@ -196,7 +196,7 @@ class TestReconstructMessages:
 
         result = engine.reconstruct_messages(session)
 
-        assert len(result) == 2  # noqa: PLR2004
+        assert len(result) == 2
 
         tool_use_block = result[0]["content"][0]
         assert tool_use_block["type"] == "tool_use"
@@ -251,7 +251,7 @@ class TestReconstructMessages:
 
         assert len(result) == 1
         content = result[0]["content"]
-        assert len(content) == 2  # noqa: PLR2004
+        assert len(content) == 2
         assert content[0] == {
             "type": "thinking",
             "thinking": "Let me reason step by step...",

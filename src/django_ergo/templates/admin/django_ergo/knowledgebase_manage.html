@@ -1,11 +1,11 @@
 {% extends "admin/base_site.html" %}
 {% load i18n admin_urls static admin_modify %}
-
-{% block title %}{{ title }} | {{ site_title|default:_('Django site admin') }}{% endblock %}
-
+{% block title %}
+    {{ title }} | {{ site_title|default:_("Django site admin") }}
+{% endblock title %}
 {% block extrahead %}
-{{ block.super }}
-<style>
+    {{ block.super }}
+    <style>
     .kb-stats {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
@@ -76,83 +76,84 @@
         padding: 20px;
         margin-bottom: 20px;
     }
-</style>
-{% endblock %}
-
+    </style>
+{% endblock extrahead %}
 {% block content %}
-<h1>{{ title }}</h1>
-
-<div class="kb-header">
-    <h3>{{ knowledgebase.name }}</h3>
-    <p><strong>Owner:</strong> {{ knowledgebase.owner_id }}</p>
-    <p><strong>Description:</strong> {{ knowledgebase.description|default:"No description provided" }}</p>
-    <p><strong>Created:</strong> {{ knowledgebase.created_at|date:"F d, Y" }}</p>
-</div>
-
-<div class="kb-stats">
-    <div class="stat-box">
-        <div class="stat-value">{{ statistics.total_articles }}</div>
-        <div class="stat-label">Total Articles</div>
+    <h1>{{ title }}</h1>
+    <div class="kb-header">
+        <h3>{{ knowledgebase.name }}</h3>
+        <p>
+            <strong>Owner:</strong> {{ knowledgebase.owner_id }}
+        </p>
+        <p>
+            <strong>Description:</strong> {{ knowledgebase.description|default:"No description provided" }}
+        </p>
+        <p>
+            <strong>Created:</strong> {{ knowledgebase.created_at|date:"F d, Y" }}
+        </p>
     </div>
-    
-    <div class="stat-box">
-        <div class="stat-value">{{ statistics.articles_with_summaries }}</div>
-        <div class="stat-label">Articles with Summaries</div>
-        <div class="progress-bar">
-            <div class="progress-fill" style="width: {{ statistics.summary_coverage }}%"></div>
+    <div class="kb-stats">
+        <div class="stat-box">
+            <div class="stat-value">{{ statistics.total_articles }}</div>
+            <div class="stat-label">Total Articles</div>
         </div>
-        <small>{{ statistics.summary_coverage|floatformat:1 }}% coverage</small>
+        <div class="stat-box">
+            <div class="stat-value">{{ statistics.articles_with_summaries }}</div>
+            <div class="stat-label">Articles with Summaries</div>
+            <div class="progress-bar">
+                <div class="progress-fill"
+                     style="width: {{ statistics.summary_coverage }}%"></div>
+            </div>
+            <small>{{ statistics.summary_coverage|floatformat:1 }}% coverage</small>
+        </div>
     </div>
-</div>
-
-<div class="hierarchy-chart">
-    <h3>Hierarchy Structure</h3>
-    {% if statistics.hierarchy_levels %}
-        <p>Distribution of articles by hierarchy depth:</p>
-        {% for level, count in statistics.hierarchy_levels.items %}
-            <div class="hierarchy-item">
-                <span>Level {{ level }} ({{ level }} character{{ level|pluralize }})</span>
-                <span><strong>{{ count }} article{{ count|pluralize }}</strong></span>
-            </div>
-        {% endfor %}
-    {% else %}
-        <p style="color: #6c757d; text-align: center; padding: 40px;">No articles in knowledge base</p>
-    {% endif %}
-</div>
-
-<div class="recent-articles">
-    <h3>Recently Updated Articles</h3>
-    {% if recent_articles %}
-        {% for article in recent_articles %}
-            <div class="article-item">
-                <div style="display: flex; justify-content: space-between; align-items: center;">
-                    <div>
-                        <strong>{{ article.hierarchy_code }}</strong>: {{ article.title|truncatechars:60 }}
-                        {% if article.summary %}
-                            <span style="color: green; margin-left: 10px;">📝</span>
-                        {% endif %}
-                    </div>
-                    <div style="color: #6c757d; font-size: 0.9em;">
-                        {{ article.updated_at|date:"M d, Y H:i" }}
-                    </div>
+    <div class="hierarchy-chart">
+        <h3>Hierarchy Structure</h3>
+        {% if statistics.hierarchy_levels %}
+            <p>Distribution of articles by hierarchy depth:</p>
+            {% for level, count in statistics.hierarchy_levels.items %}
+                <div class="hierarchy-item">
+                    <span>Level {{ level }} ({{ level }} character{{ level|pluralize }})</span>
+                    <span><strong>{{ count }} article{{ count|pluralize }}</strong></span>
                 </div>
-                {% if article.summary %}
-                    <div style="margin-top: 5px; color: #6c757d; font-size: 0.9em;">
-                        {{ article.summary|truncatechars:100 }}
+            {% endfor %}
+        {% else %}
+            <p style="color: #6c757d; text-align: center; padding: 40px;">No articles in knowledge base</p>
+        {% endif %}
+    </div>
+    <div class="recent-articles">
+        <h3>Recently Updated Articles</h3>
+        {% if recent_articles %}
+            {% for article in recent_articles %}
+                <div class="article-item">
+                    <div style="display: flex;
+                                justify-content: space-between;
+                                align-items: center">
+                        <div>
+                            <strong>{{ article.hierarchy_code }}</strong>: {{ article.title|truncatechars:60 }}
+                            {% if article.summary %}<span style="color: green; margin-left: 10px;">📝</span>{% endif %}
+                        </div>
+                        <div style="color: #6c757d; font-size: 0.9em;">{{ article.updated_at|date:"M d, Y H:i" }}</div>
                     </div>
-                {% endif %}
-            </div>
-        {% endfor %}
-    {% else %}
-        <p style="color: #6c757d; text-align: center; padding: 40px;">No articles found</p>
-    {% endif %}
-</div>
-
-<div style="margin-top: 30px;">
-    <a href="{% url 'admin:django_ergo_knowledgebase_changelist' %}" class="button default">← Back to Knowledge Bases</a>
-    <a href="{% url 'admin:django_ergo_knowledgebase_change' knowledgebase.id %}" class="button">Edit Knowledge Base</a>
-    <a href="{% url 'admin:django_ergo_knowledgebase_analytics' knowledgebase.id %}" class="button" target="_blank">📊 Analytics</a>
-    <a href="{% url 'admin:django_ergo_knowledgebase_export' knowledgebase.id %}" class="button" target="_blank">📁 Export</a>
-</div>
-
-{% endblock %}
+                    {% if article.summary %}
+                        <div style="margin-top: 5px; color: #6c757d; font-size: 0.9em;">{{ article.summary|truncatechars:100 }}</div>
+                    {% endif %}
+                </div>
+            {% endfor %}
+        {% else %}
+            <p style="color: #6c757d; text-align: center; padding: 40px;">No articles found</p>
+        {% endif %}
+    </div>
+    <div style="margin-top: 30px;">
+        <a href="{% url 'admin:django_ergo_knowledgebase_changelist' %}"
+           class="button default">← Back to Knowledge Bases</a>
+        <a href="{% url 'admin:django_ergo_knowledgebase_change' knowledgebase.id %}"
+           class="button">Edit Knowledge Base</a>
+        <a href="{% url 'admin:django_ergo_knowledgebase_analytics' knowledgebase.id %}"
+           class="button"
+           target="_blank">📊 Analytics</a>
+        <a href="{% url 'admin:django_ergo_knowledgebase_export' knowledgebase.id %}"
+           class="button"
+           target="_blank">📁 Export</a>
+    </div>
+{% endblock content %}

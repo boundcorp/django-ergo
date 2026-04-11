@@ -1,4 +1,5 @@
 # django-ergo
+
 ## Learn. Think. Become.
 
 Ergo is a Django library for building AI-powered applications with LLM agents, workflows, and knowledgebases. It provides ORM models and utilities for creating intelligent chat systems, document ingestion, and semantic search capabilities.
@@ -6,24 +7,28 @@ Ergo is a Django library for building AI-powered applications with LLM agents, w
 ## Features
 
 ### 🤖 User Chat System
+
 - **UserChat**: Individual chat sessions owned by users
 - **ChatMessage**: Typed messages (user input, assistant response, tool calls, etc.)
 - **Workflow**: AI logic and tools for processing chat messages
 - **Message Types**: Support for user_input, assistant_message, tool_request, tool_response, system_message, and error types
 
 ### 📚 Knowledgebase System
+
 - **Knowledgebase**: Hierarchical collections of articles
 - **Article**: Documents with titles, content, and semantic embeddings
 - **Hybrid Search**: Combines PostgreSQL full-text and vector similarity search
 - **Hierarchical Organization**: Articles organized with hexadecimal hierarchy codes
 
 ### 🔧 Workflow Engine
+
 - **Self-contained**: No external agent library dependencies
 - **Tool System**: Extensible tool framework for AI agents
 - **Knowledgebase Integration**: Workflows can access multiple knowledgebases
 - **Async Support**: Full async/await support for message processing
 
 ### 📝 Document Ingestion
+
 - **IngestKnowledgeBase**: Automated document processing and article creation
 - **Fact Extraction**: Extract structured information from documents
 - **Semantic Embeddings**: Automatic embedding generation for search
@@ -103,6 +108,7 @@ chat.add_message(
 ## Models
 
 ### UserChat
+
 - `user`: ForeignKey to User model
 - `workflow`: ForeignKey to Workflow model
 - `title`: Chat title
@@ -110,6 +116,7 @@ chat.add_message(
 - `metadata`: JSON field for additional data
 
 ### ChatMessage
+
 - `chat`: ForeignKey to UserChat
 - `message_type`: Type of message (user_input, assistant_message, etc.)
 - `role`: Role of sender (user, assistant, system, tool)
@@ -117,6 +124,7 @@ chat.add_message(
 - `metadata`: JSON field for tool calls, responses, etc.
 
 ### Workflow
+
 - `name`: Human-readable name
 - `description`: What the workflow does
 - `instructions`: System instructions for AI agent
@@ -124,12 +132,14 @@ chat.add_message(
 - `tools_config`: JSON configuration for available tools
 
 ### Knowledgebase
+
 - `name`: Knowledgebase name
 - `description`: Description
 - `owner_id`: Optional owner identifier
 - `articles`: Related articles
 
 ### Article
+
 - `knowledgebase`: ForeignKey to Knowledgebase
 - `hierarchy_code`: Position in knowledgebase (e.g., "0", "1A", "B2")
 - `title`: Article title
@@ -148,7 +158,7 @@ from papa.apps.ergo.workflows import WorkflowEngine, Tool
 class MyCustomTool(Tool):
     def __init__(self):
         super().__init__("my_tool", "Description of my tool")
-    
+
     async def execute(self, context, **kwargs):
         # Tool implementation
         return "Tool result"
@@ -213,4 +223,3 @@ The new chat system is backward compatible with existing Conversation/Message mo
 - Streaming responses
 - Multi-agent workflows
 - Enhanced search capabilities
-

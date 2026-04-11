@@ -84,18 +84,18 @@ class KnowledgeEntry:
     confidence: float = 0.0
     tags: List[str] = None
     source: Optional[str] = None
-    
+
     def __post_init__(self):
         if self.tags is None:
             self.tags = []
 
 class KnowledgeRetriever:
     """Retrieves relevant knowledge entries using semantic search."""
-    
+
     def __init__(self, embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"):
         self.embedding_model = embedding_model
         self._cache: Dict[str, List[KnowledgeEntry]] = {}
-    
+
     async def retrieve_similar(
         self,
         query: str,
@@ -103,56 +103,56 @@ class KnowledgeRetriever:
         min_confidence: float = 0.5
     ) -> List[KnowledgeEntry]:
         """Retrieve knowledge entries similar to the query.
-        
+
         Args:
             query: Search query
             limit: Maximum number of results
             min_confidence: Minimum confidence threshold
-            
+
         Returns:
             List of relevant knowledge entries
-            
+
         Raises:
             ValueError: If query is empty
             RuntimeError: If embedding model fails
         """
         if not query.strip():
             raise ValueError("Query cannot be empty")
-        
+
         try:
             # Check cache first
             cache_key = f"{query}:{limit}:{min_confidence}"
             if cache_key in self._cache:
                 logger.debug(f"Cache hit for query: {query}")
                 return self._cache[cache_key]
-            
+
             # Generate query embedding
             query_embedding = await self._get_embedding(query)
-            
+
             # Retrieve and rank entries
             entries = await self._search_by_embedding(
                 query_embedding, limit, min_confidence
             )
-            
+
             # Cache results
             self._cache[cache_key] = entries
-            
+
             logger.info(f"Retrieved {len(entries)} entries for query: {query}")
             return entries
-            
+
         except Exception as e:
             logger.error(f"Failed to retrieve knowledge for query '{query}': {e}")
             raise RuntimeError(f"Knowledge retrieval failed: {e}") from e
-    
+
     async def _get_embedding(self, text: str) -> List[float]:
         """Generate embedding for text."""
         # Implementation would use actual embedding model
         return [0.1] * 384  # Placeholder
-    
+
     async def _search_by_embedding(
-        self, 
-        embedding: List[float], 
-        limit: int, 
+        self,
+        embedding: List[float],
+        limit: int,
         min_confidence: float
     ) -> List[KnowledgeEntry]:
         """Search knowledge base by embedding similarity."""

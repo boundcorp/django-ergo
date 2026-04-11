@@ -1,16 +1,13 @@
-from django.db import models
-from django.contrib.postgres.fields import ArrayField
-from django.utils.functional import cached_property
-from pgvector.django import VectorField
+from typing import Any
+
 import openai
-from django.conf import settings
-from typing import Optional, Dict, Any, List
+from django.db import models
 
 
 def generate_summary(
-    text: str, max_tokens: int = 100, user_context: Optional[Dict[str, Any]] = None
+    text: str, max_tokens: int = 100, user_context: dict[str, Any] | None = None
 ) -> str:
-    messages: List[Dict[str, Any]] = [
+    messages: list[dict[str, Any]] = [
         {
             "role": "system",
             "content": f"Return a summary of the text that is {max_tokens} tokens or less. Optimize for token usage, omit non-essential information.",

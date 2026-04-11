@@ -212,7 +212,7 @@ class TestPersonalMemoryAbsorption:
         s2 = async_to_sync(absorb_conversation)(alice_chat_2, alice_kb, engine)
         s2.apply_suggestions()
 
-        assert alice_kb.articles.count() == 2  # noqa: PLR2004
+        assert alice_kb.articles.count() == 2
         titles = set(alice_kb.articles.values_list("title", flat=True))
         assert titles == {"Deployment Preferences", "Testing Preferences"}
 

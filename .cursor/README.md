@@ -13,6 +13,7 @@ This directory contains the configuration for Cursor background agents to work w
 The Dockerfile provides a complete development environment with:
 
 ### System Dependencies
+
 - Ubuntu 24.04 base
 - Python 3.9.11 (via pyenv)
 - UV package manager
@@ -20,6 +21,7 @@ The Dockerfile provides a complete development environment with:
 - All necessary build tools and libraries
 
 ### Python Development Tools
+
 - pyenv for Python version management
 - Virtual environment: `django-ergo_env`
 - All project dependencies from requirements files:
@@ -35,6 +37,7 @@ The Dockerfile provides a complete development environment with:
   - pip-freezer (dependency management)
 
 ### User Configuration
+
 - Non-root user: `ubuntu`
 - Working directory: `/home/ubuntu`
 - Proper PATH and environment setup
@@ -71,7 +74,8 @@ After setup, you can use all the Makefile commands:
 ## Ports
 
 The container exposes these ports:
+
 - 8000 - Django development server
 - 3000 - Frontend development server
 - 5432 - PostgreSQL
-- 6379 - Redis 
+- 6379 - Redis
