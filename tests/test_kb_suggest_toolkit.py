@@ -99,6 +99,15 @@ class TestSuggestCreate:
         suggestions = toolkit.get_suggestions()
         assert suggestions[0]["parent_code"] == "1"
 
+    def test_records_with_section(self, toolkit):
+        result = toolkit.execute_tool(
+            "kb_suggest_create",
+            {"title": "Darrow", "content": "Character.", "section": "1"},
+        )
+        assert "section 1" in result
+        suggestions = toolkit.get_suggestions()
+        assert suggestions[0]["section"] == "1"
+
     def test_records_with_summary(self, toolkit):
         toolkit.execute_tool(
             "kb_suggest_create",
@@ -152,7 +161,7 @@ class TestMultipleSuggestions:
         toolkit.execute_tool("kb_suggest_update", {"hierarchy_code": "0", "title": "B"})
         toolkit.execute_tool("kb_suggest_delete", {"hierarchy_code": "1"})
         suggestions = toolkit.get_suggestions()
-        assert len(suggestions) == 3  # noqa: PLR2004
+        assert len(suggestions) == 3
         assert suggestions[0]["action"] == "create"
         assert suggestions[1]["action"] == "update"
         assert suggestions[2]["action"] == "delete"
@@ -162,7 +171,7 @@ class TestClear:
     def test_clears_all_suggestions(self, toolkit):
         toolkit.execute_tool("kb_suggest_create", {"title": "A", "content": "a"})
         toolkit.execute_tool("kb_suggest_delete", {"hierarchy_code": "1"})
-        assert len(toolkit.get_suggestions()) == 2  # noqa: PLR2004
+        assert len(toolkit.get_suggestions()) == 2
         toolkit.clear()
         assert len(toolkit.get_suggestions()) == 0
 
@@ -178,7 +187,7 @@ class TestApplySuggestions:
         )
 
         results = toolkit.apply_suggestions()
-        assert len(results) == 2  # noqa: PLR2004
+        assert len(results) == 2
         assert "Created" in results[0]
         assert "Updated" in results[1]
 
@@ -198,7 +207,7 @@ class TestApplySuggestions:
         toolkit.execute_tool("kb_suggest_delete", {"hierarchy_code": "1"})
 
         results = toolkit.apply_suggestions(indices=[0, 2])
-        assert len(results) == 2  # noqa: PLR2004
+        assert len(results) == 2
         assert "Created" in results[0]
         assert "Deleted" in results[1]
 
@@ -218,7 +227,7 @@ class TestApplySuggestions:
         )
 
         results = toolkit.apply_suggestions()
-        assert len(results) == 2  # noqa: PLR2004
+        assert len(results) == 2
         assert "not found" in results[0].lower() or "error" in results[0].lower()
         assert "Created" in results[1]
         assert Article.objects.filter(knowledgebase=kb, hierarchy_code="5").exists()
@@ -244,4 +253,4 @@ class TestGetToolsSchema:
 
         adapter = ClaudeToolAdapter()
         schemas = toolkit.get_tools_schema(adapter)
-        assert len(schemas) == 3  # noqa: PLR2004
+        assert len(schemas) == 3

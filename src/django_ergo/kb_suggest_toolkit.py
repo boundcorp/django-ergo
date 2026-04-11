@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 KB_SUGGEST_TOOLS = [
     {
         "name": "kb_suggest_create",
-        "description": "Suggest creating a new article in the knowledge base (recorded for later review)",
+        "description": "Suggest creating a new article in the knowledge base (recorded for later review). Provide exactly one of: section, parent_code, or hierarchy_code.",
         "parameters": {
             "title": {
                 "type": "string",
@@ -27,6 +27,11 @@ KB_SUGGEST_TOOLS = [
                 "type": "string",
                 "required": True,
                 "description": "Article content",
+            },
+            "section": {
+                "type": "string",
+                "required": False,
+                "description": "Wiki section prefix (e.g. '1' for Characters, '2' for Settings). Auto-generates the next available code in that section.",
             },
             "hierarchy_code": {
                 "type": "string",
@@ -188,6 +193,7 @@ class KBSuggestToolkit(Toolkit):
                 content=suggestion["content"],
                 hierarchy_code=suggestion.get("hierarchy_code"),
                 parent_code=suggestion.get("parent_code"),
+                section=suggestion.get("section"),
                 summary=suggestion.get("summary"),
             )
         if action == "update":
@@ -209,6 +215,7 @@ class KBSuggestToolkit(Toolkit):
             "action": "create",
             "title": args["title"],
             "content": args["content"],
+            "section": args.get("section"),
             "hierarchy_code": args.get("hierarchy_code"),
             "parent_code": args.get("parent_code"),
             "summary": args.get("summary"),
@@ -219,8 +226,8 @@ class KBSuggestToolkit(Toolkit):
             placement = f" at code {args['hierarchy_code']}"
         elif args.get("parent_code"):
             placement = f" under parent {args['parent_code']}"
-        else:
-            placement = " (will be placed at top level)"
+        elif args.get("section"):
+            placement = f" in section {args['section']}"
         return f'Suggestion recorded: CREATE article "{args["title"]}"{placement}'
 
     def _suggest_update(self, args: dict) -> str:

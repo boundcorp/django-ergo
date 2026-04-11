@@ -47,13 +47,15 @@ def create_article(  # noqa: PLR0913
     content: str,
     hierarchy_code: str | None = None,
     parent_code: str | None = None,
+    section: str | None = None,
     summary: str | None = None,
 ) -> str:
     """Create an article in the KB. Returns confirmation string."""
     from django_ergo.models import Article
 
-    if hierarchy_code and parent_code:
-        msg = "Provide hierarchy_code or parent_code, not both"
+    placement_params = sum(1 for p in (hierarchy_code, parent_code, section) if p)
+    if placement_params > 1:
+        msg = "Provide only one of hierarchy_code, parent_code, or section"
         raise ValueError(msg)
 
     existing_codes = set(kb.articles.values_list("hierarchy_code", flat=True))
@@ -69,9 +71,20 @@ def create_article(  # noqa: PLR0913
             if c.startswith(parent_code) and len(c) == len(parent_code) + 1
         }
         hierarchy_code = _next_child_code(parent_code, child_codes)
+    elif section:
+        child_codes = {
+            c
+            for c in existing_codes
+            if c.startswith(section) and len(c) == len(section) + 1
+        }
+        hierarchy_code = _next_child_code(section, child_codes)
     else:
-        top_level_codes = {c for c in existing_codes if len(c) == 1}
-        hierarchy_code = _next_hex_code(top_level_codes)
+        msg = (
+            "Provide one of: hierarchy_code, parent_code, or section. "
+            "Use section (e.g. '1' for Characters) to auto-assign a code "
+            "within that wiki section."
+        )
+        raise ValueError(msg)
 
     create_kwargs: dict = {
         "knowledgebase": kb,
@@ -140,7 +153,7 @@ def delete_article(kb: Knowledgebase, hierarchy_code: str) -> str:
 KB_WRITE_TOOLS = [
     {
         "name": "kb_create_article",
-        "description": "Create a new article in the knowledge base",
+        "description": "Create a new article in the knowledge base. Provide exactly one of: section, parent_code, or hierarchy_code.",
         "parameters": {
             "title": {
                 "type": "string",
@@ -151,6 +164,11 @@ KB_WRITE_TOOLS = [
                 "type": "string",
                 "required": True,
                 "description": "Article content",
+            },
+            "section": {
+                "type": "string",
+                "required": False,
+                "description": "Wiki section prefix (e.g. '1' for Characters, '2' for Settings). Auto-generates the next available code in that section.",
             },
             "hierarchy_code": {
                 "type": "string",
@@ -243,6 +261,7 @@ class KBWriteToolkit(Toolkit):
                 content=arguments["content"],
                 hierarchy_code=arguments.get("hierarchy_code"),
                 parent_code=arguments.get("parent_code"),
+                section=arguments.get("section"),
                 summary=arguments.get("summary"),
             )
         if tool_name == "kb_update_article":

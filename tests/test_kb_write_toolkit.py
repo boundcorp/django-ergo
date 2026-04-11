@@ -90,15 +90,34 @@ class TestCreateArticle:
         assert "Deployment" in result
         assert Article.objects.filter(knowledgebase=kb, hierarchy_code="2").exists()
 
-    def test_create_auto_top_level(self, toolkit, kb):
-        """Auto-generates next top-level code when no code or parent given."""
+    def test_create_with_section(self, toolkit, kb):
+        """Auto-generates next code within a section prefix."""
         result = toolkit.execute_tool(
             "kb_create_article",
-            {"title": "FAQ", "content": "Frequently asked questions."},
+            {"title": "FAQ", "content": "Frequently asked questions.", "section": "2"},
         )
-        # Existing top-level codes are "0" and "1", so next should be "2"
-        assert "2" in result
-        assert Article.objects.filter(knowledgebase=kb, hierarchy_code="2").exists()
+        assert "20" in result
+        assert Article.objects.filter(knowledgebase=kb, hierarchy_code="20").exists()
+
+    def test_create_with_section_existing_children(self, toolkit, kb):
+        """Skips existing children when auto-generating within a section."""
+        Article.objects.create(
+            knowledgebase=kb, hierarchy_code="20", title="First", content="x"
+        )
+        result = toolkit.execute_tool(
+            "kb_create_article",
+            {"title": "Second", "content": "y", "section": "2"},
+        )
+        assert "21" in result
+        assert Article.objects.filter(knowledgebase=kb, hierarchy_code="21").exists()
+
+    def test_create_no_placement_raises(self, toolkit):
+        """Raises when no placement parameter is given."""
+        with pytest.raises(ValueError, match="section"):
+            toolkit.execute_tool(
+                "kb_create_article",
+                {"title": "FAQ", "content": "Frequently asked questions."},
+            )
 
     def test_create_under_parent(self, toolkit, kb):
         """Creates child article under a parent code."""
@@ -146,7 +165,7 @@ class TestCreateArticle:
             )
 
     def test_create_both_code_and_parent_raises(self, toolkit):
-        with pytest.raises(ValueError, match="not both"):
+        with pytest.raises(ValueError, match="only one"):
             toolkit.execute_tool(
                 "kb_create_article",
                 {
@@ -154,6 +173,18 @@ class TestCreateArticle:
                     "content": "x",
                     "hierarchy_code": "5",
                     "parent_code": "1",
+                },
+            )
+
+    def test_create_section_and_code_raises(self, toolkit):
+        with pytest.raises(ValueError, match="only one"):
+            toolkit.execute_tool(
+                "kb_create_article",
+                {
+                    "title": "Bad",
+                    "content": "x",
+                    "hierarchy_code": "5",
+                    "section": "1",
                 },
             )
 

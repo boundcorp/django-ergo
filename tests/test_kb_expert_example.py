@@ -161,12 +161,12 @@ class TestWriteToolkit:
             {
                 "title": "Aeration",
                 "content": "Aerate your lawn in fall to reduce soil compaction and improve root growth.",
+                "section": "3",
             },
         )
         assert "Aeration" in result
-        # Should get next top-level code: "4"
         assert Article.objects.filter(
-            knowledgebase=lawn_kb, hierarchy_code="4"
+            knowledgebase=lawn_kb, hierarchy_code="30"
         ).exists()
 
     def test_add_sub_article(self, lawn_kb):
