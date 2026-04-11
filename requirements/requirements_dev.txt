@@ -13,4 +13,4 @@ pip-freezer==0.3.8  # https://github.com/bnoordhuis/pip-freezegun
 
 # Database
 # ------------------------------------------------------------------------------
-psycopg2-binary==2.9.10  # https://github.com/psycopg/psycopg2
+psycopg[binary]==3.3.3  # https://github.com/psycopg/psycopg

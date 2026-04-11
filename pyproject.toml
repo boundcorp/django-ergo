@@ -20,7 +20,7 @@ classifiers = [
 dependencies = [
     "django>=4.2",
     "django-environ",
-    "psycopg2-binary",
+    "psycopg[binary]",
     "pgvector",
     "openai",
 ]
@@ -65,7 +65,7 @@ dev = [
     "django-coverage-plugin",
     "pytest-django",
     "pytest-asyncio",
-    "psycopg2-binary",
+    "psycopg[binary]",
     "pgserver",
     "python-dotenv",
     # API Example Dependencies

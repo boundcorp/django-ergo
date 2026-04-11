@@ -105,7 +105,7 @@ RUN uv pip install \
     factory-boy \
     django-coverage-plugin \
     pytest-django \
-    psycopg2-binary
+    psycopg[binary]
 
 # Expose common development ports
 EXPOSE 8000 3000 5432 6379

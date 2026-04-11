@@ -1,6 +1,6 @@
 django==4.2.23
 django-environ==0.12.0
-psycopg2-binary==2.9.10
+psycopg[binary]==3.3.3
 pgvector==0.4.1
 # OpenAI is STRICTLY REQUIRED - no graceful fallbacks
 openai==1.97.1
