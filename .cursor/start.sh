@@ -52,7 +52,7 @@ rm -f /workspace/.coverage* /workspace/htmlcov/* 2>/dev/null || true
 
 # Install test dependencies directly without editable install
 echo "📦 Installing test dependencies..."
-uv pip install pytest pytest-django pytest-cov coverage django psycopg2-binary
+uv pip install pytest pytest-django pytest-cov coverage django "psycopg[binary]"
 
 # Install pre-commit hooks
 echo "🔧 Installing pre-commit hooks..."
