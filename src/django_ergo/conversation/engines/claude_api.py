@@ -252,6 +252,29 @@ class ClaudeAPIEngine(Engine):
         async for event in self._process_response(session, seq + 1, additional_tools):
             yield event
 
+    async def _persist_tool_result(
+        self,
+        session,
+        tool_use_id: str,
+        result: Any,
+        is_error: bool = False,
+    ) -> None:
+        from django_ergo.conversation.models import ClaudeContentBlock
+        from django_ergo.conversation.models import ClaudeMessage
+
+        seq = await session.claude_messages.acount()
+        result_msg = await ClaudeMessage.objects.acreate(
+            session=session, role="user", sequence=seq
+        )
+        await ClaudeContentBlock.objects.acreate(
+            message=result_msg,
+            block_type="tool_result",
+            sequence=0,
+            tool_result_for=tool_use_id,
+            tool_result_content=str(result),
+            is_error=is_error,
+        )
+
     async def generate(
         self,
         prompt: str,

@@ -82,7 +82,9 @@ class OpenAIToolAdapter(ToolAdapter):
         }
 
     def parse_tool_call(self, raw: dict) -> tuple[str, dict]:
-        return raw["function"]["name"], json.loads(raw["function"]["arguments"])
+        if "function" in raw:
+            return raw["function"]["name"], json.loads(raw["function"]["arguments"])
+        return raw["name"], raw.get("input", {})
 
     def format_tool_result(self, tool_use_id: str, result: Any, is_error: bool) -> dict:
         return {"role": "tool", "tool_call_id": tool_use_id, "content": str(result)}

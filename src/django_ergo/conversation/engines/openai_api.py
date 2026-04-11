@@ -208,6 +208,46 @@ class OpenAIAPIEngine(Engine):
         async for event in self._call_and_persist(session, seq + 1, additional_tools):
             yield event
 
+    async def _persist_tool_result(
+        self,
+        session,
+        tool_use_id: str,
+        result: Any,
+        is_error: bool = False,
+    ) -> None:
+        from django_ergo.conversation.models import OpenAIMessage
+
+        seq = await session.openai_messages.acount()
+        await OpenAIMessage.objects.acreate(
+            session=session,
+            role="tool",
+            content=str(result),
+            tool_call_id=tool_use_id,
+            sequence=seq,
+        )
+
+    async def submit_tool_results_batch(
+        self,
+        session,
+        results: list[tuple[str, Any, bool]],
+        additional_tools: list[dict] | None = None,
+    ) -> AsyncIterator[EngineResponse]:
+        from django_ergo.conversation.models import OpenAIMessage
+
+        seq = await session.openai_messages.acount()
+        for tool_use_id, result, _is_error in results:
+            await OpenAIMessage.objects.acreate(
+                session=session,
+                role="tool",
+                content=str(result),
+                tool_call_id=tool_use_id,
+                sequence=seq,
+            )
+            seq += 1
+
+        async for event in self._call_and_persist(session, seq, additional_tools):
+            yield event
+
     async def generate(
         self,
         prompt: str,

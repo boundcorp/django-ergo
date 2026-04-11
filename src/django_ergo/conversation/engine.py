@@ -54,6 +54,41 @@ class Engine(ABC):
     ) -> AsyncIterator[EngineResponse]:
         """Submit a tool result, yield assistant continuation."""
 
+    async def submit_tool_results_batch(
+        self,
+        session,
+        results: list[tuple[str, Any, bool]],
+        additional_tools: list[dict] | None = None,
+    ) -> AsyncIterator[EngineResponse]:
+        """Submit multiple tool results and yield assistant continuation.
+
+        Args:
+            results: list of (tool_use_id, result, is_error) tuples.
+
+        Default implementation submits one at a time (last one triggers API call).
+        Engines that require batched submission (e.g. OpenAI) should override.
+        """
+        for i, (tool_use_id, result, is_error) in enumerate(results):
+            if i < len(results) - 1:
+                await self._persist_tool_result(session, tool_use_id, result, is_error)
+            else:
+                async for event in self.submit_tool_result(
+                    session, tool_use_id, result, is_error, additional_tools
+                ):
+                    yield event
+
+    async def _persist_tool_result(  # noqa: B027
+        self,
+        session,
+        tool_use_id: str,
+        result: Any,
+        is_error: bool = False,
+    ) -> None:
+        """Persist a tool result without triggering a new API call.
+
+        Engines should override this if they have different persistence logic.
+        """
+
     @abstractmethod
     def get_tools_schema(self, workflow) -> list[dict]:
         """Convert ergo tools to engine-native tool format."""
