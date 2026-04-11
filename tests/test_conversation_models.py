@@ -63,7 +63,7 @@ class ConversationSessionTestCase(TestCase):
             user=self.user,
             workflow=self.workflow,
             engine_type=EngineType.CLAUDE,
-            transport_type=TransportType.CLI,
+            transport_type=TransportType.API,
             status=SessionStatus.ACTIVE,
         )
         self.assertEqual(session.workflow, self.workflow)
@@ -106,7 +106,7 @@ class ConversationSessionTestCase(TestCase):
         session = ConversationSession.objects.create(
             user=self.user,
             engine_type=EngineType.CLAUDE,
-            transport_type=TransportType.CLI,
+            transport_type=TransportType.API,
             status=SessionStatus.ACTIVE,
         )
         self.assertEqual(session.session_id, "")
