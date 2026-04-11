@@ -92,6 +92,7 @@ python_files = ["tests.py", "test_*.py"]
 norecursedirs = ["node_modules"]
 filterwarnings = "ignore::DeprecationWarning"
 pythonpath = "src"
+asyncio_mode = "auto"
 
 # ==== Coverage ====
 [tool.coverage.run]
@@ -242,6 +243,21 @@ dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
   "PT009",  # Use a regular assert instead of unittest-style assert (TestCase uses assertEqual etc.)
   "S",      # Security checks not needed in test files
   "SLF001", # Accessing private members is acceptable in tests
+  "T201",   # Print statements are acceptable in tests (e.g. fixture generation output)
+  "PLR2004", # Magic values are acceptable in tests (e.g. embedding dimensions)
+]
+"examples/**/*.py" = [
+  "INP001",  # Examples are not a package
+  "T201",    # Print statements expected in examples
+  "S324",    # MD5 used for non-security chunk IDs
+  "RUF013",  # Implicit Optional acceptable in examples
+  "PLR0913", # Many arguments acceptable in examples
+  "PLR2004", # Magic values acceptable in examples
+  "RET504",  # Unnecessary assignment acceptable in examples
+  "B007",    # Unused loop variable acceptable in examples
+  "DTZ005",  # Naive datetime acceptable in examples
+  "PERF401", # List comprehension style acceptable in examples
+  "F841",    # Unused variable acceptable in examples
 ]
 
 [tool.ruff.format]
