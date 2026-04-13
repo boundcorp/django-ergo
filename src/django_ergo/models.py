@@ -87,6 +87,11 @@ class Knowledgebase(TimeStampedMixin):
         db_index=True,
         help_text="Owner identifier for multi-tenant support",
     )
+    organization_strategy = models.TextField(
+        blank=True,
+        default="",
+        help_text="Describes the hierarchy layout for this KB — what each tree prefix means, how articles should be organized.",
+    )
     workflows = models.ManyToManyField(
         Workflow,
         blank=True,

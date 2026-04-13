@@ -130,7 +130,13 @@ class KBToolkit(Toolkit):
                 else "No articles yet."
             )
 
-            parts.append(f"{header}\n{desc}\n{count}\n\n{toc}")
+            kb_part = f"{header}\n{desc}\n{count}\n\n{toc}"
+            if kb.organization_strategy:
+                kb_part = (
+                    f"## KB Organization Strategy\n{kb.organization_strategy}\n\n"
+                    + kb_part
+                )
+            parts.append(kb_part)
         return "\n\n".join(parts)
 
     def _get_kb_by_name(self, name: str) -> Knowledgebase:

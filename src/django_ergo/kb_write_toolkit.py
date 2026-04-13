@@ -286,9 +286,15 @@ class KBWriteToolkit(Toolkit):
     def render_overview(self) -> str:
         kb = self.knowledgebase
         article_count = kb.articles.count()
-        return (
+        overview = (
             f"=== KB Write Access: {kb.name} (kb_id: {kb.id}) ===\n"
             f"Articles: {article_count}\n"
             f"Available tools: kb_create_article, kb_update_article, kb_delete_article\n"
             f"Note: All write operations require approval."
         )
+        if kb.organization_strategy:
+            overview = (
+                f"## KB Organization Strategy\n{kb.organization_strategy}\n\n"
+                + overview
+            )
+        return overview

@@ -248,6 +248,14 @@ class KnowledgebaseAdmin(admin.ModelAdmin):
 
     fieldsets = (
         ("Basic Information", {"fields": ("name", "description", "owner_id")}),
+        (
+            "Organization Strategy",
+            {
+                "fields": ("organization_strategy",),
+                "classes": ("collapse",),
+                "description": "Describes the hierarchy layout — what each tree prefix means, how articles should be organized.",
+            },
+        ),
         ("Associations", {"fields": ("workflows",)}),
         (
             "Knowledge Base Management",
