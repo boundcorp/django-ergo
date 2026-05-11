@@ -24,6 +24,10 @@ DEFAULTS = {
     "OPENAI_TEMPERATURE": 0.7,
     "OPENAI_MAX_TOKENS": None,
     "OPENAI_TIMEOUT": 30,
+    # Conversation Runtime Configuration
+    "CONVERSATION_ENGINE_TYPE": "openai",
+    "CONVERSATION_TRANSPORT_TYPE": "api",
+    "CONVERSATION_ENGINE_CONFIG": {},
     # Telemetry Configuration
     "TELEMETRY_ENABLED": False,
     "TELEMETRY_SERVICE_NAME": "django-ergo",

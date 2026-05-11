@@ -12,7 +12,6 @@ from unittest.mock import patch
 import pytest
 from asgiref.sync import async_to_sync
 from django.contrib.auth import get_user_model
-from django_ergo.conversation.engine import EngineResponse
 from django_ergo.conversation.models import ClaudeContentBlock
 from django_ergo.conversation.models import ClaudeMessage
 from django_ergo.conversation.models import ConversationSession
@@ -108,11 +107,11 @@ def _make_mock_engine():
 class TestPersonalMemoryAbsorption:
     """Test the full absorption loop: conversation → absorb → KB."""
 
-    @patch("django_ergo.kb_pipelines.run_conversation_turn")
-    def test_absorb_first_conversation(self, mock_runner, alice_chat_1, alice_kb):
+    @patch("django_ergo.kb_pipelines.run_workflow_task")
+    def test_absorb_first_conversation(self, mock_run_task, alice_chat_1, alice_kb):
         """Absorption agent extracts deployment preferences from chat 1."""
 
-        async def fake_runner(*args, **kwargs):
+        async def fake_run_task(*args, **kwargs):
             toolkits = kwargs.get("extra_tools", [])
             for tk in toolkits:
                 if tk.has_tool("kb_suggest_create"):
@@ -123,9 +122,8 @@ class TestPersonalMemoryAbsorption:
                             "content": "Alice prefers morning deployments before standup. She considers this the least risky time due to fewer users online.",
                         },
                     )
-            yield EngineResponse(event_type="done", text="Absorbed.")
 
-        mock_runner.side_effect = fake_runner
+        mock_run_task.side_effect = fake_run_task
 
         result = async_to_sync(absorb_conversation)(
             alice_chat_1,
@@ -138,11 +136,11 @@ class TestPersonalMemoryAbsorption:
         assert suggestions[0]["title"] == "Deployment Preferences"
         assert "morning" in suggestions[0]["content"]
 
-    @patch("django_ergo.kb_pipelines.run_conversation_turn")
-    def test_absorb_and_apply(self, mock_runner, alice_chat_1, alice_kb):
+    @patch("django_ergo.kb_pipelines.run_workflow_task")
+    def test_absorb_and_apply(self, mock_run_task, alice_chat_1, alice_kb):
         """Absorb and apply — KB now has the article."""
 
-        async def fake_runner(*args, **kwargs):
+        async def fake_run_task(*args, **kwargs):
             toolkits = kwargs.get("extra_tools", [])
             for tk in toolkits:
                 if tk.has_tool("kb_suggest_create"):
@@ -154,9 +152,8 @@ class TestPersonalMemoryAbsorption:
                             "hierarchy_code": "0",
                         },
                     )
-            yield EngineResponse(event_type="done", text="Absorbed.")
 
-        mock_runner.side_effect = fake_runner
+        mock_run_task.side_effect = fake_run_task
 
         suggestions = async_to_sync(absorb_conversation)(
             alice_chat_1,
@@ -169,14 +166,14 @@ class TestPersonalMemoryAbsorption:
         article = alice_kb.articles.first()
         assert article.title == "Deployment Preferences"
 
-    @patch("django_ergo.kb_pipelines.run_conversation_turn")
+    @patch("django_ergo.kb_pipelines.run_workflow_task")
     def test_multi_conversation_absorption(
-        self, mock_runner, alice_chat_1, alice_chat_2, alice_kb
+        self, mock_run_task, alice_chat_1, alice_chat_2, alice_kb
     ):
         """Absorb two conversations — KB accumulates knowledge from both."""
         call_count = {"n": 0}
 
-        async def fake_runner(*args, **kwargs):
+        async def fake_run_task(*args, **kwargs):
             call_count["n"] += 1
             toolkits = kwargs.get("extra_tools", [])
             for tk in toolkits:
@@ -199,9 +196,8 @@ class TestPersonalMemoryAbsorption:
                                 "hierarchy_code": "1",
                             },
                         )
-            yield EngineResponse(event_type="done", text="Absorbed.")
 
-        mock_runner.side_effect = fake_runner
+        mock_run_task.side_effect = fake_run_task
         engine = _make_mock_engine()
 
         # Absorb chat 1

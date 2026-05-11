@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 from asgiref.sync import sync_to_async
 
 from django_ergo.conversation.renderer import ConversationRenderer
-from django_ergo.conversation.runner import run_conversation_turn
+from django_ergo.conversation.runtime import run_workflow_task
 from django_ergo.kb_suggest_toolkit import KBSuggestToolkit
 from django_ergo.kb_toolkit import KBToolkit
 
@@ -63,8 +63,6 @@ async def absorb_conversation(
         KBSuggestToolkit with accumulated suggestions. Call
         get_suggestions() to review, apply_suggestions() to apply.
     """
-    from django_ergo.conversation.models import ConversationSession as SessionModel
-
     # Render the source conversation (wrap in sync_to_async for DB safety)
     if renderer is None:
         renderer = ConversationRenderer(detail="skeleton")
@@ -88,26 +86,13 @@ async def absorb_conversation(
     read_toolkit = KBToolkit(knowledgebases=[target_kb])
     toolkits = [suggest_toolkit, read_toolkit]
 
-    # Create temporary absorption session
-    absorption_session = await SessionModel.objects.acreate(
+    await run_workflow_task(
         user=session.user,
-        engine_type=engine.engine_type,
-        transport_type="api",
-        status="active",
+        workflow=None,
+        message=message,
+        engine=engine,
+        extra_tools=toolkits,
         metadata={"absorption_source": str(session.id)},
     )
-
-    # Run the absorption agent — drain all responses
-    async for _response in run_conversation_turn(
-        engine,
-        absorption_session,
-        message,
-        extra_tools=toolkits,
-    ):
-        pass  # Toolkit tools are handled by the runner internally
-
-    # Mark absorption session as completed
-    absorption_session.status = "completed"
-    await absorption_session.asave(update_fields=["status"])
 
     return suggest_toolkit

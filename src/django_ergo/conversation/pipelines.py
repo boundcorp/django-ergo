@@ -24,6 +24,7 @@ if TYPE_CHECKING:
     from django_ergo.conversation.models import ConversationSession
 
 from django_ergo.conversation.renderer import ConversationRenderer
+from django_ergo.conversation.runtime import generate_once
 
 
 def _format_conversation_as_text(messages: list[dict]) -> str:
@@ -62,8 +63,9 @@ async def run_conversation_pipeline(
 
     prompt = f"Here is a conversation transcript:\n\n{transcript}"
 
-    return await engine.generate(
+    return await generate_once(
         prompt=prompt,
+        engine=engine,
         system=system,
         response_model=response_model,
     )

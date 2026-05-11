@@ -4,10 +4,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from django.utils.module_loading import import_string
-
-from django_ergo.conversation.engines import ENGINE_REGISTRY
 from django_ergo.conversation.models import ConversationSession
+from django_ergo.conversation.runtime import EngineSpec
+from django_ergo.conversation.runtime import build_engine
 
 if TYPE_CHECKING:
     from uuid import UUID
@@ -57,10 +56,10 @@ class SessionManager:
         await session.asave()
 
     def _build_engine(self, session: ConversationSession) -> Engine:
-        key = (session.engine_type, session.transport_type)
-        engine_path = ENGINE_REGISTRY.get(key)
-        if not engine_path:
-            msg = f"No engine registered for {key}"
-            raise ValueError(msg)
-        engine_cls = import_string(engine_path)
-        return engine_cls(config=session.metadata)
+        return build_engine(
+            EngineSpec(
+                engine_type=session.engine_type,
+                transport_type=session.transport_type,
+                config=session.metadata,
+            )
+        )

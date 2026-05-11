@@ -6,8 +6,8 @@ from unittest.mock import patch
 import pytest
 from asgiref.sync import async_to_sync
 from django.contrib.auth import get_user_model
-from django_ergo.conversation.engine import EngineResponse
 from django_ergo.conversation.models import ConversationSession
+from django_ergo.conversation.runtime import AssistantTaskResult
 from django_ergo.kb_pipelines import ABSORB_SYSTEM
 from django_ergo.kb_pipelines import absorb_conversation
 from django_ergo.models import Article
@@ -88,11 +88,11 @@ class TestAbsorbSystem:
 
 
 class TestAbsorbConversation:
-    @patch("django_ergo.kb_pipelines.run_conversation_turn")
-    def test_returns_suggest_toolkit(self, mock_runner, source_session, target_kb):
+    @patch("django_ergo.kb_pipelines.run_workflow_task")
+    def test_returns_suggest_toolkit(self, mock_run_task, source_session, target_kb):
         from django_ergo.kb_suggest_toolkit import KBSuggestToolkit
 
-        async def fake_runner(*args, **kwargs):
+        async def fake_run_task(*args, **kwargs):
             toolkits = kwargs.get("extra_tools", [])
             for tk in toolkits:
                 if tk.has_tool("kb_suggest_create"):
@@ -103,9 +103,14 @@ class TestAbsorbConversation:
                             "content": "User prefers morning deployments.",
                         },
                     )
-            yield EngineResponse(event_type="done", text="Absorbed.")
+            return AssistantTaskResult(
+                session=None,
+                events=[],
+                approvals=[],
+                text="Absorbed.",
+            )
 
-        mock_runner.side_effect = fake_runner
+        mock_run_task.side_effect = fake_run_task
 
         engine = MagicMock()
         engine.engine_type = "claude"
@@ -126,12 +131,17 @@ class TestAbsorbConversation:
         assert suggestions[0]["action"] == "create"
         assert suggestions[0]["title"] == "Deploy Preferences"
 
-    @patch("django_ergo.kb_pipelines.run_conversation_turn")
-    def test_creates_absorption_session(self, mock_runner, source_session, target_kb):
-        async def fake_runner(*args, **kwargs):
-            yield EngineResponse(event_type="done", text="Done.")
+    @patch("django_ergo.kb_pipelines.run_workflow_task")
+    def test_creates_absorption_session(self, mock_run_task, source_session, target_kb):
+        async def fake_run_task(*args, **kwargs):
+            return AssistantTaskResult(
+                session=None,
+                events=[],
+                approvals=[],
+                text="Done.",
+            )
 
-        mock_runner.side_effect = fake_runner
+        mock_run_task.side_effect = fake_run_task
 
         engine = MagicMock()
         engine.engine_type = "claude"
@@ -140,26 +150,27 @@ class TestAbsorbConversation:
             "name": "mock"
         }
 
-        initial_count = ConversationSession.objects.count()
         async_to_sync(absorb_conversation)(source_session, target_kb, engine)
-        assert ConversationSession.objects.count() == initial_count + 1
+        call_kwargs = mock_run_task.call_args.kwargs
+        assert call_kwargs["metadata"]["absorption_source"] == str(source_session.id)
+        assert call_kwargs["user"] == source_session.user
 
-        absorption_session = ConversationSession.objects.order_by("-created_at").first()
-        assert absorption_session.metadata.get("absorption_source") == str(
-            source_session.id
-        )
-
-    @patch("django_ergo.kb_pipelines.run_conversation_turn")
+    @patch("django_ergo.kb_pipelines.run_workflow_task")
     def test_prompt_includes_conversation_transcript(
-        self, mock_runner, source_session, target_kb
+        self, mock_run_task, source_session, target_kb
     ):
         captured_message = {}
 
-        async def fake_runner(engine, session, message, **kwargs):
-            captured_message["msg"] = message
-            yield EngineResponse(event_type="done", text="Done.")
+        async def fake_run_task(*args, **kwargs):
+            captured_message["msg"] = kwargs["message"]
+            return AssistantTaskResult(
+                session=None,
+                events=[],
+                approvals=[],
+                text="Done.",
+            )
 
-        mock_runner.side_effect = fake_runner
+        mock_run_task.side_effect = fake_run_task
 
         engine = MagicMock()
         engine.engine_type = "claude"
@@ -172,15 +183,20 @@ class TestAbsorbConversation:
 
         assert "morning deployments" in captured_message["msg"]
 
-    @patch("django_ergo.kb_pipelines.run_conversation_turn")
-    def test_prompt_includes_kb_context(self, mock_runner, source_session, target_kb):
+    @patch("django_ergo.kb_pipelines.run_workflow_task")
+    def test_prompt_includes_kb_context(self, mock_run_task, source_session, target_kb):
         captured_message = {}
 
-        async def fake_runner(engine, session, message, **kwargs):
-            captured_message["msg"] = message
-            yield EngineResponse(event_type="done", text="Done.")
+        async def fake_run_task(*args, **kwargs):
+            captured_message["msg"] = kwargs["message"]
+            return AssistantTaskResult(
+                session=None,
+                events=[],
+                approvals=[],
+                text="Done.",
+            )
 
-        mock_runner.side_effect = fake_runner
+        mock_run_task.side_effect = fake_run_task
 
         engine = MagicMock()
         engine.engine_type = "claude"
@@ -195,15 +211,20 @@ class TestAbsorbConversation:
         assert "Personal Notes" in msg
         assert "preferences and habits" in msg
 
-    @patch("django_ergo.kb_pipelines.run_conversation_turn")
-    def test_custom_system_prompt(self, mock_runner, source_session, target_kb):
+    @patch("django_ergo.kb_pipelines.run_workflow_task")
+    def test_custom_system_prompt(self, mock_run_task, source_session, target_kb):
         captured_message = {}
 
-        async def fake_runner(engine, session, message, **kwargs):
-            captured_message["msg"] = message
-            yield EngineResponse(event_type="done", text="Done.")
+        async def fake_run_task(*args, **kwargs):
+            captured_message["msg"] = kwargs["message"]
+            return AssistantTaskResult(
+                session=None,
+                events=[],
+                approvals=[],
+                text="Done.",
+            )
 
-        mock_runner.side_effect = fake_runner
+        mock_run_task.side_effect = fake_run_task
 
         engine = MagicMock()
         engine.engine_type = "claude"
@@ -222,15 +243,20 @@ class TestAbsorbConversation:
         msg = captured_message["msg"]
         assert "Only extract deployment preferences" in msg
 
-    @patch("django_ergo.kb_pipelines.run_conversation_turn")
-    def test_passes_both_toolkits(self, mock_runner, source_session, target_kb):
+    @patch("django_ergo.kb_pipelines.run_workflow_task")
+    def test_passes_both_toolkits(self, mock_run_task, source_session, target_kb):
         captured_tools = {}
 
-        async def fake_runner(engine, session, message, extra_tools=None):
-            captured_tools["tools"] = extra_tools
-            yield EngineResponse(event_type="done", text="Done.")
+        async def fake_run_task(*args, **kwargs):
+            captured_tools["tools"] = kwargs.get("extra_tools")
+            return AssistantTaskResult(
+                session=None,
+                events=[],
+                approvals=[],
+                text="Done.",
+            )
 
-        mock_runner.side_effect = fake_runner
+        mock_run_task.side_effect = fake_run_task
 
         engine = MagicMock()
         engine.engine_type = "claude"
@@ -248,12 +274,19 @@ class TestAbsorbConversation:
         assert "KBSuggestToolkit" in tool_types
         assert "KBToolkit" in tool_types
 
-    @patch("django_ergo.kb_pipelines.run_conversation_turn")
-    def test_no_suggestions_returns_empty(self, mock_runner, source_session, target_kb):
-        async def fake_runner(*args, **kwargs):
-            yield EngineResponse(event_type="done", text="Nothing to absorb.")
+    @patch("django_ergo.kb_pipelines.run_workflow_task")
+    def test_no_suggestions_returns_empty(
+        self, mock_run_task, source_session, target_kb
+    ):
+        async def fake_run_task(*args, **kwargs):
+            return AssistantTaskResult(
+                session=None,
+                events=[],
+                approvals=[],
+                text="Nothing to absorb.",
+            )
 
-        mock_runner.side_effect = fake_runner
+        mock_run_task.side_effect = fake_run_task
 
         engine = MagicMock()
         engine.engine_type = "claude"

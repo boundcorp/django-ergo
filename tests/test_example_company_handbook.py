@@ -12,7 +12,6 @@ from unittest.mock import patch
 import pytest
 from asgiref.sync import async_to_sync
 from django.contrib.auth import get_user_model
-from django_ergo.conversation.engine import EngineResponse
 from django_ergo.conversation.history_toolkit import ChatWithHistoryToolkit
 from django_ergo.conversation.models import ClaudeContentBlock
 from django_ergo.conversation.models import ClaudeMessage
@@ -157,11 +156,13 @@ class TestCompanyHandbookSetup:
 class TestHandbookAbsorption:
     """Test absorbing team conversations into a handbook KB."""
 
-    @patch("django_ergo.kb_pipelines.run_conversation_turn")
-    def test_absorb_architecture_chat(self, mock_runner, alice_arch_chat, handbook_kb):
+    @patch("django_ergo.kb_pipelines.run_workflow_task")
+    def test_absorb_architecture_chat(
+        self, mock_run_task, alice_arch_chat, handbook_kb
+    ):
         """Architecture decisions get absorbed into the handbook."""
 
-        async def fake_runner(*args, **kwargs):
+        async def fake_run_task(*args, **kwargs):
             toolkits = kwargs.get("extra_tools", [])
             for tk in toolkits:
                 if tk.has_tool("kb_suggest_create"):
@@ -173,9 +174,8 @@ class TestHandbookAbsorption:
                             "hierarchy_code": "0",
                         },
                     )
-            yield EngineResponse(event_type="done", text="Done.")
 
-        mock_runner.side_effect = fake_runner
+        mock_run_task.side_effect = fake_run_task
 
         suggestions = async_to_sync(absorb_conversation)(
             alice_arch_chat,
@@ -186,10 +186,10 @@ class TestHandbookAbsorption:
         assert len(suggestions.get_suggestions()) == 1
         assert suggestions.get_suggestions()[0]["title"] == "Database Architecture"
 
-    @patch("django_ergo.kb_pipelines.run_conversation_turn")
+    @patch("django_ergo.kb_pipelines.run_workflow_task")
     def test_build_full_handbook(  # noqa: PLR0913
         self,
-        mock_runner,
+        mock_run_task,
         alice_arch_chat,
         bob_deploy_chat,
         bob_onboarding_chat,
@@ -198,7 +198,7 @@ class TestHandbookAbsorption:
         """Absorb all conversations and build a structured handbook."""
         call_count = {"n": 0}
 
-        async def fake_runner(*args, **kwargs):
+        async def fake_run_task(*args, **kwargs):
             call_count["n"] += 1
             toolkits = kwargs.get("extra_tools", [])
             for tk in toolkits:
@@ -230,9 +230,8 @@ class TestHandbookAbsorption:
                                 "hierarchy_code": "2",
                             },
                         )
-            yield EngineResponse(event_type="done", text="Done.")
 
-        mock_runner.side_effect = fake_runner
+        mock_run_task.side_effect = fake_run_task
         engine = _make_mock_engine()
 
         # Absorb each conversation
@@ -302,13 +301,13 @@ class TestHandbookAbsorption:
 class TestHandbookWithSuggestionReview:
     """Test the suggest-then-review pattern for handbook curation."""
 
-    @patch("django_ergo.kb_pipelines.run_conversation_turn")
+    @patch("django_ergo.kb_pipelines.run_workflow_task")
     def test_selective_apply(
-        self, mock_runner, alice_arch_chat, bob_deploy_chat, handbook_kb
+        self, mock_run_task, alice_arch_chat, bob_deploy_chat, handbook_kb
     ):
         """Admin can review suggestions and selectively apply them."""
 
-        async def fake_runner(*args, **kwargs):
+        async def fake_run_task(*args, **kwargs):
             toolkits = kwargs.get("extra_tools", [])
             for tk in toolkits:
                 if tk.has_tool("kb_suggest_create"):
@@ -328,9 +327,8 @@ class TestHandbookWithSuggestionReview:
                             "hierarchy_code": "1",
                         },
                     )
-            yield EngineResponse(event_type="done", text="Done.")
 
-        mock_runner.side_effect = fake_runner
+        mock_run_task.side_effect = fake_run_task
 
         suggestions = async_to_sync(absorb_conversation)(
             alice_arch_chat,
