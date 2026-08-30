@@ -1,0 +1,65 @@
+version: 1
+goals:
+  - id: 7ec9a21d-6825-500d-8d72-ef9361eeb4ed
+    path: wiki/project/system-overview.md
+    title: System overview
+    type: project
+    project: django-ergo
+    question: Explain the product boundary and major subsystems.
+    required_roles: [runtime, test]
+    required_sections: [Overview, Subsystems, Boundaries]
+    queries: [product boundary, subsystems]
+  - id: e0f2c384-4d3e-5ce4-9a8c-11ea1a879ece
+    path: wiki/features/committed-knowledge-projection.md
+    title: Committed knowledge projection
+    type: feature
+    project: django-ergo
+    question: Explain trusted Git projection, identity, lifecycle, and recovery.
+    required_roles: [runtime, test]
+    required_sections: [Overview, Lifecycle, Recovery]
+    queries: [project_commit SourceDocument Git]
+  - id: fc6108bf-bf2c-5a43-b8d9-a067ac03aa96
+    path: wiki/features/retrieval-and-indexing.md
+    title: Retrieval and indexing
+    type: feature
+    project: django-ergo
+    question: Explain explicit embedding, Article retrieval, and the new source index without conflating them.
+    required_roles: [runtime]
+    required_sections: [Overview, Retrieval, Indexing]
+    queries: [embedding retrieval index]
+  - id: 09d37387-e8f2-54cb-88f1-8167c8eab065
+    path: wiki/architecture/conversation-tool-runtime.md
+    title: Conversation tool runtime
+    type: architecture
+    project: django-ergo
+    question: Explain engines, sessions, tool dispatch, approvals, and termination.
+    required_roles: [runtime, test]
+    required_sections: [Overview, Runtime, Boundaries]
+    queries: [conversation tool approval]
+  - id: 6ffb1685-f1e5-5f1c-a3bd-4186fdd4f578
+    path: wiki/architecture/permission-boundaries.md
+    title: Permission boundaries
+    type: architecture
+    project: django-ergo
+    question: Explain tenant filtering, bound toolkits, managed-content guards, and remaining caller obligations.
+    required_roles: [runtime]
+    required_sections: [Overview, Boundaries, Obligations]
+    queries: [permission knowledgebase managed]
+  - id: 977b3642-cad9-5afb-a126-271c519d5860
+    path: wiki/use-cases/conversation-absorption.md
+    title: Conversation absorption
+    type: use-case
+    project: django-ergo
+    question: Explain how conversations become reviewed knowledge proposals.
+    required_roles: [runtime]
+    required_sections: [Overview, Flow, Review]
+    queries: [conversation knowledge proposal]
+  - id: 01726812-3630-5319-9221-0c4568e4c490
+    path: wiki/use-cases/repository-self-wiki.md
+    title: Repository self-wiki
+    type: use-case
+    project: django-ergo
+    question: Explain this goal loop and its human review boundary.
+    required_roles: [runtime]
+    required_sections: [Overview, Flow, Review]
+    queries: [repository index wiki]
