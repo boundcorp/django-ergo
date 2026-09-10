@@ -1,0 +1,267 @@
+"""Committed Git-to-Article projection for filesystem knowledge sources."""
+
+from __future__ import annotations
+
+import fnmatch
+import hashlib
+import json
+import uuid
+from dataclasses import dataclass
+from typing import Any
+
+from django.db import transaction
+from django.utils import timezone
+
+from django_ergo.filesystem_support import yaml
+from django_ergo.git_snapshot import GitSnapshot
+from django_ergo.git_snapshot import GitSnapshotError
+from django_ergo.models import Article
+from django_ergo.models import KnowledgeSource
+from django_ergo.models import SourceDocument
+from django_ergo.paths import validate_relative_path
+
+
+class KnowledgeSyncError(RuntimeError):
+    """Raised when a committed source cannot be projected safely."""
+
+
+@dataclass(frozen=True)
+class ParsedDocument:
+    document_id: uuid.UUID
+    relative_path: str
+    title: str
+    body: str
+    document_type: str
+    status: str
+    project: str
+    source_references: list[Any]
+    metadata: dict[str, Any]
+    content_hash: str
+    git_blob_oid: str
+
+
+def _allowed_path(source: KnowledgeSource, path: str) -> bool:
+    includes = source.include_paths or ["**/*.md", "*.md"]
+    excludes = source.exclude_paths or []
+    return any(fnmatch.fnmatch(path, pattern) for pattern in includes) and not any(
+        fnmatch.fnmatch(path, pattern) for pattern in excludes
+    )
+
+
+def _parse_document(path: str, blob_oid: str, content: str) -> ParsedDocument:
+    if not content.startswith("---\n"):
+        raise KnowledgeSyncError(f"{path}: frontmatter must start with ---")
+    try:
+        marker = content.index("\n---\n", 4)
+    except ValueError as exc:
+        raise KnowledgeSyncError(
+            f"{path}: frontmatter closing marker is missing"
+        ) from exc
+    try:
+        frontmatter = yaml.safe_load(content[4:marker]) or {}
+    except yaml.YAMLError as exc:
+        raise KnowledgeSyncError(f"{path}: invalid YAML frontmatter: {exc}") from exc
+    if not isinstance(frontmatter, dict):
+        raise KnowledgeSyncError(f"{path}: frontmatter must be a mapping")
+    try:
+        document_id = uuid.UUID(str(frontmatter["id"]))
+        title = str(frontmatter["title"]).strip()
+    except (KeyError, TypeError, ValueError) as exc:
+        raise KnowledgeSyncError(
+            f"{path}: frontmatter requires valid id and title"
+        ) from exc
+    if not title:
+        raise KnowledgeSyncError(f"{path}: title cannot be empty")
+    source_references = frontmatter.get("sources", [])
+    if not isinstance(source_references, list):
+        raise KnowledgeSyncError(f"{path}: sources must be a list")
+    try:
+        normalized_path = validate_relative_path(path)
+    except ValueError as exc:
+        raise KnowledgeSyncError(f"{path}: invalid relative path") from exc
+    status = str(frontmatter.get("status", "current"))
+    if status not in {"current", "active", "draft", "stale", "archived", "superseded"}:
+        raise KnowledgeSyncError(f"{path}: unsupported lifecycle status {status}")
+    metadata = {
+        key: value
+        for key, value in frontmatter.items()
+        if key not in {"id", "title", "type", "status", "project", "sources"}
+    }
+    body = content[marker + len("\n---\n") :]
+    normalized = json.dumps(
+        {"path": normalized_path, "title": title, "body": body},
+        sort_keys=True,
+        ensure_ascii=False,
+    )
+    return ParsedDocument(
+        document_id=document_id,
+        relative_path=normalized_path,
+        title=title,
+        body=body,
+        document_type=str(frontmatter.get("type", "document")),
+        status=status,
+        project=str(frontmatter.get("project", "")),
+        source_references=source_references,
+        metadata=metadata,
+        content_hash=hashlib.sha256(normalized.encode()).hexdigest(),
+        git_blob_oid=blob_oid,
+    )
+
+
+def _read_tree(snapshot: GitSnapshot, source: KnowledgeSource) -> list[ParsedDocument]:
+    root = source.repository_subdirectory.strip("/")
+    prefix = f"{root}/wiki/" if root else "wiki/"
+    paths = snapshot.paths(prefix)
+    documents: list[ParsedDocument] = []
+    seen_ids: set[uuid.UUID] = set()
+    for full_path in paths:
+        if not full_path.endswith(".md"):
+            continue
+        relative_path = full_path[len(prefix) :]
+        if not _allowed_path(source, relative_path):
+            continue
+        blob_oid = snapshot.blob_oid(full_path)
+        content = snapshot.read_text(full_path)
+        document = _parse_document(relative_path, blob_oid, content)
+        if document.document_id in seen_ids:
+            raise KnowledgeSyncError(f"Duplicate document ID: {document.document_id}")
+        seen_ids.add(document.document_id)
+        documents.append(document)
+    return documents
+
+
+def project_commit(
+    source: KnowledgeSource,
+    *,
+    commit: str | None = None,
+    dry_run: bool = False,
+) -> dict[str, int | str]:
+    """Project one allowed Git commit and return reconciliation counts."""
+    observed_checkpoint = source.last_synced_commit
+    try:
+        snapshot = GitSnapshot(source, commit)
+    except GitSnapshotError as exc:
+        raise KnowledgeSyncError(str(exc)) from exc
+    target_commit = snapshot.commit
+    documents = _read_tree(snapshot, source)
+    if dry_run:
+        return {"commit": target_commit, "documents": len(documents), "writes": 0}
+
+    with transaction.atomic():
+        locked_source = KnowledgeSource.objects.select_for_update().get(pk=source.pk)
+        if locked_source.last_synced_commit != observed_checkpoint:
+            raise KnowledgeSyncError(
+                "Knowledge source changed while the commit was being prepared; retry."
+            )
+        if locked_source.last_synced_commit == target_commit:
+            return {"commit": target_commit, "documents": len(documents), "writes": 0}
+        document_ids = [document.document_id for document in documents]
+        other_source_ids = set(
+            SourceDocument.objects.exclude(source=locked_source)
+            .filter(document_id__in=document_ids)
+            .values_list("document_id", flat=True)
+        )
+        if other_source_ids:
+            raise KnowledgeSyncError(
+                "A document ID is already owned by another source."
+            )
+
+        existing = {
+            document.document_id: document
+            for document in locked_source.documents.select_related("article")
+        }
+        seen_ids: set[uuid.UUID] = set()
+        writes = 0
+        for document in documents:
+            seen_ids.add(document.document_id)
+            tracked = existing.get(document.document_id)
+            if tracked is None:
+                article = Article(
+                    knowledgebase=locked_source.knowledgebase,
+                    hierarchy_code=None,
+                    relative_path=document.relative_path,
+                    title=document.title,
+                    content=document.body,
+                    status="active"
+                    if document.status == "current"
+                    else document.status,
+                )
+                article.save(_allow_managed_write=True)
+                SourceDocument.objects.create(
+                    source=locked_source,
+                    document_id=document.document_id,
+                    relative_path=document.relative_path,
+                    article=article,
+                    content_hash=document.content_hash,
+                    git_blob_oid=document.git_blob_oid,
+                    last_seen_commit=target_commit,
+                    document_type=document.document_type,
+                    status=document.status,
+                    project=document.project,
+                    source_references=document.source_references,
+                    metadata=document.metadata,
+                    state=SourceDocument.State.ARCHIVED
+                    if document.status == "archived"
+                    else SourceDocument.State.ACTIVE,
+                )
+                writes += 1
+                continue
+
+            article = tracked.article
+            prior_paths = list(tracked.prior_paths or [])
+            changed = tracked.content_hash != document.content_hash
+            renamed = tracked.relative_path != document.relative_path
+            if renamed:
+                prior_paths.append(tracked.relative_path)
+            target_status = (
+                "active" if document.status == "current" else document.status
+            )
+            if changed or renamed or article.status != target_status:
+                article.relative_path = document.relative_path
+                article.title = document.title
+                article.content = document.body
+                article.status = target_status
+                article.content_embedding = None
+                article.summary_embedding = None
+                article.save(
+                    update_fields=[
+                        "relative_path",
+                        "title",
+                        "content",
+                        "status",
+                        "content_embedding",
+                        "summary_embedding",
+                        "updated_at",
+                    ],
+                    _allow_managed_write=True,
+                )
+                writes += 1
+            tracked.relative_path = document.relative_path
+            tracked.prior_paths = prior_paths
+            tracked.content_hash = document.content_hash
+            tracked.git_blob_oid = document.git_blob_oid
+            tracked.last_seen_commit = target_commit
+            tracked.document_type = document.document_type
+            tracked.status = document.status
+            tracked.project = document.project
+            tracked.source_references = document.source_references
+            tracked.metadata = document.metadata
+            tracked.state = (
+                SourceDocument.State.ARCHIVED
+                if document.status == "archived"
+                else SourceDocument.State.ACTIVE
+            )
+            tracked.save()
+
+        for tracked in locked_source.documents.exclude(document_id__in=seen_ids):
+            if tracked.state != SourceDocument.State.MISSING:
+                tracked.state = SourceDocument.State.MISSING
+                tracked.save(update_fields=["state", "updated_at"])
+                writes += 1
+
+        locked_source.last_synced_commit = target_commit
+        locked_source.last_sync_at = timezone.now()
+        locked_source.save(
+            update_fields=["last_synced_commit", "last_sync_at", "updated_at"]
+        )
+    return {"commit": target_commit, "documents": len(documents), "writes": writes}

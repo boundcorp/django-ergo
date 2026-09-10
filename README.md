@@ -16,6 +16,9 @@ Virtual KBs need no files, Git or YAML. Existing Article/conversation APIs
 remain supported, with an explicit reviewed Article compatibility bridge.
 See [backend contracts, host examples, commands, and exact dependency/parity limits](docs/knowledge-foundation.md).
 
+Optional repository snapshot, Markdown projection, source indexing and wiki
+proposal adapters are also available. See [integration and upgrade guidance](docs/fs-vector-integration.md).
+
 **Django Ergo** provides powerful semantic search and knowledge management capabilities through innovative field types and AI integration. Build intelligent Django applications with automatic embedding generation, multi-field semantic search, and advanced workflow orchestration.
 
 ## ✨ Key Features

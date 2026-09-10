@@ -101,6 +101,10 @@ class EmbeddingProvider(ABC):
             str: Provider name for identification
         """
 
+    def get_index_id(self) -> str:
+        """Stable identity for vectors that may share a persisted index."""
+        return f"{self.__class__.__module__}.{self.__class__.__qualname__}:{self.name}:{self.get_dimensions()}"
+
 
 class EmbeddingError(Exception):
     """Exception raised when embedding generation fails."""
@@ -260,6 +264,9 @@ class DeterministicEmbeddingProvider(EmbeddingProvider):
     def name(self) -> str:
         return f"Deterministic Provider ({self.dimensions}D)"
 
+    def get_index_id(self) -> str:
+        return f"{super().get_index_id()}:seed={self.seed}"
+
 
 class CustomEmbeddingProvider(EmbeddingProvider):
     """
@@ -315,6 +322,12 @@ class CustomEmbeddingProvider(EmbeddingProvider):
     @property
     def name(self) -> str:
         return f"Custom Provider ({len(self.embeddings)} embeddings)"
+
+    def get_index_id(self) -> str:
+        fingerprint = hashlib.sha256(
+            repr(sorted(self.embeddings.items())).encode()
+        ).hexdigest()
+        return f"{super().get_index_id()}:{fingerprint}"
 
 
 # Provider registry

@@ -46,12 +46,27 @@ class ArticleCompatibility:
                         "content": article.content,
                         "summary": article.summary,
                         "hierarchy_code": article.hierarchy_code,
-                        "status": article.status,
+                        "status": self._status(article),
+                        "relative_path": article.relative_path,
                     }
                     for article in articles
                 ],
             }
         )
+
+    @staticmethod
+    def _status(article):
+        from django.core.exceptions import ObjectDoesNotExist
+
+        try:
+            source = article.source_document
+        except ObjectDoesNotExist:
+            return article.status
+        if source.state == "missing":
+            return "stale"
+        if source.state == "archived":
+            return "archived"
+        return article.status if source.status == "current" else source.status
 
     def source_revision(self):
         self._authorize("export")
@@ -88,11 +103,11 @@ class ArticleCompatibility:
                 "page",
                 article.title,
                 article.content,
-                article.status,
+                self._status(article),
                 provenance,
                 (evidence.reference,),
                 summary=article.summary or "",
-                hierarchy_code=article.hierarchy_code,
+                hierarchy_code=article.hierarchy_code or "",
             )
             changes.extend((evidence, page))
         previous = next(

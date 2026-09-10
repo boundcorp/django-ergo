@@ -165,7 +165,9 @@ async def run_conversation_turn(
 
             yield response
 
-            result, is_error = _execute_tool(name, args, toolkits, session)
+            result, is_error = await sync_to_async(
+                _execute_tool, thread_sensitive=True
+            )(name, args, toolkits, session)
             results.append((tool_id, result, is_error))
 
         if has_approval or not results:

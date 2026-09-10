@@ -225,7 +225,9 @@ class SemanticTextField(models.TextField):
         """
         Generate embedding if the text content has changed.
         """
-        if not self.auto_embed:
+        if not self.auto_embed or getattr(
+            model_instance, "_ergo_explicit_indexing", False
+        ):
             return super().pre_save(model_instance, add)
 
         # Get current text value
