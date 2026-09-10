@@ -34,6 +34,9 @@ as the immutable release identity. Reinstall/update host locks explicitly.
 - Hosts using `django_ergo.knowledge` alone use its independent migrations and may
   use SQLite or memory without a filesystem-backed KB. The legacy `django_ergo`
   app still needs PostgreSQL/vector and `[legacy]` dependencies.
+  Include `django.contrib.postgres` in the legacy host's `INSTALLED_APPS`; current
+  Django checks require it for the repository search fields and indexes. It is
+  not needed by hosts installing only the backend-neutral knowledge app.
 - Applied migrations are unchanged. `0014_path_primary_articles` drops legacy-code
   uniqueness without rewriting IDs, content or paths. An older database must still
   satisfy unchanged 0013's duplicate-code preflight. Resolve that explicitly before

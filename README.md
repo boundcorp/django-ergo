@@ -1,6 +1,6 @@
 # django-ergo
 
-![Coverage](https://img.shields.io/badge/coverage-97%25-brightgreen)
+[![Tests](https://github.com/boundcorp/django-ergo/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/boundcorp/django-ergo/actions/workflows/test.yml)
 
 ## Overview
 
@@ -81,14 +81,11 @@ results = Article.objects.multi_field_semantic_search(
 
 ## Quickstart
 
-Install django-ergo:
+Install the legacy Article/conversation app from an immutable reviewed Git commit
+(replace `FULL_COMMIT_SHA` with the release handoff's 40-character main SHA):
 
 ```bash
-# From pypi
-python3 -m pip install 'django-ergo[legacy]'
-
-# From source
-python3 -m pip install 'django-ergo[legacy] @ git+https://github.com/boundcorp/django-ergo.git'
+python3 -m pip install 'django-ergo[legacy] @ git+https://github.com/boundcorp/django-ergo.git@FULL_COMMIT_SHA'
 ```
 
 ### Settings
@@ -98,6 +95,7 @@ To enable `django_ergo` in your project you need to add it to `INSTALLED_APPS` i
 ```python
 INSTALLED_APPS = (
     ...
+    'django.contrib.postgres',
     'django_ergo',
     ...
 )
