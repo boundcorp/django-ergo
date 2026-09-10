@@ -1,6 +1,7 @@
 import os
 import subprocess
 import sys
+import tempfile
 import tomllib
 from pathlib import Path
 
@@ -97,9 +98,12 @@ for backend in (MemoryCorpus(Snapshot('virtual', 'project', (), ())),
         "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src"),
         "PYTHONDONTWRITEBYTECODE": "1",
     }
+    if os.environ.get("ERGO_TEST_INSTALLED") == "1":
+        environment.pop("PYTHONPATH", None)
     result = subprocess.run(
         [sys.executable, "-c", script],
         env=environment,
+        cwd=tempfile.gettempdir(),
         capture_output=True,
         text=True,
         check=False,

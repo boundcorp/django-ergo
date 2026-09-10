@@ -6,21 +6,44 @@ on:
   pull_request:
     branches: [main, master, develop]
 
+permissions:
+  contents: read
+
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      ERGO_TEST_ISOLATED: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Build Docker container
-        run: |
-          make build_devcontainer
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
 
-      - name: Run tests with coverage in container
+      - name: Install test dependencies
+        run: python -m pip install -e '.[dev]' pytest-cov
+
+      - name: Run isolated PostgreSQL tests
+        run: >-
+          env -u DATABASE_URL -u OPENAI_API_KEY -u ANTHROPIC_API_KEY -u TEST_OPENAI
+          python -m pytest tests -q --tb=short -o addopts='' --reuse-db
+          --ds=tests.example_app.settings --cov=src/django_ergo
+          --cov-report=html --junitxml=test-results.xml
+
+      - name: Check additive migration drift
+        run: >-
+          python -m django makemigrations django_ergo ergo_knowledge
+          --check --dry-run --settings=tests.example_app.settings
+
+      - name: Check provider-free shared contracts
         run: |
-          make test_coverage_in_devcontainer
+          python -m pytest tests/test_knowledge_corpus.py tests/test_knowledge_writes.py tests/test_knowledge_features.py tests/test_knowledge_boundary.py tests/test_knowledge_wiki_import.py tests/test_knowledge_paths.py --ds=tests.knowledge_settings -o addopts='' -q --tb=short
 
       - name: Upload coverage reports
         uses: actions/upload-artifact@v4
@@ -36,6 +59,26 @@ jobs:
         with:
           name: test-results
           path: |
-            .coverage
+            test-results.xml
             htmlcov/
           retention-days: 30
+
+  minimal-wheel:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build and check distributions
+        run: |
+          python -m pip install build twine
+          python -m build
+          python -m twine check dist/*
+      - name: Exercise installed virtual API without optional dependencies
+        run: |
+          python -m venv "$RUNNER_TEMP/ergo-minimal"
+          "$RUNNER_TEMP/ergo-minimal/bin/python" -m pip install dist/*.whl
+          ERGO_TEST_INSTALLED=1 "$RUNNER_TEMP/ergo-minimal/bin/python" -c 'from tests.test_knowledge_boundary import test_lightweight_app_and_virtual_command_do_not_import_legacy_dependencies; test_lightweight_app_and_virtual_command_do_not_import_legacy_dependencies()'
+          "$RUNNER_TEMP/ergo-minimal/bin/python" -m pip list
