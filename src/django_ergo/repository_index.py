@@ -434,8 +434,10 @@ def index_repository_commit(  # noqa: C901, PLR0912, PLR0915 - atomic reconcilia
             vector = (
                 old.embedding
                 if reuse_embedding
-                else vector_values(
-                    provider.generate_embedding(input_text), _EMBEDDING_DIMENSIONS
+                else list(
+                    vector_values(
+                        provider.generate_embedding(input_text), _EMBEDDING_DIMENSIONS
+                    )
                 )
                 if semantic
                 else None

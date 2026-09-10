@@ -1,6 +1,7 @@
 import subprocess
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from django.test import TestCase
@@ -24,6 +25,12 @@ class RepositoryIndexReconciliationTests(TestCase):
         )
 
     def test_identical_rerun_reuses_checkpoint_without_writes(self):
+        original_save = SourceUnit.save
+
+        def require_list(instance, *args, **kwargs):
+            self.assertIsInstance(instance.embedding, list)
+            return original_save(instance, *args, **kwargs)
+
         with tempfile.TemporaryDirectory() as directory:
             repository = Path(directory) / "repo"
             (repository / ".ergo").mkdir(parents=True)
@@ -50,7 +57,10 @@ class RepositoryIndexReconciliationTests(TestCase):
                     allowed_ref="HEAD",
                 )
                 provider = DeterministicEmbeddingProvider()
-                first = index_repository_commit(source, provider=provider)
+                with patch.object(
+                    SourceUnit, "save", autospec=True, side_effect=require_list
+                ):
+                    first = index_repository_commit(source, provider=provider)
                 source.refresh_from_db()
                 second = index_repository_commit(source, provider=provider)
                 (repository / "src" / "sample.py").write_text(
