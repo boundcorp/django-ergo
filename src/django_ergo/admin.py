@@ -14,6 +14,8 @@ from django.utils.html import format_html
 from django_ergo.models import Article
 from django_ergo.models import ChatMessage
 from django_ergo.models import Knowledgebase
+from django_ergo.models import KnowledgeSource
+from django_ergo.models import SourceDocument
 from django_ergo.models import UserChat
 from django_ergo.models import Workflow
 
@@ -481,6 +483,7 @@ class ArticleAdmin(admin.ModelAdmin):
     """Admin interface for Article model."""
 
     list_display = [
+        "relative_path",
         "hierarchy_code",
         "title_truncated",
         "knowledgebase",
@@ -489,11 +492,14 @@ class ArticleAdmin(admin.ModelAdmin):
         "created_at",
     ]
     list_filter = ["knowledgebase", "created_at"]
-    search_fields = ["title", "content", "hierarchy_code"]
+    search_fields = ["title", "content", "relative_path", "hierarchy_code"]
     readonly_fields = ["summary", "created_at", "updated_at"]
 
     fieldsets = (
-        ("Basic Information", {"fields": ("knowledgebase", "hierarchy_code", "title")}),
+        (
+            "Basic Information",
+            {"fields": ("knowledgebase", "relative_path", "hierarchy_code", "title")},
+        ),
         ("Content", {"fields": ("content",)}),
         (
             "Generated Fields",
@@ -508,6 +514,34 @@ class ArticleAdmin(admin.ModelAdmin):
             {"fields": ("created_at", "updated_at"), "classes": ("collapse",)},
         ),
     )
+
+    def get_readonly_fields(self, request, obj=None):
+        """Lock all projected Article fields in the admin."""
+        fields = list(super().get_readonly_fields(request, obj))
+        if obj is not None and obj.is_managed:
+            return [
+                "knowledgebase",
+                "relative_path",
+                "hierarchy_code",
+                "title",
+                "content",
+                "summary",
+                "created_at",
+                "updated_at",
+            ]
+        return fields
+
+    def has_change_permission(self, request, obj=None):
+        """Allow viewing but not editing source-managed Articles."""
+        if obj is not None and obj.is_managed:
+            return False
+        return super().has_change_permission(request, obj)
+
+    def has_delete_permission(self, request, obj=None):
+        """Prevent direct deletion of source-managed Articles."""
+        if obj is not None and obj.is_managed:
+            return False
+        return super().has_delete_permission(request, obj)
 
     @admin.display(description="Title")
     def title_truncated(self, obj):
@@ -533,6 +567,38 @@ class ArticleAdmin(admin.ModelAdmin):
         if length > 1000:  # noqa: PLR2004
             return format_html("{:.1f}K chars", length / 1000)
         return f"{length} chars"
+
+
+@admin.register(KnowledgeSource)
+class KnowledgeSourceAdmin(admin.ModelAdmin):
+    list_display = [
+        "id",
+        "knowledgebase",
+        "repository_alias",
+        "repository_subdirectory",
+        "allowed_ref",
+        "last_synced_commit",
+        "last_sync_at",
+    ]
+    readonly_fields = ["last_synced_commit", "last_sync_at", "created_at", "updated_at"]
+
+
+@admin.register(SourceDocument)
+class SourceDocumentAdmin(admin.ModelAdmin):
+    list_display = [
+        "document_id",
+        "source",
+        "article",
+        "relative_path",
+        "state",
+        "last_seen_commit",
+    ]
+    list_filter = ["state", "source"]
+    search_fields = ["document_id", "article__relative_path"]
+
+    @admin.display(description="Relative path")
+    def relative_path(self, obj):
+        return obj.article.relative_path
 
 
 @admin.register(UserChat)
@@ -651,7 +717,7 @@ class UserChatAdmin(admin.ModelAdmin):
                 "</div>",
                 messages.count(),
                 ", ".join(
-                    f'{mt["message_type"]}: {mt["count"]}' for mt in message_types
+                    f"{mt['message_type']}: {mt['count']}" for mt in message_types
                 ),
                 self.last_activity(obj),
                 history_url,

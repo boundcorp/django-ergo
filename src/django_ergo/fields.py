@@ -138,7 +138,12 @@ def generate_embedding(text: str) -> list[float]:
 
 
 def vector_search(
-    model_class, vector_field_name: str, query_vector: list[float], top_k: int = 10
+    model_class,
+    vector_field_name: str,
+    query_vector: list[float],
+    top_k: int = 10,
+    *,
+    queryset=None,
 ):
     """
     Low-level vector search function that searches for a known vector.
@@ -152,8 +157,11 @@ def vector_search(
     Returns:
         QuerySet: Results ordered by semantic similarity (cosine distance)
     """
+    candidates = model_class.objects.all() if queryset is None else queryset
+    if hasattr(candidates, "visible_to_retrieval"):
+        candidates = candidates.visible_to_retrieval()
     return (
-        model_class.objects.exclude(**{f"{vector_field_name}__isnull": True})
+        candidates.exclude(**{f"{vector_field_name}__isnull": True})
         .annotate(semantic_distance=CosineDistance(vector_field_name, query_vector))
         .order_by("semantic_distance")[:top_k]
     )
@@ -217,7 +225,9 @@ class SemanticTextField(models.TextField):
         """
         Generate embedding if the text content has changed.
         """
-        if not self.auto_embed:
+        if not self.auto_embed or getattr(
+            model_instance, "_ergo_explicit_indexing", False
+        ):
             return super().pre_save(model_instance, add)
 
         # Get current text value

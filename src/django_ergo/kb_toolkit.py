@@ -117,12 +117,14 @@ class KBToolkit(Toolkit):
     def render_overview(self) -> str:
         parts = []
         for kb_id, kb in self.knowledgebases.items():
-            article_count = kb.articles.count()
+            article_count = kb.articles.visible_to_retrieval().count()
             header = f"=== Knowledge Base: {kb.name} (kb_id: {kb_id}) ==="
             desc = f"Description: {kb.description}"
             count = f"Articles: {article_count}"
 
-            top_level = kb.articles.filter(hierarchy_code__regex=r"^.$")
+            top_level = kb.articles.visible_to_retrieval().filter(
+                hierarchy_code__regex=r"^.$"
+            )
             toc_lines = [f"  {a.hierarchy_code}: {a.title}" for a in top_level]
             toc = (
                 "Top-level sections:\n" + "\n".join(toc_lines)
@@ -149,7 +151,7 @@ class KBToolkit(Toolkit):
     def _kb_list(self) -> str:
         lines = []
         for i, (kb_id, kb) in enumerate(self.knowledgebases.items(), 1):
-            article_count = kb.articles.count()
+            article_count = kb.articles.visible_to_retrieval().count()
             lines.append(f"{i}. {kb.name} (kb_id: {kb_id}) — {article_count} articles")
             lines.append(f"   {kb.description}")
         return "\n".join(lines)
@@ -197,7 +199,9 @@ class KBToolkit(Toolkit):
         hierarchy_code = args["hierarchy_code"]
 
         try:
-            article = kb.articles.get(hierarchy_code=hierarchy_code)
+            article = kb.articles.visible_to_retrieval().get(
+                hierarchy_code=hierarchy_code
+            )
         except kb.articles.model.DoesNotExist:
             msg = f"Article '{hierarchy_code}' not found in '{kb.name}'"
             raise ValueError(msg) from None
@@ -215,7 +219,7 @@ class KBToolkit(Toolkit):
 
     def _kb_table_of_contents(self, args: dict) -> str:
         kb = self._get_kb_by_name(args["kb_name"])
-        articles = kb.articles.all().order_by("hierarchy_code")
+        articles = kb.articles.visible_to_retrieval().order_by("hierarchy_code")
 
         lines = []
         for article in articles:

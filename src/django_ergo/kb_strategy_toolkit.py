@@ -181,7 +181,9 @@ class KBStrategyToolkit(Toolkit):
             return "No tree prefixes found in the strategy document."
 
         # Get article counts per prefix
-        all_codes = list(kb.articles.values_list("hierarchy_code", flat=True))
+        all_codes = list(
+            kb.articles.visible_to_retrieval().values_list("hierarchy_code", flat=True)
+        )
         lines = []
         for prefix in sorted(tree_prefixes):
             matching = [c for c in all_codes if c.startswith(prefix)]

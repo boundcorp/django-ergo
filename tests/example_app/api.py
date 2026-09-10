@@ -166,7 +166,7 @@ def list_knowledgebases(request):
     user_id = str(request.auth.id)
     return Knowledgebase.objects.filter(
         Q(owner_id=user_id) | Q(owner_id__isnull=True) | Q(owner_id="")
-    ).annotate(article_count=Count("articles"))
+    ).annotate(article_count=Count("articles", filter=Q(articles__status="active")))
 
 
 @api.get(
@@ -179,7 +179,9 @@ def get_knowledgebase(request, kb_id: UUID):
     """Get a specific knowledge base"""
     user_id = str(request.auth.id)
     return get_object_or_404(
-        Knowledgebase.objects.annotate(article_count=Count("articles")),
+        Knowledgebase.objects.annotate(
+            article_count=Count("articles", filter=Q(articles__status="active"))
+        ),
         id=kb_id,
         **({"owner_id": user_id} if True else {}),  # Add access control
     )
@@ -275,10 +277,14 @@ def list_articles(
     user_id = str(request.auth.id)
 
     # Base queryset with access control
-    queryset = Article.objects.select_related("knowledgebase").filter(
-        Q(knowledgebase__owner_id=user_id)
-        | Q(knowledgebase__owner_id__isnull=True)
-        | Q(knowledgebase__owner_id="")
+    queryset = (
+        Article.objects.visible_to_retrieval()
+        .select_related("knowledgebase")
+        .filter(
+            Q(knowledgebase__owner_id=user_id)
+            | Q(knowledgebase__owner_id__isnull=True)
+            | Q(knowledgebase__owner_id="")
+        )
     )
 
     if knowledgebase:
@@ -297,7 +303,7 @@ def get_article(request, article_id: UUID):
     """Get a specific article"""
     user_id = str(request.auth.id)
     return get_object_or_404(
-        Article.objects.select_related("knowledgebase"),
+        Article.objects.visible_to_retrieval().select_related("knowledgebase"),
         id=article_id,
         knowledgebase__owner_id__in=[user_id, None, ""],
     )

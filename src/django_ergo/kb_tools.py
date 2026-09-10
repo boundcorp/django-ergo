@@ -8,6 +8,7 @@ by AI agents in workflows.
 from typing import Any
 
 from django.contrib.auth import get_user_model
+from django.db.models import Q
 
 from django_ergo.models import Article
 from django_ergo.models import Knowledgebase
@@ -84,10 +85,11 @@ def search_garden_kb(user: User, query: str, top_k: int = 5) -> list[dict[str, A
         List of matching articles from garden knowledge bases
     """
     # Search in knowledge bases with garden-related names
-    garden_kbs = (
-        Knowledgebase.objects.filter(name__icontains="garden")
-        .union(Knowledgebase.objects.filter(name__icontains="plant"))
-        .union(Knowledgebase.objects.filter(description__icontains="garden"))
+    garden_kbs = Knowledgebase.objects.filter(
+        Q(name__icontains="garden")
+        | Q(name__icontains="plant")
+        | Q(description__icontains="garden"),
+        owner_id=str(user.id),
     )
 
     if not garden_kbs.exists():
@@ -133,8 +135,10 @@ def get_kb_table_of_contents(user: User, kb_name: str) -> dict[str, Any]:
         return {"error": f"Knowledge base '{kb_name}' not found"}
 
     # Get top-level articles (single character hierarchy codes)
-    top_level_articles = kb.articles.filter(hierarchy_code__regex=r"^.$").order_by(
-        "hierarchy_code"
+    top_level_articles = (
+        kb.articles.visible_to_retrieval()
+        .filter(hierarchy_code__regex=r"^.$")
+        .order_by("hierarchy_code")
     )
 
     toc_entries = [
@@ -175,7 +179,7 @@ def get_article_by_hierarchy(
     """
     try:
         kb = Knowledgebase.objects.get(name__iexact=kb_name, owner_id=str(user.id))
-        article = kb.articles.get(hierarchy_code=hierarchy_code)
+        article = kb.articles.visible_to_retrieval().get(hierarchy_code=hierarchy_code)
     except (Knowledgebase.DoesNotExist, Article.DoesNotExist):
         return {
             "error": f"Article '{hierarchy_code}' not found in knowledge base '{kb_name}'"
@@ -211,7 +215,7 @@ def list_user_knowledgebases(user: User) -> list[dict[str, Any]]:
 
     results = []
     for kb in kbs:
-        article_count = kb.articles.count()
+        article_count = kb.articles.visible_to_retrieval().count()
         results.append(
             {
                 "id": str(kb.id),

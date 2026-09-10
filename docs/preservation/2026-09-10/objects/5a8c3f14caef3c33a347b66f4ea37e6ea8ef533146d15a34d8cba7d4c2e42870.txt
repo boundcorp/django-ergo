@@ -1,0 +1,56 @@
+---
+id: e0f2c384-4d3e-5ce4-9a8c-11ea1a879ece
+title: Committed knowledge projection
+type: feature
+status: current
+project: django-ergo
+sources:
+- kind: source-unit
+  unit_id: 6bce0940-1e16-5bbf-b567-3019b3a773ee
+  commit: 0fd6cf5e357891d9300b6eb04c0a38c2c6897dee
+  path: src/django_ergo/git_snapshot.py
+  symbol: GitSnapshot
+  role: runtime
+  content_hash: 0ac9bf27f00b626d58563824ab3b31eae315a8dbdce450335b82aae0dc479302
+- kind: source-unit
+  unit_id: 07878e4f-75ea-5a9d-8804-aeb0ae8f3650
+  commit: 0fd6cf5e357891d9300b6eb04c0a38c2c6897dee
+  path: src/django_ergo/sync.py
+  symbol: project_commit
+  role: runtime
+  content_hash: a7d07d4d7f9c26836473c46928aa90778efd129087292c83ee0f45195c1f4b5f
+- kind: source-unit
+  unit_id: 1d88d4f2-9ca0-5f74-8c68-4654e7563a07
+  commit: 0fd6cf5e357891d9300b6eb04c0a38c2c6897dee
+  path: src/django_ergo/models.py
+  symbol: SourceDocument
+  role: runtime
+  content_hash: 35027ecfc0fd0e01206f130b0576d0f6d306b1c4983835e10a408f1139cfa3a8
+- kind: source-unit
+  unit_id: a0dcbca6-f0e4-5e08-b5fc-ae6c234ec275
+  commit: 0fd6cf5e357891d9300b6eb04c0a38c2c6897dee
+  path: tests/test_sync.py
+  symbol: KnowledgeSyncTests.test_committed_projection_and_missing_visibility
+  role: test
+  content_hash: 42464eb6a4afbd68287a0fcea93bf614470e47f7212ed145de479556eca26cef
+---
+
+## Overview
+
+Committed projection treats Git Markdown as the authority and the database as a derived view. `GitSnapshot` resolves a requested commit and rejects it unless it is an ancestor of the source's configured `allowed_ref`. `project_commit` parses the snapshot's `wiki/` documents, while `SourceDocument` records each page UUID, path, blob, content hash, last-seen commit, and backing Article.
+
+## Lifecycle
+
+1. `project_commit` captures the source checkpoint, resolves an allowed immutable snapshot, and parses every selected Markdown document before opening a write transaction.
+2. A dry run returns the commit and document count without writes.
+3. A real run locks the `KnowledgeSource` and rejects concurrent checkpoint movement or document UUIDs owned by another source.
+4. New UUIDs create an Article and SourceDocument. Existing UUIDs update content or paths while retaining identity and prior paths.
+5. Documents absent from the new tree become `missing`; they are not deleted. The source checkpoint advances only after reconciliation completes.
+
+## Recovery
+
+Parsing, ownership, and concurrent-update failures raise before the checkpoint advances. Database changes are enclosed in one transaction, so a failed projection does not expose a partial tree. A missing document can return under the same UUID: reconciliation reuses its SourceDocument and Article and marks it active again. Recovery is an explicit caller retry against an allowed commit; this layer does not schedule retries.
+
+## Tradeoffs
+
+Stable UUID identity makes renames distinct from delete-and-create and preserves provenance, but each page must maintain valid frontmatter. Marking absent documents missing preserves retrieval history and permits restoration, but callers must filter visibility rather than assuming absence means deletion. Git review remains the publication boundary; database content can lag until `project_commit` runs.

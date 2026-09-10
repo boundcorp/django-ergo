@@ -116,7 +116,11 @@ class ClaudeAPIEngine(Engine):
             transport_type="api",
             max_tokens=self.max_tokens,
         ) as span:
-            messages = self.reconstruct_messages(session)
+            from asgiref.sync import sync_to_async
+
+            messages = await sync_to_async(
+                self.reconstruct_messages, thread_sensitive=True
+            )(session)
             tools = (
                 self.get_tools_schema(session.workflow) if session.workflow else None
             )

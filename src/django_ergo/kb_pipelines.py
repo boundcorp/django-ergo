@@ -96,3 +96,26 @@ async def absorb_conversation(
     )
 
     return suggest_toolkit
+
+
+async def absorb_corpus_conversation(session, toolkit, engine, *, system=None):
+    """Run the existing conversation curator with a host-prepared corpus toolkit.
+
+    The host first calls prepare_absorption with its authorized, redacted capture.
+    That capture, not an implicit raw-session render, is sent to the engine.
+    """
+    proposal = await sync_to_async(toolkit.get_proposal)()
+    evidence = next(
+        document for document in proposal.changes if document.kind == "evidence"
+    )
+    transcript = evidence.content
+    overview = await sync_to_async(toolkit.render_overview)()
+    await run_workflow_task(
+        user=session.user,
+        workflow=None,
+        engine=engine,
+        message=f"{system or 'Propose relevant knowledge using corpus_suggest tools. Do not publish.'}\n{overview}\n\nConversation to review:\n{transcript}",
+        extra_tools=[toolkit],
+        metadata={"absorption_source": str(session.id)},
+    )
+    return toolkit

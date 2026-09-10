@@ -1,0 +1,73 @@
+import subprocess
+import tempfile
+import uuid
+from pathlib import Path
+
+from django.test import TestCase
+from django.test import override_settings
+
+from django_ergo.models import Article
+from django_ergo.models import Knowledgebase
+from django_ergo.models import KnowledgeSource
+from django_ergo.models import SourceDocument
+from django_ergo.sync import project_commit
+
+
+class KnowledgeSyncTests(TestCase):
+    def _git(self, repository: Path, *args: str) -> None:
+        subprocess.run(
+            ["git", "-C", str(repository), *args],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+    def _create_repository(self, tmp_path: Path) -> Path:
+        repository = tmp_path / "knowledge-repo"
+        repository.mkdir()
+        self._git(repository, "init", "-b", "main")
+        self._git(repository, "config", "user.email", "test@example.com")
+        self._git(repository, "config", "user.name", "Test User")
+        (repository / "wiki").mkdir()
+        document_id = uuid.uuid4()
+        (repository / "wiki" / "guide.md").write_text(
+            f"---\nid: {document_id}\ntitle: Guide\nproject: ergo\n---\n\nInitial body.\n",
+            encoding="utf-8",
+        )
+        self._git(repository, "add", ".")
+        self._git(repository, "commit", "-m", "initial")
+        return repository
+
+    def test_committed_projection_and_missing_visibility(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            repository = self._create_repository(Path(temporary_directory))
+            with override_settings(
+                DJANGO_ERGO={"KNOWLEDGE_REPOSITORIES": {"docs": str(repository)}}
+            ):
+                knowledgebase = Knowledgebase.objects.create(
+                    name="Docs", owner_id="owner"
+                )
+                source = KnowledgeSource.objects.create(
+                    knowledgebase=knowledgebase,
+                    repository_alias="docs",
+                    repository_subdirectory="",
+                )
+                first = project_commit(source)
+                self.assertEqual(first["documents"], 1)
+                self.assertEqual(Article.objects.count(), 1)
+                tracked = SourceDocument.objects.get()
+                self.assertEqual(tracked.relative_path, "guide.md")
+                self.assertEqual(tracked.state, SourceDocument.State.ACTIVE)
+
+                (repository / "wiki" / "guide.md").unlink()
+                self._git(repository, "add", ".")
+                self._git(repository, "commit", "-m", "remove guide")
+                source.refresh_from_db()
+                project_commit(source)
+
+            tracked.refresh_from_db()
+            self.assertEqual(tracked.state, SourceDocument.State.MISSING)
+            self.assertEqual(
+                list(Article.objects.visible_to_retrieval()),
+                [],
+            )

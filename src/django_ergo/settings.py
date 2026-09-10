@@ -17,6 +17,7 @@ from django.test.signals import setting_changed
 from django.utils.module_loading import import_string
 
 DEFAULTS = {
+    "KNOWLEDGE_REPOSITORIES": {},
     "WORKFLOW_MODEL": "django_ergo.models.Workflow",  # example only
     # OpenAI Configuration
     "OPENAI_API_KEY": None,  # Can be overridden by environment variable

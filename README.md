@@ -1,10 +1,24 @@
 # django-ergo
 
-![Coverage](https://img.shields.io/badge/coverage-97%25-brightgreen)
+[![Tests](https://github.com/boundcorp/django-ergo/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/boundcorp/django-ergo/actions/workflows/test.yml)
 
 ## Overview
 
 AI Knowledgebase Toolkit for Django
+
+### Backend-neutral knowledge foundation
+
+The optional `django_ergo.knowledge` app provides shared validation, reviewed
+writes, logical path navigation/strategy, cited lexical/vector/hybrid retrieval and usage
+tracking for in-memory, Django-database, and Git-backed corpora. Semantic
+retrieval uses optional host providers/indexes, independently of storage.
+Virtual KBs need no files, Git or YAML. Existing Article/conversation APIs
+remain supported, with an explicit reviewed Article compatibility bridge.
+See [backend contracts, host examples, commands, and exact dependency/parity limits](docs/knowledge-foundation.md).
+See [path-first APIs, reviewed moves and legacy migration boundaries](docs/knowledge-paths.md).
+
+Optional repository snapshot, Markdown projection, source indexing and wiki
+proposal adapters are also available. See [integration and upgrade guidance](docs/fs-vector-integration.md).
 
 **Django Ergo** provides powerful semantic search and knowledge management capabilities through innovative field types and AI integration. Build intelligent Django applications with automatic embedding generation, multi-field semantic search, and advanced workflow orchestration.
 
@@ -67,14 +81,11 @@ results = Article.objects.multi_field_semantic_search(
 
 ## Quickstart
 
-Install django-ergo:
+Install the legacy Article/conversation app from an immutable reviewed Git commit
+(replace `FULL_COMMIT_SHA` with the release handoff's 40-character main SHA):
 
 ```bash
-# From pypi
-python3 -m pip install django-ergo
-
-# From source
-python3 -m pip install git+https://github.com/boundcorp/django-ergo.git
+python3 -m pip install 'django-ergo[legacy] @ git+https://github.com/boundcorp/django-ergo.git@FULL_COMMIT_SHA'
 ```
 
 ### Settings
@@ -84,6 +95,7 @@ To enable `django_ergo` in your project you need to add it to `INSTALLED_APPS` i
 ```python
 INSTALLED_APPS = (
     ...
+    'django.contrib.postgres',
     'django_ergo',
     ...
 )
@@ -124,13 +136,11 @@ make coverage
 make open_coverage
 ```
 
-## Deploying
+## Git Releases
 
-```bash
-# Publish to PyPI Test before the live PyPi
-make release_test
-make release
-```
+Ergo is distributed from reviewed commits on `main`, not by deploying a standalone
+service or uploading to PyPI/TestPyPI. See [Git release and adoption](docs/git-release.md)
+for immutable installs, CI gates and migration prerequisites.
 
 ## Issues
 

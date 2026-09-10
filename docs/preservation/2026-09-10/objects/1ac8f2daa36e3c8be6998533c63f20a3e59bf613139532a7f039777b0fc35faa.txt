@@ -1,0 +1,46 @@
+# Filesystem KB snapshot/citation review
+
+Review date: 2026-09-09
+
+Verdict: not commit-ready due to one medium-severity correctness defect.
+
+## Finding
+
+- **Medium — valid citations to renamed or deleted ancestor paths cannot be built.**
+  `_capture_cited_sources()` correctly reads a cited file from its cited commit
+  (`src/django_ergo/filesystem_kb.py:766-783`), and history capture permits cited
+  ancestor commits. Validation then requires every cited `source_path` to occur
+  in the current snapshot's repository manifest (`:1094-1095`, populated from
+  the current manifest at `:1207-1213`). A reviewed page citing a file at an
+  ancestor commit therefore fails after that file is renamed or deleted, with
+  `Cited source snapshot is outside repository evidence`. This conflicts with
+  commit-specific citations and rejects evidence that was successfully read
+  from the cited Git tree. Validate path membership against commit-specific
+  captured evidence (or remove the current-tree path requirement), and add a
+  regression test covering an ancestor citation whose path is absent at HEAD.
+
+## Validation performed
+
+- Relevant suite: 18 passed (`test_filesystem_kb`, repository wiki/prompt/index,
+  search/reconciliation, and sync tests).
+- Focused Ruff check: clean.
+- Portable artifact validation: passed after copying the artifact to a new
+  temporary directory, without relying on its recorded source-repository path.
+- Artifact cross-check while the source repository was available: all 21
+  captured files matched their recorded byte count, SHA-256, and Git blob ID;
+  the v2 manifest retained 36 structured citation occurrences.
+- Focused regression reproduction: a citation to `old.py` at an ancestor commit
+  failed only after `old.py` was deleted before the reviewed wiki page commit.
+
+## Integrity-model limits (not additional defects)
+
+- `content_hash` is unit-level metadata matched exactly between page and
+  citation manifest; it is intentionally not derived from the captured whole
+  file. README language accurately states this.
+- Validation checks raw files against hashes stored in `kb.yaml`; it is an
+  internal-consistency check, not authentication against an independently
+  trusted or signed root. Wiki bodies are not checksummed. Avoid describing the
+  artifact as tamper-proof or independently provenance-authenticating.
+- The validator checks `blob_oid` syntax but does not recompute the Git object ID
+  from captured bytes (`src/django_ergo/filesystem_kb.py:1102-1106`). The built
+  artifact's IDs were independently verified against the available source repo.

@@ -1,0 +1,64 @@
+---
+id: 6ffb1685-f1e5-5f1c-a3bd-4186fdd4f578
+title: Permission boundaries
+type: architecture
+status: current
+project: django-ergo
+sources:
+- kind: source-unit
+  unit_id: f9ec9458-365b-53cf-b7c6-1f4bef0f4594
+  commit: 0fd6cf5e357891d9300b6eb04c0a38c2c6897dee
+  path: src/django_ergo/kb_toolkit.py
+  symbol: KBToolkit
+  role: runtime
+  content_hash: 9aff34455fa93067f2e6a75d31e754e4ce1a22d353bcc6eec98adc88f9556bd4
+- kind: source-unit
+  unit_id: d3322094-a226-5e24-a82e-230b7bb41952
+  commit: 0fd6cf5e357891d9300b6eb04c0a38c2c6897dee
+  path: src/django_ergo/kb_suggest_toolkit.py
+  symbol: KBSuggestToolkit
+  role: runtime
+  content_hash: 05a0f93092067fadcb5d52ef65570b7a92fa70a9c0ad07c9435fb10e74677dc1
+- kind: source-unit
+  unit_id: 62b942dc-2760-5c78-922b-bc147fc2b098
+  commit: 0fd6cf5e357891d9300b6eb04c0a38c2c6897dee
+  path: src/django_ergo/kb_tools.py
+  symbol: search_user_kb
+  role: runtime
+  content_hash: 8d268cb9c8fe6548d811049d7e20d8150c46fb625f891a356f688144ab56799a
+- kind: source-unit
+  unit_id: 4de8d389-290f-5aec-a3e6-ba12284c30b5
+  commit: 0fd6cf5e357891d9300b6eb04c0a38c2c6897dee
+  path: src/django_ergo/models.py
+  symbol: Article
+  role: runtime
+  content_hash: 2c9c12f2339b4495846ca153f9d76989b143a5322d93251d15e0154d27e765f4
+- kind: source-unit
+  unit_id: 07878e4f-75ea-5a9d-8804-aeb0ae8f3650
+  commit: 0fd6cf5e357891d9300b6eb04c0a38c2c6897dee
+  path: src/django_ergo/sync.py
+  symbol: project_commit
+  role: runtime
+  content_hash: a7d07d4d7f9c26836473c46928aa90778efd129087292c83ee0f45195c1f4b5f
+---
+
+## Overview
+
+Permissions are enforced at three different boundaries: caller-selected toolkit scope, user-filtered convenience tools, and model guards on Git-managed Articles. Usage tracking records which knowledge bases a conversation touched; it is not itself an authorization decision.
+
+## Boundaries
+
+`KBToolkit` can read only the Knowledgebase objects supplied to its constructor, and `KBSuggestToolkit` can accumulate proposals only for its single bound knowledge base. `search_user_kb` separately filters Knowledgebase rows by `owner_id` before searching Articles. The runner records each toolkit's `(knowledgebase, mode)` binding in ConversationKBUsage for provenance.
+
+An Article backed by SourceDocument is managed content. Ordinary `save` and `delete` calls raise `PermissionError`; the source Markdown is the writable authority. `project_commit` is the narrow reconciliation path that passes `_allow_managed_write=True` while applying an allowed Git snapshot.
+
+## Obligations
+
+Callers must construct toolkits from knowledge bases the current principal may access; `get_bound_knowledgebases` reports scope but does not authorize it. Code using ArticleQuerySet semantic methods must apply tenant or knowledge-base filters first. Code that catches toolkit errors must not convert an authorization failure into a successful tool result. Managed-write bypasses are reserved for projection and explicit indexing paths that preserve source ownership.
+
+## Concrete Flow
+
+1. Application code authorizes a user and constructs `KBToolkit([allowed_kb])`.
+2. The conversation runner exposes only that toolkit's schemas and records read usage for `allowed_kb`.
+3. A read resolves names and Article rows inside the toolkit's bound set; `search_user_kb` uses owner filtering on its separate API path.
+4. A direct edit to a Git-managed Article fails. The reviewer edits and commits Markdown instead, then `project_commit` reconciles the allowed commit atomically. Ownership conflicts are rejected rather than resolved automatically.

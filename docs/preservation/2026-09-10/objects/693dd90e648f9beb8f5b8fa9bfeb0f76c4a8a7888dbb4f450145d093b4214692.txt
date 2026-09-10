@@ -1,0 +1,151 @@
+# Remaining Gaps and Next Experiments
+
+Source basis:
+- `competitive-analysis-llm-wiki-v2-gstack.md` attachment `194b43f8bdfd`
+- [`docs/plans/adoption-plan-gaps-checklist.md`](/home/dev/p/boundcorp/django-ergo/.worktrees/743a48d58774/docs/plans/adoption-plan-gaps-checklist.md)
+- [`docs/plans/prioritized-adopt-learn-avoid-roadmap.md`](/home/dev/p/boundcorp/django-ergo/.worktrees/743a48d58774/docs/plans/prioritized-adopt-learn-avoid-roadmap.md)
+
+The roadmap already settles the broad direction:
+- adopt a three-layer memory model
+- keep markdown-first pages with provenance
+- require artifact-backed workflow gates
+- use append-only logs
+- avoid graph/search/browser complexity in v1
+
+What is still missing is the exact v1 contract. The gaps below are the remaining implementation blockers, not broad strategy questions.
+
+## 1) Remaining Gaps
+
+| Severity | Gap | Why it still blocks implementation |
+| --- | --- | --- |
+| High | Initial trust boundary is unresolved (`repo`, `project`, `ticket`, or `user-private`). | It determines who can read/write evidence and whether cross-scope promotion exists at all. |
+| High | Day-one entity/page boundary is still not pinned down. | The docs recommend a small fixed taxonomy, but they do not finalize the mandatory v1 types or which ones are optional. |
+| High | Minimum required schema-first files are not finalized. | The docs name `evidence/`, `wiki/`, `schema/`, `index.md`, and `log.md`, but the first ship set and folder responsibilities are still ambiguous. |
+| High | Supersession and lifecycle semantics are not final. | We know active/stale/archived/superseded are candidates, but the exact states and transitions are not locked, so writes and lint rules remain underspecified. |
+| High | Confidence representation is not final. | The analysis rejects uncalibrated numeric scoring, but the v1 rubric and when confidence may change are still open. |
+| High | Governance/review mechanics are not fully specified. | The roadmap says semantic changes need review, but it does not yet define which changes need human approval, who approves, or what evidence is required for approval. |
+| Medium | Retention and redaction policy remain open. | The docs call for append-only evidence and archive-over-delete, but not the retention window or how long redacted/original copies live. |
+| Medium | Graph encoding in v1 is still a choice, not a decision. | The docs recommend typed relations and defer richer graph work, but we still need a yes/no on storing graph edges in frontmatter for v1. |
+| Medium | The exact “done” artifact contract for workflow steps is not fully normalized. | The workflow table is good, but the canonical artifact shape per step still needs one final pass before implementation. |
+| Low | Browser automation scope remains a future decision. | The docs already lean toward out-of-scope for v1, but this should be stated explicitly as a product boundary. |
+
+## 2) Proposed Experiments For High / Medium Gaps
+
+### Experiment A: v1 memory contract spike
+
+Goal:
+- Lock the smallest usable schema and file set before implementation expands.
+
+Inputs:
+- 1 synthetic source capture
+- 1 decision page
+- 1 concept page
+- 1 append-only log entry
+
+Output:
+- A minimal file layout with concrete required fields
+- One frontmatter contract
+- One claim record format
+- One lifecycle/state model
+
+How to evaluate:
+- Every active claim has a source ref.
+- The page set is complete enough to represent the sample without custom types.
+- A reviewer can identify the canonical source, synthesized page, and schema file in under 5 minutes.
+
+This resolves:
+- entity/page boundary
+- minimum schema-first files
+- confidence shape
+- supersession/lifecycle shape
+
+### Experiment B: trust-boundary negative test
+
+Goal:
+- Prove the chosen scope boundary fails closed and logs the denial.
+
+Inputs:
+- 1 allowed read/write action in-scope
+- 1 denied read/write action out-of-scope
+- 1 synthetic evidence item and 1 synthetic wiki page
+
+Output:
+- A pass/fail access matrix
+- A log entry for the denied action
+- A clear statement of the active scope boundary
+
+How to evaluate:
+- Allowed action succeeds.
+- Denied action is blocked.
+- Denial is visible in the log.
+- No cross-scope promotion happens without an explicit review artifact.
+
+This resolves:
+- trust boundary
+- basic governance boundary
+- whether scope needs to be repo, project, ticket, or user-private
+
+### Experiment C: semantic-change review gate
+
+Goal:
+- Determine the smallest review policy that keeps the workflow auditable without over-processing every edit.
+
+Inputs:
+- 1 mechanical edit
+- 1 semantic edit
+- 1 contradiction resolution
+- 1 delete-or-archive candidate
+
+Output:
+- A review decision matrix
+- A required-evidence checklist per change class
+- A final rule for which edits require human approval
+
+How to evaluate:
+- Mechanical edits can ship with only mechanical verification.
+- Semantic edits are blocked until the required review artifact exists.
+- Delete/archive/downgrade paths are explicit and reversible.
+
+This resolves:
+- governance/review mechanics
+- what counts as approval
+- which changes are human-gated
+
+### Experiment D: end-to-end workflow slice
+
+Goal:
+- Prove the full intake -> triage -> review -> apply -> verify chain on one synthetic ticket.
+
+Inputs:
+- 1 synthetic ticket
+- 1 evidence artifact
+- 1 proposal artifact
+- 1 review artifact
+- 1 updated page
+- 1 verification note
+
+Output:
+- End-to-end trace through the log
+- Updated wiki page(s)
+- Linked artifacts for every step
+
+How to evaluate:
+- No step can be marked done without its artifact.
+- The log contains actor, timestamp, reason, source refs, and touched pages.
+- The result is reconstructable from artifacts alone.
+
+This is the smallest full-system check and is already mostly specified by the roadmap; the main remaining work is to lock the exact artifact schema per step.
+
+## 3) Recommended Next Human Decision
+
+Ask for one v1 contract decision, in this order:
+
+1. Pick the initial trust boundary: `repo`, `project`, `ticket`, or `user-private`.
+2. Confirm the mandatory v1 page/entity types.
+3. Confirm the semantic-change approval rule.
+
+If only one choice can be made now, choose the trust boundary first. It constrains every other schema and review decision.
+
+## 4) Bottom Line
+
+The roadmap already specifies the direction and the first experiments well enough to start planning. The remaining blockers are the exact v1 contract items: scope boundary, mandatory types/files, lifecycle/confidence semantics, and review policy. Once those are chosen, the P0 experiments above can be run without further design churn.

@@ -1,0 +1,34 @@
+from pathlib import Path
+
+from django.contrib.auth import get_user_model
+from django.core.management.base import BaseCommand
+from django.core.management.base import CommandError
+
+from django_ergo.models import KnowledgeSource
+from django_ergo.repository_wiki import propose_repository_wiki
+
+
+class Command(BaseCommand):
+    help = "Write review-only repository wiki proposals; never updates Git or knowledge records."
+
+    def add_arguments(self, parser):
+        parser.add_argument("source_id")
+        parser.add_argument("--user", required=True)
+        parser.add_argument("--output", required=True)
+        parser.add_argument("--goal", action="append")
+
+    def handle(self, *args, **options):
+        try:
+            source = KnowledgeSource.objects.get(pk=options["source_id"])
+            user = get_user_model().objects.get(username=options["user"])
+            manifest = propose_repository_wiki(
+                source,
+                user=user,
+                output=Path(options["output"]),
+                goal_ids=options["goal"],
+            )
+        except Exception as exc:
+            raise CommandError(str(exc)) from exc
+        self.stdout.write(
+            self.style.SUCCESS(f"Wrote {len(manifest['goals'])} review-only proposals.")
+        )

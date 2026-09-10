@@ -1,0 +1,69 @@
+import subprocess
+import tempfile
+from pathlib import Path
+
+from django.test import TestCase
+from django.test import override_settings
+
+from django_ergo.embedding_providers import DeterministicEmbeddingProvider
+from django_ergo.models import Knowledgebase
+from django_ergo.models import KnowledgeSource
+from django_ergo.repository_index import index_repository_commit
+from django_ergo.repository_search import search_repository
+
+
+class RepositorySearchTests(TestCase):
+    def test_search_is_source_scoped_and_returns_rrf_provenance(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory) / "repo"
+            (repo / ".ergo").mkdir(parents=True)
+            (repo / "src").mkdir()
+            subprocess.run(
+                ["git", "-C", str(repo.parent), "init", "repo"],
+                check=True,
+                capture_output=True,
+            )
+            subprocess.run(
+                ["git", "-C", str(repo), "config", "user.email", "test@example.com"],
+                check=True,
+                capture_output=True,
+            )
+            subprocess.run(
+                ["git", "-C", str(repo), "config", "user.name", "Test"],
+                check=True,
+                capture_output=True,
+            )
+            (repo / ".ergo" / "index.yaml").write_text(
+                "embedding_dimensions: 1536\nmax_unit_characters: 6000\nroles:\n  - role: runtime\n    include: [src/**/*.py]\n"
+            )
+            (repo / "src" / "sample.py").write_text(
+                "def retrieval_target():\n    return 'bounded evidence'\n"
+            )
+            subprocess.run(
+                ["git", "-C", str(repo), "add", "."], check=True, capture_output=True
+            )
+            subprocess.run(
+                ["git", "-C", str(repo), "commit", "-m", "initial"],
+                check=True,
+                capture_output=True,
+            )
+            with override_settings(
+                DJANGO_ERGO={"KNOWLEDGE_REPOSITORIES": {"repo": str(repo)}}
+            ):
+                kb = Knowledgebase.objects.create(name="Search", owner_id="owner")
+                source = KnowledgeSource.objects.create(
+                    knowledgebase=kb,
+                    repository_alias="repo",
+                    repository_subdirectory="",
+                    allowed_ref="HEAD",
+                )
+                provider = DeterministicEmbeddingProvider()
+                index_repository_commit(source, provider=provider)
+                source.refresh_from_db()
+                results = search_repository(
+                    source, "retrieval_target", provider=provider
+                )
+            self.assertTrue(results)
+            self.assertEqual(results[0]["commit"], source.last_indexed_commit)
+            self.assertIn("exact", results[0]["branch_ranks"])
+            self.assertEqual(results[0]["role"], "runtime")

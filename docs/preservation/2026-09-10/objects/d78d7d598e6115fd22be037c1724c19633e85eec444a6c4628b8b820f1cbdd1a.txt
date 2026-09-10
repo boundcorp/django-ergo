@@ -1,0 +1,177 @@
+# Cabal worktree planning preservation review
+
+Date: 2026-09-09
+
+## Outcome
+
+Both Cabal worktrees are preservation-sensitive. Their tracked branches are
+older than `main`, but their planning documents are untracked and contain ideas
+that are not fully represented in `docs/plan-fs.md` or `fs-vector`. Do not clean
+up either worktree yet.
+
+The strongest combined direction is:
+
+```text
+append-only evidence -> reviewed Markdown synthesis -> versioned rules
+                     -> append-only operation/review log
+                     -> optional derived Django/search indexes
+```
+
+This adds an important distinction to the flat-file recommendation: Git wiki
+pages can be the canonical maintained knowledge, while raw captures remain the
+authoritative evidence for the claims on those pages.
+
+## Exact source inventory and storage status
+
+### Worktree `cabal/ticket-4fe9433fa892`
+
+Path: `/home/dev/p/boundcorp/django-ergo/.worktrees/4fe9433fa892`  
+HEAD: `3faf919` (`Extract conversation runtime and migrate pipeline callers`),
+one commit behind current `main`; no tracked modifications.
+
+| Local source | Status | Preservation note |
+| --- | --- | --- |
+| `docs/plans/2026-06-13-structured-call-chatbot-helper-research.md` | Untracked, 7,308 bytes, SHA-256 `cb3a0d66...77be` | Unique local planning deliverable. The inspected ticket metadata listed no attachment, so preserve before any later cleanup. |
+| `.cabal/codex-home/goals_1.sqlite`, `state_5.sqlite`, logs and one session JSONL | Untracked local agent state | Contains operational/session data and potentially sensitive content. Inventory only; do not copy into project knowledge wholesale. |
+| `.cabal/codex-home/auth.json` | Untracked sensitive state | Explicitly excluded from content review and reports. |
+
+Recovered goal: identify the smallest reusable multi-response chatbot/session
+facade. The document recommends a thin `BotChatSession` over `SessionManager`,
+`run_conversation_turn()`, and `ConversationRenderer`, while keeping transcript
+reconstruction, tool adaptation, engine-specific persistence, and history
+selection in their existing layers. It explicitly rejects inventing parallel
+`StructuredCall`/`ChatResponse` models or collapsing those responsibilities into
+the facade (`2026-06-13-structured-call-chatbot-helper-research.md:34-105`).
+
+### Worktree `cabal/ticket-743a48d58774`
+
+Path: `/home/dev/p/boundcorp/django-ergo/.worktrees/743a48d58774`  
+HEAD: `3faf919`, one commit behind current `main`; no tracked modifications.
+
+All five files below are untracked local files:
+
+| Local source | Cabal attachment evidence found in local metadata | Preservation note |
+| --- | --- | --- |
+| `docs/plans/adoption-plan-gaps-checklist.md` | Attachment `ab7a4dd383b8` | Local copy is uncommitted; attachment provides a second known copy. |
+| `docs/plans/prioritized-adopt-learn-avoid-roadmap.md` | Attachment `eb8c4abda1a0` | Local copy is uncommitted; attachment provides a second known copy. |
+| `docs/plans/remaining-gaps-next-experiments.md` | Attachment `dcaf4a02a1ce` | Local copy is uncommitted; attachment provides a second known copy. |
+| `docs/plans/investigation-findings-adoption-gaps.md` | Attachment `ea354d83b2c6` | Local copy is uncommitted; attachment provides a second known copy. |
+| `docs/plans/gstack-new-features-reevaluation-2026-05-26.md` | No completed-step/attachment evidence found | Potentially unique local deliverable; preserve before any later cleanup. |
+
+The original `competitive-analysis-llm-wiki-v2-gstack.md` is referenced as
+Cabal attachment `194b43f8bdfd`; no local copy was found in the worktree.
+
+Local planning-file checksums for later identity verification:
+
+```text
+cb3a0d66a817ac3631b41c9237979113c2670f91627d96eeb96654cda3cd77be  2026-06-13-structured-call-chatbot-helper-research.md
+b892d65203da4257e1116c40169ffd2a39cb982f3f98712b52d585bbad7038c7  adoption-plan-gaps-checklist.md
+af502c183dd6ed42414d9cb3be21d8ea8628d20a15a2244ebb7e24fb761066fb  gstack-new-features-reevaluation-2026-05-26.md
+4e4a7794ab26504b39ac6e6e1c5f25663c96368ad2ace420fe57c58ca2aa4bcf  investigation-findings-adoption-gaps.md
+06a7ae7cecdecf1751e69f6badccad14f8704dbb63a1d106fe363dc8a71d2d93  prioritized-adopt-learn-avoid-roadmap.md
+693dd90e648f9beb8f5b8fa9bfeb0f76c4a8a7888dbb4f450145d093b4214692  remaining-gaps-next-experiments.md
+```
+
+The worktree also contains untracked `.cabal/codex-home` state, five raw session
+JSONL files, SQLite state/log files, and auth material. Those files established
+ticket lineage and attachment references, but their transcript/auth contents
+were not copied into this review.
+
+## Ideas recovered from the May planning set
+
+### Original goal and rationale
+
+The ticket compared the LLM Wiki v2 knowledge substrate with gstack's workflow
+discipline. Its goal was selective adoption, not importing either project. The
+reasoning was that useful memory needs both durable, inspectable knowledge and a
+review process that prevents “done in chat” from becoming unverified system
+state (`adoption-plan-gaps-checklist.md:1-30`).
+
+### High-value decisions and alternatives
+
+- Three layers: append-only evidence, editable synthesized pages, and versioned
+  schema/rules. Add `index.md` navigation and an append-only operation log.
+- Visible claim provenance: source references, status, lifecycle/supersession,
+  and a small confidence vocabulary. Numeric confidence was rejected unless it
+  can be calibrated (`adoption-plan-gaps-checklist.md:76-110,209-290`).
+- Start with a small fixed page taxonomy; an extension slot is acceptable only
+  when schema-versioned. Fully free-form labels were rejected.
+- Prefer grep/BM25 for a small corpus, add embeddings after measured recall
+  misses, and add graph traversal only if that remains insufficient
+  (`adoption-plan-gaps-checklist.md:112-124`).
+- Prefer a manual `intake -> triage -> review -> apply -> verify` chain with a
+  required artifact at every boundary. Automated lint/summaries are a later
+  step; auto-ingest/repair waits for stable schema and trust rules
+  (`adoption-plan-gaps-checklist.md:126-138,294-377`).
+- Every evidence item/page should carry an explicit trust scope; reads and
+  writes fail closed, and cross-scope promotion requires review. Repo-only,
+  repo+project+ticket, and user-private were preserved as explicit alternatives.
+- Archive/supersede by default rather than silently overwrite or hard-delete.
+  Retention, redaction, and sensitive-content policies must precede broad
+  session ingestion (`adoption-plan-gaps-checklist.md:381-466`).
+- The later gstack re-evaluation preserved those decisions but added a valuable
+  future concept: a stable, stateful “artifact session” with structured feedback
+  and explicit open/regenerating/approved/closed/superseded transitions. It
+  still recommends starting with attachments/files and avoiding a daemon until
+  real review friction proves it necessary
+  (`gstack-new-features-reevaluation-2026-05-26.md:55-79,96-160`).
+
+### Acceptance criteria retained by the plans
+
+- Every active claim has a source reference.
+- A reviewer can distinguish evidence, synthesized pages, and schema quickly.
+- Page updates preserve supersession history.
+- Out-of-scope reads/writes fail closed and leave a visible denial record.
+- Semantic changes cannot complete without their required review artifact.
+- Delete/archive/downgrade paths are explicit and reversible.
+- The end-to-end workflow is reconstructable from artifacts and an append-only
+  log containing actor, timestamp, reason, source references, and touched pages
+  (`remaining-gaps-next-experiments.md:34-137`).
+
+## Comparison with `main`, `docs/plan-fs.md`, and `fs-vector`
+
+| Planning concept | Current status | Assessment |
+| --- | --- | --- |
+| Git Markdown as maintained project knowledge | Present in `docs/plan-fs.md` and pending projection/build code | Implemented enough for a focused foundation. Preserve the stronger evidence-vs-synthesis distinction from Cabal. |
+| Stable IDs, commit/blob/hash provenance, missing-not-deleted pages | Present in `fs-vector` projection/snapshot code | Implemented partially and tested narrowly. Historical-path citation bug remains. |
+| Three layers including versioned schema/rules | `raw/` and `wiki/` exist; no coherent `schema/` layer | Still valuable and omitted. Resolve the competing `ergo-source.yaml`/`kb.yaml` contracts here. |
+| Append-only operation log | Not implemented by the pending KB code | Still valuable. Git history and generated manifests do not fully replace an actor/reason/review log. |
+| Claim-level lifecycle, confidence, and supersession | Unit citations exist, but not the proposed claim/governance model | Still valuable, but should begin with a minimal schema spike rather than the full suggested field set. |
+| Explicit scope and cross-scope promotion | Repository aliases, KB ownership, and bound toolkits provide partial boundaries | Omitted at evidence/page level. Repo or project scope is the simplest unresolved v1 choice; private memory should remain deferred unless explicitly required. |
+| BM25/grep before embeddings; graph later | `fs-vector` implements exact + lexical + vector + relations together | The implementation exploration jumped ahead of the plan. Preserve the simpler staged alternative for the adoption decision. |
+| Artifact-gated workflow | Wiki generation creates a review packet/manifest but does not enforce the full five-stage chain | Partially implemented. Cabal's own attachment discipline is a concrete operational example, not yet an Ergo integration design. |
+| Stateful review/artifact sessions | Not implemented | Valuable future review UX; defer daemon/process machinery. |
+| Thin reusable `BotChatSession` facade | Underlying runtime components are on `main`; facade is absent | Still valuable for future coordinator/voice work, but independent of the flat-file foundation. |
+
+Nothing in these documents specifies a concrete Ergo-to-Cabal API integration.
+The transferable Cabal idea is narrower: durable attachments, explicit step
+artifacts, and completion gates. Cross-project dispatch and voice coordination
+remain future product discussions, not recovered implementation scope.
+
+## Preservation and decision matrix
+
+| Material | Preserve now? | Product decision |
+| --- | --- | --- |
+| Six untracked planning files | **Yes; leave worktrees intact now** | Later choose which become canonical project docs and verify attachment copies before any cleanup. |
+| Three-layer memory/evidence model | **Yes, fold into flat-file contract discussion** | Decide whether `wiki/` is canonical maintained synthesis while `raw/evidence` is canonical factual evidence. |
+| Operation log and artifact-gated review | **Yes, retain as near-term design input** | Choose minimum log fields and which semantic changes require approval. |
+| Scope, lifecycle, retention/redaction controls | **Yes, retain as unresolved requirements** | Choose initial repo/project boundary and a minimal reversible lifecycle before ingesting conversations. |
+| Embedding/graph indexing | Preserve research, defer adoption | Require measured retrieval misses before accepting the extra index. |
+| Artifact-session/review-board idea | Preserve research, defer implementation | Test static file/attachment review first. |
+| Chatbot session facade | Preserve separately | Revisit with coordinator/voice workflow; do not couple it to KB storage. |
+| Raw `.cabal` transcripts, auth, and runtime databases | Do not ingest into Ergo or reports | Establish retention/redaction rules; preserve the untouched worktrees until the user decides how operational state is handled. |
+
+## User decisions needed
+
+1. Confirm both Cabal worktrees as preservation holds.
+2. For the flat-file foundation, choose whether the first trust boundary is
+   **repo** or **project**; the Cabal analysis consistently identifies scope as
+   the decision that constrains the rest.
+3. Decide whether v1 includes only page-level source references and lifecycle,
+   or also the richer claim-per-bullet schema. The latter is valuable but not
+   required to prove the basic file workflow.
+4. Decide whether an append-only operation/review log belongs in the first
+   foundation slice. The recovered plans strongly recommend it.
+5. Later, explicitly preserve the chatbot-helper memo and gstack re-evaluation
+   in an agreed durable location; neither currently has proven attachment
+   backup. Do not transfer or commit them until the user chooses that location.

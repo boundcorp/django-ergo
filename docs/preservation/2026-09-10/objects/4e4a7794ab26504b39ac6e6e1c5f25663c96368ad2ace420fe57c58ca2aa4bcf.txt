@@ -1,0 +1,99 @@
+# Investigation Findings: Remaining Adoption Gaps
+
+Sources reviewed:
+- `docs/plans/adoption-plan-gaps-checklist.md`
+- `docs/plans/prioritized-adopt-learn-avoid-roadmap.md`
+- Competitive analysis attachment `194b43f8bdfd` as summarized in the follow-on docs
+
+## Short Answer
+
+The roadmap already specifies the smallest end-to-end experiment well enough to build a first pass: use the markdown-first page format, run one synthetic intake -> triage -> review -> apply -> verify cycle, and require artifact-backed completion with append-only logs.
+
+What is still unresolved is the exact v1 policy surface: the day-one entity/type boundary, the confidence/lifecycle rules, the human-approval threshold, the initial trust scope, and the exact verification artifact contract. Those are the remaining implementation blockers.
+
+## Gap List
+
+### High
+
+1. Exact page/entity taxonomy
+   - Still unresolved in the checklist and build-start decisions.
+   - Why it blocks build: the schema, directory layout, lint rules, and review rules all depend on the type set.
+   - Sources: `docs/plans/adoption-plan-gaps-checklist.md:34-35`, `docs/plans/adoption-plan-gaps-checklist.md:472-475`, `docs/plans/adoption-plan-gaps-checklist.md:487-488`
+
+2. Confidence rubric and lifecycle transitions
+   - The docs say confidence exists, but not the exact scale, how it changes, or what transitions are legal.
+   - Why it blocks build: claim authoring, supersession, and review policy need a consistent confidence contract.
+   - Sources: `docs/plans/adoption-plan-gaps-checklist.md:36-38`, `docs/plans/adoption-plan-gaps-checklist.md:473-477`
+
+3. Human approval policy for semantic changes
+   - The docs still leave open whether all semantic edits require approval or only deletes/downgrades/contradictions.
+   - Why it blocks build: workflow gating cannot be enforced without this threshold.
+   - Sources: `docs/plans/adoption-plan-gaps-checklist.md:41-45`, `docs/plans/adoption-plan-gaps-checklist.md:477`, `docs/plans/adoption-plan-gaps-checklist.md:490`
+
+4. Initial trust scope boundary
+   - Repo/project/ticket/user-private are all still on the table.
+   - Why it blocks build: access control and cross-scope promotion rules depend on the chosen boundary.
+   - Sources: `docs/plans/adoption-plan-gaps-checklist.md:43-45`, `docs/plans/adoption-plan-gaps-checklist.md:480`, `docs/plans/adoption-plan-gaps-checklist.md:487`
+
+5. Exact verification artifact contract
+   - The workflow requires verification evidence, but the exact “done” artifacts are still not fixed.
+   - Why it blocks build: completion checks need a precise artifact schema, not just a list of examples.
+   - Sources: `docs/plans/adoption-plan-gaps-checklist.md:45`, `docs/plans/adoption-plan-gaps-checklist.md:493`
+
+### Medium
+
+1. Exact frontmatter schema and claim format details
+   - The docs give a strong minimum shape, but not a fully frozen v1 contract.
+   - Why it matters: the current shape is sufficient to prototype, but a final build needs exact required/optional fields and validation rules.
+   - Sources: `docs/plans/adoption-plan-gaps-checklist.md:35`, `docs/plans/adoption-plan-gaps-checklist.md:209-245`
+
+2. Supersession / archival / deletion policy
+   - The docs require supersession history, but do not fully define when to archive versus supersede versus delete.
+   - Why it matters: edit history and retention behavior need one canonical policy.
+   - Sources: `docs/plans/adoption-plan-gaps-checklist.md:37-38`, `docs/plans/adoption-plan-gaps-checklist.md:274-275`, `docs/plans/adoption-plan-gaps-checklist.md:377`
+
+3. Retention policy for raw evidence and derived pages
+   - Still open, though the docs clearly prefer append-only evidence and archive-over-delete.
+   - Why it matters: storage, privacy, and stale-data handling need a concrete window/policy before implementation.
+   - Sources: `docs/plans/adoption-plan-gaps-checklist.md:37`, `docs/plans/adoption-plan-gaps-checklist.md:407-410`, `docs/plans/adoption-plan-gaps-checklist.md:481`, `docs/plans/prioritized-adopt-learn-avoid-roadmap.md:168`
+
+4. Browser / cookie automation scope
+   - The roadmap says to keep it out of v1, but the checklist still treats it as a pending decision.
+   - Why it matters: if this is in scope, it needs a separate security review.
+   - Sources: `docs/plans/adoption-plan-gaps-checklist.md:42`, `docs/plans/adoption-plan-gaps-checklist.md:462-466`, `docs/plans/prioritized-adopt-learn-avoid-roadmap.md:82-83`
+
+## Already Specified Enough to Build
+
+- Three-layer memory model: raw evidence -> synthesized pages -> schema/rules.
+- Markdown-first storage with visible provenance, claim bullets, source refs, status, confidence, and supersession links.
+- Append-only operation log plus the intake -> triage -> review -> apply -> verify workflow chain.
+- Deny-by-default trust policy and explicit scope metadata on pages/evidence.
+
+Sources:
+- `docs/plans/adoption-plan-gaps-checklist.md:16-30`
+- `docs/plans/adoption-plan-gaps-checklist.md:190-245`
+- `docs/plans/adoption-plan-gaps-checklist.md:294-377`
+- `docs/plans/adoption-plan-gaps-checklist.md:390-438`
+
+## Recommended Next Decision
+
+Ask a human to choose these four items first:
+
+1. The v1 entity/type set.
+2. The confidence scale plus allowed confidence transitions.
+3. The semantic-change approval threshold.
+4. The initial trust scope boundary.
+
+Once those are chosen, the remaining “smallest end-to-end experiment” is already specified well enough to execute:
+
+- ingest a small evidence batch into `evidence/`
+- synthesize one decision page and one concept page in `wiki/`
+- run one synthetic ticket through intake -> triage -> review -> apply -> verify
+- require the required artifacts and log links for completion
+
+Success criteria:
+
+- every active claim has a source ref
+- the page update preserves supersession history
+- the workflow step cannot be marked done without the required artifact
+- the log is append-only and reconstructable

@@ -2,13 +2,18 @@ import uuid
 from typing import Any
 
 from django.contrib.auth import get_user_model
+from django.contrib.postgres.indexes import GinIndex
+from django.contrib.postgres.search import SearchVectorField
+from django.core.exceptions import ValidationError
 from django.db import models
 from pgvector.django import CosineDistance
+from pgvector.django import HnswIndex
 from pgvector.django import VectorField
 
 from django_ergo.fields import SemanticTextField
 from django_ergo.fields import generate_embedding
 from django_ergo.fields import vector_search
+from django_ergo.knowledge.paths import validate_path
 from django_ergo.mixins import TimeStampedMixin
 
 User = get_user_model()
@@ -114,17 +119,38 @@ class Knowledgebase(TimeStampedMixin):
         return f"# KB ID: {self.id}\nName: {self.name}\nDescription: {self.description}"
 
     def get_table_of_contents(self):
+        """List active mapped paths and explicitly unmapped legacy identities."""
+        return "\n".join(
+            f"# {article.display_path} {article.title}"
+            for article in self.articles.visible_to_retrieval().order_by(
+                "relative_path", "id"
+            )
+        )
+
+    def get_legacy_table_of_contents(self):
         """Get table of contents for top-level articles."""
         return "\n".join(
             [
                 f"# {article.hierarchy_code} {article.title}"
-                for article in self.articles.filter(hierarchy_code__regex=r"^.$")
+                for article in self.articles.visible_to_retrieval().filter(
+                    hierarchy_code__regex=r"^.$"
+                )
             ]
         )
 
 
 class ArticleQuerySet(models.QuerySet):
     """Custom QuerySet for Article model with advanced semantic search capabilities."""
+
+    def visible_to_retrieval(self):
+        """Exclude unpublished and withdrawn Articles from ordinary reads."""
+        return self.filter(status="active").filter(
+            models.Q(source_document__isnull=True)
+            | models.Q(
+                source_document__state="active",
+                source_document__status__in=["current", "active"],
+            )
+        )
 
     def semantic_search_content(self, query_text: str, top_k: int = 10):
         """
@@ -137,7 +163,7 @@ class ArticleQuerySet(models.QuerySet):
         Returns:
             QuerySet: Results ordered by semantic similarity to content
         """
-        return SemanticTextField.search_field(self.model, "content", query_text, top_k)
+        return self.vector_search_content(generate_embedding(query_text), top_k)
 
     def semantic_search_summary(self, query_text: str, top_k: int = 10):
         """
@@ -150,7 +176,7 @@ class ArticleQuerySet(models.QuerySet):
         Returns:
             QuerySet: Results ordered by semantic similarity to summary
         """
-        return SemanticTextField.search_field(self.model, "summary", query_text, top_k)
+        return self.vector_search_summary(generate_embedding(query_text), top_k)
 
     def multi_field_semantic_search(
         self, query_text: str, top_k: int = 10, weights=None
@@ -201,7 +227,8 @@ class ArticleQuerySet(models.QuerySet):
         ) * weights.get("summary", 0.4)
 
         return (
-            self.exclude(content_embedding__isnull=True, summary_embedding__isnull=True)
+            self.visible_to_retrieval()
+            .exclude(content_embedding__isnull=True, summary_embedding__isnull=True)
             .annotate(
                 content_distance=content_distance,
                 summary_distance=summary_distance,
@@ -221,7 +248,9 @@ class ArticleQuerySet(models.QuerySet):
         Returns:
             QuerySet: Results ordered by semantic similarity to content
         """
-        return vector_search(self.model, "content_embedding", query_vector, top_k)
+        return vector_search(
+            self.model, "content_embedding", query_vector, top_k, queryset=self
+        )
 
     def vector_search_summary(self, query_vector: list[float], top_k: int = 10):
         """
@@ -234,7 +263,9 @@ class ArticleQuerySet(models.QuerySet):
         Returns:
             QuerySet: Results ordered by semantic similarity to summary
         """
-        return vector_search(self.model, "summary_embedding", query_vector, top_k)
+        return vector_search(
+            self.model, "summary_embedding", query_vector, top_k, queryset=self
+        )
 
     def hybrid_search(self, query_text: str, top_k: int = 10):
         """
@@ -253,17 +284,31 @@ class ArticleQuerySet(models.QuerySet):
         """Get articles by hierarchy code prefix."""
         return self.filter(hierarchy_code__startswith=prefix)
 
+    def by_relative_path_prefix(self, prefix: str):
+        validate_path(prefix, allow_empty=True)
+        return (
+            self.exclude(relative_path="")
+            if not prefix
+            else self.filter(
+                models.Q(relative_path=prefix)
+                | models.Q(relative_path__startswith=prefix + "/")
+            )
+        )
+
     def to_prefetch_results(self, top_k: int = 5):
         """Convert queryset to prefetch-friendly format."""
+        candidates = self if self.query.is_sliced else self.visible_to_retrieval()
         return [
             {
                 "title": article.title,
                 "content": article.content,
                 "summary": article.summary,
+                "relative_path": article.relative_path,
                 "hierarchy_code": article.hierarchy_code,
                 "id": str(article.id),
             }
-            for article in self[:top_k]
+            for article in candidates[:top_k]
+            if article.status == "active"
         ]
 
 
@@ -274,14 +319,32 @@ class Article(TimeStampedMixin):
     Optimized with pgvector indexes for high-performance semantic search.
     """
 
+    class Status(models.TextChoices):
+        ACTIVE = "active", "Active"
+        DRAFT = "draft", "Draft"
+        STALE = "stale", "Stale"
+        ARCHIVED = "archived", "Archived"
+        SUPERSEDED = "superseded", "Superseded"
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    status = models.CharField(
+        max_length=16, choices=Status.choices, default=Status.ACTIVE
+    )
     hierarchy_code = models.CharField(
         max_length=16,
         default="0",
+        null=True,
+        blank=True,
         db_index=True,
-        help_text="The hierarchy code of the article, e.g. '012' (0th chapter, 1st section, 2nd sub-section) or 'C3' (12th chapter, 3rd sub-section)",
+        help_text="Legacy compatibility code; not a path or unique identity.",
     )
     title = models.CharField(max_length=512)
+    relative_path = models.CharField(
+        max_length=1024,
+        default="",
+        db_index=True,
+        help_text="Primary logical path within its knowledgebase; empty means explicitly unmapped.",
+    )
 
     # Semantic text fields with automatic embedding generation
     content = SemanticTextField(help_text="Main article content")
@@ -309,17 +372,250 @@ class Article(TimeStampedMixin):
     objects = ArticleQuerySet.as_manager()
 
     class Meta:
-        ordering = ["hierarchy_code"]
-        unique_together = [["knowledgebase", "hierarchy_code"]]
+        ordering = ["relative_path", "id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["knowledgebase", "relative_path"],
+                condition=models.Q(relative_path__gt=""),
+                name="article_kb_relative_path_unique",
+            ),
+        ]
         indexes = [
+            models.Index(fields=["knowledgebase", "relative_path"]),
             models.Index(fields=["knowledgebase", "hierarchy_code"]),
             models.Index(fields=["hierarchy_code"]),
         ]
         # Database settings for vector search optimization
         db_table_comment = "Articles with semantic embeddings and pgvector indexes for fast similarity search"
 
+    @property
+    def display_path(self):
+        return self.relative_path or f"[unmapped:{self.pk}]"
+
+    @property
+    def is_managed(self):
+        return (
+            not self._state.adding
+            and SourceDocument.objects.filter(article_id=self.pk).exists()
+        )
+
+    def save(self, *args, _allow_managed_write=False, **kwargs):
+        validate_path(self.relative_path, allow_empty=True)
+        if self.is_managed and not _allow_managed_write:
+            raise PermissionError(
+                "Source-managed Articles are read-only; publish through their source."
+            )
+        self._ergo_explicit_indexing = _allow_managed_write
+        try:
+            return super().save(*args, **kwargs)
+        finally:
+            self._ergo_explicit_indexing = False
+
+    def delete(self, *args, _allow_managed_write=False, **kwargs):
+        if self.is_managed and not _allow_managed_write:
+            raise PermissionError("Source-managed Articles cannot be deleted directly.")
+        return super().delete(*args, **kwargs)
+
     def __str__(self):
-        return f"{self.hierarchy_code}: {self.title}"
+        return f"{self.display_path}: {self.title}"
+
+
+class KnowledgeSource(TimeStampedMixin):
+    """A trusted Git repository projection into one knowledgebase."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    knowledgebase = models.ForeignKey(
+        Knowledgebase,
+        on_delete=models.CASCADE,
+        related_name="knowledge_sources",
+    )
+    repository_alias = models.CharField(max_length=255)
+    repository_subdirectory = models.CharField(
+        max_length=1024,
+        default="knowledge",
+    )
+    allowed_ref = models.CharField(max_length=255, default="HEAD")
+    include_paths = models.JSONField(default=list, blank=True)
+    exclude_paths = models.JSONField(default=list, blank=True)
+    last_synced_commit = models.CharField(
+        max_length=40,
+        null=True,
+        blank=True,
+        editable=False,
+    )
+    last_sync_at = models.DateTimeField(null=True, blank=True, editable=False)
+    last_indexed_commit = models.CharField(
+        max_length=40, null=True, blank=True, editable=False
+    )
+    last_indexed_at = models.DateTimeField(null=True, blank=True, editable=False)
+    index_config_hash = models.CharField(
+        max_length=64, blank=True, default="", editable=False
+    )
+    index_embedding_id = models.CharField(
+        max_length=512, blank=True, default="", editable=False
+    )
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["knowledgebase", "repository_alias", "repository_subdirectory"],
+                name="knowledge_source_location_unique",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.repository_alias}:{self.repository_subdirectory}"
+
+
+class SourceFile(TimeStampedMixin):
+    """One current file in a committed repository source snapshot."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    source = models.ForeignKey(
+        KnowledgeSource, on_delete=models.CASCADE, related_name="source_files"
+    )
+    relative_path = models.CharField(max_length=1024)
+    prior_paths = models.JSONField(default=list, blank=True)
+    git_blob_oid = models.CharField(max_length=64)
+    language = models.CharField(max_length=32)
+    source_role = models.CharField(max_length=64)
+    content_hash = models.CharField(max_length=64)
+    last_indexed_commit = models.CharField(max_length=40)
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["source", "relative_path"], name="source_file_path_unique"
+            )
+        ]
+        indexes = [models.Index(fields=["source", "relative_path"])]
+
+
+class SourceUnit(TimeStampedMixin):
+    """A bounded, structurally extracted source card."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    source_file = models.ForeignKey(
+        SourceFile, on_delete=models.CASCADE, related_name="units"
+    )
+    unit_key = models.CharField(max_length=1024)
+    prior_keys = models.JSONField(default=list, blank=True)
+    kind = models.CharField(max_length=64)
+    symbol = models.CharField(max_length=512, blank=True, default="")
+    qualified_name = models.CharField(max_length=1024, blank=True, default="")
+    start_line = models.PositiveIntegerField()
+    end_line = models.PositiveIntegerField()
+    signature = models.TextField(blank=True, default="")
+    lexical_text = models.TextField()
+    evidence_text = models.TextField()
+    content_hash = models.CharField(max_length=64)
+    embedding_input_hash = models.CharField(max_length=64)
+    embedding = VectorField(dimensions=1536, null=True, blank=True)
+    search_vector = SearchVectorField(null=True)
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["source_file", "unit_key"], name="source_unit_key_unique"
+            )
+        ]
+        indexes = [
+            models.Index(fields=["source_file", "kind"]),
+            GinIndex(fields=["search_vector"], name="source_unit_search_gin"),
+            HnswIndex(
+                name="source_unit_embedding_hnsw",
+                fields=["embedding"],
+                m=16,
+                ef_construction=64,
+                opclasses=["vector_cosine_ops"],
+            ),
+        ]
+
+
+class SourceRelation(TimeStampedMixin):
+    """A conservative directed relationship between units in one source."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    source = models.ForeignKey(
+        KnowledgeSource, on_delete=models.CASCADE, related_name="source_relations"
+    )
+    from_unit = models.ForeignKey(
+        SourceUnit, on_delete=models.CASCADE, related_name="outgoing_relations"
+    )
+    to_unit = models.ForeignKey(
+        SourceUnit, on_delete=models.CASCADE, related_name="incoming_relations"
+    )
+    relation_type = models.CharField(max_length=64)
+    metadata = models.JSONField(default=dict, blank=True)
+
+    def clean(self):
+        if self.from_unit_id and self.to_unit_id:
+            if (
+                self.from_unit.source_file.source_id
+                != self.to_unit.source_file.source_id
+            ):
+                raise ValidationError(
+                    "Source relations cannot cross knowledge sources."
+                )
+        if self.from_unit_id and self.source_id:
+            if self.from_unit.source_file.source_id != self.source_id:
+                raise ValidationError("Relation source must own both endpoints.")
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["source", "from_unit", "to_unit", "relation_type"],
+                name="source_relation_unique",
+            )
+        ]
+        indexes = [models.Index(fields=["source", "relation_type"])]
+
+
+class SourceDocument(TimeStampedMixin):
+    """Stable source identity and provenance for one projected Article."""
+
+    class State(models.TextChoices):
+        ACTIVE = "active", "Active"
+        MISSING = "missing", "Missing"
+        ARCHIVED = "archived", "Archived"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    document_id = models.UUIDField(unique=True, editable=False)
+    relative_path = models.CharField(max_length=1024)
+    source = models.ForeignKey(
+        KnowledgeSource,
+        on_delete=models.CASCADE,
+        related_name="documents",
+    )
+    article = models.OneToOneField(
+        Article,
+        on_delete=models.PROTECT,
+        related_name="source_document",
+    )
+    prior_paths = models.JSONField(default=list, blank=True)
+    content_hash = models.CharField(max_length=128)
+    git_blob_oid = models.CharField(max_length=64)
+    last_seen_commit = models.CharField(max_length=40)
+    document_type = models.CharField(max_length=64, default="document")
+    status = models.CharField(max_length=64, default="current")
+    project = models.CharField(max_length=255, blank=True, default="")
+    source_references = models.JSONField(default=list, blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    state = models.CharField(
+        max_length=16,
+        choices=State.choices,
+        default=State.ACTIVE,
+    )
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["source", "relative_path"],
+                name="source_document_path_unique",
+            ),
+        ]
 
 
 class UserChat(TimeStampedMixin):
