@@ -1,0 +1,182 @@
+# Prioritized Adopt / Learn / Avoid Roadmap
+
+Source basis:
+- Competitive analysis attachment `194b43f8bdfd` for Karpathy/Rohit LLM Wiki v2 vs gstack.
+- Follow-up checklist attachment `ab7a4dd383b8` that turns that analysis into an implementation-ready spec.
+
+This report converts those two artifacts into an action order:
+- what to adopt now,
+- what to learn from but defer,
+- what to avoid for now,
+- and the smallest experiments that can prove the P0 choices in our system.
+
+## P0 Adoption Opportunities
+
+These are the foundation pieces that should move first because they reduce ambiguity, preserve provenance, and keep the system auditable.
+
+1. **[Both] Three-layer memory model: raw evidence -> synthesized pages -> schema/rules**
+   - Adopt the split between append-only evidence, editable synthesis pages, and versioned schema/rules.
+   - Why now: it is the core architecture that makes the rest of the workflow reviewable and safe.
+   - Source tie-in: checklist lines 16-30 and 262-290.
+
+2. **[LLM Wiki v2 + Both] Markdown-first claim-backed wiki pages with visible provenance**
+   - Adopt markdown as the primary storage format, plus frontmatter, claims, source refs, status, confidence, and supersession links.
+   - Why now: it preserves human-editable knowledge while keeping traceability to evidence.
+   - Source tie-in: checklist lines 190-258 and 270-275.
+
+3. **[gstack + Both] Workflow gates with artifact-backed completion**
+   - Adopt the intake -> triage -> review -> apply -> verify chain, where every step is blocked unless the required artifact exists and is linked in the log.
+   - Why now: this is the minimum discipline needed to prevent “done in chat” from becoming “done in the system.”
+   - Source tie-in: checklist lines 294-377.
+
+4. **[Both] Append-only operation log for every change**
+   - Adopt a mandatory log entry for ingestion, synthesis, review, apply, archive, and repair actions.
+   - Why now: it is the audit spine that lets us reconstruct who changed what and why.
+   - Source tie-in: checklist lines 22, 286-290, 342-355, 375-377, and 433-438.
+
+5. **[Both] Explicit trust scopes with deny-by-default read/write policy**
+   - Adopt explicit scope on every page/evidence item and no cross-scope promotion without review.
+   - Start with the narrowest scope that matters for the product; repo or project scope is the safest starting point.
+   - Source tie-in: checklist lines 27-29, 154-166, and 390-396.
+
+6. **[LLM Wiki v2] Small fixed taxonomy plus lifecycle states**
+   - Adopt a minimal fixed type set and explicit lifecycle states instead of unconstrained labels.
+   - Why now: it gives tooling and review something stable to enforce without forcing an overly general graph model.
+   - Source tie-in: checklist lines 34-45, 51-75, and 98-110.
+
+## P1 Adoption Opportunities
+
+These should follow once the P0 slices are proven in our system.
+
+1. **[LLM Wiki v2] Typed relation vocabulary instead of free-form graph edges**
+   - Keep relationships small and typed, but defer richer graph traversal until the typed model proves useful.
+
+2. **[LLM Wiki v2] BM25-only baseline before embeddings**
+   - Start with markdown + grep/BM25 style retrieval and only add embeddings after measured miss cases show a real gap.
+
+3. **[gstack] Human approval for semantic changes, not just mechanical ones**
+   - Keep the review gate explicit for deletes, downgrades, contradictions, and other semantic edits.
+
+4. **[Both] Crystallization / session-end summaries as first-class artifacts**
+   - Use them as the handoff between raw intake and synthesized pages, but do not over-engineer them before the core log/provenance path works.
+
+5. **[Both] Versioned schema and lint rules**
+   - Add schema validation and failure classes after the first page/log formats are stable enough to make the rules meaningful.
+
+## P2 Adoption Opportunities
+
+These are useful later, but they are not the right first bets.
+
+1. **[LLM Wiki v2] Embeddings + graph traversal search**
+   - High potential, but it should be justified by measured retrieval misses rather than adopted by default.
+
+2. **[LLM Wiki v2] Expanded taxonomy or custom type extension**
+   - Useful if the core types become restrictive, but premature flexibility makes the system harder to lint and reason about.
+
+3. **[Both] Broader trust scopes beyond repo/project/ticket**
+   - User-private or client-private scopes should wait until the access model is proven and the product need is explicit.
+
+4. **[gstack] Automated repair / event-driven auto-ingest**
+   - Valuable only after the schema, trust, and review gates are stable.
+
+5. **[Both] Browser/cookie automation**
+   - Keep it out of v1 unless there is a separate, explicit security review and a real workflow requirement.
+
+## Learn But Do Not Adopt Yet
+
+These are the strongest ideas to study from the reference projects, but we should not install them wholesale yet.
+
+1. **[LLM Wiki v2] The “knowledge substrate” idea**
+   - Learn how the separation between source evidence and synthesized knowledge keeps a wiki useful over time.
+   - Do not adopt the full implementation surface yet, especially graph-heavy or search-heavy parts that are not justified by usage.
+
+2. **[LLM Wiki v2] The claim-centric authoring model**
+   - Learn from the idea that pages should be made of checkable claims with provenance.
+   - Do not turn this into a complicated schema until we know which claim fields are actually used in review.
+
+3. **[gstack] Role separation and workflow discipline**
+   - Learn from the explicit handoff culture, review gates, and artifact requirement.
+   - Do not copy a large orchestration surface or assume every step needs automation.
+
+4. **[gstack] “Done” means backed by artifacts**
+   - Learn the operational norm that completion requires evidence.
+   - Do not adopt opaque automation that hides the evidence path.
+
+5. **[Both] Richer automation only after the manual path is stable**
+   - Learn from both projects that the workflow is the product, not just the data model.
+   - Do not jump straight to auto-ingest, auto-repair, or browser-driven actions.
+
+## Avoid For Now
+
+These carry a worse risk/reward profile than the alternatives above.
+
+1. **[LLM Wiki v2] Fully flexible page labels**
+   - Why avoid: it undermines linting, navigation, and predictable tooling.
+   - Tradeoff: it feels easier initially but creates schema drift and makes review harder.
+
+2. **[LLM Wiki v2] Numeric confidence scoring without calibration**
+   - Why avoid: it creates false precision unless we already have data to calibrate it.
+   - Tradeoff: reviewers may trust the number more than the evidence.
+
+3. **[LLM Wiki v2] Graph traversal as a day-one dependency**
+   - Why avoid: it adds complexity before the smaller typed model has proven value.
+   - Tradeoff: the system can become harder to explain and debug.
+
+4. **[gstack] Event-driven auto-ingest and auto-repair**
+   - Why avoid: hidden automation can mutate knowledge without enough human review.
+   - Tradeoff: higher throughput, but much weaker auditability and easier failure masking.
+
+5. **[gstack] Persistent browser daemon with imported auth state**
+   - Why avoid: it increases secret exposure and creates a new attack surface.
+   - Tradeoff: convenience, but at a materially higher security and ops cost.
+
+6. **[Both] Silent hard delete or silent overwrite of evidence**
+   - Why avoid: it breaks provenance and makes later audit impossible.
+   - Tradeoff: more storage retention, but much safer reconstruction and review.
+
+7. **[Both] “Done” without a linked artifact**
+   - Why avoid: it defeats the review model and makes workflow status unreliable.
+   - Tradeoff: slightly more process overhead, but much better correctness.
+
+## P0 Experiments
+
+These are the smallest tests that can tell us whether the P0 choices work in our system.
+
+| P0 item | Smallest experiment | What to measure | Expected outcome | How to know it worked |
+| --- | --- | --- | --- | --- |
+| Three-layer memory model | Ingest a small batch of representative evidence into `evidence/`, synthesize 5-10 pages into `wiki/`, and record the schema version used. | Time to go from source to page, number of claims per page, and whether every claim has a source ref. | We can clearly separate raw evidence from synthesized pages without losing traceability. | A reviewer can trace each claim back to a source in under 5 minutes, and there are no active claims without source refs. |
+| Markdown-first claim-backed pages | Build one decision page and one concept page using the proposed frontmatter and claim format. | Frontmatter completeness, claim provenance coverage, and edit/supersession behavior. | The format is readable, editable, and preserves provenance. | The page can be updated without losing history, and supersession links remain intact after an edit. |
+| Workflow gates with artifact-backed completion | Run one full intake -> triage -> review -> apply -> verify cycle on a synthetic ticket. | Whether each step produces the required artifact and whether the log links to it. | The workflow blocks completion until the artifact exists. | A step cannot be marked done without the artifact; the log contains actor, timestamp, reason, source refs, and touched pages. |
+| Append-only operation log | Add writes, a review decision, and an archive action to a log-only sandbox. | Completeness of each log entry and whether the log is append-only. | Every action is reconstructable from the log. | We can replay the sequence from the log alone, and no entry needs in-place mutation to remain accurate. |
+| Explicit trust scopes | Run one positive and one negative access test for the chosen initial scope boundary. | Whether denied reads/writes are actually blocked and whether the denial is logged. | Deny-by-default works for out-of-scope reads/writes. | The negative test fails closed, the allowed test passes, and the access decision is visible in the log. |
+| Small fixed taxonomy and lifecycle states | Classify a small corpus of pages into the proposed types and states. | Number of ambiguous classifications and number of pages that need custom type workarounds. | The fixed taxonomy is sufficient for a first pass. | Fewer than a small minority of pages need exceptions, and the reviewer can classify the rest consistently. |
+
+## Dependencies, Assumptions, and Open Questions
+
+### Dependencies and assumptions
+
+- We are assuming the first useful version stays small and manually reviewable.
+- We are assuming markdown remains the authoring format for v1.
+- We are assuming a ticket/project scope can be enforced without importing browser auth state.
+- We are assuming the system will keep raw evidence append-only and never rewrite it in place.
+- We are assuming the ticketing/workflow layer can attach or link artifacts reliably.
+
+### Open questions
+
+1. What is the first scope boundary we should enforce: repo, project, ticket, or user-private?
+2. Which page/entity types are day-one mandatory, and which should wait?
+3. What retention window do we want for raw evidence and session artifacts?
+4. Which change classes require human approval: all semantic changes, or only deletes/downgrades/contradictions?
+5. Should search stay BM25-only for v1, or is there already a measured recall gap that justifies embeddings?
+6. Do we want graph edges in frontmatter in v1, or should graph materialization wait?
+7. Is browser automation part of this product now, or a separate security-reviewed product decision?
+8. What exact verification artifacts make a workflow step “done” in our system?
+
+## Recommendation
+
+If we only execute a few things immediately, do these in order:
+
+1. Lock the memory model and frontmatter/claim shape.
+2. Enforce artifact-backed workflow completion and append-only logs.
+3. Add explicit scope controls.
+4. Keep search, graphing, and browser automation out of the first pass unless a measured need appears.

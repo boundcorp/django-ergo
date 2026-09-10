@@ -1,0 +1,58 @@
+---
+id: fc6108bf-bf2c-5a43-b8d9-a067ac03aa96
+title: Retrieval and indexing
+type: feature
+status: current
+project: django-ergo
+sources:
+- kind: source-unit
+  unit_id: f83a2866-7849-5102-b3d7-f9e96ae4ea62
+  commit: 0fd6cf5e357891d9300b6eb04c0a38c2c6897dee
+  path: src/django_ergo/models.py
+  symbol: ArticleQuerySet
+  role: runtime
+  content_hash: 92ededf783bc0d182299c084348d9b5fef6f6f870e738f4e928c6d8d65e25775
+- kind: source-unit
+  unit_id: df1f3db5-1ff6-5145-ba72-449c0318571e
+  commit: 0fd6cf5e357891d9300b6eb04c0a38c2c6897dee
+  path: src/django_ergo/indexing.py
+  symbol: index_article
+  role: runtime
+  content_hash: 5cfafef5aac774fcd285e381a1f8187fafc816bce287c342cd73908af3693a6b
+- kind: source-unit
+  unit_id: 0c0418ab-b4b2-5304-a838-4d3c7750b56d
+  commit: 0fd6cf5e357891d9300b6eb04c0a38c2c6897dee
+  path: src/django_ergo/repository_index.py
+  symbol: index_repository_commit
+  role: runtime
+  content_hash: f6b4874115b141e0d88d753266761d69cb12844da8bada8c65fe648ab0d2ff6f
+- kind: source-unit
+  unit_id: cd081e5d-8bab-5485-ba4e-5819637b33e0
+  commit: 0fd6cf5e357891d9300b6eb04c0a38c2c6897dee
+  path: src/django_ergo/repository_search.py
+  symbol: search_repository
+  role: runtime
+  content_hash: fdc9f66bae3f4f8af2a0076a8c19c36929fb0edd1ea5ef2c1a9dc1cf50f167d3
+---
+
+## Overview
+
+Django Ergo has two retrieval stores and two explicit indexing operations. Article retrieval searches persisted Article embeddings. Repository retrieval searches SourceUnits extracted from one committed Git snapshot. Neither path indexes content as a side effect of an ordinary Article save.
+
+## Retrieval
+
+`ArticleQuerySet` exposes content, summary, and weighted multi-field semantic searches. These methods operate on the queryset they receive, so tenant and knowledge-base scoping remains the caller's responsibility. They return Articles ranked by vector distance.
+
+`search_repository` returns SourceUnit cards instead. It combines exact symbol/path matches, PostgreSQL lexical ranking, vector distance, and relation context, then applies optional role and kind filters. Its results retain the source path, structural symbol, content hash, and indexed commit.
+
+## Indexing
+
+`index_article` generates only the requested Article fields, checks vector dimensions, and saves the embedding fields inside a transaction with the managed-write guard explicitly enabled. Empty text produces a null embedding.
+
+`index_repository_commit` reads `.ergo/index.yaml` from an allowed commit, extracts bounded Python or Markdown units, assigns stable file and unit identities, reuses unchanged embeddings for the same provider identity, rebuilds relations, removes stale index records, and advances the index checkpoint atomically.
+
+## Concrete Flow
+
+1. Application code calls `index_article(article, fields=("content", "summary"))`; later an already-scoped ArticleQuerySet performs semantic retrieval.
+2. Independently, an operator runs repository indexing for an allowed commit. The index contains SourceFiles, SourceUnits, and structural relations, not Articles.
+3. A repository consumer calls `search_repository` with a query and optional role/kind filters, reads returned units, and cites their commit-bound provenance.

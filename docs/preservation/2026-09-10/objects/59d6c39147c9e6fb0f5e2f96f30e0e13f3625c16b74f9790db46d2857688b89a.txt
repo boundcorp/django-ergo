@@ -1,0 +1,437 @@
+# Filesystem-first knowledge sync for Django Ergo
+
+## Decision
+
+Keep Django Ergo as the Django-native knowledge, retrieval, integration, and
+permission layer. Make Git-backed Markdown the primary authoring surface for
+project knowledge.
+
+```text
+Git repository / filesystem             Django Ergo
+───────────────────────────             ─────────────────────────────────────
+raw/ immutable evidence          ───▶   provenance and source-sync state
+wiki/ maintained Markdown        ───▶   Article projection and retrieval index
+index.md navigation               ◀──▶   generated or validated table of contents
+git commit durable checkpoint     ───▶   incremental sync and embedding work
+```
+
+This is not a replacement of Django Ergo with GBrain. It removes the
+friction of database-first knowledge authoring while preserving Django Ergo's
+future use as an API, admin, workflow, MCP/tool, and multi-tenant integration
+framework.
+
+## Why
+
+### The useful Karpathy/LLM Wiki pattern
+
+The useful model is:
+
+```text
+immutable raw sources → LLM-maintained interlinked Markdown wiki
+                      → query, citation, and periodic linting
+```
+
+Humans and agents work against readable files. The agent maintains summaries,
+links, indexes, and evolving synthesis; source material remains immutable and
+citable. A Git commit is an auditable, reproducible checkpoint.
+
+Django Ergo should make that file corpus searchable and available to Django
+applications, rather than asking agents to manually maintain a database-native
+article hierarchy.
+
+### Current Django Ergo strengths
+
+- PostgreSQL and pgvector integration.
+- `SemanticTextField` and pluggable `EmbeddingProvider` interface.
+- `Knowledgebase` and `Article` domain models.
+- Django admin, workflow, tool, and multi-tenant foundations.
+- Existing page-level semantic search APIs.
+- Existing pgvector HNSW/IVFFlat migration work.
+
+### Current gaps observed in the checkout
+
+1. **No filesystem sync layer exists.** There is no source model, Markdown
+   importer, path/content identity, commit checkpoint, file watcher, or
+   round-trip export/import workflow. The current admin export is JSON.
+2. **No real local embedding provider exists.** The only runtime provider is
+   OpenAI; deterministic and custom providers exist for tests/fixtures.
+   Local `sentence-transformers` is documented as future work.
+3. **Search called `hybrid_search` is vector-only today.**
+   `ArticleQuerySet.hybrid_search()` delegates to weighted multi-field cosine
+   search. It does not combine PostgreSQL full-text ranking and vector ranking.
+4. **The current article hierarchy is not a filesystem identity system.**
+   `hierarchy_code` is an opaque, length-limited ordering code, unique inside a
+   knowledgebase. It does not safely represent stable page identity, arbitrary
+   paths, Git renames, or durable inter-page links.
+5. **Summary generation remains remote.** `generate_summary()` directly uses
+   an OpenAI chat model. A local-only filesystem workflow must not require
+   automatic summaries in its first version.
+6. **RAG examples are not a production pipeline.** The September 2025 RAG
+   work adds example classes and example-oriented tests for chunking, ranking,
+   context selection, and feedback. It is not connected to document ingestion,
+   chunk persistence, or production pgvector retrieval.
+
+## Scope
+
+### In scope
+
+- Git-backed Markdown as the canonical editable project knowledge corpus.
+- Safe one-way projection from Markdown into Django Ergo models.
+- Commit-based incremental synchronization.
+- Optional local working-tree preview.
+- Local-only embeddings after explicit model selection and schema migration.
+- Provenance, stable IDs, deletion safety, and retrieval citations.
+- Hermetic pgvector tests.
+
+### Out of scope for the first implementation
+
+- Replacing Django Ergo models/admin/workflows.
+- File watching as the default synchronization mechanism.
+- Automatic chunking, reranking, feedback learning, or graph extraction.
+- Automatic OpenAI summaries.
+- Making both GBrain and Django Ergo canonical for the same content.
+- Importing arbitrary `raw/` content directly into vector search.
+
+## Canonical filesystem layout
+
+Each project owns a repository-local knowledge directory:
+
+```text
+knowledge/
+├── README.md                  # authoring and sync contract
+├── ergo-source.yaml           # source identity and policy
+├── raw/                       # immutable captured material; not edited by sync
+│   ├── transcripts/
+│   ├── research/
+│   └── exports/
+└── wiki/                      # curated, LLM-maintained Markdown pages
+    ├── decisions/
+    ├── concepts/
+    ├── people/
+    ├── projects/
+    ├── patterns/
+    └── index.md
+```
+
+A synced page requires stable frontmatter identity:
+
+```yaml
+---
+id: 018f07d8-5b0e-70a3-b41d-4c385ac5a562
+title: Filesystem-first knowledge sync
+type: decision
+status: current
+project: django-ergo
+sources:
+  - ../raw/research/karpathy-llm-wiki.md
+---
+```
+
+Markdown body text is the page content. Standard Markdown links express
+relationships. Frontmatter is deliberately small: stable ID, title, type,
+status, project, source references, and optional freshness/visibility fields.
+
+## Identity, rename, and deletion invariants
+
+A relative path is a **mutable locator**, not an identity. Using it as identity
+would convert every Git rename into an old missing article plus a new article,
+losing relationships and citations.
+
+Required invariants:
+
+1. `frontmatter.id` is the permanent document identity.
+2. The relative path is stored as the current locator and may change.
+3. A sync stores current Git commit, blob object ID, and normalized-content
+   hash for provenance and incremental work.
+4. For legacy pages without IDs, Git rename detection may migrate a known
+   document once; new pages must receive IDs before becoming managed.
+5. A missing file marks its tracked document `missing`; it does not delete the
+   projected Article automatically.
+6. Deletion requires explicit `--prune` and a documented retention policy.
+7. Database edits to managed Article content must either be rejected/read-only
+   or written to a deliberate overlay/export path. Do not create two silently
+   competing sources of truth.
+
+## Django data model
+
+Do not overload `Article.hierarchy_code`. Add a source-tracking layer.
+
+```text
+KnowledgeSource
+  id
+  knowledgebase FK
+  root_path
+  sync_mode: committed | working_tree
+  include_paths / exclusions
+  last_synced_commit
+  last_sync_at
+
+SourceDocument
+  source FK
+  document_id UUID                 # Markdown frontmatter ID
+  article FK
+  relative_path                    # current locator
+  prior_paths JSON
+  content_hash
+  git_blob_oid
+  last_seen_commit
+  state: active | missing | excluded
+```
+
+`Article` remains the query/API projection. The source tracker owns external
+identity, file lifecycle, and provenance. It may map title/body/frontmatter to
+existing Article fields initially; richer frontmatter can be added as an
+explicit JSON field only when a concrete query/API needs it.
+
+## Sync design
+
+### Commit sync: default and durable
+
+Implement a management command similar to:
+
+```text
+python manage.py sync_knowledge <source-id> --commit HEAD
+python manage.py sync_knowledge <source-id> --dry-run
+python manage.py sync_knowledge <source-id> --prune
+```
+
+The normal sync:
+
+1. Resolves the source root and records the target commit.
+2. Computes changes since `last_synced_commit`, including rename pairs.
+3. Limits work to configured `wiki/**/*.md` files.
+4. Parses frontmatter and Markdown body.
+5. Validates stable ID, path uniqueness, and source references.
+6. Uses content hash to skip unchanged pages.
+7. Upserts `SourceDocument` and the associated `Article` in one transaction.
+8. Queues or performs embedding only after the transaction succeeds.
+9. Marks unobserved tracked documents missing; deletes only with `--prune`.
+10. Stores the successful commit checkpoint only after all selected documents
+    finish successfully.
+
+The source directory—not the Django database—is canonical for managed pages.
+The database is a derived projection and operational search index.
+
+### Working-tree sync: optional preview
+
+Provide an explicit local mode:
+
+```text
+python manage.py sync_knowledge <source-id> --working-tree --dry-run
+python manage.py sync_knowledge <source-id> --working-tree
+```
+
+This supports immediate local feedback while making the difference from a
+committed checkpoint explicit.
+
+### File watching: not default
+
+Do not synchronize whenever any file changes by default. Agents and editors
+commonly write intermediate states, which produces duplicate embedding work,
+indexes incomplete pages, and makes durable provenance unclear.
+
+If needed later, make watch mode opt-in, debounced, hash-gated, and clearly a
+working-tree preview:
+
+```text
+python manage.py sync_knowledge <source-id> --watch --debounce-seconds 3
+```
+
+## Local-only vectorization
+
+### Existing provider seam
+
+Django Ergo already has the needed extension point:
+
+```python
+class EmbeddingProvider:
+    def generate_embedding(self, text: str) -> list[float]: ...
+    def get_dimensions(self) -> int: ...
+```
+
+Initial implementation: an in-process
+`SentenceTransformerEmbeddingProvider`. It is local after initial model
+acquisition, needs no hosted embedding API, and can later coexist with Ollama,
+llama.cpp, or Text Embeddings Inference HTTP providers.
+
+### Dimension migration is mandatory
+
+`Article.content_embedding` and `Article.summary_embedding` currently use
+hard-coded 1536 dimensions. Many local embedding models have other dimensions.
+Never pad or truncate vectors to fit the current schema.
+
+Safe model cutover:
+
+1. Choose a local model using a representative project corpus and fixed
+   retrieval queries.
+2. Confirm its native dimension.
+3. Make embedding dimensions an explicit Django setting/model contract.
+4. Migrate vector columns to the selected dimension.
+5. Rebuild pgvector indexes.
+6. Re-embed all managed articles.
+7. Compare retrieval metrics against the fixed query set before cutover.
+
+### Indexing lifecycle
+
+Do not embed inside `SemanticTextField.pre_save()` for filesystem sync. A
+commit can alter many pages; inline embedding makes sync slow, retries hard,
+and partial work opaque.
+
+Instead:
+
+```text
+sync transaction → persisted changed Article IDs → index job/batch → checkpoint
+```
+
+For v1, embed curated `wiki/` page bodies only. Leave `raw/` material as
+immutable evidence. Do not auto-generate summary embeddings. Curated wiki
+pages are already the condensed knowledge layer.
+
+## Retrieval roadmap
+
+### Version 1: simple and useful
+
+- Search page titles and PostgreSQL full-text content.
+- Search local content embeddings.
+- Combine lexical and vector candidates with explicit reciprocal-rank fusion.
+- Return title, Markdown path, stable document ID, Git commit, and cited
+  source links.
+- Permit filtering by `KnowledgeSource`, knowledgebase, type, status, and
+  project.
+
+This replaces the current vector-only behavior behind `hybrid_search` with
+real, inspectable hybrid retrieval.
+
+### Deferred work
+
+Add only when page-level retrieval demonstrably fails:
+
+- persistent chunks for large source documents;
+- reranking;
+- context-window selection/compression;
+- feedback-driven ranking;
+- graph extraction;
+- watcher mode;
+- broader raw-document ingestion.
+
+The existing RAG examples are reference material for those later stages, not
+an implementation foundation.
+
+## Testing and operational prerequisites
+
+### Current failure
+
+The repository's general RAG tests do not run directly on this server. Test
+settings load the repository `.env`, which targets a shared PostgreSQL service;
+the configured host/credentials are not accepted from this environment. The
+ordinary test path therefore lacks a reliable local baseline.
+
+The narrow provider-only checkout test is verified:
+
+```text
+PYTHONPATH=src pytest tests/test_embedding_providers_simple.py -q
+11 passed
+```
+
+### Required hermetic test invariant
+
+```text
+When TEST/CI mode is active:
+  database host, credentials, and database name come only from test-local settings;
+  repository .env must not override them.
+```
+
+The repository already has a container-oriented test path:
+
+- `make build_devcontainer` builds `.cursor/Dockerfile`.
+- `.cursor/start.sh` starts a container-local PostgreSQL service.
+- `make test_coverage_in_devcontainer` runs Django tests inside that image.
+
+However, mounted repository `.env` currently overrides that intended local
+service. Fix settings precedence before relying on this path.
+
+The new filesystem sync test suite must use:
+
+```text
+temporary Git repository
++ disposable PostgreSQL with pgvector
++ isolated Django settings
++ local deterministic embedding provider
+→ commit Markdown → sync → Article projection → cited retrieval
+```
+
+Required observable contracts:
+
+1. New committed Markdown page projects to one Article and SourceDocument.
+2. Unchanged commit does not re-embed.
+3. Content edit reuses document identity and updates one Article.
+4. Git rename preserves the same Article/document ID.
+5. Missing file does not delete without `--prune`.
+6. `--dry-run` performs no database writes.
+7. Local provider runs without network access.
+8. Retrieval returns file path and commit provenance.
+
+## Relationship to GBrain
+
+Use each system for a distinct scope.
+
+```text
+Project-specific knowledge:
+  Git Markdown → Django Ergo source projection/index
+
+Cross-project promoted knowledge:
+  curated export/source → shared GBrain
+```
+
+Django Ergo is the project-local application framework. Shared GBrain is the
+cross-project brain for portfolio context, captured communications, people,
+and multi-repository retrieval. Do not make both systems canonical for the
+same page.
+
+## Implementation order
+
+### Phase 1: durable file projection
+
+1. Add `KnowledgeSource` and `SourceDocument` models/migrations.
+2. Add the `sync_knowledge` management command with commit mode,
+   `--working-tree`, `--dry-run`, and explicit `--prune`.
+3. Add Markdown/frontmatter parsing and stable-ID validation.
+4. Add Git commit/blob/hash provenance and rename handling.
+5. Add hermetic pgvector test settings and sync contract tests.
+
+**Acceptance:** one committed Markdown page becomes a traceable Django Article
+without a remote embedding or summary API call.
+
+### Phase 2: local semantic index
+
+1. Implement a local embedding provider.
+2. Select model/dimensions using retrieval fixtures.
+3. Migrate vector fields and rebuild indexes.
+4. Add deferred/batched embedding for changed Articles.
+5. Add a network-disabled integration test.
+
+**Acceptance:** local semantic search retrieves the committed Markdown page
+and returns file/commit provenance.
+
+### Phase 3: real hybrid retrieval and agent ergonomics
+
+1. Add lexical search plus reciprocal-rank fusion.
+2. Add a query tool/API returning citations and source metadata.
+3. Generate/validate `index.md` and lint broken links/frontmatter.
+4. Add a project knowledge agent contract (`AGENTS.md`) for ingest, query,
+   and write-back.
+
+**Acceptance:** a fresh agent session can retrieve project knowledge from
+Django Ergo and file an approved durable update back into the Git wiki.
+
+## Non-goals and guardrails
+
+- Do not silently delete database knowledge because a file disappears.
+- Do not use relative paths as document identity.
+- Do not run local and remote embeddings in the same vector column.
+- Do not add watchers before commit-mode correctness exists.
+- Do not call a vector-only search pipeline hybrid.
+- Do not treat raw captures and curated wiki pages as the same retrieval tier.
+- Do not expose source text or credentials in operational telemetry.
+- Preserve current user changes in the checkout; this plan makes no code or
+  configuration changes.

@@ -1,0 +1,116 @@
+version: 1
+goals:
+  - id: 7ec9a21d-6825-500d-8d72-ef9361eeb4ed
+    path: wiki/project/system-overview.md
+    title: System overview
+    type: project
+    project: django-ergo
+    question: Explain the product boundary and major subsystems.
+    required_roles: [runtime, test]
+    required_sections: [Overview, Subsystems, Boundaries, Concrete Flow, Tradeoffs]
+    queries: [product boundary, subsystems]
+    required_path_groups:
+      knowledge: [src/django_ergo/models.py, src/django_ergo/kb*.py]
+      conversation: [src/django_ergo/conversation/**/*.py]
+      repository: [src/django_ergo/repository_*.py, src/django_ergo/sync.py]
+      verification: [tests/test_repository_*.py, tests/test_sync.py]
+    required_symbol_groups:
+      knowledge-mechanism: [Knowledgebase, ArticleQuerySet, absorb_conversation]
+      conversation-mechanism: [Engine, SessionManager, run_conversation_turn, ToolAdapter]
+      repository-mechanism: [index_repository_commit, search_repository, project_commit]
+  - id: e0f2c384-4d3e-5ce4-9a8c-11ea1a879ece
+    path: wiki/features/committed-knowledge-projection.md
+    title: Committed knowledge projection
+    type: feature
+    project: django-ergo
+    question: Explain trusted Git projection, identity, lifecycle, and recovery.
+    required_roles: [runtime, test]
+    required_sections: [Overview, Lifecycle, Recovery, Tradeoffs]
+    queries: [project_commit SourceDocument Git]
+    required_path_groups:
+      git-snapshot: [src/django_ergo/git_snapshot.py]
+      projection: [src/django_ergo/sync.py]
+      identity: [src/django_ergo/models.py]
+      verification: [tests/test_sync.py]
+    required_symbol_groups:
+      git-snapshot-mechanism: [GitSnapshot]
+      projection-mechanism: [project_commit]
+      identity-mechanism: [SourceDocument]
+  - id: fc6108bf-bf2c-5a43-b8d9-a067ac03aa96
+    path: wiki/features/retrieval-and-indexing.md
+    title: Retrieval and indexing
+    type: feature
+    project: django-ergo
+    question: Explain explicit embedding, Article retrieval, and the new source index without conflating them.
+    required_roles: [runtime]
+    required_sections: [Overview, Retrieval, Indexing, Concrete Flow]
+    queries: [embedding retrieval index]
+    required_path_groups:
+      article-retrieval: [src/django_ergo/models.py, src/django_ergo/indexing.py]
+      repository-index: [src/django_ergo/repository_index.py, src/django_ergo/repository_search.py]
+    required_symbol_groups:
+      article-mechanism: [ArticleQuerySet, index_article]
+      repository-mechanism: [index_repository_commit, search_repository]
+  - id: 09d37387-e8f2-54cb-88f1-8167c8eab065
+    path: wiki/architecture/conversation-tool-runtime.md
+    title: Conversation tool runtime
+    type: architecture
+    project: django-ergo
+    question: Explain engines, sessions, tool dispatch, approvals, and termination.
+    required_roles: [runtime, test]
+    required_sections: [Overview, Runtime, Boundaries, Concrete Flow, Termination]
+    queries: [conversation tool approval]
+    required_path_groups:
+      engine-session: [src/django_ergo/conversation/engine.py, src/django_ergo/conversation/manager.py, src/django_ergo/conversation/runtime.py]
+      tool-approval: [src/django_ergo/conversation/runner.py, src/django_ergo/tools.py]
+      verification: [tests/test_conversation_*.py]
+    required_symbol_groups:
+      engine-session-mechanism: [Engine, SessionManager]
+      dispatch-mechanism: [run_conversation_turn, _execute_tool]
+  - id: 6ffb1685-f1e5-5f1c-a3bd-4186fdd4f578
+    path: wiki/architecture/permission-boundaries.md
+    title: Permission boundaries
+    type: architecture
+    project: django-ergo
+    question: Explain tenant filtering, bound toolkits, managed-content guards, and remaining caller obligations.
+    required_roles: [runtime]
+    required_sections: [Overview, Boundaries, Obligations, Concrete Flow]
+    queries: [permission knowledgebase managed]
+    required_path_groups:
+      tenant-tools: [src/django_ergo/kb_toolkit.py, src/django_ergo/kb_suggest_toolkit.py, src/django_ergo/kb_tools.py]
+      managed-content: [src/django_ergo/models.py, src/django_ergo/sync.py]
+    required_symbol_groups:
+      tenant-tool-mechanism: [KBToolkit, KBSuggestToolkit, search_user_kb]
+      managed-content-mechanism: [Article, project_commit]
+  - id: 977b3642-cad9-5afb-a126-271c519d5860
+    path: wiki/use-cases/conversation-absorption.md
+    title: Conversation absorption
+    type: use-case
+    project: django-ergo
+    question: Explain how conversations become reviewed knowledge proposals.
+    required_roles: [runtime]
+    required_sections: [Overview, Flow, Review]
+    queries: [conversation knowledge proposal]
+    required_path_groups:
+      conversation-pipeline: [src/django_ergo/conversation/pipelines.py]
+      reviewed-proposal: [src/django_ergo/kb_suggest_toolkit.py]
+    required_symbol_groups:
+      pipeline-mechanism: [absorb_conversation]
+      proposal-mechanism: [KBSuggestToolkit]
+  - id: 01726812-3630-5319-9221-0c4568e4c490
+    path: wiki/use-cases/repository-self-wiki.md
+    title: Repository self-wiki
+    type: use-case
+    project: django-ergo
+    question: Explain this goal loop and its human review boundary.
+    required_roles: [runtime]
+    required_sections: [Overview, Flow, Review]
+    queries: [repository index wiki]
+    required_path_groups:
+      goal-runner: [src/django_ergo/repository_wiki.py]
+      repository-index: [src/django_ergo/repository_index.py, src/django_ergo/repository_search.py]
+      review-command: [src/django_ergo/management/commands/propose_repository_wiki.py]
+    required_symbol_groups:
+      goal-mechanism: [propose_repository_wiki]
+      index-mechanism: [index_repository_commit, search_repository]
+      review-command-mechanism: [Command]

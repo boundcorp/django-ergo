@@ -1,0 +1,168 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "django-ergo Self-Index Direction",
+    "locale": "en",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "implemented-path",
+        "label": "Implemented evidence path",
+        "focus": ["configure_commit", "index_snapshot", "retrieve_evidence", "proposal_packet"],
+        "note": "Follow committed configuration through immutable indexing and evidence retrieval."
+      },
+      {
+        "id": "review-boundary",
+        "label": "Review-only boundary",
+        "focus": ["proposal_packet", "human_review", "accepted_page_commit"],
+        "note": "A canonical wiki or Git write requires human acceptance and is not evidenced by the dogfood run."
+      },
+      {
+        "id": "unresolved-outcome",
+        "label": "Unresolved proposal outcome",
+        "focus": ["proposal_packet", "evidence_gap", "retrieve_evidence"],
+        "note": "The manifest status remains exactly pending approval or missing proposal; the outcome is not disambiguated."
+      }
+    ]
+  },
+  "lanes": [
+    { "id": "committed_repository", "label": "Committed Repository" },
+    { "id": "review_workflow", "label": "Review-Only Wiki Workflow" },
+    { "id": "unresolved_proof", "label": "Unresolved Evidence / Proof", "variant": "exception" }
+  ],
+  "phases": [
+    { "id": "configure", "label": "Configure + commit", "fromCol": 0, "toCol": 0 },
+    { "id": "index", "label": "Index snapshot", "fromCol": 1, "toCol": 1, "variant": "emphasis" },
+    { "id": "retrieve", "label": "Retrieve evidence", "fromCol": 2, "toCol": 2 },
+    { "id": "propose", "label": "Propose with citations", "fromCol": 3, "toCol": 3, "variant": "emphasis" },
+    { "id": "review", "label": "Human review gate", "fromCol": 4, "toCol": 4, "variant": "security" },
+    { "id": "commit", "label": "Accepted page commit", "fromCol": 5, "toCol": 5, "variant": "dashed" }
+  ],
+  "groups": [
+    { "id": "committed_inputs", "label": "Committed base", "lane": "committed_repository", "fromCol": 0, "toCol": 2, "variant": "emphasis" },
+    { "id": "review_only_boundary", "label": "Human approval required", "lane": "review_workflow", "fromCol": 3, "toCol": 5, "variant": "security" },
+    { "id": "proof_gap", "label": "Proof open", "lane": "unresolved_proof", "fromCol": 2, "toCol": 4, "variant": "dashed" }
+  ],
+  "mainPath": ["configure_commit", "index_snapshot", "retrieve_evidence", "proposal_packet", "human_review", "accepted_page_commit"],
+  "semanticChecks": {
+    "allowedRoots": ["configure_commit"],
+    "allowedTerminals": ["accepted_page_commit", "evidence_gap"],
+    "requiredEdges": [
+      { "from": "proposal_packet", "to": "human_review" },
+      { "from": "proposal_packet", "to": "evidence_gap" },
+      { "from": "human_review", "to": "accepted_page_commit" }
+    ],
+    "requiredPaths": [
+      { "from": "configure_commit", "to": "accepted_page_commit" },
+      { "from": "proposal_packet", "to": "retrieve_evidence" }
+    ]
+  },
+  "nodes": [
+    {
+      "id": "configure_commit",
+      "lane": "committed_repository",
+      "col": 0,
+      "type": "frontend",
+      "label": "Commit config",
+      "sublabel": "ergo config",
+      "tag": "5f3e5de"
+    },
+    {
+      "id": "index_snapshot",
+      "lane": "committed_repository",
+      "col": 1,
+      "type": "backend",
+      "label": "GitSnapshot",
+      "sublabel": "committed reads",
+      "tag": "implemented"
+    },
+    {
+      "id": "retrieve_evidence",
+      "lane": "committed_repository",
+      "col": 2,
+      "type": "database",
+      "label": "Search",
+      "sublabel": "hybrid search",
+      "tag": "implemented"
+    },
+    {
+      "id": "proposal_packet",
+      "lane": "review_workflow",
+      "col": 3,
+      "type": "backend",
+      "label": "Proposal",
+      "sublabel": "with citations",
+      "tag": "review-only"
+    },
+    {
+      "id": "human_review",
+      "lane": "review_workflow",
+      "col": 4,
+      "type": "security",
+      "label": "Review",
+      "sublabel": "human approval",
+      "tag": "proof open"
+    },
+    {
+      "id": "accepted_page_commit",
+      "lane": "review_workflow",
+      "col": 5,
+      "type": "external",
+      "label": "Page commit",
+      "sublabel": "accepted only",
+      "tag": "not proved"
+    },
+    {
+      "id": "evidence_gap",
+      "lane": "unresolved_proof",
+      "col": 3,
+      "type": "security",
+      "label": "Evidence gap",
+      "sublabel": "status unknown",
+      "tag": "unresolved"
+    }
+  ],
+  "edges": [
+    { "id": "commit_to_index", "from": "configure_commit", "to": "index_snapshot", "label": "config", "role": "main" },
+    { "id": "index_to_retrieve", "from": "index_snapshot", "to": "retrieve_evidence", "label": "index", "role": "main" },
+    { "id": "retrieve_to_propose", "from": "retrieve_evidence", "to": "proposal_packet", "label": "evidence", "role": "main" },
+    { "id": "propose_to_review", "from": "proposal_packet", "to": "human_review", "label": "citations", "variant": "emphasis", "role": "main" },
+    { "id": "review_to_commit", "from": "human_review", "to": "accepted_page_commit", "label": "accepted", "variant": "security", "role": "main" },
+    { "id": "propose_to_gap", "from": "proposal_packet", "to": "evidence_gap", "label": "pending approval or missing proposal", "variant": "security", "role": "error" },
+    { "id": "gap_to_retrieve", "from": "evidence_gap", "to": "retrieve_evidence", "label": "evidence", "variant": "dashed", "role": "return" }
+  ],
+  "cards": [
+    {
+      "dot": "violet",
+      "title": "Implemented now",
+      "items": [
+        "5f3e5de committed .ergo/index.yaml and .ergo/wiki-goals.yaml",
+        "Immutable GitSnapshot committed reads; repository indexing; file and unit identity reuse across renames/content",
+        "Relations and hybrid exact, lexical, vector, and neighbor search",
+        "repo_read_file, repo_grep, repo_search, repo_read, and repo_neighbors",
+        "Review-only wiki proposal workflow; reusable architecture-first prompt; async ORM boundary fixes"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "Current verification evidence",
+      "items": [
+        "Focused suite: 43 passed",
+        "makemigrations check: no changes; embedded PostgreSQL migrations succeeded",
+        "Dogfood index: 119 files, 2,210 units, 2,659 relations, 2,330 writes",
+        "Dogfood proposal retrieved committed evidence; no canonical wiki/Git write occurred"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Outstanding proof checklist",
+      "items": [
+        "1. Distinguish approval-pending from missing-proposal outcome",
+        "2. Run a successful end-to-end proposal packet with citations",
+        "3. Prove role assignment from committed index config without manual overrides",
+        "4. Complete refresh/reconciliation checks under real repository changes and race/failure conditions"
+      ]
+    }
+  ]
+}

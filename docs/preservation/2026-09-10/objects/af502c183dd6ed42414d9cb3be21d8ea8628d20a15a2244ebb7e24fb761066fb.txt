@@ -1,0 +1,164 @@
+# G-Stack Re-evaluation: May 26 Feature Deltas
+
+Date: 2026-05-26  
+Baseline artifacts:
+- `competitive-analysis-llm-wiki-v2-gstack.md` attachment `194b43f8bdfd`
+- `docs/plans/prioritized-adopt-learn-avoid-roadmap.md` attachment `eb8c4abda1a0`
+- `docs/plans/remaining-gaps-next-experiments.md` attachment `dcaf4a02a1ce`
+- `docs/plans/investigation-findings-adoption-gaps.md` attachment `ea354d83b2c6`
+
+Current gstack source checked:
+- Main head: `cf50443b63e461a7c0796857f69d572781acab8e`
+- Commit: <https://github.com/garrytan/gstack/commit/cf50443b63e461a7c0796857f69d572781acab8e>
+- Changelog: <https://github.com/garrytan/gstack/blob/main/CHANGELOG.md>
+- Touched design resolver: <https://github.com/garrytan/gstack/blob/main/scripts/resolvers/design.ts>
+
+## Executive Decision
+
+The May 26 gstack change does not overturn the prior recommendation. We should still avoid installing or cloning gstack wholesale, and still adopt its workflow discipline selectively.
+
+The update does strengthen one earlier recommendation: artifact-backed interactive review should not be treated as a static file handoff. gstack now treats design review as a durable, same-tab, multi-round board with structured feedback, reloads, board identity, and process lifecycle rules. That is directly relevant to our "done means artifact-backed" goal and suggests a new P0 experiment: a persistent review-board/artifact-session primitive for synthesis-heavy steps.
+
+## 1) What Changed In Gstack Today
+
+The relevant new release is `v1.45.0.0`, merged to main at `2026-05-26T03:45:12Z` by commit `cf50443`.
+
+Feature-level deltas:
+
+| New feature | Specific delta | Why it matters |
+| --- | --- | --- |
+| Persistent design board daemon | `$D compare --serve` and `$D serve` now publish boards into one daemon instead of starting one short-lived server per board. Boards live under `/boards/<id>/`. | Review artifacts become durable across the working day instead of expiring after a short server timeout. |
+| 24h board lifetime | Changelog states board idle lifetime moved from 10 minutes to 24 hours, with active-board extensions up to a hard ceiling. | This turns a design board into a real handoff surface rather than an ephemeral prompt aid. |
+| Same-tab regeneration loop | Design skills now parse `BOARD_URL:` and post reloads to `${BOARD_URL}api/reload`, so regenerate/remix cycles update the same board URL. | The user's feedback context stays stable while the agent synthesizes revised answers/designs. |
+| Board history index | Daemon root lists recent boards, and one daemon hosts multiple boards. | Review/synthesis artifacts become browsable session history. |
+| Structured feedback files with board identity | Feedback writes include `boardId` and `publishedAt`; daemon derives `sourceDir` from `realpath(html)` rather than trusting request body input. | Stronger provenance for "which artifact produced this feedback" and reduced trust in client-supplied paths. |
+| Per-board state machine | Boards track `serving`, `regenerating`, and `done`; feedback and reload are serialized through a per-board mutex. | This is an explicit lifecycle model for synthesis/review work, not just a blob viewer. |
+| Lifecycle and safety gates | Daemon has `status` and `stop [--force]`; stop refuses active boards unless forced; version mismatch refuses to kill active boards. | Good operational model: do not silently destroy in-flight artifacts. |
+| Relative board URLs | Board JS moved from injected server URL to relative `./api/feedback` and `./api/progress`, with trailing-slash redirect. | Makes the same artifact work under root and per-board paths, reducing generated artifact coupling. |
+| Backward compatibility alias | CLI still emits `SERVE_STARTED: port=N html=<path>` while adding `BOARD_URL:`. | Shows a migration pattern: introduce the new artifact URL contract without immediately breaking consumers. |
+| Stronger test coverage | Changelog reports design tests increased from 16 to 77, covering lifecycle, lock races, idle shutdown, malformed bodies, path traversal, and cross-board isolation. | Evidence standard is aligned with our CI evidence discipline: behavior is pinned at the boundary where data loss would occur. |
+
+Important correction to the ticket wording: I did not find a new general gstack feature named "thinking" or "answer synthesis" in the May 26 main diff. The relevant synthesis-adjacent change is narrower: persistent interactive design/review boards now preserve iterative thinking artifacts and structured user feedback across rounds.
+
+## 2) Earlier Recommendations That Remain Valid
+
+| Earlier recommendation | Still valid? | Why |
+| --- | --- | --- |
+| Adopt gstack's role separation and workflow gates conceptually. | Yes | The new release doubles down on role-specific flows: design-related skills consume the daemon through a stable board URL contract. This reinforces workflow-as-product. |
+| Require artifact-backed completion. | Yes, stronger | The persistent board is exactly an artifact-backed completion surface. Completion depends on feedback files and board state, not chat claims. |
+| Keep append-only logs and provenance visible. | Yes | The new `boardId`, `publishedAt`, `sourceDir`, and board history pattern supports provenance. We should still map it into our own log/evidence schema. |
+| Avoid wholesale gstack install as our architecture. | Yes | The release adds a significant daemon/process surface. Useful pattern, but copying it wholesale would import operational complexity we have not justified. |
+| Avoid browser/cookie automation in v1 without security review. | Yes | This release is localhost board serving, not authenticated browser automation. It does not reduce the security risk of cookie/browser daemons. |
+| Keep the first knowledge substrate markdown/schema-first. | Yes | The design daemon is an interaction layer, not a replacement for durable evidence, synthesized pages, schema, and logs. |
+| Use manual review gates for semantic changes. | Yes | Regeneration/remix is still feedback-driven. The user explicitly chooses or asks for iteration; silent semantic mutation remains a bad default. |
+
+## 3) Recommendations To Update Or Override
+
+| Prior position | Updated position | Rationale |
+| --- | --- | --- |
+| "Workflow gates with artifacts" can start as static attachments plus logs. | Upgrade to "artifact sessions" for synthesis-heavy workflows. | A single uploaded file is enough for many steps, but design/research synthesis often needs multi-round feedback. A stable session URL plus structured feedback log is a stronger primitive. |
+| Browser/visual tooling is P2 unless UI QA is core. | Persistent local review boards become P1 for review/synthesis UX, while browser/cookie automation stays deferred. | The board daemon is not mainly browser automation; it is a durable human review surface. That is closer to our artifact discipline than to risky auth automation. |
+| "Crystallization/session-end summaries" as P1. | Add "live crystallization board" experiment before final wiki ingestion. | gstack shows value in preserving intermediate options, feedback, and regeneration state before final synthesis is accepted. |
+| Exact verification artifact contract remains open. | Add a concrete review-board artifact type to the v1 contract candidates. | Candidate fields: `session_id`, `artifact_url`, `state`, `created_at`, `updated_at`, `source_refs`, `feedback_refs`, `approved_output_ref`, `supersedes`, `closed_by`. |
+
+No recommendation should be fully overridden. The direction changes are sequencing refinements, not a strategy reversal.
+
+## 4) Updated Adopt / Learn / Avoid Matrix
+
+| Decision | Item | Updated recommendation |
+| --- | --- | --- |
+| Adopt now | Stable artifact/session IDs for review boards | Add to P0/P1 contract. Every review/synthesis artifact should have an ID, stable URL/path, lifecycle state, creation time, and source refs. |
+| Adopt now | Structured feedback as first-class evidence | Treat user feedback files as evidence items that can feed synthesis pages. Include actor, timestamp, target artifact/session, and outcome. |
+| Adopt now | Lifecycle states for interactive artifacts | Use a small state machine such as `open`, `regenerating`, `approved`, `closed`, `superseded`. This complements claim lifecycle states. |
+| Adopt now | Refuse destructive lifecycle transitions with active sessions | Do not silently stop/delete/archive sessions with unresolved feedback or active review state. Require explicit close/force semantics. |
+| Learn | Same-tab iterative synthesis loop | Study how stable URLs reduce user friction during regenerate/remix. Useful for design reviews, plan reviews, and research synthesis. |
+| Learn | Backward-compatible contract migration | `BOARD_URL` plus legacy `SERVE_STARTED` is a good example of evolving a contract without immediately breaking old consumers. |
+| Learn | Daemon lock/version/PID identity handling | Good operating model if we later need long-lived local processes. Not needed for the first markdown/wiki implementation. |
+| Avoid for now | Copying the full design daemon | It is tightly coupled to gstack's `$D` design flow and adds process lifecycle, locks, state files, LRU, and platform concerns. |
+| Avoid for now | In-memory-only board history as durable knowledge | gstack's board history is useful for a workday, but our durable memory needs append-only persisted evidence and synthesized pages. |
+| Avoid for now | Equating board persistence with knowledge correctness | A persistent artifact can preserve bad synthesis longer. It still needs provenance, review, supersession, and evidence-backed claims. |
+
+## 5) New Feature Mapping To Our Goals, Benefits, Risks, Evidence
+
+| Gstack feature | Maps to our goals | Expected benefit | Risks | Evidence to collect |
+| --- | --- | --- | --- | --- |
+| Persistent board daemon | Artifact-backed workflow, human review gates | Fewer lost reviews; better continuity across multi-round work | Process lifecycle complexity; stale local state | Time from artifact publication to review completion; number of abandoned/lost review sessions; daemon failure modes if implemented |
+| Stable `/boards/<id>/` URL | Durable handoff and provenance | A downstream agent/human can refer to the exact review surface | URL may outlive valid content if not tied to lifecycle | Can every final claim/decision cite a stable review artifact ID? |
+| Structured feedback files | Evidence layer and synthesis input | User preferences become machine-readable evidence | Feedback may be treated as truth instead of preference | Feedback schema completeness; whether final synthesis cites feedback separately from source facts |
+| Same-tab reload/regenerate | Iterative answer/design synthesis | Lower friction; preserves context during revisions | Regeneration loops can hide version history if old rounds are overwritten | Count rounds; preserve each round or log supersession; measure whether reviewers can reconstruct why final output changed |
+| Board lifecycle states | Governance and completion semantics | "Done" can be enforced by state plus artifact existence | State drift if manual edits bypass transitions | Transition log coverage; invalid transition tests |
+| Refuse stop with active boards | Data-loss prevention | Prevents silent loss of in-flight review history | Users may need force escape hatch | Number of refused destructive actions; explicit forced-close audit entries |
+| `boardId` + `publishedAt` in feedback | Provenance and auditability | Feedback is tied to the exact artifact version | IDs alone are insufficient without source refs/checksums | Verify feedback includes artifact ID, timestamp, source hash/path, actor |
+| Server-side `sourceDir` derivation | Trust boundary | Reduces client-supplied path abuse | Still local filesystem exposure if path policy is weak | Negative path traversal tests; symlink tests; denied writes logged |
+| Relative board JS paths | Portable artifacts | Same generated artifact works under multiple serving roots | Relative path assumptions can break under embedding | Open artifact under root and nested path; verify feedback/reload endpoints still resolve |
+| 77 design tests / lifecycle coverage | Verification evidence discipline | Shows the release treats edge cases as part of the feature | Test claims may not cover real browser path; changelog notes HTTP fetch substitutes for browser due to pre-existing harness issue | Require exact test command outputs and any skipped/browser-gap notes in our equivalent artifact |
+
+## 6) Revised Sequencing
+
+1. Keep the current P0 substrate sequence: schema-first evidence, markdown synthesis pages, append-only log, trust scope, minimal taxonomy.
+2. Add a P0.5/P1 artifact-session slice before richer search/graph work:
+   - define `review_session` / `synthesis_session` artifact type,
+   - define stable ID and lifecycle fields,
+   - define feedback-as-evidence schema,
+   - define close/approve/supersede transitions.
+3. Run the first end-to-end workflow experiment with at least one multi-round feedback loop, not just a single static artifact upload.
+4. Keep long-lived daemon implementation out of v1 unless the artifact-session experiment proves static attachments plus local files are not enough.
+
+## 7) Next Experiments Tailored To These Features
+
+### Experiment 1: Artifact-session contract spike
+
+Create one synthetic `review_session` artifact with:
+- stable ID,
+- stable URL or attachment path,
+- lifecycle state,
+- source refs,
+- feedback refs,
+- final approved output ref,
+- append-only transition log.
+
+Success criteria:
+- a reviewer can reconstruct the session from artifacts alone,
+- every feedback item targets a specific artifact version,
+- session close/approve/supersede is represented without overwriting prior evidence.
+
+### Experiment 2: Multi-round synthesis loop
+
+Run a synthetic plan/design/research question through:
+`draft artifact -> feedback -> regenerated artifact -> final approval -> wiki synthesis`.
+
+Success criteria:
+- all rounds remain reconstructable,
+- final wiki claims cite both source evidence and feedback evidence where relevant,
+- no step can complete without the expected artifact/session state.
+
+### Experiment 3: Lifecycle negative tests
+
+Test invalid transitions:
+- close session with pending feedback,
+- overwrite approved artifact without supersession,
+- delete raw feedback,
+- promote feedback preference into factual claim without source evidence.
+
+Success criteria:
+- invalid transitions fail closed,
+- denials are logged,
+- explicit force actions require a reason and leave an audit record.
+
+### Experiment 4: Static attachments vs local session server
+
+Compare two implementations for one review workflow:
+- attachment-only session: files uploaded to ticket,
+- local review session: stable localhost URL plus files.
+
+Measure:
+- user/agent friction,
+- recoverability after process exit,
+- ease of citation in downstream synthesis,
+- security and operational overhead.
+
+Recommendation: start attachment-only unless the test shows same-tab live iteration is materially better for our actual workflows.
+
+## Bottom Line
+
+The new gstack release is valuable less because of "daemon" as technology and more because it upgrades review artifacts from static outputs to durable, stateful, feedback-bearing sessions. We should adopt that concept in our contract and experiments, but avoid copying the daemon until our own artifact workflow proves it needs a live local process.

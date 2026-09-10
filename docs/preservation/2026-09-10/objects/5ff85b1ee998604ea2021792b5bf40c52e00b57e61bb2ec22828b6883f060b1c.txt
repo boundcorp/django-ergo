@@ -1,0 +1,45 @@
+---
+id: 01726812-3630-5319-9221-0c4568e4c490
+title: Repository self-wiki
+type: use-case
+status: current
+project: django-ergo
+sources:
+- kind: source-unit
+  unit_id: 690b701d-27e4-5390-8ae9-cc292b422ced
+  commit: 0fd6cf5e357891d9300b6eb04c0a38c2c6897dee
+  path: src/django_ergo/repository_wiki.py
+  symbol: propose_repository_wiki
+  role: runtime
+  content_hash: 5e73fc306dcef86641859694a54b66e80510c9cec8fce06b568ac0131c4d45c6
+- kind: source-unit
+  unit_id: cd081e5d-8bab-5485-ba4e-5819637b33e0
+  commit: 0fd6cf5e357891d9300b6eb04c0a38c2c6897dee
+  path: src/django_ergo/repository_search.py
+  symbol: search_repository
+  role: runtime
+  content_hash: fdc9f66bae3f4f8af2a0076a8c19c36929fb0edd1ea5ef2c1a9dc1cf50f167d3
+- kind: source-unit
+  unit_id: 0fbaf56b-56b9-577a-96bd-daebd1c8d597
+  commit: 0fd6cf5e357891d9300b6eb04c0a38c2c6897dee
+  path: src/django_ergo/management/commands/propose_repository_wiki.py
+  symbol: Command
+  role: runtime
+  content_hash: fc3a2ace23454e714fc1f3fc09dd3e01d9f83e45f57df33bc59a8c7d61c89826
+---
+
+## Overview
+
+Repository self-wiki synthesis converts committed source evidence into review-only Markdown proposals. It never writes Git or Articles. The immutable indexed commit, observed source-unit IDs, optional observed history commits, and committed goal definition bound every generated page.
+
+## Flow
+
+1. Repository indexing reads `.ergo/index.yaml` from an allowed commit and stores bounded SourceFiles, SourceUnits, and relations with commit and content hashes.
+2. The `propose_repository_wiki` command loads `.ergo/wiki-goals.yaml` from that indexed commit and runs goals sequentially.
+3. Repository tools expose an outline, committed file ranges, grep matches, hybrid search, unit relations, and Git history. Only returned units and commits become observable citations.
+4. `wiki_propose` validates source roles, distinct-file breadth, required path and symbol groups, required headings, and unsupported evaluative language.
+5. The command writes successful pages plus a manifest containing per-goal status and tool traces.
+
+## Review
+
+The packet is non-canonical. A reviewer checks every claim against its structured source-unit and Git-commit citations, corrects or rejects the prose, and commits accepted pages under `wiki/`. A later filesystem KB build preserves committed reviewed pages and validates that their cited paths and commits are captured. Failed goals remain explicit manifest entries; they are not replaced by partial pages.

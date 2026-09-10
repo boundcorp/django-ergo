@@ -1,0 +1,87 @@
+---
+id: 09d37387-e8f2-54cb-88f1-8167c8eab065
+title: Conversation tool runtime
+type: architecture
+status: current
+project: django-ergo
+sources:
+- kind: source-unit
+  unit_id: b6295ce0-2289-5599-9a89-318ef2350d31
+  commit: 0fd6cf5e357891d9300b6eb04c0a38c2c6897dee
+  path: src/django_ergo/conversation/engine.py
+  symbol: Engine
+  role: runtime
+  content_hash: 3e5b869318d91bcf2abe02397f6d3e61a093759001d57d408dac222e95fbf608
+- kind: source-unit
+  unit_id: 631fad67-6fd2-5321-ba77-9cc4241bda4a
+  commit: 0fd6cf5e357891d9300b6eb04c0a38c2c6897dee
+  path: src/django_ergo/conversation/manager.py
+  symbol: SessionManager
+  role: runtime
+  content_hash: 9d96d5c3b37df1a7cea189204ad85a56b8abde94fb8d0adc688990fd2de9407c
+- kind: source-unit
+  unit_id: ced1255b-783d-5614-a058-9e8f55cd631c
+  commit: 0fd6cf5e357891d9300b6eb04c0a38c2c6897dee
+  path: src/django_ergo/conversation/runner.py
+  symbol: run_conversation_turn
+  role: runtime
+  content_hash: a1c7966c574b2757ffd690bd31c50db42c98273b3fba23b2f3bc26a783249b52
+- kind: source-unit
+  unit_id: 28e3c590-aed5-5e7c-98bd-8de191af94f0
+  commit: 0fd6cf5e357891d9300b6eb04c0a38c2c6897dee
+  path: src/django_ergo/conversation/runner.py
+  symbol: _execute_tool
+  role: runtime
+  content_hash: b027bb99cfa38553f05b1a005be66f25fe044fb66ef2f0f4e1465406237e6172
+- kind: source-unit
+  unit_id: 70cfa30c-12bc-5db6-8c4e-0bacb34c0e40
+  commit: 0fd6cf5e357891d9300b6eb04c0a38c2c6897dee
+  path: src/django_ergo/tools.py
+  symbol: ToolRegistry
+  role: runtime
+  content_hash: 43644c2a84941c1d134eff196f1cec69fe1382d10765d46f05db9e8d45cff688
+- kind: source-unit
+  unit_id: ec43c1b9-42c2-5971-80e3-f1e02eba6c62
+  commit: 0fd6cf5e357891d9300b6eb04c0a38c2c6897dee
+  path: tests/test_conversation_engine.py
+  symbol: TestEngineResponse
+  role: test
+  content_hash: 4d3132543d2c083a7a64834ca6661ab18c0defcfd641694c9a336370faa89243
+- kind: source-unit
+  unit_id: 48e90a37-bd85-5de3-8612-2b85ad2f803a
+  commit: 0fd6cf5e357891d9300b6eb04c0a38c2c6897dee
+  path: tests/test_conversation_manager.py
+  symbol: TestBuildEngine
+  role: test
+  content_hash: d3dba9474431899c2ef63dcc31da4b6f1edbac956f03ac3c847d50a5300bddbf
+- kind: source-unit
+  unit_id: 25482076-6131-5726-b370-bdabb3527ff1
+  commit: 0fd6cf5e357891d9300b6eb04c0a38c2c6897dee
+  path: tests/test_conversation_runner.py
+  symbol: TestToolRequiresApproval
+  role: test
+  content_hash: 63afdf4596330eac2181739c532d590d616e6f5fb01977b0682df8d18fe2ee4b
+---
+
+## Overview
+
+The current conversation runtime separates an engine protocol, persisted session identity, session-owned engine instances, and a bounded tool loop. Engines translate provider events into `EngineResponse` values; the runner decides when tools execute or when control must return for approval.
+
+## Runtime
+
+`Engine` defines session start/resume/close, message generation, single or batched tool-result submission, and adapter access. `SessionManager` creates the persisted ConversationSession, builds the configured engine, caches it by session UUID, and reconstructs it on demand. `run_conversation_turn` injects schemas from extra toolkits, records bound-KB usage, sends the user message, and processes at most the configured number of tool rounds.
+
+## Boundaries
+
+A toolkit handles a tool before the global registry. Toolkit `ValueError`, `KeyError`, `TypeError`, and `RuntimeError` exceptions become error tool results so the model can correct arguments. Global tools execute through the registry with the session user. A registry tool marked `requires_approval` yields `PendingApproval` unless the workflow configuration pre-approves it; the turn returns without executing that tool.
+
+## Concrete Flow
+
+1. `SessionManager.create_session` persists an active session and starts its engine.
+2. `run_conversation_turn` sends a message with any extra toolkit schemas.
+3. The runner batches one round's tool calls. An approval-required call stops the turn; otherwise `_execute_tool` dispatches each call and reports recoverable failures as tool errors.
+4. Batched results return to the engine, and the cycle continues until no tool calls remain or the round bound is reached.
+
+## Termination
+
+`SessionManager.close_session` removes the cached engine, invokes its `close_session` hook, marks the persisted session `completed`, and saves it. The OpenAI and Claude API implementations currently treat provider sessions as stateless and implement that hook as a no-op; callers should not infer transport-resource cleanup beyond the protocol call.

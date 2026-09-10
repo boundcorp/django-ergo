@@ -1,0 +1,1279 @@
+{
+  "format": "ergo-source-preservation/v1",
+  "date": "2026-09-10",
+  "base_ref": "5f3e5deed73edce9e28898749d3e0f2041488a34",
+  "records": [
+    {
+      "group": "fs-vector",
+      "source": "/home/dev/orca/workspaces/django-ergo/fs-vector/.ergo/wiki-goals.yaml",
+      "revision": "5f3e5deed73edce9e28898749d3e0f2041488a34 + uncommitted",
+      "sha256": "0a0b557510a8e15f19e80dd19dd21327c4dca8ff9522da8d626a32796f6d9c7d",
+      "bytes": 5765,
+      "backup": "docs/preservation/2026-09-10/objects/0a0b557510a8e15f19e80dd19dd21327c4dca8ff9522da8d626a32796f6d9c7d.txt"
+    },
+    {
+      "group": "fs-vector",
+      "source": "/home/dev/orca/workspaces/django-ergo/fs-vector/README.md",
+      "revision": "5f3e5deed73edce9e28898749d3e0f2041488a34 + uncommitted",
+      "sha256": "443bccd3f8788601bf054c1ec42590061f89b0b238a644a4ebad9097d8b7cee4",
+      "bytes": 6052,
+      "backup": "docs/preservation/2026-09-10/objects/443bccd3f8788601bf054c1ec42590061f89b0b238a644a4ebad9097d8b7cee4.txt"
+    },
+    {
+      "group": "fs-vector",
+      "source": "/home/dev/orca/workspaces/django-ergo/fs-vector/pyproject.toml",
+      "revision": "5f3e5deed73edce9e28898749d3e0f2041488a34 + uncommitted",
+      "sha256": "e9830513effc46ea9469331bb0f0bf0f8bf97c11dc809c7c5d63b61739dd9734",
+      "bytes": 6781,
+      "backup": "docs/preservation/2026-09-10/objects/e9830513effc46ea9469331bb0f0bf0f8bf97c11dc809c7c5d63b61739dd9734.txt"
+    },
+    {
+      "group": "fs-vector",
+      "source": "/home/dev/orca/workspaces/django-ergo/fs-vector/src/django_ergo/admin.py",
+      "revision": "5f3e5deed73edce9e28898749d3e0f2041488a34 + uncommitted",
+      "sha256": "7db7004a359e86d3be277848b60494ea8f37e14446ccf273ad39c7513dc40cbd",
+      "bytes": 38006,
+      "backup": "docs/preservation/2026-09-10/objects/7db7004a359e86d3be277848b60494ea8f37e14446ccf273ad39c7513dc40cbd.txt"
+    },
+    {
+      "group": "fs-vector",
+      "source": "/home/dev/orca/workspaces/django-ergo/fs-vector/src/django_ergo/conversation/engines/claude_api.py",
+      "revision": "5f3e5deed73edce9e28898749d3e0f2041488a34 + uncommitted",
+      "sha256": "0fef77cda32056c0001fe8aff7bdb99cce4034059377a8461cc625a96501e1f0",
+      "bytes": 14024,
+      "backup": "docs/preservation/2026-09-10/objects/0fef77cda32056c0001fe8aff7bdb99cce4034059377a8461cc625a96501e1f0.txt"
+    },
+    {
+      "group": "fs-vector",
+      "source": "/home/dev/orca/workspaces/django-ergo/fs-vector/src/django_ergo/conversation/engines/openai_api.py",
+      "revision": "5f3e5deed73edce9e28898749d3e0f2041488a34 + uncommitted",
+      "sha256": "e5d4efe5b634f02c320adbef4c881f383f8d4c56b0cf87745cdffd7634ff7e31",
+      "bytes": 12340,
+      "backup": "docs/preservation/2026-09-10/objects/e5d4efe5b634f02c320adbef4c881f383f8d4c56b0cf87745cdffd7634ff7e31.txt"
+    },
+    {
+      "group": "fs-vector",
+      "source": "/home/dev/orca/workspaces/django-ergo/fs-vector/src/django_ergo/conversation/runner.py",
+      "revision": "5f3e5deed73edce9e28898749d3e0f2041488a34 + uncommitted",
+      "sha256": "81ed13ae18a4388c4043cbcc310cfcf3f45b6716093fa1c8d2449ea159cf91c4",
+      "bytes": 5426,
+      "backup": "docs/preservation/2026-09-10/objects/81ed13ae18a4388c4043cbcc310cfcf3f45b6716093fa1c8d2449ea159cf91c4.txt"
+    },
+    {
+      "group": "fs-vector",
+      "source": "/home/dev/orca/workspaces/django-ergo/fs-vector/src/django_ergo/embedding_providers.py",
+      "revision": "5f3e5deed73edce9e28898749d3e0f2041488a34 + uncommitted",
+      "sha256": "d318b312c63a32f94cd7f9c30121263eb6aeb729c84e39ba82d678b54e87c24d",
+      "bytes": 11440,
+      "backup": "docs/preservation/2026-09-10/objects/d318b312c63a32f94cd7f9c30121263eb6aeb729c84e39ba82d678b54e87c24d.txt"
+    },
+    {
+      "group": "fs-vector",
+      "source": "/home/dev/orca/workspaces/django-ergo/fs-vector/src/django_ergo/kb_tools.py",
+      "revision": "5f3e5deed73edce9e28898749d3e0f2041488a34 + uncommitted",
+      "sha256": "23d09796f282abd9299f0f9c2fe910fd161ee33f9919dcad9302dc83384632b7",
+      "bytes": 11186,
+      "backup": "docs/preservation/2026-09-10/objects/23d09796f282abd9299f0f9c2fe910fd161ee33f9919dcad9302dc83384632b7.txt"
+    },
+    {
+      "group": "fs-vector",
+      "source": "/home/dev/orca/workspaces/django-ergo/fs-vector/src/django_ergo/models.py",
+      "revision": "5f3e5deed73edce9e28898749d3e0f2041488a34 + uncommitted",
+      "sha256": "fca96ef125fd776064c01692229ecde1124483b4de076bffd5df558dbeddd0a8",
+      "bytes": 26495,
+      "backup": "docs/preservation/2026-09-10/objects/fca96ef125fd776064c01692229ecde1124483b4de076bffd5df558dbeddd0a8.txt"
+    },
+    {
+      "group": "fs-vector",
+      "source": "/home/dev/orca/workspaces/django-ergo/fs-vector/src/django_ergo/settings.py",
+      "revision": "5f3e5deed73edce9e28898749d3e0f2041488a34 + uncommitted",
+      "sha256": "5af786160ece2d1e59dfa708ad918cddb3ddc12452dbf569890342c18e4d51ca",
+      "bytes": 5248,
+      "backup": "docs/preservation/2026-09-10/objects/5af786160ece2d1e59dfa708ad918cddb3ddc12452dbf569890342c18e4d51ca.txt"
+    },
+    {
+      "group": "fs-vector",
+      "source": "/home/dev/orca/workspaces/django-ergo/fs-vector/tests/example_app/settings.py",
+      "revision": "5f3e5deed73edce9e28898749d3e0f2041488a34 + uncommitted",
+      "sha256": "7e0d310a9956ef36af22f233091edab896e7f3281bd3576a69f19e187e8780d4",
+      "bytes": 4240,
+      "backup": "docs/preservation/2026-09-10/objects/7e0d310a9956ef36af22f233091edab896e7f3281bd3576a69f19e187e8780d4.txt"
+    },
+    {
+      "group": "fs-vector",
+      "source": "/home/dev/orca/workspaces/django-ergo/fs-vector/CABAL_WORKTREE_PLANNING_PRESERVATION_REVIEW.md",
+      "revision": "5f3e5deed73edce9e28898749d3e0f2041488a34 + uncommitted",
+      "sha256": "d78d7d598e6115fd22be037c1724c19633e85eec444a6c4628b8b820f1cbdd1a",
+      "bytes": 12492,
+      "backup": "docs/preservation/2026-09-10/objects/d78d7d598e6115fd22be037c1724c19633e85eec444a6c4628b8b820f1cbdd1a.txt"
+    },
+    {
+      "group": "fs-vector",
+      "source": "/home/dev/orca/workspaces/django-ergo/fs-vector/ERGO_FLAT_FILE_FOUNDATION_DECISION_MEMO.md",
+      "revision": "5f3e5deed73edce9e28898749d3e0f2041488a34 + uncommitted",
+      "sha256": "45db843c2d3113998f7d4d804e1e8b99cdc278535ae6fc14eb5e389f57933588",
+      "bytes": 11179,
+      "backup": "docs/preservation/2026-09-10/objects/45db843c2d3113998f7d4d804e1e8b99cdc278535ae6fc14eb5e389f57933588.txt"
+    },
+    {
+      "group": "fs-vector",
+      "source": "/home/dev/orca/workspaces/django-ergo/fs-vector/FILESYSTEM_KB_SNAPSHOT_CITATIONS_REVIEW.md",
+      "revision": "5f3e5deed73edce9e28898749d3e0f2041488a34 + uncommitted",
+      "sha256": "1ac8f2daa36e3c8be6998533c63f20a3e59bf613139532a7f039777b0fc35faa",
+      "bytes": 2598,
+      "backup": "docs/preservation/2026-09-10/objects/1ac8f2daa36e3c8be6998533c63f20a3e59bf613139532a7f039777b0fc35faa.txt"
+    },
+    {
+      "group": "fs-vector",
+      "source": "/home/dev/orca/workspaces/django-ergo/fs-vector/django-ergo-self-index-direction.workflow.json",
+      "revision": "5f3e5deed73edce9e28898749d3e0f2041488a34 + uncommitted",
+      "sha256": "60c108f199f8ba41d767e18d62f338e1ccff7446ebd28502c26a29e69066eae3",
+      "bytes": 6922,
+      "backup": "docs/preservation/2026-09-10/objects/60c108f199f8ba41d767e18d62f338e1ccff7446ebd28502c26a29e69066eae3.txt"
+    },
+    {
+      "group": "fs-vector",
+      "source": "/home/dev/orca/workspaces/django-ergo/fs-vector/src/django_ergo/filesystem_kb.py",
+      "revision": "5f3e5deed73edce9e28898749d3e0f2041488a34 + uncommitted",
+      "sha256": "bf18f72ee3e91e098be40c6768226796138f98af9763c2d25f8d2a348f4de42e",
+      "bytes": 48953,
+      "backup": "docs/preservation/2026-09-10/objects/bf18f72ee3e91e098be40c6768226796138f98af9763c2d25f8d2a348f4de42e.txt"
+    },
+    {
+      "group": "fs-vector",
+      "source": "/home/dev/orca/workspaces/django-ergo/fs-vector/src/django_ergo/git_snapshot.py",
+      "revision": "5f3e5deed73edce9e28898749d3e0f2041488a34 + uncommitted",
+      "sha256": "0add794f14043edf4dda93a6cbf5245bc0e740197f5503d9234723998483d92e",
+      "bytes": 3787,
+      "backup": "docs/preservation/2026-09-10/objects/0add794f14043edf4dda93a6cbf5245bc0e740197f5503d9234723998483d92e.txt"
+    },
+    {
+      "group": "fs-vector",
+      "source": "/home/dev/orca/workspaces/django-ergo/fs-vector/src/django_ergo/indexing.py",
+      "revision": "5f3e5deed73edce9e28898749d3e0f2041488a34 + uncommitted",
+      "sha256": "2c83191ba131c2661ea9ecf4e88cc1f768ac970a1c4e10411ad490138ad4105a",
+      "bytes": 2692,
+      "backup": "docs/preservation/2026-09-10/objects/2c83191ba131c2661ea9ecf4e88cc1f768ac970a1c4e10411ad490138ad4105a.txt"
+    },
+    {
+      "group": "fs-vector",
+      "source": "/home/dev/orca/workspaces/django-ergo/fs-vector/src/django_ergo/management/commands/build_repository_kb.py",
+      "revision": "5f3e5deed73edce9e28898749d3e0f2041488a34 + uncommitted",
+      "sha256": "9fded1d29f7085c3be0942eaa6f5cd02e346a897c7968888751476f3e6d02f4d",
+      "bytes": 1703,
+      "backup": "docs/preservation/2026-09-10/objects/9fded1d29f7085c3be0942eaa6f5cd02e346a897c7968888751476f3e6d02f4d.txt"
+    },
+    {
+      "group": "fs-vector",
+      "source": "/home/dev/orca/workspaces/django-ergo/fs-vector/src/django_ergo/management/commands/index_repository.py",
+      "revision": "5f3e5deed73edce9e28898749d3e0f2041488a34 + uncommitted",
+      "sha256": "7b7b8c828eb390681059c979621a6bfdabbaee033b0ecea4db9023f472be3932",
+      "bytes": 1041,
+      "backup": "docs/preservation/2026-09-10/objects/7b7b8c828eb390681059c979621a6bfdabbaee033b0ecea4db9023f472be3932.txt"
+    },
+    {
+      "group": "fs-vector",
+      "source": "/home/dev/orca/workspaces/django-ergo/fs-vector/src/django_ergo/management/commands/propose_repository_wiki.py",
+      "revision": "5f3e5deed73edce9e28898749d3e0f2041488a34 + uncommitted",
+      "sha256": "67baaec4b9010a2f8a2aab96fbbaaf81117205c6c63fc871207eb582ab5daea1",
+      "bytes": 1173,
+      "backup": "docs/preservation/2026-09-10/objects/67baaec4b9010a2f8a2aab96fbbaaf81117205c6c63fc871207eb582ab5daea1.txt"
+    },
+    {
+      "group": "fs-vector",
+      "source": "/home/dev/orca/workspaces/django-ergo/fs-vector/src/django_ergo/management/commands/sync_knowledge.py",
+      "revision": "5f3e5deed73edce9e28898749d3e0f2041488a34 + uncommitted",
+      "sha256": "308124ecf6583ca9921aa991fe1b2e4f23f58ed9ae73f0d66414487215a7051f",
+      "bytes": 1363,
+      "backup": "docs/preservation/2026-09-10/objects/308124ecf6583ca9921aa991fe1b2e4f23f58ed9ae73f0d66414487215a7051f.txt"
+    },
+    {
+      "group": "fs-vector",
+      "source": "/home/dev/orca/workspaces/django-ergo/fs-vector/src/django_ergo/management/commands/validate_filesystem_kb.py",
+      "revision": "5f3e5deed73edce9e28898749d3e0f2041488a34 + uncommitted",
+      "sha256": "a67ff7f1b4bc9667145bb3b8d5634ef2b64f741e89bd8480d42adeb8f99de094",
+      "bytes": 917,
+      "backup": "docs/preservation/2026-09-10/objects/a67ff7f1b4bc9667145bb3b8d5634ef2b64f741e89bd8480d42adeb8f99de094.txt"
+    },
+    {
+      "group": "fs-vector",
+      "source": "/home/dev/orca/workspaces/django-ergo/fs-vector/src/django_ergo/migrations/0010_knowledgesource_sourcedocument_alter_article_options_and_more.py",
+      "revision": "5f3e5deed73edce9e28898749d3e0f2041488a34 + uncommitted",
+      "sha256": "980508c446ec1c9d09bda1454044970b38fd769ef15bfa2aa86c7fe610c06f83",
+      "bytes": 6016,
+      "backup": "docs/preservation/2026-09-10/objects/980508c446ec1c9d09bda1454044970b38fd769ef15bfa2aa86c7fe610c06f83.txt"
+    },
+    {
+      "group": "fs-vector",
+      "source": "/home/dev/orca/workspaces/django-ergo/fs-vector/src/django_ergo/migrations/0011_knowledgesource_index_config_hash_and_more.py",
+      "revision": "5f3e5deed73edce9e28898749d3e0f2041488a34 + uncommitted",
+      "sha256": "7c5d6a0cc34fd99e1acf90e49bde69828325627e217947495ffcc6baf9fd725b",
+      "bytes": 6592,
+      "backup": "docs/preservation/2026-09-10/objects/7c5d6a0cc34fd99e1acf90e49bde69828325627e217947495ffcc6baf9fd725b.txt"
+    },
+    {
+      "group": "fs-vector",
+      "source": "/home/dev/orca/workspaces/django-ergo/fs-vector/src/django_ergo/paths.py",
+      "revision": "5f3e5deed73edce9e28898749d3e0f2041488a34 + uncommitted",
+      "sha256": "ee0b6d9c65d4694d0fa150a4ce6e8445da137ffcf7cc6a84e9e0698b96882686",
+      "bytes": 1364,
+      "backup": "docs/preservation/2026-09-10/objects/ee0b6d9c65d4694d0fa150a4ce6e8445da137ffcf7cc6a84e9e0698b96882686.txt"
+    },
+    {
+      "group": "fs-vector",
+      "source": "/home/dev/orca/workspaces/django-ergo/fs-vector/src/django_ergo/repository_index.py",
+      "revision": "5f3e5deed73edce9e28898749d3e0f2041488a34 + uncommitted",
+      "sha256": "6e5dce6b2a6add8798e5e0865bb09c858a224961baecfd5f28f5e756a97701c5",
+      "bytes": 21909,
+      "backup": "docs/preservation/2026-09-10/objects/6e5dce6b2a6add8798e5e0865bb09c858a224961baecfd5f28f5e756a97701c5.txt"
+    },
+    {
+      "group": "fs-vector",
+      "source": "/home/dev/orca/workspaces/django-ergo/fs-vector/src/django_ergo/repository_search.py",
+      "revision": "5f3e5deed73edce9e28898749d3e0f2041488a34 + uncommitted",
+      "sha256": "db864a2e81cb674b6db55c56ac0c3360877eabc2a7d3a1c89ee4863cf7a7a8af",
+      "bytes": 3235,
+      "backup": "docs/preservation/2026-09-10/objects/db864a2e81cb674b6db55c56ac0c3360877eabc2a7d3a1c89ee4863cf7a7a8af.txt"
+    },
+    {
+      "group": "fs-vector",
+      "source": "/home/dev/orca/workspaces/django-ergo/fs-vector/src/django_ergo/repository_wiki.py",
+      "revision": "5f3e5deed73edce9e28898749d3e0f2041488a34 + uncommitted",
+      "sha256": "d6eea9e38df6f3727908420f83101720175d593dc0b9cf0008f4feeb9e02a303",
+      "bytes": 30336,
+      "backup": "docs/preservation/2026-09-10/objects/d6eea9e38df6f3727908420f83101720175d593dc0b9cf0008f4feeb9e02a303.txt"
+    },
+    {
+      "group": "fs-vector",
+      "source": "/home/dev/orca/workspaces/django-ergo/fs-vector/src/django_ergo/repository_wiki_prompt.py",
+      "revision": "5f3e5deed73edce9e28898749d3e0f2041488a34 + uncommitted",
+      "sha256": "8f5185f52bd14eb58defa837ecc0718660880114f6d4346c127e32b6e7aec53d",
+      "bytes": 5618,
+      "backup": "docs/preservation/2026-09-10/objects/8f5185f52bd14eb58defa837ecc0718660880114f6d4346c127e32b6e7aec53d.txt"
+    },
+    {
+      "group": "fs-vector",
+      "source": "/home/dev/orca/workspaces/django-ergo/fs-vector/src/django_ergo/sync.py",
+      "revision": "5f3e5deed73edce9e28898749d3e0f2041488a34 + uncommitted",
+      "sha256": "dd6149be7f1619997929f61d68acd2cdafe2bac3bdc65e8bde654a86548c6775",
+      "bytes": 9246,
+      "backup": "docs/preservation/2026-09-10/objects/dd6149be7f1619997929f61d68acd2cdafe2bac3bdc65e8bde654a86548c6775.txt"
+    },
+    {
+      "group": "fs-vector",
+      "source": "/home/dev/orca/workspaces/django-ergo/fs-vector/tests/test_filesystem_kb.py",
+      "revision": "5f3e5deed73edce9e28898749d3e0f2041488a34 + uncommitted",
+      "sha256": "e5396f627bf7dce3843715e035e6ed1edacc854e989c4dd65207d45acad7aa6f",
+      "bytes": 12395,
+      "backup": "docs/preservation/2026-09-10/objects/e5396f627bf7dce3843715e035e6ed1edacc854e989c4dd65207d45acad7aa6f.txt"
+    },
+    {
+      "group": "fs-vector",
+      "source": "/home/dev/orca/workspaces/django-ergo/fs-vector/tests/test_repository_index.py",
+      "revision": "5f3e5deed73edce9e28898749d3e0f2041488a34 + uncommitted",
+      "sha256": "ad59d45482e21e4a7708e7daa09855256ae58f0b6dd5ddd3bd4e4769e51127b0",
+      "bytes": 1368,
+      "backup": "docs/preservation/2026-09-10/objects/ad59d45482e21e4a7708e7daa09855256ae58f0b6dd5ddd3bd4e4769e51127b0.txt"
+    },
+    {
+      "group": "fs-vector",
+      "source": "/home/dev/orca/workspaces/django-ergo/fs-vector/tests/test_repository_reconciliation.py",
+      "revision": "5f3e5deed73edce9e28898749d3e0f2041488a34 + uncommitted",
+      "sha256": "f21a3f81c5085ef95eaf2944d2d0014031bc60937c937699528ab8345cb42c1a",
+      "bytes": 7106,
+      "backup": "docs/preservation/2026-09-10/objects/f21a3f81c5085ef95eaf2944d2d0014031bc60937c937699528ab8345cb42c1a.txt"
+    },
+    {
+      "group": "fs-vector",
+      "source": "/home/dev/orca/workspaces/django-ergo/fs-vector/tests/test_repository_search.py",
+      "revision": "5f3e5deed73edce9e28898749d3e0f2041488a34 + uncommitted",
+      "sha256": "61e461ac1422b9ca0eefaa447952738898c447afc5adcfb2ff9d9aa7ded6307d",
+      "bytes": 2345,
+      "backup": "docs/preservation/2026-09-10/objects/61e461ac1422b9ca0eefaa447952738898c447afc5adcfb2ff9d9aa7ded6307d.txt"
+    },
+    {
+      "group": "fs-vector",
+      "source": "/home/dev/orca/workspaces/django-ergo/fs-vector/tests/test_repository_wiki.py",
+      "revision": "5f3e5deed73edce9e28898749d3e0f2041488a34 + uncommitted",
+      "sha256": "fd2c268fc1cd657b6d67a48b68cb2de2b562985a22ece39f519478cc5866290a",
+      "bytes": 16377,
+      "backup": "docs/preservation/2026-09-10/objects/fd2c268fc1cd657b6d67a48b68cb2de2b562985a22ece39f519478cc5866290a.txt"
+    },
+    {
+      "group": "fs-vector",
+      "source": "/home/dev/orca/workspaces/django-ergo/fs-vector/tests/test_repository_wiki_prompt.py",
+      "revision": "5f3e5deed73edce9e28898749d3e0f2041488a34 + uncommitted",
+      "sha256": "ffbd92d922926ab2ab537711fc28be3a66a8fc75682de99d1f0914a31dd9a8dc",
+      "bytes": 1282,
+      "backup": "docs/preservation/2026-09-10/objects/ffbd92d922926ab2ab537711fc28be3a66a8fc75682de99d1f0914a31dd9a8dc.txt"
+    },
+    {
+      "group": "fs-vector",
+      "source": "/home/dev/orca/workspaces/django-ergo/fs-vector/tests/test_sync.py",
+      "revision": "5f3e5deed73edce9e28898749d3e0f2041488a34 + uncommitted",
+      "sha256": "d38b09c5035cd2a45032f8159aecb1413a9f3769ec5d660ba9696bd78c675d58",
+      "bytes": 2856,
+      "backup": "docs/preservation/2026-09-10/objects/d38b09c5035cd2a45032f8159aecb1413a9f3769ec5d660ba9696bd78c675d58.txt"
+    },
+    {
+      "group": "cabal/4fe9433fa892",
+      "source": "/home/dev/p/boundcorp/django-ergo/.worktrees/4fe9433fa892/docs/plans/2026-06-13-structured-call-chatbot-helper-research.md",
+      "revision": null,
+      "sha256": "cb3a0d66a817ac3631b41c9237979113c2670f91627d96eeb96654cda3cd77be",
+      "bytes": 7308,
+      "backup": "docs/preservation/2026-09-10/objects/cb3a0d66a817ac3631b41c9237979113c2670f91627d96eeb96654cda3cd77be.txt"
+    },
+    {
+      "group": "cabal/743a48d58774",
+      "source": "/home/dev/p/boundcorp/django-ergo/.worktrees/743a48d58774/docs/plans/adoption-plan-gaps-checklist.md",
+      "revision": null,
+      "sha256": "b892d65203da4257e1116c40169ffd2a39cb982f3f98712b52d585bbad7038c7",
+      "bytes": 14330,
+      "backup": "docs/preservation/2026-09-10/objects/b892d65203da4257e1116c40169ffd2a39cb982f3f98712b52d585bbad7038c7.txt"
+    },
+    {
+      "group": "cabal/743a48d58774",
+      "source": "/home/dev/p/boundcorp/django-ergo/.worktrees/743a48d58774/docs/plans/gstack-new-features-reevaluation-2026-05-26.md",
+      "revision": null,
+      "sha256": "af502c183dd6ed42414d9cb3be21d8ea8628d20a15a2244ebb7e24fb761066fb",
+      "bytes": 15499,
+      "backup": "docs/preservation/2026-09-10/objects/af502c183dd6ed42414d9cb3be21d8ea8628d20a15a2244ebb7e24fb761066fb.txt"
+    },
+    {
+      "group": "cabal/743a48d58774",
+      "source": "/home/dev/p/boundcorp/django-ergo/.worktrees/743a48d58774/docs/plans/investigation-findings-adoption-gaps.md",
+      "revision": null,
+      "sha256": "4e4a7794ab26504b39ac6e6e1c5f25663c96368ad2ace420fe57c58ca2aa4bcf",
+      "bytes": 5958,
+      "backup": "docs/preservation/2026-09-10/objects/4e4a7794ab26504b39ac6e6e1c5f25663c96368ad2ace420fe57c58ca2aa4bcf.txt"
+    },
+    {
+      "group": "cabal/743a48d58774",
+      "source": "/home/dev/p/boundcorp/django-ergo/.worktrees/743a48d58774/docs/plans/prioritized-adopt-learn-avoid-roadmap.md",
+      "revision": null,
+      "sha256": "06a7ae7cecdecf1751e69f6badccad14f8704dbb63a1d106fe363dc8a71d2d93",
+      "bytes": 11939,
+      "backup": "docs/preservation/2026-09-10/objects/06a7ae7cecdecf1751e69f6badccad14f8704dbb63a1d106fe363dc8a71d2d93.txt"
+    },
+    {
+      "group": "cabal/743a48d58774",
+      "source": "/home/dev/p/boundcorp/django-ergo/.worktrees/743a48d58774/docs/plans/remaining-gaps-next-experiments.md",
+      "revision": null,
+      "sha256": "693dd90e648f9beb8f5b8fa9bfeb0f76c4a8a7888dbb4f450145d093b4214692",
+      "bytes": 6620,
+      "backup": "docs/preservation/2026-09-10/objects/693dd90e648f9beb8f5b8fa9bfeb0f76c4a8a7888dbb4f450145d093b4214692.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-repo/django-ergo-self-index-direction.workflow.json",
+      "revision": "bbd3eefdeffd83a566e10422e005384b926dd87e",
+      "sha256": "60c108f199f8ba41d767e18d62f338e1ccff7446ebd28502c26a29e69066eae3",
+      "bytes": 6922,
+      "backup": "docs/preservation/2026-09-10/objects/60c108f199f8ba41d767e18d62f338e1ccff7446ebd28502c26a29e69066eae3.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-repo/pyproject.toml",
+      "revision": "bbd3eefdeffd83a566e10422e005384b926dd87e",
+      "sha256": "e9830513effc46ea9469331bb0f0bf0f8bf97c11dc809c7c5d63b61739dd9734",
+      "bytes": 6781,
+      "backup": "docs/preservation/2026-09-10/objects/e9830513effc46ea9469331bb0f0bf0f8bf97c11dc809c7c5d63b61739dd9734.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-repo/src/django_ergo/admin.py",
+      "revision": "bbd3eefdeffd83a566e10422e005384b926dd87e",
+      "sha256": "7db7004a359e86d3be277848b60494ea8f37e14446ccf273ad39c7513dc40cbd",
+      "bytes": 38006,
+      "backup": "docs/preservation/2026-09-10/objects/7db7004a359e86d3be277848b60494ea8f37e14446ccf273ad39c7513dc40cbd.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-repo/src/django_ergo/conversation/engines/claude_api.py",
+      "revision": "bbd3eefdeffd83a566e10422e005384b926dd87e",
+      "sha256": "0fef77cda32056c0001fe8aff7bdb99cce4034059377a8461cc625a96501e1f0",
+      "bytes": 14024,
+      "backup": "docs/preservation/2026-09-10/objects/0fef77cda32056c0001fe8aff7bdb99cce4034059377a8461cc625a96501e1f0.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-repo/src/django_ergo/conversation/engines/openai_api.py",
+      "revision": "bbd3eefdeffd83a566e10422e005384b926dd87e",
+      "sha256": "e5d4efe5b634f02c320adbef4c881f383f8d4c56b0cf87745cdffd7634ff7e31",
+      "bytes": 12340,
+      "backup": "docs/preservation/2026-09-10/objects/e5d4efe5b634f02c320adbef4c881f383f8d4c56b0cf87745cdffd7634ff7e31.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-repo/src/django_ergo/conversation/runner.py",
+      "revision": "bbd3eefdeffd83a566e10422e005384b926dd87e",
+      "sha256": "81ed13ae18a4388c4043cbcc310cfcf3f45b6716093fa1c8d2449ea159cf91c4",
+      "bytes": 5426,
+      "backup": "docs/preservation/2026-09-10/objects/81ed13ae18a4388c4043cbcc310cfcf3f45b6716093fa1c8d2449ea159cf91c4.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-repo/src/django_ergo/embedding_providers.py",
+      "revision": "bbd3eefdeffd83a566e10422e005384b926dd87e",
+      "sha256": "d318b312c63a32f94cd7f9c30121263eb6aeb729c84e39ba82d678b54e87c24d",
+      "bytes": 11440,
+      "backup": "docs/preservation/2026-09-10/objects/d318b312c63a32f94cd7f9c30121263eb6aeb729c84e39ba82d678b54e87c24d.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-repo/src/django_ergo/filesystem_kb.py",
+      "revision": "bbd3eefdeffd83a566e10422e005384b926dd87e",
+      "sha256": "14ae4be84d3c0d850259142ce1a1b4b3caa6dbda6c8d965bc1074c7b52ecc204",
+      "bytes": 38150,
+      "backup": "docs/preservation/2026-09-10/objects/14ae4be84d3c0d850259142ce1a1b4b3caa6dbda6c8d965bc1074c7b52ecc204.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-repo/src/django_ergo/git_snapshot.py",
+      "revision": "bbd3eefdeffd83a566e10422e005384b926dd87e",
+      "sha256": "0add794f14043edf4dda93a6cbf5245bc0e740197f5503d9234723998483d92e",
+      "bytes": 3787,
+      "backup": "docs/preservation/2026-09-10/objects/0add794f14043edf4dda93a6cbf5245bc0e740197f5503d9234723998483d92e.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-repo/src/django_ergo/indexing.py",
+      "revision": "bbd3eefdeffd83a566e10422e005384b926dd87e",
+      "sha256": "2c83191ba131c2661ea9ecf4e88cc1f768ac970a1c4e10411ad490138ad4105a",
+      "bytes": 2692,
+      "backup": "docs/preservation/2026-09-10/objects/2c83191ba131c2661ea9ecf4e88cc1f768ac970a1c4e10411ad490138ad4105a.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-repo/src/django_ergo/kb_tools.py",
+      "revision": "bbd3eefdeffd83a566e10422e005384b926dd87e",
+      "sha256": "23d09796f282abd9299f0f9c2fe910fd161ee33f9919dcad9302dc83384632b7",
+      "bytes": 11186,
+      "backup": "docs/preservation/2026-09-10/objects/23d09796f282abd9299f0f9c2fe910fd161ee33f9919dcad9302dc83384632b7.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-repo/src/django_ergo/management/commands/build_repository_kb.py",
+      "revision": "bbd3eefdeffd83a566e10422e005384b926dd87e",
+      "sha256": "9fded1d29f7085c3be0942eaa6f5cd02e346a897c7968888751476f3e6d02f4d",
+      "bytes": 1703,
+      "backup": "docs/preservation/2026-09-10/objects/9fded1d29f7085c3be0942eaa6f5cd02e346a897c7968888751476f3e6d02f4d.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-repo/src/django_ergo/management/commands/index_repository.py",
+      "revision": "bbd3eefdeffd83a566e10422e005384b926dd87e",
+      "sha256": "7b7b8c828eb390681059c979621a6bfdabbaee033b0ecea4db9023f472be3932",
+      "bytes": 1041,
+      "backup": "docs/preservation/2026-09-10/objects/7b7b8c828eb390681059c979621a6bfdabbaee033b0ecea4db9023f472be3932.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-repo/src/django_ergo/management/commands/propose_repository_wiki.py",
+      "revision": "bbd3eefdeffd83a566e10422e005384b926dd87e",
+      "sha256": "67baaec4b9010a2f8a2aab96fbbaaf81117205c6c63fc871207eb582ab5daea1",
+      "bytes": 1173,
+      "backup": "docs/preservation/2026-09-10/objects/67baaec4b9010a2f8a2aab96fbbaaf81117205c6c63fc871207eb582ab5daea1.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-repo/src/django_ergo/management/commands/sync_knowledge.py",
+      "revision": "bbd3eefdeffd83a566e10422e005384b926dd87e",
+      "sha256": "308124ecf6583ca9921aa991fe1b2e4f23f58ed9ae73f0d66414487215a7051f",
+      "bytes": 1363,
+      "backup": "docs/preservation/2026-09-10/objects/308124ecf6583ca9921aa991fe1b2e4f23f58ed9ae73f0d66414487215a7051f.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-repo/src/django_ergo/management/commands/validate_filesystem_kb.py",
+      "revision": "bbd3eefdeffd83a566e10422e005384b926dd87e",
+      "sha256": "a67ff7f1b4bc9667145bb3b8d5634ef2b64f741e89bd8480d42adeb8f99de094",
+      "bytes": 917,
+      "backup": "docs/preservation/2026-09-10/objects/a67ff7f1b4bc9667145bb3b8d5634ef2b64f741e89bd8480d42adeb8f99de094.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-repo/src/django_ergo/migrations/0010_knowledgesource_sourcedocument_alter_article_options_and_more.py",
+      "revision": "bbd3eefdeffd83a566e10422e005384b926dd87e",
+      "sha256": "980508c446ec1c9d09bda1454044970b38fd769ef15bfa2aa86c7fe610c06f83",
+      "bytes": 6016,
+      "backup": "docs/preservation/2026-09-10/objects/980508c446ec1c9d09bda1454044970b38fd769ef15bfa2aa86c7fe610c06f83.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-repo/src/django_ergo/migrations/0011_knowledgesource_index_config_hash_and_more.py",
+      "revision": "bbd3eefdeffd83a566e10422e005384b926dd87e",
+      "sha256": "7c5d6a0cc34fd99e1acf90e49bde69828325627e217947495ffcc6baf9fd725b",
+      "bytes": 6592,
+      "backup": "docs/preservation/2026-09-10/objects/7c5d6a0cc34fd99e1acf90e49bde69828325627e217947495ffcc6baf9fd725b.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-repo/src/django_ergo/models.py",
+      "revision": "bbd3eefdeffd83a566e10422e005384b926dd87e",
+      "sha256": "fca96ef125fd776064c01692229ecde1124483b4de076bffd5df558dbeddd0a8",
+      "bytes": 26495,
+      "backup": "docs/preservation/2026-09-10/objects/fca96ef125fd776064c01692229ecde1124483b4de076bffd5df558dbeddd0a8.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-repo/src/django_ergo/paths.py",
+      "revision": "bbd3eefdeffd83a566e10422e005384b926dd87e",
+      "sha256": "ee0b6d9c65d4694d0fa150a4ce6e8445da137ffcf7cc6a84e9e0698b96882686",
+      "bytes": 1364,
+      "backup": "docs/preservation/2026-09-10/objects/ee0b6d9c65d4694d0fa150a4ce6e8445da137ffcf7cc6a84e9e0698b96882686.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-repo/src/django_ergo/repository_index.py",
+      "revision": "bbd3eefdeffd83a566e10422e005384b926dd87e",
+      "sha256": "1fa760bddb0e72293c03eda948e419cd18806c09fd584d09b48217aebed6c431",
+      "bytes": 17337,
+      "backup": "docs/preservation/2026-09-10/objects/1fa760bddb0e72293c03eda948e419cd18806c09fd584d09b48217aebed6c431.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-repo/src/django_ergo/repository_search.py",
+      "revision": "bbd3eefdeffd83a566e10422e005384b926dd87e",
+      "sha256": "db864a2e81cb674b6db55c56ac0c3360877eabc2a7d3a1c89ee4863cf7a7a8af",
+      "bytes": 3235,
+      "backup": "docs/preservation/2026-09-10/objects/db864a2e81cb674b6db55c56ac0c3360877eabc2a7d3a1c89ee4863cf7a7a8af.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-repo/src/django_ergo/repository_wiki.py",
+      "revision": "bbd3eefdeffd83a566e10422e005384b926dd87e",
+      "sha256": "4dbfa711f9c9a28c0d8f51ab82b65adc63cd17f1a5589e6309fe68154edeb6f0",
+      "bytes": 27656,
+      "backup": "docs/preservation/2026-09-10/objects/4dbfa711f9c9a28c0d8f51ab82b65adc63cd17f1a5589e6309fe68154edeb6f0.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-repo/src/django_ergo/repository_wiki_prompt.py",
+      "revision": "bbd3eefdeffd83a566e10422e005384b926dd87e",
+      "sha256": "f52eed19ac2e46972f07ce64e5e86de4a300efde8e09738a96bcb99e72438595",
+      "bytes": 4100,
+      "backup": "docs/preservation/2026-09-10/objects/f52eed19ac2e46972f07ce64e5e86de4a300efde8e09738a96bcb99e72438595.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-repo/src/django_ergo/settings.py",
+      "revision": "bbd3eefdeffd83a566e10422e005384b926dd87e",
+      "sha256": "5af786160ece2d1e59dfa708ad918cddb3ddc12452dbf569890342c18e4d51ca",
+      "bytes": 5248,
+      "backup": "docs/preservation/2026-09-10/objects/5af786160ece2d1e59dfa708ad918cddb3ddc12452dbf569890342c18e4d51ca.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-repo/src/django_ergo/sync.py",
+      "revision": "bbd3eefdeffd83a566e10422e005384b926dd87e",
+      "sha256": "dd6149be7f1619997929f61d68acd2cdafe2bac3bdc65e8bde654a86548c6775",
+      "bytes": 9246,
+      "backup": "docs/preservation/2026-09-10/objects/dd6149be7f1619997929f61d68acd2cdafe2bac3bdc65e8bde654a86548c6775.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-repo/tests/example_app/settings.py",
+      "revision": "bbd3eefdeffd83a566e10422e005384b926dd87e",
+      "sha256": "7e0d310a9956ef36af22f233091edab896e7f3281bd3576a69f19e187e8780d4",
+      "bytes": 4240,
+      "backup": "docs/preservation/2026-09-10/objects/7e0d310a9956ef36af22f233091edab896e7f3281bd3576a69f19e187e8780d4.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-repo/tests/test_filesystem_kb.py",
+      "revision": "bbd3eefdeffd83a566e10422e005384b926dd87e",
+      "sha256": "aecbdb83e22241e71d3aa6b40e0bb821dd38454f59a1ee93c4e5d5b714ea54c8",
+      "bytes": 10288,
+      "backup": "docs/preservation/2026-09-10/objects/aecbdb83e22241e71d3aa6b40e0bb821dd38454f59a1ee93c4e5d5b714ea54c8.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-repo/tests/test_repository_index.py",
+      "revision": "bbd3eefdeffd83a566e10422e005384b926dd87e",
+      "sha256": "ad59d45482e21e4a7708e7daa09855256ae58f0b6dd5ddd3bd4e4769e51127b0",
+      "bytes": 1368,
+      "backup": "docs/preservation/2026-09-10/objects/ad59d45482e21e4a7708e7daa09855256ae58f0b6dd5ddd3bd4e4769e51127b0.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-repo/tests/test_repository_reconciliation.py",
+      "revision": "bbd3eefdeffd83a566e10422e005384b926dd87e",
+      "sha256": "380d29c8c06a3b92eb3a2e7eaff209d819c4bdeeb738036c0a1f4a0281dd42ac",
+      "bytes": 5669,
+      "backup": "docs/preservation/2026-09-10/objects/380d29c8c06a3b92eb3a2e7eaff209d819c4bdeeb738036c0a1f4a0281dd42ac.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-repo/tests/test_repository_search.py",
+      "revision": "bbd3eefdeffd83a566e10422e005384b926dd87e",
+      "sha256": "61e461ac1422b9ca0eefaa447952738898c447afc5adcfb2ff9d9aa7ded6307d",
+      "bytes": 2345,
+      "backup": "docs/preservation/2026-09-10/objects/61e461ac1422b9ca0eefaa447952738898c447afc5adcfb2ff9d9aa7ded6307d.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-repo/tests/test_repository_wiki.py",
+      "revision": "bbd3eefdeffd83a566e10422e005384b926dd87e",
+      "sha256": "64efc51df8368cba527ec8a3f874d2173bb86e871adffddf569ba01003fcff8d",
+      "bytes": 12590,
+      "backup": "docs/preservation/2026-09-10/objects/64efc51df8368cba527ec8a3f874d2173bb86e871adffddf569ba01003fcff8d.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-repo/tests/test_repository_wiki_prompt.py",
+      "revision": "bbd3eefdeffd83a566e10422e005384b926dd87e",
+      "sha256": "6d8c79ce992234847e9acd27688a5366e1f3f4457299ee18d19879b4c14557d7",
+      "bytes": 850,
+      "backup": "docs/preservation/2026-09-10/objects/6d8c79ce992234847e9acd27688a5366e1f3f4457299ee18d19879b4c14557d7.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-repo/tests/test_sync.py",
+      "revision": "bbd3eefdeffd83a566e10422e005384b926dd87e",
+      "sha256": "d38b09c5035cd2a45032f8159aecb1413a9f3769ec5d660ba9696bd78c675d58",
+      "bytes": 2856,
+      "backup": "docs/preservation/2026-09-10/objects/d38b09c5035cd2a45032f8159aecb1413a9f3769ec5d660ba9696bd78c675d58.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/.ergo/wiki-goals.yaml",
+      "revision": "0fd6cf5e357891d9300b6eb04c0a38c2c6897dee",
+      "sha256": "0a0b557510a8e15f19e80dd19dd21327c4dca8ff9522da8d626a32796f6d9c7d",
+      "bytes": 5765,
+      "backup": "docs/preservation/2026-09-10/objects/0a0b557510a8e15f19e80dd19dd21327c4dca8ff9522da8d626a32796f6d9c7d.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/README.md",
+      "revision": "0fd6cf5e357891d9300b6eb04c0a38c2c6897dee",
+      "sha256": "40680fa4931b9d3cc1324c1b332c32096ddcbe563337820c6b1a0fbc98119744",
+      "bytes": 5524,
+      "backup": "docs/preservation/2026-09-10/objects/40680fa4931b9d3cc1324c1b332c32096ddcbe563337820c6b1a0fbc98119744.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/django-ergo-self-index-direction.workflow.json",
+      "revision": "0fd6cf5e357891d9300b6eb04c0a38c2c6897dee",
+      "sha256": "60c108f199f8ba41d767e18d62f338e1ccff7446ebd28502c26a29e69066eae3",
+      "bytes": 6922,
+      "backup": "docs/preservation/2026-09-10/objects/60c108f199f8ba41d767e18d62f338e1ccff7446ebd28502c26a29e69066eae3.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/pyproject.toml",
+      "revision": "0fd6cf5e357891d9300b6eb04c0a38c2c6897dee",
+      "sha256": "e9830513effc46ea9469331bb0f0bf0f8bf97c11dc809c7c5d63b61739dd9734",
+      "bytes": 6781,
+      "backup": "docs/preservation/2026-09-10/objects/e9830513effc46ea9469331bb0f0bf0f8bf97c11dc809c7c5d63b61739dd9734.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/src/django_ergo/admin.py",
+      "revision": "0fd6cf5e357891d9300b6eb04c0a38c2c6897dee",
+      "sha256": "7db7004a359e86d3be277848b60494ea8f37e14446ccf273ad39c7513dc40cbd",
+      "bytes": 38006,
+      "backup": "docs/preservation/2026-09-10/objects/7db7004a359e86d3be277848b60494ea8f37e14446ccf273ad39c7513dc40cbd.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/src/django_ergo/conversation/engines/claude_api.py",
+      "revision": "0fd6cf5e357891d9300b6eb04c0a38c2c6897dee",
+      "sha256": "0fef77cda32056c0001fe8aff7bdb99cce4034059377a8461cc625a96501e1f0",
+      "bytes": 14024,
+      "backup": "docs/preservation/2026-09-10/objects/0fef77cda32056c0001fe8aff7bdb99cce4034059377a8461cc625a96501e1f0.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/src/django_ergo/conversation/engines/openai_api.py",
+      "revision": "0fd6cf5e357891d9300b6eb04c0a38c2c6897dee",
+      "sha256": "e5d4efe5b634f02c320adbef4c881f383f8d4c56b0cf87745cdffd7634ff7e31",
+      "bytes": 12340,
+      "backup": "docs/preservation/2026-09-10/objects/e5d4efe5b634f02c320adbef4c881f383f8d4c56b0cf87745cdffd7634ff7e31.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/src/django_ergo/conversation/runner.py",
+      "revision": "0fd6cf5e357891d9300b6eb04c0a38c2c6897dee",
+      "sha256": "81ed13ae18a4388c4043cbcc310cfcf3f45b6716093fa1c8d2449ea159cf91c4",
+      "bytes": 5426,
+      "backup": "docs/preservation/2026-09-10/objects/81ed13ae18a4388c4043cbcc310cfcf3f45b6716093fa1c8d2449ea159cf91c4.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/src/django_ergo/embedding_providers.py",
+      "revision": "0fd6cf5e357891d9300b6eb04c0a38c2c6897dee",
+      "sha256": "d318b312c63a32f94cd7f9c30121263eb6aeb729c84e39ba82d678b54e87c24d",
+      "bytes": 11440,
+      "backup": "docs/preservation/2026-09-10/objects/d318b312c63a32f94cd7f9c30121263eb6aeb729c84e39ba82d678b54e87c24d.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/src/django_ergo/filesystem_kb.py",
+      "revision": "0fd6cf5e357891d9300b6eb04c0a38c2c6897dee",
+      "sha256": "14ae4be84d3c0d850259142ce1a1b4b3caa6dbda6c8d965bc1074c7b52ecc204",
+      "bytes": 38150,
+      "backup": "docs/preservation/2026-09-10/objects/14ae4be84d3c0d850259142ce1a1b4b3caa6dbda6c8d965bc1074c7b52ecc204.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/src/django_ergo/git_snapshot.py",
+      "revision": "0fd6cf5e357891d9300b6eb04c0a38c2c6897dee",
+      "sha256": "0add794f14043edf4dda93a6cbf5245bc0e740197f5503d9234723998483d92e",
+      "bytes": 3787,
+      "backup": "docs/preservation/2026-09-10/objects/0add794f14043edf4dda93a6cbf5245bc0e740197f5503d9234723998483d92e.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/src/django_ergo/indexing.py",
+      "revision": "0fd6cf5e357891d9300b6eb04c0a38c2c6897dee",
+      "sha256": "2c83191ba131c2661ea9ecf4e88cc1f768ac970a1c4e10411ad490138ad4105a",
+      "bytes": 2692,
+      "backup": "docs/preservation/2026-09-10/objects/2c83191ba131c2661ea9ecf4e88cc1f768ac970a1c4e10411ad490138ad4105a.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/src/django_ergo/kb_tools.py",
+      "revision": "0fd6cf5e357891d9300b6eb04c0a38c2c6897dee",
+      "sha256": "23d09796f282abd9299f0f9c2fe910fd161ee33f9919dcad9302dc83384632b7",
+      "bytes": 11186,
+      "backup": "docs/preservation/2026-09-10/objects/23d09796f282abd9299f0f9c2fe910fd161ee33f9919dcad9302dc83384632b7.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/src/django_ergo/management/commands/build_repository_kb.py",
+      "revision": "0fd6cf5e357891d9300b6eb04c0a38c2c6897dee",
+      "sha256": "9fded1d29f7085c3be0942eaa6f5cd02e346a897c7968888751476f3e6d02f4d",
+      "bytes": 1703,
+      "backup": "docs/preservation/2026-09-10/objects/9fded1d29f7085c3be0942eaa6f5cd02e346a897c7968888751476f3e6d02f4d.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/src/django_ergo/management/commands/index_repository.py",
+      "revision": "0fd6cf5e357891d9300b6eb04c0a38c2c6897dee",
+      "sha256": "7b7b8c828eb390681059c979621a6bfdabbaee033b0ecea4db9023f472be3932",
+      "bytes": 1041,
+      "backup": "docs/preservation/2026-09-10/objects/7b7b8c828eb390681059c979621a6bfdabbaee033b0ecea4db9023f472be3932.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/src/django_ergo/management/commands/propose_repository_wiki.py",
+      "revision": "0fd6cf5e357891d9300b6eb04c0a38c2c6897dee",
+      "sha256": "67baaec4b9010a2f8a2aab96fbbaaf81117205c6c63fc871207eb582ab5daea1",
+      "bytes": 1173,
+      "backup": "docs/preservation/2026-09-10/objects/67baaec4b9010a2f8a2aab96fbbaaf81117205c6c63fc871207eb582ab5daea1.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/src/django_ergo/management/commands/sync_knowledge.py",
+      "revision": "0fd6cf5e357891d9300b6eb04c0a38c2c6897dee",
+      "sha256": "308124ecf6583ca9921aa991fe1b2e4f23f58ed9ae73f0d66414487215a7051f",
+      "bytes": 1363,
+      "backup": "docs/preservation/2026-09-10/objects/308124ecf6583ca9921aa991fe1b2e4f23f58ed9ae73f0d66414487215a7051f.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/src/django_ergo/management/commands/validate_filesystem_kb.py",
+      "revision": "0fd6cf5e357891d9300b6eb04c0a38c2c6897dee",
+      "sha256": "a67ff7f1b4bc9667145bb3b8d5634ef2b64f741e89bd8480d42adeb8f99de094",
+      "bytes": 917,
+      "backup": "docs/preservation/2026-09-10/objects/a67ff7f1b4bc9667145bb3b8d5634ef2b64f741e89bd8480d42adeb8f99de094.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/src/django_ergo/migrations/0010_knowledgesource_sourcedocument_alter_article_options_and_more.py",
+      "revision": "0fd6cf5e357891d9300b6eb04c0a38c2c6897dee",
+      "sha256": "980508c446ec1c9d09bda1454044970b38fd769ef15bfa2aa86c7fe610c06f83",
+      "bytes": 6016,
+      "backup": "docs/preservation/2026-09-10/objects/980508c446ec1c9d09bda1454044970b38fd769ef15bfa2aa86c7fe610c06f83.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/src/django_ergo/migrations/0011_knowledgesource_index_config_hash_and_more.py",
+      "revision": "0fd6cf5e357891d9300b6eb04c0a38c2c6897dee",
+      "sha256": "7c5d6a0cc34fd99e1acf90e49bde69828325627e217947495ffcc6baf9fd725b",
+      "bytes": 6592,
+      "backup": "docs/preservation/2026-09-10/objects/7c5d6a0cc34fd99e1acf90e49bde69828325627e217947495ffcc6baf9fd725b.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/src/django_ergo/models.py",
+      "revision": "0fd6cf5e357891d9300b6eb04c0a38c2c6897dee",
+      "sha256": "fca96ef125fd776064c01692229ecde1124483b4de076bffd5df558dbeddd0a8",
+      "bytes": 26495,
+      "backup": "docs/preservation/2026-09-10/objects/fca96ef125fd776064c01692229ecde1124483b4de076bffd5df558dbeddd0a8.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/src/django_ergo/paths.py",
+      "revision": "0fd6cf5e357891d9300b6eb04c0a38c2c6897dee",
+      "sha256": "ee0b6d9c65d4694d0fa150a4ce6e8445da137ffcf7cc6a84e9e0698b96882686",
+      "bytes": 1364,
+      "backup": "docs/preservation/2026-09-10/objects/ee0b6d9c65d4694d0fa150a4ce6e8445da137ffcf7cc6a84e9e0698b96882686.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/src/django_ergo/repository_index.py",
+      "revision": "0fd6cf5e357891d9300b6eb04c0a38c2c6897dee",
+      "sha256": "6e5dce6b2a6add8798e5e0865bb09c858a224961baecfd5f28f5e756a97701c5",
+      "bytes": 21909,
+      "backup": "docs/preservation/2026-09-10/objects/6e5dce6b2a6add8798e5e0865bb09c858a224961baecfd5f28f5e756a97701c5.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/src/django_ergo/repository_search.py",
+      "revision": "0fd6cf5e357891d9300b6eb04c0a38c2c6897dee",
+      "sha256": "db864a2e81cb674b6db55c56ac0c3360877eabc2a7d3a1c89ee4863cf7a7a8af",
+      "bytes": 3235,
+      "backup": "docs/preservation/2026-09-10/objects/db864a2e81cb674b6db55c56ac0c3360877eabc2a7d3a1c89ee4863cf7a7a8af.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/src/django_ergo/repository_wiki.py",
+      "revision": "0fd6cf5e357891d9300b6eb04c0a38c2c6897dee",
+      "sha256": "d6eea9e38df6f3727908420f83101720175d593dc0b9cf0008f4feeb9e02a303",
+      "bytes": 30336,
+      "backup": "docs/preservation/2026-09-10/objects/d6eea9e38df6f3727908420f83101720175d593dc0b9cf0008f4feeb9e02a303.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/src/django_ergo/repository_wiki_prompt.py",
+      "revision": "0fd6cf5e357891d9300b6eb04c0a38c2c6897dee",
+      "sha256": "0e510c6bb074e8ac928a780554939b75f19505e2908d09bbce8e81e2d41c2f23",
+      "bytes": 5725,
+      "backup": "docs/preservation/2026-09-10/objects/0e510c6bb074e8ac928a780554939b75f19505e2908d09bbce8e81e2d41c2f23.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/src/django_ergo/settings.py",
+      "revision": "0fd6cf5e357891d9300b6eb04c0a38c2c6897dee",
+      "sha256": "5af786160ece2d1e59dfa708ad918cddb3ddc12452dbf569890342c18e4d51ca",
+      "bytes": 5248,
+      "backup": "docs/preservation/2026-09-10/objects/5af786160ece2d1e59dfa708ad918cddb3ddc12452dbf569890342c18e4d51ca.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/src/django_ergo/sync.py",
+      "revision": "0fd6cf5e357891d9300b6eb04c0a38c2c6897dee",
+      "sha256": "dd6149be7f1619997929f61d68acd2cdafe2bac3bdc65e8bde654a86548c6775",
+      "bytes": 9246,
+      "backup": "docs/preservation/2026-09-10/objects/dd6149be7f1619997929f61d68acd2cdafe2bac3bdc65e8bde654a86548c6775.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/tests/example_app/settings.py",
+      "revision": "0fd6cf5e357891d9300b6eb04c0a38c2c6897dee",
+      "sha256": "7e0d310a9956ef36af22f233091edab896e7f3281bd3576a69f19e187e8780d4",
+      "bytes": 4240,
+      "backup": "docs/preservation/2026-09-10/objects/7e0d310a9956ef36af22f233091edab896e7f3281bd3576a69f19e187e8780d4.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/tests/test_filesystem_kb.py",
+      "revision": "0fd6cf5e357891d9300b6eb04c0a38c2c6897dee",
+      "sha256": "aecbdb83e22241e71d3aa6b40e0bb821dd38454f59a1ee93c4e5d5b714ea54c8",
+      "bytes": 10288,
+      "backup": "docs/preservation/2026-09-10/objects/aecbdb83e22241e71d3aa6b40e0bb821dd38454f59a1ee93c4e5d5b714ea54c8.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/tests/test_repository_index.py",
+      "revision": "0fd6cf5e357891d9300b6eb04c0a38c2c6897dee",
+      "sha256": "ad59d45482e21e4a7708e7daa09855256ae58f0b6dd5ddd3bd4e4769e51127b0",
+      "bytes": 1368,
+      "backup": "docs/preservation/2026-09-10/objects/ad59d45482e21e4a7708e7daa09855256ae58f0b6dd5ddd3bd4e4769e51127b0.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/tests/test_repository_reconciliation.py",
+      "revision": "0fd6cf5e357891d9300b6eb04c0a38c2c6897dee",
+      "sha256": "f21a3f81c5085ef95eaf2944d2d0014031bc60937c937699528ab8345cb42c1a",
+      "bytes": 7106,
+      "backup": "docs/preservation/2026-09-10/objects/f21a3f81c5085ef95eaf2944d2d0014031bc60937c937699528ab8345cb42c1a.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/tests/test_repository_search.py",
+      "revision": "0fd6cf5e357891d9300b6eb04c0a38c2c6897dee",
+      "sha256": "61e461ac1422b9ca0eefaa447952738898c447afc5adcfb2ff9d9aa7ded6307d",
+      "bytes": 2345,
+      "backup": "docs/preservation/2026-09-10/objects/61e461ac1422b9ca0eefaa447952738898c447afc5adcfb2ff9d9aa7ded6307d.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/tests/test_repository_wiki.py",
+      "revision": "0fd6cf5e357891d9300b6eb04c0a38c2c6897dee",
+      "sha256": "fd2c268fc1cd657b6d67a48b68cb2de2b562985a22ece39f519478cc5866290a",
+      "bytes": 16377,
+      "backup": "docs/preservation/2026-09-10/objects/fd2c268fc1cd657b6d67a48b68cb2de2b562985a22ece39f519478cc5866290a.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/tests/test_repository_wiki_prompt.py",
+      "revision": "0fd6cf5e357891d9300b6eb04c0a38c2c6897dee",
+      "sha256": "ffbd92d922926ab2ab537711fc28be3a66a8fc75682de99d1f0914a31dd9a8dc",
+      "bytes": 1282,
+      "backup": "docs/preservation/2026-09-10/objects/ffbd92d922926ab2ab537711fc28be3a66a8fc75682de99d1f0914a31dd9a8dc.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/tests/test_sync.py",
+      "revision": "0fd6cf5e357891d9300b6eb04c0a38c2c6897dee",
+      "sha256": "d38b09c5035cd2a45032f8159aecb1413a9f3769ec5d660ba9696bd78c675d58",
+      "bytes": 2856,
+      "backup": "docs/preservation/2026-09-10/objects/d38b09c5035cd2a45032f8159aecb1413a9f3769ec5d660ba9696bd78c675d58.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/.ergo/wiki-goals.yaml",
+      "revision": "e0ff44058e08707af4634906de87a411dd8118cf",
+      "sha256": "0a0b557510a8e15f19e80dd19dd21327c4dca8ff9522da8d626a32796f6d9c7d",
+      "bytes": 5765,
+      "backup": "docs/preservation/2026-09-10/objects/0a0b557510a8e15f19e80dd19dd21327c4dca8ff9522da8d626a32796f6d9c7d.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/README.md",
+      "revision": "e0ff44058e08707af4634906de87a411dd8118cf",
+      "sha256": "40680fa4931b9d3cc1324c1b332c32096ddcbe563337820c6b1a0fbc98119744",
+      "bytes": 5524,
+      "backup": "docs/preservation/2026-09-10/objects/40680fa4931b9d3cc1324c1b332c32096ddcbe563337820c6b1a0fbc98119744.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/django-ergo-self-index-direction.workflow.json",
+      "revision": "e0ff44058e08707af4634906de87a411dd8118cf",
+      "sha256": "60c108f199f8ba41d767e18d62f338e1ccff7446ebd28502c26a29e69066eae3",
+      "bytes": 6922,
+      "backup": "docs/preservation/2026-09-10/objects/60c108f199f8ba41d767e18d62f338e1ccff7446ebd28502c26a29e69066eae3.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/pyproject.toml",
+      "revision": "e0ff44058e08707af4634906de87a411dd8118cf",
+      "sha256": "e9830513effc46ea9469331bb0f0bf0f8bf97c11dc809c7c5d63b61739dd9734",
+      "bytes": 6781,
+      "backup": "docs/preservation/2026-09-10/objects/e9830513effc46ea9469331bb0f0bf0f8bf97c11dc809c7c5d63b61739dd9734.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/src/django_ergo/admin.py",
+      "revision": "e0ff44058e08707af4634906de87a411dd8118cf",
+      "sha256": "7db7004a359e86d3be277848b60494ea8f37e14446ccf273ad39c7513dc40cbd",
+      "bytes": 38006,
+      "backup": "docs/preservation/2026-09-10/objects/7db7004a359e86d3be277848b60494ea8f37e14446ccf273ad39c7513dc40cbd.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/src/django_ergo/conversation/engines/claude_api.py",
+      "revision": "e0ff44058e08707af4634906de87a411dd8118cf",
+      "sha256": "0fef77cda32056c0001fe8aff7bdb99cce4034059377a8461cc625a96501e1f0",
+      "bytes": 14024,
+      "backup": "docs/preservation/2026-09-10/objects/0fef77cda32056c0001fe8aff7bdb99cce4034059377a8461cc625a96501e1f0.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/src/django_ergo/conversation/engines/openai_api.py",
+      "revision": "e0ff44058e08707af4634906de87a411dd8118cf",
+      "sha256": "e5d4efe5b634f02c320adbef4c881f383f8d4c56b0cf87745cdffd7634ff7e31",
+      "bytes": 12340,
+      "backup": "docs/preservation/2026-09-10/objects/e5d4efe5b634f02c320adbef4c881f383f8d4c56b0cf87745cdffd7634ff7e31.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/src/django_ergo/conversation/runner.py",
+      "revision": "e0ff44058e08707af4634906de87a411dd8118cf",
+      "sha256": "81ed13ae18a4388c4043cbcc310cfcf3f45b6716093fa1c8d2449ea159cf91c4",
+      "bytes": 5426,
+      "backup": "docs/preservation/2026-09-10/objects/81ed13ae18a4388c4043cbcc310cfcf3f45b6716093fa1c8d2449ea159cf91c4.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/src/django_ergo/embedding_providers.py",
+      "revision": "e0ff44058e08707af4634906de87a411dd8118cf",
+      "sha256": "d318b312c63a32f94cd7f9c30121263eb6aeb729c84e39ba82d678b54e87c24d",
+      "bytes": 11440,
+      "backup": "docs/preservation/2026-09-10/objects/d318b312c63a32f94cd7f9c30121263eb6aeb729c84e39ba82d678b54e87c24d.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/src/django_ergo/filesystem_kb.py",
+      "revision": "e0ff44058e08707af4634906de87a411dd8118cf",
+      "sha256": "14ae4be84d3c0d850259142ce1a1b4b3caa6dbda6c8d965bc1074c7b52ecc204",
+      "bytes": 38150,
+      "backup": "docs/preservation/2026-09-10/objects/14ae4be84d3c0d850259142ce1a1b4b3caa6dbda6c8d965bc1074c7b52ecc204.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/src/django_ergo/git_snapshot.py",
+      "revision": "e0ff44058e08707af4634906de87a411dd8118cf",
+      "sha256": "0add794f14043edf4dda93a6cbf5245bc0e740197f5503d9234723998483d92e",
+      "bytes": 3787,
+      "backup": "docs/preservation/2026-09-10/objects/0add794f14043edf4dda93a6cbf5245bc0e740197f5503d9234723998483d92e.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/src/django_ergo/indexing.py",
+      "revision": "e0ff44058e08707af4634906de87a411dd8118cf",
+      "sha256": "2c83191ba131c2661ea9ecf4e88cc1f768ac970a1c4e10411ad490138ad4105a",
+      "bytes": 2692,
+      "backup": "docs/preservation/2026-09-10/objects/2c83191ba131c2661ea9ecf4e88cc1f768ac970a1c4e10411ad490138ad4105a.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/src/django_ergo/kb_tools.py",
+      "revision": "e0ff44058e08707af4634906de87a411dd8118cf",
+      "sha256": "23d09796f282abd9299f0f9c2fe910fd161ee33f9919dcad9302dc83384632b7",
+      "bytes": 11186,
+      "backup": "docs/preservation/2026-09-10/objects/23d09796f282abd9299f0f9c2fe910fd161ee33f9919dcad9302dc83384632b7.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/src/django_ergo/management/commands/build_repository_kb.py",
+      "revision": "e0ff44058e08707af4634906de87a411dd8118cf",
+      "sha256": "9fded1d29f7085c3be0942eaa6f5cd02e346a897c7968888751476f3e6d02f4d",
+      "bytes": 1703,
+      "backup": "docs/preservation/2026-09-10/objects/9fded1d29f7085c3be0942eaa6f5cd02e346a897c7968888751476f3e6d02f4d.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/src/django_ergo/management/commands/index_repository.py",
+      "revision": "e0ff44058e08707af4634906de87a411dd8118cf",
+      "sha256": "7b7b8c828eb390681059c979621a6bfdabbaee033b0ecea4db9023f472be3932",
+      "bytes": 1041,
+      "backup": "docs/preservation/2026-09-10/objects/7b7b8c828eb390681059c979621a6bfdabbaee033b0ecea4db9023f472be3932.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/src/django_ergo/management/commands/propose_repository_wiki.py",
+      "revision": "e0ff44058e08707af4634906de87a411dd8118cf",
+      "sha256": "67baaec4b9010a2f8a2aab96fbbaaf81117205c6c63fc871207eb582ab5daea1",
+      "bytes": 1173,
+      "backup": "docs/preservation/2026-09-10/objects/67baaec4b9010a2f8a2aab96fbbaaf81117205c6c63fc871207eb582ab5daea1.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/src/django_ergo/management/commands/sync_knowledge.py",
+      "revision": "e0ff44058e08707af4634906de87a411dd8118cf",
+      "sha256": "308124ecf6583ca9921aa991fe1b2e4f23f58ed9ae73f0d66414487215a7051f",
+      "bytes": 1363,
+      "backup": "docs/preservation/2026-09-10/objects/308124ecf6583ca9921aa991fe1b2e4f23f58ed9ae73f0d66414487215a7051f.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/src/django_ergo/management/commands/validate_filesystem_kb.py",
+      "revision": "e0ff44058e08707af4634906de87a411dd8118cf",
+      "sha256": "a67ff7f1b4bc9667145bb3b8d5634ef2b64f741e89bd8480d42adeb8f99de094",
+      "bytes": 917,
+      "backup": "docs/preservation/2026-09-10/objects/a67ff7f1b4bc9667145bb3b8d5634ef2b64f741e89bd8480d42adeb8f99de094.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/src/django_ergo/migrations/0010_knowledgesource_sourcedocument_alter_article_options_and_more.py",
+      "revision": "e0ff44058e08707af4634906de87a411dd8118cf",
+      "sha256": "980508c446ec1c9d09bda1454044970b38fd769ef15bfa2aa86c7fe610c06f83",
+      "bytes": 6016,
+      "backup": "docs/preservation/2026-09-10/objects/980508c446ec1c9d09bda1454044970b38fd769ef15bfa2aa86c7fe610c06f83.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/src/django_ergo/migrations/0011_knowledgesource_index_config_hash_and_more.py",
+      "revision": "e0ff44058e08707af4634906de87a411dd8118cf",
+      "sha256": "7c5d6a0cc34fd99e1acf90e49bde69828325627e217947495ffcc6baf9fd725b",
+      "bytes": 6592,
+      "backup": "docs/preservation/2026-09-10/objects/7c5d6a0cc34fd99e1acf90e49bde69828325627e217947495ffcc6baf9fd725b.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/src/django_ergo/models.py",
+      "revision": "e0ff44058e08707af4634906de87a411dd8118cf",
+      "sha256": "fca96ef125fd776064c01692229ecde1124483b4de076bffd5df558dbeddd0a8",
+      "bytes": 26495,
+      "backup": "docs/preservation/2026-09-10/objects/fca96ef125fd776064c01692229ecde1124483b4de076bffd5df558dbeddd0a8.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/src/django_ergo/paths.py",
+      "revision": "e0ff44058e08707af4634906de87a411dd8118cf",
+      "sha256": "ee0b6d9c65d4694d0fa150a4ce6e8445da137ffcf7cc6a84e9e0698b96882686",
+      "bytes": 1364,
+      "backup": "docs/preservation/2026-09-10/objects/ee0b6d9c65d4694d0fa150a4ce6e8445da137ffcf7cc6a84e9e0698b96882686.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/src/django_ergo/repository_index.py",
+      "revision": "e0ff44058e08707af4634906de87a411dd8118cf",
+      "sha256": "6e5dce6b2a6add8798e5e0865bb09c858a224961baecfd5f28f5e756a97701c5",
+      "bytes": 21909,
+      "backup": "docs/preservation/2026-09-10/objects/6e5dce6b2a6add8798e5e0865bb09c858a224961baecfd5f28f5e756a97701c5.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/src/django_ergo/repository_search.py",
+      "revision": "e0ff44058e08707af4634906de87a411dd8118cf",
+      "sha256": "db864a2e81cb674b6db55c56ac0c3360877eabc2a7d3a1c89ee4863cf7a7a8af",
+      "bytes": 3235,
+      "backup": "docs/preservation/2026-09-10/objects/db864a2e81cb674b6db55c56ac0c3360877eabc2a7d3a1c89ee4863cf7a7a8af.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/src/django_ergo/repository_wiki.py",
+      "revision": "e0ff44058e08707af4634906de87a411dd8118cf",
+      "sha256": "d6eea9e38df6f3727908420f83101720175d593dc0b9cf0008f4feeb9e02a303",
+      "bytes": 30336,
+      "backup": "docs/preservation/2026-09-10/objects/d6eea9e38df6f3727908420f83101720175d593dc0b9cf0008f4feeb9e02a303.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/src/django_ergo/repository_wiki_prompt.py",
+      "revision": "e0ff44058e08707af4634906de87a411dd8118cf",
+      "sha256": "0e510c6bb074e8ac928a780554939b75f19505e2908d09bbce8e81e2d41c2f23",
+      "bytes": 5725,
+      "backup": "docs/preservation/2026-09-10/objects/0e510c6bb074e8ac928a780554939b75f19505e2908d09bbce8e81e2d41c2f23.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/src/django_ergo/settings.py",
+      "revision": "e0ff44058e08707af4634906de87a411dd8118cf",
+      "sha256": "5af786160ece2d1e59dfa708ad918cddb3ddc12452dbf569890342c18e4d51ca",
+      "bytes": 5248,
+      "backup": "docs/preservation/2026-09-10/objects/5af786160ece2d1e59dfa708ad918cddb3ddc12452dbf569890342c18e4d51ca.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/src/django_ergo/sync.py",
+      "revision": "e0ff44058e08707af4634906de87a411dd8118cf",
+      "sha256": "dd6149be7f1619997929f61d68acd2cdafe2bac3bdc65e8bde654a86548c6775",
+      "bytes": 9246,
+      "backup": "docs/preservation/2026-09-10/objects/dd6149be7f1619997929f61d68acd2cdafe2bac3bdc65e8bde654a86548c6775.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/tests/example_app/settings.py",
+      "revision": "e0ff44058e08707af4634906de87a411dd8118cf",
+      "sha256": "7e0d310a9956ef36af22f233091edab896e7f3281bd3576a69f19e187e8780d4",
+      "bytes": 4240,
+      "backup": "docs/preservation/2026-09-10/objects/7e0d310a9956ef36af22f233091edab896e7f3281bd3576a69f19e187e8780d4.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/tests/test_filesystem_kb.py",
+      "revision": "e0ff44058e08707af4634906de87a411dd8118cf",
+      "sha256": "aecbdb83e22241e71d3aa6b40e0bb821dd38454f59a1ee93c4e5d5b714ea54c8",
+      "bytes": 10288,
+      "backup": "docs/preservation/2026-09-10/objects/aecbdb83e22241e71d3aa6b40e0bb821dd38454f59a1ee93c4e5d5b714ea54c8.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/tests/test_repository_index.py",
+      "revision": "e0ff44058e08707af4634906de87a411dd8118cf",
+      "sha256": "ad59d45482e21e4a7708e7daa09855256ae58f0b6dd5ddd3bd4e4769e51127b0",
+      "bytes": 1368,
+      "backup": "docs/preservation/2026-09-10/objects/ad59d45482e21e4a7708e7daa09855256ae58f0b6dd5ddd3bd4e4769e51127b0.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/tests/test_repository_reconciliation.py",
+      "revision": "e0ff44058e08707af4634906de87a411dd8118cf",
+      "sha256": "f21a3f81c5085ef95eaf2944d2d0014031bc60937c937699528ab8345cb42c1a",
+      "bytes": 7106,
+      "backup": "docs/preservation/2026-09-10/objects/f21a3f81c5085ef95eaf2944d2d0014031bc60937c937699528ab8345cb42c1a.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/tests/test_repository_search.py",
+      "revision": "e0ff44058e08707af4634906de87a411dd8118cf",
+      "sha256": "61e461ac1422b9ca0eefaa447952738898c447afc5adcfb2ff9d9aa7ded6307d",
+      "bytes": 2345,
+      "backup": "docs/preservation/2026-09-10/objects/61e461ac1422b9ca0eefaa447952738898c447afc5adcfb2ff9d9aa7ded6307d.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/tests/test_repository_wiki.py",
+      "revision": "e0ff44058e08707af4634906de87a411dd8118cf",
+      "sha256": "fd2c268fc1cd657b6d67a48b68cb2de2b562985a22ece39f519478cc5866290a",
+      "bytes": 16377,
+      "backup": "docs/preservation/2026-09-10/objects/fd2c268fc1cd657b6d67a48b68cb2de2b562985a22ece39f519478cc5866290a.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/tests/test_repository_wiki_prompt.py",
+      "revision": "e0ff44058e08707af4634906de87a411dd8118cf",
+      "sha256": "ffbd92d922926ab2ab537711fc28be3a66a8fc75682de99d1f0914a31dd9a8dc",
+      "bytes": 1282,
+      "backup": "docs/preservation/2026-09-10/objects/ffbd92d922926ab2ab537711fc28be3a66a8fc75682de99d1f0914a31dd9a8dc.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/tests/test_sync.py",
+      "revision": "e0ff44058e08707af4634906de87a411dd8118cf",
+      "sha256": "d38b09c5035cd2a45032f8159aecb1413a9f3769ec5d660ba9696bd78c675d58",
+      "bytes": 2856,
+      "backup": "docs/preservation/2026-09-10/objects/d38b09c5035cd2a45032f8159aecb1413a9f3769ec5d660ba9696bd78c675d58.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/wiki/architecture/conversation-tool-runtime.md",
+      "revision": "e0ff44058e08707af4634906de87a411dd8118cf",
+      "sha256": "6c6f4bd1aa1486ab836f6e6e94f9975a1dfda1f75eb5762dbc06c9dd4eaba402",
+      "bytes": 4480,
+      "backup": "docs/preservation/2026-09-10/objects/6c6f4bd1aa1486ab836f6e6e94f9975a1dfda1f75eb5762dbc06c9dd4eaba402.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/wiki/architecture/permission-boundaries.md",
+      "revision": "e0ff44058e08707af4634906de87a411dd8118cf",
+      "sha256": "8d58f4e5c1e6c00027f8d66cfc6c4df25fe2d78821f89ff4b2631d86075d2497",
+      "bytes": 3552,
+      "backup": "docs/preservation/2026-09-10/objects/8d58f4e5c1e6c00027f8d66cfc6c4df25fe2d78821f89ff4b2631d86075d2497.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/wiki/features/committed-knowledge-projection.md",
+      "revision": "e0ff44058e08707af4634906de87a411dd8118cf",
+      "sha256": "5a8c3f14caef3c33a347b66f4ea37e6ea8ef533146d15a34d8cba7d4c2e42870",
+      "bytes": 3214,
+      "backup": "docs/preservation/2026-09-10/objects/5a8c3f14caef3c33a347b66f4ea37e6ea8ef533146d15a34d8cba7d4c2e42870.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/wiki/features/retrieval-and-indexing.md",
+      "revision": "e0ff44058e08707af4634906de87a411dd8118cf",
+      "sha256": "6f023ba17f932744aeffd21fa77ce30877c876b9c13df1bc8dc063e32cb95f6c",
+      "bytes": 3200,
+      "backup": "docs/preservation/2026-09-10/objects/6f023ba17f932744aeffd21fa77ce30877c876b9c13df1bc8dc063e32cb95f6c.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/wiki/project/system-overview.md",
+      "revision": "e0ff44058e08707af4634906de87a411dd8118cf",
+      "sha256": "3c766ac070b0005c0636300fa7e1fec5716ae8e300621e44a21a70a01c46b601",
+      "bytes": 5249,
+      "backup": "docs/preservation/2026-09-10/objects/3c766ac070b0005c0636300fa7e1fec5716ae8e300621e44a21a70a01c46b601.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/wiki/use-cases/conversation-absorption.md",
+      "revision": "e0ff44058e08707af4634906de87a411dd8118cf",
+      "sha256": "dfcc869a3889aa8dcbc9b600b959393418799444d63a9ce8066b7a8a690c594b",
+      "bytes": 2914,
+      "backup": "docs/preservation/2026-09-10/objects/dfcc869a3889aa8dcbc9b600b959393418799444d63a9ce8066b7a8a690c594b.txt"
+    },
+    {
+      "group": "synthesis",
+      "source": "/tmp/django-ergo-synthesis-final-repo/wiki/use-cases/repository-self-wiki.md",
+      "revision": "e0ff44058e08707af4634906de87a411dd8118cf",
+      "sha256": "5ff85b1ee998604ea2021792b5bf40c52e00b57e61bb2ec22828b6883f060b1c",
+      "bytes": 2477,
+      "backup": "docs/preservation/2026-09-10/objects/5ff85b1ee998604ea2021792b5bf40c52e00b57e61bb2ec22828b6883f060b1c.txt"
+    },
+    {
+      "group": "main-plan",
+      "source": "/home/dev/p/boundcorp/django-ergo/docs/plan-fs.md",
+      "revision": null,
+      "sha256": "59d6c39147c9e6fb0f5e2f96f30e0e13f3625c16b74f9790db46d2857688b89a",
+      "bytes": 16025,
+      "backup": "docs/preservation/2026-09-10/objects/59d6c39147c9e6fb0f5e2f96f30e0e13f3625c16b74f9790db46d2857688b89a.txt"
+    }
+  ]
+}

@@ -1,0 +1,494 @@
+# Adoption Plan Gaps + Decisions Checklist
+
+Based on the competitive analysis of Karpathy/Rohit LLM Wiki v2 and gstack, this document turns the recommendations into an implementation-ready spec for the combined approach:
+
+- LLM Wiki v2 for the memory substrate
+- gstack for workflow gates, role separation, and artifact discipline
+
+The goal is to keep the first version small, auditable, and useful before adding graph/search/browse automation.
+
+---
+
+## 1) What Is Already Concrete vs What Is Still Vague
+
+### Already concrete enough to implement
+
+- [ ] Split storage into three layers:
+  - raw evidence
+  - synthesized wiki pages
+  - versioned schema / rules
+- [ ] Keep raw evidence append-only.
+- [ ] Treat wiki pages as the editable synthesis layer, not the source of truth.
+- [ ] Make every change produce an operation log entry.
+- [ ] Use a small, typed relationship vocabulary instead of unconstrained graph edges.
+- [ ] Make crystallization/session-end summaries first-class workflow artifacts.
+- [ ] Require artifact-backed completion for workflow steps.
+- [ ] Keep markdown as the authoring/storage format first.
+- [ ] Separate private/shared scopes explicitly.
+- [ ] Keep trust policy explicit for read/write/deny.
+- [ ] Model workflow roles and gates explicitly.
+- [ ] Add linting and review stages before automatic repair.
+
+### Still vague and requiring decisions
+
+- [ ] Exact page/entity taxonomy.
+- [ ] Exact frontmatter schema and claim format.
+- [ ] Confidence rubric and when confidence changes are allowed.
+- [ ] Retention policy for raw evidence and derived pages.
+- [ ] When a page is archived vs superseded vs deleted.
+- [ ] How much graph structure to encode in v1.
+- [ ] Whether search is BM25-only, BM25 + embeddings, or BM25 + embeddings + graph.
+- [ ] What automation hooks run automatically vs require review.
+- [ ] Whether browser/cookie automation is in scope now.
+- [ ] Which trust scopes exist in v1: user, repo, project, ticket, role, or client.
+- [ ] Which workflow roles are mandatory in the first implementation.
+- [ ] What “verification evidence” must exist for a step to count as done.
+
+---
+
+## 2) Vague Areas: Concrete Options and Decision Criteria
+
+### 2.1 Page / entity taxonomy
+
+**Options**
+
+- [ ] Option A: minimal fixed set
+  - `source`
+  - `page`
+  - `entity`
+  - `concept`
+  - `decision`
+  - `workflow`
+  - `lesson`
+  - `project`
+- [ ] Option B: fixed set plus extension slot
+  - core types above
+  - `custom_type` allowed only if schema version explicitly enables it
+- [ ] Option C: fully flexible labels
+  - page type is just a string
+
+**Decision criteria**
+
+- [ ] Prefer A if you want predictable tooling, linting, and navigation.
+- [ ] Prefer B if domain growth is expected but you still want guardrails.
+- [ ] Avoid C unless the system is explicitly experimental and human-curated.
+
+### 2.2 Confidence rubric
+
+**Options**
+
+- [ ] Option A: 3 levels
+  - `high`
+  - `medium`
+  - `low`
+- [ ] Option B: 5 levels
+  - `very_high`
+  - `high`
+  - `medium`
+  - `low`
+  - `very_low`
+- [ ] Option C: numeric score 0-100 plus textual status
+
+**Decision criteria**
+
+- [ ] Prefer A if you want fast adoption and low editorial burden.
+- [ ] Prefer B if reviewers need finer control over claims.
+- [ ] Avoid C unless you already have automated scoring calibrated against real data.
+
+### 2.3 Supersession / archival policy
+
+**Options**
+
+- [ ] Option A: active / stale / archived / deleted
+- [ ] Option B: active / superseded / archived
+- [ ] Option C: active only, with history kept in log
+
+**Decision criteria**
+
+- [ ] Prefer A if you need explicit lifecycle controls and retention.
+- [ ] Prefer B if you want a cleaner model for claims and decisions.
+- [ ] Avoid C if stale knowledge could cause user-facing mistakes.
+
+### 2.4 Search architecture
+
+**Options**
+
+- [ ] Option A: markdown + grep/BM25 only
+- [ ] Option B: BM25 + embeddings
+- [ ] Option C: BM25 + embeddings + graph traversal
+
+**Decision criteria**
+
+- [ ] Prefer A for the MVP if page counts are still small.
+- [ ] Prefer B when semantic recall becomes visibly useful.
+- [ ] Prefer C only after you can prove B is not enough with measured misses.
+
+### 2.5 Workflow automation
+
+**Options**
+
+- [ ] Option A: manual step execution with required artifacts
+- [ ] Option B: manual steps plus automated lint / summaries
+- [ ] Option C: event-driven auto-ingest and auto-repair
+
+**Decision criteria**
+
+- [ ] Prefer A to establish correctness and auditability first.
+- [ ] Prefer B when the manual flow is stable and repetitive.
+- [ ] Avoid C until the schema, trust policy, and review gates are stable.
+
+### 2.6 Browser / cookie automation
+
+**Options**
+
+- [ ] Option A: out of scope for v1
+- [ ] Option B: limited local-only browser control with explicit opt-in
+- [ ] Option C: persistent daemon with imported auth state
+
+**Decision criteria**
+
+- [ ] Prefer A unless browser QA is a core use case.
+- [ ] Prefer B only if UI automation is needed and the security review is done.
+- [ ] Avoid C until there is a separate hardening plan for secrets, tokens, and tunnel exposure.
+
+### 2.7 Trust scopes
+
+**Options**
+
+- [ ] Option A: repo scope only
+- [ ] Option B: repo + project + ticket scopes
+- [ ] Option C: repo + project + ticket + user-private scopes
+
+**Decision criteria**
+
+- [ ] Prefer A if the first release is team/project memory, not personal memory.
+- [ ] Prefer B if ticket-level evidence and project-level synthesis both matter.
+- [ ] Prefer C only if private memory is an explicit product requirement.
+
+### 2.8 Human approval policy
+
+**Options**
+
+- [ ] Option A: human approval required for all semantic changes
+- [ ] Option B: human approval required only for deletes, downgrades, and contradictions
+- [ ] Option C: automatic apply for low-risk mechanical changes
+
+**Decision criteria**
+
+- [ ] Prefer A if the corpus is small and correctness matters most.
+- [ ] Prefer B for a practical middle ground.
+- [ ] Prefer C only when the lint/review system is already trusted.
+
+---
+
+## 3) MVP Artifact Set
+
+This is the smallest useful artifact set that preserves provenance, supports review, and keeps the workflow inspectable.
+
+### 3.1 Proposed filenames / directories
+
+- [ ] `evidence/`
+  - append-only source captures
+  - session transcripts
+  - screenshots, CI logs, command output, PR links
+- [ ] `wiki/`
+  - synthesized human-readable pages
+- [ ] `schema/`
+  - versioned rules and validation logic
+- [ ] `wiki/index.md`
+  - navigation and current pointers
+- [ ] `wiki/log.md`
+  - append-only lifecycle / workflow log
+- [ ] `wiki/entities/*.md`
+- [ ] `wiki/concepts/*.md`
+- [ ] `wiki/decisions/*.md`
+- [ ] `wiki/workflows/*.md`
+- [ ] `wiki/lessons/*.md`
+- [ ] `wiki/projects/*.md`
+
+### 3.2 Required frontmatter
+
+Every page should have YAML frontmatter with at least:
+
+```yaml
+---
+id: entity-or-page-id
+type: decision | concept | entity | workflow | lesson | project | source
+title: Human-readable title
+status: active | stale | archived | superseded
+owner: team-or-person
+scope: private | shared | repo | project | ticket
+source_refs:
+  - evidence/source-20260519-001
+confidence: high | medium | low
+last_confirmed: 2026-05-19
+supersedes: []
+superseded_by: []
+created_at: 2026-05-19T22:00:00Z
+updated_at: 2026-05-19T22:00:00Z
+---
+```
+
+### 3.3 Claim format
+
+Use one claim per bullet in a dedicated `## Claims` section.
+
+Each claim must include:
+
+- [ ] claim ID
+- [ ] claim text
+- [ ] claim kind
+- [ ] confidence
+- [ ] source refs
+- [ ] status
+- [ ] optional supersession link
+
+Example:
+
+```md
+## Claims
+
+- id: C-20260519-001
+  kind: preference
+  confidence: medium
+  status: active
+  text: The user prefers morning deployments.
+  source_refs:
+    - evidence/session-20260519-003#msg-4
+```
+
+### 3.4 What each layer must do
+
+#### Evidence layer
+
+- [ ] Store raw captures append-only.
+- [ ] Preserve original IDs, timestamps, actors, and source locations.
+- [ ] Never rewrite evidence in place.
+- [ ] Allow redaction only as a separate derived artifact, never by mutating the original source.
+- [ ] Compute a checksum or stable identifier when possible.
+
+#### Page layer
+
+- [ ] Synthesize and normalize evidence into readable knowledge.
+- [ ] Keep claim provenance visible.
+- [ ] Allow edits, but preserve supersession history.
+- [ ] Mark stale or contradicted claims explicitly instead of silently removing them.
+
+#### Schema layer
+
+- [ ] Define allowed page/entity types.
+- [ ] Define allowed relation vocabulary.
+- [ ] Define required frontmatter fields.
+- [ ] Define approval thresholds.
+- [ ] Define lint rules and failure classes.
+- [ ] Version every breaking change.
+
+#### Index / log layer
+
+- [ ] `index.md` must point to the current canonical pages.
+- [ ] `log.md` must record every ingestion, synthesis, review, apply, archive, and repair action.
+- [ ] Every log entry must contain actor, timestamp, reason, source refs, and touched pages.
+
+---
+
+## 4) Minimal Workflow Chain
+
+This is the smallest chain that captures gstack-style gates while staying compatible with the memory substrate.
+
+### Step 1: Intake / capture
+
+**Handoff artifact**
+
+- [ ] `evidence/source-<id>.md` or equivalent raw capture
+- [ ] `wiki/log.md` append entry
+
+**Verification evidence expected**
+
+- [ ] Source ID or URL/path recorded
+- [ ] Timestamp recorded
+- [ ] Actor recorded
+- [ ] Checksum recorded when available
+- [ ] Scope recorded
+
+### Step 2: Triage / crystallize
+
+**Handoff artifact**
+
+- [ ] `wiki/proposals/<proposal-id>.md`
+- [ ] proposed page list
+- [ ] proposed claim list
+
+**Verification evidence expected**
+
+- [ ] Source refs for every proposed claim
+- [ ] List of pages to create/update/archive
+- [ ] Contradictions called out explicitly
+- [ ] Confidence changes called out explicitly
+
+### Step 3: Review
+
+**Handoff artifact**
+
+- [ ] review note or findings report
+- [ ] approval / changes requested / blocked decision
+
+**Verification evidence expected**
+
+- [ ] Reviewer identity
+- [ ] Decision recorded
+- [ ] Reasons for blocking or approving
+- [ ] Any semantic-risk items flagged
+
+### Step 4: Apply / ship
+
+**Handoff artifact**
+
+- [ ] updated wiki pages
+- [ ] updated schema if needed
+- [ ] updated log entry
+
+**Verification evidence expected**
+
+- [ ] Diff or patch reference
+- [ ] Updated source refs preserved
+- [ ] Supersession links written
+- [ ] Mechanical checks passed
+
+### Step 5: Verify / close
+
+**Handoff artifact**
+
+- [ ] verification report
+- [ ] release note or completion note
+- [ ] retro / lesson page when useful
+
+**Verification evidence expected**
+
+- [ ] Exact commands run
+- [ ] Exact files or endpoints touched
+- [ ] CI or lint output references when relevant
+- [ ] Screenshot or artifact link for UI work
+- [ ] Residual risks recorded
+
+### Completion rule
+
+- [ ] A workflow step is not complete until the required artifact exists and is linked in the log.
+- [ ] A “done” status in chat does not count by itself.
+- [ ] Deletions, confidence downgrades, and contradiction resolutions require explicit review artifacts.
+
+---
+
+## 5) Operational / Privacy Risks and Minimum Controls
+
+### 5.1 Auth and scope leakage
+
+**Risk**
+
+- private memory or ticket data leaks into shared memory
+- a tool or agent reads beyond its scope
+
+**Minimum controls**
+
+- [ ] Explicit scope on every page and evidence item
+- [ ] Deny-by-default read/write policy
+- [ ] Separate private and shared namespaces
+- [ ] Role-bound access checks for writes
+- [ ] No cross-scope promotion without review
+
+### 5.2 Data retention
+
+**Risk**
+
+- raw source data accumulates indefinitely
+- stale evidence remains discoverable when it should not be used
+
+**Minimum controls**
+
+- [ ] Retention policy for evidence and derived pages
+- [ ] Archive instead of hard delete by default
+- [ ] Explicit TTL or review cadence for stale sources
+- [ ] Separate redacted copies from originals
+
+### 5.3 Provenance integrity
+
+**Risk**
+
+- claims drift away from their sources
+- synthetic pages are mistaken for evidence
+
+**Minimum controls**
+
+- [ ] Mandatory source refs for every claim
+- [ ] Stable source IDs or checksums
+- [ ] No unreferenced claims in active pages
+- [ ] Log every write with actor and reason
+
+### 5.4 Auditability
+
+**Risk**
+
+- changes are hard to reconstruct
+- reviewers cannot tell what changed and why
+
+**Minimum controls**
+
+- [ ] Append-only operation log
+- [ ] Touched pages listed in every log entry
+- [ ] Review decision recorded for semantic changes
+- [ ] Supersession history preserved
+
+### 5.5 Sensitive content handling
+
+**Risk**
+
+- secrets, PII, or client-confidential data enter durable memory
+
+**Minimum controls**
+
+- [ ] Redaction policy before persistence
+- [ ] Secret scanning on evidence ingestion
+- [ ] Clear private/shared scope split
+- [ ] Human approval for any cross-boundary write
+
+### 5.6 Browser / auth automation
+
+**Risk**
+
+- cookie/state handling exposes secrets
+- local browser daemons become a new attack surface
+
+**Minimum controls**
+
+- [ ] Keep browser automation out of v1 unless explicitly required
+- [ ] If enabled, bind locally only
+- [ ] Pin tool versions
+- [ ] Separate security review before importing auth state
+- [ ] Log every browser-side action
+
+---
+
+## 6) Decisions Needed Before Build Starts
+
+- [ ] Finalize the allowed page/entity types for v1.
+- [ ] Pick the confidence scale.
+- [ ] Pick the lifecycle states for claims and pages.
+- [ ] Define the minimum required frontmatter fields.
+- [ ] Define the minimum required log fields.
+- [ ] Decide whether semantic updates need human approval or only risky updates do.
+- [ ] Decide the v1 search strategy.
+- [ ] Decide whether browser automation is out of scope.
+- [ ] Decide the initial trust scopes.
+- [ ] Decide the retention policy for raw evidence.
+
+---
+
+## 7) Next Questions for Humans
+
+1. What is the first scope boundary we must enforce: user-private, project, repo, or ticket?
+2. Which of the page types should exist on day one, and which should be deferred?
+3. What retention window do we want for raw evidence and session artifacts?
+4. Which change classes require human approval: all semantic changes, or only deletes/downgrades/contradictions?
+5. Do we want to encode graph edges in frontmatter in v1, or defer graph materialization until later?
+6. Is browser automation part of this product now, or a separate security-reviewed product decision?
+7. What exact verification artifacts should make a workflow step “done” in our system?
+

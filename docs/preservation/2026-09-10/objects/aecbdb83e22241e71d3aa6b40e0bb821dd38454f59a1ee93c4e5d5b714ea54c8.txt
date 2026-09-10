@@ -1,0 +1,260 @@
+import json
+import subprocess
+import tempfile
+from io import StringIO
+from pathlib import Path
+
+import pytest
+import yaml
+from django.core.management import call_command
+from django.test import TestCase
+from django.test import override_settings
+
+from django_ergo.filesystem_kb import FilesystemKBError
+from django_ergo.filesystem_kb import build_repository_kb
+from django_ergo.filesystem_kb import validate_filesystem_kb
+from django_ergo.models import Article
+from django_ergo.models import Knowledgebase
+from django_ergo.models import KnowledgeSource
+from django_ergo.sync import project_commit
+
+
+class FilesystemKBTests(TestCase):
+    def _git(self, repository: Path, *args: str) -> str:
+        result = subprocess.run(
+            ["git", "-C", str(repository), *args],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return result.stdout.strip()
+
+    def _create_corpus(self, root: Path) -> Path:
+        repository = root / "corpus"
+        repository.mkdir()
+        self._git(repository, "init", "-b", "main")
+        self._git(repository, "config", "user.email", "test@example.com")
+        self._git(repository, "config", "user.name", "Test User")
+        (repository / "src" / "sample" / "workers").mkdir(parents=True)
+        (repository / "docs").mkdir()
+        (repository / "README.md").write_text("# Sample\n", encoding="utf-8")
+        (repository / "src" / "sample" / "models.py").write_text(
+            "class Record:\n    pass\n", encoding="utf-8"
+        )
+        (repository / "src" / "sample" / "workers" / "service.py").write_text(
+            "from sample import models\n\ndef run():\n    return models.Record()\n",
+            encoding="utf-8",
+        )
+        (repository / "docs" / "ADR-001-boundary.md").write_text(
+            "# Service boundary\n\nWorkers own execution.\n", encoding="utf-8"
+        )
+        self._git(repository, "add", ".")
+        self._git(repository, "commit", "-m", "Add initial service")
+        (repository / "src" / "sample" / "workers" / "service.py").write_text(
+            "from sample import models\n\ndef run():\n    return models.Record()\n\ndef stop():\n    return None\n",
+            encoding="utf-8",
+        )
+        self._git(repository, "add", ".")
+        self._git(
+            repository,
+            "commit",
+            "-m",
+            "Choose worker service boundary",
+            "-m",
+            "Keep execution separate because workers have a distinct lifecycle.",
+        )
+        return repository
+
+    def test_builds_valid_kb_with_architecture_history_and_sessions(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            repository = self._create_corpus(root)
+            session = root / "session.jsonl"
+            session.write_text(
+                json.dumps(
+                    {
+                        "role": "assistant",
+                        "content": "We decided to keep the worker boundary because retries differ.",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            output = root / "knowledge"
+
+            result = build_repository_kb(
+                repository,
+                output,
+                project="sample",
+                history_limit=10,
+                session_paths=[session],
+            )
+            validation = validate_filesystem_kb(output)
+
+            self.assertEqual(result["pages"], 5)
+            self.assertTrue(validation["valid"])
+            self.assertEqual(validation["pages"], 5)
+            self.assertIn(
+                "sample.workers",
+                (output / "wiki" / "architecture" / "components.md").read_text(),
+            )
+            history = (
+                output / "wiki" / "decisions" / "repository-history.md"
+            ).read_text()
+            self.assertIn("Choose worker service boundary", history)
+            self.assertIn("docs/ADR-001-boundary.md", history)
+            sessions = (
+                output / "wiki" / "decisions" / "session-history.md"
+            ).read_text()
+            self.assertIn("We decided to keep the worker boundary", sessions)
+            manifest = yaml.safe_load((output / "kb.yaml").read_text())
+            self.assertEqual(
+                manifest["source"]["commit"], self._git(repository, "rev-parse", "HEAD")
+            )
+
+    def test_build_preserves_reviewed_pages_and_structured_citations(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            repository = self._create_corpus(root)
+            evidence_commit = self._git(repository, "rev-parse", "HEAD")
+            source = f"""- kind: source-unit
+  unit_id: 0c676ee1-a699-44a9-8c70-d54e6af88f1a
+  commit: {evidence_commit}
+  path: src/sample/models.py
+  symbol: sample.models.Record
+  role: runtime
+  content_hash: {"a" * 64}
+- kind: git-commit
+  commit: {evidence_commit}
+"""
+            reviewed_pages = {
+                "project/system-overview.md": (
+                    "e73ca918-d7a0-4f26-b84f-59dcbbdf1828",
+                    "Reviewed system overview",
+                ),
+                "features/workers.md": (
+                    "7e46d5b9-b0fa-4567-824e-90bf0253585d",
+                    "Reviewed worker boundary",
+                ),
+            }
+            for relative, (page_id, title) in reviewed_pages.items():
+                target = repository / "wiki" / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(
+                    f"""---
+id: {page_id}
+title: {title}
+type: architecture
+status: current
+project: sample
+sources:
+{source}---
+
+# Human-reviewed explanation
+
+Workers own execution because their lifecycle differs.
+""",
+                    encoding="utf-8",
+                )
+            self._git(repository, "add", "wiki")
+            self._git(repository, "commit", "-m", "Accept reviewed architecture pages")
+            output = root / "knowledge"
+
+            result = build_repository_kb(
+                repository,
+                output,
+                project="sample",
+                history_limit=1,
+            )
+            validation = validate_filesystem_kb(output)
+
+            self.assertEqual(result["pages"], 5)
+            self.assertTrue(validation["valid"])
+            overview = (output / "wiki" / "project" / "system-overview.md").read_text()
+            index = (output / "wiki" / "index.md").read_text()
+            captured_history = [
+                json.loads(line)
+                for line in (output / "raw" / "git" / "history.jsonl")
+                .read_text()
+                .splitlines()
+            ]
+            self.assertEqual(result["commits"], 2)
+            self.assertIn(
+                evidence_commit,
+                {item["oid"] for item in captured_history},
+            )
+            self.assertIn("Human-reviewed explanation", overview)
+            self.assertIn(
+                "features/workers.md|Reviewed worker boundary",
+                index,
+            )
+
+    def test_validator_detects_raw_evidence_tampering(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            output = root / "knowledge"
+            build_repository_kb(self._create_corpus(root), output, history_limit=2)
+            history = output / "raw" / "git" / "history.jsonl"
+            history.write_text(history.read_text() + "tampered\n", encoding="utf-8")
+
+            with pytest.raises(FilesystemKBError, match="checksum mismatch"):
+                validate_filesystem_kb(output)
+
+    def test_commands_build_and_validate_json(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            repository = self._create_corpus(root)
+            output = root / "knowledge"
+            build_stdout = StringIO()
+            call_command(
+                "build_repository_kb",
+                str(repository),
+                str(output),
+                "--history-limit=2",
+                "--json",
+                stdout=build_stdout,
+            )
+            validate_stdout = StringIO()
+            call_command(
+                "validate_filesystem_kb",
+                str(output),
+                "--json",
+                stdout=validate_stdout,
+            )
+
+            self.assertEqual(json.loads(build_stdout.getvalue())["pages"], 4)
+            self.assertTrue(json.loads(validate_stdout.getvalue())["valid"])
+
+    def test_generated_kb_projects_through_existing_git_loader(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            output = root / "knowledge"
+            build_repository_kb(self._create_corpus(root), output, history_limit=2)
+            self._git(output, "init", "-b", "main")
+            self._git(output, "config", "user.email", "test@example.com")
+            self._git(output, "config", "user.name", "Test User")
+            self._git(output, "add", ".")
+            self._git(output, "commit", "-m", "Generate filesystem knowledge base")
+
+            with override_settings(
+                DJANGO_ERGO={"KNOWLEDGE_REPOSITORIES": {"generated": str(output)}}
+            ):
+                knowledgebase = Knowledgebase.objects.create(name="Generated KB")
+                source = KnowledgeSource.objects.create(
+                    knowledgebase=knowledgebase,
+                    repository_alias="generated",
+                    repository_subdirectory="",
+                )
+                dry_run = project_commit(source, dry_run=True)
+                self.assertEqual(dry_run["documents"], 4)
+                self.assertEqual(dry_run["writes"], 0)
+                self.assertEqual(Article.objects.count(), 0)
+                result = project_commit(source)
+
+            self.assertEqual(result["documents"], 4)
+            self.assertEqual(Article.objects.count(), 4)
+            self.assertTrue(
+                Article.objects.filter(
+                    relative_path="project/system-overview.md"
+                ).exists()
+            )

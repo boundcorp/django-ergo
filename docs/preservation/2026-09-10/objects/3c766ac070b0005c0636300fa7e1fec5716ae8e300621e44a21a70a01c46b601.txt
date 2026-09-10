@@ -1,0 +1,92 @@
+---
+id: 7ec9a21d-6825-500d-8d72-ef9361eeb4ed
+title: System overview
+type: project
+status: current
+project: django-ergo
+sources:
+- kind: source-unit
+  unit_id: f83a2866-7849-5102-b3d7-f9e96ae4ea62
+  commit: 0fd6cf5e357891d9300b6eb04c0a38c2c6897dee
+  path: src/django_ergo/models.py
+  symbol: ArticleQuerySet
+  role: runtime
+  content_hash: 92ededf783bc0d182299c084348d9b5fef6f6f870e738f4e928c6d8d65e25775
+- kind: source-unit
+  unit_id: 59b203e5-ba29-5153-a631-db37be575546
+  commit: 0fd6cf5e357891d9300b6eb04c0a38c2c6897dee
+  path: src/django_ergo/kb_pipelines.py
+  symbol: absorb_conversation
+  role: runtime
+  content_hash: 05feda2c0ab052558a69d1187afabe52a7bf9502e0b6fbb0bd9a55feadc2aca9
+- kind: source-unit
+  unit_id: b6295ce0-2289-5599-9a89-318ef2350d31
+  commit: 0fd6cf5e357891d9300b6eb04c0a38c2c6897dee
+  path: src/django_ergo/conversation/engine.py
+  symbol: Engine
+  role: runtime
+  content_hash: 3e5b869318d91bcf2abe02397f6d3e61a093759001d57d408dac222e95fbf608
+- kind: source-unit
+  unit_id: cd081e5d-8bab-5485-ba4e-5819637b33e0
+  commit: 0fd6cf5e357891d9300b6eb04c0a38c2c6897dee
+  path: src/django_ergo/repository_search.py
+  symbol: search_repository
+  role: runtime
+  content_hash: fdc9f66bae3f4f8af2a0076a8c19c36929fb0edd1ea5ef2c1a9dc1cf50f167d3
+- kind: source-unit
+  unit_id: 690b701d-27e4-5390-8ae9-cc292b422ced
+  commit: 0fd6cf5e357891d9300b6eb04c0a38c2c6897dee
+  path: src/django_ergo/repository_wiki.py
+  symbol: propose_repository_wiki
+  role: runtime
+  content_hash: 5e73fc306dcef86641859694a54b66e80510c9cec8fce06b568ac0131c4d45c6
+- kind: source-unit
+  unit_id: 07878e4f-75ea-5a9d-8804-aeb0ae8f3650
+  commit: 0fd6cf5e357891d9300b6eb04c0a38c2c6897dee
+  path: src/django_ergo/sync.py
+  symbol: project_commit
+  role: runtime
+  content_hash: a7d07d4d7f9c26836473c46928aa90778efd129087292c83ee0f45195c1f4b5f
+- kind: source-unit
+  unit_id: a0dcbca6-f0e4-5e08-b5fc-ae6c234ec275
+  commit: 0fd6cf5e357891d9300b6eb04c0a38c2c6897dee
+  path: tests/test_sync.py
+  symbol: KnowledgeSyncTests.test_committed_projection_and_missing_visibility
+  role: test
+  content_hash: 42464eb6a4afbd68287a0fcea93bf614470e47f7212ed145de479556eca26cef
+---
+
+## Overview
+
+Django Ergo adds three connected planes to a Django application. The knowledge plane stores Articles and their explicitly generated embeddings. The conversation plane runs engine-backed sessions and dispatches tools. The repository plane reads an allowed Git commit, builds a searchable source-unit index, and produces review-only wiki proposals or projects committed wiki pages into Articles.
+
+## Subsystems
+
+### Knowledge and retrieval
+
+`ArticleQuerySet` searches Article content and summary embeddings while preserving whatever tenant or knowledge-base filters the caller applied. `absorb_conversation` renders an existing conversation and gives an agent a read-only `KBToolkit` plus a `KBSuggestToolkit`; it returns accumulated suggestions rather than applying them.
+
+### Conversation runtime
+
+`Engine` defines the session, message, tool-result, and termination protocol. `SessionManager` owns engine instances for active sessions, while `run_conversation_turn` drives tool rounds, approval stops, and terminal responses.
+
+### Repository evidence and committed projection
+
+`search_repository` retrieves indexed `SourceUnit` records rather than Articles. `propose_repository_wiki` binds one committed goal file to observed source units and writes a non-canonical review packet. Separately, `project_commit` reconciles committed `wiki/` Markdown into Articles and tracks stable document identity through `SourceDocument`.
+
+## Boundaries
+
+Article retrieval and repository retrieval are different stores with different result types; neither is an alias for the other. Conversation toolkits are scoped when constructed, and their bound knowledge bases are recorded as usage metadata. Git-backed projection accepts only commits allowed by the configured source and makes managed Articles reject ordinary model writes. Wiki synthesis records proposals only; a reviewer must accept and commit a page before it can become source-controlled knowledge.
+
+## Concrete Flow
+
+1. A repository source is indexed at one allowed commit, producing stable source-file and source-unit records.
+2. A committed wiki goal starts a conversation task with repository evidence tools and an in-memory proposal tool.
+3. The task reads concrete units; `wiki_propose` rejects unobserved, too-narrow, or structurally incomplete evidence.
+4. The command writes successful pages and a per-goal trace to a review packet without changing Git or Articles.
+5. A reviewer corrects and commits accepted pages under `wiki/`.
+6. A filesystem KB build preserves those committed pages, and `project_commit` can reconcile them into managed Articles.
+
+## Tradeoffs
+
+Keeping Article retrieval, repository retrieval, and Git projection separate prevents one index lifecycle from silently changing another, but callers must choose and invoke the correct indexing operation. Treating Git as authority gives reviewed pages a commit and stable provenance, but the database remains stale until an explicit projection runs. Review-only synthesis prevents an agent from publishing directly, at the cost of a required human acceptance step.

@@ -1,0 +1,105 @@
+# StructuredCall / Chat Helper Research
+
+**Date:** 2026-06-13  
+**Scope:** Ergo conversation/runtime primitives relevant to a reusable multi-response chatbot helper.
+
+## What exists today
+
+### Session and message storage
+
+- `ConversationSession` is the engine-agnostic session root. It stores `user`, `workflow`, `engine_type`, `transport_type`, `session_id`, `status`, and free-form `metadata`. See [`src/django_ergo/conversation/models.py`](../src/django_ergo/conversation/models.py).
+- `ClaudeMessage` + `ClaudeContentBlock` provide lossless Claude-native storage, including `tool_use`, `tool_result`, and `thinking` blocks. See [`src/django_ergo/conversation/models.py`](../src/django_ergo/conversation/models.py).
+- `OpenAIMessage` is the flatter OpenAI-native transcript store, including `tool_calls` and `tool_call_id`. See [`src/django_ergo/conversation/models.py`](../src/django_ergo/conversation/models.py).
+- `ConversationKBUsage` tracks KB bindings per session, which matters for tool scoping and provenance. See [`src/django_ergo/conversation/models.py`](../src/django_ergo/conversation/models.py).
+
+### Engine/runtime abstraction
+
+- `EngineResponse` is the current shared event envelope for one-shot and streaming engine output. It already covers text, tool-use, thinking, and terminal events. See [`src/django_ergo/conversation/engine.py`](../src/django_ergo/conversation/engine.py).
+- `Engine` is the protocol for starting, resuming, sending, and submitting tool results. It also defines `submit_tool_results_batch()`, which is the right hook for multi-tool assistant turns. See [`src/django_ergo/conversation/engine.py`](../src/django_ergo/conversation/engine.py).
+- `AssistantTaskResult` is the current collector for a workflow-backed assistant turn. It bundles the created `ConversationSession`, the emitted events, approvals, and concatenated text. See [`src/django_ergo/conversation/runtime.py`](../src/django_ergo/conversation/runtime.py).
+- `run_conversation_turn()` is the multi-round turn orchestrator. It merges toolkit schemas, emits `PendingApproval` when needed, executes tool calls, and re-enters the engine with batched tool results. See [`src/django_ergo/conversation/runner.py`](../src/django_ergo/conversation/runner.py).
+
+### Reconstruction and retrieval
+
+- `ConversationRenderer` is the main normalization layer. It reconstructs engine-native message dicts from DB rows and supports `headline`, `skeleton`, `full`, and `custom` rendering. It already hides a lot of the complexity needed for recent-history retrieval. See [`src/django_ergo/conversation/renderer.py`](../src/django_ergo/conversation/renderer.py).
+- `ChatWithHistoryToolkit` is a scoped, read-only drill-down toolkit over one or more sessions. It exposes conversation view, tool-call lookup, message ranges, and thinking retrieval. See [`src/django_ergo/conversation/history_toolkit.py`](../src/django_ergo/conversation/history_toolkit.py).
+- `SessionManager` creates sessions, resumes engines, and closes sessions. That makes it the natural boundary for any reusable bot/session façade that owns lifecycle. See [`src/django_ergo/conversation/manager.py`](../src/django_ergo/conversation/manager.py).
+
+### Legacy / inspiration layer
+
+- The old `UserChat` + `ChatMessage` models are a simpler, single-session predecessor. `UserChat.get_context_messages()` is the legacy “recent history” helper, and `ChatMessage.add_tool_call()` stores tool metadata in a JSON blob. See [`src/django_ergo/models.py`](../src/django_ergo/models.py).
+- The legacy `WorkflowEngine` uses `WorkflowContext`, `WorkflowResult`, approval messages, and `context.chat.get_context_messages(limit=20)` to build history. It is the closest current example of a bot/session helper with pause/resume and multi-response behavior. See [`src/django_ergo/workflow_engine.py`](../src/django_ergo/workflow_engine.py).
+- `old-code-inspiration/models/chat.py` and `old-code-inspiration/workflows/*.py` show the earlier shape: `UserChat`, `ChatMessage`, `WorkflowResult`, and OpenAI-agent wrappers with `tool_calls` extracted into result metadata. See [`old-code-inspiration/models/chat.py`](../old-code-inspiration/models/chat.py) and [`old-code-inspiration/workflows/openai_agent.py`](../old-code-inspiration/workflows/openai_agent.py).
+
+## What is not present
+
+- I did not find live `StructuredCall`, `ChatResponse`, or `BotChatSession` classes in `src/` or `old-code-inspiration/`.
+- The closest live equivalents are:
+  - `StructuredCall` -> `EngineResponse.tool_use` plus engine-native `tool_calls` / `tool_use` blocks
+  - `ChatResponse` -> `WorkflowResult` in the old stack, or `AssistantTaskResult` / `EngineResponse` in the current conversation stack
+  - `BotChatSession` -> `ConversationSession` plus `SessionManager`
+
+## Smallest viable abstraction boundaries
+
+### 1. `BotChatSession`
+
+Keep this as the session lifecycle facade, not a transcript formatter.
+
+Recommended responsibilities:
+
+- create/resume/close a `ConversationSession`
+- choose engine and transport via `EngineSpec` / `SessionManager`
+- expose a single turn entrypoint that returns `AssistantTaskResult`
+- persist session-level metadata only
+
+Do not put tool parsing, transcript rendering, or history selection here.
+
+### 2. Tool attachment
+
+Keep tool attachment at the engine-adapter / runner seam.
+
+Recommended responsibilities:
+
+- `ToolAdapter` converts Ergo tool configs to engine-native schema
+- `run_conversation_turn()` merges extra toolkit schemas with workflow tool schemas
+- toolkit tools remain read-only and local to the runner
+- engine implementations only need to accept `additional_tools`
+
+This keeps bot-level code from having to know Claude vs OpenAI tool syntax.
+
+### 3. Recent history retrieval
+
+Keep history retrieval in a renderer/query helper, not in the bot/session wrapper.
+
+Recommended responsibilities:
+
+- `ConversationRenderer` owns reconstruction from DB rows and detail-level formatting
+- add a tiny helper method if needed for “last N turns/messages” so callers can request recent context without knowing model layout
+- `ChatWithHistoryToolkit` should use renderer output, not duplicate reconstruction logic
+
+If a `BotChatSession` helper needs “recent history,” it should ask a renderer/history service for a bounded transcript slice, then hand that to the engine or toolkit.
+
+## Suggested design shape
+
+The smallest useful split is:
+
+1. `BotChatSession` for lifecycle and orchestration
+2. `ConversationRenderer` for transcript reconstruction and bounded history views
+3. `ToolAdapter` + `run_conversation_turn()` for tool schema/result plumbing
+4. `Engine` implementations for provider-specific persistence and replay
+
+That avoids duplicating the current three-way split already visible in the codebase:
+
+- storage models in `conversation/models.py`
+- reconstruction in `conversation/renderer.py`
+- multi-round execution in `conversation/runner.py`
+
+## Practical recommendation
+
+If the goal is a reusable multi-response helper, the least disruptive next step is to introduce a small façade that wraps:
+
+- `SessionManager`
+- `run_conversation_turn()`
+- `ConversationRenderer`
+
+and leaves the engine/storage contracts unchanged. That gives you a stable `BotChatSession` API without collapsing the existing engine-native model split.

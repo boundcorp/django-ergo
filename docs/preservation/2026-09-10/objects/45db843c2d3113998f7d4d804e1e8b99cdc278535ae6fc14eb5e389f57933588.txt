@@ -1,0 +1,148 @@
+# Ergo flat-file foundation decision memo
+
+Date: 2026-09-09
+
+## Recommendation
+
+Keep the flat-file direction, preserve every current worktree, and do **not**
+accept the `fs-vector` worktree as one unit. Extract a small committed-Markdown
+foundation first; treat database indexes and LLM synthesis as derived, optional
+layers.
+
+The product boundary should be simple enough to explain:
+
+```text
+human/agent edits -> Git-tracked wiki Markdown -> reviewed commit
+                                            |-> portable snapshot/validation
+                                            `-> optional Django projection/search index
+```
+
+For managed project knowledge, files and Git history are authoritative. Django
+rows, embeddings, source units, and search relations are rebuildable indexes.
+Existing database-authored knowledge can remain supported, but it must not
+silently compete with a file-managed page.
+
+Before extracting code, choose one file contract. The current work contains
+three variants: `docs/plan-fs.md:95-132` proposes `ergo-source.yaml`; the
+portable builder writes and requires `kb.yaml`
+(`src/django_ergo/filesystem_kb.py:975-990,1031-1067`); and projection reads
+`wiki/*.md` without either manifest (`src/django_ergo/sync.py:107-126`). This is
+the main design decision still missing.
+
+## Smallest coherent foundation worth keeping
+
+1. One documented `raw/` + `wiki/` layout and small Markdown frontmatter schema:
+   stable UUID, title, type/status/project, and source references.
+2. Committed Git snapshots behind configured repository aliases, with path
+   validation and commit ancestry checks (`git_snapshot.py:30-87`).
+3. One-way projection of committed wiki pages into `Article`, tracked by
+   `KnowledgeSource`/`SourceDocument`; stable IDs survive renames, missing files
+   become non-searchable rather than being deleted, and direct edits to managed
+   Articles are blocked (`sync.py:128-232`, `models.py:320-358,480-521`).
+4. Portable build/validation as a separate export/audit utility, after fixing
+   the historical-path citation defect. Its tested artifact can move and
+   validate without the source checkout.
+5. Start agent retrieval from the readable files themselves. Add a derived
+   database index only when a concrete workflow needs faster or semantic search.
+
+This foundation enables real workflows now: maintain one reviewed project wiki
+in Git; regenerate a portable evidence bundle; project committed pages into an
+Ergo knowledgebase; retain identity across edits/renames; and hide missing
+managed pages without destructive deletion. It does **not** yet provide a full
+agent memory loop.
+
+## Keep / defer / later-discard candidates
+
+| Decision | Current work | Why / acceptance gate |
+| --- | --- | --- |
+| **Keep, then extract** | `docs/plan-fs.md`; the `raw/` + `wiki/` concept; stable page IDs and Git checkpoints | This is the clearest durable product idea. Reconcile `ergo-source.yaml` versus `kb.yaml` first. |
+| **Keep, harden** | `paths.py`, `git_snapshot.py`, `sync.py`, `sync_knowledge`, `KnowledgeSource` and `SourceDocument` from migration `0010` | This is the smallest Django projection. Add compatibility and lifecycle tests before acceptance. |
+| **Keep as a separate utility** | `filesystem_kb.py` plus build/validate commands and tests | Already produces a portable, reviewable artifact. Fix ancestor-path citations and clarify integrity limits before commit. |
+| **Defer** | `SourceFile`, `SourceUnit`, `SourceRelation`, migration `0011`, `repository_index.py`, `repository_search.py` | A second, 1536-dimensional code/Markdown index is useful experimentation, not required for flat-file truth. It adds AST splitting, lexical/vector fusion, graph edges, reconciliation, and PostgreSQL indexes. |
+| **Defer** | `repository_wiki.py`, prompt, `.ergo/wiki-goals.yaml`, and the seven synthesized wiki pages in detached commit `e0ff440` | Review packets and citations are promising, but depend on the deferred source-unit index and an LLM. The pages describe pending code, not released capability. |
+| **Defer** | Explicit Article embedding changes in `indexing.py` and provider fingerprint changes | Projection currently does not invoke Article indexing. No local production provider or end-to-end committed-page retrieval test exists. |
+| **Defer** | Session-history capture, richer graph/claim schemas, watcher/auto-ingest, Cabal and voice coordination | These need explicit retention, privacy, approval, and cross-project scope decisions. They are not needed to prove one project KB. |
+| **Later discard candidate; do nothing now** | Detached temporary synthesis worktree/commit `bbd3eef` | Superseded by final synthesis commit `e0ff440`; remove only after useful evidence is archived and the user decides. |
+| **Later discard candidate; do nothing now** | Two Cabal worktrees at `3faf919` | Their tracked implementation is already behind `main`; only untracked research/planning files are unique. Harvest intentionally before any removal decision. |
+| **Later discard candidate; do nothing now** | `django-ergo-self-index-direction.workflow.json` and duplicate exploratory plans | Presentation/research artifacts are not runtime foundation. Keep only if they remain useful documentation. |
+
+## Current capability versus missing pieces
+
+| Area | Supported by current pending code | Still missing or unresolved |
+| --- | --- | --- |
+| Source of truth | Git-committed Markdown can be copied or projected from an immutable commit. | One canonical manifest/layout across build, validation, and sync. |
+| Authoring/updating | Humans can edit and commit Markdown; LLM flow writes review packets only (`repository_wiki.py:55-205`). | No scaffold/editor, proposal-apply command, conflict handling, or approved write-back to canonical files. Existing `KBSuggestToolkit` applies to database rows, not files. |
+| Projection lifecycle | Dry-run, atomic upsert, stable document ID, rename-by-ID, missing state, checkpoint race guard. | No working-tree mode or `--prune` despite the plan; source-reference targets are stored but not validated; projection rename/edit/idempotence tests are incomplete. |
+| Search | Existing Article vector search remains; experimental source-unit search combines exact, PostgreSQL lexical, vector, and relation results (`repository_search.py:22-51`). | Projection does not index Article embeddings; default embeddings remain hosted OpenAI; no local production provider; legacy Article tools do not return file/commit citations. |
+| Provenance | Commit, blob ID, path, hashes, raw snapshots, and citation occurrences are recorded. | Portable validation is internal consistency, not signed authenticity. Unit hashes are manifest assertions. Historical cited paths currently fail if absent at HEAD (`filesystem_kb.py:1094-1095`). |
+| Memory controls | KB tools are user/binding scoped; managed Article instance saves/deletes and admin edits are guarded; missing source pages are hidden from normal retrieval. | No explicit remember/forget/promote/supersede policy, retention policy, visibility schema, or audited file-write approval loop. Model guards can also be bypassed by bulk/queryset writes. |
+
+## Adoption options
+
+1. **Curated foundation (recommended).** Preserve `fs-vector`; extract the file
+   contract, committed projection, and portable validator as separately
+   reviewable changes. Keep direct file search initially. Revisit derived
+   indexing after exercising one real project KB.
+2. **File-only pilot.** Use Git Markdown and the portable builder/validator,
+   leaving Django models unchanged. This proves authoring and review fastest,
+   but does not yet expose knowledge through Ergo APIs or semantic search.
+3. **Accept the whole pending tree.** Fastest route to the current demo, but not
+   recommended: it couples the core decision to two indexes, LLM synthesis,
+   broad `Article` behavior changes, two migrations, and unfinished contracts.
+
+## Worktree and validation evidence
+
+- Default `main`: `0e9c9c2`; only `docs/plan-fs.md` is untracked.
+- Orca `fs-vector`: branch `leewardbound/fs-vector` at `5f3e5de`, one config
+  commit ahead of `main`, plus roughly 5,600 lines of uncommitted/untracked
+  implementation and tests when compared through final synthesis.
+- Cabal worktrees: both at `3faf919`, one commit behind `main`, with untracked
+  plans/worker metadata only.
+- Detached synthesis worktrees: clean at `bbd3eef` and `e0ff440`; the latter
+  adds seven reviewed wiki pages.
+- Targeted filesystem/repository suite: 18 passed. Portable artifact: valid;
+  21 captured files and 36 structured citation occurrences independently
+  checked against the available source repository.
+- Full suite: 422 passed, 20 skipped, 5 failed. The five failures are async tests
+  not executed because the active environment lacks `pytest-asyncio`; therefore
+  this is not a clean release gate, but no additional product regression was
+  demonstrated by that run.
+- Focused filesystem snapshot lint passed. A check of the broader new-file set
+  reports 68 Ruff violations. This was not a default-branch baseline comparison
+  or a repository-wide cleanup assessment; it only means the pending bundle is
+  not ready to claim lint-clean as a whole.
+
+## Risks to resolve before acceptance
+
+1. The global `Article` changes alter hierarchy uniqueness/order, introduce
+   canonical `relative_path`, and disable implicit embeddings. Migration `0010`
+   has no data migration for existing rows (`migrations/0010...py:54-97`).
+   Existing tools still largely address articles by `hierarchy_code`; this
+   transition needs a compatibility decision and broader tests.
+2. The sync command exposes only commit and dry-run options
+   (`management/commands/sync_knowledge.py:12-27`), while the plan promises
+   working-tree preview and explicit pruning. Document the smaller contract or
+   finish it later; do not imply those controls exist.
+3. A committed page is not yet searchable end to end without a separate hosted
+   embedding step. Keep “flat-file KB,” “Django projection,” and “source-code
+   semantic index” as distinct capabilities.
+4. The snapshot validator rejects valid citations to deleted/renamed ancestor
+   paths. See `FILESYSTEM_KB_SNAPSHOT_CITATIONS_REVIEW.md` for the reproduction.
+
+## Decision requested
+
+Approve the **curated foundation** direction and choose the canonical manifest:
+either make `kb.yaml` the single contract consumed by projection, or deliberately
+define it as export-only and choose one different source manifest. No worktree
+should be removed until that decision is made and unique planning artifacts have
+been harvested.
+
+## Preservation clarification (added after Cabal planning review)
+
+The earlier table's “later discard candidate” wording for the two Cabal
+worktrees was too strong. Their tracked branches do not add code beyond `main`,
+but both contain unique, untracked planning material. They are now explicitly
+**preservation holds**, not discard candidates. See
+`CABAL_WORKTREE_PLANNING_PRESERVATION_REVIEW.md`. No cleanup decision should be
+considered until the local documents and their Cabal attachment status have
+been reviewed by the user.

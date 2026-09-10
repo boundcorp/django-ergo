@@ -1,0 +1,59 @@
+---
+id: 977b3642-cad9-5afb-a126-271c519d5860
+title: Conversation absorption
+type: use-case
+status: current
+project: django-ergo
+sources:
+- kind: source-unit
+  unit_id: 59b203e5-ba29-5153-a631-db37be575546
+  commit: 0fd6cf5e357891d9300b6eb04c0a38c2c6897dee
+  path: src/django_ergo/kb_pipelines.py
+  symbol: absorb_conversation
+  role: runtime
+  content_hash: 05feda2c0ab052558a69d1187afabe52a7bf9502e0b6fbb0bd9a55feadc2aca9
+- kind: source-unit
+  unit_id: d3322094-a226-5e24-a82e-230b7bb41952
+  commit: 0fd6cf5e357891d9300b6eb04c0a38c2c6897dee
+  path: src/django_ergo/kb_suggest_toolkit.py
+  symbol: KBSuggestToolkit
+  role: runtime
+  content_hash: 05a0f93092067fadcb5d52ef65570b7a92fa70a9c0ad07c9435fb10e74677dc1
+- kind: source-unit
+  unit_id: 41b0fa7b-0284-5a62-9be4-8f9d3b0b34bf
+  commit: 0fd6cf5e357891d9300b6eb04c0a38c2c6897dee
+  path: src/django_ergo/conversation/pipelines.py
+  symbol: run_conversation_pipeline
+  role: runtime
+  content_hash: 399d9f253fd34ab904f11dc3243a7a898f65f34d4e5732602dcc386cfaa143fa
+- kind: source-unit
+  unit_id: 17a1ad86-783c-5b6a-b67a-58cb17dc61f3
+  commit: 0fd6cf5e357891d9300b6eb04c0a38c2c6897dee
+  path: src/django_ergo/conversation/pipelines.py
+  symbol: summarize_conversation
+  role: runtime
+  content_hash: c32efa946e96de1d158851c911987af5437ee3d2818c60aa4ee4e0011144b83e
+- kind: source-unit
+  unit_id: dbc7a154-1feb-5a35-8ec2-89865143361e
+  commit: 0fd6cf5e357891d9300b6eb04c0a38c2c6897dee
+  path: src/django_ergo/conversation/pipelines.py
+  symbol: compact_conversation
+  role: runtime
+  content_hash: 7186ecbe9becd90a5ed5a96af7b074ebaa79bc40c6aef612ad32913317b5c473
+---
+
+## Overview
+
+Conversation absorption turns an existing session into an in-memory set of proposed knowledge-base changes. It deliberately separates analysis from publication: the agent can inspect the target KB and record create, update, or delete suggestions, but the pipeline returns without applying them.
+
+## Flow
+
+1. `absorb_conversation` renders the source ConversationSession with a ConversationRenderer.
+2. It builds a curator prompt containing the target KB description and table of contents.
+3. A workflow task receives a read-only `KBToolkit` bound to that KB and a `KBSuggestToolkit` bound to the same KB.
+4. Suggest-tool calls append structured dictionaries to the toolkit. Read-tool calls can inspect existing content before proposing an update.
+5. The function returns the KBSuggestToolkit to the caller.
+
+## Review
+
+The caller inspects `get_suggestions()`. `clear()` discards all pending suggestions; `apply_suggestions(indices)` explicitly applies selected entries and removes attempted entries from the in-memory list. Because application is a separate caller action, completion of the LLM turn is not publication or approval. The caller remains responsible for presenting review, choosing indices, handling per-suggestion error strings, and retaining any audit record it requires.

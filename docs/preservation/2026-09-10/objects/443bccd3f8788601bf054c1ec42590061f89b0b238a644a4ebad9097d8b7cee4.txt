@@ -6,20 +6,6 @@
 
 AI Knowledgebase Toolkit for Django
 
-### Backend-neutral knowledge foundation
-
-The optional `django_ergo.knowledge` app provides shared validation, reviewed
-writes, logical path navigation/strategy, cited lexical/vector/hybrid retrieval and usage
-tracking for in-memory, Django-database, and Git-backed corpora. Semantic
-retrieval uses optional host providers/indexes, independently of storage.
-Virtual KBs need no files, Git or YAML. Existing Article/conversation APIs
-remain supported, with an explicit reviewed Article compatibility bridge.
-See [backend contracts, host examples, commands, and exact dependency/parity limits](docs/knowledge-foundation.md).
-See [path-first APIs, reviewed moves and legacy migration boundaries](docs/knowledge-paths.md).
-
-Optional repository snapshot, Markdown projection, source indexing and wiki
-proposal adapters are also available. See [integration and upgrade guidance](docs/fs-vector-integration.md).
-
 **Django Ergo** provides powerful semantic search and knowledge management capabilities through innovative field types and AI integration. Build intelligent Django applications with automatic embedding generation, multi-field semantic search, and advanced workflow orchestration.
 
 ## ✨ Key Features
@@ -85,10 +71,10 @@ Install django-ergo:
 
 ```bash
 # From pypi
-python3 -m pip install 'django-ergo[legacy]'
+python3 -m pip install django-ergo
 
 # From source
-python3 -m pip install 'django-ergo[legacy] @ git+https://github.com/boundcorp/django-ergo.git'
+python3 -m pip install git+https://github.com/boundcorp/django-ergo.git
 ```
 
 ### Settings
@@ -116,6 +102,43 @@ urlpatterns = [
 ]
 ```
 
+## Repository knowledge bases
+
+Generate a portable, reviewable knowledge base from an immutable Git commit:
+
+```bash
+python manage.py build_repository_kb /path/to/repository /path/to/output \
+  --commit HEAD --project my-project
+python manage.py validate_filesystem_kb /path/to/output
+```
+
+The output keeps the repository manifest and Git history under `raw/`. For
+reviewed pages with structured source-unit citations, it also copies the exact
+cited files from their cited commits into a bounded `raw/repository/citations/`
+snapshot with per-file blob IDs, SHA-256 hashes, and sizes. The citation
+manifest records every occurrence by page, unit ID, commit, path, symbol, role,
+and content hash. Validation matches those page fields to the manifest and,
+separately, verifies each captured file's checksum. It does not derive the
+source-unit content hash from the whole-file snapshot. Generated pages live
+under `wiki/`. Human-reviewed pages already committed under the source
+repository's `wiki/` directory replace matching generated pages and retain
+their source-unit and Git-commit citations.
+
+For LLM-assisted synthesis, commit `.ergo/index.yaml` and
+`.ergo/wiki-goals.yaml`, index a configured `KnowledgeSource`, then write a
+review packet:
+
+```bash
+python manage.py index_repository SOURCE_ID --commit HEAD
+python manage.py propose_repository_wiki SOURCE_ID \
+  --user REVIEWER_USERNAME --output /path/to/review-packet
+```
+
+Proposals cite only source units and history the workflow actually inspected.
+The command never changes Git or knowledge records. Review accepted pages,
+copy them into `wiki/`, and commit them before rebuilding the filesystem
+knowledge base.
+
 ## Development
 
 ```bash
@@ -138,11 +161,13 @@ make coverage
 make open_coverage
 ```
 
-## Git Releases
+## Deploying
 
-Ergo is distributed from reviewed commits on `main`, not by deploying a standalone
-service or uploading to PyPI/TestPyPI. See [Git release and adoption](docs/git-release.md)
-for immutable installs, CI gates and migration prerequisites.
+```bash
+# Publish to PyPI Test before the live PyPi
+make release_test
+make release
+```
 
 ## Issues
 
