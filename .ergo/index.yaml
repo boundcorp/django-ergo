@@ -1,0 +1,41 @@
+version: 1
+max_unit_characters: 6000
+embedding_dimensions: 1536
+roles:
+  - role: runtime
+    include: [src/django_ergo/**/*.py]
+  - role: example
+    include: [examples/**/*.py, tests/example_app/**/*.py, docs/product/**/*.md]
+  - role: test
+    include: [tests/**/*.py]
+  - role: decision
+    include: [ARCHITECTURE_DECISIONS.md, docs/superpowers/specs/**/*.md]
+  - role: published-wiki
+    include: [wiki/**/*.md]
+  - role: public-doc
+    include: [README.md, docs/**/*.md]
+  - role: historical
+    include: ["*.md"]
+exclude:
+  - "**/migrations/**"
+  - docs/superpowers/plans/**
+  - old-code-inspiration/**
+  - "**/.git/**"
+  - "**/build/**"
+  - "**/dist/**"
+  - "**/__pycache__/**"
+  - "**/.pytest_cache/**"
+  - "**/.mypy_cache/**"
+  - "**/.ruff_cache/**"
+  - "**/node_modules/**"
+  - "**/site-packages/**"
+  - "**/vendor/**"
+  - "**/.venv/**"
+  - "**/venv/**"
+  - "**/.env"
+  - "**/.env.*"
+  - "**/*secret*"
+  - "**/*credential*"
+  - "**/*password*"
+  - "**/*token*"
+  - "**/*key*.py"
