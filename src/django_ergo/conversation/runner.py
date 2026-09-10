@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from asgiref.sync import sync_to_async
+
 from django_ergo.tools import tool_registry
 
 if TYPE_CHECKING:
@@ -70,6 +72,9 @@ async def _record_kb_usage(
     from django_ergo.conversation.models import ConversationKBUsage
 
     for toolkit in toolkits:
+        recorder = getattr(toolkit, "record_usage", None)
+        if callable(recorder):
+            await sync_to_async(recorder)(str(session.pk))
         for kb, mode in toolkit.get_bound_knowledgebases():
             await ConversationKBUsage.objects.aget_or_create(
                 session=session,

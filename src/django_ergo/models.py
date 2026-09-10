@@ -118,13 +118,19 @@ class Knowledgebase(TimeStampedMixin):
         return "\n".join(
             [
                 f"# {article.hierarchy_code} {article.title}"
-                for article in self.articles.filter(hierarchy_code__regex=r"^.$")
+                for article in self.articles.visible_to_retrieval().filter(
+                    hierarchy_code__regex=r"^.$"
+                )
             ]
         )
 
 
 class ArticleQuerySet(models.QuerySet):
     """Custom QuerySet for Article model with advanced semantic search capabilities."""
+
+    def visible_to_retrieval(self):
+        """Exclude unpublished and withdrawn Articles from ordinary reads."""
+        return self.filter(status="active")
 
     def semantic_search_content(self, query_text: str, top_k: int = 10):
         """
@@ -137,7 +143,7 @@ class ArticleQuerySet(models.QuerySet):
         Returns:
             QuerySet: Results ordered by semantic similarity to content
         """
-        return SemanticTextField.search_field(self.model, "content", query_text, top_k)
+        return self.vector_search_content(generate_embedding(query_text), top_k)
 
     def semantic_search_summary(self, query_text: str, top_k: int = 10):
         """
@@ -150,7 +156,7 @@ class ArticleQuerySet(models.QuerySet):
         Returns:
             QuerySet: Results ordered by semantic similarity to summary
         """
-        return SemanticTextField.search_field(self.model, "summary", query_text, top_k)
+        return self.vector_search_summary(generate_embedding(query_text), top_k)
 
     def multi_field_semantic_search(
         self, query_text: str, top_k: int = 10, weights=None
@@ -201,7 +207,8 @@ class ArticleQuerySet(models.QuerySet):
         ) * weights.get("summary", 0.4)
 
         return (
-            self.exclude(content_embedding__isnull=True, summary_embedding__isnull=True)
+            self.visible_to_retrieval()
+            .exclude(content_embedding__isnull=True, summary_embedding__isnull=True)
             .annotate(
                 content_distance=content_distance,
                 summary_distance=summary_distance,
@@ -221,7 +228,9 @@ class ArticleQuerySet(models.QuerySet):
         Returns:
             QuerySet: Results ordered by semantic similarity to content
         """
-        return vector_search(self.model, "content_embedding", query_vector, top_k)
+        return vector_search(
+            self.model, "content_embedding", query_vector, top_k, queryset=self
+        )
 
     def vector_search_summary(self, query_vector: list[float], top_k: int = 10):
         """
@@ -234,7 +243,9 @@ class ArticleQuerySet(models.QuerySet):
         Returns:
             QuerySet: Results ordered by semantic similarity to summary
         """
-        return vector_search(self.model, "summary_embedding", query_vector, top_k)
+        return vector_search(
+            self.model, "summary_embedding", query_vector, top_k, queryset=self
+        )
 
     def hybrid_search(self, query_text: str, top_k: int = 10):
         """
@@ -255,6 +266,7 @@ class ArticleQuerySet(models.QuerySet):
 
     def to_prefetch_results(self, top_k: int = 5):
         """Convert queryset to prefetch-friendly format."""
+        candidates = self if self.query.is_sliced else self.visible_to_retrieval()
         return [
             {
                 "title": article.title,
@@ -263,7 +275,8 @@ class ArticleQuerySet(models.QuerySet):
                 "hierarchy_code": article.hierarchy_code,
                 "id": str(article.id),
             }
-            for article in self[:top_k]
+            for article in candidates[:top_k]
+            if article.status == "active"
         ]
 
 
@@ -274,7 +287,17 @@ class Article(TimeStampedMixin):
     Optimized with pgvector indexes for high-performance semantic search.
     """
 
+    class Status(models.TextChoices):
+        ACTIVE = "active", "Active"
+        DRAFT = "draft", "Draft"
+        STALE = "stale", "Stale"
+        ARCHIVED = "archived", "Archived"
+        SUPERSEDED = "superseded", "Superseded"
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    status = models.CharField(
+        max_length=16, choices=Status.choices, default=Status.ACTIVE
+    )
     hierarchy_code = models.CharField(
         max_length=16,
         default="0",

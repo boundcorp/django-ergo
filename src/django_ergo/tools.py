@@ -8,24 +8,14 @@ can perform actions with side effects.
 
 import inspect
 from collections.abc import Callable
-from dataclasses import dataclass
 from functools import wraps
 from typing import Any
 
 from django.contrib.auth import get_user_model
 
+from django_ergo.tool_config import ToolConfig
+
 User = get_user_model()
-
-
-@dataclass
-class ToolConfig:
-    """Configuration for a tool."""
-
-    name: str
-    description: str
-    parameters: dict[str, Any]
-    requires_approval: bool = False
-    readonly: bool = False
 
 
 class ToolRegistry:

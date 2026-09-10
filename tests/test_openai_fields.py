@@ -10,6 +10,7 @@ import os
 from unittest.mock import Mock
 from unittest.mock import patch
 
+import openai
 import pytest
 from django.contrib.auth import get_user_model
 from django.test import TestCase
@@ -238,6 +239,17 @@ class TestSemanticTextField(TestCase):
 
 class TestOpenAIIntegrationErrors:
     """Test error handling in OpenAI integrations."""
+
+    @pytest.fixture(autouse=True)
+    def mocked_provider_settings(self, settings, monkeypatch):
+        """Select the adapter under test independently of the host's default."""
+        placeholder = "test-placeholder-not-a-credential"
+        monkeypatch.setattr(openai, "api_key", placeholder)
+        settings.DJANGO_ERGO = {
+            **getattr(settings, "DJANGO_ERGO", {}),
+            "EMBEDDING_PROVIDER": "django_ergo.embedding_providers.OpenAIEmbeddingProvider",
+            "EMBEDDING_PROVIDER_CONFIG": {"api_key": placeholder},
+        }
 
     def test_generate_summary_empty_content(self):
         """Test generate_summary with empty content handling."""

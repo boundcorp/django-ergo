@@ -6,6 +6,16 @@
 
 AI Knowledgebase Toolkit for Django
 
+### Backend-neutral knowledge foundation
+
+The optional `django_ergo.knowledge` app provides shared validation, reviewed
+writes, hierarchy/strategy, cited lexical/vector/hybrid retrieval and usage
+tracking for in-memory, Django-database, and Git-backed corpora. Semantic
+retrieval uses optional host providers/indexes, independently of storage.
+Virtual KBs need no files, Git or YAML. Existing Article/conversation APIs
+remain supported, with an explicit reviewed Article compatibility bridge.
+See [backend contracts, host examples, commands, and exact dependency/parity limits](docs/knowledge-foundation.md).
+
 **Django Ergo** provides powerful semantic search and knowledge management capabilities through innovative field types and AI integration. Build intelligent Django applications with automatic embedding generation, multi-field semantic search, and advanced workflow orchestration.
 
 ## ✨ Key Features
@@ -71,10 +81,10 @@ Install django-ergo:
 
 ```bash
 # From pypi
-python3 -m pip install django-ergo
+python3 -m pip install 'django-ergo[legacy]'
 
 # From source
-python3 -m pip install git+https://github.com/boundcorp/django-ergo.git
+python3 -m pip install 'django-ergo[legacy] @ git+https://github.com/boundcorp/django-ergo.git'
 ```
 
 ### Settings
