@@ -1416,6 +1416,7 @@ def read_wiki_records(root: Path | str):
         if path == root / "wiki" / "index.md":
             continue
         metadata, content = _parse_page(path)
+        metadata["path"] = path.relative_to(root / "wiki").as_posix()
         yield {"metadata": metadata, "content": content}
 
 

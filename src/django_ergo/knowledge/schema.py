@@ -11,6 +11,7 @@ from datetime import datetime
 
 FORMAT = "ergo-corpus/v1"
 EXTENDED_FORMAT = "ergo-corpus/v2"
+PATH_FORMAT = "ergo-corpus/v3"
 EXPORT_FORMAT = "ergo-corpus-export/v1"
 MAX_DOCUMENTS = 10000
 MAX_CONTENT_BYTES = 1024 * 1024
@@ -55,7 +56,7 @@ def _timestamp(value):
 def _record(record_type, value):
     require(isinstance(value, dict), "Record must be an object")
     if record_type is Document:
-        value = {"summary": "", "hierarchy_code": "", **value}
+        value = {"summary": "", "hierarchy_code": "", "path": "", **value}
     require(
         set(value) == {field.name for field in fields(record_type)},
         "Invalid record fields",
@@ -106,12 +107,13 @@ class Document:
     review: Review | None = None
     summary: str = ""
     hierarchy_code: str = ""
+    path: str = ""
 
     @property
     def content_digest(self):
         payload = asdict(self)
         payload.pop("review")
-        for name in ("summary", "hierarchy_code"):
+        for name in ("summary", "hierarchy_code", "path"):
             if not payload[name]:
                 payload.pop(name)
         return digest(payload)
@@ -135,14 +137,27 @@ class Snapshot:
     def to_dict(self):
         payload = asdict(self)
         extended = False
+        path_format = any(document.path for document in self.documents)
         for record in payload["documents"]:
+            if not record["path"]:
+                record.pop("path")
             for name in ("summary", "hierarchy_code"):
                 if not record[name]:
                     record.pop(name)
                 else:
                     extended = True
             extended = extended or record["kind"] == "strategy"
-        payload["format"] = EXTENDED_FORMAT if extended else FORMAT
+        head_keys = {(head.document_id, head.revision) for head in self.heads}
+        codes = [
+            document.hierarchy_code
+            for document in self.documents
+            if (document.document_id, document.revision) in head_keys
+            and document.hierarchy_code
+        ]
+        path_format = path_format or len(codes) != len(set(codes))
+        payload["format"] = (
+            PATH_FORMAT if path_format else EXTENDED_FORMAT if extended else FORMAT
+        )
         payload["documents"] = sorted(
             payload["documents"],
             key=lambda item: (item["document_id"], item["revision"]),
@@ -160,7 +175,8 @@ class Snapshot:
             "Invalid corpus fields",
         )
         require(
-            payload["format"] in {FORMAT, EXTENDED_FORMAT}, "Unsupported corpus format"
+            payload["format"] in {FORMAT, EXTENDED_FORMAT, PATH_FORMAT},
+            "Unsupported corpus format",
         )
         require(
             isinstance(payload["documents"], list)
@@ -174,6 +190,8 @@ class Snapshot:
         for value in payload["documents"]:
             require(isinstance(value, dict), "Document must be an object")
             record = dict(value)
+            if payload["format"] != PATH_FORMAT:
+                require("path" not in record, "Path records require ergo-corpus/v3")
             if payload["format"] == FORMAT:
                 require(
                     not ({"summary", "hierarchy_code"} & set(record))
@@ -203,6 +221,8 @@ class Snapshot:
 
 def validate_snapshot(snapshot, *, require_publication=True):
     """Check structure and references, not host authorization or factual truth."""
+    from .paths import validate_path
+
     require(isinstance(snapshot, Snapshot), "Snapshot must use the logical schema")
     require(
         isinstance(snapshot.documents, tuple) and isinstance(snapshot.heads, tuple),
@@ -234,6 +254,11 @@ def validate_snapshot(snapshot, *, require_publication=True):
             "Document identity, revision and title are required",
         )
         require(document.scope == snapshot.scope, "Document scope mismatch")
+        validate_path(document.path, allow_empty=True)
+        require(
+            not document.path or document.kind == "page",
+            "Only pages have navigation paths",
+        )
         require(
             _text(document.kind) and document.kind in {"page", "evidence", "strategy"},
             "Invalid document kind",
@@ -346,16 +371,17 @@ def validate_snapshot(snapshot, *, require_publication=True):
 
 
 def _validate_layout(heads):
-    codes = [
-        document.hierarchy_code
-        for document in heads.values()
-        if document.hierarchy_code
-    ]
-    require(len(codes) == len(set(codes)), "Duplicate hierarchy code")
+    from .paths import tree_status
+
+    paths = [document.path for document in heads.values() if document.path]
+    require(len(paths) == len(set(paths)), "Duplicate document path")
     require(
         sum(document.kind == "strategy" for document in heads.values()) <= 1,
         "Only one strategy document is allowed",
     )
+    for document in heads.values():
+        if document.kind == "strategy":
+            tree_status(document.content, ())
 
 
 def export_snapshot(snapshot):

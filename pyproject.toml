@@ -243,6 +243,7 @@ unfixable = []
 dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
 
 [tool.ruff.lint.per-file-ignores]
+"src/django_ergo/knowledge/schema.py" = ["PLC0415", "PLR0915"]
 "src/django_ergo/knowledge/database.py" = ["PLC0415"]
 "src/django_ergo/knowledge/articles.py" = ["PLC0415", "SLF001"]
 "src/django_ergo/knowledge/usage.py" = ["PLC0415"]

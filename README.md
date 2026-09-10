@@ -9,12 +9,13 @@ AI Knowledgebase Toolkit for Django
 ### Backend-neutral knowledge foundation
 
 The optional `django_ergo.knowledge` app provides shared validation, reviewed
-writes, hierarchy/strategy, cited lexical/vector/hybrid retrieval and usage
+writes, logical path navigation/strategy, cited lexical/vector/hybrid retrieval and usage
 tracking for in-memory, Django-database, and Git-backed corpora. Semantic
 retrieval uses optional host providers/indexes, independently of storage.
 Virtual KBs need no files, Git or YAML. Existing Article/conversation APIs
 remain supported, with an explicit reviewed Article compatibility bridge.
 See [backend contracts, host examples, commands, and exact dependency/parity limits](docs/knowledge-foundation.md).
+See [path-first APIs, reviewed moves and legacy migration boundaries](docs/knowledge-paths.md).
 
 Optional repository snapshot, Markdown projection, source indexing and wiki
 proposal adapters are also available. See [integration and upgrade guidance](docs/fs-vector-integration.md).

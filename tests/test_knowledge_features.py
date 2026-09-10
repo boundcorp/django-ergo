@@ -137,7 +137,7 @@ def test_git_publication_is_explicit_and_v2_roundtrips(corpus, host, tmp_path):
         provider_id="tiny/v1",
         usage_store=FileUsageStore(tmp_path / "usage.jsonl"),
     )
-    assert published.get_tree_status() == [{"prefix": "A", "article_count": 0}]
+    assert published.get_tree_status() == [{"path": "A", "article_count": 0}]
     assert published.get_strategy()["citation"] == service.get_strategy()["citation"]
     published.rebuild_index()
     assert published.semantic_search_content("pump")
@@ -161,13 +161,13 @@ def test_advanced_toolkit_intake_and_strategy_share_one_review_batch(
         reason="Remember",
     )
     toolkit.execute_tool(
-        "corpus_suggest_placed_page",
+        "corpus_suggest_path_page",
         {
             "document_id": "placed",
             "title": "Pump",
             "content": "pump water",
             "summary": "Pump summary",
-            "hierarchy_code": "A0",
+            "path": "A/pump.md",
         },
     )
     toolkit.execute_tool(
@@ -180,8 +180,8 @@ def test_advanced_toolkit_intake_and_strategy_share_one_review_batch(
     )
     writer.apply(reviewed(writer, toolkit.get_proposal(), host))
     assert writer.get_tree_status() == [
-        {"prefix": "A", "article_count": 1},
-        {"prefix": "B", "article_count": 0},
+        {"path": "A", "article_count": 1},
+        {"path": "B", "article_count": 0},
     ]
     writer.embedding_provider = TinyProvider()
     writer.provider_id = "tiny/v1"
@@ -219,8 +219,8 @@ def test_advanced_commands_use_the_same_host_bound_service(advanced_service):
                 call_command(
                     "ergo_corpus", "host", "get_tree_status", stdout=io.StringIO()
                 )
-            )[0]["prefix"]
-            == "A"
+            )[0]["path"]
+            == "planned"
         )
         assert json.loads(
             call_command(
@@ -266,7 +266,7 @@ def test_usage_context_binding_does_not_leak_between_toolkits(advanced_service):
 def test_extended_fields_cannot_be_smuggled_into_v1(advanced_corpus):
     payload = advanced_corpus.to_dict()
     payload["format"] = "ergo-corpus/v1"
-    with pytest.raises(CorpusError, match="require ergo-corpus/v2"):
+    with pytest.raises(CorpusError, match="require ergo-corpus/v3"):
         Snapshot.from_dict(payload)
 
 
@@ -294,6 +294,7 @@ def advanced_corpus(corpus, host):
             content="pump water",
             summary="electrical wiring",
             hierarchy_code="A0",
+            path="pumps/reset.md",
             review=None,
         ),
         host[1],
@@ -307,13 +308,17 @@ def advanced_corpus(corpus, host):
             content="electrical wiring",
             summary="pump water",
             hierarchy_code="B0",
+            path="wiring/circuit.md",
             review=None,
         ),
         host[1],
         host[2],
     )
     archived = replace(
-        corpus.documents[3], hierarchy_code="A1", summary="Archived secret"
+        corpus.documents[3],
+        hierarchy_code="A1",
+        path="pumps/archived.md",
+        summary="Archived secret",
     )
     strategy = approve(
         Document(
@@ -322,7 +327,7 @@ def advanced_corpus(corpus, host):
             corpus.scope,
             "strategy",
             "Strategy",
-            "### Tree #A: Pumps\n### Tree #B: Wiring\n### Tree #C: Planned",
+            "### Path tree `pumps`: Pumps\n### Path tree `wiring`: Wiring\n### Path tree `planned`: Planned",
             "active",
             first.provenance,
         ),
@@ -428,17 +433,17 @@ def test_common_semantic_weighted_hybrid_and_vector_apis(advanced_service):
 
 def test_common_hierarchy_strategy_and_usage_read_apis(advanced_service):
     service = advanced_service
-    assert [row["hierarchy_code"] for row in service.table_of_contents(prefix="A")] == [
-        "A0"
-    ]
+    assert [
+        row["hierarchy_code"] for row in service.table_of_contents(prefix="pumps")
+    ] == ["A0"]
     assert service.get_by_hierarchy("B0")["summary"] == "pump water"
     assert [
         row["citation"]["document_id"] for row in service.by_hierarchy_prefix("A")
     ] == ["reset"]
     assert service.get_tree_status() == [
-        {"prefix": "A", "article_count": 1},
-        {"prefix": "B", "article_count": 1},
-        {"prefix": "C", "article_count": 0},
+        {"path": "planned", "article_count": 0},
+        {"path": "pumps", "article_count": 1},
+        {"path": "wiring", "article_count": 1},
     ]
     assert "Planned" in service.get_strategy()["content"]
     service.record_usage("session:two", mode="strategy")
@@ -535,7 +540,7 @@ def test_governed_hierarchy_and_strategy_writes_retain_history(writer, corpus, h
     )
     assert child.changes[0].hierarchy_code == "A0"
     service.apply(reviewed(service, child, host))
-    strategy = service.propose_tree(
+    strategy = service.propose_legacy_tree(
         "A",
         "Pumps",
         "Instructions",
@@ -544,14 +549,14 @@ def test_governed_hierarchy_and_strategy_writes_retain_history(writer, corpus, h
         reason="Organize",
     )
     service.apply(reviewed(service, strategy, host))
-    assert service.get_tree_status() == [{"prefix": "A", "article_count": 2}]
+    assert service.get_tree_status(legacy=True) == [{"prefix": "A", "article_count": 2}]
     assert service.backend.load().to_dict()["format"] == "ergo-corpus/v2"
     assert service.resolve(citation)["summary"] == "summary"
     moved = service.revise(
         citation.document_id, hierarchy_code="B", summary="new summary", reason="Move"
     )
     service.apply(reviewed(service, moved, host))
-    assert service.get_tree_status() == [{"prefix": "A", "article_count": 1}]
+    assert service.get_tree_status(legacy=True) == [{"prefix": "A", "article_count": 1}]
     assert service.resolve(citation)["hierarchy_code"] == "A"
     with pytest.raises(CorpusError, match="already exists"):
         service.create_page(

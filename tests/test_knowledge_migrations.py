@@ -11,11 +11,12 @@ from django.db.migrations.executor import MigrationExecutor
         "0010_article_status",
         "0010_knowledgesource_sourcedocument_alter_article_options_and_more",
         "0011_knowledgesource_index_config_hash_and_more",
+        "0013_reconcile_article_compatibility",
     ],
 )
 def test_existing_article_upgrade_preserves_identity_hierarchy_and_content(starting):
     previous = [("django_ergo", starting)]
-    current = [("django_ergo", "0013_reconcile_article_compatibility")]
+    current = [("django_ergo", "0014_path_primary_articles")]
     executor = MigrationExecutor(connection)
     executor.migrate([("django_ergo", "0009_knowledgebase_organization_strategy")])
     executor = MigrationExecutor(connection)

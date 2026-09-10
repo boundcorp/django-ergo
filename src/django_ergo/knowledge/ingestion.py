@@ -60,6 +60,7 @@ def propose_wiki_import(service, records, *, provenance, reason):
             (evidence.reference,),
             summary=metadata.get("summary", ""),
             hierarchy_code=metadata.get("hierarchy_code", ""),
+            path=metadata.get("path", ""),
         )
         changes.extend((evidence, page))
     proposal = service.propose(changes, reason=reason)

@@ -191,7 +191,7 @@ def test_portable_bundle_is_reviewed_common_input(repository, tmp_path, corpus, 
 def test_conflicting_fs_hierarchy_upgrade_fails_without_reassigning():
     initial = [("django_ergo", "0009_knowledgebase_organization_strategy")]
     branch = [("django_ergo", "0011_knowledgesource_index_config_hash_and_more")]
-    current = [("django_ergo", "0013_reconcile_article_compatibility")]
+    current = [("django_ergo", "0014_path_primary_articles")]
     MigrationExecutor(connection).migrate(initial)
     executor = MigrationExecutor(connection)
     executor.migrate(branch)

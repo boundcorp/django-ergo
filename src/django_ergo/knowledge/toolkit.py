@@ -6,12 +6,27 @@ from uuid import uuid4
 
 from django_ergo.tool_config import ToolConfig
 
-from .hierarchy import tree_block
+from .paths import tree_block
 from .schema import Document
 from .schema import Reference
 from .schema import require
 
 TOOLS = {
+    "corpus_paths": ("List active pages under a logical path", ("prefix",)),
+    "corpus_get_path": ("Read an active page by logical path", ("path",)),
+    "corpus_navigation": ("Browse logical directories and pages", ("prefix",)),
+    "corpus_suggest_move": (
+        "Propose a path move retaining identity and history",
+        ("document_id", "path"),
+    ),
+    "corpus_suggest_move_tree": (
+        "Propose a logical subtree move",
+        ("prefix", "destination"),
+    ),
+    "corpus_suggest_path_page": (
+        "Propose a page at an explicit logical path",
+        ("document_id", "title", "content", "summary", "path"),
+    ),
     "corpus_semantic_search": (
         "Cited semantic search with configured provider/index",
         ("query", "weights_json"),
@@ -20,16 +35,16 @@ TOOLS = {
         "Cited lexical and semantic search",
         ("query", "weights_json"),
     ),
-    "corpus_hierarchy": ("List active pages under a hierarchy prefix", ("prefix",)),
+    "corpus_hierarchy": ("Legacy compatibility: list pages by code", ("prefix",)),
     "corpus_get_strategy": ("Read the reviewed organization strategy", ()),
     "corpus_tree_status": ("Report active article counts for planned trees", ()),
     "corpus_suggest_strategy": ("Propose a reviewed strategy revision", ("strategy",)),
     "corpus_suggest_tree": (
-        "Propose a tree in the strategy",
+        "Propose a logical path tree in the strategy",
         ("prefix", "title", "description"),
     ),
     "corpus_suggest_placed_page": (
-        "Propose a page with hierarchy and summary",
+        "Legacy compatibility: propose an unmapped page with a code",
         ("document_id", "title", "content", "summary", "hierarchy_code"),
     ),
     "corpus_search": ("Search active reviewed pages", ("query",)),
@@ -40,7 +55,7 @@ TOOLS = {
     ),
     "corpus_toc": ("List active reviewed pages", ()),
     "corpus_suggest_create": (
-        "Propose a new page using admitted evidence",
+        "Legacy unmapped-page intake; prefer corpus_suggest_path_page",
         ("document_id", "title", "content"),
     ),
     "corpus_suggest_update": (
@@ -146,9 +161,10 @@ class CorpusToolkit:
         )
 
     def _suggest_metadata(self, tool_name, arguments):
-        if tool_name == "corpus_suggest_placed_page":
+        if tool_name in {"corpus_suggest_placed_page", "corpus_suggest_path_page"}:
             require(
-                bool(arguments["hierarchy_code"]), "Placement requires a hierarchy code"
+                bool(arguments.get("path") or arguments.get("hierarchy_code")),
+                "Placement requires a path or explicit legacy code",
             )
             document = Document(
                 arguments["document_id"],
@@ -161,7 +177,8 @@ class CorpusToolkit:
                 self.provenance,
                 self.sources,
                 summary=arguments["summary"],
-                hierarchy_code=arguments["hierarchy_code"],
+                hierarchy_code=arguments.get("hierarchy_code", ""),
+                path=arguments.get("path", ""),
             )
             proposal = self.service.propose(
                 (self._proposal.changes if self._proposal else ()) + (document,),
@@ -202,6 +219,9 @@ class CorpusToolkit:
         require(tool_name in TOOLS, "Unknown corpus tool")
         require(set(arguments) == set(TOOLS[tool_name][1]), "Invalid tool arguments")
         readers = {
+            "corpus_paths": lambda: self.service.by_path_prefix(arguments["prefix"]),
+            "corpus_get_path": lambda: self.service.get_by_path(arguments["path"]),
+            "corpus_navigation": lambda: self.service.navigation(arguments["prefix"]),
             "corpus_search": lambda: self.service.search(arguments["query"]),
             "corpus_get": lambda: self.service.get_document(arguments["document_id"]),
             "corpus_resolve": lambda: self.service.resolve(Reference(**arguments)),
@@ -220,10 +240,24 @@ class CorpusToolkit:
         }
         if tool_name in readers:
             return json.dumps(readers[tool_name]())
+        if tool_name == "corpus_suggest_move":
+            return self._stage(
+                self.service.move(
+                    arguments["document_id"], arguments["path"], reason=self.reason
+                ).changes[0]
+            )
+        if tool_name == "corpus_suggest_move_tree":
+            proposal = self.service.move_tree(
+                arguments["prefix"], arguments["destination"], reason=self.reason
+            )
+            for document in proposal.changes:
+                self._stage(document)
+            return json.dumps(self.get_proposal().to_dict())
         if tool_name in {
             "corpus_suggest_strategy",
             "corpus_suggest_tree",
             "corpus_suggest_placed_page",
+            "corpus_suggest_path_page",
         }:
             return self._suggest_metadata(tool_name, arguments)
         if tool_name == "corpus_suggest_archive":

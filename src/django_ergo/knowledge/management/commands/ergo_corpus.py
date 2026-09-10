@@ -40,6 +40,13 @@ class Command(BaseCommand):
                 "usage",
                 "propose_strategy",
                 "hierarchy",
+                "paths",
+                "get_path",
+                "navigation",
+                "move",
+                "move_tree",
+                "create_page",
+                "propose_tree",
             ],
         )
         parser.add_argument("--query")
@@ -51,6 +58,7 @@ class Command(BaseCommand):
         )
         parser.add_argument("--weights")
         parser.add_argument("--prefix", default="")
+        parser.add_argument("--path")
         parser.add_argument("--context")
         parser.add_argument("--rebuild-index", action="store_true")
 
@@ -64,11 +72,27 @@ class Command(BaseCommand):
         try:
             service = factory()
             action = options["action"]
-            if action in {"intake", "review", "apply", "propose_strategy"}:
+            if action in {
+                "intake",
+                "review",
+                "apply",
+                "propose_strategy",
+                "create_page",
+                "propose_tree",
+                "move",
+                "move_tree",
+            }:
                 result = self._write(service, action, self._input())
             elif action == "search":
                 result = self._search(service, options)
-            elif action in {"hierarchy", "usage"}:
+            elif action in {
+                "hierarchy",
+                "usage",
+                "get_path",
+                "paths",
+                "navigation",
+                "table_of_contents",
+            }:
                 result = self._lookup(service, action, options)
             elif action == "get":
                 result = service.get_document(
@@ -95,9 +119,16 @@ class Command(BaseCommand):
 
     @staticmethod
     def _lookup(service, action, options):
-        if action == "hierarchy":
-            return service.by_hierarchy_prefix(options["prefix"])
-        return service.usage(context_id=options["context"])
+        return {
+            "hierarchy": lambda: service.by_hierarchy_prefix(options["prefix"]),
+            "usage": lambda: service.usage(context_id=options["context"]),
+            "get_path": lambda: service.get_by_path(options["path"]),
+            "paths": lambda: service.by_path_prefix(options["prefix"]),
+            "navigation": lambda: service.navigation(options["prefix"]),
+            "table_of_contents": lambda: service.table_of_contents(
+                prefix=options["prefix"]
+            ),
+        }[action]()
 
     @staticmethod
     def _search(service, options):
@@ -111,9 +142,15 @@ class Command(BaseCommand):
 
     @staticmethod
     def _write(service, action, payload):
-        if action in {"intake", "propose_strategy"}:
+        if action in {"move", "move_tree"}:
+            return getattr(service, action)(**payload).to_dict()
+        if action in {"intake", "propose_strategy", "create_page", "propose_tree"}:
             require(isinstance(payload, dict), "Intake must be an object")
             payload["provenance"] = Provenance(**payload["provenance"])
+            if action == "create_page":
+                payload["sources"] = tuple(
+                    Reference(**record) for record in payload["sources"]
+                )
             return getattr(service, action)(**payload).to_dict()
         if action == "review":
             return service.review(

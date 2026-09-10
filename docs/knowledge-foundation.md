@@ -8,9 +8,9 @@ through CorpusService:
 
 | Operation | Common API |
 | --- | --- |
-| Read layout and individual placements | table_of_contents(prefix=...), by_hierarchy_prefix(prefix), get_by_hierarchy(code) |
-| Create with explicit or allocated placement | create_page(..., hierarchy_code=... OR parent_code=... OR section=...) |
-| Correct summary or move placement | revise(document_id, summary=..., hierarchy_code=..., reason=...) |
+| Read layout and individual placements | navigation(prefix), table_of_contents(prefix=...), by_path_prefix(prefix), get_by_path(path) |
+| Create with explicit placement | create_page(..., path=... OR parent_path=..., name=...) |
+| Correct summary or move placement | revise(document_id, summary=..., reason=...), move(document_id, path, reason=...), move_tree(prefix, destination, reason=...) |
 | Read/revise strategy and propose trees | get_strategy(), propose_strategy(...), propose_tree(...), get_tree_status() |
 | Semantic field queries | semantic_search_content(query), semantic_search_summary(query) |
 | Weighted semantic queries | multi_field_semantic_search(query, weights=...) |
@@ -21,14 +21,16 @@ through CorpusService:
 
 Creation/strategy/move helpers return proposals, not implicit publications.
 The existing review/apply gate and stale-base conflict checks cover all these
-changes. Hierarchy codes are unique across heads (including archived heads),
-bounded printable logical strings, not paths. Prefix navigation is flat
-prefix semantics, not an inferred graph. Auto-allocation tries hex suffixes,
-matching existing tooling conventions. Strategy is one versioned, reviewed
-Markdown document of kind `strategy`; it is not mixed into page search.
-Tree-status counts only active pages. Named trees use `Tree #prefix:` syntax;
-legacy two-digit hex references are also recognized. Review receipts include
-summary/layout changes, and historical citations preserve previous placement.
+changes. Logical paths are unique across heads, including archived reservations.
+Prefix navigation respects slash-segment boundaries. Paths never require files
+or Git. Empty paths are explicitly unmapped compatibility records; codes never
+become filenames automatically. Codes remain optional, potentially ambiguous
+legacy metadata. Explicit old code allocation/read APIs remain compatibility-only.
+Strategy is one reviewed Markdown document; named trees use path headings.
+Tree counts include only active mapped pages. `move_tree` revises those headings
+in its review batch; arbitrary prose/links are not rewritten. Old code plans stay
+readable as content; use `get_tree_status(legacy=True)` or `propose_legacy_tree`
+explicitly. See [path contract and adoption](knowledge-paths.md).
 
 ### Optional retrieval configuration
 
@@ -131,14 +133,16 @@ without changing their ORM/QuerySet return types or rewriting migrations.
 `export` (all legacy rows, including archived content) or `publish`.
 A logical corpus scope grant is not permission to copy another Article KB.
 
-- propose_import(provenance=..., reason=...) creates retained evidence and
+- propose_import(provenance=..., reason=..., path_mapping=...) creates retained evidence and
   proposed pages with original Article IDs, summary, status and hierarchy, plus
-  the KB strategy. It does not invent review approvals. The host reviews/applies
+  the KB strategy. Existing paths are retained; an optional ID-to-path mapping
+  is explicit host input, not guessed from codes. It does not invent approvals. The host reviews/applies
   that artifact through the common service.
 - publish() transactionally upserts accepted heads back into the bound Article
   KB, retaining original UUIDs; new logical IDs map deterministically to UUIDs.
   Existing Article field/provider behavior still runs. Missing rows are kept,
-  never deleted, and foreign IDs or conflicting hierarchy identities fail.
+  never deleted, and foreign IDs or conflicting path identities fail. Repeated
+  legacy codes do not constrain paths; code-free path pages also publish.
 - Publication checks the source fingerprint captured by import under row locks.
   Concurrent legacy edits cause an explicit conflict, not silent overwrite.
   A newly constructed bridge must receive expected_source_revision from an
@@ -149,12 +153,13 @@ A logical corpus scope grant is not permission to copy another Article KB.
 ### Commands and file publication
 
 The existing alias-based command also accepts get_strategy, get_tree_status,
-hierarchy --prefix, usage --context, propose_strategy (JSON stdin), and
+paths --prefix, get_path --path, navigation --prefix, legacy hierarchy --prefix,
+usage --context, create_page/move/move_tree/propose_tree/propose_strategy (JSON stdin), and
 rebuild_index. Search accepts --mode, --weights JSON, and explicit
 --rebuild-index to build/query in the same command process. A fresh
 MemoryVectorIndex in each alias factory does not survive separate CLI calls.
 
-GitCorpus reads committed authored v1/v2 records. To author, use a governed
+GitCorpus reads committed authored v1/v2/v3 records. To author, use a governed
 MemoryCorpus/DatabaseCorpus workspace seeded from that Git snapshot. Apply
 changes there, export the canonical corpus object, then let the host publisher
 write and commit the authored representation and select a trusted ref. Direct
@@ -189,8 +194,9 @@ Those capabilities remain available. This foundation adds a separate logical
 snapshot API rather than silently converting existing Articles or replacing
 their authoring/search behavior. `Article.status` defaults existing/new rows
 to `active`; other states are excluded from normal search and read tools.
-Existing hierarchy uniqueness, Article UUIDs, embeddings, and write/suggest
-APIs remain unchanged. Direct ORM/admin access remains privileged management
+Article UUIDs, embeddings, and legacy write/suggest APIs remain available.
+Hierarchy uniqueness is removed by additive migration 0014; old code lookups
+require unambiguous codes. Direct ORM/admin access remains privileged management
 access and can intentionally inspect archived records. Archiving does not
 erase prior transcripts or already delivered context.
 
@@ -315,9 +321,11 @@ the writer's trust boundary, with payload integrity checked on load.
 
 The shared JSON-compatible object format is `ergo-corpus/v1` for the original
 records, or `ergo-corpus/v2` when summaries, hierarchy codes or strategy records
-are present. Empty new fields are omitted so existing v1 document/corpus hashes
-and review receipts do not change. V1 readers are not expected to read v2; the
-new reader accepts both and rejects v2 fields smuggled under a v1 declaration.
+are present, or `ergo-corpus/v3` for logical paths (also duplicate legacy codes).
+Empty new fields are omitted so existing v1/v2 hashes and proposal receipts do
+not change. Assigning/moving a path creates a newly reviewed revision. Older
+readers are not expected to read v3; the new reader accepts all three and rejects
+path fields smuggled under an earlier declaration.
 
 ```python
 payload = snapshot.to_dict()
@@ -594,8 +602,8 @@ reviewed proposal. Then call `service.review(pending, reviews)` and
 
 `CorpusToolkit` implements the existing structural Toolkit interface:
 `has_tool`, `execute_tool`, `get_tools_schema`, `render_overview`, and
-`get_bound_knowledgebases`. Its fifteen tools include cited search/get/resolve,
-TOC, semantic/hybrid search, hierarchy, strategy/gap reads, and proposed page,
+`get_bound_knowledgebases`. Its twenty-one tools include cited search/get/resolve,
+TOC, semantic/hybrid search, path/navigation, legacy hierarchy, strategy/gap reads, and proposed page,
 placement, strategy/tree, update and archive changes. There is deliberately
 no agent-facing approve/apply tool. A host can invoke the authorized service
 write API explicitly. `get_suggestions` returns the JSON proposal artifact;

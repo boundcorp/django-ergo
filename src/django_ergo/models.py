@@ -13,6 +13,7 @@ from pgvector.django import VectorField
 from django_ergo.fields import SemanticTextField
 from django_ergo.fields import generate_embedding
 from django_ergo.fields import vector_search
+from django_ergo.knowledge.paths import validate_path
 from django_ergo.mixins import TimeStampedMixin
 
 User = get_user_model()
@@ -118,6 +119,15 @@ class Knowledgebase(TimeStampedMixin):
         return f"# KB ID: {self.id}\nName: {self.name}\nDescription: {self.description}"
 
     def get_table_of_contents(self):
+        """List active mapped paths and explicitly unmapped legacy identities."""
+        return "\n".join(
+            f"# {article.display_path} {article.title}"
+            for article in self.articles.visible_to_retrieval().order_by(
+                "relative_path", "id"
+            )
+        )
+
+    def get_legacy_table_of_contents(self):
         """Get table of contents for top-level articles."""
         return "\n".join(
             [
@@ -275,7 +285,15 @@ class ArticleQuerySet(models.QuerySet):
         return self.filter(hierarchy_code__startswith=prefix)
 
     def by_relative_path_prefix(self, prefix: str):
-        return self.filter(relative_path__startswith=prefix)
+        validate_path(prefix, allow_empty=True)
+        return (
+            self.exclude(relative_path="")
+            if not prefix
+            else self.filter(
+                models.Q(relative_path=prefix)
+                | models.Q(relative_path__startswith=prefix + "/")
+            )
+        )
 
     def to_prefetch_results(self, top_k: int = 5):
         """Convert queryset to prefetch-friendly format."""
@@ -318,14 +336,14 @@ class Article(TimeStampedMixin):
         null=True,
         blank=True,
         db_index=True,
-        help_text="The hierarchy code of the article, e.g. '012' (0th chapter, 1st section, 2nd sub-section) or 'C3' (12th chapter, 3rd sub-section)",
+        help_text="Legacy compatibility code; not a path or unique identity.",
     )
     title = models.CharField(max_length=512)
     relative_path = models.CharField(
         max_length=1024,
         default="",
         db_index=True,
-        help_text="Optional source locator within its knowledgebase.",
+        help_text="Primary logical path within its knowledgebase; empty means explicitly unmapped.",
     )
 
     # Semantic text fields with automatic embedding generation
@@ -354,8 +372,7 @@ class Article(TimeStampedMixin):
     objects = ArticleQuerySet.as_manager()
 
     class Meta:
-        ordering = ["hierarchy_code"]
-        unique_together = [["knowledgebase", "hierarchy_code"]]
+        ordering = ["relative_path", "id"]
         constraints = [
             models.UniqueConstraint(
                 fields=["knowledgebase", "relative_path"],
@@ -373,7 +390,7 @@ class Article(TimeStampedMixin):
 
     @property
     def display_path(self):
-        return self.relative_path or self.hierarchy_code or str(self.pk)
+        return self.relative_path or f"[unmapped:{self.pk}]"
 
     @property
     def is_managed(self):
@@ -383,6 +400,7 @@ class Article(TimeStampedMixin):
         )
 
     def save(self, *args, _allow_managed_write=False, **kwargs):
+        validate_path(self.relative_path, allow_empty=True)
         if self.is_managed and not _allow_managed_write:
             raise PermissionError(
                 "Source-managed Articles are read-only; publish through their source."

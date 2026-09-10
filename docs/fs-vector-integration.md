@@ -34,14 +34,16 @@ frontmatter, commit ancestry and old 'reviewed' labels do not confer host grants
 
 ## Three representations, one authored common contract
 
-1. `ergo-corpus/v1` and `/v2` are logical common records. `ergo-source.yaml` is
+1. `ergo-corpus/v1`, `/v2` and `/v3` are logical common records. `ergo-source.yaml` is
    just the Git adapter's serialization of those same records; virtual corpora
    use the same JSON/schema without that file. JSON exports retain the identical
-   semantic revisions. Summary/layout/strategy use v2; existing v1 hashes remain.
+   semantic revisions. Summary/legacy codes/strategy use v2; paths use v3.
+   Existing v1/v2 hashes remain until an explicit semantic revision.
 2. Legacy `wiki/*.md` frontmatter is an **input adapter format**, not an alternate
    common canonical schema. `project_commit` preserves its old committed-source
    projection interface and stable UUID/path/checkpoint history. Paths are optional
-   Article source locators, not a replacement for logical hierarchy codes.
+   primary logical Article paths. Hierarchy codes are legacy compatibility only;
+   missing paths remain explicitly unmapped, never inferred from codes.
 3. Legacy `kb.yaml` describes a **portable repository evidence bundle**, not an
    authored common manifest. Builder output is review material, not automatically
    approved KB state. Snapshot validation is internal consistency, not authenticity.
@@ -72,7 +74,7 @@ review explicit sources through the normal common proposal API.
 `ArticleCompatibility` similarly imports old Article content through review.
 Missing/archived source projections cannot become active through import. Publishing
 back to managed Articles is forbidden: publish their source instead. Unmanaged
-Article publication requires logical hierarchy codes and retains automatic
+Article publication accepts code-free paths and retains automatic
 embeddings and original caller types. There is no hidden bidirectional writer.
 
 ## Repository workflows retained
@@ -136,6 +138,12 @@ decide which codes to retain/reassign, or explicitly choose NULL for source-only
 rows, then retry. The migration does not guess, delete, or rename data. Duplicate
 codes are a genuine adoption decision, not silently repaired. Downgrading a source
 database with nullable codes to pre-fs schema is not promised.
+
+The later additive `0014_path_primary_articles` removes code uniqueness again
+and makes path ordering primary. It retains the path uniqueness constraint and
+all existing data. Hosts already at 0013 can retain duplicate codes after 0014;
+hosts starting earlier still traverse the unmodified 0013 precondition. See
+`knowledge-paths.md` for explicit mapping and compatibility details.
 
 ## Operational distinctions
 

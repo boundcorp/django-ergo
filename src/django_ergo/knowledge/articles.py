@@ -76,7 +76,7 @@ class ArticleCompatibility:
             self.knowledgebase.organization_strategy,
         )
 
-    def propose_import(self, *, provenance, reason):
+    def propose_import(self, *, provenance, reason, path_mapping=None):
         self._authorize("export")
         base = import_snapshot(self.service.export())
         self.knowledgebase.refresh_from_db(fields=["organization_strategy"])
@@ -85,6 +85,12 @@ class ArticleCompatibility:
             articles, self.knowledgebase.organization_strategy
         )
         changes = []
+        path_mapping = {} if path_mapping is None else path_mapping
+        require(
+            isinstance(path_mapping, dict)
+            and set(path_mapping) <= {str(article.pk) for article in articles},
+            "Path mapping must use source Article IDs",
+        )
         for article in articles:
             evidence = Document(
                 f"article-capture:{article.pk}:{uuid4()}",
@@ -108,6 +114,7 @@ class ArticleCompatibility:
                 (evidence.reference,),
                 summary=article.summary or "",
                 hierarchy_code=article.hierarchy_code or "",
+                path=path_mapping.get(str(article.pk), article.relative_path),
             )
             changes.extend((evidence, page))
         previous = next(
@@ -167,6 +174,56 @@ class ArticleCompatibility:
                 == expected_source_revision,
                 "Articles changed; reimport and review before publishing",
             )
+            targets = {}
+            for head in snapshot.heads:
+                document = records[(head.document_id, head.revision)]
+                if document.kind == "page":
+                    try:
+                        identifier = UUID(document.document_id)
+                    except ValueError:
+                        identifier = uuid5(
+                            self.knowledgebase.pk,
+                            f"{snapshot.collection_id}:{snapshot.scope}:{document.document_id}",
+                        )
+                    require(
+                        identifier not in targets, "Article identity mapping collision"
+                    )
+                    targets[identifier] = document
+            reserved_paths = {
+                article.relative_path
+                for article in articles
+                if article.pk not in targets and article.relative_path
+            }
+            require(
+                not any(
+                    document.path in reserved_paths
+                    for document in targets.values()
+                    if document.path
+                ),
+                "Article path conflicts with an existing identity",
+            )
+            require(
+                not article_model.objects.using(using)
+                .filter(pk__in=targets)
+                .exclude(knowledgebase=self.knowledgebase)
+                .exists(),
+                "Article identity belongs to another knowledgebase",
+            )
+            require(
+                not any(
+                    article.is_managed for article in articles if article.pk in targets
+                ),
+                "Source-managed Articles must be published through their source",
+            )
+            changed_paths = [
+                article.pk
+                for article in articles
+                if article.pk in targets
+                and article.relative_path != targets[article.pk].path
+            ]
+            article_model.objects.using(using).filter(pk__in=changed_paths).update(
+                relative_path=""
+            )
             for head in snapshot.heads:
                 document = records[(head.document_id, head.revision)]
                 if document.kind == "strategy":
@@ -178,10 +235,6 @@ class ArticleCompatibility:
                     )
                 if document.kind != "page":
                     continue
-                require(
-                    bool(document.hierarchy_code),
-                    "Article publication requires a hierarchy code",
-                )
                 try:
                     identifier = UUID(document.document_id)
                 except ValueError:
@@ -196,14 +249,6 @@ class ArticleCompatibility:
                     .exists(),
                     "Article identity belongs to another knowledgebase",
                 )
-                require(
-                    not self.knowledgebase.articles.filter(
-                        hierarchy_code=document.hierarchy_code
-                    )
-                    .exclude(pk=identifier)
-                    .exists(),
-                    "Article hierarchy conflicts with an existing identity",
-                )
                 article_model.objects.using(using).update_or_create(
                     pk=identifier,
                     defaults={
@@ -211,7 +256,8 @@ class ArticleCompatibility:
                         "title": document.title,
                         "content": document.content,
                         "summary": document.summary,
-                        "hierarchy_code": document.hierarchy_code,
+                        "hierarchy_code": document.hierarchy_code or None,
+                        "relative_path": document.path,
                         "status": document.status,
                     },
                 )

@@ -32,7 +32,7 @@ def test_existing_conversation_runner_accepts_corpus_toolkit(
         reason="Remember approved transcript",
     )
     for adapter in (ClaudeToolAdapter(), OpenAIToolAdapter()):
-        assert len(toolkit.get_tools_schema(adapter)) == 15
+        assert len(toolkit.get_tools_schema(adapter)) == 21
 
     async def curator(**kwargs):
         assert kwargs["extra_tools"] == [toolkit]

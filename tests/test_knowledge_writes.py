@@ -317,7 +317,7 @@ def test_toolkit_schema_and_update_withdraw(writer, corpus, host):
             return asdict(config)
 
     toolkit = CorpusToolkit(writer)
-    assert len(toolkit.get_tools_schema(Adapter())) == 15
+    assert len(toolkit.get_tools_schema(Adapter())) == 21
     assert not toolkit.has_tool("corpus_apply")
     assert toolkit.get_bound_knowledgebases() == []
     assert (

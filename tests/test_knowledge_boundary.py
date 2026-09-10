@@ -66,11 +66,11 @@ for backend in (MemoryCorpus(Snapshot('virtual', 'project', (), ())),
     toolkit = prepare_absorption(service, content='Virtual intake', title='Upload',
         provenance=Provenance('host:upload', '1', 'host-command', '2026-09-09T12:00:00Z'),
         reason='Remember explicitly')
-    toolkit.execute_tool('corpus_suggest_placed_page',
+    toolkit.execute_tool('corpus_suggest_path_page',
         {'document_id': 'memory', 'title': 'Memory', 'content': 'Virtual intake',
-         'hierarchy_code': 'A0', 'summary': 'Virtual summary'})
+         'path': 'memory/guide.md', 'summary': 'Virtual summary'})
     toolkit.execute_tool('corpus_suggest_tree',
-        {'prefix': 'A', 'title': 'Memory', 'description': 'Instructions'})
+        {'prefix': 'memory', 'title': 'Memory', 'description': 'Instructions'})
     proposal = toolkit.get_proposal()
     reviews = [Review('reviewer', 'approved', 'Checked', 'v1', document.content_digest)
                for document in proposal.changes]
@@ -88,8 +88,8 @@ for backend in (MemoryCorpus(Snapshot('virtual', 'project', (), ())),
     assert service.semantic_search_summary('virtual')
     assert service.multi_field_semantic_search('virtual', weights={'summary': 1})
     assert service.hybrid_search('virtual')
-    assert service.get_by_hierarchy('A0')['summary'] == 'Virtual summary'
-    assert service.get_tree_status() == [{'prefix': 'A', 'article_count': 1}]
+    assert service.get_by_path('memory/guide.md')['summary'] == 'Virtual summary'
+    assert service.get_tree_status() == [{'path': 'memory', 'article_count': 1}]
     assert service.usage()
 """
     environment = {

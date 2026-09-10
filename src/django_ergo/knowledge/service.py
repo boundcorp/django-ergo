@@ -17,8 +17,14 @@ from uuid import uuid4
 from .changes import Proposal
 from .changes import operation_event
 from .hierarchy import allocate_code
-from .hierarchy import tree_block
-from .hierarchy import tree_status
+from .hierarchy import tree_block as legacy_tree_block
+from .hierarchy import tree_status as legacy_tree_status
+from .paths import move_tree_references
+from .paths import placement
+from .paths import tree_block
+from .paths import tree_status
+from .paths import validate_path
+from .paths import within
 from .retrieval import capability
 from .retrieval import normalized_weights
 from .schema import MAX_ID_LENGTH
@@ -176,6 +182,7 @@ class CorpusService:
             "provenance": asdict(document.provenance),
             "summary": document.summary,
             "hierarchy_code": document.hierarchy_code,
+            "path": document.path,
         }
 
     def validate(self):
@@ -270,12 +277,13 @@ class CorpusService:
 
     def table_of_contents(self, *, prefix=""):
         snapshot = self._load("read")
-        require(isinstance(prefix, str), "Hierarchy prefix must be text")
+        validate_path(prefix, allow_empty=True)
         records = self._records(snapshot)
         results = [
             {
                 "document_id": head.document_id,
                 "title": records[(head.document_id, head.revision)].title,
+                "path": records[(head.document_id, head.revision)].path,
                 "hierarchy_code": records[
                     (head.document_id, head.revision)
                 ].hierarchy_code,
@@ -283,13 +291,19 @@ class CorpusService:
             for head in sorted(snapshot.heads, key=lambda item: item.document_id)
             if records[(head.document_id, head.revision)].kind == "page"
             and records[(head.document_id, head.revision)].status == "active"
-            and records[(head.document_id, head.revision)].hierarchy_code.startswith(
-                prefix
+            and (
+                not prefix
+                or within(records[(head.document_id, head.revision)].path, prefix)
             )
         ]
         self._track(snapshot, "read")
         return sorted(
-            results, key=lambda item: (item["hierarchy_code"], item["document_id"])
+            results,
+            key=lambda item: (
+                not bool(item["path"]),
+                item["path"],
+                item["document_id"],
+            ),
         )
 
     def propose(self, documents, *, reason):
@@ -338,6 +352,7 @@ class CorpusService:
                 "provenance",
                 "summary",
                 "hierarchy_code",
+                "path",
             },
             "Unsupported revision fields",
         )
@@ -668,16 +683,93 @@ class CorpusService:
             "A nonempty hierarchy code is required",
         )
         results = self.by_hierarchy_prefix(hierarchy_code)
-        result = next(
-            (
-                result
-                for result in results
-                if result["hierarchy_code"] == hierarchy_code
-            ),
-            None,
+        matches = [
+            result for result in results if result["hierarchy_code"] == hierarchy_code
+        ]
+        require(
+            len(matches) == 1,
+            "Legacy hierarchy is unavailable or ambiguous; use document ID or path",
         )
+        return matches[0]
+
+    def by_path_prefix(self, prefix=""):
+        validate_path(prefix, allow_empty=True)
+        snapshot = self._load("read")
+        results = [
+            self._result(snapshot, document)
+            for document in self._active_pages(snapshot)
+            if within(document.path, prefix)
+        ]
+        self._track(snapshot, "read", results)
+        return sorted(results, key=lambda item: item["path"])
+
+    def get_by_path(self, path):
+        validate_path(path)
+        results = self.by_path_prefix(path)
+        result = next((item for item in results if item["path"] == path), None)
         require(result is not None, "Document is unavailable")
         return result
+
+    def navigation(self, prefix=""):
+        validate_path(prefix, allow_empty=True)
+        pages = self.table_of_contents(prefix=prefix)
+        directories = set()
+        for page in pages:
+            parts = page["path"].split("/")
+            directories.update(
+                "/".join(parts[:index]) for index in range(1, len(parts))
+            )
+        return {
+            "prefix": prefix,
+            "directories": sorted(path for path in directories if within(path, prefix)),
+            "pages": pages,
+        }
+
+    def move(self, document_id, path, *, reason):
+        validate_path(path)
+        return self.revise(document_id, path=path, reason=reason)
+
+    def move_tree(self, prefix, destination, *, reason):
+        validate_path(prefix)
+        validate_path(destination)
+        require(
+            prefix != destination and not within(destination, prefix),
+            "Cannot move a tree into itself",
+        )
+        self._authorize("history")
+        self._authorize("evidence")
+        snapshot = self._load("propose")
+        records = self._records(snapshot)
+        changes = tuple(
+            replace(
+                document,
+                path=destination + document.path[len(prefix) :],
+                revision=str(uuid4()),
+                review=None,
+            )
+            for head in snapshot.heads
+            for document in [records[(head.document_id, head.revision)]]
+            if document.kind == "page" and within(document.path, prefix)
+        )
+        require(bool(changes), "Tree is unavailable")
+        for head in snapshot.heads:
+            document = records[(head.document_id, head.revision)]
+            if document.kind == "strategy":
+                content = move_tree_references(document.content, prefix, destination)
+                if content != document.content:
+                    changes += (
+                        replace(
+                            document,
+                            content=content,
+                            revision=str(uuid4()),
+                            review=None,
+                        ),
+                    )
+        proposal = self.propose(changes, reason=reason)
+        require(
+            proposal.base.revision == snapshot.revision, "Corpus changed; rebase move"
+        )
+        return proposal
 
     def create_page(
         self,
@@ -692,6 +784,9 @@ class CorpusService:
         section=None,
         summary="",
         document_id=None,
+        path=None,
+        parent_path=None,
+        name=None,
     ):
         self._authorize("history")
         self._authorize("evidence")
@@ -701,11 +796,24 @@ class CorpusService:
             records[(head.document_id, head.revision)].hierarchy_code
             for head in snapshot.heads
         }
-        code = allocate_code(
-            codes,
-            hierarchy_code=hierarchy_code,
-            parent_code=parent_code,
-            section=section,
+        logical_path = (
+            placement(path=path, parent_path=parent_path, name=name)
+            if any(value is not None for value in (path, parent_path, name))
+            else ""
+        )
+        require(
+            not logical_path or (parent_code is None and section is None),
+            "Legacy allocation cannot determine a logical path",
+        )
+        code = (
+            (hierarchy_code or "")
+            if logical_path
+            else allocate_code(
+                codes,
+                hierarchy_code=hierarchy_code,
+                parent_code=parent_code,
+                section=section,
+            )
         )
         document = Document(
             document_id or str(uuid4()),
@@ -719,6 +827,7 @@ class CorpusService:
             tuple(sources),
             summary=summary,
             hierarchy_code=code,
+            path=logical_path,
         )
         require(
             not any(
@@ -798,7 +907,7 @@ class CorpusService:
         )
         return proposal
 
-    def get_tree_status(self):
+    def get_tree_status(self, *, legacy=False):
         snapshot = self._load("read")
         records = self._records(snapshot)
         strategy = next(
@@ -811,10 +920,29 @@ class CorpusService:
             "",
         )
         self._track(snapshot, "strategy")
-        return tree_status(
+        return (legacy_tree_status if legacy else tree_status)(
             strategy,
-            [document.hierarchy_code for document in self._active_pages(snapshot)],
+            [
+                document.hierarchy_code if legacy else document.path
+                for document in self._active_pages(snapshot)
+            ],
         )
+
+    def propose_legacy_tree(
+        self, prefix, title, description, *, provenance, reason, entries=()
+    ):
+        strategy = self.get_strategy()
+        proposal = self.propose_strategy(
+            strategy["content"]
+            + legacy_tree_block(prefix, title, description, entries),
+            provenance=provenance,
+            reason=reason,
+        )
+        require(
+            proposal.base.revision == strategy["corpus_revision"],
+            "Corpus changed; rebase strategy",
+        )
+        return proposal
 
     def operations(self):
         self._load("history")
