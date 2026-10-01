@@ -131,7 +131,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends redis-server \
 COPY --from=dxflrs/garage:v1.1.0 /garage /usr/local/bin/garage
 
 # Postgres refuses to run as root.
-RUN useradd --create-home --uid 1000 ergonaut \
+RUN useradd --create-home --uid 10001 ergonaut \
     && mkdir -p /data /bot \
     && chown ergonaut:ergonaut /data /bot
 USER ergonaut
