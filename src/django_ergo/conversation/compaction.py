@@ -100,6 +100,26 @@ def render_summary_message(compaction: ConversationCompaction) -> str:
     )
 
 
+def apply_native_window(session, messages: list[dict]) -> list[dict]:
+    """Trim engine context to the current turn when the session asks for it.
+
+    With ``compaction_config["native_history"] == "turn"`` the engine only
+    replays messages from the latest user turn onward (plus system
+    messages). Earlier history reaches the model through a context builder
+    and history tools instead; see ``conversation.stream.StreamChat``.
+    """
+    from django_ergo.conversation.models import ConversationSession
+
+    if not isinstance(session, ConversationSession):
+        return messages
+    if (session.compaction_config or {}).get("native_history") != "turn":
+        return messages
+    system = [m for m in messages if m.get("role") == "system"]
+    rest = [m for m in messages if m.get("role") != "system"]
+    starts = [i for i, m in enumerate(rest) if _is_turn_start(m)]
+    return system + (rest[starts[-1] :] if starts else rest)
+
+
 def _message_rows(session: ConversationSession):
     if session.engine_type == "openai":
         return session.openai_messages

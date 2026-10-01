@@ -12,6 +12,7 @@ from django_ergo.conversation.attachments import Attachment
 from django_ergo.conversation.attachments import attachments_by_sequence
 from django_ergo.conversation.attachments import openai_part
 from django_ergo.conversation.attachments import save_attachments
+from django_ergo.conversation.compaction import apply_native_window
 from django_ergo.conversation.compaction import latest_compaction
 from django_ergo.conversation.compaction import render_summary_message
 from django_ergo.conversation.engine import Engine
@@ -119,7 +120,7 @@ class OpenAIAPIEngine(Engine):
                 position,
                 {"role": "user", "content": render_summary_message(compaction)},
             )
-        return messages
+        return apply_native_window(session, messages)
 
     def get_tools_schema(self, workflow) -> list[dict]:
         """Return all registered tools converted to OpenAI function-calling format."""
@@ -170,6 +171,9 @@ class OpenAIAPIEngine(Engine):
             messages = await sync_to_async(
                 self.reconstruct_messages, thread_sensitive=True
             )(session)
+            if extra := getattr(self, "ephemeral_context", ""):
+                position = sum(1 for m in messages if m["role"] == "system")
+                messages.insert(position, {"role": "system", "content": extra})
             tools = (
                 self.get_tools_schema(session.workflow) if session.workflow else None
             )

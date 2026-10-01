@@ -52,6 +52,9 @@ class Engine(ABC):
     """Abstract engine protocol. All engines implement this interface."""
 
     engine_type: str
+    # Extra system text for the current turn (e.g. a ContextBuilder's output).
+    # Sent with every model call while set, never stored.
+    ephemeral_context: str = ""
 
     @abstractmethod
     async def start_session(self, session) -> str:

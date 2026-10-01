@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from django_ergo.conversation.engine import Engine
     from django_ergo.conversation.engine import EngineResponse
     from django_ergo.conversation.models import ConversationSession
+    from django_ergo.conversation.context import ContextBuilder
     from django_ergo.conversation.toolkit import Toolkit
 
 MAX_TOOL_ROUNDS = 30
@@ -127,6 +128,7 @@ async def run_conversation_turn(
     extra_tools: list[Toolkit] | None = None,
     max_rounds: int = MAX_TOOL_ROUNDS,
     attachments: list | None = None,
+    context_builder: ContextBuilder | None = None,
 ) -> AsyncIterator[EngineResponse | PendingApproval]:
     """Send a message and handle multi-round tool calls until the LLM is done.
 
@@ -143,6 +145,36 @@ async def run_conversation_turn(
         await _record_kb_usage(session, toolkits)
     await maybe_compact(session, engine)
 
+    if context_builder is not None:
+        built = await sync_to_async(context_builder.build, thread_sensitive=True)()
+        engine.ephemeral_context = built.text
+    try:
+        async for event in _run_rounds(
+            engine,
+            session,
+            message,
+            toolkits,
+            adapter,
+            additional_tool_schemas,
+            max_rounds,
+            attachments,
+        ):
+            yield event
+    finally:
+        if context_builder is not None:
+            engine.ephemeral_context = ""
+
+
+async def _run_rounds(  # noqa: PLR0913
+    engine: Engine,
+    session: ConversationSession,
+    message: str,
+    toolkits: list[Toolkit],
+    adapter,
+    additional_tool_schemas: list[dict] | None,
+    max_rounds: int,
+    attachments: list | None,
+) -> AsyncIterator[EngineResponse | PendingApproval]:
     send_kwargs = {"additional_tools": additional_tool_schemas}
     if attachments:
         send_kwargs["attachments"] = attachments

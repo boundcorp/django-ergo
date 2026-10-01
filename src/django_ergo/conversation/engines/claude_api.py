@@ -10,6 +10,7 @@ from django_ergo.conversation.attachments import Attachment
 from django_ergo.conversation.attachments import attachments_by_sequence
 from django_ergo.conversation.attachments import claude_block
 from django_ergo.conversation.attachments import save_attachments
+from django_ergo.conversation.compaction import apply_native_window
 from django_ergo.conversation.compaction import latest_compaction
 from django_ergo.conversation.compaction import render_summary_message
 from django_ergo.conversation.engine import Engine
@@ -119,7 +120,7 @@ class ClaudeAPIEngine(Engine):
                     ],
                 },
             )
-        return messages
+        return apply_native_window(session, messages)
 
     def get_tools_schema(self, workflow) -> list[dict]:
         """Convert workflow tools to Claude API tool format."""
@@ -176,7 +177,14 @@ class ClaudeAPIEngine(Engine):
                 "max_tokens": self.max_tokens,
                 "messages": messages,
             }
-            system = session_system_prompt(session)
+            system = "\n\n".join(
+                part
+                for part in (
+                    session_system_prompt(session),
+                    getattr(self, "ephemeral_context", ""),
+                )
+                if part
+            )
             if system:
                 kwargs["system"] = system
             if tools:

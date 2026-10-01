@@ -28,6 +28,7 @@ class SessionManager:
         metadata: dict | None = None,
         compaction_mode: str = "none",
         compaction_config: dict | None = None,
+        system_prompt: str = "",
     ) -> ConversationSession:
         session = await ConversationSession.objects.acreate(
             user=user,
@@ -38,6 +39,7 @@ class SessionManager:
             metadata=metadata or {},
             compaction_mode=compaction_mode,
             compaction_config=compaction_config or {},
+            system_prompt=system_prompt,
         )
         engine = self._build_engine(session)
         session.session_id = await engine.start_session(session)
