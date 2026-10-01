@@ -3,12 +3,16 @@
     plugins:
       - name: telegram
         token_env: KITCHEN_TELEGRAM_TOKEN   # bot token from @BotFather
-        users:                               # Telegram chat id -> Django username
+        users:                               # Telegram user or chat id -> username
           123456789: lee
+        album_wait: 1.5                      # seconds to collect an album
 
-``bot.serve()`` long-polls Telegram. Each message from a listed chat goes to
-that user's root session; messages from other chats are ignored. Photos,
-voice notes, audio and documents arrive as attachments. A reply's
+``bot.serve()`` long-polls Telegram. A message's sender is looked up in
+``users`` first, then its chat, so people in a shared group chat each talk
+as themselves. Each message goes to that user's root session and the reply
+goes back to the chat it came from; messages from anyone else are ignored.
+Photos, voice notes, audio and documents arrive as attachments, and the
+photos of an album arrive together as one message. A reply's
 suggestions show as a one-time keyboard. When a turn stops
 for approval, the reply carries Approve and Deny buttons, and pressing one
 resumes the turn.
@@ -80,6 +84,9 @@ class TelegramPlugin(BotPlugin):
     def on_load(self) -> None:
         self.users = {str(k): v for k, v in (self.config.get("users") or {}).items()}
         self.poll_timeout = int(self.config.get("poll_timeout", 30))
+        self.album_wait = float(self.config.get("album_wait", 1.5))
+        self._albums: dict[tuple, list[dict]] = {}
+        self._album_timers: dict[tuple, asyncio.Task] = {}
         self._api: Any = None
         self._offset = 0
 
@@ -154,11 +161,15 @@ class TelegramPlugin(BotPlugin):
 
     # -- inbound -----------------------------------------------------------
 
-    async def user_for(self, chat_id):
-        username = self.users.get(str(chat_id))
-        if username is None:
-            return None
-        return await get_user_model().objects.filter(username=username).afirst()
+    async def user_for(self, *ids):
+        """The user for the first listed id (sender, then chat)."""
+        for telegram_id in ids:
+            if telegram_id is None:
+                continue
+            username = self.users.get(str(telegram_id))
+            if username is not None:
+                return await get_user_model().objects.filter(username=username).afirst()
+        return None
 
     async def attachments_for(self, message: dict) -> list[Attachment]:
         found: list[tuple[str, str, str]] = []  # (file_id, media_type, filename)
@@ -188,13 +199,50 @@ class TelegramPlugin(BotPlugin):
         ]
 
     async def handle_message(self, message: dict) -> None:
-        chat_id = message["chat"]["id"]
-        user = await self.user_for(chat_id)
+        if group_id := message.get("media_group_id"):
+            self._queue_album(message, group_id)
+            return
+        await self.handle_messages([message])
+
+    def _queue_album(self, message: dict, group_id: str) -> None:
+        key = (message["chat"]["id"], group_id)
+        self._albums.setdefault(key, []).append(message)
+        if timer := self._album_timers.get(key):
+            timer.cancel()
+        self._album_timers[key] = asyncio.create_task(self._flush_album_later(key))
+
+    async def _flush_album_later(self, key: tuple) -> None:
+        await asyncio.sleep(self.album_wait)
+        self._album_timers.pop(key, None)
+        await self._flush_album(key)
+
+    async def _flush_album(self, key: tuple) -> None:
+        messages = self._albums.pop(key, [])
+        if not messages:
+            return
+        try:
+            await self.handle_messages(messages)
+        except Exception:
+            logger.exception("Telegram album %s failed", key[1])
+
+    async def flush_albums(self) -> None:
+        """Handle every album still being collected, now."""
+        for key in list(self._albums):
+            if timer := self._album_timers.pop(key, None):
+                timer.cancel()
+            await self._flush_album(key)
+
+    async def handle_messages(self, messages: list[dict]) -> None:
+        """Answer one or more messages (an album) as a single turn."""
+        first = messages[0]
+        chat_id = first["chat"]["id"]
+        user = await self.user_for((first.get("from") or {}).get("id"), chat_id)
         if user is None:
             logger.info("Ignoring Telegram chat %s: not in users", chat_id)
             return
-        text = message.get("text") or message.get("caption") or ""
-        attachments = await self.attachments_for(message)
+        texts = [m.get("text") or m.get("caption") or "" for m in messages]
+        text = "\n\n".join(t for t in texts if t)
+        attachments = [a for m in messages for a in await self.attachments_for(m)]
         if not text and not attachments:
             return
         session = await self.bot.root_session(user)
@@ -204,7 +252,7 @@ class TelegramPlugin(BotPlugin):
     async def handle_callback(self, query: dict) -> None:
         await self.api.call("answerCallbackQuery", callback_query_id=query["id"])
         chat_id = query["message"]["chat"]["id"]
-        user = await self.user_for(chat_id)
+        user = await self.user_for((query.get("from") or {}).get("id"), chat_id)
         action, _, session_id = (query.get("data") or "").partition(":")
         if user is None or action not in {"ok", "no"}:
             return

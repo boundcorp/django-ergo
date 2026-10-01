@@ -19,6 +19,8 @@ bot.yaml::
       budget_tokens: 8000
       granularity: conversation
     orchestration: true                # thread tools on the root; false = none
+    timezone: America/Los_Angeles      # for the current time in context
+    current_time: true                 # put the current date and time in context
     sessions:
       allow_create: true               # may the root start threads?
       default_compaction: {mode: stream, config: {keep_recent: 15}}
@@ -73,6 +75,8 @@ class BotDefinition:
     budget_tokens: int = 8000
     granularity: Granularity = Granularity.CONVERSATION
     orchestration: bool = True
+    timezone: str = ""
+    current_time: bool = True
     allow_create_sessions: bool = False
     default_compaction_mode: str = CompactionMode.STREAM
     default_compaction_config: dict = field(default_factory=dict)
@@ -113,6 +117,8 @@ class BotDefinition:
             budget_tokens=int(root.get("budget_tokens", 8000)),
             granularity=Granularity.parse(root.get("granularity")),
             orchestration=bool(data.get("orchestration", True)),
+            timezone=str(data.get("timezone") or ""),
+            current_time=bool(data.get("current_time", True)),
             allow_create_sessions=bool(sessions.get("allow_create", False)),
             default_compaction_mode=mode,
             default_compaction_config=dict(compaction.get("config") or {}),

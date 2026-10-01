@@ -26,6 +26,8 @@ root:                                # the root (stream) session
   budget_tokens: 8000
   granularity: conversation          # or reasoning / full
 orchestration: true                  # thread tools on the root; false = none
+timezone: America/Los_Angeles        # default for users without a timezone
+current_time: true                   # current date and time in every turn
 sessions:
   allow_create: true                 # may the root start threads?
   default_compaction: {mode: context_size, config: {keep_recent: 6}}
@@ -61,6 +63,31 @@ Parameters come from type hints (`str`, `int`, `float`, `bool`, `list`,
 `dict`), or pass `parameters=` as JSON Schema properties. Non-string results
 are sent back as JSON. A tool module can also define
 `toolkits(ctx) -> list[Toolkit]` for class-based toolkits.
+
+Tool code reads credentials with `ctx.secret("TANDOOR_API_KEY")`. It
+returns the environment variable `TANDOOR_API_KEY__<USERNAME>` (the user's
+name upper-cased, other characters as `_`) when set, else
+`TANDOOR_API_KEY`, so each person can bring their own key. `ctx.now()` is
+the current time in the user's `timezone` attribute, the bot's `timezone`,
+or Django's `TIME_ZONE`, in that order.
+
+## Context functions
+
+A tool module can also put live data into every turn's context:
+
+```python
+from django_ergo.bots import bot_context
+
+@bot_context(title="Shopping list", weight=1.0)
+def shopping_list(ctx, message: str) -> str:
+    return render(tandoor(ctx).shopping_list())
+```
+
+Each function's text becomes a section of the turn's context, trimmed to
+its share of `root.budget_tokens`. An empty string adds nothing, and an
+exception is logged and adds nothing, so an outage in one source never
+fails the turn. The current date and time is added the same way unless
+`current_time: false`.
 
 Tools with `requires_approval=True` are not run. The turn ends with a
 `PendingApproval` instead, and `bot.resume(session, {tool_use_id: True})`
@@ -201,11 +228,15 @@ lists open pull requests. Changes take effect when the bot is loaded again.
 ```yaml
 - name: telegram
   token_env: KITCHEN_TELEGRAM_TOKEN
-  users: {123456789: lee}    # chat id -> Django username
+  users: {123456789: lee}    # Telegram user or chat id -> Django username
+  album_wait: 1.5            # seconds to collect an album's photos
 ```
 
-`bot.serve()` long-polls the Bot API. Messages from listed chats go to that
-user's root session; other chats are ignored. Photos, voice notes, audio
+`bot.serve()` long-polls the Bot API. Each message's sender is looked up in
+`users`, then its chat, so in a shared group chat each person talks to the
+bot as themselves (in their own root session) and the reply goes back to
+the group. Messages from anyone else are ignored. The photos of an album
+arrive as one turn. Photos, voice notes, audio
 and documents become attachments. A turn that stops for approval replies
 with Approve and Deny buttons that resume it. `plugin.notify(user, text)`
 sends a message from other code.

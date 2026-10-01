@@ -43,6 +43,7 @@ from django_ergo.conversation.chat_reply import ChatReply
 from django_ergo.conversation.chat_reply import chat_reply_spec
 from django_ergo.conversation.context import ContextBuilder
 from django_ergo.conversation.context import MessageContextSource
+from django_ergo.conversation.context import TextContextSource
 from django_ergo.conversation.history import SessionSource
 from django_ergo.conversation.history_search_toolkit import MessageHistoryToolkit
 from django_ergo.conversation.models import CompactionMode
@@ -328,6 +329,25 @@ class Bot:
         ctx = self.tool_context(session)
         builder = ContextBuilder(budget_tokens=self.definition.budget_tokens)
         empty = True
+        if self.definition.current_time:
+            builder.add(
+                TextContextSource(
+                    "Current time",
+                    lambda: ctx.now().strftime("%A, %B %d, %Y at %H:%M %Z"),
+                    weight=0.2,
+                )
+            )
+            empty = False
+        for module in self.tool_modules:
+            for item in module.contexts:
+                builder.add(
+                    TextContextSource(
+                        item.title,
+                        lambda item=item: item.render(ctx, message),
+                        weight=item.weight,
+                    )
+                )
+                empty = False
         if self.is_stream(session):
             builder.add(
                 MessageContextSource(

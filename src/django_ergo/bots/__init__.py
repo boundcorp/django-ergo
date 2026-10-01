@@ -5,6 +5,7 @@ stays light. The runtime lives in ``django_ergo.bots.runtime``.
 """
 
 from django_ergo.bots.tools import ToolContext
+from django_ergo.bots.tools import bot_context
 from django_ergo.bots.tools import bot_tool
 
-__all__ = ["ToolContext", "bot_tool"]
+__all__ = ["ToolContext", "bot_context", "bot_tool"]

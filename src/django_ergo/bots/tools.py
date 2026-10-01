@@ -16,6 +16,17 @@ A bot's tool module is a plain Python file::
 Parameters come from the signature (str, int, float, bool, list, dict),
 or pass ``parameters=`` as a JSON Schema ``properties`` mapping. A module
 may also define ``toolkits(ctx) -> list[Toolkit]``.
+
+``@bot_context`` marks a function whose text goes into the model's context
+on every turn, such as live data the bot should always see::
+
+    @bot_context(title="Shopping list")
+    def shopping_list(ctx, message: str) -> str:
+        return render(tandoor(ctx).shopping_list())
+
+Tools and context functions read per-user credentials with
+``ctx.secret("TANDOOR_API_KEY")``: the environment variable
+``TANDOOR_API_KEY__<USERNAME>`` if set, else ``TANDOOR_API_KEY``.
 """
 
 from __future__ import annotations
@@ -24,8 +35,12 @@ import hashlib
 import importlib.util
 import inspect
 import json
+import logging
+import os
+import re
 import sys
 from dataclasses import dataclass
+from dataclasses import field
 from typing import TYPE_CHECKING
 from typing import Any
 from typing import get_type_hints
@@ -40,6 +55,8 @@ if TYPE_CHECKING:
     from django_ergo.bots.runtime import Bot
     from django_ergo.conversation.adapters import ToolAdapter
     from django_ergo.conversation.models import ConversationSession
+
+logger = logging.getLogger(__name__)
 
 _JSON_TYPES = {
     str: "string",
@@ -62,6 +79,40 @@ class ToolContext:
     @property
     def is_root(self) -> bool:
         return bool(self.session and self.session.parent_id is None)
+
+    def secret(self, name: str, default: str | None = None) -> str | None:
+        """An environment value, preferring the user's own ``NAME__<USERNAME>``."""
+        if self.user is not None:
+            username = re.sub(r"\W", "_", self.user.get_username()).upper()
+            if value := os.environ.get(f"{name}__{username}"):
+                return value
+        return os.environ.get(name) or default
+
+    @property
+    def timezone(self):
+        """The user's ``timezone`` attribute, else the bot's, else Django's."""
+        from zoneinfo import ZoneInfo
+        from zoneinfo import ZoneInfoNotFoundError
+
+        from django.conf import settings
+
+        names = [
+            getattr(self.user, "timezone", None),
+            self.bot.definition.timezone if self.bot else None,
+            settings.TIME_ZONE,
+        ]
+        for name in names:
+            if name and isinstance(name, str):
+                try:
+                    return ZoneInfo(name)
+                except (ZoneInfoNotFoundError, ValueError):
+                    continue
+        return ZoneInfo("UTC")
+
+    def now(self):
+        from datetime import datetime
+
+        return datetime.now(self.timezone)
 
 
 @dataclass
@@ -130,6 +181,34 @@ def bot_tool(  # noqa: PLR0913
             requires_approval=requires_approval,
             takes_context=takes_context,
         )
+        return fn
+
+    return decorate(func) if func is not None else decorate
+
+
+@dataclass
+class BotContext:
+    title: str
+    function: Callable
+    weight: float = 1.0
+
+    def render(self, ctx: ToolContext, message: str) -> str:
+        """The function's text; a failure is logged and gives no text."""
+        try:
+            return self.function(ctx, message) or ""
+        except Exception:
+            logger.exception("Bot context %r failed", self.title)
+            return ""
+
+
+def bot_context(
+    func: Callable | None = None, *, title: str | None = None, weight: float = 1.0
+):
+    """Mark ``fn(ctx, message) -> str`` as context for every turn."""
+
+    def decorate(fn: Callable) -> Callable:
+        heading = title or fn.__name__.replace("_", " ").capitalize()
+        fn.__bot_context__ = BotContext(heading, fn, weight)
         return fn
 
     return decorate(func) if func is not None else decorate
@@ -208,6 +287,7 @@ class ToolModule:
     path: Path
     tools: list[BotTool]
     toolkit_factory: Callable | None = None
+    contexts: list[BotContext] = field(default_factory=list)
 
 
 def load_tool_module(path: Path, bot_name: str) -> ToolModule:
@@ -226,5 +306,10 @@ def load_tool_module(path: Path, bot_name: str) -> ToolModule:
         for value in vars(module).values()
         if callable(value) and hasattr(value, "__bot_tool__")
     ]
+    contexts = [
+        value.__bot_context__
+        for value in vars(module).values()
+        if callable(value) and hasattr(value, "__bot_context__")
+    ]
     factory = getattr(module, "toolkits", None)
-    return ToolModule(path=path, tools=tools, toolkit_factory=factory)
+    return ToolModule(path=path, tools=tools, toolkit_factory=factory, contexts=contexts)

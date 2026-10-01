@@ -488,3 +488,48 @@ async def test_telegram_shows_suggestions_as_keyboard(tmp_path):
     assert sent["text"] == "Tacos or soup?"
     assert sent["reply_markup"]["keyboard"] == [[{"text": "Tacos"}], [{"text": "Soup"}]]
     assert sent["reply_markup"]["one_time_keyboard"] is True
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_telegram_group_chat_speaks_as_each_sender(tmp_path):
+    cook = await User.objects.acreate(username="cook")
+    await User.objects.acreate(username="sous")
+    bot, engine, plugin = telegram_bot(tmp_path, say("Hi cook."), say("Hi sous."))
+    plugin.users["222"] = "sous"
+    group = -500
+
+    await plugin.handle_update(update(1, chat_id=group, text="hi", **{"from": {"id": 111}}))
+    await plugin.handle_update(update(2, chat_id=group, text="yo", **{"from": {"id": 222}}))
+    await plugin.handle_update(update(3, chat_id=group, text="??", **{"from": {"id": 333}}))
+
+    assert [m["chat_id"] for m in plugin.api.sent()] == [group, group]
+    assert len(engine._client.calls) == 2
+    owners = [s.user_id async for s in bot.sessions().order_by("created_at")]
+    assert owners[0] == cook.id
+    assert len(owners) == 2
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_telegram_album_is_one_turn(tmp_path):
+    await User.objects.acreate(username="cook")
+    bot, engine, plugin = telegram_bot(tmp_path, say("Two receipts."))
+    plugin.album_wait = 60
+
+    for n, file_id in enumerate(["r1", "r2"]):
+        await plugin.handle_update(
+            update(
+                n,
+                media_group_id="album-1",
+                photo=[{"file_id": file_id}],
+                **({"caption": "add these to the pantry"} if n == 0 else {}),
+            )
+        )
+    assert engine._client.calls == []
+
+    await plugin.flush_albums()
+
+    assert len(engine._client.calls) == 1
+    content = engine._client.calls[0]["messages"][0]["content"]
+    assert [part["type"] for part in content] == ["image", "image", "text"]
+    assert content[-1]["text"] == "add these to the pantry"
+    assert plugin.api.sent()[-1]["text"] == "Two receipts."

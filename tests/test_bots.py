@@ -559,3 +559,72 @@ async def test_orchestration_can_be_turned_off(tmp_path):
     tools = _tool_names(engine._client.calls[0])
     assert not {t for t in tools if t.startswith("threads_")}
     assert "history_read" in tools
+
+
+CONTEXT_TOOLS = textwrap.dedent(
+    """
+    from django_ergo.bots import bot_context, bot_tool
+
+    @bot_tool(takes_context=True)
+    def whoami(ctx) -> str:
+        return ctx.secret("PANTRY_KEY") or "none"
+
+    @bot_context(title="Shopping list")
+    def shopping_list(ctx, message):
+        return f"- eggs (for {ctx.user.get_username()}, re: {message})"
+
+    @bot_context
+    def broken(ctx, message):
+        raise RuntimeError("pantry is down")
+    """
+)
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_bot_context_functions_secrets_and_current_time(tmp_path, monkeypatch):
+    monkeypatch.setenv("PANTRY_KEY", "shared")
+    monkeypatch.setenv("PANTRY_KEY__MS_COOK", "cooks-own")
+    user = await User.objects.acreate(username="ms-cook")
+    yaml_text = """
+        name: kitchen
+        timezone: America/Denver
+        tools: [tools/pantry.py]
+    """
+    bot, engine = make_bot(
+        tmp_path,
+        claude_tool("whoami", {}),
+        say("Eggs are on the list."),
+        yaml_text=yaml_text,
+        tools=CONTEXT_TOOLS,
+    )
+    root = await bot.root_session(user)
+
+    await bot.ask(root, "what do we need?")
+
+    system = engine._client.calls[0]["system"]
+    assert "## Shopping list" in system
+    assert "- eggs (for ms-cook, re: what do we need?)" in system
+    assert "## Current time" in system
+    assert "MST" in system or "MDT" in system
+    assert "pantry is down" not in system  # a failing context gives no text
+    result = engine._client.calls[1]["messages"][-1]["content"][0]["content"]
+    assert result == "cooks-own"
+
+
+def test_secret_falls_back_to_shared_value(monkeypatch):
+    from django_ergo.bots.tools import ToolContext
+
+    monkeypatch.setenv("TANDOOR_KEY", "shared")
+    monkeypatch.delenv("TANDOOR_KEY__AUD", raising=False)
+    user = User(username="aud")
+    assert ToolContext(user=user).secret("TANDOOR_KEY") == "shared"
+    assert ToolContext().secret("MISSING_KEY", "dflt") == "dflt"
+    user.timezone = "Not/AZone"
+    assert ToolContext(user=user).timezone.key == "UTC"
+
+
+def test_current_time_can_be_switched_off(tmp_path):
+    bot, _ = make_bot(
+        tmp_path, yaml_text="name: kitchen\ncurrent_time: false\ntools: []\n"
+    )
+    assert bot.definition.current_time is False
