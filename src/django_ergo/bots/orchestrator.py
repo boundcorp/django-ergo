@@ -43,7 +43,11 @@ def _thread(ctx: ToolContext, thread_id: str) -> ConversationSession:
 
 
 def _reply(result: TurnResult) -> str:
-    text = result.text.strip() or "(no text reply)"
+    if result.reply is not None:
+        prefix = "[The thread asks] " if result.reply.is_question else ""
+        text = prefix + result.reply.as_message()
+    else:
+        text = f"(no reply: {result.error or 'the thread did not answer'})"
     if result.approvals:
         names = ", ".join(a.tool_name for a in result.approvals)
         text += (

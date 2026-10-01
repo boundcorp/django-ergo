@@ -158,24 +158,31 @@ def attachments_by_sequence(session) -> dict[int, list[ConversationAttachment]]:
     return grouped
 
 
-def _read_b64(row: ConversationAttachment) -> str:
+def _has_bytes(row: ConversationAttachment | Attachment) -> bool:
+    return bool(getattr(row, "data", None) or getattr(row, "file", None))
+
+
+def _read_b64(row: ConversationAttachment | Attachment) -> str:
+    """Base64 of a stored attachment row or an in-memory Attachment."""
+    if data := getattr(row, "data", None):
+        return base64.b64encode(data).decode("ascii")
     with row.file.open("rb") as handle:
         return base64.b64encode(handle.read()).decode("ascii")
 
 
-def audio_placeholder(row: ConversationAttachment) -> str:
+def audio_placeholder(row: ConversationAttachment | Attachment) -> str:
     label = row.filename or row.media_type
     if row.transcript:
         return f"[Audio attachment {label}, transcript]: {row.transcript}"
     return f"[Audio attachment {label}: no transcript available]"
 
 
-def claude_block(row: ConversationAttachment) -> dict:
+def claude_block(row: ConversationAttachment | Attachment) -> dict:
     """Engine-native Claude content block for an attachment."""
     if row.kind == "audio":
         return {"type": "text", "text": audio_placeholder(row)}
     block_type = "image" if row.kind == "image" else "document"
-    if row.file:
+    if _has_bytes(row):
         source = {
             "type": "base64",
             "media_type": row.media_type,
@@ -186,20 +193,26 @@ def claude_block(row: ConversationAttachment) -> dict:
     return {"type": block_type, "source": source}
 
 
-def openai_part(row: ConversationAttachment, *, audio_input: bool = False) -> dict:
+def openai_part(
+    row: ConversationAttachment | Attachment, *, audio_input: bool = False
+) -> dict:
     """Chat Completions content part for an attachment."""
     if row.kind == "image":
-        url = f"data:{row.media_type};base64,{_read_b64(row)}" if row.file else row.url
+        url = (
+            f"data:{row.media_type};base64,{_read_b64(row)}"
+            if _has_bytes(row)
+            else row.url
+        )
         return {"type": "image_url", "image_url": {"url": url}}
     if row.kind == "audio":
         audio_format = _OPENAI_AUDIO_FORMATS.get(row.media_type)
-        if audio_input and row.file and audio_format:
+        if audio_input and _has_bytes(row) and audio_format:
             return {
                 "type": "input_audio",
                 "input_audio": {"data": _read_b64(row), "format": audio_format},
             }
         return {"type": "text", "text": audio_placeholder(row)}
-    if row.file:
+    if _has_bytes(row):
         return {
             "type": "file",
             "file": {
@@ -210,7 +223,7 @@ def openai_part(row: ConversationAttachment, *, audio_input: bool = False) -> di
     return {"type": "text", "text": f"[Document attachment: {row.url}]"}
 
 
-def describe(row: ConversationAttachment) -> str:
+def describe(row: ConversationAttachment | Attachment) -> str:
     """Short text stand-in used by renderers and history tools."""
     label = row.filename or row.url or row.media_type
     if row.kind == "audio":

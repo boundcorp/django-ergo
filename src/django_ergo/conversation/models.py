@@ -25,11 +25,6 @@ class SessionStatus(models.TextChoices):
     FAILED = "failed", "Failed"
 
 
-class SessionMode(models.TextChoices):
-    CHAT = "chat", "Chat"
-    STRUCTURED = "structured", "Structured"
-
-
 class CompactionMode(models.TextChoices):
     NONE = "none", "None"
     TIME = "time", "Time-based"
@@ -67,14 +62,6 @@ class ConversationSession(TimeStampedMixin):
         choices=SessionStatus.choices,
     )
     metadata = models.JSONField(default=dict, blank=True)
-    mode = models.CharField(
-        max_length=20,
-        choices=SessionMode.choices,
-        default=SessionMode.CHAT,
-    )
-    # Free-form label for the job a structured session does ("planner",
-    # "summarizer"). A varchar so new kinds don't need migrations.
-    kind = models.CharField(max_length=64, blank=True, default="")
     # Overrides workflow.instructions when set.
     system_prompt = models.TextField(blank=True, default="")
     compaction_mode = models.CharField(
@@ -98,7 +85,6 @@ class ConversationSession(TimeStampedMixin):
     class Meta:
         ordering = ["-created_at"]
         indexes = [
-            models.Index(fields=["mode", "kind"]),
             models.Index(fields=["user", "-created_at"]),
             models.Index(fields=["status"]),
             models.Index(fields=["engine_type"]),
@@ -230,58 +216,86 @@ class OpenAIMessage(TimeStampedMixin):
         return f"{self.session} - {self.role} [{self.sequence}]"
 
 
-class StructuredOutputStatus(models.TextChoices):
+class StructuredCallStatus(models.TextChoices):
     IN_PROGRESS = "in_progress", "In progress"
+    AWAITING_APPROVAL = "awaiting_approval", "Awaiting approval"
     COMPLETED = "completed", "Completed"
     FAILED = "failed", "Failed"
     TURN_LIMITED = "turn_limited", "Turn limited"
 
 
-class StructuredOutput(TimeStampedMixin):
-    """The validated output produced in response to one message of a structured session.
+class StructuredCall(TimeStampedMixin):
+    """One structured call: a request, a kind, and a validated response.
 
-    Each user message sent to a structured session gets its own row, so a
-    follow-up ("make the title shorter") yields a new output while earlier
-    ones stay on record. first_sequence/last_sequence give the span of
-    engine messages the turn wrote.
+    A call stands on its own. Its tool loop is kept in ``transcript``
+    (engine-native messages) so it can be audited and revised. A call made
+    inside a conversation is a turn of that session instead: ``session`` is
+    set, the loop lives in the session's messages, and first_sequence and
+    last_sequence give its span. Sessions can mix structured calls with
+    ordinary chat turns.
+
+    ``parent`` links a revision ("make the title shorter") to the call it
+    corrects.
     """
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    # Free-form label for the job ("planner", "summarizer"). A varchar so new
+    # kinds don't need migrations.
+    kind = models.CharField(max_length=64)
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="structured_calls",
+    )
     session = models.ForeignKey(
         ConversationSession,
         on_delete=models.CASCADE,
-        related_name="structured_outputs",
+        null=True,
+        blank=True,
+        related_name="structured_calls",
     )
-    sequence = models.IntegerField()
+    parent = models.ForeignKey(
+        "self",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="revisions",
+    )
     request = models.TextField(blank=True, default="")
     status = models.CharField(
         max_length=20,
-        choices=StructuredOutputStatus.choices,
-        default=StructuredOutputStatus.IN_PROGRESS,
+        choices=StructuredCallStatus.choices,
+        default=StructuredCallStatus.IN_PROGRESS,
     )
-    output = models.JSONField(null=True, blank=True)
+    response = models.JSONField(null=True, blank=True)
     error = models.TextField(blank=True, default="")
     error_category = models.CharField(max_length=20, blank=True, default="")
     turns_used = models.IntegerField(default=0)
+    engine_type = models.CharField(max_length=20, blank=True, default="")
+    model_name = models.CharField(max_length=100, blank=True, default="")
+    # Standalone calls: what was sent, so revisions can replay it.
+    system_prompt = models.TextField(blank=True, default="")
+    transcript = models.JSONField(default=list, blank=True)
+    # Calls inside a session: the span of session messages this call wrote.
     first_sequence = models.IntegerField(null=True, blank=True)
     last_sequence = models.IntegerField(null=True, blank=True)
     input_tokens = models.IntegerField(default=0)
     output_tokens = models.IntegerField(default=0)
     cache_creation_input_tokens = models.IntegerField(default=0)
     cache_read_input_tokens = models.IntegerField(default=0)
-    model_name = models.CharField(max_length=100, blank=True, default="")
+    metadata = models.JSONField(default=dict, blank=True)
 
     class Meta:
-        ordering = ["sequence"]
-        constraints = [
-            models.UniqueConstraint(
-                fields=["session", "sequence"],
-                name="unique_structured_output_sequence",
-            )
+        ordering = ["created_at"]
+        indexes = [
+            models.Index(fields=["kind", "-created_at"]),
+            models.Index(fields=["session", "created_at"]),
         ]
 
     def __str__(self):
-        return f"{self.session_id} output [{self.sequence}] ({self.status})"
+        return f"{self.kind} call {self.id} ({self.status})"
 
 
 class ConversationCompaction(TimeStampedMixin):
@@ -304,6 +318,14 @@ class ConversationCompaction(TimeStampedMixin):
     upto_sequence = models.IntegerField()
     message_count = models.IntegerField(default=0)
     summary = models.TextField()
+    # The structured call that wrote the summary, when one did.
+    structured_call = models.ForeignKey(
+        StructuredCall,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="compactions",
+    )
 
     class Meta:
         ordering = ["upto_sequence"]

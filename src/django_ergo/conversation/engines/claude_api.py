@@ -13,6 +13,7 @@ from django_ergo.conversation.attachments import save_attachments
 from django_ergo.conversation.compaction import apply_native_window
 from django_ergo.conversation.compaction import latest_compaction
 from django_ergo.conversation.compaction import render_summary_message
+from django_ergo.conversation.engine import Completion
 from django_ergo.conversation.engine import Engine
 from django_ergo.conversation.engine import EngineResponse
 from django_ergo.conversation.engine import SeededToolCall
@@ -382,6 +383,144 @@ class ClaudeAPIEngine(Engine):
             tool_result_content=str(result),
             is_error=is_error,
         )
+
+    async def append_assistant_text(self, session, text: str) -> None:
+        from django_ergo.conversation.models import ClaudeContentBlock
+        from django_ergo.conversation.models import ClaudeMessage
+
+        seq = await session.claude_messages.acount()
+        msg = await ClaudeMessage.objects.acreate(
+            session=session,
+            role="assistant",
+            sequence=seq,
+            stop_reason="end_turn",
+            model_name=self.model,
+        )
+        await ClaudeContentBlock.objects.acreate(
+            message=msg, block_type="text", sequence=0, text=text
+        )
+
+    # -- Sessionless calls ------------------------------------------------
+
+    async def complete(
+        self,
+        messages: list[dict],
+        *,
+        system: str = "",
+        tools: list[dict] | None = None,
+    ) -> Completion:
+        with trace_engine_call(
+            operation="complete",
+            engine_type=self.engine_type,
+            model=self.model,
+            transport_type="api",
+            max_tokens=self.max_tokens,
+        ) as span:
+            kwargs: dict[str, Any] = {
+                "model": self.model,
+                "max_tokens": self.max_tokens,
+                "messages": messages,
+            }
+            if system:
+                kwargs["system"] = system
+            if tools:
+                kwargs["tools"] = tools
+            response = await self._get_client().messages.create(**kwargs)
+            usage = response.usage
+            record_usage(
+                span,
+                input_tokens=usage.input_tokens,
+                output_tokens=usage.output_tokens,
+                cache_creation=getattr(usage, "cache_creation_input_tokens", None),
+                cache_read=getattr(usage, "cache_read_input_tokens", None),
+            )
+
+        content: list[dict] = []
+        events: list[EngineResponse] = []
+        for block in response.content:
+            if block.type == "text":
+                content.append({"type": "text", "text": block.text})
+                events.append(
+                    EngineResponse(
+                        event_type="text", raw={"type": "text"}, text=block.text
+                    )
+                )
+            elif block.type == "tool_use":
+                call = {"id": block.id, "name": block.name, "input": block.input}
+                content.append({"type": "tool_use", **call})
+                events.append(
+                    EngineResponse(
+                        event_type="tool_use", raw={"type": "tool_use"}, tool_use=call
+                    )
+                )
+            elif block.type == "thinking":
+                content.append({"type": "thinking", "thinking": block.thinking})
+                events.append(
+                    EngineResponse(
+                        event_type="thinking",
+                        raw={"type": "thinking"},
+                        thinking=block.thinking,
+                    )
+                )
+        events.append(
+            EngineResponse(event_type="done", raw={"stop_reason": response.stop_reason})
+        )
+        return Completion(
+            message={"role": "assistant", "content": content},
+            events=events,
+            model=self.model,
+            input_tokens=usage.input_tokens or 0,
+            output_tokens=usage.output_tokens or 0,
+            cache_creation_input_tokens=(
+                getattr(usage, "cache_creation_input_tokens", None) or 0
+            ),
+            cache_read_input_tokens=getattr(usage, "cache_read_input_tokens", None)
+            or 0,
+        )
+
+    def user_message(self, text: str, attachments: list | None = None) -> dict:
+        blocks = [claude_block(a) for a in attachments or []]
+        return {"role": "user", "content": [*blocks, {"type": "text", "text": text}]}
+
+    def assistant_text_message(self, text: str) -> dict:
+        return {"role": "assistant", "content": [{"type": "text", "text": text}]}
+
+    def tool_exchange_messages(self, calls: list[SeededToolCall]) -> list[dict]:
+        if not calls:
+            return []
+        return [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": c.tool_use_id,
+                        "name": c.name,
+                        "input": c.input,
+                    }
+                    for c in calls
+                ],
+            },
+            *self.tool_result_messages(
+                [(c.tool_use_id, c.result, c.is_error) for c in calls]
+            ),
+        ]
+
+    def tool_result_messages(self, results: list[tuple[str, Any, bool]]) -> list[dict]:
+        return [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": tool_use_id,
+                        "content": str(result),
+                        "is_error": is_error,
+                    }
+                    for tool_use_id, result, is_error in results
+                ],
+            }
+        ]
 
     async def generate(
         self,

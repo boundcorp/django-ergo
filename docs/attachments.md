@@ -9,7 +9,7 @@ await engine.send(session, "What's in the fridge?",
                   attachments=[Attachment.from_path("fridge.jpg")])
 
 # Also on run_conversation_turn, run_workflow_task, run_structured_call,
-# StructuredSession.start/send, and Engine.append_user_message.
+# revise_structured_call, and Engine.append_user_message.
 Attachment(media_type="audio/ogg", data=voice_bytes, filename="note.ogg")
 Attachment(media_type="image/jpeg", url="https://example.com/photo.jpg")
 ```

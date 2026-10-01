@@ -14,8 +14,10 @@ Compaction never deletes messages. ``ConversationCompaction`` records the
 summary and the sequence it covers, and engines substitute it when they
 rebuild context. History tools still see every message.
 
-Each summary folds in the previous one, so only the newest compaction is
-used. The cut always falls before a user message that starts a turn, so tool
+Each summary is a structured call (kind ``compaction``) that returns a
+``CompactionSummary``. The compaction row links to that call, so token use,
+failures and retries are on record. Each summary folds in the previous one,
+so only the newest compaction is used. The cut always falls before a user message that starts a turn, so tool
 calls are never separated from their results.
 """
 
@@ -28,6 +30,8 @@ from typing import TYPE_CHECKING
 
 from asgiref.sync import sync_to_async
 from django.utils import timezone
+from pydantic import BaseModel
+from pydantic import Field
 
 from django_ergo.conversation.renderer import ConversationRenderer
 
@@ -40,7 +44,11 @@ if TYPE_CHECKING:
     from django_ergo.conversation.models import ConversationCompaction
     from django_ergo.conversation.models import ConversationSession
 
-    Summarizer = Callable[[str, str], Awaitable[str]]
+    from django_ergo.conversation.structured import StructuredCallResult
+
+    # Returns summary text, or a structured call result whose parsed value
+    # has render() (see CompactionSummary).
+    Summarizer = Callable[[str, str], Awaitable["str | StructuredCallResult"]]
 
 log = logging.getLogger(__name__)
 
@@ -60,6 +68,26 @@ newer messages, write an updated summary that keeps:
 
 Drop pleasantries, repetition and tool output detail. Write plain prose or \
 short lists. Do not address the user."""
+
+
+class CompactionSummary(BaseModel):
+    """What a compaction call returns."""
+
+    summary: str = Field(description="The running summary, in prose or short lists")
+    decisions: list[str] = Field(
+        default_factory=list, description="Decisions and constraints the user gave"
+    )
+    open_items: list[str] = Field(
+        default_factory=list, description="Questions or work still open"
+    )
+
+    def render(self) -> str:
+        parts = [self.summary.strip()]
+        if self.decisions:
+            parts.append("Decisions:\n" + "\n".join(f"- {d}" for d in self.decisions))
+        if self.open_items:
+            parts.append("Open:\n" + "\n".join(f"- {o}" for o in self.open_items))
+        return "\n\n".join(p for p in parts if p)
 
 
 @dataclass(frozen=True)
@@ -204,16 +232,30 @@ async def decide_compaction(
     raise ValueError(msg)
 
 
-def engine_summarizer(engine: Engine) -> Summarizer:
-    """Default summarizer: one stateless generate() call on the session's engine."""
+def structured_summarizer(engine: Engine, session: ConversationSession) -> Summarizer:
+    """Default summarizer: a standalone structured call on the session's engine."""
 
-    async def summarize(previous_summary: str, transcript: str) -> str:
+    async def summarize(previous_summary: str, transcript: str):
+        from django_ergo.conversation.structured import StructuredCallSpec
+        from django_ergo.conversation.structured import run_structured_call
+
+        spec = StructuredCallSpec(
+            kind="compaction",
+            system_prompt=SUMMARY_SYSTEM,
+            response_model=CompactionSummary,
+            max_turns=3,
+        )
         prompt = (
             f"Previous summary:\n{previous_summary or '(none)'}\n\n"
             f"Newer messages:\n{transcript}"
         )
-        response = await engine.generate(prompt=prompt, system=SUMMARY_SYSTEM)
-        return (response.text or "").strip()
+        return await run_structured_call(
+            spec,
+            prompt,
+            user=await sync_to_async(lambda: session.user)(),
+            engine=engine,
+            metadata={"compacted_session": str(session.pk)},
+        )
 
     return summarize
 
@@ -250,8 +292,20 @@ async def compact_session(  # noqa: PLR0913
     transcript = ConversationRenderer(detail="skeleton").render_messages(
         [message for _, message in folded]
     )
-    summarize = summarizer or engine_summarizer(engine)
-    summary = await summarize(current.summary if current else "", transcript)
+    summarize = summarizer or structured_summarizer(engine, session)
+    outcome = await summarize(current.summary if current else "", transcript)
+    call = None
+    if isinstance(outcome, str):
+        summary = outcome.strip()
+    else:
+        call = outcome.call
+        if not outcome.ok:
+            log.warning(
+                "compaction of session %s failed: %s", session.pk, outcome.error
+            )
+            return None
+        parsed = outcome.parsed
+        summary = parsed.render() if hasattr(parsed, "render") else str(parsed)
     if not summary:
         log.warning("compaction of session %s produced an empty summary", session.pk)
         return None
@@ -264,6 +318,7 @@ async def compact_session(  # noqa: PLR0913
         upto_sequence=folded[-1][0].sequence,
         message_count=len(folded),
         summary=summary,
+        structured_call=call,
     )
 
 

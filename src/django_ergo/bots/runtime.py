@@ -3,7 +3,11 @@
     bot = Bot.load("bots/kitchen")
     root = await bot.root_session(user)
     result = await bot.ask(root, "What's for dinner?")
-    result.text
+    result.reply   # ChatReply: a message, or a question with suggestions
+
+Every turn is a chat reply: a structured call against the session (see
+``conversation.chat_reply``). The bot uses its tools, then answers with a
+``ChatReply``.
 
 Each (bot, user) pair has one root session: a stream chat (see
 ``conversation.stream``) that only sends the current turn natively and gets
@@ -24,7 +28,6 @@ import os
 from dataclasses import dataclass
 from dataclasses import field
 from typing import TYPE_CHECKING
-from typing import Any
 
 from asgiref.sync import sync_to_async
 from django.utils.module_loading import import_string
@@ -36,22 +39,24 @@ from django_ergo.bots.plugins import resolve_plugin_class
 from django_ergo.bots.tools import FunctionToolkit
 from django_ergo.bots.tools import ToolContext
 from django_ergo.bots.tools import load_tool_module
+from django_ergo.conversation.chat_reply import ChatReply
+from django_ergo.conversation.chat_reply import chat_reply_spec
 from django_ergo.conversation.context import ContextBuilder
 from django_ergo.conversation.context import MessageContextSource
 from django_ergo.conversation.history import SessionSource
 from django_ergo.conversation.history_search_toolkit import MessageHistoryToolkit
 from django_ergo.conversation.models import CompactionMode
 from django_ergo.conversation.models import ConversationSession
-from django_ergo.conversation.runner import PendingApproval
-from django_ergo.conversation.runner import resume_conversation_turn
-from django_ergo.conversation.runner import run_conversation_turn
+from django_ergo.conversation.models import StructuredCall
+from django_ergo.conversation.models import StructuredCallStatus
 from django_ergo.conversation.runtime import EngineSpec
 from django_ergo.conversation.runtime import build_engine
 from django_ergo.conversation.runtime import get_default_engine_spec
 from django_ergo.conversation.stream import STREAM_CONFIG
+from django_ergo.conversation.structured import resume_structured_call
+from django_ergo.conversation.structured import run_structured_call
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
     from collections.abc import Callable
     from pathlib import Path
 
@@ -59,7 +64,8 @@ if TYPE_CHECKING:
     from django_ergo.bots.tools import ToolModule
     from django_ergo.conversation.attachments import Attachment
     from django_ergo.conversation.engine import Engine
-    from django_ergo.conversation.engine import EngineResponse
+    from django_ergo.conversation.runner import PendingApproval
+    from django_ergo.conversation.structured import StructuredCallResult
     from django_ergo.conversation.toolkit import Toolkit
 
 ROOT_ROLE = "root"
@@ -69,13 +75,34 @@ THREAD_ROLE = "thread"
 @dataclass
 class TurnResult:
     session: ConversationSession
-    text: str = ""
-    events: list[EngineResponse] = field(default_factory=list)
+    call: StructuredCall | None = None
+    reply: ChatReply | None = None
     approvals: list[PendingApproval] = field(default_factory=list)
+
+    @classmethod
+    def from_call(cls, session, result: StructuredCallResult) -> TurnResult:
+        return cls(
+            session=session,
+            call=result.call,
+            reply=result.parsed,
+            approvals=list(result.approvals),
+        )
+
+    @property
+    def text(self) -> str:
+        return self.reply.text if self.reply else ""
+
+    @property
+    def suggestions(self) -> list[str]:
+        return list(self.reply.suggestions) if self.reply else []
 
     @property
     def needs_approval(self) -> bool:
         return bool(self.approvals)
+
+    @property
+    def error(self) -> str:
+        return self.call.error if self.call else ""
 
 
 async def _maybe_await(value):
@@ -280,7 +307,7 @@ class Bot:
                 source_loader=lambda: self.history_sources(session),
             )
         ]
-        if self.is_root(session):
+        if self.is_root(session) and self.definition.orchestration:
             toolkits.append(orchestrator_toolkit(ctx))
         tools = [tool for module in self.tool_modules for tool in module.tools]
         if tools:
@@ -329,31 +356,8 @@ class Bot:
 
     # -- turns -------------------------------------------------------------
 
-    async def send(
-        self,
-        session: ConversationSession,
-        message: str,
-        *,
-        attachments: list[Attachment] | None = None,
-        engine: Engine | None = None,
-    ) -> AsyncIterator[EngineResponse | PendingApproval]:
-        """Run one turn, streaming events. Plugins see before/after hooks."""
-        for plugin in self.plugins:
-            await _maybe_await(plugin.before_turn(session, message))
-        toolkits, builder = await self._prepare(session, message)
-        result = TurnResult(session=session)
-        async for event in run_conversation_turn(
-            engine or self.make_engine(),
-            session,
-            message,
-            extra_tools=toolkits,
-            attachments=attachments,
-            context_builder=builder,
-        ):
-            _collect(result, event)
-            yield event
-        for plugin in self.plugins:
-            await _maybe_await(plugin.after_turn(session, message, result))
+    def reply_spec(self, toolkits: list[Toolkit]):
+        return chat_reply_spec(toolkits)
 
     async def ask(
         self,
@@ -362,39 +366,61 @@ class Bot:
         *,
         attachments: list[Attachment] | None = None,
     ) -> TurnResult:
-        """Run one turn and collect its text, events and pending approvals."""
-        result = TurnResult(session=session)
-        async for event in self.send(session, message, attachments=attachments):
-            _collect(result, event)
+        """Answer one message with a ChatReply. Plugins see before/after hooks."""
+        for plugin in self.plugins:
+            await _maybe_await(plugin.before_turn(session, message))
+        toolkits, builder = await self._prepare(session, message)
+        outcome = await run_structured_call(
+            self.reply_spec(toolkits),
+            message,
+            session=session,
+            engine=self.make_engine(),
+            attachments=attachments,
+            context_builder=builder,
+            allow_approvals=True,
+        )
+        result = TurnResult.from_call(session, outcome)
+        for plugin in self.plugins:
+            await _maybe_await(plugin.after_turn(session, message, result))
         return result
 
+    async def pending_call(self, session: ConversationSession) -> StructuredCall | None:
+        """The session's latest turn if it is waiting for approval."""
+        return (
+            await session.structured_calls.filter(
+                status=StructuredCallStatus.AWAITING_APPROVAL
+            )
+            .order_by("-created_at")
+            .afirst()
+        )
+
     async def resume(
-        self, session: ConversationSession, decisions: dict[str, bool]
+        self, session: ConversationSession, decisions: dict[str, bool] | bool
     ) -> TurnResult:
-        """Continue a turn that stopped for approval."""
+        """Continue a turn that stopped for approval.
+
+        ``decisions`` maps tool_use_id to approve/deny, or is one bool for
+        every pending tool call.
+        """
+        call = await self.pending_call(session)
+        if call is None:
+            return TurnResult(session=session)
+        if isinstance(decisions, bool):
+            pending = (call.metadata or {}).get("pending_approvals", [])
+            decisions = {item["id"]: decisions for item in pending}
         toolkits, builder = await self._prepare(session, "")
-        result = TurnResult(session=session)
-        async for event in resume_conversation_turn(
-            self.make_engine(),
-            session,
+        outcome = await resume_structured_call(
+            self.reply_spec(toolkits),
+            call,
             decisions,
-            extra_tools=toolkits,
+            engine=self.make_engine(),
             context_builder=builder,
-        ):
-            _collect(result, event)
+        )
+        result = TurnResult.from_call(session, outcome)
         for plugin in self.plugins:
-            await _maybe_await(plugin.after_turn(session, "", result))
+            await _maybe_await(plugin.after_turn(session, call.request, result))
         return result
 
     async def serve(self) -> None:
         """Run every plugin's long-running ``serve`` (e.g. chat channels)."""
         await asyncio.gather(*(plugin.serve() for plugin in self.plugins))
-
-
-def _collect(result: TurnResult, event: Any) -> None:
-    if isinstance(event, PendingApproval):
-        result.approvals.append(event)
-        return
-    result.events.append(event)
-    if getattr(event, "event_type", "") == "text" and event.text:
-        result.text += event.text

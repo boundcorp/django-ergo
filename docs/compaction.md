@@ -26,10 +26,15 @@ turn, so a tool call is never separated from its result.
   `<conversation-summary>` user message (placed after the system message for
   OpenAI). The message rows are never deleted, so renderers and history
   tools still see everything.
-- The default summarizer makes one stateless `engine.generate()` call. Pass
-  `summarizer=` (an async `(previous_summary, transcript) -> str`) to
-  `maybe_compact` or `compact_session` to use something else.
-- If summarizing fails, the turn goes ahead without compaction.
+- Each summary is a standalone [structured call](structured-calls.md) of
+  kind `compaction` on the session's engine. It returns a
+  `CompactionSummary` (summary text, decisions, open items), and the
+  compaction row links to it through `structured_call`, so every summary's
+  tokens, failures and transcript are on record. Pass `summarizer=` (an
+  async `(previous_summary, transcript)` returning text or a structured call
+  result) to `maybe_compact` or `compact_session` to use something else.
+- If summarizing fails (including a failed structured call), the turn goes
+  ahead without compaction.
 - Setting a session back to `none` restores full context. Stored
   compactions are kept and ignored.
 

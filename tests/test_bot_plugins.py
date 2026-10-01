@@ -14,6 +14,7 @@ from django_ergo.conversation.models import ConversationAttachment
 from django_ergo.conversation.models import ConversationSession
 from django_ergo.conversation.toolkit import Toolkit
 from tests.test_bots import make_bot
+from tests.test_bots import say
 from tests.test_bots import write_bot
 from tests.test_conversation_structured import claude_text
 from tests.test_conversation_structured import claude_tool
@@ -65,9 +66,7 @@ def kb_yaml(prefetch="new_session"):
 async def test_kb_prefetch_on_new_session_only(tmp_path):
     FakeKB.searches = []
     user = await User.objects.acreate(username="kb-new")
-    bot, engine = make_bot(
-        tmp_path, claude_text("Tacos."), claude_text("Ok."), yaml_text=kb_yaml()
-    )
+    bot, engine = make_bot(tmp_path, say("Tacos."), say("Ok."), yaml_text=kb_yaml())
     thread = await bot.create_session(user)
 
     await bot.ask(thread, "dinner ideas")
@@ -88,8 +87,8 @@ async def test_kb_prefetch_every_turn_survives_errors(tmp_path):
     user = await User.objects.acreate(username="kb-every")
     bot, engine = make_bot(
         tmp_path,
-        claude_text("a"),
-        claude_text("b"),
+        say("a"),
+        say("b"),
         yaml_text=kb_yaml("every_turn"),
     )
     root = await bot.root_session(user)
@@ -123,7 +122,7 @@ def test_kb_plugin_config(tmp_path):
     bot = Bot.load(write_bot(tmp_path, bad, name="kb2"))
     with pytest.raises(ValueError, match="Unknown knowledge bases: Nope"):
         bot.plugin("ergo_kb").make_toolkit(None)
-    with pytest.raises(ValueError, match="needs knowledgebases or toolkit"):
+    with pytest.raises(ValueError, match="needs path, knowledgebases or toolkit"):
         Bot.load(write_bot(tmp_path, "name: kb3\nplugins: [ergo_kb]\n", name="kb3"))
     with pytest.raises(ValueError, match="prefetch must be one of"):
         Bot.load(
@@ -190,7 +189,7 @@ async def test_bot_edits_and_merges_its_own_config(bot_repo):
             {"path": "bots/manager/agents.md", "content": "Be brief."},
         ),
         claude_tool("repo_publish", {"message": "Shorter instructions"}, tool_id="p1"),
-        claude_text("Published."),
+        say("Published."),
     )
     git(work, "add", "-A")
     git(work, "commit", "-m", "add bot")
@@ -254,9 +253,7 @@ def test_bot_proposes_pr_and_returns_to_main(bot_repo, monkeypatch):
 @pytest.mark.django_db(transaction=True)
 async def test_bot_management_tools_are_root_only(bot_repo):
     _, work = bot_repo
-    bot, engine, _ = management_bot(
-        work, "merge_main", claude_text("a"), claude_text("b")
-    )
+    bot, engine, _ = management_bot(work, "merge_main", say("a"), say("b"))
     user = await User.objects.acreate(username="root-only")
     root = await bot.root_session(user)
     thread = await bot.create_session(user, parent=root)
@@ -327,7 +324,7 @@ def update(update_id, chat_id=111, **message):
 @pytest.mark.django_db(transaction=True)
 async def test_telegram_routes_chats_to_root_sessions(tmp_path):
     user = await User.objects.acreate(username="cook")
-    bot, engine, plugin = telegram_bot(tmp_path, claude_text("Hello cook!"))
+    bot, engine, plugin = telegram_bot(tmp_path, say("Hello cook!"))
     plugin.api.updates = [
         update(5, text="hi"),
         update(6, chat_id=999, text="who am I?"),  # unknown chat: ignored
@@ -348,7 +345,7 @@ async def test_telegram_routes_chats_to_root_sessions(tmp_path):
 @pytest.mark.django_db(transaction=True)
 async def test_telegram_photo_becomes_attachment(tmp_path):
     await User.objects.acreate(username="cook")
-    bot, engine, plugin = telegram_bot(tmp_path, claude_text("Nice lasagna."))
+    bot, engine, plugin = telegram_bot(tmp_path, say("Nice lasagna."))
 
     await plugin.handle_update(
         update(1, caption="what is this?", photo=[{"file_id": "s"}, {"file_id": "big"}])
@@ -368,12 +365,12 @@ async def test_telegram_approval_buttons_resume_the_turn(tmp_path):
     bot, engine, plugin = telegram_bot(
         tmp_path,
         claude_tool("order", {"item": "flour"}, tool_id="o1", text="Ordering."),
-        claude_text("Flour is on the way."),
+        say("Flour is on the way."),
     )
 
     await plugin.handle_update(update(1, text="We need flour"))
     prompt = plugin.api.sent()[-1]
-    assert prompt["text"] == "Ordering.\n\nApprove order?"
+    assert prompt["text"] == "Approve order?"
     session = await ConversationSession.objects.aget()
     buttons = prompt["reply_markup"]["inline_keyboard"][0]
     assert buttons[0]["callback_data"] == f"ok:{session.id}"
@@ -406,3 +403,88 @@ def test_telegram_needs_token(tmp_path, monkeypatch):
         _ = bot.plugin("telegram").api
     monkeypatch.setenv("TEST_TELEGRAM_TOKEN", "123:abc")
     assert bot.plugin("telegram").api.token == "123:abc"
+
+
+# ---------------------------------------------------------------------------
+# ergo_kb with a Markdown folder
+# ---------------------------------------------------------------------------
+
+
+def folder_kb_bot(tmp_path, *responses, prefetch="every_turn"):
+    yaml_text = f"""
+        name: kitchen
+        plugins:
+          - name: ergo_kb
+            path: ../kb
+            prefetch: {prefetch}
+    """
+    kb = tmp_path / "kb"
+    (kb / "preferences").mkdir(parents=True)
+    (kb / "preferences" / "diet.md").write_text(
+        "# Diet\n\nLee is vegetarian on weekdays. No cilantro, ever.\n"
+    )
+    (kb / "household.md").write_text("# Household\n\nTwo adults and a dog.\n")
+    return make_bot(tmp_path, *responses, yaml_text=yaml_text)
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_folder_kb_tools_and_prefetch(tmp_path):
+    user = await User.objects.acreate(username="kb-folder")
+    bot, engine = folder_kb_bot(
+        tmp_path,
+        claude_tool("kb_read", {"path": "preferences/diet.md"}),
+        say("No cilantro, noted."),
+        say("Hello!"),
+    )
+    root = await bot.root_session(user)
+
+    await bot.ask(root, "Does anyone avoid cilantro?")
+    first = engine._client.calls[0]
+    assert {"kb_search", "kb_read", "kb_list"} <= {t["name"] for t in first["tools"]}
+    assert "## Knowledge base results for this message" in first["system"]
+    assert "### Diet (preferences/diet.md)" in first["system"]
+    read = engine._client.calls[1]["messages"][-1]["content"][0]["content"]
+    assert read.startswith("# preferences/diet.md")
+    assert "No cilantro, ever." in read
+
+    # Nothing relevant: no KB section at all.
+    await bot.ask(root, "hello")
+    assert "Knowledge base results" not in engine._client.calls[2]["system"]
+
+
+def test_folder_kb_reads_only_markdown_inside(tmp_path):
+    from django_ergo.bots.folder_kb import FolderKB
+
+    kb_dir = tmp_path / "kb"
+    kb_dir.mkdir()
+    (kb_dir / "a.md").write_text("# Alpha\n\nalpha alpha beta")
+    (kb_dir / "b.md").write_text("beta only")
+    (tmp_path / "secret.md").write_text("secret")
+    kb = FolderKB(kb_dir)
+
+    assert [a.path for a, _ in kb.search("beta alpha")] == ["a.md", "b.md"]
+    assert kb.read("a.md").title == "Alpha"
+    assert kb.read("b.md").title == "b.md"
+    with pytest.raises(ValueError, match="not an article"):
+        kb.read("../secret.md")
+    with pytest.raises(ValueError, match="No article"):
+        kb.read("missing.md")
+    assert kb.search("zz") == []
+    assert FolderKB(tmp_path / "nope").articles() == []
+    toolkit = kb.toolkit()
+    assert toolkit.execute_tool("kb_list", {}) == "a.md: Alpha\nb.md: b.md"
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_telegram_shows_suggestions_as_keyboard(tmp_path):
+    await User.objects.acreate(username="cook")
+    bot, engine, plugin = telegram_bot(
+        tmp_path, say("Tacos or soup?", suggestions=["Tacos", "Soup"], kind="question")
+    )
+
+    await plugin.handle_update(update(1, text="Dinner?"))
+
+    sent = plugin.api.sent()[-1]
+    assert sent["text"] == "Tacos or soup?"
+    assert sent["reply_markup"]["keyboard"] == [[{"text": "Tacos"}], [{"text": "Soup"}]]
+    assert sent["reply_markup"]["one_time_keyboard"] is True

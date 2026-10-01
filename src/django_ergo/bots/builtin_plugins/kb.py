@@ -2,7 +2,8 @@
 
     plugins:
       - name: ergo_kb
-        knowledgebases: [Kitchen]        # Knowledgebase names (legacy KB app)
+        path: kb                         # a folder of Markdown files in the bot repo
+        # or: knowledgebases: [Kitchen]  # Knowledgebase names (legacy KB app)
         # or: toolkit: "myapp.kb:make_toolkit"   # factory(ctx) -> Toolkit
         prefetch: new_session            # new_session | every_turn | off
         search_tool: kb_search           # tool called for prefetch
@@ -13,6 +14,10 @@ Every session of the bot gets the KB tools. Prefetch runs the search tool
 with the user's message and puts the results in the turn's context block,
 on a session's first turn (``new_session``) or on every turn. Results are
 never stored in the conversation.
+
+A ``path`` knowledge base is plain Markdown (see ``bots.folder_kb``). Pair it
+with the bot_management plugin and the bot can edit its own articles and
+propose them as pull requests.
 """
 
 from __future__ import annotations
@@ -21,6 +26,7 @@ from typing import TYPE_CHECKING
 
 from django.utils.module_loading import import_string
 
+from django_ergo.bots.folder_kb import FolderKB
 from django_ergo.bots.plugins import BotPlugin
 from django_ergo.conversation.context import TextContextSource
 
@@ -44,15 +50,38 @@ class ErgoKBPlugin(BotPlugin):
             raise ValueError(msg)
         factory = self.config.get("toolkit")
         self._factory = import_string(factory.replace(":", ".")) if factory else None
-        if self._factory is None and not self.config.get("knowledgebases"):
-            msg = "ergo_kb needs knowledgebases or toolkit"
+        self.folder = self._folder()
+        if (
+            self._factory is None
+            and self.folder is None
+            and not self.config.get("knowledgebases")
+        ):
+            msg = "ergo_kb needs path, knowledgebases or toolkit"
             raise ValueError(msg)
         self.search_tool = self.config.get("search_tool", "kb_search")
         self.top_k = int(self.config.get("top_k", 5))
 
+    def _folder(self) -> FolderKB | None:
+        relative = self.config.get("path")
+        if not relative:
+            return None
+        root_dir = self.bot.definition.root_dir
+        if root_dir is None:
+            msg = "ergo_kb path needs a bot loaded from a folder"
+            raise ValueError(msg)
+        root = (root_dir / str(relative)).resolve()
+        repo_top = root_dir.resolve()
+        # The KB may sit next to the bot folder in the same repo (../kb).
+        if not (root.is_relative_to(repo_top) or root.is_relative_to(repo_top.parent)):
+            msg = f"ergo_kb path {relative} is outside the bot repository"
+            raise ValueError(msg)
+        return FolderKB(root)
+
     def make_toolkit(self, ctx: ToolContext) -> Toolkit:
         if self._factory is not None:
             return self._factory(ctx)
+        if self.folder is not None:
+            return self.folder.toolkit(ctx)
         from django_ergo.kb_toolkit import KBToolkit
         from django_ergo.models import Knowledgebase
 
@@ -99,6 +128,10 @@ class ErgoKBPlugin(BotPlugin):
 
     def _search(self, ctx: ToolContext, message: str) -> str:
         try:
+            if self._factory is None and self.folder is not None:
+                if not self.folder.search(message, self.top_k):
+                    return ""  # nothing relevant: add no section
+                return self.folder.render_results(message, self.top_k)
             toolkit = self.make_toolkit(ctx)
             return toolkit.execute_tool(
                 self.search_tool, {"query": message, "top_k": self.top_k}

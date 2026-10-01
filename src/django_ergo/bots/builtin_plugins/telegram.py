@@ -8,7 +8,8 @@
 
 ``bot.serve()`` long-polls Telegram. Each message from a listed chat goes to
 that user's root session; messages from other chats are ignored. Photos,
-voice notes, audio and documents arrive as attachments. When a turn stops
+voice notes, audio and documents arrive as attachments. A reply's
+suggestions show as a one-time keyboard. When a turn stops
 for approval, the reply carries Approve and Deny buttons, and pressing one
 resumes the turn.
 
@@ -25,12 +26,10 @@ import urllib.request
 from typing import TYPE_CHECKING
 from typing import Any
 
-from asgiref.sync import sync_to_async
 from django.contrib.auth import get_user_model
 
 from django_ergo.bots.plugins import BotPlugin
 from django_ergo.conversation.attachments import Attachment
-from django_ergo.conversation.runner import unresolved_tool_calls
 
 if TYPE_CHECKING:
     from django_ergo.bots.runtime import TurnResult
@@ -124,7 +123,18 @@ class TelegramPlugin(BotPlugin):
 
     async def send_result(self, chat_id, result: TurnResult) -> None:
         if not result.approvals:
-            await self.send_text(chat_id, result.text)
+            text = result.text or (
+                f"Sorry, something went wrong: {result.error}" if result.error else ""
+            )
+            extra = {}
+            if result.suggestions:
+                # Suggested replies become a one-time keyboard; typing still works.
+                extra["reply_markup"] = {
+                    "keyboard": [[{"text": s}] for s in result.suggestions],
+                    "one_time_keyboard": True,
+                    "resize_keyboard": True,
+                }
+            await self.send_text(chat_id, text, **extra)
             return
         names = ", ".join(a.tool_name for a in result.approvals)
         text = (result.text + "\n\n" if result.text else "") + f"Approve {names}?"
@@ -206,14 +216,10 @@ class TelegramPlugin(BotPlugin):
         )
         if session is None:
             return
-        calls = await sync_to_async(unresolved_tool_calls, thread_sensitive=True)(
-            session
-        )
-        if not calls:
+        if await self.bot.pending_call(session) is None:
             await self.send_text(chat_id, "That request was already handled.")
             return
-        decisions = {call["id"]: action == "ok" for call in calls}
-        result = await self.bot.resume(session, decisions)
+        result = await self.bot.resume(session, action == "ok")
         await self.send_result(chat_id, result)
 
     async def handle_update(self, update: dict) -> None:

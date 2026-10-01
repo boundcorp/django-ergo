@@ -365,7 +365,6 @@ class SessionSource(MessageSource):
         return (
             meta.get("title")
             or meta.get("slug")
-            or self.session.kind
             or f"{self.session.engine_type} session"
         )
 

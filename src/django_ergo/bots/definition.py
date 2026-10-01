@@ -18,6 +18,7 @@ bot.yaml::
       recent: 15
       budget_tokens: 8000
       granularity: conversation
+    orchestration: true                # thread tools on the root; false = none
     sessions:
       allow_create: true               # may the root start threads?
       default_compaction: {mode: stream, config: {keep_recent: 15}}
@@ -71,6 +72,7 @@ class BotDefinition:
     recent: int = 15
     budget_tokens: int = 8000
     granularity: Granularity = Granularity.CONVERSATION
+    orchestration: bool = True
     allow_create_sessions: bool = False
     default_compaction_mode: str = CompactionMode.STREAM
     default_compaction_config: dict = field(default_factory=dict)
@@ -110,6 +112,7 @@ class BotDefinition:
             recent=int(root.get("recent", 15)),
             budget_tokens=int(root.get("budget_tokens", 8000)),
             granularity=Granularity.parse(root.get("granularity")),
+            orchestration=bool(data.get("orchestration", True)),
             allow_create_sessions=bool(sessions.get("allow_create", False)),
             default_compaction_mode=mode,
             default_compaction_config=dict(compaction.get("config") or {}),

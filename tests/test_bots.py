@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 import json
 import textwrap
 
@@ -46,6 +47,17 @@ TOOLS = textwrap.dedent(
         return "not a tool"
     '''
 )
+
+
+_reply_ids = itertools.count()
+
+
+def say(text, suggestions=None, kind="message"):
+    """A model response that answers with a ChatReply."""
+    reply = {"type": kind, "text": text}
+    if suggestions:
+        reply["suggestions"] = suggestions
+    return claude_tool("send_reply", reply, tool_id=f"reply_{next(_reply_ids)}")
 
 
 def write_bot(tmp_path, yaml_text, name="kitchen", tools=TOOLS):
@@ -218,7 +230,7 @@ async def test_root_session_turn_uses_stream_context_tools_and_hooks(tmp_path):
     bot, engine = make_bot(
         tmp_path,
         claude_tool("pantry_count", {"item": "eggs"}),
-        claude_text("You have 4 eggs."),
+        say("You have 4 eggs."),
     )
     plugin = bot.plugin("recording")
 
@@ -252,7 +264,7 @@ async def test_approval_tool_pauses_then_resumes_with_context(tmp_path):
     bot, engine = make_bot(
         tmp_path,
         claude_tool("add_to_list", {"item": "milk", "qty": 2}, tool_id="t1"),
-        claude_text("Added."),
+        say("Added."),
     )
     root = await bot.root_session(user)
 
@@ -284,7 +296,7 @@ async def test_threads_use_default_compaction_and_root_reads_them(tmp_path):
     with pytest.raises(ValueError, match="compaction"):
         await bot.create_session(user, compaction_mode="weekly")
 
-    engine._client.responses = [claude_text("Tacos.")]
+    engine._client.responses = [say("Tacos.")]
     await bot.ask(thread, "Plan Tuesday")
     # A thread keeps full native history and has no recent-window context.
     assert "<context>" in engine._client.calls[-1]["system"]  # plugin note only
@@ -292,7 +304,7 @@ async def test_threads_use_default_compaction_and_root_reads_them(tmp_path):
 
     engine._client.responses = [
         claude_tool("history_sources", {}),
-        claude_text("Tuesday is tacos."),
+        say("Tuesday is tacos."),
     ]
     await bot.ask(root, "What did the plan say?")
     listing = engine._client.calls[-1]["messages"][-1]["content"][0]["content"]
@@ -365,8 +377,8 @@ async def test_root_creates_and_drives_threads(tmp_path):
                 "compaction_mode": "time",
             },
         ),
-        claude_text("Tacos on Tuesday."),  # the thread's reply
-        claude_text("I started a meal plan thread."),
+        say("Tacos on Tuesday."),  # the thread's reply
+        say("I started a meal plan thread."),
     )
     root = await bot.root_session(user)
 
@@ -393,7 +405,7 @@ async def test_root_creates_and_drives_threads(tmp_path):
         claude_tool(
             "threads_send", {"thread_id": str(thread.id), "message": "And Wed?"}
         ),
-        claude_text("Soup on Wednesday."),
+        say("Soup on Wednesday."),
         claude_tool("threads_list", {}, tool_id="t2"),
         claude_tool("threads_close", {"thread_id": str(thread.id)}, tool_id="t3"),
         claude_tool(
@@ -402,17 +414,24 @@ async def test_root_creates_and_drives_threads(tmp_path):
         claude_tool(
             "threads_send", {"thread_id": "nope", "message": "x"}, tool_id="t5"
         ),
-        claude_text("Done."),
+        say("Done."),
     ]
     await bot.ask(root, "Wednesday too")
     calls = engine._client.calls
-    # The thread kept its own native history across turns.
-    assert [m["role"] for m in calls[4]["messages"]] == ["user", "assistant", "user"]
+    # The thread kept its own native history: the first turn (question, reply
+    # tool call, its result, reply text) then the new message.
+    assert [m["role"] for m in calls[4]["messages"]] == [
+        "user",
+        "assistant",
+        "user",
+        "assistant",
+        "user",
+    ]
     results = [c["messages"][-1]["content"][0] for c in calls[5:]]
     assert results[0]["content"] == "Soup on Wednesday."
     listing = json.loads(results[1]["content"])
     assert listing[0]["title"] == "Meal plan"
-    assert listing[0]["messages"] == 4
+    assert listing[0]["messages"] == 8  # two turns of four messages
     assert results[2]["content"] == f"Closed thread {thread.id}"
     assert results[3]["is_error"] and "closed" in results[3]["content"]
     assert results[4]["is_error"] and "No thread nope" in results[4]["content"]
@@ -421,9 +440,7 @@ async def test_root_creates_and_drives_threads(tmp_path):
 @pytest.mark.django_db(transaction=True)
 async def test_thread_creation_needs_permission(tmp_path):
     user = await User.objects.acreate(username="no-threads")
-    bot, engine = make_bot(
-        tmp_path, claude_text("ok"), yaml_text="name: plain\n", name="plain"
-    )
+    bot, engine = make_bot(tmp_path, say("ok"), yaml_text="name: plain\n", name="plain")
     root = await bot.root_session(user)
     await bot.ask(root, "hi")
     tools = _tool_names(engine._client.calls[0])
@@ -437,8 +454,8 @@ async def test_bots_call_reaches_permitted_bot(tmp_path):
     chief, engine = make_bot(
         tmp_path,
         claude_tool("bots_call", {"bot": "sysadmin", "message": "Disk space?"}),
-        claude_text("Disk is 40% full."),
-        claude_text("The server is fine."),
+        say("Disk is 40% full."),
+        say("The server is fine."),
         yaml_text="name: chief\npermissions: {call_bots: [sysadmin]}\n",
         name="chief",
     )
@@ -460,9 +477,9 @@ async def test_bots_call_reaches_permitted_bot(tmp_path):
     # A second call reuses the same session; unknown bots are refused.
     engine._client.responses = [
         claude_tool("bots_call", {"bot": "sysadmin", "message": "And memory?"}),
-        claude_text("Memory is fine."),
+        say("Memory is fine."),
         claude_tool("bots_call", {"bot": "kitchen", "message": "hi"}, tool_id="t2"),
-        claude_text("ok"),
+        say("ok"),
     ]
     await chief.ask(root, "Memory?")
     assert await sysadmin.sessions(user).acount() == 1
@@ -488,3 +505,57 @@ def test_run_bots_check_command(tmp_path):
     write_bot(tmp_path, "name: x\ntools: [../evil.py]\n", name="bad")
     with pytest.raises(CommandError, match="outside the bot folder"):
         call_command("run_bots", str(tmp_path / "bad"), "--check")
+
+
+# ---------------------------------------------------------------------------
+# ChatReply turns
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_bot_turn_is_a_chat_reply_structured_call(tmp_path):
+    user = await User.objects.acreate(username="asker")
+    bot, engine = make_bot(
+        tmp_path,
+        say("Tacos or soup?", suggestions=["Tacos", "Soup"], kind="question"),
+        claude_text("Plain text is not allowed"),
+        say("Tacos it is."),
+    )
+    root = await bot.root_session(user)
+
+    question = await bot.ask(root, "Plan dinner")
+    assert question.reply.is_question
+    assert question.suggestions == ["Tacos", "Soup"]
+    assert question.call.kind == "chat_reply"
+    assert question.call.session_id == root.id
+    first = engine._client.calls[0]
+    assert "send_reply" in {t["name"] for t in first["tools"]}
+    assert (
+        "Every reply to the user goes through the send_reply tool" in (first["system"])
+    )
+
+    answer = await bot.ask(root, "Tacos")
+    assert answer.text == "Tacos it is."
+    # A plain-text answer was sent back for a proper reply.
+    correction = engine._client.calls[2]["messages"][-1]["content"][0]["text"]
+    assert "must call the send_reply tool" in correction
+    # History keeps each reply as readable text, suggestions included.
+    window = engine._client.calls[1]["system"]
+    assert "Tacos or soup?" in window
+    assert "Suggested replies: Tacos / Soup" in window
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_orchestration_can_be_turned_off(tmp_path):
+    user = await User.objects.acreate(username="solo")
+    bot, engine = make_bot(
+        tmp_path,
+        say("ok"),
+        yaml_text="name: solo\norchestration: false\nsessions: {allow_create: true}\n",
+        name="solo",
+    )
+    root = await bot.root_session(user)
+    await bot.ask(root, "hi")
+    tools = _tool_names(engine._client.calls[0])
+    assert not {t for t in tools if t.startswith("threads_")}
+    assert "history_read" in tools

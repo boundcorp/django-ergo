@@ -225,3 +225,6 @@ async def test_structured_call_with_image(user):
     content = engine._client.calls[0]["messages"][0]["content"]
     assert content[0]["type"] == "image"
     assert content[1]["text"] == "Plan from this whiteboard"
+    # The transcript keeps a placeholder, not the bytes.
+    stored = result.call.transcript[0]["content"][0]
+    assert stored == {"type": "text", "text": "[image attachment, not stored]"}

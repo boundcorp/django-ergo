@@ -16,12 +16,14 @@ from django_ergo.conversation.models import ClaudeContentBlock
 from django_ergo.conversation.models import ClaudeMessage
 from django_ergo.conversation.models import ConversationCompaction
 from django_ergo.conversation.models import ConversationSession
+from django_ergo.conversation.models import StructuredCall
 from django_ergo.conversation.models import OpenAIMessage
 from django_ergo.conversation.renderer import ConversationRenderer
 from django_ergo.conversation.runner import run_conversation_turn
 
 from tests.test_conversation_structured import claude_engine
 from tests.test_conversation_structured import claude_text
+from tests.test_conversation_structured import claude_tool
 
 User = get_user_model()
 
@@ -282,22 +284,54 @@ async def test_failed_summary_does_not_block(user):
 # ---------------------------------------------------------------------------
 
 
-async def test_turn_compacts_with_engine_summarizer_before_sending(user):
+async def test_turn_compacts_with_a_structured_call_before_sending(user):
     session = await sync_to_async(make_session)(
         user, "stream", {"keep_recent": 0, "batch": 1}
     )
     await sync_to_async(chat)(session, 1)
-    engine = claude_engine(claude_text("Rolling summary text"), claude_text("hi"))
+    engine = claude_engine(
+        claude_tool(
+            "submit_output",
+            {
+                "summary": "Rolling summary text",
+                "decisions": ["use postgres"],
+                "open_items": [],
+            },
+        ),
+        claude_text("hi"),
+    )
 
     events = [e async for e in run_conversation_turn(engine, session, "next")]
 
     assert [e.text for e in events if e.event_type == "text"] == ["hi"]
     summary_call, turn_call = engine._client.calls
-    assert "question 0" in summary_call["messages"][0]["content"]
+    assert "question 0" in summary_call["messages"][0]["content"][0]["text"]
     assert "running summary" in summary_call["system"]
     sent = _texts(turn_call["messages"])
     assert "Rolling summary text" in sent[0]
+    assert "- use postgres" in sent[0]
     assert sent[1:] == ["next"]
+
+    compaction = await session.compactions.select_related("structured_call").aget()
+    call = compaction.structured_call
+    assert call.kind == "compaction"
+    assert call.session_id is None
+    assert call.metadata == {"compacted_session": str(session.pk)}
+    assert call.response["decisions"] == ["use postgres"]
+
+
+async def test_failed_compaction_call_leaves_session_uncompacted(user):
+    session = await sync_to_async(make_session)(
+        user, "stream", {"keep_recent": 0, "batch": 1}
+    )
+    await sync_to_async(chat)(session, 1)
+    engine = claude_engine(claude_text("no tool", stop="max_tokens"), claude_text("hi"))
+
+    _ = [e async for e in run_conversation_turn(engine, session, "next")]
+
+    assert not await session.compactions.aexists()
+    failed = await StructuredCall.objects.aget(kind="compaction")
+    assert failed.status == "failed"
 
 
 async def test_openai_summary_goes_after_system_message(user):

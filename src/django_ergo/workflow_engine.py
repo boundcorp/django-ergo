@@ -21,6 +21,7 @@ from django_ergo.models import MessageRole
 from django_ergo.models import MessageType
 from django_ergo.models import UserChat
 from django_ergo.models import Workflow
+from django_ergo.openai_options import chat_options
 from django_ergo.settings import api_settings
 from django_ergo.tools import tool_registry
 
@@ -258,8 +259,12 @@ class WorkflowEngine:
                 messages=messages,
                 tools=tools if tools else None,
                 tool_choice="auto" if tools else None,
-                temperature=self.temperature,
-                max_tokens=self.max_tokens,
+                **chat_options(
+                    self.model,
+                    temperature=self.temperature,
+                    max_tokens=self.max_tokens,
+                    tools=bool(tools),
+                ),
             )
 
             message = response.choices[0].message
@@ -638,8 +643,9 @@ class WorkflowEngine:
         response = self.openai_client.chat.completions.create(
             model=self.model,
             messages=messages,
-            temperature=self.temperature,
-            max_tokens=self.max_tokens,
+            **chat_options(
+                self.model, temperature=self.temperature, max_tokens=self.max_tokens
+            ),
         )
 
         message = response.choices[0].message

@@ -21,7 +21,8 @@ DEFAULTS = {
     "WORKFLOW_MODEL": "django_ergo.models.Workflow",  # example only
     # OpenAI Configuration
     "OPENAI_API_KEY": None,  # Can be overridden by environment variable
-    "OPENAI_MODEL": "gpt-4o-mini",
+    "OPENAI_MODEL": "gpt-6-luna",
+    # Ignored by reasoning models (GPT-5, GPT-6, o-series), which reject it.
     "OPENAI_TEMPERATURE": 0.7,
     "OPENAI_MAX_TOKENS": None,
     "OPENAI_TIMEOUT": 30,

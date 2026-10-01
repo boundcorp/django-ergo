@@ -39,6 +39,23 @@ class SeededToolCall:
     is_error: bool = False
 
 
+@dataclass
+class Completion:
+    """One model call made by Engine.complete(): nothing is stored.
+
+    ``message`` is the assistant reply as an engine-native message dict,
+    ready to append to the messages list for the next call.
+    """
+
+    message: dict
+    events: list[EngineResponse]
+    model: str = ""
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_creation_input_tokens: int = 0
+    cache_read_input_tokens: int = 0
+
+
 def session_system_prompt(session) -> str:
     """Return the effective system prompt: the session's own, else the workflow's."""
     own = getattr(session, "system_prompt", "") or ""
@@ -150,6 +167,45 @@ class Engine(ABC):
         msg = f"{type(self).__name__} does not support respond"
         raise NotImplementedError(msg)
         yield  # pragma: no cover
+
+    async def append_assistant_text(self, session, text: str) -> None:
+        """Persist an assistant text message without calling the model."""
+        msg = f"{type(self).__name__} does not support append_assistant_text"
+        raise NotImplementedError(msg)
+
+    # -- Sessionless calls ------------------------------------------------
+    # These build and send engine-native message lists without touching the
+    # database, for work that doesn't belong to a session (standalone
+    # structured calls).
+
+    async def complete(
+        self,
+        messages: list[dict],
+        *,
+        system: str = "",
+        tools: list[dict] | None = None,
+    ) -> Completion:
+        """Call the model on ``messages`` and return its reply. Stores nothing."""
+        msg = f"{type(self).__name__} does not support complete"
+        raise NotImplementedError(msg)
+
+    def user_message(self, text: str, attachments: list | None = None) -> dict:
+        """An engine-native user message, with any in-memory attachments."""
+        msg = f"{type(self).__name__} does not support user_message"
+        raise NotImplementedError(msg)
+
+    def assistant_text_message(self, text: str) -> dict:
+        return {"role": "assistant", "content": text}
+
+    def tool_exchange_messages(self, calls: list[SeededToolCall]) -> list[dict]:
+        """Engine-native messages for tool calls the model didn't make itself."""
+        msg = f"{type(self).__name__} does not support tool_exchange_messages"
+        raise NotImplementedError(msg)
+
+    def tool_result_messages(self, results: list[tuple[str, Any, bool]]) -> list[dict]:
+        """Engine-native messages carrying (tool_use_id, result, is_error) results."""
+        msg = f"{type(self).__name__} does not support tool_result_messages"
+        raise NotImplementedError(msg)
 
     @abstractmethod
     def get_tools_schema(self, workflow) -> list[dict]:
