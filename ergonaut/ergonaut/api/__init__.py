@@ -17,4 +17,7 @@ def healthz(request):
 # Import routers
 from ergonaut.api.auth import router as auth_router
 
+from ergonaut.api.bots import router as bots_router
+
 api.add_router("/auth/", auth_router)
+api.add_router("/", bots_router)
