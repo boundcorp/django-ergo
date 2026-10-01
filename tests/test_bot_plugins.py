@@ -1,0 +1,401 @@
+"""Tests for the built-in bot plugins: ergo_kb, bot_management and telegram."""
+
+from __future__ import annotations
+
+import json
+import subprocess
+import textwrap
+
+import pytest
+from django.contrib.auth import get_user_model
+from django_ergo.bots.runtime import Bot
+from django_ergo.conversation.models import ConversationAttachment
+from django_ergo.conversation.models import ConversationSession
+from django_ergo.conversation.toolkit import Toolkit
+
+from tests.test_bots import make_bot
+from tests.test_bots import write_bot
+from tests.test_conversation_structured import claude_text
+from tests.test_conversation_structured import claude_tool
+
+User = get_user_model()
+
+
+# ---------------------------------------------------------------------------
+# ergo_kb
+# ---------------------------------------------------------------------------
+
+
+class FakeKB(Toolkit):
+    searches: list = []  # noqa: RUF012 — shared on purpose to see prefetch calls
+
+    def has_tool(self, tool_name):
+        return tool_name == "kb_search"
+
+    def execute_tool(self, tool_name, arguments):
+        FakeKB.searches.append(arguments)
+        if arguments["query"] == "boom":
+            msg = "index offline"
+            raise RuntimeError(msg)
+        return f"Article 1A: Tacos (for {arguments['query']!r})"
+
+    def get_tools_schema(self, adapter):
+        return [{"name": "kb_search", "input_schema": {"type": "object"}}]
+
+    def render_overview(self):
+        return ""
+
+
+def fake_kb(ctx):
+    return FakeKB()
+
+
+def kb_yaml(prefetch="new_session"):
+    return f"""
+        name: kitchen
+        plugins:
+          - name: ergo_kb
+            toolkit: tests.test_bot_plugins:fake_kb
+            prefetch: {prefetch}
+            top_k: 3
+    """
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_kb_prefetch_on_new_session_only(tmp_path):
+    FakeKB.searches = []
+    user = await User.objects.acreate(username="kb-new")
+    bot, engine = make_bot(
+        tmp_path, claude_text("Tacos."), claude_text("Ok."), yaml_text=kb_yaml()
+    )
+    thread = await bot.create_session(user)
+
+    await bot.ask(thread, "dinner ideas")
+    first = engine._client.calls[0]
+    assert "## Knowledge base results for this message" in first["system"]
+    assert "Article 1A: Tacos (for 'dinner ideas')" in first["system"]
+    assert "kb_search" in {t["name"] for t in first["tools"]}
+    assert FakeKB.searches == [{"query": "dinner ideas", "top_k": 3}]
+
+    await bot.ask(thread, "and lunch?")
+    assert "Knowledge base results" not in engine._client.calls[1]["system"]
+    assert len(FakeKB.searches) == 1
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_kb_prefetch_every_turn_survives_errors(tmp_path):
+    FakeKB.searches = []
+    user = await User.objects.acreate(username="kb-every")
+    bot, engine = make_bot(
+        tmp_path,
+        claude_text("a"),
+        claude_text("b"),
+        yaml_text=kb_yaml("every_turn"),
+    )
+    root = await bot.root_session(user)
+    await bot.ask(root, "first")
+    await bot.ask(root, "boom")
+    assert "for 'first'" in engine._client.calls[0]["system"]
+    assert "prefetch failed: index offline" in engine._client.calls[1]["system"]
+
+
+@pytest.mark.django_db
+def test_kb_plugin_config(tmp_path):
+    from django_ergo.kb_toolkit import KBToolkit
+    from django_ergo.models import Knowledgebase
+
+    Knowledgebase.objects.create(name="Kitchen", description="Recipes")
+    yaml_text = """
+        name: kb
+        plugins: [{name: ergo_kb, knowledgebases: [Kitchen], prefetch: off}]
+    """
+    bot = Bot.load(write_bot(tmp_path, yaml_text, name="kb"))
+    plugin = bot.plugin("ergo_kb")
+    toolkit = plugin.make_toolkit(None)
+    assert isinstance(toolkit, KBToolkit)
+    assert list(toolkit._name_to_id) == ["Kitchen"]
+    assert plugin.context_sources(None, "hello") == []
+
+    bad = """
+        name: kb2
+        plugins: [{name: ergo_kb, knowledgebases: [Nope]}]
+    """
+    bot = Bot.load(write_bot(tmp_path, bad, name="kb2"))
+    with pytest.raises(ValueError, match="Unknown knowledge bases: Nope"):
+        bot.plugin("ergo_kb").make_toolkit(None)
+    with pytest.raises(ValueError, match="needs knowledgebases or toolkit"):
+        Bot.load(write_bot(tmp_path, "name: kb3\nplugins: [ergo_kb]\n", name="kb3"))
+    with pytest.raises(ValueError, match="prefetch must be one of"):
+        Bot.load(
+            write_bot(
+                tmp_path,
+                "name: kb4\nplugins: [{name: ergo_kb, toolkit: x:y, prefetch: x}]\n",
+                name="kb4",
+            )
+        )
+
+
+# ---------------------------------------------------------------------------
+# bot_management
+# ---------------------------------------------------------------------------
+
+
+def git(cwd, *args):
+    return subprocess.run(
+        ["git", *args], cwd=cwd, check=True, capture_output=True, text=True
+    ).stdout
+
+
+@pytest.fixture()
+def bot_repo(tmp_path, monkeypatch):
+    """A bare remote and a clone whose bots/manager folder is a bot."""
+    for key, value in {
+        "GIT_AUTHOR_NAME": "Bot",
+        "GIT_AUTHOR_EMAIL": "bot@example.com",
+        "GIT_COMMITTER_NAME": "Bot",
+        "GIT_COMMITTER_EMAIL": "bot@example.com",
+    }.items():
+        monkeypatch.setenv(key, value)
+    remote = tmp_path / "remote.git"
+    git(tmp_path, "init", "--bare", "-b", "main", str(remote))
+    work = tmp_path / "work"
+    git(tmp_path, "clone", str(remote), str(work))
+    git(work, "checkout", "-b", "main")
+    (work / "README.md").write_text("bots\n")
+    git(work, "add", "-A")
+    git(work, "commit", "-m", "init")
+    git(work, "push", "-u", "origin", "main")
+    return remote, work
+
+
+def management_bot(work, mode, *responses):
+    yaml_text = f"""
+        name: manager
+        plugins: [{{name: bot_management, mode: {mode}}}]
+    """
+    folder = work / "bots"
+    folder.mkdir()
+    bot, engine = make_bot(folder, *responses, yaml_text=yaml_text, name="manager")
+    return bot, engine, bot.plugin("bot_management")
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_bot_edits_and_merges_its_own_config(bot_repo):
+    remote, work = bot_repo
+    bot, engine, plugin = management_bot(
+        work,
+        "merge_main",
+        claude_tool(
+            "repo_write",
+            {"path": "bots/manager/agents.md", "content": "Be brief."},
+        ),
+        claude_tool("repo_publish", {"message": "Shorter instructions"}, tool_id="p1"),
+        claude_text("Published."),
+    )
+    git(work, "add", "-A")
+    git(work, "commit", "-m", "add bot")
+    git(work, "push")
+    user = await User.objects.acreate(username="manager")
+    root = await bot.root_session(user)
+
+    paused = await bot.ask(root, "Make your instructions shorter")
+    assert [a.tool_name for a in paused.approvals] == ["repo_publish"]
+    assert "Be brief." == (work / "bots/manager/agents.md").read_text()
+    assert "Shorter" not in git(remote, "log", "--oneline", "main")
+
+    done = await bot.resume(root, {"p1": True})
+    assert done.text == "Published."
+    assert "Shorter instructions" in git(remote, "log", "--oneline", "main")
+    assert "Pushed" in engine._client.calls[-1]["messages"][-1]["content"][0]["content"]
+    assert "(clean)" in plugin.status()
+    assert plugin.publish("again") == "Nothing to publish: the working copy is clean."
+
+
+@pytest.mark.django_db
+def test_bot_proposes_pr_and_returns_to_main(bot_repo, monkeypatch):
+    remote, work = bot_repo
+    bot, _, plugin = management_bot(work, "propose_pr")
+    git(work, "add", "-A")
+    git(work, "commit", "-m", "add bot")
+    git(work, "push")
+    calls = []
+    real_run = plugin.run
+
+    def run(args, cwd=None):
+        if args[0] == "gh":
+            calls.append(args)
+            return "https://github.com/acme/bots/pull/7\n"
+        return real_run(args, cwd)
+
+    monkeypatch.setattr(plugin, "run", run)
+
+    plugin.write("bots/manager/tools/new.py", "x = 1\n")
+    assert "bots/manager/tools/new.py" in plugin.diff()
+    assert "bots/manager/tools/new.py" in plugin.list_files("bots/manager")
+    result = plugin.publish("Add a tool", title="New tool")
+
+    assert result.startswith("Opened https://github.com/acme/bots/pull/7 from bot/manager/")
+    branch = result.split(" from ")[1].rstrip(".")
+    assert branch.endswith("-new-tool")
+    assert calls[0][:3] == ["gh", "pr", "create"]
+    assert calls[0][calls[0].index("--head") + 1] == branch
+    assert "Add a tool" in git(remote, "log", "--oneline", branch)
+    assert git(work, "rev-parse", "--abbrev-ref", "HEAD").strip() == "main"
+    assert not (work / "bots/manager/tools/new.py").exists()
+
+    with pytest.raises(ValueError, match="outside the repository"):
+        plugin.read("../remote.git/config")
+    with pytest.raises(ValueError, match="outside the repository"):
+        plugin.write(".git/hooks/pre-commit", "evil")
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_bot_management_tools_are_root_only(bot_repo):
+    _, work = bot_repo
+    bot, engine, _ = management_bot(work, "merge_main", claude_text("a"), claude_text("b"))
+    user = await User.objects.acreate(username="root-only")
+    root = await bot.root_session(user)
+    thread = await bot.create_session(user, parent=root)
+    await bot.ask(root, "hi")
+    await bot.ask(thread, "hi")
+    root_tools = {t["name"] for t in engine._client.calls[0]["tools"]}
+    thread_tools = {t["name"] for t in engine._client.calls[1]["tools"]}
+    assert "repo_publish" in root_tools
+    assert "repo_publish" not in thread_tools
+
+
+# ---------------------------------------------------------------------------
+# telegram
+# ---------------------------------------------------------------------------
+
+
+class FakeTelegram:
+    def __init__(self, updates=()):
+        self.updates = list(updates)
+        self.calls = []
+
+    async def call(self, method, **params):
+        self.calls.append((method, params))
+        if method == "getUpdates":
+            updates, self.updates = self.updates, []
+            return updates
+        return True
+
+    async def download(self, file_id):
+        return b"\x89PNG fake " + file_id.encode()
+
+    def sent(self):
+        return [p for m, p in self.calls if m == "sendMessage"]
+
+
+TELEGRAM_TOOLS = textwrap.dedent(
+    """
+    from django_ergo.bots import bot_tool
+
+    @bot_tool(requires_approval=True)
+    def order(item: str) -> str:
+        return f"ordered {item}"
+    """
+)
+
+
+def telegram_bot(tmp_path, *responses):
+    yaml_text = """
+        name: kitchen
+        tools: [tools/pantry.py]
+        plugins:
+          - name: telegram
+            token_env: TEST_TELEGRAM_TOKEN
+            users: {111: cook}
+    """
+    folder = write_bot(tmp_path, yaml_text, tools=TELEGRAM_TOOLS)
+    bot, engine = make_bot(folder.parent, *responses, yaml_text=yaml_text)
+    plugin = bot.plugin("telegram")
+    plugin.api = FakeTelegram()
+    return bot, engine, plugin
+
+
+def update(update_id, chat_id=111, **message):
+    return {"update_id": update_id, "message": {"chat": {"id": chat_id}, **message}}
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_telegram_routes_chats_to_root_sessions(tmp_path):
+    user = await User.objects.acreate(username="cook")
+    bot, engine, plugin = telegram_bot(tmp_path, claude_text("Hello cook!"))
+    plugin.api.updates = [
+        update(5, text="hi"),
+        update(6, chat_id=999, text="who am I?"),  # unknown chat: ignored
+    ]
+
+    assert await plugin.poll_once() == 2
+
+    assert plugin._offset == 7
+    assert plugin.api.sent() == [{"chat_id": 111, "text": "Hello cook!"}]
+    root = await bot.root_session(user)
+    assert len(engine._client.calls) == 1
+    assert await bot.sessions().acount() == 1
+    assert await plugin.notify(user, "Dinner is ready")
+    assert plugin.api.sent()[-1] == {"chat_id": "111", "text": "Dinner is ready"}
+    assert root.bot_name == "kitchen"
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_telegram_photo_becomes_attachment(tmp_path):
+    await User.objects.acreate(username="cook")
+    bot, engine, plugin = telegram_bot(tmp_path, claude_text("Nice lasagna."))
+
+    await plugin.handle_update(
+        update(1, caption="what is this?", photo=[{"file_id": "s"}, {"file_id": "big"}])
+    )
+
+    content = engine._client.calls[0]["messages"][0]["content"]
+    assert content[0]["type"] == "image"
+    assert content[-1] == {"type": "text", "text": "what is this?"}
+    attachment = await ConversationAttachment.objects.aget()
+    assert attachment.metadata == {"telegram_file_id": "big"}
+    assert attachment.kind == "image"
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_telegram_approval_buttons_resume_the_turn(tmp_path):
+    await User.objects.acreate(username="cook")
+    bot, engine, plugin = telegram_bot(
+        tmp_path,
+        claude_tool("order", {"item": "flour"}, tool_id="o1", text="Ordering."),
+        claude_text("Flour is on the way."),
+    )
+
+    await plugin.handle_update(update(1, text="We need flour"))
+    prompt = plugin.api.sent()[-1]
+    assert prompt["text"] == "Ordering.\n\nApprove order?"
+    session = await ConversationSession.objects.aget()
+    buttons = prompt["reply_markup"]["inline_keyboard"][0]
+    assert buttons[0]["callback_data"] == f"ok:{session.id}"
+
+    callback = {
+        "id": "cb1",
+        "data": buttons[0]["callback_data"],
+        "message": {"chat": {"id": 111}},
+    }
+    await plugin.handle_update({"update_id": 2, "callback_query": callback})
+
+    assert ("answerCallbackQuery", {"callback_query_id": "cb1"}) in plugin.api.calls
+    assert plugin.api.sent()[-1]["text"] == "Flour is on the way."
+    result = engine._client.calls[-1]["messages"][-1]["content"][0]
+    assert result["content"] == "ordered flour"
+
+    # Pressing again finds nothing left to approve.
+    await plugin.handle_update({"update_id": 3, "callback_query": callback})
+    assert plugin.api.sent()[-1]["text"] == "That request was already handled."
+    assert json.dumps(plugin.api.calls)  # calls are plain data
+
+
+def test_telegram_needs_token(tmp_path, monkeypatch):
+    monkeypatch.delenv("TEST_TELEGRAM_TOKEN", raising=False)
+    yaml_text = "name: tg\nplugins: [{name: telegram, token_env: TEST_TELEGRAM_TOKEN}]\n"
+    bot = Bot.load(write_bot(tmp_path, yaml_text, name="tg"))
+    with pytest.raises(RuntimeError, match="TEST_TELEGRAM_TOKEN"):
+        _ = bot.plugin("telegram").api
+    monkeypatch.setenv("TEST_TELEGRAM_TOKEN", "123:abc")
+    assert bot.plugin("telegram").api.token == "123:abc"

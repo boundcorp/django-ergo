@@ -34,6 +34,14 @@ class Toolkit(ABC):
     def render_overview(self) -> str:
         """Render initial context for the agent (e.g., TOC, summaries)."""
 
+    def requires_approval(self, tool_name: str) -> bool:
+        """Whether a person must approve this call before it runs.
+
+        The runner yields PendingApproval instead of running it, and
+        resume_conversation_turn() continues once there's a decision.
+        """
+        return False
+
     def get_bound_knowledgebases(self) -> list[tuple]:
         """Return [(knowledgebase, mode), ...] for usage tracking.
 

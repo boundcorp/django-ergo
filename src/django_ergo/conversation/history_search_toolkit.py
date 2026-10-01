@@ -30,6 +30,8 @@ from django_ergo.conversation.history import render_message
 from django_ergo.conversation.toolkit import Toolkit
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from django_ergo.conversation.adapters import ToolAdapter
 
 DEFAULT_LIMIT = 20
@@ -154,11 +156,22 @@ class MessageHistoryToolkit(Toolkit):
         sources: list[MessageSource],
         *,
         default_granularity: Granularity | str = Granularity.CONVERSATION,
+        source_loader: Callable[[], list[MessageSource]] | None = None,
     ):
         self.sources: dict[str, MessageSource] = {}
         for source in sources:
             self.add_source(source)
         self.default_granularity = Granularity.parse(default_granularity)
+        # Called before each tool call to pick up sources created since,
+        # e.g. new threads of a bot.
+        self.source_loader = source_loader
+
+    def _load_sources(self) -> None:
+        if self.source_loader is None:
+            return
+        for source in self.source_loader():
+            if source.source_id not in self.sources:
+                self.add_source(source)
 
     def add_source(self, source: MessageSource) -> None:
         self.sources[source.source_id] = source
@@ -184,6 +197,7 @@ class MessageHistoryToolkit(Toolkit):
         ]
 
     def render_overview(self) -> str:
+        self._load_sources()
         return (
             "You can read and search earlier messages with the history_* tools. "
             "Messages are shown as [source L<line> <timestamp> ROLE]; pass those "
@@ -191,6 +205,7 @@ class MessageHistoryToolkit(Toolkit):
         )
 
     def execute_tool(self, tool_name: str, arguments: dict) -> str:
+        self._load_sources()
         handler = getattr(self, f"_{tool_name.removeprefix('history_')}", None)
         if tool_name not in TOOL_NAMES or handler is None:
             msg = f"Unknown tool: {tool_name}"

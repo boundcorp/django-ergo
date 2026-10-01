@@ -84,6 +84,16 @@ class ConversationSession(TimeStampedMixin):
     )
     # Mode parameters; see conversation.compaction.DEFAULT_CONFIG.
     compaction_config = models.JSONField(default=dict, blank=True)
+    # Set for sessions owned by an Ergo bot (django_ergo.bots).
+    bot_name = models.CharField(max_length=100, blank=True, default="", db_index=True)
+    # The session that created this one, e.g. a bot's root orchestrator.
+    parent = models.ForeignKey(
+        "self",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="children",
+    )
 
     class Meta:
         ordering = ["-created_at"]

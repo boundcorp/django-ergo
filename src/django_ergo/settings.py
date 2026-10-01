@@ -34,6 +34,8 @@ DEFAULTS = {
     # "django_ergo.conversation.attachments.openai_transcriber". None = no
     # transcription; engines without native audio input see a placeholder.
     "AUDIO_TRANSCRIBER": None,
+    # Extra bot plugins by short name: {"name": "dotted.path.PluginClass"}.
+    "BOT_PLUGINS": {},
     # Telemetry Configuration
     "TELEMETRY_ENABLED": False,
     "TELEMETRY_SERVICE_NAME": "django-ergo",

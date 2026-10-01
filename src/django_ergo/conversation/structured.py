@@ -415,7 +415,7 @@ async def run_structured_turn(  # noqa: C901, PLR0912, PLR0915
             results = []
             for event in tool_events:
                 name, args = adapter.parse_tool_call(event.tool_use)
-                if _tool_requires_approval(name, session.workflow):
+                if _tool_requires_approval(name, session.workflow, toolkits):
                     result = (
                         f"{name} requires approval, which structured calls "
                         "cannot request"

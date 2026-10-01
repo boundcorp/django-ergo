@@ -42,6 +42,7 @@ Changelog = "https://github.com/boundcorp/django-ergo/blob/master/HISTORY.md"
 legacy = ["psycopg[binary]", "pgvector", "openai"]
 openai = ["openai"]
 filesystem = ["pyyaml>=6.0"]
+bots = ["pyyaml>=6.0"]
 telemetry = [
     "opentelemetry-api",
     "opentelemetry-sdk",
