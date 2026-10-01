@@ -29,6 +29,11 @@ DEFAULTS = {
     "CONVERSATION_ENGINE_TYPE": "openai",
     "CONVERSATION_TRANSPORT_TYPE": "api",
     "CONVERSATION_ENGINE_CONFIG": {},
+    # Async callable (data: bytes, media_type: str, filename: str) -> str used to
+    # transcribe audio attachments, e.g.
+    # "django_ergo.conversation.attachments.openai_transcriber". None = no
+    # transcription; engines without native audio input see a placeholder.
+    "AUDIO_TRANSCRIBER": None,
     # Telemetry Configuration
     "TELEMETRY_ENABLED": False,
     "TELEMETRY_SERVICE_NAME": "django-ergo",
@@ -48,6 +53,7 @@ DEFAULTS = {
 IMPORT_STRINGS = [
     "WORKFLOW_MODEL",  # example only as it will be imported as a class
     "EMBEDDING_PROVIDER",  # Import embedding provider class
+    "AUDIO_TRANSCRIBER",
 ]
 
 

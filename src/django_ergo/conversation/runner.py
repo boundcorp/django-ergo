@@ -126,6 +126,7 @@ async def run_conversation_turn(
     message: str,
     extra_tools: list[Toolkit] | None = None,
     max_rounds: int = MAX_TOOL_ROUNDS,
+    attachments: list | None = None,
 ) -> AsyncIterator[EngineResponse | PendingApproval]:
     """Send a message and handle multi-round tool calls until the LLM is done.
 
@@ -142,8 +143,11 @@ async def run_conversation_turn(
         await _record_kb_usage(session, toolkits)
     await maybe_compact(session, engine)
 
+    send_kwargs = {"additional_tools": additional_tool_schemas}
+    if attachments:
+        send_kwargs["attachments"] = attachments
     other_events, tool_events = await _split_events(
-        engine.send(session, message, additional_tools=additional_tool_schemas)
+        engine.send(session, message, **send_kwargs)
     )
     for event in other_events:
         yield event

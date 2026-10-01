@@ -8,6 +8,10 @@ from typing import Any
 from django.db import models
 
 from django_ergo.conversation.adapters import OpenAIToolAdapter
+from django_ergo.conversation.attachments import Attachment
+from django_ergo.conversation.attachments import attachments_by_sequence
+from django_ergo.conversation.attachments import openai_part
+from django_ergo.conversation.attachments import save_attachments
 from django_ergo.conversation.compaction import latest_compaction
 from django_ergo.conversation.compaction import render_summary_message
 from django_ergo.conversation.engine import Engine
@@ -22,9 +26,15 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
 
-def openai_message_dict(msg) -> dict:
-    """Convert an OpenAIMessage row to an API message dict."""
-    entry = {"role": msg.role, "content": msg.content}
+def openai_message_dict(msg, attachments=(), *, audio_input: bool = False) -> dict:
+    """Convert an OpenAIMessage row (plus its attachments) to an API message dict."""
+    content = msg.content
+    if attachments:
+        content = [
+            *([{"type": "text", "text": msg.content}] if msg.content else []),
+            *(openai_part(row, audio_input=audio_input) for row in attachments),
+        ]
+    entry = {"role": msg.role, "content": content}
     if msg.tool_calls:
         entry["tool_calls"] = msg.tool_calls
     if msg.tool_call_id:
@@ -44,6 +54,9 @@ class OpenAIAPIEngine(Engine):
         self.base_url = config.get("base_url")
         self.temperature = config.get("temperature", 0.7)
         self.max_tokens = config.get("max_tokens", 4096)
+        # Send audio attachments natively (needs an audio-capable model);
+        # otherwise their transcript is sent as text.
+        self.audio_input = config.get("audio_input", False)
         self._client = None
         self._adapter = OpenAIToolAdapter()
 
@@ -78,7 +91,18 @@ class OpenAIAPIEngine(Engine):
             rows = rows.filter(
                 models.Q(sequence__gt=after_sequence) | models.Q(role="system")
             )
-        return [(msg, openai_message_dict(msg)) for msg in rows]
+        attachments = attachments_by_sequence(session)
+        return [
+            (
+                msg,
+                openai_message_dict(
+                    msg,
+                    attachments.get(msg.sequence, ()),
+                    audio_input=self.audio_input,
+                ),
+            )
+            for msg in rows
+        ]
 
     def reconstruct_messages(self, session) -> list[dict]:
         """Build OpenAI message list from DB-stored OpenAIMessage rows.
@@ -209,13 +233,20 @@ class OpenAIAPIEngine(Engine):
                 event_type="done", raw={"finish_reason": choice.finish_reason}
             )
 
-    async def append_user_message(self, session, message: str) -> None:
+    async def append_user_message(
+        self,
+        session,
+        message: str,
+        attachments: list[Attachment] | None = None,
+    ) -> None:
         from django_ergo.conversation.models import OpenAIMessage
 
         seq = await session.openai_messages.acount()
         await OpenAIMessage.objects.acreate(
             session=session, role="user", content=message, sequence=seq
         )
+        if attachments:
+            await save_attachments(session, seq, attachments)
 
     async def append_tool_exchange(self, session, calls: list[SeededToolCall]) -> None:
         import json
@@ -259,10 +290,14 @@ class OpenAIAPIEngine(Engine):
             yield event
 
     async def send(
-        self, session, message: str, additional_tools: list[dict] | None = None
+        self,
+        session,
+        message: str,
+        additional_tools: list[dict] | None = None,
+        attachments: list[Attachment] | None = None,
     ) -> AsyncIterator[EngineResponse]:
         """Persist the user message, call the API, and yield response events."""
-        await self.append_user_message(session, message)
+        await self.append_user_message(session, message, attachments)
         async for event in self.respond(session, additional_tools):
             yield event
 

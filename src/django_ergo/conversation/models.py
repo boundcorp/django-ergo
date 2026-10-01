@@ -303,6 +303,47 @@ class ConversationCompaction(TimeStampedMixin):
         return f"{self.session_id} compaction <= {self.upto_sequence}"
 
 
+class AttachmentKind(models.TextChoices):
+    IMAGE = "image", "Image"
+    AUDIO = "audio", "Audio"
+    DOCUMENT = "document", "Document"
+
+
+class ConversationAttachment(TimeStampedMixin):
+    """An image, audio clip or document attached to a user message.
+
+    Linked to the message by its sequence number, so it works for every
+    engine's message table. The bytes live in ``file`` (default storage) or
+    at ``url``. Audio keeps a ``transcript`` for engines that can't take
+    audio input.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    session = models.ForeignKey(
+        ConversationSession,
+        on_delete=models.CASCADE,
+        related_name="attachments",
+    )
+    message_sequence = models.IntegerField()
+    position = models.IntegerField(default=0)
+    kind = models.CharField(max_length=20, choices=AttachmentKind.choices)
+    media_type = models.CharField(max_length=100)
+    file = models.FileField(upload_to="ergo/attachments/%Y/%m/", blank=True)
+    url = models.URLField(max_length=2000, blank=True, default="")
+    filename = models.CharField(max_length=255, blank=True, default="")
+    size = models.IntegerField(null=True, blank=True)
+    sha256 = models.CharField(max_length=64, blank=True, default="")
+    transcript = models.TextField(blank=True, default="")
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ["message_sequence", "position"]
+        indexes = [models.Index(fields=["session", "message_sequence"])]
+
+    def __str__(self):
+        return f"{self.session_id} #{self.message_sequence} {self.kind}"
+
+
 class KBUsageMode(models.TextChoices):
     READ = "read", "Read"
     WRITE = "write", "Write"

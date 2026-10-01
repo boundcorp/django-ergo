@@ -100,6 +100,7 @@ async def run_workflow_task(  # noqa: PLR0913
     extra_tools: list[Toolkit] | None = None,
     metadata: dict[str, Any] | None = None,
     close_session: bool = True,
+    attachments: list | None = None,
 ) -> AssistantTaskResult:
     """Create a conversation session, run one workflow-backed turn, and collect output."""
     from django_ergo.conversation.manager import SessionManager
@@ -126,6 +127,7 @@ async def run_workflow_task(  # noqa: PLR0913
         session,
         message,
         extra_tools=extra_tools,
+        attachments=attachments,
     ):
         if isinstance(event, PendingApproval):
             approvals.append(event)

@@ -6,6 +6,10 @@ from typing import TYPE_CHECKING
 from typing import Any
 
 from django_ergo.conversation.adapters import ClaudeToolAdapter
+from django_ergo.conversation.attachments import Attachment
+from django_ergo.conversation.attachments import attachments_by_sequence
+from django_ergo.conversation.attachments import claude_block
+from django_ergo.conversation.attachments import save_attachments
 from django_ergo.conversation.compaction import latest_compaction
 from django_ergo.conversation.compaction import render_summary_message
 from django_ergo.conversation.engine import Engine
@@ -83,7 +87,18 @@ class ClaudeAPIEngine(Engine):
         rows = session.claude_messages.prefetch_related("content_blocks")
         if after_sequence is not None:
             rows = rows.filter(sequence__gt=after_sequence)
-        return [(msg, claude_message_dict(msg)) for msg in rows]
+        attachments = attachments_by_sequence(session)
+        result = []
+        for msg in rows:
+            message = claude_message_dict(msg)
+            if msg.sequence in attachments:
+                # Attachments go before the text, as Anthropic recommends.
+                message["content"] = [
+                    *(claude_block(row) for row in attachments[msg.sequence]),
+                    *message["content"],
+                ]
+            result.append((msg, message))
+        return result
 
     def reconstruct_messages(self, session) -> list[dict]:
         """Build Claude API message history from DB state.
@@ -242,7 +257,12 @@ class ClaudeAPIEngine(Engine):
                 event_type="done", raw={"stop_reason": response.stop_reason}
             )
 
-    async def append_user_message(self, session, message: str) -> None:
+    async def append_user_message(
+        self,
+        session,
+        message: str,
+        attachments: list[Attachment] | None = None,
+    ) -> None:
         from django_ergo.conversation.models import ClaudeContentBlock
         from django_ergo.conversation.models import ClaudeMessage
 
@@ -253,6 +273,8 @@ class ClaudeAPIEngine(Engine):
         await ClaudeContentBlock.objects.acreate(
             message=user_msg, block_type="text", sequence=0, text=message
         )
+        if attachments:
+            await save_attachments(session, seq, attachments)
 
     async def append_tool_exchange(self, session, calls: list[SeededToolCall]) -> None:
         from django_ergo.conversation.models import ClaudeContentBlock
@@ -293,9 +315,13 @@ class ClaudeAPIEngine(Engine):
             yield event
 
     async def send(
-        self, session, message: str, additional_tools: list[dict] | None = None
+        self,
+        session,
+        message: str,
+        additional_tools: list[dict] | None = None,
+        attachments: list[Attachment] | None = None,
     ) -> AsyncIterator[EngineResponse]:
-        await self.append_user_message(session, message)
+        await self.append_user_message(session, message, attachments)
         async for event in self.respond(session, additional_tools):
             yield event
 

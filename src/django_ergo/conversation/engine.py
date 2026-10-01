@@ -124,8 +124,10 @@ class Engine(ABC):
         Engines should override this if they have different persistence logic.
         """
 
-    async def append_user_message(self, session, message: str) -> None:
-        """Persist a user message without calling the model."""
+    async def append_user_message(
+        self, session, message: str, attachments: list | None = None
+    ) -> None:
+        """Persist a user message (and any attachments) without calling the model."""
         msg = f"{type(self).__name__} does not support append_user_message"
         raise NotImplementedError(msg)
 

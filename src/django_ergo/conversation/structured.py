@@ -70,6 +70,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from django_ergo.conversation.adapters import ToolAdapter
+    from django_ergo.conversation.attachments import Attachment
     from django_ergo.conversation.engine import Engine
     from django_ergo.conversation.engine import EngineResponse
 
@@ -362,6 +363,7 @@ async def run_structured_turn(  # noqa: C901, PLR0912, PLR0915
     session: ConversationSession,
     message: str,
     spec: StructuredCallSpec,
+    attachments: list[Attachment] | None = None,
 ) -> StructuredCallResult:
     """Send one message to a structured session and drive it to a validated output.
 
@@ -393,7 +395,7 @@ async def run_structured_turn(  # noqa: C901, PLR0912, PLR0915
         await _record_kb_usage(session, spec.toolkits)
 
     await maybe_compact(session, engine)
-    await engine.append_user_message(session, message)
+    await engine.append_user_message(session, message, attachments)
     if spec.pre_seeds and output_seq == 0:
         await engine.append_tool_exchange(session, await _run_pre_seeds(spec.pre_seeds))
 
@@ -528,6 +530,7 @@ class StructuredSession:
         user,
         message: str,
         metadata: dict | None = None,
+        attachments: list[Attachment] | None = None,
     ) -> StructuredCallResult:
         spec = self._engine_spec()
         engine_type = getattr(self.engine, "engine_type", None) or spec.engine_type
@@ -557,14 +560,21 @@ class StructuredSession:
         engine = self._engine_for(session)
         session.session_id = await engine.start_session(session)
         await session.asave(update_fields=["session_id", "updated_at"])
-        return await run_structured_turn(engine, session, message, self.spec)
+        return await run_structured_turn(
+            engine, session, message, self.spec, attachments
+        )
 
     async def send(
-        self, session: ConversationSession, message: str
+        self,
+        session: ConversationSession,
+        message: str,
+        attachments: list[Attachment] | None = None,
     ) -> StructuredCallResult:
         engine = self._engine_for(session)
         await engine.resume_session(session)
-        return await run_structured_turn(engine, session, message, self.spec)
+        return await run_structured_turn(
+            engine, session, message, self.spec, attachments
+        )
 
 
 async def run_structured_call(  # noqa: PLR0913
@@ -576,9 +586,12 @@ async def run_structured_call(  # noqa: PLR0913
     engine_spec: EngineSpec | None = None,
     workflow=None,
     metadata: dict | None = None,
+    attachments: list[Attachment] | None = None,
 ) -> StructuredCallResult:
     """Open a structured session and return the output for its first message."""
     handler = StructuredSession(
         spec, engine=engine, engine_spec=engine_spec, workflow=workflow
     )
-    return await handler.start(user=user, message=message, metadata=metadata)
+    return await handler.start(
+        user=user, message=message, metadata=metadata, attachments=attachments
+    )
