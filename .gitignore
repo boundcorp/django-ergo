@@ -33,3 +33,6 @@ htmlcov/
 # Project Specific
 node_modules/
 .worktrees/
+
+# Attachment files written by tests
+/ergo/
