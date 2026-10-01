@@ -8,6 +8,8 @@ from typing import Any
 from django_ergo.conversation.adapters import OpenAIToolAdapter
 from django_ergo.conversation.engine import Engine
 from django_ergo.conversation.engine import EngineResponse
+from django_ergo.conversation.engine import SeededToolCall
+from django_ergo.conversation.engine import session_system_prompt
 from django_ergo.conversation.telemetry import record_usage
 from django_ergo.conversation.telemetry import trace_engine_call
 from django_ergo.tools import tool_registry
@@ -76,11 +78,12 @@ class OpenAIAPIEngine(Engine):
         from django_ergo.conversation.models import OpenAIMessage
         from django_ergo.conversation.models import OpenAIMessageRole
 
-        if session.workflow and session.workflow.instructions:
+        system = session_system_prompt(session)
+        if system:
             await sync_to_async(OpenAIMessage.objects.create)(
                 session=session,
                 role=OpenAIMessageRole.SYSTEM,
-                content=session.workflow.instructions,
+                content=system,
                 sequence=0,
             )
         return str(session.id)
@@ -175,10 +178,7 @@ class OpenAIAPIEngine(Engine):
                 event_type="done", raw={"finish_reason": choice.finish_reason}
             )
 
-    async def send(
-        self, session, message: str, additional_tools: list[dict] | None = None
-    ) -> AsyncIterator[EngineResponse]:
-        """Persist the user message, call the API, and yield response events."""
+    async def append_user_message(self, session, message: str) -> None:
         from django_ergo.conversation.models import OpenAIMessage
 
         seq = await session.openai_messages.acount()
@@ -186,7 +186,53 @@ class OpenAIAPIEngine(Engine):
             session=session, role="user", content=message, sequence=seq
         )
 
-        async for event in self._call_and_persist(session, seq + 1, additional_tools):
+    async def append_tool_exchange(self, session, calls: list[SeededToolCall]) -> None:
+        import json
+
+        from django_ergo.conversation.models import OpenAIMessage
+
+        if not calls:
+            return
+        seq = await session.openai_messages.acount()
+        await OpenAIMessage.objects.acreate(
+            session=session,
+            role="assistant",
+            content=None,
+            tool_calls=[
+                {
+                    "id": call.tool_use_id,
+                    "type": "function",
+                    "function": {
+                        "name": call.name,
+                        "arguments": json.dumps(call.input),
+                    },
+                }
+                for call in calls
+            ],
+            sequence=seq,
+        )
+        for offset, call in enumerate(calls, start=1):
+            await OpenAIMessage.objects.acreate(
+                session=session,
+                role="tool",
+                content=str(call.result),
+                tool_call_id=call.tool_use_id,
+                sequence=seq + offset,
+            )
+
+    async def respond(
+        self, session, additional_tools: list[dict] | None = None
+    ) -> AsyncIterator[EngineResponse]:
+        seq = await session.openai_messages.acount()
+        async for event in self._call_and_persist(session, seq, additional_tools):
+            yield event
+
+    async def send(
+        self, session, message: str, additional_tools: list[dict] | None = None
+    ) -> AsyncIterator[EngineResponse]:
+        """Persist the user message, call the API, and yield response events."""
+        await self.append_user_message(session, message)
+        async for event in self.respond(session, additional_tools):
             yield event
 
     async def submit_tool_result(  # noqa: PLR0913

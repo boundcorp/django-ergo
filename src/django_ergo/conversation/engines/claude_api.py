@@ -8,6 +8,8 @@ from typing import Any
 from django_ergo.conversation.adapters import ClaudeToolAdapter
 from django_ergo.conversation.engine import Engine
 from django_ergo.conversation.engine import EngineResponse
+from django_ergo.conversation.engine import SeededToolCall
+from django_ergo.conversation.engine import session_system_prompt
 from django_ergo.conversation.telemetry import record_usage
 from django_ergo.conversation.telemetry import trace_engine_call
 from django_ergo.tools import tool_registry
@@ -132,8 +134,9 @@ class ClaudeAPIEngine(Engine):
                 "max_tokens": self.max_tokens,
                 "messages": messages,
             }
-            if session.workflow and session.workflow.instructions:
-                kwargs["system"] = session.workflow.instructions
+            system = session_system_prompt(session)
+            if system:
+                kwargs["system"] = system
             if tools:
                 kwargs["tools"] = tools
 
@@ -212,9 +215,7 @@ class ClaudeAPIEngine(Engine):
                 event_type="done", raw={"stop_reason": response.stop_reason}
             )
 
-    async def send(
-        self, session, message: str, additional_tools: list[dict] | None = None
-    ) -> AsyncIterator[EngineResponse]:
+    async def append_user_message(self, session, message: str) -> None:
         from django_ergo.conversation.models import ClaudeContentBlock
         from django_ergo.conversation.models import ClaudeMessage
 
@@ -226,7 +227,49 @@ class ClaudeAPIEngine(Engine):
             message=user_msg, block_type="text", sequence=0, text=message
         )
 
-        async for event in self._process_response(session, seq + 1, additional_tools):
+    async def append_tool_exchange(self, session, calls: list[SeededToolCall]) -> None:
+        from django_ergo.conversation.models import ClaudeContentBlock
+        from django_ergo.conversation.models import ClaudeMessage
+
+        if not calls:
+            return
+        seq = await session.claude_messages.acount()
+        call_msg = await ClaudeMessage.objects.acreate(
+            session=session, role="assistant", sequence=seq, stop_reason="tool_use"
+        )
+        result_msg = await ClaudeMessage.objects.acreate(
+            session=session, role="user", sequence=seq + 1
+        )
+        for block_seq, call in enumerate(calls):
+            await ClaudeContentBlock.objects.acreate(
+                message=call_msg,
+                block_type="tool_use",
+                sequence=block_seq,
+                tool_use_id=call.tool_use_id,
+                tool_name=call.name,
+                tool_input=call.input,
+            )
+            await ClaudeContentBlock.objects.acreate(
+                message=result_msg,
+                block_type="tool_result",
+                sequence=block_seq,
+                tool_result_for=call.tool_use_id,
+                tool_result_content=str(call.result),
+                is_error=call.is_error,
+            )
+
+    async def respond(
+        self, session, additional_tools: list[dict] | None = None
+    ) -> AsyncIterator[EngineResponse]:
+        seq = await session.claude_messages.acount()
+        async for event in self._process_response(session, seq, additional_tools):
+            yield event
+
+    async def send(
+        self, session, message: str, additional_tools: list[dict] | None = None
+    ) -> AsyncIterator[EngineResponse]:
+        await self.append_user_message(session, message)
+        async for event in self.respond(session, additional_tools):
             yield event
 
     async def submit_tool_result(  # noqa: PLR0913

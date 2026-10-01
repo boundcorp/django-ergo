@@ -24,6 +24,30 @@ class EngineResponse:
     thinking: str | None = None
 
 
+@dataclass
+class SeededToolCall:
+    """A tool call executed outside the model and written into session history.
+
+    Used for pre-seeding: the model sees the call and its result as if it had
+    made the call itself, saving a round trip for data the caller already has.
+    """
+
+    tool_use_id: str
+    name: str
+    input: dict
+    result: Any
+    is_error: bool = False
+
+
+def session_system_prompt(session) -> str:
+    """Return the effective system prompt: the session's own, else the workflow's."""
+    own = getattr(session, "system_prompt", "") or ""
+    if own:
+        return own
+    workflow = getattr(session, "workflow", None)
+    return (workflow.instructions if workflow else "") or ""
+
+
 class Engine(ABC):
     """Abstract engine protocol. All engines implement this interface."""
 
@@ -77,6 +101,17 @@ class Engine(ABC):
                 ):
                     yield event
 
+    async def append_tool_results(
+        self, session, results: list[tuple[str, Any, bool]]
+    ) -> None:
+        """Persist tool results without calling the model.
+
+        Args:
+            results: list of (tool_use_id, result, is_error) tuples.
+        """
+        for tool_use_id, result, is_error in results:
+            await self._persist_tool_result(session, tool_use_id, result, is_error)
+
     async def _persist_tool_result(  # noqa: B027
         self,
         session,
@@ -88,6 +123,28 @@ class Engine(ABC):
 
         Engines should override this if they have different persistence logic.
         """
+
+    async def append_user_message(self, session, message: str) -> None:
+        """Persist a user message without calling the model."""
+        msg = f"{type(self).__name__} does not support append_user_message"
+        raise NotImplementedError(msg)
+
+    async def append_tool_exchange(self, session, calls: list[SeededToolCall]) -> None:
+        """Persist an assistant tool-call turn and its results without calling the model."""
+        msg = f"{type(self).__name__} does not support append_tool_exchange"
+        raise NotImplementedError(msg)
+
+    async def respond(
+        self, session, additional_tools: list[dict] | None = None
+    ) -> AsyncIterator[EngineResponse]:
+        """Call the model on the current history and yield its response.
+
+        Unlike send(), this persists no new user input, so a failed call can
+        be retried without duplicating history.
+        """
+        msg = f"{type(self).__name__} does not support respond"
+        raise NotImplementedError(msg)
+        yield  # pragma: no cover
 
     @abstractmethod
     def get_tools_schema(self, workflow) -> list[dict]:

@@ -841,6 +841,29 @@ try:
     from django_ergo.conversation.models import ClaudeContentBlock
     from django_ergo.conversation.models import ClaudeMessage
     from django_ergo.conversation.models import ConversationSession
+    from django_ergo.conversation.models import StructuredOutput
+
+    class StructuredOutputInline(admin.TabularInline):
+        model = StructuredOutput
+        extra = 0
+        fields = [
+            "sequence",
+            "status",
+            "request",
+            "output",
+            "error",
+            "turns_used",
+            "input_tokens",
+            "output_tokens",
+        ]
+        readonly_fields = fields
+        ordering = ["sequence"]
+
+        def has_add_permission(self, request, obj=None):
+            return False
+
+        def has_delete_permission(self, request, obj=None):
+            return False
 
     class ClaudeMessageInline(admin.TabularInline):
         model = ClaudeMessage
@@ -896,14 +919,16 @@ try:
             "user",
             "message_count",
             "engine_type",
+            "mode",
+            "kind",
             "status",
             "metadata_preview",
             "created_at",
         ]
-        list_filter = ["engine_type", "status"]
-        search_fields = ["session_id", "metadata"]
+        list_filter = ["engine_type", "mode", "status"]
+        search_fields = ["session_id", "kind", "metadata"]
         readonly_fields = ["id", "created_at", "updated_at"]
-        inlines = [ClaudeMessageInline]
+        inlines = [StructuredOutputInline, ClaudeMessageInline]
 
         def get_urls(self):
             urls = super().get_urls()

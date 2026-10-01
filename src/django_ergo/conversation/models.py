@@ -25,6 +25,11 @@ class SessionStatus(models.TextChoices):
     FAILED = "failed", "Failed"
 
 
+class SessionMode(models.TextChoices):
+    CHAT = "chat", "Chat"
+    STRUCTURED = "structured", "Structured"
+
+
 class ConversationSession(TimeStampedMixin):
     """A conversation session with an AI engine."""
 
@@ -55,10 +60,21 @@ class ConversationSession(TimeStampedMixin):
         choices=SessionStatus.choices,
     )
     metadata = models.JSONField(default=dict, blank=True)
+    mode = models.CharField(
+        max_length=20,
+        choices=SessionMode.choices,
+        default=SessionMode.CHAT,
+    )
+    # Free-form label for the job a structured session does ("planner",
+    # "summarizer"). A varchar so new kinds don't need migrations.
+    kind = models.CharField(max_length=64, blank=True, default="")
+    # Overrides workflow.instructions when set.
+    system_prompt = models.TextField(blank=True, default="")
 
     class Meta:
         ordering = ["-created_at"]
         indexes = [
+            models.Index(fields=["mode", "kind"]),
             models.Index(fields=["user", "-created_at"]),
             models.Index(fields=["status"]),
             models.Index(fields=["engine_type"]),
@@ -188,6 +204,60 @@ class OpenAIMessage(TimeStampedMixin):
 
     def __str__(self):
         return f"{self.session} - {self.role} [{self.sequence}]"
+
+
+class StructuredOutputStatus(models.TextChoices):
+    IN_PROGRESS = "in_progress", "In progress"
+    COMPLETED = "completed", "Completed"
+    FAILED = "failed", "Failed"
+    TURN_LIMITED = "turn_limited", "Turn limited"
+
+
+class StructuredOutput(TimeStampedMixin):
+    """The validated output produced in response to one message of a structured session.
+
+    Each user message sent to a structured session gets its own row, so a
+    follow-up ("make the title shorter") yields a new output while earlier
+    ones stay on record. first_sequence/last_sequence give the span of
+    engine messages the turn wrote.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    session = models.ForeignKey(
+        ConversationSession,
+        on_delete=models.CASCADE,
+        related_name="structured_outputs",
+    )
+    sequence = models.IntegerField()
+    request = models.TextField(blank=True, default="")
+    status = models.CharField(
+        max_length=20,
+        choices=StructuredOutputStatus.choices,
+        default=StructuredOutputStatus.IN_PROGRESS,
+    )
+    output = models.JSONField(null=True, blank=True)
+    error = models.TextField(blank=True, default="")
+    error_category = models.CharField(max_length=20, blank=True, default="")
+    turns_used = models.IntegerField(default=0)
+    first_sequence = models.IntegerField(null=True, blank=True)
+    last_sequence = models.IntegerField(null=True, blank=True)
+    input_tokens = models.IntegerField(default=0)
+    output_tokens = models.IntegerField(default=0)
+    cache_creation_input_tokens = models.IntegerField(default=0)
+    cache_read_input_tokens = models.IntegerField(default=0)
+    model_name = models.CharField(max_length=100, blank=True, default="")
+
+    class Meta:
+        ordering = ["sequence"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["session", "sequence"],
+                name="unique_structured_output_sequence",
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.session_id} output [{self.sequence}] ({self.status})"
 
 
 class KBUsageMode(models.TextChoices):
