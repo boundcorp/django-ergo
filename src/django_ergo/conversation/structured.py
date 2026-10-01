@@ -49,6 +49,7 @@ from pydantic import BaseModel
 from pydantic import ValidationError
 
 from django_ergo.conversation.adapters import OpenAIToolAdapter
+from django_ergo.conversation.compaction import maybe_compact
 from django_ergo.conversation.engine import SeededToolCall
 from django_ergo.conversation.models import ConversationSession
 from django_ergo.conversation.models import SessionMode
@@ -391,6 +392,7 @@ async def run_structured_turn(  # noqa: C901, PLR0912, PLR0915
     if spec.toolkits:
         await _record_kb_usage(session, spec.toolkits)
 
+    await maybe_compact(session, engine)
     await engine.append_user_message(session, message)
     if spec.pre_seeds and output_seq == 0:
         await engine.append_tool_exchange(session, await _run_pre_seeds(spec.pre_seeds))

@@ -30,6 +30,13 @@ class SessionMode(models.TextChoices):
     STRUCTURED = "structured", "Structured"
 
 
+class CompactionMode(models.TextChoices):
+    NONE = "none", "None"
+    TIME = "time", "Time-based"
+    CONTEXT_SIZE = "context_size", "Context size"
+    STREAM = "stream", "Stream"
+
+
 class ConversationSession(TimeStampedMixin):
     """A conversation session with an AI engine."""
 
@@ -70,6 +77,13 @@ class ConversationSession(TimeStampedMixin):
     kind = models.CharField(max_length=64, blank=True, default="")
     # Overrides workflow.instructions when set.
     system_prompt = models.TextField(blank=True, default="")
+    compaction_mode = models.CharField(
+        max_length=20,
+        choices=CompactionMode.choices,
+        default=CompactionMode.NONE,
+    )
+    # Mode parameters; see conversation.compaction.DEFAULT_CONFIG.
+    compaction_config = models.JSONField(default=dict, blank=True)
 
     class Meta:
         ordering = ["-created_at"]
@@ -258,6 +272,35 @@ class StructuredOutput(TimeStampedMixin):
 
     def __str__(self):
         return f"{self.session_id} output [{self.sequence}] ({self.status})"
+
+
+class ConversationCompaction(TimeStampedMixin):
+    """A summary standing in for a session's earlier messages in model context.
+
+    Messages with sequence <= upto_sequence are replaced by ``summary`` when
+    engines rebuild context. The rows themselves are kept, so history tools
+    can still read them. Each summary folds in the previous one (rolling).
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    session = models.ForeignKey(
+        ConversationSession,
+        on_delete=models.CASCADE,
+        related_name="compactions",
+    )
+    mode = models.CharField(max_length=20, choices=CompactionMode.choices)
+    reason = models.CharField(max_length=255, blank=True, default="")
+    from_sequence = models.IntegerField()
+    upto_sequence = models.IntegerField()
+    message_count = models.IntegerField(default=0)
+    summary = models.TextField()
+
+    class Meta:
+        ordering = ["upto_sequence"]
+        indexes = [models.Index(fields=["session", "-upto_sequence"])]
+
+    def __str__(self):
+        return f"{self.session_id} compaction <= {self.upto_sequence}"
 
 
 class KBUsageMode(models.TextChoices):

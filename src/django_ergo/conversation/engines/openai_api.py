@@ -5,7 +5,11 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 from typing import Any
 
+from django.db import models
+
 from django_ergo.conversation.adapters import OpenAIToolAdapter
+from django_ergo.conversation.compaction import latest_compaction
+from django_ergo.conversation.compaction import render_summary_message
 from django_ergo.conversation.engine import Engine
 from django_ergo.conversation.engine import EngineResponse
 from django_ergo.conversation.engine import SeededToolCall
@@ -16,6 +20,16 @@ from django_ergo.tools import tool_registry
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
+
+
+def openai_message_dict(msg) -> dict:
+    """Convert an OpenAIMessage row to an API message dict."""
+    entry = {"role": msg.role, "content": msg.content}
+    if msg.tool_calls:
+        entry["tool_calls"] = msg.tool_calls
+    if msg.tool_call_id:
+        entry["tool_call_id"] = msg.tool_call_id
+    return entry
 
 
 class OpenAIAPIEngine(Engine):
@@ -54,16 +68,33 @@ class OpenAIAPIEngine(Engine):
     def get_tool_adapter(self) -> OpenAIToolAdapter:
         return self._adapter
 
+    def history_rows(self, session, after_sequence: int | None = None) -> list:
+        """Return [(OpenAIMessage, message dict), ...] in sequence order.
+
+        System messages are always included, whatever after_sequence says.
+        """
+        rows = session.openai_messages.all()
+        if after_sequence is not None:
+            rows = rows.filter(
+                models.Q(sequence__gt=after_sequence) | models.Q(role="system")
+            )
+        return [(msg, openai_message_dict(msg)) for msg in rows]
+
     def reconstruct_messages(self, session) -> list[dict]:
-        """Build OpenAI message list from DB-stored OpenAIMessage rows."""
-        messages = []
-        for msg in session.openai_messages.all():
-            entry = {"role": msg.role, "content": msg.content}
-            if msg.tool_calls:
-                entry["tool_calls"] = msg.tool_calls
-            if msg.tool_call_id:
-                entry["tool_call_id"] = msg.tool_call_id
-            messages.append(entry)
+        """Build OpenAI message list from DB-stored OpenAIMessage rows.
+
+        When the session has been compacted, the latest summary replaces the
+        messages it covers, after any system message.
+        """
+        compaction = latest_compaction(session)
+        after = compaction.upto_sequence if compaction else None
+        messages = [message for _, message in self.history_rows(session, after)]
+        if compaction:
+            position = sum(1 for m in messages if m["role"] == "system")
+            messages.insert(
+                position,
+                {"role": "user", "content": render_summary_message(compaction)},
+            )
         return messages
 
     def get_tools_schema(self, workflow) -> list[dict]:

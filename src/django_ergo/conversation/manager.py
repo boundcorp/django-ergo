@@ -26,6 +26,8 @@ class SessionManager:
         engine_type: str,
         transport_type: str,
         metadata: dict | None = None,
+        compaction_mode: str = "none",
+        compaction_config: dict | None = None,
     ) -> ConversationSession:
         session = await ConversationSession.objects.acreate(
             user=user,
@@ -34,6 +36,8 @@ class SessionManager:
             transport_type=transport_type,
             status="active",
             metadata=metadata or {},
+            compaction_mode=compaction_mode,
+            compaction_config=compaction_config or {},
         )
         engine = self._build_engine(session)
         session.session_id = await engine.start_session(session)

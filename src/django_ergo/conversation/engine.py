@@ -150,6 +150,15 @@ class Engine(ABC):
     def get_tools_schema(self, workflow) -> list[dict]:
         """Convert ergo tools to engine-native tool format."""
 
+    def history_rows(self, session, after_sequence: int | None = None) -> list:
+        """Return [(message row, engine-native message dict), ...] in order.
+
+        Unlike reconstruct_messages(), this ignores compaction. Compaction
+        uses it to read the messages it folds.
+        """
+        msg = f"{type(self).__name__} does not support history_rows"
+        raise NotImplementedError(msg)
+
     @abstractmethod
     def reconstruct_messages(self, session) -> list[dict]:
         """Build engine-native message history from DB."""

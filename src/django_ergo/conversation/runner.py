@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 from asgiref.sync import sync_to_async
 
+from django_ergo.conversation.compaction import maybe_compact
 from django_ergo.tools import tool_registry
 
 if TYPE_CHECKING:
@@ -139,6 +140,7 @@ async def run_conversation_turn(
     )
     if toolkits:
         await _record_kb_usage(session, toolkits)
+    await maybe_compact(session, engine)
 
     other_events, tool_events = await _split_events(
         engine.send(session, message, additional_tools=additional_tool_schemas)

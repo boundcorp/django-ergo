@@ -925,7 +925,7 @@ try:
             "metadata_preview",
             "created_at",
         ]
-        list_filter = ["engine_type", "mode", "status"]
+        list_filter = ["engine_type", "mode", "compaction_mode", "status"]
         search_fields = ["session_id", "kind", "metadata"]
         readonly_fields = ["id", "created_at", "updated_at"]
         inlines = [StructuredOutputInline, ClaudeMessageInline]

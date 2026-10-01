@@ -6,6 +6,8 @@ from typing import TYPE_CHECKING
 from typing import Any
 
 from django_ergo.conversation.adapters import ClaudeToolAdapter
+from django_ergo.conversation.compaction import latest_compaction
+from django_ergo.conversation.compaction import render_summary_message
 from django_ergo.conversation.engine import Engine
 from django_ergo.conversation.engine import EngineResponse
 from django_ergo.conversation.engine import SeededToolCall
@@ -16,6 +18,35 @@ from django_ergo.tools import tool_registry
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
+
+
+def claude_message_dict(msg) -> dict:
+    """Convert a ClaudeMessage row (with content_blocks) to an API message dict."""
+    content = []
+    for block in msg.content_blocks.all():
+        if block.block_type == "text":
+            content.append({"type": "text", "text": block.text})
+        elif block.block_type == "thinking":
+            content.append({"type": "thinking", "thinking": block.thinking})
+        elif block.block_type == "tool_use":
+            content.append(
+                {
+                    "type": "tool_use",
+                    "id": block.tool_use_id,
+                    "name": block.tool_name,
+                    "input": block.tool_input or {},
+                }
+            )
+        elif block.block_type == "tool_result":
+            content.append(
+                {
+                    "type": "tool_result",
+                    "tool_use_id": block.tool_result_for,
+                    "content": block.tool_result_content or "",
+                    "is_error": block.is_error,
+                }
+            )
+    return {"role": msg.role, "content": content}
 
 
 class ClaudeAPIEngine(Engine):
@@ -47,36 +78,32 @@ class ClaudeAPIEngine(Engine):
     def get_tool_adapter(self) -> ClaudeToolAdapter:
         return self._adapter
 
-    def reconstruct_messages(self, session) -> list[dict]:
-        """Build Claude API message history from DB state."""
+    def history_rows(self, session, after_sequence: int | None = None) -> list:
+        """Return [(ClaudeMessage, message dict), ...] in sequence order."""
+        rows = session.claude_messages.prefetch_related("content_blocks")
+        if after_sequence is not None:
+            rows = rows.filter(sequence__gt=after_sequence)
+        return [(msg, claude_message_dict(msg)) for msg in rows]
 
-        messages = []
-        for msg in session.claude_messages.prefetch_related("content_blocks").all():
-            content = []
-            for block in msg.content_blocks.all():
-                if block.block_type == "text":
-                    content.append({"type": "text", "text": block.text})
-                elif block.block_type == "thinking":
-                    content.append({"type": "thinking", "thinking": block.thinking})
-                elif block.block_type == "tool_use":
-                    content.append(
-                        {
-                            "type": "tool_use",
-                            "id": block.tool_use_id,
-                            "name": block.tool_name,
-                            "input": block.tool_input or {},
-                        }
-                    )
-                elif block.block_type == "tool_result":
-                    content.append(
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": block.tool_result_for,
-                            "content": block.tool_result_content or "",
-                            "is_error": block.is_error,
-                        }
-                    )
-            messages.append({"role": msg.role, "content": content})
+    def reconstruct_messages(self, session) -> list[dict]:
+        """Build Claude API message history from DB state.
+
+        When the session has been compacted, the latest summary replaces the
+        messages it covers.
+        """
+        compaction = latest_compaction(session)
+        after = compaction.upto_sequence if compaction else None
+        messages = [message for _, message in self.history_rows(session, after)]
+        if compaction:
+            messages.insert(
+                0,
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": render_summary_message(compaction)}
+                    ],
+                },
+            )
         return messages
 
     def get_tools_schema(self, workflow) -> list[dict]:
