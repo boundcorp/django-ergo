@@ -99,6 +99,9 @@ INSTALLED_APPS = [
     "ergonaut.apps.bots",
 ]
 
+# The built web app (npm run build in frontend/), served for unknown paths.
+FRONTEND_DIST = os.environ.get("FRONTEND_DIST", os.path.join(os.path.dirname(__file__), "../../frontend/dist"))
+
 # Ergo. Bots' webhooks are served at /hooks/; ERGONAUT_PUBLIC_URL is this
 # server's public address, e.g. https://ergonaut.example.com.
 ERGONAUT_PUBLIC_URL = os.environ.get("ERGONAUT_PUBLIC_URL", "").rstrip("/")
