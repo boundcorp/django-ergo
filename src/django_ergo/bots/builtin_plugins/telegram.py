@@ -6,6 +6,7 @@
         users:                               # Telegram user or chat id -> username
           123456789: lee
         album_wait: 1.5                      # seconds to collect an album
+        mode: auto                           # webhook, polling, or auto
 
 ``bot.serve()`` long-polls Telegram. A message's sender is looked up in
 ``users`` first, then its chat, so people in a shared group chat each talk
@@ -17,12 +18,20 @@ suggestions show as a one-time keyboard. When a turn stops
 for approval, the reply carries Approve and Deny buttons, and pressing one
 resumes the turn.
 
+In ``auto`` mode the plugin uses a webhook when
+``DJANGO_ERGO["BOT_WEBHOOK_BASE_URL"]`` is set (``bot.serve()`` registers it
+with Telegram and returns), and long-polls otherwise. Webhook requests must
+carry Telegram's secret-token header: the value of ``secret_env`` if set,
+else one derived from the bot token.
+
 Other code can message a user with ``plugin.notify(user, text)``.
 """
 
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
 import json
 import logging
 import os
@@ -87,6 +96,11 @@ class TelegramPlugin(BotPlugin):
         self.album_wait = float(self.config.get("album_wait", 1.5))
         self._albums: dict[tuple, list[dict]] = {}
         self._album_timers: dict[tuple, asyncio.Task] = {}
+        self._tasks: set[asyncio.Task] = set()
+        self.mode = str(self.config.get("mode", "auto"))
+        if self.mode not in {"auto", "webhook", "polling"}:
+            msg = f"Telegram mode must be auto, webhook or polling, not {self.mode!r}"
+            raise ValueError(msg)
         self._api: Any = None
         self._offset = 0
 
@@ -291,7 +305,62 @@ class TelegramPlugin(BotPlugin):
             await self.handle_update(update)
         return len(updates)
 
+    # -- webhook ---------------------------------------------------------
+
+    @property
+    def webhook_secret(self) -> str:
+        env = self.config.get("secret_env")
+        if env and os.environ.get(env):
+            return os.environ[env]
+        return hashlib.sha256(f"ergo-telegram:{self.api.token}".encode()).hexdigest()[:48]
+
+    @property
+    def uses_webhook(self) -> bool:
+        if self.mode == "polling":
+            return False
+        url = self.webhook_url("update")
+        if self.mode == "webhook" and not url:
+            msg = "Telegram webhook mode needs DJANGO_ERGO['BOT_WEBHOOK_BASE_URL']"
+            raise RuntimeError(msg)
+        return bool(url)
+
+    def webhooks(self):
+        return {"update": self.receive_webhook}
+
+    async def receive_webhook(self, request):
+        from django.http import HttpResponse
+
+        given = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+        if not hmac.compare_digest(given, self.webhook_secret):
+            return HttpResponse(status=403)
+        try:
+            update = json.loads(request.body or b"{}")
+        except ValueError:
+            return HttpResponse(status=400)
+        # Answer Telegram at once; the turn runs after the response.
+        task = asyncio.create_task(self.handle_update(update))
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+        return None
+
+    async def drain(self) -> None:
+        """Wait for webhook updates still being handled."""
+        while self._tasks:
+            await asyncio.gather(*list(self._tasks))
+
+    async def register_webhook(self) -> None:
+        await self.api.call(
+            "setWebhook",
+            url=self.webhook_url("update"),
+            secret_token=self.webhook_secret,
+            allowed_updates=["message", "callback_query"],
+        )
+
     async def serve(self) -> None:
+        if self.uses_webhook:
+            await self.register_webhook()
+            return
+        await self.api.call("deleteWebhook")
         while True:
             try:
                 await self.poll_once()

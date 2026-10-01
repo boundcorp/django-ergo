@@ -37,6 +37,10 @@ DEFAULTS = {
     "AUDIO_TRANSCRIBER": None,
     # Extra bot plugins by short name: {"name": "dotted.path.PluginClass"}.
     "BOT_PLUGINS": {},
+    # Public base URL that django_ergo.bots.urls is mounted at, e.g.
+    # "https://bots.example.com/hooks". Plugins build their webhook URLs from
+    # it; None = no public URL, so channels such as Telegram poll instead.
+    "BOT_WEBHOOK_BASE_URL": None,
     # Telemetry Configuration
     "TELEMETRY_ENABLED": False,
     "TELEMETRY_SERVICE_NAME": "django-ergo",

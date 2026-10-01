@@ -13,6 +13,7 @@ A plugin is a class with any of these hooks::
         async def after_turn(self, session, message, result): ...
         async def on_session_closed(self, session): ...
         async def serve(self): ...                     # long-running, e.g. a channel
+        def webhooks(self): return {"update": handler} # see django_ergo.bots.webhooks
 
 ``bot.yaml`` names plugins by short name (built-ins below, or
 ``DJANGO_ERGO["BOT_PLUGINS"]``) or by dotted path ``module:Class``. Every
@@ -27,6 +28,8 @@ from typing import Any
 from django.utils.module_loading import import_string
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from django_ergo.bots.runtime import Bot
     from django_ergo.bots.runtime import TurnResult
     from django_ergo.bots.tools import ToolContext
@@ -75,6 +78,24 @@ class BotPlugin:
 
     async def serve(self) -> None:
         """Long-running work, such as polling a chat channel. Optional."""
+
+    def webhooks(self) -> dict[str, Callable]:
+        """Webhook handlers by name: ``async handler(request) -> response``.
+
+        Served at ``<BOT_WEBHOOK_BASE_URL>/<bot>/<plugin>/<name>/`` when the
+        project includes ``django_ergo.bots.urls``. A handler returns an
+        ``HttpResponse``, a JSON-able value, or None for an empty 200.
+        """
+        return {}
+
+    def webhook_url(self, name: str) -> str | None:
+        """This plugin's public URL for one of its webhooks, if one is set."""
+        from django_ergo.settings import api_settings
+
+        base = api_settings.BOT_WEBHOOK_BASE_URL
+        if not base:
+            return None
+        return f"{base.rstrip('/')}/{self.bot.name}/{self.name}/{name}/"
 
 
 def resolve_plugin_class(name: str) -> type[BotPlugin]:

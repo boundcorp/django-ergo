@@ -533,3 +533,57 @@ async def test_telegram_album_is_one_turn(tmp_path):
     assert [part["type"] for part in content] == ["image", "image", "text"]
     assert content[-1]["text"] == "add these to the pantry"
     assert plugin.api.sent()[-1]["text"] == "Two receipts."
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_telegram_webhook_mode(tmp_path, settings, monkeypatch):
+    from django.test import AsyncClient
+
+    from django_ergo.bots import webhooks
+    from django_ergo.bots.registry import BotRegistry
+    from django_ergo.settings import api_settings
+
+    monkeypatch.setattr(
+        api_settings, "BOT_WEBHOOK_BASE_URL", "https://bots.test/hooks/", raising=False
+    )
+    await User.objects.acreate(username="cook")
+    bot, engine, plugin = telegram_bot(tmp_path, say("Hello from a webhook."))
+    plugin.api.token = "123:abc"
+    registry = BotRegistry()
+    registry.add(bot)
+    webhooks.set_registry(registry)
+    try:
+        assert plugin.uses_webhook
+        await bot.serve()  # registers the webhook and returns
+        method, params = plugin.api.calls[-1]
+        assert method == "setWebhook"
+        assert params["url"] == "https://bots.test/hooks/kitchen/telegram/update/"
+        assert params["secret_token"] == plugin.webhook_secret
+
+        client = AsyncClient()
+        body = json.dumps(update(9, text="hi"))
+        url = "/hooks/kitchen/telegram/update/"
+        denied = await client.post(url, body, content_type="application/json")
+        assert denied.status_code == 403
+        missing = await client.post("/hooks/kitchen/nope/update/", body, content_type="application/json")
+        assert missing.status_code == 404
+
+        ok = await client.post(
+            url,
+            body,
+            content_type="application/json",
+            headers={"X-Telegram-Bot-Api-Secret-Token": plugin.webhook_secret},
+        )
+        assert ok.status_code == 200
+        await plugin.drain()
+        assert plugin.api.sent()[-1] == {"chat_id": 111, "text": "Hello from a webhook."}
+    finally:
+        webhooks.set_registry(None)
+
+
+def test_telegram_polling_without_public_url(tmp_path):
+    bot, _, plugin = telegram_bot(tmp_path)
+    assert plugin.uses_webhook is False
+    plugin.mode = "webhook"
+    with pytest.raises(RuntimeError, match="BOT_WEBHOOK_BASE_URL"):
+        _ = plugin.uses_webhook

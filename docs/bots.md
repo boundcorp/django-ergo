@@ -174,6 +174,40 @@ than `name` is passed as `self.config`. Plugins are named by dotted path
 `DJANGO_ERGO["BOT_PLUGINS"]`, or by a built-in name. `bot.serve()` runs
 every plugin's `serve()` together.
 
+## Webhooks
+
+A plugin can serve webhooks by returning handlers from `webhooks()`:
+
+```python
+class GitHubPlugin(BotPlugin):
+    name = "github"
+
+    def webhooks(self):
+        return {"push": self.on_push}
+
+    async def on_push(self, request):
+        ...                      # check the signature, then act
+        return {"ok": True}     # JSON, an HttpResponse, or None for 200
+```
+
+The project mounts every plugin's webhooks with one URL pattern and tells
+Ergo which bots this process serves:
+
+```python
+# urls.py
+path("hooks/", include("django_ergo.bots.urls")),
+
+# startup, e.g. AppConfig.ready()
+from django_ergo.bots import webhooks
+webhooks.set_registry(BotRegistry.discover("bots/"))
+```
+
+A request to `hooks/<bot>/<plugin>/<name>/` reaches that handler; anything
+else is a 404. Set `DJANGO_ERGO["BOT_WEBHOOK_BASE_URL"]` to the public URL
+of that mount (`https://bots.example.com/hooks`) and
+`plugin.webhook_url(name)` gives the full URL to register with the outside
+service. Handlers check their own secrets.
+
 ## Built-in plugins
 
 ### ergo_kb
@@ -230,7 +264,14 @@ lists open pull requests. Changes take effect when the bot is loaded again.
   token_env: KITCHEN_TELEGRAM_TOKEN
   users: {123456789: lee}    # Telegram user or chat id -> Django username
   album_wait: 1.5            # seconds to collect an album's photos
+  mode: auto                 # webhook, polling, or auto
+  secret_env: KITCHEN_TELEGRAM_SECRET   # optional webhook secret
 ```
+
+In `auto` mode Telegram uses a webhook when `BOT_WEBHOOK_BASE_URL` is set:
+`bot.serve()` registers it and returns, and updates arrive at
+`hooks/<bot>/telegram/update/` with Telegram's secret-token header. Without
+a public URL it long-polls.
 
 `bot.serve()` long-polls the Bot API. Each message's sender is looked up in
 `users`, then its chat, so in a shared group chat each person talks to the
