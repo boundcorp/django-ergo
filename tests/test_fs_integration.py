@@ -191,7 +191,7 @@ def test_portable_bundle_is_reviewed_common_input(repository, tmp_path, corpus, 
 def test_conflicting_fs_hierarchy_upgrade_fails_without_reassigning():
     initial = [("django_ergo", "0009_knowledgebase_organization_strategy")]
     branch = [("django_ergo", "0011_knowledgesource_index_config_hash_and_more")]
-    current = [("django_ergo", "0014_path_primary_articles")]
+    current = _latest_ergo_migration()
     MigrationExecutor(connection).migrate(initial)
     executor = MigrationExecutor(connection)
     executor.migrate(branch)
@@ -217,3 +217,9 @@ def test_conflicting_fs_hierarchy_upgrade_fails_without_reassigning():
         MigrationExecutor(connection).migrate(current)
     assert Article.objects.get(pk=first.pk).hierarchy_code == "A"
     assert Article.objects.get(pk=second.pk).hierarchy_code is None
+
+
+def _latest_ergo_migration():
+    """Leaf migration of django_ergo, so tests restore the full schema."""
+    graph = MigrationExecutor(connection).loader.graph
+    return [node for node in graph.leaf_nodes() if node[0] == "django_ergo"]

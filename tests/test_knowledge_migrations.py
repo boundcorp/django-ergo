@@ -16,7 +16,7 @@ from django.db.migrations.executor import MigrationExecutor
 )
 def test_existing_article_upgrade_preserves_identity_hierarchy_and_content(starting):
     previous = [("django_ergo", starting)]
-    current = [("django_ergo", "0014_path_primary_articles")]
+    current = _latest_ergo_migration()
     executor = MigrationExecutor(connection)
     executor.migrate([("django_ergo", "0009_knowledgebase_organization_strategy")])
     executor = MigrationExecutor(connection)
@@ -93,3 +93,9 @@ def test_existing_article_upgrade_preserves_identity_hierarchy_and_content(start
             assert preserved.evidence_text == "Retained"
     finally:
         MigrationExecutor(connection).migrate(current)
+
+
+def _latest_ergo_migration():
+    """Leaf migration of django_ergo, so tests restore the full schema."""
+    graph = MigrationExecutor(connection).loader.graph
+    return [node for node in graph.leaf_nodes() if node[0] == "django_ergo"]
