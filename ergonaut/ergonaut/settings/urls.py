@@ -4,10 +4,12 @@ from django.urls import include, path, re_path
 
 from ergonaut.utils.admin import admin_site
 from ergonaut.api import api
+from ergonaut.api.stream import session_events
 from ergonaut.observability.views import metrics_view
 from ergonaut.utils.views.frontend import frontend
 
 urlpatterns = [
+    path("api/sessions/<uuid:session_id>/events", session_events),
     path("api/", api.urls),
     path("mgmt/", admin_site.urls),
     path("hooks/", include("django_ergo.bots.urls")),

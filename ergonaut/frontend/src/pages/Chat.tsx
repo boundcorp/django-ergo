@@ -1,8 +1,21 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useParams } from 'react-router-dom'
-import type { SessionDetail, Turn } from '../api'
+import type { Call, Message, SessionDetail, Turn } from '../api'
 import { api } from '../api'
 import { Transcript } from '../components/Transcript'
+
+/** Fold a live update into the transcript: messages replace by line, calls by id. */
+function merge(detail: SessionDetail, messages: Message[], calls: Call[]): SessionDetail {
+  const byLine = new Map(detail.messages.map(m => [m.line, m]))
+  for (const m of messages) byLine.set(m.line, m)
+  const byId = new Map(detail.calls.map(c => [c.id, c]))
+  for (const c of calls) byId.set(c.id, c)
+  return {
+    ...detail,
+    messages: [...byLine.values()].sort((a, b) => a.line - b.line),
+    calls: [...byId.values()].sort((a, b) => a.created_at.localeCompare(b.created_at)),
+  }
+}
 
 export function Chat({ onChange }: { onChange: () => void }) {
   const { id = '' } = useParams()
@@ -12,6 +25,8 @@ export function Chat({ onChange }: { onChange: () => void }) {
   const [error, setError] = useState('')
   const [last, setLast] = useState<Turn | null>(null)
   const bottom = useRef<HTMLDivElement>(null)
+  const latest = useRef<SessionDetail | null>(null)
+  latest.current = detail
 
   const load = useCallback(async () => setDetail(await api.session(id)), [id])
 
@@ -20,6 +35,20 @@ export function Chat({ onChange }: { onChange: () => void }) {
     setLast(null)
     load().catch(e => setError(String(e.message ?? e)))
   }, [load])
+
+  // Follow the session live, whichever process runs its turns.
+  const loaded = detail !== null
+  useEffect(() => {
+    if (!loaded) return
+    const messages = latest.current?.messages ?? []
+    const after = messages.length ? messages[messages.length - 1].line : -1
+    const events = new EventSource(`/api/sessions/${id}/events?after=${after}`)
+    events.onmessage = e => {
+      const { messages, calls } = JSON.parse(e.data) as { messages: Message[]; calls: Call[] }
+      setDetail(d => (d ? merge(d, messages, calls) : d))
+    }
+    return () => events.close()
+  }, [id, loaded])
 
   useEffect(() => bottom.current?.scrollIntoView({ behavior: 'smooth' }), [detail, busy])
 
@@ -51,6 +80,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
   const waiting = lastCall?.status === 'awaiting_approval' ? lastCall.pending_approvals : []
   const suggestions = !waiting.length ? (last?.suggestions ?? lastCall?.response?.suggestions ?? []) : []
   const closed = detail.session.status === 'completed'
+  const thinking = busy || lastCall?.status === 'in_progress'
 
   return (
     <div className="flex h-full flex-col">
@@ -71,7 +101,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
       </header>
       <div className="flex-1 overflow-y-auto px-6 py-4">
         <Transcript messages={detail.messages} calls={detail.calls} />
-        {busy && <div className="mt-3 text-sm text-zinc-500">Thinking…</div>}
+        {thinking && <div className="mt-3 text-sm text-zinc-500">Thinking…</div>}
         <div ref={bottom} />
       </div>
       {!!waiting.length && (
