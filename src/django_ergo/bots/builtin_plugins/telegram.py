@@ -199,7 +199,10 @@ class TelegramPlugin(BotPlugin):
         if user is None or action not in {"ok", "no"}:
             return
         session = await (
-            self.bot.sessions(user).filter(id=session_id).select_related("user").afirst()
+            self.bot.sessions(user)
+            .filter(id=session_id)
+            .select_related("user")
+            .afirst()
         )
         if session is None:
             return
@@ -243,4 +246,3 @@ class TelegramPlugin(BotPlugin):
             except Exception:
                 logger.exception("Telegram polling failed; retrying")
                 await asyncio.sleep(5)
-

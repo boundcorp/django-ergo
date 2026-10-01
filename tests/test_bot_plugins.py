@@ -8,11 +8,11 @@ import textwrap
 
 import pytest
 from django.contrib.auth import get_user_model
+
 from django_ergo.bots.runtime import Bot
 from django_ergo.conversation.models import ConversationAttachment
 from django_ergo.conversation.models import ConversationSession
 from django_ergo.conversation.toolkit import Toolkit
-
 from tests.test_bots import make_bot
 from tests.test_bots import write_bot
 from tests.test_conversation_structured import claude_text
@@ -27,7 +27,7 @@ User = get_user_model()
 
 
 class FakeKB(Toolkit):
-    searches: list = []  # noqa: RUF012 — shared on purpose to see prefetch calls
+    searches: list = []
 
     def has_tool(self, tool_name):
         return tool_name == "kb_search"
@@ -146,7 +146,7 @@ def git(cwd, *args):
     ).stdout
 
 
-@pytest.fixture()
+@pytest.fixture
 def bot_repo(tmp_path, monkeypatch):
     """A bare remote and a clone whose bots/manager folder is a bot."""
     for key, value in {
@@ -200,7 +200,7 @@ async def test_bot_edits_and_merges_its_own_config(bot_repo):
 
     paused = await bot.ask(root, "Make your instructions shorter")
     assert [a.tool_name for a in paused.approvals] == ["repo_publish"]
-    assert "Be brief." == (work / "bots/manager/agents.md").read_text()
+    assert (work / "bots/manager/agents.md").read_text() == "Be brief."
     assert "Shorter" not in git(remote, "log", "--oneline", "main")
 
     done = await bot.resume(root, {"p1": True})
@@ -234,7 +234,9 @@ def test_bot_proposes_pr_and_returns_to_main(bot_repo, monkeypatch):
     assert "bots/manager/tools/new.py" in plugin.list_files("bots/manager")
     result = plugin.publish("Add a tool", title="New tool")
 
-    assert result.startswith("Opened https://github.com/acme/bots/pull/7 from bot/manager/")
+    assert result.startswith(
+        "Opened https://github.com/acme/bots/pull/7 from bot/manager/"
+    )
     branch = result.split(" from ")[1].rstrip(".")
     assert branch.endswith("-new-tool")
     assert calls[0][:3] == ["gh", "pr", "create"]
@@ -252,7 +254,9 @@ def test_bot_proposes_pr_and_returns_to_main(bot_repo, monkeypatch):
 @pytest.mark.django_db(transaction=True)
 async def test_bot_management_tools_are_root_only(bot_repo):
     _, work = bot_repo
-    bot, engine, _ = management_bot(work, "merge_main", claude_text("a"), claude_text("b"))
+    bot, engine, _ = management_bot(
+        work, "merge_main", claude_text("a"), claude_text("b")
+    )
     user = await User.objects.acreate(username="root-only")
     root = await bot.root_session(user)
     thread = await bot.create_session(user, parent=root)
@@ -308,8 +312,9 @@ def telegram_bot(tmp_path, *responses):
             token_env: TEST_TELEGRAM_TOKEN
             users: {111: cook}
     """
-    folder = write_bot(tmp_path, yaml_text, tools=TELEGRAM_TOOLS)
-    bot, engine = make_bot(folder.parent, *responses, yaml_text=yaml_text)
+    bot, engine = make_bot(
+        tmp_path, *responses, yaml_text=yaml_text, tools=TELEGRAM_TOOLS
+    )
     plugin = bot.plugin("telegram")
     plugin.api = FakeTelegram()
     return bot, engine, plugin
@@ -393,7 +398,9 @@ async def test_telegram_approval_buttons_resume_the_turn(tmp_path):
 
 def test_telegram_needs_token(tmp_path, monkeypatch):
     monkeypatch.delenv("TEST_TELEGRAM_TOKEN", raising=False)
-    yaml_text = "name: tg\nplugins: [{name: telegram, token_env: TEST_TELEGRAM_TOKEN}]\n"
+    yaml_text = (
+        "name: tg\nplugins: [{name: telegram, token_env: TEST_TELEGRAM_TOKEN}]\n"
+    )
     bot = Bot.load(write_bot(tmp_path, yaml_text, name="tg"))
     with pytest.raises(RuntimeError, match="TEST_TELEGRAM_TOKEN"):
         _ = bot.plugin("telegram").api

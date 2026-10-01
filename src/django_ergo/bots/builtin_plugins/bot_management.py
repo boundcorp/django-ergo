@@ -93,9 +93,10 @@ class BotManagementPlugin(BotPlugin):
 
     def path(self, relative: str) -> Path:
         path = (self.repo / relative).resolve()
-        if not path.is_relative_to(self.repo) or ".git" in path.relative_to(
-            self.repo
-        ).parts:
+        if (
+            not path.is_relative_to(self.repo)
+            or ".git" in path.relative_to(self.repo).parts
+        ):
             msg = f"{relative} is outside the repository"
             raise ValueError(msg)
         return path

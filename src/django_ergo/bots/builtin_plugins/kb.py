@@ -37,6 +37,8 @@ class ErgoKBPlugin(BotPlugin):
 
     def on_load(self) -> None:
         self.prefetch = self.config.get("prefetch", "new_session")
+        if self.prefetch is False:  # YAML reads a bare `off` as false
+            self.prefetch = "off"
         if self.prefetch not in PREFETCH_MODES:
             msg = f"ergo_kb prefetch must be one of {sorted(PREFETCH_MODES)}"
             raise ValueError(msg)
@@ -71,7 +73,9 @@ class ErgoKBPlugin(BotPlugin):
         if self.prefetch == "every_turn":
             return True
         session = ctx.session
-        return not (session.claude_messages.exists() or session.openai_messages.exists())
+        return not (
+            session.claude_messages.exists() or session.openai_messages.exists()
+        )
 
     def context_sources(self, ctx: ToolContext, message: str) -> list[ContextSource]:
         if not message.strip() or not self.should_prefetch(ctx):

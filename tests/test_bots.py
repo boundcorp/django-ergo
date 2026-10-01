@@ -197,7 +197,7 @@ def test_plugin_resolution():
 # ---------------------------------------------------------------------------
 
 
-def make_bot(tmp_path, *responses, yaml_text=KITCHEN_YAML, name="kitchen"):
+def make_bot(tmp_path, *responses, yaml_text=KITCHEN_YAML, name="kitchen", tools=TOOLS):
     """A bot whose engines (one per turn, like production) share a fake client."""
     engine = claude_engine(*responses)
 
@@ -206,7 +206,9 @@ def make_bot(tmp_path, *responses, yaml_text=KITCHEN_YAML, name="kitchen"):
         fresh._client = engine._client
         return fresh
 
-    bot = Bot.load(write_bot(tmp_path, yaml_text, name=name), engine_factory=factory)
+    bot = Bot.load(
+        write_bot(tmp_path, yaml_text, name=name, tools=tools), engine_factory=factory
+    )
     return bot, engine
 
 
