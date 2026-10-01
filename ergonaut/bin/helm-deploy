@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+set -e
+
+cd $(dirname $0)/..
+
+[[ "$CI" == "true" ]] || [[ $(kubectx -c) == $KUBE_CLUSTER ]] || (echo "Must be attached to the $KUBE_CLUSTER cluster" && exit 1)
+
+VERSION=$(test -z "$1" && echo "latest" || echo "$1")
+CHANNEL=$(test -z "$2" && echo "staging" || echo "$2")
+VALUES=$(test -z "$3" && echo "helm-values.$CHANNEL.secrets.yaml" || echo "$3")
+
+NAMESPACE="${CHANNEL}"
+echo "Deploying helm release into $NAMESPACE..."
+
+
+kubectl get pods -n $NAMESPACE
+
+helm upgrade --install ergonaut bjw-s/app-template \
+    --version=3.4.0 \
+    --values="$VALUES" \
+    -n $NAMESPACE \
+    --set controllers.main.containers.main.image.repository=$(echo $CI_REGISTRY_IMAGE | tr '[:upper:]' '[:lower:]') \
+    --set controllers.main.containers.main.image.tag=$VERSION \
+    --set controllers.celery.containers.main.image.repository=$(echo $CI_REGISTRY_IMAGE | tr '[:upper:]' '[:lower:]') \
+    --set controllers.celery.containers.main.image.tag=$VERSION \
+    --set controllers.beat.containers.main.image.repository=$(echo $CI_REGISTRY_IMAGE | tr '[:upper:]' '[:lower:]') \
+    --set controllers.beat.containers.main.image.tag=$VERSION

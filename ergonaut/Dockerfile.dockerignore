@@ -1,0 +1,9 @@
+# Build context is the django-ergo repo root (docker build -f ergonaut/Dockerfile .)
+.git
+**/.venv
+**/__pycache__
+ergonaut/static/
+ergonaut/frontend/node_modules
+ergo/
+examples/proprietary/
+old-code-inspiration/

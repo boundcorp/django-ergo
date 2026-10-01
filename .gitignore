@@ -36,3 +36,6 @@ node_modules/
 
 # Attachment files written by tests
 /ergo/
+
+# Private example bots (e.g. the kitchen bot) stay out of git
+/examples/proprietary/

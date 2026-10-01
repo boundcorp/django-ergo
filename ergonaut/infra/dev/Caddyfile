@@ -1,0 +1,15 @@
+:80 {
+    route /mgmt/* {
+        reverse_proxy http://backend:8000
+    }
+    route /api/* {
+        reverse_proxy http://backend:8000
+    }
+    route /dj-static/* {
+        reverse_proxy http://backend:8000
+    }
+    route /* {
+        reverse_proxy http://frontend:3000
+    }
+    redir /mgmt /mgmt/
+}

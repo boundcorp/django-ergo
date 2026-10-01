@@ -1,0 +1,13 @@
+services:
+  ergonaut-django-dev:
+    build:
+      context: ../../../
+      dockerfile: ergonaut/Dockerfile
+      target: dev
+    image: ghcr.io/boundcorp/ergonaut/dev:latest
+  ergonaut-django:
+    build:
+      context: ../../../
+      dockerfile: ergonaut/Dockerfile
+      target: release
+    image: ghcr.io/boundcorp/ergonaut/release:latest

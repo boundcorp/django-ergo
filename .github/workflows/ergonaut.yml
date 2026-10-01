@@ -1,0 +1,40 @@
+name: Ergonaut
+
+on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+    branches: [main, master, develop]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: ergonaut
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Ergonaut with Ergo from this checkout
+        run: |
+          python -m pip install --upgrade pip uv
+          uv venv -p 3.12 .venv
+          uv pip install -e "..[legacy,bots]" -e .
+      - name: Run tests on embedded PostgreSQL
+        run: env -u DATABASE_URL .venv/bin/python -m pytest -q
+      - name: Check migrations
+        run: env -u DATABASE_URL .venv/bin/python manage.py makemigrations --check --dry-run
+
+  image:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the release image
+        run: docker build -f ergonaut/Dockerfile --target release -t ergonaut:ci .
