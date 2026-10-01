@@ -38,6 +38,9 @@ pytest-asyncio = "*"
 django-ergo = {extras = ["legacy", "bots"], version = "*"}
 anthropic = "*"
 
+[tool.poetry.scripts]
+ergonaut = "ergonaut.cli:main"
+
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"

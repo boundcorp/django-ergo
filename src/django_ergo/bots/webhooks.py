@@ -9,6 +9,8 @@ pattern for all of them and says which bots are live::
     # at startup
     from django_ergo.bots import webhooks
     webhooks.set_registry(BotRegistry.discover("bots/"))
+    # or a function, called on the first webhook request:
+    webhooks.set_registry(load_my_bots)
 
 A request to ``hooks/<bot>/<plugin>/<name>/`` calls that plugin's handler
 with the request. Unknown bots, plugins or names get a 404. Handlers check
@@ -27,27 +29,33 @@ from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from django_ergo.bots.registry import BotRegistry
 
 logger = logging.getLogger(__name__)
 
-_registry: BotRegistry | None = None
+_registry: BotRegistry | Callable[[], BotRegistry] | None = None
 
 
-def set_registry(registry: BotRegistry | None) -> None:
-    """The bots whose webhooks this process serves."""
+def set_registry(registry: BotRegistry | Callable[[], BotRegistry] | None) -> None:
+    """The bots whose webhooks this process serves, or a function loading them."""
     global _registry  # noqa: PLW0603 — one registry per process
     _registry = registry
 
 
 def get_registry() -> BotRegistry | None:
+    global _registry  # noqa: PLW0603
+    if callable(_registry) and not hasattr(_registry, "bots"):
+        _registry = _registry()
     return _registry
 
 
 def find_handler(bot_name: str, plugin_name: str, hook: str):
-    if _registry is None or bot_name not in _registry:
+    registry = get_registry()
+    if registry is None or bot_name not in registry:
         return None
-    plugin = _registry.get(bot_name).plugin(plugin_name)
+    plugin = registry.get(bot_name).plugin(plugin_name)
     if plugin is None:
         return None
     return plugin.webhooks().get(hook)

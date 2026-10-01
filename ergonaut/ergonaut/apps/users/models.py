@@ -11,6 +11,9 @@ class AccountTypes(models.TextChoices):
 
 class User(TimestampMixin, MediumIDMixin, AbstractUser, MailMixin):
     account_type = models.CharField(max_length=50, choices=AccountTypes.choices, default=AccountTypes.STAFF)
+    # Read by Ergo bots: the current time in context and Telegram routing.
+    timezone = models.CharField(max_length=64, blank=True, default="")
+    telegram_id = models.BigIntegerField(null=True, blank=True, unique=True)
 
     def __str__(self):
         return f"{self.get_full_name()} <{self.email}>"

@@ -15,3 +15,10 @@ class BotsConfig(AppConfig):
         for model, model_admin in admin.site._registry.items():
             if not admin_site.is_registered(model):
                 admin_site.register(model, type(model_admin))
+
+        # Webhooks load the bots on the first request.
+        from django_ergo.bots import webhooks
+
+        from ergonaut.apps.bots.loading import load_registry
+
+        webhooks.set_registry(load_registry)

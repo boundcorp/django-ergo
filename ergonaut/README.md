@@ -17,6 +17,30 @@ that uses them land together:
   `ERGONAUT_PUBLIC_URL` to this server's public address to use them.
 - Ergo's models are in the admin at `/mgmt/`.
 
+## Running bots
+
+`ERGONAUT_BOTS` (default `/bot`) points at a bot folder, a folder with an
+`ergonaut.yaml` listing bot folders, or a folder of bot folders. A
+`people:` section (in `bot.yaml` or `ergonaut.yaml`) names each person
+once; they become Django users and their Telegram ids reach every Telegram
+plugin:
+
+```yaml
+people:
+  lee: {telegram: 123456789, timezone: America/Los_Angeles, email: lee@example.com}
+```
+
+The `ergonaut` command (installed with the package):
+
+| Command | What it does |
+| --- | --- |
+| `ergonaut web` | Migrate, then serve the web app, API, admin and webhooks |
+| `ergonaut worker` / `ergonaut beat` | Celery worker and scheduler |
+| `ergonaut bots` | Every bot's long-running plugins (Telegram polling or webhook setup) |
+| `ergonaut check` | Load the bots; list tools, plugins, people and missing secrets |
+| `ergonaut chat BOT [--user NAME]` | Chat with a bot's root session in the terminal |
+| `ergonaut manage ...` | Any `manage.py` command |
+
 ## Quick Start (Zero-Dep Mode)
 
     make venv

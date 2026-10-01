@@ -551,7 +551,7 @@ async def test_telegram_webhook_mode(tmp_path, settings, monkeypatch):
     plugin.api.token = "123:abc"
     registry = BotRegistry()
     registry.add(bot)
-    webhooks.set_registry(registry)
+    webhooks.set_registry(lambda: registry)  # loaded on first request
     try:
         assert plugin.uses_webhook
         await bot.serve()  # registers the webhook and returns
