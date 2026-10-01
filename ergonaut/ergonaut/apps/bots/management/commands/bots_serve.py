@@ -22,3 +22,7 @@ class Command(BaseCommand):
 
     async def serve(self, registry):
         await asyncio.gather(*(bot.serve() for bot in registry))
+        # Webhook plugins return once registered; stay up so a supervisor or
+        # Kubernetes doesn't restart the runner in a loop.
+        self.stdout.write("Plugins are set up; waiting.")
+        await asyncio.Event().wait()

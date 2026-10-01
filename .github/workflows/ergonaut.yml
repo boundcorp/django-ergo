@@ -38,3 +38,24 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build the release image
         run: docker build -f ergonaut/Dockerfile --target release -t ergonaut:ci .
+      - name: Build the all-in-one image
+        run: docker build -f ergonaut/Dockerfile --target aio -t ergonaut:aio .
+      - name: Start the all-in-one image with the hello bot
+        run: |
+          docker run -d --name aio -p 8000:8000 -v "$PWD/examples/hello:/bot:ro" ergonaut:aio
+          for i in $(seq 1 90); do
+            curl -sf localhost:8000/api/healthz && break
+            sleep 2
+          done
+          curl -sf localhost:8000/api/healthz
+          for i in $(seq 1 30); do
+            docker logs aio 2>&1 | grep -q "celery@.* ready" && docker logs aio 2>&1 | grep -q "Serving bots: hello" && break
+            sleep 2
+          done
+          docker logs aio 2>&1 | grep "Serving bots: hello"
+          docker logs aio 2>&1 | grep "embedded Garage"
+          docker logs aio 2>&1 | grep "celery@.* ready"
+          docker exec aio ergonaut check
+      - name: Container logs
+        if: always()
+        run: docker logs aio 2>&1 | tail -200 || true

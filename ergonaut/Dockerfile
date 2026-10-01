@@ -118,3 +118,27 @@ RUN mkdir -p /app/static/uploads && chmod 777 /app/static/uploads
 ENV PATH=/app/.venv/bin:$PATH
 
 RUN python manage.py collectstatic --noinput
+
+#
+# All-in-one Stage: `ergonaut up` runs Postgres (pgserver), Redis and Garage
+# inside the container unless DATABASE_URL, CELERY_BROKER_URL or
+# S3_ENDPOINT_URL point elsewhere.
+#   docker run -v "$PWD:/bot" -v ergonaut-data:/data -p 8000:8000 ghcr.io/boundcorp/ergonaut
+FROM release AS aio
+
+RUN apt-get update && apt-get install -y --no-install-recommends redis-server \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=dxflrs/garage:v1.1.0 /garage /usr/local/bin/garage
+
+# Postgres refuses to run as root.
+RUN useradd --create-home --uid 1000 ergonaut \
+    && mkdir -p /data /bot \
+    && chown ergonaut:ergonaut /data /bot
+USER ergonaut
+
+ENV DATA_DIR=/data \
+    ERGONAUT_BOTS=/bot \
+    PORT=8000
+VOLUME ["/data"]
+EXPOSE 8000
+CMD ["ergonaut", "up"]

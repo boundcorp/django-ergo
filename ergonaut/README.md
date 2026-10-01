@@ -34,12 +34,34 @@ The `ergonaut` command (installed with the package):
 
 | Command | What it does |
 | --- | --- |
+| `ergonaut up [ROLES]` | Everything in one process tree: backing services that have no URL set, then web, worker, beat and bots |
 | `ergonaut web` | Migrate, then serve the web app, API, admin and webhooks |
 | `ergonaut worker` / `ergonaut beat` | Celery worker and scheduler |
 | `ergonaut bots` | Every bot's long-running plugins (Telegram polling or webhook setup) |
 | `ergonaut check` | Load the bots; list tools, plugins, people and missing secrets |
 | `ergonaut chat BOT [--user NAME]` | Chat with a bot's root session in the terminal |
 | `ergonaut manage ...` | Any `manage.py` command |
+
+## All-in-one container
+
+The `aio` image target runs `ergonaut up` as an unprivileged user, with
+data under the `/data` volume and the bot folder mounted at `/bot`:
+
+    docker build -f ergonaut/Dockerfile --target aio -t ghcr.io/boundcorp/ergonaut .
+    docker run -v "$PWD:/bot" -v ergonaut-data:/data -p 8000:8000 ghcr.io/boundcorp/ergonaut
+    docker exec -it <container> ergonaut manage createsuperuser
+
+`ergonaut up` starts only what is missing:
+
+| Setting | Unset | Set |
+| --- | --- | --- |
+| `DATABASE_URL` | Embedded Postgres with pgvector (pgserver) | Use it |
+| `CELERY_BROKER_URL` | `redis-server` (no worker or beat if it isn't installed) | Use it |
+| `S3_ENDPOINT_URL` | `garage` with a generated key and bucket (local files if it isn't installed) | Use it |
+
+Pass roles to run a subset, such as `ergonaut up web bots`. In production,
+set the URLs and run `ergonaut web`, `worker`, `beat` and `bots` as separate
+workloads from the same image, with one replica for `bots`.
 
 ## Quick Start (Zero-Dep Mode)
 

@@ -1,5 +1,6 @@
 """The ``ergonaut`` command.
 
+    ergonaut up       # everything in one process tree; see ergonaut/up.py
     ergonaut web      # migrate, then serve the web app, API, admin and webhooks
     ergonaut worker   # Celery worker
     ergonaut beat     # Celery beat
@@ -35,6 +36,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     command, rest = argv[0], argv[1:]
     port = os.environ.get("PORT", "8000")
+    if command == "up":
+        from ergonaut.up import up
+
+        return up(rest)
     if command == "web":
         manage("migrate", "--noinput")
         return run(sys.executable, "-m", "uvicorn", "ergonaut.asgi:application", "--host", "0.0.0.0", "--port", port, *rest)

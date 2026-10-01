@@ -38,13 +38,15 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 _database_url = os.environ.get("DATABASE_URL")
 if _database_url:
     _parsed = urlparse(_database_url)
+    _qs = parse_qs(_parsed.query)
     DATABASES = {
         "default": {
             "ENGINE": "django.db.backends.postgresql",
             "NAME": _parsed.path.lstrip("/") or "postgres",
             "USER": _parsed.username or "postgres",
             "PASSWORD": _parsed.password or "",
-            "HOST": _parsed.hostname or "",
+            # ?host=/socket/dir is how `ergonaut up` passes embedded Postgres on
+            "HOST": _qs.get("host", [""])[0] or _parsed.hostname or "",
             "PORT": str(_parsed.port or 5432),
         }
     }
@@ -124,7 +126,7 @@ USE_TZ = True
 
 # BELOW IS CONFUSING!
 # MEDIA_{ROOT,URL} -> User generated content
-MEDIA_ROOT = root("static", "uploads")
+MEDIA_ROOT = os.environ.get("MEDIA_ROOT") or root("static", "uploads")
 MEDIA_URL = "/dj-static/uploads/"
 
 # STATIC_{ROOT,URL} -> Python-collected static content
@@ -275,19 +277,23 @@ TEMPLATES = [
     },
 ]
 
-STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
 
 ALLOWED_HOSTS = ["127.0.0.1", "localhost", "*"]
 
 # Object storage: S3-compatible (Garage/MinIO/AWS) or local filesystem
+STORAGES = {
+    "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+    "staticfiles": {"BACKEND": "whitenoise.storage.CompressedStaticFilesStorage"},
+}
 _s3_endpoint = os.environ.get("S3_ENDPOINT_URL")
 if _s3_endpoint:
-    DEFAULT_FILE_STORAGE = "storages.backends.s3boto3.S3Boto3Storage"
+    STORAGES["default"] = {"BACKEND": "storages.backends.s3boto3.S3Boto3Storage"}
     AWS_S3_ENDPOINT_URL = _s3_endpoint
     AWS_ACCESS_KEY_ID = os.environ.get("AWS_ACCESS_KEY_ID", "dev")
     AWS_SECRET_ACCESS_KEY = os.environ.get("AWS_SECRET_ACCESS_KEY", "dev12345678")
     AWS_STORAGE_BUCKET_NAME = os.environ.get("AWS_STORAGE_BUCKET_NAME", "ergonaut-media")
     AWS_S3_USE_SSL = env_variable_truthy("AWS_S3_USE_SSL")
+    AWS_S3_REGION_NAME = os.environ.get("AWS_S3_REGION_NAME") or None
     AWS_QUERYSTRING_AUTH = True  # presigned URLs
     AWS_S3_FILE_OVERWRITE = False
     AWS_DEFAULT_ACL = None
@@ -295,7 +301,7 @@ if _s3_endpoint:
     credentials_file = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")
     if os.path.exists(credentials_file):
         from google.oauth2 import service_account
-        DEFAULT_FILE_STORAGE = "storages.backends.gcloud.GoogleCloudStorage"
+        STORAGES["default"] = {"BACKEND": "storages.backends.gcloud.GoogleCloudStorage"}
         GS_BUCKET_NAME = os.environ.get("GS_BUCKET_NAME", "")
         GS_PROJECT_ID = os.environ.get("GS_PROJECT_ID", "")
         GS_CREDENTIALS = service_account.Credentials.from_service_account_file(credentials_file)
