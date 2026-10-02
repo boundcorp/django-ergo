@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router-dom'
 import type { BotDetail } from '../api'
 import { api } from '../api'
 import BotFiles from '../components/BotFiles'
+import TableBrowser from '../components/TableBrowser'
 import Changes from '../components/Changes'
 
 // The bot folder's files, for admins (the API refuses everyone else, and then this hides).
@@ -37,6 +38,8 @@ function Section({ title, count, children }: { title: string; count?: number; ch
 export function BotPage() {
   const { name = '' } = useParams()
   const [bot, setBot] = useState<BotDetail | null>(null)
+  // The table whose rows are open in the browser, if any.
+  const [browsing, setBrowsing] = useState('')
   const [error, setError] = useState('')
   const [open, setOpen] = useState<string | null>(null)
 
@@ -133,7 +136,15 @@ export function BotPage() {
               <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800">
                 {bot.tables.map(t => (
                   <tr key={t.name}>
-                    <td className="py-1.5 pr-4 font-mono text-xs">{t.name}</td>
+                    <td className="py-1.5 pr-4 font-mono text-xs">
+                      <button
+                        className="text-indigo-600 hover:underline dark:text-indigo-400"
+                        title="Browse its rows"
+                        onClick={() => setBrowsing(b => (b === t.name ? '' : t.name))}
+                      >
+                        {t.name}
+                      </button>
+                    </td>
                     <td className="py-1.5 pr-4">{t.description}</td>
                     <td className="py-1.5 text-xs whitespace-nowrap text-zinc-500">
                       {t.rows == null ? 'not migrated' : `${t.rows.toLocaleString()} rows`}
@@ -143,6 +154,7 @@ export function BotPage() {
               </tbody>
             </table>
           )}
+          {browsing && <TableBrowser bot={bot.name} table={browsing} onClose={() => setBrowsing('')} />}
           {bot.pages?.map(p => (
             <div key={p.path} className="text-sm">
               📄{' '}

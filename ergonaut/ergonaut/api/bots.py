@@ -241,6 +241,66 @@ def tables_out(bot: Bot) -> list[dict]:
     return out
 
 
+MAX_TABLE_PAGE = 200
+
+
+def bot_table(bot_name: str, table: str, user):
+    bot = get_bot(bot_name, user)
+    try:
+        return bot.table(table)
+    except LookupError as e:
+        raise HttpError(404, str(e)) from e
+
+
+def _cell(value):
+    from datetime import date, datetime
+    from decimal import Decimal
+
+    if isinstance(value, Decimal):
+        return float(value)
+    if isinstance(value, datetime | date):
+        return value.isoformat()
+    return value
+
+
+@router.get("/bots/{bot_name}/tables/{table}/rows")
+def table_rows(  # noqa: PLR0913
+    request, bot_name: str, table: str, page: int = 1, page_size: int = 50, order: str = "", q: str = ""
+):
+    """Browse a bot table: one page of rows, sorted by ``order`` (a field, "-" for descending),
+    filtered by ``q`` (contained in any text field)."""
+    from django.db import models
+
+    model = bot_table(bot_name, table, request.auth)
+    fields = [f for f in model._meta.concrete_fields]  # noqa: SLF001
+    names = [f.name for f in fields]
+    qs = model.objects.all()
+    if q.strip():
+        text = [f.name for f in fields if isinstance(f, models.CharField | models.TextField)]
+        match = Q()
+        for name in text:
+            match |= Q(**{f"{name}__icontains": q.strip()})
+        qs = qs.filter(match) if text else qs.none()
+    if order.lstrip("-") in names:
+        qs = qs.order_by(order, "-pk")
+    size = max(1, min(int(page_size), MAX_TABLE_PAGE))
+    count = qs.count()
+    start = (max(1, int(page)) - 1) * size
+    rows = [
+        {name: _cell(getattr(obj, f.attname)) for name, f in zip(names, fields, strict=True)}
+        for obj in qs[start : start + size]
+    ]
+    return {
+        "table": model.__name__,
+        "description": (model.__doc__ or "").strip().splitlines()[0] if model.__doc__ else "",
+        "fields": [{"name": f.name, "type": f.get_internal_type()} for f in fields],
+        "count": count,
+        "page": max(1, int(page)),
+        "page_size": size,
+        "rows": rows,
+    }
+
+
 def pages_out(bot: Bot) -> list[dict]:
     """Bot-folder pages pinned in any chat, plus any other .jhtml files under pages/."""
     from django_ergo.bots.pages import bot_file

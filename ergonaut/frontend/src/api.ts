@@ -347,6 +347,19 @@ export const api = {
       }[]
     }>('GET', `/bots/${bot}/proposals`),
   botErrors: () => request<{ folder: string; name: string; error: string }[]>('GET', '/bot-errors'),
+  tableRows: (bot: string, table: string, opts: { page?: number; order?: string; q?: string } = {}) =>
+    request<{
+      table: string
+      description: string
+      fields: { name: string; type: string }[]
+      count: number
+      page: number
+      page_size: number
+      rows: Record<string, unknown>[]
+    }>(
+      'GET',
+      `/bots/${bot}/tables/${encodeURIComponent(table)}/rows?page=${opts.page ?? 1}&order=${encodeURIComponent(opts.order ?? '')}&q=${encodeURIComponent(opts.q ?? '')}`,
+    ),
   allPins: () => request<Record<string, { name: string; url: string }[]>>('GET', '/pins'),
   pins: (id: string) => request<Pin[]>('GET', `/sessions/${id}/pins`),
   pin: (id: string, pinned: boolean) => request<AttachmentFile>('POST', `/attachments/${id}/pin`, { pinned }),

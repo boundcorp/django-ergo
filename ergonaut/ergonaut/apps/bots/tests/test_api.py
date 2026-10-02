@@ -720,3 +720,28 @@ def test_running_workers_show_in_the_chat_and_keep_it_busy(client, cook, use_bot
         assert tasks.resume_workers() == 1
     Worker.objects.filter(pk=worker.pk).update(status="completed")
     assert {s["id"]: s["busy"] for s in client.get("/api/sessions").json()}[root["id"]] is False
+
+
+@pytest.mark.django_db(transaction=True)
+def test_browse_a_bot_tables_rows(client, cook, use_bots, monkeypatch):
+    from django_ergo.bots.runtime import Bot
+    from django_ergo.conversation.models import BotJob
+
+    use_bots(say("hi"))
+    # Any model stands in for a bot table here.
+    monkeypatch.setattr(Bot, "table", lambda self, name: BotJob if name.lower() == "botjob" else Bot.__dict__["nope"])
+    for i in range(7):
+        BotJob.objects.create(
+            bot_name="kitchen", name=f"job {i}", target="tools/x.py:pull" if i % 2 else "tools/y.py:push"
+        )
+    first = client.get("/api/bots/kitchen/tables/BotJob/rows?page_size=3&order=-name").json()
+    assert (first["count"], len(first["rows"]), first["page_size"]) == (7, 3, 3)
+    assert [r["name"] for r in first["rows"]] == ["job 6", "job 5", "job 4"]
+    assert {"name": "name", "type": "CharField"} in first["fields"]
+    last = client.get("/api/bots/kitchen/tables/BotJob/rows?page_size=3&page=3&order=name").json()
+    assert [r["name"] for r in last["rows"]] == ["job 6"]
+    found = client.get("/api/bots/kitchen/tables/BotJob/rows?q=y.py").json()
+    assert found["count"] == 4
+    assert client.get("/api/bots/kitchen/tables/BotJob/rows?order=no_such_field").status_code == 200
+    monkeypatch.setattr(Bot, "table", lambda self, name: (_ for _ in ()).throw(LookupError("kitchen has no table")))
+    assert client.get("/api/bots/kitchen/tables/Nope/rows").status_code == 404
