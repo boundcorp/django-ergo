@@ -71,12 +71,14 @@ export default function BotFiles({ bot }: { bot: string }) {
   }, [bot, loadProposals])
 
   useEffect(() => {
+    let current = true
     setFiles(null)
     setSource(null)
     setError('')
     api
       .botTree(bot, version)
       .then(tree => {
+        if (!current) return
         setFiles(tree.files)
         setTruncated(tree.truncated)
         const changed = tree.files.filter(f => f.status)
@@ -91,19 +93,28 @@ export default function BotFiles({ bot }: { bot: string }) {
         }
         setOpen(folders)
       })
-      .catch(e => (version === 'live' ? setDenied(true) : setError(String(e.message ?? e))))
+      .catch(e => current && (version === 'live' ? setDenied(true) : setError(String(e.message ?? e))))
+    return () => {
+      current = false
+    }
   }, [bot, version])
 
   useEffect(() => {
     if (!selected) return
+    // A slower answer for an earlier file or version must not replace this one.
+    let current = true
     setError('')
     api
       .botSource(bot, selected, version)
       .then(s => {
+        if (!current) return
         setSource(s)
         setShowDiff(!!s.diff)
       })
-      .catch(e => setError(String(e.message ?? e)))
+      .catch(e => current && setError(String(e.message ?? e)))
+    return () => {
+      current = false
+    }
   }, [bot, selected, version])
 
   const visible = useMemo(() => (files ?? []).filter(f => !changedOnly || f.status), [files, changedOnly])
