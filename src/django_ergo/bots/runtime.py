@@ -270,6 +270,26 @@ class Bot:
             )
         return defs
 
+    def code(self, relative: str):
+        """A Python file inside the bot folder, imported once (for schedule ``run`` steps)."""
+        from django_ergo.bots.definition import _inside
+
+        root = self.definition.root_dir
+        if root is None:
+            msg = "This bot wasn't loaded from a folder"
+            raise ValueError(msg)
+        path = _inside(root, relative)
+        if path.suffix != ".py" or not path.is_file():
+            msg = f"No Python file {relative} in the bot folder"
+            raise ValueError(msg)
+        for module in self.tool_modules:
+            if module.path == path:
+                return module.module
+        cache = self.__dict__.setdefault("_code", {})
+        if path not in cache:
+            cache[path] = load_tool_module(path, self.name).module
+        return cache[path]
+
     @staticmethod
     def _module_toolkits(module: ToolModule, ctx: ToolContext) -> list[Toolkit]:
         toolkits: list[Toolkit] = (

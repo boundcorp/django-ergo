@@ -107,6 +107,8 @@ DJANGO_ERGO = {
     "THREAD_MESSAGE_RUNNER": "ergonaut.apps.bots.tasks.queue_thread_message",
     # A bot tool's ctx.tasks.start(...) runs @bot_task functions on a worker.
     "BOT_TASK_RUNNER": "ergonaut.apps.bots.tasks.celery_bot_task",
+    # Each due schedule run is a task of its own.
+    "SCHEDULE_RUNNER": "ergonaut.apps.bots.tasks.queue_schedule_run",
 }
 
 SITE_ROOT = PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))

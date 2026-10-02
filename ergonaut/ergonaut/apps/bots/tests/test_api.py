@@ -441,13 +441,9 @@ def test_bot_page_lists_schedules(client, cook, bot_folder, use_bots):
     )
     use_bots(say("hi"))
     [schedule] = client.get("/api/bots/kitchen").json()["schedules"]
-    assert (schedule["name"], schedule["cron"], schedule["to"], schedule["enabled"]) == (
-        "plan",
-        "0 17 * * sun",
-        "thread",
-        True,
-    )
-    assert schedule["thread_title"] == "plan %b %d"
+    assert (schedule["name"], schedule["cron"], schedule["enabled"]) == ("plan", "0 17 * * sun", True)
+    [action] = schedule["actions"]
+    assert (action["kind"], action["to"], action["thread_title"]) == ("prompt", "thread", "plan %b %d")
     assert schedule["next_run"]
 
 

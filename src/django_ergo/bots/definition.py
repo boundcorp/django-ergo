@@ -158,7 +158,7 @@ class BotDefinition:
         chats = _chats(data.get("chats") or {}, orchestration=orchestration)
         schedules = _schedules(data.get("schedules") or [])
         for schedule in schedules:
-            for chat in {schedule.to, schedule.thread_in} - {"thread"}:
+            for chat in {c for action in schedule.actions for c in action.chats}:
                 if chat not in chats:
                     msg = f"schedules: {schedule.name} targets {chat!r}, which isn't in chats"
                     raise BotDefinitionError(msg)
