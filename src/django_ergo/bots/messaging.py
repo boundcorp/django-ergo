@@ -207,14 +207,20 @@ def deliver(message_id: str, registry: BotRegistry | None = None) -> None:
     if busy(recipient) or not lock.acquire(blocking=False):
         requeue(message)
         return
+    factory = api_settings.TURN_CONTROL
+    control = factory(recipient, delegated=True) if factory else None
     try:
         archival.reopen(recipient)
-        async_to_sync(bot.ask)(recipient, turn_text(message), thread_message=message)
+        async_to_sync(bot.ask)(
+            recipient, turn_text(message), thread_message=message, control=control
+        )
     except Exception as exc:
         logger.exception("Delivering thread message %s failed", message_id)
         fail(message, str(exc))
     finally:
         lock.release()
+        if callable(getattr(control, "finish", None)):
+            control.finish()
     redispatch_waiting(recipient, registry=registry)  # anything that queued meanwhile
 
 

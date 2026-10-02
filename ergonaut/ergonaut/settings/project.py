@@ -110,6 +110,8 @@ DJANGO_ERGO = {
     # Each due schedule run is a task of its own.
     "SCHEDULE_RUNNER": "ergonaut.apps.bots.tasks.queue_schedule_run",
     "WORKER_RUNNER": "ergonaut.apps.bots.tasks.queue_worker",
+    # Turns another bot or a finished worker starts can be steered and stopped like the user's own.
+    "TURN_CONTROL": "ergonaut.apps.bots.tasks.InboxControl",
     "SESSION_NOTIFIER": "ergonaut.apps.bots.tasks.notify",
 }
 
