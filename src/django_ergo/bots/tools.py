@@ -77,6 +77,13 @@ class ToolContext:
     user: Any = None
 
     @property
+    def tasks(self):
+        """Start this bot's ``@bot_task`` functions in the background."""
+        from django_ergo.bots.background import BotTasks
+
+        return BotTasks(self.bot)
+
+    @property
     def is_root(self) -> bool:
         return bool(self.session and self.session.parent_id is None)
 
@@ -182,6 +189,19 @@ def bot_tool(  # noqa: PLR0913
             requires_approval=requires_approval,
             takes_context=takes_context,
         )
+        return fn
+
+    return decorate(func) if func is not None else decorate
+
+
+def bot_task(func: Callable | None = None, *, name: str | None = None):
+    """Mark a function as a background task of the bot whose tool file defines it.
+
+    Tools start it with ``ctx.tasks`` (see ``django_ergo.bots.background``).
+    """
+
+    def decorate(fn: Callable) -> Callable:
+        fn.__bot_task__ = name or fn.__name__
         return fn
 
     return decorate(func) if func is not None else decorate
@@ -305,6 +325,7 @@ class ToolModule:
     tools: list[BotTool]
     toolkit_factory: Callable | None = None
     contexts: list[BotContext] = field(default_factory=list)
+    tasks: dict[str, Callable] = field(default_factory=dict)
 
 
 def load_tool_module(path: Path, bot_name: str) -> ToolModule:
@@ -328,5 +349,12 @@ def load_tool_module(path: Path, bot_name: str) -> ToolModule:
         for value in vars(module).values()
         if callable(value) and hasattr(value, "__bot_context__")
     ]
+    tasks = {
+        value.__bot_task__: value
+        for value in vars(module).values()
+        if callable(value) and hasattr(value, "__bot_task__")
+    }
     factory = getattr(module, "toolkits", None)
-    return ToolModule(path=path, tools=tools, toolkit_factory=factory, contexts=contexts)
+    return ToolModule(
+        path=path, tools=tools, toolkit_factory=factory, contexts=contexts, tasks=tasks
+    )

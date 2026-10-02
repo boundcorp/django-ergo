@@ -40,6 +40,9 @@ DEFAULTS = {
     # Callable(message_id) that delivers a bot-to-bot thread message, e.g. by
     # queueing a Celery task. None = deliver in a background thread.
     "THREAD_MESSAGE_RUNNER": None,
+    # Callable(bot_name, task_name, args, kwargs) -> TaskHandle that runs a
+    # @bot_task, e.g. on a Celery worker. None = a thread pool in this process.
+    "BOT_TASK_RUNNER": None,
     # Public base URL that django_ergo.bots.urls is mounted at, e.g.
     # "https://bots.example.com/hooks". Plugins build their webhook URLs from
     # it; None = no public URL, so channels such as Telegram poll instead.
@@ -67,6 +70,7 @@ IMPORT_STRINGS = [
     "EMBEDDING_PROVIDER",  # Import embedding provider class
     "AUDIO_TRANSCRIBER",
     "THREAD_MESSAGE_RUNNER",
+    "BOT_TASK_RUNNER",
 ]
 
 

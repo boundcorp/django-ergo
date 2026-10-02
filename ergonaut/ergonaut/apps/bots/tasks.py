@@ -146,3 +146,36 @@ def archive_idle_threads() -> list[str]:
     if archived:
         logger.info("Archived %d idle threads", len(archived))
     return archived
+
+
+@shared_task(name="ergonaut.run_bot_task")
+def run_bot_task(bot_name: str, task_name: str, args: list, kwargs: dict):
+    """Run a bot's @bot_task on a worker (see django_ergo.bots.background)."""
+    from django_ergo.bots import background
+
+    return background.execute(bot_name, task_name, args, kwargs)
+
+
+class CeleryTaskHandle:
+    """A @bot_task running on a Celery worker; wait() or await it."""
+
+    def __init__(self, result):
+        self.result = result
+        self.id = result.id
+
+    def done(self) -> bool:
+        return self.result.ready()
+
+    def wait(self, timeout: float | None = None):
+        # Tools run inside turn tasks, so waiting on another task is allowed here.
+        return self.result.get(timeout=timeout, disable_sync_subtasks=False)
+
+    def __await__(self):
+        import asyncio
+
+        return asyncio.to_thread(self.wait).__await__()
+
+
+def celery_bot_task(bot_name: str, task_name: str, args: list, kwargs: dict) -> CeleryTaskHandle:
+    """BOT_TASK_RUNNER: run @bot_task functions on Celery workers."""
+    return CeleryTaskHandle(run_bot_task.delay(bot_name, task_name, args, kwargs))

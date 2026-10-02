@@ -897,3 +897,69 @@ async def test_idle_threads_are_archived_and_reopen_on_a_message(tmp_path):
     bot.definition.archive_after_days = 0  # never
     await ConversationSession.objects.filter(id=old.id).aupdate(updated_at=ago)
     assert await sync_to_async(archival.archive_idle_threads)([bot]) == []
+
+
+TASK_TOOLS = textwrap.dedent(
+    """
+    from django_ergo.bots import bot_task, bot_tool
+
+    @bot_task
+    def slow_sum(numbers: list) -> int:
+        return sum(numbers)
+
+    @bot_task(name="shout")
+    async def loud(word: str) -> str:
+        return word.upper()
+
+    @bot_tool(takes_context=True)
+    def add_up(ctx, a: int, b: int) -> int:
+        return ctx.tasks.run(slow_sum, [a, b], timeout=10)
+    """
+)
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_tools_run_bot_tasks_in_the_background(tmp_path):
+    user = await User.objects.acreate(username="tasker")
+    bot, engine = make_bot(
+        tmp_path,
+        claude_tool("add_up", {"a": 2, "b": 3}),
+        say("5"),
+        yaml_text="name: tasker\ntools: [tools/pantry.py]\n",
+        name="tasker",
+        tools=TASK_TOOLS,
+    )
+    assert sorted(bot.tasks) == ["shout", "slow_sum"]
+    root = await bot.root_session(user)
+    await bot.ask(root, "2 + 3?")
+    assert _last_tool_result(engine) == "5"
+
+    ctx = bot.tool_context(root)
+    job = ctx.tasks.start("shout", "hi")
+    assert await job == "HI"
+    assert job.done()
+    with pytest.raises(ValueError, match="not a @bot_task"):
+        ctx.tasks.start(len, [])
+
+
+def test_a_bot_task_runner_setting_takes_over(tmp_path, settings):
+    from django_ergo.bots import background
+
+    calls = []
+
+    class Done(background.TaskHandle):
+        def done(self):
+            return True
+
+        def wait(self, timeout=None):
+            return "queued elsewhere"
+
+    def runner(bot_name, task_name, args, kwargs):
+        calls.append((bot_name, task_name, args, kwargs))
+        return Done()
+
+    settings.DJANGO_ERGO = {"BOT_TASK_RUNNER": runner}
+    bot = Bot.load(write_bot(tmp_path, "name: tasker\ntools: [tools/pantry.py]\n", name="tasker", tools=TASK_TOOLS))
+    assert ToolContext(bot=bot).tasks.run("slow_sum", [1, 2]) == "queued elsewhere"
+    assert calls == [("tasker", "slow_sum", [[1, 2]], {})]
+    assert background.execute("tasker", "slow_sum", [[1, 2]], {}) == 3

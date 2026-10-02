@@ -10,7 +10,7 @@ Live on rigel from `~/p/boundcorp/django-ergo`, bots from `boundcorp/ergo-bots`.
 - [x] **Turns as Celery tasks**: web messages and approvals queue a turn task (inline without a broker); Redis pub/sub wakes the SSE stream; rigel runs `up web worker beat`.
 - [x] **Thread-to-thread messaging**: messages record a sender; replies go back to the sender's thread; `ergo_thread_list(bot)` and async `ergo_thread_send(bot, root|<id>|new, message)`; hop limit; replaces sync `threads_*` and `ergo_bot_call`.
 - [x] **Thread inactivity and archival**: beat archives threads idle `sessions.archive_after_days` (default 7); archived threads collapse in the sidebar; messaging one reopens it.
-- [ ] **`@bot_task` for custom tools**: run a bot-folder function on a worker and wait for or await its result.
+- [x] **`@bot_task` for custom tools**: run a bot-folder function on a worker and wait for or await its result.
 
 ### Next
 
@@ -20,6 +20,7 @@ Live on rigel from `~/p/boundcorp/django-ergo`, bots from `boundcorp/ergo-bots`.
 - [ ] Images and PDFs from the Files panel shown to the model, not just described.
 - [ ] "Changes" tab on the bot page: open ergo-bots PRs with diff, Merge and Discard.
 - [ ] Replace the 30s git-pull thread with a beat task.
+- [ ] A bot tool waiting on a @bot_task holds a worker slot; watch worker concurrency if many tools wait at once.
 - [ ] Reconcile the root pre-commit config (ruff, prettier) with the branch's code style.
 - [ ] `test_telegram_webhook_mode` fails locally (async view under the sync test client); check CI.
 

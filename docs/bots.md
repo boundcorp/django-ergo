@@ -72,6 +72,30 @@ name upper-cased, other characters as `_`) when set, else
 the current time in the user's `timezone` attribute, the bot's `timezone`,
 or Django's `TIME_ZONE`, in that order.
 
+## Background tasks
+
+Slow work in a tool file can run off the chat turn. Mark a function with
+`@bot_task` and start it from a tool with `ctx.tasks`:
+
+```python
+from django_ergo.bots import bot_task, bot_tool
+
+@bot_task
+def import_receipts(month: str) -> dict:
+    ...
+
+@bot_tool(takes_context=True)
+def receipts(ctx, month: str) -> dict:
+    job = ctx.tasks.start(import_receipts, month)   # returns at once
+    return job.wait(timeout=300)                    # or `await job`
+```
+
+`ctx.tasks.run(fn, *args, timeout=...)` starts and waits in one call; tasks
+can be async functions too. Arguments and results must be JSON-serializable.
+`DJANGO_ERGO["BOT_TASK_RUNNER"]` decides where tasks run: Ergonaut sends them
+to its Celery workers; without it they run in a thread pool in the same
+process. A worker only runs tasks the bot's own tool files declared.
+
 ## Skills
 
 A `skills/` folder (or the folder named by `skills:` in bot.yaml) holds

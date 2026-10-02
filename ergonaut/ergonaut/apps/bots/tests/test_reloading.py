@@ -82,3 +82,25 @@ def test_pull_checkout_fast_forwards_only_a_clean_checkout(tmp_path, monkeypatch
     (live / "scratch.txt").unlink()
     assert pull_checkout(live) == "pulled"
     assert (live / "cto" / "bot.yaml").exists()
+
+
+def test_bot_tasks_run_through_celery(bots_dir):
+    from django_ergo.bots import webhooks
+    from django_ergo.bots.tools import ToolContext
+
+    from ergonaut.apps.bots.reloading import ReloadingRegistry
+
+    (bots_dir / "tools").mkdir()
+    (bots_dir / "tools" / "jobs.py").write_text(
+        "from django_ergo.bots import bot_task\n\n@bot_task\ndef double(n: int) -> int:\n    return n * 2\n"
+    )
+    (bots_dir / "bot.yaml").write_text("name: boundcorp\ntools: [tools/jobs.py]\n")
+    registry = ReloadingRegistry(check_every=0)
+    webhooks.set_registry(registry)
+    try:
+        job = ToolContext(bot=registry.get("boundcorp")).tasks.start("double", 21)
+        assert job.wait(timeout=5) == 42  # eager without a broker
+    finally:
+        from ergonaut.apps.bots.loading import load_registry
+
+        webhooks.set_registry(load_registry)

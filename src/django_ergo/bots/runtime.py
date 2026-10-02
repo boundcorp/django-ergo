@@ -135,6 +135,8 @@ class Bot:
         self.tool_modules: list[ToolModule] = [
             load_tool_module(path, definition.name) for path in definition.tool_files
         ]
+        # @bot_task functions from the tool files, by name (see bots.background).
+        self.tasks = {name: fn for module in self.tool_modules for name, fn in module.tasks.items()}
         self.skills: list[Skill] = load_skills(definition.skills_dir)
         self.toolkit_factories = [
             import_string(path.replace(":", "."))

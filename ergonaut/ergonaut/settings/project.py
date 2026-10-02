@@ -111,6 +111,8 @@ DJANGO_ERGO = {
     "BOT_WEBHOOK_BASE_URL": f"{ERGONAUT_PUBLIC_URL}/hooks" if ERGONAUT_PUBLIC_URL else None,
     # Bot-to-bot thread messages are delivered by a Celery worker.
     "THREAD_MESSAGE_RUNNER": "ergonaut.apps.bots.tasks.queue_thread_message",
+    # A bot tool's ctx.tasks.start(...) runs @bot_task functions on a worker.
+    "BOT_TASK_RUNNER": "ergonaut.apps.bots.tasks.celery_bot_task",
 }
 
 SITE_ROOT = PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
