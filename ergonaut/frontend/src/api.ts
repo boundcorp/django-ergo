@@ -326,6 +326,7 @@ export const api = {
         changed: Record<string, string>
       }[]
     }>('GET', `/bots/${bot}/proposals`),
+  botErrors: () => request<{ folder: string; name: string; error: string }[]>('GET', '/bot-errors'),
   allPins: () => request<Record<string, { name: string; url: string }[]>>('GET', '/pins'),
   pins: (id: string) => request<Pin[]>('GET', `/sessions/${id}/pins`),
   pin: (id: string, pinned: boolean) => request<AttachmentFile>('POST', `/attachments/${id}/pin`, { pinned }),

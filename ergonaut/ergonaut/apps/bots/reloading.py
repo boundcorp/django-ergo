@@ -60,6 +60,17 @@ def fingerprint(paths: list[Path]) -> tuple:
     return tuple(found)
 
 
+def keep_last_good(old: BotRegistry, new: BotRegistry) -> None:
+    """A bot whose folder broke in this reload keeps running as it was (its failure
+    stays in ``new.failed``, so the app can say so)."""
+    broken = {Path(folder).resolve() for folder in new.failed}
+    for bot in list(old):
+        root = bot.definition.root_dir
+        if root is not None and root.resolve() in broken and bot.name not in new:
+            new.add(bot)
+            logger.warning("Keeping the last good %s bot: its folder didn't load", bot.name)
+
+
 class ReloadingRegistry:
     def __init__(
         self,
@@ -91,6 +102,7 @@ class ReloadingRegistry:
                     logger.exception("Reloading the bots failed; keeping the loaded ones")
                 else:
                     if self._registry is not None:
+                        keep_last_good(self._registry, registry)
                         logger.info("Bot files changed; reloaded %s", ", ".join(b.name for b in registry))
                     self._registry = registry
                 self._fingerprint = seen

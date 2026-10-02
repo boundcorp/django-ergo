@@ -922,6 +922,19 @@ def session_pins(request, session_id: str):
     return pins
 
 
+@router.get("/bot-errors")
+def bot_errors(request):
+    """Bot folders that didn't load, for admins (the others keep running)."""
+    if not request.auth.is_superuser:
+        return []
+    from pathlib import Path
+
+    return [
+        {"folder": folder, "name": Path(folder).name, "error": error}
+        for folder, error in sorted(getattr(registry(), "failed", {}).items())
+    ]
+
+
 @router.get("/pins")
 def all_pins(request):
     """What's pinned in each of your chats, by session id (for the sidebar)."""

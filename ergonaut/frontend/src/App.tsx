@@ -26,6 +26,7 @@ function App() {
   const [bots, setBots] = useState<Bot[]>([])
   const [sessions, setSessions] = useState<Session[]>([])
   const [pins, setPins] = useState<Record<string, { name: string; url: string }[]>>({})
+  const [botErrors, setBotErrors] = useState<{ folder: string; name: string; error: string }[]>([])
 
   useEffect(() => {
     api
@@ -36,10 +37,16 @@ function App() {
   }, [])
 
   const refresh = useCallback(async () => {
-    const [b, s, p] = await Promise.all([api.bots(), api.sessions(), api.allPins().catch(() => ({}))])
+    const [b, s, p, e] = await Promise.all([
+      api.bots(),
+      api.sessions(),
+      api.allPins().catch(() => ({})),
+      api.botErrors().catch(() => []),
+    ])
     setBots(b)
     setSessions(s)
     setPins(p)
+    setBotErrors(e)
   }, [])
 
   useEffect(() => {
@@ -53,7 +60,7 @@ function App() {
     <BrowserRouter>
       <div className="flex h-screen">
         <aside className="w-64 shrink-0 border-r border-zinc-200 dark:border-zinc-800">
-          <Sidebar bots={bots} sessions={sessions} pins={pins} onChange={refresh} />
+          <Sidebar bots={bots} sessions={sessions} pins={pins} botErrors={botErrors} onChange={refresh} />
         </aside>
         <main className="min-w-0 flex-1">
           <Routes>
