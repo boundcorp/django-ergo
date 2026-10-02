@@ -41,6 +41,7 @@ The `ergonaut` command (installed with the package):
 | `ergonaut check` | Load the bots; list tools, plugins, people and missing secrets |
 | `ergonaut chat BOT [--user NAME]` | Chat with a bot's root session in the terminal |
 | `ergonaut manage ...` | Any `manage.py` command |
+| `ergonaut manage wait_idle` | Wait until no bot turn is running; run it before a restart (`ergonaut manage wait_idle && <restart>`) so running turns aren't cut off |
 
 ## All-in-one container
 
