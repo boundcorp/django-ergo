@@ -21,7 +21,7 @@ Live on rigel from `~/p/boundcorp/django-ergo`, bots from `boundcorp/ergo-bots`.
 
 ### Next
 
-- [ ] **Docs** (branch `claude/project-thread-ru4ull`): full README; guides for getting started, building bots, skills, tools and plugins, schedules, running Ergonaut, development; 2025 planning docs and old specs moved to `docs/archive/`.
+- [ ] **Docs** (PR #69): full README; guides for getting started, building bots, skills, tools and plugins, schedules, running Ergonaut, development; 2025 planning docs and old specs moved to `docs/archive/`.
 - [x] **Skills unified + named chats** (PR #33, merged): lazy skills (load/unload, always per chat, requires), main replaces root, named chats in bot.yaml, schedule targets.
 - [x] **Schedule actions** (PR #34, merged): ordered `prompt` and `run` steps; `run` calls bot-folder Python and records a BotJob.
 - [x] **BotTable** (PR #35, merged): real Django models per bot, migrations in the bot folder's `migrations/` (bot_management writes them into the proposal), `ergo_bot_migrate` at start and after pulls, `tables` skill.
