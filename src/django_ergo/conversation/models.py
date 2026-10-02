@@ -228,6 +228,7 @@ class StructuredCallStatus(models.TextChoices):
     COMPLETED = "completed", "Completed"
     FAILED = "failed", "Failed"
     TURN_LIMITED = "turn_limited", "Turn limited"
+    STOPPED = "stopped", "Stopped"
 
 
 class StructuredCall(TimeStampedMixin):

@@ -40,6 +40,24 @@ Response modes:
 - ``output_parser`` (a callable on the final text, ``json.loads`` by default):
   the final assistant text is parsed; a parse failure is sent back as a
   correction message.
+
+Turn control: pass ``control=`` (anything with an async ``check()`` returning
+a ``TurnSignal``) to steer or stop a call while it runs. The loop checks it
+before every model call, so after a tool step's results are in::
+
+    class Inbox:
+        async def check(self) -> TurnSignal:
+            if user_pressed_stop():
+                return TurnSignal(stop=True)
+            return TurnSignal(messages=[SteeringMessage(t) for t in new_messages()])
+
+    result = await run_structured_call(spec, "Plan it", session=session, control=Inbox())
+
+- ``messages`` go into the call as ordinary user messages (with any
+  attachments), so the model sees them on its next step and they stay in the
+  history like any other message.
+- ``stop`` ends the call with status ``stopped``. A tool that is already
+  running finishes first; the call stops at the next step.
 """
 
 from __future__ import annotations
@@ -51,6 +69,7 @@ from dataclasses import dataclass
 from dataclasses import field
 from typing import TYPE_CHECKING
 from typing import Any
+from typing import Protocol
 
 from asgiref.sync import sync_to_async
 from pydantic import BaseModel
@@ -90,6 +109,7 @@ DEFAULT_OUTPUT_TOOL = "submit_output"
 # Seconds to wait before each retry of a transient API failure.
 RETRY_DELAYS = (1, 2, 4)
 MAX_ERROR_CHARS = 4000
+STOPPED_NOTICE = "Stopped by the user"
 
 # Matched against exception class names (and their bases) so neither SDK
 # has to be importable.
@@ -168,6 +188,31 @@ class StructuredCallSpec:
     def parse_text(self, text: str) -> Any:
         parser = self.output_parser or json.loads
         return parser(text)
+
+
+@dataclass
+class SteeringMessage:
+    """A message from the user that arrived while the call was running."""
+
+    text: str
+    attachments: list[Attachment] | None = None
+
+
+@dataclass
+class TurnSignal:
+    """What a TurnControl wants at a step boundary.
+
+    With ``stop``, any ``messages`` are still added to the history, then the call stops.
+    """
+
+    stop: bool = False
+    messages: list[SteeringMessage] = field(default_factory=list)
+
+
+class TurnControl(Protocol):
+    """Checked before each model call; see the module docstring."""
+
+    async def check(self) -> TurnSignal: ...
 
 
 @dataclass
@@ -489,6 +534,11 @@ def _fail(call: StructuredCall, error: str, category: str = "other") -> None:
     call.error_category = category
 
 
+def _stop(call: StructuredCall) -> None:
+    call.status = StructuredCallStatus.STOPPED
+    call.error = STOPPED_NOTICE
+
+
 def _wrap_up_note(spec: StructuredCallSpec) -> str:
     return (
         f"This is your last step for this turn ({spec.max_turns} steps used). "
@@ -517,6 +567,7 @@ class _Run:
     user: Any
     workflow: Any
     allow_approvals: bool
+    control: TurnControl | None = None
 
     def __post_init__(self):
         spec = self.spec
@@ -542,6 +593,15 @@ class _Run:
             name, args, self.toolkits, self.user, self.workflow
         )
 
+    async def steer(self) -> bool:
+        """Add any steering messages to the call; True when the control says stop."""
+        if self.control is None:
+            return False
+        signal = await self.control.check()
+        for message in signal.messages:
+            await self.transcript.append_user(message.text, message.attachments)
+        return signal.stop
+
 
 async def _loop(run: _Run) -> StructuredCallResult:
     """Run the call to its end; a crash marks it FAILED instead of leaving it in progress."""
@@ -564,6 +624,10 @@ async def _run_loop(run: _Run) -> StructuredCallResult:  # noqa: C901, PLR0912, 
     approvals: list[PendingApproval] = []
     finished = False
     while call.turns_used < spec.max_turns:
+        if await run.steer():
+            _stop(call)
+            finished = True
+            break
         call.turns_used += 1
         schemas, note = run.tool_schemas, ""
         if (
@@ -729,6 +793,7 @@ async def run_structured_call(  # noqa: PLR0913
     parent: StructuredCall | None = None,
     context_builder: ContextBuilder | None = None,
     allow_approvals: bool = False,
+    control: TurnControl | None = None,
 ) -> StructuredCallResult:
     """Make one structured call, standalone or as a turn of ``session``.
 
@@ -737,7 +802,8 @@ async def run_structured_call(  # noqa: PLR0913
     needs approval pauses the call (status ``awaiting_approval``) and
     ``resume_structured_call`` continues it; otherwise such tools are
     refused. ``context_builder`` (sessions only) adds its context to every
-    model call of this turn.
+    model call of this turn. ``control`` can steer or stop the call between
+    steps (see the module docstring).
     """
     pre_seeds = await sync_to_async(spec.all_pre_seeds, thread_sensitive=True)()
     if session is not None:
@@ -788,7 +854,7 @@ async def run_structured_call(  # noqa: PLR0913
         )
         transcript = _MemoryTranscript(active, call, history)
 
-    run = _Run(active, transcript, call, spec, user, workflow, allow_approvals)
+    run = _Run(active, transcript, call, spec, user, workflow, allow_approvals, control)
     await _record_tools(call, spec)
     await transcript.append_user(message, attachments)
     if seed and pre_seeds:
@@ -805,11 +871,13 @@ async def resume_structured_call(  # noqa: PLR0913
     engine_spec: EngineSpec | None = None,
     workflow=None,
     context_builder: ContextBuilder | None = None,
+    control: TurnControl | None = None,
 ) -> StructuredCallResult:
     """Continue a call that stopped for approval.
 
     ``decisions`` maps tool_use_id to True (approved) or False (denied).
     Approved tools run; the rest go back to the model as declined.
+    ``control`` works as in ``run_structured_call``.
     """
     if call.status != StructuredCallStatus.AWAITING_APPROVAL:
         msg = f"Call {call.pk} is not waiting for approval"
@@ -837,7 +905,16 @@ async def resume_structured_call(  # noqa: PLR0913
         transcript = _MemoryTranscript(active, call, call.transcript)
         user = await sync_to_async(lambda: call.user, thread_sensitive=True)()
 
-    run = _Run(active, transcript, call, spec, user, workflow, allow_approvals=True)
+    run = _Run(
+        active,
+        transcript,
+        call,
+        spec,
+        user,
+        workflow,
+        allow_approvals=True,
+        control=control,
+    )
     results = []
     for item in pending:
         if decisions.get(item["id"]):

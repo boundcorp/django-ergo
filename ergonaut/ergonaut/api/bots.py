@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from asgiref.sync import sync_to_async
 from django.db.models import Count, Q
@@ -24,7 +24,7 @@ from ninja import File, Router, Schema, UploadedFile
 from ninja.errors import HttpError
 from ninja.security import django_auth
 
-from ergonaut.apps.bots.tasks import queue_turn
+from ergonaut.apps.bots.tasks import queue_message, queue_turn, request_stop
 
 router = Router(tags=["bots"], auth=django_auth)
 
@@ -166,6 +166,9 @@ class MessageIn(Schema):
     # Files already uploaded to the session, to send with this message so
     # the model sees them (images and PDFs natively).
     attachment_ids: list[str] = []
+    # "send" steers a running turn (or starts one); "interrupt" stops the running
+    # turn first, so the message starts the next one.
+    mode: Literal["send", "interrupt"] = "send"
 
 
 class ApprovalIn(Schema):
@@ -725,9 +728,25 @@ async def send_message(request, session_id: str, data: MessageIn):
             raise HttpError(400, "Attach files uploaded to this session")
     if session.status == "completed" and (session.metadata or {}).get("bot_role") == "thread":
         await sync_to_async(archival.reopen)(session)  # a message brings an archived thread back
-    return await sync_to_async(queue_and_report)(
-        session, message=data.text or "(see the attached files)", attachment_ids=data.attachment_ids
+    queued = await sync_to_async(queue_message)(
+        session.id,
+        data.text or "(see the attached files)",
+        data.attachment_ids,
+        interrupt=data.mode == "interrupt",
     )
+    return await sync_to_async(latest_turn)(session, queued=queued)
+
+
+@router.post("/sessions/{session_id}/stop", response=TurnOut)
+async def stop_turn(request, session_id: str):
+    """Stop the running turn at its next step; a no-op when nothing runs.
+
+    ``queued`` says a turn was running: follow it over /events until it stops.
+    """
+    session = await get_session(request, session_id)
+    get_bot(session.bot_name, request.auth)
+    running = await sync_to_async(request_stop)(session.id)
+    return await sync_to_async(latest_turn)(session, queued=running)
 
 
 @router.post("/sessions/{session_id}/approvals", response=TurnOut)

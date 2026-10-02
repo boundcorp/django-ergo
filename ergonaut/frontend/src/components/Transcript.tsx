@@ -150,7 +150,9 @@ function CallHeader({ call }: { call: Call }) {
       ? 'text-emerald-600'
       : call.status === 'awaiting_approval'
         ? 'text-amber-600'
-        : 'text-red-600'
+        : call.status === 'stopped'
+          ? 'text-zinc-600 dark:text-zinc-400'
+          : 'text-red-600'
   return (
     <div className="my-2 text-xs text-zinc-500">
       <button
@@ -164,7 +166,11 @@ function CallHeader({ call }: { call: Call }) {
         {call.model_name && <span>{call.model_name}</span>}
         <span className="h-px flex-1 bg-zinc-200 dark:bg-zinc-800" />
       </button>
-      {call.error && <div className="mt-1 text-center text-red-600">{call.error}</div>}
+      {call.error && (
+        <div className={`mt-1 text-center ${call.status === 'stopped' ? 'text-zinc-500' : 'text-red-600'}`}>
+          {call.status === 'stopped' ? `⏹ ${call.error}` : call.error}
+        </div>
+      )}
       {detail != null && !!call.tools?.length && (
         <div className="mt-2 flex flex-wrap items-center gap-1">
           <span className="mr-1">Tools available:</span>
