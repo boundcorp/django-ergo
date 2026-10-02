@@ -3,6 +3,7 @@ import textwrap
 
 import pytest
 from django.contrib.auth import get_user_model
+from django.utils import timezone
 from django_ergo.bots import webhooks
 
 from ergonaut.apps.bots.loading import load_registry
@@ -252,6 +253,12 @@ def test_upload_list_download_and_delete_session_files(client, cook, use_bots, s
     )
     listed = client.get(f"/api/sessions/{root['id']}/attachments").json()
     assert [f["id"] for f in listed] == [file["id"]]
+    assert listed[0]["archived_at"] is None
+    # A file the bot archived is still listed, marked, for the Files panel's toggle.
+    ConversationSession.objects.get(id=root["id"]).attachments.update(archived_at=timezone.now())
+    listed = client.get(f"/api/sessions/{root['id']}/attachments").json()
+    assert [f["id"] for f in listed] == [file["id"]]
+    assert listed[0]["archived_at"]
     download = client.get(f"/api/attachments/{file['id']}/download")
     assert b"".join(download.streaming_content) == b"item,count\neggs,4\n"
 

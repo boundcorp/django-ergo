@@ -658,6 +658,10 @@ or other file goes to the bot's own model as an attachment in a separate call
 message (Ergonaut's 📎 button or a pasted image) reach the model natively.
 Only the latest two images stay in what's sent to the model; older ones
 become `[image omitted: name (id=...)]`, and the bot can look again by id.
+`ergo_attachments_archive` clears old files out of the bot's working set
+(by id, or `all_files` with optional `older_than_days` / `keep_latest`);
+`ergo_attachments_unarchive` brings them back. See
+[attachments.md](attachments.md#archiving-session-files).
 
 ### telegram
 

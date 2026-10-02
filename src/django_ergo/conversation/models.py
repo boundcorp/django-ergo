@@ -397,6 +397,9 @@ class ConversationAttachment(TimeStampedMixin):
     sha256 = models.CharField(max_length=64, blank=True, default="")
     transcript = models.TextField(blank=True, default="")
     metadata = models.JSONField(default=dict, blank=True)
+    # Set when a bot (or person) archives the file: it stays stored and readable
+    # by id but drops out of the default file list and the bot's context.
+    archived_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         ordering = ["message_sequence", "position"]

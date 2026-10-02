@@ -68,3 +68,28 @@ images (default 2). Older ones are replaced by `[image omitted: name
 `DJANGO_ERGO["IMAGE_MAX_SIDE"]` pixels (default 1024) on the long side
 before sending; without it they are sent as they are when they're JPEG, PNG,
 GIF or WebP under 5 MB, and left out otherwise.
+
+## Archiving session files
+
+A long chat collects files the bot no longer needs. The attachments plugin's
+`ergo_attachments_archive` tool archives them, so they stop crowding the
+bot's working set:
+
+```python
+plugin.archive(ctx, ["<id>", "<id>"])                   # these files
+plugin.archive(ctx, all_files=True)                     # every file in the chat
+plugin.archive(ctx, all_files=True, older_than_days=7)  # not updated for a week
+plugin.archive(ctx, all_files=True, keep_latest=3)      # all but the newest three
+plugin.unarchive(ctx, ["<id>"])                         # bring one back
+```
+
+`older_than_days` and `keep_latest` also narrow a list of ids. Archiving sets
+`ConversationAttachment.archived_at`; the file stays stored and readable by id
+(`ergo_attachments_read`, `ergo_attachments_look`). Archived files are left
+out of `ergo_attachments_list` (unless `include_archived`), of the "Files in
+this chat" context section (which notes how many are archived) and of the
+skill hint's count. A file sent with a message stays in the message history,
+where the image window above already limits what's sent. The bot archives
+only files in its own session. Archiving is reversible, so neither tool asks
+for approval. Ergonaut's Files panel hides archived files behind a "Show N
+archived" toggle.
