@@ -987,3 +987,60 @@ async def test_telegram_hears_about_delegated_replies_in_the_root_chat(
     )
     await sync_to_async(messaging.deliver)(str(asked.id))
     assert len(plugin.api.sent()) == before
+
+
+@pytest.mark.django_db
+def test_a_writable_kb_saves_commits_and_pushes(bot_repo):
+    remote, work = bot_repo
+    folder = work / "bots"
+    folder.mkdir()
+    bot, _ = make_bot(
+        folder,
+        yaml_text="""
+            name: cook
+            plugins: [{name: ergo_kb, path: kb, write: true}]
+        """,
+        name="cook",
+    )
+    (bot.definition.root_dir / "kb").mkdir()
+    (bot.definition.root_dir / "kb" / "index.md").write_text("# Kitchen\n")
+    git(work, "add", "-A")
+    git(work, "commit", "-m", "add cook")
+    git(work, "push")
+    toolkit = bot.plugin("ergo_kb").make_toolkit(None)
+    assert "ergo_kb_write" in toolkit.tools
+
+    result = toolkit.execute_tool(
+        "ergo_kb_write",
+        {
+            "path": "preferences/breakfast.md",
+            "content": "# Breakfast\nChocolate Soylent.",
+        },
+    )
+    assert result == "Created preferences/breakfast.md. Saved and pushed."
+    assert "kb: created preferences/breakfast.md" in git(
+        remote, "log", "--oneline", "main"
+    )
+    assert git(work, "status", "--porcelain").strip() == ""
+
+    again = toolkit.execute_tool(
+        "ergo_kb_write",
+        {
+            "path": "preferences/breakfast.md",
+            "content": "# Breakfast\nChocolate Soylent.",
+        },
+    )
+    assert again == "Updated preferences/breakfast.md. No change to save."
+    for bad in ("../agents.md", "notes.txt", "/etc/passwd.md"):
+        with pytest.raises(ValueError, match="must be a .md file inside"):
+            toolkit.execute_tool("ergo_kb_write", {"path": bad, "content": "x"})
+
+
+@pytest.mark.django_db
+def test_kb_writing_is_off_by_default(tmp_path):
+    bot, _ = make_bot(
+        tmp_path,
+        yaml_text="name: reader\nplugins: [{name: ergo_kb, path: kb}]\n",
+        name="reader",
+    )
+    assert "ergo_kb_write" not in bot.plugin("ergo_kb").make_toolkit(None).tools

@@ -97,6 +97,62 @@ class FolderKB:
         msg = f"No article {path}"
         raise ValueError(msg)
 
+    def write(
+        self, path: str, content: str, *, commit: bool = True, author: str = ""
+    ) -> str:
+        """Create or replace an article; in a git repo, commit and push it to main.
+
+        Only ``.md`` files inside the knowledge base folder can be written.
+        Returns what happened, for the bot to report.
+        """
+        target = (self.root / path).resolve()
+        if not target.is_relative_to(self.root) or target.suffix != ".md":
+            msg = f"{path} must be a .md file inside the knowledge base"
+            raise ValueError(msg)
+        if len(content) > MAX_ARTICLE_CHARS:
+            msg = f"Articles are limited to {MAX_ARTICLE_CHARS} characters"
+            raise ValueError(msg)
+        existed = target.exists()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content if content.endswith("\n") else content + "\n")
+        relative = target.relative_to(self.root).as_posix()
+        verb = "Updated" if existed else "Created"
+        if not commit:
+            return f"{verb} {relative}."
+        return f"{verb} {relative}. {self._commit(target, f'kb: {verb.lower()} {relative}', author)}"
+
+    def _commit(self, target: Path, message: str, author: str) -> str:
+        import subprocess
+
+        def git(*args: str) -> subprocess.CompletedProcess:
+            return subprocess.run(  # noqa: S603 — fixed argv
+                ["git", *args],  # noqa: S607
+                cwd=self.root,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=60,
+            )
+
+        if git("rev-parse", "--is-inside-work-tree").returncode != 0:
+            return "Saved (not in a git repository)."
+        git("add", "--", str(target))
+        if not git("diff", "--cached", "--quiet").returncode:
+            return "No change to save."
+        trailer = f"\n\nWritten by {author}." if author else ""
+        committed = git("commit", "-m", message + trailer, "--", str(target))
+        if committed.returncode != 0:
+            return f"Saved, but not committed: {committed.stderr.strip()[:200]}"
+        if git("rev-parse", "--abbrev-ref", "@{upstream}").returncode != 0:
+            return "Saved and committed (no upstream to push to)."
+        git("pull", "--rebase", "--autostash", "--quiet")
+        pushed = git("push", "--quiet")
+        if pushed.returncode != 0:
+            return (
+                f"Saved and committed; the push failed: {pushed.stderr.strip()[:200]}"
+            )
+        return "Saved and pushed."
+
     def render_results(self, query: str, limit: int = 5) -> str:
         results = self.search(query, limit)
         if not results:
@@ -107,7 +163,14 @@ class FolderKB:
             blocks.append(f"### {article.title} ({article.path})\n{snippet}")
         return "\n\n".join(blocks)
 
-    def toolkit(self, ctx=None, *, prefix: str = "ergo_kb") -> FunctionToolkit:
+    def toolkit(
+        self,
+        ctx=None,
+        *,
+        prefix: str = "ergo_kb",
+        writable: bool = False,
+        commit: bool = True,
+    ) -> FunctionToolkit:
         kb = self
 
         @bot_tool(name=f"{prefix}_search")
@@ -129,5 +192,21 @@ class FolderKB:
                 return "The knowledge base is empty."
             return "\n".join(f"{a.path}: {a.title}" for a in articles)
 
-        tools: list[BotTool] = [fn.__bot_tool__ for fn in (search, read, list_articles)]
+        functions = [search, read, list_articles]
+        if writable:
+
+            @bot_tool(name=f"{prefix}_write", takes_context=True)
+            def write(ctx, path: str, content: str) -> str:
+                """Create or replace a knowledge base article (Markdown, starting with a `# Title`).
+
+                Use it to remember lasting facts and preferences. Read the article
+                first and keep what's still true; the whole file is replaced.
+                """
+                bot = getattr(ctx, "bot", None)
+                return kb.write(
+                    path, content, commit=commit, author=bot.name if bot else ""
+                )
+
+            functions.append(write)
+        tools: list[BotTool] = [fn.__bot_tool__ for fn in functions]
         return FunctionToolkit(tools, ctx)

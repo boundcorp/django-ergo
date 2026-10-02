@@ -5,6 +5,8 @@
         path: kb                         # a folder of Markdown files in the bot repo
         # or: knowledgebases: [Kitchen]  # Knowledgebase names (legacy KB app)
         # or: toolkit: "myapp.kb:make_toolkit"   # factory(ctx) -> Toolkit
+        write: false                     # path KBs: ergo_kb_write saves articles
+        commit: true                     # ...and commits/pushes them when in a git repo
         prefetch: new_session            # new_session | every_turn | off
         search_tool: ergo_kb_search      # tool called for prefetch (kb_search for knowledgebases)
         top_k: 5
@@ -19,9 +21,12 @@ A bot folder with a ``kb/`` folder gets this plugin with ``path: kb``
 automatically. A folder KB's root article (``kb/index.md``) is in context on
 every turn, with the title "Knowledge base".
 
-A ``path`` knowledge base is plain Markdown (see ``bots.folder_kb``). Pair it
-with the bot_management plugin and the bot can edit its own articles and
-propose them as pull requests.
+A ``path`` knowledge base is plain Markdown (see ``bots.folder_kb``). With
+``write: true`` the bot also gets ``ergo_kb_write`` and can keep its own
+notes (preferences, lasting facts). Writes touch only ``.md`` files in the KB
+folder; in a git checkout each write is committed and pushed to its branch
+straight away (``commit: false`` leaves it uncommitted), so it needs no
+review. For reviewed changes, use the bot_management plugin instead.
 """
 
 from __future__ import annotations
@@ -65,6 +70,8 @@ class ErgoKBPlugin(BotPlugin):
         default_search = "ergo_kb_search" if self.folder is not None else "kb_search"
         self.search_tool = self.config.get("search_tool", default_search)
         self.top_k = int(self.config.get("top_k", 5))
+        self.writable = bool(self.config.get("write", False))
+        self.commit = bool(self.config.get("commit", True))
 
     def _folder(self) -> FolderKB | None:
         relative = self.config.get("path")
@@ -86,7 +93,7 @@ class ErgoKBPlugin(BotPlugin):
         if self._factory is not None:
             return self._factory(ctx)
         if self.folder is not None:
-            return self.folder.toolkit(ctx)
+            return self.folder.toolkit(ctx, writable=self.writable, commit=self.commit)
         from django_ergo.kb_toolkit import KBToolkit
         from django_ergo.models import Knowledgebase
 

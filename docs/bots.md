@@ -311,6 +311,8 @@ Tandoor tools) go in that bot folder's `tools/` instead.
 - name: ergo_kb
   path: kb                           # Markdown folder, relative to the bot folder
   # or knowledgebases: [Kitchen], or toolkit: "myapp.kb:make_toolkit"
+  write: false                       # path KBs: the bot may save articles (ergo_kb_write)
+  commit: true                       # ...committed and pushed when the KB is in a git checkout
   prefetch: new_session              # new_session | every_turn | off
   search_tool: ergo_kb_search
   top_k: 5
@@ -331,6 +333,11 @@ context only when something matches. Add the `bot_management` plugin and the
 bot can edit articles with `ergo_config_repo_write` and propose them with
 `ergo_config_repo_publish`, which is how it keeps notes such as household preferences up
 to date under your review.
+With `write: true` the bot also gets `ergo_kb_write(path, content)` and keeps
+its own notes: only `.md` files inside the KB folder, each write committed
+and pushed to the checkout's branch at once (`commit: false` leaves it
+uncommitted). Use it for things a bot should learn, like preferences; use
+`bot_management` for changes you want to review.
 
 ### bot_management
 
