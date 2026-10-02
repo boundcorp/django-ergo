@@ -430,9 +430,13 @@ class BotManagementPlugin(BotPlugin):
                 "status", "--porcelain", "--untracked-files=all", cwd=work
             ).splitlines():
                 code, path = line[:2], line[3:].split(" -> ")[-1].strip('"')
-                changed[path] = (
-                    "D" if "D" in code else "A" if code in ("??", "A ", "AM") else "M"
-                )
+                # " A" is a new file added with --intent-to-add (diff does that); "??" untracked.
+                if "D" in code:
+                    changed[path] = "D"
+                elif "A" in code or code == "??":
+                    changed[path] = "A"
+                else:
+                    changed[path] = "M"
             return files, changed
         ref = self._pr_ref(_pr_number(version))
         files = self.git("ls-tree", "-r", "--name-only", ref).splitlines()
