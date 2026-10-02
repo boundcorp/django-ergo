@@ -35,6 +35,7 @@ from django.utils.module_loading import import_string
 from django_ergo.bots.definition import BotDefinition
 from django_ergo.bots.definition import PluginSpec
 from django_ergo.bots.orchestrator import orchestrator_toolkit
+from django_ergo.bots import messaging
 from django_ergo.bots.plugins import BotPlugin
 from django_ergo.bots.plugins import resolve_plugin_class
 from django_ergo.bots.skills import Skill
@@ -67,6 +68,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from django_ergo.bots.registry import BotRegistry
+    from django_ergo.conversation.models import ThreadMessage
     from django_ergo.bots.tools import ToolModule
     from django_ergo.conversation.attachments import Attachment
     from django_ergo.conversation.engine import Engine
@@ -147,6 +149,7 @@ class Bot:
         ):
             # A kb/ folder in the bot folder is its knowledge base.
             specs.append(PluginSpec("ergo_kb", {"path": "kb"}))
+        messaging.KNOWN_BOTS[definition.name] = self
         self.plugins: list[BotPlugin] = [
             resolve_plugin_class(spec.name)(self, spec.config) for spec in specs
         ]
@@ -323,7 +326,7 @@ class Bot:
                 source_loader=lambda: self.history_sources(session),
             )
         ]
-        if self.is_root(session) and self.definition.orchestration:
+        if self.definition.orchestration:
             toolkits.append(orchestrator_toolkit(ctx))
         tools = [tool for module in self.tool_modules for tool in module.tools]
         if tools:
@@ -409,8 +412,13 @@ class Bot:
         message: str,
         *,
         attachments: list[Attachment] | None = None,
+        thread_message: ThreadMessage | None = None,
     ) -> TurnResult:
-        """Answer one message with a ChatReply. Plugins see before/after hooks."""
+        """Answer one message with a ChatReply. Plugins see before/after hooks.
+
+        With ``thread_message`` (another session's message, see
+        ``django_ergo.bots.messaging``) the reply is routed back to its sender.
+        """
         for plugin in self.plugins:
             await _maybe_await(plugin.before_turn(session, message))
         toolkits, builder = await self._prepare(session, message)
@@ -422,10 +430,12 @@ class Bot:
             attachments=attachments,
             context_builder=builder,
             allow_approvals=True,
+            metadata={"thread_message": str(thread_message.id)} if thread_message else None,
         )
         result = TurnResult.from_call(session, outcome)
         for plugin in self.plugins:
             await _maybe_await(plugin.after_turn(session, message, result))
+        await sync_to_async(messaging.finish_turn, thread_sensitive=True)(self, session, result)
         return result
 
     async def pending_call(self, session: ConversationSession) -> StructuredCall | None:
@@ -463,6 +473,7 @@ class Bot:
         result = TurnResult.from_call(session, outcome)
         for plugin in self.plugins:
             await _maybe_await(plugin.after_turn(session, call.request, result))
+        await sync_to_async(messaging.finish_turn, thread_sensitive=True)(self, session, result)
         return result
 
     async def serve(self) -> None:

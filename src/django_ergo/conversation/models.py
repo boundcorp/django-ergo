@@ -388,6 +388,56 @@ class ConversationAttachment(TimeStampedMixin):
         return f"{self.session_id} {where} {self.filename or self.kind}"
 
 
+class ThreadMessageStatus(models.TextChoices):
+    QUEUED = "queued", "Queued"
+    DELIVERED = "delivered", "Delivered (the recipient is working on it)"
+    WAITING = "waiting", "Waiting for the user's approval"
+    ANSWERED = "answered", "Answered"
+    FAILED = "failed", "Failed"
+
+
+class ThreadMessage(TimeStampedMixin):
+    """A message from one bot session to another (or a reply back).
+
+    The recipient answers it in a turn of its own, and the answer goes back
+    to ``sender_session`` as a new ThreadMessage (``in_reply_to`` this one).
+    A message with no sender session came from a person; nothing is routed
+    back. ``depth`` counts hops, so bots can't message each other forever.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    sender_session = models.ForeignKey(
+        ConversationSession,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="sent_thread_messages",
+    )
+    recipient_session = models.ForeignKey(
+        ConversationSession,
+        on_delete=models.CASCADE,
+        related_name="thread_messages",
+    )
+    in_reply_to = models.ForeignKey(
+        "self", null=True, blank=True, on_delete=models.SET_NULL, related_name="replies"
+    )
+    text = models.TextField()
+    depth = models.PositiveIntegerField(default=0)
+    status = models.CharField(
+        max_length=20, choices=ThreadMessageStatus.choices, default=ThreadMessageStatus.QUEUED
+    )
+    reply_text = models.TextField(blank=True, default="")
+    error = models.TextField(blank=True, default="")
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ["created_at"]
+        indexes = [models.Index(fields=["recipient_session", "status"])]
+
+    def __str__(self):
+        return f"{self.sender_session_id or 'person'} -> {self.recipient_session_id} ({self.status})"
+
+
 class KBUsageMode(models.TextChoices):
     READ = "read", "Read"
     WRITE = "write", "Write"

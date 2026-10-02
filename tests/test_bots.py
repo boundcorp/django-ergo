@@ -7,6 +7,7 @@ import json
 import textwrap
 
 import pytest
+from asgiref.sync import sync_to_async
 from django.contrib.auth import get_user_model
 
 from django_ergo.bots import bot_tool
@@ -364,128 +365,211 @@ def _last_tool_result(engine):
     return engine._client.calls[-1]["messages"][-1]["content"][0]["content"]
 
 
+SENT: list[str] = []
+
+
+def record_message(message_id):
+    """A THREAD_MESSAGE_RUNNER for tests: deliver by hand, in order."""
+    SENT.append(message_id)
+
+
+@pytest.fixture
+def thread_messages(settings):
+    from django.conf import settings as django_settings
+
+    SENT.clear()
+    settings.DJANGO_ERGO = {
+        **getattr(django_settings, "DJANGO_ERGO", {}),
+        "THREAD_MESSAGE_RUNNER": "tests.test_bots.record_message",
+    }
+
+    async def deliver_next(registry=None):
+        from django_ergo.bots import messaging
+
+        message_id = SENT.pop(0)
+        await sync_to_async(messaging.deliver)(message_id, registry)
+        return message_id
+
+    return deliver_next
+
+
+def _seeded(call):
+    return [
+        part["content"]
+        for message in call["messages"]
+        if isinstance(message["content"], list)
+        for part in message["content"]
+        if part.get("type") == "tool_result"
+    ]
+
+
+def _texts(call):
+    """Every text part the model was sent in a call."""
+    return [
+        part["text"]
+        for message in call["messages"]
+        if isinstance(message["content"], list)
+        for part in message["content"]
+        if part.get("type") == "text"
+    ] + [m["content"] for m in call["messages"] if isinstance(m["content"], str)]
+
+
 @pytest.mark.django_db(transaction=True)
-async def test_root_creates_and_drives_threads(tmp_path):
+async def test_a_bot_delegates_to_a_new_thread_and_gets_the_reply(tmp_path, thread_messages):
+    from django_ergo.conversation.models import ThreadMessage
+
     user = await User.objects.acreate(username="orchestrator")
     bot, engine = make_bot(
         tmp_path,
         claude_tool(
-            "threads_create",
-            {
-                "title": "Meal plan",
-                "message": "Plan Tuesday",
-                "compaction_mode": "time",
-            },
+            "ergo_thread_send",
+            {"thread": "new", "title": "Meal plan", "message": "Plan Tuesday"},
         ),
-        say("Tacos on Tuesday."),  # the thread's reply
-        say("I started a meal plan thread."),
+        say("I asked a meal plan thread."),
+        say("Tacos on Tuesday."),  # the thread's turn
+        say("The thread says tacos on Tuesday."),  # the root, on the reply
     )
     root = await bot.root_session(user)
 
     result = await bot.ask(root, "Plan meals")
-
-    assert result.text == "I started a meal plan thread."
-    root_call, thread_call, _ = engine._client.calls
-    assert {"threads_list", "threads_create", "threads_send", "threads_close"} <= (
-        _tool_names(root_call)
-    )
-    assert "ergo_bot_call" in _tool_names(root_call)  # permissions.call_bots is set
-    # The thread is a normal session: no orchestrator tools, no recent window.
-    assert "threads_create" not in _tool_names(thread_call)
-    assert thread_call["messages"][0]["content"][0]["text"] == "Plan Tuesday"
-    created = json.loads(_last_tool_result(engine))
-    assert created["reply"] == "Tacos on Tuesday."
-
-    thread = await ConversationSession.objects.aget(id=created["thread_id"])
+    assert result.text == "I asked a meal plan thread."
+    tools = _tool_names(engine._client.calls[0])
+    assert {"ergo_thread_list", "ergo_thread_send", "ergo_thread_archive"} <= tools
+    assert not {t for t in tools if t.startswith("threads_")}
+    sent = json.loads(engine._client.calls[1]["messages"][-1]["content"][0]["content"])
+    assert sent["sent_to"] == "kitchen · Meal plan"
+    thread = await ConversationSession.objects.aget(id=sent["thread_id"])
     assert thread.parent_id == root.id
-    assert thread.compaction_mode == "time"
-    assert thread.metadata["title"] == "Meal plan"
 
+    # The thread answers in a turn of its own...
+    await thread_messages()
+    asked = engine._client.calls[2]["messages"][0]["content"][0]["text"]
+    assert asked.startswith("[Message from kitchen · Chat")
+    assert asked.endswith("Plan Tuesday")
+    request = await ThreadMessage.objects.aget(recipient_session=thread)
+    assert (request.status, request.reply_text) == ("answered", "Tacos on Tuesday.")
+
+    # ...and the reply comes back to the root as a new turn, answered there.
+    await thread_messages()
+    back = engine._client.calls[3]["messages"][-1]["content"][0]["text"]
+    assert back.startswith("[Reply from kitchen · Meal plan")
+    assert back.endswith("Tacos on Tuesday.")
+    reply = await ThreadMessage.objects.aget(recipient_session=root)
+    assert reply.in_reply_to_id == request.id
+    assert reply.status == "answered"
+    assert SENT == []  # a reply is never answered back
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_a_delegated_turn_waits_for_approval_before_replying(tmp_path, thread_messages):
+    from django_ergo.conversation.models import ThreadMessage
+
+    user = await User.objects.acreate(username="approver")
+    bot, engine = make_bot(
+        tmp_path,
+        claude_tool("ergo_thread_send", {"thread": "new", "message": "Add milk"}),
+        say("Asked."),
+        claude_tool("add_to_list", {"item": "milk"}, tool_id="add1"),  # the thread pauses
+        say("Added milk."),
+    )
+    root = await bot.root_session(user)
+    await bot.ask(root, "Get milk on the list")
+    await thread_messages()
+    request = await ThreadMessage.objects.aget(in_reply_to__isnull=True)
+    assert request.status == "waiting"
+    assert SENT == []
+
+    thread = await ConversationSession.objects.aget(id=request.recipient_session_id)
+    await bot.resume(thread, True)
+    await request.arefresh_from_db()
+    assert (request.status, request.reply_text) == ("answered", "Added milk.")
+    assert len(SENT) == 1  # the reply is on its way to the root
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_threads_are_listed_targeted_and_archived(tmp_path, thread_messages):
+    user = await User.objects.acreate(username="lister")
+    bot, engine = make_bot(tmp_path, say("ok"))
+    root = await bot.root_session(user)
+    thread = await bot.create_session(user, parent=root, title="Groceries")
     engine._client.responses = [
-        claude_tool(
-            "threads_send", {"thread_id": str(thread.id), "message": "And Wed?"}
-        ),
-        say("Soup on Wednesday."),
-        claude_tool("threads_list", {}, tool_id="t2"),
-        claude_tool("threads_close", {"thread_id": str(thread.id)}, tool_id="t3"),
-        claude_tool(
-            "threads_send", {"thread_id": str(thread.id), "message": "x"}, tool_id="t4"
-        ),
-        claude_tool(
-            "threads_send", {"thread_id": "nope", "message": "x"}, tool_id="t5"
-        ),
+        claude_tool("ergo_thread_list", {}, tool_id="l1"),
+        claude_tool("ergo_thread_send", {"thread": str(thread.id), "message": "Eggs?"}, tool_id="s1"),
+        claude_tool("ergo_thread_send", {"thread": "nope", "message": "x"}, tool_id="s2"),
+        claude_tool("ergo_thread_archive", {"thread_id": str(thread.id)}, tool_id="a1"),
+        claude_tool("ergo_thread_list", {}, tool_id="l2"),
         say("Done."),
     ]
-    await bot.ask(root, "Wednesday too")
-    calls = engine._client.calls
-    # The thread kept its own native history: the first turn (question, reply
-    # tool call, its result, reply text) then the new message.
-    assert [m["role"] for m in calls[4]["messages"]] == [
-        "user",
-        "assistant",
-        "user",
-        "assistant",
-        "user",
+    await bot.ask(root, "Tidy up")
+    results = [c["messages"][-1]["content"][0] for c in engine._client.calls[1:6]]
+    listing = json.loads(results[0]["content"])
+    assert [(r["thread"], r["title"]) for r in listing] == [
+        (str(thread.id), "kitchen · Groceries"),
+        ("root", "kitchen · Chat"),
     ]
-    results = [c["messages"][-1]["content"][0] for c in calls[5:]]
-    assert results[0]["content"] == "Soup on Wednesday."
-    listing = json.loads(results[1]["content"])
-    assert listing[0]["title"] == "Meal plan"
-    assert listing[0]["messages"] == 8  # two turns of four messages
-    assert results[2]["content"] == f"Closed thread {thread.id}"
-    assert results[3]["is_error"] and "closed" in results[3]["content"]
-    assert results[4]["is_error"] and "No thread nope" in results[4]["content"]
+    assert listing[1]["you_are_here"] is True
+    assert json.loads(results[1]["content"])["thread_id"] == str(thread.id)
+    assert results[2]["is_error"] and "No thread nope" in results[2]["content"]
+    assert results[3]["content"] == "Archived kitchen · Groceries"
+    assert [r["thread"] for r in json.loads(results[4]["content"])] == ["root"]
+
+    # A message to an archived thread reopens it.
+    engine._client.responses = [say("Four eggs.")]
+    await thread_messages()
+    await thread.arefresh_from_db()
+    assert thread.status == "active"
 
 
 @pytest.mark.django_db(transaction=True)
 async def test_thread_creation_needs_permission(tmp_path):
     user = await User.objects.acreate(username="no-threads")
-    bot, engine = make_bot(tmp_path, say("ok"), yaml_text="name: plain\n", name="plain")
+    bot, engine = make_bot(
+        tmp_path,
+        claude_tool("ergo_thread_send", {"thread": "new", "message": "hi"}),
+        say("ok"),
+        yaml_text="name: plain\n",
+        name="plain",
+    )
     root = await bot.root_session(user)
     await bot.ask(root, "hi")
-    tools = _tool_names(engine._client.calls[0])
-    assert "threads_create" not in tools
-    assert "threads_list" in tools
+    refused = _last_tool_result(engine)
+    assert "may not start threads" in refused
+    assert await bot.sessions(user).acount() == 1
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_bots_call_reaches_permitted_bot(tmp_path):
+async def test_messages_reach_permitted_bots_only(tmp_path, thread_messages):
     user = await User.objects.acreate(username="chief")
     chief, engine = make_bot(
         tmp_path,
-        claude_tool("ergo_bot_call", {"bot": "sysadmin", "message": "Disk space?"}),
-        say("Disk is 40% full."),
-        say("The server is fine."),
-        yaml_text="name: chief\npermissions: {call_bots: [sysadmin]}\n",
+        claude_tool("ergo_thread_send", {"bot": "sysadmin", "message": "Disk space?"}),
+        claude_tool("ergo_thread_send", {"bot": "kitchen", "message": "hi"}, tool_id="t2"),
+        say("Asked."),
+        say("Disk is 40% full."),  # sysadmin's root, on the message
+        say("The server is fine."),  # chief, on the reply
+        yaml_text="name: chief\ndescription: Runs things\npermissions: {call_bots: [sysadmin]}\n",
         name="chief",
     )
-    sysadmin, _ = make_bot(tmp_path, yaml_text="name: sysadmin\n", name="sysadmin")
+    sysadmin, _ = make_bot(
+        tmp_path, yaml_text="name: sysadmin\ndescription: Keeps servers up\n", name="sysadmin"
+    )
     sysadmin._engine_factory = chief._engine_factory
     registry = BotRegistry()
     registry.add(chief)
     registry.add(sysadmin)
 
     root = await chief.root_session(user)
-    result = await chief.ask(root, "How is the server?")
+    await chief.ask(root, "How is the server?")
+    first = engine._client.calls[0]
+    assert any("- sysadmin: Keeps servers up" in text for text in _seeded(first))
+    refused = engine._client.calls[2]["messages"][-1]["content"][0]
+    assert refused["is_error"] and "may not message 'kitchen'" in refused["content"]
 
-    assert result.text == "The server is fine."
-    assert "ergo_bot_call" in _tool_names(engine._client.calls[0])
-    assert _last_tool_result(engine) == "Disk is 40% full."
-    called = await sysadmin.sessions(user).aget()
-    assert called.metadata["called_by"] == "chief"
-
-    # A second call reuses the same session; unknown bots are refused.
-    engine._client.responses = [
-        claude_tool("ergo_bot_call", {"bot": "sysadmin", "message": "And memory?"}),
-        say("Memory is fine."),
-        claude_tool("ergo_bot_call", {"bot": "kitchen", "message": "hi"}, tool_id="t2"),
-        say("ok"),
-    ]
-    await chief.ask(root, "Memory?")
-    assert await sysadmin.sessions(user).acount() == 1
-    refused = engine._client.calls[-1]["messages"][-1]["content"][0]
-    assert refused["is_error"]
-    assert "may not call 'kitchen'" in refused["content"]
+    await thread_messages(registry)  # sysadmin's root chat answers
+    target = await sysadmin.root_session(user)
+    assert target.id != root.id
+    await thread_messages(registry)  # the reply reaches chief's root
+    assert any(text.endswith("Disk is 40% full.") for text in _texts(engine._client.calls[-1]))
 
 
 def test_run_bots_check_command(tmp_path):
@@ -708,7 +792,7 @@ def test_bots_without_a_skills_folder_have_no_skill_tools(tmp_path):
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_nested_bot_folders_make_sub_bots_the_parent_can_message(tmp_path):
+async def test_nested_bot_folders_make_sub_bots_the_parent_can_message(tmp_path, thread_messages):
     user = await User.objects.acreate(username="lee")
     parent = write_bot(tmp_path, "name: boundcorp\ndescription: Boundcorp\n", name="boundcorp")
     write_bot(parent, "name: kitchen\ndescription: Runs the kitchen\norchestration: false\n", name="kitchen")
@@ -716,7 +800,8 @@ async def test_nested_bot_folders_make_sub_bots_the_parent_can_message(tmp_path)
     (parent / "skills").mkdir()
     write_bot(parent / "skills", "name: notabot\n", name="ignored")
     engine = claude_engine(
-        claude_tool("ergo_bot_call", {"bot": "kitchen", "message": "What's for dinner?"}),
+        claude_tool("ergo_thread_send", {"bot": "kitchen", "message": "What's for dinner?"}),
+        say("I asked the kitchen."),
         say("Tacos."),
         say("Kitchen says tacos."),
     )
@@ -737,26 +822,22 @@ async def test_nested_bot_folders_make_sub_bots_the_parent_can_message(tmp_path)
 
     root = await boundcorp.root_session(user)
     result = await boundcorp.ask(root, "Dinner?")
-    assert result.text == "Kitchen says tacos."
+    assert result.text == "I asked the kitchen."
     first = engine._client.calls[0]
-    assert "ergo_bot_call" in _tool_names(first)
+    assert "ergo_thread_send" in _tool_names(first)
     # The bots it can reach are pre-seeded as an ergo_bot_list result.
-    seeded = [
-        part["content"]
-        for message in first["messages"]
-        if isinstance(message["content"], list)
-        for part in message["content"]
-        if part.get("type") == "tool_result"
-    ]
-    assert any("- kitchen: Runs the kitchen" in text for text in seeded)
+    assert any("- kitchen: Runs the kitchen" in text for text in _seeded(first))
     assert "- kitchen: Runs the kitchen" not in first["system"]
-    assert _last_tool_result(engine) == "Tacos."
-    called = await kitchen.sessions(user).aget()
-    assert called.metadata["called_by"] == "boundcorp"
 
-    # The kitchen bot has no thread or bot tools of its own.
-    kitchen_tools = _tool_names(engine._client.calls[1])
-    assert not {t for t in kitchen_tools if t.startswith(("threads_", "bots_"))}
+    await thread_messages(registry)  # kitchen's root chat answers
+    kitchen_root = await kitchen.sessions(user).aget()
+    assert kitchen_root.metadata["bot_role"] == "root"
+    # The kitchen bot (orchestration off) has no thread or bot tools.
+    kitchen_tools = _tool_names(engine._client.calls[2])
+    assert not {t for t in kitchen_tools if t.startswith(("ergo_thread", "ergo_bot"))}
+
+    await thread_messages(registry)  # the reply reaches boundcorp
+    assert any(text.endswith("Tacos.") for text in _texts(engine._client.calls[-1]))
 
 
 @pytest.mark.django_db(transaction=True)

@@ -48,7 +48,18 @@ function MessageView({
     <div className={`flex flex-col gap-1 ${user ? 'items-end' : 'items-start'}`}>
       {parts.map((block, i) => {
         switch (block.type) {
-          case 'text':
+          case 'text': {
+            const from = user ? fromThread(block.text) : null
+            if (from)
+              return (
+                <div key={i} className="max-w-[85%] self-start rounded-2xl rounded-tl-sm border border-teal-500/50 bg-teal-50 px-4 py-2 dark:bg-teal-950/40">
+                  <div className="mb-1 text-xs font-medium text-teal-700 dark:text-teal-300">
+                    {from.kind === 'reply' ? '↩ reply from' : '✉ message from'} {from.who}
+                    {from.about && <span className="font-normal text-teal-600/80"> · re “{from.about}”</span>}
+                  </div>
+                  <div className="whitespace-pre-wrap">{from.body}</div>
+                </div>
+              )
             return user ? (
               <div key={i} className="max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-tr-sm bg-indigo-600 px-4 py-2 text-white">
                 {block.text}
@@ -56,6 +67,7 @@ function MessageView({
             ) : (
               <div key={i} className="max-w-[85%] whitespace-pre-wrap text-sm text-zinc-500 italic">{block.text}</div>
             )
+          }
           case 'attachment':
             return (
               <div key={i} className="rounded-md border border-zinc-300 px-2 py-1 text-xs text-zinc-500 dark:border-zinc-700">
@@ -88,6 +100,16 @@ function MessageView({
       })}
     </div>
   )
+}
+
+// A message from another bot thread starts with a bracketed header
+// (see django_ergo.bots.messaging); show it as coming from that thread.
+const THREAD_HEADER = /^\[(Message|Reply) from (.+?) \(thread [0-9a-f-]+\)(?:\. [^\]]*| to your message: “([^”]*)”)\]\n\n([\s\S]*)$/
+
+function fromThread(text: string) {
+  const match = THREAD_HEADER.exec(text)
+  if (!match) return null
+  return { kind: match[1] === 'Reply' ? 'reply' : 'message', who: match[2], about: match[3] ?? '', body: match[4] }
 }
 
 function CallHeader({ call }: { call: Call }) {

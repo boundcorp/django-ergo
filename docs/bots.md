@@ -158,22 +158,31 @@ user. It also gets the orchestrator tools:
 
 | Tool | What it does |
 | --- | --- |
-| `threads_list` | This bot's threads with the user |
-| `threads_create` | Start a thread (needs `sessions.allow_create`), optionally with a first message whose reply is returned |
-| `threads_send` | Message a thread and return its reply |
-| `threads_close` | Close a thread; its history stays readable |
 | `ergo_bot_list` | The bots it can message, with their `description`s (pre-seeded) |
-| `ergo_bot_call` | Message a bot in `permissions.call_bots` (needs a `BotRegistry`) |
+| `ergo_thread_list` | A bot's root chat and threads with the user (default: this bot) |
+| `ergo_thread_send` | Message a bot's `root` chat, a thread id, or a `new` thread; returns at once |
+| `ergo_thread_archive` | Archive one of this bot's threads; its history stays readable |
 
-Threads are ordinary sessions with the bot's default compaction mode. A
-thread that stops for approval reports that back to the root. Set
-`orchestration: false` for a bot that only ever talks in its root session:
-the thread and `ergo_bot_call` tools are left out entirely.
+Messages between sessions are asynchronous, like thread-to-thread
+delegation in Codex (`django_ergo.bots.messaging`). `ergo_thread_send`
+stores a `ThreadMessage` and returns. The recipient answers it in a turn of
+its own, which starts with a `[Message from <bot> · <thread> (thread <id>)]`
+header; when that turn finishes, its reply goes back to the sender as a new
+message (`[Reply from ...]`) and starts a turn there. Replies are never
+answered back, chains of delegation stop after six hops, a recipient that is
+mid-turn finishes first, and a turn that stops for approval replies once the
+user decides. A message from a person routes nothing back, so a bot's root
+chat can take delegated work without its replies reaching Telegram.
+Delivery goes through `DJANGO_ERGO["THREAD_MESSAGE_RUNNER"]` (Ergonaut
+queues a Celery task) or a background thread. Starting a thread of the bot's
+own needs `sessions.allow_create`; set `orchestration: false` for a bot that
+only answers in its root session and gets none of these tools (it still
+answers messages sent to it).
 
 `BotRegistry.discover("bots/")` loads every folder at or under `bots/` that
 has a `bot.yaml`, and lets bots find each other by name. Bot folders can
 nest: a bot folder inside another bot's folder is its sub-bot, and the
-parent's root session may message its sub-bots with `ergo_bot_call` (as well as
+parent may message its sub-bots with `ergo_thread_send` (as well as
 any bot in `permissions.call_bots`). Each session starts with an
 `ergo_bot_list` result already in its history, built from each bot's
 `description` in bot.yaml, so instructions don't need to list the bots.

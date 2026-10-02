@@ -109,6 +109,8 @@ FRONTEND_DIST = os.environ.get("FRONTEND_DIST", os.path.join(os.path.dirname(__f
 ERGONAUT_PUBLIC_URL = os.environ.get("ERGONAUT_PUBLIC_URL", "").rstrip("/")
 DJANGO_ERGO = {
     "BOT_WEBHOOK_BASE_URL": f"{ERGONAUT_PUBLIC_URL}/hooks" if ERGONAUT_PUBLIC_URL else None,
+    # Bot-to-bot thread messages are delivered by a Celery worker.
+    "THREAD_MESSAGE_RUNNER": "ergonaut.apps.bots.tasks.queue_thread_message",
 }
 
 SITE_ROOT = PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))

@@ -1,4 +1,4 @@
-"""Bot turns as Celery tasks, and live "session changed" notices.
+"""Bot turns and thread messages as Celery tasks, and live "session changed" notices.
 
 The web app queues a turn (a message, or an approval answer) with
 ``queue_turn`` and returns; a worker runs it and the browser follows along
@@ -94,3 +94,41 @@ def queue_turn(session_id, *, message: str | None = None, approve: bool | None =
     result = run_turn.delay(str(session_id), message, approve)
     notify(session_id)
     return not getattr(settings, "CELERY_TASK_ALWAYS_EAGER", False) and result is not None
+
+
+@shared_task(name="ergonaut.deliver_thread_message", ignore_result=True)
+def deliver_thread_message(message_id: str) -> None:
+    """Run the recipient's turn for a bot-to-bot message (see django_ergo.bots.messaging)."""
+    from django_ergo.bots import messaging
+    from django_ergo.conversation.models import ThreadMessage
+
+    recipient_id = (
+        ThreadMessage.objects.filter(id=message_id).values_list("recipient_session_id", flat=True).first()
+    )
+    if recipient_id is None:
+        return
+    with session_lock(str(recipient_id)):
+        messaging.deliver(message_id)
+    notify(recipient_id)
+
+
+def queue_thread_message(message_id: str) -> None:
+    """THREAD_MESSAGE_RUNNER: a worker delivers it. Without a broker, a background thread does,
+    since an eager task would run inside the sender's own turn."""
+    from django.conf import settings
+
+    if getattr(settings, "CELERY_TASK_ALWAYS_EAGER", False):
+        import threading
+
+        from django.db import close_old_connections
+        from django_ergo.bots import messaging
+
+        def run():
+            try:
+                messaging.deliver(message_id)
+            finally:
+                close_old_connections()
+
+        threading.Thread(target=run, daemon=True).start()
+        return
+    deliver_thread_message.delay(message_id)

@@ -37,6 +37,9 @@ DEFAULTS = {
     "AUDIO_TRANSCRIBER": None,
     # Extra bot plugins by short name: {"name": "dotted.path.PluginClass"}.
     "BOT_PLUGINS": {},
+    # Callable(message_id) that delivers a bot-to-bot thread message, e.g. by
+    # queueing a Celery task. None = deliver in a background thread.
+    "THREAD_MESSAGE_RUNNER": None,
     # Public base URL that django_ergo.bots.urls is mounted at, e.g.
     # "https://bots.example.com/hooks". Plugins build their webhook URLs from
     # it; None = no public URL, so channels such as Telegram poll instead.
@@ -63,6 +66,7 @@ IMPORT_STRINGS = [
     "WORKFLOW_MODEL",  # example only as it will be imported as a class
     "EMBEDDING_PROVIDER",  # Import embedding provider class
     "AUDIO_TRANSCRIBER",
+    "THREAD_MESSAGE_RUNNER",
 ]
 
 

@@ -1,15 +1,19 @@
-"""Orchestrator tools: every bot's root session gets these.
+"""Orchestration tools: sessions of bots with ``orchestration: true`` get these.
 
-- ``threads_list`` / ``threads_create`` / ``threads_send`` / ``threads_close``
-  manage this bot's thread sessions with the same user. Creating threads
-  needs ``sessions.allow_create: true`` in bot.yaml.
-- ``ergo_bot_list`` lists the bots it can message (pre-seeded into every
-  session) and ``ergo_bot_call`` sends a message to one of this bot's sub-bots (bot folders
-  nested in its folder) or a bot listed in ``permissions.call_bots``. Each
-  calling bot gets its own thread in the called bot, reused across calls.
+- ``ergo_bot_list``: the bots this bot can message (sub-bots nested in its
+  folder and bots in ``permissions.call_bots``), with their descriptions.
+  Pre-seeded into every session.
+- ``ergo_thread_list``: a bot's root chat and threads with this user, so the
+  bot can choose where a message should go.
+- ``ergo_thread_send``: message a root chat, a thread, or a new thread, of
+  this bot or one it can message. It returns at once; the recipient's reply
+  arrives later as a new message in this session (see
+  ``django_ergo.bots.messaging``). Starting a thread of this bot needs
+  ``sessions.allow_create: true``.
+- ``ergo_thread_archive``: archive one of this bot's threads that is done.
 
-Reading thread histories is done with the root's history tools, which cover
-every session this bot has with the user.
+Reading another session's history is done with the history tools, which
+cover every session this bot has with the user.
 """
 
 from __future__ import annotations
@@ -18,168 +22,64 @@ from typing import TYPE_CHECKING
 
 from asgiref.sync import async_to_sync
 from django.core.exceptions import ValidationError
+from django.db.models import Q
+from django.utils import timezone
 
+from django_ergo.bots import messaging
 from django_ergo.bots.tools import BotTool
 from django_ergo.bots.tools import FunctionToolkit
 from django_ergo.bots.tools import bot_tool
-from django_ergo.conversation.models import CompactionMode
 from django_ergo.conversation.models import ConversationSession
+from django_ergo.conversation.models import ThreadMessageStatus
 
 if TYPE_CHECKING:
     from django_ergo.bots.runtime import Bot
-    from django_ergo.bots.runtime import TurnResult
     from django_ergo.bots.tools import ToolContext
 
+OPEN_STATUSES = [
+    ThreadMessageStatus.QUEUED,
+    ThreadMessageStatus.DELIVERED,
+    ThreadMessageStatus.WAITING,
+]
 
-def _thread(ctx: ToolContext, thread_id: str) -> ConversationSession:
+
+def _target(ctx: ToolContext, bot: str) -> Bot:
+    """This bot (``bot`` empty or its own name), or one it may message."""
+    caller = ctx.bot
+    if not bot or bot == caller.name:
+        return caller
+    registry = caller.registry
+    if registry is None or not registry.may_call(caller, bot) or bot not in registry:
+        allowed = ", ".join(b.name for b in registry.callable_bots(caller)) if registry else ""
+        msg = f"This bot may not message {bot!r} (allowed: {allowed or 'none'})."
+        raise ValueError(msg)
+    return registry.get(bot)
+
+
+def _session(target: Bot, ctx: ToolContext, thread_id: str) -> ConversationSession:
     try:
-        return (
-            ctx.bot.sessions()
-            .filter(user_id=ctx.session.user_id, metadata__bot_role="thread")
-            .get(id=thread_id)
-        )
+        return target.sessions().filter(user_id=ctx.session.user_id).get(id=thread_id)
     except (ConversationSession.DoesNotExist, ValidationError, ValueError):
-        msg = f"No thread {thread_id}"
+        msg = f"No thread {thread_id} in {target.name}"
         raise ValueError(msg) from None
 
 
-def _reply(result: TurnResult) -> str:
-    if result.reply is not None:
-        prefix = "[The thread asks] " if result.reply.is_question else ""
-        text = prefix + result.reply.as_message()
-    else:
-        text = f"(no reply: {result.error or 'the thread did not answer'})"
-    if result.approvals:
-        names = ", ".join(a.tool_name for a in result.approvals)
-        text += (
-            f"\n\n[The thread is paused waiting for the user to approve: {names}. "
-            f"It continues after they decide.]"
-        )
-    return text
-
-
-def _run(bot: Bot, session: ConversationSession, message: str) -> str:
-    return _reply(async_to_sync(bot.ask)(session, message))
-
-
-@bot_tool(takes_context=True)
-def threads_list(ctx: ToolContext, include_closed: bool = False) -> list[dict]:  # noqa: FBT001, FBT002
-    """List this bot's threads with the user: id, title, status and size."""
-    qs = (
-        ctx.bot.sessions()
-        .filter(user_id=ctx.session.user_id, metadata__bot_role="thread")
-        .order_by("-updated_at")
-    )
-    if not include_closed:
-        qs = qs.exclude(status="completed")
-    return [
-        {
-            "thread_id": str(s.id),
-            "title": (s.metadata or {}).get("title", ""),
-            "status": s.status,
-            "compaction_mode": s.compaction_mode,
-            "messages": s.claude_messages.count() or s.openai_messages.count(),
-            "updated_at": s.updated_at.isoformat(),
-            "history_source_id": f"session:{s.id}",
-        }
-        for s in qs
-    ]
-
-
-@bot_tool(
-    takes_context=True,
-    parameters={
-        "title": {"type": "string", "description": "Short name for the thread"},
-        "message": {
-            "type": "string",
-            "description": "Optional first message; the thread's reply is returned",
-        },
-        "compaction_mode": {
-            "type": "string",
-            "enum": list(CompactionMode.values),
-            "description": "Defaults to the bot's configured mode",
-        },
-        "instructions": {
-            "type": "string",
-            "description": "Optional extra instructions appended to the bot's own",
-        },
-    },
-    required=["title"],
-)
-def threads_create(
-    ctx: ToolContext,
-    title: str,
-    message: str = "",
-    compaction_mode: str = "",
-    instructions: str = "",
-) -> dict:
-    """Start a new thread (a separate session of this bot) for a focused task."""
-    bot = ctx.bot
-    if not bot.definition.allow_create_sessions:
-        msg = "This bot is not allowed to create threads (sessions.allow_create)."
-        raise ValueError(msg)
-    system_prompt = bot.definition.instructions
-    if instructions:
-        system_prompt = f"{system_prompt}\n\n{instructions}".strip()
-    thread = async_to_sync(bot.create_session)(
-        ctx.session.user,
-        parent=ctx.session,
-        title=title,
-        compaction_mode=compaction_mode or None,
-        system_prompt=system_prompt,
-    )
-    out = {"thread_id": str(thread.id), "title": title}
-    if message:
-        out["reply"] = _run(bot, thread, message)
-    return out
-
-
-@bot_tool(takes_context=True)
-def threads_send(ctx: ToolContext, thread_id: str, message: str) -> str:
-    """Send a message to one of this bot's threads and return its reply."""
-    thread = _thread(ctx, thread_id)
-    if thread.status == "completed":
-        msg = f"Thread {thread_id} is closed"
-        raise ValueError(msg)
-    return _run(ctx.bot, thread, message)
-
-
-@bot_tool(takes_context=True)
-def threads_close(ctx: ToolContext, thread_id: str) -> str:
-    """Close a thread that is done. Its history stays readable."""
-    thread = _thread(ctx, thread_id)
-    async_to_sync(ctx.bot.close_session)(thread)
-    return f"Closed thread {thread_id}"
-
-
-@bot_tool(takes_context=True)
-def ergo_bot_call(ctx: ToolContext, bot: str, message: str) -> str:
-    """Send a message to another bot this bot may call, and return its reply."""
-    caller = ctx.bot
-    registry = caller.registry
-    if registry is None or not registry.may_call(caller, bot):
-        allowed = ", ".join(b.name for b in registry.callable_bots(caller)) if registry else ""
-        msg = f"This bot may not call {bot!r} (allowed: {allowed or 'none'})."
-        raise ValueError(msg)
-    if bot not in registry:
-        msg = f"Bot {bot!r} is not loaded"
-        raise ValueError(msg)
-    target = caller.registry.get(bot)
-    user = ctx.session.user
-    session = (
-        target.sessions(user)
-        .filter(metadata__bot_role="thread", metadata__called_by=caller.name)
-        .exclude(status="completed")
-        .order_by("created_at")
-        .first()
-    )
-    if session is None:
-        session = async_to_sync(target.create_session)(
-            user,
-            title=f"Calls from {caller.name}",
-            metadata={"called_by": caller.name},
-        )
-    return _run(target, session, message)
+def _row(session: ConversationSession, current: ConversationSession) -> dict:
+    meta = session.metadata or {}
+    open_requests = session.thread_messages.filter(
+        status__in=OPEN_STATUSES, in_reply_to__isnull=True
+    ).count()
+    row = {
+        "thread": "root" if meta.get("bot_role") == "root" else str(session.id),
+        "id": str(session.id),
+        "title": messaging.label(session),
+        "status": "archived" if session.status == "completed" else session.status,
+        "last_activity": session.updated_at.isoformat(timespec="seconds"),
+        "open_requests": open_requests,
+    }
+    if session.id == current.id:
+        row["you_are_here"] = True
+    return row
 
 
 @bot_tool(takes_context=True)
@@ -193,19 +93,85 @@ def ergo_bot_list(ctx: ToolContext) -> str:
     return "Bots you can message:\n" + "\n".join(lines)
 
 
-THREAD_TOOLS = [threads_list, threads_create, threads_send, threads_close]
+@bot_tool(takes_context=True)
+def ergo_thread_list(ctx: ToolContext, bot: str = "", include_archived: bool = False) -> list[dict]:  # noqa: FBT001, FBT002
+    """List a bot's root chat and threads with the user (default: this bot), newest first."""
+    target = _target(ctx, bot)
+    qs = target.sessions().filter(user_id=ctx.session.user_id).order_by("-updated_at")
+    if not include_archived:
+        qs = qs.filter(~Q(status="completed") | Q(metadata__bot_role="root"))
+    return [_row(s, ctx.session) for s in qs[:50]]
+
+
+@bot_tool(
+    takes_context=True,
+    parameters={
+        "message": {"type": "string", "description": "What you want done or asked"},
+        "bot": {
+            "type": "string",
+            "description": "Which bot: empty for this bot, or a name from ergo_bot_list",
+        },
+        "thread": {
+            "type": "string",
+            "description": '"root" for its main chat, "new" for a new thread, or a thread id',
+        },
+        "title": {"type": "string", "description": "Title for a new thread"},
+    },
+    required=["message"],
+)
+def ergo_thread_send(
+    ctx: ToolContext, message: str, bot: str = "", thread: str = "root", title: str = ""
+) -> dict:
+    """Send a message to a bot's root chat, a thread, or a new thread.
+
+    Returns at once. The reply arrives later as a new message in this chat.
+    """
+    target = _target(ctx, bot)
+    user = ctx.session.user
+    thread = (thread or "root").strip()
+    if thread == "root":
+        recipient = async_to_sync(target.root_session)(user)
+    elif thread == "new":
+        if target is ctx.bot and not target.definition.allow_create_sessions:
+            msg = "This bot may not start threads of its own (sessions.allow_create)."
+            raise ValueError(msg)
+        recipient = async_to_sync(target.create_session)(
+            user,
+            parent=ctx.session if target is ctx.bot else None,
+            title=title or messaging.snippet(message)[:60],
+            metadata={"started_by": str(ctx.session.id)},
+        )
+    else:
+        recipient = _session(target, ctx, thread)
+    if recipient.id == ctx.session.id:
+        msg = "That is this chat; send it somewhere else."
+        raise ValueError(msg)
+    sent = messaging.send(ctx.session, recipient, message, registry=ctx.bot.registry)
+    return {
+        "sent_to": messaging.label(recipient),
+        "thread_id": str(recipient.id),
+        "message_id": str(sent.id),
+        "note": "The reply will arrive as a new message in this chat.",
+    }
+
+
+@bot_tool(takes_context=True)
+def ergo_thread_archive(ctx: ToolContext, thread_id: str) -> str:
+    """Archive one of this bot's threads that is done. Its history stays readable."""
+    thread = _session(ctx.bot, ctx, thread_id)
+    if (thread.metadata or {}).get("bot_role") == "root":
+        msg = "The root chat can't be archived."
+        raise ValueError(msg)
+    thread.metadata = {**(thread.metadata or {}), "archived_at": timezone.now().isoformat()}
+    thread.save(update_fields=["metadata"])
+    async_to_sync(ctx.bot.close_session)(thread)
+    return f"Archived {messaging.label(thread)}"
 
 
 def orchestrator_toolkit(ctx: ToolContext) -> FunctionToolkit:
-    functions = list(THREAD_TOOLS)
-    if not ctx.bot.definition.allow_create_sessions:
-        functions.remove(threads_create)
-    if ctx.bot.definition.call_bots or (
-        ctx.bot.registry and ctx.bot.registry.children(ctx.bot)
-    ):
-        functions += [ergo_bot_list, ergo_bot_call]
-    tools: list[BotTool] = [fn.__bot_tool__ for fn in functions]
     registry = ctx.bot.registry
     reachable = registry.callable_bots(ctx.bot) if registry else []
+    functions = [ergo_bot_list, ergo_thread_list, ergo_thread_send, ergo_thread_archive]
+    tools: list[BotTool] = [fn.__bot_tool__ for fn in functions]
     # Every session starts knowing which bots it can reach.
     return FunctionToolkit(tools, ctx, seed=["ergo_bot_list"] if reachable else [])
