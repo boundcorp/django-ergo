@@ -1141,3 +1141,52 @@ def test_a_failed_publish_keeps_the_draft(bot_repo, monkeypatch):
         plugin.publish("Kinder", title="Kinder")
     assert "Be kind." in plugin.diff()  # still there, uncommitted, to publish again
     assert "bot/manager/draft" in git(work, "branch")
+
+
+@pytest.mark.django_db(transaction=True)
+def test_orca_attach_copies_a_worktree_file_into_the_chat(
+    tmp_path, monkeypatch, settings
+):
+    from asgiref.sync import async_to_sync
+
+    from django_ergo.bots.tools import ToolContext
+
+    settings.MEDIA_ROOT = str(tmp_path / "media")
+    bot, _, plugin = orca_bot(
+        tmp_path, config='environment: devbox, executable: orca-test, files_host: ""'
+    )
+    worktree = tmp_path / "wt"
+    (worktree / "out").mkdir(parents=True)
+    (worktree / "out" / "report.md").write_text("# Done")
+    (worktree / ".env").write_text("TOKEN=x")
+    (tmp_path / "outside.txt").write_text("nope")
+    (worktree / "out" / "link.txt").symlink_to(tmp_path / "outside.txt")
+    (worktree / "out" / "safe-name").symlink_to(worktree / ".env")
+    monkeypatch.setattr(type(plugin), "worktree_path", lambda self, w: str(worktree))
+    assert "orca_attach" in [tool.name for tool in plugin._tools()]
+
+    user = User.objects.create(username="attach")
+    session = async_to_sync(bot.main_session)(user)
+    ctx = ToolContext(bot=bot, session=session, user=user)
+    attached = plugin.attach(ctx, "wt", "out/report.md")
+    assert (attached["filename"], attached["media_type"]) == (
+        "report.md",
+        "text/markdown",
+    )
+    row = session.attachments.get()
+    assert row.file.read() == b"# Done"
+    assert row.metadata["from_orca"]["path"].endswith("/out/report.md")
+
+    for path, error in (
+        ("../outside.txt", "outside the worktree"),
+        (".env", "looks like a secret"),
+        ("out/link.txt", "outside the worktree"),
+        ("out/safe-name", "secret"),
+        ("out", "not a file"),
+        ("out/missing.md", "Couldn't read"),
+    ):
+        with pytest.raises(ValueError, match=error):
+            plugin.attach(ctx, "wt", path)
+    plugin.max_attach_bytes = 3
+    with pytest.raises(ValueError, match="larger than 3 bytes"):
+        plugin.attach(ctx, "wt", "out/report.md")

@@ -373,6 +373,46 @@ class Bot:
             config=config,
         )
 
+    async def thread_metadata(
+        self, text: str, *, user=None, session: ConversationSession | None = None
+    ) -> dict:
+        """A title for a new thread from its first message (structured call
+        ``new_thread_metadata``). Returns {} when the model gives none."""
+        from pydantic import BaseModel
+        from pydantic import Field
+
+        from django_ergo.conversation.structured import StructuredCallSpec
+
+        class ThreadMetadata(BaseModel):
+            title: str = Field(
+                description="A short title for the thread: 2 to 6 words, no quotes, no final period"
+            )
+
+        spec = StructuredCallSpec(
+            kind="new_thread_metadata",
+            system_prompt=(
+                "Someone is starting a new conversation thread with an assistant. Read their "
+                "first message and give the thread a short, specific title, like an email "
+                "subject: 2 to 6 words, in the message's language, no quotes."
+            ),
+            response_model=ThreadMetadata,
+            max_turns=2,
+        )
+        result = await run_structured_call(
+            spec,
+            text[:4000],
+            user=user,
+            engine=self.make_engine(),
+            metadata={"bot": self.name, "session": str(session.id) if session else ""},
+        )
+        title = (
+            (result.parsed.title if result.parsed else "")
+            .strip()
+            .strip('"')
+            .rstrip(".")
+        )
+        return {"title": title[:80]} if title else {}
+
     def make_engine(self) -> Engine:
         if self._engine_factory is not None:
             return self._engine_factory()
@@ -666,7 +706,7 @@ class Bot:
     def reply_spec(
         self, toolkits: list[Toolkit], session: ConversationSession | None = None
     ):
-        spec = chat_reply_spec(toolkits)
+        spec = chat_reply_spec(toolkits, max_turns=self.definition.max_turns)
         # Toolkits pre-seed what every session should start knowing (its
         # skills, the bots it can message); a stream session needs it each turn.
         spec.pre_seed_each_turn = session is not None and self.is_stream(session)

@@ -319,3 +319,53 @@ def run_schedule(run_id: int) -> None:
 def queue_schedule_run(run_id: int) -> None:
     """SCHEDULE_RUNNER: each due run is its own task, so slow code doesn't hold up others."""
     run_schedule.delay(run_id)
+
+
+@shared_task(name="ergonaut.name_thread", ignore_result=True)
+def name_thread(session_id: str, message: str) -> None:
+    """Title a new thread from its first message (structured call new_thread_metadata)."""
+    from django_ergo.bots import webhooks
+    from django_ergo.conversation.models import ConversationSession
+
+    session = ConversationSession.objects.select_related("user").filter(id=session_id).first()
+    registry = webhooks.get_registry()
+    if session is None or registry is None or session.bot_name not in registry:
+        return
+    try:
+        found = async_to_sync(registry.get(session.bot_name).thread_metadata)(
+            message, user=session.user, session=session
+        )
+    except Exception:
+        logger.exception("Naming thread %s failed", session_id)
+        return
+    if found.get("title"):
+        import json
+
+        from django.db.models.expressions import RawSQL
+        from django.utils import timezone
+
+        # Merge just the title in one UPDATE, so a turn writing the metadata at the
+        # same moment keeps its own keys.
+        ConversationSession.objects.filter(id=session_id).update(
+            metadata=RawSQL("COALESCE(metadata, '{}'::jsonb) || %s::jsonb", [json.dumps({"title": found["title"]})]),
+            updated_at=timezone.now(),
+        )
+        notify(session_id)
+
+
+def queue_thread_naming(session_id: str, message: str) -> None:
+    """Name it on a worker; without a broker, in a background thread (it's a model call)."""
+    from django.conf import settings
+
+    if getattr(settings, "CELERY_TASK_ALWAYS_EAGER", False):
+        from django.db import close_old_connections
+
+        def run():
+            try:
+                name_thread(session_id, message)
+            finally:
+                close_old_connections()
+
+        threading.Thread(target=run, daemon=True).start()
+        return
+    name_thread.delay(session_id, message)

@@ -21,6 +21,7 @@ bot.yaml::
     orchestration: true                # may the bot delegate at all (default true)
     timezone: America/Los_Angeles      # for the current time in context
     current_time: true                 # put the current date and time in context
+    max_turns: 50                      # model calls one reply may use, tool calls included
     chats:
       main:                            # every user's main chat (always there)
         skills: [orchestration, tandoor]   # loaded from the start (default: orchestration)
@@ -131,6 +132,7 @@ class BotDefinition:
     chats: dict[str, ChatDefinition] = field(default_factory=dict)  # main + named
     thread_skills: list[str] = field(default_factory=list)
     unload_after_turns: int = 30
+    max_turns: int = 50  # model calls one reply may use (tool calls and all)
     skill_requires: dict[str, list[str]] = field(default_factory=dict)
 
     def chat(self, name: str) -> ChatDefinition:
@@ -205,6 +207,7 @@ class BotDefinition:
                 for k, vs in (skills_config.get("requires") or {}).items()
             },
             schedules=schedules,
+            max_turns=max(1, int(data.get("max_turns", 50) or 50)),
             raw=data,
         )
 
