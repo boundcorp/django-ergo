@@ -19,6 +19,7 @@ lives under ``DATA_DIR`` (``/data`` in the image).
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import secrets
@@ -54,6 +55,45 @@ def data_dir() -> Path:
     path = Path(os.environ.get("DATA_DIR") or os.path.expanduser("~/.ergonaut"))
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+STATE_FILE = "up.json"
+
+
+def write_state(sup: Supervisor, data: Path) -> None:
+    """Record the services this ``up`` started, so other ``ergonaut`` commands
+    (``manage shell``, ``chat``) use the same database, broker and storage."""
+    started = {k: v for k, v in sup.env.items() if os.environ.get(k) != v}
+    path = data / STATE_FILE
+    path.touch(mode=0o600)
+    path.write_text(json.dumps({"pid": os.getpid(), "env": started}))
+
+
+def clear_state(data: Path) -> None:
+    path = data / STATE_FILE
+    with contextlib.suppress(OSError, ValueError):
+        if json.loads(path.read_text()).get("pid") == os.getpid():
+            path.unlink()
+
+
+def attach() -> list[str]:
+    """Take the services of a running ``up`` for settings this process doesn't set.
+
+    Without it, ``ergonaut manage shell`` next to ``ergonaut up`` has no broker:
+    tasks run inline, so a queued bot turn runs inside the shell (which then
+    doesn't exit until the turn ends) and its in-process inbox and lock miss the
+    real ones. Returns the names it set.
+    """
+    path = data_dir() / STATE_FILE
+    try:
+        state = json.loads(path.read_text())
+        os.kill(int(state["pid"]), 0)
+    except (OSError, ValueError, KeyError, TypeError):
+        return []
+    added = [k for k in state.get("env", {}) if k not in os.environ]
+    for key in added:
+        os.environ[key] = state["env"][key]
+    return added
 
 
 def free_port(preferred: int) -> int:
@@ -247,6 +287,7 @@ def up(argv: list[str]) -> int:
         if not sup.env.get("S3_ENDPOINT_URL"):
             start_garage(sup, data)
 
+        write_state(sup, data)
         subprocess.run([python, "-m", "ergonaut.cli", "manage", "migrate", "--noinput"], env=sup.env, check=True)
         # Bot tables: each bot folder's own migrations/ (see django_ergo.bots.tables).
         # The same default as ergonaut.apps.bots.loading.DEFAULT_BOTS (which needs Django set up).
@@ -287,3 +328,4 @@ def up(argv: list[str]) -> int:
         return 0
     finally:
         sup.stop()
+        clear_state(data)

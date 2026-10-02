@@ -35,6 +35,10 @@ def main(argv: list[str] | None = None) -> int:
         print(USAGE)
         return 0
     command, rest = argv[0], argv[1:]
+    if command != "up":
+        from ergonaut.up import attach
+
+        attach()  # an ``ergonaut up`` running here: use its database, broker and storage
     port = os.environ.get("PORT", "8000")
     if command == "up":
         from ergonaut.up import up
