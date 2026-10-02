@@ -23,7 +23,7 @@ Live on rigel from `~/p/boundcorp/django-ergo`, bots from `boundcorp/ergo-bots`.
 - [x] **Schedule actions** (PR #34, merged): ordered `prompt` and `run` steps; `run` calls bot-folder Python and records a BotJob.
 - [x] **BotTable** (PR #35, merged): real Django models per bot, migrations in the bot folder's `migrations/` (bot_management writes them into the proposal), `ergo_bot_migrate` at start and after pulls, `tables` skill.
 - [x] **Pages and pins** (PR #36, merged): live .jhtml pages (sandboxed Jinja over tables), blocks, the `pages` plugin, chat pins (bot-folder files and pinned chat files), page viewer in the chat, `ctx.table()` for schedule code.
-- [ ] **Fixes from the Ad Manager test** (PR #37): code-only schedules run once as the first admin; pulls only migrate after real changes; page sums are unknown, not zero.
+- [x] **Fixes from the Ad Manager test** (PR #37, merged): code-only schedules run once as the first admin; pulls only migrate after real changes; page sums are unknown, not zero.
 - [ ] **Ad Manager bot (`ads`, ergo-bots #3, merged)**: written by boundcorp; live on rigel, table migrated, dashboard pinned. Waiting on Lee to put the Meta token in ~/src/ergonaut-secrets.env, then restart and run the first pull.
 - [ ] Ideas from the test: preview a draft's pages before publishing (boundcorp can't render a page in its draft); a visual blocks editor in the UI.
 - [x] **Bot data and pages** (decided 2026-10-02): pinned files (repo files and bot-written attachments), blocks-based page toolkit, live .jhtml Jinja pages served straight from the file/attachment endpoints, templates from bots or PRs. No sandbox origin; all users share rows.
