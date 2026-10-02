@@ -26,6 +26,8 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from django_ergo.bots.providers import PROVIDERS_FILE
+
 from ergonaut.apps.bots.loading import bot_paths, load_registry
 
 if TYPE_CHECKING:
@@ -69,6 +71,9 @@ def keep_last_good(old: BotRegistry, new: BotRegistry) -> None:
         if root is not None and root.resolve() in broken and bot.name not in new:
             new.add(bot)
             logger.warning("Keeping the last good %s bot: its folder didn't load", bot.name)
+    if PROVIDERS_FILE in new.failed and getattr(old, "providers", None):
+        new.providers = old.providers
+        logger.warning("Keeping the last good %s: it didn't load", PROVIDERS_FILE)
 
 
 class ReloadingRegistry:

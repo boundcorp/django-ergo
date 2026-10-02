@@ -14,6 +14,8 @@ bot.yaml::
       type: claude                     # or openai
       config: {model: claude-sonnet-4-5}
       api_key_env: KITCHEN_ANTHROPIC_KEY   # read at runtime, never stored
+      # or, with a providers.yaml (django_ergo.bots.providers):
+      # config: {model: anthropic/claude-sonnet-5-5}
     root:                              # stream settings for main and named chats
       recent: 15
       budget_tokens: 8000
