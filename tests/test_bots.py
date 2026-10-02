@@ -247,7 +247,7 @@ async def test_root_session_turn_uses_stream_context_tools_and_hooks(tmp_path):
     assert first["system"].startswith("You run the kitchen.\n\n<context>")
     assert "## Plugin note\nhello" in first["system"]
     tools = [t["name"] for t in first["tools"]]
-    assert {"pantry_count", "add_to_list", "history_read"} <= set(tools)
+    assert {"pantry_count", "add_to_list", "ergo_chat_history_read"} <= set(tools)
     assert "helper" not in tools
     assert '"count": 4' in second["messages"][-1]["content"][0]["content"]
     assert plugin.events == [
@@ -303,7 +303,7 @@ async def test_threads_use_default_compaction_and_root_reads_them(tmp_path):
     assert "Recent messages" not in engine._client.calls[-1]["system"]
 
     engine._client.responses = [
-        claude_tool("history_sources", {}),
+        claude_tool("ergo_chat_history_sources", {}),
         say("Tuesday is tacos."),
     ]
     await bot.ask(root, "What did the plan say?")
@@ -389,7 +389,7 @@ async def test_root_creates_and_drives_threads(tmp_path):
     assert {"threads_list", "threads_create", "threads_send", "threads_close"} <= (
         _tool_names(root_call)
     )
-    assert "bots_call" in _tool_names(root_call)  # permissions.call_bots is set
+    assert "ergo_bot_call" in _tool_names(root_call)  # permissions.call_bots is set
     # The thread is a normal session: no orchestrator tools, no recent window.
     assert "threads_create" not in _tool_names(thread_call)
     assert thread_call["messages"][0]["content"][0]["text"] == "Plan Tuesday"
@@ -453,7 +453,7 @@ async def test_bots_call_reaches_permitted_bot(tmp_path):
     user = await User.objects.acreate(username="chief")
     chief, engine = make_bot(
         tmp_path,
-        claude_tool("bots_call", {"bot": "sysadmin", "message": "Disk space?"}),
+        claude_tool("ergo_bot_call", {"bot": "sysadmin", "message": "Disk space?"}),
         say("Disk is 40% full."),
         say("The server is fine."),
         yaml_text="name: chief\npermissions: {call_bots: [sysadmin]}\n",
@@ -469,16 +469,16 @@ async def test_bots_call_reaches_permitted_bot(tmp_path):
     result = await chief.ask(root, "How is the server?")
 
     assert result.text == "The server is fine."
-    assert "bots_call" in _tool_names(engine._client.calls[0])
+    assert "ergo_bot_call" in _tool_names(engine._client.calls[0])
     assert _last_tool_result(engine) == "Disk is 40% full."
     called = await sysadmin.sessions(user).aget()
     assert called.metadata["called_by"] == "chief"
 
     # A second call reuses the same session; unknown bots are refused.
     engine._client.responses = [
-        claude_tool("bots_call", {"bot": "sysadmin", "message": "And memory?"}),
+        claude_tool("ergo_bot_call", {"bot": "sysadmin", "message": "And memory?"}),
         say("Memory is fine."),
-        claude_tool("bots_call", {"bot": "kitchen", "message": "hi"}, tool_id="t2"),
+        claude_tool("ergo_bot_call", {"bot": "kitchen", "message": "hi"}, tool_id="t2"),
         say("ok"),
     ]
     await chief.ask(root, "Memory?")
@@ -558,7 +558,7 @@ async def test_orchestration_can_be_turned_off(tmp_path):
     await bot.ask(root, "hi")
     tools = _tool_names(engine._client.calls[0])
     assert not {t for t in tools if t.startswith("threads_")}
-    assert "history_read" in tools
+    assert "ergo_chat_history_read" in tools
 
 
 CONTEXT_TOOLS = textwrap.dedent(
@@ -716,7 +716,7 @@ async def test_nested_bot_folders_make_sub_bots_the_parent_can_message(tmp_path)
     (parent / "skills").mkdir()
     write_bot(parent / "skills", "name: notabot\n", name="ignored")
     engine = claude_engine(
-        claude_tool("bots_call", {"bot": "kitchen", "message": "What's for dinner?"}),
+        claude_tool("ergo_bot_call", {"bot": "kitchen", "message": "What's for dinner?"}),
         say("Tacos."),
         say("Kitchen says tacos."),
     )
@@ -739,7 +739,7 @@ async def test_nested_bot_folders_make_sub_bots_the_parent_can_message(tmp_path)
     result = await boundcorp.ask(root, "Dinner?")
     assert result.text == "Kitchen says tacos."
     first = engine._client.calls[0]
-    assert "bots_call" in _tool_names(first)
+    assert "ergo_bot_call" in _tool_names(first)
     assert "- kitchen: Runs the kitchen" in first["system"]
     assert _last_tool_result(engine) == "Tacos."
     called = await kitchen.sessions(user).aget()
@@ -768,4 +768,4 @@ async def test_a_kb_folder_is_the_bots_knowledge_base(tmp_path):
     first = engine._client.calls[0]
     assert "Knowledge base: Kitchen" in first["system"]
     assert "chocolate Soylent shake" in first["system"]
-    assert {"kb_search", "kb_read"} <= _tool_names(first)
+    assert {"ergo_kb_search", "ergo_kb_read"} <= _tool_names(first)

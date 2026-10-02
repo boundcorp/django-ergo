@@ -107,7 +107,7 @@ class FolderKB:
             blocks.append(f"### {article.title} ({article.path})\n{snippet}")
         return "\n\n".join(blocks)
 
-    def toolkit(self, ctx=None, *, prefix: str = "kb") -> FunctionToolkit:
+    def toolkit(self, ctx=None, *, prefix: str = "ergo_kb") -> FunctionToolkit:
         kb = self
 
         @bot_tool(name=f"{prefix}_search")

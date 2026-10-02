@@ -159,12 +159,12 @@ class MessageContextSource(ContextSource):
         body_lines = [text for _, text in lines]
         if not complete:
             body_lines.append(
-                f"(Earlier messages: history_read source_id={self.source.source_id} "
+                f"(Earlier messages: ergo_chat_history_read source_id={self.source.source_id} "
                 f"end_line={first_line})"
             )
         if granularity != Granularity.FULL:
             body_lines.append(
-                "(More detail: history_around or history_read with "
+                "(More detail: ergo_chat_history_around or ergo_chat_history_read with "
                 "granularity=reasoning or full)"
             )
         body = "\n".join(body_lines)

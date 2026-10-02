@@ -6,7 +6,7 @@
         # or: knowledgebases: [Kitchen]  # Knowledgebase names (legacy KB app)
         # or: toolkit: "myapp.kb:make_toolkit"   # factory(ctx) -> Toolkit
         prefetch: new_session            # new_session | every_turn | off
-        search_tool: kb_search           # tool called for prefetch
+        search_tool: ergo_kb_search      # tool called for prefetch (kb_search for knowledgebases)
         top_k: 5
         weight: 1                        # share of the context budget
 
@@ -62,7 +62,8 @@ class ErgoKBPlugin(BotPlugin):
         ):
             msg = "ergo_kb needs path, knowledgebases or toolkit"
             raise ValueError(msg)
-        self.search_tool = self.config.get("search_tool", "kb_search")
+        default_search = "ergo_kb_search" if self.folder is not None else "kb_search"
+        self.search_tool = self.config.get("search_tool", default_search)
         self.top_k = int(self.config.get("top_k", 5))
 
     def _folder(self) -> FolderKB | None:

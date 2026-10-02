@@ -5,19 +5,19 @@
         mode: propose_pr        # or merge_main
         main_branch: main
         remote: origin
-        approve_publish: true   # repo_publish waits for the user's approval
+        approve_publish: true   # ergo_config_repo_publish waits for the user's approval
         root_only: true         # only the root session gets these tools
 
 The repository is the git checkout that contains the bot folder. Tools:
 
-- ``repo_status``, ``repo_list``, ``repo_read``, ``repo_diff``: look around.
-- ``repo_write``: change a file (nothing is published).
-- ``repo_publish``: commit everything. In ``merge_main`` mode it rebases on
+- ``ergo_config_repo_status``, ``ergo_config_repo_list``, ``ergo_config_repo_read``, ``ergo_config_repo_diff``: look around.
+- ``ergo_config_repo_write``: change a file (nothing is published).
+- ``ergo_config_repo_publish``: commit everything. In ``merge_main`` mode it rebases on
   the main branch and pushes to it. In ``propose_pr`` mode it pushes a new
   branch and opens a pull request with the GitHub CLI (``gh``).
-- ``repo_discard``: throw away unpublished changes.
-- ``repo_pull``: fast-forward the main branch from the remote.
-- ``repo_prs``: list open pull requests (``gh``).
+- ``ergo_config_repo_discard``: throw away unpublished changes.
+- ``ergo_config_repo_pull``: fast-forward the main branch from the remote.
+- ``ergo_config_repo_prs``: list open pull requests (``gh``).
 
 In ``merge_main`` mode the bot edits the checkout it runs from. In
 ``propose_pr`` mode it edits a draft: a separate git worktree of the main
@@ -240,50 +240,50 @@ class BotManagementPlugin(BotPlugin):
             else "Commit all changes on a new branch and open a pull request."
         )
 
-        @bot_tool(name="repo_status")
+        @bot_tool(name="ergo_config_repo_status")
         def status() -> str:
             """Show the bot repository's branch, uncommitted changes and recent commits."""
             return plugin.status()
 
-        @bot_tool(name="repo_list")
+        @bot_tool(name="ergo_config_repo_list")
         def list_files(path: str = ".") -> str:
             """List files in the bot repository, optionally under a folder."""
             return plugin.list_files(path)
 
-        @bot_tool(name="repo_read")
+        @bot_tool(name="ergo_config_repo_read")
         def read(path: str) -> str:
             """Read a file from the bot repository."""
             return plugin.read(path)
 
-        @bot_tool(name="repo_write")
+        @bot_tool(name="ergo_config_repo_write")
         def write(path: str, content: str) -> str:
-            """Create or replace a file in the bot repository (unpublished until repo_publish)."""
+            """Create or replace a file in the bot repository (unpublished until ergo_config_repo_publish)."""
             return plugin.write(path, content)
 
-        @bot_tool(name="repo_diff")
+        @bot_tool(name="ergo_config_repo_diff")
         def diff() -> str:
             """Show uncommitted changes in the bot repository."""
             return plugin.diff()
 
-        @bot_tool(name="repo_pull")
+        @bot_tool(name="ergo_config_repo_pull")
         def pull() -> str:
             """Update the main branch from the remote (fast-forward only)."""
             return plugin.pull()
 
-        @bot_tool(name="repo_discard")
+        @bot_tool(name="ergo_config_repo_discard")
         def discard() -> str:
             """Throw away all unpublished changes."""
             return plugin.discard()
 
         @bot_tool(
-            name="repo_publish",
+            name="ergo_config_repo_publish",
             description=publish_help,
             requires_approval=self.approve_publish,
         )
         def publish(message: str, title: str = "", body: str = "") -> str:
             return plugin.publish(message, title, body)
 
-        @bot_tool(name="repo_prs")
+        @bot_tool(name="ergo_config_repo_prs")
         def prs() -> str:
             """List open pull requests on the bot repository."""
             return plugin.prs()

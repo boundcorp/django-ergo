@@ -52,15 +52,15 @@ await run_conversation_turn(engine, session, message, extra_tools=[own_history])
 
 | Tool | Does |
 | --- | --- |
-| `history_sources` | lists sources with message counts and date ranges |
-| `history_read` | pages by line: `start_line` goes forward, `end_line` alone reads the messages before it |
-| `history_tail` | latest N messages (default 15) |
-| `history_around` | `before`/`after` messages around a line, to expand a hit |
-| `history_by_date` | `since`/`until` window across sources, oldest first |
-| `history_search` | all words must match, searching full content including tool I/O, newest first |
+| `ergo_chat_history_sources` | lists sources with message counts and date ranges |
+| `ergo_chat_history_read` | pages by line: `start_line` goes forward, `end_line` alone reads the messages before it |
+| `ergo_chat_history_tail` | latest N messages (default 15) |
+| `ergo_chat_history_around` | `before`/`after` messages around a line, to expand a hit |
+| `ergo_chat_history_by_date` | `since`/`until` window across sources, oldest first |
+| `ergo_chat_history_search` | all words must match, searching full content including tool I/O, newest first |
 
 Every read takes `granularity`. Results end with the next call to make, for
-example `More: history_read start_line=57`. `source_id` is optional when the
+example `More: ergo_chat_history_read start_line=57`. `source_id` is optional when the
 toolkit holds a single source. Session sources re-read the database on each
 call, so a live session sees its own new messages.
 

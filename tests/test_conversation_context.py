@@ -130,7 +130,7 @@ def test_message_source_pages_hint_and_limits():
     lines = section.body.splitlines()
     assert lines[0].startswith("[L12 ")
     assert "latest 4 of 10" in section.title
-    assert "history_read source_id=test:chat end_line=12" in section.body
+    assert "ergo_chat_history_read source_id=test:chat end_line=12" in section.body
     assert not section.complete
 
     before = MessageContextSource(
@@ -200,7 +200,7 @@ def test_native_window_keeps_only_current_turn():
 async def test_stream_chat_sends_recent_window_and_history_tools():
     user = await User.objects.acreate(username="stream")
     engine = claude_engine(
-        claude_tool("history_read", {"end_line": 16, "limit": 2}),
+        claude_tool("ergo_chat_history_read", {"end_line": 16, "limit": 2}),
         claude_text("We decided on the blue fridge."),
     )
     chat = await StreamChat.create(
@@ -227,12 +227,12 @@ async def test_stream_chat_sends_recent_window_and_history_tools():
     assert "latest 4 of 20" in system
     assert "[L16 " in system
     assert "question 7" not in system
-    assert "history_read source_id=session:" in system
+    assert "ergo_chat_history_read source_id=session:" in system
     assert "## Pantry\neggs: 4" in system
     # Only the current turn is sent natively.
     assert [m["role"] for m in first["messages"]] == ["user"]
     assert first["messages"][0]["content"][0]["text"] == "What fridge did we pick?"
-    assert "history_read" in [t["name"] for t in first["tools"]]
+    assert "ergo_chat_history_read" in [t["name"] for t in first["tools"]]
 
     # The tool call ran against the chat's own history.
     tool_result = second["messages"][-1]["content"][0]

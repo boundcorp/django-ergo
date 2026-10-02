@@ -371,7 +371,7 @@ class Bot:
             )
             builder.add(
                 TextContextSource(
-                    "Bots you can message with bots_call",
+                    "Bots you can message with ergo_bot_call",
                     lambda: listing,
                     weight=0.3,
                 )

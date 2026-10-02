@@ -306,7 +306,7 @@ def toolkit(claude_file, codex_file):
 
 
 def test_toolkit_lists_sources(toolkit):
-    listing = toolkit.execute_tool("history_sources", {})
+    listing = toolkit.execute_tool("ergo_chat_history_sources", {})
     assert "claude:abc (claude_code)" in listing
     assert (
         "5 messages, 2026-09-01T10:00:00+00:00 to 2026-09-02T09:00:00+00:00" in listing
@@ -316,27 +316,27 @@ def test_toolkit_lists_sources(toolkit):
 
 def test_toolkit_requires_source_when_ambiguous(toolkit):
     with pytest.raises(ValueError, match="source_id is required"):
-        toolkit.execute_tool("history_tail", {})
+        toolkit.execute_tool("ergo_chat_history_tail", {})
     with pytest.raises(ValueError, match="Unknown source"):
-        toolkit.execute_tool("history_tail", {"source_id": "nope"})
+        toolkit.execute_tool("ergo_chat_history_tail", {"source_id": "nope"})
 
 
 def test_read_pages_forward_and_backward(claude_file):
     toolkit = MessageHistoryToolkit([ClaudeCodeSource(claude_file)])
 
     page = toolkit.execute_tool(
-        "history_read", {"limit": 2, "granularity": "reasoning"}
+        "ergo_chat_history_read", {"limit": 2, "granularity": "reasoning"}
     )
     assert page.splitlines()[0].startswith("[L1 ")
-    assert page.splitlines()[-1] == "More: history_read start_line=3"
+    assert page.splitlines()[-1] == "More: ergo_chat_history_read start_line=3"
 
     page2 = toolkit.execute_tool(
-        "history_read", {"start_line": 3, "granularity": "reasoning"}
+        "ergo_chat_history_read", {"start_line": 3, "granularity": "reasoning"}
     )
     assert "[L3 " in page2
     assert "More:" not in page2
 
-    back = toolkit.execute_tool("history_read", {"end_line": 4, "limit": 1})
+    back = toolkit.execute_tool("ergo_chat_history_read", {"end_line": 4, "limit": 1})
     assert back.splitlines() == [
         "[L1 2026-09-01T10:00:00+00:00 USER] How many eggs are left?"
     ]
@@ -345,14 +345,14 @@ def test_read_pages_forward_and_backward(claude_file):
 def test_tail_and_around(claude_file):
     toolkit = MessageHistoryToolkit([ClaudeCodeSource(claude_file)])
 
-    tail = toolkit.execute_tool("history_tail", {"limit": 1})
+    tail = toolkit.execute_tool("ergo_chat_history_tail", {"limit": 1})
     assert tail.splitlines() == [
         "[L4 2026-09-01T10:00:08+00:00 ASSISTANT] You have 4 eggs.",
-        "Earlier: history_read end_line=4",
+        "Earlier: ergo_chat_history_read end_line=4",
     ]
 
     around = toolkit.execute_tool(
-        "history_around",
+        "ergo_chat_history_around",
         {"line": 3, "before": 1, "after": 0, "granularity": "full"},
     )
     lines = around.splitlines()
@@ -362,33 +362,33 @@ def test_tail_and_around(claude_file):
 
 def test_by_date_across_sources(toolkit):
     result = toolkit.execute_tool(
-        "history_by_date",
+        "ergo_chat_history_by_date",
         {"since": "2026-09-01", "until": "2026-09-03", "limit": 2},
     )
     lines = result.splitlines()
     assert lines[0].startswith("[claude:abc L1 ")
     assert lines[1].startswith("[claude:abc L4 ")
-    assert lines[2] == "More: history_by_date since=2026-09-03T08:00:02+00:00"
+    assert lines[2] == "More: ergo_chat_history_by_date since=2026-09-03T08:00:02+00:00"
 
-    later = toolkit.execute_tool("history_by_date", {"since": "2026-09-03T08:00:02Z"})
+    later = toolkit.execute_tool("ergo_chat_history_by_date", {"since": "2026-09-03T08:00:02Z"})
     assert "Fix the failing test" in later
     assert "4 eggs" not in later
 
 
 def test_search_finds_tool_content_and_filters(toolkit):
-    hits = toolkit.execute_tool("history_search", {"query": "EGGS 4"})
+    hits = toolkit.execute_tool("ergo_chat_history_search", {"query": "EGGS 4"})
     assert "[claude:abc L4 " in hits
     assert "[claude:abc L3 " in hits  # matched inside a tool result
-    assert "history_around" in hits
+    assert "ergo_chat_history_around" in hits
 
     scoped = toolkit.execute_tool(
-        "history_search",
+        "ergo_chat_history_search",
         {"query": "failing", "source_id": "codex:2026-09-03-codex-123"},
     )
     assert "Fix the failing test" in scoped
     assert (
         toolkit.execute_tool(
-            "history_search", {"query": "pantry", "since": "2026-09-03"}
+            "ergo_chat_history_search", {"query": "pantry", "since": "2026-09-03"}
         )
         == "(no matches)"
     )
@@ -397,10 +397,10 @@ def test_search_finds_tool_content_and_filters(toolkit):
 def test_invalid_inputs(toolkit):
     with pytest.raises(ValueError, match="granularity"):
         toolkit.execute_tool(
-            "history_tail", {"source_id": "claude:abc", "granularity": "verbose"}
+            "ergo_chat_history_tail", {"source_id": "claude:abc", "granularity": "verbose"}
         )
     with pytest.raises(ValueError, match="Invalid date"):
-        toolkit.execute_tool("history_by_date", {"since": "yesterday"})
+        toolkit.execute_tool("ergo_chat_history_by_date", {"since": "yesterday"})
     with pytest.raises(ValueError, match="Unknown tool"):
         toolkit.execute_tool("history_nope", {})
 
@@ -411,12 +411,12 @@ def test_tool_schemas():
     schemas = MessageHistoryToolkit([]).get_tools_schema(ClaudeToolAdapter())
     names = [s["name"] for s in schemas]
     assert names == [
-        "history_sources",
-        "history_read",
-        "history_tail",
-        "history_around",
-        "history_by_date",
-        "history_search",
+        "ergo_chat_history_sources",
+        "ergo_chat_history_read",
+        "ergo_chat_history_tail",
+        "ergo_chat_history_around",
+        "ergo_chat_history_by_date",
+        "ergo_chat_history_search",
     ]
     around = schemas[3]["input_schema"]
     assert around["required"] == ["line"]
@@ -429,13 +429,13 @@ def test_live_session_source_refreshes():
         user=user, engine_type="claude", transport_type="api", status="active"
     )
     toolkit = MessageHistoryToolkit([SessionSource(session)])
-    assert toolkit.execute_tool("history_tail", {}) == "(no messages)"
+    assert toolkit.execute_tool("ergo_chat_history_tail", {}) == "(no messages)"
 
     message = ClaudeMessage.objects.create(session=session, role="user", sequence=0)
     ClaudeContentBlock.objects.create(
         message=message, block_type="text", sequence=0, text="new message"
     )
-    assert "new message" in toolkit.execute_tool("history_tail", {})
+    assert "new message" in toolkit.execute_tool("ergo_chat_history_tail", {})
 
 
 # ---------------------------------------------------------------------------

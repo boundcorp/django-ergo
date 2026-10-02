@@ -185,10 +185,10 @@ async def test_bot_edits_and_merges_its_own_config(bot_repo):
         work,
         "merge_main",
         claude_tool(
-            "repo_write",
+            "ergo_config_repo_write",
             {"path": "bots/manager/agents.md", "content": "Be brief."},
         ),
-        claude_tool("repo_publish", {"message": "Shorter instructions"}, tool_id="p1"),
+        claude_tool("ergo_config_repo_publish", {"message": "Shorter instructions"}, tool_id="p1"),
         say("Published."),
     )
     git(work, "add", "-A")
@@ -198,7 +198,7 @@ async def test_bot_edits_and_merges_its_own_config(bot_repo):
     root = await bot.root_session(user)
 
     paused = await bot.ask(root, "Make your instructions shorter")
-    assert [a.tool_name for a in paused.approvals] == ["repo_publish"]
+    assert [a.tool_name for a in paused.approvals] == ["ergo_config_repo_publish"]
     assert (work / "bots/manager/agents.md").read_text() == "Be brief."
     assert "Shorter" not in git(remote, "log", "--oneline", "main")
 
@@ -282,8 +282,8 @@ async def test_bot_management_tools_are_root_only(bot_repo):
     await bot.ask(thread, "hi")
     root_tools = {t["name"] for t in engine._client.calls[0]["tools"]}
     thread_tools = {t["name"] for t in engine._client.calls[1]["tools"]}
-    assert "repo_publish" in root_tools
-    assert "repo_publish" not in thread_tools
+    assert "ergo_config_repo_publish" in root_tools
+    assert "ergo_config_repo_publish" not in thread_tools
 
 
 # ---------------------------------------------------------------------------
@@ -453,7 +453,7 @@ async def test_folder_kb_tools_and_prefetch(tmp_path):
     user = await User.objects.acreate(username="kb-folder")
     bot, engine = folder_kb_bot(
         tmp_path,
-        claude_tool("kb_read", {"path": "preferences/diet.md"}),
+        claude_tool("ergo_kb_read", {"path": "preferences/diet.md"}),
         say("No cilantro, noted."),
         say("Hello!"),
     )
@@ -461,7 +461,7 @@ async def test_folder_kb_tools_and_prefetch(tmp_path):
 
     await bot.ask(root, "Does anyone avoid cilantro?")
     first = engine._client.calls[0]
-    assert {"kb_search", "kb_read", "kb_list"} <= {t["name"] for t in first["tools"]}
+    assert {"ergo_kb_search", "ergo_kb_read", "ergo_kb_list"} <= {t["name"] for t in first["tools"]}
     assert "## Knowledge base results for this message" in first["system"]
     assert "### Diet (preferences/diet.md)" in first["system"]
     read = engine._client.calls[1]["messages"][-1]["content"][0]["content"]
@@ -493,7 +493,7 @@ def test_folder_kb_reads_only_markdown_inside(tmp_path):
     assert kb.search("zz") == []
     assert FolderKB(tmp_path / "nope").articles() == []
     toolkit = kb.toolkit()
-    assert toolkit.execute_tool("kb_list", {}) == "a.md: Alpha\nb.md: b.md"
+    assert toolkit.execute_tool("ergo_kb_list", {}) == "a.md: Alpha\nb.md: b.md"
 
 
 @pytest.mark.django_db(transaction=True)

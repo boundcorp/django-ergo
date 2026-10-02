@@ -162,17 +162,17 @@ user. It also gets the orchestrator tools:
 | `threads_create` | Start a thread (needs `sessions.allow_create`), optionally with a first message whose reply is returned |
 | `threads_send` | Message a thread and return its reply |
 | `threads_close` | Close a thread; its history stays readable |
-| `bots_call` | Message a bot in `permissions.call_bots` (needs a `BotRegistry`) |
+| `ergo_bot_call` | Message a bot in `permissions.call_bots` (needs a `BotRegistry`) |
 
 Threads are ordinary sessions with the bot's default compaction mode. A
 thread that stops for approval reports that back to the root. Set
 `orchestration: false` for a bot that only ever talks in its root session:
-the thread and `bots_call` tools are left out entirely.
+the thread and `ergo_bot_call` tools are left out entirely.
 
 `BotRegistry.discover("bots/")` loads every folder at or under `bots/` that
 has a `bot.yaml`, and lets bots find each other by name. Bot folders can
 nest: a bot folder inside another bot's folder is its sub-bot, and the
-parent's root session may message its sub-bots with `bots_call` (as well as
+parent's root session may message its sub-bots with `ergo_bot_call` (as well as
 any bot in `permissions.call_bots`). The root session's context lists the
 bots it can message.
 
@@ -261,7 +261,7 @@ Tandoor tools) go in that bot folder's `tools/` instead.
   path: kb                           # Markdown folder, relative to the bot folder
   # or knowledgebases: [Kitchen], or toolkit: "myapp.kb:make_toolkit"
   prefetch: new_session              # new_session | every_turn | off
-  search_tool: kb_search
+  search_tool: ergo_kb_search
   top_k: 5
 ```
 
@@ -274,11 +274,11 @@ example one returning a `CorpusToolkit`; set `search_tool` to its search tool.
 
 With `path`, the knowledge base is a folder of Markdown files (it may sit
 next to the bot folder, as `../kb`, in the same repo). Each file is an
-article titled by its first `# Heading`. The bot gets `kb_search` (keyword
-search), `kb_read` and `kb_list`, and prefetch adds matching articles to the
+article titled by its first `# Heading`. The bot gets `ergo_kb_search` (keyword
+search), `ergo_kb_read` and `ergo_kb_list`, and prefetch adds matching articles to the
 context only when something matches. Add the `bot_management` plugin and the
-bot can edit articles with `repo_write` and propose them with
-`repo_publish`, which is how it keeps notes such as household preferences up
+bot can edit articles with `ergo_config_repo_write` and propose them with
+`ergo_config_repo_publish`, which is how it keeps notes such as household preferences up
 to date under your review.
 
 ### bot_management
@@ -293,17 +293,17 @@ to date under your review.
 
 Lets the bot maintain the git repository its folder lives in, so it can
 change its own instructions, config and tools, or add new bots.
-`repo_status`, `repo_list`, `repo_read`, `repo_diff` and `repo_write` look
+`ergo_config_repo_status`, `ergo_config_repo_list`, `ergo_config_repo_read`, `ergo_config_repo_diff` and `ergo_config_repo_write` look
 at and edit the files (paths can't leave the repo or touch `.git`), and
-`repo_discard` throws unpublished edits away.
+`ergo_config_repo_discard` throws unpublished edits away.
 
 In `merge_main` mode the bot edits the checkout it runs from, and
-`repo_publish` commits, rebases on main and pushes. In `propose_pr` mode it
+`ergo_config_repo_publish` commits, rebases on main and pushes. In `propose_pr` mode it
 edits a draft instead: a separate git worktree of main kept inside `.git`,
-so the running bots don't change until you merge. `repo_publish` then pushes
+so the running bots don't change until you merge. `ergo_config_repo_publish` then pushes
 a `bot/<name>/<time>-<title>` branch and opens a pull request with `gh`.
-Publishing needs approval unless `approve_publish: false`. `repo_pull`
-fast-forwards main and `repo_prs` lists open pull requests. Changes take
+Publishing needs approval unless `approve_publish: false`. `ergo_config_repo_pull`
+fast-forwards main and `ergo_config_repo_prs` lists open pull requests. Changes take
 effect when the bot is loaded again (Ergonaut reloads changed bot files on
 its own, and with `ERGONAUT_BOTS_PULL_SECONDS` pulls merged changes too).
 

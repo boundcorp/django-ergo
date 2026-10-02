@@ -3,7 +3,7 @@
 - ``threads_list`` / ``threads_create`` / ``threads_send`` / ``threads_close``
   manage this bot's thread sessions with the same user. Creating threads
   needs ``sessions.allow_create: true`` in bot.yaml.
-- ``bots_call`` sends a message to one of this bot's sub-bots (bot folders
+- ``ergo_bot_call`` sends a message to one of this bot's sub-bots (bot folders
   nested in its folder) or a bot listed in ``permissions.call_bots``. Each
   calling bot gets its own thread in the called bot, reused across calls.
 
@@ -152,7 +152,7 @@ def threads_close(ctx: ToolContext, thread_id: str) -> str:
 
 
 @bot_tool(takes_context=True)
-def bots_call(ctx: ToolContext, bot: str, message: str) -> str:
+def ergo_bot_call(ctx: ToolContext, bot: str, message: str) -> str:
     """Send a message to another bot this bot may call, and return its reply."""
     caller = ctx.bot
     registry = caller.registry
@@ -191,6 +191,6 @@ def orchestrator_toolkit(ctx: ToolContext) -> FunctionToolkit:
     if ctx.bot.definition.call_bots or (
         ctx.bot.registry and ctx.bot.registry.children(ctx.bot)
     ):
-        functions.append(bots_call)
+        functions.append(ergo_bot_call)
     tools: list[BotTool] = [fn.__bot_tool__ for fn in functions]
     return FunctionToolkit(tools, ctx)

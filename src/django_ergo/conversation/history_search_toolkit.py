@@ -41,7 +41,7 @@ SNIPPET_CHARS = 300
 _SOURCE = {
     "type": "string",
     "required": False,
-    "description": "Source id from history_sources. Optional when only one source exists.",
+    "description": "Source id from ergo_chat_history_sources. Optional when only one source exists.",
 }
 _GRANULARITY = {
     "type": "string",
@@ -60,12 +60,12 @@ _LIMIT = {
 
 TOOLS = [
     {
-        "name": "history_sources",
+        "name": "ergo_chat_history_sources",
         "description": "List the conversations you can read, with message counts and date ranges.",
         "parameters": {},
     },
     {
-        "name": "history_read",
+        "name": "ergo_chat_history_read",
         "description": (
             "Read messages by line number. Give start_line to page forward, or "
             "only end_line to read the messages just before it."
@@ -79,7 +79,7 @@ TOOLS = [
         },
     },
     {
-        "name": "history_tail",
+        "name": "ergo_chat_history_tail",
         "description": "Read the latest messages of a conversation.",
         "parameters": {
             "source_id": _SOURCE,
@@ -88,7 +88,7 @@ TOOLS = [
         },
     },
     {
-        "name": "history_around",
+        "name": "ergo_chat_history_around",
         "description": "Read the messages before and after a line, e.g. to expand a search hit.",
         "parameters": {
             "source_id": _SOURCE,
@@ -99,7 +99,7 @@ TOOLS = [
         },
     },
     {
-        "name": "history_by_date",
+        "name": "ergo_chat_history_by_date",
         "description": (
             "Read messages in a date range, oldest first, across all sources or "
             "one. Dates are ISO 8601 (2026-10-01 or 2026-10-01T14:00:00Z)."
@@ -113,7 +113,7 @@ TOOLS = [
         },
     },
     {
-        "name": "history_search",
+        "name": "ergo_chat_history_search",
         "description": (
             "Find messages containing all the given words (case-insensitive), "
             "searching full content including tool calls. Newest first."
@@ -206,7 +206,7 @@ class MessageHistoryToolkit(Toolkit):
 
     def execute_tool(self, tool_name: str, arguments: dict) -> str:
         self._load_sources()
-        handler = getattr(self, f"_{tool_name.removeprefix('history_')}", None)
+        handler = getattr(self, f"_{tool_name.removeprefix('ergo_chat_history_')}", None)
         if tool_name not in TOOL_NAMES or handler is None:
             msg = f"Unknown tool: {tool_name}"
             raise ValueError(msg)
@@ -220,12 +220,12 @@ class MessageHistoryToolkit(Toolkit):
             if len(self.sources) == 1:
                 source = next(iter(self.sources.values()))
             else:
-                msg = "source_id is required; call history_sources to list them"
+                msg = "source_id is required; call ergo_chat_history_sources to list them"
                 raise ValueError(msg)
         else:
             source = self.sources.get(source_id)
             if source is None:
-                msg = f"Unknown source {source_id!r}; call history_sources to list them"
+                msg = f"Unknown source {source_id!r}; call ergo_chat_history_sources to list them"
                 raise ValueError(msg)
         if isinstance(source, SessionSource):
             source.refresh()  # live sessions keep growing
@@ -291,7 +291,7 @@ class MessageHistoryToolkit(Toolkit):
             page = before[-limit:]
             notes = []
             if len(before) > len(page):
-                notes.append(f"Earlier: history_read end_line={page[0].line}")
+                notes.append(f"Earlier: ergo_chat_history_read end_line={page[0].line}")
         else:
             after = [
                 m
@@ -302,7 +302,7 @@ class MessageHistoryToolkit(Toolkit):
             page = after[:limit]
             notes = []
             if len(after) > len(page):
-                notes.append(f"More: history_read start_line={after[len(page)].line}")
+                notes.append(f"More: ergo_chat_history_read start_line={after[len(page)].line}")
         body = self._render(page, granularity, include_source=len(self.sources) > 1)
         return "\n".join([body, *notes])
 
@@ -314,7 +314,7 @@ class MessageHistoryToolkit(Toolkit):
         page = visible[-limit:]
         body = self._render(page, granularity, include_source=len(self.sources) > 1)
         if len(visible) > len(page):
-            body += f"\nEarlier: history_read end_line={page[0].line}"
+            body += f"\nEarlier: ergo_chat_history_read end_line={page[0].line}"
         return body
 
     def _around(self, arguments: dict) -> str:
@@ -351,7 +351,7 @@ class MessageHistoryToolkit(Toolkit):
         body = self._render(page, granularity, include_source=True)
         if len(matches) > len(page):
             next_since = matches[len(page)].timestamp.isoformat()
-            body += f"\nMore: history_by_date since={next_since}"
+            body += f"\nMore: ergo_chat_history_by_date since={next_since}"
         return body
 
     def _search(self, arguments: dict) -> str:
@@ -394,5 +394,5 @@ class MessageHistoryToolkit(Toolkit):
         more = len(hits) - len(lines)
         if more > 0:
             lines.append(f"({more} more matches; narrow the query or dates)")
-        lines.append("Expand a hit with history_around source_id=... line=...")
+        lines.append("Expand a hit with ergo_chat_history_around source_id=... line=...")
         return "\n".join(lines)

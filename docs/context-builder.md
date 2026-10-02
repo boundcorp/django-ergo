@@ -29,7 +29,7 @@ built.text    # "<context>\n## ...\n</context>"
   level, or `before_line=` to leave out recent lines.
 - Messages are rendered with line numbers and timestamps. A section that
   couldn't fit everything ends with the call that reads further back, for
-  example `history_read source_id=session:... end_line=210`, plus a hint for
+  example `ergo_chat_history_read source_id=session:... end_line=210`, plus a hint for
   getting more detail. Both are calls on `MessageHistoryToolkit`.
 - `TextContextSource` takes text or a callable, for things like KB results,
   a profile, or live state, and truncates it to fit. Write your own source by
@@ -62,6 +62,6 @@ Each turn the model gets:
 3. only the current turn as native messages: the new message plus that
    turn's tool calls and results. This is the session setting
    `compaction_config["native_history"] = "turn"`.
-4. `MessageHistoryToolkit` over its own history plus any `history_sources`.
+4. `MessageHistoryToolkit` over its own history plus any `ergo_chat_history_sources`.
    It uses this to read further back or to see thinking and tool details for
    messages in the window.
