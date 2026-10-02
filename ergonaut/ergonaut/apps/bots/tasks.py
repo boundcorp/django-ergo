@@ -25,8 +25,12 @@ from celery import shared_task
 logger = logging.getLogger(__name__)
 
 CHANNEL = "ergonaut:sessions"
-# Long enough for any turn; a crashed worker's lock still expires.
+# The longest a turn waits for the session's lock.
 LOCK_SECONDS = 2 * 60 * 60
+# A held Redis lock lives this long and is renewed every LOCK_RENEW_SECONDS while
+# its turn runs, so a lock left by a killed worker or a restart clears within a minute.
+LOCK_TTL_SECONDS = 60
+LOCK_RENEW_SECONDS = 20
 # How long a @bot_task wait() blocks when the tool gives no timeout.
 DEFAULT_TASK_WAIT_SECONDS = 600
 
@@ -59,14 +63,29 @@ def session_lock(session_id: str, *, wait: bool = True):
         lock = messaging._session_locks.setdefault(str(session_id), threading.Lock())
         acquired = lock.acquire(timeout=LOCK_SECONDS) if wait else lock.acquire(blocking=False)
     else:
-        lock = client.lock(f"ergonaut:turn:{session_id}", timeout=LOCK_SECONDS)
+        # Not thread-local: the renewal thread extends the lock this thread holds.
+        lock = client.lock(f"ergonaut:turn:{session_id}", timeout=LOCK_TTL_SECONDS, thread_local=False)
         acquired = lock.acquire(blocking=wait, blocking_timeout=LOCK_SECONDS if wait else None)
+    stop = threading.Event()
+    if acquired and client is not None:
+        threading.Thread(target=_keep_lock, args=(lock, stop), daemon=True).start()
     try:
         yield acquired
     finally:
+        stop.set()
         if acquired:
             with contextlib.suppress(Exception):
                 lock.release()
+
+
+def _keep_lock(lock, stop: threading.Event) -> None:
+    """Renew a held Redis turn lock until ``stop`` is set."""
+    while not stop.wait(LOCK_RENEW_SECONDS):
+        try:
+            lock.reacquire()
+        except Exception:  # noqa: BLE001 — a lost lock just stops being renewed
+            logger.warning("Could not renew a session turn lock", exc_info=True)
+            return
 
 
 def notify(session_id) -> None:
