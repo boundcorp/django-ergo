@@ -15,6 +15,7 @@ from django.db.models import Count, Q
 from django.http import FileResponse, HttpResponse
 from django.shortcuts import aget_object_or_404
 from django_ergo.bots import archival, webhooks
+from django_ergo.bots.pages import text_page, view_kind
 from django_ergo.bots.runtime import Bot
 from django_ergo.conversation.attachments import save_session_file
 from django_ergo.conversation.history import SessionSource
@@ -755,6 +756,7 @@ class AttachmentOut(Schema):
     source: str
     message_sequence: int | None
     pinned: bool = False
+    view: str = ""  # how the viewer shows it (django_ergo.bots.pages.view_kind); "" = download
     created_at: datetime
     updated_at: datetime
 
@@ -769,6 +771,7 @@ def attachment_out(row: ConversationAttachment) -> dict:
         "source": row.source,
         "message_sequence": row.message_sequence,
         "pinned": bool((row.metadata or {}).get("pinned")),
+        "view": view_kind(row.filename, row.media_type),
         "created_at": row.created_at,
         "updated_at": row.updated_at,
     }
@@ -845,12 +848,22 @@ def download_attachment(request, attachment_id: str, inline: bool = False):
         bot = get_bot(row.session.bot_name, request.auth)
         title = (row.metadata or {}).get("title") or row.filename
         return page_response(render_or_error(bot, read_text(row), request.auth, title), sandboxed=True)
-    if inline and row.media_type == "text/html":
+    kind = view_kind(row.filename, row.media_type) if inline else ""
+    if kind == "html":
         with row.file.open("rb") as handle:
             return page_response(handle.read().decode("utf-8", "replace"), sandboxed=True)
-    # Inline only for images, so a stored HTML or SVG file can't run in the app's origin.
-    show = inline and row.media_type in ("image/png", "image/jpeg", "image/gif", "image/webp")
-    return FileResponse(row.file.open("rb"), as_attachment=not show, filename=row.filename, content_type=row.media_type)
+    if kind in ("markdown", "csv", "json", "text"):
+        from django_ergo.conversation.attachments import read_text
+
+        return page_response(text_page(row.filename, read_text(row, limit=500_000), kind), sandboxed=True)
+    if kind in ("image", "pdf", "media"):
+        # Shown in the chat's viewer. SVG can carry scripts, so it gets the sandbox too.
+        response = FileResponse(row.file.open("rb"), filename=row.filename, content_type=row.media_type)
+        response["X-Frame-Options"] = "SAMEORIGIN"
+        if row.media_type == "image/svg+xml":
+            response["Content-Security-Policy"] = SANDBOXED
+        return response
+    return FileResponse(row.file.open("rb"), as_attachment=True, filename=row.filename, content_type=row.media_type)
 
 
 class PinIn(Schema):
@@ -912,6 +925,77 @@ def bot_file(request, bot_name: str, path: str):
     response["Cache-Control"] = "no-cache"
     response["X-Frame-Options"] = "SAMEORIGIN"
     return response
+
+
+# -- the bot folder, for admins ---------------------------------------------------------
+
+TREE_SKIP_DIRS = {".git", "__pycache__", "node_modules", ".venv", ".mypy_cache", ".pytest_cache", ".ruff_cache"}
+MAX_TREE_FILES = 3000
+MAX_SOURCE_BYTES = 500_000
+
+
+def bot_root(bot_name: str, user):
+    if not user.is_superuser:
+        raise HttpError(403, "Only an admin can browse a bot's files")
+    root = get_bot(bot_name, user).definition.root_dir
+    if root is None:
+        raise HttpError(404, "This bot has no folder")
+    return root.resolve()
+
+
+def hidden(relative) -> bool:
+    """Secrets never show: .env files and anything named like a secret file."""
+    name = relative.name.lower()
+    return name.startswith(".env") or name.endswith((".pem", ".key")) or "secret" in name
+
+
+@router.get("/bots/{bot_name}/tree")
+def bot_tree(request, bot_name: str):
+    """Every file in the bot folder (sub-bots included), for the bot page's file browser."""
+    import os
+    from pathlib import Path
+
+    root = bot_root(bot_name, request.auth)
+    files = []
+    for directory, dirs, names in os.walk(root):
+        dirs[:] = sorted(d for d in dirs if d not in TREE_SKIP_DIRS)
+        for name in sorted(names):
+            path = Path(directory) / name
+            relative = path.relative_to(root)
+            if hidden(relative) or path.is_symlink():
+                continue
+            files.append({"path": str(relative), "size": path.stat().st_size})
+            if len(files) >= MAX_TREE_FILES:
+                return {"files": files, "truncated": True}
+    return {"files": files, "truncated": False}
+
+
+@router.get("/bots/{bot_name}/source/{path:path}")
+def bot_source(request, bot_name: str, path: str):
+    """One file of the bot folder: its text, or (for images and other binaries) where to see it."""
+    from django_ergo.bots.pages import bot_file
+    from django_ergo.conversation.attachments import guess_media_type
+
+    root = bot_root(bot_name, request.auth)
+    target = (root / path).resolve()
+    relative = target.relative_to(root) if target.is_relative_to(root) else None
+    if (
+        relative is None
+        or not target.is_file()
+        or target.is_symlink()
+        or hidden(relative)
+        or any(part in TREE_SKIP_DIRS for part in relative.parts)
+    ):
+        raise HttpError(404, "No such file")
+    size = target.stat().st_size
+    media_type = guess_media_type(target.name)
+    text = None
+    if size <= MAX_SOURCE_BYTES:
+        data = target.read_bytes()
+        if b"\0" not in data[:8000]:
+            text = data.decode("utf-8", "replace")
+    url = f"/api/bots/{bot_name}/files/{relative}" if bot_file(registry().get(bot_name), str(relative)) else ""
+    return {"path": str(relative), "size": size, "media_type": media_type, "text": text, "url": url}
 
 
 # -- changes: proposals to the bot repo ------------------------------------------

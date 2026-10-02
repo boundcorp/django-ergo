@@ -16,8 +16,7 @@ function size(bytes: number | null) {
 }
 
 // The session's files: uploads, files sent with messages, and files the bot wrote.
-// Pages (.jhtml) and HTML files open in the chat's viewer; any file can be pinned.
-const VIEWABLE = /\.(jhtml|html?)$/i
+// Pages, images, PDFs, Markdown, text and media open in the chat's viewer; any file can be pinned.
 
 export default function Files({
   sessionId,
@@ -102,21 +101,26 @@ export default function Files({
         {files?.map(file => (
           <div key={file.id} className="group rounded-md px-2 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-900">
             <div className="flex items-center gap-2">
-              <a
-                className="truncate text-sm text-indigo-600 hover:underline dark:text-indigo-400"
-                href={api.downloadUrl(file.id)}
-                title={file.filename}
-              >
-                {file.filename || file.media_type}
-              </a>
-              {VIEWABLE.test(file.filename) && (
+              {file.view ? (
                 <button
-                  className="text-xs text-zinc-500 underline"
+                  className="truncate text-left text-sm text-indigo-600 hover:underline dark:text-indigo-400"
+                  title={`View ${file.filename}`}
                   onClick={() => onView({ kind: 'file', name: file.filename, id: file.id, url: api.viewUrl(file.id) })}
                 >
-                  view
+                  {file.filename || file.media_type}
                 </button>
+              ) : (
+                <a
+                  className="truncate text-sm text-indigo-600 hover:underline dark:text-indigo-400"
+                  href={api.downloadUrl(file.id)}
+                  title={file.filename}
+                >
+                  {file.filename || file.media_type}
+                </a>
               )}
+              <a className="text-xs text-zinc-400 hover:text-zinc-700" href={api.downloadUrl(file.id)} title="Download">
+                ⬇
+              </a>
               <button
                 className={`ml-auto text-xs ${file.pinned ? '' : 'hidden opacity-50 group-hover:block'}`}
                 title={file.pinned ? 'Unpin' : 'Pin to the top of the chat'}

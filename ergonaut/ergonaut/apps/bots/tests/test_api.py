@@ -504,3 +504,72 @@ def test_pins_bot_files_and_live_pages(client, cook, bot_folder, use_bots, setti
     client.force_login(other)
     assert client.get(f"/api/sessions/{root['id']}/pins").status_code == 404
     assert client.get(pins[1]["url"]).status_code == 404
+
+
+@pytest.mark.django_db(transaction=True)
+def test_files_open_in_the_viewer_by_kind(client, cook, use_bots, settings, tmp_path):
+    from django_ergo.conversation.attachments import save_session_file
+    from django_ergo.conversation.models import ConversationSession
+
+    settings.MEDIA_ROOT = str(tmp_path / "media")
+    use_bots(say("hi"))
+    root = post(client, "/api/bots/kitchen/root").json()
+    session = ConversationSession.objects.get(id=root["id"])
+    files = {
+        "notes.md": b"# Plan\n\n<script>x</script> **bold**",
+        "pantry.csv": b"item,count\neggs,4\n",
+        "data.json": b'{"a": [1, 2]}',
+        "photo.png": b"\x89PNG\r\n",
+        "drawing.svg": b"<svg xmlns='http://www.w3.org/2000/svg'/>",
+        "receipt.pdf": b"%PDF-1.4",
+        "blob.bin": b"\x00\x01",
+    }
+    rows = {name: save_session_file(session, name, data, source="upload") for name, data in files.items()}
+    listed = {f["filename"]: f["view"] for f in client.get(f"/api/sessions/{root['id']}/attachments").json()}
+    assert listed == {
+        "notes.md": "markdown",
+        "pantry.csv": "csv",
+        "data.json": "json",
+        "photo.png": "image",
+        "drawing.svg": "image",
+        "receipt.pdf": "pdf",
+        "blob.bin": "",
+    }
+
+    def view(name):
+        return client.get(f"/api/attachments/{rows[name].id}/download?inline=true")
+
+    md = view("notes.md")
+    assert b"<h1>Plan</h1>" in md.content and b"<strong>bold</strong>" in md.content
+    assert b"<script>x</script>" not in md.content
+    assert md["Content-Security-Policy"].startswith("sandbox")
+    assert b"<td>eggs</td>" in view("pantry.csv").content
+    assert b"&#34;a&#34;: [\n    1" in view("data.json").content  # pretty-printed, escaped
+    for name in ("photo.png", "receipt.pdf"):
+        response = view(name)
+        assert "attachment" not in response.get("Content-Disposition", "")
+        assert response["X-Frame-Options"] == "SAMEORIGIN"
+    assert view("drawing.svg")["Content-Security-Policy"].startswith("sandbox")
+    assert "attachment" in view("blob.bin")["Content-Disposition"]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_admins_browse_the_bot_folder(client, cook, bot_folder, use_bots):
+    (bot_folder / ".env").write_text("TOKEN=x")
+    (bot_folder / "tools" / "__pycache__").mkdir()
+    (bot_folder / "tools" / "__pycache__" / "pantry.pyc").write_bytes(b"\x00")
+    (bot_folder / "logo.png").write_bytes(b"\x89PNG\r\n\x00")
+    use_bots(say("hi"))
+    assert client.get("/api/bots/kitchen/tree").status_code == 403
+
+    cook.is_superuser = True
+    cook.save()
+    paths = [f["path"] for f in client.get("/api/bots/kitchen/tree").json()["files"]]
+    assert paths == ["agents.md", "bot.yaml", "logo.png", "tools/pantry.py"]
+
+    source = client.get("/api/bots/kitchen/source/tools/pantry.py").json()
+    assert "def pantry_count" in source["text"] and source["url"] == ""
+    logo = client.get("/api/bots/kitchen/source/logo.png").json()
+    assert logo["text"] is None and logo["url"] == "/api/bots/kitchen/files/logo.png"
+    for blocked in (".env", "../kitchen/.env", "tools/__pycache__/pantry.pyc", "nope.py"):
+        assert client.get(f"/api/bots/kitchen/source/{blocked}").status_code == 404

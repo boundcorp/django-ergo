@@ -2,7 +2,25 @@ import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import type { BotDetail } from '../api'
 import { api } from '../api'
+import BotFiles from '../components/BotFiles'
 import Changes from '../components/Changes'
+
+// The bot folder's files, for admins (the API refuses everyone else, and then this hides).
+function BotFilesSection({ bot }: { bot: string }) {
+  const [admin, setAdmin] = useState(false)
+  useEffect(() => {
+    api
+      .botTree(bot)
+      .then(() => setAdmin(true))
+      .catch(() => setAdmin(false))
+  }, [bot])
+  if (!admin) return null
+  return (
+    <Section title="Files">
+      <BotFiles bot={bot} />
+    </Section>
+  )
+}
 
 function Section({ title, count, children }: { title: string; count?: number; children: React.ReactNode }) {
   return (
@@ -170,6 +188,8 @@ export function BotPage() {
           </table>
         </Section>
       )}
+
+      <BotFilesSection bot={bot.name} />
 
       <Section title="Skills" count={bot.skills.length}>
         <p className="mb-2 text-xs text-zinc-500">
