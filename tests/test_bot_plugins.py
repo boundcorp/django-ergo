@@ -639,7 +639,7 @@ def orca_calls(monkeypatch):
 @pytest.mark.django_db
 def test_orca_read_runs_inventory_pinned_to_the_environment(tmp_path, orca_calls):
     _, _, plugin = orca_bot(tmp_path)
-    assert plugin.read(["worktree", "ps"]) == '{"ok": true}'
+    assert plugin.read(["worktree", "ps"]) == '{"ok":true}'
     assert orca_calls[-1] == [
         "orca-test", "worktree", "ps", "--environment", "devbox", "--json",
     ]
@@ -681,6 +681,31 @@ async def test_orca_run_waits_for_approval(tmp_path, orca_calls):
     done = await bot.resume(root, {"w1": True})
     assert done.text == "Stopped."
     assert orca_calls[-1][1:3] == ["orchestration", "worker-stop"]
+
+
+@pytest.mark.django_db
+def test_orca_compacts_json_and_keeps_requested_fields(tmp_path, monkeypatch):
+    listing = {
+        "id": "req-1",
+        "ok": True,
+        "result": {
+            "worktrees": [
+                {"id": "r::/a", "path": "/a", "git": {"head": "x" * 50}},
+                {"id": "r::/b", "path": "/b", "git": {"head": "y" * 50}},
+            ]
+        },
+    }
+
+    def fake_run(argv, **kwargs):
+        stdout = json.dumps(listing, indent=2)
+        return subprocess.CompletedProcess(argv, 0, stdout=stdout, stderr="")
+
+    monkeypatch.setattr("django_ergo.plugins.orca.subprocess.run", fake_run)
+    _, _, plugin = orca_bot(tmp_path)
+    full = plugin.read(["worktree", "list"])
+    assert full == json.dumps(listing["result"], separators=(",", ":"))
+    short = plugin.read(["worktree", "list"], fields=["id"])
+    assert json.loads(short) == {"worktrees": [{"id": "r::/a"}, {"id": "r::/b"}]}
 
 
 @pytest.mark.django_db

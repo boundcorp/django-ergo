@@ -26,6 +26,7 @@ call anywhere else.
 
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 from typing import TYPE_CHECKING
@@ -62,17 +63,53 @@ READ_ONLY = {
     ("skills", "get"),
 }
 NO_JSON = {("skills", "get")}
+MAX_OUTPUT_CHARS = 40_000  # about 10k tokens; a 26-worktree list is ~28k compact
 TARGET_FLAGS = ("--environment", "--pairing-code")
 ARGS_SCHEMA = {
     "args": {
         "type": "array",
         "items": {"type": "string"},
         "description": (
-            'CLI arguments after the executable, e.g. ["worktree", "ps"] or '
+            'CLI arguments after the executable, e.g. ["worktree", "list"] or '
             '["terminal", "read", "--terminal", "<handle>"]'
         ),
-    }
+    },
+    "fields": {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": (
+            "Optional: keep only these keys in each item of the JSON lists, "
+            'e.g. ["id", "path", "branch"] for a short worktree list'
+        ),
+    },
 }
+
+
+def keep_fields(value, fields: set[str]):
+    """Drop every key not in ``fields`` from the dicts inside lists."""
+    if isinstance(value, list):
+        return [
+            {k: v for k, v in item.items() if k in fields}
+            if isinstance(item, dict)
+            else keep_fields(item, fields)
+            for item in value
+        ]
+    if isinstance(value, dict):
+        return {k: keep_fields(v, fields) for k, v in value.items()}
+    return value
+
+
+def compact(stdout: str, fields: list[str] | None = None) -> str:
+    """The CLI's JSON without indentation (and narrowed to ``fields``)."""
+    try:
+        data = json.loads(stdout)
+    except ValueError:
+        return stdout
+    if isinstance(data, dict) and "result" in data:
+        data = data["result"]
+    if fields:
+        data = keep_fields(data, set(fields))
+    return json.dumps(data, separators=(",", ":"), ensure_ascii=False)
 
 
 def command_of(args: list[str]) -> tuple[str, ...]:
@@ -119,7 +156,7 @@ class OrcaPlugin(BotPlugin):
             args.append("--json")
         return [self.executable, *args]
 
-    def run(self, args: list[str]) -> str:
+    def run(self, args: list[str], fields: list[str] | None = None) -> str:
         try:
             proc = subprocess.run(  # noqa: S603 — argv list, no shell
                 self.argv(args),
@@ -132,18 +169,18 @@ class OrcaPlugin(BotPlugin):
             return f"The Orca CLI ({self.executable}) is not installed on this host."
         except subprocess.TimeoutExpired:
             return f"Timed out after {self.timeout}s."
-        output = trim((proc.stdout + (proc.stderr if proc.returncode else "")).strip())
         if proc.returncode:
-            return f"Exit {proc.returncode}:\n{output}"
-        return output or "(no output)"
+            output = f"Exit {proc.returncode}:\n{(proc.stdout + proc.stderr).strip()}"
+            return trim(output, MAX_OUTPUT_CHARS)
+        return trim(compact(proc.stdout.strip(), fields), MAX_OUTPUT_CHARS) or "(no output)"
 
-    def read(self, args: list[str]) -> str:
+    def read(self, args: list[str], fields: list[str] | None = None) -> str:
         if not is_read_only(args):
             return (
                 f"{' '.join(command_of(args)) or args!r} can change Orca state; "
                 "use orca_run, which asks the user first."
             )
-        return self.run(args)
+        return self.run(args, fields)
 
     # -- plugin hooks ------------------------------------------------------
 
@@ -167,8 +204,9 @@ class OrcaPlugin(BotPlugin):
             TextContextSource(
                 "Orca",
                 f"You manage Orca on {where} with the {self.executable} CLI. "
-                f"Use orca_read for inventory; {approval}. Long output keeps only its "
-                "start and end, so prefer narrow commands (worktree ps over worktree list). Before starting or "
+                f"Use orca_read for inventory; {approval}. Output is compact JSON; long "
+                'output keeps only its start and end, so pass fields (e.g. ["id", "path", "branch"]) '
+                "to list commands. Before starting or "
                 'stopping workers, read the CLI\'s guides with orca_read ["skills", '
                 '"get", "orca-cli"] and ["skills", "get", "orchestration"], and check '
                 "the run and worker lists so you don't duplicate work.",
@@ -189,8 +227,8 @@ class OrcaPlugin(BotPlugin):
             parameters=ARGS_SCHEMA,
             required=["args"],
         )
-        def read(args: list[str]) -> str:
-            return plugin.read(args)
+        def read(args: list[str], fields: list[str] | None = None) -> str:
+            return plugin.read(args, fields)
 
         @bot_tool(
             name="orca_run",
@@ -203,7 +241,7 @@ class OrcaPlugin(BotPlugin):
             required=["args"],
             requires_approval=self.approve_changes,
         )
-        def run(args: list[str]) -> str:
-            return plugin.run(args)
+        def run(args: list[str], fields: list[str] | None = None) -> str:
+            return plugin.run(args, fields)
 
         return [read.__bot_tool__, run.__bot_tool__]
