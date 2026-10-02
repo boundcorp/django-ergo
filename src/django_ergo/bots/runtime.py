@@ -10,7 +10,7 @@ Every turn is a chat reply: a structured call against the session (see
 ``ChatReply``.
 
 Each (bot, user) pair has a main chat, plus one chat per named chat in
-bot.yaml (``chats:``). These are stream chats (see ``conversation.stream``):
+bot.yaml (``chats:``). These are window chats (see ``conversation.window``):
 they send only the current turn natively, get their latest messages through
 a context block, and can read the history of every session this bot has with
 the user. Threads are child sessions that use the bot's default compaction
@@ -60,13 +60,14 @@ from django_ergo.conversation.models import CompactionMode
 from django_ergo.conversation.models import ConversationSession
 from django_ergo.conversation.models import StructuredCall
 from django_ergo.conversation.models import StructuredCallStatus
+from django_ergo.conversation.models import normalize_compaction_mode
 from django_ergo.conversation.runtime import EngineSpec
 from django_ergo.conversation.runtime import build_engine
 from django_ergo.conversation.runtime import get_default_engine_spec
-from django_ergo.conversation.stream import STREAM_CONFIG
 from django_ergo.conversation.structured import StructuredCallError
 from django_ergo.conversation.structured import resume_structured_call
 from django_ergo.conversation.structured import run_structured_call
+from django_ergo.conversation.window import WINDOW_CONFIG
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -521,7 +522,7 @@ class Bot:
             parent=None,
             role=role,
             compaction_mode=CompactionMode.NONE,
-            compaction_config=dict(STREAM_CONFIG),
+            compaction_config=dict(WINDOW_CONFIG),
             metadata=metadata,
             system_prompt=self.instructions_for(name),
         )
@@ -556,7 +557,9 @@ class Bot:
         metadata: dict | None = None,
     ) -> ConversationSession:
         """Start a thread session for this bot."""
-        mode = compaction_mode or self.definition.default_compaction_mode
+        mode = normalize_compaction_mode(
+            compaction_mode or self.definition.default_compaction_mode
+        )
         if mode not in CompactionMode.values:
             msg = f"Unknown compaction mode {mode!r}"
             raise ValueError(msg)
@@ -631,8 +634,11 @@ class Bot:
         return (session.metadata or {}).get("bot_role") in ("root", MAIN_ROLE)
 
     @staticmethod
-    def is_stream(session: ConversationSession) -> bool:
+    def is_window(session: ConversationSession) -> bool:
+        """A window chat: only the current turn goes to the model natively."""
         return (session.compaction_config or {}).get("native_history") == "turn"
+
+    is_stream = is_window  # deprecated alias
 
     def history_sources(self, session: ConversationSession) -> list[SessionSource]:
         """Sessions the history tools can read: all of this user's sessions
@@ -713,7 +719,7 @@ class Bot:
                     )
                 )
                 empty = False
-        if self.is_stream(session):
+        if self.is_window(session):
             builder.add(
                 MessageContextSource(
                     SessionSource(session),
@@ -775,8 +781,8 @@ class Bot:
     ):
         spec = chat_reply_spec(toolkits, max_turns=self.definition.max_turns)
         # Toolkits pre-seed what every session should start knowing (its
-        # skills, the bots it can message); a stream session needs it each turn.
-        spec.pre_seed_each_turn = session is not None and self.is_stream(session)
+        # skills, the bots it can message); a window session needs it each turn.
+        spec.pre_seed_each_turn = session is not None and self.is_window(session)
         return spec
 
     async def ask(

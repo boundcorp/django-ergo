@@ -16,7 +16,7 @@ bot.yaml::
       api_key_env: KITCHEN_ANTHROPIC_KEY   # read at runtime, never stored
       # or, with a providers.yaml (django_ergo.bots.providers):
       # config: {model: anthropic/claude-sonnet-5-5}
-    root:                              # stream settings for main and named chats
+    root:                              # window settings for main and named chats
       recent: 15
       budget_tokens: 8000
       granularity: conversation
@@ -37,7 +37,7 @@ bot.yaml::
       skills: []
       allow_create: true               # may chats start threads of this bot?
       archive_after_days: 7            # archive threads idle this long (0 = never)
-      default_compaction: {mode: stream, config: {keep_recent: 15}}
+      default_compaction: {mode: rolling, config: {keep_recent: 15}}  # "stream" still works
     skills:                            # see django_ergo.bots.skillset
       folder: skills                   # default
       unload_after_turns: 30           # drop a lazily loaded skill unused this long
@@ -73,6 +73,7 @@ from typing import Any
 
 from django_ergo.conversation.history import Granularity
 from django_ergo.conversation.models import CompactionMode
+from django_ergo.conversation.models import normalize_compaction_mode
 
 CONFIG_FILE = "bot.yaml"
 DEFAULT_INSTRUCTIONS = "agents.md"
@@ -122,7 +123,7 @@ class BotDefinition:
     current_time: bool = True
     allow_create_sessions: bool = False
     archive_after_days: int = 7
-    default_compaction_mode: str = CompactionMode.STREAM
+    default_compaction_mode: str = CompactionMode.ROLLING
     default_compaction_config: dict = field(default_factory=dict)
     tool_files: list[Path] = field(default_factory=list)
     table_files: list[Path] = field(default_factory=list)
@@ -164,7 +165,8 @@ class BotDefinition:
             skills_config = {"folder": skills_config} if skills_config else {}
         orchestration = bool(data.get("orchestration", True))
         compaction = sessions.get("default_compaction") or {}
-        mode = compaction.get("mode", CompactionMode.STREAM)
+        # "stream" is the old name for rolling compaction.
+        mode = normalize_compaction_mode(compaction.get("mode", CompactionMode.ROLLING))
         if mode not in CompactionMode.values:
             msg = f"Unknown compaction mode {mode!r}"
             raise BotDefinitionError(msg)

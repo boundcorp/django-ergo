@@ -21,7 +21,7 @@ engine:
   type: claude                       # or openai; default is the settings engine
   config: {model: claude-sonnet-4-5}
   api_key_env: KITCHEN_ANTHROPIC_KEY # read at runtime, never stored
-root:                                # stream settings for main and named chats
+root:                                # window settings for main and named chats
   recent: 15                         # latest messages always in context
   budget_tokens: 8000
   granularity: conversation          # or reasoning / full
@@ -335,7 +335,7 @@ returns its `worker_done` report.
 
 Every user has a **main** chat with each bot (formerly the root session),
 plus one chat for each named chat in `chats:`, created when first opened.
-Main and named chats are stream chats with history tools over every session
+Main and named chats are window chats with history tools over every session
 the bot has with the user. A named chat adds its own `instructions` to
 agents.md and loads its own skills. Threads are child sessions of any chat.
 Instructions are rebuilt every turn, so edits to agents.md and bot.yaml reach
@@ -401,7 +401,7 @@ marked `requires_approval` pauses the turn (`result.approvals`), and
 `chat_reply_spec` live in `django_ergo.conversation.chat_reply` and work for
 any chat session, not only bots.
 
-The **main chat** (and each named chat) is a stream chat (see
+The **main chat** (and each named chat) is a window chat (see
 [context-builder.md](context-builder.md)): each turn it sees the latest
 `recent` messages through a context block, sends only the current turn
 natively, and has history tools over every session this bot has with the
@@ -448,7 +448,7 @@ any bot in `permissions.call_bots`). Each session starts with an
 
 A toolkit's `pre_seeds()` names tool calls that run before a session's first
 model call; their results are written into the history as if the model had
-made the calls (each turn for stream sessions, whose model calls carry only
+made the calls (each turn for window sessions, whose model calls carry only
 the current turn). `FunctionToolkit(tools, ctx, seed=["tool_name"])` seeds
 zero-argument tools. The orchestrator seeds `ergo_bot_list` and skills seed
 `list_skills`.

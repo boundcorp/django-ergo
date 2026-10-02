@@ -155,10 +155,24 @@ def test_definition_defaults_and_inline_instructions():
     assert definition.instructions == "Hi"
     assert definition.recent == 15
     assert definition.allow_create_sessions is False
-    assert definition.default_compaction_mode == "stream"
+    assert definition.default_compaction_mode == "rolling"
     assert definition.tool_results_in_context is None
     with pytest.raises(BotDefinitionError, match="needs a name"):
         BotDefinition.from_dict({})
+
+
+def test_old_stream_compaction_mode_loads_as_rolling(tmp_path):
+    # "stream" was the name of rolling compaction before the rename.
+    folder = write_bot(
+        tmp_path,
+        "name: x\nthreads: {default_compaction: {mode: stream, config: {batch: 4}}}\n",
+    )
+    definition = BotDefinition.load(folder)
+    assert definition.default_compaction_mode == "rolling"
+    assert definition.default_compaction_config == {"batch": 4}
+    from django_ergo.conversation.models import CompactionMode
+
+    assert CompactionMode.STREAM is CompactionMode.ROLLING
 
 
 def test_tool_results_in_context_reaches_the_engine(tmp_path):
@@ -239,7 +253,7 @@ def make_bot(tmp_path, *responses, yaml_text=KITCHEN_YAML, name="kitchen", tools
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_root_session_turn_uses_stream_context_tools_and_hooks(tmp_path):
+async def test_root_session_turn_uses_window_context_tools_and_hooks(tmp_path):
     user = await User.objects.acreate(username="cook")
     bot, engine = make_bot(
         tmp_path,
@@ -311,6 +325,8 @@ async def test_threads_use_default_compaction_and_root_reads_them(tmp_path):
     assert thread.metadata == {"title": "Meal plan", "bot_role": "thread"}
     other = await bot.create_session(user, compaction_mode="time")
     assert other.compaction_config == {}
+    legacy = await bot.create_session(user, compaction_mode="stream")
+    assert legacy.compaction_mode == "rolling"
     with pytest.raises(ValueError, match="compaction"):
         await bot.create_session(user, compaction_mode="weekly")
 

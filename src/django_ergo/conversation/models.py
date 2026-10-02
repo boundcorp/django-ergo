@@ -29,7 +29,19 @@ class CompactionMode(models.TextChoices):
     NONE = "none", "None"
     TIME = "time", "Time-based"
     CONTEXT_SIZE = "context_size", "Context size"
-    STREAM = "stream", "Stream"
+    ROLLING = "rolling", "Rolling"
+
+
+# Deprecated: rolling compaction used to be called "stream". The old member
+# name still resolves, and stored or configured "stream" values are read as
+# "rolling" (see normalize_compaction_mode).
+CompactionMode.STREAM = CompactionMode.ROLLING
+LEGACY_COMPACTION_MODES = {"stream": CompactionMode.ROLLING}
+
+
+def normalize_compaction_mode(mode: str | None) -> str | None:
+    """Map a legacy compaction mode name to its current value."""
+    return LEGACY_COMPACTION_MODES.get(mode, mode)
 
 
 class ConversationSession(TimeStampedMixin):
