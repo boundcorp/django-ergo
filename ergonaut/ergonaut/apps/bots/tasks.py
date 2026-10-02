@@ -650,3 +650,36 @@ def resume_workers() -> int:
         workers.schedule(worker, 0)
         count += 1
     return count
+
+
+# A call still in progress, untouched this long, whose session holds no turn lock,
+# belongs to a turn that died (a killed worker or shell, a restart).
+DEAD_TURN_MINUTES = 10
+
+
+@shared_task(name="ergonaut.recover_dead_turns", ignore_result=True)
+def recover_dead_turns() -> int:
+    """Fail in-progress calls whose turn died, so their chats stop showing busy and
+    queued messages go out. Beat runs this; it needs Redis, where every turn's lock
+    lives (and expires a minute after its holder dies)."""
+    from django.utils import timezone
+    from django_ergo.conversation.models import StructuredCall
+
+    if redis_client() is None:
+        return 0
+    old = timezone.now() - timezone.timedelta(minutes=DEAD_TURN_MINUTES)
+    calls = StructuredCall.objects.filter(status="in_progress", updated_at__lt=old, session__isnull=False)
+    recovered = 0
+    for call in calls.only("id", "session_id")[:100]:
+        if turn_running(call.session_id):
+            continue
+        updated = StructuredCall.objects.filter(id=call.id, status="in_progress").update(
+            status="failed",
+            error="The turn stopped without finishing (its worker or process exited).",
+            updated_at=timezone.now(),
+        )
+        if updated:
+            recovered += 1
+            notify(call.session_id)
+            queue_waiting(call.session_id)
+    return recovered
