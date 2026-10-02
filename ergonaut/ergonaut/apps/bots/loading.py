@@ -33,6 +33,7 @@ from pathlib import Path
 import yaml
 from django.contrib.auth import get_user_model
 from django_ergo.bots.definition import CONFIG_FILE
+from django_ergo.bots.providers import PROVIDERS_FILE, Providers, load_providers
 from django_ergo.bots.registry import BotRegistry, find_bot_folders
 
 logger = logging.getLogger(__name__)
@@ -59,6 +60,7 @@ class Setup:
     folders: list[Path] = field(default_factory=list)
     people: dict[str, Person] = field(default_factory=dict)
     failed: dict[str, str] = field(default_factory=dict)  # bot folder -> why it was skipped
+    providers: Providers = field(default_factory=Providers)
 
 
 def bot_paths(value: str | None = None) -> list[Path]:
@@ -119,13 +121,24 @@ def find_setup(paths: list[Path] | None = None) -> Setup:
                 setup.failed[str(folder)] = f"{type(exc).__name__}: {exc}"[:2000]
                 continue
             setup.folders.append(folder)
+    _add_providers(setup, paths if paths is not None else bot_paths())
     return setup
+
+
+def _add_providers(setup: Setup, paths: list[Path]) -> None:
+    """The providers.yaml at the top of a bot path (see django_ergo.bots.providers)."""
+    try:
+        setup.providers = load_providers(paths)
+    except Exception as exc:  # noqa: BLE001 — the bots still load, on their own engines
+        logger.exception("Skipping %s", PROVIDERS_FILE)
+        setup.failed[PROVIDERS_FILE] = f"{type(exc).__name__}: {exc}"[:2000]
 
 
 def load_registry(setup: Setup | None = None) -> BotRegistry:
     setup = setup or find_setup()
     registry = BotRegistry.from_paths(setup.folders, skip_broken=True)
     registry.failed = {**setup.failed, **registry.failed}
+    registry.providers = setup.providers
     telegram_ids = {str(p.telegram): p.username for p in setup.people.values() if p.telegram}
     for bot in registry:
         plugin = bot.plugin("telegram")

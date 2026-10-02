@@ -432,7 +432,7 @@ def test_a_turn_that_fails_early_is_recorded(cook, use_bots, monkeypatch):
     session = ConversationSession.objects.create(user=cook, bot_name="kitchen", metadata={"bot_role": "root"})
     from django_ergo.bots.runtime import Bot
 
-    def broken(self):
+    def broken(self, *args, **kwargs):
         msg = "no API key"
         raise RuntimeError(msg)
 
@@ -779,3 +779,37 @@ def test_sessions_show_unread_replies_and_what_needs_attention(client, cook, use
     post(client, f"/api/sessions/{root['id']}/messages", {"text": "Buy more"})
     client.get(f"/api/sessions/{root['id']}")
     assert listed() == (False, True)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_chats_pick_a_model_from_providers(client, cook, use_bots, monkeypatch):
+    from django_ergo.bots.providers import Providers
+
+    use_bots(say("hi"))
+    webhooks.get_registry().providers = Providers.from_dict(
+        {
+            "providers": {
+                "anthropic": {"type": "claude", "api_key_env": "TEST_CLAUDE_KEY", "models": ["claude-opus-5-5"]},
+                "spare": {"type": "claude", "api_key_env": "TEST_UNSET_KEY", "models": ["claude-haiku-4-5"]},
+                "openai": {"type": "openai", "models": ["gpt-6-sol"]},
+            }
+        }
+    )
+    monkeypatch.setenv("TEST_CLAUDE_KEY", "k")
+    monkeypatch.delenv("TEST_UNSET_KEY", raising=False)
+
+    models = client.get("/api/bots/kitchen/models").json()
+    assert [(m["id"], m["engine_type"], m["available"]) for m in models["models"]] == [
+        ("anthropic/claude-opus-5-5", "claude", True),
+        ("spare/claude-haiku-4-5", "claude", False),
+        ("openai/gpt-6-sol", "openai", True),
+    ]
+    root = post(client, "/api/bots/kitchen/root").json()
+    assert (root["engine_type"], root["model"]) == ("claude", "")
+
+    picked = post(client, f"/api/sessions/{root['id']}/model", {"model": "anthropic/claude-opus-5-5"})
+    assert picked.json()["model"] == "anthropic/claude-opus-5-5"
+    assert post(client, f"/api/sessions/{root['id']}/model", {"model": "openai/gpt-6-sol"}).status_code == 409
+    assert post(client, f"/api/sessions/{root['id']}/model", {"model": "spare/claude-haiku-4-5"}).status_code == 409
+    assert post(client, f"/api/sessions/{root['id']}/model", {"model": "nope/x"}).status_code == 400
+    assert post(client, f"/api/sessions/{root['id']}/model", {"model": ""}).json()["model"] == ""
