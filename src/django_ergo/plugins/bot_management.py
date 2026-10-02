@@ -584,6 +584,7 @@ class BotManagementPlugin(BotPlugin):
             list_files,
             read,
             write,
+            delete,
             diff,
             preview,
             discard,
