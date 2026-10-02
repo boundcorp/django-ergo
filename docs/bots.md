@@ -24,6 +24,7 @@ engine:
   type: claude                       # or openai; default is the settings engine
   config: {model: claude-sonnet-4-5}
   api_key_env: KITCHEN_ANTHROPIC_KEY # read at runtime, never stored
+  # with a providers.yaml: config: {model: anthropic/claude-sonnet-5-5}
 root:                                # window settings for main and named chats
   recent: 15                         # latest messages always in context
   budget_tokens: 8000

@@ -81,6 +81,9 @@ Data lives under `DATA_DIR` (default `~/.ergonaut`, `/data` in the image).
 | `DEBUG` | false | Django debug mode |
 | `SENTRY_BACKEND_URL` | unset | Sentry DSN |
 
+Which models chats may use comes from a `providers.yaml` at the top of the
+bot path; see [Models and providers](building-bots.md#models-and-providers).
+
 Bots read their own secrets (API keys, tokens) from the environment by the
 names their bot.yaml and tools use: `engine.api_key_env`, `token_env`,
 `ctx.secret("NAME")`, or the SDK defaults `ANTHROPIC_API_KEY` and
@@ -97,7 +100,8 @@ their own sessions. Only admins can approve tools of bots with the `bash`,
 - **Sidebar**: each bot with your main chat, named chats and threads. A
   spinner means a turn or worker is running; a blue dot, unread replies; a
   yellow dot, a chat waiting on you (an approval or a question).
-- **Chat**: the transcript with tool calls you can open, approvals with
+- **Chat**: a model picker in the header (with a `providers.yaml`), the
+  transcript with tool calls you can open, approvals with
   Approve and Deny, suggested replies as buttons, file uploads and pasted
   images. Send while the bot is working to steer the running turn; Stop
   ends it, and Stop & send interrupts it with your message. Pinned files

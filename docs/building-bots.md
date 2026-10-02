@@ -48,6 +48,36 @@ permissions:
 the web app shows it. The API key is read from the environment on every
 turn and never stored.
 
+## Models and providers
+
+A `providers.yaml` at the top of a bot path (the first one found among the
+`ERGONAUT_BOTS` paths) lists the engines and models a deployment allows:
+
+```yaml
+default: anthropic/claude-sonnet-5-5   # for bots without an engine, and chats with no pick
+providers:
+  anthropic:
+    type: claude
+    api_key_env: ANTHROPIC_API_KEY
+    models:
+      - claude-sonnet-5-5
+      - {name: claude-opus-5-5, label: Opus 5.5, config: {max_tokens: 16000}}
+  openai:
+    type: openai
+    api_key_env: OPENAI_API_KEY
+    config: {reasoning_effort: medium}   # shared by its models
+    models: [gpt-6-luna, gpt-6-sol]
+```
+
+Models are named `provider/model`. A bot picks one with
+`engine: {config: {model: openai/gpt-6-sol}}`; a bot with no `engine` uses
+`default`. In Ergonaut, the chat header and the New thread page have a
+model picker listing every model whose provider's key is set. A new thread
+can start on any of them; an existing chat can only switch to another model
+on the same engine, because its history is stored in that engine's format.
+The file reloads like the bot folders. If an edit breaks it, the last good
+version stays in use and admins see the error.
+
 ## agents.md
 
 The system prompt, rebuilt every turn, so edits reach existing chats at
