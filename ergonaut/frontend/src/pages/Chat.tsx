@@ -247,11 +247,15 @@ export function Chat({ onChange }: { onChange: () => void }) {
   const thinking = busy || !!pending || lastCall?.status === 'in_progress'
   // A turn is running that Stop can reach (not just this browser's request in flight).
   const running = !!pending || lastCall?.status === 'in_progress'
-  const callError = !pending && lastCall?.status === 'failed' ? lastCall.error : ''
+  // The latest turn failed: say what happened in plain words, with a Resume button.
+  const failed = !pending && lastCall?.status === 'failed' && !lastCall.problem?.resumed ? lastCall : null
   const inbox = detail.inbox ?? []
   // Show a queued message until the worker has stored it (the inbox shows it while it waits there).
   const echo =
-    pending?.text && !stored(detail.messages, pending.text, pending.line) && !inbox.some(m => m.text === pending.text)
+    pending?.text &&
+    !pending.text.startsWith('[Resuming:') &&
+    !stored(detail.messages, pending.text, pending.line) &&
+    !inbox.some(m => m.text === pending.text)
       ? pending.text
       : ''
 
@@ -380,7 +384,31 @@ export function Chat({ onChange }: { onChange: () => void }) {
             </div>
           </div>
         )}
-        {(error || callError) && <div className="mx-6 mb-2 text-sm text-red-600">{error || callError}</div>}
+        {error && <div className="mx-6 mb-2 text-sm text-red-600">{error}</div>}
+        {failed && (
+          <div className="mx-6 mb-2 flex items-start gap-3 rounded-lg border border-red-300/70 bg-red-50 p-3 text-sm dark:border-red-900 dark:bg-red-950/30">
+            <div className="min-w-0 flex-1">
+              <div className="font-medium text-red-700 dark:text-red-300">
+                ⚠ {failed.problem?.title ?? 'The last turn failed'}
+              </div>
+              <div className="text-zinc-600 dark:text-zinc-400">
+                {failed.problem?.hint ?? 'Resume to try again.'} Work done before the error is kept.
+              </div>
+              <details className="mt-1 text-xs text-zinc-500">
+                <summary className="cursor-pointer">Details</summary>
+                <div className="mt-1 break-words font-mono">{failed.error}</div>
+              </details>
+            </div>
+            <button
+              disabled={busy}
+              title="Carry on the turn from where it stopped"
+              className="rounded-md bg-red-600 px-3 py-1 text-white disabled:opacity-50"
+              onClick={() => run(() => api.resume(id), '[Resuming:')}
+            >
+              ↻ Resume
+            </button>
+          </div>
+        )}
         {!!suggestions.length && (
           <div className="mx-6 mb-2 flex flex-wrap gap-2">
             {suggestions.map(s => (

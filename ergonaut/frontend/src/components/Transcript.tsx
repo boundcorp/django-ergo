@@ -49,6 +49,12 @@ function MessageView({
       {parts.map((block, i) => {
         switch (block.type) {
           case 'text': {
+            if (user && block.text.startsWith(RESUMING))
+              return (
+                <div key={i} className="w-full text-center text-xs text-zinc-500">
+                  ↻ Resumed after an error
+                </div>
+              )
             const from = user ? fromThread(block.text) : null
             if (from)
               return (
@@ -136,6 +142,9 @@ function MessageView({
 const THREAD_HEADER =
   /^\[(Message|Reply) from (.+?) \(thread [0-9a-f-]+\)(?:\. [^\]]*| to your message: “([^”]*)”)\]\n\n([\s\S]*)$/
 
+// A turn resumed after an error starts with this (Ergonaut's Resume button).
+const RESUMING = '[Resuming:'
+
 function fromThread(text: string) {
   const match = THREAD_HEADER.exec(text)
   if (!match) return null
@@ -166,7 +175,13 @@ function CallHeader({ call }: { call: Call }) {
         {call.model_name && <span>{call.model_name}</span>}
         <span className="h-px flex-1 bg-zinc-200 dark:bg-zinc-800" />
       </button>
-      {call.error && (
+      {call.error && call.problem && (
+        <details className="mt-1 text-center text-red-600">
+          <summary className="cursor-pointer list-none">⚠ {call.problem.title}</summary>
+          <div className="mx-auto mt-1 max-w-2xl break-words font-mono text-[11px] text-zinc-500">{call.error}</div>
+        </details>
+      )}
+      {call.error && !call.problem && (
         <div className={`mt-1 text-center ${call.status === 'stopped' ? 'text-zinc-500' : 'text-red-600'}`}>
           {call.status === 'stopped' ? `⏹ ${call.error}` : call.error}
         </div>

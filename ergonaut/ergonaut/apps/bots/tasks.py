@@ -481,6 +481,35 @@ def queue_message(session_id, text: str, attachment_ids: list[str] | None = None
     return queue_turn(session_id)
 
 
+RESUME_TEXT = (
+    "[Resuming: your last turn stopped with an error before it finished ({problem}). Carry on where you left off.]"
+)
+
+
+def resume_session(session) -> bool | None:
+    """Carry on the session's failed turn. Returns as queue_turn does, or None when its
+    latest turn didn't fail. A turn that answered another bot's message runs again on
+    that message, so its reply still goes back."""
+    from django_ergo.bots import messaging
+    from django_ergo.conversation.models import ThreadMessage
+
+    from ergonaut.apps.bots.errors import describe_error
+
+    call = session.structured_calls.filter(kind="chat_reply").order_by("-created_at").first()
+    if call is None or call.status != "failed" or (call.metadata or {}).get("resumed"):
+        return None
+    message_id = (call.metadata or {}).get("thread_message")
+    message = ThreadMessage.objects.filter(id=message_id).first() if message_id else None
+    # Mark it handled, so a second press (or resume_failed) doesn't run it twice.
+    call.metadata = {**(call.metadata or {}), "resumed": True}
+    call.save(update_fields=["metadata", "updated_at"])
+    if message is not None and message.sender_session_id and message.in_reply_to_id is None:
+        messaging.resume(message)
+        notify(session.id)
+        return True
+    return queue_message(session.id, RESUME_TEXT.format(problem=describe_error(call.error)["title"]))
+
+
 @shared_task(name="ergonaut.deliver_thread_message", ignore_result=True)
 def deliver_thread_message(message_id: str) -> None:
     """Run the recipient's turn for a bot-to-bot message (see django_ergo.bots.messaging)."""

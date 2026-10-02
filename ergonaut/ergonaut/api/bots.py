@@ -25,7 +25,8 @@ from ninja import File, Router, Schema, UploadedFile
 from ninja.errors import HttpError
 from ninja.security import django_auth
 
-from ergonaut.apps.bots.tasks import inbox_items, queue_message, queue_turn, request_stop, unsend
+from ergonaut.apps.bots.errors import describe_error
+from ergonaut.apps.bots.tasks import inbox_items, queue_message, queue_turn, request_stop, resume_session, unsend
 
 router = Router(tags=["bots"], auth=django_auth)
 
@@ -134,6 +135,8 @@ class CallOut(Schema):
     pending_approvals: list[dict]
     tools: list[str]
     created_at: datetime
+    # A failed call's error in plain words: {kind, title, hint}.
+    problem: dict | None = None
 
 
 class CallDetailOut(CallOut):
@@ -502,6 +505,11 @@ def call_out(call: StructuredCall, detail: bool = False) -> dict:
         "pending_approvals": (call.metadata or {}).get("pending_approvals", []),
         "tools": (call.metadata or {}).get("tools", []),
         "created_at": call.created_at,
+        "problem": (
+            {**describe_error(call.error), "resumed": bool((call.metadata or {}).get("resumed"))}
+            if call.status == "failed"
+            else None
+        ),
     }
     if detail:
         out.update(system_prompt=call.system_prompt, transcript=call.transcript, metadata=call.metadata)
@@ -799,6 +807,17 @@ async def unsend_message(request, session_id: str, item_id: str):
     if item is None:
         raise HttpError(409, "Too late: the bot already has that message")
     return {"text": item.get("text", "")}
+
+
+@router.post("/sessions/{session_id}/resume", response=TurnOut)
+async def resume_turn(request, session_id: str):
+    """Carry on a turn that failed (out of credits, a crash...) from where it stopped."""
+    session = await get_session(request, session_id)
+    get_bot(session.bot_name, request.auth)
+    queued = await sync_to_async(resume_session)(session)
+    if queued is None:
+        raise HttpError(409, "The last turn didn't fail; there's nothing to resume")
+    return await sync_to_async(latest_turn)(session, queued=queued)
 
 
 @router.post("/sessions/{session_id}/stop", response=TurnOut)
