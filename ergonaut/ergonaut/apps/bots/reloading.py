@@ -131,10 +131,11 @@ def pull_checkout(repo: Path) -> str:
         return "skipped: uncommitted changes"
     if git("rev-parse", "--abbrev-ref", "@{upstream}").returncode != 0:
         return "skipped: no upstream branch"
+    before = git("rev-parse", "HEAD").stdout.strip()
     result = git("pull", "--ff-only", "--quiet")
     if result.returncode != 0:
         return f"failed: {(result.stderr or result.stdout).strip()}"
-    return "pulled"
+    return "pulled" if git("rev-parse", "HEAD").stdout.strip() != before else "up to date"
 
 
 def pull_seconds() -> float:

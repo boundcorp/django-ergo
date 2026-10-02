@@ -82,6 +82,7 @@ def test_pull_checkout_fast_forwards_only_a_clean_checkout(tmp_path, monkeypatch
     (live / "scratch.txt").unlink()
     assert pull_checkout(live) == "pulled"
     assert (live / "cto" / "bot.yaml").exists()
+    assert pull_checkout(live) == "up to date"  # nothing new: no reload or migrate
 
 
 def test_bot_tasks_run_through_celery(bots_dir):

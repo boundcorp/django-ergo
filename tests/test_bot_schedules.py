@@ -287,3 +287,27 @@ def test_run_steps_feed_the_next_prompt_and_failures_stop_the_rest(tmp_path, set
     assert "the API is down" in failed.error
     assert "RuntimeError" in failed.traceback
     assert ThreadMessage.objects.count() == 1  # the prompt after it never went out
+
+
+@pytest.mark.django_db(transaction=True)
+def test_code_only_schedules_run_once_as_the_first_admin(tmp_path):
+    from django_ergo.bots import schedules
+    from django_ergo.conversation.models import BotJob
+
+    yaml_text = """
+        name: stats
+        timezone: America/Los_Angeles
+        schedules:
+          - {name: pull, cron: "0 */12 * * *", actions: [{run: "jobs/stats.py:pull_stats"}]}
+    """
+    bot, _ = make_bot(tmp_path, yaml_text=yaml_text, name="stats")
+    (bot.definition.root_dir / "jobs").mkdir()
+    (bot.definition.root_dir / "jobs" / "stats.py").write_text(STATS_TOOLS)
+    User.objects.create(username="guest")
+    User.objects.create(username="lee", is_superuser=True)
+    User.objects.create(username="other-admin", is_superuser=True)
+
+    noon = datetime(2026, 10, 5, 12, 0, tzinfo=LA).astimezone(UTC)
+    # Nobody has a chat with the bot, and it still runs: once, as the first admin.
+    assert schedules.run_due([bot], noon) == ["stats/pull/lee"]
+    assert BotJob.objects.get().status == "completed"

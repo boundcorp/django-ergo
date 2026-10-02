@@ -14,6 +14,7 @@
         to: main                        # main (default), a named chat, or a new thread:
         # to: {thread: "Reports {n}", in: main}   # {n} run number, {date:%b %d}, strftime codes
         users: [lee]                    # default: permissions.users, else everyone with a chat
+                                        # (code-only schedules: once, as the first admin)
         enabled: true
 
 The cron fields are read in each person's timezone (their ``timezone``, else
@@ -286,13 +287,16 @@ class Schedule:
 
 def people_for(bot: Bot, schedule: Schedule) -> list:
     """Who a schedule runs for: its users, else the bot's allowed users, else
-    everyone with a chat with the bot."""
+    everyone with a chat with the bot. A schedule of only ``run`` steps (code,
+    no chat) with no users runs once, as the first admin."""
     from django.contrib.auth import get_user_model
 
     users = get_user_model().objects.filter(is_active=True)
     names = list(schedule.users) or list(bot.definition.allowed_users)
     if names:
         return list(users.filter(username__in=names))
+    if all(action.kind == "run" for action in schedule.actions):
+        return list(users.filter(is_superuser=True).order_by("pk")[:1])
     return list(users.filter(conversation_sessions__bot_name=bot.name).distinct())
 
 

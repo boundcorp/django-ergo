@@ -127,6 +127,7 @@ schedules:
       - prompt: "Summarize last week: {result}"   # {result}: the last run step's value
         to: {thread: "Stats {date:%b %d}"}
     users: [lee]              # default: permissions.users, else everyone with a chat
+                              # (a schedule of only run steps: once, as the first admin)
     enabled: true
 ```
 
