@@ -623,6 +623,8 @@ def test_files_show_the_draft_and_pull_requests_with_diffs(client, cook, bot_fol
         ("pr-9", {"agents.md": "M"}),
     ]
 
+    plugin.diff()  # marks new files --intent-to-add, as the bot's own diff does
+    assert client.get("/api/bots/kitchen/proposals").json()["proposals"][0]["changed"]["notes.md"] == "A"
     draft = {f["path"]: f["status"] for f in client.get("/api/bots/kitchen/tree?version=draft").json()["files"]}
     assert draft["tools/pantry.py"] == "M" and draft["notes.md"] == "A" and draft["agents.md"] == ""
     source = client.get("/api/bots/kitchen/source/tools/pantry.py?version=draft").json()
