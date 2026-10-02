@@ -22,6 +22,7 @@ from dataclasses import dataclass
 # Sources (checked 2026-10-02):
 #   https://platform.claude.com/docs/en/about-claude/pricing
 #   https://developers.openai.com/api/docs/models/gpt-6-luna
+#   https://developers.openai.com/api/docs/models/gpt-6-sol
 DEFAULT_PRICES: dict[str, dict[str, float]] = {
     "claude-fable-5-1": {
         "input": 10,
@@ -127,6 +128,12 @@ DEFAULT_PRICES: dict[str, dict[str, float]] = {
         "output": 0.50,
         "cache_write": 0.125,
         "cache_read": 0.01,
+    },
+    "gpt-6-sol": {
+        "input": 2.00,
+        "output": 10.00,
+        "cache_write": 2.50,
+        "cache_read": 0.20,
     },
 }
 
