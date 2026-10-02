@@ -65,6 +65,7 @@ READ_ONLY = {
     ("worktree", "show"),
     ("worktree", "current"),
     ("terminal", "list"),
+    ("terminal", "wait"),  # waits for a terminal's state; changes nothing
     ("terminal", "read"),
     ("terminal", "show"),
     ("repo", "list"),
@@ -641,8 +642,11 @@ class OrcaPlugin(BotPlugin):
                 f"You manage Orca on {where} with the {self.executable} CLI. "
                 f"Use orca_read for inventory; {approval}. Output is compact JSON; long "
                 'output keeps only its start and end, so pass fields (e.g. ["id", "path", "branch"]) '
-                "to list commands. Before starting or "
-                'stopping workers, read the CLI\'s guides with orca_read ["skills", '
+                "to list commands. Start coding agents only with orca_start_worker: it makes a "
+                "supervised Orca worker that reports back to this chat. Never start one by "
+                "creating a terminal with --command and sending it text; that agent is "
+                "unsupervised and invisible to Orca's worker list. Before stopping workers or "
+                'anything else unusual, read the CLI\'s guides with orca_read ["skills", '
                 '"get", "orca-cli"] and ["skills", "get", "orchestration"], and check '
                 "the run and worker lists so you don't duplicate work.",
             )
