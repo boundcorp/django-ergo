@@ -46,6 +46,8 @@ from typing import Any
 from typing import get_type_hints
 
 from django_ergo.conversation.adapters import OpenAIToolAdapter
+from django_ergo.conversation.images import ToolResult
+from django_ergo.conversation.images import as_tool_result
 from django_ergo.conversation.toolkit import Toolkit
 
 if TYPE_CHECKING:
@@ -329,14 +331,14 @@ class FunctionToolkit(Toolkit):
                 )
         return schemas
 
-    def execute_tool(self, tool_name: str, arguments: dict) -> str:
+    def execute_tool(self, tool_name: str, arguments: dict) -> str | ToolResult:
         tool = self.tools.get(tool_name)
         if tool is None:
             msg = f"Unknown tool: {tool_name}"
             raise ValueError(msg)
         args = [self.context] if tool.takes_context else []
-        result = tool.function(*args, **(arguments or {}))
-        if isinstance(result, str):
+        result = as_tool_result(tool.function(*args, **(arguments or {})))
+        if isinstance(result, (str, ToolResult)):
             return result
         return json.dumps(result, default=str)
 

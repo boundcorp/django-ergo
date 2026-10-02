@@ -414,7 +414,14 @@ class SessionSource(MessageSource):
                     {
                         "type": "tool_result",
                         "tool_use_id": row.tool_call_id or "",
-                        "content": row.content or "",
+                        "content": (
+                            [
+                                {"type": "text", "text": row.content or ""},
+                                *row.images,
+                            ]
+                            if row.images
+                            else row.content or ""
+                        ),
                         "is_error": False,
                     }
                 )

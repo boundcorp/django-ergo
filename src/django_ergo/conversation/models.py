@@ -202,6 +202,8 @@ class OpenAIMessage(TimeStampedMixin):
     content = models.TextField(null=True, blank=True)  # noqa: DJ001
     tool_calls = models.JSONField(null=True, blank=True)
     tool_call_id = models.CharField(max_length=255, null=True, blank=True)  # noqa: DJ001
+    # A tool result's images, as image_ref items (conversation.images).
+    images = models.JSONField(null=True, blank=True)
     function_name = models.CharField(max_length=255, null=True, blank=True)  # noqa: DJ001
     input_tokens = models.IntegerField(null=True, blank=True)
     # Cached prompt tokens, billed at the cached-input rate; input_tokens excludes them.

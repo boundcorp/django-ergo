@@ -74,7 +74,25 @@ def add_to_list(ctx, item: str) -> str:
 
 Parameters come from type hints (`str`, `int`, `float`, `bool`, `list`,
 `dict`), or pass `parameters=` as JSON Schema properties. Non-string results
-are sent back as JSON. A tool module can also define
+are sent back as JSON. A tool can also return images, which the model sees
+directly:
+
+```python
+from django_ergo.bots import ToolImage, ToolResult, bot_tool
+
+@bot_tool
+def sales_chart(days: int = 7) -> ToolResult:
+    """Chart of sales."""
+    return ToolResult(f"Sales, last {days} days", [ToolImage(png_bytes, name="sales.png")])
+```
+
+The image bytes are saved as a file in the chat (`ToolImage.from_attachment(row)`
+points at a file the chat already has) and history keeps a reference. Only the
+latest two images go to the model on each call (`DJANGO_ERGO["IMAGES_IN_CONTEXT"]`),
+downscaled to 1024px with Pillow when it's installed; older ones show as
+`[image omitted: name (id=...)]`. See [attachments.md](attachments.md).
+
+A tool module can also define
 `toolkits(ctx) -> list[Toolkit]` for class-based toolkits.
 
 Tool code reads credentials with `ctx.secret("TANDOOR_API_KEY")`. It
@@ -633,10 +651,13 @@ gets `ergo_attachments_list`, `ergo_attachments_read`,
 `ergo_attachments_create` and `ergo_attachments_update`. It writes text
 files only in its own session, reads files in the same user's other
 sessions, and sees the session's file list in every turn's context.
-`ergo_attachments_look(attachment_id, question)` lets it see an image or PDF:
-the file goes to the bot's own model as an attachment in a separate call
-(kind `attachment_look`), which works with every engine. Files sent with a
+`ergo_attachments_look(attachment_id, question)` lets it see an image or PDF.
+An image comes back in the tool result, so the bot looks at it itself. A PDF
+or other file goes to the bot's own model as an attachment in a separate call
+(kind `attachment_look`) that answers the question. Files sent with a
 message (Ergonaut's 📎 button or a pasted image) reach the model natively.
+Only the latest two images stay in what's sent to the model; older ones
+become `[image omitted: name (id=...)]`, and the bot can look again by id.
 
 ### telegram
 

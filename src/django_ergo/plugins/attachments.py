@@ -15,10 +15,11 @@ Files come from three places: sent with a message, uploaded to the session
 - ``ergo_attachments_create``: write a new text file into this session.
 - ``ergo_attachments_update``: replace the contents of a text file in this
   session.
-- ``ergo_attachments_look``: look at an image or PDF (or any file) and
-  answer a question about it. The file goes to the bot's own model as an
-  attachment in a separate call (kind ``attachment_look``), so this works
-  with every engine.
+- ``ergo_attachments_look``: look at an image or PDF (or any file). An
+  image comes back in the tool result, so the bot sees it itself
+  (downscaled; see ``django_ergo.conversation.images``). Other files go to
+  the bot's own model as an attachment in a separate call (kind
+  ``attachment_look``) that answers the question about them.
 
 The bot only writes to its own session. It reads other sessions only when
 they belong to the same user. Every turn's context lists the session's
@@ -42,6 +43,7 @@ from django_ergo.conversation.context import TextContextSource
 if TYPE_CHECKING:
     from django_ergo.bots.tools import ToolContext
     from django_ergo.conversation.context import ContextSource
+    from django_ergo.conversation.images import ToolResult
     from django_ergo.conversation.models import ConversationAttachment
     from django_ergo.conversation.models import ConversationSession
     from django_ergo.conversation.toolkit import Toolkit
@@ -146,10 +148,14 @@ class AttachmentsPlugin(BotPlugin):
         self._check_size(data)
         return describe_row(replace_session_file(row, data))
 
-    def look(self, ctx: ToolContext, attachment_id: str, question: str = "") -> str:
+    def look(
+        self, ctx: ToolContext, attachment_id: str, question: str = ""
+    ) -> str | ToolResult:
         from asgiref.sync import async_to_sync
 
         from django_ergo.conversation.attachments import Attachment
+        from django_ergo.conversation.images import ToolImage
+        from django_ergo.conversation.images import ToolResult
         from django_ergo.conversation.structured import StructuredCallSpec
         from django_ergo.conversation.structured import run_structured_call
 
@@ -162,6 +168,12 @@ class AttachmentsPlugin(BotPlugin):
         if (row.size or 0) > self.max_look_bytes:
             msg = f"{row.filename} is too large to look at ({row.size} bytes)"
             raise ValueError(msg)
+        if row.kind == "image":
+            # The bot sees the image itself, in this tool result.
+            text = f"{row.filename} ({row.media_type}, id={row.id})"
+            if question:
+                text += f"\nYou wanted to know: {question}"
+            return ToolResult(text, [ToolImage.from_attachment(row)])
         with row.file.open("rb") as handle:
             data = handle.read()
         attachment = Attachment(
@@ -272,8 +284,9 @@ class AttachmentsPlugin(BotPlugin):
             name="ergo_attachments_look",
             takes_context=True,
             description=(
-                "Look at an image or PDF (or any file) by id and answer a question "
-                "about it, e.g. what's in a photo or what a receipt says."
+                "Look at an image or PDF (or any file) by id. You see an image "
+                "yourself in the result; for a PDF or other file, the question is "
+                "answered for you, e.g. what a receipt says."
             ),
             parameters={
                 "attachment_id": {"type": "string"},
@@ -284,7 +297,9 @@ class AttachmentsPlugin(BotPlugin):
             },
             required=["attachment_id"],
         )
-        def look(ctx: ToolContext, attachment_id: str, question: str = "") -> str:
+        def look(
+            ctx: ToolContext, attachment_id: str, question: str = ""
+        ) -> str | ToolResult:
             return plugin.look(ctx, attachment_id, question)
 
         return [fn.__bot_tool__ for fn in (list_files, read, create, update, look)]

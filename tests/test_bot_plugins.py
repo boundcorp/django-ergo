@@ -923,9 +923,13 @@ def test_attachments_access_rules(tmp_path, settings):
 
 @pytest.mark.django_db(transaction=True)
 async def test_bot_looks_at_an_uploaded_image(tmp_path, settings):
+    import base64
+
     from asgiref.sync import sync_to_async
 
     from django_ergo.conversation.attachments import save_session_file
+    from django_ergo.conversation.models import ClaudeContentBlock
+    from django_ergo.conversation.models import StructuredCall
 
     settings.MEDIA_ROOT = str(tmp_path / "media")
     bot, engine, _ = files_bot(tmp_path, config="max_bytes: 100")
@@ -937,24 +941,65 @@ async def test_bot_looks_at_an_uploaded_image(tmp_path, settings):
             "ergo_attachments_look",
             {"attachment_id": str(photo.id), "question": "Any eggs?"},
         ),
-        claude_text("Yes, a dozen eggs on the top shelf."),
         say("You have eggs."),
     ]
     result = await bot.ask(root, "What's in my fridge photo?")
     assert result.text == "You have eggs."
-    look = engine._client.calls[1]
-    parts = look["messages"][0]["content"]
-    assert [p["type"] for p in parts] == ["image", "text"] or [
-        p["type"] for p in parts
-    ] == ["text", "image"]
-    assert any(p.get("text") == "Any eggs?" for p in parts)
-    answer = engine._client.calls[2]["messages"][-1]["content"][0]["content"]
-    assert answer == "fridge.png: Yes, a dozen eggs on the top shelf."
+    # No side call: the image comes back in the tool result itself.
+    assert not await StructuredCall.objects.filter(kind="attachment_look").aexists()
+    tool_result = engine._client.calls[1]["messages"][-1]["content"][0]
+    assert tool_result["type"] == "tool_result"
+    text, image = tool_result["content"]
+    assert text["text"].startswith(f"fridge.png (image/png, id={photo.id})")
+    assert "Any eggs?" in text["text"]
+    assert image == {
+        "type": "image",
+        "source": {
+            "type": "base64",
+            "media_type": "image/png",
+            "data": base64.b64encode(b"\x89PNGfake").decode(),
+        },
+    }
+    # History keeps a reference to the file, not the bytes.
+    block = await ClaudeContentBlock.objects.aget(
+        block_type="tool_result", message__session=root, tool_result_for="toolu_1"
+    )
+    assert block.tool_result_content[1]["attachment_id"] == str(photo.id)
+    assert "data" not in block.tool_result_content[1]
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_bot_looks_at_a_pdf_in_a_side_call(tmp_path, settings):
+    from asgiref.sync import sync_to_async
+
+    from django_ergo.conversation.attachments import save_session_file
     from django_ergo.conversation.models import StructuredCall
 
+    settings.MEDIA_ROOT = str(tmp_path / "media")
+    bot, engine, _ = files_bot(tmp_path, config="max_bytes: 100")
+    user = await User.objects.acreate(username="pdf-looker")
+    root = await bot.root_session(user)
+    receipt = await sync_to_async(save_session_file)(
+        root, "receipt.pdf", b"%PDF-1.4 fake"
+    )
+    engine._client.responses = [
+        claude_tool(
+            "ergo_attachments_look",
+            {"attachment_id": str(receipt.id), "question": "Total?"},
+        ),
+        claude_text("The total is $12."),
+        say("It came to $12."),
+    ]
+    result = await bot.ask(root, "What did the receipt say?")
+    assert result.text == "It came to $12."
+    parts = engine._client.calls[1]["messages"][0]["content"]
+    assert [p["type"] for p in parts] == ["document", "text"]
+    assert parts[1]["text"] == "Total?"
+    answer = engine._client.calls[2]["messages"][-1]["content"][0]["content"]
+    assert answer == "receipt.pdf: The total is $12."
     looked = await StructuredCall.objects.aget(kind="attachment_look")
     assert looked.user_id == user.id
-    assert looked.metadata["attachment"] == str(photo.id)
+    assert looked.metadata["attachment"] == str(receipt.id)
 
 
 @pytest.mark.django_db
