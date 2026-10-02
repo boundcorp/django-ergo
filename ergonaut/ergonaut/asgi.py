@@ -6,8 +6,8 @@ os.environ.setdefault("DJANGO_SETTINGS_MODULE", "ergonaut.settings")
 
 application = get_asgi_application()
 
-# Merged changes to the bot repo go live without a restart (off unless
-# ERGONAUT_BOTS_PULL_SECONDS is set).
+# Without a Celery broker, pull the bot repo in a thread instead of beat (off
+# unless ERGONAUT_BOTS_PULL_SECONDS is set).
 from ergonaut.apps.bots.reloading import start_pulling  # noqa: E402
 
 start_pulling()

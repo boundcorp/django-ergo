@@ -18,11 +18,12 @@ Live on rigel from `~/p/boundcorp/django-ergo`, bots from `boundcorp/ergo-bots`.
 - [ ] Show ThreadMessage status (queued, working, waiting on approval, answered) in the UI, not only in the transcript headers.
 
 - [ ] "Changes" tab on the bot page: open ergo-bots PRs with diff, Merge and Discard.
-- [ ] Replace the 30s git-pull thread with a beat task.
 - [ ] A bot tool waiting on a @bot_task holds a worker slot; watch worker concurrency if many tools wait at once.
 - [ ] Reconcile the root pre-commit config (ruff, prettier) with the branch's code style.
 
 ### Done
+
+- [x] Bot repo pulls run as the `ergonaut.pull_bot_repos` beat task (a thread only without a broker).
 
 - [x] `test_telegram_webhook_mode`: webhook_view is csrf-exempt by attribute (Django 4.2's decorator made it sync).
 

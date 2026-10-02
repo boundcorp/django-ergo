@@ -6,9 +6,10 @@ changed it loads the bots again, so a new bot, skill, prompt or tool file is
 live without a restart. A config that fails to load is logged and the
 previous bots stay up.
 
-With ``ERGONAUT_BOTS_PULL_SECONDS`` set, a background thread also
-fast-forwards each bot folder's git checkout from its upstream on that
-interval, when the checkout is clean. A pull request merged on GitHub then
+With ``ERGONAUT_BOTS_PULL_SECONDS`` set, each bot folder's git checkout is
+fast-forwarded from its upstream on that interval when it is clean: by
+Celery beat (``ergonaut.pull_bot_repos``), or by a background thread when
+there is no broker. A pull request merged on GitHub then
 goes live on its own.
 
 Long-running plugins (Telegram polling) run in the ``bots`` process and still
@@ -136,23 +137,39 @@ def pull_checkout(repo: Path) -> str:
     return "pulled"
 
 
+def pull_seconds() -> float:
+    return float(os.environ.get("ERGONAUT_BOTS_PULL_SECONDS") or 0)
+
+
+def pull_all(paths: Callable[[], list[Path]] = bot_paths) -> dict[str, str]:
+    """Fast-forward every clean bot checkout once. Returns repo -> outcome."""
+    outcomes = {}
+    repos = {top for p in paths() if p.exists() and (top := git_toplevel(p))}
+    for repo in sorted(repos):
+        try:
+            outcomes[str(repo)] = pull_checkout(repo)
+        except Exception:
+            logger.exception("Pulling %s failed", repo)
+            outcomes[str(repo)] = "failed: see the log"
+            continue
+        if outcomes[str(repo)].startswith("failed"):
+            logger.warning("Pulling %s %s", repo, outcomes[str(repo)])
+    return outcomes
+
+
 def start_pulling(paths: Callable[[], list[Path]] = bot_paths, every: float | None = None) -> threading.Thread | None:
-    """Pull the bot checkouts every ``ERGONAUT_BOTS_PULL_SECONDS`` seconds."""
-    every = every if every is not None else float(os.environ.get("ERGONAUT_BOTS_PULL_SECONDS") or 0)
-    if every <= 0:
+    """Pull the bot checkouts every ``ERGONAUT_BOTS_PULL_SECONDS`` seconds in a thread.
+
+    Only for setups without a Celery broker; with one, beat runs
+    ``ergonaut.pull_bot_repos`` on the same interval instead.
+    """
+    every = every if every is not None else pull_seconds()
+    if every <= 0 or os.environ.get("CELERY_BROKER_URL"):
         return None
 
     def loop():
         while True:
-            repos = {top for p in paths() if p.exists() and (top := git_toplevel(p))}
-            for repo in sorted(repos):
-                try:
-                    outcome = pull_checkout(repo)
-                except Exception:
-                    logger.exception("Pulling %s failed", repo)
-                    continue
-                if outcome.startswith("failed"):
-                    logger.warning("Pulling %s %s", repo, outcome)
+            pull_all(paths)
             time.sleep(every)
 
     thread = threading.Thread(target=loop, name="ergonaut-bots-pull", daemon=True)

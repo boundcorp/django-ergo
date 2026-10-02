@@ -344,6 +344,12 @@ CELERY_BEAT_SCHEDULE = {
     # Bot threads idle past their bot's sessions.archive_after_days.
     "archive-idle-threads": {"task": "ergonaut.archive_idle_threads", "schedule": 60 * 60},
 }
+if float(os.environ.get("ERGONAUT_BOTS_PULL_SECONDS") or 0) > 0:
+    # Merged changes to the bot repo go live without a restart.
+    CELERY_BEAT_SCHEDULE["pull-bot-repos"] = {
+        "task": "ergonaut.pull_bot_repos",
+        "schedule": float(os.environ["ERGONAUT_BOTS_PULL_SECONDS"]),
+    }
 if CELERY_BROKER_URL:
     CELERY_RESULT_BACKEND = os.environ.get("CELERY_RESULT_BACKEND", CELERY_BROKER_URL)
 else:

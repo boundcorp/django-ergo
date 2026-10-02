@@ -217,3 +217,11 @@ class CeleryTaskHandle:
 def celery_bot_task(bot_name: str, task_name: str, args: list, kwargs: dict) -> CeleryTaskHandle:
     """BOT_TASK_RUNNER: run @bot_task functions on Celery workers."""
     return CeleryTaskHandle(run_bot_task.delay(bot_name, task_name, args, kwargs))
+
+
+@shared_task(name="ergonaut.pull_bot_repos", ignore_result=True)
+def pull_bot_repos() -> dict[str, str]:
+    """Fast-forward the bot checkouts so merged changes go live (beat runs this)."""
+    from ergonaut.apps.bots.reloading import pull_all
+
+    return pull_all()
