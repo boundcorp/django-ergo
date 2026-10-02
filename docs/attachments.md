@@ -1,4 +1,82 @@
-# Message attachments
+# Attachments
+
+Files in conversations: images, audio, PDFs and text. The first part covers
+how files work in a bot's chats; the rest is the library underneath.
+
+## Files in a bot's chats
+
+A chat's files come from three places, recorded on each file as its
+`source`:
+
+- **Sent with a message.** In Ergonaut, the 📎 button or a pasted image;
+  in Telegram, photos (an album arrives as one turn), voice notes, audio
+  and documents. These reach the model natively with the message (see the
+  table below).
+- **Uploaded to the chat** from Ergonaut's Files panel, without a message.
+- **Written by the bot**: text files from the `attachments` plugin, pages
+  from the `pages` plugin, and images that tools return.
+
+Every file is a `ConversationAttachment` row on the chat's session, stored
+on Django's default storage (Garage or S3 in Ergonaut, local files without
+it).
+
+### The attachments plugin
+
+Add it to let the bot work with files beyond what came in with a message:
+
+```yaml
+plugins:
+  - name: attachments
+    max_bytes: 5000000     # largest file the bot may write
+    other_sessions: true   # may read files from the same person's other chats
+```
+
+Its `attachments` skill gives:
+
+| Tool | Does |
+| --- | --- |
+| `ergo_attachments_list` | files in this chat, or another of the person's chats |
+| `ergo_attachments_read` | a file's text (or a short description of a non-text file) |
+| `ergo_attachments_look(attachment_id, question)` | see an image or PDF: an image comes back in the tool result so the bot looks itself; other files go to the bot's model in a separate call that answers the question |
+| `ergo_attachments_create`, `ergo_attachments_update` | write or replace a text file in this chat |
+| `ergo_attachments_archive`, `ergo_attachments_unarchive` | clear old files out of the working set (below) |
+
+While the skill is loaded, each turn's context lists the chat's files; while
+it isn't, the skill list shows how many there are, so the bot knows to load
+it when someone uploads something. The bot writes only into its own chat
+and reads other chats only when they belong to the same person.
+
+### Images and the context window
+
+Images are expensive, so each model call carries only the latest two
+(`IMAGES_IN_CONTEXT`), whether they came from people or tools; older ones
+become `[image omitted: name (id=...)]` and the bot can look again by id.
+Install the `images` extra (Pillow) so images are downscaled to 1024px
+first. Details are in [How many images a call carries](#how-many-images-a-call-carries).
+
+### Audio
+
+Voice notes need a transcript, since Claude can't hear audio. Set
+`DJANGO_ERGO["AUDIO_TRANSCRIBER"] =
+"django_ergo.conversation.attachments.openai_transcriber"` (with
+`OPENAI_API_KEY`) to transcribe on arrival. Without a transcriber the bot
+sees only that an audio file arrived.
+
+### Pinning and pages
+
+Any chat file can be pinned (Files panel, or the `pages` plugin's
+`ergo_page_pin`); pinned files show as tabs above the transcript. HTML and
+`.jhtml` files the bot writes are served sandboxed (`Content-Security-Policy:
+sandbox`), so their scripts run without the app's cookies. See
+[Pages and pins](bots.md#pages-and-pins).
+
+### From tool code
+
+Tools can return images with `ToolResult` (below), and read a chat's files
+through the session: `ctx.session.attachments.all()`, with
+`django_ergo.conversation.attachments.read_text(row)` for text.
+
+## Library: attachments on messages
 
 User messages can carry images, audio and documents:
 

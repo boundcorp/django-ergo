@@ -1,4 +1,7 @@
-# Bots
+# Bot reference
+
+The full list of bot.yaml keys, tool APIs and official plugin options.
+For a guided introduction, start with [Building bots](building-bots.md).
 
 A bot is a folder:
 
@@ -19,8 +22,9 @@ description: Household kitchen manager
 instructions: agents.md              # default
 engine:
   type: claude                       # or openai; default is the settings engine
-  config: {model: claude-sonnet-4-5}
+  config: {model: claude-sonnet-5-5}
   api_key_env: KITCHEN_ANTHROPIC_KEY # read at runtime, never stored
+  # with a providers.yaml: config: {model: anthropic/claude-sonnet-5-5}
 root:                                # window settings for main and named chats
   recent: 15                         # latest messages always in context
   budget_tokens: 8000
@@ -40,7 +44,7 @@ threads:                             # child threads (`sessions:` also works)
   skills: []
   allow_create: true                 # may chats start threads of this bot?
   archive_after_days: 7              # archive threads idle this long (0 = never)
-  default_compaction: {mode: context_size, config: {keep_recent: 6}}
+  default_compaction: {mode: rolling, config: {keep_recent: 15}}   # the default; `stream` also works
 skills:
   folder: skills                     # default
   unload_after_turns: 30             # drop a loaded skill unused this many turns
@@ -433,8 +437,8 @@ answers messages sent to it).
 Threads idle longer than `sessions.archive_after_days` (default 7) are
 archived by `django_ergo.bots.archival.archive_idle_threads`, which
 Ergonaut's Celery beat runs hourly; threads with a turn in progress, a
-pending approval or an unanswered thread message are left alone. Root chats
-are never archived. A message to an archived thread reopens it.
+pending approval or an unanswered thread message are left alone. Main and named
+chats are never archived. A message to an archived thread reopens it.
 
 `BotRegistry.discover("bots/")` loads every folder at or under `bots/` that
 has a `bot.yaml`, and lets bots find each other by name. Bot folders can
@@ -448,7 +452,7 @@ any bot in `permissions.call_bots`). Each session starts with an
 
 A toolkit's `pre_seeds()` names tool calls that run before a session's first
 model call; their results are written into the history as if the model had
-made the calls (each turn for window sessions, whose model calls carry only
+made the calls (each turn for window chats, whose model calls carry only
 the current turn). `FunctionToolkit(tools, ctx, seed=["tool_name"])` seeds
 zero-argument tools. The orchestrator seeds `ergo_bot_list` and skills seed
 `list_skills`.
