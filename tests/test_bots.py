@@ -1013,3 +1013,82 @@ def test_a_bot_task_runner_setting_takes_over(tmp_path, settings):
     assert ToolContext(bot=bot).tasks.run("slow_sum", [1, 2]) == "queued elsewhere"
     assert calls == [("tasker", "slow_sum", [[1, 2]], {})]
     assert background.execute("tasker", "slow_sum", [[1, 2]], {}) == 3
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_messages_wait_while_the_recipient_waits_for_approval(
+    tmp_path, thread_messages
+):
+    from django_ergo.bots import messaging
+    from django_ergo.conversation.models import ThreadMessage
+
+    user = await User.objects.acreate(username="patient")
+    bot, engine = make_bot(
+        tmp_path,
+        claude_tool(
+            "add_to_list", {"item": "milk"}, tool_id="add1"
+        ),  # the thread pauses
+        say("Added milk."),
+        say("Noted."),  # the queued message, once the thread is free
+    )
+    root = await bot.root_session(user)
+    thread = await bot.create_session(user, parent=root, title="List")
+    await bot.ask(thread, "Add milk")
+    assert await bot.pending_call(thread) is not None
+
+    queued = await sync_to_async(messaging.send)(root, thread, "Also eggs?")
+    await thread_messages()  # delivered while paused: stays queued
+    await queued.arefresh_from_db()
+    assert queued.status == "queued"
+
+    # The approval is answered once, even if it's pressed twice.
+    await bot.resume(thread, True)
+    again = await bot.resume(thread, True)
+    assert again.call is None
+    assert [str(queued.id)] == SENT  # freed: the waiting message goes out
+    await thread_messages()
+    await queued.arefresh_from_db()
+    assert queued.status == "answered"
+    assert (
+        await sync_to_async(messaging.deliver)(str(queued.id)) is None
+    )  # a duplicate does nothing
+    assert await ThreadMessage.objects.filter(in_reply_to=queued).acount() == 1
+
+
+@pytest.mark.django_db(transaction=True)
+def test_replies_count_toward_the_delegation_depth(tmp_path, thread_messages):
+    from django_ergo.bots import messaging
+    from django_ergo.conversation.models import StructuredCall
+    from django_ergo.conversation.models import ThreadMessage
+
+    user = User.objects.create(username="pingpong")
+    a = ConversationSession.objects.create(
+        user=user, bot_name="a", metadata={"bot_role": "root"}
+    )
+    b = ConversationSession.objects.create(
+        user=user, bot_name="b", metadata={"bot_role": "root"}
+    )
+    reply = None
+    for hop in range(1, messaging.MAX_DEPTH + 2):
+        handling = reply
+        StructuredCall.objects.filter(session=a).delete()
+        if handling:
+            StructuredCall.objects.create(
+                kind="chat_reply",
+                session=a,
+                status="in_progress",
+                metadata={"thread_message": str(handling.id)},
+            )
+        if hop > messaging.MAX_DEPTH:
+            with pytest.raises(ValueError, match="Too many hops"):
+                messaging.send(a, b, "again?")
+            break
+        request = messaging.send(a, b, "again?")
+        assert request.depth == hop
+        reply = ThreadMessage.objects.create(
+            sender_session=b,
+            recipient_session=a,
+            in_reply_to=request,
+            text="no",
+            depth=request.depth,
+        )

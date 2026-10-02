@@ -9,7 +9,8 @@ thread-to-thread delegation.
 - A message with no sender session came from a person: nothing is routed back.
 - A reply is never answered back, so two bots can't ping-pong; ``depth``
   caps chains of delegation (A asks B, which asks C...) at ``MAX_DEPTH``.
-- A recipient that is mid-turn finishes that turn first.
+- A recipient that is mid-turn or waiting for approval keeps the message
+  queued until it is free.
 - A turn that stops for approval leaves the message ``waiting``; the reply
   goes back once the user decides and the turn finishes.
 
@@ -21,13 +22,15 @@ from __future__ import annotations
 
 import logging
 import threading
-import time
 import weakref
+from datetime import timedelta
 from typing import TYPE_CHECKING
 
 from asgiref.sync import async_to_sync
 from django.db import close_old_connections
 from django.db import transaction
+from django.db.models import Q
+from django.utils import timezone
 
 from django_ergo.bots import archival
 from django_ergo.conversation.models import ConversationSession
@@ -46,7 +49,9 @@ logger = logging.getLogger(__name__)
 MAX_DEPTH = 6
 # Bots loaded in this process, by name: the last place deliver() looks.
 KNOWN_BOTS: weakref.WeakValueDictionary[str, Bot] = weakref.WeakValueDictionary()
-IDLE_WAIT_SECONDS = 15 * 60
+# A turn still marked in progress after this long is treated as dead.
+STALE_TURN_SECONDS = 30 * 60
+_session_locks: dict[str, threading.Lock] = {}
 SNIPPET = 120
 
 
@@ -99,15 +104,10 @@ def send(
     if in_reply_to is not None:
         depth = in_reply_to.depth
     elif sender is not None:
-        asked = (
-            ThreadMessage.objects.filter(
-                recipient_session=sender, in_reply_to__isnull=True
-            )
-            .exclude(sender_session=None)
-            .order_by("-created_at")
-            .first()
-        )
-        depth = asked.depth + 1 if asked else 1
+        # One more hop than the message this turn is answering (a request or a
+        # reply), so a chain of sends that reacts to replies is capped too.
+        handling = current_thread_message(sender)
+        depth = handling.depth + 1 if handling else 1
     if depth > MAX_DEPTH:
         msg = f"Too many hops of delegation ({depth}); answer with what you have."
         raise ValueError(msg)
@@ -120,6 +120,17 @@ def send(
     )
     transaction.on_commit(lambda: dispatch(str(message.id), registry))
     return message
+
+
+def current_thread_message(session: ConversationSession) -> ThreadMessage | None:
+    """The thread message the session's running turn is answering, if any."""
+    call = (
+        session.structured_calls.filter(status=StructuredCallStatus.IN_PROGRESS)
+        .order_by("-created_at")
+        .first()
+    )
+    message_id = (call.metadata or {}).get("thread_message") if call else None
+    return ThreadMessage.objects.filter(id=message_id).first() if message_id else None
 
 
 def dispatch(message_id: str, registry: BotRegistry | None = None) -> None:
@@ -142,33 +153,32 @@ def dispatch(message_id: str, registry: BotRegistry | None = None) -> None:
 # -- delivering ----------------------------------------------------------------
 
 
-def wait_until_idle(
-    session: ConversationSession, timeout: float = IDLE_WAIT_SECONDS
-) -> bool:
-    """Wait for any turn in progress on ``session`` to finish."""
-    deadline = time.monotonic() + timeout
-    while session.structured_calls.filter(
-        status=StructuredCallStatus.IN_PROGRESS
-    ).exists():
-        if time.monotonic() > deadline:
-            return False
-        time.sleep(0.5)
-    return True
+def busy(session: ConversationSession) -> bool:
+    """A turn is running (and not stale), or one is waiting for approval."""
+    stale = timezone.now() - timedelta(seconds=STALE_TURN_SECONDS)
+    return session.structured_calls.filter(
+        Q(status=StructuredCallStatus.AWAITING_APPROVAL)
+        | Q(status=StructuredCallStatus.IN_PROGRESS, updated_at__gte=stale)
+    ).exists()
 
 
 def deliver(message_id: str, registry: BotRegistry | None = None) -> None:
-    """Run the recipient's turn for a queued message (in a worker or thread)."""
+    """Run the recipient's turn for a queued message (in a worker or thread).
+
+    A busy recipient keeps the message queued; it goes out when the
+    recipient's current turn ends (``finish_turn``) or on the next sweep
+    (``redispatch_waiting``).
+    """
     from django_ergo.bots import webhooks
 
-    message = (
-        ThreadMessage.objects.select_related(
-            "recipient_session__user", "sender_session", "in_reply_to"
-        )
-        .filter(id=message_id, status=ThreadMessageStatus.QUEUED)
-        .first()
-    )
-    if message is None:
+    # Claim it, so a duplicate dispatch can't run the recipient's turn twice.
+    if not ThreadMessage.objects.filter(
+        id=message_id, status=ThreadMessageStatus.QUEUED
+    ).update(status=ThreadMessageStatus.DELIVERED):
         return
+    message = ThreadMessage.objects.select_related(
+        "recipient_session__user", "sender_session", "in_reply_to"
+    ).get(id=message_id)
     recipient = message.recipient_session
     registry = registry or webhooks.get_registry()
     if registry is not None and recipient.bot_name in registry:
@@ -178,17 +188,49 @@ def deliver(message_id: str, registry: BotRegistry | None = None) -> None:
     if bot is None:
         fail(message, f"Bot {recipient.bot_name!r} is not loaded")
         return
-    if not wait_until_idle(recipient):
-        fail(message, "The recipient stayed busy too long")
+    lock = _session_locks.setdefault(str(recipient.id), threading.Lock())
+    if busy(recipient) or not lock.acquire(blocking=False):
+        requeue(message)
         return
-    archival.reopen(recipient)
-    message.status = ThreadMessageStatus.DELIVERED
-    message.save(update_fields=["status", "updated_at"])
     try:
+        archival.reopen(recipient)
         async_to_sync(bot.ask)(recipient, turn_text(message), thread_message=message)
     except Exception as exc:
         logger.exception("Delivering thread message %s failed", message_id)
         fail(message, str(exc))
+    finally:
+        lock.release()
+    redispatch_waiting(recipient, registry=registry)  # anything that queued meanwhile
+
+
+def requeue(message: ThreadMessage) -> None:
+    message.status = ThreadMessageStatus.QUEUED
+    message.save(update_fields=["status", "updated_at"])
+
+
+def redispatch_waiting(
+    session: ConversationSession | None = None,
+    *,
+    older_than: float = 0,
+    registry: BotRegistry | None = None,
+) -> int:
+    """Dispatch queued messages again: one session's (after its turn), or any
+    queued longer than ``older_than`` seconds (a periodic sweep)."""
+    queued = ThreadMessage.objects.filter(status=ThreadMessageStatus.QUEUED)
+    if session is not None:
+        queued = queued.filter(recipient_session=session)
+    if older_than:
+        queued = queued.filter(
+            updated_at__lt=timezone.now() - timedelta(seconds=older_than)
+        )
+    ids = [
+        str(i) for i in queued.order_by("created_at").values_list("id", flat=True)[:50]
+    ]
+    for message_id in ids:
+        transaction.on_commit(
+            lambda message_id=message_id: dispatch(message_id, registry)
+        )
+    return len(ids)
 
 
 def fail(message: ThreadMessage, error: str) -> None:
@@ -213,7 +255,16 @@ def reply(
 
 
 def finish_turn(bot: Bot, session: ConversationSession, result: TurnResult) -> None:
-    """After a turn: if it answered a thread message, route the reply."""
+    """After a turn: route its reply if it answered a thread message, then send
+    on any messages that waited for the session to be free."""
+    try:
+        _route_reply(bot, session, result)
+    finally:
+        if not result.needs_approval:
+            redispatch_waiting(session, registry=bot.registry)
+
+
+def _route_reply(bot: Bot, session: ConversationSession, result: TurnResult) -> None:
     call = result.call
     message_id = (call.metadata or {}).get("thread_message") if call else None
     if not message_id:

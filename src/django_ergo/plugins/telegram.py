@@ -195,15 +195,16 @@ class TelegramPlugin(BotPlugin):
             return
         names = ", ".join(a.tool_name for a in result.approvals)
         text = (result.text + "\n\n" if result.text else "") + f"Approve {names}?"
-        session_id = result.session.id
+        # The buttons name the waiting call, so an old prompt can't approve a newer one.
+        call_id = result.call.id if result.call else ""
         await self.send_text(
             chat_id,
             text,
             reply_markup={
                 "inline_keyboard": [
                     [
-                        {"text": "Approve", "callback_data": f"ok:{session_id}"},
-                        {"text": "Deny", "callback_data": f"no:{session_id}"},
+                        {"text": "Approve", "callback_data": f"ok:{call_id}"},
+                        {"text": "Deny", "callback_data": f"no:{call_id}"},
                     ]
                 ]
             },
@@ -296,28 +297,42 @@ class TelegramPlugin(BotPlugin):
         if not text and not attachments:
             return
         session = await self.bot.root_session(user)
+        if await self.bot.pending_call(session) is not None:
+            # A new message instead of Approve/Deny: decline what was waiting.
+            await self.bot.resume(session, decisions=False)
         result = await self.bot.ask(session, text, attachments=attachments or None)
         await self.send_result(chat_id, result)
 
     async def handle_callback(self, query: dict) -> None:
+        from django_ergo.conversation.models import StructuredCall
+
         await self.api.call("answerCallbackQuery", callback_query_id=query["id"])
         chat_id = query["message"]["chat"]["id"]
-        user = await self.user_for((query.get("from") or {}).get("id"), chat_id)
-        action, _, session_id = (query.get("data") or "").partition(":")
+        # Only the person themselves can answer, never anyone else in a group chat.
+        user = await self.user_for((query.get("from") or {}).get("id"))
+        action, _, call_id = (query.get("data") or "").partition(":")
         if user is None or action not in {"ok", "no"}:
             return
-        session = await (
-            self.bot.sessions(user)
-            .filter(id=session_id)
-            .select_related("user")
+        call = await (
+            StructuredCall.objects.filter(
+                id=call_id, session__bot_name=self.bot.name, session__user=user
+            )
+            .select_related("session__user")
             .afirst()
+            if _is_uuid(call_id)
+            else _none()
         )
-        if session is None:
+        if call is None:
             return
-        if await self.bot.pending_call(session) is None:
+        session = call.session
+        pending = await self.bot.pending_call(session)
+        if pending is None or pending.id != call.id:
             await self.send_text(chat_id, "That request was already handled.")
             return
         result = await self.bot.resume(session, action == "ok")
+        if result.call is None:
+            await self.send_text(chat_id, "That request was already handled.")
+            return
         await self.send_result(chat_id, result)
 
     async def handle_update(self, update: dict) -> None:
@@ -407,3 +422,17 @@ class TelegramPlugin(BotPlugin):
             except Exception:
                 logger.exception("Telegram polling failed; retrying")
                 await asyncio.sleep(5)
+
+
+def _is_uuid(value: str) -> bool:
+    import uuid
+
+    try:
+        uuid.UUID(value)
+    except ValueError:
+        return False
+    return True
+
+
+async def _none():
+    return None

@@ -13,8 +13,8 @@ The bot runs the CLI on the host Ergonaut runs on, as that user. Tools:
 - ``orca_read``: read-only commands, no approval: ``status``, ``worktree
   ps|list|show|current``, ``terminal list|read|show``, ``repo
   list|show|search-refs``, ``orchestration run-list|worker-list|worker-read|
-  worker-show``, ``search``, ``skills get`` (the CLI's own guides) and any
-  command with ``--help``.
+  worker-show``, ``search``, ``skills get`` (the CLI's own guides) and
+  ``<subcommand> --help``.
 - ``orca_run``: every other command (creating worktrees, starting and
   stopping workers, sending to terminals...). Each call needs approval unless
   ``approve_changes: false``.
@@ -123,7 +123,9 @@ def command_of(args: list[str]) -> tuple[str, ...]:
 
 
 def is_read_only(args: list[str]) -> bool:
-    if "--help" in args or "-h" in args:
+    # Help only as `<subcommand words> --help`: anywhere else "--help" or "-h"
+    # could be the value of a flag (`--text -h`), and the command would run.
+    if args and args[-1] == "--help" and not any(a.startswith("-") for a in args[:-1]):
         return True
     command = command_of(args)
     return any(command[: len(known)] == known for known in READ_ONLY)

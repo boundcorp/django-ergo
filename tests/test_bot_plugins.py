@@ -187,6 +187,7 @@ async def test_bot_edits_and_merges_its_own_config(bot_repo):
         claude_tool(
             "ergo_config_repo_write",
             {"path": "bots/manager/agents.md", "content": "Be brief."},
+            tool_id="w1",
         ),
         claude_tool(
             "ergo_config_repo_publish",
@@ -202,6 +203,10 @@ async def test_bot_edits_and_merges_its_own_config(bot_repo):
     root = await bot.root_session(user)
 
     paused = await bot.ask(root, "Make your instructions shorter")
+    # merge_main edits the running bots, so the write itself needs approval.
+    assert [a.tool_name for a in paused.approvals] == ["ergo_config_repo_write"]
+    assert (work / "bots/manager/agents.md").read_text() != "Be brief."
+    paused = await bot.resume(root, {"w1": True})
     assert [a.tool_name for a in paused.approvals] == ["ergo_config_repo_publish"]
     assert (work / "bots/manager/agents.md").read_text() == "Be brief."
     assert "Shorter" not in git(remote, "log", "--oneline", "main")
@@ -397,15 +402,22 @@ async def test_telegram_approval_buttons_resume_the_turn(tmp_path):
     prompt = plugin.api.sent()[-1]
     assert prompt["text"] == "Approve order?"
     session = await ConversationSession.objects.aget()
+    call = await session.structured_calls.aget()
     buttons = prompt["reply_markup"]["inline_keyboard"][0]
-    assert buttons[0]["callback_data"] == f"ok:{session.id}"
+    assert buttons[0]["callback_data"] == f"ok:{call.id}"
 
-    callback = {
-        "id": "cb1",
+    # Someone else in the chat can't answer for the user.
+    stranger = {
+        "id": "cb0",
         "data": buttons[0]["callback_data"],
+        "from": {"id": 999},
         "message": {"chat": {"id": 111}},
     }
-    await plugin.handle_update({"update_id": 2, "callback_query": callback})
+    await plugin.handle_update({"update_id": 2, "callback_query": stranger})
+    assert plugin.api.sent()[-1]["text"] == "Approve order?"
+
+    callback = {**stranger, "id": "cb1", "from": {"id": 111}}
+    await plugin.handle_update({"update_id": 3, "callback_query": callback})
 
     assert ("answerCallbackQuery", {"callback_query_id": "cb1"}) in plugin.api.calls
     assert plugin.api.sent()[-1]["text"] == "Flour is on the way."
@@ -413,7 +425,7 @@ async def test_telegram_approval_buttons_resume_the_turn(tmp_path):
     assert result["content"] == "ordered flour"
 
     # Pressing again finds nothing left to approve.
-    await plugin.handle_update({"update_id": 3, "callback_query": callback})
+    await plugin.handle_update({"update_id": 4, "callback_query": callback})
     assert plugin.api.sent()[-1]["text"] == "That request was already handled."
     assert json.dumps(plugin.api.calls)  # calls are plain data
 
@@ -1044,3 +1056,55 @@ def test_kb_writing_is_off_by_default(tmp_path):
         name="reader",
     )
     assert "ergo_kb_write" not in bot.plugin("ergo_kb").make_toolkit(None).tools
+
+
+def test_orca_help_cannot_smuggle_a_command():
+    from django_ergo.plugins.orca import is_read_only
+
+    assert is_read_only(["orchestration", "worker-start", "--help"])
+    assert is_read_only(["worktree", "ps"])
+    for sneaky in (
+        ["terminal", "send", "--terminal", "t1", "--text", "-h", "--enter"],
+        ["terminal", "send", "--text", "--help"],
+        ["terminal", "create", "--title", "-h"],
+        ["orchestration", "worker-stop", "-h"],
+    ):
+        assert not is_read_only(sneaky), sneaky
+
+
+@pytest.mark.django_db
+def test_merge_main_discard_stashes_and_writes_need_approval(bot_repo):
+    _, work = bot_repo
+    _, _, plugin = management_bot(work, "merge_main")
+    git(work, "add", "-A")
+    git(work, "commit", "-m", "add bot")
+    tools = {t.name: t for t in plugin._tools()}
+    assert tools["ergo_config_repo_write"].requires_approval
+    assert tools["ergo_config_repo_discard"].requires_approval
+    (work / "notes.txt").write_text("a person's work in progress")
+    assert plugin.discard() == "Set the unpublished changes aside (git stash)."
+    assert "discarded by manager" in git(work, "stash", "list")
+    assert plugin.discard() == "Nothing to discard."
+
+
+@pytest.mark.django_db
+def test_a_failed_publish_keeps_the_draft(bot_repo, monkeypatch):
+    _, work = bot_repo
+    _, _, plugin = management_bot(work, "propose_pr")
+    git(work, "add", "-A")
+    git(work, "commit", "-m", "add bot")
+    git(work, "push")
+    real_run = plugin.run
+
+    def run(args, cwd=None):
+        if args[0] == "gh":
+            msg = "gh: not logged in"
+            raise ValueError(msg)
+        return real_run(args, cwd)
+
+    monkeypatch.setattr(plugin, "run", run)
+    plugin.write("bots/manager/agents.md", "Be kind.")
+    with pytest.raises(ValueError, match="not logged in"):
+        plugin.publish("Kinder", title="Kinder")
+    assert "Be kind." in plugin.diff()  # still there, uncommitted, to publish again
+    assert "bot/manager/draft" in git(work, "branch")

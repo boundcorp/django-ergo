@@ -60,6 +60,7 @@ from django_ergo.conversation.runtime import EngineSpec
 from django_ergo.conversation.runtime import build_engine
 from django_ergo.conversation.runtime import get_default_engine_spec
 from django_ergo.conversation.stream import STREAM_CONFIG
+from django_ergo.conversation.structured import StructuredCallError
 from django_ergo.conversation.structured import resume_structured_call
 from django_ergo.conversation.structured import run_structured_call
 
@@ -473,13 +474,16 @@ class Bot:
             pending = (call.metadata or {}).get("pending_approvals", [])
             decisions = {item["id"]: decisions for item in pending}
         toolkits, builder = await self._prepare(session, "")
-        outcome = await resume_structured_call(
-            self.reply_spec(toolkits),
-            call,
-            decisions,
-            engine=self.make_engine(),
-            context_builder=builder,
-        )
+        try:
+            outcome = await resume_structured_call(
+                self.reply_spec(toolkits),
+                call,
+                decisions,
+                engine=self.make_engine(),
+                context_builder=builder,
+            )
+        except StructuredCallError:
+            return TurnResult(session=session)  # someone else answered it first
         result = TurnResult.from_call(session, outcome)
         for plugin in self.plugins:
             await _maybe_await(plugin.after_turn(session, call.request, result))

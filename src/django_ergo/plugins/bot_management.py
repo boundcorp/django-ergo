@@ -175,18 +175,29 @@ class BotManagementPlugin(BotPlugin):
     def diff(self) -> str:
         work = self.workdir
         self.git("add", "--intent-to-add", "--all", cwd=work)
-        return self.git("diff", cwd=work).strip() or "(no changes)"
+        return self.git("diff", "HEAD", cwd=work).strip() or "(no changes)"
 
     def discard(self) -> str:
         if self.mode == "merge_main":
-            self.git("reset", "--hard")
-            self.git("clean", "-fd")
-        else:
-            self.drop_draft()
+            # Stashed, not deleted: `git stash list` / `git stash pop` brings it back.
+            if not self.git("status", "--porcelain").strip():
+                return "Nothing to discard."
+            self.git(
+                "stash",
+                "push",
+                "--include-untracked",
+                "-m",
+                f"discarded by {self.bot.name}",
+            )
+            return "Set the unpublished changes aside (git stash)."
+        self.drop_draft()
         return "Discarded the unpublished changes."
 
     def pull(self) -> str:
-        self.git("checkout", self.main_branch)
+        branch = self.git("rev-parse", "--abbrev-ref", "HEAD").strip()
+        if branch != self.main_branch:
+            msg = f"The checkout is on {branch}, not {self.main_branch}; not switching it."
+            raise ValueError(msg)
         return self.git("pull", "--ff-only", self.remote, self.main_branch).strip()
 
     def publish(self, message: str, title: str = "", body: str = "") -> str:
@@ -207,8 +218,20 @@ class BotManagementPlugin(BotPlugin):
         self.git("checkout", "-b", branch, cwd=work)
         self.git("add", "--all", cwd=work)
         self.git("commit", "-m", message, cwd=work)
-        self.git("push", "-u", self.remote, branch, cwd=work)
-        url = self.run(
+        try:
+            self.git("push", "-u", self.remote, branch, cwd=work)
+            url = self._open_pr(branch, message, title, body, work)
+        except ValueError:
+            # Put the changes back in the draft, uncommitted, so they can be published again.
+            self.git("reset", "--soft", "HEAD~1", cwd=work)
+            self.git("branch", "-M", self.draft_branch, cwd=work)
+            raise
+        self.git("worktree", "remove", "--force", str(work))
+        self.git("branch", "-D", self.draft_branch)
+        return f"Opened {url} from {branch}; it goes live once merged."
+
+    def _open_pr(self, branch: str, message: str, title: str, body: str, work) -> str:
+        return self.run(
             [
                 "gh",
                 "pr",
@@ -224,9 +247,6 @@ class BotManagementPlugin(BotPlugin):
             ],
             cwd=work,
         ).strip()
-        self.git("worktree", "remove", "--force", str(work))
-        self.git("branch", "-D", self.draft_branch)
-        return f"Opened {url} from {branch}; it goes live once merged."
 
     def prs(self) -> str:
         return self.run(
@@ -244,7 +264,7 @@ class BotManagementPlugin(BotPlugin):
         else:
             return ""
         self.git("add", "--intent-to-add", "--all", cwd=work)
-        return self.git("diff", cwd=work).strip()
+        return self.git("diff", "HEAD", cwd=work).strip()
 
     def pull_requests(self) -> list[dict]:
         """Open pull requests on the bot repository, newest first."""
@@ -295,7 +315,11 @@ class BotManagementPlugin(BotPlugin):
             """Read a file from the bot repository."""
             return plugin.read(path)
 
-        @bot_tool(name="ergo_config_repo_write")
+        @bot_tool(
+            name="ergo_config_repo_write",
+            # In merge_main mode a write changes the bots that are running.
+            requires_approval=self.mode == "merge_main" and self.approve_publish,
+        )
         def write(path: str, content: str) -> str:
             """Create or replace a file in the bot repository (unpublished until ergo_config_repo_publish)."""
             return plugin.write(path, content)
@@ -310,7 +334,9 @@ class BotManagementPlugin(BotPlugin):
             """Update the main branch from the remote (fast-forward only)."""
             return plugin.pull()
 
-        @bot_tool(name="ergo_config_repo_discard")
+        @bot_tool(
+            name="ergo_config_repo_discard", requires_approval=self.approve_publish
+        )
         def discard() -> str:
             """Throw away all unpublished changes."""
             return plugin.discard()

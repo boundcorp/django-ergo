@@ -519,7 +519,22 @@ class _Run:
         )
 
 
-async def _loop(run: _Run) -> StructuredCallResult:  # noqa: C901, PLR0912, PLR0915
+async def _loop(run: _Run) -> StructuredCallResult:
+    """Run the call to its end; a crash marks it FAILED instead of leaving it in progress."""
+    try:
+        return await _run_loop(run)
+    except BaseException as e:
+        call = run.call
+        if call.status == StructuredCallStatus.IN_PROGRESS:
+            _fail(call, f"Crashed: {e!r}"[:MAX_ERROR_CHARS], "crash")
+            try:
+                await call.asave()
+            except Exception:
+                log.exception("Could not record the crash of call %s", call.pk)
+        raise
+
+
+async def _run_loop(run: _Run) -> StructuredCallResult:  # noqa: C901, PLR0912, PLR0915
     call, spec, transcript = run.call, run.spec, run.transcript
     parsed = None
     approvals: list[PendingApproval] = []
@@ -765,6 +780,14 @@ async def resume_structured_call(  # noqa: PLR0913
     if call.status != StructuredCallStatus.AWAITING_APPROVAL:
         msg = f"Call {call.pk} is not waiting for approval"
         raise StructuredCallError(msg)
+    # Claim it, so a second answer (a double tap, two devices) can't run the tools again.
+    claimed = await StructuredCall.objects.filter(
+        pk=call.pk, status=StructuredCallStatus.AWAITING_APPROVAL
+    ).aupdate(status=StructuredCallStatus.IN_PROGRESS)
+    if not claimed:
+        msg = f"Call {call.pk} was already answered"
+        raise StructuredCallError(msg)
+    call.status = StructuredCallStatus.IN_PROGRESS
     pending = (call.metadata or {}).get("pending_approvals", [])
 
     if call.session_id is not None:
