@@ -50,10 +50,6 @@ DEFAULTS = {
     # Callable(message_id) that delivers a bot-to-bot thread message, e.g. by
     # queueing a Celery task. None = deliver in a background thread.
     "THREAD_MESSAGE_RUNNER": None,
-    # Callable(session) -> TurnControl for the turn that answers a thread
-    # message, so steering and Stop reach it (see conversation.structured).
-    # The control's optional close() runs after the turn. None = no control.
-    "TURN_CONTROL": None,
     # Callable(session_id, text) -> bool: hand text to the session's running
     # turn as a steering message; False if no turn is running. A bot's second
     # message to a chat still working on its first goes this way. None = it
@@ -67,6 +63,9 @@ DEFAULTS = {
     "SCHEDULE_RUNNER": None,
     # Runs a worker step later: runner(worker_id, delay_seconds) (bots.workers). Default: a thread.
     "WORKER_RUNNER": None,
+    # Callable(session, delegated=True) -> TurnControl for turns that a thread message (another
+    # bot, or a finished worker) starts, so the user can still steer or stop them. None = none.
+    "TURN_CONTROL": None,
     # Called with a session id when its workers change, to wake live views.
     "SESSION_NOTIFIER": None,
     # Public base URL that django_ergo.bots.urls is mounted at, e.g.
@@ -96,11 +95,11 @@ IMPORT_STRINGS = [
     "EMBEDDING_PROVIDER",  # Import embedding provider class
     "AUDIO_TRANSCRIBER",
     "THREAD_MESSAGE_RUNNER",
-    "TURN_CONTROL",
     "TURN_STEER",
     "BOT_TASK_RUNNER",
     "SCHEDULE_RUNNER",
     "WORKER_RUNNER",
+    "TURN_CONTROL",
     "SESSION_NOTIFIER",
 ]
 

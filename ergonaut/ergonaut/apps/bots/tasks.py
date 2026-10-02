@@ -166,10 +166,13 @@ def clear_stop(session_id) -> None:
         client.delete(_stop_key(session_id))
 
 
-def push_message(session_id, text: str, attachment_ids: list[str] | None = None) -> str:
+def push_message(session_id, text: str, attachment_ids: list[str] | None = None, *, from_bot: bool = False) -> str:
     """Add a message to the session's inbox; returns its id (for ``unsend``)."""
     item_id = uuid.uuid4().hex
-    item = json.dumps({"id": item_id, "text": text, "attachment_ids": [str(a) for a in attachment_ids or []]})
+    fields = {"id": item_id, "text": text, "attachment_ids": [str(a) for a in attachment_ids or []]}
+    if from_bot:
+        fields["from_bot"] = True
+    item = json.dumps(fields)
     client = redis_client()
     if client is None:
         with _local_guard:
@@ -258,9 +261,19 @@ class InboxControl:
     remove once the turn has stored copies of them.
     """
 
-    def __init__(self, session):
+    # Before a steering message in a turn another bot (or a finished worker) started, so the
+    # model knows it's from the user, not from whoever sent the request.
+    DELEGATED_NOTE = "[The user sent this while you were working on the request above. Follow it.]"
+
+    def __init__(self, session, *, delegated: bool = False):
         self.session = session
+        self.delegated = delegated
         self.uploads: list = []
+
+    def finish(self) -> None:
+        """Remove uploads the turn has stored copies of."""
+        remove_uploads(self.uploads)
+        self.uploads = []
 
     async def check(self):
         from asgiref.sync import sync_to_async
@@ -277,23 +290,23 @@ class InboxControl:
         items = drain_inbox(session_id)
         if not items:
             return TurnSignal()
+        if self.delegated:
+            # The user's own messages get the note; a bot's follow-up carries its own header.
+            first = next((item for item in items if not item.get("from_bot")), None)
+            if first is not None:
+                first["text"] = f"{self.DELEGATED_NOTE}\n\n{first.get('text', '')}"
         text, attachment_ids = combine(items)
         attachments, uploads = take_uploads(self.session, attachment_ids)
         self.uploads.extend(uploads)
         notify(session_id)
         return TurnSignal(messages=[SteeringMessage(text, attachments or None)])
 
-    def close(self) -> None:
-        """After the turn: remove the uploads it has stored copies of."""
-        remove_uploads(self.uploads)
-        self.uploads = []
-
 
 def steer_running_turn(session_id, text: str) -> bool:
     """TURN_STEER: give the running turn ``text`` at its next step. False if none is running."""
     if not turn_running(session_id):
         return False
-    push_message(session_id, text)
+    push_message(session_id, text, from_bot=True)
     notify(session_id)
     return True
 

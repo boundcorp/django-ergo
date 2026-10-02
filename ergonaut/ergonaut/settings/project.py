@@ -105,14 +105,15 @@ DJANGO_ERGO = {
     "BOT_WEBHOOK_BASE_URL": f"{ERGONAUT_PUBLIC_URL}/hooks" if ERGONAUT_PUBLIC_URL else None,
     # Bot-to-bot thread messages are delivered by a Celery worker.
     "THREAD_MESSAGE_RUNNER": "ergonaut.apps.bots.tasks.queue_thread_message",
-    # Turns that answer another bot's message take steering and Stop too.
-    "TURN_CONTROL": "ergonaut.apps.bots.tasks.InboxControl",
+    # A bot's follow-up to a request a chat is working on steers that turn.
     "TURN_STEER": "ergonaut.apps.bots.tasks.steer_running_turn",
     # A bot tool's ctx.tasks.start(...) runs @bot_task functions on a worker.
     "BOT_TASK_RUNNER": "ergonaut.apps.bots.tasks.celery_bot_task",
     # Each due schedule run is a task of its own.
     "SCHEDULE_RUNNER": "ergonaut.apps.bots.tasks.queue_schedule_run",
     "WORKER_RUNNER": "ergonaut.apps.bots.tasks.queue_worker",
+    # Turns another bot or a finished worker starts can be steered and stopped like the user's own.
+    "TURN_CONTROL": "ergonaut.apps.bots.tasks.InboxControl",
     "SESSION_NOTIFIER": "ergonaut.apps.bots.tasks.notify",
 }
 
