@@ -1,19 +1,21 @@
 """Bot runtime: a loaded bot definition with its tools, plugins and sessions.
 
     bot = Bot.load("bots/kitchen")
-    root = await bot.root_session(user)
-    result = await bot.ask(root, "What's for dinner?")
+    main = await bot.main_session(user)
+    result = await bot.ask(main, "What's for dinner?")
     result.reply   # ChatReply: a message, or a question with suggestions
 
 Every turn is a chat reply: a structured call against the session (see
 ``conversation.chat_reply``). The bot uses its tools, then answers with a
 ``ChatReply``.
 
-Each (bot, user) pair has one root session: a stream chat (see
-``conversation.stream``) that only sends the current turn natively and gets
-its latest messages through a context block. The root can read the history
-of every session this bot has with the user. Other sessions (threads) use
-the bot's default compaction mode and keep full native history.
+Each (bot, user) pair has a main chat, plus one chat per named chat in
+bot.yaml (``chats:``). These are stream chats (see ``conversation.stream``):
+they send only the current turn natively, get their latest messages through
+a context block, and can read the history of every session this bot has with
+the user. Threads are child sessions that use the bot's default compaction
+mode and keep full native history. A chat's tools come from its skills (see
+``bots.skillset``), loaded when needed.
 
 Engines are built per turn from the definition. The API key is read from
 the environment variable named in ``engine.api_key_env`` and is never
@@ -33,15 +35,16 @@ from asgiref.sync import sync_to_async
 from django.utils.module_loading import import_string
 
 from django_ergo.bots import messaging
+from django_ergo.bots.definition import MAIN
 from django_ergo.bots.definition import BotDefinition
 from django_ergo.bots.definition import PluginSpec
-from django_ergo.bots.orchestrator import orchestrator_toolkit
 from django_ergo.bots.plugins import BotPlugin
 from django_ergo.bots.plugins import resolve_plugin_class
 from django_ergo.bots.skills import Skill
 from django_ergo.bots.skills import load_skills
-from django_ergo.bots.skills import skills_toolkit
-from django_ergo.bots.skills import tool_overview
+from django_ergo.bots.skillset import STATE_KEY
+from django_ergo.bots.skillset import SkillDef
+from django_ergo.bots.skillset import SkillSet
 from django_ergo.bots.tools import FunctionToolkit
 from django_ergo.bots.tools import ToolContext
 from django_ergo.bots.tools import load_tool_module
@@ -77,8 +80,11 @@ if TYPE_CHECKING:
     from django_ergo.conversation.structured import StructuredCallResult
     from django_ergo.conversation.toolkit import Toolkit
 
-ROOT_ROLE = "root"
+MAIN_ROLE = "main"
+CHAT_ROLE = "chat"  # a named chat from bot.yaml
 THREAD_ROLE = "thread"
+ROOT_ROLE = MAIN_ROLE  # the main chat was called the root
+TOP_ROLES = {MAIN_ROLE, CHAT_ROLE, "root"}
 
 
 @dataclass
@@ -162,6 +168,116 @@ class Bot:
         ]
         for plugin in self.plugins:
             plugin.on_load()
+        # Skill folders that ship tools.py
+        self.skill_tool_modules = {
+            skill.name: load_tool_module(skill.tools_file, definition.name)
+            for skill in self.skills
+            if skill.tools_file is not None
+        }
+        for module in self.skill_tool_modules.values():
+            self.tasks.update(module.tasks)
+        self.skill_defs: list[SkillDef] = self._skill_defs()
+
+    def _skill_defs(self) -> list[SkillDef]:
+        """Everything this bot can load, as skills (see bots.skillset)."""
+        from django_ergo.bots.orchestrator import orchestrator_toolkit
+
+        requires = self.definition.skill_requires
+        defs = [
+            SkillDef(
+                "history",
+                "Read and search this conversation and your other chats with this person",
+                toolkits=lambda ctx: [
+                    MessageHistoryToolkit(
+                        [SessionSource(ctx.session)],
+                        source_loader=lambda: self.history_sources(ctx.session),
+                    )
+                ],
+                always=True,
+                source="built-in",
+            )
+        ]
+        if self.definition.orchestration:
+            defs.append(
+                SkillDef(
+                    "orchestration",
+                    "Delegate to your threads and to other bots, and check on them",
+                    toolkits=lambda ctx: [orchestrator_toolkit(ctx)],
+                    source="built-in",
+                )
+            )
+        for module in self.tool_modules:
+            name = module.path.stem
+            doc = (inspect.getdoc(module.module) if module.module else "") or ""
+            defs.append(
+                SkillDef(
+                    name,
+                    doc.splitlines()[0] if doc else f"Tools from {module.path.name}",
+                    toolkits=lambda ctx, module=module: self._module_toolkits(
+                        module, ctx
+                    ),
+                    requires=requires.get(name, []),
+                    source=f"tools/{module.path.name}",
+                )
+            )
+        for path, factory in zip(
+            self.definition.toolkit_factories, self.toolkit_factories, strict=True
+        ):
+            name = path.replace(":", ".").rsplit(".", 1)[-1]
+            defs.append(
+                SkillDef(
+                    name,
+                    (inspect.getdoc(factory) or "").split("\n")[0]
+                    or f"Tools from {path}",
+                    toolkits=lambda ctx, factory=factory: _as_list(factory(ctx)),
+                    requires=requires.get(name, []),
+                    source=path,
+                )
+            )
+        for plugin in self.plugins:
+            if type(plugin).toolkits is BotPlugin.toolkits:
+                continue  # a plugin without tools (e.g. telegram) isn't a skill
+            defs.append(
+                SkillDef(
+                    plugin.skill_name,
+                    plugin.description or f"The {plugin.name} plugin",
+                    toolkits=lambda ctx, plugin=plugin: plugin.toolkits(ctx) or [],
+                    context=lambda ctx, message, plugin=plugin: plugin.context_sources(
+                        ctx, message
+                    )
+                    or [],
+                    hint=plugin.skill_hint,
+                    requires=requires.get(plugin.skill_name, []),
+                    source=f"plugin {plugin.name}",
+                )
+            )
+        for skill in self.skills:
+            module = self.skill_tool_modules.get(skill.name)
+            defs.append(
+                SkillDef(
+                    skill.name,
+                    skill.description,
+                    instructions=skill.body,
+                    toolkits=(
+                        lambda ctx, module=module: self._module_toolkits(module, ctx)
+                    )
+                    if module
+                    else None,
+                    requires=[*skill.requires, *requires.get(skill.name, [])],
+                    always=skill.always_load,
+                    source=f"skills/{skill.path.parent.name if skill.path.name == 'SKILL.md' else skill.path.name}",
+                )
+            )
+        return defs
+
+    @staticmethod
+    def _module_toolkits(module: ToolModule, ctx: ToolContext) -> list[Toolkit]:
+        toolkits: list[Toolkit] = (
+            [FunctionToolkit(module.tools, ctx)] if module.tools else []
+        )
+        if module.toolkit_factory is not None:
+            toolkits.extend(_as_list(module.toolkit_factory(ctx)))
+        return toolkits
 
     @classmethod
     def load(cls, path: str | Path, **kwargs) -> Bot:
@@ -210,24 +326,66 @@ class Bot:
             qs = qs.filter(user=user)
         return qs
 
-    async def root_session(self, user) -> ConversationSession:
-        """Get or create the user's root session with this bot."""
-        existing = await (
-            self.sessions(user)
-            .filter(parent__isnull=True, metadata__bot_role=ROOT_ROLE)
-            .exclude(status="completed")
-            .order_by("created_at")
-            .afirst()
-        )
+    async def main_session(self, user) -> ConversationSession:
+        """Get or create the user's main chat with this bot."""
+        return await self.chat_session(user, MAIN)
+
+    root_session = main_session  # the main chat used to be called the root
+
+    async def chat_session(self, user, name: str = MAIN) -> ConversationSession:
+        """Get or create the user's ``main`` chat, or a named chat from bot.yaml."""
+        if name in ("root", MAIN):
+            name, role = MAIN, MAIN_ROLE
+            qs = self.sessions(user).filter(
+                parent__isnull=True, metadata__bot_role__in=["root", MAIN_ROLE]
+            )
+        else:
+            if name not in self.definition.chats:
+                msg = f"{self.name} has no chat named {name!r}"
+                raise ValueError(msg)
+            role = CHAT_ROLE
+            qs = self.sessions(user).filter(
+                metadata__bot_role=CHAT_ROLE, metadata__chat=name
+            )
+        existing = await qs.exclude(status="completed").order_by("created_at").afirst()
         if existing is not None:
             return existing
+        chat = self.definition.chat(name)
+        metadata = (
+            {}
+            if role == MAIN_ROLE
+            else {
+                "chat": name,
+                "title": chat.description or name.replace("-", " ").title(),
+            }
+        )
         return await self._create(
             user=user,
             parent=None,
-            role=ROOT_ROLE,
+            role=role,
             compaction_mode=CompactionMode.NONE,
             compaction_config=dict(STREAM_CONFIG),
+            metadata=metadata,
+            system_prompt=self.instructions_for(name),
         )
+
+    def instructions_for(self, chat: str | None) -> str:
+        """The bot's instructions, plus a chat's own when it has any."""
+        extra = self.definition.chat(chat).instructions if chat else ""
+        return "\n\n".join(
+            part for part in (self.definition.instructions, extra) if part
+        )
+
+    @staticmethod
+    def chat_name(session: ConversationSession) -> str | None:
+        """``main``, a named chat's name, or None for a thread."""
+        meta = session.metadata or {}
+        role = meta.get("bot_role")
+        if role in ("root", MAIN_ROLE):
+            return MAIN
+        if role == CHAT_ROLE:
+            return meta.get("chat")
+        return None
 
     async def create_session(  # noqa: PLR0913
         self,
@@ -307,7 +465,12 @@ class Bot:
 
     @staticmethod
     def is_root(session: ConversationSession) -> bool:
-        return (session.metadata or {}).get("bot_role") == ROOT_ROLE
+        """A top-level chat: main or a named chat (not a thread)."""
+        return (session.metadata or {}).get("bot_role") in TOP_ROLES
+
+    @staticmethod
+    def is_main(session: ConversationSession) -> bool:
+        return (session.metadata or {}).get("bot_role") in ("root", MAIN_ROLE)
 
     @staticmethod
     def is_stream(session: ConversationSession) -> bool:
@@ -325,34 +488,47 @@ class Bot:
             .order_by("created_at")
         ]
 
-    def toolkits(self, session: ConversationSession) -> list[Toolkit]:
+    def skillset(self, session: ConversationSession) -> SkillSet:
+        """The chat's skills for this turn (see bots.skillset)."""
         ctx = self.tool_context(session)
-        toolkits: list[Toolkit] = [
-            MessageHistoryToolkit(
-                [SessionSource(session)],
-                source_loader=lambda: self.history_sources(session),
+        chat = self.chat_name(session)
+        always = set(
+            self.definition.chat(chat).skills if chat else self.definition.thread_skills
+        )
+        turn = (
+            session.structured_calls.filter(kind="chat_reply").count()
+            if session.pk is not None
+            else 0
+        )
+
+        def save(state: dict) -> None:
+            fresh = (
+                ConversationSession.objects.filter(pk=session.pk)
+                .values_list("metadata", flat=True)
+                .first()
             )
-        ]
-        if self.definition.orchestration:
-            toolkits.append(orchestrator_toolkit(ctx))
-        tools = [tool for module in self.tool_modules for tool in module.tools]
-        if tools:
-            toolkits.append(FunctionToolkit(tools, ctx))
-        for module in self.tool_modules:
-            if module.toolkit_factory is not None:
-                toolkits.extend(module.toolkit_factory(ctx) or [])
-        for factory in self.toolkit_factories:
-            made = factory(ctx)
-            toolkits.extend(made if isinstance(made, list | tuple) else [made])
-        for plugin in self.plugins:
-            toolkits.extend(plugin.toolkits(ctx) or [])
-        if self.skills:
-            others = list(toolkits)
-            toolkits.append(skills_toolkit(self.skills, lambda: tool_overview(others)))
-        return toolkits
+            metadata = {**(fresh or {}), STATE_KEY: state}
+            ConversationSession.objects.filter(pk=session.pk).update(metadata=metadata)
+            session.metadata = metadata
+
+        return SkillSet(
+            ctx,
+            self.skill_defs,
+            always=always,
+            unload_after_turns=self.definition.unload_after_turns,
+            turn=turn,
+            save=save if session.pk is not None else None,
+            state=(session.metadata or {}).get(STATE_KEY),
+        )
+
+    def toolkits(self, session: ConversationSession) -> list[Toolkit]:
+        return [self.skillset(session)]
 
     def context_builder(
-        self, session: ConversationSession, message: str
+        self,
+        session: ConversationSession,
+        message: str,
+        skillset: SkillSet | None = None,
     ) -> ContextBuilder | None:
         ctx = self.tool_context(session)
         builder = ContextBuilder(budget_tokens=self.definition.budget_tokens)
@@ -389,18 +565,40 @@ class Bot:
             )
             empty = False
         for plugin in self.plugins:
-            for source in plugin.context_sources(ctx, message) or []:
+            for source in plugin.always_context_sources(ctx, message) or []:
                 builder.add(source)
                 empty = False
+            if type(plugin).toolkits is BotPlugin.toolkits:
+                # Not a skill (e.g. telegram): its context is always on.
+                for source in plugin.context_sources(ctx, message) or []:
+                    builder.add(source)
+                    empty = False
+        for source in (skillset or self.skillset(session)).context_sources(message):
+            builder.add(source)
+            empty = False
         return None if empty else builder
 
     async def _prepare(self, session: ConversationSession, message: str):
         def build():
             # Touch the user so sync tool code can use ctx.user.
             _ = session.user
-            return self.toolkits(session), self.context_builder(session, message)
+            self._refresh_instructions(session)
+            skillset = self.skillset(session)
+            return [skillset], self.context_builder(session, message, skillset)
 
         return await sync_to_async(build, thread_sensitive=True)()
+
+    def _refresh_instructions(self, session: ConversationSession) -> None:
+        """Keep a chat's instructions current with agents.md and bot.yaml."""
+        meta = session.metadata or {}
+        if meta.get("custom_instructions"):
+            return
+        wanted = self.instructions_for(self.chat_name(session))
+        if session.pk is not None and session.system_prompt != wanted:
+            session.system_prompt = wanted
+            ConversationSession.objects.filter(pk=session.pk).update(
+                system_prompt=wanted
+            )
 
     # -- turns -------------------------------------------------------------
 
@@ -495,3 +693,9 @@ class Bot:
     async def serve(self) -> None:
         """Run every plugin's long-running ``serve`` (e.g. chat channels)."""
         await asyncio.gather(*(plugin.serve() for plugin in self.plugins))
+
+
+def _as_list(made) -> list:
+    if made is None:
+        return []
+    return list(made) if isinstance(made, list | tuple) else [made]

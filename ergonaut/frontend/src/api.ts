@@ -9,6 +9,7 @@ export type Bot = {
   knowledge: boolean
   parent: string
   root_session_id: string | null
+  chats?: { name: string; description: string; session_id: string | null }[]
 }
 
 export type Session = {
@@ -104,13 +105,22 @@ export type BotDetail = Bot & {
   instructions: string
   plugins: string[]
   tools: { name: string; description: string; requires_approval: boolean }[]
-  skills: { name: string; description: string; body: string }[]
+  skills: {
+    name: string
+    description: string
+    body: string
+    source?: string
+    tools?: { name: string; description: string; requires_approval: boolean }[]
+    always_in?: string[]
+  }[]
   manages_repo?: boolean
   schedules?: {
     name: string
     cron: string
     message: string
-    to: 'root' | 'new'
+    to: string
+    thread_title?: string
+    thread_in?: string
     users: string[]
     enabled: boolean
     next_run: string | null
@@ -235,6 +245,7 @@ export const api = {
     return request<Session[]>('GET', `/sessions?${query}`)
   },
   openRoot: (bot: string) => request<Session>('POST', `/bots/${bot}/root`),
+  openChat: (bot: string, name: string) => request<Session>('POST', `/bots/${bot}/chats/${name}`),
   newThread: (bot: string, title: string) => request<Session>('POST', `/bots/${bot}/threads`, { title }),
   session: (id: string) => request<SessionDetail>('GET', `/sessions/${id}`),
   call: (id: string) =>

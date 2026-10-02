@@ -19,6 +19,9 @@ Live on rigel from `~/p/boundcorp/django-ergo`, bots from `boundcorp/ergo-bots`.
 
 ### Next
 
+- [ ] **Skills unified + named chats** (branch `claude/skills-and-chats`): lazy skills (load/unload, always per chat, requires), main replaces root, named chats in bot.yaml, schedule targets. PR, then ergo-bots configs.
+- [ ] **Bot data and pages** (brainstorm 2026-10-02): pinned files and bot-level files, page toolkit with a sandboxed HTML viewer, BotTable models, live .jhtml pages. Waiting on Lee's four decisions.
+
 - [ ] Bots with bash/orca in a multi-user Ergonaut: approvals are admin-only now; consider per-plugin approver lists.
 - [ ] Managed brokers without REDIS_URL fall back to in-process turn locks only.
 

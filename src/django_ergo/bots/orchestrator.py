@@ -3,9 +3,9 @@
 - ``ergo_bot_list``: the bots this bot can message (sub-bots nested in its
   folder and bots in ``permissions.call_bots``), with their descriptions.
   Pre-seeded into every session.
-- ``ergo_thread_list``: a bot's root chat and threads with this user, so the
-  bot can choose where a message should go.
-- ``ergo_thread_send``: message a root chat, a thread, or a new thread, of
+- ``ergo_thread_list``: a bot's main chat, named chats and threads with this
+  user, so the bot can choose where a message should go.
+- ``ergo_thread_send``: message a main or named chat, a thread, or a new thread, of
   this bot or one it can message. It returns at once; the recipient's reply
   arrives later as a new message in this session (see
   ``django_ergo.bots.messaging``). Starting a thread of this bot needs
@@ -36,6 +36,7 @@ if TYPE_CHECKING:
     from django_ergo.bots.runtime import Bot
     from django_ergo.bots.tools import ToolContext
 
+TOP_ROLES = {"root", "main", "chat"}  # main and named chats (not threads)
 OPEN_STATUSES = [
     ThreadMessageStatus.QUEUED,
     ThreadMessageStatus.DELIVERED,
@@ -68,13 +69,22 @@ def _session(target: Bot, ctx: ToolContext, thread_id: str) -> ConversationSessi
         raise ValueError(msg) from None
 
 
-def _row(session: ConversationSession, current: ConversationSession) -> dict:
+def _thread_key(session: ConversationSession) -> str:
+    """How ergo_thread_send names a session: main, a named chat, or a thread id."""
     meta = session.metadata or {}
+    if meta.get("bot_role") in ("root", "main"):
+        return "main"
+    if meta.get("bot_role") == "chat":
+        return str(meta.get("chat") or session.id)
+    return str(session.id)
+
+
+def _row(session: ConversationSession, current: ConversationSession) -> dict:
     open_requests = session.thread_messages.filter(
         status__in=OPEN_STATUSES, in_reply_to__isnull=True
     ).count()
     row = {
-        "thread": "root" if meta.get("bot_role") == "root" else str(session.id),
+        "thread": _thread_key(session),
         "id": str(session.id),
         "title": messaging.label(session),
         "status": "archived" if session.status == "completed" else session.status,
@@ -103,11 +113,13 @@ def ergo_bot_list(ctx: ToolContext) -> str:
 def ergo_thread_list(
     ctx: ToolContext, bot: str = "", include_archived: bool = False
 ) -> list[dict]:
-    """List a bot's root chat and threads with the user (default: this bot), newest first."""
+    """List a bot's main chat, named chats and threads with the user (default: this bot), newest first."""
     target = _target(ctx, bot)
     qs = target.sessions().filter(user_id=ctx.session.user_id).order_by("-updated_at")
     if not include_archived:
-        qs = qs.filter(~Q(status="completed") | Q(metadata__bot_role="root"))
+        qs = qs.filter(
+            ~Q(status="completed") | Q(metadata__bot_role__in=list(TOP_ROLES))
+        )
     return [_row(s, ctx.session) for s in qs[:50]]
 
 
@@ -121,24 +133,24 @@ def ergo_thread_list(
         },
         "thread": {
             "type": "string",
-            "description": '"root" for its main chat, "new" for a new thread, or a thread id',
+            "description": '"main" for its main chat, a named chat, "new" for a new thread, or a thread id',
         },
         "title": {"type": "string", "description": "Title for a new thread"},
     },
     required=["message"],
 )
 def ergo_thread_send(
-    ctx: ToolContext, message: str, bot: str = "", thread: str = "root", title: str = ""
+    ctx: ToolContext, message: str, bot: str = "", thread: str = "main", title: str = ""
 ) -> dict:
-    """Send a message to a bot's root chat, a thread, or a new thread.
+    """Send a message to a bot's main chat, a named chat, a thread, or a new thread.
 
     Returns at once. The reply arrives later as a new message in this chat.
     """
     target = _target(ctx, bot)
     user = ctx.session.user
-    thread = (thread or "root").strip()
-    if thread == "root":
-        recipient = async_to_sync(target.root_session)(user)
+    thread = (thread or "main").strip()
+    if thread in ("main", "root") or thread in target.definition.chats:
+        recipient = async_to_sync(target.chat_session)(user, thread)
     elif thread == "new":
         if target is ctx.bot and not target.definition.allow_create_sessions:
             msg = "This bot may not start threads of its own (sessions.allow_create)."
@@ -167,8 +179,8 @@ def ergo_thread_send(
 def ergo_thread_archive(ctx: ToolContext, thread_id: str) -> str:
     """Archive one of this bot's threads that is done. Its history stays readable."""
     thread = _session(ctx.bot, ctx, thread_id)
-    if (thread.metadata or {}).get("bot_role") == "root":
-        msg = "The root chat can't be archived."
+    if (thread.metadata or {}).get("bot_role") in TOP_ROLES:
+        msg = "Main and named chats can't be archived."
         raise ValueError(msg)
     archival.archive(thread, reason="archived by the bot")
     return f"Archived {messaging.label(thread)}"

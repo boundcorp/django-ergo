@@ -31,13 +31,20 @@ router = Router(tags=["bots"], auth=django_auth)
 # -- schemas -----------------------------------------------------------------
 
 
+class ChatOut(Schema):
+    name: str  # "main" or a named chat from bot.yaml
+    description: str
+    session_id: str | None  # None until the user first opens it
+
+
 class BotOut(Schema):
     name: str
     description: str
     orchestration: bool
     knowledge: bool
     parent: str
-    root_session_id: str | None
+    root_session_id: str | None  # the main chat's session (name kept for clients)
+    chats: list[ChatOut] = []
 
 
 class ToolOut(Schema):
@@ -50,6 +57,9 @@ class SkillOut(Schema):
     name: str
     description: str
     body: str
+    source: str = ""
+    tools: list[ToolOut] = []
+    always_in: list[str] = []  # chats (and "threads") that load it from the start
 
 
 class BotDetailOut(BotOut):
@@ -182,6 +192,8 @@ def schedules_out(bot: Bot, user) -> list[dict]:
                 "cron": schedule.cron.expression,
                 "message": schedule.message,
                 "to": schedule.to,
+                "thread_title": schedule.thread_title,
+                "thread_in": schedule.thread_in,
                 "users": list(schedule.users),
                 "enabled": schedule.enabled,
                 "next_run": upcoming.isoformat() if upcoming else None,
@@ -224,7 +236,7 @@ def session_out(session: ConversationSession) -> dict:
     return {
         "id": str(session.id),
         "bot": session.bot_name,
-        "title": meta.get("title") or ("Chat" if meta.get("bot_role") == "root" else "Thread"),
+        "title": meta.get("title") or ("Main" if meta.get("bot_role") in ("root", "main") else "Thread"),
         "role": meta.get("bot_role") or "",
         "parent_id": str(session.parent_id) if session.parent_id else None,
         "status": session.status,
@@ -333,13 +345,7 @@ async def get_session(request, session_id) -> ConversationSession:
 async def list_bots(request):
     out = []
     for bot in [b for b in registry() if may_use(b, request.auth)]:
-        root = await (
-            bot.sessions(request.auth)
-            .filter(parent__isnull=True, metadata__bot_role="root")
-            .exclude(status="completed")
-            .order_by("created_at")
-            .afirst()
-        )
+        chats = await sync_to_async(chats_out)(bot, request.auth)
         out.append(
             {
                 "name": bot.name,
@@ -347,10 +353,26 @@ async def list_bots(request):
                 "orchestration": bot.definition.orchestration,
                 "knowledge": any(p.name == "ergo_kb" for p in bot.plugins),
                 "parent": bot.parent_name,
-                "root_session_id": str(root.id) if root else None,
+                "root_session_id": chats[0]["session_id"],
+                "chats": chats,
             }
         )
     return out
+
+
+def chats_out(bot: Bot, user) -> list[dict]:
+    """The bot's main chat and named chats, with the user's session for each."""
+    sessions = {
+        (s.metadata or {}).get("chat") or "main": str(s.id)
+        for s in bot.sessions(user)
+        .filter(parent__isnull=True, metadata__bot_role__in=["root", "main", "chat"])
+        .exclude(status="completed")
+        .order_by("-created_at")
+    }
+    return [
+        {"name": name, "description": chat.description, "session_id": sessions.get(name)}
+        for name, chat in bot.definition.chats.items()
+    ]
 
 
 @router.get("/sessions", response=list[SessionOut])
@@ -371,40 +393,73 @@ def list_sessions(request, bot: str = "", q: str = "", status: str = ""):
 
 @router.post("/bots/{bot}/root", response=SessionOut)
 async def open_root(request, bot: str):
-    session = await get_bot(bot, request.auth).root_session(request.auth)
+    """The user's main chat (the endpoint keeps its old name)."""
+    session = await get_bot(bot, request.auth).main_session(request.auth)
     session.user = request.auth
     return session_out(session)
 
 
-def root_tools(bot: Bot, user) -> list[dict]:
-    """The tools a root chat with ``bot`` gets, without the send_reply output tool."""
+@router.post("/bots/{bot}/chats/{name}", response=SessionOut)
+async def open_chat(request, bot: str, name: str):
+    """Open (creating on first use) the main chat or a named chat."""
+    found = get_bot(bot, request.auth)
+    if name != "main" and name not in found.definition.chats:
+        raise HttpError(404, f"{bot} has no chat named {name!r}")
+    session = await found.chat_session(request.auth, name)
+    session.user = request.auth
+    return session_out(session)
+
+
+def _tools_and_skills(bot: Bot, user) -> dict:
+    skills = skills_out(bot, user)
+    tools = [tool for skill in skills for tool in skill["tools"]]
+    return {"skills": skills, "tools": tools}
+
+
+def skills_out(bot: Bot, user) -> list[dict]:
+    """Every skill the bot can load, with its tools and where it loads from the start."""
+    from django_ergo.bots.skillset import SkillSet
     from django_ergo.conversation.adapters import ClaudeToolAdapter
 
-    probe = ConversationSession(bot_name=bot.name, user=user, metadata={"bot_role": "root"})
-    spec = bot.reply_spec(bot.toolkits(probe))
-    tools = []
-    for toolkit in spec.toolkits:
-        approval = getattr(toolkit, "requires_approval", None)
-        for schema in toolkit.get_tools_schema(ClaudeToolAdapter()):
-            tools.append(
-                {
-                    "name": schema["name"],
-                    "description": schema.get("description", ""),
-                    "requires_approval": bool(approval and approval(schema["name"])),
-                }
-            )
-    return tools
+    probe = ConversationSession(bot_name=bot.name, user=user, metadata={"bot_role": "main"})
+    skillset = SkillSet(bot.tool_context(probe), bot.skill_defs)
+    always = {name: [] for name in skillset.skills}
+    for chat in bot.definition.chats.values():
+        for name in SkillSet(bot.tool_context(probe), bot.skill_defs, always=set(chat.skills)).always:
+            always.setdefault(name, []).append(chat.name)
+    for name in SkillSet(bot.tool_context(probe), bot.skill_defs, always=set(bot.definition.thread_skills)).always:
+        always.setdefault(name, []).append("threads")
+    out = []
+    for name, skill in skillset.skills.items():
+        tools = []
+        for toolkit in skillset.toolkits_of(name):
+            for schema in toolkit.get_tools_schema(ClaudeToolAdapter()):
+                tools.append(
+                    {
+                        "name": schema["name"],
+                        "description": schema.get("description", ""),
+                        "requires_approval": bool(toolkit.requires_approval(schema["name"])),
+                    }
+                )
+        if not tools and not skill.instructions:
+            continue
+        out.append(
+            {
+                "name": name,
+                "description": skill.description,
+                "body": skill.instructions,
+                "source": skill.source,
+                "tools": tools,
+                "always_in": always.get(name, []),
+            }
+        )
+    return out
 
 
 @router.get("/bots/{bot}", response=BotDetailOut)
 async def bot_detail(request, bot: str):
     found = get_bot(bot, request.auth)
-    root = await (
-        found.sessions(request.auth)
-        .filter(parent__isnull=True, metadata__bot_role="root")
-        .exclude(status="completed")
-        .afirst()
-    )
+    chats = await sync_to_async(chats_out)(found, request.auth)
     definition = found.definition
     try:
         spec = found.engine_spec()
@@ -417,7 +472,8 @@ async def bot_detail(request, bot: str):
         "orchestration": definition.orchestration,
         "knowledge": any(p.name == "ergo_kb" for p in found.plugins),
         "parent": found.parent_name,
-        "root_session_id": str(root.id) if root else None,
+        "root_session_id": chats[0]["session_id"],
+        "chats": chats,
         "engine": engine,
         "model": model,
         "timezone": definition.timezone,
@@ -426,8 +482,7 @@ async def bot_detail(request, bot: str):
         "plugins": [type(p).__name__ for p in found.plugins],
         "manages_repo": found.plugin("bot_management") is not None,
         "schedules": schedules_out(found, request.auth),
-        "tools": await sync_to_async(root_tools)(found, request.auth),
-        "skills": [{"name": s.name, "description": s.description, "body": s.body} for s in found.skills],
+        **await sync_to_async(_tools_and_skills)(found, request.auth),
     }
 
 
@@ -535,8 +590,8 @@ async def answer_approval(request, session_id: str, data: ApprovalIn):
 async def close_session(request, session_id: str):
     """Archive a thread (a root chat can't be archived)."""
     session = await get_session(request, session_id)
-    if (session.metadata or {}).get("bot_role") == "root":
-        raise HttpError(409, "The root chat can't be archived")
+    if (session.metadata or {}).get("bot_role") in ("root", "main", "chat"):
+        raise HttpError(409, "Main and named chats can't be archived")
     await sync_to_async(archival.archive)(session, "archived by the user")
     return await sync_to_async(session_out)(session)
 

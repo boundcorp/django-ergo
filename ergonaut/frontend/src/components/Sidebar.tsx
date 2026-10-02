@@ -43,10 +43,10 @@ export function Sidebar({ bots, sessions, onChange }: { bots: Bot[]; sessions: S
   const navigate = useNavigate()
   const [showArchived, setShowArchived] = useState<Record<string, boolean>>({})
 
-  async function openRoot(bot: Bot) {
-    const root = await api.openRoot(bot.name)
+  async function openChat(bot: Bot, name: string) {
+    const chat = await api.openChat(bot.name, name)
     onChange()
-    navigate(`/s/${root.id}`)
+    navigate(`/s/${chat.id}`)
   }
 
   async function newThread(bot: Bot) {
@@ -67,7 +67,9 @@ export function Sidebar({ bots, sessions, onChange }: { bots: Bot[]; sessions: S
       </Link>
       {bots.map(bot => {
         const mine = sessions.filter(s => s.bot === bot.name)
-        const root = mine.find(s => s.id === bot.root_session_id)
+        const chats = bot.chats?.length
+          ? bot.chats
+          : [{ name: 'main', description: '', session_id: bot.root_session_id }]
         const threads = mine.filter(s => s.role === 'thread' && s.status !== 'completed')
         const archived = mine.filter(s => s.role === 'thread' && s.status === 'completed')
         return (
@@ -91,16 +93,21 @@ export function Sidebar({ bots, sessions, onChange }: { bots: Bot[]; sessions: S
                 </button>
               )}
             </div>
-            {root ? (
-              <SessionLink session={root} />
-            ) : (
-              <button
-                className="w-full rounded-md px-2 py-1 text-left text-sm text-indigo-600 hover:bg-zinc-100 dark:hover:bg-zinc-900"
-                onClick={() => openRoot(bot)}
-              >
-                Start chatting
-              </button>
-            )}
+            {chats.map(chat => {
+              const session = mine.find(s => s.id === chat.session_id)
+              return session ? (
+                <SessionLink key={chat.name} session={session} />
+              ) : (
+                <button
+                  key={chat.name}
+                  title={chat.description || undefined}
+                  className="w-full rounded-md px-2 py-1 text-left text-sm text-indigo-600 hover:bg-zinc-100 dark:hover:bg-zinc-900"
+                  onClick={() => openChat(bot, chat.name)}
+                >
+                  {chat.name === 'main' ? 'Start chatting' : `Open ${chat.description || chat.name}`}
+                </button>
+              )
+            })}
             {threads.map(t => (
               <SessionLink key={t.id} session={t} nested />
             ))}

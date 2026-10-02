@@ -506,9 +506,12 @@ class _Run:
         )
         self.toolkits = [*spec.toolkits, *([self.submit] if self.submit else [])]
         self.adapter = self.engine.get_tool_adapter()
-        self.tool_schemas = (
-            _collect_toolkit_schemas(self.toolkits, self.adapter) or None
-        )
+
+    @property
+    def tool_schemas(self) -> list[dict] | None:
+        # Rebuilt for every model call: a toolkit's tools can change mid-turn
+        # (loading a skill adds its tools to the next call).
+        return _collect_toolkit_schemas(self.toolkits, self.adapter) or None
 
     def needs_approval(self, name: str) -> bool:
         return _tool_requires_approval(name, self.workflow, self.toolkits)

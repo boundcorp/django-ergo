@@ -74,7 +74,11 @@ export function BotPage() {
                   <td className="py-1.5 pr-4">
                     {s.message}
                     <div className="text-xs text-zinc-500">
-                      {s.to === 'new' ? 'in a new thread' : 'in the chat'}
+                      {s.to === 'thread'
+                        ? `in a new thread “${s.thread_title}”`
+                        : s.to === 'main'
+                          ? 'in the main chat'
+                          : `in ${s.to}`}
                       {s.users.length ? ` · for ${s.users.join(', ')}` : ''}
                     </div>
                   </td>
@@ -89,50 +93,56 @@ export function BotPage() {
       )}
 
       <Section title="Skills" count={bot.skills.length}>
-        {bot.skills.length ? (
-          <ul className="divide-y divide-zinc-200 rounded-lg border border-zinc-200 dark:divide-zinc-800 dark:border-zinc-800">
-            {bot.skills.map(skill => (
-              <li key={skill.name}>
-                <button
-                  className="flex w-full items-baseline gap-3 px-3 py-2 text-left hover:bg-zinc-50 dark:hover:bg-zinc-900"
-                  onClick={() => setOpen(open === skill.name ? null : skill.name)}
-                >
-                  <span className="font-mono text-sm">{skill.name}</span>
-                  <span className="text-sm text-zinc-500">{skill.description}</span>
-                </button>
-                {open === skill.name && (
-                  <pre className="mx-3 mb-3 overflow-auto rounded bg-zinc-50 p-3 text-xs whitespace-pre-wrap dark:bg-zinc-900">
-                    {skill.body}
-                  </pre>
-                )}
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p className="text-sm text-zinc-500">
-            No skills. Add Markdown files to the bot's <code>skills/</code> folder.
-          </p>
-        )}
-      </Section>
-
-      <Section title="Tools" count={bot.tools.length}>
-        <table className="w-full text-sm">
-          <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800">
-            {bot.tools.map(tool => (
-              <tr key={tool.name} className="align-top">
-                <td className="py-1.5 pr-4 font-mono text-xs whitespace-nowrap">
-                  {tool.name}
-                  {tool.requires_approval && (
-                    <span className="ml-2 rounded bg-amber-100 px-1 text-[10px] text-amber-800 dark:bg-amber-900/40 dark:text-amber-300">
-                      approval
-                    </span>
+        <p className="mb-2 text-xs text-zinc-500">
+          Chats load a skill when they need it and get its tools; skills marked “always” are loaded from the start
+          there.
+        </p>
+        <ul className="divide-y divide-zinc-200 rounded-lg border border-zinc-200 dark:divide-zinc-800 dark:border-zinc-800">
+          {bot.skills.map(skill => (
+            <li key={skill.name}>
+              <button
+                className="flex w-full flex-wrap items-baseline gap-x-3 px-3 py-2 text-left hover:bg-zinc-50 dark:hover:bg-zinc-900"
+                onClick={() => setOpen(open === skill.name ? null : skill.name)}
+              >
+                <span className="font-mono text-sm">{skill.name}</span>
+                <span className="text-sm text-zinc-500">{skill.description}</span>
+                <span className="ml-auto text-xs text-zinc-400">
+                  {skill.tools?.length ? `${skill.tools.length} tools` : 'instructions'}
+                  {skill.always_in?.length ? ` · always in ${skill.always_in.join(', ')}` : ''}
+                </span>
+              </button>
+              {open === skill.name && (
+                <div className="mx-3 mb-3 flex flex-col gap-2">
+                  {skill.source && <div className="text-xs text-zinc-500">from {skill.source}</div>}
+                  {skill.body && (
+                    <pre className="overflow-auto rounded bg-zinc-50 p-3 text-xs whitespace-pre-wrap dark:bg-zinc-900">
+                      {skill.body}
+                    </pre>
                   )}
-                </td>
-                <td className="py-1.5 text-zinc-600 dark:text-zinc-400">{tool.description}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+                  {!!skill.tools?.length && (
+                    <table className="w-full text-sm">
+                      <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800">
+                        {skill.tools.map(tool => (
+                          <tr key={tool.name} className="align-top">
+                            <td className="py-1.5 pr-4 font-mono text-xs whitespace-nowrap">
+                              {tool.name}
+                              {tool.requires_approval && (
+                                <span className="ml-2 rounded bg-amber-100 px-1 text-[10px] text-amber-800 dark:bg-amber-900/40 dark:text-amber-300">
+                                  approval
+                                </span>
+                              )}
+                            </td>
+                            <td className="py-1.5 text-zinc-600 dark:text-zinc-400">{tool.description}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              )}
+            </li>
+          ))}
+        </ul>
       </Section>
 
       <Section title="Instructions">

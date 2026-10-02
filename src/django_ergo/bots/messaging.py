@@ -57,9 +57,8 @@ SNIPPET = 120
 
 def label(session: ConversationSession) -> str:
     meta = session.metadata or {}
-    title = meta.get("title") or (
-        "Chat" if meta.get("bot_role") == "root" else "Thread"
-    )
+    role = meta.get("bot_role")
+    title = meta.get("title") or ("Main" if role in ("root", "main") else "Thread")
     return f"{session.bot_name} · {title}"
 
 

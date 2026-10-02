@@ -21,17 +21,29 @@ engine:
   type: claude                       # or openai; default is the settings engine
   config: {model: claude-sonnet-4-5}
   api_key_env: KITCHEN_ANTHROPIC_KEY # read at runtime, never stored
-root:                                # the root (stream) session
+root:                                # stream settings for main and named chats
   recent: 15                         # latest messages always in context
   budget_tokens: 8000
   granularity: conversation          # or reasoning / full
-orchestration: true                  # thread tools on the root; false = none
+orchestration: true                  # may the bot delegate at all (false: never)
 timezone: America/Los_Angeles        # default for users without a timezone
 current_time: true                   # current date and time in every turn
-sessions:
-  allow_create: true                 # may the root start threads?
+chats:
+  main:                              # every user's main chat (always there)
+    skills: [orchestration, tandoor] # loaded from the start (default: [orchestration])
+  reports:                           # a named chat: one per user, its own purpose
+    description: Weekly reports
+    instructions: Keep each report short.   # added to agents.md in this chat
+    skills: [analytics]
+threads:                             # child threads (`sessions:` also works)
+  skills: []
+  allow_create: true                 # may chats start threads of this bot?
   archive_after_days: 7              # archive threads idle this long (0 = never)
   default_compaction: {mode: context_size, config: {keep_recent: 6}}
+skills:
+  folder: skills                     # default
+  unload_after_turns: 30             # drop a loaded skill unused this many turns
+  requires: {meal-planning: [tandoor]}
 tools: [tools/tandoor.py]
 toolkits: ["myapp.toolkits:make_toolkit"]   # factory(ctx) -> Toolkit or list
 plugins:
@@ -105,7 +117,8 @@ schedules:
   - name: weekly-meal-plan
     cron: "0 17 * * sun"      # minute hour day-of-month month day-of-week
     message: Propose next week's dinners with the meal-planning skill.
-    to: root                  # the root chat (default), or new: a new thread each time
+    to: main                  # main (default), a named chat, or a new thread:
+    # to: {thread: "Reports {n}", in: main}   # {n} run number, {date:%b %d} and strftime codes
     users: [lee]              # default: permissions.users, else everyone with a chat
     enabled: true
 ```
@@ -116,27 +129,55 @@ names, read in each person's timezone (theirs, else the bot's, else
 (Ergonaut's beat runs it every minute); a `ScheduleRun` row keeps each from
 running twice. The bot answers in a turn of its own under a `[Scheduled
 message: <name>]` header, the reply stays in that chat, and the telegram
-plugin passes it on for a root chat.
+plugin passes it on for a main chat.
 
 ## Skills
 
-A `skills/` folder (or the folder named by `skills:` in bot.yaml) holds
-instructions the bot loads only when it needs them. Each skill is
-`skills/<name>.md` or `skills/<name>/SKILL.md`, with optional front matter:
+Everything a bot can do beyond answering is a **skill**, and every skill
+loads the same way (`django_ergo.bots.skillset`):
+
+- a skill folder: `skills/<name>.md` or `skills/<name>/SKILL.md`, optionally
+  with `skills/<name>/tools.py`;
+- a tool file from `tools:` (`tools/tandoor.py` is the `tandoor` skill; its
+  module docstring is the description);
+- a plugin that adds tools (`kb`, `config_repo`, `orca`, `bash`,
+  `attachments`, ...) and each `toolkits:` factory;
+- built-ins: `history` (always loaded) and `orchestration`.
 
 ```markdown
 ---
 name: meal-planning
 description: Plan a week of dinners from the recipe library
+requires: [tandoor]      # load these too
+always_load: false       # load in every chat from the start
 ---
 1. Review the last 60 days of the meal plan with view_meal_plan.
-2. ...
 ```
 
-A bot with skills gets `list_skills` and `load_skill` tools, and its
-sessions start with a `list_skills` result already in history, naming every
-skill and tool. Root sessions only carry the current turn natively, so they
-get that result on every turn.
+Every chat starts with an `ergo_skills_list` result already in its history:
+each skill, whether it's loaded, how many tools it has, and a hint for some
+unloaded plugins ("3 files in this chat"). `ergo_skill_load(name)` returns
+the skill's instructions and context and offers its tools from the next
+model call on (the same turn); using a skill's tool keeps it loaded, and one
+unused for `skills.unload_after_turns` turns (default 30, counting every turn
+in the chat) is dropped again. `ergo_skill_unload` drops one sooner. Loaded
+skills are kept per chat. `history` and the skills a chat lists under
+`chats.<name>.skills` (or `threads.skills`) are always loaded there.
+
+A plugin's `context_sources` are part of its skill (in context while it's
+loaded); `always_context_sources` stay on regardless (the KB's root article
+and prefetch).
+
+## Chats
+
+Every user has a **main** chat with each bot (formerly the root session),
+plus one chat for each named chat in `chats:`, created when first opened.
+Main and named chats are stream chats with history tools over every session
+the bot has with the user. A named chat adds its own `instructions` to
+agents.md and loads its own skills. Threads are child sessions of any chat.
+Instructions are rebuilt every turn, so edits to agents.md and bot.yaml reach
+existing chats. `bot.main_session(user)` and `bot.chat_session(user, name)`
+open them (`root_session` still works).
 
 ## Knowledge base folder
 
@@ -173,11 +214,11 @@ continues it. Declined calls go back to the model as errors.
 from django_ergo.bots.runtime import Bot
 
 bot = Bot.load("bots/kitchen")
-root = await bot.root_session(user)          # one per (bot, user)
-result = await bot.ask(root, "What's for dinner?")
+main = await bot.main_session(user)          # one per (bot, user)
+result = await bot.ask(main, "What's for dinner?")
 result.reply          # ChatReply
 result.text, result.suggestions, result.approvals
-await bot.resume(root, True)                 # approve what the turn is waiting on
+await bot.resume(main, True)                 # approve what the turn is waiting on
 ```
 
 Every turn is a **chat reply**: a [structured call](structured-calls.md) of
@@ -197,17 +238,17 @@ marked `requires_approval` pauses the turn (`result.approvals`), and
 `chat_reply_spec` live in `django_ergo.conversation.chat_reply` and work for
 any chat session, not only bots.
 
-The **root session** is a stream chat (see
+The **main chat** (and each named chat) is a stream chat (see
 [context-builder.md](context-builder.md)): each turn it sees the latest
 `recent` messages through a context block, sends only the current turn
 natively, and has history tools over every session this bot has with the
-user. It also gets the orchestrator tools:
+user. The `orchestration` skill (loaded in main by default) has:
 
 | Tool | What it does |
 | --- | --- |
 | `ergo_bot_list` | The bots it can message, with their `description`s (pre-seeded) |
-| `ergo_thread_list` | A bot's root chat and threads with the user (default: this bot) |
-| `ergo_thread_send` | Message a bot's `root` chat, a thread id, or a `new` thread; returns at once |
+| `ergo_thread_list` | A bot's main chat, named chats and threads with the user (default: this bot) |
+| `ergo_thread_send` | Message a bot's `main` chat, a named chat, a thread id, or a `new` thread; returns at once |
 | `ergo_thread_archive` | Archive one of this bot's threads; its history stays readable |
 
 Messages between sessions are asynchronous, like thread-to-thread
@@ -218,12 +259,12 @@ header; when that turn finishes, its reply goes back to the sender as a new
 message (`[Reply from ...]`) and starts a turn there. Replies are never
 answered back, chains of delegation stop after six hops, a recipient that is
 mid-turn finishes first, and a turn that stops for approval replies once the
-user decides. A message from a person routes nothing back, so a bot's root
+user decides. A message from a person routes nothing back, so a bot's main
 chat can take delegated work without its replies reaching Telegram.
 Delivery goes through `DJANGO_ERGO["THREAD_MESSAGE_RUNNER"]` (Ergonaut
 queues a Celery task) or a background thread. Starting a thread of the bot's
 own needs `sessions.allow_create`; set `orchestration: false` for a bot that
-only answers in its root session and gets none of these tools (it still
+never delegates; it has no `orchestration` skill (it still
 answers messages sent to it).
 
 Threads idle longer than `sessions.archive_after_days` (default 7) are

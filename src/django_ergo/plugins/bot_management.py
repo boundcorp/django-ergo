@@ -52,6 +52,13 @@ MAX_READ_CHARS = 50_000
 
 class BotManagementPlugin(BotPlugin):
     name = "bot_management"
+    description = (
+        "Read and change this bot repository: config, instructions, skills, new bots"
+    )
+
+    @property
+    def skill_name(self) -> str:
+        return "config_repo"
 
     def on_load(self) -> None:
         self.mode = self.config.get("mode", "propose_pr")

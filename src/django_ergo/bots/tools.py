@@ -330,6 +330,7 @@ class ToolModule:
     toolkit_factory: Callable | None = None
     contexts: list[BotContext] = field(default_factory=list)
     tasks: dict[str, Callable] = field(default_factory=dict)
+    module: Any = None  # the imported module (its docstring describes the skill)
 
 
 def load_tool_module(path: Path, bot_name: str) -> ToolModule:
@@ -360,5 +361,10 @@ def load_tool_module(path: Path, bot_name: str) -> ToolModule:
     }
     factory = getattr(module, "toolkits", None)
     return ToolModule(
-        path=path, tools=tools, toolkit_factory=factory, contexts=contexts, tasks=tasks
+        path=path,
+        tools=tools,
+        toolkit_factory=factory,
+        contexts=contexts,
+        tasks=tasks,
+        module=module,
     )

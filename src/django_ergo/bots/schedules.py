@@ -4,7 +4,8 @@
       - name: weekly-meal-plan
         cron: "0 17 * * sun"            # minute hour day-of-month month day-of-week
         message: Propose next week's dinners with the meal-planning skill.
-        to: root                        # root chat (default), or new: a new thread each time
+        to: main                        # main (default), a named chat, or a new thread:
+        # to: {thread: "Reports {n}", in: main}   # {n} run number, {date:%b %d}, strftime codes
         users: [lee]                    # default: permissions.users, else everyone with a chat
         enabled: true
 
@@ -49,7 +50,6 @@ FIELDS = [
     ("month", 1, 12),
     ("weekday", 0, 7),
 ]
-TARGETS = {"root", "new"}
 
 
 class ScheduleError(ValueError):
@@ -156,9 +156,20 @@ class Schedule:
     name: str
     cron: Cron
     message: str
-    to: str = "root"
+    to: str = "main"  # main, a named chat, or "thread"
     users: tuple[str, ...] = field(default_factory=tuple)
     enabled: bool = True
+    thread_title: str = ""  # for to: thread, a template for each new thread's title
+    thread_in: str = "main"  # the chat new threads hang under
+
+    def title_for(self, moment: datetime, run_number: int) -> str:
+        """A new thread's title: ``{n}`` is the run number, ``{date:...}`` and
+        strftime codes format the run's local time."""
+        try:
+            title = self.thread_title.format(n=run_number, date=moment)
+            return moment.strftime(title)
+        except (KeyError, IndexError, ValueError):
+            return f"{self.thread_title} {run_number}"
 
     @classmethod
     def from_config(cls, data: dict) -> Schedule:
@@ -170,10 +181,19 @@ class Schedule:
         if not name or not message or not data.get("cron"):
             msg = f"schedule {name or '?'} needs name, cron and message"
             raise ScheduleError(msg)
-        to = str(data.get("to") or "root")
-        if to not in TARGETS:
-            msg = f"schedule {name}: to must be root or new"
-            raise ScheduleError(msg)
+        target = data.get("to") or "main"
+        thread_title, thread_in = "", "main"
+        if isinstance(target, dict):
+            thread_title = str(target.get("thread") or "").strip()
+            thread_in = str(target.get("in") or "main")
+            if not thread_title:
+                msg = f"schedule {name}: to: {{thread: ...}} needs a title template"
+                raise ScheduleError(msg)
+            to = "thread"
+        elif str(target) == "new":  # the older spelling: a dated thread per run
+            to, thread_title = "thread", f"{name} %b %d"
+        else:
+            to = "main" if str(target) == "root" else str(target)
         return cls(
             name=name,
             cron=Cron.parse(str(data["cron"])),
@@ -181,6 +201,8 @@ class Schedule:
             to=to,
             users=tuple(str(u) for u in data.get("users") or []),
             enabled=bool(data.get("enabled", True)),
+            thread_title=thread_title,
+            thread_in="main" if thread_in == "root" else thread_in,
         )
 
 
@@ -227,13 +249,21 @@ def run_due(bots: Iterable[Bot], now: datetime | None = None) -> list[str]:
                 except IntegrityError:
                     continue  # already ran this minute (another beat, a retry)
                 try:
-                    if schedule.to == "new":
+                    if schedule.to == "thread":
+                        parent = async_to_sync(bot.chat_session)(
+                            user, schedule.thread_in
+                        )
+                        runs = ScheduleRun.objects.filter(
+                            bot_name=bot.name, schedule=schedule.name, user=user
+                        ).count()
                         session = async_to_sync(bot.create_session)(
                             user,
-                            title=f"{schedule.name} {local_now(bot, user, now):%b %d}",
+                            parent=parent,
+                            title=schedule.title_for(local_now(bot, user, now), runs),
+                            metadata={"schedule": schedule.name},
                         )
                     else:
-                        session = async_to_sync(bot.root_session)(user)
+                        session = async_to_sync(bot.chat_session)(user, schedule.to)
                     messaging.send(
                         None,
                         session,

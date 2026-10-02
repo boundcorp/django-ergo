@@ -1,18 +1,21 @@
-"""Skills: instructions a bot loads only when it needs them.
+"""Skill folders: instructions (and optionally tools) a bot loads when it needs them.
 
-A bot folder may have a ``skills/`` folder (``skills:`` in bot.yaml names
-another one). Each skill is a Markdown file, either ``skills/<name>.md`` or
-``skills/<name>/SKILL.md``, with optional front matter::
+A bot folder may have a ``skills/`` folder (``skills: {folder: ...}`` in
+bot.yaml names another one). Each skill is a Markdown file, either
+``skills/<name>.md`` or ``skills/<name>/SKILL.md``, with optional front matter::
 
     ---
     name: weekly-plan
     description: How to plan a week of dinners around the pantry
+    requires: [tandoor]        # load these skills along with this one
+    always_load: false         # load it in every chat from the start
     ---
     1. Check the pantry with view_pantry...
 
-When a bot has skills it gets two tools, ``list_skills`` and ``load_skill``,
-and every session starts with a ``list_skills`` result already in its
-history, so the model knows the skill names and its tools without asking.
+A folder skill can ship tools too: ``skills/<name>/tools.py`` (with
+``@bot_tool`` functions) is imported when the bot loads, and its tools are
+offered once the skill is loaded. See ``django_ergo.bots.skillset`` for how
+skills, tool files and plugins all load the same way.
 """
 
 from __future__ import annotations
@@ -20,21 +23,16 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
+from dataclasses import field
 from typing import TYPE_CHECKING
-
-from django_ergo.bots.tools import BotTool
-from django_ergo.bots.tools import FunctionToolkit
 
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from django_ergo.conversation.toolkit import Toolkit
 
 logger = logging.getLogger(__name__)
 
 SKILL_FILE = "SKILL.md"
-LIST_SKILLS = "list_skills"
-LOAD_SKILL = "load_skill"
 _FRONT_MATTER = re.compile(r"\A---\s*\n(.*?)\n---\s*\n?", re.DOTALL)
 
 
@@ -44,6 +42,9 @@ class Skill:
     description: str
     path: Path
     body: str
+    requires: list[str] = field(default_factory=list)
+    always_load: bool = False
+    tools_file: Path | None = None
 
 
 def _parse(path: Path, default_name: str) -> Skill:
@@ -63,11 +64,15 @@ def _parse(path: Path, default_name: str) -> Skill:
     if not description:
         first = next((line for line in body.splitlines() if line.strip()), "")
         description = first.lstrip("# ").strip()
+    tools_file = path.parent / "tools.py" if path.name == SKILL_FILE else None
     return Skill(
         name=str(meta.get("name") or default_name),
         description=description,
         path=path,
         body=body,
+        requires=[str(r) for r in meta.get("requires") or []],
+        always_load=bool(meta.get("always_load", False)),
+        tools_file=tools_file if tools_file and tools_file.is_file() else None,
     )
 
 
@@ -82,64 +87,3 @@ def load_skills(folder: Path | None) -> list[Skill]:
         elif entry.is_file() and entry.suffix == ".md":
             skills.append(_parse(entry, entry.stem))
     return sorted(skills, key=lambda skill: skill.name)
-
-
-def tool_overview(toolkits: list[Toolkit]) -> list[dict]:
-    """Name and description of every tool in ``toolkits``."""
-    from django_ergo.conversation.adapters import ClaudeToolAdapter
-
-    tools = []
-    for toolkit in toolkits:
-        for schema in toolkit.get_tools_schema(ClaudeToolAdapter()):
-            tools.append(  # noqa: PERF401
-                {"name": schema["name"], "description": schema.get("description", "")}
-            )
-    return tools
-
-
-def render_listing(skills: list[Skill], tools: list[dict]) -> str:
-    lines = ["Skills (load one with load_skill before doing that kind of task):"]
-    lines += [f"- {s.name}: {s.description}" for s in skills]
-    if tools:
-        lines += ["", "Tools:"]
-        lines += [f"- {t['name']}: {t['description']}" for t in tools]
-    return "\n".join(lines)
-
-
-def skills_toolkit(skills: list[Skill], tools_for_listing) -> Toolkit:
-    """``list_skills`` and ``load_skill`` for ``skills``.
-
-    ``tools_for_listing()`` returns the other tools to describe in the
-    listing.
-    """
-    by_name = {skill.name: skill for skill in skills}
-
-    def list_skills() -> str:
-        return render_listing(skills, tools_for_listing())
-
-    def load_skill(name: str) -> str:
-        skill = by_name.get(name)
-        if skill is None:
-            known = ", ".join(by_name) or "none"
-            return f"No skill named {name!r}. Skills: {known}"
-        return f"# Skill: {skill.name}\n\n{skill.body}"
-
-    return FunctionToolkit(
-        [
-            BotTool(
-                name=LIST_SKILLS,
-                description="List this bot's skills and tools.",
-                function=list_skills,
-                parameters={},
-                required=[],
-            ),
-            BotTool(
-                name=LOAD_SKILL,
-                description="Load a skill's instructions by name.",
-                function=load_skill,
-                parameters={"name": {"type": "string", "description": "Skill name"}},
-                required=["name"],
-            ),
-        ],
-        seed=[LIST_SKILLS],
-    )
