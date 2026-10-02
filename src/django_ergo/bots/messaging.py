@@ -13,6 +13,12 @@ thread-to-thread delegation.
   queued until it is free.
 - A turn that stops for approval leaves the message ``waiting``; the reply
   goes back once the user decides and the turn finishes.
+- A second message to a chat that hasn't answered the sender's first one
+  joins it: still queued, its text is added to the queued message; already
+  being worked on, it steers that turn (``DJANGO_ERGO["TURN_STEER"]``), so a
+  handoff split into two sends costs one turn, not two.
+- Turns that answer a message get ``DJANGO_ERGO["TURN_CONTROL"]``, so the
+  user's steering messages and Stop reach them like any other turn.
 
 Delivery runs through ``DJANGO_ERGO["THREAD_MESSAGE_RUNNER"]`` (Ergonaut
 queues a Celery task), or a background thread by default.
@@ -30,6 +36,8 @@ from asgiref.sync import async_to_sync
 from django.db import close_old_connections
 from django.db import transaction
 from django.db.models import Q
+from django.db.models import Value
+from django.db.models.functions import Concat
 from django.utils import timezone
 
 from django_ergo.bots import archival
@@ -125,6 +133,10 @@ def send(  # noqa: PLR0913
     if depth > MAX_DEPTH:
         msg = f"Too many hops of delegation ({depth}); answer with what you have."
         raise ValueError(msg)
+    if sender is not None and in_reply_to is None and not metadata:
+        joined = _join_open_request(sender, recipient, text)
+        if joined is not None:
+            return joined
     message = ThreadMessage.objects.create(
         sender_session=sender,
         recipient_session=recipient,
@@ -135,6 +147,43 @@ def send(  # noqa: PLR0913
     )
     transaction.on_commit(lambda: dispatch(str(message.id), registry))
     return message
+
+
+def _join_open_request(
+    sender: ConversationSession, recipient: ConversationSession, text: str
+) -> ThreadMessage | None:
+    """Add ``text`` to the sender's unanswered request to ``recipient``, if any:
+    into the queued message, or as steering for the turn working on it."""
+    open_request = (
+        ThreadMessage.objects.filter(
+            sender_session=sender,
+            recipient_session=recipient,
+            in_reply_to__isnull=True,
+            status__in=[ThreadMessageStatus.QUEUED, ThreadMessageStatus.DELIVERED],
+        )
+        .order_by("-created_at")
+        .first()
+    )
+    if open_request is None:
+        return None
+    # Still queued: the update fails if delivery claimed it meanwhile.
+    if ThreadMessage.objects.filter(
+        id=open_request.id, status=ThreadMessageStatus.QUEUED
+    ).update(text=Concat("text", Value("\n\n" + text)), updated_at=timezone.now()):
+        open_request.refresh_from_db()
+        return open_request
+    steer = api_settings.TURN_STEER
+    if steer is None or not steer(
+        str(recipient.id),
+        f"[More from {label(sender)} (thread {sender.id}), adding to its "
+        f"message you're working on]\n\n{text}",
+    ):
+        return None
+    ThreadMessage.objects.filter(id=open_request.id).update(
+        text=Concat("text", Value("\n\n" + text)), updated_at=timezone.now()
+    )
+    open_request.refresh_from_db()
+    return open_request
 
 
 def current_thread_message(session: ConversationSession) -> ThreadMessage | None:
@@ -207,14 +256,21 @@ def deliver(message_id: str, registry: BotRegistry | None = None) -> None:
     if busy(recipient) or not lock.acquire(blocking=False):
         requeue(message)
         return
+    control = None
     try:
         archival.reopen(recipient)
-        async_to_sync(bot.ask)(recipient, turn_text(message), thread_message=message)
+        factory = api_settings.TURN_CONTROL
+        control = factory(recipient) if factory is not None else None
+        async_to_sync(bot.ask)(
+            recipient, turn_text(message), thread_message=message, control=control
+        )
     except Exception as exc:
         logger.exception("Delivering thread message %s failed", message_id)
         fail(message, str(exc))
     finally:
         lock.release()
+        if close := getattr(control, "close", None):
+            close()
     redispatch_waiting(recipient, registry=registry)  # anything that queued meanwhile
 
 

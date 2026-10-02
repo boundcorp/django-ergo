@@ -50,6 +50,15 @@ DEFAULTS = {
     # Callable(message_id) that delivers a bot-to-bot thread message, e.g. by
     # queueing a Celery task. None = deliver in a background thread.
     "THREAD_MESSAGE_RUNNER": None,
+    # Callable(session) -> TurnControl for the turn that answers a thread
+    # message, so steering and Stop reach it (see conversation.structured).
+    # The control's optional close() runs after the turn. None = no control.
+    "TURN_CONTROL": None,
+    # Callable(session_id, text) -> bool: hand text to the session's running
+    # turn as a steering message; False if no turn is running. A bot's second
+    # message to a chat still working on its first goes this way. None = it
+    # waits and runs as a turn of its own.
+    "TURN_STEER": None,
     # Callable(bot_name, task_name, args, kwargs) -> TaskHandle that runs a
     # @bot_task, e.g. on a Celery worker. None = a thread pool in this process.
     "BOT_TASK_RUNNER": None,
@@ -87,6 +96,8 @@ IMPORT_STRINGS = [
     "EMBEDDING_PROVIDER",  # Import embedding provider class
     "AUDIO_TRANSCRIBER",
     "THREAD_MESSAGE_RUNNER",
+    "TURN_CONTROL",
+    "TURN_STEER",
     "BOT_TASK_RUNNER",
     "SCHEDULE_RUNNER",
     "WORKER_RUNNER",

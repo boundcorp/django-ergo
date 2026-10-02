@@ -1125,6 +1125,8 @@ def test_replies_count_toward_the_delegation_depth(tmp_path, thread_messages):
             break
         request = messaging.send(a, b, "again?")
         assert request.depth == hop
+        request.status = "answered"
+        request.save()
         reply = ThreadMessage.objects.create(
             sender_session=b,
             recipient_session=a,
@@ -1246,3 +1248,69 @@ def test_max_turns_comes_from_bot_yaml(tmp_path):
         yaml_text="name: kitchen\nmax_turns: 80\ntools: [tools/pantry.py]\n",
     )
     assert bot.reply_spec([]).max_turns == 80
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_second_message_joins_the_queued_one(tmp_path, thread_messages):
+    from django_ergo.bots import messaging
+    from django_ergo.conversation.models import ThreadMessage
+
+    user = User.objects.create(username="splitter")
+    a = ConversationSession.objects.create(
+        user=user, bot_name="a", metadata={"bot_role": "main"}
+    )
+    b = ConversationSession.objects.create(
+        user=user, bot_name="b", metadata={"bot_role": "main"}
+    )
+    first = messaging.send(a, b, "Design the cover.")
+    second = messaging.send(a, b, "Use the blue palette.")
+    assert second.id == first.id
+    first.refresh_from_db()
+    assert first.text == "Design the cover.\n\nUse the blue palette."
+    assert [str(first.id)] == SENT  # one turn, not two
+
+    # Being worked on, with no way to steer: the new text waits as its own message.
+    ThreadMessage.objects.filter(id=first.id).update(status="delivered")
+    third = messaging.send(a, b, "And the back cover.")
+    assert third.id != first.id
+    # A person's message, or a reply, never joins.
+    assert messaging.send(None, b, "hi").id != third.id
+
+
+STEERED: list = []
+
+
+def record_steer(session_id, text):
+    STEERED.append((session_id, text))
+    return True
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_second_message_steers_the_turn_working_on_the_first(
+    settings, thread_messages
+):
+    from django_ergo.bots import messaging
+
+    settings.DJANGO_ERGO = {
+        **settings.DJANGO_ERGO,
+        "TURN_STEER": "tests.test_bots.record_steer",
+    }
+    STEERED.clear()
+    user = User.objects.create(username="steerer")
+    a = ConversationSession.objects.create(
+        user=user, bot_name="a", metadata={"bot_role": "main"}
+    )
+    b = ConversationSession.objects.create(
+        user=user, bot_name="b", metadata={"bot_role": "main"}
+    )
+    first = messaging.send(a, b, "Design the cover.")
+    first.status = "delivered"
+    first.save()
+    again = messaging.send(a, b, "Blue, please.")
+    assert again.id == first.id
+    [(session_id, text)] = STEERED
+    assert session_id == str(b.id)
+    assert text.startswith("[More from a · Main")
+    assert text.endswith("Blue, please.")
+    assert again.text == "Design the cover.\n\nBlue, please."
+    assert [str(first.id)] == SENT

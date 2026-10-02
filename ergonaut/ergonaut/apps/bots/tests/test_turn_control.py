@@ -116,3 +116,55 @@ def test_stop_and_interrupt_endpoints(client, cook, use_bots):  # noqa: F811
     someone = get_user_model().objects.create_user("someone", "s@example.com", "pw")
     other = ConversationSession.objects.create(user=someone, bot_name="kitchen", metadata={"bot_role": "root"})
     assert post(client, f"/api/sessions/{other.id}/stop").status_code == 404
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_turn_answering_a_bot_takes_steering_and_its_follow_up(session, cook, use_bots):  # noqa: F811
+    import threading
+
+    from django_ergo.bots import messaging
+    from django_ergo.conversation.models import ThreadMessage
+
+    boss = ConversationSession.objects.create(user=cook, bot_name="kitchen", metadata={"bot_role": "main"})
+    client = use_bots(tool_call("pantry_count", {"item": "eggs"}), say("Four eggs, no milk."))
+    request = ThreadMessage.objects.create(sender_session=boss, recipient_session=session, text="How many eggs?")
+
+    def mid_turn():
+        tasks.push_message(session.id, "From the user: and milk?")
+        # The boss adds to its handoff while it's being worked on: it steers, no second turn.
+        sent = threading.Thread(target=lambda: messaging.send(boss, session, "Butter too."))
+        sent.start()
+        sent.join()
+
+    during_first_call(client, mid_turn)
+    messaging.deliver(str(request.id))  # as a worker does, holding the turn lock
+
+    # Both arrived during the same step, so they reach the model as one message.
+    assert texts(client.calls[1]["messages"][-1:]) == [
+        "From the user: and milk?\n\n[More from kitchen · Main "
+        f"(thread {boss.id}), adding to its message you're working on]\n\nButter too."
+    ]
+    assert ThreadMessage.objects.filter(recipient_session=session).count() == 1
+    request.refresh_from_db()
+    assert request.status == "answered"
+    assert request.text == "How many eggs?\n\nButter too."
+    assert session.structured_calls.count() == 1
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_message_the_turn_hasnt_read_can_be_unsent(session, client, use_bots):  # noqa: F811
+    use_bots(tool_call("pantry_count", {"item": "eggs"}), say("Four eggs."))
+    first = tasks.push_message(session.id, "Oops, wrong chat")
+    tasks.push_message(session.id, "How many eggs?")
+    detail = client.get(f"/api/sessions/{session.id}").json()
+    assert [m["text"] for m in detail["inbox"]] == ["Oops, wrong chat", "How many eggs?"]
+
+    response = client.delete(f"/api/sessions/{session.id}/inbox/{first}")
+    assert response.status_code == 200
+    assert response.json() == {"text": "Oops, wrong chat"}
+    assert client.delete(f"/api/sessions/{session.id}/inbox/{first}").status_code == 409  # already gone
+
+    tasks.run_turn(str(session.id))
+    call = session.structured_calls.get()
+    assert call.request == "How many eggs?"
+    assert client.get(f"/api/sessions/{session.id}").json()["inbox"] == []

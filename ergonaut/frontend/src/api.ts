@@ -236,7 +236,11 @@ export type SessionDetail = {
   calls: Call[]
   requests?: DelegatedRequest[]
   workers?: Worker[]
+  // Sent while a turn runs; the model hasn't seen them yet, so they can be unsent.
+  inbox?: InboxItem[]
 }
+
+export type InboxItem = { id: string; text: string; files: string[] }
 
 export type Turn = {
   session_id: string
@@ -332,6 +336,7 @@ export const api = {
   send: (id: string, text: string, attachmentIds: string[] = [], mode: 'send' | 'interrupt' = 'send') =>
     request<Turn>('POST', `/sessions/${id}/messages`, { text, attachment_ids: attachmentIds, mode }),
   stop: (id: string) => request<Turn>('POST', `/sessions/${id}/stop`),
+  unsend: (id: string, itemId: string) => request<{ text: string }>('DELETE', `/sessions/${id}/inbox/${itemId}`),
   approve: (id: string, approve: boolean, approvalIds?: string[]) =>
     request<Turn>('POST', `/sessions/${id}/approvals`, { approve, approval_ids: approvalIds }),
   close: (id: string) => request<Session>('POST', `/sessions/${id}/close`),

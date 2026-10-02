@@ -191,6 +191,19 @@ export function Chat({ onChange }: { onChange: () => void }) {
     run(() => api.send(id, message, ids, mode), message || outgoing.map(f => f.filename).join(', '))
   }
 
+  // Take back a message the running turn hasn't picked up; its text returns to the box.
+  async function unsendItem(itemId: string, itemText: string) {
+    setError('')
+    try {
+      const { text: back } = await api.unsend(id, itemId)
+      if (pending?.text === itemText) setPending(null)
+      if (!text.trim()) setText(back === '(see the attached files)' ? '' : back)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+    await load()
+  }
+
   async function stop() {
     setStopping(true)
     setError('')
@@ -235,8 +248,12 @@ export function Chat({ onChange }: { onChange: () => void }) {
   // A turn is running that Stop can reach (not just this browser's request in flight).
   const running = !!pending || lastCall?.status === 'in_progress'
   const callError = !pending && lastCall?.status === 'failed' ? lastCall.error : ''
-  // Show a queued message until the worker has stored it.
-  const echo = pending?.text && !stored(detail.messages, pending.text, pending.line) ? pending.text : ''
+  const inbox = detail.inbox ?? []
+  // Show a queued message until the worker has stored it (the inbox shows it while it waits there).
+  const echo =
+    pending?.text && !stored(detail.messages, pending.text, pending.line) && !inbox.some(m => m.text === pending.text)
+      ? pending.text
+      : ''
 
   return (
     <div className="flex h-full">
@@ -300,6 +317,25 @@ export function Chat({ onChange }: { onChange: () => void }) {
               </div>
             </div>
           )}
+          {inbox.map(item => (
+            <div key={item.id} className="mt-3 flex flex-col items-end gap-1">
+              <div className="max-w-[80%] rounded-2xl border border-dashed border-indigo-400 bg-indigo-50 px-4 py-2 whitespace-pre-wrap text-indigo-900 dark:bg-indigo-950/40 dark:text-indigo-100">
+                {item.text}
+                {!!item.files.length && <div className="mt-1 text-xs opacity-70">📎 {item.files.join(', ')}</div>}
+              </div>
+              <div className="flex items-center gap-2 text-xs text-zinc-500">
+                Not seen by the bot yet
+                <button
+                  type="button"
+                  title="Take this message back before the bot reads it"
+                  className="rounded border border-zinc-300 px-2 py-0.5 hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                  onClick={() => unsendItem(item.id, item.text)}
+                >
+                  Unsend
+                </button>
+              </div>
+            </div>
+          ))}
           {thinking && (
             <div className="mt-3 text-sm text-zinc-500">
               {stopping ? 'Stopping…' : pending && !lastCall?.status?.startsWith('in_') ? 'Queued…' : 'Thinking…'}
