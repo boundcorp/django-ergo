@@ -689,3 +689,120 @@ async def test_openai_calls_record_cache_reasoning_and_per_request_cost(user):
     # prompt is past the 272K long-context line: 2x input and cache, 1.5x output.
     assert float(call.cost_usd) == pytest.approx(0.04 * 2 + 0.006 * 2 + 0.05 * 1.5)
     assert call.metadata["cost_parts"]["cache_read"] == pytest.approx(0.012)
+
+
+# ---------------------------------------------------------------------------
+# Turn control: steering and stopping between steps
+# ---------------------------------------------------------------------------
+
+
+class ScriptedControl:
+    """Hands out one TurnSignal per check, then empty ones."""
+
+    def __init__(self, *signals):
+        self.signals = list(signals)
+        self.checks = 0
+
+    async def check(self):
+        self.checks += 1
+        return self.signals.pop(0) if self.signals else structured.TurnSignal()
+
+
+async def test_steering_message_reaches_the_next_step(user):
+    toolkit = LookupToolkit()
+    engine = claude_engine(
+        claude_tool("lookup", {"q": "docs"}),
+        claude_tool("submit_output", VALID_PLAN, tool_id="toolu_2"),
+    )
+    spec = StructuredCallSpec(kind="planner", response_model=Plan, toolkits=[toolkit])
+    control = ScriptedControl(
+        structured.TurnSignal(),  # before the first call
+        structured.TurnSignal(messages=[structured.SteeringMessage("Only two steps")]),
+    )
+
+    result = await run_structured_call(
+        spec, "Plan X", user=user, engine=engine, control=control
+    )
+
+    assert result.ok
+    assert control.checks == 2
+    second = engine._client.calls[1]["messages"]
+    assert second[-2]["content"][0]["type"] == "tool_result"
+    assert second[-1] == {
+        "role": "user",
+        "content": [{"type": "text", "text": "Only two steps"}],
+    }
+    # The steering message stays in the call's history.
+    assert "Only two steps" in json.dumps(result.call.transcript)
+
+
+async def test_stop_ends_the_call_at_the_next_step(user):
+    toolkit = LookupToolkit()
+    engine = claude_engine(
+        claude_tool("lookup", {"q": "docs"}),
+        claude_tool("submit_output", VALID_PLAN, tool_id="toolu_2"),
+    )
+    spec = StructuredCallSpec(kind="planner", response_model=Plan, toolkits=[toolkit])
+    control = ScriptedControl(structured.TurnSignal(), structured.TurnSignal(stop=True))
+
+    result = await run_structured_call(
+        spec, "Plan X", user=user, engine=engine, control=control
+    )
+
+    assert result.status == StructuredCallStatus.STOPPED
+    assert not result.ok
+    assert result.error == "Stopped by the user"
+    # The tool that was running finished; no further model call was made.
+    assert toolkit.calls == [("lookup", {"q": "docs"})]
+    assert len(engine._client.calls) == 1
+    saved = await StructuredCall.objects.aget(pk=result.call.pk)
+    assert saved.status == "stopped"
+    assert saved.turns_used == 1
+    assert saved.transcript[-1]["content"][0]["type"] == "tool_result"
+
+
+async def test_stop_works_after_an_approval(user):
+    toolkit = ApprovalToolkit()
+    engine = claude_engine(claude_tool("delete_all", {}, tool_id="d1"))
+    spec = StructuredCallSpec(kind="planner", response_model=Plan, toolkits=[toolkit])
+    paused = await run_structured_call(
+        spec, "Clean up", user=user, engine=engine, allow_approvals=True
+    )
+
+    done = await structured.resume_structured_call(
+        spec,
+        paused.call,
+        {"d1": True},
+        engine=engine,
+        control=ScriptedControl(structured.TurnSignal(stop=True)),
+    )
+
+    assert done.status == StructuredCallStatus.STOPPED
+    assert toolkit.ran == [{}]
+    assert len(engine._client.calls) == 1
+
+
+async def test_steering_in_a_stream_session_keeps_the_turns_tool_work(user):
+    session = await _chat_session(user)
+    session.compaction_config = {"native_history": "turn"}
+    await session.asave()
+    engine = claude_engine(
+        claude_tool("lookup", {"q": "docs"}),
+        claude_tool("submit_output", VALID_PLAN, tool_id="toolu_2"),
+    )
+    spec = StructuredCallSpec(
+        kind="planner", response_model=Plan, toolkits=[LookupToolkit()]
+    )
+    control = ScriptedControl(
+        structured.TurnSignal(),
+        structured.TurnSignal(messages=[structured.SteeringMessage("Shorter")]),
+    )
+
+    result = await run_structured_call(
+        spec, "Plan X", session=session, engine=engine, control=control
+    )
+
+    assert result.ok
+    sent = engine._client.calls[1]["messages"]
+    assert sent[0]["content"][0]["text"] == "Plan X"
+    assert sent[-1]["content"][0]["text"] == "Shorter"

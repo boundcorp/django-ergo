@@ -190,6 +190,16 @@ def test_native_window_keeps_only_current_turn():
     session.compaction_config = {}
     assert apply_native_window(session, messages) == messages
 
+    # A message after tool results (steering, or one after a stopped turn)
+    # continues the turn instead of starting a new one.
+    session.compaction_config = {"native_history": "turn"}
+    steered = [
+        *messages,
+        {"role": "user", "content": [{"type": "text", "text": "steer"}]},
+        {"role": "user", "content": [{"type": "text", "text": "and more"}]},
+    ]
+    assert apply_native_window(session, steered) == steered[2:]
+
 
 # ---------------------------------------------------------------------------
 # StreamChat

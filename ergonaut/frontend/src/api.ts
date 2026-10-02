@@ -54,6 +54,7 @@ export type Approval = { id: string; name: string; input: unknown }
 export type Call = {
   id: string
   kind: string
+  // in_progress, awaiting_approval, completed, failed, turn_limited or stopped
   status: string
   request: string
   response: { type?: string; text?: string; suggestions?: string[] } | null
@@ -309,8 +310,10 @@ export const api = {
   session: (id: string) => request<SessionDetail>('GET', `/sessions/${id}`),
   call: (id: string) =>
     request<Call & { system_prompt: string; transcript: unknown[]; metadata: unknown }>('GET', `/calls/${id}`),
-  send: (id: string, text: string, attachmentIds: string[] = []) =>
-    request<Turn>('POST', `/sessions/${id}/messages`, { text, attachment_ids: attachmentIds }),
+  // While a turn runs, "send" steers it and "interrupt" stops it and starts a new one.
+  send: (id: string, text: string, attachmentIds: string[] = [], mode: 'send' | 'interrupt' = 'send') =>
+    request<Turn>('POST', `/sessions/${id}/messages`, { text, attachment_ids: attachmentIds, mode }),
+  stop: (id: string) => request<Turn>('POST', `/sessions/${id}/stop`),
   approve: (id: string, approve: boolean, approvalIds?: string[]) =>
     request<Turn>('POST', `/sessions/${id}/approvals`, { approve, approval_ids: approvalIds }),
   close: (id: string) => request<Session>('POST', `/sessions/${id}/close`),

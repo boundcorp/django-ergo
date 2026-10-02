@@ -78,6 +78,7 @@ if TYPE_CHECKING:
     from django_ergo.conversation.models import ThreadMessage
     from django_ergo.conversation.runner import PendingApproval
     from django_ergo.conversation.structured import StructuredCallResult
+    from django_ergo.conversation.structured import TurnControl
     from django_ergo.conversation.toolkit import Toolkit
 
 MAIN_ROLE = "main"
@@ -730,11 +731,14 @@ class Bot:
         *,
         attachments: list[Attachment] | None = None,
         thread_message: ThreadMessage | None = None,
+        control: TurnControl | None = None,
     ) -> TurnResult:
         """Answer one message with a ChatReply. Plugins see before/after hooks.
 
         With ``thread_message`` (another session's message, see
         ``django_ergo.bots.messaging``) the reply is routed back to its sender.
+        ``control`` steers or stops the turn between steps (see
+        ``conversation.structured``).
         """
         for plugin in self.plugins:
             await _maybe_await(plugin.before_turn(session, message))
@@ -747,6 +751,7 @@ class Bot:
             attachments=attachments,
             context_builder=builder,
             allow_approvals=True,
+            control=control,
             metadata={"thread_message": str(thread_message.id)}
             if thread_message
             else None,
@@ -770,12 +775,16 @@ class Bot:
         )
 
     async def resume(
-        self, session: ConversationSession, decisions: dict[str, bool] | bool
+        self,
+        session: ConversationSession,
+        decisions: dict[str, bool] | bool,
+        *,
+        control: TurnControl | None = None,
     ) -> TurnResult:
         """Continue a turn that stopped for approval.
 
         ``decisions`` maps tool_use_id to approve/deny, or is one bool for
-        every pending tool call.
+        every pending tool call. ``control`` works as in ``ask``.
         """
         call = await self.pending_call(session)
         if call is None:
@@ -791,6 +800,7 @@ class Bot:
                 decisions,
                 engine=self.make_engine(),
                 context_builder=builder,
+                control=control,
             )
         except StructuredCallError:
             return TurnResult(session=session)  # someone else answered it first

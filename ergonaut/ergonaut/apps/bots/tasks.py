@@ -1,23 +1,38 @@
 """Bot turns and thread messages as Celery tasks, and live "session changed" notices.
 
-The web app queues a turn (a message, or an approval answer) with
-``queue_turn`` and returns; a worker runs it and the browser follows along
-over SSE. Without a broker Celery runs tasks eagerly, so the turn runs inside
-the request, as before.
+The web app queues a turn (a message, or an approval answer) and returns; a
+worker runs it and the browser follows along over SSE. Without a broker Celery
+runs tasks eagerly, so the turn runs inside the request, as before.
 
 Turns for one session never overlap: each takes the session's turn lock (Redis
-when ``REDIS_URL`` is set, else in-process); a turn that finds it taken retries.
-``@bot_task`` work runs on its own ``bot_tasks`` queue. Every write to a session's messages or calls
-publishes its id on ``ergonaut:sessions``, which wakes the SSE streams
-watching it.
+when ``REDIS_URL`` is set, else in-process). Messages go through the session's
+inbox (``ergonaut:turn:<session>:inbox``): ``queue_message`` pushes one and
+queues ``run_turn``. The turn holding the lock takes everything in the inbox
+as its message, and at each step of the turn (after a tool call's results are
+in) takes anything newer as a steering message the model sees on its next
+step. Whatever arrives after a turn's last step starts the next turn, under
+the same lock. A ``run_turn`` that finds the lock taken just ends, since the
+holder will pick its message up; each holder checks the inbox again after
+releasing the lock, so nothing is left behind. An approval answer that finds
+the lock taken retries.
+
+Stop sets ``ergonaut:turn:<session>:stop``; the running turn ends at its next
+step with status ``stopped``. An interrupt sets it and then queues a message,
+which runs as the next turn.
+
+``@bot_task`` work runs on its own ``bot_tasks`` queue. Every write to a session's
+messages or calls publishes its id on ``ergonaut:sessions``, which wakes the SSE
+streams watching it.
 """
 
 from __future__ import annotations
 
 import contextlib
+import json
 import logging
 import os
 import threading
+import time
 
 from asgiref.sync import async_to_sync
 from celery import shared_task
@@ -33,6 +48,10 @@ LOCK_TTL_SECONDS = 60
 LOCK_RENEW_SECONDS = 20
 # How long a @bot_task wait() blocks when the tool gives no timeout.
 DEFAULT_TASK_WAIT_SECONDS = 600
+# A stop nobody acted on (no turn reached a step) is forgotten after this long.
+STOP_TTL_SECONDS = 10 * 60
+# Messages left in an inbox nobody drained (no worker running) expire after this long.
+INBOX_TTL_SECONDS = 24 * 60 * 60
 
 
 _clients: dict = {}
@@ -88,6 +107,145 @@ def _keep_lock(lock, stop: threading.Event) -> None:
             return
 
 
+# -- stop flag and inbox -------------------------------------------------------
+#
+# Without Redis these live in this process, like the in-process turn lock.
+
+_local_stops: dict[str, float] = {}  # session id -> when the stop expires (monotonic)
+_local_inboxes: dict[str, list[str]] = {}
+_local_guard = threading.Lock()
+
+
+def _stop_key(session_id) -> str:
+    return f"ergonaut:turn:{session_id}:stop"
+
+
+def _inbox_key(session_id) -> str:
+    return f"ergonaut:turn:{session_id}:inbox"
+
+
+def turn_running(session_id) -> bool:
+    """Whether a turn (or a thread message's delivery) holds the session's lock now."""
+    client = redis_client()
+    if client is None:
+        from django_ergo.bots import messaging
+
+        lock = messaging._session_locks.get(str(session_id))
+        return lock is not None and lock.locked()
+    return bool(client.exists(f"ergonaut:turn:{session_id}"))
+
+
+def request_stop(session_id) -> bool:
+    """Ask the running turn to stop at its next step. Returns whether one was running."""
+    if not turn_running(session_id):
+        return False
+    client = redis_client()
+    if client is None:
+        with _local_guard:
+            _local_stops[str(session_id)] = time.monotonic() + STOP_TTL_SECONDS
+    else:
+        client.set(_stop_key(session_id), "1", ex=STOP_TTL_SECONDS)
+    return True
+
+
+def stop_requested(session_id) -> bool:
+    client = redis_client()
+    if client is None:
+        with _local_guard:
+            return _local_stops.get(str(session_id), 0) > time.monotonic()
+    return bool(client.exists(_stop_key(session_id)))
+
+
+def clear_stop(session_id) -> None:
+    client = redis_client()
+    if client is None:
+        with _local_guard:
+            _local_stops.pop(str(session_id), None)
+    else:
+        client.delete(_stop_key(session_id))
+
+
+def push_message(session_id, text: str, attachment_ids: list[str] | None = None) -> None:
+    item = json.dumps({"text": text, "attachment_ids": [str(a) for a in attachment_ids or []]})
+    client = redis_client()
+    if client is None:
+        with _local_guard:
+            _local_inboxes.setdefault(str(session_id), []).append(item)
+        return
+    with client.pipeline() as pipe:
+        pipe.rpush(_inbox_key(session_id), item)
+        pipe.expire(_inbox_key(session_id), INBOX_TTL_SECONDS)
+        pipe.execute()
+
+
+def drain_inbox(session_id) -> list[dict]:
+    """Take every message waiting in the session's inbox, oldest first."""
+    client = redis_client()
+    if client is None:
+        with _local_guard:
+            raw = _local_inboxes.pop(str(session_id), [])
+    else:
+        with client.pipeline() as pipe:
+            pipe.lrange(_inbox_key(session_id), 0, -1)
+            pipe.delete(_inbox_key(session_id))
+            raw = pipe.execute()[0]
+    return [json.loads(item) for item in raw]
+
+
+def inbox_waiting(session_id) -> bool:
+    client = redis_client()
+    if client is None:
+        with _local_guard:
+            return bool(_local_inboxes.get(str(session_id)))
+    return bool(client.llen(_inbox_key(session_id)))
+
+
+class InboxControl:
+    """Turn control for a user's turn: stops on the stop flag, steers with the inbox.
+
+    Uploads sent with steering messages are kept in ``uploads`` for the caller to
+    remove once the turn has stored copies of them.
+    """
+
+    def __init__(self, session):
+        self.session = session
+        self.uploads: list = []
+
+    async def check(self):
+        from asgiref.sync import sync_to_async
+
+        return await sync_to_async(self._check, thread_sensitive=True)()
+
+    def _check(self):
+        from django_ergo.conversation.structured import SteeringMessage, TurnSignal
+
+        session_id = str(self.session.id)
+        if stop_requested(session_id):
+            # Leave the inbox alone: an interrupt's message starts the next turn.
+            return TurnSignal(stop=True)
+        items = drain_inbox(session_id)
+        if not items:
+            return TurnSignal()
+        text, attachment_ids = combine(items)
+        attachments, uploads = take_uploads(self.session, attachment_ids)
+        self.uploads.extend(uploads)
+        notify(session_id)
+        return TurnSignal(messages=[SteeringMessage(text, attachments or None)])
+
+
+def combine(items: list[dict]) -> tuple[str, list[str]]:
+    """Messages queued together, as one message and its files."""
+    texts = [item["text"] for item in items if item.get("text")]
+    attachment_ids = [a for item in items for a in item.get("attachment_ids") or []]
+    return "\n\n".join(texts) or "(see the attached files)", attachment_ids
+
+
+def remove_uploads(rows) -> None:
+    for row in rows:
+        row.file.delete(save=False)
+        row.delete()
+
+
 def notify(session_id) -> None:
     """Tell SSE streams that a session changed. Never raises."""
     client = redis_client()
@@ -131,44 +289,88 @@ def run_turn(  # noqa: PLR0913
     attachment_ids: list[str] | None = None,
     approval_ids: list[str] | None = None,
 ) -> None:
-    """Answer a message (with any uploaded files), or answer the approval the user saw.
+    """Answer the session's inbox, or answer the approval the user saw (then the inbox).
 
     ``approval_ids`` are the tool calls the user was shown; if the turn now
     waits on anything else (a double click after it moved on), nothing runs.
+    A ``message`` passed in (a task queued before the inbox) joins the inbox.
     """
-    from django_ergo.bots import webhooks
     from django_ergo.conversation.models import ConversationSession
 
+    if message is not None:
+        push_message(session_id, message, attachment_ids)
     session = ConversationSession.objects.select_related("user").get(id=session_id)
-    eager = getattr(self.request, "is_eager", False)
-    with session_lock(session_id, wait=eager) as locked:
-        if not locked:
-            # Another turn of this session is running; try again shortly.
-            raise self.retry(countdown=3)
+    if approve is None:
+        with session_lock(session_id, wait=False) as locked:
+            if not locked:
+                return  # the running turn takes the message
+            answer_inbox(session)
+    else:
+        eager = getattr(self.request, "is_eager", False)
+        with session_lock(session_id, wait=eager) as locked:
+            if not locked:
+                # Another turn of this session is running; try again shortly.
+                raise self.retry(countdown=3)
+            answer_approval(session, approve, approval_ids)
+            answer_inbox(session)
+    queue_waiting(session_id)
+
+
+def loaded_bot(session):
+    from django_ergo.bots import webhooks
+
+    registry = webhooks.get_registry()
+    if registry is None or session.bot_name not in registry:
+        msg = f"The {session.bot_name} bot isn't loaded"
+        raise LookupError(msg)
+    return registry.get(session.bot_name)
+
+
+def answer_approval(session, approve: bool, approval_ids: list[str] | None) -> None:
+    session_id = str(session.id)
+    clear_stop(session_id)
+    try:
+        bot = loaded_bot(session)
+        pending = async_to_sync(bot.pending_call)(session)
+        waiting = sorted(a["id"] for a in (pending.metadata or {}).get("pending_approvals", [])) if pending else []
+        if pending is not None and (approval_ids is None or sorted(approval_ids) == waiting):
+            control = InboxControl(session)
+            async_to_sync(bot.resume)(session, approve, control=control)
+            remove_uploads(control.uploads)
+    except Exception as exc:
+        logger.exception("Turn for session %s failed", session_id)
+        record_failure(session, None, exc)
+    finally:
+        notify(session_id)
+
+
+def answer_inbox(session) -> None:
+    """Run turns, holding the lock, until the inbox is empty."""
+    session_id = str(session.id)
+    while True:
+        clear_stop(session_id)  # a stop meant for an earlier turn
+        items = drain_inbox(session_id)
+        if not items:
+            return
+        message, attachment_ids = combine(items)
         try:
-            registry = webhooks.get_registry()
-            if registry is None or session.bot_name not in registry:
-                msg = f"The {session.bot_name} bot isn't loaded"
-                raise LookupError(msg)
-            bot = registry.get(session.bot_name)
-            if message is not None:
-                attachments, uploads = take_uploads(session, attachment_ids or [])
-                async_to_sync(bot.ask)(session, message, attachments=attachments or None)
-                for row in uploads:
-                    row.file.delete(save=False)
-                    row.delete()
-            elif approve is not None:
-                pending = async_to_sync(bot.pending_call)(session)
-                waiting = (
-                    sorted(a["id"] for a in (pending.metadata or {}).get("pending_approvals", [])) if pending else []
-                )
-                if pending is not None and (approval_ids is None or sorted(approval_ids) == waiting):
-                    async_to_sync(bot.resume)(session, approve)
+            bot = loaded_bot(session)
+            attachments, uploads = take_uploads(session, attachment_ids)
+            control = InboxControl(session)
+            async_to_sync(bot.ask)(session, message, attachments=attachments or None, control=control)
+            remove_uploads([*uploads, *control.uploads])
         except Exception as exc:
             logger.exception("Turn for session %s failed", session_id)
             record_failure(session, message, exc)
         finally:
             notify(session_id)
+
+
+def queue_waiting(session_id) -> None:
+    """After releasing a session's lock: a message that arrived as the holder finished
+    gets a turn of its own."""
+    if inbox_waiting(session_id):
+        run_turn.delay(str(session_id))
 
 
 def record_failure(session, message: str | None, exc: Exception) -> None:
@@ -192,17 +394,26 @@ def record_failure(session, message: str | None, exc: Exception) -> None:
 def queue_turn(
     session_id,
     *,
-    message: str | None = None,
     approve: bool | None = None,
-    attachment_ids: list[str] | None = None,
     approval_ids: list[str] | None = None,
 ) -> bool:
     """Queue a turn. Returns True when a worker will run it, False when it already ran."""
     from django.conf import settings
 
-    result = run_turn.delay(str(session_id), message, approve, list(attachment_ids or []), approval_ids)
+    result = run_turn.delay(str(session_id), None, approve, [], approval_ids)
     notify(session_id)
-    return not getattr(settings, "CELERY_TASK_ALWAYS_EAGER", False) and result is not None
+    eager = getattr(settings, "CELERY_TASK_ALWAYS_EAGER", False)
+    # Eager, a message for a turn running in another request waits for that turn.
+    return (not eager and result is not None) or (eager and turn_running(session_id))
+
+
+def queue_message(session_id, text: str, attachment_ids: list[str] | None = None, *, interrupt: bool = False) -> bool:
+    """Send a message: it steers the running turn, or starts one. ``interrupt`` stops the
+    running turn first, so the message starts the next one. Returns as queue_turn does."""
+    if interrupt:
+        request_stop(session_id)
+    push_message(session_id, text, attachment_ids)
+    return queue_turn(session_id)
 
 
 @shared_task(name="ergonaut.deliver_thread_message", ignore_result=True)
@@ -219,6 +430,8 @@ def deliver_thread_message(message_id: str) -> None:
             messaging.deliver(message_id)
         # else the recipient is mid-turn: the message stays queued and goes out
         # when that turn ends, or on the next sweep.
+    if locked:
+        queue_waiting(recipient_id)
     notify(recipient_id)
 
 
@@ -243,6 +456,8 @@ def queue_thread_message(message_id: str) -> None:
                 with session_lock(str(recipient_id), wait=False) as locked:
                     if locked:
                         messaging.deliver(message_id)
+                if locked:
+                    queue_waiting(recipient_id)
             finally:
                 close_old_connections()
 

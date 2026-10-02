@@ -134,6 +134,10 @@ def apply_native_window(session, messages: list[dict]) -> list[dict]:
     replays messages from the latest user turn onward (plus system
     messages). Earlier history reaches the model through a context builder
     and history tools instead; see ``conversation.stream.StreamChat``.
+
+    A user message that follows tool results (a steering message, or the next
+    message after a stopped turn) continues that turn rather than starting one,
+    so the model keeps the tool work it was in the middle of.
     """
     from django_ergo.conversation.models import ConversationSession
 
@@ -143,8 +147,31 @@ def apply_native_window(session, messages: list[dict]) -> list[dict]:
         return messages
     system = [m for m in messages if m.get("role") == "system"]
     rest = [m for m in messages if m.get("role") != "system"]
-    starts = [i for i, m in enumerate(rest) if _is_turn_start(m)]
+    starts = []
+    continuing = False
+    for i, message in enumerate(rest):
+        if _is_turn_start(message):
+            previous = rest[i - 1] if i else None
+            continuing = previous is not None and (
+                _is_tool_results(previous) or continuing
+            )
+            if not continuing:
+                starts.append(i)
+        elif message.get("role") != "user":
+            continuing = False
     return system + (rest[starts[-1] :] if starts else rest)
+
+
+def _is_tool_results(message: dict) -> bool:
+    """True for tool results: an OpenAI tool message, or a Claude user message of them."""
+    if message.get("role") == "tool":
+        return True
+    content = message.get("content")
+    return (
+        message.get("role") == "user"
+        and isinstance(content, list)
+        and any(block.get("type") == "tool_result" for block in content)
+    )
 
 
 def _message_rows(session: ConversationSession):

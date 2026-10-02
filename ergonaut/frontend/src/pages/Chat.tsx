@@ -19,6 +19,12 @@ function merge(detail: SessionDetail, messages: Message[], calls: Call[]): Sessi
   }
 }
 
+/** Whether a user message with this text was stored after ``line``. */
+function stored(messages: Message[], text: string, line: number): boolean {
+  const needle = JSON.stringify(text).slice(1, -1)
+  return messages.some(m => m.line > line && m.role === 'user' && JSON.stringify(m.blocks).includes(needle))
+}
+
 export function Chat({ onChange }: { onChange: () => void }) {
   const { id = '' } = useParams()
   const [detail, setDetail] = useState<SessionDetail | null>(null)
@@ -30,8 +36,10 @@ export function Chat({ onChange }: { onChange: () => void }) {
   const [outgoing, setOutgoing] = useState<{ id: string; filename: string }[]>([])
   const [uploading, setUploading] = useState(false)
   const picker = useRef<HTMLInputElement>(null)
-  // A turn a worker is running: what was sent and how the calls looked then.
-  const [pending, setPending] = useState<{ text: string; calls: number; approvals: string } | null>(null)
+  // A turn a worker is running: what was sent, and how the calls and messages looked then.
+  const [pending, setPending] = useState<{ text: string; calls: number; line: number; approvals: string } | null>(null)
+  // Stop was pressed; the turn ends at its next step.
+  const [stopping, setStopping] = useState(false)
   // The Files panel stays open or closed across sessions, per browser.
   const [showFiles, setShowFiles] = useState(() => {
     try {
@@ -122,13 +130,14 @@ export function Chat({ onChange }: { onChange: () => void }) {
   }, [detail, busy])
 
   // A queued turn is done once its call has finished: a new call for a
-  // message, or the paused call moving on for an approval answer.
+  // message (or the running call, once it took the message to steer it),
+  // or the paused call moving on for an approval answer.
   useEffect(() => {
     if (!pending || !detail) return
     const call = detail.calls[detail.calls.length - 1]
     if (!call || call.status === 'in_progress') return
     const done = pending.text
-      ? detail.calls.length > pending.calls
+      ? detail.calls.length > pending.calls || stored(detail.messages, pending.text, pending.line)
       : call.status !== 'awaiting_approval' || JSON.stringify(call.pending_approvals ?? []) !== pending.approvals
     if (done) {
       setPending(null)
@@ -136,13 +145,22 @@ export function Chat({ onChange }: { onChange: () => void }) {
     }
   }, [detail, pending, onChange])
 
+  // Stopping ends with the running call: it stopped, or a new call (an interrupt's) started.
+  const lastCallId = detail?.calls[detail.calls.length - 1]?.id
+  const lastStatus = detail?.calls[detail.calls.length - 1]?.status
+  useEffect(() => {
+    if (lastStatus !== 'in_progress') setStopping(false)
+  }, [lastCallId, lastStatus])
+
   async function run(action: () => Promise<Turn>, sent = '') {
     setBusy(true)
     setError('')
     const calls = detail?.calls ?? []
+    const messages = detail?.messages ?? []
     const before = {
       text: sent,
       calls: calls.length,
+      line: messages.length ? messages[messages.length - 1].line : -1,
       approvals: JSON.stringify(calls[calls.length - 1]?.pending_approvals ?? []),
     }
     try {
@@ -162,12 +180,25 @@ export function Chat({ onChange }: { onChange: () => void }) {
     }
   }
 
-  function send(message: string) {
-    if ((!message.trim() && !outgoing.length) || busy || pending || uploading) return
+  // While a turn runs, a message steers it ("send") or stops it and starts the next one ("interrupt").
+  function send(message: string, mode: 'send' | 'interrupt' = 'send') {
+    if ((!message.trim() && !outgoing.length) || busy || uploading) return
     const ids = outgoing.map(f => f.id)
     setText('')
     setOutgoing([])
-    run(() => api.send(id, message, ids), message || outgoing.map(f => f.filename).join(', '))
+    if (mode === 'interrupt') setStopping(true)
+    run(() => api.send(id, message, ids, mode), message || outgoing.map(f => f.filename).join(', '))
+  }
+
+  async function stop() {
+    setStopping(true)
+    setError('')
+    try {
+      await api.stop(id)
+    } catch (e) {
+      setStopping(false)
+      setError(e instanceof Error ? e.message : String(e))
+    }
   }
 
   async function attach(files: FileList | File[] | null) {
@@ -200,15 +231,11 @@ export function Chat({ onChange }: { onChange: () => void }) {
   const archived = detail.session.status === 'completed' && detail.session.role === 'thread'
   const closed = detail.session.status === 'completed' && !archived
   const thinking = busy || !!pending || lastCall?.status === 'in_progress'
+  // A turn is running that Stop can reach (not just this browser's request in flight).
+  const running = !!pending || lastCall?.status === 'in_progress'
   const callError = !pending && lastCall?.status === 'failed' ? lastCall.error : ''
   // Show a queued message until the worker has stored it.
-  const echo =
-    pending?.text &&
-    !detail.messages.some(
-      m => m.role === 'user' && JSON.stringify(m.blocks).includes(JSON.stringify(pending.text).slice(1, -1)),
-    )
-      ? pending.text
-      : ''
+  const echo = pending?.text && !stored(detail.messages, pending.text, pending.line) ? pending.text : ''
 
   return (
     <div className="flex h-full">
@@ -263,7 +290,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
           )}
           {thinking && (
             <div className="mt-3 text-sm text-zinc-500">
-              {pending && !lastCall?.status?.startsWith('in_') ? 'Queued…' : 'Thinking…'}
+              {stopping ? 'Stopping…' : pending && !lastCall?.status?.startsWith('in_') ? 'Queued…' : 'Thinking…'}
             </div>
           )}
           <div ref={bottom} />
@@ -382,12 +409,39 @@ export function Chat({ onChange }: { onChange: () => void }) {
                   ? 'Answer the approval first'
                   : archived
                     ? 'Archived: sending a message reopens it'
-                    : 'Message the bot'
+                    : running
+                      ? 'Steer the bot: your message joins this turn'
+                      : 'Message the bot'
             }
             className="flex-1 resize-none rounded-lg border border-zinc-300 bg-transparent px-3 py-2 focus:border-indigo-500 focus:outline-none dark:border-zinc-700"
           />
+          {running && (
+            <div className="flex flex-col gap-1">
+              <button
+                type="button"
+                disabled={stopping}
+                title="Stop the bot after the step it's on"
+                className="flex-1 rounded-lg border border-zinc-300 px-3 text-sm disabled:opacity-50 dark:border-zinc-700"
+                onClick={stop}
+              >
+                ⏹ Stop
+              </button>
+              {(!!text.trim() || !!outgoing.length) && (
+                <button
+                  type="button"
+                  disabled={busy || uploading || stopping}
+                  title="Stop the bot and answer this message instead"
+                  className="flex-1 rounded-lg border border-indigo-300 px-3 text-sm text-indigo-700 disabled:opacity-50 dark:border-indigo-700 dark:text-indigo-300"
+                  onClick={() => send(text, 'interrupt')}
+                >
+                  Stop &amp; send
+                </button>
+              )}
+            </div>
+          )}
           <button
             disabled={busy || uploading || (!text.trim() && !outgoing.length)}
+            title={running ? 'Send now; the bot sees it after the step it is on' : undefined}
             className="rounded-lg bg-indigo-600 px-4 text-white disabled:opacity-50"
           >
             Send
