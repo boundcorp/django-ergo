@@ -484,6 +484,7 @@ def test_pins_bot_files_and_live_pages(client, cook, bot_folder, use_bots, setti
     assert pinned["pinned"]
     pins = client.get(f"/api/sessions/{root['id']}/pins").json()
     assert [(p["kind"], p["name"]) for p in pins] == [("bot_file", "home.jhtml"), ("file", "Board")]
+    assert [p["name"] for p in client.get("/api/pins").json()[root["id"]]] == ["home.jhtml", "Board"]
 
     # A bot-folder page renders in the app's origin; assets come as files; code and config don't.
     home = client.get("/api/bots/kitchen/files/pages/home.jhtml")
@@ -573,3 +574,67 @@ def test_admins_browse_the_bot_folder(client, cook, bot_folder, use_bots):
     assert logo["text"] is None and logo["url"] == "/api/bots/kitchen/files/logo.png"
     for blocked in (".env", "../kitchen/.env", "tools/__pycache__/pantry.pyc", "nope.py"):
         assert client.get(f"/api/bots/kitchen/source/{blocked}").status_code == 404
+
+
+@pytest.mark.django_db(transaction=True)
+def test_files_show_the_draft_and_pull_requests_with_diffs(client, cook, bot_folder, use_bots, tmp_path, monkeypatch):
+    import subprocess
+
+    from ergonaut.api import bots as api
+
+    for key in ("GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME"):
+        monkeypatch.setenv(key, "Test")
+    for key in ("GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL"):
+        monkeypatch.setenv(key, "test@example.com")
+
+    def git(cwd, *args):
+        return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True).stdout
+
+    (bot_folder / "bot.yaml").write_text(BOT + "plugins:\n  - {name: bot_management, mode: propose_pr}\n")
+    remote = tmp_path / "remote.git"
+    git(tmp_path, "init", "--bare", "-b", "main", str(remote))
+    git(bot_folder, "init", "-b", "main")
+    git(bot_folder, "add", "-A")
+    git(bot_folder, "commit", "-m", "init")
+    git(bot_folder, "remote", "add", "origin", str(remote))
+    git(bot_folder, "push", "-u", "origin", "main")
+    # A pull request: another clone pushes a branch to refs/pull/9/head, as GitHub does.
+    other = tmp_path / "other"
+    git(tmp_path, "clone", str(remote), str(other))
+    (other / "agents.md").write_text("You run the kitchen. Be brief.")
+    git(other, "commit", "-am", "brief")
+    git(other, "push", "origin", "HEAD:refs/pull/9/head")
+
+    use_bots(say("hi"))
+    cook.is_superuser = True
+    cook.save()
+    _, plugin = api.change_manager("kitchen", cook)
+    plugin.write("tools/pantry.py", (bot_folder / "tools" / "pantry.py").read_text() + "\n# draft edit\n")
+    plugin.write("notes.md", "new file")
+    monkeypatch.setattr(
+        type(plugin),
+        "pull_requests",
+        lambda self: [{"number": 9, "title": "Be brief", "url": "u", "files": [{"path": "agents.md"}]}],
+    )
+
+    proposals = client.get("/api/bots/kitchen/proposals").json()["proposals"]
+    assert [(p["version"], p["changed"]) for p in proposals] == [
+        ("draft", {"notes.md": "A", "tools/pantry.py": "M"}),
+        ("pr-9", {"agents.md": "M"}),
+    ]
+
+    draft = {f["path"]: f["status"] for f in client.get("/api/bots/kitchen/tree?version=draft").json()["files"]}
+    assert draft["tools/pantry.py"] == "M" and draft["notes.md"] == "A" and draft["agents.md"] == ""
+    source = client.get("/api/bots/kitchen/source/tools/pantry.py?version=draft").json()
+    assert "+# draft edit" in source["diff"] and "# draft edit" in source["text"]
+    added = client.get("/api/bots/kitchen/source/notes.md?version=draft").json()
+    assert added["diff"].startswith("--- /dev/null")
+
+    pr = {f["path"]: f["status"] for f in client.get("/api/bots/kitchen/tree?version=pr-9").json()["files"]}
+    assert pr["agents.md"] == "M" and "notes.md" not in pr
+    brief = client.get("/api/bots/kitchen/source/agents.md?version=pr-9").json()
+    assert "-You run the kitchen." in brief["diff"] and "+You run the kitchen. Be brief." in brief["diff"]
+
+    # The live view is untouched, and versions are checked.
+    assert "# draft edit" not in client.get("/api/bots/kitchen/source/tools/pantry.py").json()["text"]
+    assert client.get("/api/bots/kitchen/tree?version=../x").status_code == 400

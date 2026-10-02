@@ -39,7 +39,44 @@ function SessionLink({ session, nested }: { session: Session; nested?: boolean }
   )
 }
 
-export function Sidebar({ bots, sessions, onChange }: { bots: Bot[]; sessions: Session[]; onChange: () => void }) {
+// A chat's pinned files under it; each opens in that chat's viewer.
+function PinLinks({
+  session,
+  pins,
+  nested,
+}: {
+  session: Session
+  pins?: { name: string; url: string }[]
+  nested?: boolean
+}) {
+  if (!pins?.length) return null
+  return (
+    <>
+      {pins.map(pin => (
+        <Link
+          key={pin.url}
+          to={`/s/${session.id}?pin=${encodeURIComponent(pin.url)}&name=${encodeURIComponent(pin.name)}`}
+          className={`block truncate rounded-md px-2 py-0.5 text-xs text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-900 ${nested ? 'ml-10' : 'ml-6'}`}
+          title={pin.name}
+        >
+          📌 {pin.name}
+        </Link>
+      ))}
+    </>
+  )
+}
+
+export function Sidebar({
+  bots,
+  sessions,
+  pins,
+  onChange,
+}: {
+  bots: Bot[]
+  sessions: Session[]
+  pins: Record<string, { name: string; url: string }[]>
+  onChange: () => void
+}) {
   const navigate = useNavigate()
   const [showArchived, setShowArchived] = useState<Record<string, boolean>>({})
 
@@ -96,7 +133,10 @@ export function Sidebar({ bots, sessions, onChange }: { bots: Bot[]; sessions: S
             {chats.map(chat => {
               const session = mine.find(s => s.id === chat.session_id)
               return session ? (
-                <SessionLink key={chat.name} session={session} />
+                <div key={chat.name}>
+                  <SessionLink session={session} />
+                  <PinLinks session={session} pins={pins[session.id]} />
+                </div>
               ) : (
                 <button
                   key={chat.name}
@@ -109,7 +149,10 @@ export function Sidebar({ bots, sessions, onChange }: { bots: Bot[]; sessions: S
               )
             })}
             {threads.map(t => (
-              <SessionLink key={t.id} session={t} nested />
+              <div key={t.id}>
+                <SessionLink session={t} nested />
+                <PinLinks session={t} pins={pins[t.id]} nested />
+              </div>
             ))}
             {!!archived.length && (
               <button

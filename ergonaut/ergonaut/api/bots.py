@@ -909,6 +909,36 @@ def session_pins(request, session_id: str):
     return pins
 
 
+@router.get("/pins")
+def all_pins(request):
+    """What's pinned in each of your chats, by session id (for the sidebar)."""
+    from django_ergo.bots.runtime import Bot as BotClass
+
+    bots = registry()
+    out: dict[str, list] = {}
+    sessions = visible_sessions(request.auth).filter(user=request.auth).order_by("-updated_at")[:200]
+    for session in sessions:
+        bot = bots.get(session.bot_name) if session.bot_name in bots else None
+        chat = BotClass.chat_name(session)
+        if bot is None or chat is None:
+            continue
+        for relative in bot.definition.chat(chat).pins:
+            out.setdefault(str(session.id), []).append(
+                {"name": relative.rsplit("/", 1)[-1], "url": f"/api/bots/{bot.name}/files/{relative}"}
+            )
+    pinned = ConversationAttachment.objects.filter(
+        metadata__pinned=True, session__in=visible_sessions(request.auth).filter(user=request.auth)
+    ).order_by("created_at")
+    for row in pinned:
+        out.setdefault(str(row.session_id), []).append(
+            {
+                "name": (row.metadata or {}).get("title") or row.filename,
+                "url": f"/api/attachments/{row.id}/download?inline=true",
+            }
+        )
+    return out
+
+
 @router.get("/bots/{bot_name}/files/{path:path}")
 def bot_file(request, bot_name: str, path: str):
     """A page or asset from the bot folder (reviewed in the bot repo, so it runs in the app's origin)."""
@@ -949,13 +979,56 @@ def hidden(relative) -> bool:
     return name.startswith(".env") or name.endswith((".pem", ".key")) or "secret" in name
 
 
+def shown(relative) -> bool:
+    return not hidden(relative) and not any(part in TREE_SKIP_DIRS for part in relative.parts[:-1])
+
+
+def proposal_view(bot_name: str, user, version: str):
+    """The bot_management plugin holding ``version`` of this bot's folder, and the folder's
+    path inside the repository ("" when the bot is the repository root)."""
+    from pathlib import Path
+
+    root = bot_root(bot_name, user)
+    _, plugin = change_manager(bot_name, user)
+    try:
+        prefix = root.relative_to(plugin.repo)
+    except ValueError:
+        raise HttpError(404, "This bot's folder isn't in its manager's repository") from None
+    if version != "draft" and not version.startswith("pr-"):
+        raise HttpError(400, "version is live, draft or pr-<number>")
+    return plugin, Path(prefix) if str(prefix) != "." else Path()
+
+
+def in_folder(prefix, repo_path: str):
+    """``repo_path`` relative to the bot folder, or None if it's outside."""
+    from pathlib import Path
+
+    path = Path(repo_path)
+    if prefix == Path():
+        return path
+    return path.relative_to(prefix) if path.is_relative_to(prefix) else None
+
+
 @router.get("/bots/{bot_name}/tree")
-def bot_tree(request, bot_name: str):
-    """Every file in the bot folder (sub-bots included), for the bot page's file browser."""
+def bot_tree(request, bot_name: str, version: str = "live"):
+    """Every file in the bot folder (sub-bots included), live or in a proposal, with what changed."""
     import os
     from pathlib import Path
 
     root = bot_root(bot_name, request.auth)
+    if version != "live":
+        plugin, prefix = proposal_view(bot_name, request.auth, version)
+        try:
+            paths, changed = plugin.version_files(version)
+        except ValueError as e:
+            raise HttpError(400, str(e)) from e
+        files = []
+        for repo_path in sorted(set(paths) | set(changed)):
+            relative = in_folder(prefix, repo_path)
+            if relative is None or not shown(relative):
+                continue
+            files.append({"path": str(relative), "size": 0, "status": changed.get(repo_path, "")})
+        return {"files": files[:MAX_TREE_FILES], "truncated": len(files) > MAX_TREE_FILES}
     files = []
     for directory, dirs, names in os.walk(root):
         dirs[:] = sorted(d for d in dirs if d not in TREE_SKIP_DIRS)
@@ -964,38 +1037,113 @@ def bot_tree(request, bot_name: str):
             relative = path.relative_to(root)
             if hidden(relative) or path.is_symlink():
                 continue
-            files.append({"path": str(relative), "size": path.stat().st_size})
+            files.append({"path": str(relative), "size": path.stat().st_size, "status": ""})
             if len(files) >= MAX_TREE_FILES:
                 return {"files": files, "truncated": True}
     return {"files": files, "truncated": False}
 
 
+def as_text(data: bytes | None) -> str | None:
+    if data is None or len(data) > MAX_SOURCE_BYTES or b"\0" in data[:8000]:
+        return None
+    return data.decode("utf-8", "replace")
+
+
 @router.get("/bots/{bot_name}/source/{path:path}")
-def bot_source(request, bot_name: str, path: str):
-    """One file of the bot folder: its text, or (for images and other binaries) where to see it."""
+def bot_source(request, bot_name: str, path: str, version: str = "live"):
+    """One file of the bot folder: its text, or (for images and other binaries) where to see it.
+    For a proposal, also the diff against the live file."""
+    import difflib
+
     from django_ergo.bots.pages import bot_file
     from django_ergo.conversation.attachments import guess_media_type
 
     root = bot_root(bot_name, request.auth)
     target = (root / path).resolve()
     relative = target.relative_to(root) if target.is_relative_to(root) else None
-    if (
-        relative is None
-        or not target.is_file()
-        or target.is_symlink()
-        or hidden(relative)
-        or any(part in TREE_SKIP_DIRS for part in relative.parts)
-    ):
+    if relative is None or not shown(relative):
         raise HttpError(404, "No such file")
-    size = target.stat().st_size
     media_type = guess_media_type(target.name)
-    text = None
-    if size <= MAX_SOURCE_BYTES:
-        data = target.read_bytes()
-        if b"\0" not in data[:8000]:
-            text = data.decode("utf-8", "replace")
+    if version != "live":
+        plugin, prefix = proposal_view(bot_name, request.auth, version)
+        repo_path = str(prefix / relative)
+        try:
+            new = plugin.version_read(version, repo_path)
+        except ValueError as e:
+            raise HttpError(400, str(e)) from e
+        old = plugin.live_read(repo_path)
+        if new is None and old is None:
+            raise HttpError(404, "No such file")
+        new_text, old_text = as_text(new), as_text(old)
+        diff = ""
+        if new != old and (new is None or new_text is not None) and (old is None or old_text is not None):
+            diff = "".join(
+                difflib.unified_diff(
+                    (old_text or "").splitlines(keepends=True),
+                    (new_text or "").splitlines(keepends=True),
+                    f"live/{relative}" if old is not None else "/dev/null",
+                    f"{version}/{relative}" if new is not None else "/dev/null",
+                )
+            )
+        return {
+            "path": str(relative),
+            "size": len(new or b""),
+            "media_type": media_type,
+            "text": new_text,
+            "url": "",
+            "deleted": new is None,
+            "diff": diff,
+        }
+    if not target.is_file() or target.is_symlink():
+        raise HttpError(404, "No such file")
+    text = as_text(target.read_bytes()) if target.stat().st_size <= MAX_SOURCE_BYTES else None
     url = f"/api/bots/{bot_name}/files/{relative}" if bot_file(registry().get(bot_name), str(relative)) else ""
-    return {"path": str(relative), "size": size, "media_type": media_type, "text": text, "url": url}
+    return {
+        "path": str(relative),
+        "size": target.stat().st_size,
+        "media_type": media_type,
+        "text": text,
+        "url": url,
+        "deleted": False,
+        "diff": "",
+    }
+
+
+@router.get("/bots/{bot_name}/proposals")
+def bot_proposals(request, bot_name: str):
+    """Proposed versions of this bot's folder: the unpublished draft and open pull requests
+    that touch it."""
+    from pathlib import Path
+
+    bot_root(bot_name, request.auth)
+    try:
+        manager, plugin = change_manager(bot_name, request.auth)
+    except HttpError:
+        return {"managed_by": "", "proposals": []}
+    _, prefix = proposal_view(bot_name, request.auth, "draft")
+    out = []
+    try:
+        _, changed = plugin.version_files("draft")
+        mine = {str(r): s for p, s in changed.items() if (r := in_folder(prefix, p)) is not None}
+        if mine:
+            out.append({"version": "draft", "title": "Unpublished changes", "number": None, "url": "", "changed": mine})
+        if plugin.mode == "propose_pr":
+            for pr in plugin.pull_requests():
+                files = [f.get("path", "") for f in pr.get("files") or []]
+                touched = [str(r) for p in files if (r := in_folder(prefix, p)) is not None]
+                if touched or prefix == Path():
+                    out.append(
+                        {
+                            "version": f"pr-{pr['number']}",
+                            "title": pr.get("title", ""),
+                            "number": pr["number"],
+                            "url": pr.get("url", ""),
+                            "changed": dict.fromkeys(touched, "M"),
+                        }
+                    )
+    except (ValueError, OSError) as e:
+        return {"managed_by": manager.name, "proposals": out, "error": str(e)}
+    return {"managed_by": manager.name, "proposals": out}
 
 
 # -- changes: proposals to the bot repo ------------------------------------------
