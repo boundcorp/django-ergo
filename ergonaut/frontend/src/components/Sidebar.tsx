@@ -13,22 +13,29 @@ function SessionLink({ session, nested }: { session: Session; nested?: boolean }
         }`
       }
     >
-      <span
-        title={
-          session.open_in
-            ? 'Working on a delegated request'
-            : session.open_out
-              ? 'Waiting on another thread'
-              : undefined
-        }
-        className={`h-1.5 w-1.5 shrink-0 rounded-full ${
-          session.open_in
-            ? 'animate-pulse bg-amber-500'
-            : session.status === 'completed'
-              ? 'bg-zinc-400'
-              : 'bg-emerald-500'
-        }`}
-      />
+      {session.busy ? (
+        <span
+          title="Working"
+          className="h-2.5 w-2.5 shrink-0 animate-spin rounded-full border-[1.5px] border-indigo-500 border-t-transparent"
+        />
+      ) : (
+        <span
+          title={
+            session.open_in
+              ? 'Working on a delegated request'
+              : session.open_out
+                ? 'Waiting on another thread'
+                : undefined
+          }
+          className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+            session.open_in
+              ? 'animate-pulse bg-amber-500'
+              : session.status === 'completed'
+                ? 'bg-zinc-400'
+                : 'bg-emerald-500'
+          }`}
+        />
+      )}
       <span className="truncate">{session.title}</span>
       {!!session.open_out && (
         <span className="ml-auto shrink-0 text-xs text-zinc-400" title="Waiting on other threads">

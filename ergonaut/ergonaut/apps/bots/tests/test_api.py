@@ -664,3 +664,24 @@ def test_a_thread_started_from_a_message_gets_a_generated_title(client, cook, bo
     assert (naming.status, naming.request) == ("completed", message)
     assert post(client, "/api/bots/kitchen/threads", {"title": "Groceries"}).json()["title"] == "Groceries"
     assert StructuredCall.objects.filter(kind="new_thread_metadata").count() == 1  # a given title isn't regenerated
+
+
+@pytest.mark.django_db(transaction=True)
+def test_sessions_say_when_a_turn_is_running(client, cook, use_bots):
+    from django.utils import timezone
+    from django_ergo.conversation.models import StructuredCall
+
+    use_bots(say("hi"))
+    root = post(client, "/api/bots/kitchen/root").json()
+
+    def busy():
+        return {s["id"]: s["busy"] for s in client.get("/api/sessions").json()}[root["id"]]
+
+    assert busy() is False
+    call = StructuredCall.objects.create(kind="chat_reply", session_id=root["id"], user=cook, status="in_progress")
+    assert busy() is True
+    # A call stuck "in progress" for longer than any turn is a crashed worker, not a busy chat.
+    StructuredCall.objects.filter(pk=call.pk).update(updated_at=timezone.now() - timezone.timedelta(hours=1))
+    assert busy() is False
+    StructuredCall.objects.filter(pk=call.pk).update(status="completed", updated_at=timezone.now())
+    assert busy() is False
