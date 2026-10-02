@@ -54,3 +54,30 @@ def test_people_only_see_their_own_costs(client):
     get_user_model().objects.create_user("cook", "c@example.com", "pw")
     client.post("/api/auth/login", json.dumps({"username": "cook", "password": "pw"}), content_type="application/json")
     assert client.get("/api/costs").json()["total"]["calls"] == 0
+
+
+@pytest.mark.django_db
+def test_cache_writes_and_reads_are_billed_at_their_own_rates(client, lee):
+    million = 1_000_000
+    # claude-sonnet-5-5: input $2, cache write $2.50, cache read $0.20, output $10.
+    StructuredCall.objects.create(
+        kind="chat_reply",
+        user=lee,
+        model_name="claude-sonnet-5-5",
+        input_tokens=million,
+        cache_creation_input_tokens=million,
+        cache_read_input_tokens=10 * million,
+        output_tokens=million,
+    )
+
+    total = client.get("/api/costs?days=7").json()["total"]
+    assert (total["input_tokens"], total["cache_write_tokens"], total["cache_read_tokens"]) == (
+        million,
+        million,
+        10 * million,
+    )
+    assert total["input_cost"] == pytest.approx(2)
+    assert total["cache_write_cost"] == pytest.approx(2.5)
+    assert total["cache_read_cost"] == pytest.approx(2)
+    assert total["output_cost"] == pytest.approx(10)
+    assert total["cost"] == pytest.approx(16.5)

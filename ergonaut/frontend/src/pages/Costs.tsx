@@ -65,6 +65,23 @@ function Daily({ days }: { days: Costs['by_day'] }) {
   )
 }
 
+const PARTS = [
+  ['input', 'Input'],
+  ['cache_write', 'Cache write'],
+  ['cache_read', 'Cache read'],
+  ['output', 'Output'],
+] as const
+
+// Tokens, with what they cost at that part's rate on hover.
+function PartCell({ bucket, part }: { bucket: CostBucket; part: (typeof PARTS)[number][0] }) {
+  const count = bucket[`${part}_tokens`]
+  return (
+    <td className="py-1.5 text-right tabular-nums" title={count ? money(bucket[`${part}_cost`]) : undefined}>
+      {count ? tokens(count) : <span className="text-zinc-400">–</span>}
+    </td>
+  )
+}
+
 function Row({
   bucket,
   nested,
@@ -88,8 +105,9 @@ function Row({
         )}
       </td>
       <td className="py-1.5 text-right tabular-nums">{bucket.calls}</td>
-      <td className="py-1.5 text-right tabular-nums">{tokens(bucket.input_tokens)}</td>
-      <td className="py-1.5 text-right tabular-nums">{tokens(bucket.output_tokens)}</td>
+      {PARTS.map(([part]) => (
+        <PartCell key={part} bucket={bucket} part={part} />
+      ))}
       <td className="py-1.5 text-right font-medium tabular-nums">
         {money(bucket.cost)}
         {bucket.unpriced_calls > 0 && (
@@ -106,13 +124,16 @@ function Table({ title, children }: { title: string; children: React.ReactNode }
   return (
     <section className="mt-8">
       <h2 className="mb-2 text-sm font-semibold tracking-wide text-zinc-500 uppercase">{title}</h2>
-      <table className="w-full max-w-3xl text-sm">
+      <table className="w-full max-w-4xl text-sm">
         <thead className="text-xs text-zinc-500">
           <tr className="border-b border-zinc-200 dark:border-zinc-800">
             <th className="py-1 text-left font-normal">Name</th>
             <th className="py-1 text-right font-normal">Calls</th>
-            <th className="py-1 text-right font-normal">Input</th>
-            <th className="py-1 text-right font-normal">Output</th>
+            {PARTS.map(([part, label]) => (
+              <th key={part} className="py-1 text-right font-normal">
+                {label}
+              </th>
+            ))}
             <th className="py-1 text-right font-normal">Cost</th>
           </tr>
         </thead>
@@ -158,7 +179,22 @@ export function CostsPage() {
       <div className="mt-4 grid max-w-3xl grid-cols-3 gap-3">
         <Tile label={`Spent, last ${data.days} days`} value={money(total.cost)} />
         <Tile label="Calls" value={total.calls.toLocaleString()} />
-        <Tile label="Tokens in / out" value={`${tokens(total.input_tokens)} / ${tokens(total.output_tokens)}`} />
+        <Tile
+          label="Prompt served from cache"
+          value={`${Math.round((100 * total.cache_read_tokens) / Math.max(1, total.input_tokens + total.cache_write_tokens + total.cache_read_tokens))}%`}
+          note={`${tokens(total.cache_read_tokens)} of ${tokens(total.input_tokens + total.cache_write_tokens + total.cache_read_tokens)} input tokens`}
+        />
+      </div>
+
+      <div className="mt-3 grid max-w-3xl grid-cols-2 gap-3 sm:grid-cols-4">
+        {PARTS.map(([part, label]) => (
+          <Tile
+            key={part}
+            label={label}
+            value={money(total[`${part}_cost`])}
+            note={`${tokens(total[`${part}_tokens`])} tokens`}
+          />
+        ))}
       </div>
 
       <div className="mt-6 max-w-3xl">
@@ -180,7 +216,7 @@ export function CostsPage() {
         ))}
         {!data.by_kind.length && (
           <tr>
-            <td colSpan={5} className="py-3 text-zinc-500">
+            <td colSpan={7} className="py-3 text-zinc-500">
               No calls in this period.
             </td>
           </tr>
@@ -200,8 +236,9 @@ export function CostsPage() {
         </p>
       )}
       <p className="mt-2 max-w-3xl text-xs text-zinc-500">
-        Costs are worked out from token counts and list prices, so they are estimates. OpenAI cached input is priced at
-        the full input rate.
+        Costs are worked out from token counts and list prices, so they are estimates. Input, cache writes, cache reads
+        and output are each billed at the model's own rate; hover a token count to see its cost. OpenAI calls made
+        before cached tokens were tracked count them as full-price input.
       </p>
     </div>
   )

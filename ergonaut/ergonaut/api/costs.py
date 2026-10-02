@@ -3,7 +3,8 @@
     GET /api/costs?days=30
 
 Totals by kind, with chat replies (bot turns) split by bot, plus totals by
-model and by day. Superusers see everyone's calls; others see their own.
+model and by day. Tokens and cost are split into uncached input, cache writes,
+cache reads and output, each priced at its own rate. Superusers see everyone's calls; others see their own.
 """
 
 from __future__ import annotations
@@ -14,7 +15,7 @@ from datetime import timedelta
 from django.utils import timezone
 from django_ergo.conversation.chat_reply import CHAT_REPLY_KIND
 from django_ergo.conversation.models import StructuredCall
-from django_ergo.pricing import call_cost
+from django_ergo.pricing import price_for
 from ninja import Router, Schema
 from ninja.security import django_auth
 
@@ -24,8 +25,15 @@ router = Router(tags=["costs"], auth=django_auth)
 class Bucket(Schema):
     name: str
     calls: int
+    # Uncached input only; cache writes and reads are counted separately.
     input_tokens: int
+    cache_write_tokens: int
+    cache_read_tokens: int
     output_tokens: int
+    input_cost: float
+    cache_write_cost: float
+    cache_read_cost: float
+    output_cost: float
     cost: float
     unpriced_calls: int
 
@@ -46,18 +54,41 @@ class CostsOut(Schema):
     unpriced_models: list[str]
 
 
+# (bucket token key, StructuredCall field, Price attribute)
+PARTS = (
+    ("input", "input_tokens", "input"),
+    ("cache_write", "cache_creation_input_tokens", "cache_write"),
+    ("cache_read", "cache_read_input_tokens", "cache_read"),
+    ("output", "output_tokens", "output"),
+)
+
+
 def _empty(name: str) -> dict:
-    return {"name": name, "calls": 0, "input_tokens": 0, "output_tokens": 0, "cost": 0.0, "unpriced_calls": 0}
+    bucket = {"name": name, "calls": 0, "cost": 0.0, "unpriced_calls": 0}
+    for part, _, _ in PARTS:
+        bucket[f"{part}_tokens"] = 0
+        bucket[f"{part}_cost"] = 0.0
+    return bucket
 
 
-def _add(bucket: dict, call: StructuredCall, cost: float | None) -> None:
+def call_costs(call: StructuredCall) -> dict[str, float] | None:
+    """The call's cost per part (input, cache_write, cache_read, output), or None if unpriced."""
+    price = price_for(call.model_name)
+    if price is None:
+        return None
+    return {part: (getattr(call, field) or 0) * getattr(price, rate) / 1_000_000 for part, field, rate in PARTS}
+
+
+def _add(bucket: dict, call: StructuredCall, costs: dict[str, float] | None) -> None:
     bucket["calls"] += 1
-    bucket["input_tokens"] += call.input_tokens + call.cache_creation_input_tokens + call.cache_read_input_tokens
-    bucket["output_tokens"] += call.output_tokens
-    if cost is None:
+    for part, field, _ in PARTS:
+        bucket[f"{part}_tokens"] += getattr(call, field) or 0
+    if costs is None:
         bucket["unpriced_calls"] += 1
-    else:
-        bucket["cost"] += cost
+        return
+    for part, value in costs.items():
+        bucket[f"{part}_cost"] += value
+    bucket["cost"] += sum(costs.values())
 
 
 def _sorted(buckets: dict) -> list[dict]:
@@ -80,16 +111,17 @@ def costs(request, days: int = 30):
     by_day: dict[str, dict] = defaultdict(lambda: {"cost": 0.0, "calls": 0})
     unpriced: set[str] = set()
     for call in calls:
-        cost = call_cost(call)
-        if cost is None:
+        parts = call_costs(call)
+        cost = None if parts is None else sum(parts.values())
+        if parts is None:
             unpriced.add(call.model_name or "(unknown)")
-        _add(total, call, cost)
-        _add(by_kind.setdefault(call.kind, _empty(call.kind)), call, cost)
+        _add(total, call, parts)
+        _add(by_kind.setdefault(call.kind, _empty(call.kind)), call, parts)
         model = call.model_name or "(unknown)"
-        _add(by_model.setdefault(model, _empty(model)), call, cost)
+        _add(by_model.setdefault(model, _empty(model)), call, parts)
         if call.kind == CHAT_REPLY_KIND:
             bot = (call.session.bot_name if call.session else "") or "(no bot)"
-            _add(by_bot.setdefault(bot, _empty(bot)), call, cost)
+            _add(by_bot.setdefault(bot, _empty(bot)), call, parts)
         day = by_day[timezone.localtime(call.created_at).date().isoformat()]
         day["calls"] += 1
         day["cost"] += cost or 0.0
