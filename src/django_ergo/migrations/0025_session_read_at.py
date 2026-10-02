@@ -6,7 +6,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ("django_ergo", "0023_usage_parts"),
+        ("django_ergo", "0024_structured_call_stopped"),
     ]
 
     operations = [
