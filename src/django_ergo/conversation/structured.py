@@ -148,6 +148,10 @@ class StructuredCallSpec:
     # calls only carry the current turn natively (stream compaction).
     pre_seed_each_turn: bool = False
     max_turns: int = 10
+    # Spend the last allowed turn on the answer: only the output tool is
+    # offered, with a note to report what was done and what's left, so a long
+    # turn ends with a reply instead of TURN_LIMITED.
+    wrap_up: bool = False
     max_tokens: int | None = None
     output_tool_name: str = DEFAULT_OUTPUT_TOOL
 
@@ -370,9 +374,10 @@ class _MemoryTranscript:
     async def append_response_text(self, text: str) -> None:
         self.messages.append(self.engine.assistant_text_message(text))
 
-    async def respond(self, tool_schemas) -> list[EngineResponse]:
+    async def respond(self, tool_schemas, note: str = "") -> list[EngineResponse]:
+        system = "\n\n".join(p for p in (self.call.system_prompt, note) if p)
         completion = await self.engine.complete(
-            self.messages, system=self.call.system_prompt, tools=tool_schemas
+            self.messages, system=system, tools=tool_schemas
         )
         self.messages.append(completion.message)
         call = self.call
@@ -413,9 +418,11 @@ class _SessionTranscript:
     async def append_response_text(self, text: str) -> None:
         await self.engine.append_assistant_text(self.session, text)
 
-    async def respond(self, tool_schemas) -> list[EngineResponse]:
-        # The spec's instructions apply to this turn only.
-        self.engine.ephemeral_context = self.extra_system
+    async def respond(self, tool_schemas, note: str = "") -> list[EngineResponse]:
+        # The spec's instructions (and any note) apply to this turn only.
+        self.engine.ephemeral_context = "\n\n".join(
+            p for p in (self.extra_system, note) if p
+        )
         try:
             return [
                 event async for event in self.engine.respond(self.session, tool_schemas)
@@ -475,6 +482,15 @@ def _fail(call: StructuredCall, error: str, category: str = "other") -> None:
     call.status = StructuredCallStatus.FAILED
     call.error = error
     call.error_category = category
+
+
+def _wrap_up_note(spec: StructuredCallSpec) -> str:
+    return (
+        f"This is your last step for this turn ({spec.max_turns} steps used). "
+        f"No other tools are available now. Call {spec.output_tool_name} with what "
+        'you finished, what is left, and that the user can say "continue" to '
+        "carry on."
+    )
 
 
 def _response_text(parsed: Any, response: Any) -> str:
@@ -544,8 +560,18 @@ async def _run_loop(run: _Run) -> StructuredCallResult:  # noqa: C901, PLR0912, 
     finished = False
     while call.turns_used < spec.max_turns:
         call.turns_used += 1
+        schemas, note = run.tool_schemas, ""
+        if (
+            spec.wrap_up
+            and run.submit is not None
+            and call.turns_used == spec.max_turns
+        ):
+            schemas = _collect_toolkit_schemas([run.submit], run.adapter) or None
+            note = _wrap_up_note(spec)
         try:
-            events = await _with_retry(lambda: transcript.respond(run.tool_schemas))
+            events = await _with_retry(
+                lambda schemas=schemas, note=note: transcript.respond(schemas, note)
+            )
         except Exception as e:  # noqa: BLE001 — recorded on the row
             _fail(call, f"API call failed: {e}", _error_category(e))
             finished = True
