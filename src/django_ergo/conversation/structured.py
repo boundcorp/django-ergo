@@ -79,6 +79,9 @@ from django_ergo.conversation.adapters import ClaudeToolAdapter
 from django_ergo.conversation.adapters import OpenAIToolAdapter
 from django_ergo.conversation.compaction import maybe_compact
 from django_ergo.conversation.engine import SeededToolCall
+from django_ergo.conversation.images import is_ref
+from django_ergo.conversation.images import prepare_messages
+from django_ergo.conversation.images import storable_ref
 from django_ergo.conversation.models import ConversationSession
 from django_ergo.conversation.models import StructuredCall
 from django_ergo.conversation.models import StructuredCallStatus
@@ -422,8 +425,12 @@ class _MemoryTranscript:
 
     async def respond(self, tool_schemas, note: str = "") -> list[EngineResponse]:
         system = "\n\n".join(p for p in (self.call.system_prompt, note) if p)
+        # Image references become image parts (only the latest few).
+        messages = await sync_to_async(prepare_messages, thread_sensitive=True)(
+            self.messages, getattr(self.engine, "engine_type", "")
+        )
         completion = await self.engine.complete(
-            self.messages, system=system, tools=tool_schemas
+            messages, system=system, tools=tool_schemas
         )
         self.messages.append(completion.message)
         call = self.call
@@ -512,6 +519,10 @@ def _storable(messages: list[dict]) -> list[dict]:
 
 def _strip_bytes(block: dict) -> dict:
     kind = block.get("type")
+    if is_ref(block):
+        return storable_ref(block)
+    if isinstance(block.get("content"), list):  # a tool_result's text and images
+        return {**block, "content": [_strip_bytes(b) for b in block["content"]]}
     if kind in {"image", "document"} and block.get("source", {}).get("type") == (
         "base64"
     ):

@@ -18,12 +18,28 @@ from django_ergo.conversation.engine import Engine
 from django_ergo.conversation.engine import EngineResponse
 from django_ergo.conversation.engine import SeededToolCall
 from django_ergo.conversation.engine import session_system_prompt
+from django_ergo.conversation.images import attachment_ref
+from django_ergo.conversation.images import memory_result
+from django_ergo.conversation.images import prepare_messages
+from django_ergo.conversation.images import result_content
+from django_ergo.conversation.images import stored_result
 from django_ergo.conversation.telemetry import record_usage
 from django_ergo.conversation.telemetry import trace_engine_call
 from django_ergo.tools import tool_registry
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
+
+
+def attachment_block(row) -> dict:
+    """A user-message attachment: images as references (sent by prepare_messages)."""
+    return attachment_ref(row) if row.kind == "image" else claude_block(row)
+
+
+async def tool_result_content(session, result: Any) -> str | list[dict]:
+    """What a tool_result block stores: the text, or text plus image references."""
+    text, refs = await stored_result(session, result)
+    return result_content(text, refs) if refs else text
 
 
 def claude_message_dict(msg) -> dict:
@@ -96,7 +112,7 @@ class ClaudeAPIEngine(Engine):
             if msg.sequence in attachments:
                 # Attachments go before the text, as Anthropic recommends.
                 message["content"] = [
-                    *(claude_block(row) for row in attachments[msg.sequence]),
+                    *(attachment_block(row) for row in attachments[msg.sequence]),
                     *message["content"],
                 ]
             result.append((msg, message))
@@ -121,7 +137,7 @@ class ClaudeAPIEngine(Engine):
                     ],
                 },
             )
-        return apply_native_window(session, messages)
+        return prepare_messages(apply_native_window(session, messages), "claude")
 
     def get_tools_schema(self, workflow) -> list[dict]:
         """Convert workflow tools to Claude API tool format."""
@@ -312,7 +328,7 @@ class ClaudeAPIEngine(Engine):
                 block_type="tool_result",
                 sequence=block_seq,
                 tool_result_for=call.tool_use_id,
-                tool_result_content=str(call.result),
+                tool_result_content=await tool_result_content(session, call.result),
                 is_error=call.is_error,
             )
 
@@ -354,7 +370,7 @@ class ClaudeAPIEngine(Engine):
             block_type="tool_result",
             sequence=0,
             tool_result_for=tool_use_id,
-            tool_result_content=str(result),
+            tool_result_content=await tool_result_content(session, result),
             is_error=is_error,
         )
 
@@ -380,7 +396,7 @@ class ClaudeAPIEngine(Engine):
             block_type="tool_result",
             sequence=0,
             tool_result_for=tool_use_id,
-            tool_result_content=str(result),
+            tool_result_content=await tool_result_content(session, result),
             is_error=is_error,
         )
 
@@ -479,7 +495,7 @@ class ClaudeAPIEngine(Engine):
         )
 
     def user_message(self, text: str, attachments: list | None = None) -> dict:
-        blocks = [claude_block(a) for a in attachments or []]
+        blocks = [attachment_block(a) for a in attachments or []]
         return {"role": "user", "content": [*blocks, {"type": "text", "text": text}]}
 
     def assistant_text_message(self, text: str) -> dict:
@@ -514,7 +530,7 @@ class ClaudeAPIEngine(Engine):
                     {
                         "type": "tool_result",
                         "tool_use_id": tool_use_id,
-                        "content": str(result),
+                        "content": memory_result(result),
                         "is_error": is_error,
                     }
                     for tool_use_id, result, is_error in results

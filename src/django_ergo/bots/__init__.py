@@ -8,8 +8,18 @@ from django_ergo.bots.tools import ToolContext
 from django_ergo.bots.tools import bot_context
 from django_ergo.bots.tools import bot_task
 from django_ergo.bots.tools import bot_tool
+from django_ergo.conversation.images import ToolImage
+from django_ergo.conversation.images import ToolResult
 
-__all__ = ["BotTable", "ToolContext", "bot_context", "bot_task", "bot_tool"]
+__all__ = [
+    "BotTable",
+    "ToolContext",
+    "ToolImage",
+    "ToolResult",
+    "bot_context",
+    "bot_task",
+    "bot_tool",
+]
 
 
 def __getattr__(name: str):

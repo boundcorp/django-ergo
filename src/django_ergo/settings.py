@@ -35,6 +35,11 @@ DEFAULTS = {
     # "django_ergo.conversation.attachments.openai_transcriber". None = no
     # transcription; engines without native audio input see a placeholder.
     "AUDIO_TRANSCRIBER": None,
+    # Images (sent with messages or returned by tools) each model call carries:
+    # the latest N; older ones become a text placeholder. Images are downscaled
+    # to IMAGE_MAX_SIDE pixels on the long side when Pillow is installed.
+    "IMAGES_IN_CONTEXT": 2,
+    "IMAGE_MAX_SIDE": 1024,
     # Extra bot plugins by short name: {"name": "dotted.path.PluginClass"}.
     "BOT_PLUGINS": {},
     # Callable(message_id) that delivers a bot-to-bot thread message, e.g. by

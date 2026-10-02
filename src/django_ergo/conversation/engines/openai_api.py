@@ -20,6 +20,11 @@ from django_ergo.conversation.engine import Engine
 from django_ergo.conversation.engine import EngineResponse
 from django_ergo.conversation.engine import SeededToolCall
 from django_ergo.conversation.engine import session_system_prompt
+from django_ergo.conversation.images import attachment_ref
+from django_ergo.conversation.images import memory_result
+from django_ergo.conversation.images import prepare_messages
+from django_ergo.conversation.images import result_content
+from django_ergo.conversation.images import stored_result
 from django_ergo.conversation.telemetry import record_usage
 from django_ergo.conversation.telemetry import trace_engine_call
 from django_ergo.openai_options import DEFAULT_OPENAI_MODEL
@@ -91,14 +96,27 @@ def usage_tokens(usage) -> tuple[int | None, int | None, int | None]:
     )
 
 
+def attachment_part(row, *, audio_input: bool = False) -> dict:
+    """A user-message attachment: images as references (sent by prepare_messages)."""
+    if row.kind == "image":
+        return attachment_ref(row)
+    return openai_part(row, audio_input=audio_input)
+
+
 def openai_message_dict(msg, attachments=(), *, audio_input: bool = False) -> dict:
-    """Convert an OpenAIMessage row (plus its attachments) to an API message dict."""
+    """Convert an OpenAIMessage row (plus its attachments) to an API message dict.
+
+    A tool message with images gets list content (text plus image references);
+    prepare_messages moves the images into a user message.
+    """
     content = msg.content
     if attachments:
         content = [
             *([{"type": "text", "text": msg.content}] if msg.content else []),
-            *(openai_part(row, audio_input=audio_input) for row in attachments),
+            *(attachment_part(row, audio_input=audio_input) for row in attachments),
         ]
+    elif images := getattr(msg, "images", None):
+        content = result_content(msg.content or "", images)
     entry = {"role": msg.role, "content": content}
     if msg.tool_calls:
         entry["tool_calls"] = msg.tool_calls
@@ -195,7 +213,7 @@ class OpenAIAPIEngine(Engine):
                 position,
                 {"role": "user", "content": render_summary_message(compaction)},
             )
-        return apply_native_window(session, messages)
+        return prepare_messages(apply_native_window(session, messages), "openai")
 
     def get_tools_schema(self, workflow) -> list[dict]:
         """Return all registered tools converted to OpenAI function-calling format."""
@@ -348,10 +366,12 @@ class OpenAIAPIEngine(Engine):
             sequence=seq,
         )
         for offset, call in enumerate(calls, start=1):
+            text, images = await stored_result(session, call.result)
             await OpenAIMessage.objects.acreate(
                 session=session,
                 role="tool",
-                content=str(call.result),
+                content=text,
+                images=images or None,
                 tool_call_id=call.tool_use_id,
                 sequence=seq + offset,
             )
@@ -387,10 +407,12 @@ class OpenAIAPIEngine(Engine):
         from django_ergo.conversation.models import OpenAIMessage
 
         seq = await session.openai_messages.acount()
+        text, images = await stored_result(session, result)
         await OpenAIMessage.objects.acreate(
             session=session,
             role="tool",
-            content=str(result),
+            content=text,
+            images=images or None,
             tool_call_id=tool_use_id,
             sequence=seq,
         )
@@ -408,10 +430,12 @@ class OpenAIAPIEngine(Engine):
         from django_ergo.conversation.models import OpenAIMessage
 
         seq = await session.openai_messages.acount()
+        text, images = await stored_result(session, result)
         await OpenAIMessage.objects.acreate(
             session=session,
             role="tool",
-            content=str(result),
+            content=text,
+            images=images or None,
             tool_call_id=tool_use_id,
             sequence=seq,
         )
@@ -426,10 +450,12 @@ class OpenAIAPIEngine(Engine):
 
         seq = await session.openai_messages.acount()
         for tool_use_id, result, _is_error in results:
+            text, images = await stored_result(session, result)
             await OpenAIMessage.objects.acreate(
                 session=session,
                 role="tool",
-                content=str(result),
+                content=text,
+                images=images or None,
                 tool_call_id=tool_use_id,
                 sequence=seq,
             )
@@ -524,7 +550,10 @@ class OpenAIAPIEngine(Engine):
             "role": "user",
             "content": [
                 *([{"type": "text", "text": text}] if text else []),
-                *(openai_part(a, audio_input=self.audio_input) for a in attachments),
+                *(
+                    attachment_part(a, audio_input=self.audio_input)
+                    for a in attachments
+                ),
             ],
         }
 
@@ -553,7 +582,11 @@ class OpenAIAPIEngine(Engine):
 
     def tool_result_messages(self, results: list[tuple[str, Any, bool]]) -> list[dict]:
         return [
-            {"role": "tool", "tool_call_id": tool_use_id, "content": str(result)}
+            {
+                "role": "tool",
+                "tool_call_id": tool_use_id,
+                "content": memory_result(result),
+            }
             for tool_use_id, result, _is_error in results
         ]
 
