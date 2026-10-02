@@ -21,6 +21,7 @@ def test_longest_prefix_wins_and_dated_names_match():
     assert price_for("claude-opus-5").input == 5
     assert price_for("claude-opus-5-5-20260101").output == 20
     assert price_for("gpt-6-luna-2026-09-01").output == 0.5
+    assert price_for("gpt-6-sol").input == 2
     assert price_for("mystery-model") is None
     assert price_for("") is None
 
