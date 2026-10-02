@@ -908,3 +908,32 @@ def test_bot_management_review_helpers(bot_repo, monkeypatch):
         ["gh", "pr", "merge"],
         ["gh", "pr", "close"],
     ]
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_telegram_hears_about_delegated_replies_in_the_root_chat(tmp_path, settings):
+    from asgiref.sync import sync_to_async
+
+    from django_ergo.bots import messaging
+    from django_ergo.conversation.models import ThreadMessage
+
+    settings.DJANGO_ERGO = {"THREAD_MESSAGE_RUNNER": "tests.test_bots.record_message"}
+    bot, engine, plugin = telegram_bot(tmp_path, say("The meal thread says tacos."), say("Done."))
+    cook = await User.objects.acreate(username="cook")
+    root = await bot.root_session(cook)
+    thread = await bot.create_session(cook, parent=root, title="Meals")
+    request = await ThreadMessage.objects.acreate(
+        sender_session=root, recipient_session=thread, text="Plan dinner", status="answered"
+    )
+    reply = await ThreadMessage.objects.acreate(
+        sender_session=thread, recipient_session=root, in_reply_to=request, text="Tacos", depth=1
+    )
+    await sync_to_async(messaging.deliver)(str(reply.id))
+    assert str(plugin.api.sent()[-1]["chat_id"]) == "111"
+    assert plugin.api.sent()[-1]["text"] == "The meal thread says tacos."
+
+    # A request answered back to another thread isn't sent to Telegram.
+    before = len(plugin.api.sent())
+    asked = await ThreadMessage.objects.acreate(sender_session=thread, recipient_session=root, text="Status?")
+    await sync_to_async(messaging.deliver)(str(asked.id))
+    assert len(plugin.api.sent()) == before

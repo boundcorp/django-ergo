@@ -425,6 +425,7 @@ message (Ergonaut's 📎 button or a pasted image) reach the model natively.
   album_wait: 1.5            # seconds to collect an album's photos
   mode: auto                 # webhook, polling, or auto
   secret_env: KITCHEN_TELEGRAM_SECRET   # optional webhook secret
+  notify_delegations: true   # pass delegated replies in the root chat on to Telegram
 ```
 
 In `auto` mode Telegram uses a webhook when `BOT_WEBHOOK_BASE_URL` is set:

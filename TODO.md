@@ -14,12 +14,13 @@ Live on rigel from `~/p/boundcorp/django-ergo`, bots from `boundcorp/ergo-bots`.
 
 ### Next
 
-- [ ] Telegram: when a delegated reply lands in a root chat that a person reaches over Telegram, tell them there too.
 
 - [ ] A bot tool waiting on a @bot_task holds a worker slot; watch worker concurrency if many tools wait at once.
 - [ ] Reconcile the root pre-commit config (ruff, prettier) with the branch's code style.
 
 ### Done
+
+- [x] Telegram passes on delegated replies that land in a root chat, and approvals a delegated request is waiting on (`notify_delegations`).
 
 - [x] Changes section on the managing bot's page: open PRs with diff, Merge (squash, then pull) and Close; the unpublished draft with Discard. Admins only.
 

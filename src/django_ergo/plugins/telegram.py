@@ -25,6 +25,11 @@ carry Telegram's secret-token header: the value of ``secret_env`` if set,
 else one derived from the bot token.
 
 Other code can message a user with ``plugin.notify(user, text)``.
+
+Delegated work reaches Telegram too (``notify_delegations: true``, the
+default): when a reply from another thread lands in the user's root chat,
+the bot's answer to it is sent to their chat, and when a delegated request
+in the root chat stops for approval, the Approve and Deny buttons are.
 """
 
 from __future__ import annotations
@@ -103,6 +108,7 @@ class TelegramPlugin(BotPlugin):
             raise ValueError(msg)
         self._api: Any = None
         self._offset = 0
+        self.notify_delegations = bool(self.config.get("notify_delegations", True))
 
     @property
     def api(self):
@@ -141,6 +147,32 @@ class TelegramPlugin(BotPlugin):
             return False
         await self.send_text(chat_id, text)
         return True
+
+    async def after_turn(self, session, message: str, result: TurnResult) -> None:
+        """Pass delegated work in a root chat on to the user's Telegram chat."""
+        call = result.call
+        message_id = (call.metadata or {}).get("thread_message") if call else None
+        if not (self.notify_delegations and message_id and self.bot.is_root(session)):
+            return
+        from asgiref.sync import sync_to_async
+
+        from django_ergo.conversation.models import ThreadMessage
+
+        def lookup():
+            found = ThreadMessage.objects.filter(id=message_id).values_list("in_reply_to_id", flat=True).first()
+            return found, session.user
+
+        in_reply_to, user = await sync_to_async(lookup)()
+        is_reply = in_reply_to is not None
+        if not is_reply and not result.approvals:
+            return  # a request answered back to its sender: nothing for the user here
+        chat_id = self.chat_for(user)
+        if chat_id is None:
+            return
+        try:
+            await self.send_result(chat_id, result)
+        except Exception:
+            logger.exception("Telegram notice for %s failed", session.id)
 
     async def send_result(self, chat_id, result: TurnResult) -> None:
         if not result.approvals:
