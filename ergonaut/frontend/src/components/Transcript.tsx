@@ -109,6 +109,16 @@ function CallHeader({ call }: { call: Call }) {
         <span className="h-px flex-1 bg-zinc-200 dark:bg-zinc-800" />
       </button>
       {call.error && <div className="mt-1 text-center text-red-600">{call.error}</div>}
+      {detail != null && !!call.tools?.length && (
+        <div className="mt-2 flex flex-wrap items-center gap-1">
+          <span className="mr-1">Tools available:</span>
+          {call.tools.map(name => (
+            <span key={name} className="rounded bg-zinc-100 px-1.5 py-0.5 font-mono text-[11px] dark:bg-zinc-800">
+              {name}
+            </span>
+          ))}
+        </div>
+      )}
       {detail != null && (
         <pre className="mt-2 max-h-96 overflow-auto rounded-lg bg-zinc-50 p-3 font-mono text-[11px] dark:bg-zinc-900">
           {pretty(detail)}

@@ -71,6 +71,33 @@ name upper-cased, other characters as `_`) when set, else
 the current time in the user's `timezone` attribute, the bot's `timezone`,
 or Django's `TIME_ZONE`, in that order.
 
+## Skills
+
+A `skills/` folder (or the folder named by `skills:` in bot.yaml) holds
+instructions the bot loads only when it needs them. Each skill is
+`skills/<name>.md` or `skills/<name>/SKILL.md`, with optional front matter:
+
+```markdown
+---
+name: meal-planning
+description: Plan a week of dinners from the recipe library
+---
+1. Review the last 60 days of the meal plan with view_meal_plan.
+2. ...
+```
+
+A bot with skills gets `list_skills` and `load_skill` tools, and its
+sessions start with a `list_skills` result already in history, naming every
+skill and tool. Root sessions only carry the current turn natively, so they
+get that result on every turn.
+
+## Knowledge base folder
+
+A `kb/` folder in the bot folder is the bot's knowledge base: Markdown
+articles it can search and read (the `ergo_kb` plugin, added automatically).
+The root article, `kb/index.md`, is in context on every turn, so it is the
+place for what the bot should always know.
+
 ## Context functions
 
 A tool module can also put live data into every turn's context:
@@ -142,8 +169,21 @@ thread that stops for approval reports that back to the root. Set
 `orchestration: false` for a bot that only ever talks in its root session:
 the thread and `bots_call` tools are left out entirely.
 
-`BotRegistry.discover("bots/")` loads every subfolder with a `bot.yaml` and
-lets bots find each other by name.
+`BotRegistry.discover("bots/")` loads every folder at or under `bots/` that
+has a `bot.yaml`, and lets bots find each other by name. Bot folders can
+nest: a bot folder inside another bot's folder is its sub-bot, and the
+parent's root session may message its sub-bots with `bots_call` (as well as
+any bot in `permissions.call_bots`). The root session's context lists the
+bots it can message.
+
+```
+boundcorp/
+  bot.yaml          # orchestration on
+  kitchen/
+    bot.yaml        # a sub-bot of boundcorp, orchestration: false
+    skills/
+    kb/
+```
 
 Engines are built per turn from the definition. The API key is read from
 `engine.api_key_env` each time and never written to the session.

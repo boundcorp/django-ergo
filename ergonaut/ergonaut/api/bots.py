@@ -34,7 +34,32 @@ class BotOut(Schema):
     name: str
     description: str
     orchestration: bool
+    knowledge: bool
+    parent: str
     root_session_id: str | None
+
+
+class ToolOut(Schema):
+    name: str
+    description: str
+    requires_approval: bool
+
+
+class SkillOut(Schema):
+    name: str
+    description: str
+    body: str
+
+
+class BotDetailOut(BotOut):
+    engine: str
+    model: str
+    timezone: str
+    folder: str
+    instructions: str
+    plugins: list[str]
+    tools: list[ToolOut]
+    skills: list[SkillOut]
 
 
 class SessionOut(Schema):
@@ -70,6 +95,7 @@ class CallOut(Schema):
     output_tokens: int
     turns_used: int
     pending_approvals: list[dict]
+    tools: list[str]
     created_at: datetime
 
 
@@ -129,7 +155,7 @@ def session_out(session: ConversationSession) -> dict:
     return {
         "id": str(session.id),
         "bot": session.bot_name,
-        "title": meta.get("title") or ("Root chat" if meta.get("bot_role") == "root" else "Thread"),
+        "title": meta.get("title") or ("Chat" if meta.get("bot_role") == "root" else "Thread"),
         "role": meta.get("bot_role") or "",
         "parent_id": str(session.parent_id) if session.parent_id else None,
         "status": session.status,
@@ -154,6 +180,7 @@ def call_out(call: StructuredCall, detail: bool = False) -> dict:
         "output_tokens": call.output_tokens,
         "turns_used": call.turns_used,
         "pending_approvals": (call.metadata or {}).get("pending_approvals", []),
+        "tools": (call.metadata or {}).get("tools", []),
         "created_at": call.created_at,
     }
     if detail:
@@ -204,6 +231,8 @@ async def list_bots(request):
                 "name": bot.name,
                 "description": bot.definition.description,
                 "orchestration": bot.definition.orchestration,
+                "knowledge": any(p.name == "ergo_kb" for p in bot.plugins),
+                "parent": bot.parent_name,
                 "root_session_id": str(root.id) if root else None,
             }
         )
@@ -233,9 +262,68 @@ async def open_root(request, bot: str):
     return session_out(session)
 
 
+def root_tools(bot: Bot, user) -> list[dict]:
+    """The tools a root chat with ``bot`` gets, as the model sees them."""
+    from django_ergo.conversation.adapters import ClaudeToolAdapter
+
+    probe = ConversationSession(bot_name=bot.name, user=user, metadata={"bot_role": "root"})
+    spec = bot.reply_spec(bot.toolkits(probe))
+    tools = []
+    for toolkit in spec.toolkits:
+        approval = getattr(toolkit, "requires_approval", None)
+        for schema in toolkit.get_tools_schema(ClaudeToolAdapter()):
+            tools.append(
+                {
+                    "name": schema["name"],
+                    "description": schema.get("description", ""),
+                    "requires_approval": bool(approval and approval(schema["name"])),
+                }
+            )
+    if spec.output_tool_name:
+        tools.append(
+            {"name": spec.output_tool_name, "description": "Answer the user, with optional suggested replies.", "requires_approval": False}
+        )
+    return tools
+
+
+@router.get("/bots/{bot}", response=BotDetailOut)
+async def bot_detail(request, bot: str):
+    found = get_bot(bot)
+    root = await (
+        found.sessions(request.auth)
+        .filter(parent__isnull=True, metadata__bot_role="root")
+        .exclude(status="completed")
+        .afirst()
+    )
+    definition = found.definition
+    try:
+        spec = found.engine_spec()
+        engine, model = spec.engine_type, str(spec.config.get("model") or "")
+    except Exception:  # noqa: BLE001 - e.g. its API key isn't set
+        engine, model = definition.engine_type, str(definition.engine_config.get("model") or "")
+    return {
+        "name": found.name,
+        "description": definition.description,
+        "orchestration": definition.orchestration,
+        "knowledge": any(p.name == "ergo_kb" for p in found.plugins),
+        "parent": found.parent_name,
+        "root_session_id": str(root.id) if root else None,
+        "engine": engine,
+        "model": model,
+        "timezone": definition.timezone,
+        "folder": str(definition.root_dir or ""),
+        "instructions": definition.instructions,
+        "plugins": [type(p).__name__ for p in found.plugins],
+        "tools": await sync_to_async(root_tools)(found, request.auth),
+        "skills": [{"name": s.name, "description": s.description, "body": s.body} for s in found.skills],
+    }
+
+
 @router.post("/bots/{bot}/threads", response=SessionOut)
 async def new_thread(request, bot: str, data: NewThreadIn):
     found = get_bot(bot)
+    if not found.definition.orchestration:
+        raise HttpError(409, f"{bot} has threads turned off (orchestration: false)")
     root = await found.root_session(request.auth)
     session = await found.create_session(request.auth, parent=root, title=data.title)
     session.user = request.auth
@@ -291,3 +379,90 @@ async def close_session(request, session_id: str):
     session = await get_session(request, session_id)
     await get_bot(session.bot_name).close_session(session)
     return await sync_to_async(session_out)(session)
+
+
+# -- knowledge bases ---------------------------------------------------------
+
+
+class KBArticleOut(Schema):
+    path: str
+    title: str
+    root: bool = False
+
+
+class KBOut(Schema):
+    id: str
+    name: str
+    kind: str
+    location: str
+    articles: list[KBArticleOut]
+
+
+class KBArticleDetailOut(Schema):
+    path: str
+    title: str
+    body: str
+
+
+def bot_kbs(bot: Bot) -> list[dict]:
+    """The knowledge bases attached to ``bot`` through its ergo_kb plugins."""
+    from django_ergo.models import Knowledgebase
+
+    found = []
+    for index, plugin in enumerate(p for p in bot.plugins if p.name == "ergo_kb"):
+        folder = getattr(plugin, "folder", None)
+        if folder is not None:
+            root = folder.root_article()
+            articles = [
+                {"path": a.path, "title": a.title, "root": root is not None and a.path == root.path}
+                for a in folder.articles()
+            ]
+            articles.sort(key=lambda a: (not a["root"], a["path"]))
+            found.append(
+                {
+                    "id": f"folder-{index}",
+                    "name": folder.root.name,
+                    "kind": "folder",
+                    "location": str(folder.root),
+                    "articles": articles,
+                    "_source": folder,
+                }
+            )
+        for kb in Knowledgebase.objects.filter(name__in=plugin.config.get("knowledgebases") or []):
+            found.append(
+                {
+                    "id": str(kb.id),
+                    "name": kb.name,
+                    "kind": "database",
+                    "location": kb.description,
+                    "articles": [
+                        {"path": str(a.id), "title": a.title}
+                        for a in kb.articles.order_by("hierarchy_code", "title")[:2000]
+                    ],
+                    "_source": kb,
+                }
+            )
+    return found
+
+
+@router.get("/bots/{bot}/kbs", response=list[KBOut])
+def list_kbs(request, bot: str):
+    return bot_kbs(get_bot(bot))
+
+
+@router.get("/bots/{bot}/kbs/{kb_id}/article", response=KBArticleDetailOut)
+def read_kb_article(request, bot: str, kb_id: str, path: str):
+    kb = next((k for k in bot_kbs(get_bot(bot)) if k["id"] == kb_id), None)
+    if kb is None:
+        raise HttpError(404, "No such knowledge base")
+    source = kb["_source"]
+    if kb["kind"] == "folder":
+        try:
+            article = source.read(path)
+        except (ValueError, FileNotFoundError, OSError) as e:
+            raise HttpError(404, str(e)) from e
+        return {"path": article.path, "title": article.title, "body": article.body}
+    article = source.articles.filter(id=path).first()
+    if article is None:
+        raise HttpError(404, "No such article")
+    return {"path": str(article.id), "title": article.title, "body": article.content or ""}

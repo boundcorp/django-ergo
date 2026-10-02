@@ -9,6 +9,10 @@ is lexical (word matches in the title and body), so it needs no index or
 embeddings, and the folder can live in a bot's git repo, where the bot edits
 articles and proposes them like any other change (see the bot_management
 plugin). Files are read fresh on every call.
+
+The root article, ``index.md`` (or ``README.md``) at the top of the folder,
+is what the bot should always know; the ergo_kb plugin puts it in context on
+every turn.
 """
 
 from __future__ import annotations
@@ -24,6 +28,7 @@ from django_ergo.bots.tools import bot_tool
 MAX_ARTICLES = 2000
 MAX_ARTICLE_CHARS = 50_000
 SNIPPET_CHARS = 300
+ROOT_ARTICLES = ("index.md", "README.md")
 _WORD = re.compile(r"[\w'-]{3,}", re.UNICODE)
 
 
@@ -53,6 +58,16 @@ class FolderKB:
                 title = first[2:].strip()
             found.append(Article(relative, title, text))
         return found
+
+    def root_article(self) -> Article | None:
+        for name in ROOT_ARTICLES:
+            path = self.root / name
+            if path.is_file():
+                text = path.read_text(errors="replace")[:MAX_ARTICLE_CHARS]
+                first = text.lstrip().splitlines()[0] if text.strip() else ""
+                title = first[2:].strip() if first.startswith("# ") else name
+                return Article(name, title, text)
+        return None
 
     def search(self, query: str, limit: int = 5) -> list[tuple[Article, int]]:
         terms = {w.lower() for w in _WORD.findall(query)}

@@ -1,16 +1,21 @@
 """Find the bots this Ergonaut serves and the people who use them.
 
 ``ERGONAUT_BOTS`` (default ``/bot``) is a path, or several separated by
-``:``. Each path is one of:
+``:``. Every folder at or under each path with a ``bot.yaml`` is a bot, and
+a bot folder inside another bot's folder is its sub-bot, which the parent
+can message (see ``django_ergo.bots.registry``)::
 
-- a bot folder (has ``bot.yaml``),
-- a folder with an ``ergonaut.yaml`` listing bot folders::
+    config/
+      bot.yaml          # boundcorp, the root bot
+      kitchen/
+        bot.yaml        # kitchen, a sub-bot of boundcorp
+
+A path may instead hold an ``ergonaut.yaml`` that lists bot folders (each
+searched the same way) and people::
 
       bots: [kitchen, ../sysadmin]
       people:
         lee: {telegram: 123456789, timezone: America/Los_Angeles}
-
-- a folder of bot folders.
 
 ``people:`` can also sit in a bot's own ``bot.yaml``. Each person becomes a
 Django user (created if missing, updated otherwise), and their Telegram id
@@ -31,6 +36,7 @@ from django.contrib.auth import get_user_model
 
 from django_ergo.bots.definition import CONFIG_FILE
 from django_ergo.bots.registry import BotRegistry
+from django_ergo.bots.registry import find_bot_folders
 
 logger = logging.getLogger(__name__)
 
@@ -90,21 +96,24 @@ def _add_people(setup: Setup, data: dict, source: Path) -> None:
 def find_setup(paths: list[Path] | None = None) -> Setup:
     setup = Setup()
     for path in paths if paths is not None else bot_paths():
-        if (path / CONFIG_FILE).is_file():
-            folders = [path]
-        elif (path / HOST_CONFIG).is_file():
+        if (path / HOST_CONFIG).is_file() and not (path / CONFIG_FILE).is_file():
             data = _read_yaml(path / HOST_CONFIG)
             _add_people(setup, data, path / HOST_CONFIG)
-            folders = [(path / p).resolve() for p in data.get("bots") or []]
+            folders = []
+            for listed in data.get("bots") or []:
+                folder = (path / listed).resolve()
+                if not (folder / CONFIG_FILE).is_file():
+                    msg = f"No {CONFIG_FILE} in {folder}"
+                    raise ErgonautConfigError(msg)
+                folders.extend(find_bot_folders(folder))
         elif path.is_dir():
-            folders = sorted(p for p in path.iterdir() if (p / CONFIG_FILE).is_file())
+            folders = find_bot_folders(path)
         else:
             logger.info("No bots at %s", path)
             continue
         for folder in folders:
-            if not (folder / CONFIG_FILE).is_file():
-                msg = f"No {CONFIG_FILE} in {folder}"
-                raise ErgonautConfigError(msg)
+            if folder in setup.folders:
+                continue
             _add_people(setup, _read_yaml(folder / CONFIG_FILE), folder / CONFIG_FILE)
             setup.folders.append(folder)
     return setup

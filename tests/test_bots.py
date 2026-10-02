@@ -643,3 +643,129 @@ def test_explicit_parameters_respect_an_empty_required_list():
 
     assert optional.__bot_tool__.json_schema()["required"] == []
     assert everything.__bot_tool__.json_schema()["required"] == ["query"]
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_skills_are_listed_up_front_and_loaded_on_demand(tmp_path):
+    user = await User.objects.acreate(username="planner")
+    bot, engine = make_bot(
+        tmp_path,
+        claude_tool("load_skill", {"name": "meal-planning"}),
+        say("Here are five dinners."),
+        say("Sure."),
+    )
+    skills = bot.definition.root_dir / "skills"
+    (skills / "meal-planning").mkdir(parents=True)
+    (skills / "meal-planning" / "SKILL.md").write_text(
+        "---\nname: meal-planning\ndescription: Plan a week of dinners\n---\n"
+        "Check the last 60 days of the meal plan first."
+    )
+    (skills / "shopping.md").write_text("# Shop by aisle\n\nGroup the list by aisle.")
+    bot = Bot.load(bot.definition.root_dir, engine_factory=bot._engine_factory)
+    assert [s.name for s in bot.skills] == ["meal-planning", "shopping"]
+    assert bot.skills[1].description == "Shop by aisle"
+
+    root = await bot.root_session(user)
+    turn = await bot.ask(root, "Plan dinners")
+    assert turn.text == "Here are five dinners."
+
+    first = engine._client.calls[0]
+    assert {"list_skills", "load_skill", "pantry_count"} <= _tool_names(first)
+    seeded = [
+        block
+        for message in first["messages"]
+        for block in (message["content"] if isinstance(message["content"], list) else [])
+        if block.get("type") == "tool_result"
+    ]
+    assert len(seeded) == 1
+    listing = str(seeded[0]["content"])
+    assert "- meal-planning: Plan a week of dinners" in listing
+    assert "- shopping: Shop by aisle" in listing
+    assert "pantry_count" in listing
+    assert "send_reply" not in listing
+
+    loaded = engine._client.calls[1]["messages"][-1]["content"][0]["content"]
+    assert "Check the last 60 days" in str(loaded)
+    assert "load_skill" in turn.call.metadata["tools"]
+    assert turn.call.metadata["seeded"] is True
+
+    # The root only sends the current turn natively, so it is seeded each turn.
+    again = await bot.ask(root, "Thanks")
+    assert again.call.metadata["seeded"] is True
+    results = [
+        block
+        for message in engine._client.calls[2]["messages"]
+        for block in (message["content"] if isinstance(message["content"], list) else [])
+        if block.get("type") == "tool_result" and "Skills (load one" in str(block["content"])
+    ]
+    assert len(results) == 1
+
+
+def test_bots_without_a_skills_folder_have_no_skill_tools(tmp_path):
+    bot, _ = make_bot(tmp_path)
+    assert bot.skills == []
+    assert bot.reply_spec([]).pre_seeds == []
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_nested_bot_folders_make_sub_bots_the_parent_can_message(tmp_path):
+    user = await User.objects.acreate(username="lee")
+    parent = write_bot(tmp_path, "name: boundcorp\ndescription: Boundcorp\n", name="boundcorp")
+    write_bot(parent, "name: kitchen\ndescription: Runs the kitchen\norchestration: false\n", name="kitchen")
+    write_bot(parent / "kitchen", "name: pantry\n", name="pantry")
+    (parent / "skills").mkdir()
+    write_bot(parent / "skills", "name: notabot\n", name="ignored")
+    engine = claude_engine(
+        claude_tool("bots_call", {"bot": "kitchen", "message": "What's for dinner?"}),
+        say("Tacos."),
+        say("Kitchen says tacos."),
+    )
+
+    def factory():
+        fresh = claude_engine()
+        fresh._client = engine._client
+        return fresh
+
+    registry = BotRegistry.discover(parent, engine_factory=factory)
+    assert [b.name for b in registry] == ["boundcorp", "kitchen", "pantry"]
+    boundcorp, kitchen, pantry = (registry.get(n) for n in ("boundcorp", "kitchen", "pantry"))
+    assert (boundcorp.parent_name, kitchen.parent_name, pantry.parent_name) == ("", "boundcorp", "kitchen")
+    assert [b.name for b in registry.children(boundcorp)] == ["kitchen"]
+    assert registry.may_call(boundcorp, "kitchen")
+    assert not registry.may_call(boundcorp, "pantry")
+    assert not registry.may_call(kitchen, "boundcorp")
+
+    root = await boundcorp.root_session(user)
+    result = await boundcorp.ask(root, "Dinner?")
+    assert result.text == "Kitchen says tacos."
+    first = engine._client.calls[0]
+    assert "bots_call" in _tool_names(first)
+    assert "- kitchen: Runs the kitchen" in first["system"]
+    assert _last_tool_result(engine) == "Tacos."
+    called = await kitchen.sessions(user).aget()
+    assert called.metadata["called_by"] == "boundcorp"
+
+    # The kitchen bot has no thread or bot tools of its own.
+    kitchen_tools = _tool_names(engine._client.calls[1])
+    assert not {t for t in kitchen_tools if t.startswith(("threads_", "bots_"))}
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_a_kb_folder_is_the_bots_knowledge_base(tmp_path):
+    user = await User.objects.acreate(username="eater")
+    bot, engine = make_bot(tmp_path, say("Soylent, as usual."))
+    kb = bot.definition.root_dir / "kb"
+    kb.mkdir()
+    (kb / "index.md").write_text(
+        "# Kitchen\n\nLee has a chocolate Soylent shake for breakfast most days."
+    )
+    (kb / "recipes.md").write_text("# Recipes\n\nTacos on Tuesday.")
+    bot = Bot.load(bot.definition.root_dir, engine_factory=bot._engine_factory)
+    assert "ergo_kb" in [p.name for p in bot.plugins]
+
+    root = await bot.root_session(user)
+    await bot.ask(root, "What do I eat for breakfast?")
+    first = engine._client.calls[0]
+    assert "Knowledge base: Kitchen" in first["system"]
+    assert "chocolate Soylent shake" in first["system"]
+    assert {"kb_search", "kb_read"} <= _tool_names(first)

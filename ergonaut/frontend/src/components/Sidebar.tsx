@@ -1,38 +1,56 @@
-import { Link, NavLink, useNavigate } from 'react-router-dom'
-import type { Bot, Session } from '../api'
-import { api } from '../api'
+import { Link, NavLink, useNavigate } from "react-router-dom";
+import type { Bot, Session } from "../api";
+import { api } from "../api";
 
-function SessionLink({ session, nested }: { session: Session; nested?: boolean }) {
+function SessionLink({
+  session,
+  nested,
+}: {
+  session: Session;
+  nested?: boolean;
+}) {
   return (
     <NavLink
       to={`/s/${session.id}`}
       className={({ isActive }) =>
-        `flex items-center gap-2 truncate rounded-md px-2 py-1 text-sm ${nested ? 'ml-4' : ''} ${
-          isActive ? 'bg-zinc-200 font-medium dark:bg-zinc-800' : 'hover:bg-zinc-100 dark:hover:bg-zinc-900'
+        `flex items-center gap-2 truncate rounded-md px-2 py-1 text-sm ${nested ? "ml-4" : ""} ${
+          isActive
+            ? "bg-zinc-200 font-medium dark:bg-zinc-800"
+            : "hover:bg-zinc-100 dark:hover:bg-zinc-900"
         }`
       }
     >
-      <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${session.status === 'completed' ? 'bg-zinc-400' : 'bg-emerald-500'}`} />
+      <span
+        className={`h-1.5 w-1.5 shrink-0 rounded-full ${session.status === "completed" ? "bg-zinc-400" : "bg-emerald-500"}`}
+      />
       <span className="truncate">{session.title}</span>
     </NavLink>
-  )
+  );
 }
 
-export function Sidebar({ bots, sessions, onChange }: { bots: Bot[]; sessions: Session[]; onChange: () => void }) {
-  const navigate = useNavigate()
+export function Sidebar({
+  bots,
+  sessions,
+  onChange,
+}: {
+  bots: Bot[];
+  sessions: Session[];
+  onChange: () => void;
+}) {
+  const navigate = useNavigate();
 
   async function openRoot(bot: Bot) {
-    const root = await api.openRoot(bot.name)
-    onChange()
-    navigate(`/s/${root.id}`)
+    const root = await api.openRoot(bot.name);
+    onChange();
+    navigate(`/s/${root.id}`);
   }
 
   async function newThread(bot: Bot) {
-    const title = window.prompt('Thread title', '')
-    if (title === null) return
-    const thread = await api.newThread(bot.name, title)
-    onChange()
-    navigate(`/s/${thread.id}`)
+    const title = window.prompt("Thread title", "");
+    if (title === null) return;
+    const thread = await api.newThread(bot.name, title);
+    onChange();
+    navigate(`/s/${thread.id}`);
   }
 
   return (
@@ -40,24 +58,42 @@ export function Sidebar({ bots, sessions, onChange }: { bots: Bot[]; sessions: S
       <Link to="/" className="px-2 text-lg font-semibold">
         Ergonaut
       </Link>
-      <Link to="/sessions" className="rounded-md px-2 py-1 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-900">
+      <Link
+        to="/sessions"
+        className="rounded-md px-2 py-1 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-900"
+      >
         🔎 All sessions
       </Link>
-      {bots.map(bot => {
-        const mine = sessions.filter(s => s.bot === bot.name)
-        const root = mine.find(s => s.id === bot.root_session_id)
-        const threads = mine.filter(s => s.role === 'thread' && s.status !== 'completed')
+      {bots.map((bot) => {
+        const mine = sessions.filter((s) => s.bot === bot.name);
+        const root = mine.find((s) => s.id === bot.root_session_id);
+        const threads = mine.filter(
+          (s) => s.role === "thread" && s.status !== "completed",
+        );
         return (
           <section key={bot.name}>
             <div className="mb-1 flex items-center px-2">
-              <span className="text-xs font-semibold tracking-wide text-zinc-500 uppercase">{bot.name}</span>
-              <button
-                className="ml-auto rounded px-1.5 text-xs text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-900"
-                title="New thread"
-                onClick={() => newThread(bot)}
+              <Link
+                to={`/bots/${bot.name}`}
+                title="Bot options: tools and skills"
+                className="text-xs font-semibold tracking-wide text-zinc-500 uppercase hover:text-zinc-800 dark:hover:text-zinc-200"
               >
-                + thread
-              </button>
+                {bot.name} ⚙
+              </Link>
+              {bot.parent && (
+                <span className="ml-1 text-[10px] text-zinc-400">
+                  in {bot.parent}
+                </span>
+              )}
+              {bot.orchestration && (
+                <button
+                  className="ml-auto rounded px-1.5 text-xs text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-900"
+                  title="New thread"
+                  onClick={() => newThread(bot)}
+                >
+                  + thread
+                </button>
+              )}
             </div>
             {root ? (
               <SessionLink session={root} />
@@ -69,13 +105,31 @@ export function Sidebar({ bots, sessions, onChange }: { bots: Bot[]; sessions: S
                 Start chatting
               </button>
             )}
-            {threads.map(t => (
+            {threads.map((t) => (
               <SessionLink key={t.id} session={t} nested />
             ))}
+            {bot.knowledge && (
+              <NavLink
+                to={`/bots/${bot.name}/kb`}
+                className={({ isActive }) =>
+                  `block rounded-md px-2 py-1 text-sm text-zinc-500 ${
+                    isActive
+                      ? "bg-zinc-200 font-medium dark:bg-zinc-800"
+                      : "hover:bg-zinc-100 dark:hover:bg-zinc-900"
+                  }`
+                }
+              >
+                Memory
+              </NavLink>
+            )}
           </section>
-        )
+        );
       })}
-      {!bots.length && <p className="px-2 text-sm text-zinc-500">No bots are loaded. Set ERGONAUT_BOTS and restart.</p>}
+      {!bots.length && (
+        <p className="px-2 text-sm text-zinc-500">
+          No bots are loaded. Set ERGONAUT_BOTS and restart.
+        </p>
+      )}
     </nav>
-  )
+  );
 }

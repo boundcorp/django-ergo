@@ -15,6 +15,10 @@ with the user's message and puts the results in the turn's context block,
 on a session's first turn (``new_session``) or on every turn. Results are
 never stored in the conversation.
 
+A bot folder with a ``kb/`` folder gets this plugin with ``path: kb``
+automatically. A folder KB's root article (``kb/index.md``) is in context on
+every turn, with the title "Knowledge base".
+
 A ``path`` knowledge base is plain Markdown (see ``bots.folder_kb``). Pair it
 with the bot_management plugin and the bot can edit its own articles and
 propose them as pull requests.
@@ -107,8 +111,9 @@ class ErgoKBPlugin(BotPlugin):
         )
 
     def context_sources(self, ctx: ToolContext, message: str) -> list[ContextSource]:
+        sources = self._root_sources()
         if not message.strip() or not self.should_prefetch(ctx):
-            return []
+            return sources
 
         found: list[str] = []
 
@@ -119,9 +124,24 @@ class ErgoKBPlugin(BotPlugin):
             return found[0]
 
         return [
+            *sources,
             TextContextSource(
                 "Knowledge base results for this message",
                 search,
+                weight=float(self.config.get("weight", 1)),
+            ),
+        ]
+
+    def _root_sources(self) -> list[ContextSource]:
+        if self._factory is not None or self.folder is None:
+            return []
+        root = self.folder.root_article()
+        if root is None:
+            return []
+        return [
+            TextContextSource(
+                f"Knowledge base: {root.title}",
+                lambda: root.body,
                 weight=float(self.config.get("weight", 1)),
             )
         ]

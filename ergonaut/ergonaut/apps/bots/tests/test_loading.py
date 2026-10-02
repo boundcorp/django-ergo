@@ -118,3 +118,16 @@ def test_cli_help_and_unknown_command(capsys):
     assert main([]) == 0
     assert "ergonaut web" in capsys.readouterr().out
     assert main(["nope"]) == 2
+
+
+def test_nested_bot_folders_are_all_loaded(tmp_path):
+    root = tmp_path / "config"
+    (root / "kitchen" / "skills").mkdir(parents=True)
+    (root / "bot.yaml").write_text("name: boundcorp\nengine: {type: claude}\n")
+    (root / "agents.md").write_text("You coordinate.")
+    (root / "kitchen" / "bot.yaml").write_text("name: kitchen\nengine: {type: claude}\norchestration: false\n")
+    (root / "kitchen" / "agents.md").write_text("You run the kitchen.")
+    setup = find_setup([root])
+    assert setup.folders == [root.resolve(), (root / "kitchen").resolve()]
+    registry = load_registry(setup)
+    assert registry.get("kitchen").parent_name == "boundcorp"

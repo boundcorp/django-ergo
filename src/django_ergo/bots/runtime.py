@@ -33,9 +33,16 @@ from asgiref.sync import sync_to_async
 from django.utils.module_loading import import_string
 
 from django_ergo.bots.definition import BotDefinition
+from django_ergo.bots.definition import PluginSpec
 from django_ergo.bots.orchestrator import orchestrator_toolkit
 from django_ergo.bots.plugins import BotPlugin
 from django_ergo.bots.plugins import resolve_plugin_class
+from django_ergo.bots.skills import LIST_SKILLS
+from django_ergo.bots.skills import Skill
+from django_ergo.bots.skills import load_skills
+from django_ergo.bots.skills import render_listing
+from django_ergo.bots.skills import skills_toolkit
+from django_ergo.bots.skills import tool_overview
 from django_ergo.bots.tools import FunctionToolkit
 from django_ergo.bots.tools import ToolContext
 from django_ergo.bots.tools import load_tool_module
@@ -54,6 +61,7 @@ from django_ergo.conversation.runtime import EngineSpec
 from django_ergo.conversation.runtime import build_engine
 from django_ergo.conversation.runtime import get_default_engine_spec
 from django_ergo.conversation.stream import STREAM_CONFIG
+from django_ergo.conversation.structured import PreSeedCall
 from django_ergo.conversation.structured import resume_structured_call
 from django_ergo.conversation.structured import run_structured_call
 
@@ -123,17 +131,27 @@ class Bot:
         self.definition = definition
         self.name = definition.name
         self.registry = registry
+        self.parent_name = ""  # set by the registry for nested bot folders
         self._engine_factory = engine_factory
         self.tool_modules: list[ToolModule] = [
             load_tool_module(path, definition.name) for path in definition.tool_files
         ]
+        self.skills: list[Skill] = load_skills(definition.skills_dir)
         self.toolkit_factories = [
             import_string(path.replace(":", "."))
             for path in definition.toolkit_factories
         ]
+        specs = list(definition.plugins)
+        kb_folder = definition.root_dir / "kb" if definition.root_dir else None
+        if (
+            kb_folder is not None
+            and kb_folder.is_dir()
+            and not any(spec.name == "ergo_kb" for spec in specs)
+        ):
+            # A kb/ folder in the bot folder is its knowledge base.
+            specs.append(PluginSpec("ergo_kb", {"path": "kb"}))
         self.plugins: list[BotPlugin] = [
-            resolve_plugin_class(spec.name)(self, spec.config)
-            for spec in definition.plugins
+            resolve_plugin_class(spec.name)(self, spec.config) for spec in specs
         ]
         for plugin in self.plugins:
             plugin.on_load()
@@ -321,6 +339,9 @@ class Bot:
             toolkits.extend(made if isinstance(made, list | tuple) else [made])
         for plugin in self.plugins:
             toolkits.extend(plugin.toolkits(ctx) or [])
+        if self.skills:
+            others = list(toolkits)
+            toolkits.append(skills_toolkit(self.skills, lambda: tool_overview(others)))
         return toolkits
 
     def context_builder(
@@ -335,6 +356,24 @@ class Bot:
                     "Current time",
                     lambda: ctx.now().strftime("%A, %B %d, %Y at %H:%M %Z"),
                     weight=0.2,
+                )
+            )
+            empty = False
+        callable_bots = (
+            self.registry.callable_bots(self)
+            if self.registry and self.is_root(session) and self.definition.orchestration
+            else []
+        )
+        if callable_bots:
+            listing = "\n".join(
+                f"- {b.name}: {b.definition.description or 'no description'}"
+                for b in callable_bots
+            )
+            builder.add(
+                TextContextSource(
+                    "Bots you can message with bots_call",
+                    lambda: listing,
+                    weight=0.3,
                 )
             )
             empty = False
@@ -376,8 +415,16 @@ class Bot:
 
     # -- turns -------------------------------------------------------------
 
-    def reply_spec(self, toolkits: list[Toolkit]):
-        return chat_reply_spec(toolkits)
+    def reply_spec(
+        self, toolkits: list[Toolkit], session: ConversationSession | None = None
+    ):
+        spec = chat_reply_spec(toolkits)
+        if self.skills:
+            spec.pre_seed_each_turn = session is not None and self.is_stream(session)
+            # Every session starts knowing its skills and tools.
+            listing = render_listing(self.skills, tool_overview(toolkits[:-1]))
+            spec.pre_seeds.append(PreSeedCall(LIST_SKILLS, {}, lambda _input: listing))
+        return spec
 
     async def ask(
         self,
@@ -391,7 +438,7 @@ class Bot:
             await _maybe_await(plugin.before_turn(session, message))
         toolkits, builder = await self._prepare(session, message)
         outcome = await run_structured_call(
-            self.reply_spec(toolkits),
+            self.reply_spec(toolkits, session),
             message,
             session=session,
             engine=self.make_engine(),

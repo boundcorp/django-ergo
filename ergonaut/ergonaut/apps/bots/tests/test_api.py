@@ -79,11 +79,18 @@ def test_chat_with_the_root_session_and_drill_into_tools(client, cook, use_bots)
 
     bots = client.get("/api/bots").json()
     assert bots == [
-        {"name": "kitchen", "description": "Runs the kitchen", "orchestration": False, "root_session_id": None}
+        {
+            "name": "kitchen",
+            "description": "Runs the kitchen",
+            "orchestration": False,
+            "knowledge": False,
+            "parent": "",
+            "root_session_id": None,
+        }
     ]
     root = post(client, "/api/bots/kitchen/root").json()
     assert root["role"] == "root"
-    assert root["title"] == "Root chat"
+    assert root["title"] == "Chat"
 
     turn = post(client, f"/api/sessions/{root['id']}/messages", {"text": "How many eggs?"}).json()
     assert turn["text"] == "You have 4 eggs."
@@ -113,7 +120,37 @@ def test_chat_with_the_root_session_and_drill_into_tools(client, cook, use_bots)
 
 
 @pytest.mark.django_db(transaction=True)
-def test_threads_and_approvals(client, cook, use_bots):
+def test_bot_page_lists_tools_and_skills_and_threads_follow_orchestration(client, cook, bot_folder, use_bots):
+    (bot_folder / "skills").mkdir()
+    (bot_folder / "skills" / "meal-planning.md").write_text(
+        "---\ndescription: Plan a week of dinners\n---\nLook back 60 days."
+    )
+    use_bots(say("hi"))
+    bot = client.get("/api/bots/kitchen").json()
+    assert bot["orchestration"] is False
+    assert bot["engine"] == "claude"
+    assert bot["instructions"] == "You run the kitchen."
+    tools = {t["name"]: t for t in bot["tools"]}
+    assert {"pantry_count", "order", "list_skills", "load_skill", "send_reply"} <= set(tools)
+    assert not [name for name in tools if name.startswith("threads_")]
+    assert tools["order"]["requires_approval"] is True
+    assert tools["pantry_count"]["requires_approval"] is False
+    assert bot["skills"] == [
+        {"name": "meal-planning", "description": "Plan a week of dinners", "body": "Look back 60 days."}
+    ]
+
+    refused = post(client, "/api/bots/kitchen/threads", {"title": "Nope"})
+    assert refused.status_code == 409
+
+    root = post(client, "/api/bots/kitchen/root").json()
+    post(client, f"/api/sessions/{root['id']}/messages", {"text": "hi"})
+    [call] = client.get(f"/api/sessions/{root['id']}").json()["calls"]
+    assert {"pantry_count", "load_skill", "send_reply"} <= set(call["tools"])
+
+
+@pytest.mark.django_db(transaction=True)
+def test_threads_and_approvals(client, cook, bot_folder, use_bots):
+    (bot_folder / "bot.yaml").write_text(textwrap.dedent(BOT).replace("orchestration: false", "orchestration: true"))
     use_bots(tool_call("order", {"item": "milk"}), say("Ordered milk."))
     thread = post(client, "/api/bots/kitchen/threads", {"title": "Groceries"}).json()
     assert thread["title"] == "Groceries"
@@ -164,3 +201,22 @@ def test_browser_writes_pass_the_csrf_check(use_bots):
     turn = write(f"/api/sessions/{root.json()['id']}/messages", {"text": "hello"})
     assert turn.status_code == 200, turn.content
     assert browser.post("/api/bots/kitchen/root").status_code == 403
+
+
+@pytest.mark.django_db(transaction=True)
+def test_browse_a_bots_knowledge_base(client, cook, bot_folder, use_bots):
+    kb = bot_folder / "kb"
+    (kb / "recipes").mkdir(parents=True)
+    (kb / "index.md").write_text("# Kitchen\n\nChocolate Soylent for breakfast most days.")
+    (kb / "recipes" / "tacos.md").write_text("# Tacos\n\nTuesdays.")
+    use_bots(say("hi"))
+    [found] = client.get("/api/bots/kitchen/kbs").json()
+    assert found["kind"] == "folder"
+    assert found["articles"] == [
+        {"path": "index.md", "title": "Kitchen", "root": True},
+        {"path": "recipes/tacos.md", "title": "Tacos", "root": False},
+    ]
+    article = client.get(f"/api/bots/kitchen/kbs/{found['id']}/article?path=recipes/tacos.md").json()
+    assert article == {"path": "recipes/tacos.md", "title": "Tacos", "body": "# Tacos\n\nTuesdays."}
+    assert client.get(f"/api/bots/kitchen/kbs/{found['id']}/article?path=../bot.yaml").status_code == 404
+    assert client.get("/api/bots/kitchen/kbs/nope/article?path=index.md").status_code == 404

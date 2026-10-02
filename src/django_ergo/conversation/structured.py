@@ -56,6 +56,7 @@ from asgiref.sync import sync_to_async
 from pydantic import BaseModel
 from pydantic import ValidationError
 
+from django_ergo.conversation.adapters import ClaudeToolAdapter
 from django_ergo.conversation.adapters import OpenAIToolAdapter
 from django_ergo.conversation.compaction import maybe_compact
 from django_ergo.conversation.engine import SeededToolCall
@@ -143,6 +144,9 @@ class StructuredCallSpec:
     output_parser: Callable[[str], Any] | None = None
     toolkits: list[Toolkit] = field(default_factory=list)
     pre_seeds: list[PreSeedCall] = field(default_factory=list)
+    # Seed every turn instead of once per session, for sessions whose model
+    # calls only carry the current turn natively (stream compaction).
+    pre_seed_each_turn: bool = False
     max_turns: int = 10
     max_tokens: int | None = None
     output_tool_name: str = DEFAULT_OUTPUT_TOOL
@@ -271,6 +275,25 @@ def _dispatch_tool(
             return str(e), True
         return result, False
     return f"Unknown tool: {name}", True
+
+
+async def _record_tools(call: StructuredCall, spec: StructuredCallSpec) -> None:
+    """Keep the names of the tools this call could use, for inspection later."""
+    adapter = ClaudeToolAdapter()
+
+    def names():
+        tools = [
+            schema["name"]
+            for toolkit in spec.toolkits
+            for schema in toolkit.get_tools_schema(adapter)
+        ]
+        # A call with only its output tool has nothing worth recording.
+        return [*tools, spec.output_tool_name] if tools and spec.output_tool_name else tools
+
+    tools = await sync_to_async(names)()
+    if tools:
+        call.metadata = {**(call.metadata or {}), "tools": tools}
+        await call.asave(update_fields=["metadata"])
 
 
 async def _run_pre_seeds(pre_seeds: list[PreSeedCall]) -> list[SeededToolCall]:
@@ -670,7 +693,14 @@ async def run_structured_call(  # noqa: PLR0913
             if session.engine_type == "openai"
             else session.claude_messages
         )
-        seed = not await session.structured_calls.filter(kind=spec.kind).aexists()
+        # Pre-seeds go in once per session, the first time a turn has them.
+        seed = bool(spec.pre_seeds) and (
+            spec.pre_seed_each_turn
+            or not await session.structured_calls.filter(
+                kind=spec.kind, metadata__seeded=True
+            ).aexists()
+        )
+        metadata = {**(metadata or {}), **({"seeded": True} if seed else {})}
         await maybe_compact(session, active)
         call = await StructuredCall.objects.acreate(
             kind=spec.kind,
@@ -705,6 +735,7 @@ async def run_structured_call(  # noqa: PLR0913
         transcript = _MemoryTranscript(active, call, history)
 
     run = _Run(active, transcript, call, spec, user, workflow, allow_approvals)
+    await _record_tools(call, spec)
     await transcript.append_user(message, attachments)
     if seed and spec.pre_seeds:
         await transcript.append_tool_exchange(await _run_pre_seeds(spec.pre_seeds))

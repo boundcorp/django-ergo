@@ -6,6 +6,8 @@ import { Sidebar } from './components/Sidebar'
 import { Chat } from './pages/Chat'
 import { Login } from './pages/Login'
 import { Sessions } from './pages/Sessions'
+import { BotPage } from './pages/BotPage'
+import { Memory } from './pages/Memory'
 
 function Home({ bots }: { bots: Bot[] }) {
   const root = bots.find(b => b.root_session_id)
@@ -54,6 +56,8 @@ function App() {
             <Route path="/" element={<Home bots={bots} />} />
             <Route path="/s/:id" element={<Chat onChange={refresh} />} />
             <Route path="/sessions" element={<Sessions bots={bots} />} />
+            <Route path="/bots/:name" element={<BotPage />} />
+            <Route path="/bots/:name/kb" element={<Memory />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </main>

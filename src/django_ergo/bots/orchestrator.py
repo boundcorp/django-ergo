@@ -3,9 +3,9 @@
 - ``threads_list`` / ``threads_create`` / ``threads_send`` / ``threads_close``
   manage this bot's thread sessions with the same user. Creating threads
   needs ``sessions.allow_create: true`` in bot.yaml.
-- ``bots_call`` sends a message to another bot listed in
-  ``permissions.call_bots``. Each calling bot gets its own thread in the
-  called bot, reused across calls.
+- ``bots_call`` sends a message to one of this bot's sub-bots (bot folders
+  nested in its folder) or a bot listed in ``permissions.call_bots``. Each
+  calling bot gets its own thread in the called bot, reused across calls.
 
 Reading thread histories is done with the root's history tools, which cover
 every session this bot has with the user.
@@ -155,11 +155,12 @@ def threads_close(ctx: ToolContext, thread_id: str) -> str:
 def bots_call(ctx: ToolContext, bot: str, message: str) -> str:
     """Send a message to another bot this bot may call, and return its reply."""
     caller = ctx.bot
-    if bot not in caller.definition.call_bots:
-        allowed = ", ".join(caller.definition.call_bots) or "none"
-        msg = f"This bot may not call {bot!r} (allowed: {allowed})."
+    registry = caller.registry
+    if registry is None or not registry.may_call(caller, bot):
+        allowed = ", ".join(b.name for b in registry.callable_bots(caller)) if registry else ""
+        msg = f"This bot may not call {bot!r} (allowed: {allowed or 'none'})."
         raise ValueError(msg)
-    if caller.registry is None or bot not in caller.registry:
+    if bot not in registry:
         msg = f"Bot {bot!r} is not loaded"
         raise ValueError(msg)
     target = caller.registry.get(bot)
@@ -187,7 +188,9 @@ def orchestrator_toolkit(ctx: ToolContext) -> FunctionToolkit:
     functions = list(THREAD_TOOLS)
     if not ctx.bot.definition.allow_create_sessions:
         functions.remove(threads_create)
-    if ctx.bot.definition.call_bots:
+    if ctx.bot.definition.call_bots or (
+        ctx.bot.registry and ctx.bot.registry.children(ctx.bot)
+    ):
         functions.append(bots_call)
     tools: list[BotTool] = [fn.__bot_tool__ for fn in functions]
     return FunctionToolkit(tools, ctx)

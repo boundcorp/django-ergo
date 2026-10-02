@@ -2,7 +2,14 @@
 
 export type User = { id: string; username: string; email: string; first_name: string; last_name: string }
 
-export type Bot = { name: string; description: string; orchestration: boolean; root_session_id: string | null }
+export type Bot = {
+  name: string
+  description: string
+  orchestration: boolean
+  knowledge: boolean
+  parent: string
+  root_session_id: string | null
+}
 
 export type Session = {
   id: string
@@ -42,7 +49,29 @@ export type Call = {
   output_tokens: number
   turns_used: number
   pending_approvals: Approval[]
+  tools: string[]
   created_at: string
+}
+
+export type KB = {
+  id: string
+  name: string
+  kind: string
+  location: string
+  articles: { path: string; title: string; root: boolean }[]
+}
+
+export type KBArticle = { path: string; title: string; body: string }
+
+export type BotDetail = Bot & {
+  engine: string
+  model: string
+  timezone: string
+  folder: string
+  instructions: string
+  plugins: string[]
+  tools: { name: string; description: string; requires_approval: boolean }[]
+  skills: { name: string; description: string; body: string }[]
 }
 
 export type SessionDetail = { session: Session; messages: Message[]; calls: Call[] }
@@ -97,6 +126,10 @@ export const api = {
   login: (username: string, password: string) => request<User>('POST', '/auth/login', { username, password }),
   logout: () => request<{ ok: boolean }>('POST', '/auth/logout'),
   bots: () => request<Bot[]>('GET', '/bots'),
+  bot: (name: string) => request<BotDetail>('GET', `/bots/${name}`),
+  kbs: (bot: string) => request<KB[]>('GET', `/bots/${bot}/kbs`),
+  kbArticle: (bot: string, kb: string, path: string) =>
+    request<KBArticle>('GET', `/bots/${bot}/kbs/${kb}/article?path=${encodeURIComponent(path)}`),
   sessions: (params: { bot?: string; q?: string; status?: string } = {}) => {
     const query = new URLSearchParams(Object.entries(params).filter(([, v]) => v) as [string, string][])
     return request<Session[]>('GET', `/sessions?${query}`)

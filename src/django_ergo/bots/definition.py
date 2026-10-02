@@ -25,6 +25,7 @@ bot.yaml::
       allow_create: true               # may the root start threads?
       default_compaction: {mode: stream, config: {keep_recent: 15}}
     tools: [tools/tandoor.py]
+    skills: skills                     # default; see django_ergo.bots.skills
     toolkits: ["myapp.toolkits:make_toolkit"]   # factory(ctx) -> Toolkit
     plugins:
       - name: ergo_kb
@@ -81,6 +82,7 @@ class BotDefinition:
     default_compaction_mode: str = CompactionMode.STREAM
     default_compaction_config: dict = field(default_factory=dict)
     tool_files: list[Path] = field(default_factory=list)
+    skills_dir: Path | None = None
     toolkit_factories: list[str] = field(default_factory=list)
     plugins: list[PluginSpec] = field(default_factory=list)
     call_bots: list[str] = field(default_factory=list)
@@ -123,6 +125,9 @@ class BotDefinition:
             default_compaction_mode=mode,
             default_compaction_config=dict(compaction.get("config") or {}),
             tool_files=[_tool_path(p, root_dir) for p in data.get("tools") or []],
+            skills_dir=_inside(root_dir, str(data.get("skills") or "skills"))
+            if root_dir
+            else None,
             toolkit_factories=list(data.get("toolkits") or []),
             plugins=[_plugin(spec) for spec in data.get("plugins") or []],
             call_bots=list(_mapping(data, "permissions").get("call_bots") or []),
