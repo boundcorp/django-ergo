@@ -105,6 +105,7 @@ export type BotDetail = Bot & {
   plugins: string[]
   tools: { name: string; description: string; requires_approval: boolean }[]
   skills: { name: string; description: string; body: string }[]
+  manages_repo?: boolean
 }
 
 export type AttachmentFile = {
@@ -117,6 +118,28 @@ export type AttachmentFile = {
   message_sequence: number | null
   created_at: string
   updated_at: string
+}
+
+export type PullRequest = {
+  number: number
+  title: string
+  url: string
+  branch: string
+  author: string
+  created_at: string
+  body: string
+  additions: number
+  deletions: number
+  changed_files: number
+}
+
+export type Changes = {
+  managed_by: string
+  repo: string
+  mode: string
+  draft_diff: string
+  pull_requests: PullRequest[]
+  error: string
 }
 
 export type SessionDetail = { session: Session; messages: Message[]; calls: Call[]; requests?: DelegatedRequest[] }
@@ -210,6 +233,11 @@ export const api = {
     request<Turn>('POST', `/sessions/${id}/messages`, { text, attachment_ids: attachmentIds }),
   approve: (id: string, approve: boolean) => request<Turn>('POST', `/sessions/${id}/approvals`, { approve }),
   close: (id: string) => request<Session>('POST', `/sessions/${id}/close`),
+  changes: (bot: string) => request<Changes>('GET', `/bots/${bot}/changes`),
+  changeDiff: (bot: string, n: number) => request<{ diff: string }>('GET', `/bots/${bot}/changes/${n}/diff`),
+  mergeChange: (bot: string, n: number) => request<{ result: string }>('POST', `/bots/${bot}/changes/${n}/merge`),
+  closeChange: (bot: string, n: number) => request<{ result: string }>('POST', `/bots/${bot}/changes/${n}/close`),
+  discardDraft: (bot: string) => request<{ result: string }>('POST', `/bots/${bot}/changes/draft/discard`),
   attachments: (id: string) => request<AttachmentFile[]>('GET', `/sessions/${id}/attachments`),
   uploadAttachment: (id: string, file: File) => upload<AttachmentFile>(`/sessions/${id}/attachments`, file),
   deleteAttachment: (id: string) => request<{ ok: boolean }>('DELETE', `/attachments/${id}`),

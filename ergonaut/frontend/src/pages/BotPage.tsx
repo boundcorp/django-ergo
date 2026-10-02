@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import type { BotDetail } from '../api'
 import { api } from '../api'
+import Changes from '../components/Changes'
 
 function Section({ title, count, children }: { title: string; count?: number; children: React.ReactNode }) {
   return (
@@ -55,6 +56,12 @@ export function BotPage() {
           </div>
         ))}
       </dl>
+
+      {bot.manages_repo && (
+        <Section title="Changes">
+          <Changes bot={bot.name} />
+        </Section>
+      )}
 
       <Section title="Skills" count={bot.skills.length}>
         {bot.skills.length ? (

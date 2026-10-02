@@ -61,6 +61,7 @@ class BotDetailOut(BotOut):
     plugins: list[str]
     tools: list[ToolOut]
     skills: list[SkillOut]
+    manages_repo: bool = False  # has bot_management: show the Changes section
 
 
 class SessionOut(Schema):
@@ -375,6 +376,7 @@ async def bot_detail(request, bot: str):
         "folder": str(definition.root_dir or ""),
         "instructions": definition.instructions,
         "plugins": [type(p).__name__ for p in found.plugins],
+        "manages_repo": found.plugin("bot_management") is not None,
         "tools": await sync_to_async(root_tools)(found, request.auth),
         "skills": [{"name": s.name, "description": s.description, "body": s.body} for s in found.skills],
     }
@@ -662,3 +664,116 @@ def delete_attachment(request, attachment_id: str):
         row.file.delete(save=False)
     row.delete()
     return {"ok": True}
+
+
+# -- changes: proposals to the bot repo ------------------------------------------
+
+
+class PullRequestOut(Schema):
+    number: int
+    title: str
+    url: str
+    branch: str
+    author: str
+    created_at: str
+    body: str
+    additions: int = 0
+    deletions: int = 0
+    changed_files: int = 0
+
+
+class ChangesOut(Schema):
+    managed_by: str
+    repo: str
+    mode: str
+    draft_diff: str
+    pull_requests: list[PullRequestOut]
+    error: str = ""
+
+
+def change_manager(bot: str):
+    """The bot_management plugin that maintains ``bot``'s repo (its own, or a parent's)."""
+    found = get_bot(bot)
+    seen = set()
+    current = found
+    while current is not None and current.name not in seen:
+        seen.add(current.name)
+        plugin = current.plugin("bot_management")
+        if plugin is not None:
+            return current, plugin
+        current = registry().get(current.parent_name) if current.parent_name in registry() else None
+    raise HttpError(404, f"No bot manages {bot}'s repository (bot_management plugin)")
+
+
+def require_admin(request):
+    if not request.auth.is_superuser:
+        raise HttpError(403, "Only an admin can merge or close changes")
+
+
+@router.get("/bots/{bot}/changes", response=ChangesOut)
+def bot_changes(request, bot: str):
+    manager, plugin = change_manager(bot)
+    out = {
+        "managed_by": manager.name,
+        "repo": str(plugin.repo),
+        "mode": plugin.mode,
+        "draft_diff": "",
+        "pull_requests": [],
+    }
+    try:
+        out["draft_diff"] = plugin.draft_diff()
+        if plugin.mode == "propose_pr":
+            out["pull_requests"] = [
+                {
+                    "number": pr["number"],
+                    "title": pr.get("title", ""),
+                    "url": pr.get("url", ""),
+                    "branch": pr.get("headRefName", ""),
+                    "author": (pr.get("author") or {}).get("login", ""),
+                    "created_at": pr.get("createdAt", ""),
+                    "body": pr.get("body", ""),
+                    "additions": pr.get("additions") or 0,
+                    "deletions": pr.get("deletions") or 0,
+                    "changed_files": pr.get("changedFiles") or 0,
+                }
+                for pr in plugin.pull_requests()
+            ]
+    except (ValueError, OSError) as e:
+        out["error"] = str(e)
+    return out
+
+
+@router.get("/bots/{bot}/changes/{number}/diff")
+def bot_change_diff(request, bot: str, number: int):
+    _, plugin = change_manager(bot)
+    try:
+        return {"diff": plugin.pull_request_diff(number)}
+    except ValueError as e:
+        raise HttpError(400, str(e)) from e
+
+
+@router.post("/bots/{bot}/changes/{number}/merge")
+def merge_bot_change(request, bot: str, number: int):
+    require_admin(request)
+    _, plugin = change_manager(bot)
+    try:
+        return {"result": plugin.merge_pull_request(number)}
+    except ValueError as e:
+        raise HttpError(400, str(e)) from e
+
+
+@router.post("/bots/{bot}/changes/{number}/close")
+def close_bot_change(request, bot: str, number: int):
+    require_admin(request)
+    _, plugin = change_manager(bot)
+    try:
+        return {"result": plugin.close_pull_request(number)}
+    except ValueError as e:
+        raise HttpError(400, str(e)) from e
+
+
+@router.post("/bots/{bot}/changes/draft/discard")
+def discard_bot_draft(request, bot: str):
+    require_admin(request)
+    _, plugin = change_manager(bot)
+    return {"result": plugin.discard()}

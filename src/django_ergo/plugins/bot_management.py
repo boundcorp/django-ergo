@@ -28,6 +28,7 @@ agents.md or tool files take effect when the bot is loaded again.
 
 from __future__ import annotations
 
+import json
 import re
 import subprocess
 from datetime import UTC
@@ -226,6 +227,38 @@ class BotManagementPlugin(BotPlugin):
         return self.run(
             ["gh", "pr", "list", "--json", "number,title,url,headRefName,state"]
         ).strip()
+
+    # -- for review screens (Ergonaut's Changes tab) ---------------------------
+
+    def draft_diff(self) -> str:
+        """The unpublished changes, without starting a draft if there is none."""
+        if self.mode == "merge_main":
+            work = self.repo
+        elif self.draft_dir.is_dir():
+            work = self.draft_dir
+        else:
+            return ""
+        self.git("add", "--intent-to-add", "--all", cwd=work)
+        return self.git("diff", cwd=work).strip()
+
+    def pull_requests(self) -> list[dict]:
+        """Open pull requests on the bot repository, newest first."""
+        fields = "number,title,url,headRefName,author,createdAt,body,additions,deletions,changedFiles"
+        return json.loads(self.run(["gh", "pr", "list", "--state", "open", "--json", fields]) or "[]")
+
+    def pull_request_diff(self, number: int) -> str:
+        return self.run(["gh", "pr", "diff", str(int(number))])
+
+    def merge_pull_request(self, number: int) -> str:
+        """Squash-merge a pull request and bring the checkout up to date."""
+        self.run(["gh", "pr", "merge", str(int(number)), "--squash", "--delete-branch"])
+        if not self.git("status", "--porcelain").strip():
+            self.pull()
+        return f"Merged #{int(number)}."
+
+    def close_pull_request(self, number: int) -> str:
+        self.run(["gh", "pr", "close", str(int(number)), "--delete-branch"])
+        return f"Closed #{int(number)}."
 
     def toolkits(self, ctx: ToolContext) -> list[Toolkit]:
         if self.root_only and not ctx.bot.is_root(ctx.session):

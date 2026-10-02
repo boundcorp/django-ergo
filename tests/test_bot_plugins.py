@@ -873,3 +873,38 @@ async def test_bot_looks_at_an_uploaded_image(tmp_path, settings):
     looked = await StructuredCall.objects.aget(kind="attachment_look")
     assert looked.user_id == user.id
     assert looked.metadata["attachment"] == str(photo.id)
+
+
+@pytest.mark.django_db
+def test_bot_management_review_helpers(bot_repo, monkeypatch):
+    _, work = bot_repo
+    _, _, plugin = management_bot(work, "propose_pr")
+    git(work, "add", "-A")
+    git(work, "commit", "-m", "add bot")
+    git(work, "push")
+    assert plugin.draft_diff() == ""
+    assert not plugin.draft_dir.exists()  # looking doesn't start a draft
+    plugin.write("bots/manager/agents.md", "Be kind.")
+    assert "Be kind." in plugin.draft_diff()
+
+    calls = []
+    real_run = plugin.run
+
+    def run(args, cwd=None):
+        if args[0] == "gh":
+            calls.append(args[:4])
+            if args[1:3] == ["pr", "list"]:
+                return json.dumps([{"number": 3, "title": "Add CTO"}])
+            return "diff --git a/x b/x\n"
+        return real_run(args, cwd)
+
+    monkeypatch.setattr(plugin, "run", run)
+    assert plugin.pull_requests() == [{"number": 3, "title": "Add CTO"}]
+    assert plugin.pull_request_diff(3).startswith("diff --git")
+    assert plugin.merge_pull_request(3) == "Merged #3."
+    assert plugin.close_pull_request(4) == "Closed #4."
+    assert [c[:3] for c in calls[1:]] == [
+        ["gh", "pr", "diff"],
+        ["gh", "pr", "merge"],
+        ["gh", "pr", "close"],
+    ]

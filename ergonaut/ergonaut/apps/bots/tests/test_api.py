@@ -3,12 +3,10 @@ import textwrap
 
 import pytest
 from django.contrib.auth import get_user_model
-
 from django_ergo.bots import webhooks
+
 from ergonaut.apps.bots.loading import load_registry
-from ergonaut.apps.bots.tests.fakes import fake_registry
-from ergonaut.apps.bots.tests.fakes import say
-from ergonaut.apps.bots.tests.fakes import tool_call
+from ergonaut.apps.bots.tests.fakes import fake_registry, say, tool_call
 
 BOT = """
 name: kitchen
@@ -227,7 +225,6 @@ def test_browse_a_bots_knowledge_base(client, cook, bot_folder, use_bots):
 @pytest.mark.django_db(transaction=True)
 def test_upload_list_download_and_delete_session_files(client, cook, use_bots, settings, tmp_path):
     from django.core.files.uploadedfile import SimpleUploadedFile
-
     from django_ergo.conversation.models import ConversationSession
 
     settings.MEDIA_ROOT = str(tmp_path / "media")
@@ -277,6 +274,7 @@ def test_a_queued_turn_returns_at_once(client, cook, use_bots, monkeypatch, sett
 @pytest.mark.django_db(transaction=True)
 def test_run_turn_answers_and_resumes(cook, use_bots):
     from django_ergo.conversation.models import ConversationSession
+
     from ergonaut.apps.bots.tasks import run_turn
 
     use_bots(say("Tacos."))
@@ -291,7 +289,6 @@ def test_run_turn_answers_and_resumes(cook, use_bots):
 @pytest.mark.django_db(transaction=True)
 def test_files_sent_with_a_message_reach_the_model(client, cook, use_bots, settings, tmp_path):
     from django.core.files.uploadedfile import SimpleUploadedFile
-
     from django_ergo.conversation.models import ConversationSession
 
     settings.MEDIA_ROOT = str(tmp_path / "media")
@@ -337,3 +334,42 @@ def test_sessions_show_delegated_requests(client, cook, use_bots):
     assert (listed[str(thread.id)]["open_in"], listed[root["id"]]["open_out"]) == (1, 1)
     inside = client.get(f"/api/sessions/{thread.id}").json()
     assert [(r["direction"], r["other"]) for r in inside["requests"]] == [("in", "kitchen · Chat")]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_changes_list_and_merge_need_a_manager_and_an_admin(client, cook, use_bots, monkeypatch):
+    from ergonaut.api import bots as api
+
+    use_bots(say("hi"))
+    assert client.get("/api/bots/kitchen/changes").status_code == 404  # no bot_management
+
+    class FakeManager:
+        repo = "/repo"
+        mode = "propose_pr"
+        merged = []
+
+        def draft_diff(self):
+            return "+draft line"
+
+        def pull_requests(self):
+            return [{"number": 7, "title": "Add CTO", "url": "u", "headRefName": "b", "author": {"login": "bot"}}]
+
+        def pull_request_diff(self, number):
+            return f"diff for {number}"
+
+        def merge_pull_request(self, number):
+            self.merged.append(number)
+            return f"Merged #{number}."
+
+    fake = FakeManager()
+    monkeypatch.setattr(api, "change_manager", lambda bot: (api.get_bot(bot), fake))
+    changes = client.get("/api/bots/kitchen/changes").json()
+    assert changes["draft_diff"] == "+draft line"
+    assert [(p["number"], p["author"]) for p in changes["pull_requests"]] == [(7, "bot")]
+    assert client.get("/api/bots/kitchen/changes/7/diff").json() == {"diff": "diff for 7"}
+
+    assert post(client, "/api/bots/kitchen/changes/7/merge").status_code == 403
+    cook.is_superuser = True
+    cook.save()
+    assert post(client, "/api/bots/kitchen/changes/7/merge").json() == {"result": "Merged #7."}
+    assert fake.merged == [7]

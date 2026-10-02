@@ -357,6 +357,9 @@ Publishing needs approval unless `approve_publish: false`. `ergo_config_repo_pul
 fast-forwards main and `ergo_config_repo_prs` lists open pull requests. Changes take
 effect when the bot is loaded again (Ergonaut reloads changed bot files on
 its own, and with `ERGONAUT_BOTS_PULL_SECONDS` pulls merged changes too).
+For review screens the plugin also has `draft_diff()`, `pull_requests()`,
+`pull_request_diff(n)`, `merge_pull_request(n)` (squash-merge, then pull) and
+`close_pull_request(n)`; Ergonaut's bot page uses them for its Changes section.
 
 ### orca
 
