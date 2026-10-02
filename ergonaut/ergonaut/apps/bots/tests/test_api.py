@@ -459,3 +459,48 @@ def test_named_chats_open_from_the_api(client, cook, bot_folder, use_bots):
     assert post(client, "/api/bots/kitchen/chats/nope").status_code == 404
     [bot] = client.get("/api/bots").json()
     assert bot["chats"][1]["session_id"] == opened["id"]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_pins_bot_files_and_live_pages(client, cook, bot_folder, use_bots, settings, tmp_path):
+    from django_ergo.conversation.attachments import save_session_file
+    from django_ergo.conversation.models import ConversationSession
+
+    settings.MEDIA_ROOT = str(tmp_path / "media")
+    (bot_folder / "bot.yaml").write_text(BOT + "chats:\n  main: {pins: [pages/home.jhtml]}\n")
+    (bot_folder / "pages").mkdir()
+    (bot_folder / "pages" / "home.jhtml").write_text("<p>Hello {{ user.username }} from {{ bot.name }}</p>")
+    (bot_folder / "pages" / "app.mjs").write_text("export const x = 1\n")
+    use_bots(say("hi"))
+    root = post(client, "/api/bots/kitchen/root").json()
+    session = ConversationSession.objects.get(id=root["id"])
+    page = save_session_file(session, "board.jhtml", b"<b>{{ 6 * 7 }}</b>", source="bot", metadata={"title": "Board"})
+    save_session_file(session, "evil.jhtml", b"{{ ''.__class__.__mro__ }}", source="bot")
+
+    assert [p["url"] for p in client.get(f"/api/sessions/{root['id']}/pins").json()] == [
+        "/api/bots/kitchen/files/pages/home.jhtml"
+    ]
+    pinned = post(client, f"/api/attachments/{page.id}/pin", {"pinned": True}).json()
+    assert pinned["pinned"]
+    pins = client.get(f"/api/sessions/{root['id']}/pins").json()
+    assert [(p["kind"], p["name"]) for p in pins] == [("bot_file", "home.jhtml"), ("file", "Board")]
+
+    # A bot-folder page renders in the app's origin; assets come as files; code and config don't.
+    home = client.get("/api/bots/kitchen/files/pages/home.jhtml")
+    assert b"Hello cook from kitchen" in home.content
+    assert "Content-Security-Policy" not in home and home["X-Frame-Options"] == "SAMEORIGIN"
+    assert client.get("/api/bots/kitchen/files/pages/app.mjs")["Content-Type"] == "text/javascript"
+    for blocked in ("bot.yaml", "tools/pantry.py", "../kitchen/bot.yaml", "pages/nope.jhtml"):
+        assert client.get(f"/api/bots/kitchen/files/{blocked}").status_code == 404
+
+    # A page the bot wrote renders live, sandboxed into its own origin.
+    board = client.get(pins[1]["url"])
+    assert b"<b>42</b>" in board.content
+    assert board["Content-Security-Policy"].startswith("sandbox allow-scripts")
+    evil = client.get(f"/api/attachments/{session.attachments.get(filename='evil.jhtml').id}/download?inline=true")
+    assert b"couldn&#39;t render" in evil.content or b"couldn't render" in evil.content
+
+    other = get_user_model().objects.create_user("other", "o@example.com", "pw")
+    client.force_login(other)
+    assert client.get(f"/api/sessions/{root['id']}/pins").status_code == 404
+    assert client.get(pins[1]["url"]).status_code == 404

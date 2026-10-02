@@ -12,7 +12,7 @@ from typing import Any
 
 from asgiref.sync import sync_to_async
 from django.db.models import Count, Q
-from django.http import FileResponse
+from django.http import FileResponse, HttpResponse
 from django.shortcuts import aget_object_or_404
 from django_ergo.bots import archival, webhooks
 from django_ergo.bots.runtime import Bot
@@ -74,6 +74,8 @@ class BotDetailOut(BotOut):
     manages_repo: bool = False  # has bot_management: show the Changes section
     schedules: list[dict] = []
     jobs: list[dict] = []
+    tables: list[dict] = []
+    pages: list[dict] = []
 
 
 class SessionOut(Schema):
@@ -209,6 +211,31 @@ def schedules_out(bot: Bot, user) -> list[dict]:
             }
         )
     return out
+
+
+def tables_out(bot: Bot) -> list[dict]:
+    """The bot's tables with row counts (a table not migrated yet shows rows=None)."""
+    out = []
+    for model in bot.tables:
+        try:
+            rows = model.objects.count()
+        except Exception:  # noqa: BLE001 — e.g. the migration hasn't run yet
+            rows = None
+        doc = (model.__doc__ or "").strip()
+        out.append({"name": model.__name__, "description": doc.splitlines()[0] if doc else "", "rows": rows})
+    return out
+
+
+def pages_out(bot: Bot) -> list[dict]:
+    """Bot-folder pages pinned in any chat, plus any other .jhtml files under pages/."""
+    from django_ergo.bots.pages import bot_file
+
+    paths = [p for chat in bot.definition.chats.values() for p in chat.pins]
+    root = bot.definition.root_dir
+    if root is not None and (root / "pages").is_dir():
+        paths += [str(p.relative_to(root)) for p in sorted((root / "pages").rglob("*.jhtml"))]
+    seen = list(dict.fromkeys(paths))
+    return [{"path": p, "url": f"/api/bots/{bot.name}/files/{p}", "exists": bot_file(bot, p) is not None} for p in seen]
 
 
 def jobs_out(bot: Bot) -> list[dict]:
@@ -511,6 +538,8 @@ async def bot_detail(request, bot: str):
         "manages_repo": found.plugin("bot_management") is not None,
         "schedules": schedules_out(found, request.auth),
         "jobs": await sync_to_async(jobs_out)(found),
+        "tables": await sync_to_async(tables_out)(found),
+        "pages": pages_out(found),
         **await sync_to_async(_tools_and_skills)(found, request.auth),
     }
 
@@ -725,6 +754,7 @@ class AttachmentOut(Schema):
     size: int | None
     source: str
     message_sequence: int | None
+    pinned: bool = False
     created_at: datetime
     updated_at: datetime
 
@@ -738,6 +768,7 @@ def attachment_out(row: ConversationAttachment) -> dict:
         "size": row.size,
         "source": row.source,
         "message_sequence": row.message_sequence,
+        "pinned": bool((row.metadata or {}).get("pinned")),
         "created_at": row.created_at,
         "updated_at": row.updated_at,
     }
@@ -780,14 +811,58 @@ def upload_attachment(request, session_id: str, file: UploadedFile = File(...)):
     return attachment_out(row)
 
 
+# Bot-written pages run scripts, so they get their own opaque origin: no cookies, no app API.
+SANDBOXED = "sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox allow-downloads"
+
+
+def page_response(html: str, *, sandboxed: bool) -> HttpResponse:
+    response = HttpResponse(html, content_type="text/html; charset=utf-8")
+    response["Cache-Control"] = "no-store"
+    response["X-Frame-Options"] = "SAMEORIGIN"  # shown in the chat's page viewer
+    if sandboxed:
+        response["Content-Security-Policy"] = SANDBOXED
+    return response
+
+
+def render_or_error(bot: Bot, source: str, user, title: str) -> str:
+    from django_ergo.bots.pages import PageError, error_page, render_page
+
+    try:
+        return render_page(bot, source, user=user, title=title)
+    except PageError as exc:
+        return error_page(str(exc), title)
+
+
 @router.get("/attachments/{attachment_id}/download")
 def download_attachment(request, attachment_id: str, inline: bool = False):
     row = visible_attachment(request.auth, attachment_id)
     if not row.file:
         raise HttpError(404, "This file has no stored copy")
+    if inline and row.filename.endswith(".jhtml"):
+        # A live page: rendered now, over the bot's tables.
+        from django_ergo.conversation.attachments import read_text
+
+        bot = get_bot(row.session.bot_name, request.auth)
+        title = (row.metadata or {}).get("title") or row.filename
+        return page_response(render_or_error(bot, read_text(row), request.auth, title), sandboxed=True)
+    if inline and row.media_type == "text/html":
+        with row.file.open("rb") as handle:
+            return page_response(handle.read().decode("utf-8", "replace"), sandboxed=True)
     # Inline only for images, so a stored HTML or SVG file can't run in the app's origin.
     show = inline and row.media_type in ("image/png", "image/jpeg", "image/gif", "image/webp")
     return FileResponse(row.file.open("rb"), as_attachment=not show, filename=row.filename, content_type=row.media_type)
+
+
+class PinIn(Schema):
+    pinned: bool = True
+
+
+@router.post("/attachments/{attachment_id}/pin", response=AttachmentOut)
+def pin_attachment(request, attachment_id: str, payload: PinIn):
+    row = visible_attachment(request.auth, attachment_id)
+    row.metadata = {**(row.metadata or {}), "pinned": payload.pinned}
+    row.save(update_fields=["metadata", "updated_at"])
+    return attachment_out(row)
 
 
 @router.delete("/attachments/{attachment_id}")
@@ -799,6 +874,44 @@ def delete_attachment(request, attachment_id: str):
         row.file.delete(save=False)
     row.delete()
     return {"ok": True}
+
+
+# -- pins and bot files --------------------------------------------------------------
+
+
+@router.get("/sessions/{session_id}/pins")
+def session_pins(request, session_id: str):
+    from django_ergo.bots.pages import session_pins as pins_of
+
+    session = visible_sessions(request.auth).filter(id=uuid_or_404(session_id)).first()
+    if session is None:
+        raise HttpError(404, "No such session")
+    bot = get_bot(session.bot_name, request.auth)
+    pins = pins_of(bot, session)
+    for pin in pins:
+        if pin["kind"] == "bot_file":
+            pin["url"] = f"/api/bots/{bot.name}/files/{pin['path']}"
+        else:
+            pin["url"] = f"/api/attachments/{pin['id']}/download?inline=true"
+    return pins
+
+
+@router.get("/bots/{bot_name}/files/{path:path}")
+def bot_file(request, bot_name: str, path: str):
+    """A page or asset from the bot folder (reviewed in the bot repo, so it runs in the app's origin)."""
+    from django_ergo.bots.pages import SERVED_SUFFIXES
+    from django_ergo.bots.pages import bot_file as find
+
+    bot = get_bot(bot_name, request.auth)
+    found = find(bot, path)
+    if found is None:
+        raise HttpError(404, "No such file")
+    if found.suffix == ".jhtml":
+        return page_response(render_or_error(bot, found.read_text(), request.auth, found.stem), sandboxed=False)
+    response = FileResponse(found.open("rb"), content_type=SERVED_SUFFIXES[found.suffix.lower()])
+    response["Cache-Control"] = "no-cache"
+    response["X-Frame-Options"] = "SAMEORIGIN"
+    return response
 
 
 # -- changes: proposals to the bot repo ------------------------------------------

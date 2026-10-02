@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { AttachmentFile } from '../api'
+import type { AttachmentFile, Pin } from '../api'
 import { api } from '../api'
 
 const SOURCE_LABEL: Record<AttachmentFile['source'], string> = {
@@ -16,7 +16,20 @@ function size(bytes: number | null) {
 }
 
 // The session's files: uploads, files sent with messages, and files the bot wrote.
-export default function Files({ sessionId, refreshKey }: { sessionId: string; refreshKey: unknown }) {
+// Pages (.jhtml) and HTML files open in the chat's viewer; any file can be pinned.
+const VIEWABLE = /\.(jhtml|html?)$/i
+
+export default function Files({
+  sessionId,
+  refreshKey,
+  onPinsChanged,
+  onView,
+}: {
+  sessionId: string
+  refreshKey: unknown
+  onPinsChanged: () => void
+  onView: (pin: Pin) => void
+}) {
   const [files, setFiles] = useState<AttachmentFile[] | null>(null)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
@@ -47,6 +60,12 @@ export default function Files({ sessionId, refreshKey }: { sessionId: string; re
       setBusy(false)
       if (input.current) input.current.value = ''
     }
+  }
+
+  async function togglePin(file: AttachmentFile) {
+    await api.pin(file.id, !file.pinned).catch(e => setError(String(e.message ?? e)))
+    await load()
+    onPinsChanged()
   }
 
   async function remove(file: AttachmentFile) {
@@ -90,9 +109,24 @@ export default function Files({ sessionId, refreshKey }: { sessionId: string; re
               >
                 {file.filename || file.media_type}
               </a>
+              {VIEWABLE.test(file.filename) && (
+                <button
+                  className="text-xs text-zinc-500 underline"
+                  onClick={() => onView({ kind: 'file', name: file.filename, id: file.id, url: api.viewUrl(file.id) })}
+                >
+                  view
+                </button>
+              )}
+              <button
+                className={`ml-auto text-xs ${file.pinned ? '' : 'hidden opacity-50 group-hover:block'}`}
+                title={file.pinned ? 'Unpin' : 'Pin to the top of the chat'}
+                onClick={() => togglePin(file)}
+              >
+                📌
+              </button>
               {file.message_sequence == null && (
                 <button
-                  className="ml-auto hidden text-xs text-zinc-400 hover:text-red-600 group-hover:block"
+                  className="hidden text-xs text-zinc-400 hover:text-red-600 group-hover:block"
                   title="Delete"
                   onClick={() => remove(file)}
                 >

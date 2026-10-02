@@ -108,6 +108,43 @@ export function BotPage() {
         </Section>
       )}
 
+      {!!(bot.tables?.length || bot.pages?.length) && (
+        <Section title="Data" count={(bot.tables?.length ?? 0) + (bot.pages?.length ?? 0)}>
+          {!!bot.tables?.length && (
+            <table className="mb-3 w-full text-sm">
+              <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800">
+                {bot.tables.map(t => (
+                  <tr key={t.name}>
+                    <td className="py-1.5 pr-4 font-mono text-xs">{t.name}</td>
+                    <td className="py-1.5 pr-4">{t.description}</td>
+                    <td className="py-1.5 text-xs whitespace-nowrap text-zinc-500">
+                      {t.rows == null ? 'not migrated' : `${t.rows.toLocaleString()} rows`}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          {bot.pages?.map(p => (
+            <div key={p.path} className="text-sm">
+              📄{' '}
+              {p.exists ? (
+                <a
+                  className="font-mono text-xs text-indigo-600 hover:underline dark:text-indigo-400"
+                  href={p.url}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  {p.path}
+                </a>
+              ) : (
+                <span className="font-mono text-xs text-zinc-500">{p.path} (missing)</span>
+              )}
+            </div>
+          ))}
+        </Section>
+      )}
+
       {!!bot.jobs?.length && (
         <Section title="Recent jobs" count={bot.jobs.length}>
           <table className="w-full text-sm">

@@ -246,6 +246,8 @@ TEXT_MEDIA_TYPES = {
 
 
 def guess_media_type(filename: str, default: str = "application/octet-stream") -> str:
+    if Path(filename).suffix.lower() == ".jhtml":
+        return "text/x-jhtml"  # a live page (django_ergo.bots.pages)
     guessed = mimetypes.guess_type(filename)[0]
     if guessed:
         return guessed

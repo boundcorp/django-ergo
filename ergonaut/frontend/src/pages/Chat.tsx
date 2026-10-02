@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import type { Call, DelegatedRequest, Message, SessionDetail, Turn } from '../api'
+import type { Call, DelegatedRequest, Message, Pin, SessionDetail, Turn } from '../api'
 import { api } from '../api'
 import Files from '../components/Files'
+import { PageViewer, Pins } from '../components/Pins'
 import { Transcript } from '../components/Transcript'
 
 /** Fold a live update into the transcript: messages replace by line, calls by id. */
@@ -47,6 +48,10 @@ export function Chat({ onChange }: { onChange: () => void }) {
       // storage unavailable
     }
   }
+  // The pinned page shown in place of the transcript, if any.
+  const [openPin, setOpenPin] = useState<Pin | null>(null)
+  // Bumped when the Files panel pins or unpins, so the strip reloads.
+  const [pinsKey, setPinsKey] = useState(0)
   const bottom = useRef<HTMLDivElement>(null)
   const latest = useRef<SessionDetail | null>(null)
   latest.current = detail
@@ -56,6 +61,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
   useEffect(() => {
     setDetail(null)
     setLast(null)
+    setOpenPin(null)
     load().catch(e => setError(String(e.message ?? e)))
   }, [load])
 
@@ -210,7 +216,9 @@ export function Chat({ onChange }: { onChange: () => void }) {
           </a>
         </header>
         <Requests requests={detail.requests ?? []} />
-        <div className="flex-1 overflow-y-auto px-6 py-4">
+        <Pins sessionId={id} refreshKey={`${detail.messages.length}:${pinsKey}`} open={openPin} onOpen={setOpenPin} />
+        {openPin && <PageViewer pin={openPin} refreshKey={detail.messages.length} onClose={() => setOpenPin(null)} />}
+        <div className={`flex-1 overflow-y-auto px-6 py-4 ${openPin ? 'hidden' : ''}`}>
           <Transcript messages={detail.messages} calls={detail.calls} />
           {echo && (
             <div className="mt-3 flex justify-end">
@@ -352,7 +360,14 @@ export function Chat({ onChange }: { onChange: () => void }) {
           </button>
         </form>
       </div>
-      {showFiles && <Files sessionId={id} refreshKey={detail.messages.length} />}
+      {showFiles && (
+        <Files
+          sessionId={id}
+          refreshKey={detail.messages.length}
+          onPinsChanged={() => setPinsKey(k => k + 1)}
+          onView={setOpenPin}
+        />
+      )}
     </div>
   )
 }

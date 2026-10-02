@@ -219,6 +219,42 @@ lookups, ordering, up to 200 rows or a count), `ergo_table_add`,
 `ergo_table_delete` (waits for approval). Loading the skill describes each
 table's fields; a model's docstring is its description.
 
+## Pages and pins
+
+A `.jhtml` file is a live page: a Jinja template rendered over the bot's
+tables each time it's opened (`django_ergo.bots.pages`).
+
+```html
+<h1>Ad spend</h1>
+<p>{{ table("AdStat").filter(date__gte=days_ago(7)).sum("spend") | money }} this week</p>
+{{ blocks.metric(label="Installs", table="AdStat", aggregate="sum", field="installs") }}
+{{ blocks.chart(table="AdStat", x="date", y="spend", group="campaign") }}
+{% for row in table("AdStat").order_by("-date").limit(10) %}{{ row.campaign }} {{ row.spend | money }}<br>{% endfor %}
+```
+
+Pages run in Jinja's sandbox and can only read: `table(name)` is a view with
+`filter`, `exclude`, `order_by`, `limit`, `count`, `sum`, `avg`, `min`,
+`max`, `group(...)`, `first` and `rows`, never a queryset. `blocks.*` (heading,
+markdown, metric, table, chart, html) render common pieces; `now`, `today`,
+`days_ago(n)`, `user`, `bot` and the `money`, `number`, `percent` and
+`markdown` filters are there too, and `{% include %}` loads other files from
+the bot folder. A page without an `<html>` tag gets a layout with Chart.js.
+
+Pages come from two places:
+
+- **The bot folder**, reviewed like the rest of the repo. Pin them in a chat
+  with `chats.<name>.pins: [pages/dashboard.jhtml]`. Ergonaut serves bot-folder
+  pages and assets (`.html`, `.mjs`, `.js`, `.css`, images, JSON, CSV, never
+  Python, YAML or dotfiles) at `/api/bots/<bot>/files/<path>`, in the app's
+  origin, so a page can load its own scripts.
+- **Files the bot writes** into a chat with the `pages` plugin. They're
+  served from the file's own URL and sandboxed (`Content-Security-Policy:
+  sandbox`): scripts run, but without the app's cookies or API.
+
+Any chat file can be pinned (`metadata.pinned`, from the Files panel or
+`ergo_page_pin`). Pinned files show as tabs at the top of the chat and open in
+place of the transcript.
+
 ## Chats
 
 Every user has a **main** chat with each bot (formerly the root session),
@@ -452,6 +488,22 @@ its own notes: only `.md` files inside the KB folder, each write committed
 and pushed to the checkout's branch at once (`commit: false` leaves it
 uncommitted). Use it for things a bot should learn, like preferences; use
 `bot_management` for changes you want to review.
+
+### pages
+
+```yaml
+- name: pages
+  max_bytes: 500000
+```
+
+Lets the bot write live pages into a chat. `ergo_page_write(filename, title,
+blocks | source, pin=true)` writes or rewrites a `.jhtml` page from blocks
+(`heading`, `markdown`, `metric`, `table`, `chart`, `html`) or Jinja source,
+and returns a text preview of the render or the error, so the bot can fix it
+in the same turn. `ergo_page_get` returns a page's blocks and source,
+`ergo_page_preview` renders a chat page, a bot-folder page or some source, and
+`ergo_page_pin` pins or unpins any file in the chat. Loading the skill loads
+`tables` too.
 
 ### bot_management
 

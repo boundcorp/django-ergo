@@ -24,6 +24,7 @@ bot.yaml::
     chats:
       main:                            # every user's main chat (always there)
         skills: [orchestration, tandoor]   # loaded from the start (default: orchestration)
+        pins: [pages/dashboard.jhtml]      # bot-folder files pinned in this chat (see bots.pages)
       reports:                         # a named chat: one per user, its own purpose
         description: Weekly analytics
         instructions: Keep each report short.   # added to agents.md in this chat
@@ -95,6 +96,9 @@ class ChatDefinition:
     description: str = ""
     instructions: str = ""  # added to the bot's instructions in this chat
     skills: list[str] = field(default_factory=list)  # loaded from the start
+    pins: list[str] = field(
+        default_factory=list
+    )  # bot-folder files shown pinned in the chat
 
 
 @dataclass
@@ -293,6 +297,14 @@ def _schedules(items: list) -> list:
     return found
 
 
+def _pin(chat: str, value: Any) -> str:
+    pin = str(value).strip().lstrip("./")
+    if not pin or pin.startswith("/") or ".." in pin.split("/"):
+        msg = f"chats: {chat} pins {value!r}; pins are paths inside the bot folder"
+        raise BotDefinitionError(msg)
+    return pin
+
+
 def _chats(data: dict, *, orchestration: bool) -> dict[str, ChatDefinition]:
     if not isinstance(data, dict):
         msg = "chats must map chat names to their settings"
@@ -309,5 +321,6 @@ def _chats(data: dict, *, orchestration: bool) -> dict[str, ChatDefinition]:
             description=str(config.get("description") or ""),
             instructions=str(config.get("instructions") or ""),
             skills=[str(s) for s in config.get("skills", default_skills) or []],
+            pins=[_pin(name, p) for p in config.get("pins") or []],
         )
     return chats
