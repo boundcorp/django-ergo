@@ -36,7 +36,7 @@ def _serialize(unit, score, branches, context=None):
     }
 
 
-def search_repository(
+def search_repository(  # noqa: PLR0912
     source, query, *, top_k=8, roles=None, kinds=None, provider=None, mode="hybrid"
 ):
     if mode not in {"lexical", "hybrid", "semantic"}:

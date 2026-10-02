@@ -404,7 +404,7 @@ def _analyze_components(
             isinstance(node, ast.ClassDef) for node in ast.walk(tree)
         )
         counters[component]["functions"] += sum(
-            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))  # noqa: UP038
             for node in ast.walk(tree)
         )
         for node in ast.walk(tree):
@@ -1115,7 +1115,7 @@ def _validate_citation_source_entry(
         _fail(f"Cited source snapshot checksum mismatch: {captured_path}")
     if not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", str(entry["blob_oid"])):
         _fail(f"Cited source snapshot has invalid blob_oid: {captured_path}")
-    algorithm = "sha1" if len(entry["blob_oid"]) == 40 else "sha256"
+    algorithm = "sha1" if len(entry["blob_oid"]) == 40 else "sha256"  # noqa: PLR2004
     blob = f"blob {len(content)}\0".encode() + content
     if (
         hashlib.new(algorithm, blob, usedforsecurity=False).hexdigest()

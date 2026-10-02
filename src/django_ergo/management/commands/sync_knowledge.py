@@ -18,8 +18,8 @@ class Command(BaseCommand):
         try:
             source = KnowledgeSource.objects.get(pk=options["source_id"])
         except KnowledgeSource.DoesNotExist as exc:
-            raise CommandError(
-                f"Unknown knowledge source: {options['source_id']}"
+            raise CommandError(  # noqa: TRY003
+                f"Unknown knowledge source: {options['source_id']}"  # noqa: EM102
             ) from exc
         try:
             result = project_commit(

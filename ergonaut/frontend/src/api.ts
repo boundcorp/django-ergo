@@ -1,0 +1,247 @@
+// Thin client for the Ergonaut API (django-ninja at /api, Django session auth).
+
+export type User = { id: string; username: string; email: string; first_name: string; last_name: string }
+
+export type Bot = {
+  name: string
+  description: string
+  orchestration: boolean
+  knowledge: boolean
+  parent: string
+  root_session_id: string | null
+}
+
+export type Session = {
+  id: string
+  bot: string
+  title: string
+  role: string
+  parent_id: string | null
+  status: string
+  username: string
+  created_at: string
+  updated_at: string
+  open_in?: number
+  open_out?: number
+}
+
+export type DelegatedRequest = {
+  id: string
+  direction: 'in' | 'out'
+  other_session_id: string | null
+  other: string
+  text: string
+  status: 'queued' | 'delivered' | 'waiting' | 'answered' | 'failed'
+  reply: string
+  created_at: string
+  updated_at: string
+}
+
+export type Block =
+  | { type: 'text'; text: string }
+  | { type: 'thinking'; text: string }
+  | { type: 'attachment'; label: string; id?: string; kind?: string; media_type?: string }
+  | { type: 'context'; text: string }
+  | { type: 'tool_use'; id: string; name: string; input: unknown }
+  | { type: 'tool_result'; tool_use_id: string; name?: string; content: unknown; is_error?: boolean }
+
+export type Message = { line: number; role: string; blocks: Block[]; timestamp: string | null }
+
+export type Approval = { id: string; name: string; input: unknown }
+
+export type Call = {
+  id: string
+  kind: string
+  status: string
+  request: string
+  response: { type?: string; text?: string; suggestions?: string[] } | null
+  error: string
+  first_sequence: number | null
+  last_sequence: number | null
+  model_name: string
+  input_tokens: number
+  output_tokens: number
+  turns_used: number
+  pending_approvals: Approval[]
+  tools: string[]
+  created_at: string
+}
+
+export type KB = {
+  id: string
+  name: string
+  kind: string
+  location: string
+  articles: { path: string; title: string; root: boolean }[]
+}
+
+export type KBArticle = { path: string; title: string; body: string }
+
+export type CostBucket = {
+  name: string
+  calls: number
+  input_tokens: number
+  output_tokens: number
+  cost: number
+  unpriced_calls: number
+}
+
+export type Costs = {
+  days: number
+  total: CostBucket
+  by_kind: CostBucket[]
+  chat_reply_by_bot: CostBucket[]
+  by_model: CostBucket[]
+  by_day: { date: string; cost: number; calls: number }[]
+  unpriced_models: string[]
+}
+
+export type BotDetail = Bot & {
+  engine: string
+  model: string
+  timezone: string
+  folder: string
+  instructions: string
+  plugins: string[]
+  tools: { name: string; description: string; requires_approval: boolean }[]
+  skills: { name: string; description: string; body: string }[]
+  manages_repo?: boolean
+}
+
+export type AttachmentFile = {
+  id: string
+  filename: string
+  media_type: string
+  kind: string
+  size: number | null
+  source: 'message' | 'upload' | 'bot'
+  message_sequence: number | null
+  created_at: string
+  updated_at: string
+}
+
+export type PullRequest = {
+  number: number
+  title: string
+  url: string
+  branch: string
+  author: string
+  created_at: string
+  body: string
+  additions: number
+  deletions: number
+  changed_files: number
+}
+
+export type Changes = {
+  managed_by: string
+  repo: string
+  mode: string
+  draft_diff: string
+  pull_requests: PullRequest[]
+  error: string
+}
+
+export type SessionDetail = { session: Session; messages: Message[]; calls: Call[]; requests?: DelegatedRequest[] }
+
+export type Turn = {
+  session_id: string
+  call_id: string | null
+  type: string | null
+  text: string
+  suggestions: string[]
+  approvals: Approval[]
+  error: string
+  queued?: boolean
+}
+
+export class ApiError extends Error {
+  status: number
+  constructor(status: number, message: string) {
+    super(message)
+    this.status = status
+  }
+}
+
+function csrfToken(): string {
+  return document.cookie.match(/(?:^|; )csrftoken=([^;]+)/)?.[1] ?? ''
+}
+
+async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const response = await fetch(`/api${path}`, {
+    method,
+    credentials: 'same-origin',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(method === 'GET' ? {} : { 'X-CSRFToken': csrfToken() }),
+    },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  })
+  if (!response.ok) {
+    let detail = response.statusText
+    try {
+      detail = (await response.json()).detail ?? detail
+    } catch {
+      // not JSON
+    }
+    throw new ApiError(response.status, detail)
+  }
+  return response.json() as Promise<T>
+}
+
+async function upload<T>(path: string, file: File): Promise<T> {
+  const form = new FormData()
+  form.append('file', file)
+  const response = await fetch(`/api${path}`, {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'X-CSRFToken': csrfToken() },
+    body: form,
+  })
+  if (!response.ok) {
+    let detail = response.statusText
+    try {
+      detail = (await response.json()).detail ?? detail
+    } catch {
+      // not JSON
+    }
+    throw new ApiError(response.status, detail)
+  }
+  return response.json() as Promise<T>
+}
+
+export const api = {
+  csrf: () => request<{ csrftoken: string }>('GET', '/auth/csrf'),
+  me: () => request<User>('GET', '/auth/me'),
+  login: (username: string, password: string) => request<User>('POST', '/auth/login', { username, password }),
+  logout: () => request<{ ok: boolean }>('POST', '/auth/logout'),
+  bots: () => request<Bot[]>('GET', '/bots'),
+  bot: (name: string) => request<BotDetail>('GET', `/bots/${name}`),
+  costs: (days: number) => request<Costs>('GET', `/costs?days=${days}`),
+  kbs: (bot: string) => request<KB[]>('GET', `/bots/${bot}/kbs`),
+  kbArticle: (bot: string, kb: string, path: string) =>
+    request<KBArticle>('GET', `/bots/${bot}/kbs/${kb}/article?path=${encodeURIComponent(path)}`),
+  sessions: (params: { bot?: string; q?: string; status?: string } = {}) => {
+    const query = new URLSearchParams(Object.entries(params).filter(([, v]) => v) as [string, string][])
+    return request<Session[]>('GET', `/sessions?${query}`)
+  },
+  openRoot: (bot: string) => request<Session>('POST', `/bots/${bot}/root`),
+  newThread: (bot: string, title: string) => request<Session>('POST', `/bots/${bot}/threads`, { title }),
+  session: (id: string) => request<SessionDetail>('GET', `/sessions/${id}`),
+  call: (id: string) =>
+    request<Call & { system_prompt: string; transcript: unknown[]; metadata: unknown }>('GET', `/calls/${id}`),
+  send: (id: string, text: string, attachmentIds: string[] = []) =>
+    request<Turn>('POST', `/sessions/${id}/messages`, { text, attachment_ids: attachmentIds }),
+  approve: (id: string, approve: boolean, approvalIds?: string[]) =>
+    request<Turn>('POST', `/sessions/${id}/approvals`, { approve, approval_ids: approvalIds }),
+  close: (id: string) => request<Session>('POST', `/sessions/${id}/close`),
+  changes: (bot: string) => request<Changes>('GET', `/bots/${bot}/changes`),
+  changeDiff: (bot: string, n: number) => request<{ diff: string }>('GET', `/bots/${bot}/changes/${n}/diff`),
+  mergeChange: (bot: string, n: number) => request<{ result: string }>('POST', `/bots/${bot}/changes/${n}/merge`),
+  closeChange: (bot: string, n: number) => request<{ result: string }>('POST', `/bots/${bot}/changes/${n}/close`),
+  discardDraft: (bot: string) => request<{ result: string }>('POST', `/bots/${bot}/changes/draft/discard`),
+  attachments: (id: string) => request<AttachmentFile[]>('GET', `/sessions/${id}/attachments`),
+  uploadAttachment: (id: string, file: File) => upload<AttachmentFile>(`/sessions/${id}/attachments`, file),
+  deleteAttachment: (id: string) => request<{ ok: boolean }>('DELETE', `/attachments/${id}`),
+  downloadUrl: (id: string) => `/api/attachments/${id}/download`,
+}

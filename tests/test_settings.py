@@ -2,6 +2,7 @@ from unittest.mock import patch
 
 import pytest
 from django.conf import settings
+
 from django_ergo.settings import DEFAULTS
 from django_ergo.settings import IMPORT_STRINGS
 from django_ergo.settings import APISettings
@@ -36,6 +37,6 @@ def test_reload_api_settings(mock_api_settings):
     mock_api_settings.reload.assert_called_once()
 
 
-@pytest.fixture()
+@pytest.fixture
 def api_settings():
     return APISettings(None, DEFAULTS, IMPORT_STRINGS)

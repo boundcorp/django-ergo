@@ -6,6 +6,7 @@ from unittest.mock import patch
 import pytest
 from asgiref.sync import async_to_sync
 from django.contrib.auth import get_user_model
+
 from django_ergo.conversation.models import ConversationSession
 from django_ergo.conversation.runtime import AssistantTaskResult
 from django_ergo.kb_pipelines import ABSORB_SYSTEM
@@ -17,12 +18,12 @@ User = get_user_model()
 pytestmark = pytest.mark.django_db
 
 
-@pytest.fixture()
+@pytest.fixture
 def user():
     return User.objects.create_user(username="testuser", password="testpass")
 
 
-@pytest.fixture()
+@pytest.fixture
 def source_session(user):
     session = ConversationSession.objects.create(
         user=user,
@@ -55,7 +56,7 @@ def source_session(user):
     return session
 
 
-@pytest.fixture()
+@pytest.fixture
 def target_kb(user):
     kb = Knowledgebase.objects.create(
         name="Personal Notes",

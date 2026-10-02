@@ -841,6 +841,30 @@ try:
     from django_ergo.conversation.models import ClaudeContentBlock
     from django_ergo.conversation.models import ClaudeMessage
     from django_ergo.conversation.models import ConversationSession
+    from django_ergo.conversation.models import StructuredCall
+
+    class StructuredCallInline(admin.TabularInline):
+        model = StructuredCall
+        fk_name = "session"
+        extra = 0
+        fields = [
+            "kind",
+            "status",
+            "request",
+            "response",
+            "error",
+            "turns_used",
+            "first_sequence",
+            "last_sequence",
+        ]
+        readonly_fields = fields
+        ordering = ["created_at"]
+
+        def has_add_permission(self, request, obj=None):
+            return False
+
+        def has_delete_permission(self, request, obj=None):
+            return False
 
     class ClaudeMessageInline(admin.TabularInline):
         model = ClaudeMessage
@@ -889,6 +913,24 @@ try:
                 return f"[result{tag}: {len(str(obj.tool_result_content or ''))} chars]"
             return "—"
 
+    @admin.register(StructuredCall)
+    class StructuredCallAdmin(admin.ModelAdmin):
+        list_display = [
+            "kind",
+            "status",
+            "user",
+            "session",
+            "model_name",
+            "turns_used",
+            "created_at",
+        ]
+        list_filter = ["kind", "status", "engine_type"]
+        search_fields = ["kind", "request", "error"]
+        readonly_fields = [f.name for f in StructuredCall._meta.fields]  # noqa: SLF001
+
+        def has_add_permission(self, request):
+            return False
+
     @admin.register(ConversationSession)
     class ConversationSessionAdmin(admin.ModelAdmin):
         list_display = [
@@ -896,14 +938,15 @@ try:
             "user",
             "message_count",
             "engine_type",
+            "bot_name",
             "status",
             "metadata_preview",
             "created_at",
         ]
-        list_filter = ["engine_type", "status"]
-        search_fields = ["session_id", "metadata"]
+        list_filter = ["engine_type", "compaction_mode", "status"]
+        search_fields = ["session_id", "bot_name", "metadata"]
         readonly_fields = ["id", "created_at", "updated_at"]
-        inlines = [ClaudeMessageInline]
+        inlines = [StructuredCallInline, ClaudeMessageInline]
 
         def get_urls(self):
             urls = super().get_urls()

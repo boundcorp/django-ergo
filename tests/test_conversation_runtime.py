@@ -6,6 +6,7 @@ import pytest
 from asgiref.sync import async_to_sync
 from django.contrib.auth import get_user_model
 from django.test import override_settings
+
 from django_ergo.conversation.engine import Engine
 from django_ergo.conversation.engine import EngineResponse
 from django_ergo.conversation.runtime import AssistantTaskResult
@@ -41,7 +42,7 @@ class FakeEngine(Engine):
             tool_use={"id": "tool_1", "name": "dangerous", "input": {"x": 1}},
         )
 
-    async def submit_tool_result(  # noqa: PLR0913
+    async def submit_tool_result(
         self,
         session,
         tool_use_id,
@@ -84,12 +85,12 @@ class FakeEngine(Engine):
         return EngineResponse(event_type="done", text="ok")
 
 
-@pytest.fixture()
+@pytest.fixture
 def user():
     return User.objects.create_user(username="runtime-user", password="testpass")
 
 
-@pytest.fixture()
+@pytest.fixture
 def workflow():
     return Workflow.objects.create(
         name="Runtime Test Workflow",

@@ -5,6 +5,7 @@ ConversationSession, ClaudeMessage, ClaudeContentBlock, OpenAIMessage
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
+
 from django_ergo.conversation.models import ClaudeContentBlock
 from django_ergo.conversation.models import ClaudeMessage
 from django_ergo.conversation.models import ClaudeMessageRole

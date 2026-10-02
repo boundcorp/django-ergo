@@ -1,6 +1,7 @@
 """Tests for Toolkit ABC protocol."""
 
 import pytest
+
 from django_ergo.conversation.toolkit import Toolkit
 
 

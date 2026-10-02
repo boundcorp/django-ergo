@@ -7,12 +7,14 @@ from typing import TYPE_CHECKING
 
 from asgiref.sync import sync_to_async
 
+from django_ergo.conversation.compaction import maybe_compact
 from django_ergo.tools import tool_registry
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
     from typing import Any
 
+    from django_ergo.conversation.context import ContextBuilder
     from django_ergo.conversation.engine import Engine
     from django_ergo.conversation.engine import EngineResponse
     from django_ergo.conversation.models import ConversationSession
@@ -30,7 +32,13 @@ class PendingApproval:
     arguments: dict
 
 
-def _tool_requires_approval(tool_name: str, workflow) -> bool:
+def _tool_requires_approval(
+    tool_name: str, workflow, toolkits: list[Toolkit] | None = None
+) -> bool:
+    toolkit = _find_toolkit_for_tool(toolkits or [], tool_name)
+    if toolkit is not None:
+        checker = getattr(toolkit, "requires_approval", None)
+        return bool(checker(tool_name)) if callable(checker) else False
     tool_config = tool_registry.get_tool(tool_name)
     if not tool_config or not tool_config.requires_approval:
         return False
@@ -88,8 +96,13 @@ def _execute_tool(
     args: dict,
     toolkits: list[Toolkit],
     session: ConversationSession,
+    *,
+    approved: bool = True,
 ) -> tuple[Any, bool]:
-    """Execute a tool via toolkit or global registry. Returns (result, is_error)."""
+    """Execute a tool via toolkit or global registry. Returns (result, is_error).
+
+    Callers check approval first; ``approved`` is passed to the registry.
+    """
     toolkit = _find_toolkit_for_tool(toolkits, name)
     if toolkit is not None:
         try:
@@ -99,7 +112,7 @@ def _execute_tool(
 
     return (
         tool_registry.execute_tool(
-            name=name, user=session.user, arguments=args, approved=True
+            name=name, user=session.user, arguments=args, approved=approved
         ),
         False,
     )
@@ -119,12 +132,14 @@ async def _split_events(
     return other_events, tool_events
 
 
-async def run_conversation_turn(
+async def run_conversation_turn(  # noqa: PLR0913
     engine: Engine,
     session: ConversationSession,
     message: str,
     extra_tools: list[Toolkit] | None = None,
     max_rounds: int = MAX_TOOL_ROUNDS,
+    attachments: list | None = None,
+    context_builder: ContextBuilder | None = None,
 ) -> AsyncIterator[EngineResponse | PendingApproval]:
     """Send a message and handle multi-round tool calls until the LLM is done.
 
@@ -139,10 +154,69 @@ async def run_conversation_turn(
     )
     if toolkits:
         await _record_kb_usage(session, toolkits)
+    await maybe_compact(session, engine)
 
-    other_events, tool_events = await _split_events(
-        engine.send(session, message, additional_tools=additional_tool_schemas)
-    )
+    if context_builder is not None:
+        built = await sync_to_async(context_builder.build, thread_sensitive=True)()
+        engine.ephemeral_context = built.text
+    try:
+        async for event in _run_rounds(
+            engine,
+            session,
+            message,
+            toolkits,
+            adapter,
+            additional_tool_schemas,
+            max_rounds,
+            attachments,
+        ):
+            yield event
+    finally:
+        if context_builder is not None:
+            engine.ephemeral_context = ""
+
+
+async def _run_rounds(  # noqa: PLR0913
+    engine: Engine,
+    session: ConversationSession,
+    message: str,
+    toolkits: list[Toolkit],
+    adapter,
+    additional_tool_schemas: list[dict] | None,
+    max_rounds: int,
+    attachments: list | None,
+) -> AsyncIterator[EngineResponse | PendingApproval]:
+    send_kwargs = {"additional_tools": additional_tool_schemas}
+    if attachments:
+        send_kwargs["attachments"] = attachments
+    async for event in _drive(
+        engine,
+        session,
+        engine.send(session, message, **send_kwargs),
+        toolkits,
+        adapter,
+        additional_tool_schemas,
+        max_rounds,
+    ):
+        yield event
+
+
+async def _drive(  # noqa: C901, PLR0913
+    engine: Engine,
+    session: ConversationSession,
+    first_response,
+    toolkits: list[Toolkit],
+    adapter,
+    additional_tool_schemas: list[dict] | None,
+    max_rounds: int,
+) -> AsyncIterator[EngineResponse | PendingApproval]:
+    """Run tool rounds until the model stops calling tools or approval is needed.
+
+    Tools that need approval are not run. Their PendingApproval events are
+    yielded after the rest of the batch has run and been stored, and the
+    turn ends there; resume_conversation_turn() continues it.
+    """
+    other_events, tool_events = await _split_events(first_response)
     for event in other_events:
         yield event
 
@@ -150,18 +224,17 @@ async def run_conversation_turn(
         if not tool_events:
             break
 
-        has_approval = False
+        pending: list[PendingApproval] = []
         results: list[tuple[str, Any, bool]] = []
         for response in tool_events:
             name, args = adapter.parse_tool_call(response.tool_use)
             tool_id = response.tool_use["id"]
 
-            if _tool_requires_approval(name, session.workflow):
-                yield PendingApproval(
-                    tool_use_id=tool_id, tool_name=name, arguments=args
+            if _tool_requires_approval(name, session.workflow, toolkits):
+                pending.append(
+                    PendingApproval(tool_use_id=tool_id, tool_name=name, arguments=args)
                 )
-                has_approval = True
-                break
+                continue
 
             yield response
 
@@ -170,7 +243,13 @@ async def run_conversation_turn(
             )(name, args, toolkits, session)
             results.append((tool_id, result, is_error))
 
-        if has_approval or not results:
+        if pending:
+            if results:
+                await engine.append_tool_results(session, results)
+            for approval in pending:
+                yield approval
+            return
+        if not results:
             return
 
         other_events, tool_events = await _split_events(
@@ -180,3 +259,72 @@ async def run_conversation_turn(
         )
         for event in other_events:
             yield event
+
+
+def unresolved_tool_calls(session: ConversationSession) -> list[dict]:
+    """Tool calls in the session's history that have no result yet."""
+    from django_ergo.conversation.history import SessionSource
+
+    calls: dict[str, dict] = {}
+    for message in SessionSource(session).messages():
+        for block in message.blocks:
+            if block["type"] == "tool_use":
+                calls[block.get("id")] = block
+            elif block["type"] == "tool_result":
+                calls.pop(block.get("tool_use_id"), None)
+    return list(calls.values())
+
+
+async def resume_conversation_turn(  # noqa: PLR0913
+    engine: Engine,
+    session: ConversationSession,
+    decisions: dict[str, bool],
+    extra_tools: list[Toolkit] | None = None,
+    max_rounds: int = MAX_TOOL_ROUNDS,
+    context_builder: ContextBuilder | None = None,
+) -> AsyncIterator[EngineResponse | PendingApproval]:
+    """Continue a turn that stopped on PendingApproval.
+
+    ``decisions`` maps tool_use_id to True (approved) or False (denied).
+    Approved calls run; denied or undecided ones that need approval get an
+    error result telling the model the user declined. Then the turn carries
+    on as usual.
+    """
+    adapter = engine.get_tool_adapter()
+    toolkits = extra_tools or []
+    schemas = _collect_toolkit_schemas(toolkits, adapter) if toolkits else None
+    calls = await sync_to_async(unresolved_tool_calls, thread_sensitive=True)(session)
+    if not calls:
+        return
+
+    results: list[tuple[str, Any, bool]] = []
+    for call in calls:
+        name, args, tool_id = call["name"], call.get("input") or {}, call["id"]
+        needs = _tool_requires_approval(name, session.workflow, toolkits)
+        if needs and not decisions.get(tool_id):
+            results.append((tool_id, "The user declined this tool call.", True))
+            continue
+        result, is_error = await sync_to_async(_execute_tool, thread_sensitive=True)(
+            name, args, toolkits, session, approved=True
+        )
+        results.append((tool_id, result, is_error))
+
+    if context_builder is not None:
+        built = await sync_to_async(context_builder.build, thread_sensitive=True)()
+        engine.ephemeral_context = built.text
+    try:
+        async for event in _drive(
+            engine,
+            session,
+            engine.submit_tool_results_batch(
+                session, results, additional_tools=schemas
+            ),
+            toolkits,
+            adapter,
+            schemas,
+            max_rounds,
+        ):
+            yield event
+    finally:
+        if context_builder is not None:
+            engine.ephemeral_context = ""

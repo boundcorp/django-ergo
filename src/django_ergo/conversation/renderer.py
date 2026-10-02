@@ -187,10 +187,12 @@ class ConversationRenderer:
                 msg_parts.append(
                     f"[tool_result #{tc_num}{error_tag}: ({line_count} lines)]"
                 )
+            elif block_type in ("image", "document"):
+                msg_parts.append(f"[{block_type} attachment]")
             # thinking blocks are omitted in skeleton
         return msg_parts, tool_call_counter
 
-    def _render_full(self, messages: list[dict]) -> str:
+    def _render_full(self, messages: list[dict]) -> str:  # noqa: C901
         lines = []
         tool_call_counter = 0
         tool_id_to_number: dict[str, int] = {}
@@ -224,6 +226,10 @@ class ConversationRenderer:
                         lines.append(
                             f"[msg #{msg_num} TOOL_RESULT #{tc_num}{error_tag}]: "
                             f"{block.get('content', '')}"
+                        )
+                    elif block_type in ("image", "document"):
+                        lines.append(
+                            f"[msg #{msg_num} {role}]: [{block_type} attachment]"
                         )
             elif content is not None:
                 lines.append(f"[msg #{msg_num} {role}]: {content}")

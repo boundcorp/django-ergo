@@ -64,6 +64,12 @@ from pgvector.django import CosineDistance
 logger = logging.getLogger(__name__)
 
 
+def _summary_model() -> str:
+    from django_ergo.settings import api_settings
+
+    return api_settings.OPENAI_MODEL
+
+
 def generate_summary(
     text: str, max_tokens: int = 100, user_context: dict[str, Any] | None = None
 ) -> str:
@@ -106,7 +112,7 @@ def generate_summary(
     messages.append({"role": "user", "content": text})
 
     response = openai.chat.completions.create(
-        model="gpt-4o-mini",
+        model=_summary_model(),
         messages=messages,  # type: ignore[arg-type]
     )
 

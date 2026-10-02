@@ -1,0 +1,629 @@
+"""Tests for structured calls as conversation sessions."""
+
+from __future__ import annotations
+
+import json
+from types import SimpleNamespace
+
+import pytest
+from django.contrib.auth import get_user_model
+from pydantic import BaseModel
+
+from django_ergo.conversation import structured
+from django_ergo.conversation.engines.claude_api import ClaudeAPIEngine
+from django_ergo.conversation.engines.openai_api import OpenAIAPIEngine
+from django_ergo.conversation.models import ConversationSession
+from django_ergo.conversation.models import StructuredCall
+from django_ergo.conversation.models import StructuredCallStatus
+from django_ergo.conversation.runtime import EngineSpec
+from django_ergo.conversation.structured import PreSeedCall
+from django_ergo.conversation.structured import StructuredCallError
+from django_ergo.conversation.structured import StructuredCallSpec
+from django_ergo.conversation.structured import revise_structured_call
+from django_ergo.conversation.structured import run_structured_call
+from django_ergo.conversation.toolkit import Toolkit
+
+User = get_user_model()
+
+pytestmark = pytest.mark.django_db(transaction=True)
+
+
+class Plan(BaseModel):
+    title: str
+    steps: list[str]
+
+
+# ---------------------------------------------------------------------------
+# Fake SDK clients
+# ---------------------------------------------------------------------------
+
+
+def _usage(inp=10, out=5, cache_create=0, cache_read=0):
+    return SimpleNamespace(
+        input_tokens=inp,
+        output_tokens=out,
+        cache_creation_input_tokens=cache_create,
+        cache_read_input_tokens=cache_read,
+    )
+
+
+def claude_text(text, stop="end_turn"):
+    return SimpleNamespace(
+        content=[SimpleNamespace(type="text", text=text)],
+        stop_reason=stop,
+        usage=_usage(),
+    )
+
+
+def claude_tool(name, tool_input, tool_id="toolu_1", text=None):
+    blocks = []
+    if text:
+        blocks.append(SimpleNamespace(type="text", text=text))
+    blocks.append(
+        SimpleNamespace(type="tool_use", id=tool_id, name=name, input=tool_input)
+    )
+    return SimpleNamespace(content=blocks, stop_reason="tool_use", usage=_usage())
+
+
+class FakeClaudeClient:
+    def __init__(self, *responses):
+        self.responses = list(responses)
+        self.calls = []
+        self.messages = self
+
+    async def create(self, **kwargs):
+        self.calls.append(json.loads(json.dumps(kwargs, default=str)))
+        response = self.responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+
+def openai_tool(name, args, call_id="call_1"):
+    tc = SimpleNamespace(
+        id=call_id,
+        type="function",
+        function=SimpleNamespace(name=name, arguments=json.dumps(args)),
+    )
+    tc.model_dump = lambda: {
+        "id": call_id,
+        "type": "function",
+        "function": {"name": name, "arguments": json.dumps(args)},
+    }
+    return SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(content=None, tool_calls=[tc]),
+                finish_reason="tool_calls",
+            )
+        ],
+        usage=SimpleNamespace(prompt_tokens=7, completion_tokens=3),
+    )
+
+
+class FakeOpenAIClient:
+    def __init__(self, *responses):
+        self.responses = list(responses)
+        self.calls = []
+        self.chat = SimpleNamespace(completions=self)
+
+    async def create(self, **kwargs):
+        self.calls.append(kwargs)
+        return self.responses.pop(0)
+
+
+def claude_engine(*responses):
+    engine = ClaudeAPIEngine(config={"model": "claude-test", "max_tokens": 512})
+    engine._client = FakeClaudeClient(*responses)
+    return engine
+
+
+class LookupToolkit(Toolkit):
+    def __init__(self):
+        self.calls = []
+
+    def has_tool(self, tool_name):
+        return tool_name in {"lookup", "explode"}
+
+    def execute_tool(self, tool_name, arguments):
+        self.calls.append((tool_name, arguments))
+        if tool_name == "explode":
+            msg = "lookup backend down"
+            raise RuntimeError(msg)
+        return f"found {arguments['q']}"
+
+    def get_tools_schema(self, adapter):
+        return [{"name": "lookup", "input_schema": {"type": "object"}}]
+
+    def render_overview(self):
+        return ""
+
+
+@pytest.fixture
+def user():
+    return User.objects.create_user(username="structured", password="x")
+
+
+VALID_PLAN = {"title": "Ship it", "steps": ["build", "test"]}
+
+
+# ---------------------------------------------------------------------------
+# response_model mode
+# ---------------------------------------------------------------------------
+
+
+async def test_tool_then_submit_completes(user):
+    toolkit = LookupToolkit()
+    engine = claude_engine(
+        claude_tool("lookup", {"q": "docs"}),
+        claude_tool("submit_output", VALID_PLAN, tool_id="toolu_2"),
+    )
+    spec = StructuredCallSpec(
+        kind="planner",
+        system_prompt="Plan carefully.",
+        response_model=Plan,
+        toolkits=[toolkit],
+    )
+
+    result = await run_structured_call(spec, "Plan X", user=user, engine=engine)
+
+    assert result.ok
+    assert result.parsed == Plan(**VALID_PLAN)
+    call = result.call
+    assert call.kind == "planner"
+    assert call.session_id is None
+    assert call.response == VALID_PLAN
+    assert call.turns_used == 2
+    assert call.input_tokens == 20
+    assert call.output_tokens == 10
+    assert call.model_name == "claude-test"
+    assert call.engine_type == "claude"
+    assert toolkit.calls == [("lookup", {"q": "docs"})]
+    # Standalone calls never create a session.
+    assert not await ConversationSession.objects.aexists()
+
+    first_call = engine._client.calls[0]
+    assert first_call["system"] == "Plan carefully."
+    tool_names = [t["name"] for t in first_call["tools"]]
+    assert tool_names == ["lookup", "submit_output"]
+    submit_schema = first_call["tools"][1]["input_schema"]
+    assert submit_schema["required"] == ["title", "steps"]
+
+    saved = await StructuredCall.objects.aget(pk=call.pk)
+    # user, tool_use, tool_result, submit tool_use, submit result, response text
+    assert [m["role"] for m in saved.transcript] == [
+        "user",
+        "assistant",
+        "user",
+        "assistant",
+        "user",
+        "assistant",
+    ]
+    assert json.loads(saved.transcript[-1]["content"][0]["text"]) == VALID_PLAN
+
+
+async def test_invalid_output_is_returned_to_model(user):
+    engine = claude_engine(
+        claude_tool("submit_output", {"title": "Missing steps"}),
+        claude_tool("submit_output", VALID_PLAN, tool_id="toolu_2"),
+    )
+    spec = StructuredCallSpec(kind="planner", response_model=Plan)
+
+    result = await run_structured_call(spec, "Plan", user=user, engine=engine)
+
+    assert result.ok
+    assert result.call.turns_used == 2
+    error_block = result.call.transcript[2]["content"][0]
+    assert error_block["is_error"] is True
+    assert "failed validation" in error_block["content"]
+
+
+async def test_plain_text_answer_gets_correction(user):
+    engine = claude_engine(
+        claude_text("Here is the plan: ..."),
+        claude_tool("submit_output", VALID_PLAN),
+    )
+    spec = StructuredCallSpec(kind="planner", response_model=Plan)
+
+    result = await run_structured_call(spec, "Plan", user=user, engine=engine)
+
+    assert result.ok
+    second_call_messages = engine._client.calls[1]["messages"]
+    assert "must call the submit_output tool" in json.dumps(second_call_messages[-1])
+
+
+async def test_revise_replays_standalone_transcript(user):
+    engine = claude_engine(
+        claude_tool("submit_output", VALID_PLAN),
+        claude_tool(
+            "submit_output",
+            {"title": "Ship it", "steps": ["build"]},
+            tool_id="toolu_2",
+        ),
+    )
+    spec = StructuredCallSpec(
+        kind="planner", system_prompt="Plan.", response_model=Plan
+    )
+
+    first = await run_structured_call(spec, "Plan", user=user, engine=engine)
+    second = await revise_structured_call(
+        spec, first.call, "Drop the test step", engine=engine
+    )
+
+    assert second.ok
+    assert second.parsed.steps == ["build"]
+    assert second.call.parent_id == first.call.id
+    assert second.call.request == "Drop the test step"
+    assert second.call.user_id == user.id
+    replay = engine._client.calls[1]
+    assert replay["system"] == "Plan."
+    assert replay["messages"][0]["content"][0]["text"] == "Plan"
+    assert replay["messages"][-1]["content"][0]["text"] == "Drop the test step"
+    # The original is untouched; the revision carries the whole history.
+    await first.call.arefresh_from_db()
+    assert len(first.call.transcript) == 4
+    assert len(second.call.transcript) == 8
+    revisions = [c.response async for c in first.call.revisions.all()]
+    assert revisions == [{"title": "Ship it", "steps": ["build"]}]
+
+
+async def test_revise_refuses_another_engine(user):
+    engine = claude_engine(claude_tool("submit_output", VALID_PLAN))
+    spec = StructuredCallSpec(kind="planner", response_model=Plan)
+    first = await run_structured_call(spec, "Plan", user=user, engine=engine)
+    other = OpenAIAPIEngine(config={"model": "gpt-test"})
+    with pytest.raises(StructuredCallError, match="can't be replayed"):
+        await revise_structured_call(spec, first.call, "again", engine=other)
+
+
+async def test_tool_errors_and_unknown_tools_go_back_to_model(user):
+    engine = claude_engine(
+        claude_tool("explode", {}),
+        claude_tool("nope", {}, tool_id="toolu_2"),
+        claude_tool("submit_output", VALID_PLAN, tool_id="toolu_3"),
+    )
+    spec = StructuredCallSpec(
+        kind="planner", response_model=Plan, toolkits=[LookupToolkit()]
+    )
+
+    result = await run_structured_call(spec, "Plan", user=user, engine=engine)
+
+    assert result.ok
+    transcript = result.call.transcript
+    assert transcript[2]["content"][0]["content"] == "lookup backend down"
+    assert transcript[4]["content"][0]["content"] == "Unknown tool: nope"
+
+
+# ---------------------------------------------------------------------------
+# Calls inside a conversation session
+# ---------------------------------------------------------------------------
+
+
+async def _chat_session(user, engine_type="claude"):
+    return await ConversationSession.objects.acreate(
+        user=user,
+        engine_type=engine_type,
+        transport_type="api",
+        status="active",
+        system_prompt="You are helpful.",
+    )
+
+
+async def test_session_mixes_chat_and_structured_turns(user):
+    from django_ergo.conversation.runner import run_conversation_turn
+
+    session = await _chat_session(user)
+    engine = claude_engine(
+        claude_text("Sure, what are we shipping?"),
+        claude_tool("submit_output", VALID_PLAN),
+        claude_text("Done, the plan has two steps."),
+    )
+    spec = StructuredCallSpec(
+        kind="planner", system_prompt="Return a plan.", response_model=Plan
+    )
+
+    _ = [e async for e in run_conversation_turn(engine, session, "Let's plan")]
+    result = await run_structured_call(spec, "Plan it", session=session, engine=engine)
+    _ = [e async for e in run_conversation_turn(engine, session, "Summarize")]
+
+    assert result.ok
+    call = result.call
+    assert call.session_id == session.id
+    assert call.transcript == []
+    assert (call.first_sequence, call.last_sequence) == (2, 5)
+    structured_request = engine._client.calls[1]
+    assert structured_request["system"] == "You are helpful.\n\nReturn a plan."
+    assert structured_request["messages"][0]["content"][0]["text"] == "Let's plan"
+    # The next chat turn sees the response as the structured turn's last reply.
+    after = engine._client.calls[2]
+    assert after["system"] == "You are helpful."
+    assert "submit_output" not in [t["name"] for t in after.get("tools", [])]
+    response_text = after["messages"][-2]["content"][0]["text"]
+    assert json.loads(response_text) == VALID_PLAN
+    assert engine.ephemeral_context == ""
+
+
+async def test_revise_in_session_adds_a_turn(user):
+    session = await _chat_session(user)
+    engine = claude_engine(
+        claude_tool("submit_output", VALID_PLAN),
+        claude_tool("submit_output", {"title": "Ship", "steps": ["build"]}),
+    )
+    spec = StructuredCallSpec(kind="planner", response_model=Plan)
+
+    first = await run_structured_call(spec, "Plan", session=session, engine=engine)
+    second = await revise_structured_call(spec, first.call, "Shorter", engine=engine)
+
+    assert second.call.session_id == session.id
+    assert second.call.parent_id == first.call.id
+    assert second.call.first_sequence == first.call.last_sequence + 1
+    calls = [c.kind async for c in session.structured_calls.all()]
+    assert calls == ["planner", "planner"]
+    history = await _history(engine, session)
+    assert history[-1]["role"] == "assistant"
+    assert history[-4]["content"][0]["text"] == "Shorter"
+
+
+# ---------------------------------------------------------------------------
+# output_parser (text) mode
+# ---------------------------------------------------------------------------
+
+
+async def test_text_mode_parses_json_with_correction(user):
+    engine = claude_engine(
+        claude_text("not json"),
+        claude_text('{"answer": 42}'),
+    )
+    spec = StructuredCallSpec(kind="answer")
+
+    result = await run_structured_call(spec, "Q", user=user, engine=engine)
+
+    assert result.ok
+    assert result.parsed == {"answer": 42}
+    assert result.call.response == {"answer": 42}
+    assert "failed validation" in json.dumps(engine._client.calls[1]["messages"][-1])
+
+
+async def test_custom_output_parser(user):
+    engine = claude_engine(claude_text("  yes "))
+    spec = StructuredCallSpec(kind="yesno", output_parser=lambda t: t.strip() == "yes")
+
+    result = await run_structured_call(spec, "Q", user=user, engine=engine)
+
+    assert result.parsed is True
+
+
+def test_spec_rejects_both_output_modes():
+    with pytest.raises(StructuredCallError):
+        StructuredCallSpec(kind="x", response_model=Plan, output_parser=str)
+
+
+# ---------------------------------------------------------------------------
+# Failure modes
+# ---------------------------------------------------------------------------
+
+
+async def test_turn_limit(user):
+    engine = claude_engine(claude_text("nope"), claude_text("still nope"))
+    spec = StructuredCallSpec(kind="planner", response_model=Plan, max_turns=2)
+
+    result = await run_structured_call(spec, "Plan", user=user, engine=engine)
+
+    assert result.status == StructuredCallStatus.TURN_LIMITED
+    assert result.parsed is None
+    assert result.call.turns_used == 2
+
+
+async def test_max_tokens_stop_fails(user):
+    engine = claude_engine(claude_text("truncated", stop="max_tokens"))
+    spec = StructuredCallSpec(kind="planner", response_model=Plan)
+
+    result = await run_structured_call(spec, "Plan", user=user, engine=engine)
+
+    assert result.status == StructuredCallStatus.FAILED
+    assert "max_tokens" in result.error
+
+
+class APIConnectionError(Exception):
+    pass
+
+
+class AuthenticationError(Exception):
+    pass
+
+
+async def test_transient_errors_are_retried_without_duplicating_history(
+    user, monkeypatch
+):
+    monkeypatch.setattr(structured, "RETRY_DELAYS", (0, 0))
+    session = await _chat_session(user)
+    engine = claude_engine(
+        APIConnectionError("reset"),
+        claude_tool("submit_output", VALID_PLAN),
+        APIConnectionError("reset"),
+        claude_tool("submit_output", VALID_PLAN),
+    )
+    spec = StructuredCallSpec(kind="planner", response_model=Plan)
+
+    standalone = await run_structured_call(spec, "Plan", user=user, engine=engine)
+    in_session = await run_structured_call(spec, "Plan", session=session, engine=engine)
+
+    assert standalone.ok
+    assert in_session.ok
+    assert len(engine._client.calls) == 4
+    assert [m["role"] for m in standalone.call.transcript] == [
+        "user",
+        "assistant",
+        "user",
+        "assistant",
+    ]
+    history = await _history(engine, session)
+    assert [m["role"] for m in history] == ["user", "assistant", "user", "assistant"]
+
+
+async def test_non_transient_error_is_recorded(user, monkeypatch):
+    monkeypatch.setattr(structured, "RETRY_DELAYS", (0, 0))
+    engine = claude_engine(AuthenticationError("bad key"))
+    spec = StructuredCallSpec(kind="planner", response_model=Plan)
+
+    result = await run_structured_call(spec, "Plan", user=user, engine=engine)
+
+    assert result.status == StructuredCallStatus.FAILED
+    assert result.call.error_category == "auth"
+    assert "bad key" in result.error
+    assert len(engine._client.calls) == 1
+
+
+# ---------------------------------------------------------------------------
+# Pre-seeds, engines, metadata
+# ---------------------------------------------------------------------------
+
+
+async def test_pre_seeds_are_written_before_first_call(user):
+    def boom(_):
+        msg = "unavailable"
+        raise RuntimeError(msg)
+
+    engine = claude_engine(claude_tool("submit_output", VALID_PLAN))
+    spec = StructuredCallSpec(
+        kind="planner",
+        response_model=Plan,
+        pre_seeds=[
+            PreSeedCall("get_ticket", {"id": 7}, lambda args: {"ticket": args["id"]}),
+            PreSeedCall("broken", {}, boom),
+        ],
+    )
+
+    result = await run_structured_call(spec, "Plan", user=user, engine=engine)
+
+    assert result.ok
+    sent = engine._client.calls[0]["messages"]
+    assert [m["role"] for m in sent] == ["user", "assistant", "user"]
+    assert sent[1]["content"] == [
+        {
+            "type": "tool_use",
+            "id": "preseed_0",
+            "name": "get_ticket",
+            "input": {"id": 7},
+        }
+    ]
+    assert sent[2]["content"][0]["content"] == "{'ticket': 7}"
+
+
+async def test_openai_engine_round_trip(user):
+    engine = OpenAIAPIEngine(config={"model": "gpt-test"})
+    engine._client = FakeOpenAIClient(openai_tool("submit_output", VALID_PLAN))
+    spec = StructuredCallSpec(
+        kind="planner", system_prompt="Plan.", response_model=Plan
+    )
+
+    result = await run_structured_call(spec, "Plan", user=user, engine=engine)
+
+    assert result.ok
+    assert result.call.engine_type == "openai"
+    call = engine._client.calls[0]
+    assert call["messages"][0] == {
+        "role": "system",
+        "content": "Plan.",
+    }
+    tool = call["tools"][0]
+    assert tool["type"] == "function"
+    assert tool["function"]["name"] == "submit_output"
+    assert tool["function"]["parameters"]["required"] == ["title", "steps"]
+    assert [m["role"] for m in result.call.transcript] == [
+        "user",
+        "assistant",
+        "tool",
+        "assistant",
+    ]
+    assert result.call.input_tokens == 7
+
+
+def test_engine_spec_gets_max_tokens_and_rows_hold_no_config():
+    spec = StructuredCallSpec(kind="planner", response_model=Plan, max_tokens=99)
+    engine = structured._engine(
+        spec, EngineSpec("claude", "api", {"model": "m", "api_key": "sk-secret"})
+    )
+    assert engine.max_tokens == 99
+    stored = {f.name for f in StructuredCall._meta.fields}
+    assert not {"config", "engine_config"} & stored
+
+
+async def _history(engine, session):
+    from asgiref.sync import sync_to_async
+
+    return await sync_to_async(engine.reconstruct_messages)(session)
+
+
+class ApprovalToolkit(Toolkit):
+    def __init__(self):
+        self.ran = []
+
+    def has_tool(self, tool_name):
+        return tool_name == "delete_all"
+
+    def requires_approval(self, tool_name):
+        return True
+
+    def execute_tool(self, tool_name, arguments):
+        self.ran.append(arguments)
+        return "deleted"
+
+    def get_tools_schema(self, adapter):
+        return [{"name": "delete_all", "input_schema": {"type": "object"}}]
+
+    def render_overview(self):
+        return ""
+
+
+async def test_approval_pauses_and_resumes_standalone_call(user):
+    toolkit = ApprovalToolkit()
+    engine = claude_engine(
+        claude_tool("delete_all", {"scope": "tmp"}, tool_id="d1"),
+        claude_tool("submit_output", VALID_PLAN, tool_id="s1"),
+    )
+    spec = StructuredCallSpec(kind="planner", response_model=Plan, toolkits=[toolkit])
+
+    paused = await run_structured_call(
+        spec, "Clean up", user=user, engine=engine, allow_approvals=True
+    )
+
+    assert paused.status == StructuredCallStatus.AWAITING_APPROVAL
+    assert [a.tool_name for a in paused.approvals] == ["delete_all"]
+    assert toolkit.ran == []
+    saved = await StructuredCall.objects.aget(pk=paused.call.pk)
+    assert saved.metadata["pending_approvals"][0]["id"] == "d1"
+
+    done = await structured.resume_structured_call(
+        spec, saved, {"d1": True}, engine=engine
+    )
+
+    assert done.ok
+    assert toolkit.ran == [{"scope": "tmp"}]
+    assert "pending_approvals" not in done.call.metadata
+    sent = engine._client.calls[1]["messages"][-1]["content"][0]
+    assert sent == {
+        "type": "tool_result",
+        "tool_use_id": "d1",
+        "content": "deleted",
+        "is_error": False,
+    }
+    with pytest.raises(StructuredCallError, match="not waiting"):
+        await structured.resume_structured_call(spec, done.call, {}, engine=engine)
+
+
+async def test_approval_tools_are_refused_without_allow_approvals(user):
+    toolkit = ApprovalToolkit()
+    engine = claude_engine(
+        claude_tool("delete_all", {}, tool_id="d1"),
+        claude_tool("submit_output", VALID_PLAN, tool_id="s1"),
+    )
+    spec = StructuredCallSpec(kind="planner", response_model=Plan, toolkits=[toolkit])
+
+    result = await run_structured_call(spec, "Clean up", user=user, engine=engine)
+
+    assert result.ok
+    assert toolkit.ran == []
+    refused = result.call.transcript[2]["content"][0]
+    assert refused["is_error"]
+    assert "requires approval" in refused["content"]

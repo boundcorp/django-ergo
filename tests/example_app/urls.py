@@ -12,4 +12,6 @@ urlpatterns = [
     path("django-ergo/", include("django_ergo.urls", namespace="django-ergo")),
     # API Example (demonstrates how to build APIs with django-ergo)
     path("api/", api.urls),
+    # Webhooks for bot plugins
+    path("hooks/", include("django_ergo.bots.urls")),
 ]

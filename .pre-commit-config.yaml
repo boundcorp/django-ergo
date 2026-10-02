@@ -1,5 +1,5 @@
 exclude: '^docs/|/migrations/|devcontainer.json'
-default_stages: [commit]
+default_stages: [pre-commit]
 
 default_language_version:
   python: python3.11
@@ -20,12 +20,15 @@ repos:
       - id: check-docstring-first
       - id: detect-private-key
 
-  - repo: https://github.com/pre-commit/mirrors-prettier
-    rev: v4.0.0-alpha.8
+  # Ergonaut's web app; style in ergonaut/frontend/.prettierrc.json.
+  - repo: local
     hooks:
       - id: prettier
-        args: ['--tab-width', '2', '--single-quote']
-        exclude: 'src/django_ergo/templates/|node_modules/'
+        name: prettier
+        entry: prettier --write
+        language: node
+        additional_dependencies: ['prettier@3.3.3']
+        files: '^ergonaut/frontend/src/.*\.(ts|tsx|css)$'
 
   - repo: https://github.com/adamchainz/django-upgrade
     rev: '1.16.0'
@@ -35,7 +38,7 @@ repos:
 
   # Run the Ruff linter.
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.3.2
+    rev: v0.12.5 # keep in step with the ruff in the dev environment
     hooks:
       # Linter
       - id: ruff

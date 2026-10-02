@@ -4,9 +4,21 @@ from __future__ import annotations
 
 from typing import Any
 
+from django_ergo.conversation.history import db_timestamp
+from django_ergo.conversation.history import parse_timestamp
 from django_ergo.conversation.models import ClaudeContentBlock
 from django_ergo.conversation.models import ClaudeMessage
 from django_ergo.conversation.models import ConversationSession
+
+
+async def _keep_original_timestamp(message: ClaudeMessage, value: Any) -> None:
+    """Set created_at to the transcript's timestamp (auto_now_add ignores it on create)."""
+    timestamp = parse_timestamp(value)
+    if timestamp is not None:
+        await ClaudeMessage.objects.filter(pk=message.pk).aupdate(
+            created_at=db_timestamp(timestamp)
+        )
+        message.created_at = timestamp
 
 
 class ClaudeCLIImporter:
@@ -83,6 +95,7 @@ class ClaudeCLIImporter:
 
             content = message_obj.get("content", "")
             await self._import_content_blocks(claude_msg, content)
+            await _keep_original_timestamp(claude_msg, msg_data.get("timestamp"))
         return session
 
     async def _import_content_blocks(

@@ -8,6 +8,7 @@ and execution through the ToolRegistry class.
 import pytest
 from django.contrib.auth import get_user_model
 from django.test import TestCase
+
 from django_ergo.tools import ToolConfig
 from django_ergo.tools import ToolRegistry
 from django_ergo.tools import ToolRegistryBase

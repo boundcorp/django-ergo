@@ -1,12 +1,13 @@
 """Tests for tool adapters."""
 
 import pytest
+
 from django_ergo.conversation.adapters import ClaudeToolAdapter
 from django_ergo.conversation.adapters import OpenAIToolAdapter
 from django_ergo.tools import ToolConfig
 
 
-@pytest.fixture()
+@pytest.fixture
 def sample_tool():
     return ToolConfig(
         name="search_kb",

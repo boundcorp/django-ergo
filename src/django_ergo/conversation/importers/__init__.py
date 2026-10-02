@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 from typing import Any
 
 from django_ergo.conversation.importers.claude_cli import ClaudeCLIImporter
+from django_ergo.conversation.importers.codex_cli import CodexCLIImporter
 
 if TYPE_CHECKING:
     from django_ergo.conversation.models import ConversationSession
@@ -13,7 +14,8 @@ if TYPE_CHECKING:
 
 class ImportService:
     def __init__(self):
-        self.importers = [ClaudeCLIImporter()]
+        # Codex first: Claude's detection also matches any user/assistant lines.
+        self.importers = [CodexCLIImporter(), ClaudeCLIImporter()]
 
     async def import_auto(self, data: Any, user, **kwargs) -> ConversationSession:
         for importer in self.importers:

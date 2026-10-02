@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from django_ergo.conversation.adapters import ToolAdapter
+    from django_ergo.conversation.structured import PreSeedCall
 
 
 class Toolkit(ABC):
@@ -33,6 +34,22 @@ class Toolkit(ABC):
     @abstractmethod
     def render_overview(self) -> str:
         """Render initial context for the agent (e.g., TOC, summaries)."""
+
+    def requires_approval(self, tool_name: str) -> bool:
+        """Whether a person must approve this call before it runs.
+
+        The runner yields PendingApproval instead of running it, and
+        resume_conversation_turn() continues once there's a decision.
+        """
+        return False
+
+    def pre_seeds(self) -> list[PreSeedCall]:
+        """Tool calls to run and write into the chat before the first model call.
+
+        The model sees each result as if it had made the call itself, so it
+        starts a session already knowing, say, which bots or skills exist.
+        """
+        return []
 
     def get_bound_knowledgebases(self) -> list[tuple]:
         """Return [(knowledgebase, mode), ...] for usage tracking.

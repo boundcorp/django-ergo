@@ -21,7 +21,8 @@ DEFAULTS = {
     "WORKFLOW_MODEL": "django_ergo.models.Workflow",  # example only
     # OpenAI Configuration
     "OPENAI_API_KEY": None,  # Can be overridden by environment variable
-    "OPENAI_MODEL": "gpt-4o-mini",
+    "OPENAI_MODEL": "gpt-6-luna",
+    # Ignored by reasoning models (GPT-5, GPT-6, o-series), which reject it.
     "OPENAI_TEMPERATURE": 0.7,
     "OPENAI_MAX_TOKENS": None,
     "OPENAI_TIMEOUT": 30,
@@ -29,6 +30,25 @@ DEFAULTS = {
     "CONVERSATION_ENGINE_TYPE": "openai",
     "CONVERSATION_TRANSPORT_TYPE": "api",
     "CONVERSATION_ENGINE_CONFIG": {},
+    # Async callable (data: bytes, media_type: str, filename: str) -> str used to
+    # transcribe audio attachments, e.g.
+    # "django_ergo.conversation.attachments.openai_transcriber". None = no
+    # transcription; engines without native audio input see a placeholder.
+    "AUDIO_TRANSCRIBER": None,
+    # Extra bot plugins by short name: {"name": "dotted.path.PluginClass"}.
+    "BOT_PLUGINS": {},
+    # Callable(message_id) that delivers a bot-to-bot thread message, e.g. by
+    # queueing a Celery task. None = deliver in a background thread.
+    "THREAD_MESSAGE_RUNNER": None,
+    # Callable(bot_name, task_name, args, kwargs) -> TaskHandle that runs a
+    # @bot_task, e.g. on a Celery worker. None = a thread pool in this process.
+    "BOT_TASK_RUNNER": None,
+    # Public base URL that django_ergo.bots.urls is mounted at, e.g.
+    # "https://bots.example.com/hooks". Plugins build their webhook URLs from
+    # it; None = no public URL, so channels such as Telegram poll instead.
+    "BOT_WEBHOOK_BASE_URL": None,
+    # Extra or overriding model prices, USD per million tokens (see pricing.py)
+    "MODEL_PRICES": {},
     # Telemetry Configuration
     "TELEMETRY_ENABLED": False,
     "TELEMETRY_SERVICE_NAME": "django-ergo",
@@ -48,6 +68,9 @@ DEFAULTS = {
 IMPORT_STRINGS = [
     "WORKFLOW_MODEL",  # example only as it will be imported as a class
     "EMBEDDING_PROVIDER",  # Import embedding provider class
+    "AUDIO_TRANSCRIBER",
+    "THREAD_MESSAGE_RUNNER",
+    "BOT_TASK_RUNNER",
 ]
 
 
@@ -117,7 +140,7 @@ class APISettings:
 
     def __getattr__(self, attr):
         if attr not in self.defaults:
-            raise AttributeError("Invalid API setting: '%s'" % attr)
+            raise AttributeError("Invalid API setting: '%s'" % attr)  # noqa: UP031
 
         try:
             # Check if present in user settings

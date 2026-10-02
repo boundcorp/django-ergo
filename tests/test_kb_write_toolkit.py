@@ -2,6 +2,7 @@
 
 import pytest
 from django.contrib.auth import get_user_model
+
 from django_ergo.kb_write_toolkit import KBWriteToolkit
 from django_ergo.models import Article
 from django_ergo.models import Knowledgebase
@@ -10,12 +11,12 @@ User = get_user_model()
 pytestmark = pytest.mark.django_db
 
 
-@pytest.fixture()
+@pytest.fixture
 def user():
     return User.objects.create_user(username="testuser", password="testpass")
 
 
-@pytest.fixture()
+@pytest.fixture
 def kb(user):
     kb = Knowledgebase.objects.create(
         name="Product Docs",
@@ -43,7 +44,7 @@ def kb(user):
     return kb
 
 
-@pytest.fixture()
+@pytest.fixture
 def toolkit(kb):
     return KBWriteToolkit(knowledgebase=kb)
 

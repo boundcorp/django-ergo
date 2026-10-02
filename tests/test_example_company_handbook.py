@@ -12,6 +12,7 @@ from unittest.mock import patch
 import pytest
 from asgiref.sync import async_to_sync
 from django.contrib.auth import get_user_model
+
 from django_ergo.conversation.history_toolkit import ChatWithHistoryToolkit
 from django_ergo.conversation.models import ClaudeContentBlock
 from django_ergo.conversation.models import ClaudeMessage
@@ -44,22 +45,22 @@ def _create_conversation(user, messages):
     return session
 
 
-@pytest.fixture()
+@pytest.fixture
 def admin():
     return User.objects.create_user(username="admin", password="testpass")
 
 
-@pytest.fixture()
+@pytest.fixture
 def dev_alice():
     return User.objects.create_user(username="dev_alice", password="testpass")
 
 
-@pytest.fixture()
+@pytest.fixture
 def dev_bob():
     return User.objects.create_user(username="dev_bob", password="testpass")
 
 
-@pytest.fixture()
+@pytest.fixture
 def handbook_kb(admin):
     return Knowledgebase.objects.create(
         name="Company Handbook",
@@ -68,7 +69,7 @@ def handbook_kb(admin):
     )
 
 
-@pytest.fixture()
+@pytest.fixture
 def alice_arch_chat(dev_alice):
     """Alice discusses architecture decisions."""
     return _create_conversation(
@@ -91,7 +92,7 @@ def alice_arch_chat(dev_alice):
     )
 
 
-@pytest.fixture()
+@pytest.fixture
 def bob_deploy_chat(dev_bob):
     """Bob discusses deployment process."""
     return _create_conversation(
@@ -108,7 +109,7 @@ def bob_deploy_chat(dev_bob):
     )
 
 
-@pytest.fixture()
+@pytest.fixture
 def bob_onboarding_chat(dev_bob):
     """Bob discusses onboarding."""
     return _create_conversation(
@@ -187,7 +188,7 @@ class TestHandbookAbsorption:
         assert suggestions.get_suggestions()[0]["title"] == "Database Architecture"
 
     @patch("django_ergo.kb_pipelines.run_workflow_task")
-    def test_build_full_handbook(  # noqa: PLR0913
+    def test_build_full_handbook(
         self,
         mock_run_task,
         alice_arch_chat,

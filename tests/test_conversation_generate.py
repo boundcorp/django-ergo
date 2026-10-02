@@ -6,9 +6,10 @@ from unittest.mock import MagicMock
 from unittest.mock import patch
 
 from asgiref.sync import async_to_sync
+from pydantic import BaseModel
+
 from django_ergo.conversation.engines.claude_api import ClaudeAPIEngine
 from django_ergo.conversation.engines.openai_api import OpenAIAPIEngine
-from pydantic import BaseModel
 
 EXPECTED_RATING = 9.5
 

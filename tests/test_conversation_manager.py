@@ -4,6 +4,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from django.contrib.auth import get_user_model
+
 from django_ergo.conversation.manager import SessionManager
 from django_ergo.conversation.models import ConversationSession
 
@@ -11,12 +12,12 @@ User = get_user_model()
 pytestmark = pytest.mark.django_db
 
 
-@pytest.fixture()
+@pytest.fixture
 def user():
     return User.objects.create_user(username="testuser", password="testpass")
 
 
-@pytest.fixture()
+@pytest.fixture
 def manager():
     return SessionManager()
 

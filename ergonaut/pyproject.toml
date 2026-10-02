@@ -1,0 +1,76 @@
+[tool.poetry]
+name = "ergonaut"
+version = "0.1.0"
+description = "Hosts Ergo bots: a bot folder in, a running bot out"
+packages = [
+    { include = "ergonaut" },
+]
+authors = ["Leeward Bound <leeward@boundcorp.net>"]
+readme = "README.md"
+
+
+[tool.poetry.dependencies]
+python = "^3.12"
+django = "^5.2"
+django-environ = "*"
+django-cors-headers = "*"
+django-ninja = "*"
+django-ninja-jwt = "*"
+django-extensions = "*"
+django-filter = "*"
+django-storages = {extras = ["s3"], version = "*"}
+celery = {extras = ["redis"], version = "*"}
+pgserver = "*"
+psycopg = {extras = ["binary"], version = "*"}
+uvicorn = "*"
+whitenoise = "*"
+pydantic = "*"
+pytz = "*"
+requests = "*"
+prometheus-client = "*"
+xhtml2pdf = ">=0.2.13"
+factory-boy = "*"
+ruff = "*"
+pytest = "*"
+pytest-django = "*"
+pytest-asyncio = "*"
+# Ergo itself. Dev installs it editable from the parent folder (make venv).
+django-ergo = {extras = ["legacy", "bots"], version = "*"}
+anthropic = "*"
+
+[tool.poetry.scripts]
+ergonaut = "ergonaut.cli:main"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"ergonaut/settings/*.py" = ["E402", "F403", "F405"]
+"ergonaut/api/__init__.py" = ["E402"]
+"**/tests.py" = ["E402"]
+"**/tests/*.py" = ["E402"]
+"ergonaut/utils/*.py" = ["E402", "UP031"]
+"ergonaut/utils/**/*.py" = ["UP031"]
+
+[tool.mypy]
+files = ["ergonaut"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "ergonaut.settings.test_settings"
+python_files = ["test_*.py", "*_test.py", "tests.py"]
+addopts = "--ds=ergonaut.settings.test_settings"
+
+[tool.djlint]
+# Email templates need inline styles and no meta tags; the SPA's index.html is
+# a Vite shell.
+ignore = "H005,H021,H030,H031,H037,T003"

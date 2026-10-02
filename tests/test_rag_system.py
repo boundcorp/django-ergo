@@ -9,9 +9,9 @@ from unittest.mock import patch
 import pytest
 from django.contrib.auth import get_user_model
 from django.test import TestCase
+
 from django_ergo.models import Article
 from django_ergo.models import Knowledgebase
-
 from examples.rag_examples import ChunkConfig
 from examples.rag_examples import ContextWindowOptimizer
 from examples.rag_examples import FeedbackLearningSystem
@@ -26,7 +26,7 @@ User = get_user_model()
 # =============================================================================
 
 
-@pytest.fixture()
+@pytest.fixture
 def sample_documents():
     """Provide various document types for testing"""
     return {
@@ -77,7 +77,7 @@ def sample_documents():
     }
 
 
-@pytest.fixture()
+@pytest.fixture
 def knowledge_base():
     """Create test knowledge base"""
     return Knowledgebase.objects.create(
@@ -85,7 +85,7 @@ def knowledge_base():
     )
 
 
-@pytest.fixture()
+@pytest.fixture
 def populated_kb(knowledge_base):
     """Knowledge base with sample articles"""
     articles = [

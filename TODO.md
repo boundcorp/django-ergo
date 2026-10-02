@@ -1,5 +1,52 @@
 # Django Ergo - Development Tasks
 
+## 🤖 Ergonaut bots (PR #31, branch `claude/project-thread-epsqtb`)
+
+Live on rigel from `~/p/boundcorp/django-ergo`, bots from `boundcorp/ergo-bots`. Updated by whoever works the branch.
+
+### Now (2026-10-02)
+
+- [ ] **PR #31 review and merge**: two review passes done (22 findings); fixes in 2e54508 and the Ergonaut fix commit; CI green, then merge.
+- [x] **Bots that learn**: `ergo_kb` `write: true` gives `ergo_kb_write` (kb/*.md only, committed and pushed). Kitchen turned on in ergo-bots.
+- [ ] **Deploy plan** for Ergonaut on the octo cluster (modeled on kitchen-mgmt's infra/octo).
+- [ ] **Schedules in each bot's bot.yaml** (`schedules:` run by Celery beat).
+
+- [x] **Toolkit pre-seeding**: toolkits declare tool calls run and written into the chat before the first completion; orchestration pre-seeds `ergo_bot_list` (names + YAML descriptions); skills use the same path; boundcorp's instructions stop listing bots.
+- [x] **Turns as Celery tasks**: web messages and approvals queue a turn task (inline without a broker); Redis pub/sub wakes the SSE stream; rigel runs `up web worker beat`.
+- [x] **Thread-to-thread messaging**: messages record a sender; replies go back to the sender's thread; `ergo_thread_list(bot)` and async `ergo_thread_send(bot, root|<id>|new, message)`; hop limit; replaces sync `threads_*` and `ergo_bot_call`.
+- [x] **Thread inactivity and archival**: beat archives threads idle `sessions.archive_after_days` (default 7); archived threads collapse in the sidebar; messaging one reopens it.
+- [x] **`@bot_task` for custom tools**: run a bot-folder function on a worker and wait for or await its result.
+
+### Next
+
+- [ ] Bots with bash/orca in a multi-user Ergonaut: approvals are admin-only now; consider per-plugin approver lists.
+- [ ] Managed brokers without REDIS_URL fall back to in-process turn locks only.
+
+
+- [ ] A bot tool waiting on a @bot_task holds a worker slot; watch worker concurrency if many tools wait at once.
+
+### Done
+
+- [x] Pre-commit reconciled: ruff pinned to the dev version, prettier scoped to the Ergonaut frontend with its own config, the whole repo reformatted once; every hook passes, so commits no longer skip hooks.
+
+- [x] Telegram passes on delegated replies that land in a root chat, and approvals a delegated request is waiting on (`notify_delegations`).
+
+- [x] Changes section on the managing bot's page: open PRs with diff, Merge (squash, then pull) and Close; the unpublished draft with Discard. Admins only.
+
+- [x] Delegation status in the UI: a chat lists what it's waiting on / working for; sidebar dots show threads busy with delegated work.
+
+- [x] Bot repo pulls run as the `ergonaut.pull_bot_repos` beat task (a thread only without a broker).
+
+- [x] `test_telegram_webhook_mode`: webhook_view is csrf-exempt by attribute (Django 4.2's decorator made it sync).
+
+- [x] Bots see images and PDFs: 📎/paste attaches files to a message (native image/document parts), `ergo_attachments_look` for files already in a session, image thumbnails in the transcript.
+
+- [x] Kitchen bot on Ergonaut (Tandoor tools, meal-planning skill, KB), boundcorp root bot, nested bots, `ergo_bot_call`.
+- [x] Official plugins in `django_ergo/plugins`: ergo_kb, bot_management (draft worktree + PR), telegram, orca, bash, attachments.
+- [x] Live bot reloads on file changes; auto-pull of the bot repo.
+- [x] CTO bot (orca on devbox, bash, threads) proposed by boundcorp and merged (ergo-bots #1).
+- [x] Costs page, bot pages, Memory page, Files panel; tool names prefixed `ergo_*`.
+
 ## 🎯 IMMEDIATE NEXT STEPS (Current Sprint)
 
 ### Production Readiness

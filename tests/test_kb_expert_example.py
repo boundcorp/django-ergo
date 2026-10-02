@@ -9,6 +9,7 @@ Exercises the full KB toolkit stack end-to-end:
 
 import pytest
 from django.contrib.auth import get_user_model
+
 from django_ergo.conversation.models import ConversationKBUsage
 from django_ergo.conversation.models import ConversationSession
 from django_ergo.kb_toolkit import KBToolkit
@@ -57,12 +58,12 @@ LAWN_CARE_ARTICLES = [
 ]
 
 
-@pytest.fixture()
+@pytest.fixture
 def user():
     return User.objects.create_user(username="gardener", password="testpass")
 
 
-@pytest.fixture()
+@pytest.fixture
 def lawn_kb(user):
     kb = Knowledgebase.objects.create(
         name="Lawn Care Expert",
@@ -79,7 +80,7 @@ def lawn_kb(user):
     return kb
 
 
-@pytest.fixture()
+@pytest.fixture
 def session(user):
     return ConversationSession.objects.create(
         user=user,

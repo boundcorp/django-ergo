@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 import pytest
 from asgiref.sync import async_to_sync
 from django.contrib.auth import get_user_model
+
 from django_ergo.conversation.engine import EngineResponse
 from django_ergo.conversation.models import ClaudeContentBlock
 from django_ergo.conversation.models import ClaudeMessage
@@ -24,12 +25,12 @@ User = get_user_model()
 pytestmark = pytest.mark.django_db
 
 
-@pytest.fixture()
+@pytest.fixture
 def user():
     return User.objects.create_user(username="testuser", password="testpass")
 
 
-@pytest.fixture()
+@pytest.fixture
 def session_with_messages(user):
     session = ConversationSession.objects.create(
         user=user,

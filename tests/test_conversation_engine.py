@@ -1,6 +1,7 @@
 """Tests for the engine protocol ABC and EngineResponse."""
 
 import pytest
+
 from django_ergo.conversation.engine import Engine
 from django_ergo.conversation.engine import EngineResponse
 

@@ -1,0 +1,208 @@
+import { Fragment, useEffect, useState } from 'react'
+import type { CostBucket, Costs } from '../api'
+import { api } from '../api'
+
+const RANGES = [7, 30, 90]
+
+function money(value: number) {
+  if (value === 0) return '$0'
+  if (value < 0.0001) return '<$0.0001'
+  // Cheap models cost fractions of a cent per call; keep two significant digits.
+  if (value < 0.01) return `$${value.toPrecision(2)}`
+  return value.toLocaleString(undefined, {
+    style: 'currency',
+    currency: 'USD',
+    maximumFractionDigits: value < 10 ? 2 : 0,
+  })
+}
+
+function tokens(value: number) {
+  return value >= 1_000_000
+    ? `${(value / 1_000_000).toFixed(1)}M`
+    : value >= 1000
+      ? `${Math.round(value / 1000)}k`
+      : String(value)
+}
+
+function Tile({ label, value, note }: { label: string; value: string; note?: string }) {
+  return (
+    <div className="rounded-lg border border-zinc-200 px-4 py-3 dark:border-zinc-800">
+      <div className="text-xs text-zinc-500">{label}</div>
+      <div className="mt-1 text-2xl font-semibold tabular-nums">{value}</div>
+      {note && <div className="mt-0.5 text-xs text-zinc-500">{note}</div>}
+    </div>
+  )
+}
+
+// One series (cost per day): a single hue, no legend; hover shows the day.
+function Daily({ days }: { days: Costs['by_day'] }) {
+  const [hover, setHover] = useState<number | null>(null)
+  const max = Math.max(...days.map(d => d.cost), 0.0001)
+  const shown = hover != null ? days[hover] : null
+  return (
+    <div>
+      <div className="mb-1 h-5 text-xs text-zinc-500">
+        {shown ? `${shown.date}: ${money(shown.cost)} · ${shown.calls} calls` : 'Cost per day'}
+      </div>
+      <div
+        className="flex h-32 items-end gap-[2px] border-b border-zinc-200 dark:border-zinc-800"
+        onMouseLeave={() => setHover(null)}
+      >
+        {days.map((d, i) => (
+          <div key={d.date} className="flex h-full flex-1 items-end" onMouseEnter={() => setHover(i)}>
+            <div
+              className={`w-full rounded-t ${hover === i ? 'bg-indigo-700 dark:bg-indigo-300' : 'bg-indigo-500 dark:bg-indigo-400'}`}
+              style={{ height: d.cost ? `${Math.max(2, (d.cost / max) * 100)}%` : 0 }}
+            />
+          </div>
+        ))}
+      </div>
+      <div className="mt-1 flex justify-between text-[11px] text-zinc-500">
+        <span>{days[0]?.date}</span>
+        <span>{days[days.length - 1]?.date}</span>
+      </div>
+    </div>
+  )
+}
+
+function Row({
+  bucket,
+  nested,
+  toggle,
+  open,
+}: {
+  bucket: CostBucket
+  nested?: boolean
+  toggle?: () => void
+  open?: boolean
+}) {
+  return (
+    <tr className={nested ? 'text-zinc-600 dark:text-zinc-400' : ''}>
+      <td className={`py-1.5 font-mono text-xs ${nested ? 'pl-6' : ''}`}>
+        {toggle ? (
+          <button onClick={toggle} className="hover:underline">
+            {open ? '▾' : '▸'} {bucket.name}
+          </button>
+        ) : (
+          bucket.name
+        )}
+      </td>
+      <td className="py-1.5 text-right tabular-nums">{bucket.calls}</td>
+      <td className="py-1.5 text-right tabular-nums">{tokens(bucket.input_tokens)}</td>
+      <td className="py-1.5 text-right tabular-nums">{tokens(bucket.output_tokens)}</td>
+      <td className="py-1.5 text-right font-medium tabular-nums">
+        {money(bucket.cost)}
+        {bucket.unpriced_calls > 0 && (
+          <span className="ml-1 text-amber-600" title={`${bucket.unpriced_calls} calls with no price`}>
+            *
+          </span>
+        )}
+      </td>
+    </tr>
+  )
+}
+
+function Table({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <section className="mt-8">
+      <h2 className="mb-2 text-sm font-semibold tracking-wide text-zinc-500 uppercase">{title}</h2>
+      <table className="w-full max-w-3xl text-sm">
+        <thead className="text-xs text-zinc-500">
+          <tr className="border-b border-zinc-200 dark:border-zinc-800">
+            <th className="py-1 text-left font-normal">Name</th>
+            <th className="py-1 text-right font-normal">Calls</th>
+            <th className="py-1 text-right font-normal">Input</th>
+            <th className="py-1 text-right font-normal">Output</th>
+            <th className="py-1 text-right font-normal">Cost</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-zinc-100 dark:divide-zinc-900">{children}</tbody>
+      </table>
+    </section>
+  )
+}
+
+export function CostsPage() {
+  const [days, setDays] = useState(30)
+  const [data, setData] = useState<Costs | null>(null)
+  const [error, setError] = useState('')
+  const [open, setOpen] = useState(true)
+
+  useEffect(() => {
+    api
+      .costs(days)
+      .then(setData)
+      .catch(e => setError(String(e.message ?? e)))
+  }, [days])
+
+  if (!data) return <div className="p-6 text-zinc-500">{error || 'Loading…'}</div>
+
+  const { total } = data
+  return (
+    <div className="h-full overflow-y-auto px-6 py-6">
+      <div className="flex items-center gap-3">
+        <h1 className="text-xl font-semibold">Costs</h1>
+        <div className="ml-auto flex gap-1">
+          {RANGES.map(r => (
+            <button
+              key={r}
+              onClick={() => setDays(r)}
+              className={`rounded-md px-2 py-1 text-sm ${r === days ? 'bg-zinc-200 font-medium dark:bg-zinc-800' : 'hover:bg-zinc-100 dark:hover:bg-zinc-900'}`}
+            >
+              {r} days
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="mt-4 grid max-w-3xl grid-cols-3 gap-3">
+        <Tile label={`Spent, last ${data.days} days`} value={money(total.cost)} />
+        <Tile label="Calls" value={total.calls.toLocaleString()} />
+        <Tile label="Tokens in / out" value={`${tokens(total.input_tokens)} / ${tokens(total.output_tokens)}`} />
+      </div>
+
+      <div className="mt-6 max-w-3xl">
+        <Daily days={data.by_day} />
+      </div>
+
+      <Table title="By kind">
+        {data.by_kind.map(bucket => (
+          <Fragment key={bucket.name}>
+            {bucket.name === 'chat_reply' ? (
+              <>
+                <Row bucket={bucket} toggle={() => setOpen(!open)} open={open} />
+                {open && data.chat_reply_by_bot.map(bot => <Row key={bot.name} bucket={bot} nested />)}
+              </>
+            ) : (
+              <Row bucket={bucket} />
+            )}
+          </Fragment>
+        ))}
+        {!data.by_kind.length && (
+          <tr>
+            <td colSpan={5} className="py-3 text-zinc-500">
+              No calls in this period.
+            </td>
+          </tr>
+        )}
+      </Table>
+
+      <Table title="By model">
+        {data.by_model.map(bucket => (
+          <Row key={bucket.name} bucket={bucket} />
+        ))}
+      </Table>
+
+      {!!data.unpriced_models.length && (
+        <p className="mt-4 max-w-3xl text-xs text-amber-700 dark:text-amber-400">
+          * No price for {data.unpriced_models.join(', ')}; those calls count as $0. Add prices under
+          DJANGO_ERGO["MODEL_PRICES"].
+        </p>
+      )}
+      <p className="mt-2 max-w-3xl text-xs text-zinc-500">
+        Costs are worked out from token counts and list prices, so they are estimates. OpenAI cached input is priced at
+        the full input rate.
+      </p>
+    </div>
+  )
+}

@@ -12,6 +12,7 @@ from unittest.mock import patch
 import pytest
 from asgiref.sync import async_to_sync
 from django.contrib.auth import get_user_model
+
 from django_ergo.conversation.models import ClaudeContentBlock
 from django_ergo.conversation.models import ClaudeMessage
 from django_ergo.conversation.models import ConversationSession
@@ -24,12 +25,12 @@ User = get_user_model()
 pytestmark = pytest.mark.django_db
 
 
-@pytest.fixture()
+@pytest.fixture
 def alice():
     return User.objects.create_user(username="alice", password="testpass")
 
 
-@pytest.fixture()
+@pytest.fixture
 def alice_kb(alice):
     return Knowledgebase.objects.create(
         name="Alice's Memory",
@@ -38,7 +39,7 @@ def alice_kb(alice):
     )
 
 
-@pytest.fixture()
+@pytest.fixture
 def alice_chat_1(alice):
     """Alice's first conversation — mentions deployment preferences."""
     session = ConversationSession.objects.create(
@@ -66,7 +67,7 @@ def alice_chat_1(alice):
     return session
 
 
-@pytest.fixture()
+@pytest.fixture
 def alice_chat_2(alice):
     """Alice's second conversation — mentions testing preferences."""
     session = ConversationSession.objects.create(

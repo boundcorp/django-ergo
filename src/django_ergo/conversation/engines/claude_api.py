@@ -6,14 +6,53 @@ from typing import TYPE_CHECKING
 from typing import Any
 
 from django_ergo.conversation.adapters import ClaudeToolAdapter
+from django_ergo.conversation.attachments import Attachment
+from django_ergo.conversation.attachments import attachments_by_sequence
+from django_ergo.conversation.attachments import claude_block
+from django_ergo.conversation.attachments import save_attachments
+from django_ergo.conversation.compaction import apply_native_window
+from django_ergo.conversation.compaction import latest_compaction
+from django_ergo.conversation.compaction import render_summary_message
+from django_ergo.conversation.engine import Completion
 from django_ergo.conversation.engine import Engine
 from django_ergo.conversation.engine import EngineResponse
+from django_ergo.conversation.engine import SeededToolCall
+from django_ergo.conversation.engine import session_system_prompt
 from django_ergo.conversation.telemetry import record_usage
 from django_ergo.conversation.telemetry import trace_engine_call
 from django_ergo.tools import tool_registry
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
+
+
+def claude_message_dict(msg) -> dict:
+    """Convert a ClaudeMessage row (with content_blocks) to an API message dict."""
+    content = []
+    for block in msg.content_blocks.all():
+        if block.block_type == "text":
+            content.append({"type": "text", "text": block.text})
+        elif block.block_type == "thinking":
+            content.append({"type": "thinking", "thinking": block.thinking})
+        elif block.block_type == "tool_use":
+            content.append(
+                {
+                    "type": "tool_use",
+                    "id": block.tool_use_id,
+                    "name": block.tool_name,
+                    "input": block.tool_input or {},
+                }
+            )
+        elif block.block_type == "tool_result":
+            content.append(
+                {
+                    "type": "tool_result",
+                    "tool_use_id": block.tool_result_for,
+                    "content": block.tool_result_content or "",
+                    "is_error": block.is_error,
+                }
+            )
+    return {"role": msg.role, "content": content}
 
 
 class ClaudeAPIEngine(Engine):
@@ -45,37 +84,44 @@ class ClaudeAPIEngine(Engine):
     def get_tool_adapter(self) -> ClaudeToolAdapter:
         return self._adapter
 
-    def reconstruct_messages(self, session) -> list[dict]:
-        """Build Claude API message history from DB state."""
+    def history_rows(self, session, after_sequence: int | None = None) -> list:
+        """Return [(ClaudeMessage, message dict), ...] in sequence order."""
+        rows = session.claude_messages.prefetch_related("content_blocks")
+        if after_sequence is not None:
+            rows = rows.filter(sequence__gt=after_sequence)
+        attachments = attachments_by_sequence(session)
+        result = []
+        for msg in rows:
+            message = claude_message_dict(msg)
+            if msg.sequence in attachments:
+                # Attachments go before the text, as Anthropic recommends.
+                message["content"] = [
+                    *(claude_block(row) for row in attachments[msg.sequence]),
+                    *message["content"],
+                ]
+            result.append((msg, message))
+        return result
 
-        messages = []
-        for msg in session.claude_messages.prefetch_related("content_blocks").all():
-            content = []
-            for block in msg.content_blocks.all():
-                if block.block_type == "text":
-                    content.append({"type": "text", "text": block.text})
-                elif block.block_type == "thinking":
-                    content.append({"type": "thinking", "thinking": block.thinking})
-                elif block.block_type == "tool_use":
-                    content.append(
-                        {
-                            "type": "tool_use",
-                            "id": block.tool_use_id,
-                            "name": block.tool_name,
-                            "input": block.tool_input or {},
-                        }
-                    )
-                elif block.block_type == "tool_result":
-                    content.append(
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": block.tool_result_for,
-                            "content": block.tool_result_content or "",
-                            "is_error": block.is_error,
-                        }
-                    )
-            messages.append({"role": msg.role, "content": content})
-        return messages
+    def reconstruct_messages(self, session) -> list[dict]:
+        """Build Claude API message history from DB state.
+
+        When the session has been compacted, the latest summary replaces the
+        messages it covers.
+        """
+        compaction = latest_compaction(session)
+        after = compaction.upto_sequence if compaction else None
+        messages = [message for _, message in self.history_rows(session, after)]
+        if compaction:
+            messages.insert(
+                0,
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": render_summary_message(compaction)}
+                    ],
+                },
+            )
+        return apply_native_window(session, messages)
 
     def get_tools_schema(self, workflow) -> list[dict]:
         """Convert workflow tools to Claude API tool format."""
@@ -132,8 +178,16 @@ class ClaudeAPIEngine(Engine):
                 "max_tokens": self.max_tokens,
                 "messages": messages,
             }
-            if session.workflow and session.workflow.instructions:
-                kwargs["system"] = session.workflow.instructions
+            system = "\n\n".join(
+                part
+                for part in (
+                    session_system_prompt(session),
+                    getattr(self, "ephemeral_context", ""),
+                )
+                if part
+            )
+            if system:
+                kwargs["system"] = system
             if tools:
                 kwargs["tools"] = tools
 
@@ -212,9 +266,12 @@ class ClaudeAPIEngine(Engine):
                 event_type="done", raw={"stop_reason": response.stop_reason}
             )
 
-    async def send(
-        self, session, message: str, additional_tools: list[dict] | None = None
-    ) -> AsyncIterator[EngineResponse]:
+    async def append_user_message(
+        self,
+        session,
+        message: str,
+        attachments: list[Attachment] | None = None,
+    ) -> None:
         from django_ergo.conversation.models import ClaudeContentBlock
         from django_ergo.conversation.models import ClaudeMessage
 
@@ -225,11 +282,59 @@ class ClaudeAPIEngine(Engine):
         await ClaudeContentBlock.objects.acreate(
             message=user_msg, block_type="text", sequence=0, text=message
         )
+        if attachments:
+            await save_attachments(session, seq, attachments)
 
-        async for event in self._process_response(session, seq + 1, additional_tools):
+    async def append_tool_exchange(self, session, calls: list[SeededToolCall]) -> None:
+        from django_ergo.conversation.models import ClaudeContentBlock
+        from django_ergo.conversation.models import ClaudeMessage
+
+        if not calls:
+            return
+        seq = await session.claude_messages.acount()
+        call_msg = await ClaudeMessage.objects.acreate(
+            session=session, role="assistant", sequence=seq, stop_reason="tool_use"
+        )
+        result_msg = await ClaudeMessage.objects.acreate(
+            session=session, role="user", sequence=seq + 1
+        )
+        for block_seq, call in enumerate(calls):
+            await ClaudeContentBlock.objects.acreate(
+                message=call_msg,
+                block_type="tool_use",
+                sequence=block_seq,
+                tool_use_id=call.tool_use_id,
+                tool_name=call.name,
+                tool_input=call.input,
+            )
+            await ClaudeContentBlock.objects.acreate(
+                message=result_msg,
+                block_type="tool_result",
+                sequence=block_seq,
+                tool_result_for=call.tool_use_id,
+                tool_result_content=str(call.result),
+                is_error=call.is_error,
+            )
+
+    async def respond(
+        self, session, additional_tools: list[dict] | None = None
+    ) -> AsyncIterator[EngineResponse]:
+        seq = await session.claude_messages.acount()
+        async for event in self._process_response(session, seq, additional_tools):
             yield event
 
-    async def submit_tool_result(  # noqa: PLR0913
+    async def send(
+        self,
+        session,
+        message: str,
+        additional_tools: list[dict] | None = None,
+        attachments: list[Attachment] | None = None,
+    ) -> AsyncIterator[EngineResponse]:
+        await self.append_user_message(session, message, attachments)
+        async for event in self.respond(session, additional_tools):
+            yield event
+
+    async def submit_tool_result(
         self,
         session,
         tool_use_id: str,
@@ -278,6 +383,144 @@ class ClaudeAPIEngine(Engine):
             tool_result_content=str(result),
             is_error=is_error,
         )
+
+    async def append_assistant_text(self, session, text: str) -> None:
+        from django_ergo.conversation.models import ClaudeContentBlock
+        from django_ergo.conversation.models import ClaudeMessage
+
+        seq = await session.claude_messages.acount()
+        msg = await ClaudeMessage.objects.acreate(
+            session=session,
+            role="assistant",
+            sequence=seq,
+            stop_reason="end_turn",
+            model_name=self.model,
+        )
+        await ClaudeContentBlock.objects.acreate(
+            message=msg, block_type="text", sequence=0, text=text
+        )
+
+    # -- Sessionless calls ------------------------------------------------
+
+    async def complete(
+        self,
+        messages: list[dict],
+        *,
+        system: str = "",
+        tools: list[dict] | None = None,
+    ) -> Completion:
+        with trace_engine_call(
+            operation="complete",
+            engine_type=self.engine_type,
+            model=self.model,
+            transport_type="api",
+            max_tokens=self.max_tokens,
+        ) as span:
+            kwargs: dict[str, Any] = {
+                "model": self.model,
+                "max_tokens": self.max_tokens,
+                "messages": messages,
+            }
+            if system:
+                kwargs["system"] = system
+            if tools:
+                kwargs["tools"] = tools
+            response = await self._get_client().messages.create(**kwargs)
+            usage = response.usage
+            record_usage(
+                span,
+                input_tokens=usage.input_tokens,
+                output_tokens=usage.output_tokens,
+                cache_creation=getattr(usage, "cache_creation_input_tokens", None),
+                cache_read=getattr(usage, "cache_read_input_tokens", None),
+            )
+
+        content: list[dict] = []
+        events: list[EngineResponse] = []
+        for block in response.content:
+            if block.type == "text":
+                content.append({"type": "text", "text": block.text})
+                events.append(
+                    EngineResponse(
+                        event_type="text", raw={"type": "text"}, text=block.text
+                    )
+                )
+            elif block.type == "tool_use":
+                call = {"id": block.id, "name": block.name, "input": block.input}
+                content.append({"type": "tool_use", **call})
+                events.append(
+                    EngineResponse(
+                        event_type="tool_use", raw={"type": "tool_use"}, tool_use=call
+                    )
+                )
+            elif block.type == "thinking":
+                content.append({"type": "thinking", "thinking": block.thinking})
+                events.append(
+                    EngineResponse(
+                        event_type="thinking",
+                        raw={"type": "thinking"},
+                        thinking=block.thinking,
+                    )
+                )
+        events.append(
+            EngineResponse(event_type="done", raw={"stop_reason": response.stop_reason})
+        )
+        return Completion(
+            message={"role": "assistant", "content": content},
+            events=events,
+            model=self.model,
+            input_tokens=usage.input_tokens or 0,
+            output_tokens=usage.output_tokens or 0,
+            cache_creation_input_tokens=(
+                getattr(usage, "cache_creation_input_tokens", None) or 0
+            ),
+            cache_read_input_tokens=getattr(usage, "cache_read_input_tokens", None)
+            or 0,
+        )
+
+    def user_message(self, text: str, attachments: list | None = None) -> dict:
+        blocks = [claude_block(a) for a in attachments or []]
+        return {"role": "user", "content": [*blocks, {"type": "text", "text": text}]}
+
+    def assistant_text_message(self, text: str) -> dict:
+        return {"role": "assistant", "content": [{"type": "text", "text": text}]}
+
+    def tool_exchange_messages(self, calls: list[SeededToolCall]) -> list[dict]:
+        if not calls:
+            return []
+        return [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": c.tool_use_id,
+                        "name": c.name,
+                        "input": c.input,
+                    }
+                    for c in calls
+                ],
+            },
+            *self.tool_result_messages(
+                [(c.tool_use_id, c.result, c.is_error) for c in calls]
+            ),
+        ]
+
+    def tool_result_messages(self, results: list[tuple[str, Any, bool]]) -> list[dict]:
+        return [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": tool_use_id,
+                        "content": str(result),
+                        "is_error": is_error,
+                    }
+                    for tool_use_id, result, is_error in results
+                ],
+            }
+        ]
 
     async def generate(
         self,

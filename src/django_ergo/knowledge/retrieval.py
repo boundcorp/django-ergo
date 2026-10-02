@@ -38,7 +38,7 @@ def normalized_weights(weights):
 
 def vector_values(vector, dimensions):
     require(
-        isinstance(vector, (list, tuple)) and len(vector) == dimensions,
+        isinstance(vector, (list, tuple)) and len(vector) == dimensions,  # noqa: UP038
         "Vector dimension mismatch",
     )
     require(

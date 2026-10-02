@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable  # noqa: TC003
 from typing import Any
 
 from django.db import transaction
 
 from django_ergo.embedding_providers import EmbeddingProvider
 from django_ergo.embedding_providers import get_embedding_provider
-from django_ergo.models import Article
+from django_ergo.models import Article  # noqa: TC001
 
 
 class IndexingError(RuntimeError):
