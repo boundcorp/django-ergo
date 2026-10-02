@@ -58,6 +58,7 @@ class Person:
 class Setup:
     folders: list[Path] = field(default_factory=list)
     people: dict[str, Person] = field(default_factory=dict)
+    failed: dict[str, str] = field(default_factory=dict)  # bot folder -> why it was skipped
 
 
 def bot_paths(value: str | None = None) -> list[Path]:
@@ -111,14 +112,20 @@ def find_setup(paths: list[Path] | None = None) -> Setup:
         for folder in folders:
             if folder in setup.folders:
                 continue
-            _add_people(setup, _read_yaml(folder / CONFIG_FILE), folder / CONFIG_FILE)
+            try:
+                _add_people(setup, _read_yaml(folder / CONFIG_FILE), folder / CONFIG_FILE)
+            except Exception as exc:  # noqa: BLE001 — skip this bot, load the others
+                logger.exception("Skipping bot folder %s", folder)
+                setup.failed[str(folder)] = f"{type(exc).__name__}: {exc}"[:2000]
+                continue
             setup.folders.append(folder)
     return setup
 
 
 def load_registry(setup: Setup | None = None) -> BotRegistry:
     setup = setup or find_setup()
-    registry = BotRegistry.from_paths(setup.folders)
+    registry = BotRegistry.from_paths(setup.folders, skip_broken=True)
+    registry.failed = {**setup.failed, **registry.failed}
     telegram_ids = {str(p.telegram): p.username for p in setup.people.values() if p.telegram}
     for bot in registry:
         plugin = bot.plugin("telegram")

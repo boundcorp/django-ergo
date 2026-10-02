@@ -36,6 +36,28 @@ def test_a_broken_config_keeps_the_loaded_bots(bots_dir):
     assert registry.get("boundcorp").definition.description == "Fixed"
 
 
+def test_one_broken_bot_does_not_stop_the_others(bots_dir):
+    from ergonaut.apps.bots.loading import load_registry
+
+    write_bot(bots_dir / "kitchen", "kitchen")
+    write_bot(bots_dir / "cto", "cto")
+    (bots_dir / "cto" / "bot.yaml").write_text("name: [unclosed\n")
+    fresh = load_registry()
+    assert sorted(b.name for b in fresh) == ["boundcorp", "kitchen"]
+    assert list(fresh.failed) == [str((bots_dir / "cto").resolve())]
+
+    # A bot that breaks while running keeps its last good version; the others reload.
+    write_bot(bots_dir / "cto", "cto")
+    registry = ReloadingRegistry(check_every=0)
+    assert sorted(b.name for b in registry) == ["boundcorp", "cto", "kitchen"]
+    (bots_dir / "cto" / "bot.yaml").write_text("name: [unclosed\n")
+    write_bot(bots_dir / "kitchen", "kitchen", description="Changed")
+    assert sorted(b.name for b in registry) == ["boundcorp", "cto", "kitchen"]
+    assert registry.get("kitchen").definition.description == "Changed"
+    assert registry.get("cto").definition.description == "A bot"
+    assert len(registry.failed) == 1
+
+
 def test_unchanged_files_are_not_reloaded(bots_dir):
     loads = []
 

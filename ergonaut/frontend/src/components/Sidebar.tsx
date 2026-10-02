@@ -70,11 +70,13 @@ export function Sidebar({
   bots,
   sessions,
   pins,
+  botErrors = [],
   onChange,
 }: {
   bots: Bot[]
   sessions: Session[]
   pins: Record<string, { name: string; url: string }[]>
+  botErrors?: { folder: string; name: string; error: string }[]
   onChange: () => void
 }) {
   const navigate = useNavigate()
@@ -95,6 +97,15 @@ export function Sidebar({
       <Link to="/" className="px-2 text-lg font-semibold">
         Ergonaut
       </Link>
+      {botErrors.map(e => (
+        <div
+          key={e.folder}
+          title={`${e.folder}\n${e.error}`}
+          className="rounded-md border border-red-300 bg-red-50 px-2 py-1 text-xs text-red-700 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300"
+        >
+          ⚠ {e.name} didn't load: <span className="break-words">{e.error.slice(0, 160)}</span>
+        </div>
+      ))}
       <Link to="/sessions" className="rounded-md px-2 py-1 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-900">
         🔎 All sessions
       </Link>

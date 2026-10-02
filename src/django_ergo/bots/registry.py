@@ -12,6 +12,7 @@ bot may call its sub-bots (as well as those in ``permissions.call_bots``)::
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -41,9 +42,14 @@ def find_bot_folders(directory: str | Path) -> list[Path]:
     return found
 
 
+logger = logging.getLogger(__name__)
+
+
 class BotRegistry:
     def __init__(self):
         self.bots: dict[str, Bot] = {}
+        # Bot folders that didn't load (with skip_broken): folder -> the error.
+        self.failed: dict[str, str] = {}
 
     def add(self, bot: Bot) -> Bot:
         if bot.name in self.bots:
@@ -86,10 +92,22 @@ class BotRegistry:
         return self.add(Bot.load(path, **kwargs))
 
     @classmethod
-    def from_paths(cls, paths: Iterable[str | Path], **kwargs) -> BotRegistry:
+    def from_paths(
+        cls, paths: Iterable[str | Path], *, skip_broken: bool = False, **kwargs
+    ) -> BotRegistry:
+        """Load each bot folder. With ``skip_broken``, a folder that fails (bad
+        bot.yaml, a tool file that won't import, a duplicate name) is logged and
+        recorded in ``failed`` while the others load."""
         registry = cls()
         for path in paths:
-            registry.load(path, **kwargs)
+            if not skip_broken:
+                registry.load(path, **kwargs)
+                continue
+            try:
+                registry.load(path, **kwargs)
+            except Exception as exc:
+                logger.exception("Bot folder %s didn't load", path)
+                registry.failed[str(path)] = f"{type(exc).__name__}: {exc}"[:2000]
         return registry
 
     @classmethod
