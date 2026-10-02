@@ -351,6 +351,8 @@ CELERY_BEAT_SCHEDULE = {
     "archive-idle-threads": {"task": "ergonaut.archive_idle_threads", "schedule": 60 * 60},
     # Thread messages that waited for a busy recipient and were missed.
     "redispatch-thread-messages": {"task": "ergonaut.redispatch_thread_messages", "schedule": 60},
+    # Turns whose worker or shell died mid-turn: their chats stop showing busy.
+    "recover-dead-turns": {"task": "ergonaut.recover_dead_turns", "schedule": 60},
     # Workers whose next step got lost (a restart) start again.
     "resume-workers": {"task": "ergonaut.resume_workers", "schedule": 60},
     # Each bot's schedules (bot.yaml); the task checks which are due this minute.
