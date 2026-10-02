@@ -18,6 +18,8 @@ The bot runs the CLI on the host Ergonaut runs on, as that user. Tools:
   list|show|search-refs``, ``orchestration run-list|worker-list|worker-read|
   worker-show``, ``search``, ``skills get`` (the CLI's own guides) and
   ``<subcommand> --help``.
+- ``orca_screenshot``: capture the browser tab (in a worktree, or by page
+  id) and attach the image to the chat. No approval: it only looks.
 - ``orca_attach``: copy a file from an Orca worktree into the chat, as an
   attachment (screenshots, reports, logs a worker wrote). The path must stay
   inside the worktree (symlinks resolved), and secret-looking files (``.env*``,
@@ -66,6 +68,13 @@ READ_ONLY = {
     ("orchestration", "run-list"),
     ("orchestration", "worker-list"),
     ("orchestration", "worker-read"),
+    # Looking at the browser (no clicks, typing or navigation).
+    ("tab", "list"),
+    ("tab", "show"),
+    ("tab", "current"),
+    ("snapshot",),
+    ("get",),
+    ("is",),
     ("orchestration", "worker-show"),
     ("search",),
     ("skills", "get"),
@@ -286,6 +295,59 @@ class OrcaPlugin(BotPlugin):
             raise ValueError(msg)
         return resolved, data
 
+    def screenshot(
+        self,
+        ctx: ToolContext,
+        worktree: str = "",
+        page: str = "",
+        image_format: str = "png",
+    ) -> dict:
+        """Capture a browser tab and attach the image to the chat."""
+        import base64
+        from datetime import UTC
+        from datetime import datetime
+
+        from django_ergo.conversation.attachments import save_session_file
+
+        if ctx.session is None:
+            msg = "Screenshots go into a chat"
+            raise ValueError(msg)
+        image_format = "jpeg" if image_format in ("jpg", "jpeg") else "png"
+        args = ["screenshot", "--format", image_format]
+        if worktree:
+            args += ["--worktree", worktree]
+        if page:
+            args += ["--page", page]
+        proc = subprocess.run(  # noqa: S603 — argv list, no shell
+            self.argv(args),
+            capture_output=True,
+            text=True,
+            timeout=self.timeout,
+            check=False,
+        )
+        try:
+            payload = json.loads(proc.stdout)
+        except ValueError:
+            payload = {}
+        data = (payload.get("result") or {}).get("data") if payload.get("ok") else None
+        if not data:
+            error = (payload.get("error") or {}).get("message") or (
+                proc.stderr or proc.stdout
+            ).strip()[:500]
+            msg = f"Screenshot failed: {error}"
+            raise ValueError(msg)
+        stamp = datetime.now(tz=UTC).strftime("%Y%m%d-%H%M%S")
+        row = save_session_file(
+            ctx.session,
+            f"screenshot-{stamp}.{'jpg' if image_format == 'jpeg' else 'png'}",
+            base64.b64decode(data),
+            source="bot",
+            metadata={
+                "from_orca": {"screenshot": {"worktree": worktree, "page": page}}
+            },
+        )
+        return {"id": str(row.id), "filename": row.filename, "size": row.size}
+
     def attach(
         self, ctx: ToolContext, worktree: str, path: str, filename: str = ""
     ) -> dict:
@@ -402,4 +464,38 @@ class OrcaPlugin(BotPlugin):
         ) -> dict:
             return plugin.attach(ctx, worktree, path, filename)
 
-        return [read.__bot_tool__, run.__bot_tool__, attach.__bot_tool__]
+        @bot_tool(
+            name="orca_screenshot",
+            takes_context=True,
+            description=(
+                "Take a screenshot of an Orca browser tab and attach it to this chat (no approval: "
+                "it only looks). Give the worktree, and the page id from tab list if the worktree "
+                "has several tabs. Use ergo_attachments_look to see it yourself."
+            ),
+            parameters={
+                "worktree": {
+                    "type": "string",
+                    "description": "Worktree selector, e.g. path:/home/dev/p/x",
+                },
+                "page": {
+                    "type": "string",
+                    "description": "Browser page id (tab list); default the active tab",
+                },
+                "image_format": {"type": "string", "enum": ["png", "jpeg"]},
+            },
+            required=[],
+        )
+        def screenshot(
+            ctx: ToolContext,
+            worktree: str = "",
+            page: str = "",
+            image_format: str = "png",
+        ) -> dict:
+            return plugin.screenshot(ctx, worktree, page, image_format)
+
+        return [
+            read.__bot_tool__,
+            run.__bot_tool__,
+            attach.__bot_tool__,
+            screenshot.__bot_tool__,
+        ]
