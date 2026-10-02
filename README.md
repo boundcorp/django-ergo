@@ -64,7 +64,7 @@ kitchen/
 # bot.yaml
 name: kitchen
 description: Household kitchen manager
-engine: {type: claude, config: {model: claude-sonnet-4-5}}
+engine: {type: claude, config: {model: claude-sonnet-5-5}}
 tools: [tools/tandoor.py]
 chats:
   main: {skills: [orchestration, tandoor]}

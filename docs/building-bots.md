@@ -35,7 +35,7 @@ description: Lee's chief of staff; delegates to the other bots
 instructions: agents.md          # default
 engine:
   type: claude                   # or openai
-  config: {model: claude-sonnet-4-5}
+  config: {model: claude-sonnet-5-5}
   api_key_env: BOUNDCORP_ANTHROPIC_KEY   # default: the SDK's ANTHROPIC_API_KEY / OPENAI_API_KEY
 timezone: America/Los_Angeles
 max_turns: 50                    # model calls one reply may use, tool calls included

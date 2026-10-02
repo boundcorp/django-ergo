@@ -75,7 +75,7 @@ name: notes
 description: Keeps my running notes and reminders
 engine:
   type: claude
-  config: {model: claude-sonnet-4-5}
+  config: {model: claude-sonnet-5-5}
 tools: [tools/notes.py]
 ```
 
