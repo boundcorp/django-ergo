@@ -117,13 +117,28 @@ export type BotDetail = Bot & {
   schedules?: {
     name: string
     cron: string
-    message: string
-    to: string
-    thread_title?: string
-    thread_in?: string
     users: string[]
     enabled: boolean
     next_run: string | null
+    actions: {
+      kind: 'prompt' | 'run'
+      message: string
+      to: string
+      thread_title: string
+      thread_in: string
+      run: string
+      args: Record<string, unknown>
+    }[]
+  }[]
+  jobs?: {
+    id: number
+    name: string
+    target: string
+    status: string
+    error: string
+    result: unknown
+    created_at: string
+    completed_at: string | null
   }[]
 }
 

@@ -73,6 +73,7 @@ class BotDetailOut(BotOut):
     skills: list[SkillOut]
     manages_repo: bool = False  # has bot_management: show the Changes section
     schedules: list[dict] = []
+    jobs: list[dict] = []
 
 
 class SessionOut(Schema):
@@ -178,7 +179,7 @@ def registry():
 
 
 def schedules_out(bot: Bot, user) -> list[dict]:
-    """The bot's schedules, with the next run in the viewer's timezone."""
+    """The bot's schedules and their steps, with the next run in the viewer's timezone."""
     from django.utils import timezone
     from django_ergo.bots.schedules import local_now
 
@@ -190,16 +191,43 @@ def schedules_out(bot: Bot, user) -> list[dict]:
             {
                 "name": schedule.name,
                 "cron": schedule.cron.expression,
-                "message": schedule.message,
-                "to": schedule.to,
-                "thread_title": schedule.thread_title,
-                "thread_in": schedule.thread_in,
                 "users": list(schedule.users),
                 "enabled": schedule.enabled,
                 "next_run": upcoming.isoformat() if upcoming else None,
+                "actions": [
+                    {
+                        "kind": a.kind,
+                        "message": a.message,
+                        "to": a.to,
+                        "thread_title": a.thread_title,
+                        "thread_in": a.thread_in,
+                        "run": f"{a.path}:{a.function}" if a.kind == "run" else "",
+                        "args": a.args,
+                    }
+                    for a in schedule.actions
+                ],
             }
         )
     return out
+
+
+def jobs_out(bot: Bot) -> list[dict]:
+    """The bot's latest background jobs (schedule run steps, tasks)."""
+    from django_ergo.conversation.models import BotJob
+
+    return [
+        {
+            "id": job.id,
+            "name": job.name,
+            "target": job.target,
+            "status": job.status,
+            "error": job.error,
+            "result": job.result,
+            "created_at": job.created_at,
+            "completed_at": job.completed_at,
+        }
+        for job in BotJob.objects.filter(bot_name=bot.name)[:20]
+    ]
 
 
 def may_use(bot: Bot, user) -> bool:
@@ -482,6 +510,7 @@ async def bot_detail(request, bot: str):
         "plugins": [type(p).__name__ for p in found.plugins],
         "manages_repo": found.plugin("bot_management") is not None,
         "schedules": schedules_out(found, request.auth),
+        "jobs": await sync_to_async(jobs_out)(found),
         **await sync_to_async(_tools_and_skills)(found, request.auth),
     }
 

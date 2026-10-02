@@ -72,18 +72,60 @@ export function BotPage() {
                   <td className="py-1.5 pr-4 font-mono text-xs whitespace-nowrap">{s.name}</td>
                   <td className="py-1.5 pr-4 font-mono text-xs whitespace-nowrap text-zinc-500">{s.cron}</td>
                   <td className="py-1.5 pr-4">
-                    {s.message}
-                    <div className="text-xs text-zinc-500">
-                      {s.to === 'thread'
-                        ? `in a new thread “${s.thread_title}”`
-                        : s.to === 'main'
-                          ? 'in the main chat'
-                          : `in ${s.to}`}
-                      {s.users.length ? ` · for ${s.users.join(', ')}` : ''}
-                    </div>
+                    <ol className="flex flex-col gap-1">
+                      {s.actions.map((a, i) => (
+                        <li key={i}>
+                          {a.kind === 'run' ? (
+                            <span className="font-mono text-xs">
+                              run {a.run}
+                              {Object.keys(a.args).length ? ` ${JSON.stringify(a.args)}` : ''}
+                            </span>
+                          ) : (
+                            <>
+                              {a.message}
+                              <span className="text-xs text-zinc-500">
+                                {' — '}
+                                {a.to === 'thread'
+                                  ? `new thread “${a.thread_title}”`
+                                  : a.to === 'main'
+                                    ? 'main chat'
+                                    : a.to}
+                              </span>
+                            </>
+                          )}
+                        </li>
+                      ))}
+                    </ol>
+                    {!!s.users.length && <div className="text-xs text-zinc-500">for {s.users.join(', ')}</div>}
                   </td>
                   <td className="py-1.5 text-xs whitespace-nowrap text-zinc-500">
                     {!s.enabled ? 'off' : s.next_run ? `next ${new Date(s.next_run).toLocaleString()}` : 'not soon'}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Section>
+      )}
+
+      {!!bot.jobs?.length && (
+        <Section title="Recent jobs" count={bot.jobs.length}>
+          <table className="w-full text-sm">
+            <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800">
+              {bot.jobs.map(job => (
+                <tr key={job.id} className="align-top">
+                  <td className="py-1.5 pr-4 text-xs whitespace-nowrap text-zinc-500">
+                    {new Date(job.created_at).toLocaleString()}
+                  </td>
+                  <td className="py-1.5 pr-4">
+                    {job.name}
+                    <div className="font-mono text-xs text-zinc-500">{job.target}</div>
+                  </td>
+                  <td
+                    className={`py-1.5 text-xs ${job.status === 'failed' ? 'text-red-600' : job.status === 'completed' ? 'text-emerald-600' : 'text-amber-600'}`}
+                  >
+                    {job.status}
+                    {job.error && <div className="text-zinc-500">{job.error}</div>}
                   </td>
                 </tr>
               ))}

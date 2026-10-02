@@ -119,6 +119,13 @@ schedules:
     message: Propose next week's dinners with the meal-planning skill.
     to: main                  # main (default), a named chat, or a new thread:
     # to: {thread: "Reports {n}", in: main}   # {n} run number, {date:%b %d} and strftime codes
+  - name: weekly-stats        # or an ordered list of actions
+    cron: "0 8 * * mon"
+    actions:
+      - run: tools/analytics.py:pull_stats   # a function in a .py file in the bot folder
+        args: {days: 7}                      # it may take ctx (a ToolContext) first
+      - prompt: "Summarize last week: {result}"   # {result}: the last run step's value
+        to: {thread: "Stats {date:%b %d}"}
     users: [lee]              # default: permissions.users, else everyone with a chat
     enabled: true
 ```
@@ -126,8 +133,11 @@ schedules:
 Cron fields take `*`, numbers, ranges, `*/n` steps, lists and day/month
 names, read in each person's timezone (theirs, else the bot's, else
 `TIME_ZONE`). `django_ergo.bots.schedules.run_due(bots)` sends due messages
-(Ergonaut's beat runs it every minute); a `ScheduleRun` row keeps each from
-running twice. The bot answers in a turn of its own under a `[Scheduled
+(Ergonaut's beat runs it every minute, and a Celery task carries out each run);
+a `ScheduleRun` row keeps each from running twice. Actions run in order: a
+`run` step calls the function and is recorded as a `BotJob` (status, result,
+error, traceback; the bot page lists recent ones), and a failing step stops
+the rest. A `prompt` step is sent to its chat like a message. The bot answers in a turn of its own under a `[Scheduled
 message: <name>]` header, the reply stays in that chat, and the telegram
 plugin passes it on for a main chat.
 

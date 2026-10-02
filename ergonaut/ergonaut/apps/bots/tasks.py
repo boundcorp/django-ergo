@@ -306,3 +306,16 @@ def run_schedules() -> list[str]:
     if ran:
         logger.info("Ran schedules: %s", ", ".join(ran))
     return ran
+
+
+@shared_task(name="ergonaut.run_schedule", ignore_result=True)
+def run_schedule(run_id: int) -> None:
+    """Carry out one schedule run's actions, in order (see django_ergo.bots.schedules)."""
+    from django_ergo.bots import schedules
+
+    schedules.run_actions(run_id)
+
+
+def queue_schedule_run(run_id: int) -> None:
+    """SCHEDULE_RUNNER: each due run is its own task, so slow code doesn't hold up others."""
+    run_schedule.delay(run_id)

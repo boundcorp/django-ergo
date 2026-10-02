@@ -467,6 +467,34 @@ class ScheduleRun(models.Model):
         return f"{self.bot_name}/{self.schedule} {self.minute:%Y-%m-%d %H:%M}"
 
 
+class BotJob(models.Model):
+    """A piece of a bot's own code run in the background (a schedule step, a task)."""
+
+    bot_name = models.CharField(max_length=100, db_index=True)
+    name = models.CharField(max_length=200)  # e.g. "schedule weekly-stats, step 1"
+    target = models.CharField(max_length=300)  # "tools/analytics.py:pull_stats"
+    args = models.JSONField(default=dict, blank=True)
+    user = models.ForeignKey(
+        User, null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
+    )
+    status = models.CharField(
+        max_length=20, default="pending"
+    )  # pending, in_progress, completed, failed
+    progress = models.PositiveSmallIntegerField(default=0)
+    result = models.JSONField(null=True, blank=True)
+    error = models.TextField(blank=True, default="")
+    traceback = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.bot_name} {self.name} ({self.status})"
+
+
 class KBUsageMode(models.TextChoices):
     READ = "read", "Read"
     WRITE = "write", "Write"

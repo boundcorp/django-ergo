@@ -4,6 +4,13 @@
       - name: weekly-meal-plan
         cron: "0 17 * * sun"            # minute hour day-of-month month day-of-week
         message: Propose next week's dinners with the meal-planning skill.
+      - name: weekly-stats              # or an ordered list of actions:
+        cron: "0 8 * * mon"
+        actions:
+          - run: tools/analytics.py:pull_stats    # a function in a .py file in the bot folder
+            args: {days: 7}                       # (it may take ctx first: a ToolContext)
+          - prompt: "Summarize last week: {result}"   # {result}: the last run step's value
+            to: {thread: "Stats {date:%b %d}"}
         to: main                        # main (default), a named chat, or a new thread:
         # to: {thread: "Reports {n}", in: main}   # {n} run number, {date:%b %d}, strftime codes
         users: [lee]                    # default: permissions.users, else everyone with a chat
@@ -15,11 +22,13 @@ numbers, ``a-b`` ranges, ``*/n`` and ``a-b/n`` steps, comma lists, and day and
 month names (``mon``, ``jan``); day-of-week 0 and 7 are Sunday. When both day
 fields are restricted, either may match (as in cron).
 
-``run_due(bots)`` (Ergonaut's Celery beat calls it every minute) sends each
-due schedule's message to the chosen session as a thread message with no
-sender, so it waits for a busy chat like any other, and Telegram passes the
-result on for a root chat. A ``ScheduleRun`` row per bot, schedule, person and
-minute keeps a schedule from running twice.
+``run_due(bots)`` (Ergonaut's Celery beat calls it every minute) claims each
+due run with a ``ScheduleRun`` row per bot, schedule, person and minute (so
+nothing runs twice) and runs its actions in order. A prompt goes to its chat
+as a thread message with no sender, so it waits for a busy chat like any
+other, and Telegram passes the reply on for a main chat. A run step calls a
+function from the bot's Python files and is recorded as a ``BotJob``; if it
+fails, the steps after it don't run.
 """
 
 from __future__ import annotations
@@ -30,6 +39,7 @@ from dataclasses import field
 from datetime import datetime
 from datetime import timedelta
 from typing import TYPE_CHECKING
+from typing import Any
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -152,15 +162,17 @@ class Cron:
 
 
 @dataclass(frozen=True)
-class Schedule:
-    name: str
-    cron: Cron
-    message: str
-    to: str = "main"  # main, a named chat, or "thread"
-    users: tuple[str, ...] = field(default_factory=tuple)
-    enabled: bool = True
-    thread_title: str = ""  # for to: thread, a template for each new thread's title
-    thread_in: str = "main"  # the chat new threads hang under
+class Action:
+    """One step of a schedule: send a prompt to a chat, or run a function."""
+
+    kind: str  # "prompt" or "run"
+    message: str = ""  # prompt: may use {result}, the previous step's result
+    to: str = "main"  # prompt: main, a named chat, or "thread"
+    thread_title: str = ""  # prompt to a new thread: its title template
+    thread_in: str = "main"  # ...and the chat it hangs under
+    path: str = ""  # run: a .py file in the bot folder
+    function: str = ""  # run: the function in it
+    args: dict = field(default_factory=dict)  # run: keyword arguments
 
     def title_for(self, moment: datetime, run_number: int) -> str:
         """A new thread's title: ``{n}`` is the run number, ``{date:...}`` and
@@ -172,16 +184,8 @@ class Schedule:
             return f"{self.thread_title} {run_number}"
 
     @classmethod
-    def from_config(cls, data: dict) -> Schedule:
-        if not isinstance(data, dict):
-            msg = "each schedule needs name, cron and message"
-            raise ScheduleError(msg)
-        name = str(data.get("name") or "").strip()
-        message = str(data.get("message") or "").strip()
-        if not name or not message or not data.get("cron"):
-            msg = f"schedule {name or '?'} needs name, cron and message"
-            raise ScheduleError(msg)
-        target = data.get("to") or "main"
+    def prompt(cls, name: str, message: str, target) -> Action:
+        target = target or "main"
         thread_title, thread_in = "", "main"
         if isinstance(target, dict):
             thread_title = str(target.get("thread") or "").strip()
@@ -195,15 +199,89 @@ class Schedule:
         else:
             to = "main" if str(target) == "root" else str(target)
         return cls(
-            name=name,
-            cron=Cron.parse(str(data["cron"])),
+            "prompt",
             message=message,
             to=to,
-            users=tuple(str(u) for u in data.get("users") or []),
-            enabled=bool(data.get("enabled", True)),
             thread_title=thread_title,
             thread_in="main" if thread_in == "root" else thread_in,
         )
+
+    @classmethod
+    def run(cls, name: str, spec: str, args) -> Action:
+        path, _, function = str(spec).partition(":")
+        if (
+            not path.endswith(".py")
+            or not function
+            or path.startswith(("/", ".."))
+            or "/../" in path
+        ):
+            msg = f"schedule {name}: run must be <file.py in the bot folder>:<function>, got {spec!r}"
+            raise ScheduleError(msg)
+        if args is not None and not isinstance(args, dict):
+            msg = f"schedule {name}: args must be a mapping"
+            raise ScheduleError(msg)
+        return cls("run", path=path, function=function, args=dict(args or {}))
+
+    @property
+    def chats(self) -> set[str]:
+        """The chats this step needs to exist."""
+        if self.kind != "prompt":
+            return set()
+        return {self.thread_in} if self.to == "thread" else {self.to}
+
+
+@dataclass(frozen=True)
+class Schedule:
+    name: str
+    cron: Cron
+    actions: tuple[Action, ...]
+    users: tuple[str, ...] = field(default_factory=tuple)
+    enabled: bool = True
+
+    @classmethod
+    def from_config(cls, data: dict) -> Schedule:
+        if not isinstance(data, dict):
+            msg = "each schedule needs name, cron and actions (or a message)"
+            raise ScheduleError(msg)
+        name = str(data.get("name") or "").strip()
+        if not name or not data.get("cron"):
+            msg = f"schedule {name or '?'} needs name, cron and message"
+            raise ScheduleError(msg)
+        if data.get("actions") is not None:
+            items = data["actions"]
+            if not isinstance(items, list) or not items:
+                msg = f"schedule {name}: actions must be a non-empty list"
+                raise ScheduleError(msg)
+            actions = [cls._action(name, item) for item in items]
+        else:
+            message = str(data.get("message") or "").strip()
+            if not message:
+                msg = f"schedule {name} needs name, cron and message"
+                raise ScheduleError(msg)
+            actions = [Action.prompt(name, message, data.get("to"))]
+        return cls(
+            name=name,
+            cron=Cron.parse(str(data["cron"])),
+            actions=tuple(actions),
+            users=tuple(str(u) for u in data.get("users") or []),
+            enabled=bool(data.get("enabled", True)),
+        )
+
+    @staticmethod
+    def _action(name: str, item) -> Action:
+        if not isinstance(item, dict):
+            msg = f"schedule {name}: each action is {{prompt: ...}} or {{run: ...}}"
+            raise ScheduleError(msg)
+        if "prompt" in item:
+            message = str(item.get("prompt") or "").strip()
+            if not message:
+                msg = f"schedule {name}: a prompt action needs text"
+                raise ScheduleError(msg)
+            return Action.prompt(name, message, item.get("to"))
+        if "run" in item:
+            return Action.run(name, item["run"], item.get("args"))
+        msg = f"schedule {name}: each action is {{prompt: ...}} or {{run: ...}}"
+        raise ScheduleError(msg)
 
 
 def people_for(bot: Bot, schedule: Schedule) -> list:
@@ -225,15 +303,20 @@ def local_now(bot: Bot, user, now: datetime) -> datetime:
 
 
 def run_due(bots: Iterable[Bot], now: datetime | None = None) -> list[str]:
-    """Send every schedule due this minute. Returns "bot/schedule/user" for each run."""
-    from asgiref.sync import async_to_sync
+    """Start every schedule due this minute. Returns "bot/schedule/user" for each run.
+
+    Each run is claimed with a ``ScheduleRun`` row, then handed to
+    ``DJANGO_ERGO["SCHEDULE_RUNNER"]`` (Ergonaut queues a Celery task), or run
+    here and now by default.
+    """
     from django.db import IntegrityError
     from django.utils import timezone
 
-    from django_ergo.bots import messaging
     from django_ergo.conversation.models import ScheduleRun
+    from django_ergo.settings import api_settings
 
     now = (now or timezone.now()).replace(second=0, microsecond=0)
+    runner = api_settings.SCHEDULE_RUNNER or run_actions
     ran = []
     for bot in bots:
         for schedule in bot.definition.schedules:
@@ -243,34 +326,13 @@ def run_due(bots: Iterable[Bot], now: datetime | None = None) -> list[str]:
                 if not schedule.cron.matches(local_now(bot, user, now)):
                     continue
                 try:
-                    ScheduleRun.objects.create(
+                    run = ScheduleRun.objects.create(
                         bot_name=bot.name, schedule=schedule.name, user=user, minute=now
                     )
                 except IntegrityError:
                     continue  # already ran this minute (another beat, a retry)
                 try:
-                    if schedule.to == "thread":
-                        parent = async_to_sync(bot.chat_session)(
-                            user, schedule.thread_in
-                        )
-                        runs = ScheduleRun.objects.filter(
-                            bot_name=bot.name, schedule=schedule.name, user=user
-                        ).count()
-                        session = async_to_sync(bot.create_session)(
-                            user,
-                            parent=parent,
-                            title=schedule.title_for(local_now(bot, user, now), runs),
-                            metadata={"schedule": schedule.name},
-                        )
-                    else:
-                        session = async_to_sync(bot.chat_session)(user, schedule.to)
-                    messaging.send(
-                        None,
-                        session,
-                        schedule.message,
-                        registry=bot.registry,
-                        metadata={"schedule": schedule.name},
-                    )
+                    runner(run.pk)
                 except Exception:
                     logger.exception(
                         "Schedule %s of %s failed", schedule.name, bot.name
@@ -278,3 +340,123 @@ def run_due(bots: Iterable[Bot], now: datetime | None = None) -> list[str]:
                     continue
                 ran.append(f"{bot.name}/{schedule.name}/{user.get_username()}")
     return ran
+
+
+def run_actions(run_id: int, registry=None) -> None:
+    """Carry out one schedule run's actions, in order (a worker calls this)."""
+    from django_ergo.bots.background import find_bot
+    from django_ergo.conversation.models import ScheduleRun
+
+    run = ScheduleRun.objects.select_related("user").get(pk=run_id)
+    bot = find_bot(run.bot_name, registry)
+    schedule = next(
+        (s for s in bot.definition.schedules if s.name == run.schedule), None
+    )
+    if schedule is None:
+        logger.warning("Schedule %s of %s is gone", run.schedule, run.bot_name)
+        return
+    moment = local_now(bot, run.user, run.minute)
+    result: Any = None
+    for step, action in enumerate(schedule.actions, start=1):
+        label = f"schedule {schedule.name}, step {step}"
+        if action.kind == "run":
+            job = run_code(bot, action, run.user, name=label)
+            if job.status != "completed":
+                logger.warning("%s of %s failed: %s", label, bot.name, job.error)
+                return
+            result = job.result
+        else:
+            _send_prompt(bot, schedule, action, run, moment, result)
+
+
+def run_code(bot: Bot, action: Action, user, *, name: str):
+    """Run a function from the bot's Python files, recorded as a BotJob."""
+    import inspect
+    import traceback
+
+    from django.utils import timezone
+
+    from django_ergo.bots.tools import ToolContext
+    from django_ergo.conversation.models import BotJob
+
+    job = BotJob.objects.create(
+        bot_name=bot.name,
+        name=name,
+        target=f"{action.path}:{action.function}",
+        args=action.args,
+        user=user,
+        status="in_progress",
+        started_at=timezone.now(),
+    )
+    try:
+        function = getattr(bot.code(action.path), action.function, None)
+        if not callable(function):
+            msg = f"{action.path} has no function {action.function!r}"
+            raise LookupError(msg)  # noqa: TRY301, TRY004
+        params = list(inspect.signature(function).parameters)
+        args = dict(action.args)
+        if params and params[0] == "ctx":
+            value = function(ToolContext(bot=bot, user=user), **args)
+        else:
+            value = function(**args)
+        if inspect.isawaitable(value):
+            from asgiref.sync import async_to_sync
+
+            async def wait(awaitable=value):
+                return await awaitable
+
+            value = async_to_sync(wait)()
+        job.status, job.result = "completed", _jsonable(value)
+    except Exception as exc:  # noqa: BLE001 — recorded on the job
+        job.status, job.error = "failed", f"{type(exc).__name__}: {exc}"[:2000]
+        job.traceback = "".join(traceback.format_exception(exc))[-20000:]
+    job.completed_at = timezone.now()
+    job.save()
+    return job
+
+
+def _jsonable(value: Any) -> Any:
+    import json
+
+    try:
+        json.dumps(value)
+    except (TypeError, ValueError):
+        return str(value)
+    return value
+
+
+def _send_prompt(  # noqa: PLR0913
+    bot: Bot, schedule: Schedule, action: Action, run, moment, result
+) -> None:
+    import json
+
+    from asgiref.sync import async_to_sync
+
+    from django_ergo.bots import messaging
+    from django_ergo.conversation.models import ScheduleRun
+
+    user = run.user
+    if action.to == "thread":
+        parent = async_to_sync(bot.chat_session)(user, action.thread_in)
+        runs = ScheduleRun.objects.filter(
+            bot_name=bot.name, schedule=schedule.name, user=user
+        ).count()
+        session = async_to_sync(bot.create_session)(
+            user,
+            parent=parent,
+            title=action.title_for(moment, runs),
+            metadata={"schedule": schedule.name},
+        )
+    else:
+        session = async_to_sync(bot.chat_session)(user, action.to)
+    text = action.message
+    if "{result}" in text:
+        shown = (
+            result
+            if isinstance(result, str)
+            else json.dumps(result, indent=2, default=str)
+        )
+        text = text.replace("{result}", shown)
+    messaging.send(
+        None, session, text, registry=bot.registry, metadata={"schedule": schedule.name}
+    )
