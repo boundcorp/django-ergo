@@ -58,6 +58,9 @@ DEFAULTS = {
     "SCHEDULE_RUNNER": None,
     # Runs a worker step later: runner(worker_id, delay_seconds) (bots.workers). Default: a thread.
     "WORKER_RUNNER": None,
+    # Callable(session, delegated=True) -> TurnControl for turns that a thread message (another
+    # bot, or a finished worker) starts, so the user can still steer or stop them. None = none.
+    "TURN_CONTROL": None,
     # Called with a session id when its workers change, to wake live views.
     "SESSION_NOTIFIER": None,
     # Public base URL that django_ergo.bots.urls is mounted at, e.g.
@@ -90,6 +93,7 @@ IMPORT_STRINGS = [
     "BOT_TASK_RUNNER",
     "SCHEDULE_RUNNER",
     "WORKER_RUNNER",
+    "TURN_CONTROL",
     "SESSION_NOTIFIER",
 ]
 

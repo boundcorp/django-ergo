@@ -207,9 +207,19 @@ class InboxControl:
     remove once the turn has stored copies of them.
     """
 
-    def __init__(self, session):
+    # Before a steering message in a turn another bot (or a finished worker) started, so the
+    # model knows it's from the user, not from whoever sent the request.
+    DELEGATED_NOTE = "[The user sent this while you were working on the request above. Follow it.]"
+
+    def __init__(self, session, *, delegated: bool = False):
         self.session = session
+        self.delegated = delegated
         self.uploads: list = []
+
+    def finish(self) -> None:
+        """Remove uploads the turn has stored copies of."""
+        remove_uploads(self.uploads)
+        self.uploads = []
 
     async def check(self):
         from asgiref.sync import sync_to_async
@@ -230,6 +240,8 @@ class InboxControl:
         attachments, uploads = take_uploads(self.session, attachment_ids)
         self.uploads.extend(uploads)
         notify(session_id)
+        if self.delegated:
+            text = f"{self.DELEGATED_NOTE}\n\n{text}"
         return TurnSignal(messages=[SteeringMessage(text, attachments or None)])
 
 
