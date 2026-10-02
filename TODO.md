@@ -26,6 +26,8 @@ Live on rigel from `~/p/boundcorp/django-ergo`, bots from `boundcorp/ergo-bots`.
 - [x] **Fixes from the Ad Manager test** (PR #37, merged): code-only schedules run once as the first admin; pulls only migrate after real changes; page sums are unknown, not zero.
 - [ ] **Ad Manager bot (`ads`, ergo-bots #3, merged)**: written by boundcorp; live on rigel, table migrated, dashboard pinned. Token in place 2026-10-02; first 30-day pull: 63 rows, 16 campaigns, $302.54 (matches the 10-01 report for Sep 29-30). Pulls every 12 h.
 - [x] Draft page preview (PR #38, merged): `ergo_config_repo_preview` / `ergo_bot_preview`.
+- [x] Files: viewer for chat files (#39), bot folder browser (#39) with proposed changes, diffs, merge/close/discard (#40, #42, #43); pinned files in the sidebar (#40); `ergo_config_repo_delete` (#40, #41).
+- [ ] One bot with a broken bot.yaml stops a reload of all bots (the old ones stay loaded) and would fail a fresh start; load the others and report the broken one.
 - [ ] A visual blocks editor in the UI. Campaign names are Ad Manager's internal `AM:<uuid>:campaign` labels; friendly names would need Ad Manager's mapping.
 - [x] **Bot data and pages** (decided 2026-10-02): pinned files (repo files and bot-written attachments), blocks-based page toolkit, live .jhtml Jinja pages served straight from the file/attachment endpoints, templates from bots or PRs. No sandbox origin; all users share rows.
 
