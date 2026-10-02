@@ -6,6 +6,7 @@ One module per plugin:
 - ``bot_management`` (bot_management.py): a bot edits its own repo and proposes changes.
 - ``telegram`` (telegram.py): a Telegram channel for a bot.
 - ``orca`` (orca.py): manage Orca worktrees, terminals and workers with the Orca CLI.
+- ``bash`` (bash.py): run shell commands on the host, with approval.
 
 Bot-specific tools don't belong here; put them in the bot folder's ``tools/``.
 """

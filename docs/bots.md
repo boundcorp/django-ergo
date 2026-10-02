@@ -327,6 +327,21 @@ worker-start`, and waits for approval unless `approve_changes: false`.
 Arguments are an argv list, never a shell string, and `--json` is added for
 the bot. With `environment` set, the bot can't point a call elsewhere.
 
+### bash
+
+```yaml
+- name: bash
+  cwd: ~               # working directory
+  approve: true        # every command waits for approval
+  timeout: 120
+  root_only: true
+```
+
+Gives the bot `ergo_bash_run(command, cwd?)`, which runs `bash -lc` on the
+host as the user Ergonaut runs as. Output is stdout and stderr with the exit
+code, trimmed to its start and end when long. It is the whole machine, so
+keep `approve: true` unless you trust the bot with it.
+
 ### telegram
 
 ```yaml

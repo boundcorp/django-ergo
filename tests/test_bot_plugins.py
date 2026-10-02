@@ -687,3 +687,47 @@ async def test_orca_run_waits_for_approval(tmp_path, orca_calls):
 def test_orca_reports_a_missing_cli(tmp_path):
     _, _, plugin = orca_bot(tmp_path, config="executable: no-such-orca-cli")
     assert "is not installed" in plugin.read(["status"])
+
+
+# ---------------------------------------------------------------------------
+# bash
+# ---------------------------------------------------------------------------
+
+
+def bash_bot(tmp_path, *responses, config="cwd: /tmp"):
+    yaml_text = f"""
+        name: ops
+        plugins: [{{name: bash, {config}}}]
+    """
+    bot, engine = make_bot(tmp_path, *responses, yaml_text=yaml_text, name="ops")
+    return bot, engine, bot.plugin("bash")
+
+
+@pytest.mark.django_db
+def test_bash_runs_commands_with_exit_code_and_output(tmp_path):
+    _, _, plugin = bash_bot(tmp_path, config=f"cwd: {tmp_path}")
+    assert plugin.run("pwd") == f"Exit 0\n{tmp_path}"
+    assert plugin.run("echo oops >&2; exit 3") == "Exit 3\noops"
+    assert plugin.run("ls", cwd=str(tmp_path / "missing")).startswith("No such directory")
+    long = plugin.run("seq 1 20000")
+    assert "characters skipped" in long
+    assert long.endswith("20000")
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_bash_waits_for_approval(tmp_path):
+    marker = tmp_path / "ran"
+    bot, engine, _ = bash_bot(
+        tmp_path,
+        claude_tool("ergo_bash_run", {"command": f"touch {marker}"}, tool_id="b1"),
+        say("Done."),
+    )
+    user = await User.objects.acreate(username="ops-user")
+    root = await bot.root_session(user)
+    paused = await bot.ask(root, "Touch the marker")
+    assert [a.tool_name for a in paused.approvals] == ["ergo_bash_run"]
+    assert not marker.exists()
+    assert "ergo_bash_run runs bash commands" in engine._client.calls[0]["system"]
+    done = await bot.resume(root, {"b1": True})
+    assert done.text == "Done."
+    assert marker.exists()

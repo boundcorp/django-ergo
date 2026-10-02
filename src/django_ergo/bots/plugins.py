@@ -43,6 +43,7 @@ OFFICIAL_PLUGINS = {
     "bot_management": "django_ergo.plugins.bot_management.BotManagementPlugin",
     "telegram": "django_ergo.plugins.telegram.TelegramPlugin",
     "orca": "django_ergo.plugins.orca.OrcaPlugin",
+    "bash": "django_ergo.plugins.bash.BashPlugin",
 }
 
 

@@ -35,13 +35,13 @@ from django_ergo.bots.tools import BotTool
 from django_ergo.bots.tools import FunctionToolkit
 from django_ergo.bots.tools import bot_tool
 from django_ergo.conversation.context import TextContextSource
+from django_ergo.plugins.bash import trim
 
 if TYPE_CHECKING:
     from django_ergo.bots.tools import ToolContext
     from django_ergo.conversation.context import ContextSource
     from django_ergo.conversation.toolkit import Toolkit
 
-MAX_OUTPUT_CHARS = 20_000
 READ_ONLY = {
     ("status",),
     ("worktree", "ps"),
@@ -132,9 +132,7 @@ class OrcaPlugin(BotPlugin):
             return f"The Orca CLI ({self.executable}) is not installed on this host."
         except subprocess.TimeoutExpired:
             return f"Timed out after {self.timeout}s."
-        output = (proc.stdout + (proc.stderr if proc.returncode else "")).strip()
-        if len(output) > MAX_OUTPUT_CHARS:
-            output = output[:MAX_OUTPUT_CHARS] + "\n[truncated]"
+        output = trim((proc.stdout + (proc.stderr if proc.returncode else "")).strip())
         if proc.returncode:
             return f"Exit {proc.returncode}:\n{output}"
         return output or "(no output)"
@@ -169,7 +167,8 @@ class OrcaPlugin(BotPlugin):
             TextContextSource(
                 "Orca",
                 f"You manage Orca on {where} with the {self.executable} CLI. "
-                f"Use orca_read for inventory; {approval}. Before starting or "
+                f"Use orca_read for inventory; {approval}. Long output keeps only its "
+                "start and end, so prefer narrow commands (worktree ps over worktree list). Before starting or "
                 'stopping workers, read the CLI\'s guides with orca_read ["skills", '
                 '"get", "orca-cli"] and ["skills", "get", "orchestration"], and check '
                 "the run and worker lists so you don't duplicate work.",
