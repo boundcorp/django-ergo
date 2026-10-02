@@ -111,7 +111,10 @@ class AttachmentsPlugin(BotPlugin):
 
     def read(self, ctx: ToolContext, attachment_id: str) -> str:
         row = self.file_for(ctx, attachment_id)
-        return f"# {row.filename} ({row.media_type})\n\n{read_text(row)}"
+        text = f"# {row.filename} ({row.media_type})\n\n{read_text(row)}"
+        if not is_text(row.media_type):
+            text += "\n\nThis isn't a text file; use ergo_attachments_look to see what's in it."
+        return text
 
     def create(self, ctx: ToolContext, filename: str, content: str, media_type: str = "") -> dict:
         data = content.encode()
