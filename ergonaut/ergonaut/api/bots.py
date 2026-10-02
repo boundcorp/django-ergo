@@ -95,6 +95,8 @@ class SessionOut(Schema):
     busy: bool = False  # a turn is running in it right now
     unread: bool = False  # a reply came after its owner last opened it
     attention: bool = False  # the latest turn waits on the user (approval, question, failure)
+    engine_type: str = ""  # openai or claude: its messages are stored per engine
+    model: str = ""  # the provider/model picked for this chat ("" = the bot's default)
 
 
 class RequestOut(Schema):
@@ -162,6 +164,11 @@ class NewThreadIn(Schema):
     # The first message, when the thread starts from a prompt: the thread gets a provisional
     # title from it now and a generated one (new_thread_metadata) a moment later.
     message: str = ""
+    model: str = ""  # a provider/model from providers.yaml ("" = the bot's default)
+
+
+class ModelIn(Schema):
+    model: str = ""  # "" goes back to the bot's default
 
 
 class MessageIn(Schema):
@@ -392,6 +399,8 @@ def session_out(session: ConversationSession) -> dict:
         "busy": bool(getattr(session, "busy", False)),
         "unread": bool(getattr(session, "unread", False)),
         "attention": needs_attention(session),
+        "engine_type": session.engine_type,
+        "model": str(meta.get("model") or ""),
     }
 
 
@@ -664,7 +673,12 @@ async def new_thread(request, bot: str, data: NewThreadIn):
         raise HttpError(409, f"{bot} has threads turned off (orchestration: false)")
     root = await found.root_session(request.auth)
     title = data.title.strip() or provisional_title(data.message)
-    session = await found.create_session(request.auth, parent=root, title=title)
+    model = data.model.strip()
+    if model:
+        check_model(found, model)
+    session = await found.create_session(
+        request.auth, parent=root, title=title, metadata={"model": model} if model else None
+    )
     session.user = request.auth
     if data.message.strip() and not data.title.strip():
         from ergonaut.apps.bots.tasks import queue_thread_naming
@@ -784,6 +798,66 @@ async def answer_approval(request, session_id: str, data: ApprovalIn):
     if data.approval_ids is not None and sorted(data.approval_ids) != waiting:
         raise HttpError(409, "That approval was already answered")
     return await sync_to_async(queue_and_report)(session, approve=data.approve, approval_ids=data.approval_ids)
+
+
+def models_out(bot: Bot) -> dict:
+    """The models a chat with ``bot`` can use (providers.yaml), and the bot's own."""
+    try:
+        spec = bot.engine_spec()
+        default = bot.model_ref() or str(spec.config.get("model") or "")
+        default_type = spec.engine_type
+    except Exception:  # noqa: BLE001 - e.g. its API key isn't set
+        default = bot.model_ref() or str(bot.definition.engine_config.get("model") or "")
+        default_type = bot.definition.engine_type
+    return {
+        "default": default,
+        "default_engine_type": default_type,
+        "models": [
+            {
+                "id": m.id,
+                "name": m.name,
+                "label": m.label or m.name,
+                "provider": m.provider,
+                "engine_type": bot.providers.providers[m.provider].type,
+                "available": bot.providers.providers[m.provider].available,
+            }
+            for m in bot.providers.models()
+        ],
+    }
+
+
+def check_model(bot: Bot, model: str, engine_type: str = "") -> None:
+    found = bot.providers.find(model)
+    if found is None:
+        raise HttpError(400, f"{model!r} isn't a model in providers.yaml")
+    provider, _ = found
+    if not provider.available:
+        raise HttpError(409, f"{provider.name} has no API key set ({provider.api_key_env})")
+    if engine_type and provider.type != engine_type:
+        raise HttpError(409, f"This chat runs on {engine_type}; start a new thread to use {provider.name} models")
+
+
+@router.get("/bots/{bot}/models")
+def bot_models(request, bot: str):
+    return models_out(get_bot(bot, request.auth))
+
+
+@router.post("/sessions/{session_id}/model", response=SessionOut)
+async def set_session_model(request, session_id: str, data: ModelIn):
+    """Pick the model this chat's next turns use (same engine type as the chat)."""
+    session = await get_session(request, session_id)
+    found = get_bot(session.bot_name, request.auth)
+    model = data.model.strip()
+    if model:
+        check_model(found, model, session.engine_type)
+    metadata = dict(session.metadata or {})
+    if model:
+        metadata["model"] = model
+    else:
+        metadata.pop("model", None)
+    session.metadata = metadata
+    await session.asave(update_fields=["metadata", "updated_at"])
+    return await sync_to_async(session_out)(session)
 
 
 @router.post("/sessions/{session_id}/close", response=SessionOut)

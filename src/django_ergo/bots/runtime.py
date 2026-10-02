@@ -40,6 +40,7 @@ from django_ergo.bots.definition import BotDefinition
 from django_ergo.bots.definition import PluginSpec
 from django_ergo.bots.plugins import BotPlugin
 from django_ergo.bots.plugins import resolve_plugin_class
+from django_ergo.bots.providers import Providers
 from django_ergo.bots.skills import Skill
 from django_ergo.bots.skills import load_skills
 from django_ergo.bots.skillset import STATE_KEY
@@ -364,19 +365,56 @@ class Bot:
 
     # -- engines -----------------------------------------------------------
 
-    def engine_spec(self) -> EngineSpec:
+    @property
+    def providers(self) -> Providers:
+        registry = getattr(self, "registry", None)
+        return registry.providers if registry is not None else Providers()
+
+    def model_ref(self) -> str:
+        """The ``provider/model`` this bot uses by default, when providers.yaml names it."""
+        model = str(self.definition.engine_config.get("model") or "")
+        if "/" in model and self.providers.find(model):
+            return model
+        if not self.definition.engine_type and self.providers.default:
+            return self.providers.default
+        return ""
+
+    def session_model(self, session: ConversationSession | None) -> str:
+        """The model picked for this chat, if it's still enabled and runs on the
+        chat's engine (its messages are stored per engine type)."""
+        if session is None:
+            return ""
+        ref = self.session_model_ref((session.metadata or {}).get("model"))
+        found = self.providers.find(ref) if ref else None
+        return ref if found and found[0].type == session.engine_type else ""
+
+    def session_model_ref(self, picked) -> str:
+        picked = str(picked or "")
+        return picked if picked and self.providers.find(picked) else ""
+
+    def engine_spec(
+        self, session: ConversationSession | None = None, model: str = ""
+    ) -> EngineSpec:
+        """The engine for a chat: the model picked for it (or ``model``), else the bot's."""
         default = get_default_engine_spec()
-        engine_type = self.definition.engine_type or default.engine_type
-        # The settings default config only applies to the default engine type.
-        config = {} if self.definition.engine_type else dict(default.config)
-        config.update(self.definition.engine_config)
-        if self.definition.api_key_env:
-            key = os.environ.get(self.definition.api_key_env)
+        ref = model or self.session_model(session) or self.model_ref()
+        if ref:
+            engine_type, config, key_env = self.providers.engine(ref)
+            extra = {
+                k: v for k, v in self.definition.engine_config.items() if k != "model"
+            }
+            if self.definition.engine_type in ("", engine_type):
+                config = {**config, **extra}  # e.g. the bot's max_tokens
+        else:
+            engine_type = self.definition.engine_type or default.engine_type
+            # The settings default config only applies to the default engine type.
+            config = {} if self.definition.engine_type else dict(default.config)
+            config.update(self.definition.engine_config)
+            key_env = self.definition.api_key_env
+        if key_env:
+            key = os.environ.get(key_env)
             if not key:
-                msg = (
-                    f"Bot {self.name!r} needs the {self.definition.api_key_env} "
-                    "environment variable"
-                )
+                msg = f"Bot {self.name!r} needs the {key_env} environment variable"
                 raise RuntimeError(msg)
             config["api_key"] = key
         return EngineSpec(
@@ -425,10 +463,12 @@ class Bot:
         )
         return {"title": title[:80]} if title else {}
 
-    def make_engine(self) -> Engine:
+    def make_engine(
+        self, session: ConversationSession | None = None, model: str = ""
+    ) -> Engine:
         if self._engine_factory is not None:
             return self._engine_factory()
-        return build_engine(self.engine_spec())
+        return build_engine(self.engine_spec(session, model))
 
     # -- sessions ----------------------------------------------------------
 
@@ -543,13 +583,14 @@ class Bot:
         system_prompt=None,
         metadata=None,
     ) -> ConversationSession:
-        engine = self.make_engine()
+        model = self.session_model_ref((metadata or {}).get("model"))
+        engine = self.make_engine(model=model)
         session = await ConversationSession.objects.acreate(
             user=user,
             parent=parent,
             bot_name=self.name,
             engine_type=getattr(engine, "engine_type", None)
-            or self.engine_spec().engine_type,
+            or self.engine_spec(model=model).engine_type,
             transport_type="api",
             status="active",
             metadata={**(metadata or {}), "bot_role": role},
@@ -747,7 +788,7 @@ class Bot:
             self.reply_spec(toolkits, session),
             message,
             session=session,
-            engine=self.make_engine(),
+            engine=self.make_engine(session),
             attachments=attachments,
             context_builder=builder,
             allow_approvals=True,
@@ -798,7 +839,7 @@ class Bot:
                 self.reply_spec(toolkits),
                 call,
                 decisions,
-                engine=self.make_engine(),
+                engine=self.make_engine(session),
                 context_builder=builder,
                 control=control,
             )

@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from django_ergo.bots.definition import CONFIG_FILE
+from django_ergo.bots.providers import Providers
 from django_ergo.bots.runtime import Bot
 
 if TYPE_CHECKING:
@@ -50,6 +51,8 @@ class BotRegistry:
         self.bots: dict[str, Bot] = {}
         # Bot folders that didn't load (with skip_broken): folder -> the error.
         self.failed: dict[str, str] = {}
+        # Engines and models chats may use (providers.yaml).
+        self.providers = Providers()
 
     def add(self, bot: Bot) -> Bot:
         if bot.name in self.bots:

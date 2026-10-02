@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { api } from '../api'
+import ModelPicker from '../components/ModelPicker'
 
 // Start a thread by writing its first message (with files). The thread gets a title from the
 // message right away, and a generated one (new_thread_metadata) a moment later.
@@ -10,6 +11,7 @@ export function NewThread({ onChange }: { onChange: () => void }) {
   const [text, setText] = useState('')
   const [files, setFiles] = useState<File[]>([])
   const [busy, setBusy] = useState(false)
+  const [model, setModel] = useState('')
   const [error, setError] = useState('')
   const picker = useRef<HTMLInputElement>(null)
 
@@ -24,7 +26,7 @@ export function NewThread({ onChange }: { onChange: () => void }) {
     setError('')
     try {
       const message = text.trim() || `(${files.map(f => f.name).join(', ')})`
-      const thread = await api.newThread(name, '', message)
+      const thread = await api.newThread(name, '', message, model)
       const ids = []
       for (const file of files) ids.push((await api.uploadAttachment(thread.id, file)).id)
       await api.send(thread.id, text, ids)
@@ -41,7 +43,12 @@ export function NewThread({ onChange }: { onChange: () => void }) {
   return (
     <div className="mx-auto flex h-full max-w-3xl flex-col justify-center px-6">
       <h1 className="mb-1 text-lg font-semibold">New thread with {name}</h1>
-      <p className="mb-4 text-sm text-zinc-500">Say what it's about; the thread gets its title from your message.</p>
+      <p className="mb-4 flex items-center gap-2 text-sm text-zinc-500">
+        <span>Say what it's about; the thread gets its title from your message.</span>
+        <span className="ml-auto">
+          <ModelPicker bot={name} value={model} onPick={setModel} />
+        </span>
+      </p>
       {!!files.length && (
         <div className="mb-2 flex flex-wrap gap-2">
           {files.map((file, i) => (

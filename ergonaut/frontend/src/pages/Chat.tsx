@@ -3,6 +3,7 @@ import { Link, useParams, useSearchParams } from 'react-router-dom'
 import type { Call, DelegatedRequest, Message, Pin, SessionDetail, Turn, Worker } from '../api'
 import { api } from '../api'
 import Files from '../components/Files'
+import ModelPicker from '../components/ModelPicker'
 import { PageViewer, Pins } from '../components/Pins'
 import { Transcript } from '../components/Transcript'
 
@@ -247,9 +248,20 @@ export function Chat({ onChange }: { onChange: () => void }) {
               {detail.session.bot} · {detail.session.role || 'session'} · {detail.messages.length} messages
             </div>
           </div>
+          <div className="ml-auto">
+            <ModelPicker
+              bot={detail.session.bot}
+              value={detail.session.model ?? ''}
+              engineType={detail.session.engine_type}
+              onPick={async model => {
+                await api.setModel(id, model).catch(e => setError(String(e.message ?? e)))
+                await load()
+              }}
+            />
+          </div>
           {detail.session.role === 'thread' && (
             <button
-              className="ml-auto rounded-md border border-zinc-300 px-2 py-0.5 text-xs text-zinc-600 disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-400"
+              className="rounded-md border border-zinc-300 px-2 py-0.5 text-xs text-zinc-600 disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-400"
               disabled={archived || busy}
               title={archived ? 'Archived; a new message reopens it' : 'Archive this thread'}
               onClick={async () => {
@@ -262,7 +274,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
             </button>
           )}
           <button
-            className={`${detail.session.role === 'thread' ? '' : 'ml-auto '}rounded-md border px-2 py-0.5 text-xs ${showFiles ? 'border-indigo-400 text-indigo-700 dark:text-indigo-300' : 'border-zinc-300 text-zinc-600 dark:border-zinc-700 dark:text-zinc-400'}`}
+            className={`rounded-md border px-2 py-0.5 text-xs ${showFiles ? 'border-indigo-400 text-indigo-700 dark:text-indigo-300' : 'border-zinc-300 text-zinc-600 dark:border-zinc-700 dark:text-zinc-400'}`}
             onClick={() => toggleFiles(!showFiles)}
           >
             📎 Files

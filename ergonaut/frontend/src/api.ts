@@ -27,7 +27,20 @@ export type Session = {
   busy?: boolean // a turn is running now
   unread?: boolean // a reply came after the owner last opened it
   attention?: boolean // the latest turn waits on the user: an approval, a question, or a failure
+  engine_type?: string // openai or claude: a chat keeps its engine
+  model?: string // the provider/model picked for this chat ('' = the bot's default)
 }
+
+export type ModelChoice = {
+  id: string // provider/model
+  name: string
+  label: string
+  provider: string
+  engine_type: string
+  available: boolean // its provider's API key is set
+}
+
+export type BotModels = { default: string; default_engine_type: string; models: ModelChoice[] }
 
 export type DelegatedRequest = {
   id: string
@@ -308,8 +321,10 @@ export const api = {
   },
   openRoot: (bot: string) => request<Session>('POST', `/bots/${bot}/root`),
   openChat: (bot: string, name: string) => request<Session>('POST', `/bots/${bot}/chats/${name}`),
-  newThread: (bot: string, title: string, message = '') =>
-    request<Session>('POST', `/bots/${bot}/threads`, { title, message }),
+  newThread: (bot: string, title: string, message = '', model = '') =>
+    request<Session>('POST', `/bots/${bot}/threads`, { title, message, model }),
+  models: (bot: string) => request<BotModels>('GET', `/bots/${bot}/models`),
+  setModel: (id: string, model: string) => request<Session>('POST', `/sessions/${id}/model`, { model }),
   session: (id: string) => request<SessionDetail>('GET', `/sessions/${id}`),
   call: (id: string) =>
     request<Call & { system_prompt: string; transcript: unknown[]; metadata: unknown }>('GET', `/calls/${id}`),
