@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from '../api'
+import CodeView from './CodeView'
 
 type Source = Awaited<ReturnType<typeof api.botSource>>
 type Proposal = Awaited<ReturnType<typeof api.botProposals>>['proposals'][number]
@@ -301,16 +302,7 @@ export default function BotFiles({ bot }: { bot: string }) {
                 ) : IMAGE.test(source.path) && source.url ? (
                   <img src={source.url} alt={source.path} className="max-w-full p-3" />
                 ) : source.text != null ? (
-                  <table className="font-mono text-xs">
-                    <tbody>
-                      {source.text.split('\n').map((line, i) => (
-                        <tr key={i}>
-                          <td className="pr-3 pl-3 text-right align-top text-zinc-400 select-none">{i + 1}</td>
-                          <td className="pr-3 whitespace-pre-wrap">{line || ' '}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                  <CodeView path={source.path} text={source.text} />
                 ) : (
                   <p className="p-3 text-sm text-zinc-500">
                     {source.size > 500_000 ? 'Too large to show here.' : 'Not a text file.'}

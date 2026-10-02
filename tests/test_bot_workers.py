@@ -23,6 +23,11 @@ def watch(ctx, target: str, polls: int = 2):
     return {"target": target, "checks": seen}
 
 
+@bot_task(requires_approval=True)
+def launch(target: str):
+    return target
+
+
 @bot_task
 def explode():
     raise RuntimeError("the build broke")
@@ -138,6 +143,7 @@ def test_failed_and_cancelled_workers(tmp_path, workers):
 @pytest.mark.django_db(transaction=True)
 def test_the_workers_skill_lists_starts_and_cancels(tmp_path, workers):
     from django_ergo.bots.tools import ToolContext
+    from django_ergo.conversation.adapters import ClaudeToolAdapter
 
     bot, engine = make_bot(tmp_path, say("ok"), yaml_text=YAML, tools=TOOLS)
     user = get_user_model().objects.create(username="w3")
@@ -147,6 +153,17 @@ def test_the_workers_skill_lists_starts_and_cancels(tmp_path, workers):
     assert skill.always
     kit = skill.toolkits(ctx)[0]
 
+    schema = next(
+        s
+        for s in kit.get_tools_schema(ClaudeToolAdapter())
+        if s["name"] == "ergo_worker_start"
+    )
+    assert "launch" not in schema["input_schema"]["properties"]["task"]["enum"]
+    with pytest.raises(ValueError, match="can't be started here"):
+        kit.execute_tool(
+            "ergo_worker_start",
+            {"task": "launch", "title": "x", "args": {"target": "y"}},
+        )
     started = json.loads(
         kit.execute_tool(
             "ergo_worker_start",

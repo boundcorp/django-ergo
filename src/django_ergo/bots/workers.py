@@ -423,8 +423,14 @@ def worker_toolkit(bot: Bot, ctx):
         return cancel(found)
 
     tools = [list_workers, cancel_worker]
-    if bot.tasks:
-        names = ", ".join(sorted(bot.tasks))
+    # Tasks that need approval start only through the bot's own (approved) tools.
+    startable = sorted(
+        name
+        for name, fn in bot.tasks.items()
+        if not getattr(fn, "__bot_task_requires_approval__", False)
+    )
+    if startable:
+        names = ", ".join(startable)
 
         @bot_tool(
             name="ergo_worker_start",
@@ -434,7 +440,7 @@ def worker_toolkit(bot: Bot, ctx):
                 "when it's done, so don't wait for it."
             ),
             parameters={
-                "task": {"type": "string", "enum": sorted(bot.tasks)},
+                "task": {"type": "string", "enum": startable},
                 "title": {
                     "type": "string",
                     "description": "What it's doing, for the user",
@@ -447,6 +453,9 @@ def worker_toolkit(bot: Bot, ctx):
             required=["task", "title"],
         )
         def start_worker(task: str, title: str, args: dict | None = None) -> dict:
+            if task not in startable:
+                msg = f"{task} can't be started here; use the tool the bot has for it"
+                raise ValueError(msg)
             return describe(starter.start(task, title=title, **(args or {})))
 
         tools.append(start_worker)
