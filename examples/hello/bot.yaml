@@ -1,5 +1,5 @@
 name: hello
 description: A minimal Ergo bot to start from
-engine: {type: claude}
+engine: {type: claude, config: {model: claude-sonnet-4-5}}
 orchestration: false
 tools: [tools/dice.py]

@@ -1,4 +1,4 @@
-# Context builder and stream chats
+# Context builder and window chats
 
 ## ContextBuilder
 
@@ -39,9 +39,12 @@ Pass `context_builder=builder` to `run_conversation_turn` to send the built
 text as extra system context on every model call in that turn. It is never
 stored.
 
-## StreamChat
+## Window chats
 
-A long-running chat whose context stays the same size however long it runs:
+A window chat is a long-running chat whose context stays the same size
+however long it runs: each turn sees a window of recent messages, never the
+whole transcript. Bot main chats and named chats work this way. In code it
+is `StreamChat` (window chats were called stream chats before):
 
 ```python
 from django_ergo.conversation.stream import StreamChat

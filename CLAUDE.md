@@ -4,152 +4,64 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Django Ergo is an AI Knowledgebase Toolkit for Django that provides semantic search and knowledge management capabilities through innovative field types and AI integration. The project uses PostgreSQL with pgvector for vector operations and integrates deeply with Django patterns.
+Django Ergo is a toolkit for building AI agents in Django, in three layers:
 
-## Development Commands
+- `src/django_ergo/`: the library. Conversation sessions on Claude and OpenAI
+  (`conversation/`), structured calls, compaction, history tools, the context
+  builder, knowledge bases (`knowledge/` and the legacy Article models), and
+  attachments.
+- `src/django_ergo/bots/` and `src/django_ergo/plugins/`: bots defined as
+  folders (`bot.yaml`, `agents.md`, tools, skills, schedules, tables, pages)
+  and the official plugins.
+- `ergonaut/`: the Django project that hosts bot folders (web app, API,
+  Celery, the `ergonaut` command). It has its own `CLAUDE.md`.
 
-### Environment Setup
+User docs are in `README.md` and `docs/`. Start with `docs/README.md`.
 
-```bash
-# 1. Copy environment variables template and configure
-cp .env.example .env
-# Edit .env with your database credentials and API keys
-
-# 2. Set up Python environment
-make env               # Create virtual environment with uv
-make pip_install       # Install all dependencies
-
-# 3. Set up database
-make migrations        # Create database migrations
-make migrate          # Apply migrations
-make superuser        # Create Django superuser
-
-# 4. Run development server
-make serve            # Run dev server at 127.0.0.1:8000
-```
-
-### Testing
+## Commands
 
 ```bash
-make pytest                      # Run standard tests
-make pytest_verbose             # Run tests with verbose output
-make coverage                   # Run tests with coverage report
-make open_coverage              # Open coverage HTML report
+make env && make pip_install    # virtualenv with uv, dev dependencies
+make pytest                     # tests (embedded PostgreSQL via pgserver unless DATABASE_URL is set)
+make coverage                   # with coverage
+make ruff_format && make ruff_check
+pytest tests/test_bots.py::test_name -v
 
-# OpenAI-specific tests (two-tier system)
-make tests_openai_real          # Run real API tests (costs credits, generates fixtures)
-make tests_openai_mocked        # Run tests using saved fixtures (fast, no API costs)
-make tests_openai_all           # Run all OpenAI tests
-
-# Single test execution
-pytest tests/test_specific.py::TestClass::test_method -v
+# OpenAI fixture tests: real calls cost credits and write fixtures
+make tests_openai_real          # TEST_OPENAI=true
+make tests_openai_mocked        # replay saved fixtures
 ```
 
-### Code Quality
+Ergonaut: `cd ergonaut && make venv && make test`. Pre-commit runs ruff
+and prettier (for `ergonaut/frontend`); every hook should pass.
 
-```bash
-make ruff_format        # Format code with ruff
-make ruff_check        # Check code style with ruff
-```
+## Where things are
 
-### Build & Release
+- `bots/definition.py`: bot.yaml parsing (the docstring lists every key)
+- `bots/runtime.py`: `Bot` (load, sessions, turns, skills as `SkillDef`s)
+- `bots/skillset.py`, `bots/skills.py`: lazy skill loading, skill folders
+- `bots/tools.py`: `@bot_tool`, `@bot_task`, `@bot_context`, `ToolContext`, `FunctionToolkit`
+- `bots/messaging.py`, `bots/orchestrator.py`: async thread messages between bots
+- `bots/schedules.py`, `bots/workers.py`, `bots/background.py`, `bots/archival.py`
+- `bots/tables.py`, `bots/pages.py`: `BotTable` models and `.jhtml` pages
+- `plugins/`: `ergo_kb` (`kb.py`), `bot_management`, `pages`, `attachments`, `telegram`, `orca`, `bash`
+- `conversation/structured.py`: `StructuredCall` and `run_structured_call`; every bot turn is one (`chat_reply`)
+- `conversation/compaction.py`, `conversation/context.py`, `conversation/history*.py`
+- `settings.py`: `DJANGO_ERGO` defaults
 
-```bash
-make dist               # Build distribution packages
-make twine_check       # Check package validity
-make twine_upload_test  # Upload to PyPI test
-make twine_upload      # Upload to PyPI
-```
+## Database
 
-## Architecture
+The legacy `django_ergo` app needs PostgreSQL with pgvector. Tests and
+Ergonaut use pgserver (embedded PostgreSQL) when `DATABASE_URL` is unset.
+`django_ergo.knowledge` alone also runs on SQLite.
 
-### Core Components
+## Conventions
 
-**SemanticTextField**: The revolutionary field type that automatically generates embeddings for text content. Each semantic field gets its own embedding field, enabling field-specific semantic search.
-
-**Workflow Engine**: Python-based workflows with OpenAI agent context serialization, supporting pause/resume and tool approval systems.
-
-**Tool System**: Declarative tool registry with approval workflows. Tools can be "approved" (run automatically) or "ask" (require user approval).
-
-**Knowledge Base**: Hierarchical article storage with vector search capabilities, designed for agentic processing with export/import utilities.
-
-### Key Models & Fields
-
-- `Workflow`: Defines AI logic and available tools for processing messages
-- `Knowledgebase`: Stores hierarchical articles with owner support for multi-tenancy
-- `Article`: Individual KB entries with semantic content and embeddings
-- `Chat`: Conversation container linking users to workflows
-- `ChatMessage`: Message storage with role/type support and metadata
-- `SemanticTextField`: Auto-embedding text field type with search capabilities
-
-### Search Architecture
-
-Multiple search levels provide flexibility:
-
-1. High-level `semantic_search()` - auto-embeds queries
-2. Low-level `vector_search()` - uses pre-computed vectors
-3. Field helpers like `SemanticTextField.search_field()`
-4. QuerySet methods for multi-field weighted search
-
-### Embedding System
-
-Fully pluggable with provider interface:
-
-- Default: OpenAI `text-embedding-3-small`
-- Configured via `DJANGO_ERGO['EMBEDDING_PROVIDER']` setting
-- Custom providers implement `BaseEmbeddingProvider` interface
-- Automatic regeneration on content changes
-
-## Database Requirements
-
-**PostgreSQL only** - The project requires PostgreSQL with the pgvector extension for vector operations. SQLite is not supported.
-
-Database credentials are stored in `.env` file (copy from `.env.example`). The test database requires pgvector extension to be enabled.
-
-## Key Design Decisions
-
-1. **Framework, Not Platform**: Provides building blocks for Django developers to compose their own applications
-2. **Agent-Friendly**: Designed with AI agents as first-class users with programmatic KB management
-3. **Deep Django Integration**: Follows Django patterns, feels natural to Django developers
-4. **Python Workflows**: No YAML or visual builders - workflows defined in Python for maximum flexibility
-5. **App-Managed Permissions**: Applications decide permissions, not the framework
-
-## Testing Strategy
-
-**Two-tier OpenAI testing**:
-
-- Real API tests generate fixtures (costs credits)
-- Mocked tests use saved fixtures (fast, free)
-- Set `TEST_OPENAI=true` environment variable for real API tests
-
-**Coverage Target**: 97%+ coverage maintained
-
-## Common Development Tasks
-
-### Adding a New Semantic Field
-
-1. Add `SemanticTextField` to model
-2. Add corresponding `VectorField` with same name + `_embedding` suffix
-3. Run migrations
-4. Embeddings generate automatically on save
-
-### Creating a Tool
-
-1. Define tool function with proper signature
-2. Register with `@tool_registry.register` decorator
-3. Configure approval requirements in workflow tools_config
-
-### Working with Knowledge Bases
-
-- Use admin interface for manual management
-- Use `kb_tools` module for programmatic access
-- Export/import via flatfile utilities for agentic processing
-
-## Important Files
-
-- `src/django_ergo/fields.py`: SemanticTextField implementation
-- `src/django_ergo/workflow_engine.py`: Workflow execution logic
-- `src/django_ergo/tools.py`: Tool registry and base classes
-- `src/django_ergo/embedding_providers.py`: Embedding provider interface
-- `src/django_ergo/models.py`: Core Django models
-- `tests/conftest.py`: Test fixtures and configuration
+- Keep docs current: a change to bot.yaml keys, plugins, tools or Ergonaut
+  behavior updates `docs/bots.md` and the relevant guide in the same PR.
+- `TODO.md` tracks the bots and Ergonaut backlog; update it as items land.
+- Bot configs live in their own repos (for Boundcorp, `boundcorp/ergo-bots`),
+  not here. `examples/` holds public examples; `examples/proprietary/` is
+  git-ignored.
+- Tool names that Ergo provides start with `ergo_`.
+- Install is from a reviewed Git commit, not PyPI (`docs/git-release.md`).

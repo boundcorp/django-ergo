@@ -72,10 +72,13 @@ Docker Compose services: Django backend, PostgreSQL 16, Redis 7, Garage (S3), Ce
 
 Env files loaded via `.envrc`: `infra/common/.env` → `infra/dev/.env` → `.env.local` (git-ignored).
 
-Production: Kubernetes + Helm. Deploy three workloads from the same image:
+Production: separate workloads from the same image:
 - `main` via `infra/prod/start-uvicorn.sh`
-- `celery` via `infra/prod/start-celery-worker.sh`
-- `beat` via `infra/prod/start-celery-beat.sh`
+- `celery` via `infra/prod/start-celery-worker.sh` (queues `celery` and `bot_tasks`)
+- `beat` via `infra/prod/start-celery-beat.sh` (one replica)
+- `bots` via `ergonaut bots` (one replica)
+
+User-facing docs for running Ergonaut are in `../docs/ergonaut.md`; update them with behavior changes.
 
 If a project defines `CELERY_BEAT_SCHEDULE`, `beat` must be deployed or those tasks will never run. See `infra/prod/README.md`.
 

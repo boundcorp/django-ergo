@@ -1,25 +1,19 @@
-# Production Infra
+# Production start scripts
 
-Production deploys via the `bjw-s/app-template` Helm chart and the values files at the repo root.
+Production runs the `release` image as separate workloads, each with its
+own start command:
 
-The Django image is deployed three times with different commands:
+- `start-uvicorn.sh`: the web app (any number of replicas)
+- `start-celery-worker.sh`: a worker for the `celery` and `bot_tasks` queues
+- `start-celery-beat.sh`: beat (exactly one)
 
-- `main` runs `infra/prod/start-uvicorn.sh`
-- `celery` runs `infra/prod/start-celery-worker.sh`
-- `beat` runs `infra/prod/start-celery-beat.sh`
+Ergonaut also needs `ergonaut bots` (exactly one) for long-running bot
+plugins, and `ergonaut manage ergo_bot_migrate <bot paths>` on each deploy
+for bot tables.
 
-This split is required for any project that uses asynchronous jobs plus `CELERY_BEAT_SCHEDULE`. Do not background a worker inside the web pod; web, worker, and beat must be independently restartable and observable.
+Keep web, worker and beat as separate, independently restartable
+workloads; don't background a worker inside the web pod. Beat must run, or
+schedules, archival and worker polling stop.
 
-## First-time setup
-
-1. Provision cluster dependencies like PostgreSQL and ingress from `infra/prod/cluster/`.
-2. Encrypt and commit `helm-values.staging.secrets.yaml` and `helm-values.production.secrets.yaml` with SOPS.
-3. Ensure the deploy kubeconfigs and SOPS age key are present in GitHub Actions secrets.
-
-## Deploy flow
-
-1. `deploy-staging.yml` runs on PRs and calls `bin/helm-deploy <sha> staging`.
-2. `deploy-production.yml` runs on `main` and calls `bin/helm-deploy <sha> production`.
-3. `bin/helm-deploy` pins the same image tag onto the `main`, `celery`, and `beat` controllers.
-
-When you add a periodic task, update the app schedule and confirm the `beat` controller still exists in both values files.
+There is no deploy pipeline in this repo yet. See
+[docs/ergonaut.md](../../../docs/ergonaut.md#production).
