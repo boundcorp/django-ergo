@@ -64,9 +64,6 @@ export function Sidebar({
       >
         🔎 All sessions
       </Link>
-      <Link to="/costs" className="-mt-3 rounded-md px-2 py-1 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-900">
-        💲 Costs
-      </Link>
       {bots.map((bot) => {
         const mine = sessions.filter((s) => s.bot === bot.name);
         const root = mine.find((s) => s.id === bot.root_session_id);
@@ -133,6 +130,9 @@ export function Sidebar({
           No bots are loaded. Set ERGONAUT_BOTS and restart.
         </p>
       )}
+      <Link to="/costs" className="mt-auto rounded-md px-2 py-1 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-900">
+        💲 Costs
+      </Link>
     </nav>
   );
 }
