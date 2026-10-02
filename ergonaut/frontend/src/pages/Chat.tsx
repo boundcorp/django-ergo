@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
-import type { Call, DelegatedRequest, Message, Pin, SessionDetail, Turn } from '../api'
+import type { Call, DelegatedRequest, Message, Pin, SessionDetail, Turn, Worker } from '../api'
 import { api } from '../api'
 import Files from '../components/Files'
 import { PageViewer, Pins } from '../components/Pins'
@@ -95,11 +95,12 @@ export function Chat({ onChange }: { onChange: () => void }) {
     const after = messages.length ? messages[messages.length - 1].line : -1
     const events = new EventSource(`/api/sessions/${id}/events?after=${after}`)
     events.onmessage = e => {
-      const { messages, calls, requests, title } = JSON.parse(e.data) as {
+      const { messages, calls, requests, title, workers } = JSON.parse(e.data) as {
         messages: Message[]
         calls: Call[]
         requests?: DelegatedRequest[]
         title?: string
+        workers?: Worker[]
       }
       setDetail(d =>
         d
@@ -107,6 +108,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
               ...merge(d, messages, calls),
               ...(requests ? { requests } : {}),
               ...(title ? { session: { ...d.session, title } } : {}),
+              ...(workers ? { workers } : {}),
             }
           : d,
       )
@@ -247,6 +249,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
           </a>
         </header>
         <Requests requests={detail.requests ?? []} />
+        <Workers workers={detail.workers ?? []} />
         <Pins sessionId={id} refreshKey={`${detail.messages.length}:${pinsKey}`} open={openPin} onOpen={setOpenPin} />
         {openPin && <PageViewer pin={openPin} refreshKey={detail.messages.length} onClose={() => setOpenPin(null)} />}
         <div className={`flex-1 overflow-y-auto px-6 py-4 ${openPin ? 'hidden' : ''}`}>
@@ -412,6 +415,53 @@ const REQUEST_STATUS: Record<DelegatedRequest['status'], string> = {
 }
 
 // Delegated work still open: what this chat is waiting on, and what it's doing for others.
+const WORKER_ICON: Record<Worker['status'], string> = {
+  queued: '…',
+  running: '',
+  completed: '✓',
+  failed: '✗',
+  cancelled: '⊘',
+}
+
+// Long-running work this chat started: running ones with their latest progress, and the
+// last few that finished (their results also arrive as messages).
+function Workers({ workers }: { workers: Worker[] }) {
+  const [showDone, setShowDone] = useState(false)
+  const running = workers.filter(w => w.status === 'queued' || w.status === 'running')
+  const done = workers.filter(w => !running.includes(w))
+  if (!workers.length) return null
+  return (
+    <div className="flex flex-col gap-1 border-b border-zinc-200 bg-zinc-50 px-6 py-2 text-xs dark:border-zinc-800 dark:bg-zinc-900/50">
+      {running.map(w => (
+        <div key={w.id} className="flex items-center gap-2 truncate">
+          {w.status === 'running' ? (
+            <span className="h-2.5 w-2.5 shrink-0 animate-spin rounded-full border-[1.5px] border-indigo-500 border-t-transparent" />
+          ) : (
+            <span className="text-zinc-400">{WORKER_ICON[w.status]}</span>
+          )}
+          <span className="font-medium">{w.title}</span>
+          <span className="truncate text-zinc-500">{w.progress || w.status}</span>
+        </div>
+      ))}
+      {!!done.length && (
+        <button className="self-start text-zinc-400 hover:text-zinc-600" onClick={() => setShowDone(s => !s)}>
+          {showDone ? '▾' : '▸'} {done.length} finished worker{done.length === 1 ? '' : 's'}
+        </button>
+      )}
+      {showDone &&
+        done.map(w => (
+          <div key={w.id} className="flex items-center gap-2 truncate" title={w.error || undefined}>
+            <span className={w.status === 'completed' ? 'text-emerald-600' : 'text-red-600'}>
+              {WORKER_ICON[w.status]}
+            </span>
+            <span>{w.title}</span>
+            <span className="truncate text-zinc-400">{w.error || w.progress}</span>
+          </div>
+        ))}
+    </div>
+  )
+}
+
 function Requests({ requests }: { requests: DelegatedRequest[] }) {
   const open = requests.filter(r => r.status !== 'answered' && r.status !== 'failed')
   if (!open.length) return null

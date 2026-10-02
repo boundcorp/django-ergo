@@ -25,6 +25,11 @@ The bot runs the CLI on the host Ergonaut runs on, as that user. Tools:
   inside the worktree (symlinks resolved), and secret-looking files (``.env*``,
   ``*.pem``, ``*.key``, anything named like a secret) are refused. Worktree
   files are read over ``ssh <files_host>``.
+- ``orca_start_worker``: start a supervised coding agent on a task (approval),
+  watched by a thread Worker (``orca:watch``, see bots.workers) that polls the
+  dispatch, passes the agent's questions to the chat and brings its
+  ``worker_done`` report back as a message. Each chat gets its own Orca Run
+  and mailbox terminal, made on first use.
 - ``orca_run``: every other command (creating worktrees, starting and
   stopping workers, sending to terminals...). Each call needs approval unless
   ``approve_changes: false``.
@@ -156,6 +161,27 @@ def is_secret(name: str) -> bool:
         or "secret" in name
         or "credential" in name
     )
+
+
+POLL_SECONDS = 60
+SETTLED = ("completed", "failed", "cancelled", "abandoned")
+
+
+def _first_key(value, keys: tuple[str, ...]):
+    """The first non-empty string under any of ``keys`` in a JSON value (receipts nest them)."""
+    if isinstance(value, dict):
+        for key in keys:
+            if isinstance(value.get(key), str) and value[key]:
+                return value[key]
+        values = value.values()
+    elif isinstance(value, list):
+        values = value
+    else:
+        return None
+    for item in values:
+        if found := _first_key(item, keys):
+            return found
+    return None
 
 
 def _first_path(value):
@@ -373,6 +399,224 @@ class OrcaPlugin(BotPlugin):
             "size": row.size,
         }
 
+    # -- supervised Orca workers as thread Workers ---------------------------
+
+    def cli_json(self, args: list[str]) -> dict:
+        """Run a CLI command and return its JSON result; raise with Orca's error."""
+        proc = subprocess.run(  # noqa: S603 — argv list, no shell
+            self.argv(args),
+            capture_output=True,
+            text=True,
+            timeout=self.timeout,
+            check=False,
+        )
+        try:
+            payload = json.loads(proc.stdout)
+        except ValueError:
+            payload = {}
+        if proc.returncode or payload.get("ok") is False:
+            error = (payload.get("error") or {}).get("message") or (
+                proc.stderr or proc.stdout
+            ).strip()[:600]
+            msg = f"orca {' '.join(command_of(args))} failed: {error}"
+            raise ValueError(msg)
+        return payload.get("result", payload)
+
+    def mailbox(self, ctx: ToolContext, worktree: str) -> tuple[str, str]:
+        """This chat's Orca mailbox terminal and Run, created on first use and kept in
+        the session's metadata. Workers report to the Run; Orca needs a terminal to
+        bind the Run to (a remote run-create otherwise binds whatever is active)."""
+        from django_ergo.conversation.models import ConversationSession
+
+        session = ctx.session
+        meta = dict(session.metadata or {})
+        place = self.environment or "local"
+        saved = (meta.get("orca") or {}).get(place) or {}
+        if saved.get("mailbox") and saved.get("run"):
+            return saved["mailbox"], saved["run"]
+        title = (meta.get("title") or f"{ctx.bot.name} chat")[:60]
+        terminal = self.cli_json(
+            [
+                "terminal",
+                "create",
+                "--worktree",
+                worktree,
+                "--title",
+                f"Ergo {ctx.bot.name} mailbox: {title}",
+            ]
+        )
+        handle = _first_key(terminal, ("handle", "terminalHandle"))
+        if not handle:
+            msg = f"Orca made no mailbox terminal: {json.dumps(terminal)[:300]}"
+            raise ValueError(msg)
+        run = self.cli_json(
+            [
+                "orchestration",
+                "run-create",
+                "--objective",
+                f"{ctx.bot.name}: {title}",
+                "--from",
+                handle,
+            ]
+        )
+        run_id = _first_key(run, ("runId", "run_id", "id"))
+        orca = dict(meta.get("orca") or {})
+        orca[place] = {"mailbox": handle, "run": run_id}
+        meta["orca"] = orca
+        ConversationSession.objects.filter(pk=session.pk).update(metadata=meta)
+        session.metadata = meta
+        return handle, run_id
+
+    def exact_worktree(self, selector: str) -> str:
+        """Orca's exact id:<repo>::<path> selector (remote calls want it)."""
+        if selector.startswith("id:"):
+            return selector
+        shown = self.cli_json(["worktree", "show", "--worktree", selector])
+        found = _first_key(shown, ("id",))
+        if not found:
+            msg = f"No worktree {selector!r}"
+            raise ValueError(msg)
+        return f"id:{found}"
+
+    def start_worker(  # noqa: PLR0913
+        self,
+        ctx: ToolContext,
+        spec: str,
+        worktree: str,
+        agent: str = "codex",
+        title: str = "",
+        model: str = "",
+        effort: str = "",
+    ) -> dict:
+        """Start a supervised Orca worker, and a thread Worker that watches it."""
+        from django_ergo.bots.workers import describe
+
+        if ctx.session is None:
+            msg = "Workers belong to a chat"
+            raise ValueError(msg)
+        worktree = self.exact_worktree(worktree)
+        mailbox, run_id = self.mailbox(ctx, worktree)
+        title = (title or spec.strip().splitlines()[0])[:120]
+        task = self.cli_json(
+            [
+                "orchestration",
+                "task-create",
+                "--spec",
+                spec,
+                "--task-title",
+                title,
+                "--run",
+                run_id,
+                "--from",
+                mailbox,
+            ]
+        )
+        task_id = _first_key(task, ("taskId", "task_id", "id"))
+        args = [
+            "orchestration",
+            "worker-start",
+            "--task",
+            task_id,
+            "--worktree",
+            worktree,
+            "--agent",
+            agent,
+            "--run",
+            run_id,
+            "--from",
+            mailbox,
+        ]
+        if model:
+            args += ["--model", model]
+        if effort:
+            args += ["--effort", effort]
+        receipt = self.cli_json(args)
+        dispatch_id = _first_key(receipt, ("dispatchId", "dispatch_id"))
+        if not dispatch_id:
+            msg = f"worker-start gave no dispatch id: {json.dumps(receipt)[:400]}"
+            raise ValueError(msg)
+        worker = ctx.workers.start(
+            "orca:watch",
+            title=f"{agent}: {title}",
+            state={"task": task_id, "seen": []},
+            dispatch=dispatch_id,
+            run=run_id,
+        )
+        return {
+            **describe(worker),
+            "orca": {
+                "run": run_id,
+                "task": task_id,
+                "dispatch": dispatch_id,
+                "worktree": worktree,
+            },
+        }
+
+    def watch(self, ctx, dispatch: str, run: str):
+        """Worker function ``orca:watch``: poll the dispatch until it settles, pass the
+        agent's questions and escalations to the chat, then return its report."""
+        shown = self.cli_json(["orchestration", "worker-show", "--dispatch", dispatch])
+        status = str((shown.get("dispatch") or {}).get("status") or "")
+        state = str((shown.get("worker") or {}).get("state") or "")
+        liveness = str((shown.get("observation") or {}).get("status") or "")
+        seen = set(ctx.state.get("seen") or [])
+        report = None
+        for message in self.run_messages(run, dispatch, ctx.state.get("task", "")):
+            if message["id"] in seen:
+                continue
+            seen.add(message["id"])
+            kind = message.get("type")
+            if kind == "worker_done":
+                report = message
+            elif kind in ("question", "escalation"):
+                ctx.tell(
+                    f"The Orca worker sent a {kind}: {message.get('subject') or ''}\n\n"
+                    f"{message.get('body') or ''}\n\nAnswer it with orca_run "
+                    f'["orchestration", "reply", "--id", "{message["id"]}", "--body", "<answer>"].'
+                )
+        ctx.state["seen"] = sorted(seen)
+        if ctx.stopping:
+            return None
+        if report is not None or status in SETTLED:
+            body = (report or {}).get("body") or ""
+            if status == "failed" and not body:
+                failure = (shown.get("dispatch") or {}).get(
+                    "last_failure"
+                ) or "no report"
+                msg = f"The Orca worker failed: {failure}"
+                raise RuntimeError(msg)
+            return {
+                "status": status or "completed",
+                "subject": (report or {}).get("subject") or "",
+                "report": body,
+                "dispatch": dispatch,
+            }
+        progress = state or status or "starting"
+        if liveness:
+            progress += f" · {liveness}"
+        return ctx.again(POLL_SECONDS, progress=progress)
+
+    def run_messages(self, run: str, dispatch: str, task: str) -> list[dict]:
+        """Messages to this Run about this dispatch, read without consuming them."""
+        inbox = self.cli_json(["orchestration", "inbox", "--limit", "100"])
+        rows = inbox.get("messages", []) if isinstance(inbox, dict) else inbox
+        mine = []
+        for row in rows:
+            if row.get("run_id") != run:
+                continue
+            try:
+                payload = json.loads(row.get("payload") or "{}")
+            except ValueError:
+                payload = {}
+            ids = {payload.get("dispatchId"), payload.get("dispatch_id")}
+            tasks = {payload.get("taskId"), payload.get("task_id")}
+            if dispatch in ids or (task and task in tasks):
+                mine.append(row)
+        return sorted(mine, key=lambda r: r.get("sequence") or 0)
+
+    def worker_functions(self) -> dict:
+        return {"watch": self.watch}
+
     # -- plugin hooks ------------------------------------------------------
 
     def toolkits(self, ctx: ToolContext) -> list[Toolkit]:
@@ -493,9 +737,50 @@ class OrcaPlugin(BotPlugin):
         ) -> dict:
             return plugin.screenshot(ctx, worktree, page, image_format)
 
+        @bot_tool(
+            name="orca_start_worker",
+            takes_context=True,
+            description=(
+                "Start a supervised coding agent (an Orca worker) on a task in a worktree. It runs "
+                "for minutes to hours; this chat shows it as a worker, and its report comes back here "
+                "as a message when it's done, so don't wait or poll. The spec must be self-contained: "
+                "target, change, constraints, ownership, and how to prove it's done."
+            ),
+            parameters={
+                "spec": {"type": "string", "description": "The task, self-contained"},
+                "worktree": {
+                    "type": "string",
+                    "description": "Exact worktree selector (id:<repo-id>::<path>) or path:<path>",
+                },
+                "agent": {
+                    "type": "string",
+                    "description": "codex, claude or omp (default codex)",
+                },
+                "title": {
+                    "type": "string",
+                    "description": "A short title for the task",
+                },
+                "model": {"type": "string"},
+                "effort": {"type": "string"},
+            },
+            required=["spec", "worktree"],
+            requires_approval=self.approve_changes,
+        )
+        def start_worker(  # noqa: PLR0913
+            ctx: ToolContext,
+            spec: str,
+            worktree: str,
+            agent: str = "codex",
+            title: str = "",
+            model: str = "",
+            effort: str = "",
+        ) -> dict:
+            return plugin.start_worker(ctx, spec, worktree, agent, title, model, effort)
+
         return [
             read.__bot_tool__,
             run.__bot_tool__,
             attach.__bot_tool__,
             screenshot.__bot_tool__,
+            start_worker.__bot_tool__,
         ]

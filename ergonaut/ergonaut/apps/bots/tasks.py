@@ -369,3 +369,50 @@ def queue_thread_naming(session_id: str, message: str) -> None:
         threading.Thread(target=run, daemon=True).start()
         return
     name_thread.delay(session_id, message)
+
+
+@shared_task(name="ergonaut.run_worker", ignore_result=True, queue="bot_tasks")
+def run_worker(worker_id: str) -> None:
+    """One step of a thread's worker (see django_ergo.bots.workers)."""
+    from django_ergo.bots import workers
+
+    workers.run(worker_id)
+
+
+def queue_worker(worker_id: str, delay: float) -> None:
+    """WORKER_RUNNER: each step is its own task, so a worker that polls for hours never
+    holds a worker process, and survives restarts (see resume_workers)."""
+    from django.conf import settings
+
+    if getattr(settings, "CELERY_TASK_ALWAYS_EAGER", False):
+        from django.db import close_old_connections
+        from django_ergo.bots import workers
+
+        def run():
+            try:
+                workers.run(worker_id)
+            finally:
+                close_old_connections()
+
+        timer = threading.Timer(delay, run)
+        timer.daemon = True
+        timer.start()
+        return
+    run_worker.apply_async((worker_id,), countdown=max(0, delay))
+
+
+@shared_task(name="ergonaut.resume_workers", ignore_result=True)
+def resume_workers() -> int:
+    """Restart workers whose next step is long overdue (a lost task, a restart). Beat runs this."""
+    from django.utils import timezone
+    from django_ergo.bots import workers
+    from django_ergo.conversation.models import Worker
+
+    overdue = Worker.objects.filter(
+        status__in=["queued", "running"], next_poll_at__lt=timezone.now() - timezone.timedelta(minutes=3)
+    )
+    count = 0
+    for worker in overdue[:100]:
+        workers.schedule(worker, 0)
+        count += 1
+    return count

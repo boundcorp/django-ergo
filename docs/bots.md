@@ -262,6 +262,48 @@ Any chat file can be pinned (`metadata.pinned`, from the Files panel or
 `ergo_page_pin`). Pinned files show as tabs at the top of the chat and open in
 place of the transcript.
 
+## Workers
+
+A **Worker** is long-running work a chat or thread started: a build, a data
+pull, a coding agent in Orca. The tool that starts it returns at once, the
+chat shows as busy (a spinner in the sidebar, a strip above the transcript
+with the worker's latest progress), and when the worker finishes its result
+comes back to the chat as a message, so the bot follows up with a reply
+(`django_ergo.bots.workers`, model `Worker`).
+
+```python
+@bot_task
+def watch_deploy(ctx, release: str):       # ctx is a WorkerContext
+    status = check(release)
+    if status != "done":
+        return ctx.again(60, progress=f"deploy {status}")   # run again in a minute
+    return {"release": release, "status": status}
+
+@bot_tool(takes_context=True)
+def deploy(ctx, release: str) -> str:
+    ctx.workers.start("watch_deploy", title=f"Deploy {release}", release=release)
+    return "Deploying; I'll tell you when it's live."
+```
+
+- A worker function runs once, or **polls** by returning `ctx.again(seconds)`.
+  Each poll is a fresh task (Ergonaut: a Celery task on the `bot_tasks` queue),
+  so nothing holds a process while it waits and a restart loses nothing (beat
+  restarts overdue workers). `ctx.state` is a dict kept between polls,
+  `ctx.progress(text)` updates the status line, `ctx.tell(text)` sends the chat
+  a message while it keeps running (e.g. a question), and `ctx.stopping` turns
+  true when it's cancelled.
+- Functions are the bot's `@bot_task`s (`task:<name>`) and plugin worker
+  functions (`<plugin>:<name>`, from `BotPlugin.worker_functions()`).
+- Every chat has the `workers` skill: `ergo_worker_list`, `ergo_worker_cancel`,
+  and `ergo_worker_start` for the bot's `@bot_task`s.
+- `DJANGO_ERGO["WORKER_RUNNER"]` runs the steps (default: a thread);
+  `SESSION_NOTIFIER` wakes live views when a worker changes.
+
+The Orca plugin's `orca_start_worker(spec, worktree, agent)` starts a
+supervised Orca worker (with approval) and a Worker (`orca:watch`) that polls
+its dispatch every minute, passes the agent's questions to the chat, and
+returns its `worker_done` report.
+
 ## Chats
 
 Every user has a **main** chat with each bot (formerly the root session),

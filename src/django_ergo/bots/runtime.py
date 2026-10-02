@@ -204,6 +204,17 @@ class Bot:
                 source="built-in",
             )
         ]
+        from django_ergo.bots.workers import worker_toolkit
+
+        defs.append(
+            SkillDef(
+                "workers",
+                "Long-running background work this chat started: list, start and cancel it",
+                toolkits=lambda ctx: [worker_toolkit(self, ctx)],
+                always=True,
+                source="built-in",
+            )
+        )
         if self.definition.orchestration:
             defs.append(
                 SkillDef(

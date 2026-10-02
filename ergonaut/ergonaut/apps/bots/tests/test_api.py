@@ -685,3 +685,38 @@ def test_sessions_say_when_a_turn_is_running(client, cook, use_bots):
     assert busy() is False
     StructuredCall.objects.filter(pk=call.pk).update(status="completed", updated_at=timezone.now())
     assert busy() is False
+
+
+@pytest.mark.django_db(transaction=True)
+def test_running_workers_show_in_the_chat_and_keep_it_busy(client, cook, use_bots, monkeypatch):
+    from django.utils import timezone
+    from django_ergo.conversation.models import Worker
+
+    from ergonaut.apps.bots import tasks
+
+    use_bots(say("hi"))
+    root = post(client, "/api/bots/kitchen/root").json()
+    worker = Worker.objects.create(
+        session_id=root["id"],
+        bot_name="kitchen",
+        title="Fix footer",
+        function="orca:watch",
+        status="running",
+        progress="running · alive",
+    )
+    assert {s["id"]: s["busy"] for s in client.get("/api/sessions").json()}[root["id"]] is True
+    detail = client.get(f"/api/sessions/{root['id']}").json()
+    assert [(w["title"], w["status"], w["progress"]) for w in detail["workers"]] == [
+        ("Fix footer", "running", "running · alive")
+    ]
+
+    # A worker whose next step is long overdue (a restart lost it) is started again.
+    started = []
+    monkeypatch.setattr(tasks, "queue_worker", lambda worker_id, delay: started.append(worker_id))
+    from django.test import override_settings
+
+    with override_settings(DJANGO_ERGO={"WORKER_RUNNER": "ergonaut.apps.bots.tasks.queue_worker"}):
+        Worker.objects.filter(pk=worker.pk).update(next_poll_at=timezone.now() - timezone.timedelta(minutes=10))
+        assert tasks.resume_workers() == 1
+    Worker.objects.filter(pk=worker.pk).update(status="completed")
+    assert {s["id"]: s["busy"] for s in client.get("/api/sessions").json()}[root["id"]] is False
