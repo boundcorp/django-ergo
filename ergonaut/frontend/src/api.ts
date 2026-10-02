@@ -130,6 +130,8 @@ export type BotDetail = Bot & {
       args: Record<string, unknown>
     }[]
   }[]
+  tables?: { name: string; description: string; rows: number | null }[]
+  pages?: { path: string; url: string; exists: boolean }[]
   jobs?: {
     id: number
     name: string

@@ -74,6 +74,8 @@ class BotDetailOut(BotOut):
     manages_repo: bool = False  # has bot_management: show the Changes section
     schedules: list[dict] = []
     jobs: list[dict] = []
+    tables: list[dict] = []
+    pages: list[dict] = []
 
 
 class SessionOut(Schema):
@@ -209,6 +211,31 @@ def schedules_out(bot: Bot, user) -> list[dict]:
             }
         )
     return out
+
+
+def tables_out(bot: Bot) -> list[dict]:
+    """The bot's tables with row counts (a table not migrated yet shows rows=None)."""
+    out = []
+    for model in bot.tables:
+        try:
+            rows = model.objects.count()
+        except Exception:  # noqa: BLE001 — e.g. the migration hasn't run yet
+            rows = None
+        doc = (model.__doc__ or "").strip()
+        out.append({"name": model.__name__, "description": doc.splitlines()[0] if doc else "", "rows": rows})
+    return out
+
+
+def pages_out(bot: Bot) -> list[dict]:
+    """Bot-folder pages pinned in any chat, plus any other .jhtml files under pages/."""
+    from django_ergo.bots.pages import bot_file
+
+    paths = [p for chat in bot.definition.chats.values() for p in chat.pins]
+    root = bot.definition.root_dir
+    if root is not None and (root / "pages").is_dir():
+        paths += [str(p.relative_to(root)) for p in sorted((root / "pages").rglob("*.jhtml"))]
+    seen = list(dict.fromkeys(paths))
+    return [{"path": p, "url": f"/api/bots/{bot.name}/files/{p}", "exists": bot_file(bot, p) is not None} for p in seen]
 
 
 def jobs_out(bot: Bot) -> list[dict]:
@@ -511,6 +538,8 @@ async def bot_detail(request, bot: str):
         "manages_repo": found.plugin("bot_management") is not None,
         "schedules": schedules_out(found, request.auth),
         "jobs": await sync_to_async(jobs_out)(found),
+        "tables": await sync_to_async(tables_out)(found),
+        "pages": pages_out(found),
         **await sync_to_async(_tools_and_skills)(found, request.auth),
     }
 
