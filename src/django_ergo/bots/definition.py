@@ -38,6 +38,7 @@ bot.yaml::
       unload_after_turns: 30           # drop a lazily loaded skill unused this long
       requires: {meal-planning: [tandoor]}
     tools: [tools/tandoor.py]
+    tables: [tables.py]                # BotTable models (see django_ergo.bots.tables)
     toolkits: ["myapp.toolkits:make_toolkit"]   # factory(ctx) -> Toolkit
     plugins:
       - name: ergo_kb
@@ -116,6 +117,7 @@ class BotDefinition:
     default_compaction_mode: str = CompactionMode.STREAM
     default_compaction_config: dict = field(default_factory=dict)
     tool_files: list[Path] = field(default_factory=list)
+    table_files: list[Path] = field(default_factory=list)
     skills_dir: Path | None = None
     toolkit_factories: list[str] = field(default_factory=list)
     plugins: list[PluginSpec] = field(default_factory=list)
@@ -181,6 +183,7 @@ class BotDefinition:
             default_compaction_mode=mode,
             default_compaction_config=dict(compaction.get("config") or {}),
             tool_files=[_tool_path(p, root_dir) for p in data.get("tools") or []],
+            table_files=[_tool_path(p, root_dir) for p in data.get("tables") or []],
             skills_dir=_inside(root_dir, str(skills_config.get("folder") or "skills"))
             if root_dir
             else None,

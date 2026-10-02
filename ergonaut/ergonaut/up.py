@@ -248,6 +248,11 @@ def up(argv: list[str]) -> int:
             start_garage(sup, data)
 
         subprocess.run([python, "-m", "ergonaut.cli", "manage", "migrate", "--noinput"], env=sup.env, check=True)
+        # Bot tables: each bot folder's own migrations/ (see django_ergo.bots.tables).
+        # The same default as ergonaut.apps.bots.loading.DEFAULT_BOTS (which needs Django set up).
+        bots = [p for p in (sup.env.get("ERGONAUT_BOTS") or "/bot").split(":") if p.strip()]
+        if bots:
+            subprocess.run([python, "-m", "ergonaut.cli", "manage", "ergo_bot_migrate", *bots], env=sup.env, check=True)
         if "web" in roles:
             port = sup.env.get("PORT", "8000")
             sup.start("web", python, "-m", "uvicorn", "ergonaut.asgi:application", "--host", "0.0.0.0", "--port", port)

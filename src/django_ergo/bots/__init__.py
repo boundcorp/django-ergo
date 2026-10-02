@@ -9,4 +9,13 @@ from django_ergo.bots.tools import bot_context
 from django_ergo.bots.tools import bot_task
 from django_ergo.bots.tools import bot_tool
 
-__all__ = ["ToolContext", "bot_context", "bot_task", "bot_tool"]
+__all__ = ["BotTable", "ToolContext", "bot_context", "bot_task", "bot_tool"]
+
+
+def __getattr__(name: str):
+    # BotTable is a Django model, so import it only when a bot's tables ask.
+    if name == "BotTable":
+        from django_ergo.bots.tables import BotTable
+
+        return BotTable
+    raise AttributeError(name)

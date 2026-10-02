@@ -179,8 +179,44 @@ class BotManagementPlugin(BotPlugin):
         target.write_text(content)
         return f"Wrote {target.relative_to(self.workdir)} ({len(content)} chars)"
 
+    def make_migrations(self, work) -> str:
+        """Write migrations for any bot tables changed in ``work`` (a separate
+        process, so the draft's models load fresh). Returns what it printed."""
+        import os
+        import sys
+
+        from django_ergo.bots.registry import find_bot_folders
+
+        out = []
+        for folder in find_bot_folders(work):
+            yaml_text = (folder / "bot.yaml").read_text()
+            if "tables:" not in yaml_text:
+                continue
+            proc = subprocess.run(  # noqa: S603 — our own management command
+                [
+                    sys.executable,
+                    "-m",
+                    "django",
+                    "ergo_bot_makemigrations",
+                    str(folder),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=COMMAND_TIMEOUT,
+                check=False,
+                # No __pycache__ in the bot repo's migrations/.
+                env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+            )
+            if proc.returncode != 0:
+                msg = f"makemigrations failed for {folder.name}: {(proc.stderr or proc.stdout).strip()[-800:]}"
+                raise ValueError(msg)
+            if "No changes" not in proc.stdout:
+                out.append(proc.stdout.strip())
+        return "\n".join(out)
+
     def diff(self) -> str:
         work = self.workdir
+        self.make_migrations(work)
         self.git("add", "--intent-to-add", "--all", cwd=work)
         return self.git("diff", "HEAD", cwd=work).strip() or "(no changes)"
 
@@ -209,6 +245,8 @@ class BotManagementPlugin(BotPlugin):
 
     def publish(self, message: str, title: str = "", body: str = "") -> str:
         work = self.workdir
+        # A table change goes out with its migration, in the same commit.
+        self.make_migrations(work)
         if not self.git("status", "--porcelain", cwd=work).strip():
             return "Nothing to publish: there are no changes."
         if self.mode == "merge_main":

@@ -178,6 +178,47 @@ A plugin's `context_sources` are part of its skill (in context while it's
 loaded); `always_context_sources` stay on regardless (the KB's root article
 and prefetch).
 
+## Tables
+
+A bot can keep its own data in real Django models. List the files that
+declare them under `tables:`:
+
+```yaml
+tables: [tables.py]
+```
+
+```python
+from django.db import models
+from django_ergo.bots import BotTable
+
+class House(BotTable):
+    """Houses we've looked at for the property search."""
+
+    address = models.CharField(max_length=200)
+    price = models.IntegerField(null=True, blank=True)
+```
+
+Each bot is a Django app (label `ergo_bot_<name>`, tables
+`ergo_bot_<name>_<model>`), so the ORM and admin work on its tables.
+Everyone shares the rows. Every row gets `created_at` and `updated_at`.
+
+Schema changes are ordinary Django migrations kept in the bot folder's
+`migrations/`, so they're reviewed with the model change and data migrations
+have a place to live:
+
+- `python -m django ergo_bot_makemigrations <bot folder>` writes them
+  (`--check` fails when one is missing). The bot_management plugin runs it
+  before showing a diff and before publishing, so a proposal that changes a
+  table carries its migration in the same commit.
+- `python -m django ergo_bot_migrate <paths>` applies what's committed.
+  Ergonaut runs it at start (`ergonaut up`) and after pulling a bot repo.
+
+A bot with tables gets the `tables` skill: `ergo_table_query` (Django field
+lookups, ordering, up to 200 rows or a count), `ergo_table_add`,
+`ergo_table_update` (both validated with `full_clean`) and
+`ergo_table_delete` (waits for approval). Loading the skill describes each
+table's fields; a model's docstring is its description.
+
 ## Chats
 
 Every user has a **main** chat with each bot (formerly the root session),
