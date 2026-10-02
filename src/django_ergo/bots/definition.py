@@ -24,6 +24,7 @@ bot.yaml::
     timezone: America/Los_Angeles      # for the current time in context
     current_time: true                 # put the current date and time in context
     max_turns: 50                      # model calls one reply may use, tool calls included
+    tool_results_in_context: 3         # large tool results each model call keeps in full
     chats:
       main:                            # every user's main chat (always there)
         skills: [orchestration, tandoor]   # loaded from the start (default: orchestration)
@@ -135,6 +136,9 @@ class BotDefinition:
     thread_skills: list[str] = field(default_factory=list)
     unload_after_turns: int = 30
     max_turns: int = 50  # model calls one reply may use (tool calls and all)
+    # Large tool results each model call carries in full (None: the
+    # DJANGO_ERGO["TOOL_RESULTS_IN_CONTEXT"] setting); see conversation.tool_results.
+    tool_results_in_context: int | None = None
     skill_requires: dict[str, list[str]] = field(default_factory=dict)
 
     def chat(self, name: str) -> ChatDefinition:
@@ -210,6 +214,7 @@ class BotDefinition:
             },
             schedules=schedules,
             max_turns=max(1, int(data.get("max_turns", 50) or 50)),
+            tool_results_in_context=_optional_int(data, "tool_results_in_context"),
             raw=data,
         )
 
@@ -229,6 +234,17 @@ class BotDefinition:
             raise BotDefinitionError(msg)
         data = yaml.safe_load(config_path.read_text()) or {}
         return cls.from_dict(data, root_dir=config_path.parent.resolve())
+
+
+def _optional_int(data: dict, key: str) -> int | None:
+    value = data.get(key)
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        msg = f"{key} must be a number, not {value!r}"
+        raise BotDefinitionError(msg) from None
 
 
 def _mapping(data: dict, key: str) -> dict:

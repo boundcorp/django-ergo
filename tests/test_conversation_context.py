@@ -17,9 +17,16 @@ from django_ergo.conversation.context import TextContextSource
 from django_ergo.conversation.context import estimate_tokens
 from django_ergo.conversation.history import HistoryMessage
 from django_ergo.conversation.history import MessageSource
+from django_ergo.conversation.history import SessionSource
 from django_ergo.conversation.models import ConversationSession
 from django_ergo.conversation.stream import StreamChat
+from django_ergo.conversation.structured import StructuredCallSpec
+from django_ergo.conversation.structured import resume_structured_call
+from django_ergo.conversation.structured import run_structured_call
 from tests.test_conversation_compaction import add
+from tests.test_conversation_structured import VALID_PLAN
+from tests.test_conversation_structured import ApprovalToolkit
+from tests.test_conversation_structured import Plan
 from tests.test_conversation_structured import claude_engine
 from tests.test_conversation_structured import claude_text
 from tests.test_conversation_structured import claude_tool
@@ -268,3 +275,125 @@ async def test_stream_chat_resume_switches_existing_session():
     await session.arefresh_from_db()
     assert session.compaction_config == {"native_history": "turn"}
     assert chat.recent == 15
+
+
+# ---------------------------------------------------------------------------
+# The recent-messages block leaves out what is sent natively
+# ---------------------------------------------------------------------------
+
+
+async def _stream_session(username):
+    user = await User.objects.acreate(username=username)
+    session = await ConversationSession.objects.acreate(
+        user=user,
+        engine_type="claude",
+        transport_type="api",
+        status="active",
+        compaction_config={"native_history": "turn"},
+    )
+
+    def seed():
+        add(session, "user", "earlier question")
+        add(session, "assistant", "earlier answer")
+
+    await sync_to_async(seed)()
+    return session
+
+
+def _recent_builder(session, *, incoming=True):
+    """What bots.runtime and StreamChat build for a stream chat."""
+    return ContextBuilder(budget_tokens=4000).add(
+        MessageContextSource(
+            SessionSource(session),
+            min_messages=10,
+            max_messages=10,
+            max_granularity="conversation",
+            skip_native_turn=True,
+            incoming=incoming,
+        )
+    )
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_new_message_is_only_sent_natively():
+    session = await _stream_session("dup-new")
+    engine = claude_engine(claude_tool("submit_output", VALID_PLAN))
+    spec = StructuredCallSpec(kind="planner", response_model=Plan)
+
+    result = await run_structured_call(
+        spec,
+        "Plan the new thing",
+        session=session,
+        engine=engine,
+        context_builder=_recent_builder(session),
+    )
+
+    assert result.ok
+    call = engine._client.calls[0]
+    assert "earlier question" in call["system"]
+    assert "Plan the new thing" not in call["system"]
+    assert call["messages"][0]["content"][0]["text"] == "Plan the new thing"
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_resumed_turn_is_not_repeated_in_context():
+    session = await _stream_session("dup-resume")
+    engine = claude_engine(
+        claude_tool("delete_all", {}, tool_id="d1"),
+        claude_tool("submit_output", VALID_PLAN, tool_id="s1"),
+    )
+    spec = StructuredCallSpec(
+        kind="planner", response_model=Plan, toolkits=[ApprovalToolkit()]
+    )
+    paused = await run_structured_call(
+        spec,
+        "Clean up",
+        session=session,
+        engine=engine,
+        allow_approvals=True,
+        context_builder=_recent_builder(session),
+    )
+    assert paused.status == "awaiting_approval"
+
+    done = await resume_structured_call(
+        spec,
+        paused.call,
+        {"d1": True},
+        engine=engine,
+        context_builder=_recent_builder(session, incoming=False),
+    )
+
+    assert done.ok
+    call = engine._client.calls[1]
+    assert call["messages"][0]["content"][0]["text"] == "Clean up"
+    assert "earlier answer" in call["system"]
+    assert "Clean up" not in call["system"]
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_continued_turn_is_not_repeated_in_context():
+    """After a turn stopped mid-tool-work, the next message continues it natively."""
+    session = await _stream_session("dup-continue")
+
+    def stopped_turn():
+        add(session, "user", "Look it up")
+        add(session, "assistant", tool_use="t1")
+        add(session, "user", tool_result="t1")
+
+    await sync_to_async(stopped_turn)()
+    engine = claude_engine(claude_tool("submit_output", VALID_PLAN))
+    spec = StructuredCallSpec(kind="planner", response_model=Plan)
+
+    result = await run_structured_call(
+        spec,
+        "carry on",
+        session=session,
+        engine=engine,
+        context_builder=_recent_builder(session),
+    )
+
+    assert result.ok
+    call = engine._client.calls[0]
+    assert call["messages"][0]["content"][0]["text"] == "Look it up"
+    assert "earlier answer" in call["system"]
+    assert "Look it up" not in call["system"]

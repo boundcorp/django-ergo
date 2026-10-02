@@ -467,8 +467,12 @@ class Bot:
         self, session: ConversationSession | None = None, model: str = ""
     ) -> Engine:
         if self._engine_factory is not None:
-            return self._engine_factory()
-        return build_engine(self.engine_spec(session, model))
+            engine = self._engine_factory()
+        else:
+            engine = build_engine(self.engine_spec(session, model))
+        if self.definition.tool_results_in_context is not None:
+            engine.tool_results_in_context = self.definition.tool_results_in_context
+        return engine
 
     # -- sessions ----------------------------------------------------------
 
@@ -683,7 +687,10 @@ class Bot:
         session: ConversationSession,
         message: str,
         skillset: SkillSet | None = None,
+        *,
+        incoming: bool = True,
     ) -> ContextBuilder | None:
+        """The turn's context. ``incoming`` is False when resuming a stored turn."""
         ctx = self.tool_context(session)
         builder = ContextBuilder(budget_tokens=self.definition.budget_tokens)
         empty = True
@@ -715,6 +722,9 @@ class Bot:
                     min_messages=self.definition.recent,
                     max_messages=self.definition.recent,
                     max_granularity=self.definition.granularity,
+                    # What the engine sends natively isn't repeated here.
+                    skip_native_turn=True,
+                    incoming=incoming,
                 )
             )
             empty = False
@@ -732,13 +742,17 @@ class Bot:
             empty = False
         return None if empty else builder
 
-    async def _prepare(self, session: ConversationSession, message: str):
+    async def _prepare(
+        self, session: ConversationSession, message: str, *, incoming: bool = True
+    ):
         def build():
             # Touch the user so sync tool code can use ctx.user.
             _ = session.user
             self._refresh_instructions(session)
             skillset = self.skillset(session)
-            return [skillset], self.context_builder(session, message, skillset)
+            return [skillset], self.context_builder(
+                session, message, skillset, incoming=incoming
+            )
 
         return await sync_to_async(build, thread_sensitive=True)()
 
@@ -833,7 +847,7 @@ class Bot:
         if isinstance(decisions, bool):
             pending = (call.metadata or {}).get("pending_approvals", [])
             decisions = {item["id"]: decisions for item in pending}
-        toolkits, builder = await self._prepare(session, "")
+        toolkits, builder = await self._prepare(session, "", incoming=False)
         try:
             outcome = await resume_structured_call(
                 self.reply_spec(toolkits),

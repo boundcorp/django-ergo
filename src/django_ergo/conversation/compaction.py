@@ -146,12 +146,27 @@ def apply_native_window(session, messages: list[dict]) -> list[dict]:
     if (session.compaction_config or {}).get("native_history") != "turn":
         return messages
     system = [m for m in messages if m.get("role") == "system"]
-    rest = [m for m in messages if m.get("role") != "system"]
+    start = native_turn_start(messages) or 0
+    return system + [m for m in messages[start:] if m.get("role") != "system"]
+
+
+def native_turn_start(messages: list[dict], *, incoming: bool = False) -> int | None:
+    """Index in ``messages`` where the per-turn native window starts.
+
+    None when no message starts a turn (the whole history is the turn).
+    With ``incoming``, a new user message is about to be added: the window
+    starts there (``len(messages)``) unless it continues a turn left in the
+    middle of tool work. Context builders use this to leave out what the
+    engine already sends natively.
+    """
+    rest = [(i, m) for i, m in enumerate(messages) if m.get("role") != "system"]
+    if incoming:
+        rest.append((len(messages), {"role": "user", "content": [{"type": "text"}]}))
     starts = []
     continuing = False
-    for i, message in enumerate(rest):
+    for k, (i, message) in enumerate(rest):
         if _is_turn_start(message):
-            previous = rest[i - 1] if i else None
+            previous = rest[k - 1][1] if k else None
             continuing = previous is not None and (
                 _is_tool_results(previous) or continuing
             )
@@ -159,7 +174,7 @@ def apply_native_window(session, messages: list[dict]) -> list[dict]:
                 starts.append(i)
         elif message.get("role") != "user":
             continuing = False
-    return system + (rest[starts[-1] :] if starts else rest)
+    return starts[-1] if starts else None
 
 
 def _is_tool_results(message: dict) -> bool:

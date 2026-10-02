@@ -120,6 +120,8 @@ class StreamChat:
                 min_messages=self.recent,
                 max_messages=self.recent,
                 max_granularity=self.granularity,
+                # The new message and its turn go natively, not here too.
+                skip_native_turn=True,
             )
         )
         for source in self.context_sources:

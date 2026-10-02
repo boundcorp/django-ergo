@@ -78,6 +78,18 @@ result = await run_structured_call(spec, "Plan it", session=session)
 - Statuses: `completed`, `failed` (API error or `max_tokens` stop), and
   `turn_limited` (no valid output within `max_turns`).
 - Rows never store engine config, so credentials are never written.
+- Each model call carries only the newest
+  `DJANGO_ERGO["TOOL_RESULTS_IN_CONTEXT"]` large tool results (default 3,
+  "large" meaning over 500 characters) in full. Older ones are sent as a stub
+  such as `[penpot_tree result, 180 lines, 9,412 chars; superseded, call the
+  tool again if you need it]`. Errors and short results are sent as they
+  are. Only the request changes: the transcript and session rows keep every
+  result, and tool call ids still pair up. Images in a stubbed result stay,
+  and the image window (`IMAGES_IN_CONTEXT`) decides about them as before.
+  An engine's `tool_results_in_context` attribute overrides the setting;
+  `None` in the setting sends every result in full. The same applies to chat
+  turns (`run_conversation_turn`), since both engines apply it when they
+  rebuild a session's messages.
 
 Compaction summaries are structured calls of kind `compaction`; see
 [compaction.md](compaction.md).
