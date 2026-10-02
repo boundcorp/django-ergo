@@ -110,7 +110,8 @@ class TableView:
         return _plain(value)
 
     def sum(self, field: str):
-        return self._aggregate("Sum", field) or 0
+        # None when nothing was reported: unknown, not zero.
+        return self._aggregate("Sum", field)
 
     def avg(self, field: str):
         return self._aggregate("Avg", field)
