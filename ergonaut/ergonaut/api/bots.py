@@ -91,6 +91,7 @@ class SessionOut(Schema):
     updated_at: datetime
     open_in: int = 0  # delegated requests this session is still answering
     open_out: int = 0  # requests it sent that are still unanswered
+    busy: bool = False  # a turn is running in it right now
 
 
 class RequestOut(Schema):
@@ -304,15 +305,29 @@ def session_out(session: ConversationSession) -> dict:
         "updated_at": session.updated_at,
         "open_in": getattr(session, "open_in", 0) or 0,
         "open_out": getattr(session, "open_out", 0) or 0,
+        "busy": bool(getattr(session, "busy", False)),
     }
 
 
 OPEN_REQUESTS = ["queued", "delivered", "waiting"]
 
 
+BUSY_WITHIN_MINUTES = 30  # an in-progress call older than this is a crashed turn, not a busy one
+
+
 def with_open_counts(qs):
-    """Annotate sessions with their open delegated requests, in and out."""
+    """Annotate sessions with their open delegated requests, in and out, and whether a
+    turn is running now (``busy``)."""
+    from django.db.models import Exists, OuterRef
+    from django.utils import timezone
+
+    running = StructuredCall.objects.filter(
+        session=OuterRef("pk"),
+        status="in_progress",
+        updated_at__gte=timezone.now() - timezone.timedelta(minutes=BUSY_WITHIN_MINUTES),
+    )
     return qs.annotate(
+        busy=Exists(running),
         open_in=Count(
             "thread_messages",
             filter=Q(

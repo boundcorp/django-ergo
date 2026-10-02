@@ -53,6 +53,14 @@ function App() {
     if (user) refresh().catch(() => setBots([]))
   }, [user, refresh])
 
+  // Keep the sidebar's busy spinners current: poll quickly while a turn runs, slowly otherwise.
+  const anyBusy = sessions.some(s => s.busy)
+  useEffect(() => {
+    if (!user) return
+    const timer = setInterval(() => refresh().catch(() => {}), anyBusy ? 3000 : 20000)
+    return () => clearInterval(timer)
+  }, [user, refresh, anyBusy])
+
   if (user === undefined) return null
   if (user === null) return <Login onLogin={setUser} />
 

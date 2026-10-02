@@ -24,6 +24,7 @@ export type Session = {
   updated_at: string
   open_in?: number
   open_out?: number
+  busy?: boolean // a turn is running now
 }
 
 export type DelegatedRequest = {
