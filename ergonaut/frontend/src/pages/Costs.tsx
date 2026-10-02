@@ -6,7 +6,9 @@ const RANGES = [7, 30, 90]
 
 function money(value: number) {
   if (value === 0) return '$0'
-  if (value < 0.01) return '<$0.01'
+  if (value < 0.0001) return '<$0.0001'
+  // Cheap models cost fractions of a cent per call; keep two significant digits.
+  if (value < 0.01) return `$${value.toPrecision(2)}`
   return value.toLocaleString(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: value < 10 ? 2 : 0 })
 }
 
