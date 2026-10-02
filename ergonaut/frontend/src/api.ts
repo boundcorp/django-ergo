@@ -153,6 +153,7 @@ export type AttachmentFile = {
   source: 'message' | 'upload' | 'bot'
   message_sequence: number | null
   pinned: boolean
+  view: '' | 'page' | 'html' | 'image' | 'pdf' | 'media' | 'markdown' | 'csv' | 'json' | 'text'
   created_at: string
   updated_at: string
 }
@@ -294,6 +295,13 @@ export const api = {
   deleteAttachment: (id: string) => request<{ ok: boolean }>('DELETE', `/attachments/${id}`),
   downloadUrl: (id: string) => `/api/attachments/${id}/download`,
   viewUrl: (id: string) => `/api/attachments/${id}/download?inline=true`,
+  botTree: (bot: string) =>
+    request<{ files: { path: string; size: number }[]; truncated: boolean }>('GET', `/bots/${bot}/tree`),
+  botSource: (bot: string, path: string) =>
+    request<{ path: string; size: number; media_type: string; text: string | null; url: string }>(
+      'GET',
+      `/bots/${bot}/source/${path.split('/').map(encodeURIComponent).join('/')}`,
+    ),
   pins: (id: string) => request<Pin[]>('GET', `/sessions/${id}/pins`),
   pin: (id: string, pinned: boolean) => request<AttachmentFile>('POST', `/attachments/${id}/pin`, { pinned }),
 }

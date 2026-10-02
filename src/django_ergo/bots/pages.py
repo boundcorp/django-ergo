@@ -590,3 +590,71 @@ def session_pins(bot: Bot, session) -> list[dict]:
         )
     )
     return pins
+
+
+# -- viewing files ----------------------------------------------------------------------
+
+VIEW_STYLE = (
+    "<style>pre{white-space:pre-wrap;word-break:break-word;font:13px/1.5 ui-monospace,monospace;}"
+    "img{max-width:100%}</style>"
+)
+MAX_VIEW_ROWS = 1000
+
+
+def text_page(title: str, text: str, kind: str = "text") -> str:
+    """A file shown as a page: ``markdown`` rendered (raw HTML stays escaped), ``csv`` as a
+    table, ``json`` pretty-printed, anything else as preformatted text."""
+    import csv
+    import io
+
+    from markupsafe import escape
+
+    if kind == "markdown":
+        body = str(markdown(text))
+    elif kind == "csv":
+        rows = list(csv.reader(io.StringIO(text)))[: MAX_VIEW_ROWS + 1]
+        head = "".join(f"<th>{escape(c)}</th>" for c in (rows[0] if rows else []))
+        cells = "".join(
+            "<tr>" + "".join(f"<td>{escape(c)}</td>" for c in row) + "</tr>"
+            for row in rows[1:]
+        )
+        body = f'<div class="ergo-table"><table><thead><tr>{head}</tr></thead><tbody>{cells}</tbody></table></div>'
+    else:
+        if kind == "json":
+            import contextlib
+
+            with contextlib.suppress(ValueError):
+                text = json.dumps(json.loads(text), indent=2, ensure_ascii=False)
+        body = f"<pre>{escape(text)}</pre>"
+    return LAYOUT.format(title=escape(title), chart_js=CHART_JS, body=VIEW_STYLE + body)
+
+
+def view_kind(filename: str, media_type: str) -> str:  # noqa: PLR0911
+    """How a file is shown in a viewer: page, image, pdf, media, markdown, csv, json, text,
+    or "" (download only)."""
+    name = filename.lower()
+    if name.endswith(".jhtml"):
+        return "page"
+    if media_type == "text/html" or name.endswith((".html", ".htm")):
+        return "html"
+    if media_type in (
+        "image/png",
+        "image/jpeg",
+        "image/gif",
+        "image/webp",
+        "image/svg+xml",
+    ):
+        return "image"
+    if media_type == "application/pdf":
+        return "pdf"
+    if media_type.startswith(("audio/", "video/")):
+        return "media"
+    if name.endswith((".md", ".markdown")) or media_type == "text/markdown":
+        return "markdown"
+    if name.endswith(".csv") or media_type == "text/csv":
+        return "csv"
+    if name.endswith(".json") or media_type == "application/json":
+        return "json"
+    from django_ergo.conversation.attachments import is_text
+
+    return "text" if is_text(media_type) else ""
