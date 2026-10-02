@@ -33,6 +33,7 @@ import logging
 import os
 import threading
 import time
+import uuid
 
 from asgiref.sync import async_to_sync
 from celery import shared_task
@@ -165,17 +166,54 @@ def clear_stop(session_id) -> None:
         client.delete(_stop_key(session_id))
 
 
-def push_message(session_id, text: str, attachment_ids: list[str] | None = None) -> None:
-    item = json.dumps({"text": text, "attachment_ids": [str(a) for a in attachment_ids or []]})
+def push_message(session_id, text: str, attachment_ids: list[str] | None = None) -> str:
+    """Queue a message for the session's turn. Returns its id (to unsend it)."""
+    item_id = uuid.uuid4().hex
+    item = json.dumps({"id": item_id, "text": text, "attachment_ids": [str(a) for a in attachment_ids or []]})
     client = redis_client()
     if client is None:
         with _local_guard:
             _local_inboxes.setdefault(str(session_id), []).append(item)
-        return
+        return item_id
     with client.pipeline() as pipe:
         pipe.rpush(_inbox_key(session_id), item)
         pipe.expire(_inbox_key(session_id), INBOX_TTL_SECONDS)
         pipe.execute()
+    return item_id
+
+
+def _inbox_raw(session_id) -> list:
+    client = redis_client()
+    if client is None:
+        with _local_guard:
+            return list(_local_inboxes.get(str(session_id), []))
+    return client.lrange(_inbox_key(session_id), 0, -1)
+
+
+def peek_inbox(session_id) -> list[dict]:
+    """Messages waiting for the model, oldest first, without taking them."""
+    return [json.loads(item) for item in _inbox_raw(session_id)]
+
+
+def unsend(session_id, item_id: str) -> dict | None:
+    """Take one waiting message back before the model sees it. Returns it, or None if a
+    turn already took it (or there's no such message)."""
+    for raw in _inbox_raw(session_id):
+        item = json.loads(raw)
+        if item.get("id") != item_id:
+            continue
+        client = redis_client()
+        if client is None:
+            with _local_guard:
+                waiting = _local_inboxes.get(str(session_id), [])
+                if raw not in waiting:
+                    return None
+                waiting.remove(raw)
+        elif not client.lrem(_inbox_key(session_id), 1, raw):
+            return None  # drained between our read and the removal
+        notify(session_id)
+        return item
+    return None
 
 
 def drain_inbox(session_id) -> list[dict]:

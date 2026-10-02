@@ -145,3 +145,22 @@ def test_the_user_can_steer_and_stop_a_turn_another_chat_started(session, use_bo
     messaging.deliver(str(delegated(session).id), registry=webhooks.get_registry())
     assert session.structured_calls.latest("created_at").status == "stopped"
     assert len(client.calls) == 1
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_waiting_message_can_be_unsent_until_the_model_takes_it(client, cook, use_bots):  # noqa: F811
+    use_bots(say("hi"))
+    root = post(client, "/api/bots/kitchen/root").json()
+    first = tasks.push_message(root["id"], "Use blue")
+    second = tasks.push_message(root["id"], "Actually red")
+
+    inbox = client.get(f"/api/sessions/{root['id']}").json()["inbox"]
+    assert [(i["id"], i["text"]) for i in inbox] == [(first, "Use blue"), (second, "Actually red")]
+
+    taken = client.delete(f"/api/sessions/{root['id']}/inbox/{first}")
+    assert taken.json() == {"text": "Use blue", "attachment_ids": []}
+    assert [i["text"] for i in tasks.peek_inbox(root["id"])] == ["Actually red"]
+
+    assert [i["text"] for i in tasks.drain_inbox(root["id"])] == ["Actually red"]  # the turn took it
+    assert client.delete(f"/api/sessions/{root['id']}/inbox/{second}").status_code == 409
+    assert client.get(f"/api/sessions/{root['id']}").json()["inbox"] == []

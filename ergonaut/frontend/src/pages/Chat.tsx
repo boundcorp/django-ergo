@@ -191,6 +191,20 @@ export function Chat({ onChange }: { onChange: () => void }) {
     run(() => api.send(id, message, ids, mode), message || outgoing.map(f => f.filename).join(', '))
   }
 
+  // Take back a message the running turn hasn't given the model yet; its text returns to the box.
+  async function unsendMessage(itemId: string) {
+    setError('')
+    try {
+      const item = await api.unsend(id, itemId)
+      setText(current => (current.trim() ? `${item.text}\n\n${current}` : item.text))
+      if (pending?.text === item.text) setPending(null)
+      await load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+      await load()
+    }
+  }
+
   async function stop() {
     setStopping(true)
     setError('')
@@ -293,7 +307,27 @@ export function Chat({ onChange }: { onChange: () => void }) {
         {openPin && <PageViewer pin={openPin} refreshKey={detail.messages.length} onClose={() => setOpenPin(null)} />}
         <div className={`flex-1 overflow-y-auto px-6 py-4 ${openPin ? 'hidden' : ''}`}>
           <Transcript messages={detail.messages} calls={detail.calls} />
-          {echo && (
+          {(detail.inbox ?? []).map(item => (
+            <div key={item.id} className="mt-3 flex flex-col items-end">
+              <div className="max-w-[80%] rounded-2xl border border-dashed border-indigo-400 bg-indigo-600/50 px-4 py-2 whitespace-pre-wrap text-white">
+                {item.text}
+                {item.files > 0 && <span className="ml-2 text-xs opacity-80">📎 {item.files}</span>}
+              </div>
+              <div className="mt-1 flex items-center gap-2 text-xs text-zinc-500">
+                <span>Waiting for the model's next step</span>
+                {item.id && (
+                  <button
+                    className="rounded border border-zinc-300 px-1.5 hover:border-red-400 hover:text-red-600 dark:border-zinc-700"
+                    title="Take this message back before the model sees it; its text goes back to the message box"
+                    onClick={() => unsendMessage(item.id)}
+                  >
+                    Unsend
+                  </button>
+                )}
+              </div>
+            </div>
+          ))}
+          {echo && !(detail.inbox ?? []).some(item => item.text === echo) && (
             <div className="mt-3 flex justify-end">
               <div className="max-w-[80%] rounded-2xl bg-indigo-600/70 px-4 py-2 whitespace-pre-wrap text-white">
                 {echo}
