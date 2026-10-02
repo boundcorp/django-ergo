@@ -414,6 +414,33 @@ async def test_turn_limit(user):
     assert result.call.turns_used == 2
 
 
+async def test_wrap_up_spends_the_last_turn_on_the_answer(user):
+    engine = claude_engine(
+        claude_tool("lookup", {"q": "a"}),
+        claude_tool("lookup", {"q": "b"}, tool_id="toolu_2"),
+        claude_tool("submit_output", VALID_PLAN, tool_id="toolu_3"),
+    )
+    spec = StructuredCallSpec(
+        kind="planner",
+        system_prompt="Plan carefully.",
+        response_model=Plan,
+        toolkits=[LookupToolkit()],
+        max_turns=3,
+        wrap_up=True,
+    )
+
+    result = await run_structured_call(spec, "Plan", user=user, engine=engine)
+
+    assert result.ok
+    assert result.parsed == Plan(**VALID_PLAN)
+    calls = engine._client.calls
+    tool_names = [[t["name"] for t in c["tools"]] for c in calls]
+    assert "lookup" in tool_names[0]
+    assert tool_names[2] == ["submit_output"]
+    assert "last step" in json.dumps(calls[2]["system"])
+    assert "last step" not in json.dumps(calls[0]["system"])
+
+
 async def test_max_tokens_stop_fails(user):
     engine = claude_engine(claude_text("truncated", stop="max_tokens"))
     spec = StructuredCallSpec(kind="planner", response_model=Plan)

@@ -85,6 +85,7 @@ def chat_reply_spec(
         response_model=ChatReply,
         toolkits=list(toolkits or []),
         max_turns=max_turns,
+        wrap_up=True,
         max_tokens=max_tokens,
         output_tool_name=CHAT_REPLY_TOOL,
     )
