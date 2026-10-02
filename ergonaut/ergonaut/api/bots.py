@@ -804,7 +804,8 @@ def models_out(bot: Bot) -> dict:
     """The models a chat with ``bot`` can use (providers.yaml), and the bot's own."""
     try:
         spec = bot.engine_spec()
-        default = bot.model_ref() or str(spec.config.get("model") or "")
+        # No model in bot.yaml: the engine's own default.
+        default = bot.model_ref() or str(spec.config.get("model") or getattr(bot.make_engine(), "model", ""))
         default_type = spec.engine_type
     except Exception:  # noqa: BLE001 - e.g. its API key isn't set
         default = bot.model_ref() or str(bot.definition.engine_config.get("model") or "")
