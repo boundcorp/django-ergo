@@ -30,23 +30,65 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
 
-def usage_tokens(usage) -> tuple[int | None, int | None, int | None]:
-    """(uncached input, cached input, output) tokens from an OpenAI usage block.
+def _count(value) -> int:
+    return value if isinstance(value, int) and not isinstance(value, bool) else 0
 
-    OpenAI's ``prompt_tokens`` includes cached tokens, which bill at the lower
-    cached-input rate, so they're split out to be priced as cache reads.
-    """
-    if usage is None:
-        return None, None, None
-    details = getattr(usage, "prompt_tokens_details", None)
+
+def _detail(details, name: str) -> int:
     if isinstance(details, dict):
-        cached = details.get("cached_tokens") or 0
-    else:
-        cached = getattr(details, "cached_tokens", None) or 0
-    if not isinstance(cached, int):
-        cached = 0
-    prompt = usage.prompt_tokens or 0
-    return prompt - cached, cached, usage.completion_tokens
+        return _count(details.get(name))
+    return _count(getattr(details, name, None))
+
+
+def usage_parts(usage) -> dict:
+    """OpenAI usage split the way it's billed (and the way Claude reports it):
+    ``input_tokens`` is the uncached rest of the prompt, ``cache_read_input_tokens``
+    and ``cache_creation_input_tokens`` are cached input and cache writes (both inside
+    OpenAI's ``prompt_tokens``), and ``reasoning_tokens`` is the part of
+    ``output_tokens`` spent reasoning. All None without usage."""
+    if usage is None:
+        return dict.fromkeys(
+            (
+                "input_tokens",
+                "cache_read_input_tokens",
+                "cache_creation_input_tokens",
+                "output_tokens",
+                "reasoning_tokens",
+            )
+        )
+    prompt = _count(getattr(usage, "prompt_tokens", None)) or _count(
+        getattr(usage, "input_tokens", None)
+    )
+    output = _count(getattr(usage, "completion_tokens", None)) or _count(
+        getattr(usage, "output_tokens", None)
+    )
+    details = getattr(usage, "prompt_tokens_details", None) or getattr(
+        usage, "input_tokens_details", None
+    )
+    out_details = getattr(usage, "completion_tokens_details", None) or getattr(
+        usage, "output_tokens_details", None
+    )
+    cached = _detail(details, "cached_tokens") if details else 0
+    written = _detail(details, "cache_write_tokens") if details else 0
+    return {
+        "input_tokens": max(0, prompt - cached - written),
+        "cache_read_input_tokens": cached,
+        "cache_creation_input_tokens": written,
+        "output_tokens": output,
+        "reasoning_tokens": _detail(out_details, "reasoning_tokens")
+        if out_details
+        else 0,
+    }
+
+
+def usage_tokens(usage) -> tuple[int | None, int | None, int | None]:
+    """(uncached input, cached input, output) tokens from an OpenAI usage block (see usage_parts)."""
+    parts = usage_parts(usage)
+    return (
+        parts["input_tokens"],
+        parts["cache_read_input_tokens"],
+        parts["output_tokens"],
+    )
 
 
 def openai_message_dict(msg, attachments=(), *, audio_input: bool = False) -> dict:
@@ -242,9 +284,7 @@ class OpenAIAPIEngine(Engine):
                 if msg.tool_calls
                 else None,
                 sequence=seq,
-                input_tokens=usage_tokens(response.usage)[0],
-                cache_read_input_tokens=usage_tokens(response.usage)[1],
-                output_tokens=usage_tokens(response.usage)[2],
+                **usage_parts(response.usage),
                 model_name=self.model,
             )
 
@@ -474,9 +514,7 @@ class OpenAIAPIEngine(Engine):
             message=message,
             events=events,
             model=self.model,
-            input_tokens=usage_tokens(usage)[0] or 0,
-            output_tokens=usage_tokens(usage)[2] or 0,
-            cache_read_input_tokens=usage_tokens(usage)[1] or 0,
+            **{k: v or 0 for k, v in usage_parts(usage).items()},
         )
 
     def user_message(self, text: str, attachments: list | None = None) -> dict:

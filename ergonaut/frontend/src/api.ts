@@ -87,6 +87,7 @@ export type CostBucket = {
   cache_write_tokens: number
   cache_read_tokens: number
   output_tokens: number
+  reasoning_tokens: number // part of output_tokens
   input_cost: number
   cache_write_cost: number
   cache_read_cost: number
