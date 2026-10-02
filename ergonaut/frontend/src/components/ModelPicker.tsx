@@ -29,7 +29,8 @@ export default function ModelPicker({
   }, [bot])
 
   if (!models?.models.length) return null
-  const defaultLabel = models.models.find(m => m.id === models.default)?.label ?? models.default
+  const defaultLabel =
+    models.models.find(m => m.id === models.default || m.name === models.default)?.label ?? models.default
   return (
     <select
       value={value}
