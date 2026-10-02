@@ -63,6 +63,25 @@ export type KB = {
 
 export type KBArticle = { path: string; title: string; body: string }
 
+export type CostBucket = {
+  name: string
+  calls: number
+  input_tokens: number
+  output_tokens: number
+  cost: number
+  unpriced_calls: number
+}
+
+export type Costs = {
+  days: number
+  total: CostBucket
+  by_kind: CostBucket[]
+  chat_reply_by_bot: CostBucket[]
+  by_model: CostBucket[]
+  by_day: { date: string; cost: number; calls: number }[]
+  unpriced_models: string[]
+}
+
 export type BotDetail = Bot & {
   engine: string
   model: string
@@ -127,6 +146,7 @@ export const api = {
   logout: () => request<{ ok: boolean }>('POST', '/auth/logout'),
   bots: () => request<Bot[]>('GET', '/bots'),
   bot: (name: string) => request<BotDetail>('GET', `/bots/${name}`),
+  costs: (days: number) => request<Costs>('GET', `/costs?days=${days}`),
   kbs: (bot: string) => request<KB[]>('GET', `/bots/${bot}/kbs`),
   kbArticle: (bot: string, kb: string, path: string) =>
     request<KBArticle>('GET', `/bots/${bot}/kbs/${kb}/article?path=${encodeURIComponent(path)}`),

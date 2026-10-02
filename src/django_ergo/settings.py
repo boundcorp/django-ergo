@@ -41,6 +41,8 @@ DEFAULTS = {
     # "https://bots.example.com/hooks". Plugins build their webhook URLs from
     # it; None = no public URL, so channels such as Telegram poll instead.
     "BOT_WEBHOOK_BASE_URL": None,
+    # Extra or overriding model prices, USD per million tokens (see pricing.py)
+    "MODEL_PRICES": {},
     # Telemetry Configuration
     "TELEMETRY_ENABLED": False,
     "TELEMETRY_SERVICE_NAME": "django-ergo",
