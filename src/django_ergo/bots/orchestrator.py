@@ -3,7 +3,8 @@
 - ``threads_list`` / ``threads_create`` / ``threads_send`` / ``threads_close``
   manage this bot's thread sessions with the same user. Creating threads
   needs ``sessions.allow_create: true`` in bot.yaml.
-- ``ergo_bot_call`` sends a message to one of this bot's sub-bots (bot folders
+- ``ergo_bot_list`` lists the bots it can message (pre-seeded into every
+  session) and ``ergo_bot_call`` sends a message to one of this bot's sub-bots (bot folders
   nested in its folder) or a bot listed in ``permissions.call_bots``. Each
   calling bot gets its own thread in the called bot, reused across calls.
 
@@ -181,6 +182,17 @@ def ergo_bot_call(ctx: ToolContext, bot: str, message: str) -> str:
     return _run(target, session, message)
 
 
+@bot_tool(takes_context=True)
+def ergo_bot_list(ctx: ToolContext) -> str:
+    """List the bots this bot can message, with their descriptions."""
+    registry = ctx.bot.registry
+    bots = registry.callable_bots(ctx.bot) if registry else []
+    if not bots:
+        return "There are no other bots you can message."
+    lines = [f"- {b.name}: {b.definition.description or 'no description'}" for b in bots]
+    return "Bots you can message:\n" + "\n".join(lines)
+
+
 THREAD_TOOLS = [threads_list, threads_create, threads_send, threads_close]
 
 
@@ -191,6 +203,9 @@ def orchestrator_toolkit(ctx: ToolContext) -> FunctionToolkit:
     if ctx.bot.definition.call_bots or (
         ctx.bot.registry and ctx.bot.registry.children(ctx.bot)
     ):
-        functions.append(ergo_bot_call)
+        functions += [ergo_bot_list, ergo_bot_call]
     tools: list[BotTool] = [fn.__bot_tool__ for fn in functions]
-    return FunctionToolkit(tools, ctx)
+    registry = ctx.bot.registry
+    reachable = registry.callable_bots(ctx.bot) if registry else []
+    # Every session starts knowing which bots it can reach.
+    return FunctionToolkit(tools, ctx, seed=["ergo_bot_list"] if reachable else [])

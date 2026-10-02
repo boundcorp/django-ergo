@@ -1,5 +1,33 @@
 # Django Ergo - Development Tasks
 
+## 🤖 Ergonaut bots (PR #31, branch `claude/project-thread-epsqtb`)
+
+Live on rigel from `~/p/boundcorp/django-ergo`, bots from `boundcorp/ergo-bots`. Updated by whoever works the branch.
+
+### Now (2026-10-02)
+
+- [x] **Toolkit pre-seeding**: toolkits declare tool calls run and written into the chat before the first completion; orchestration pre-seeds `ergo_bot_list` (names + YAML descriptions); skills use the same path; boundcorp's instructions stop listing bots.
+- [ ] **Turns as Celery tasks**: web messages and approvals queue a turn task (inline without a broker); Redis pub/sub wakes the SSE stream; rigel runs `up web worker beat`.
+- [ ] **Thread-to-thread messaging**: messages record a sender; replies go back to the sender's thread; `ergo_thread_list(bot)` and async `ergo_thread_send(bot, root|<id>|new, message)`; hop limit; replaces sync `threads_*` and `ergo_bot_call`.
+- [ ] **Thread inactivity and archival**: beat archives threads idle `sessions.archive_after_days` (default 7); archived threads collapse in the sidebar; messaging one reopens it.
+- [ ] **`@bot_task` for custom tools**: run a bot-folder function on a worker and wait for or await its result.
+
+### Next
+
+- [ ] Images and PDFs from the Files panel shown to the model, not just described.
+- [ ] "Changes" tab on the bot page: open ergo-bots PRs with diff, Merge and Discard.
+- [ ] Replace the 30s git-pull thread with a beat task.
+- [ ] Reconcile the root pre-commit config (ruff, prettier) with the branch's code style.
+- [ ] `test_telegram_webhook_mode` fails locally (async view under the sync test client); check CI.
+
+### Done
+
+- [x] Kitchen bot on Ergonaut (Tandoor tools, meal-planning skill, KB), boundcorp root bot, nested bots, `ergo_bot_call`.
+- [x] Official plugins in `django_ergo/plugins`: ergo_kb, bot_management (draft worktree + PR), telegram, orca, bash, attachments.
+- [x] Live bot reloads on file changes; auto-pull of the bot repo.
+- [x] CTO bot (orca on devbox, bash, threads) proposed by boundcorp and merged (ergo-bots #1).
+- [x] Costs page, bot pages, Memory page, Files panel; tool names prefixed `ergo_*`.
+
 ## 🎯 IMMEDIATE NEXT STEPS (Current Sprint)
 
 ### Production Readiness

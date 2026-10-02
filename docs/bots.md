@@ -162,6 +162,7 @@ user. It also gets the orchestrator tools:
 | `threads_create` | Start a thread (needs `sessions.allow_create`), optionally with a first message whose reply is returned |
 | `threads_send` | Message a thread and return its reply |
 | `threads_close` | Close a thread; its history stays readable |
+| `ergo_bot_list` | The bots it can message, with their `description`s (pre-seeded) |
 | `ergo_bot_call` | Message a bot in `permissions.call_bots` (needs a `BotRegistry`) |
 
 Threads are ordinary sessions with the bot's default compaction mode. A
@@ -173,8 +174,18 @@ the thread and `ergo_bot_call` tools are left out entirely.
 has a `bot.yaml`, and lets bots find each other by name. Bot folders can
 nest: a bot folder inside another bot's folder is its sub-bot, and the
 parent's root session may message its sub-bots with `ergo_bot_call` (as well as
-any bot in `permissions.call_bots`). The root session's context lists the
-bots it can message.
+any bot in `permissions.call_bots`). Each session starts with an
+`ergo_bot_list` result already in its history, built from each bot's
+`description` in bot.yaml, so instructions don't need to list the bots.
+
+### Pre-seeded tool calls
+
+A toolkit's `pre_seeds()` names tool calls that run before a session's first
+model call; their results are written into the history as if the model had
+made the calls (each turn for stream sessions, whose model calls carry only
+the current turn). `FunctionToolkit(tools, ctx, seed=["tool_name"])` seeds
+zero-argument tools. The orchestrator seeds `ergo_bot_list` and skills seed
+`list_skills`.
 
 ```
 boundcorp/

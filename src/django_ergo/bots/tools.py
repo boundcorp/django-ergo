@@ -218,12 +218,28 @@ def bot_context(
 class FunctionToolkit(Toolkit):
     """A Toolkit made of @bot_tool functions, bound to a ToolContext."""
 
-    def __init__(self, tools: list[BotTool], context: ToolContext | None = None):
+    def __init__(
+        self,
+        tools: list[BotTool],
+        context: ToolContext | None = None,
+        *,
+        seed: list[str] | None = None,
+    ):
         self.tools = {tool.name: tool for tool in tools}
         if len(self.tools) != len(tools):
             msg = "Duplicate bot tool names"
             raise ValueError(msg)
         self.context = context or ToolContext()
+        # Tools (taking no arguments) whose results start every session.
+        self.seed = [name for name in seed or [] if name in self.tools]
+
+    def pre_seeds(self):
+        from django_ergo.conversation.structured import PreSeedCall
+
+        return [
+            PreSeedCall(name, {}, lambda arguments, name=name: self.execute_tool(name, arguments))
+            for name in self.seed
+        ]
 
     @classmethod
     def from_functions(

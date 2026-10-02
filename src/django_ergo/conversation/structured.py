@@ -151,6 +151,10 @@ class StructuredCallSpec:
     max_tokens: int | None = None
     output_tool_name: str = DEFAULT_OUTPUT_TOOL
 
+    def all_pre_seeds(self) -> list[PreSeedCall]:
+        """The spec's own pre-seeds, then each toolkit's."""
+        return [*self.pre_seeds, *(s for kit in self.toolkits for s in kit.pre_seeds())]
+
     def __post_init__(self):
         if self.response_model is not None and self.output_parser is not None:
             msg = "Pass response_model or output_parser, not both"
@@ -686,6 +690,7 @@ async def run_structured_call(  # noqa: PLR0913
     refused. ``context_builder`` (sessions only) adds its context to every
     model call of this turn.
     """
+    pre_seeds = await sync_to_async(spec.all_pre_seeds, thread_sensitive=True)()
     if session is not None:
         active = await _session_engine(spec, session, engine)
         rows = (
@@ -694,7 +699,7 @@ async def run_structured_call(  # noqa: PLR0913
             else session.claude_messages
         )
         # Pre-seeds go in once per session, the first time a turn has them.
-        seed = bool(spec.pre_seeds) and (
+        seed = bool(pre_seeds) and (
             spec.pre_seed_each_turn
             or not await session.structured_calls.filter(
                 kind=spec.kind, metadata__seeded=True
@@ -737,8 +742,8 @@ async def run_structured_call(  # noqa: PLR0913
     run = _Run(active, transcript, call, spec, user, workflow, allow_approvals)
     await _record_tools(call, spec)
     await transcript.append_user(message, attachments)
-    if seed and spec.pre_seeds:
-        await transcript.append_tool_exchange(await _run_pre_seeds(spec.pre_seeds))
+    if seed and pre_seeds:
+        await transcript.append_tool_exchange(await _run_pre_seeds(pre_seeds))
     return await _loop(run)
 
 

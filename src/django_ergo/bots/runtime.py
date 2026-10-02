@@ -37,10 +37,8 @@ from django_ergo.bots.definition import PluginSpec
 from django_ergo.bots.orchestrator import orchestrator_toolkit
 from django_ergo.bots.plugins import BotPlugin
 from django_ergo.bots.plugins import resolve_plugin_class
-from django_ergo.bots.skills import LIST_SKILLS
 from django_ergo.bots.skills import Skill
 from django_ergo.bots.skills import load_skills
-from django_ergo.bots.skills import render_listing
 from django_ergo.bots.skills import skills_toolkit
 from django_ergo.bots.skills import tool_overview
 from django_ergo.bots.tools import FunctionToolkit
@@ -61,7 +59,6 @@ from django_ergo.conversation.runtime import EngineSpec
 from django_ergo.conversation.runtime import build_engine
 from django_ergo.conversation.runtime import get_default_engine_spec
 from django_ergo.conversation.stream import STREAM_CONFIG
-from django_ergo.conversation.structured import PreSeedCall
 from django_ergo.conversation.structured import resume_structured_call
 from django_ergo.conversation.structured import run_structured_call
 
@@ -359,24 +356,6 @@ class Bot:
                 )
             )
             empty = False
-        callable_bots = (
-            self.registry.callable_bots(self)
-            if self.registry and self.is_root(session) and self.definition.orchestration
-            else []
-        )
-        if callable_bots:
-            listing = "\n".join(
-                f"- {b.name}: {b.definition.description or 'no description'}"
-                for b in callable_bots
-            )
-            builder.add(
-                TextContextSource(
-                    "Bots you can message with ergo_bot_call",
-                    lambda: listing,
-                    weight=0.3,
-                )
-            )
-            empty = False
         for module in self.tool_modules:
             for item in module.contexts:
                 builder.add(
@@ -419,11 +398,9 @@ class Bot:
         self, toolkits: list[Toolkit], session: ConversationSession | None = None
     ):
         spec = chat_reply_spec(toolkits)
-        if self.skills:
-            spec.pre_seed_each_turn = session is not None and self.is_stream(session)
-            # Every session starts knowing its skills and tools.
-            listing = render_listing(self.skills, tool_overview(toolkits[:-1]))
-            spec.pre_seeds.append(PreSeedCall(LIST_SKILLS, {}, lambda _input: listing))
+        # Toolkits pre-seed what every session should start knowing (its
+        # skills, the bots it can message); a stream session needs it each turn.
+        spec.pre_seed_each_turn = session is not None and self.is_stream(session)
         return spec
 
     async def ask(

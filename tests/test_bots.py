@@ -740,7 +740,16 @@ async def test_nested_bot_folders_make_sub_bots_the_parent_can_message(tmp_path)
     assert result.text == "Kitchen says tacos."
     first = engine._client.calls[0]
     assert "ergo_bot_call" in _tool_names(first)
-    assert "- kitchen: Runs the kitchen" in first["system"]
+    # The bots it can reach are pre-seeded as an ergo_bot_list result.
+    seeded = [
+        part["content"]
+        for message in first["messages"]
+        if isinstance(message["content"], list)
+        for part in message["content"]
+        if part.get("type") == "tool_result"
+    ]
+    assert any("- kitchen: Runs the kitchen" in text for text in seeded)
+    assert "- kitchen: Runs the kitchen" not in first["system"]
     assert _last_tool_result(engine) == "Tacos."
     called = await kitchen.sessions(user).aget()
     assert called.metadata["called_by"] == "boundcorp"

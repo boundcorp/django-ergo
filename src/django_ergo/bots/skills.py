@@ -140,5 +140,6 @@ def skills_toolkit(skills: list[Skill], tools_for_listing) -> Toolkit:
                 parameters={"name": {"type": "string", "description": "Skill name"}},
                 required=["name"],
             ),
-        ]
+        ],
+        seed=[LIST_SKILLS],
     )
