@@ -132,3 +132,17 @@ def queue_thread_message(message_id: str) -> None:
         threading.Thread(target=run, daemon=True).start()
         return
     deliver_thread_message.delay(message_id)
+
+
+@shared_task(name="ergonaut.archive_idle_threads", ignore_result=True)
+def archive_idle_threads() -> list[str]:
+    """Archive threads idle past their bot's sessions.archive_after_days."""
+    from django_ergo.bots import archival, webhooks
+
+    registry = webhooks.get_registry()
+    archived = archival.archive_idle_threads(list(registry) if registry is not None else [])
+    for session_id in archived:
+        notify(session_id)
+    if archived:
+        logger.info("Archived %d idle threads", len(archived))
+    return archived

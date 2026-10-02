@@ -23,6 +23,7 @@ bot.yaml::
     current_time: true                 # put the current date and time in context
     sessions:
       allow_create: true               # may the root start threads?
+      archive_after_days: 7            # archive threads idle this long (0 = never)
       default_compaction: {mode: stream, config: {keep_recent: 15}}
     tools: [tools/tandoor.py]
     skills: skills                     # default; see django_ergo.bots.skills
@@ -79,6 +80,7 @@ class BotDefinition:
     timezone: str = ""
     current_time: bool = True
     allow_create_sessions: bool = False
+    archive_after_days: int = 7
     default_compaction_mode: str = CompactionMode.STREAM
     default_compaction_config: dict = field(default_factory=dict)
     tool_files: list[Path] = field(default_factory=list)
@@ -122,6 +124,7 @@ class BotDefinition:
             timezone=str(data.get("timezone") or ""),
             current_time=bool(data.get("current_time", True)),
             allow_create_sessions=bool(sessions.get("allow_create", False)),
+            archive_after_days=int(sessions.get("archive_after_days", 7) or 0),
             default_compaction_mode=mode,
             default_compaction_config=dict(compaction.get("config") or {}),
             tool_files=[_tool_path(p, root_dir) for p in data.get("tools") or []],

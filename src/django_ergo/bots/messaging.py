@@ -29,6 +29,7 @@ from asgiref.sync import async_to_sync
 from django.db import close_old_connections
 from django.db import transaction
 
+from django_ergo.bots import archival
 from django_ergo.conversation.models import ConversationSession
 from django_ergo.conversation.models import StructuredCallStatus
 from django_ergo.conversation.models import ThreadMessage
@@ -172,9 +173,7 @@ def deliver(message_id: str, registry: BotRegistry | None = None) -> None:
     if not wait_until_idle(recipient):
         fail(message, "The recipient stayed busy too long")
         return
-    if recipient.status == "completed":
-        recipient.status = "active"
-        recipient.save(update_fields=["status", "updated_at"])
+    archival.reopen(recipient)
     message.status = ThreadMessageStatus.DELIVERED
     message.save(update_fields=["status", "updated_at"])
     try:

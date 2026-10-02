@@ -338,6 +338,10 @@ DEFAULT_AUTO_FIELD = "django.db.models.AutoField"
 
 # Celery
 CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL")
+CELERY_BEAT_SCHEDULE = {
+    # Bot threads idle past their bot's sessions.archive_after_days.
+    "archive-idle-threads": {"task": "ergonaut.archive_idle_threads", "schedule": 60 * 60},
+}
 if CELERY_BROKER_URL:
     CELERY_RESULT_BACKEND = os.environ.get("CELERY_RESULT_BACKEND", CELERY_BROKER_URL)
 else:

@@ -125,7 +125,8 @@ export function Chat({ onChange }: { onChange: () => void }) {
   const lastCall = detail.calls[detail.calls.length - 1]
   const waiting = lastCall?.status === 'awaiting_approval' ? lastCall.pending_approvals : []
   const suggestions = !waiting.length ? (last?.suggestions ?? lastCall?.response?.suggestions ?? []) : []
-  const closed = detail.session.status === 'completed'
+  const archived = detail.session.status === 'completed' && detail.session.role === 'thread'
+  const closed = detail.session.status === 'completed' && !archived
   const thinking = busy || !!pending || lastCall?.status === 'in_progress'
   const callError = !pending && lastCall?.status === 'failed' ? lastCall.error : ''
   // Show a queued message until the worker has stored it.
@@ -141,8 +142,22 @@ export function Chat({ onChange }: { onChange: () => void }) {
             {detail.session.bot} · {detail.session.role || 'session'} · {detail.messages.length} messages
           </div>
         </div>
+        {detail.session.role === 'thread' && (
+          <button
+            className="ml-auto rounded-md border border-zinc-300 px-2 py-0.5 text-xs text-zinc-600 disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-400"
+            disabled={archived || busy}
+            title={archived ? 'Archived; a new message reopens it' : 'Archive this thread'}
+            onClick={async () => {
+              await api.close(id).catch(e => setError(String(e.message ?? e)))
+              await load()
+              onChange()
+            }}
+          >
+            {archived ? 'Archived' : 'Archive'}
+          </button>
+        )}
         <button
-          className={`ml-auto rounded-md border px-2 py-0.5 text-xs ${showFiles ? 'border-indigo-400 text-indigo-700 dark:text-indigo-300' : 'border-zinc-300 text-zinc-600 dark:border-zinc-700 dark:text-zinc-400'}`}
+          className={`${detail.session.role === 'thread' ? '' : 'ml-auto '}rounded-md border px-2 py-0.5 text-xs ${showFiles ? 'border-indigo-400 text-indigo-700 dark:text-indigo-300' : 'border-zinc-300 text-zinc-600 dark:border-zinc-700 dark:text-zinc-400'}`}
           onClick={() => toggleFiles(!showFiles)}
         >
           📎 Files
@@ -213,7 +228,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
             }
           }}
           rows={2}
-          placeholder={closed ? 'This session is closed' : waiting.length ? 'Answer the approval first' : 'Message the bot'}
+          placeholder={closed ? 'This session is closed' : waiting.length ? 'Answer the approval first' : archived ? 'Archived: sending a message reopens it' : 'Message the bot'}
           className="flex-1 resize-none rounded-lg border border-zinc-300 bg-transparent px-3 py-2 focus:border-indigo-500 focus:outline-none dark:border-zinc-700"
         />
         <button disabled={busy || !text.trim()} className="rounded-lg bg-indigo-600 px-4 text-white disabled:opacity-50">

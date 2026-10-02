@@ -30,6 +30,7 @@ timezone: America/Los_Angeles        # default for users without a timezone
 current_time: true                   # current date and time in every turn
 sessions:
   allow_create: true                 # may the root start threads?
+  archive_after_days: 7              # archive threads idle this long (0 = never)
   default_compaction: {mode: context_size, config: {keep_recent: 6}}
 tools: [tools/tandoor.py]
 toolkits: ["myapp.toolkits:make_toolkit"]   # factory(ctx) -> Toolkit or list
@@ -178,6 +179,12 @@ queues a Celery task) or a background thread. Starting a thread of the bot's
 own needs `sessions.allow_create`; set `orchestration: false` for a bot that
 only answers in its root session and gets none of these tools (it still
 answers messages sent to it).
+
+Threads idle longer than `sessions.archive_after_days` (default 7) are
+archived by `django_ergo.bots.archival.archive_idle_threads`, which
+Ergonaut's Celery beat runs hourly; threads with a turn in progress, a
+pending approval or an unanswered thread message are left alone. Root chats
+are never archived. A message to an archived thread reopens it.
 
 `BotRegistry.discover("bots/")` loads every folder at or under `bots/` that
 has a `bot.yaml`, and lets bots find each other by name. Bot folders can

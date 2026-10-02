@@ -23,8 +23,8 @@ from typing import TYPE_CHECKING
 from asgiref.sync import async_to_sync
 from django.core.exceptions import ValidationError
 from django.db.models import Q
-from django.utils import timezone
 
+from django_ergo.bots import archival
 from django_ergo.bots import messaging
 from django_ergo.bots.tools import BotTool
 from django_ergo.bots.tools import FunctionToolkit
@@ -162,9 +162,7 @@ def ergo_thread_archive(ctx: ToolContext, thread_id: str) -> str:
     if (thread.metadata or {}).get("bot_role") == "root":
         msg = "The root chat can't be archived."
         raise ValueError(msg)
-    thread.metadata = {**(thread.metadata or {}), "archived_at": timezone.now().isoformat()}
-    thread.save(update_fields=["metadata"])
-    async_to_sync(ctx.bot.close_session)(thread)
+    archival.archive(thread, reason="archived by the bot")
     return f"Archived {messaging.label(thread)}"
 
 

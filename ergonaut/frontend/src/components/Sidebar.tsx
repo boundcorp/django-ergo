@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Link, NavLink, useNavigate } from "react-router-dom";
 import type { Bot, Session } from "../api";
 import { api } from "../api";
@@ -38,6 +39,7 @@ export function Sidebar({
   onChange: () => void;
 }) {
   const navigate = useNavigate();
+  const [showArchived, setShowArchived] = useState<Record<string, boolean>>({});
 
   async function openRoot(bot: Bot) {
     const root = await api.openRoot(bot.name);
@@ -69,6 +71,9 @@ export function Sidebar({
         const root = mine.find((s) => s.id === bot.root_session_id);
         const threads = mine.filter(
           (s) => s.role === "thread" && s.status !== "completed",
+        );
+        const archived = mine.filter(
+          (s) => s.role === "thread" && s.status === "completed",
         );
         return (
           <section key={bot.name}>
@@ -108,6 +113,18 @@ export function Sidebar({
             {threads.map((t) => (
               <SessionLink key={t.id} session={t} nested />
             ))}
+            {!!archived.length && (
+              <button
+                className="ml-4 px-2 py-0.5 text-xs text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300"
+                onClick={() =>
+                  setShowArchived((open) => ({ ...open, [bot.name]: !open[bot.name] }))
+                }
+              >
+                {showArchived[bot.name] ? "▾" : "▸"} {archived.length} archived
+              </button>
+            )}
+            {showArchived[bot.name] &&
+              archived.map((t) => <SessionLink key={t.id} session={t} nested />)}
             {bot.knowledge && (
               <NavLink
                 to={`/bots/${bot.name}/kb`}

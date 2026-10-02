@@ -859,3 +859,41 @@ async def test_a_kb_folder_is_the_bots_knowledge_base(tmp_path):
     assert "Knowledge base: Kitchen" in first["system"]
     assert "chocolate Soylent shake" in first["system"]
     assert {"ergo_kb_search", "ergo_kb_read"} <= _tool_names(first)
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_idle_threads_are_archived_and_reopen_on_a_message(tmp_path):
+    from datetime import timedelta
+
+    from django.utils import timezone
+
+    from django_ergo.bots import archival
+    from django_ergo.conversation.models import ThreadMessage
+
+    user = await User.objects.acreate(username="tidy")
+    bot, _ = make_bot(tmp_path, say("ok"))
+    root = await bot.root_session(user)
+    old = await bot.create_session(user, parent=root, title="Old")
+    busy = await bot.create_session(user, parent=root, title="Busy")
+    fresh = await bot.create_session(user, parent=root, title="Fresh")
+    await ThreadMessage.objects.acreate(recipient_session=busy, text="still working", status="delivered")
+    ago = timezone.now() - timedelta(days=8)
+    await ConversationSession.objects.filter(id__in=[root.id, old.id, busy.id]).aupdate(updated_at=ago)
+
+    archived = await sync_to_async(archival.archive_idle_threads)([bot])
+    assert archived == [str(old.id)]
+    await old.arefresh_from_db()
+    assert old.status == "completed"
+    assert old.metadata["archived_reason"] == "idle"
+    for session in (root, busy, fresh):
+        await session.arefresh_from_db()
+        assert session.status == "active"
+
+    assert await sync_to_async(archival.reopen)(old)
+    await old.arefresh_from_db()
+    assert old.status == "active"
+    assert "archived_at" not in old.metadata
+
+    bot.definition.archive_after_days = 0  # never
+    await ConversationSession.objects.filter(id=old.id).aupdate(updated_at=ago)
+    assert await sync_to_async(archival.archive_idle_threads)([bot]) == []

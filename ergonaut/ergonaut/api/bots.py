@@ -20,6 +20,7 @@ from ninja import UploadedFile
 from ninja.errors import HttpError
 from ninja.security import django_auth
 
+from django_ergo.bots import archival
 from django_ergo.bots import webhooks
 from django_ergo.bots.runtime import Bot
 from django_ergo.conversation.attachments import save_session_file
@@ -370,6 +371,8 @@ async def send_message(request, session_id: str, data: MessageIn):
     if not data.text.strip():
         raise HttpError(400, "Say something")
     get_bot(session.bot_name)
+    if session.status == "completed" and (session.metadata or {}).get("bot_role") == "thread":
+        await sync_to_async(archival.reopen)(session)  # a message brings an archived thread back
     return await sync_to_async(queue_and_report)(session, message=data.text)
 
 
@@ -384,8 +387,11 @@ async def answer_approval(request, session_id: str, data: ApprovalIn):
 
 @router.post("/sessions/{session_id}/close", response=SessionOut)
 async def close_session(request, session_id: str):
+    """Archive a thread (a root chat can't be archived)."""
     session = await get_session(request, session_id)
-    await get_bot(session.bot_name).close_session(session)
+    if (session.metadata or {}).get("bot_role") == "root":
+        raise HttpError(409, "The root chat can't be archived")
+    await sync_to_async(archival.archive)(session, "archived by the user")
     return await sync_to_async(session_out)(session)
 
 
