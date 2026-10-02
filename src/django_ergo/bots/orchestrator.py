@@ -136,11 +136,21 @@ def ergo_thread_list(
             "description": '"main" for its main chat, a named chat, "new" for a new thread, or a thread id',
         },
         "title": {"type": "string", "description": "Title for a new thread"},
+        "attachments": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Files in this chat (filenames or ids) the recipient should see; it can open them",
+        },
     },
     required=["message"],
 )
-def ergo_thread_send(
-    ctx: ToolContext, message: str, bot: str = "", thread: str = "main", title: str = ""
+def ergo_thread_send(  # noqa: PLR0913, PLR0917
+    ctx: ToolContext,
+    message: str,
+    bot: str = "",
+    thread: str = "main",
+    title: str = "",
+    attachments: list[str] | None = None,
 ) -> dict:
     """Send a message to a bot's main chat, a named chat, a thread, or a new thread.
 
@@ -148,6 +158,7 @@ def ergo_thread_send(
     """
     target = _target(ctx, bot)
     user = ctx.session.user
+    files = _shared_files(ctx.session, attachments or [])
     thread = (thread or "main").strip()
     if thread in ("main", "root") or thread in target.definition.chats:
         recipient = async_to_sync(target.chat_session)(user, thread)
@@ -166,6 +177,13 @@ def ergo_thread_send(
     if recipient.id == ctx.session.id:
         msg = "That is this chat; send it somewhere else."
         raise ValueError(msg)
+    if files:
+        listed = ", ".join(f"{row.filename} (id {row.id})" for row in files)
+        message += (
+            f"\n\n[Files from {messaging.label(ctx.session)} (thread {ctx.session.id}): "
+            f"{listed}. Open them with ergo_attachments_look or ergo_attachments_read, "
+            "by id or by filename with this thread's id as session_id.]"
+        )
     sent = messaging.send(ctx.session, recipient, message, registry=ctx.bot.registry)
     return {
         "sent_to": messaging.label(recipient),
@@ -173,6 +191,29 @@ def ergo_thread_send(
         "message_id": str(sent.id),
         "note": "The reply will arrive as a new message in this chat.",
     }
+
+
+def _shared_files(session, refs: list[str]) -> list:
+    """This session's files named by id or filename, or a ValueError naming the missing."""
+    import uuid
+
+    from django_ergo.conversation.models import ConversationAttachment
+
+    found, missing = [], []
+    for ref in refs:
+        rows = ConversationAttachment.objects.filter(session=session)
+        try:
+            row = rows.filter(id=uuid.UUID(str(ref))).first()
+        except ValueError:
+            row = rows.filter(filename=ref).order_by("-updated_at").first()
+        if row is None:
+            missing.append(str(ref))
+        elif row not in found:
+            found.append(row)
+    if missing:
+        msg = f"No file {', '.join(missing)} in this chat (see ergo_attachments_list)"
+        raise ValueError(msg)
+    return found
 
 
 @bot_tool(takes_context=True)

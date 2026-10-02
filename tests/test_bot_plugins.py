@@ -922,6 +922,46 @@ def test_attachments_access_rules(tmp_path, settings):
 
 
 @pytest.mark.django_db
+def test_files_open_by_name_in_another_thread(tmp_path, settings):
+    from django_ergo.bots.orchestrator import ergo_thread_send
+    from django_ergo.bots.tools import ToolContext
+    from django_ergo.conversation.attachments import save_session_file
+    from django_ergo.conversation.models import ThreadMessage
+
+    settings.MEDIA_ROOT = str(tmp_path / "media")
+    bot, _, plugin = files_bot(tmp_path)
+    lee = User.objects.create(username="lee-shares")
+    x = ConversationSession.objects.create(
+        user=lee, bot_name="filer", metadata={"bot_role": "main"}
+    )
+    y = ConversationSession.objects.create(
+        user=lee, bot_name="filer", metadata={"bot_role": "thread", "title": "Y"}
+    )
+    save_session_file(x, "1.md", b"old draft")
+    newest = save_session_file(x, "1.md", b"# Cover")
+    save_session_file(x, "2.png", b"\x89PNGfake", media_type="image/png")
+
+    # Y opens X's file by name, with X's thread id.
+    at_y = ToolContext(bot=bot, session=y, user=lee)
+    assert plugin.read(at_y, "1.md", str(x.id)).endswith("# Cover")
+    with pytest.raises(ValueError, match=r"No file 3\.md in session"):
+        plugin.read(at_y, "3.md", str(x.id))
+    with pytest.raises(ValueError, match=r"No file 1\.md"):
+        plugin.read(at_y, "1.md")  # not in Y itself
+
+    # X names its files when it sends; Y gets ids it can open.
+    at_x = ToolContext(bot=bot, session=x, user=lee)
+    sent = ergo_thread_send(
+        at_x, "Review these", thread=str(y.id), attachments=["1.md", "2.png"]
+    )
+    text = ThreadMessage.objects.get(id=sent["message_id"]).text
+    assert text.startswith("Review these\n\n[Files from filer · Main")
+    assert f"1.md (id {newest.id})" in text
+    with pytest.raises(ValueError, match=r"No file nope\.png in this chat"):
+        ergo_thread_send(at_x, "x", thread=str(y.id), attachments=["nope.png"])
+
+
+@pytest.mark.django_db
 def test_attachments_archive_and_unarchive(tmp_path, settings):
     from datetime import timedelta
 
