@@ -210,3 +210,37 @@ def test_schedule_code_can_write_to_tables(realty_bot):
     assert job.status == "completed", job.traceback
     assert job.result == 3
     assert bot.code("tables.py").House is bot.table("House")
+
+
+@pytest.mark.django_db(transaction=True)
+def test_preview_renders_a_draft_page_with_samples_and_saves_nothing(realty):  # noqa: F811
+    from io import StringIO
+
+    from django.db import connection
+
+    folder, _engine = realty
+    call_command("ergo_bot_makemigrations", str(folder))
+    (folder / "pages").mkdir()
+    (folder / "pages" / "ok.jhtml").write_text(
+        "{% for h in table('House').order_by('address') %}{{ h.address }}:"
+        "{% if h.price is not none %}{{ (h.price / 1000) | number }}k{% else %}?{% endif %};{% endfor %}"
+    )
+    (folder / "pages" / "bad.jhtml").write_text(
+        "{% for h in table('House') %}{{ h.price / 1000 }}{% endfor %}"
+    )
+
+    def preview(page):
+        out = StringIO()
+        call_command("ergo_bot_preview", str(folder), page, stdout=out)
+        return json.loads(out.getvalue().strip().splitlines()[-1])
+
+    good = preview("pages/ok.jhtml")
+    assert good["ok"], good
+    assert "sample address 1:0.01k;" in good["preview"]
+    assert "sample address 2:?;" in good["preview"]  # optional fields left empty
+    assert any("4 sample rows" in n for n in good["notes"])
+
+    bad = preview("pages/bad.jhtml")
+    assert not bad["ok"] and "NoneType" in bad["error"]
+    assert not preview("../outside.jhtml")["ok"]
+    assert "ergo_bot_realty_house" not in connection.introspection.table_names()

@@ -12,6 +12,8 @@ The repository is the git checkout that contains the bot folder. Tools:
 
 - ``ergo_config_repo_status``, ``ergo_config_repo_list``, ``ergo_config_repo_read``, ``ergo_config_repo_diff``: look around.
 - ``ergo_config_repo_write``: change a file (nothing is published).
+- ``ergo_config_repo_preview``: render a ``.jhtml`` page from the changes, with
+  the draft's tables and sample rows, all rolled back (``ergo_bot_preview``).
 - ``ergo_config_repo_publish``: commit everything. In ``merge_main`` mode it rebases on
   the main branch and pushes to it. In ``propose_pr`` mode it pushes a new
   branch and opens a pull request with the GitHub CLI (``gh``).
@@ -214,6 +216,53 @@ class BotManagementPlugin(BotPlugin):
                 out.append(proc.stdout.strip())
         return "\n".join(out)
 
+    def preview(self, path: str) -> str:
+        """Render a .jhtml page from the draft (or checkout) in a separate process."""
+        import os
+        import sys
+
+        work = self.workdir
+        target = self.path(path)
+        if target.suffix != ".jhtml" or not target.is_file():
+            msg = f"{path} isn't a .jhtml page in the repository"
+            raise ValueError(msg)
+        folder = next(
+            (
+                p
+                for p in target.parents
+                if (p / "bot.yaml").is_file() and p.is_relative_to(work)
+            ),
+            None,
+        )
+        if folder is None:
+            msg = f"{path} isn't inside a bot folder"
+            raise ValueError(msg)
+        self.make_migrations(work)
+        proc = subprocess.run(  # noqa: S603 — our own management command
+            [
+                sys.executable,
+                "-m",
+                "django",
+                "ergo_bot_preview",
+                str(folder),
+                str(target.relative_to(folder)),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=COMMAND_TIMEOUT,
+            check=False,
+            env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+        )
+        lines = proc.stdout.strip().splitlines()
+        if proc.returncode != 0 or not lines:
+            msg = f"Preview failed: {(proc.stderr or proc.stdout).strip()[-800:]}"
+            raise ValueError(msg)
+        result = json.loads(lines[-1])
+        notes = "\n".join(f"Note: {n}" for n in result.get("notes", []))
+        if not result.get("ok"):
+            return f"The page doesn't render: {result.get('error')}\n{notes}"
+        return f"Rendered {path}:\n\n{result.get('preview')}\n\n{notes}"
+
     def diff(self) -> str:
         work = self.workdir
         self.make_migrations(work)
@@ -337,7 +386,7 @@ class BotManagementPlugin(BotPlugin):
             return []
         return [FunctionToolkit(self._tools(), ctx)]
 
-    def _tools(self) -> list[BotTool]:
+    def _tools(self) -> list[BotTool]:  # noqa: C901 — one closure per tool
         plugin = self
         publish_help = (
             "Commit all changes and push them to the main branch."
@@ -374,6 +423,15 @@ class BotManagementPlugin(BotPlugin):
             """Show uncommitted changes in the bot repository."""
             return plugin.diff()
 
+        @bot_tool(name="ergo_config_repo_preview")
+        def preview(path: str) -> str:
+            """Render a .jhtml page from the unpublished changes and show its text (or the error).
+
+            Nothing is saved: the draft's tables are created in a transaction that is rolled
+            back, and empty tables get sample rows, some with optional fields empty.
+            """
+            return plugin.preview(path)
+
         @bot_tool(name="ergo_config_repo_pull")
         def pull() -> str:
             """Update the main branch from the remote (fast-forward only)."""
@@ -399,5 +457,16 @@ class BotManagementPlugin(BotPlugin):
             """List open pull requests on the bot repository."""
             return plugin.prs()
 
-        functions = [status, list_files, read, write, diff, discard, pull, publish, prs]
+        functions = [
+            status,
+            list_files,
+            read,
+            write,
+            diff,
+            preview,
+            discard,
+            pull,
+            publish,
+            prs,
+        ]
         return [fn.__bot_tool__ for fn in functions]
