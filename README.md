@@ -117,8 +117,12 @@ What a bot gets:
 - [Getting started](docs/getting-started.md): run Ergonaut and the hello bot, add a tool
 - [Building bots](docs/building-bots.md): the folder, bot.yaml, chats, threads, sub-bots
 - [Skills](docs/skills.md): skill folders, tool files, loading and unloading
-- [Tools and plugins](docs/tools.md): `@bot_tool`, context, secrets, approvals, tasks, workers, writing plugins
+- [Tools](docs/tools.md): `@bot_tool`, context, secrets, approvals, tasks, workers, toolkits
 - [Schedules](docs/schedules.md): cron, targets and actions
+- [Memory and knowledge bases](docs/memory.md): history, the `kb/` folder, bots that take notes
+- [Data tables](docs/tables.md): `BotTable` models, migrations, pages over tables
+- [Attachments](docs/attachments.md): files in chats, images, audio
+- [Plugins](docs/plugins.md): the official plugins and writing your own
 - [Bot reference](docs/bots.md): every bot.yaml key and official plugin
 - [Running Ergonaut](docs/ergonaut.md): commands, settings, containers, production
 
@@ -128,7 +132,6 @@ What a bot gets:
 - [Compaction](docs/compaction.md)
 - [Context builder and window chats](docs/context-builder.md)
 - [Message history](docs/message-history.md)
-- [Attachments](docs/attachments.md)
 - [Knowledge foundation](docs/knowledge-foundation.md), [knowledge paths](docs/knowledge-paths.md), [filesystem and vector integration](docs/fs-vector-integration.md)
 - [Semantic fields and search](docs/semantic-search.md)
 

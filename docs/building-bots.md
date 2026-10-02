@@ -159,7 +159,7 @@ plugins:
 
 For long-term reference material, `ergo_kb` can also point at Ergo
 knowledge bases in the database (`knowledgebases: [...]`) or any toolkit
-factory.
+factory. See [Memory and knowledge bases](memory.md).
 
 ## Tables and pages
 
@@ -195,7 +195,7 @@ they're opened:
 ```
 
 Pin them in a chat with `chats.<name>.pins`, or let the bot write its own
-with the `pages` plugin. See [Pages and pins](bots.md#pages-and-pins).
+with the `pages` plugin. See [Data tables](tables.md).
 
 ## People
 

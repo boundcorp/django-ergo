@@ -96,4 +96,4 @@ A plugin is one skill. Its tools, `context_sources` and `skill_instructions`
 arrive when it loads; `always_context_sources` stay on regardless (the KB
 plugin keeps `kb/index.md` and prefetched articles in context this way).
 `skill_hint(ctx)` is the one-line note shown in the list while unloaded.
-See [writing a plugin](tools.md#plugins).
+See [writing a plugin](plugins.md#writing-a-plugin).

@@ -9,7 +9,7 @@ to largest:
    `toolkits:`. Use these to share tools between bots or with non-bot code.
 3. **Plugins**: a `BotPlugin` that adds tools plus context, lifecycle hooks,
    long-running services and webhooks. Use these for channels and
-   integrations.
+   integrations; see [Plugins](plugins.md).
 
 Each of them becomes a [skill](skills.md).
 
@@ -180,50 +180,6 @@ zero-argument tools.
 
 ## Plugins
 
-```python
-from django_ergo.bots.plugins import BotPlugin
-
-class CRMPlugin(BotPlugin):
-    name = "crm"
-    description = "Customers and deals in the CRM"
-
-    def on_load(self): ...                                  # bot constructed; self.config is the bot.yaml entry
-    def toolkits(self, ctx): return [make_crm_toolkit(ctx)]
-    def context_sources(self, ctx, message): return []      # while the skill is loaded
-    def always_context_sources(self, ctx, message): return []
-    def skill_hint(self, ctx): return ""                    # shown in the skill list while unloaded
-    async def before_turn(self, session, message): ...
-    async def after_turn(self, session, message, result): ...
-    async def serve(self): ...                              # long-running, e.g. polling a channel
-    def webhooks(self): return {"event": self.on_event}
-    def worker_functions(self): return {}                   # "<plugin>:<name>" workers
-```
-
-Use it from bot.yaml by dotted path, or register a short name in
-`DJANGO_ERGO["BOT_PLUGINS"]`:
-
-```yaml
-plugins:
-  - name: myapp.plugins:CRMPlugin
-    base_url: https://crm.example.com      # every other key is self.config
-```
-
-Hooks may be sync or async. `serve()` runs in `ergonaut bots` (one
-process for all bots). Webhooks are served at
-`/hooks/<bot>/<plugin>/<name>/`; `self.webhook_url(name)` gives the public
-URL once `DJANGO_ERGO["BOT_WEBHOOK_BASE_URL"]` (Ergonaut:
-`ERGONAUT_PUBLIC_URL`) is set. Handlers check their own signatures.
-
-## Official plugins
-
-| Plugin | Gives the bot |
-| --- | --- |
-| `ergo_kb` | knowledge base search, reading and (with `write: true`) note-taking; added for any `kb/` folder |
-| `bot_management` | read, edit and publish its own config repo, as a PR or straight to main |
-| `pages` | write live `.jhtml` pages into a chat and pin them |
-| `attachments` | list, read, write, look at and archive chat files |
-| `telegram` | a Telegram bot, by webhook or polling, with approval buttons |
-| `orca` | the Orca CLI: worktrees, terminals and supervised coding workers |
-| `bash` | shell commands on the host, each approved by default |
-
-Options for each are in the [bot reference](bots.md#official-plugins).
+A plugin adds tools plus context, lifecycle hooks, services and webhooks,
+configured per bot in bot.yaml. See [Plugins](plugins.md) for the official
+ones and how to write your own.

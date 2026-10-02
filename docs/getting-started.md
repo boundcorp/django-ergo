@@ -122,11 +122,12 @@ While Ergonaut runs, it reloads a bot when its files change, so edits to
 `agents.md`, `bot.yaml` and tools reach the next turn without a restart.
 
 Notes kept in a Python list vanish on restart. For data that lasts, give the
-bot a table (see [Building bots](building-bots.md#tables-and-pages)) or a
-knowledge base folder it can write to.
+bot a [table](tables.md) or a [knowledge base](memory.md) folder it can
+write to.
 
 ## Next
 
 - [Building bots](building-bots.md): chats, threads, sub-bots, knowledge, tables
-- [Tools and plugins](tools.md): context, secrets, approvals, background work
+- [Tools](tools.md): context, secrets, approvals, background work
+- [Memory and knowledge bases](memory.md): what the bot remembers and how it learns
 - [Schedules](schedules.md): have the bot do things on its own
