@@ -21,10 +21,10 @@ name: kitchen
 description: Household kitchen manager
 instructions: agents.md              # default
 engine:
-  type: claude                       # or openai; default is the settings engine
-  config: {model: claude-sonnet-5-5}
-  api_key_env: KITCHEN_ANTHROPIC_KEY # read at runtime, never stored
-  # with a providers.yaml: config: {model: anthropic/claude-sonnet-5-5}
+  type: openai                       # or claude (optional); default is the settings engine (openai)
+  config: {model: gpt-6-luna}
+  api_key_env: KITCHEN_OPENAI_KEY    # read at runtime, never stored
+  # with a providers.yaml: config: {model: openai/gpt-6-sol}
 root:                                # window settings for main and named chats
   recent: 15                         # latest messages always in context
   budget_tokens: 8000
