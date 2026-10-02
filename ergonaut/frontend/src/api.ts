@@ -276,7 +276,8 @@ export const api = {
   },
   openRoot: (bot: string) => request<Session>('POST', `/bots/${bot}/root`),
   openChat: (bot: string, name: string) => request<Session>('POST', `/bots/${bot}/chats/${name}`),
-  newThread: (bot: string, title: string) => request<Session>('POST', `/bots/${bot}/threads`, { title }),
+  newThread: (bot: string, title: string, message = '') =>
+    request<Session>('POST', `/bots/${bot}/threads`, { title, message }),
   session: (id: string) => request<SessionDetail>('GET', `/sessions/${id}`),
   call: (id: string) =>
     request<Call & { system_prompt: string; transcript: unknown[]; metadata: unknown }>('GET', `/calls/${id}`),

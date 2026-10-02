@@ -7,6 +7,9 @@
         approve_changes: true      # orca_run waits for the user's approval
         root_only: true            # only the root session gets these tools
         timeout: 120               # seconds per command
+        files_host: devbox         # ssh host holding the worktrees (default: the environment;
+                                   # "" reads them on this host)
+        max_attach_bytes: 20000000
 
 The bot runs the CLI on the host Ergonaut runs on, as that user. Tools:
 
@@ -15,6 +18,11 @@ The bot runs the CLI on the host Ergonaut runs on, as that user. Tools:
   list|show|search-refs``, ``orchestration run-list|worker-list|worker-read|
   worker-show``, ``search``, ``skills get`` (the CLI's own guides) and
   ``<subcommand> --help``.
+- ``orca_attach``: copy a file from an Orca worktree into the chat, as an
+  attachment (screenshots, reports, logs a worker wrote). The path must stay
+  inside the worktree (symlinks resolved), and secret-looking files (``.env*``,
+  ``*.pem``, ``*.key``, anything named like a secret) are refused. Worktree
+  files are read over ``ssh <files_host>``.
 - ``orca_run``: every other command (creating worktrees, starting and
   stopping workers, sending to terminals...). Each call needs approval unless
   ``approve_changes: false``.
@@ -131,6 +139,32 @@ def is_read_only(args: list[str]) -> bool:
     return any(command[: len(known)] == known for known in READ_ONLY)
 
 
+def is_secret(name: str) -> bool:
+    name = name.lower()
+    return (
+        name.startswith((".env", "id_rsa", "id_ed25519"))
+        or name.endswith((".pem", ".key", ".p12", ".pfx"))
+        or "secret" in name
+        or "credential" in name
+    )
+
+
+def _first_path(value):
+    """The first "path" string in a JSON value (worktree show nests it)."""
+    if isinstance(value, dict):
+        if isinstance(value.get("path"), str):
+            return value["path"]
+        values = value.values()
+    elif isinstance(value, list):
+        values = value
+    else:
+        return None
+    for item in values:
+        if found := _first_path(item):
+            return found
+    return None
+
+
 class OrcaPlugin(BotPlugin):
     name = "orca"
     description = "Manage Orca worktrees, terminals and workers"
@@ -144,6 +178,8 @@ class OrcaPlugin(BotPlugin):
         self.approve_changes = bool(self.config.get("approve_changes", True))
         self.root_only = bool(self.config.get("root_only", True))
         self.timeout = int(self.config.get("timeout", 120))
+        self.files_host = str(self.config.get("files_host", self.environment) or "")
+        self.max_attach_bytes = int(self.config.get("max_attach_bytes", 20_000_000))
 
     def argv(self, args: list[str]) -> list[str]:
         args = [str(a) for a in args]
@@ -187,6 +223,93 @@ class OrcaPlugin(BotPlugin):
                 "use orca_run, which asks the user first."
             )
         return self.run(args, fields)
+
+    # -- attaching worktree files -------------------------------------------
+
+    def worktree_path(self, worktree: str) -> str:
+        proc = subprocess.run(  # noqa: S603 — argv list, no shell
+            self.argv(["worktree", "show", "--worktree", worktree]),
+            capture_output=True,
+            text=True,
+            timeout=self.timeout,
+            check=False,
+        )
+        found = (
+            _first_path(json.loads(proc.stdout))
+            if proc.returncode == 0 and proc.stdout.strip()
+            else None
+        )
+        if not found:
+            msg = f"No worktree {worktree!r}: {(proc.stderr or proc.stdout).strip()[:300]}"
+            raise ValueError(msg)
+        return found
+
+    def fetch(self, root: str, path: str) -> tuple[str, bytes]:
+        """A file inside the worktree at ``root``: its resolved path and bytes."""
+        import posixpath
+        import shlex
+
+        target = posixpath.normpath(
+            path if path.startswith("/") else posixpath.join(root, path)
+        )
+        if not target.startswith(root.rstrip("/") + "/"):
+            msg = f"{path} is outside the worktree"
+            raise ValueError(msg)
+        if is_secret(posixpath.basename(target)):
+            msg = f"{posixpath.basename(target)} looks like a secret; it can't be attached"
+            raise ValueError(msg)
+        limit = self.max_attach_bytes
+        script = (
+            f"set -e; r=$(realpath -e -- {shlex.quote(root)}); f=$(realpath -e -- {shlex.quote(target)}); "
+            'case "$f" in "$r"/*) ;; *) echo "outside the worktree" >&2; exit 3;; esac; '
+            'test -f "$f" || { echo "not a file" >&2; exit 4; }; '
+            f'printf "%s\\0" "$f"; head -c {limit + 1} -- "$f"'
+        )
+        argv = (
+            ["ssh", "-o", "BatchMode=yes", self.files_host, script]
+            if self.files_host
+            else ["sh", "-c", script]
+        )
+        proc = subprocess.run(  # noqa: S603 — fixed script; paths are shell-quoted
+            argv, capture_output=True, timeout=self.timeout, check=False
+        )
+        if proc.returncode:
+            msg = f"Couldn't read {path}: {proc.stderr.decode(errors='replace').strip()[:300]}"
+            raise ValueError(msg)
+        resolved, _, data = proc.stdout.partition(b"\0")
+        if len(data) > limit:
+            msg = f"{path} is larger than {limit} bytes"
+            raise ValueError(msg)
+        resolved = resolved.decode(errors="replace")
+        if is_secret(posixpath.basename(resolved)):  # a symlink to a secret
+            msg = f"{path} points at a secret-looking file; it can't be attached"
+            raise ValueError(msg)
+        return resolved, data
+
+    def attach(
+        self, ctx: ToolContext, worktree: str, path: str, filename: str = ""
+    ) -> dict:
+        import posixpath
+
+        from django_ergo.conversation.attachments import save_session_file
+
+        if ctx.session is None:
+            msg = "Attachments need a chat"
+            raise ValueError(msg)
+        resolved, data = self.fetch(self.worktree_path(worktree), path)
+        row = save_session_file(
+            ctx.session,
+            filename or posixpath.basename(resolved),
+            data,
+            source="bot",
+            metadata={"from_orca": {"worktree": worktree, "path": resolved}},
+        )
+        return {
+            "id": str(row.id),
+            "filename": row.filename,
+            "media_type": row.media_type,
+            "size": row.size,
+        }
 
     # -- plugin hooks ------------------------------------------------------
 
@@ -250,4 +373,33 @@ class OrcaPlugin(BotPlugin):
         def run(args: list[str], fields: list[str] | None = None) -> str:
             return plugin.run(args, fields)
 
-        return [read.__bot_tool__, run.__bot_tool__]
+        @bot_tool(
+            name="orca_attach",
+            takes_context=True,
+            description=(
+                "Copy a file from an Orca worktree into this chat as an attachment, e.g. a "
+                "screenshot, report or log a worker wrote. Lee can then open it in the chat; "
+                "use ergo_attachments_look to see an image or PDF yourself."
+            ),
+            parameters={
+                "worktree": {
+                    "type": "string",
+                    "description": "Worktree selector, e.g. id:<repo-id>::<path> or a path",
+                },
+                "path": {
+                    "type": "string",
+                    "description": "File path, relative to the worktree (or absolute inside it)",
+                },
+                "filename": {
+                    "type": "string",
+                    "description": "Name for the attachment (default: the file's name)",
+                },
+            },
+            required=["worktree", "path"],
+        )
+        def attach(
+            ctx: ToolContext, worktree: str, path: str, filename: str = ""
+        ) -> dict:
+            return plugin.attach(ctx, worktree, path, filename)
+
+        return [read.__bot_tool__, run.__bot_tool__, attach.__bot_tool__]

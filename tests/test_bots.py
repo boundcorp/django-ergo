@@ -1189,3 +1189,29 @@ async def test_instructions_follow_agents_md(tmp_path):
     bot = Bot.load(bot.definition.root_dir, engine_factory=bot._engine_factory)
     await bot.ask(main, "hi again")
     assert engine._client.calls[-1]["system"].startswith("You run a tidy kitchen.")
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_thread_metadata_names_a_new_thread(tmp_path):
+    from django_ergo.conversation.models import StructuredCall
+
+    bot, _ = make_bot(
+        tmp_path, claude_tool("submit_output", {"title": '"Fix the pantry sync."'})
+    )
+    user = await get_user_model().objects.acreate(username="namer")
+    assert await bot.thread_metadata(
+        "the pantry sync keeps failing, can you look?", user=user
+    ) == {"title": "Fix the pantry sync"}
+    call = await StructuredCall.objects.aget(kind="new_thread_metadata")
+    assert call.status == "completed"
+
+
+@pytest.mark.django_db
+def test_max_turns_comes_from_bot_yaml(tmp_path):
+    bot, _ = make_bot(tmp_path)
+    assert bot.reply_spec([]).max_turns == 50
+    bot, _ = make_bot(
+        tmp_path / "x",
+        yaml_text="name: kitchen\nmax_turns: 80\ntools: [tools/pantry.py]\n",
+    )
+    assert bot.reply_spec([]).max_turns == 80

@@ -145,6 +145,9 @@ class SessionDetailOut(Schema):
 
 class NewThreadIn(Schema):
     title: str = ""
+    # The first message, when the thread starts from a prompt: the thread gets a provisional
+    # title from it now and a generated one (new_thread_metadata) a moment later.
+    message: str = ""
 
 
 class MessageIn(Schema):
@@ -551,9 +554,19 @@ async def new_thread(request, bot: str, data: NewThreadIn):
     if not found.definition.orchestration:
         raise HttpError(409, f"{bot} has threads turned off (orchestration: false)")
     root = await found.root_session(request.auth)
-    session = await found.create_session(request.auth, parent=root, title=data.title)
+    title = data.title.strip() or provisional_title(data.message)
+    session = await found.create_session(request.auth, parent=root, title=title)
     session.user = request.auth
+    if data.message.strip() and not data.title.strip():
+        from ergonaut.apps.bots.tasks import queue_thread_naming
+
+        await sync_to_async(queue_thread_naming)(str(session.id), data.message)
     return session_out(session)
+
+
+def provisional_title(message: str) -> str:
+    words = message.split()
+    return " ".join(words[:6]) + ("…" if len(words) > 6 else "") if words else ""
 
 
 @router.get("/sessions/{session_id}", response=SessionDetailOut)

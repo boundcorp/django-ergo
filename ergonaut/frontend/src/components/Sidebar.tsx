@@ -86,12 +86,8 @@ export function Sidebar({
     navigate(`/s/${chat.id}`)
   }
 
-  async function newThread(bot: Bot) {
-    const title = window.prompt('Thread title', '')
-    if (title === null) return
-    const thread = await api.newThread(bot.name, title)
-    onChange()
-    navigate(`/s/${thread.id}`)
+  function newThread(bot: Bot) {
+    navigate(`/bots/${bot.name}/new-thread`)
   }
 
   return (

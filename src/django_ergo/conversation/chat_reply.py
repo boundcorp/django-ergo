@@ -74,7 +74,7 @@ def chat_reply_spec(
     toolkits: list[Toolkit] | None = None,
     *,
     instructions: str = "",
-    max_turns: int = 30,
+    max_turns: int = 50,
     max_tokens: int | None = None,
 ) -> StructuredCallSpec:
     """The structured-call spec for one chat reply turn."""

@@ -7,6 +7,7 @@ import { Chat } from './pages/Chat'
 import { Login } from './pages/Login'
 import { Sessions } from './pages/Sessions'
 import { BotPage } from './pages/BotPage'
+import { NewThread } from './pages/NewThread'
 import { Memory } from './pages/Memory'
 import { CostsPage } from './pages/Costs'
 
@@ -61,6 +62,7 @@ function App() {
             <Route path="/sessions" element={<Sessions bots={bots} />} />
             <Route path="/costs" element={<CostsPage />} />
             <Route path="/bots/:name" element={<BotPage />} />
+            <Route path="/bots/:name/new-thread" element={<NewThread onChange={refresh} />} />
             <Route path="/bots/:name/kb" element={<Memory />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>

@@ -640,3 +640,27 @@ def test_files_show_the_draft_and_pull_requests_with_diffs(client, cook, bot_fol
     # The live view is untouched, and versions are checked.
     assert "# draft edit" not in client.get("/api/bots/kitchen/source/tools/pantry.py").json()["text"]
     assert client.get("/api/bots/kitchen/tree?version=../x").status_code == 400
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_thread_started_from_a_message_gets_a_generated_title(client, cook, bot_folder, use_bots, monkeypatch):
+    from django_ergo.conversation.models import ConversationSession
+
+    from ergonaut.apps.bots import tasks
+
+    (bot_folder / "bot.yaml").write_text(textwrap.dedent(BOT).replace("orchestration: false", "orchestration: true"))
+    use_bots(tool_call("submit_output", {"title": "Weekly grocery order"}))
+    monkeypatch.setattr(tasks, "queue_thread_naming", tasks.name_thread)  # run it now
+    message = "Can you put together the grocery order for this week, the usual plus oat milk?"
+    thread = post(client, "/api/bots/kitchen/threads", {"message": message}).json()
+    assert thread["parent_id"] is not None
+    # Created with a provisional title from the message, then named by the model.
+    session = ConversationSession.objects.get(id=thread["id"])
+    assert session.metadata["title"] == "Weekly grocery order"
+    assert session.metadata["bot_role"] == "thread"
+    from django_ergo.conversation.models import StructuredCall
+
+    naming = StructuredCall.objects.get(kind="new_thread_metadata")
+    assert (naming.status, naming.request) == ("completed", message)
+    assert post(client, "/api/bots/kitchen/threads", {"title": "Groceries"}).json()["title"] == "Groceries"
+    assert StructuredCall.objects.filter(kind="new_thread_metadata").count() == 1  # a given title isn't regenerated

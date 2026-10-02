@@ -65,6 +65,18 @@ export function Chat({ onChange }: { onChange: () => void }) {
     load().catch(e => setError(String(e.message ?? e)))
   }, [load])
 
+  // A thread's generated title arrives after it starts; show it in the sidebar too.
+  const title = detail?.session.title
+  const firstTitle = useRef<string | undefined>(undefined)
+  useEffect(() => {
+    if (!title) return
+    if (firstTitle.current !== undefined && firstTitle.current !== title) onChange()
+    firstTitle.current = title
+  }, [title, onChange])
+  useEffect(() => {
+    firstTitle.current = undefined
+  }, [id])
+
   // ?pin=<url>&name=<name> (from the sidebar) opens that pin. Declared after the effect above,
   // which resets the viewer when the chat changes, so it runs second.
   const [search, setSearch] = useSearchParams()
@@ -83,12 +95,21 @@ export function Chat({ onChange }: { onChange: () => void }) {
     const after = messages.length ? messages[messages.length - 1].line : -1
     const events = new EventSource(`/api/sessions/${id}/events?after=${after}`)
     events.onmessage = e => {
-      const { messages, calls, requests } = JSON.parse(e.data) as {
+      const { messages, calls, requests, title } = JSON.parse(e.data) as {
         messages: Message[]
         calls: Call[]
         requests?: DelegatedRequest[]
+        title?: string
       }
-      setDetail(d => (d ? { ...merge(d, messages, calls), ...(requests ? { requests } : {}) } : d))
+      setDetail(d =>
+        d
+          ? {
+              ...merge(d, messages, calls),
+              ...(requests ? { requests } : {}),
+              ...(title ? { session: { ...d.session, title } } : {}),
+            }
+          : d,
+      )
       if (requests) onChange()
     }
     return () => events.close()
