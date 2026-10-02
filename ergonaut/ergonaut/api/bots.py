@@ -14,6 +14,7 @@ from asgiref.sync import sync_to_async
 from django.db.models import Count, Q
 from django.http import FileResponse, HttpResponse
 from django.shortcuts import aget_object_or_404
+from django.utils import timezone
 from django_ergo.bots import archival, webhooks
 from django_ergo.bots.pages import text_page, view_kind
 from django_ergo.bots.runtime import Bot
@@ -92,6 +93,8 @@ class SessionOut(Schema):
     open_in: int = 0  # delegated requests this session is still answering
     open_out: int = 0  # requests it sent that are still unanswered
     busy: bool = False  # a turn is running in it right now
+    unread: bool = False  # a reply came after its owner last opened it
+    attention: bool = False  # the latest turn waits on the user (approval, question, failure)
 
 
 class RequestOut(Schema):
@@ -364,6 +367,14 @@ def uuid_or_404(value: str, what: str = "session") -> str:
         raise HttpError(404, f"No such {what}") from None
 
 
+def needs_attention(session: ConversationSession) -> bool:
+    """The latest turn waits on the user: an approval, a question, or a failure."""
+    status = getattr(session, "latest_status", None)
+    return status in ("awaiting_approval", "failed") or (
+        status == "completed" and getattr(session, "latest_type", None) == "question"
+    )
+
+
 def session_out(session: ConversationSession) -> dict:
     meta = session.metadata or {}
     return {
@@ -379,6 +390,8 @@ def session_out(session: ConversationSession) -> dict:
         "open_in": getattr(session, "open_in", 0) or 0,
         "open_out": getattr(session, "open_out", 0) or 0,
         "busy": bool(getattr(session, "busy", False)),
+        "unread": bool(getattr(session, "unread", False)),
+        "attention": needs_attention(session),
     }
 
 
@@ -389,10 +402,14 @@ BUSY_WITHIN_MINUTES = 30  # an in-progress call older than this is a crashed tur
 
 
 def with_open_counts(qs):
-    """Annotate sessions with their open delegated requests, in and out, and whether a
-    turn is running now (``busy``)."""
-    from django.db.models import Exists, OuterRef
-    from django.utils import timezone
+    """Annotate sessions with their open delegated requests, in and out, whether a
+    turn is running now (``busy``), whether a reply came after the owner last looked
+    (``unread``), and whether the latest turn waits on the user (``attention``: an
+    approval, a question, or a failure)."""
+    from django.db.models import Exists, OuterRef, Subquery
+
+    finished = StructuredCall.objects.filter(session=OuterRef("pk"), kind="chat_reply").exclude(status="in_progress")
+    latest = StructuredCall.objects.filter(session=OuterRef("pk"), kind="chat_reply").order_by("-created_at")
 
     running = StructuredCall.objects.filter(
         session=OuterRef("pk"),
@@ -402,6 +419,9 @@ def with_open_counts(qs):
     working = Worker.objects.filter(session=OuterRef("pk"), status__in=["queued", "running"])
     return qs.annotate(
         busy=Exists(running) | Exists(working),
+        unread=Exists(finished.filter(updated_at__gt=OuterRef("read_at"))),
+        latest_status=Subquery(latest.values("status")[:1]),
+        latest_type=Subquery(latest.values("response__type")[:1]),
         open_in=Count(
             "thread_messages",
             filter=Q(
@@ -668,6 +688,8 @@ def session_detail(request, session_id: str):
         for m in SessionSource(session).messages()
     ]
     calls = [call_out(c) for c in session.structured_calls.order_by("created_at")]
+    if session.user_id == request.auth.pk:
+        ConversationSession.objects.filter(id=session.id).update(read_at=timezone.now())
     session = with_open_counts(visible_sessions(request.auth).filter(id=session.id)).first()
     return {
         "session": session_out(session),

@@ -747,3 +747,28 @@ def test_browse_a_bot_tables_rows(client, cook, use_bots, monkeypatch):
     assert client.get("/api/bots/kitchen/tables/BotJob/rows?order=no_such_field").status_code == 200
     monkeypatch.setattr(Bot, "table", lambda self, name: (_ for _ in ()).throw(LookupError("kitchen has no table")))
     assert client.get("/api/bots/kitchen/tables/Nope/rows").status_code == 404
+
+
+@pytest.mark.django_db(transaction=True)
+def test_sessions_show_unread_replies_and_what_needs_attention(client, cook, use_bots):
+    from django_ergo.conversation.models import ConversationSession
+
+    use_bots(say("You have 4 eggs."), say("Which store?", ["Safeway", "Costco"], kind="question"))
+    root = post(client, "/api/bots/kitchen/root").json()
+
+    def listed():
+        s = {x["id"]: x for x in client.get("/api/sessions").json()}[root["id"]]
+        return s["unread"], s["attention"]
+
+    assert listed() == (False, False)
+    post(client, f"/api/sessions/{root['id']}/messages", {"text": "How many eggs?"})
+    # A reply the owner hasn't opened yet is unread; opening the chat reads it.
+    ConversationSession.objects.filter(id=root["id"]).update(read_at="2000-01-01T00:00Z")
+    assert listed() == (True, False)
+    client.get(f"/api/sessions/{root['id']}")
+    assert listed() == (False, False)
+
+    # A question waits on the user until they answer it.
+    post(client, f"/api/sessions/{root['id']}/messages", {"text": "Buy more"})
+    client.get(f"/api/sessions/{root['id']}")
+    assert listed() == (False, True)
