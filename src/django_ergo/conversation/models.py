@@ -81,6 +81,8 @@ class ConversationSession(TimeStampedMixin):
         blank=True,
         related_name="children",
     )
+    # When the session's owner last looked at it (replies after this are unread).
+    read_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         ordering = ["-created_at"]

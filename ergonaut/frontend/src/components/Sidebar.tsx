@@ -1,9 +1,12 @@
 import { useState } from 'react'
-import { Link, NavLink, useNavigate } from 'react-router-dom'
+import { Link, NavLink, useMatch, useNavigate } from 'react-router-dom'
 import type { Bot, Session } from '../api'
 import { api } from '../api'
 
 function SessionLink({ session, nested }: { session: Session; nested?: boolean }) {
+  // The open chat is being read, so its reply is never shown as unread.
+  const open = useMatch(`/s/${session.id}`)
+  const unread = session.unread && !open
   return (
     <NavLink
       to={`/s/${session.id}`}
@@ -21,18 +24,26 @@ function SessionLink({ session, nested }: { session: Session; nested?: boolean }
       ) : (
         <span
           title={
-            session.open_in
-              ? 'Working on a delegated request'
-              : session.open_out
-                ? 'Waiting on another thread'
-                : undefined
+            session.attention
+              ? 'Needs your attention'
+              : unread
+                ? 'Unread reply'
+                : session.open_in
+                  ? 'Working on a delegated request'
+                  : session.open_out
+                    ? 'Waiting on another thread'
+                    : undefined
           }
-          className={`h-1.5 w-1.5 shrink-0 rounded-full ${
-            session.open_in
-              ? 'animate-pulse bg-amber-500'
-              : session.status === 'completed'
-                ? 'bg-zinc-400'
-                : 'bg-emerald-500'
+          className={`shrink-0 rounded-full ${
+            session.attention
+              ? 'h-2 w-2 bg-amber-400'
+              : unread
+                ? 'h-2 w-2 bg-sky-500'
+                : session.open_in
+                  ? 'h-1.5 w-1.5 animate-pulse bg-indigo-400'
+                  : session.status === 'completed'
+                    ? 'h-1.5 w-1.5 bg-zinc-400'
+                    : 'h-1.5 w-1.5 bg-emerald-500'
           }`}
         />
       )}

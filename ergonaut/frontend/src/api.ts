@@ -25,6 +25,8 @@ export type Session = {
   open_in?: number
   open_out?: number
   busy?: boolean // a turn is running now
+  unread?: boolean // a reply came after the owner last opened it
+  attention?: boolean // the latest turn waits on the user: an approval, a question, or a failure
 }
 
 export type DelegatedRequest = {
