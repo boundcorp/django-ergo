@@ -6,9 +6,10 @@ A session's ``compaction_mode`` decides when to compact:
   message. Everything so far is folded (``keep_recent`` defaults to 0).
 - ``context_size``: the last model call's prompt plus output exceeded
   ``max_context_tokens``. Older messages are folded, keeping ``keep_recent``.
-- ``stream``: a rolling window. Once more than ``keep_recent + batch``
-  messages sit past the last summary, everything but the latest
-  ``keep_recent`` is folded into a new summary.
+- ``rolling``: summaries roll up in batches. Once more than
+  ``keep_recent + batch`` messages sit past the last summary, everything but
+  the latest ``keep_recent`` is folded into a new summary. (Formerly named
+  ``stream``; that value is still accepted and read as ``rolling``.)
 
 Compaction never deletes messages. ``ConversationCompaction`` records the
 summary and the sequence it covers, and engines substitute it when they
@@ -54,8 +55,9 @@ log = logging.getLogger(__name__)
 DEFAULT_CONFIG = {
     "time": {"idle_seconds": 3600, "keep_recent": 0},
     "context_size": {"max_context_tokens": 100_000, "keep_recent": 6},
-    "stream": {"keep_recent": 15, "batch": 10},
+    "rolling": {"keep_recent": 15, "batch": 10},
 }
+DEFAULT_CONFIG["stream"] = DEFAULT_CONFIG["rolling"]  # deprecated alias
 
 SUMMARY_SYSTEM = """\
 You maintain a running summary of a conversation so it can continue without \
@@ -97,7 +99,11 @@ class CompactionDecision:
 
 def compaction_config(session: ConversationSession) -> dict:
     """Return the session's compaction parameters merged over the mode defaults."""
-    defaults = DEFAULT_CONFIG.get(session.compaction_mode, {})
+    from django_ergo.conversation.models import normalize_compaction_mode
+
+    defaults = DEFAULT_CONFIG.get(
+        normalize_compaction_mode(session.compaction_mode), {}
+    )
     return {**defaults, **(session.compaction_config or {})}
 
 
@@ -133,7 +139,7 @@ def apply_native_window(session, messages: list[dict]) -> list[dict]:
     With ``compaction_config["native_history"] == "turn"`` the engine only
     replays messages from the latest user turn onward (plus system
     messages). Earlier history reaches the model through a context builder
-    and history tools instead; see ``conversation.stream.StreamChat``.
+    and history tools instead; see ``conversation.window.WindowChat``.
 
     A user message that follows tool results (a steering message, or the next
     message after a stopped turn) continues that turn rather than starting one,
@@ -226,8 +232,9 @@ async def decide_compaction(  # noqa: C901, PLR0911
 ) -> CompactionDecision | None:
     """Decide whether the session should be compacted before its next message."""
     from django_ergo.conversation.models import CompactionMode
+    from django_ergo.conversation.models import normalize_compaction_mode
 
-    mode = session.compaction_mode
+    mode = normalize_compaction_mode(session.compaction_mode)
     if mode == CompactionMode.NONE:
         return None
     config = compaction_config(session)
@@ -260,7 +267,7 @@ async def decide_compaction(  # noqa: C901, PLR0911
             )
         return None
 
-    if mode == CompactionMode.STREAM:
+    if mode == CompactionMode.ROLLING:
         count = await rows.acount()
         if count > config["keep_recent"] + config["batch"]:
             return CompactionDecision(
@@ -314,6 +321,7 @@ async def compact_session(
     Returns None when there is nothing to fold.
     """
     from django_ergo.conversation.models import ConversationCompaction
+    from django_ergo.conversation.models import normalize_compaction_mode
 
     current = await sync_to_async(latest_compaction)(session)
     after = current.upto_sequence if current else None
@@ -353,7 +361,7 @@ async def compact_session(
 
     return await ConversationCompaction.objects.acreate(
         session=session,
-        mode=session.compaction_mode,
+        mode=normalize_compaction_mode(session.compaction_mode),
         reason=reason[:255],
         from_sequence=folded[0][0].sequence,
         upto_sequence=folded[-1][0].sequence,

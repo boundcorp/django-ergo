@@ -12,11 +12,10 @@ checks the policy and, when it applies, folds older messages into a summary.
 | `context_size` | the last model call's prompt plus output exceeds `max_context_tokens` (cached tokens count) | `max_context_tokens=100000`, `keep_recent=6` |
 | `rolling` | more than `keep_recent + batch` messages sit past the last summary | `keep_recent=15`, `batch=10` |
 
-`rolling` was called `stream` before; `stream` is still accepted
-everywhere a mode is read, including bot.yaml. Rolling compaction is the
-default for bot threads. A bot's main and named chats don't compact this
-way at all: they are window chats (see
-[context-builder.md](context-builder.md#window-chats)).
+`rolling` was called `stream` before; `stream` is still accepted (in bot.yaml
+and on stored sessions) and read as `rolling`. Don't confuse it with window
+chats ([context-builder.md](context-builder.md)), which rebuild context every
+turn instead of summarizing.
 
 `keep_recent` counts stored engine messages, and tool calls and tool results
 count as messages. The cut always moves back to a user message that starts a

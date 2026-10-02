@@ -46,7 +46,7 @@ and prettier (for `ergonaut/frontend`); every hook should pass.
 - `bots/tables.py`, `bots/pages.py`: `BotTable` models and `.jhtml` pages
 - `plugins/`: `ergo_kb` (`kb.py`), `bot_management`, `pages`, `attachments`, `telegram`, `orca`, `bash`
 - `conversation/structured.py`: `StructuredCall` and `run_structured_call`; every bot turn is one (`chat_reply`)
-- `conversation/compaction.py`, `conversation/context.py`, `conversation/history*.py`
+- `conversation/compaction.py`, `conversation/context.py`, `conversation/window.py` (window chats), `conversation/history*.py`
 - `settings.py`: `DJANGO_ERGO` defaults
 
 ## Database

@@ -1,4 +1,4 @@
-"""Tests for the context builder and stream chats."""
+"""Tests for the context builder and window chats."""
 
 from __future__ import annotations
 
@@ -19,10 +19,10 @@ from django_ergo.conversation.history import HistoryMessage
 from django_ergo.conversation.history import MessageSource
 from django_ergo.conversation.history import SessionSource
 from django_ergo.conversation.models import ConversationSession
-from django_ergo.conversation.stream import StreamChat
 from django_ergo.conversation.structured import StructuredCallSpec
 from django_ergo.conversation.structured import resume_structured_call
 from django_ergo.conversation.structured import run_structured_call
+from django_ergo.conversation.window import WindowChat
 from tests.test_conversation_compaction import add
 from tests.test_conversation_structured import VALID_PLAN
 from tests.test_conversation_structured import ApprovalToolkit
@@ -209,18 +209,18 @@ def test_native_window_keeps_only_current_turn():
 
 
 # ---------------------------------------------------------------------------
-# StreamChat
+# WindowChat
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_stream_chat_sends_recent_window_and_history_tools():
-    user = await User.objects.acreate(username="stream")
+async def test_window_chat_sends_recent_window_and_history_tools():
+    user = await User.objects.acreate(username="window")
     engine = claude_engine(
         claude_tool("ergo_chat_history_read", {"end_line": 16, "limit": 2}),
         claude_text("We decided on the blue fridge."),
     )
-    chat = await StreamChat.create(
+    chat = await WindowChat.create(
         user=user,
         engine=engine,
         system_prompt="You are the kitchen bot.",
@@ -266,15 +266,24 @@ async def test_stream_chat_sends_recent_window_and_history_tools():
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_stream_chat_resume_switches_existing_session():
-    user = await User.objects.acreate(username="stream-resume")
+async def test_window_chat_resume_switches_existing_session():
+    user = await User.objects.acreate(username="window-resume")
     session = await ConversationSession.objects.acreate(
         user=user, engine_type="claude", transport_type="api", status="active"
     )
-    chat = await StreamChat.resume(session, engine=claude_engine())
+    chat = await WindowChat.resume(session, engine=claude_engine())
     await session.arefresh_from_db()
     assert session.compaction_config == {"native_history": "turn"}
     assert chat.recent == 15
+
+
+def test_old_stream_chat_names_still_import():
+    from django_ergo.conversation.stream import STREAM_CONFIG
+    from django_ergo.conversation.stream import StreamChat
+    from django_ergo.conversation.window import WINDOW_CONFIG
+
+    assert StreamChat is WindowChat
+    assert STREAM_CONFIG is WINDOW_CONFIG
 
 
 # ---------------------------------------------------------------------------
@@ -282,7 +291,7 @@ async def test_stream_chat_resume_switches_existing_session():
 # ---------------------------------------------------------------------------
 
 
-async def _stream_session(username):
+async def _window_session(username):
     user = await User.objects.acreate(username=username)
     session = await ConversationSession.objects.acreate(
         user=user,
@@ -301,7 +310,7 @@ async def _stream_session(username):
 
 
 def _recent_builder(session, *, incoming=True):
-    """What bots.runtime and StreamChat build for a stream chat."""
+    """What bots.runtime and WindowChat build for a window chat."""
     return ContextBuilder(budget_tokens=4000).add(
         MessageContextSource(
             SessionSource(session),
@@ -316,7 +325,7 @@ def _recent_builder(session, *, incoming=True):
 
 @pytest.mark.django_db(transaction=True)
 async def test_new_message_is_only_sent_natively():
-    session = await _stream_session("dup-new")
+    session = await _window_session("dup-new")
     engine = claude_engine(claude_tool("submit_output", VALID_PLAN))
     spec = StructuredCallSpec(kind="planner", response_model=Plan)
 
@@ -337,7 +346,7 @@ async def test_new_message_is_only_sent_natively():
 
 @pytest.mark.django_db(transaction=True)
 async def test_resumed_turn_is_not_repeated_in_context():
-    session = await _stream_session("dup-resume")
+    session = await _window_session("dup-resume")
     engine = claude_engine(
         claude_tool("delete_all", {}, tool_id="d1"),
         claude_tool("submit_output", VALID_PLAN, tool_id="s1"),
@@ -373,7 +382,7 @@ async def test_resumed_turn_is_not_repeated_in_context():
 @pytest.mark.django_db(transaction=True)
 async def test_continued_turn_is_not_repeated_in_context():
     """After a turn stopped mid-tool-work, the next message continues it natively."""
-    session = await _stream_session("dup-continue")
+    session = await _window_session("dup-continue")
 
     def stopped_turn():
         add(session, "user", "Look it up")

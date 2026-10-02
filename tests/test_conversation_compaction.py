@@ -108,13 +108,13 @@ def _texts(messages):
 
 
 # ---------------------------------------------------------------------------
-# Stream mode
+# Rolling mode (formerly "stream")
 # ---------------------------------------------------------------------------
 
 
-async def test_stream_folds_all_but_recent(user):
+async def test_rolling_folds_all_but_recent(user):
     session = await sync_to_async(make_session)(
-        user, "stream", {"keep_recent": 2, "batch": 2}
+        user, "rolling", {"keep_recent": 2, "batch": 2}
     )
     await sync_to_async(chat)(session, 2)  # 4 messages: at threshold
     engine = claude_engine()
@@ -128,7 +128,7 @@ async def test_stream_folds_all_but_recent(user):
     assert compaction.upto_sequence == 3
     assert compaction.from_sequence == 0
     assert compaction.message_count == 4
-    assert compaction.mode == "stream"
+    assert compaction.mode == "rolling"
     previous, transcript = summarizer.calls[0]
     assert previous == ""
     assert "question 0" in transcript
@@ -145,9 +145,9 @@ async def test_stream_folds_all_but_recent(user):
     assert "question 0" in full
 
 
-async def test_stream_summaries_roll_forward(user):
+async def test_rolling_summaries_roll_forward(user):
     session = await sync_to_async(make_session)(
-        user, "stream", {"keep_recent": 2, "batch": 2}
+        user, "rolling", {"keep_recent": 2, "batch": 2}
     )
     engine = claude_engine()
     summarizer = RecordingSummarizer()
@@ -166,6 +166,22 @@ async def test_stream_summaries_roll_forward(user):
     texts = _texts(await _context(engine, session))
     assert "SUMMARY 2" in texts[0]
     assert texts[1:] == ["question 4", "answer 4"]
+
+
+async def test_legacy_stream_mode_compacts_as_rolling(user):
+    # Rows saved before the rename may still say "stream".
+    session = await sync_to_async(make_session)(
+        user, "stream", {"keep_recent": 2, "batch": 2}
+    )
+    await sync_to_async(chat)(session, 3)
+    decision = await decide_compaction(session)
+    assert decision is not None
+    assert decision.keep_recent == 2
+
+    compaction = await maybe_compact(
+        session, claude_engine(), summarizer=RecordingSummarizer()
+    )
+    assert compaction.mode == "rolling"
 
 
 async def test_cut_never_splits_tool_call_from_result(user):
@@ -254,7 +270,7 @@ async def test_context_size_mode_uses_last_prompt_size(user):
 
 
 async def test_none_mode_ignores_stored_compactions(user):
-    session = await sync_to_async(make_session)(user, "stream", {"keep_recent": 0})
+    session = await sync_to_async(make_session)(user, "rolling", {"keep_recent": 0})
     await sync_to_async(chat)(session, 1)
     engine = claude_engine()
     await compact_session(
@@ -268,7 +284,7 @@ async def test_none_mode_ignores_stored_compactions(user):
 
 
 async def test_failed_summary_does_not_block(user):
-    session = await sync_to_async(make_session)(user, "stream", {"keep_recent": 0})
+    session = await sync_to_async(make_session)(user, "rolling", {"keep_recent": 0})
     await sync_to_async(chat)(session, 1)
 
     async def broken(previous, transcript):
@@ -286,7 +302,7 @@ async def test_failed_summary_does_not_block(user):
 
 async def test_turn_compacts_with_a_structured_call_before_sending(user):
     session = await sync_to_async(make_session)(
-        user, "stream", {"keep_recent": 0, "batch": 1}
+        user, "rolling", {"keep_recent": 0, "batch": 1}
     )
     await sync_to_async(chat)(session, 1)
     engine = claude_engine(
@@ -322,7 +338,7 @@ async def test_turn_compacts_with_a_structured_call_before_sending(user):
 
 async def test_failed_compaction_call_leaves_session_uncompacted(user):
     session = await sync_to_async(make_session)(
-        user, "stream", {"keep_recent": 0, "batch": 1}
+        user, "rolling", {"keep_recent": 0, "batch": 1}
     )
     await sync_to_async(chat)(session, 1)
     engine = claude_engine(claude_text("no tool", stop="max_tokens"), claude_text("hi"))
@@ -336,7 +352,7 @@ async def test_failed_compaction_call_leaves_session_uncompacted(user):
 
 async def test_openai_summary_goes_after_system_message(user):
     session = await sync_to_async(make_session)(
-        user, "stream", {"keep_recent": 0}, engine_type="openai"
+        user, "rolling", {"keep_recent": 0}, engine_type="openai"
     )
 
     def build():

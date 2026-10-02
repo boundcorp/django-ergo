@@ -170,7 +170,7 @@ class StructuredCallSpec:
     toolkits: list[Toolkit] = field(default_factory=list)
     pre_seeds: list[PreSeedCall] = field(default_factory=list)
     # Seed every turn instead of once per session, for sessions whose model
-    # calls only carry the current turn natively (stream compaction).
+    # calls only carry the current turn natively (window chats).
     pre_seed_each_turn: bool = False
     max_turns: int = 10
     # Spend the last allowed turn on the answer: only the output tool is
