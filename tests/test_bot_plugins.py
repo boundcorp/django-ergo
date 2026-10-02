@@ -756,3 +756,89 @@ async def test_bash_waits_for_approval(tmp_path):
     done = await bot.resume(root, {"b1": True})
     assert done.text == "Done."
     assert marker.exists()
+
+
+# ---------------------------------------------------------------------------
+# attachments
+# ---------------------------------------------------------------------------
+
+
+def files_bot(tmp_path, *responses, config="max_bytes: 100"):
+    yaml_text = f"""
+        name: filer
+        plugins: [{{name: attachments, {config}}}]
+    """
+    bot, engine = make_bot(tmp_path, *responses, yaml_text=yaml_text, name="filer")
+    return bot, engine, bot.plugin("attachments")
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_bot_writes_and_reads_files_in_its_session(tmp_path, settings):
+    from asgiref.sync import sync_to_async
+
+    from django_ergo.conversation.attachments import save_session_file
+
+    settings.MEDIA_ROOT = str(tmp_path / "media")
+    bot, engine, _ = files_bot(
+        tmp_path,
+        claude_tool(
+            "ergo_attachments_create", {"filename": "plan.md", "content": "# Plan\nTacos"}
+        ),
+        say("Saved."),
+        claude_tool("ergo_attachments_list", {}),
+        say("Listed."),
+    )
+    user = await User.objects.acreate(username="filer-user")
+    root = await bot.root_session(user)
+    await sync_to_async(save_session_file)(root, "notes.txt", b"bring napkins")
+
+    await bot.ask(root, "Write a plan")
+    rows = [r async for r in root.attachments.order_by("filename")]
+    assert [(r.filename, r.source, r.message_sequence) for r in rows] == [
+        ("notes.txt", "upload", None),
+        ("plan.md", "bot", None),
+    ]
+    assert "Files in this chat" in engine._client.calls[0]["system"]
+    assert "notes.txt (text/plain" in engine._client.calls[0]["system"]
+
+    await bot.ask(root, "What files are there?")
+    listed = engine._client.calls[-1]["messages"][-1]["content"][0]["content"]
+    assert "plan.md" in listed
+    assert "notes.txt" in listed
+
+
+@pytest.mark.django_db
+def test_attachments_access_rules(tmp_path, settings):
+    from django_ergo.bots.tools import ToolContext
+    from django_ergo.conversation.attachments import save_session_file
+
+    settings.MEDIA_ROOT = str(tmp_path / "media")
+    bot, _, plugin = files_bot(tmp_path)
+    lee = User.objects.create(username="lee-files")
+    other = User.objects.create(username="someone-else")
+    mine = ConversationSession.objects.create(user=lee, bot_name="filer")
+    older = ConversationSession.objects.create(user=lee, bot_name="kitchen")
+    theirs = ConversationSession.objects.create(user=other, bot_name="filer")
+    recipe = save_session_file(older, "recipe.md", b"# Soup")
+    secret = save_session_file(theirs, "secret.txt", b"nope")
+    photo = save_session_file(mine, "fridge.jpg", b"\xff\xd8jpeg")
+    ctx = ToolContext(bot=bot, session=mine, user=lee)
+
+    assert plugin.read(ctx, str(recipe.id)).endswith("# Soup")
+    assert [f["filename"] for f in plugin.list_files(ctx, str(older.id))] == ["recipe.md"]
+    assert "image attachment: fridge.jpg" in plugin.read(ctx, str(photo.id))
+    with pytest.raises(ValueError, match="No file"):
+        plugin.read(ctx, str(secret.id))
+    with pytest.raises(ValueError, match="No session"):
+        plugin.list_files(ctx, str(theirs.id))
+    with pytest.raises(ValueError, match="read-only"):
+        plugin.update(ctx, str(recipe.id), "# Stew")
+    with pytest.raises(ValueError, match="not a text file"):
+        plugin.update(ctx, str(photo.id), "x")
+    with pytest.raises(ValueError, match="too large"):
+        plugin.create(ctx, "big.txt", "x" * 101)
+
+    made = plugin.create(ctx, "list.md", "- eggs")
+    updated = plugin.update(ctx, made["id"], "- eggs\n- milk")
+    assert updated["size"] == len("- eggs\n- milk")
+    assert plugin.read(ctx, made["id"]).endswith("- eggs\n- milk")

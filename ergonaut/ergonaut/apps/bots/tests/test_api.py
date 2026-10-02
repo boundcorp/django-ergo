@@ -222,3 +222,37 @@ def test_browse_a_bots_knowledge_base(client, cook, bot_folder, use_bots):
     assert article == {"path": "recipes/tacos.md", "title": "Tacos", "body": "# Tacos\n\nTuesdays."}
     assert client.get(f"/api/bots/kitchen/kbs/{found['id']}/article?path=../bot.yaml").status_code == 404
     assert client.get("/api/bots/kitchen/kbs/nope/article?path=index.md").status_code == 404
+
+
+@pytest.mark.django_db(transaction=True)
+def test_upload_list_download_and_delete_session_files(client, cook, use_bots, settings, tmp_path):
+    from django.core.files.uploadedfile import SimpleUploadedFile
+
+    from django_ergo.conversation.models import ConversationSession
+
+    settings.MEDIA_ROOT = str(tmp_path / "media")
+    use_bots(say("hi"))
+    root = post(client, "/api/bots/kitchen/root").json()
+    upload = client.post(
+        f"/api/sessions/{root['id']}/attachments",
+        {"file": SimpleUploadedFile("pantry.csv", b"item,count\neggs,4\n", content_type="text/csv")},
+    )
+    assert upload.status_code == 200, upload.content
+    file = upload.json()
+    assert (file["filename"], file["source"], file["media_type"], file["size"]) == (
+        "pantry.csv", "upload", "text/csv", 18,
+    )
+    listed = client.get(f"/api/sessions/{root['id']}/attachments").json()
+    assert [f["id"] for f in listed] == [file["id"]]
+    download = client.get(f"/api/attachments/{file['id']}/download")
+    assert b"".join(download.streaming_content) == b"item,count\neggs,4\n"
+
+    # Someone else can't see it.
+    other = get_user_model().objects.create_user("other", "o@example.com", "pw")
+    client.force_login(other)
+    assert client.get(f"/api/attachments/{file['id']}/download").status_code == 404
+    assert client.get(f"/api/sessions/{root['id']}/attachments").status_code == 404
+
+    client.force_login(cook)
+    assert client.delete(f"/api/attachments/{file['id']}").status_code == 200
+    assert not ConversationSession.objects.get(id=root["id"]).attachments.exists()

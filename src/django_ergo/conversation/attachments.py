@@ -229,3 +229,89 @@ def describe(row: ConversationAttachment | Attachment) -> str:
     if row.kind == "audio":
         return audio_placeholder(row)
     return f"[{row.kind} attachment: {label} ({row.media_type})]"
+
+
+# -- session files ------------------------------------------------------------
+
+TEXT_MEDIA_TYPES = {
+    "application/json",
+    "application/xml",
+    "application/x-yaml",
+    "application/yaml",
+    "application/javascript",
+    "application/x-sh",
+    "application/sql",
+    "application/toml",
+}
+
+
+def guess_media_type(filename: str, default: str = "application/octet-stream") -> str:
+    guessed = mimetypes.guess_type(filename)[0]
+    if guessed:
+        return guessed
+    if Path(filename).suffix.lower() in {".md", ".markdown", ".txt", ".log", ".yaml", ".yml", ".toml", ".csv"}:
+        return "text/markdown" if filename.lower().endswith((".md", ".markdown")) else "text/plain"
+    return default
+
+
+def is_text(media_type: str) -> bool:
+    return media_type.startswith("text/") or media_type in TEXT_MEDIA_TYPES
+
+
+def save_session_file(  # noqa: PLR0913
+    session: ConversationSession,
+    filename: str,
+    data: bytes,
+    *,
+    media_type: str = "",
+    source: str = "upload",
+    metadata: dict | None = None,
+) -> ConversationAttachment:
+    """Store a file in a session, not tied to any message."""
+    from django_ergo.conversation.models import ConversationAttachment
+
+    media_type = media_type or guess_media_type(filename)
+    row = ConversationAttachment(
+        session=session,
+        message_sequence=None,
+        kind=kind_for_media_type(media_type),
+        media_type=media_type,
+        filename=Path(filename).name or "file",
+        source=source,
+        metadata=metadata or {},
+    )
+    _store(row, data)
+    row.save()
+    return row
+
+
+def replace_session_file(row: ConversationAttachment, data: bytes) -> ConversationAttachment:
+    """Overwrite a file's bytes, keeping its id; counts versions in metadata."""
+    old = row.file.name if row.file else ""
+    _store(row, data)
+    row.metadata = {**(row.metadata or {}), "version": int((row.metadata or {}).get("version", 1)) + 1}
+    row.save()
+    if old and old != row.file.name:
+        row.file.storage.delete(old)
+    return row
+
+
+def _store(row: ConversationAttachment, data: bytes) -> None:
+    row.size = len(data)
+    row.sha256 = hashlib.sha256(data).hexdigest()
+    row.file.save(row.filename or f"{row.id}", ContentFile(data), save=False)
+
+
+def read_text(row: ConversationAttachment, limit: int = 50_000) -> str:
+    """A text file's contents, or a short description for other files."""
+    if not is_text(row.media_type) or not row.file:
+        text = describe(row)
+        if row.transcript:
+            text += f"\nTranscript: {row.transcript}"
+        return text
+    with row.file.open("rb") as handle:
+        data = handle.read(limit + 1)
+    text = data[:limit].decode("utf-8", errors="replace")
+    if len(data) > limit:
+        text += f"\n[truncated at {limit} characters]"
+    return text

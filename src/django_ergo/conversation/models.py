@@ -341,13 +341,21 @@ class AttachmentKind(models.TextChoices):
     DOCUMENT = "document", "Document"
 
 
-class ConversationAttachment(TimeStampedMixin):
-    """An image, audio clip or document attached to a user message.
+class AttachmentSource(models.TextChoices):
+    MESSAGE = "message", "Sent with a message"
+    UPLOAD = "upload", "Uploaded to the session"
+    BOT = "bot", "Written by the bot"
 
-    Linked to the message by its sequence number, so it works for every
-    engine's message table. The bytes live in ``file`` (default storage) or
-    at ``url``. Audio keeps a ``transcript`` for engines that can't take
-    audio input.
+
+class ConversationAttachment(TimeStampedMixin):
+    """A file in a chat session: an image, audio clip or document.
+
+    A file sent with a user message is linked to it by its sequence number,
+    so it works for every engine's message table. A file uploaded to the
+    session, or written by the bot, has no message (``message_sequence`` is
+    null) and is read through the attachments tools instead. The bytes live
+    in ``file`` (default storage) or at ``url``. Audio keeps a
+    ``transcript`` for engines that can't take audio input.
     """
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -356,7 +364,10 @@ class ConversationAttachment(TimeStampedMixin):
         on_delete=models.CASCADE,
         related_name="attachments",
     )
-    message_sequence = models.IntegerField()
+    message_sequence = models.IntegerField(null=True, blank=True)
+    source = models.CharField(
+        max_length=20, choices=AttachmentSource.choices, default=AttachmentSource.MESSAGE
+    )
     position = models.IntegerField(default=0)
     kind = models.CharField(max_length=20, choices=AttachmentKind.choices)
     media_type = models.CharField(max_length=100)
@@ -373,7 +384,8 @@ class ConversationAttachment(TimeStampedMixin):
         indexes = [models.Index(fields=["session", "message_sequence"])]
 
     def __str__(self):
-        return f"{self.session_id} #{self.message_sequence} {self.kind}"
+        where = f"#{self.message_sequence}" if self.message_sequence is not None else self.source
+        return f"{self.session_id} {where} {self.filename or self.kind}"
 
 
 class KBUsageMode(models.TextChoices):

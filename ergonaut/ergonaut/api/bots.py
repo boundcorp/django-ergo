@@ -11,16 +11,21 @@ from typing import Any
 
 from asgiref.sync import sync_to_async
 from django.db.models import Q
+from django.http import FileResponse
 from django.shortcuts import aget_object_or_404
+from ninja import File
 from ninja import Router
 from ninja import Schema
+from ninja import UploadedFile
 from ninja.errors import HttpError
 from ninja.security import django_auth
 
 from django_ergo.bots import webhooks
 from django_ergo.bots.runtime import Bot
 from django_ergo.bots.runtime import TurnResult
+from django_ergo.conversation.attachments import save_session_file
 from django_ergo.conversation.history import SessionSource
+from django_ergo.conversation.models import ConversationAttachment
 from django_ergo.conversation.models import ConversationSession
 from django_ergo.conversation.models import StructuredCall
 
@@ -462,3 +467,90 @@ def read_kb_article(request, bot: str, kb_id: str, path: str):
     if article is None:
         raise HttpError(404, "No such article")
     return {"path": str(article.id), "title": article.title, "body": article.content or ""}
+
+
+# -- attachments ---------------------------------------------------------------
+
+MAX_UPLOAD_BYTES = 25 * 1024 * 1024
+
+
+class AttachmentOut(Schema):
+    id: str
+    filename: str
+    media_type: str
+    kind: str
+    size: int | None
+    source: str
+    message_sequence: int | None
+    created_at: datetime
+    updated_at: datetime
+
+
+def attachment_out(row: ConversationAttachment) -> dict:
+    return {
+        "id": str(row.id),
+        "filename": row.filename,
+        "media_type": row.media_type,
+        "kind": row.kind,
+        "size": row.size,
+        "source": row.source,
+        "message_sequence": row.message_sequence,
+        "created_at": row.created_at,
+        "updated_at": row.updated_at,
+    }
+
+
+def visible_attachment(user, attachment_id: str) -> ConversationAttachment:
+    row = (
+        ConversationAttachment.objects.select_related("session")
+        .filter(id=attachment_id, session__in=visible_sessions(user))
+        .first()
+    )
+    if row is None:
+        raise HttpError(404, "No such file")
+    return row
+
+
+@router.get("/sessions/{session_id}/attachments", response=list[AttachmentOut])
+def list_attachments(request, session_id: str):
+    session = visible_sessions(request.auth).filter(id=session_id).first()
+    if session is None:
+        raise HttpError(404, "No such session")
+    return [attachment_out(r) for r in session.attachments.order_by("-updated_at")]
+
+
+@router.post("/sessions/{session_id}/attachments", response=AttachmentOut)
+def upload_attachment(request, session_id: str, file: UploadedFile = File(...)):  # noqa: B008
+    session = visible_sessions(request.auth).filter(id=session_id).first()
+    if session is None:
+        raise HttpError(404, "No such session")
+    if file.size and file.size > MAX_UPLOAD_BYTES:
+        raise HttpError(413, f"Files are limited to {MAX_UPLOAD_BYTES // (1024 * 1024)} MB")
+    row = save_session_file(
+        session,
+        file.name or "upload",
+        file.read(),
+        media_type=file.content_type if file.content_type not in ("", "application/octet-stream") else "",
+        source="upload",
+        metadata={"uploaded_by": request.auth.get_username()},
+    )
+    return attachment_out(row)
+
+
+@router.get("/attachments/{attachment_id}/download")
+def download_attachment(request, attachment_id: str):
+    row = visible_attachment(request.auth, attachment_id)
+    if not row.file:
+        raise HttpError(404, "This file has no stored copy")
+    return FileResponse(row.file.open("rb"), as_attachment=True, filename=row.filename, content_type=row.media_type)
+
+
+@router.delete("/attachments/{attachment_id}")
+def delete_attachment(request, attachment_id: str):
+    row = visible_attachment(request.auth, attachment_id)
+    if row.message_sequence is not None:
+        raise HttpError(409, "Files sent with a message stay with the message")
+    if row.file:
+        row.file.delete(save=False)
+    row.delete()
+    return {"ok": True}

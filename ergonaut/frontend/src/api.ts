@@ -93,6 +93,18 @@ export type BotDetail = Bot & {
   skills: { name: string; description: string; body: string }[]
 }
 
+export type AttachmentFile = {
+  id: string
+  filename: string
+  media_type: string
+  kind: string
+  size: number | null
+  source: 'message' | 'upload' | 'bot'
+  message_sequence: number | null
+  created_at: string
+  updated_at: string
+}
+
 export type SessionDetail = { session: Session; messages: Message[]; calls: Call[] }
 
 export type Turn = {
@@ -139,6 +151,27 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   return response.json() as Promise<T>
 }
 
+async function upload<T>(path: string, file: File): Promise<T> {
+  const form = new FormData()
+  form.append('file', file)
+  const response = await fetch(`/api${path}`, {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'X-CSRFToken': csrfToken() },
+    body: form,
+  })
+  if (!response.ok) {
+    let detail = response.statusText
+    try {
+      detail = (await response.json()).detail ?? detail
+    } catch {
+      // not JSON
+    }
+    throw new ApiError(response.status, detail)
+  }
+  return response.json() as Promise<T>
+}
+
 export const api = {
   csrf: () => request<{ csrftoken: string }>('GET', '/auth/csrf'),
   me: () => request<User>('GET', '/auth/me'),
@@ -161,4 +194,8 @@ export const api = {
   send: (id: string, text: string) => request<Turn>('POST', `/sessions/${id}/messages`, { text }),
   approve: (id: string, approve: boolean) => request<Turn>('POST', `/sessions/${id}/approvals`, { approve }),
   close: (id: string) => request<Session>('POST', `/sessions/${id}/close`),
+  attachments: (id: string) => request<AttachmentFile[]>('GET', `/sessions/${id}/attachments`),
+  uploadAttachment: (id: string, file: File) => upload<AttachmentFile>(`/sessions/${id}/attachments`, file),
+  deleteAttachment: (id: string) => request<{ ok: boolean }>('DELETE', `/attachments/${id}`),
+  downloadUrl: (id: string) => `/api/attachments/${id}/download`,
 }

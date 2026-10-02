@@ -342,6 +342,22 @@ host as the user Ergonaut runs as. Output is stdout and stderr with the exit
 code, trimmed to its start and end when long. It is the whole machine, so
 keep `approve: true` unless you trust the bot with it.
 
+### attachments
+
+```yaml
+- name: attachments
+  max_bytes: 5000000     # largest file the bot may write
+  other_sessions: true   # may read files in the user's other sessions
+```
+
+Files in a chat session are `ConversationAttachment` rows: sent with a
+message, uploaded to the session (Ergonaut's Files panel), or written by the
+bot (`source` says which; session files have no `message_sequence`). The bot
+gets `ergo_attachments_list`, `ergo_attachments_read`,
+`ergo_attachments_create` and `ergo_attachments_update`. It writes text
+files only in its own session, reads files in the same user's other
+sessions, and sees the session's file list in every turn's context.
+
 ### telegram
 
 ```yaml

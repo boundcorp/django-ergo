@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import type { Call, Message, SessionDetail, Turn } from '../api'
 import { api } from '../api'
+import Files from '../components/Files'
 import { Transcript } from '../components/Transcript'
 
 /** Fold a live update into the transcript: messages replace by line, calls by id. */
@@ -24,6 +25,22 @@ export function Chat({ onChange }: { onChange: () => void }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [last, setLast] = useState<Turn | null>(null)
+  // The Files panel stays open or closed across sessions, per browser.
+  const [showFiles, setShowFiles] = useState(() => {
+    try {
+      return localStorage.getItem('ergonaut.files') === 'open'
+    } catch {
+      return false
+    }
+  })
+  function toggleFiles(open: boolean) {
+    setShowFiles(open)
+    try {
+      localStorage.setItem('ergonaut.files', open ? 'open' : 'closed')
+    } catch {
+      // storage unavailable
+    }
+  }
   const bottom = useRef<HTMLDivElement>(null)
   const latest = useRef<SessionDetail | null>(null)
   latest.current = detail
@@ -85,7 +102,8 @@ export function Chat({ onChange }: { onChange: () => void }) {
   const thinking = busy || lastCall?.status === 'in_progress'
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full">
+    <div className="flex min-w-0 flex-1 flex-col">
       <header className="flex items-center gap-3 border-b border-zinc-200 px-6 py-3 dark:border-zinc-800">
         <div>
           <div className="font-semibold">{detail.session.title}</div>
@@ -93,8 +111,14 @@ export function Chat({ onChange }: { onChange: () => void }) {
             {detail.session.bot} · {detail.session.role || 'session'} · {detail.messages.length} messages
           </div>
         </div>
+        <button
+          className={`ml-auto rounded-md border px-2 py-0.5 text-xs ${showFiles ? 'border-indigo-400 text-indigo-700 dark:text-indigo-300' : 'border-zinc-300 text-zinc-600 dark:border-zinc-700 dark:text-zinc-400'}`}
+          onClick={() => toggleFiles(!showFiles)}
+        >
+          📎 Files
+        </button>
         <a
-          className="ml-auto text-xs text-zinc-500 underline"
+          className="text-xs text-zinc-500 underline"
           href={`data:application/json,${encodeURIComponent(JSON.stringify(detail, null, 2))}`}
           download={`session-${detail.session.id}.json`}
         >
@@ -161,6 +185,8 @@ export function Chat({ onChange }: { onChange: () => void }) {
           Send
         </button>
       </form>
+    </div>
+    {showFiles && <Files sessionId={id} refreshKey={detail.messages.length} />}
     </div>
   )
 }
