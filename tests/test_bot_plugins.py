@@ -288,6 +288,7 @@ def test_bot_moves_a_file_by_writing_then_deleting(bot_repo):
     git(work, "add", "-A")
     git(work, "commit", "-m", "add bot")
     git(work, "push")
+    assert "ergo_config_repo_delete" in [tool.name for tool in plugin._tools()]
     old = plugin.read("bots/manager/agents.md")
     plugin.write("bots/renamed/agents.md", old)
     assert plugin.delete("bots/manager/agents.md") == "Deleted bots/manager/agents.md"
