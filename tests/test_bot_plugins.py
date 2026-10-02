@@ -1190,3 +1190,59 @@ def test_orca_attach_copies_a_worktree_file_into_the_chat(
     plugin.max_attach_bytes = 3
     with pytest.raises(ValueError, match="larger than 3 bytes"):
         plugin.attach(ctx, "wt", "out/report.md")
+
+
+@pytest.mark.django_db(transaction=True)
+def test_orca_screenshot_attaches_the_image(tmp_path, monkeypatch, settings):
+    import base64
+
+    from asgiref.sync import async_to_sync
+
+    from django_ergo.bots.tools import ToolContext
+    from django_ergo.plugins.orca import is_read_only
+
+    settings.MEDIA_ROOT = str(tmp_path / "media")
+    bot, _, plugin = orca_bot(tmp_path)
+    calls = []
+    png = b"\x89PNG\r\n\x1a\nfake"
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        if "--page" in argv and argv[argv.index("--page") + 1] == "gone":
+            out = '{"ok": false, "error": {"message": "Screenshot timed out"}}'
+        else:
+            out = json.dumps(
+                {
+                    "ok": True,
+                    "result": {"data": base64.b64encode(png).decode(), "format": "png"},
+                }
+            )
+        return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
+
+    monkeypatch.setattr("django_ergo.plugins.orca.subprocess.run", fake_run)
+    user = User.objects.create(username="shooter")
+    session = async_to_sync(bot.main_session)(user)
+    ctx = ToolContext(bot=bot, session=session, user=user)
+    shot = plugin.screenshot(ctx, worktree="path:/w", page="p1")
+    assert shot["filename"].startswith("screenshot-") and shot["filename"].endswith(
+        ".png"
+    )
+    assert session.attachments.get().file.read() == png
+    assert calls[-1][:7] == [
+        "orca-test",
+        "screenshot",
+        "--format",
+        "png",
+        "--worktree",
+        "path:/w",
+        "--page",
+    ]
+    assert calls[-1][-3:] == ["--environment", "devbox", "--json"]
+    with pytest.raises(ValueError, match="Screenshot timed out"):
+        plugin.screenshot(ctx, page="gone")
+    assert "orca_screenshot" in [tool.name for tool in plugin._tools()]
+    assert (
+        is_read_only(["tab", "list"])
+        and is_read_only(["snapshot"])
+        and not is_read_only(["click"])
+    )
