@@ -6,7 +6,7 @@ exist. Current docs start at [docs/README.md](../README.md).
 
 | File | What it was |
 | --- | --- |
-| `STATUS.md`, `ROADMAP.md`, `HISTORY.md`, `QUESTIONS.md` | Status, 24-week roadmap, history and open questions from the 2025 v1.0 plan |
+| `STATUS.md`, `ROADMAP.md`, `QUESTIONS.md` | Status, 24-week roadmap and open questions from the 2025 v1.0 plan |
 | `ARCHITECTURE_ANALYSIS.md`, `ARCHITECTURE_DECISIONS.md` | Analysis of the original prototype and the v1.0 decisions |
 | `PLUGGABLE_EMBEDDING_SYSTEM.md` | Announcement of the embedding providers (now in [semantic-search.md](../semantic-search.md)) |
 | `OPENAI_TESTING_SUMMARY.md`, `README_HYBRID_TESTING.md` | The two-tier OpenAI test setup (now in [development.md](../development.md)) |

@@ -36,6 +36,7 @@ Telegram plugin. `people:` may also sit in a bot's own bot.yaml.
 | `ergonaut check` | Load the bots; list skills, tools, plugins, people and missing secrets |
 | `ergonaut chat BOT [--user NAME]` | Chat with a bot's main chat in the terminal |
 | `ergonaut manage ...` | Any `manage.py` command, e.g. `ergo_bot_makemigrations`, `ergo_bot_preview` |
+| `ergonaut manage wait_idle` | Wait until no bot turn is running, before a restart |
 
 Commands other than `up` find a running `ergonaut up` on the same machine
 (through `DATA_DIR/up.json`) and use its database, broker and storage, so
@@ -129,8 +130,15 @@ polling) only pick up a new bot when `ergonaut bots` restarts.
 ## Restarting
 
 A restart of the web or worker processes ends every turn in progress, in
-every chat. Before restarting a shared Ergonaut, check the sidebar for
-running turns and wait until it's idle. Workers survive restarts (beat
+every chat. Wait for idle first:
+
+```bash
+ergonaut manage wait_idle --quiet-for 30 && systemctl restart ergonaut   # or your run script
+```
+
+`wait_idle` exits once no turn is running (`--quiet-for` waits until none
+has run for that many seconds in a row), or fails after `--timeout`
+(30 minutes by default). Workers survive restarts (beat
 resumes them), and thread messages that were waiting are redelivered.
 
 ## Development

@@ -27,7 +27,7 @@ built.text    # "<context>\n## ...\n</context>"
   until at least `min_messages` of the latest messages fit. Then it adds as
   many more as fit, up to `max_messages`. Pass `granularity=` to fix the
   level, or `before_line=` to leave out recent lines. With
-  `skip_native_turn=True` it leaves out the messages a stream session
+  `skip_native_turn=True` it leaves out the messages a window chat
   already sends natively (the current turn, or the turn a new message
   continues), so nothing appears twice; pass `incoming=False` when the
   builder is for resuming a stored turn (after an approval) rather than a
