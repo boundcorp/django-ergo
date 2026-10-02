@@ -200,12 +200,12 @@ class BotManagementPlugin(BotPlugin):
                     "ergo_bot_makemigrations",
                     str(folder),
                 ],
-                cwd=work,
                 capture_output=True,
                 text=True,
                 timeout=COMMAND_TIMEOUT,
                 check=False,
-                env={**os.environ},
+                # No __pycache__ in the bot repo's migrations/.
+                env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
             )
             if proc.returncode != 0:
                 msg = f"makemigrations failed for {folder.name}: {(proc.stderr or proc.stdout).strip()[-800:]}"
