@@ -782,7 +782,7 @@ async def test_stop_works_after_an_approval(user):
     assert len(engine._client.calls) == 1
 
 
-async def test_steering_in_a_stream_session_keeps_the_turns_tool_work(user):
+async def test_steering_in_a_window_session_keeps_the_turns_tool_work(user):
     session = await _chat_session(user)
     session.compaction_config = {"native_history": "turn"}
     await session.asave()

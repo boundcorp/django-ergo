@@ -1,4 +1,4 @@
-# Context builder and stream chats
+# Context builder and window chats
 
 ## ContextBuilder
 
@@ -27,7 +27,7 @@ built.text    # "<context>\n## ...\n</context>"
   until at least `min_messages` of the latest messages fit. Then it adds as
   many more as fit, up to `max_messages`. Pass `granularity=` to fix the
   level, or `before_line=` to leave out recent lines. With
-  `skip_native_turn=True` it leaves out the messages a stream session
+  `skip_native_turn=True` it leaves out the messages a window session
   already sends natively (the current turn, or the turn a new message
   continues), so nothing appears twice; pass `incoming=False` when the
   builder is for resuming a stored turn (after an approval) rather than a
@@ -44,19 +44,21 @@ Pass `context_builder=builder` to `run_conversation_turn` to send the built
 text as extra system context on every model call in that turn. It is never
 stored.
 
-## StreamChat
+## WindowChat
 
-A long-running chat whose context stays the same size however long it runs:
+A long-running chat whose context stays the same size however long it runs.
+(It was called `StreamChat` in `conversation.stream`; those names still
+import.)
 
 ```python
-from django_ergo.conversation.stream import StreamChat
+from django_ergo.conversation.window import WindowChat
 
-chat = await StreamChat.create(user=user, system_prompt="You are the kitchen bot.",
+chat = await WindowChat.create(user=user, system_prompt="You are the kitchen bot.",
                                recent=15, context_sources=[pantry_source],
                                history_sources=sources_from_paths(default_cli_paths()))
 async for event in chat.send("What fridge did we pick?"):
     ...
-chat = await StreamChat.resume(session)   # later
+chat = await WindowChat.resume(session)   # later
 ```
 
 Each turn the model gets:
