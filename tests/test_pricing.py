@@ -39,3 +39,20 @@ def test_settings_add_and_override_prices(settings):
     api_settings.reload() if hasattr(api_settings, "reload") else None
     price = price_for("house-model")
     assert (price.input, price.output, price.cache_read) == (1, 2, 1)
+
+
+def test_gpt_6_sol_price():
+    from django_ergo.pricing import price_for
+
+    price = price_for("gpt-6-sol")
+    assert (price.input, price.output, price.cache_write, price.cache_read) == (
+        2.0,
+        10.0,
+        2.5,
+        0.2,
+    )
+    # A million in, a million out: $2 + $10.
+    assert price.cost(input_tokens=1_000_000, output_tokens=1_000_000) == pytest.approx(
+        12.0
+    )
+    assert price_for("gpt-6-luna").input == 0.10  # its own entry, not sol's
