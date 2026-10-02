@@ -50,7 +50,9 @@ export function Chat({ onChange }: { onChange: () => void }) {
     return () => events.close()
   }, [id, loaded])
 
-  useEffect(() => bottom.current?.scrollIntoView({ behavior: 'smooth' }), [detail, busy])
+  useEffect(() => {
+    bottom.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [detail, busy])
 
   async function run(action: () => Promise<Turn>) {
     setBusy(true)
