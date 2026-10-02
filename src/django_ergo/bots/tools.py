@@ -83,6 +83,13 @@ class ToolContext:
 
         return BotTasks(self.bot)
 
+    @property
+    def workers(self):
+        """Start this chat's workers (see bots.workers)."""
+        from django_ergo.bots.workers import WorkerStarter
+
+        return WorkerStarter(self.bot, self.session)
+
     def table(self, name: str):
         """One of the bot's tables (a Django model), e.g. ``ctx.table("AdStat").objects.update_or_create(...)``."""
         return self.bot.table(name)

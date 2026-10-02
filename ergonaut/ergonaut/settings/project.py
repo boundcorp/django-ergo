@@ -109,6 +109,8 @@ DJANGO_ERGO = {
     "BOT_TASK_RUNNER": "ergonaut.apps.bots.tasks.celery_bot_task",
     # Each due schedule run is a task of its own.
     "SCHEDULE_RUNNER": "ergonaut.apps.bots.tasks.queue_schedule_run",
+    "WORKER_RUNNER": "ergonaut.apps.bots.tasks.queue_worker",
+    "SESSION_NOTIFIER": "ergonaut.apps.bots.tasks.notify",
 }
 
 SITE_ROOT = PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
@@ -349,6 +351,8 @@ CELERY_BEAT_SCHEDULE = {
     "archive-idle-threads": {"task": "ergonaut.archive_idle_threads", "schedule": 60 * 60},
     # Thread messages that waited for a busy recipient and were missed.
     "redispatch-thread-messages": {"task": "ergonaut.redispatch_thread_messages", "schedule": 60},
+    # Workers whose next step got lost (a restart) start again.
+    "resume-workers": {"task": "ergonaut.resume_workers", "schedule": 60},
     # Each bot's schedules (bot.yaml); the task checks which are due this minute.
     "run-bot-schedules": {"task": "ergonaut.run_schedules", "schedule": crontab()},
 }

@@ -495,6 +495,59 @@ class BotJob(models.Model):
         return f"{self.bot_name} {self.name} ({self.status})"
 
 
+class WorkerStatus(models.TextChoices):
+    QUEUED = "queued", "Queued"
+    RUNNING = "running", "Running"
+    COMPLETED = "completed", "Completed"
+    FAILED = "failed", "Failed"
+    CANCELLED = "cancelled", "Cancelled"
+
+
+class Worker(TimeStampedMixin):
+    """Long-running work a chat or thread started, e.g. an Orca coding agent, watched in
+    the background (see django_ergo.bots.workers).
+
+    The session shows as busy while it runs. When it finishes, its result is
+    sent to the session as a message (unless ``notify`` is off), so the bot
+    follows up with a reply.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    session = models.ForeignKey(
+        ConversationSession, on_delete=models.CASCADE, related_name="workers"
+    )
+    bot_name = models.CharField(max_length=100, db_index=True)
+    title = models.CharField(max_length=200)
+    # What runs: "task:<name>" (a @bot_task) or "<plugin>:<name>" (a plugin's worker).
+    function = models.CharField(max_length=200)
+    args = models.JSONField(default=dict, blank=True)
+    status = models.CharField(
+        max_length=20, choices=WorkerStatus.choices, default=WorkerStatus.QUEUED
+    )
+    progress = models.TextField(blank=True, default="")  # the latest status line
+    state = models.JSONField(
+        default=dict, blank=True
+    )  # the function's own notes between polls
+    result = models.JSONField(null=True, blank=True)
+    error = models.TextField(blank=True, default="")
+    notify = models.BooleanField(default=True)
+    polls = models.PositiveIntegerField(default=0)
+    next_poll_at = models.DateTimeField(null=True, blank=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [models.Index(fields=["session", "status"])]
+
+    def __str__(self):
+        return f"{self.bot_name} worker {self.title} ({self.status})"
+
+    @property
+    def active(self) -> bool:
+        return self.status in (WorkerStatus.QUEUED, WorkerStatus.RUNNING)
+
+
 class KBUsageMode(models.TextChoices):
     READ = "read", "Read"
     WRITE = "write", "Write"

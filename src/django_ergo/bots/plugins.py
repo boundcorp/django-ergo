@@ -83,6 +83,10 @@ class BotPlugin:
     def skill_name(self) -> str:
         return self.name
 
+    def worker_functions(self) -> dict[str, Callable]:
+        """Functions this plugin's tools start as workers, by name ("<plugin>:<name>")."""
+        return {}
+
     @property
     def skill_instructions(self) -> str:
         """What the model reads when it loads this plugin's skill."""

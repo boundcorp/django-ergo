@@ -82,6 +82,18 @@ def turn_text(message: ThreadMessage) -> str:
             "goes back to that thread automatically; it is not shown to the user "
             "unless they open this chat.]"
         )
+    elif (message.metadata or {}).get("worker") and (message.metadata or {}).get(
+        "update"
+    ):
+        header = (
+            f"[News from the worker “{message.metadata.get('worker_title', '')}”, which is still "
+            "running. Pass on what matters to the user.]"
+        )
+    elif (message.metadata or {}).get("worker"):
+        header = (
+            "[A worker this chat started has finished. Tell the user what it did, "
+            "using its result below.]"
+        )
     elif schedule := (message.metadata or {}).get("schedule"):
         header = f"[Scheduled message: {schedule}. The user will see your reply.]"
     else:

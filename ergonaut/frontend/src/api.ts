@@ -192,7 +192,26 @@ export type Changes = {
   error: string
 }
 
-export type SessionDetail = { session: Session; messages: Message[]; calls: Call[]; requests?: DelegatedRequest[] }
+// Long-running work a chat started (django_ergo.bots.workers).
+export type Worker = {
+  id: string
+  title: string
+  function: string
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'
+  progress: string
+  result: unknown
+  error: string
+  created_at: string
+  completed_at: string | null
+}
+
+export type SessionDetail = {
+  session: Session
+  messages: Message[]
+  calls: Call[]
+  requests?: DelegatedRequest[]
+  workers?: Worker[]
+}
 
 export type Turn = {
   session_id: string

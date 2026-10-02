@@ -19,7 +19,7 @@ from django_ergo.bots.pages import text_page, view_kind
 from django_ergo.bots.runtime import Bot
 from django_ergo.conversation.attachments import save_session_file
 from django_ergo.conversation.history import SessionSource
-from django_ergo.conversation.models import ConversationAttachment, ConversationSession, StructuredCall
+from django_ergo.conversation.models import ConversationAttachment, ConversationSession, StructuredCall, Worker
 from ninja import File, Router, Schema, UploadedFile
 from ninja.errors import HttpError
 from ninja.security import django_auth
@@ -142,6 +142,16 @@ class SessionDetailOut(Schema):
     messages: list[MessageOut]
     calls: list[CallOut]
     requests: list[RequestOut] = []
+    workers: list[dict] = []
+
+
+def workers_out(session: ConversationSession) -> list[dict]:
+    """The session's workers: every running one, then the latest few finished."""
+    from django_ergo.bots.workers import describe
+
+    active = list(session.workers.filter(status__in=["queued", "running"]))
+    done = list(session.workers.exclude(status__in=["queued", "running"])[:5])
+    return [describe(w) for w in active + done]
 
 
 class NewThreadIn(Schema):
@@ -326,8 +336,9 @@ def with_open_counts(qs):
         status="in_progress",
         updated_at__gte=timezone.now() - timezone.timedelta(minutes=BUSY_WITHIN_MINUTES),
     )
+    working = Worker.objects.filter(session=OuterRef("pk"), status__in=["queued", "running"])
     return qs.annotate(
-        busy=Exists(running),
+        busy=Exists(running) | Exists(working),
         open_in=Count(
             "thread_messages",
             filter=Q(
@@ -600,6 +611,7 @@ def session_detail(request, session_id: str):
         "messages": messages,
         "calls": calls,
         "requests": requests_out(session),
+        "workers": workers_out(session),
     }
 
 
