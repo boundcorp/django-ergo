@@ -133,6 +133,7 @@ def is_read_only(args: list[str]) -> bool:
 
 class OrcaPlugin(BotPlugin):
     name = "orca"
+    description = "Manage Orca worktrees, terminals and workers"
 
     def on_load(self) -> None:
         self.environment = str(self.config.get("environment") or "")

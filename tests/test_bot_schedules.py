@@ -88,13 +88,15 @@ def test_schedules_in_bot_yaml_are_checked():
             ],
         }
     )
-    assert [(s.name, s.to) for s in good.schedules] == [("plan", "new")]
+    assert [(s.name, s.to, s.thread_title) for s in good.schedules] == [
+        ("plan", "thread", "plan %b %d")
+    ]
     for bad, error in [
         ([{"name": "plan", "cron": "0 17 * *", "message": "x"}], "5 fields"),
         ([{"name": "plan", "message": "x"}], "needs name, cron and message"),
         (
             [{"name": "plan", "cron": "* * * * *", "message": "x", "to": "everyone"}],
-            "root or new",
+            "isn.t in chats",
         ),
         ([{"name": "p", "cron": "* * * * *", "message": "x"}] * 2, "two named"),
     ]:
@@ -124,7 +126,7 @@ def test_run_due_sends_each_schedule_once(tmp_path, settings):
     lee = User.objects.create(username="lee")
     User.objects.create(username="guest")  # no chat with the bot: not scheduled
     ConversationSession.objects.create(
-        user=lee, bot_name="kitchen", metadata={"bot_role": "root"}
+        user=lee, bot_name="kitchen", metadata={"bot_role": "main"}
     )
 
     sunday_5pm = datetime(2026, 10, 4, 17, 0, tzinfo=LA).astimezone(UTC)
@@ -133,7 +135,7 @@ def test_run_due_sends_each_schedule_once(tmp_path, settings):
     sent = ThreadMessage.objects.get()
     assert sent.sender_session_id is None
     assert sent.metadata == {"schedule": "weekly-plan"}
-    assert sent.recipient_session.metadata["bot_role"] == "root"
+    assert sent.recipient_session.metadata["bot_role"] == "main"
 
     saturday_9am = datetime(2026, 10, 3, 9, 0, tzinfo=LA).astimezone(UTC)
     assert schedules.run_due([bot], saturday_9am) == ["kitchen/shopping/lee"]
@@ -144,3 +146,61 @@ def test_run_due_sends_each_schedule_once(tmp_path, settings):
     from django_ergo.bots.messaging import turn_text
 
     assert turn_text(sent).startswith("[Scheduled message: weekly-plan.")
+
+
+def test_schedule_targets_and_thread_titles():
+    from django_ergo.bots.schedules import Schedule
+
+    definition = BotDefinition.from_dict(
+        {
+            "name": "k",
+            "chats": {"reports": {"description": "Weekly analytics"}},
+            "schedules": [
+                {"name": "a", "cron": "0 9 * * mon", "message": "x", "to": "reports"},
+                {
+                    "name": "b",
+                    "cron": "0 9 * * *",
+                    "message": "x",
+                    "to": {"thread": "Reports {n}", "in": "reports"},
+                },
+                {
+                    "name": "c",
+                    "cron": "0 9 * * *",
+                    "message": "x",
+                    "to": {"thread": "Digest {date:%b %d} (#{n})"},
+                },
+                {"name": "d", "cron": "0 9 * * *", "message": "x", "to": "root"},
+            ],
+        }
+    )
+    a, b, c, d = definition.schedules
+    assert (a.to, b.to, b.thread_in, c.thread_in, d.to) == (
+        "reports",
+        "thread",
+        "reports",
+        "main",
+        "main",
+    )
+    moment = datetime(2026, 10, 5, 9, 0, tzinfo=LA)
+    assert b.title_for(moment, 3) == "Reports 3"
+    assert c.title_for(moment, 12) == "Digest Oct 05 (#12)"
+    assert (
+        Schedule.from_config(
+            {
+                "name": "e",
+                "cron": "* * * * *",
+                "message": "x",
+                "to": {"thread": "Day %d"},
+            }
+        ).title_for(moment, 1)
+        == "Day 05"
+    )
+    with pytest.raises(BotDefinitionError, match="isn't in chats"):
+        BotDefinition.from_dict(
+            {
+                "name": "k",
+                "schedules": [
+                    {"name": "a", "cron": "* * * * *", "message": "x", "to": "nope"}
+                ],
+            }
+        )

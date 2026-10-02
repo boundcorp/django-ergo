@@ -79,6 +79,8 @@ KITCHEN_YAML = """
       allow_create: true
       default_compaction: {mode: context_size, config: {keep_recent: 6}}
     tools: [tools/pantry.py]
+    chats:
+      main: {skills: [orchestration, pantry]}
     plugins:
       - name: tests.test_bots:RecordingPlugin
         note: hello
@@ -253,7 +255,7 @@ async def test_root_session_turn_uses_stream_context_tools_and_hooks(tmp_path):
     assert '"count": 4' in second["messages"][-1]["content"][0]["content"]
     assert plugin.events == [
         "load",
-        ("created", "root"),
+        ("created", "main"),
         ("before", "How many eggs?"),
         ("after", "How many eggs?", "You have 4 eggs.", 0),
     ]
@@ -446,14 +448,18 @@ async def test_a_bot_delegates_to_a_new_thread_and_gets_the_reply(
     # The thread answers in a turn of its own...
     await thread_messages()
     asked = engine._client.calls[2]["messages"][0]["content"][0]["text"]
-    assert asked.startswith("[Message from kitchen · Chat")
+    assert asked.startswith("[Message from kitchen · Main")
     assert asked.endswith("Plan Tuesday")
     request = await ThreadMessage.objects.aget(recipient_session=thread)
     assert (request.status, request.reply_text) == ("answered", "Tacos on Tuesday.")
 
     # ...and the reply comes back to the root as a new turn, answered there.
     await thread_messages()
-    back = engine._client.calls[3]["messages"][-1]["content"][0]["text"]
+    back = next(
+        text
+        for text in _texts(engine._client.calls[3])
+        if text.startswith("[Reply from")
+    )
     assert back.startswith("[Reply from kitchen · Meal plan")
     assert back.endswith("Tacos on Tuesday.")
     reply = await ThreadMessage.objects.aget(recipient_session=root)
@@ -517,13 +523,13 @@ async def test_threads_are_listed_targeted_and_archived(tmp_path, thread_message
     listing = json.loads(results[0]["content"])
     assert [(r["thread"], r["title"]) for r in listing] == [
         (str(thread.id), "kitchen · Groceries"),
-        ("root", "kitchen · Chat"),
+        ("main", "kitchen · Main"),
     ]
     assert listing[1]["you_are_here"] is True
     assert json.loads(results[1]["content"])["thread_id"] == str(thread.id)
     assert results[2]["is_error"] and "No thread nope" in results[2]["content"]
     assert results[3]["content"] == "Archived kitchen · Groceries"
-    assert [r["thread"] for r in json.loads(results[4]["content"])] == ["root"]
+    assert [r["thread"] for r in json.loads(results[4]["content"])] == ["main"]
 
     # A message to an archived thread reopens it.
     engine._client.responses = [say("Four eggs.")]
@@ -752,7 +758,7 @@ async def test_skills_are_listed_up_front_and_loaded_on_demand(tmp_path):
     user = await User.objects.acreate(username="planner")
     bot, engine = make_bot(
         tmp_path,
-        claude_tool("load_skill", {"name": "meal-planning"}),
+        claude_tool("ergo_skill_load", {"name": "meal-planning"}),
         say("Here are five dinners."),
         say("Sure."),
     )
@@ -772,7 +778,7 @@ async def test_skills_are_listed_up_front_and_loaded_on_demand(tmp_path):
     assert turn.text == "Here are five dinners."
 
     first = engine._client.calls[0]
-    assert {"list_skills", "load_skill", "pantry_count"} <= _tool_names(first)
+    assert {"ergo_skills_list", "ergo_skill_load", "pantry_count"} <= _tool_names(first)
     seeded = [
         block
         for message in first["messages"]
@@ -783,14 +789,15 @@ async def test_skills_are_listed_up_front_and_loaded_on_demand(tmp_path):
     ]
     assert len(seeded) == 1
     listing = str(seeded[0]["content"])
-    assert "- meal-planning: Plan a week of dinners" in listing
-    assert "- shopping: Shop by aisle" in listing
-    assert "pantry_count" in listing
+    assert "- meal-planning [not loaded]: Plan a week of dinners" in listing
+    assert "- shopping [not loaded]: Shop by aisle" in listing
+    assert "- pantry [loaded]: Tools from pantry.py (2 tools)" in listing
+    assert "history" not in listing  # always there, so not listed
     assert "send_reply" not in listing
 
     loaded = engine._client.calls[1]["messages"][-1]["content"][0]["content"]
     assert "Check the last 60 days" in str(loaded)
-    assert "load_skill" in turn.call.metadata["tools"]
+    assert "ergo_skill_load" in turn.call.metadata["tools"]
     assert turn.call.metadata["seeded"] is True
 
     # The root only sends the current turn natively, so it is seeded each turn.
@@ -803,7 +810,7 @@ async def test_skills_are_listed_up_front_and_loaded_on_demand(tmp_path):
             message["content"] if isinstance(message["content"], list) else []
         )
         if block.get("type") == "tool_result"
-        and "Skills (load one" in str(block["content"])
+        and "Skills (ergo_skill_load" in str(block["content"])
     ]
     assert len(results) == 1
 
@@ -870,7 +877,7 @@ async def test_nested_bot_folders_make_sub_bots_the_parent_can_message(
 
     await thread_messages(registry)  # kitchen's root chat answers
     kitchen_root = await kitchen.sessions(user).aget()
-    assert kitchen_root.metadata["bot_role"] == "root"
+    assert kitchen_root.metadata["bot_role"] == "main"
     # The kitchen bot (orchestration off) has no thread or bot tools.
     kitchen_tools = _tool_names(engine._client.calls[2])
     assert not {t for t in kitchen_tools if t.startswith(("ergo_thread", "ergo_bot"))}
@@ -897,7 +904,9 @@ async def test_a_kb_folder_is_the_bots_knowledge_base(tmp_path):
     first = engine._client.calls[0]
     assert "Knowledge base: Kitchen" in first["system"]
     assert "chocolate Soylent shake" in first["system"]
-    assert {"ergo_kb_search", "ergo_kb_read"} <= _tool_names(first)
+    # What it knows is always in context; the kb tools load when needed.
+    assert "ergo_kb_search" not in _tool_names(first)
+    assert any("- kb [not loaded]" in text for text in _seeded(first))
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1092,3 +1101,91 @@ def test_replies_count_toward_the_delegation_depth(tmp_path, thread_messages):
             text="no",
             depth=request.depth,
         )
+
+
+LAZY_YAML = """
+    name: lazy
+    tools: [tools/pantry.py]
+    chats:
+      main: {skills: []}
+      reports:
+        description: Weekly reports
+        instructions: Keep reports short.
+        skills: [pantry]
+    threads: {skills: [pantry]}
+    skills:
+      unload_after_turns: 2
+      requires: {planner: [pantry]}
+"""
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_skills_load_mid_turn_require_each_other_and_unload(tmp_path):
+    user = await User.objects.acreate(username="lazy-user")
+    bot, engine = make_bot(
+        tmp_path,
+        claude_tool("ergo_skill_load", {"name": "planner"}, tool_id="l1"),
+        claude_tool("pantry_count", {"item": "eggs"}, tool_id="p1"),
+        say("4 eggs."),
+        yaml_text=LAZY_YAML,
+        name="lazy",
+    )
+    skills = bot.definition.root_dir / "skills"
+    skills.mkdir()
+    (skills / "planner.md").write_text("# Plan meals\n\nCount the pantry first.")
+    bot = Bot.load(bot.definition.root_dir, engine_factory=bot._engine_factory)
+
+    main = await bot.main_session(user)
+    assert main.metadata["bot_role"] == "main"
+    await bot.ask(main, "Plan dinner")
+    first, second, _ = engine._client.calls
+    assert "pantry_count" not in _tool_names(first)
+    assert "pantry_count" in _tool_names(
+        second
+    )  # loaded mid-turn, offered on the next call
+    loaded = second["messages"][-1]["content"][0]["content"]
+    assert "# Skill: planner" in loaded
+    assert "Count the pantry first." in loaded
+    assert "# Skill: pantry" in loaded  # required by planner
+    await main.arefresh_from_db()
+    assert set(main.metadata["skills"]) == {"planner", "pantry"}
+
+    # Unused for more than unload_after_turns turns: dropped again.
+    for _ in range(3):
+        engine._client.responses = [say("ok")]
+        await bot.ask(main, "hi")
+    assert "pantry_count" not in _tool_names(engine._client.calls[-1])
+    await main.arefresh_from_db()
+    assert main.metadata["skills"] == {}
+
+    # A named chat and a thread load the skills their config lists.
+    reports = await bot.chat_session(user, "reports")
+    assert (reports.metadata["bot_role"], reports.metadata["chat"]) == (
+        "chat",
+        "reports",
+    )
+    assert reports.metadata["title"] == "Weekly reports"
+    assert await bot.chat_session(user, "reports") == reports
+    engine._client.responses = [say("ok")]
+    await bot.ask(reports, "hi")
+    call = engine._client.calls[-1]
+    assert "pantry_count" in _tool_names(call)
+    assert call["system"].startswith("You run the kitchen.\n\nKeep reports short.")
+    thread = await bot.create_session(user, parent=main)
+    engine._client.responses = [say("ok")]
+    await bot.ask(thread, "hi")
+    assert "pantry_count" in _tool_names(engine._client.calls[-1])
+    with pytest.raises(ValueError, match="no chat named"):
+        await bot.chat_session(user, "nope")
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_instructions_follow_agents_md(tmp_path):
+    user = await User.objects.acreate(username="editor")
+    bot, engine = make_bot(tmp_path, say("a"), say("b"))
+    main = await bot.main_session(user)
+    await bot.ask(main, "hi")
+    (bot.definition.root_dir / "agents.md").write_text("You run a tidy kitchen.")
+    bot = Bot.load(bot.definition.root_dir, engine_factory=bot._engine_factory)
+    await bot.ask(main, "hi again")
+    assert engine._client.calls[-1]["system"].startswith("You run a tidy kitchen.")

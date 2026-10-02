@@ -62,6 +62,7 @@ def describe_row(row: ConversationAttachment) -> dict:
 
 class AttachmentsPlugin(BotPlugin):
     name = "attachments"
+    description = "Read, look at and write files in chats (images and PDFs too)"
 
     def on_load(self) -> None:
         self.max_bytes = int(self.config.get("max_bytes", 5_000_000))
@@ -205,6 +206,12 @@ class AttachmentsPlugin(BotPlugin):
 
     def toolkits(self, ctx: ToolContext) -> list[Toolkit]:
         return [FunctionToolkit(self._tools(), ctx)]
+
+    def skill_hint(self, ctx: ToolContext) -> str:
+        count = ctx.session.attachments.count() if ctx.session is not None else 0
+        if not count:
+            return ""
+        return f"{count} file{'s' if count != 1 else ''} in this chat"
 
     def context_sources(self, ctx: ToolContext, message: str) -> list[ContextSource]:
         def listing() -> str:

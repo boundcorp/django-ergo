@@ -49,6 +49,11 @@ PREFETCH_MODES = {"new_session", "every_turn", "off"}
 
 class ErgoKBPlugin(BotPlugin):
     name = "ergo_kb"
+    description = "Search, read (and, if allowed, write) the knowledge base"
+
+    @property
+    def skill_name(self) -> str:
+        return "kb"
 
     def on_load(self) -> None:
         self.prefetch = self.config.get("prefetch", "new_session")
@@ -118,7 +123,11 @@ class ErgoKBPlugin(BotPlugin):
             session.claude_messages.exists() or session.openai_messages.exists()
         )
 
-    def context_sources(self, ctx: ToolContext, message: str) -> list[ContextSource]:
+    def always_context_sources(
+        self, ctx: ToolContext, message: str
+    ) -> list[ContextSource]:
+        # What the bot knows is in context whether or not the kb skill is loaded:
+        # the root article, and articles matching the message (prefetch).
         sources = self._root_sources()
         if not message.strip() or not self.should_prefetch(ctx):
             return sources

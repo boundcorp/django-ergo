@@ -50,6 +50,9 @@ OFFICIAL_PLUGINS = {
 
 class BotPlugin:
     name: str = ""
+    # A plugin that adds tools is a skill (see bots.skillset): loaded on
+    # request, with this description in the listing.
+    description: str = ""
 
     def __init__(self, bot: Bot, config: dict[str, Any] | None = None):
         self.bot = bot
@@ -62,7 +65,22 @@ class BotPlugin:
         return []
 
     def context_sources(self, ctx: ToolContext, message: str) -> list[ContextSource]:
+        """Context for a turn, while the plugin's skill is loaded."""
         return []
+
+    def always_context_sources(
+        self, ctx: ToolContext, message: str
+    ) -> list[ContextSource]:
+        """Context for every turn, loaded or not (e.g. a KB's root article)."""
+        return []
+
+    def skill_hint(self, ctx: ToolContext) -> str:
+        """A short note for the skill listing while it's not loaded."""
+        return ""
+
+    @property
+    def skill_name(self) -> str:
+        return self.name
 
     async def on_session_created(self, session: ConversationSession) -> None:
         pass

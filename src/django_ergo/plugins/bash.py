@@ -47,6 +47,7 @@ def trim(text: str, limit: int = MAX_OUTPUT_CHARS) -> str:
 
 class BashPlugin(BotPlugin):
     name = "bash"
+    description = "Run shell commands on the host (each one approved)"
 
     def on_load(self) -> None:
         self.cwd = Path(str(self.config.get("cwd") or "~")).expanduser()

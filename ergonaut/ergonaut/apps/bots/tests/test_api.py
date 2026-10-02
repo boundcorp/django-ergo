@@ -84,11 +84,13 @@ def test_chat_with_the_root_session_and_drill_into_tools(client, cook, use_bots)
             "knowledge": False,
             "parent": "",
             "root_session_id": None,
+            "chats": [{"name": "main", "description": "", "session_id": None}],
         }
     ]
     root = post(client, "/api/bots/kitchen/root").json()
-    assert root["role"] == "root"
-    assert root["title"] == "Chat"
+    assert root["role"] == "main"
+    assert root["title"] == "Main"
+    assert client.get("/api/bots").json()[0]["chats"][0]["session_id"] == root["id"]
 
     turn = post(client, f"/api/sessions/{root['id']}/messages", {"text": "How many eggs?"}).json()
     assert turn["text"] == "You have 4 eggs."
@@ -129,14 +131,17 @@ def test_bot_page_lists_tools_and_skills_and_threads_follow_orchestration(client
     assert bot["engine"] == "claude"
     assert bot["instructions"] == "You run the kitchen."
     tools = {t["name"]: t for t in bot["tools"]}
-    assert {"pantry_count", "order", "list_skills", "load_skill"} <= set(tools)
+    assert {"pantry_count", "order"} <= set(tools)
     assert "send_reply" not in tools  # the reply format, not a tool
-    assert not [name for name in tools if name.startswith("threads_")]
+    assert not [name for name in tools if name.startswith("ergo_thread")]  # orchestration is off
     assert tools["order"]["requires_approval"] is True
     assert tools["pantry_count"]["requires_approval"] is False
-    assert bot["skills"] == [
-        {"name": "meal-planning", "description": "Plan a week of dinners", "body": "Look back 60 days."}
-    ]
+    skills = {s["name"]: s for s in bot["skills"]}
+    assert skills["history"]["always_in"] == ["main", "threads"]
+    assert skills["pantry"]["source"] == "tools/pantry.py"
+    assert [t["name"] for t in skills["pantry"]["tools"]] == ["pantry_count", "order"]
+    assert skills["meal-planning"]["body"] == "Look back 60 days."
+    assert skills["meal-planning"]["always_in"] == []
 
     refused = post(client, "/api/bots/kitchen/threads", {"title": "Nope"})
     assert refused.status_code == 409
@@ -144,7 +149,8 @@ def test_bot_page_lists_tools_and_skills_and_threads_follow_orchestration(client
     root = post(client, "/api/bots/kitchen/root").json()
     post(client, f"/api/sessions/{root['id']}/messages", {"text": "hi"})
     [call] = client.get(f"/api/sessions/{root['id']}").json()["calls"]
-    assert {"pantry_count", "load_skill"} <= set(call["tools"])
+    assert "ergo_skill_load" in call["tools"]
+    assert "pantry_count" not in call["tools"]  # a skill, loaded when needed
     assert "send_reply" not in call["tools"]
 
 
@@ -340,7 +346,7 @@ def test_sessions_show_delegated_requests(client, cook, use_bots):
     listed = {s["id"]: s for s in client.get("/api/sessions").json()}
     assert (listed[str(thread.id)]["open_in"], listed[root["id"]]["open_out"]) == (1, 1)
     inside = client.get(f"/api/sessions/{thread.id}").json()
-    assert [(r["direction"], r["other"]) for r in inside["requests"]] == [("in", "kitchen · Chat")]
+    assert [(r["direction"], r["other"]) for r in inside["requests"]] == [("in", "kitchen · Main")]
 
 
 @pytest.mark.django_db(transaction=True)
@@ -438,7 +444,22 @@ def test_bot_page_lists_schedules(client, cook, bot_folder, use_bots):
     assert (schedule["name"], schedule["cron"], schedule["to"], schedule["enabled"]) == (
         "plan",
         "0 17 * * sun",
-        "new",
+        "thread",
         True,
     )
+    assert schedule["thread_title"] == "plan %b %d"
     assert schedule["next_run"]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_named_chats_open_from_the_api(client, cook, bot_folder, use_bots):
+    (bot_folder / "bot.yaml").write_text(BOT + "chats:\n  reports: {description: Weekly reports}\n")
+    use_bots(say("hi"))
+    [bot] = client.get("/api/bots").json()
+    assert [(c["name"], c["session_id"]) for c in bot["chats"]] == [("main", None), ("reports", None)]
+    opened = post(client, "/api/bots/kitchen/chats/reports").json()
+    assert (opened["role"], opened["title"]) == ("chat", "Weekly reports")
+    assert post(client, "/api/bots/kitchen/chats/reports").json()["id"] == opened["id"]
+    assert post(client, "/api/bots/kitchen/chats/nope").status_code == 404
+    [bot] = client.get("/api/bots").json()
+    assert bot["chats"][1]["session_id"] == opened["id"]

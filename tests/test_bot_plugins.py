@@ -73,7 +73,8 @@ async def test_kb_prefetch_on_new_session_only(tmp_path):
     first = engine._client.calls[0]
     assert "## Knowledge base results for this message" in first["system"]
     assert "Article 1A: Tacos (for 'dinner ideas')" in first["system"]
-    assert "kb_search" in {t["name"] for t in first["tools"]}
+    # Prefetch works whether or not the kb skill is loaded; its tools wait.
+    assert "kb_search" not in {t["name"] for t in first["tools"]}
     assert FakeKB.searches == [{"query": "dinner ideas", "top_k": 3}]
 
     await bot.ask(thread, "and lunch?")
@@ -170,6 +171,7 @@ def bot_repo(tmp_path, monkeypatch):
 def management_bot(work, mode, *responses):
     yaml_text = f"""
         name: manager
+        chats: {{main: {{skills: [config_repo]}}}}
         plugins: [{{name: bot_management, mode: {mode}}}]
     """
     folder = work / "bots"
@@ -451,6 +453,7 @@ def test_telegram_needs_token(tmp_path, monkeypatch):
 def folder_kb_bot(tmp_path, *responses, prefetch="every_turn"):
     yaml_text = f"""
         name: kitchen
+        chats: {{main: {{skills: [kb]}}}}
         plugins:
           - name: ergo_kb
             path: ../kb
@@ -648,6 +651,7 @@ def test_telegram_polling_without_public_url(tmp_path):
 def orca_bot(tmp_path, *responses, config="environment: devbox, executable: orca-test"):
     yaml_text = f"""
         name: cto
+        chats: {{main: {{skills: [orca]}}}}
         plugins: [{{name: orca, {config}}}]
     """
     bot, engine = make_bot(tmp_path, *responses, yaml_text=yaml_text, name="cto")
@@ -762,6 +766,7 @@ def test_orca_reports_a_missing_cli(tmp_path):
 def bash_bot(tmp_path, *responses, config="cwd: /tmp"):
     yaml_text = f"""
         name: ops
+        chats: {{main: {{skills: [bash]}}}}
         plugins: [{{name: bash, {config}}}]
     """
     bot, engine = make_bot(tmp_path, *responses, yaml_text=yaml_text, name="ops")
@@ -808,6 +813,7 @@ async def test_bash_waits_for_approval(tmp_path):
 def files_bot(tmp_path, *responses, config="max_bytes: 100"):
     yaml_text = f"""
         name: filer
+        chats: {{main: {{skills: [attachments]}}}}
         plugins: [{{name: attachments, {config}}}]
     """
     bot, engine = make_bot(tmp_path, *responses, yaml_text=yaml_text, name="filer")
