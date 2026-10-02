@@ -282,6 +282,31 @@ def test_bot_discards_a_draft(bot_repo):
     assert "bot/manager/draft" in git(work, "branch")
 
 
+def test_bot_moves_a_file_by_writing_then_deleting(bot_repo):
+    _, work = bot_repo
+    _, _, plugin = management_bot(work, "propose_pr")
+    git(work, "add", "-A")
+    git(work, "commit", "-m", "add bot")
+    git(work, "push")
+    old = plugin.read("bots/manager/agents.md")
+    plugin.write("bots/renamed/agents.md", old)
+    assert plugin.delete("bots/manager/agents.md") == "Deleted bots/manager/agents.md"
+    diff = plugin.diff()
+    assert (
+        "rename from bots/manager/agents.md" in diff
+        and "rename to bots/renamed/agents.md" in diff
+    )
+    with pytest.raises(ValueError, match="doesn't exist"):
+        plugin.delete("bots/manager/agents.md")
+    with pytest.raises(ValueError, match="is a folder"):
+        plugin.delete("bots/manager")
+    with pytest.raises(ValueError, match="outside"):
+        plugin.delete("../x")
+    assert (
+        work / "bots" / "manager" / "agents.md"
+    ).exists()  # the live checkout is untouched
+
+
 @pytest.mark.django_db(transaction=True)
 async def test_bot_management_tools_are_root_only(bot_repo):
     _, work = bot_repo

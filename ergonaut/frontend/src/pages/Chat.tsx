@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useParams, useSearchParams } from 'react-router-dom'
 import type { Call, DelegatedRequest, Message, Pin, SessionDetail, Turn } from '../api'
 import { api } from '../api'
 import Files from '../components/Files'
@@ -64,6 +64,16 @@ export function Chat({ onChange }: { onChange: () => void }) {
     setOpenPin(null)
     load().catch(e => setError(String(e.message ?? e)))
   }, [load])
+
+  // ?pin=<url>&name=<name> (from the sidebar) opens that pin. Declared after the effect above,
+  // which resets the viewer when the chat changes, so it runs second.
+  const [search, setSearch] = useSearchParams()
+  useEffect(() => {
+    const url = search.get('pin')
+    if (!url) return
+    setOpenPin({ kind: 'file', name: search.get('name') || 'Pinned', url })
+    setSearch({}, { replace: true })
+  }, [search, setSearch])
 
   // Follow the session live, whichever process runs its turns.
   const loaded = detail !== null

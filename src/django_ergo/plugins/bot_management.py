@@ -12,6 +12,7 @@ The repository is the git checkout that contains the bot folder. Tools:
 
 - ``ergo_config_repo_status``, ``ergo_config_repo_list``, ``ergo_config_repo_read``, ``ergo_config_repo_diff``: look around.
 - ``ergo_config_repo_write``: change a file (nothing is published).
+- ``ergo_config_repo_delete``: delete a file (to move one, write it anew, then delete).
 - ``ergo_config_repo_preview``: render a ``.jhtml`` page from the changes, with
   the draft's tables and sample rows, all rolled back (``ergo_bot_preview``).
 - ``ergo_config_repo_publish``: commit everything. In ``merge_main`` mode it rebases on
@@ -49,6 +50,16 @@ if TYPE_CHECKING:
 
 MODES = {"merge_main", "propose_pr"}
 COMMAND_TIMEOUT = 120
+PR_FETCH_SECONDS = 30
+
+
+def _pr_number(version: str) -> int:
+    if not re.fullmatch(r"pr-[0-9]{1,9}", version):
+        msg = f"Unknown version {version!r}: use draft or pr-<number>"
+        raise ValueError(msg)
+    return int(version[3:])
+
+
 MAX_READ_CHARS = 50_000
 
 
@@ -180,6 +191,23 @@ class BotManagementPlugin(BotPlugin):
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content)
         return f"Wrote {target.relative_to(self.workdir)} ({len(content)} chars)"
+
+    def delete(self, path: str) -> str:
+        """Remove a file (not a folder); empty folders left behind go too."""
+        target = self.path(path)
+        if not target.exists():
+            msg = f"{path} doesn't exist"
+            raise ValueError(msg)
+        if target.is_dir():
+            msg = f"{path} is a folder; delete its files one by one"
+            raise ValueError(msg)
+        target.unlink()
+        work = self.workdir
+        parent = target.parent
+        while parent != work and parent.is_dir() and not any(parent.iterdir()):
+            parent.rmdir()
+            parent = parent.parent
+        return f"Deleted {target.relative_to(work)}"
 
     def make_migrations(self, work) -> str:
         """Write migrations for any bot tables changed in ``work`` (a separate
@@ -360,9 +388,94 @@ class BotManagementPlugin(BotPlugin):
         self.git("add", "--intent-to-add", "--all", cwd=work)
         return self.git("diff", "HEAD", cwd=work).strip()
 
+    # -- reading proposed versions (Ergonaut's Files browser) ----------------------
+    #
+    # A version is "draft" (the unpublished changes) or "pr-<number>". Paths are
+    # relative to the repository; "changed" compares with the live checkout.
+
+    def _draft_work(self) -> Path | None:
+        if self.mode == "merge_main":
+            return self.repo
+        return self.draft_dir if self.draft_dir.is_dir() else None
+
+    def _pr_ref(self, number: int) -> str:
+        """Fetch a pull request's head into a local ref (at most every 30 seconds)."""
+        import time
+
+        ref = f"refs/ergo/pr/{int(number)}"
+        fetched = self.__dict__.setdefault("_pr_fetched", {})
+        if time.monotonic() - fetched.get(ref, -1e9) > PR_FETCH_SECONDS:
+            self.git(
+                "fetch",
+                "--quiet",
+                "--force",
+                self.remote,
+                f"refs/pull/{int(number)}/head:{ref}",
+            )
+            fetched[ref] = time.monotonic()
+        return ref
+
+    def version_files(self, version: str) -> tuple[list[str], dict[str, str]]:
+        """Every file at ``version``, and the changed ones (path -> A, M or D)."""
+        changed: dict[str, str] = {}
+        if version == "draft":
+            work = self._draft_work()
+            if work is None:
+                return [], {}
+            listed = self.git(
+                "ls-files", "--cached", "--others", "--exclude-standard", cwd=work
+            ).splitlines()
+            files = [f for f in listed if (work / f).is_file()]
+            for line in self.git(
+                "status", "--porcelain", "--untracked-files=all", cwd=work
+            ).splitlines():
+                code, path = line[:2], line[3:].split(" -> ")[-1].strip('"')
+                changed[path] = (
+                    "D" if "D" in code else "A" if code in ("??", "A ", "AM") else "M"
+                )
+            return files, changed
+        ref = self._pr_ref(_pr_number(version))
+        files = self.git("ls-tree", "-r", "--name-only", ref).splitlines()
+        base = self.git("merge-base", "HEAD", ref).strip()
+        for line in self.git("diff", "--name-status", base, ref).splitlines():
+            status, *paths = line.split("\t")
+            if status.startswith("R") and len(paths) == 2:  # noqa: PLR2004 — old and new path
+                changed[paths[0]], changed[paths[1]] = "D", "A"
+            elif paths:
+                changed[paths[0]] = status[:1]
+        return files, changed
+
+    def version_read(self, version: str, path: str) -> bytes | None:
+        """A file's bytes at ``version`` (None if it isn't there)."""
+        if version == "draft":
+            work = self._draft_work()
+            target = (work / path).resolve() if work else None
+            if (
+                target is None
+                or not target.is_relative_to(work)
+                or not target.is_file()
+            ):
+                return None
+            return target.read_bytes()
+        return self._show(f"{self._pr_ref(_pr_number(version))}:{path}")
+
+    def live_read(self, path: str) -> bytes | None:
+        """A file's bytes in the live checkout's last commit."""
+        return self._show(f"HEAD:{path}")
+
+    def _show(self, spec: str) -> bytes | None:
+        proc = subprocess.run(  # noqa: S603 — fixed argv, no shell
+            ["git", "show", spec],  # noqa: S607
+            cwd=self.repo,
+            capture_output=True,
+            timeout=COMMAND_TIMEOUT,
+            check=False,
+        )
+        return proc.stdout if proc.returncode == 0 else None
+
     def pull_requests(self) -> list[dict]:
         """Open pull requests on the bot repository, newest first."""
-        fields = "number,title,url,headRefName,author,createdAt,body,additions,deletions,changedFiles"
+        fields = "number,title,url,headRefName,author,createdAt,body,additions,deletions,changedFiles,files"
         return json.loads(
             self.run(["gh", "pr", "list", "--state", "open", "--json", fields]) or "[]"
         )
@@ -417,6 +530,15 @@ class BotManagementPlugin(BotPlugin):
         def write(path: str, content: str) -> str:
             """Create or replace a file in the bot repository (unpublished until ergo_config_repo_publish)."""
             return plugin.write(path, content)
+
+        @bot_tool(
+            name="ergo_config_repo_delete",
+            requires_approval=self.mode == "merge_main" and self.approve_publish,
+        )
+        def delete(path: str) -> str:
+            """Delete a file from the bot repository (unpublished until ergo_config_repo_publish).
+            To rename or move a file, write it at the new path, then delete the old one."""
+            return plugin.delete(path)
 
         @bot_tool(name="ergo_config_repo_diff")
         def diff() -> str:

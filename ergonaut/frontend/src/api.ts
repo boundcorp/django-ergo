@@ -295,13 +295,37 @@ export const api = {
   deleteAttachment: (id: string) => request<{ ok: boolean }>('DELETE', `/attachments/${id}`),
   downloadUrl: (id: string) => `/api/attachments/${id}/download`,
   viewUrl: (id: string) => `/api/attachments/${id}/download?inline=true`,
-  botTree: (bot: string) =>
-    request<{ files: { path: string; size: number }[]; truncated: boolean }>('GET', `/bots/${bot}/tree`),
-  botSource: (bot: string, path: string) =>
-    request<{ path: string; size: number; media_type: string; text: string | null; url: string }>(
+  botTree: (bot: string, version = 'live') =>
+    request<{ files: { path: string; size: number; status: string }[]; truncated: boolean }>(
       'GET',
-      `/bots/${bot}/source/${path.split('/').map(encodeURIComponent).join('/')}`,
+      `/bots/${bot}/tree?version=${encodeURIComponent(version)}`,
     ),
+  botSource: (bot: string, path: string, version = 'live') =>
+    request<{
+      path: string
+      size: number
+      media_type: string
+      text: string | null
+      url: string
+      deleted: boolean
+      diff: string
+    }>(
+      'GET',
+      `/bots/${bot}/source/${path.split('/').map(encodeURIComponent).join('/')}?version=${encodeURIComponent(version)}`,
+    ),
+  botProposals: (bot: string) =>
+    request<{
+      managed_by: string
+      error?: string
+      proposals: {
+        version: string
+        title: string
+        number: number | null
+        url: string
+        changed: Record<string, string>
+      }[]
+    }>('GET', `/bots/${bot}/proposals`),
+  allPins: () => request<Record<string, { name: string; url: string }[]>>('GET', '/pins'),
   pins: (id: string) => request<Pin[]>('GET', `/sessions/${id}/pins`),
   pin: (id: string, pinned: boolean) => request<AttachmentFile>('POST', `/attachments/${id}/pin`, { pinned }),
 }
