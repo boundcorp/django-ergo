@@ -11,7 +11,7 @@ from datetime import datetime
 from typing import Any
 
 from asgiref.sync import sync_to_async
-from django.db.models import Q
+from django.db.models import Count, Q
 from django.http import FileResponse
 from django.shortcuts import aget_object_or_404
 from django_ergo.bots import archival, webhooks
@@ -73,6 +73,20 @@ class SessionOut(Schema):
     username: str
     created_at: datetime
     updated_at: datetime
+    open_in: int = 0  # delegated requests this session is still answering
+    open_out: int = 0  # requests it sent that are still unanswered
+
+
+class RequestOut(Schema):
+    id: str
+    direction: str  # "in": sent to this session; "out": sent by it
+    other_session_id: str | None
+    other: str
+    text: str
+    status: str
+    reply: str
+    created_at: datetime
+    updated_at: datetime
 
 
 class MessageOut(Schema):
@@ -110,6 +124,7 @@ class SessionDetailOut(Schema):
     session: SessionOut
     messages: list[MessageOut]
     calls: list[CallOut]
+    requests: list[RequestOut] = []
 
 
 class NewThreadIn(Schema):
@@ -167,7 +182,67 @@ def session_out(session: ConversationSession) -> dict:
         "username": session.user.get_username() if session.user_id else "",
         "created_at": session.created_at,
         "updated_at": session.updated_at,
+        "open_in": getattr(session, "open_in", 0) or 0,
+        "open_out": getattr(session, "open_out", 0) or 0,
     }
+
+
+OPEN_REQUESTS = ["queued", "delivered", "waiting"]
+
+
+def with_open_counts(qs):
+    """Annotate sessions with their open delegated requests, in and out."""
+    return qs.annotate(
+        open_in=Count(
+            "thread_messages",
+            filter=Q(
+                thread_messages__status__in=OPEN_REQUESTS,
+                thread_messages__in_reply_to__isnull=True,
+                thread_messages__sender_session__isnull=False,
+            ),
+            distinct=True,
+        ),
+        open_out=Count(
+            "sent_thread_messages",
+            filter=Q(
+                sent_thread_messages__status__in=OPEN_REQUESTS,
+                sent_thread_messages__in_reply_to__isnull=True,
+            ),
+            distinct=True,
+        ),
+    )
+
+
+def requests_out(session: ConversationSession, limit: int = 20) -> list[dict]:
+    """Recent delegated requests to and from a session, newest first."""
+    from django_ergo.bots.messaging import label, snippet
+    from django_ergo.conversation.models import ThreadMessage
+
+    rows = (
+        ThreadMessage.objects.filter(in_reply_to__isnull=True)
+        .filter(Q(recipient_session=session) | Q(sender_session=session))
+        .exclude(sender_session__isnull=True)
+        .select_related("sender_session", "recipient_session")
+        .order_by("-created_at")[:limit]
+    )
+    out = []
+    for row in rows:
+        incoming = row.recipient_session_id == session.id
+        other = row.sender_session if incoming else row.recipient_session
+        out.append(
+            {
+                "id": str(row.id),
+                "direction": "in" if incoming else "out",
+                "other_session_id": str(other.id) if other else None,
+                "other": label(other) if other else "",
+                "text": snippet(row.text),
+                "status": row.status,
+                "reply": snippet(row.reply_text or row.error),
+                "created_at": row.created_at,
+                "updated_at": row.updated_at,
+            }
+        )
+    return out
 
 
 def call_out(call: StructuredCall, detail: bool = False) -> dict:
@@ -242,7 +317,7 @@ def list_sessions(request, bot: str = "", q: str = "", status: str = ""):
             | Q(openai_messages__content__icontains=q)
             | Q(metadata__title__icontains=q)
         ).distinct()
-    return [session_out(s) for s in qs.order_by("-updated_at")[:200]]
+    return [session_out(s) for s in with_open_counts(qs).order_by("-updated_at")[:200]]
 
 
 @router.post("/bots/{bot}/root", response=SessionOut)
@@ -326,7 +401,13 @@ def session_detail(request, session_id: str):
         for m in SessionSource(session).messages()
     ]
     calls = [call_out(c) for c in session.structured_calls.order_by("created_at")]
-    return {"session": session_out(session), "messages": messages, "calls": calls}
+    session = with_open_counts(visible_sessions(request.auth).filter(id=session.id)).first()
+    return {
+        "session": session_out(session),
+        "messages": messages,
+        "calls": calls,
+        "requests": requests_out(session),
+    }
 
 
 @router.get("/calls/{call_id}", response=CallDetailOut)

@@ -22,9 +22,27 @@ function SessionLink({
       }
     >
       <span
-        className={`h-1.5 w-1.5 shrink-0 rounded-full ${session.status === "completed" ? "bg-zinc-400" : "bg-emerald-500"}`}
+        title={
+          session.open_in
+            ? "Working on a delegated request"
+            : session.open_out
+              ? "Waiting on another thread"
+              : undefined
+        }
+        className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+          session.open_in
+            ? "animate-pulse bg-amber-500"
+            : session.status === "completed"
+              ? "bg-zinc-400"
+              : "bg-emerald-500"
+        }`}
       />
       <span className="truncate">{session.title}</span>
+      {!!session.open_out && (
+        <span className="ml-auto shrink-0 text-xs text-zinc-400" title="Waiting on other threads">
+          ⏳{session.open_out > 1 ? session.open_out : ""}
+        </span>
+      )}
     </NavLink>
   );
 }

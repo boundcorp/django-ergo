@@ -21,6 +21,20 @@ export type Session = {
   username: string
   created_at: string
   updated_at: string
+  open_in?: number
+  open_out?: number
+}
+
+export type DelegatedRequest = {
+  id: string
+  direction: 'in' | 'out'
+  other_session_id: string | null
+  other: string
+  text: string
+  status: 'queued' | 'delivered' | 'waiting' | 'answered' | 'failed'
+  reply: string
+  created_at: string
+  updated_at: string
 }
 
 export type Block =
@@ -105,7 +119,7 @@ export type AttachmentFile = {
   updated_at: string
 }
 
-export type SessionDetail = { session: Session; messages: Message[]; calls: Call[] }
+export type SessionDetail = { session: Session; messages: Message[]; calls: Call[]; requests?: DelegatedRequest[] }
 
 export type Turn = {
   session_id: string

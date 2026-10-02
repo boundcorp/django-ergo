@@ -24,7 +24,7 @@ from django.http import HttpResponse, StreamingHttpResponse
 from django_ergo.conversation.history import SessionSource
 from django_ergo.conversation.models import ClaudeContentBlock, ConversationSession
 
-from ergonaut.api.bots import call_out, visible_sessions
+from ergonaut.api.bots import call_out, requests_out, visible_sessions
 
 POLL_SECONDS = 0.5
 PUBSUB_POLL_SECONDS = 3.0
@@ -47,13 +47,19 @@ def _snapshot(session_id, after: int, seen: dict):
             for m in SessionSource(session).messages()
             if m.line >= after
         ]
+    requests = requests_out(session)
+    key = [(r["id"], r["status"]) for r in requests]
+    if seen.get("requests") == key:
+        requests = None
+    else:
+        seen["requests"] = key
     calls = []
     for call in session.structured_calls.order_by("created_at"):
         key = (call.status, call.updated_at.isoformat(), call.output_tokens)
         if seen.setdefault("calls", {}).get(str(call.id)) != key:
             seen["calls"][str(call.id)] = key
             calls.append(call_out(call))
-    return messages, calls
+    return messages, calls, requests
 
 
 def _event(payload) -> str:
@@ -112,15 +118,18 @@ async def session_events(request, session_id):
         first = True
         waits = changes()
         while loop.time() < end:
-            messages, calls = await sync_to_async(_snapshot)(session_id, last, seen)
+            messages, calls, requests = await sync_to_async(_snapshot)(session_id, last, seen)
             if first:
                 # The client already has everything up to `after`; only
-                # remember the calls it has seen.
-                calls, first = [], False
-            if messages or calls:
+                # remember the calls and requests it has seen.
+                calls, requests, first = [], None, False
+            if messages or calls or requests is not None:
                 if messages:
                     last = max(m["line"] for m in messages)
-                yield _event({"messages": messages, "calls": calls})
+                event = {"messages": messages, "calls": calls}
+                if requests is not None:
+                    event["requests"] = requests
+                yield _event(event)
                 quiet = 0.0
             elif quiet >= KEEPALIVE_SECONDS:
                 yield ": keepalive\n\n"

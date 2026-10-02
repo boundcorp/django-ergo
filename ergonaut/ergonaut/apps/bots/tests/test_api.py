@@ -314,3 +314,26 @@ def test_files_sent_with_a_message_reach_the_model(client, cook, use_bots, setti
 
     other = post(client, f"/api/sessions/{root['id']}/messages", {"text": "x", "attachment_ids": ["nope"]})
     assert other.status_code == 400
+
+
+@pytest.mark.django_db(transaction=True)
+def test_sessions_show_delegated_requests(client, cook, use_bots):
+    from django_ergo.conversation.models import ConversationSession, ThreadMessage
+
+    use_bots(say("hi"))
+    root = post(client, "/api/bots/kitchen/root").json()
+    parent = ConversationSession.objects.get(id=root["id"])
+    thread = ConversationSession.objects.create(
+        user=cook, bot_name="kitchen", parent=parent, metadata={"bot_role": "thread", "title": "Meals"}
+    )
+    ThreadMessage.objects.create(sender_session=parent, recipient_session=thread, text="Plan Tuesday", status="delivered")
+
+    detail = client.get(f"/api/sessions/{root['id']}").json()
+    assert detail["session"]["open_out"] == 1
+    assert [(r["direction"], r["other"], r["status"]) for r in detail["requests"]] == [
+        ("out", "kitchen · Meals", "delivered")
+    ]
+    listed = {s["id"]: s for s in client.get("/api/sessions").json()}
+    assert (listed[str(thread.id)]["open_in"], listed[root["id"]]["open_out"]) == (1, 1)
+    inside = client.get(f"/api/sessions/{thread.id}").json()
+    assert [(r["direction"], r["other"]) for r in inside["requests"]] == [("in", "kitchen · Chat")]

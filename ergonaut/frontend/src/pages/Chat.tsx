@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useParams } from 'react-router-dom'
-import type { Call, Message, SessionDetail, Turn } from '../api'
+import { Link, useParams } from 'react-router-dom'
+import type { Call, DelegatedRequest, Message, SessionDetail, Turn } from '../api'
 import { api } from '../api'
 import Files from '../components/Files'
 import { Transcript } from '../components/Transcript'
@@ -67,8 +67,13 @@ export function Chat({ onChange }: { onChange: () => void }) {
     const after = messages.length ? messages[messages.length - 1].line : -1
     const events = new EventSource(`/api/sessions/${id}/events?after=${after}`)
     events.onmessage = e => {
-      const { messages, calls } = JSON.parse(e.data) as { messages: Message[]; calls: Call[] }
-      setDetail(d => (d ? merge(d, messages, calls) : d))
+      const { messages, calls, requests } = JSON.parse(e.data) as {
+        messages: Message[]
+        calls: Call[]
+        requests?: DelegatedRequest[]
+      }
+      setDetail(d => (d ? { ...merge(d, messages, calls), ...(requests ? { requests } : {}) } : d))
+      if (requests) onChange()
     }
     return () => events.close()
   }, [id, loaded])
@@ -198,6 +203,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
           Export JSON
         </a>
       </header>
+      <Requests requests={detail.requests ?? []} />
       <div className="flex-1 overflow-y-auto px-6 py-4">
         <Transcript messages={detail.messages} calls={detail.calls} />
         {echo && (
@@ -294,6 +300,39 @@ export function Chat({ onChange }: { onChange: () => void }) {
       </form>
     </div>
     {showFiles && <Files sessionId={id} refreshKey={detail.messages.length} />}
+    </div>
+  )
+}
+
+const REQUEST_STATUS: Record<DelegatedRequest['status'], string> = {
+  queued: 'queued',
+  delivered: 'working on it',
+  waiting: 'waiting for your approval',
+  answered: 'answered',
+  failed: 'failed',
+}
+
+// Delegated work still open: what this chat is waiting on, and what it's doing for others.
+function Requests({ requests }: { requests: DelegatedRequest[] }) {
+  const open = requests.filter(r => r.status !== 'answered' && r.status !== 'failed')
+  if (!open.length) return null
+  return (
+    <div className="flex flex-col gap-1 border-b border-zinc-200 bg-zinc-50 px-6 py-2 text-xs dark:border-zinc-800 dark:bg-zinc-900/50">
+      {open.map(r => (
+        <div key={r.id} className="flex items-center gap-2 truncate">
+          <span className={r.status === 'waiting' ? 'text-amber-600' : 'text-teal-600'}>{r.direction === 'out' ? '⏳' : '📥'}</span>
+          <span className="text-zinc-500">{r.direction === 'out' ? 'Waiting on' : 'Working for'}</span>
+          {r.other_session_id ? (
+            <Link to={`/s/${r.other_session_id}`} className="font-medium text-indigo-600 hover:underline dark:text-indigo-400">
+              {r.other}
+            </Link>
+          ) : (
+            <span className="font-medium">{r.other}</span>
+          )}
+          <span className="text-zinc-500">· {REQUEST_STATUS[r.status]}</span>
+          <span className="truncate text-zinc-400">“{r.text}”</span>
+        </div>
+      ))}
     </div>
   )
 }

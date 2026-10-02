@@ -30,6 +30,10 @@ class BotsConfig(AppConfig):
         from ergonaut.apps.bots.tasks import notify
 
         def changed(sender, instance, **kwargs):
+            if sender is ergo_models.ThreadMessage:
+                notify(instance.recipient_session_id)
+                notify(instance.sender_session_id)
+                return
             session_id = getattr(instance, "session_id", None)
             if session_id is None and sender is ergo_models.ClaudeContentBlock:
                 session_id = getattr(instance.message, "session_id", None)
@@ -41,5 +45,6 @@ class BotsConfig(AppConfig):
             ergo_models.OpenAIMessage,
             ergo_models.StructuredCall,
             ergo_models.ConversationAttachment,
+            ergo_models.ThreadMessage,
         ):
             post_save.connect(changed, sender=model, dispatch_uid=f"ergonaut-live-{model.__name__}")

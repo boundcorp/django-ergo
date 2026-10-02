@@ -15,13 +15,14 @@ Live on rigel from `~/p/boundcorp/django-ergo`, bots from `boundcorp/ergo-bots`.
 ### Next
 
 - [ ] Telegram: when a delegated reply lands in a root chat that a person reaches over Telegram, tell them there too.
-- [ ] Show ThreadMessage status (queued, working, waiting on approval, answered) in the UI, not only in the transcript headers.
 
 - [ ] "Changes" tab on the bot page: open ergo-bots PRs with diff, Merge and Discard.
 - [ ] A bot tool waiting on a @bot_task holds a worker slot; watch worker concurrency if many tools wait at once.
 - [ ] Reconcile the root pre-commit config (ruff, prettier) with the branch's code style.
 
 ### Done
+
+- [x] Delegation status in the UI: a chat lists what it's waiting on / working for; sidebar dots show threads busy with delegated work.
 
 - [x] Bot repo pulls run as the `ergonaut.pull_bot_repos` beat task (a thread only without a broker).
 
