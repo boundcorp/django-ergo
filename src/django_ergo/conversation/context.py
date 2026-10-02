@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from dataclasses import field
 from typing import TYPE_CHECKING
 
+from django_ergo.conversation.compaction import native_turn_start
 from django_ergo.conversation.history import Granularity
 from django_ergo.conversation.history import is_visible
 from django_ergo.conversation.history import render_message
@@ -98,8 +99,14 @@ class MessageContextSource(ContextSource):
         max_messages: never include more than this many.
         max_granularity: the most detail the builder may choose.
         granularity: fix the granularity instead of choosing.
-        before_line: only messages before this line, e.g. to leave out the
-            turn the engine already sends natively.
+        before_line: only messages before this line.
+        skip_native_turn: leave out the messages a session with
+            ``native_history="turn"`` already sends natively (the current
+            turn, or a turn the next message continues), so they aren't in
+            the model's context twice.
+        incoming: with ``skip_native_turn``, whether a new user message is
+            about to start the turn (True when building for a new message,
+            False when resuming a turn that is already stored).
     """
 
     def __init__(  # noqa: PLR0913
@@ -113,6 +120,8 @@ class MessageContextSource(ContextSource):
         max_granularity: Granularity | str = Granularity.REASONING,
         granularity: Granularity | str | None = None,
         before_line: int | None = None,
+        skip_native_turn: bool = False,
+        incoming: bool = True,
     ):
         self.source = source
         self.weight = weight
@@ -122,6 +131,8 @@ class MessageContextSource(ContextSource):
         self.max_granularity = Granularity.parse(max_granularity)
         self.granularity = Granularity.parse(granularity) if granularity else None
         self.before_line = before_line
+        self.skip_native_turn = skip_native_turn
+        self.incoming = incoming
 
     def _candidates(self) -> list[Granularity]:
         if self.granularity:
@@ -133,6 +144,11 @@ class MessageContextSource(ContextSource):
         messages = self.source.messages()
         if self.before_line is not None:
             messages = [m for m in messages if m.line < self.before_line]
+        if self.skip_native_turn:
+            start = native_turn_start(
+                [_api_shape(m) for m in messages], incoming=self.incoming
+            )
+            messages = messages[: start or 0]
         return messages
 
     def render(self, budget_tokens: int) -> ContextSection | None:
@@ -205,6 +221,15 @@ class MessageContextSource(ContextSource):
             selected.append((message.line, text))
             used += cost
         return selected
+
+
+def _api_shape(message: HistoryMessage) -> dict:
+    """Enough of an API message for native_turn_start to read."""
+    blocks = [
+        {**b, "type": "text"} if b.get("type") == "context" else b
+        for b in message.blocks
+    ]
+    return {"role": message.role, "content": blocks}
 
 
 @dataclass

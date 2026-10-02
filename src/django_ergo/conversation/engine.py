@@ -73,6 +73,9 @@ class Engine(ABC):
     # Extra system text for the current turn (e.g. a ContextBuilder's output).
     # Sent with every model call while set, never stored.
     ephemeral_context: str = ""
+    # Large tool results each model call carries in full; None uses
+    # DJANGO_ERGO["TOOL_RESULTS_IN_CONTEXT"] (see conversation.tool_results).
+    tool_results_in_context: int | None = None
 
     @abstractmethod
     async def start_session(self, session) -> str:

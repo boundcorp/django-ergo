@@ -32,6 +32,7 @@ root:                                # window settings for main and named chats
 orchestration: true                  # may the bot delegate at all (false: never)
 timezone: America/Los_Angeles        # default for users without a timezone
 current_time: true                   # current date and time in every turn
+tool_results_in_context: 3           # large tool results each model call keeps in full
 chats:
   main:                              # every user's main chat (always there)
     skills: [orchestration, tandoor] # loaded from the start (default: [orchestration])
@@ -95,6 +96,14 @@ points at a file the chat already has) and history keeps a reference. Only the
 latest two images go to the model on each call (`DJANGO_ERGO["IMAGES_IN_CONTEXT"]`),
 downscaled to 1024px with Pillow when it's installed; older ones show as
 `[image omitted: name (id=...)]`. See [attachments.md](attachments.md).
+
+Large tool results get the same treatment: each model call carries the
+newest three (`tool_results_in_context` in bot.yaml, default
+`DJANGO_ERGO["TOOL_RESULTS_IN_CONTEXT"]`) in full, and older ones over 500
+characters go as a stub naming the tool and its size, so a long turn that
+keeps reading a big dump doesn't re-send every earlier copy. History keeps
+every result; the bot calls the tool again if it needs an old one. See
+[structured-calls.md](structured-calls.md).
 
 A tool module can also define
 `toolkits(ctx) -> list[Toolkit]` for class-based toolkits.

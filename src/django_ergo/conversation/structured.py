@@ -93,6 +93,7 @@ from django_ergo.conversation.runner import _tool_requires_approval
 from django_ergo.conversation.runtime import EngineSpec
 from django_ergo.conversation.runtime import build_engine
 from django_ergo.conversation.runtime import get_default_engine_spec
+from django_ergo.conversation.tool_results import trim_tool_results
 from django_ergo.conversation.toolkit import Toolkit
 from django_ergo.pricing import add_request_cost
 from django_ergo.tools import tool_registry
@@ -425,9 +426,13 @@ class _MemoryTranscript:
 
     async def respond(self, tool_schemas, note: str = "") -> list[EngineResponse]:
         system = "\n\n".join(p for p in (self.call.system_prompt, note) if p)
-        # Image references become image parts (only the latest few).
+        # Older large tool results become stubs and image references become
+        # image parts (only the latest few of each); self.messages keeps all.
+        messages = trim_tool_results(
+            self.messages, keep=getattr(self.engine, "tool_results_in_context", None)
+        )
         messages = await sync_to_async(prepare_messages, thread_sensitive=True)(
-            self.messages, getattr(self.engine, "engine_type", "")
+            messages, getattr(self.engine, "engine_type", "")
         )
         completion = await self.engine.complete(
             messages, system=system, tools=tool_schemas
