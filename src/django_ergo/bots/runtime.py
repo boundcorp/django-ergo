@@ -149,6 +149,13 @@ class Bot:
             for name, fn in module.tasks.items()
         }
         self.skills: list[Skill] = load_skills(definition.skills_dir)
+        self.tables = []
+        if definition.table_files:
+            from django_ergo.bots.tables import load_tables
+
+            self.tables = load_tables(
+                definition.name, definition.root_dir, definition.table_files
+            )
         self.toolkit_factories = [
             import_string(path.replace(":", "."))
             for path in definition.toolkit_factories
@@ -204,6 +211,23 @@ class Bot:
                     "Delegate to your threads and to other bots, and check on them",
                     toolkits=lambda ctx: [orchestrator_toolkit(ctx)],
                     source="built-in",
+                )
+            )
+        if self.tables:
+            from django_ergo.bots.tables import describe
+            from django_ergo.bots.tables import table_tools
+
+            tools = table_tools(self.tables)
+            defs.append(
+                SkillDef(
+                    "tables",
+                    "Look up and change rows in this bot's tables: "
+                    + ", ".join(t.__name__ for t in self.tables),
+                    instructions="Tables and their fields:\n"
+                    + "\n".join(describe(t) for t in self.tables),
+                    toolkits=lambda ctx, tools=tools: [FunctionToolkit(tools, ctx)],
+                    requires=requires.get("tables", []),
+                    source="tables",
                 )
             )
         for module in self.tool_modules:

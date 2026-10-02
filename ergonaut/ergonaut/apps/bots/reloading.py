@@ -154,7 +154,26 @@ def pull_all(paths: Callable[[], list[Path]] = bot_paths) -> dict[str, str]:
             continue
         if outcomes[str(repo)].startswith("failed"):
             logger.warning("Pulling %s %s", repo, outcomes[str(repo)])
+        elif outcomes[str(repo)] == "pulled":
+            migrate_tables([p for p in paths() if p.exists() and git_toplevel(p) == repo])
     return outcomes
+
+
+def migrate_tables(paths: list[Path]) -> bool:
+    """Apply the bots' table migrations, in a fresh process so the new models load cleanly."""
+    import sys
+
+    if not paths:
+        return True
+    result = subprocess.run(  # noqa: S603 — our own management command
+        [sys.executable, "-m", "ergonaut.cli", "manage", "ergo_bot_migrate", *map(str, paths)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        logger.error("Bot table migrations failed: %s", (result.stderr or result.stdout).strip()[-2000:])
+    return result.returncode == 0
 
 
 def start_pulling(paths: Callable[[], list[Path]] = bot_paths, every: float | None = None) -> threading.Thread | None:

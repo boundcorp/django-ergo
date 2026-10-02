@@ -253,6 +253,7 @@ dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
 "src/django_ergo/models.py" = ["TRY003", "EM101", "EM102", "DJ001", "UP031"]
 "src/django_ergo/indexing.py" = ["TRY003", "EM101", "EM102", "C901", "PERF401"]
 "src/django_ergo/repository_index.py" = ["TRY003", "EM101", "EM102", "C901", "PLR0913"]
+"src/django_ergo/bots/tables.py" = ["SLF001"]  # Django model _meta
 "tests/*.py" = ["PT018", "FBT003", "PLR2004", "SLF001", "S603", "S607"]
 "src/django_ergo/knowledge/schema.py" = ["PLC0415", "PLR0915"]
 "src/django_ergo/knowledge/database.py" = ["PLC0415"]
