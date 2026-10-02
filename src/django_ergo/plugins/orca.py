@@ -594,10 +594,30 @@ class OrcaPlugin(BotPlugin):
                 "report": body,
                 "dispatch": dispatch,
             }
+        self.submit_brief_once(ctx, shown, status)
         progress = state or status or "starting"
         if liveness:
             progress += f" · {liveness}"
         return ctx.again(self.poll_seconds, progress=progress)
+
+    def submit_brief_once(self, ctx, shown: dict, status: str) -> None:
+        """Older Orca hosts can leave the injected brief unsubmitted in the agent's input
+        box. On the first check, if the agent hasn't checked in yet, press Enter once in
+        its terminal (an empty Enter does nothing to an agent that's already working)."""
+        if ctx.state.get("nudged") or status != "dispatched":
+            return
+        ctx.state["nudged"] = True
+        dispatch = shown.get("dispatch") or {}
+        handle = (shown.get("worker") or {}).get(
+            "agent_terminal_handle"
+        ) or dispatch.get("assignee_handle")
+        if dispatch.get("last_heartbeat_at") or not handle:
+            return
+        try:
+            self.cli_json(["terminal", "send", "--terminal", handle, "--enter"])
+            ctx.progress("pressed Enter to submit the brief")
+        except ValueError:
+            pass  # best effort; the next check reports what the agent is doing
 
     def run_messages(self, run: str, dispatch: str, task: str) -> list[dict]:
         """Messages to this Run about this dispatch, read without consuming them."""

@@ -188,6 +188,7 @@ def test_orca_start_worker_watches_the_dispatch_and_reports_back(
         },
         ("orchestration", "task-create"): {"task": {"id": "task_1"}},
         ("orchestration", "worker-start"): {"dispatchId": "ctx_1", "taskId": "task_1"},
+        ("terminal", "send"): {"send": {"accepted": True}},
     }
 
     def respond(args):
@@ -195,7 +196,7 @@ def test_orca_start_worker_watches_the_dispatch_and_reports_back(
         if command == ("orchestration", "worker-show"):
             return {
                 "dispatch": {"status": state["status"]},
-                "worker": {"state": "running"},
+                "worker": {"state": "running", "agent_terminal_handle": "term_agent"},
                 "observation": {"status": "alive"},
             }
         if command == ("orchestration", "inbox"):
@@ -247,6 +248,11 @@ def test_orca_start_worker_watches_the_dispatch_and_reports_back(
 
     worker_id = started["id"]
     assert w.run(worker_id, bot.registry) == "running"
+    # First check: no heartbeat yet, so Enter goes to the agent's terminal, once.
+    sends = [c for c in calls if c[1:3] == ["terminal", "send"]]
+    assert (
+        len(sends) == 1 and sends[0][sends[0].index("--terminal") + 1] == "term_agent"
+    )
     state["inbox"] = [
         {
             "id": "msg_q",
@@ -297,3 +303,6 @@ def test_orca_start_worker_watches_the_dispatch_and_reports_back(
     [done] = sent(False)
     assert "Done; tests pass." in done.text and "Footer fixed" in done.text
     assert len(sent(True)) == 1  # the question was passed on once
+    assert (
+        len([c for c in calls if c[1:3] == ["terminal", "send"]]) == 1
+    )  # Enter was pressed only once
