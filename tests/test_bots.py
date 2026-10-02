@@ -628,3 +628,18 @@ def test_current_time_can_be_switched_off(tmp_path):
         tmp_path, yaml_text="name: kitchen\ncurrent_time: false\ntools: []\n"
     )
     assert bot.definition.current_time is False
+
+
+def test_explicit_parameters_respect_an_empty_required_list():
+    props = {"query": {"type": "string"}}
+
+    @bot_tool(parameters=props, required=[])
+    def optional(query=""):
+        return query
+
+    @bot_tool(parameters=props)
+    def everything(query):
+        return query
+
+    assert optional.__bot_tool__.json_schema()["required"] == []
+    assert everything.__bot_tool__.json_schema()["required"] == ["query"]

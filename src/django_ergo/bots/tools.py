@@ -169,7 +169,8 @@ def bot_tool(  # noqa: PLR0913
 
     def decorate(fn: Callable) -> Callable:
         if parameters is not None:
-            props, req = parameters, list(required or parameters.keys())
+            props = parameters
+            req = list(parameters.keys()) if required is None else list(required)
         else:
             props, req = _infer_parameters(fn, skip_first=takes_context)
         fn.__bot_tool__ = BotTool(

@@ -141,3 +141,26 @@ def test_people_only_see_their_own_sessions(client, cook, use_bots):
     assert client.get(f"/api/sessions/{theirs.id}").status_code == 404
     assert client.get("/api/sessions").json() == []
     assert post(client, "/api/bots/nobody/root").status_code == 404
+
+
+@pytest.mark.django_db(transaction=True)
+def test_browser_writes_pass_the_csrf_check(use_bots):
+    """The web app's flow: fetch the CSRF cookie, log in, then write with the header."""
+    from django.test import Client
+
+    use_bots(say("hi"))
+    get_user_model().objects.create_user("cook", "cook@example.com", "pw")
+    browser = Client(enforce_csrf_checks=True)
+    browser.get("/api/auth/csrf")
+    token = browser.cookies["csrftoken"].value
+
+    def write(url, data=None):
+        return browser.post(url, json.dumps(data or {}), content_type="application/json", headers={"X-CSRFToken": token})
+
+    assert write("/api/auth/login", {"username": "cook", "password": "pw"}).status_code == 200
+    token = browser.cookies["csrftoken"].value  # rotated on login
+    root = write("/api/bots/kitchen/root")
+    assert root.status_code == 200, root.content
+    turn = write(f"/api/sessions/{root.json()['id']}/messages", {"text": "hello"})
+    assert turn.status_code == 200, turn.content
+    assert browser.post("/api/bots/kitchen/root").status_code == 403

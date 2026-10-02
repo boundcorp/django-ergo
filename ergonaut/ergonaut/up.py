@@ -57,6 +57,20 @@ def data_dir() -> Path:
     return path
 
 
+def free_port(preferred: int) -> int:
+    """``preferred`` if nothing listens on it, else any free local port."""
+    import socket
+
+    for candidate in (preferred, 0):
+        with socket.socket() as sock:
+            try:
+                sock.bind(("127.0.0.1", candidate))
+            except OSError:
+                continue
+            return sock.getsockname()[1]
+    raise RuntimeError("no free port")
+
+
 def wait_for(check, what: str, timeout: float = 30) -> None:
     end = time.monotonic() + timeout
     while time.monotonic() < end:
@@ -126,7 +140,7 @@ def start_redis(sup: Supervisor, data: Path) -> bool:
     if not binary:
         log("no CELERY_BROKER_URL and no redis-server: tasks run inline, no worker or beat")
         return False
-    port = sup.env.get("ERGONAUT_REDIS_PORT", "6379")
+    port = sup.env.get("ERGONAUT_REDIS_PORT") or str(free_port(6379))
     folder = data / "redis"
     folder.mkdir(exist_ok=True)
     sup.start(

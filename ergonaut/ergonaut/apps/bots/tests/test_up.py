@@ -36,3 +36,13 @@ def test_watch_stops_when_a_process_exits():
     finally:
         sup.stop()
     assert sup.procs["sleeper"].poll() is not None
+
+
+def test_free_port_skips_a_busy_one():
+    import socket
+
+    with socket.socket() as busy:
+        busy.bind(("127.0.0.1", 0))
+        busy.listen()
+        taken = busy.getsockname()[1]
+        assert up.free_port(taken) != taken
