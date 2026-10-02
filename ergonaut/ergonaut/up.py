@@ -249,9 +249,8 @@ def up(argv: list[str]) -> int:
 
         subprocess.run([python, "-m", "ergonaut.cli", "manage", "migrate", "--noinput"], env=sup.env, check=True)
         # Bot tables: each bot folder's own migrations/ (see django_ergo.bots.tables).
-        from ergonaut.apps.bots.loading import DEFAULT_BOTS
-
-        bots = [p for p in (sup.env.get("ERGONAUT_BOTS") or DEFAULT_BOTS).split(":") if p.strip()]
+        # The same default as ergonaut.apps.bots.loading.DEFAULT_BOTS (which needs Django set up).
+        bots = [p for p in (sup.env.get("ERGONAUT_BOTS") or "/bot").split(":") if p.strip()]
         if bots:
             subprocess.run([python, "-m", "ergonaut.cli", "manage", "ergo_bot_migrate", *bots], env=sup.env, check=True)
         if "web" in roles:
