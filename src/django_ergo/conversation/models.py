@@ -204,6 +204,10 @@ class OpenAIMessage(TimeStampedMixin):
     input_tokens = models.IntegerField(null=True, blank=True)
     # Cached prompt tokens, billed at the cached-input rate; input_tokens excludes them.
     cache_read_input_tokens = models.IntegerField(null=True, blank=True)
+    cache_creation_input_tokens = models.IntegerField(null=True, blank=True)
+    reasoning_tokens = models.IntegerField(
+        null=True, blank=True
+    )  # part of output_tokens
     output_tokens = models.IntegerField(null=True, blank=True)
     model_name = models.CharField(max_length=100, null=True, blank=True)  # noqa: DJ001
     sequence = models.IntegerField()
@@ -287,6 +291,12 @@ class StructuredCall(TimeStampedMixin):
     output_tokens = models.IntegerField(default=0)
     cache_creation_input_tokens = models.IntegerField(default=0)
     cache_read_input_tokens = models.IntegerField(default=0)
+    reasoning_tokens = models.IntegerField(default=0)  # included in output_tokens
+    # What the call cost, priced request by request as it ran, so per-request tiers
+    # (the long-context surcharge) apply. None: unpriced, or recorded before this.
+    cost_usd = models.DecimalField(
+        max_digits=14, decimal_places=8, null=True, blank=True
+    )
     metadata = models.JSONField(default=dict, blank=True)
 
     class Meta:

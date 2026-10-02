@@ -75,8 +75,13 @@ const PARTS = [
 // Tokens, with what they cost at that part's rate on hover.
 function PartCell({ bucket, part }: { bucket: CostBucket; part: (typeof PARTS)[number][0] }) {
   const count = bucket[`${part}_tokens`]
+  const reasoning =
+    part === 'output' && bucket.reasoning_tokens ? ` · ${tokens(bucket.reasoning_tokens)} of it reasoning` : ''
   return (
-    <td className="py-1.5 text-right tabular-nums" title={count ? money(bucket[`${part}_cost`]) : undefined}>
+    <td
+      className="py-1.5 text-right tabular-nums"
+      title={count ? `${money(bucket[`${part}_cost`])}${reasoning}` : undefined}
+    >
       {count ? tokens(count) : <span className="text-zinc-400">–</span>}
     </td>
   )

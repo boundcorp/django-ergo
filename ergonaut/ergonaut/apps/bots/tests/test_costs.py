@@ -81,3 +81,23 @@ def test_cache_writes_and_reads_are_billed_at_their_own_rates(client, lee):
     assert total["cache_read_cost"] == pytest.approx(2)
     assert total["output_cost"] == pytest.approx(10)
     assert total["cost"] == pytest.approx(16.5)
+
+
+@pytest.mark.django_db
+def test_costs_use_the_cost_recorded_per_request_and_count_reasoning(client, lee):
+    from decimal import Decimal
+
+    StructuredCall.objects.create(
+        kind="chat_reply",
+        user=lee,
+        model_name="gpt-6-sol",
+        input_tokens=1_000_000,
+        output_tokens=1_000_000,
+        reasoning_tokens=300_000,
+        cost_usd=Decimal("17"),  # recorded with a long-context surcharge
+        metadata={"cost_parts": {"input": 4.0, "cache_write": 0.0, "cache_read": 0.0, "output": 13.0}},
+    )
+    total = client.get("/api/costs").json()["total"]
+    assert total["cost"] == pytest.approx(17)
+    assert (total["input_cost"], total["output_cost"]) == (pytest.approx(4), pytest.approx(13))
+    assert total["reasoning_tokens"] == 300_000

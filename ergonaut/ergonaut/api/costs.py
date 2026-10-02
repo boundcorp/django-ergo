@@ -15,7 +15,7 @@ from datetime import timedelta
 from django.utils import timezone
 from django_ergo.conversation.chat_reply import CHAT_REPLY_KIND
 from django_ergo.conversation.models import StructuredCall
-from django_ergo.pricing import price_for
+from django_ergo.pricing import call_cost_parts
 from ninja import Router, Schema
 from ninja.security import django_auth
 
@@ -30,6 +30,7 @@ class Bucket(Schema):
     cache_write_tokens: int
     cache_read_tokens: int
     output_tokens: int
+    reasoning_tokens: int = 0  # part of output_tokens (billed as output)
     input_cost: float
     cache_write_cost: float
     cache_read_cost: float
@@ -64,7 +65,7 @@ PARTS = (
 
 
 def _empty(name: str) -> dict:
-    bucket = {"name": name, "calls": 0, "cost": 0.0, "unpriced_calls": 0}
+    bucket = {"name": name, "calls": 0, "cost": 0.0, "unpriced_calls": 0, "reasoning_tokens": 0}
     for part, _, _ in PARTS:
         bucket[f"{part}_tokens"] = 0
         bucket[f"{part}_cost"] = 0.0
@@ -72,17 +73,16 @@ def _empty(name: str) -> dict:
 
 
 def call_costs(call: StructuredCall) -> dict[str, float] | None:
-    """The call's cost per part (input, cache_write, cache_read, output), or None if unpriced."""
-    price = price_for(call.model_name)
-    if price is None:
-        return None
-    return {part: (getattr(call, field) or 0) * getattr(price, rate) / 1_000_000 for part, field, rate in PARTS}
+    """The call's cost per part (input, cache_write, cache_read, output), or None if unpriced:
+    what was recorded request by request, else priced from its totals (older calls)."""
+    return call_cost_parts(call)
 
 
 def _add(bucket: dict, call: StructuredCall, costs: dict[str, float] | None) -> None:
     bucket["calls"] += 1
     for part, field, _ in PARTS:
         bucket[f"{part}_tokens"] += getattr(call, field) or 0
+    bucket["reasoning_tokens"] += getattr(call, "reasoning_tokens", 0) or 0
     if costs is None:
         bucket["unpriced_calls"] += 1
         return
