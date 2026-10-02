@@ -83,6 +83,8 @@ def turn_text(message: ThreadMessage) -> str:
             "goes back to that thread automatically; it is not shown to the user "
             "unless they open this chat.]"
         )
+    elif schedule := (message.metadata or {}).get("schedule"):
+        header = f"[Scheduled message: {schedule}. The user will see your reply.]"
     else:
         header = "[Message from the user]"
     return f"{header}\n\n{message.text}"
@@ -91,13 +93,14 @@ def turn_text(message: ThreadMessage) -> str:
 # -- sending -----------------------------------------------------------------
 
 
-def send(
+def send(  # noqa: PLR0913
     sender: ConversationSession | None,
     recipient: ConversationSession,
     text: str,
     *,
     in_reply_to: ThreadMessage | None = None,
     registry: BotRegistry | None = None,
+    metadata: dict | None = None,
 ) -> ThreadMessage:
     """Queue a message for ``recipient`` and start delivering it."""
     depth = 0
@@ -117,6 +120,7 @@ def send(
         in_reply_to=in_reply_to,
         text=text,
         depth=depth,
+        metadata=metadata or {},
     )
     transaction.on_commit(lambda: dispatch(str(message.id), registry))
     return message

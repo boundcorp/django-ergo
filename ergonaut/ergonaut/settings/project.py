@@ -340,11 +340,15 @@ DEFAULT_AUTO_FIELD = "django.db.models.AutoField"
 
 # Celery
 CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL")
+from celery.schedules import crontab  # noqa: E402
+
 CELERY_BEAT_SCHEDULE = {
     # Bot threads idle past their bot's sessions.archive_after_days.
     "archive-idle-threads": {"task": "ergonaut.archive_idle_threads", "schedule": 60 * 60},
     # Thread messages that waited for a busy recipient and were missed.
     "redispatch-thread-messages": {"task": "ergonaut.redispatch_thread_messages", "schedule": 60},
+    # Each bot's schedules (bot.yaml); the task checks which are due this minute.
+    "run-bot-schedules": {"task": "ergonaut.run_schedules", "schedule": crontab()},
 }
 if float(os.environ.get("ERGONAUT_BOTS_PULL_SECONDS") or 0) > 0:
     # Merged changes to the bot repo go live without a restart.

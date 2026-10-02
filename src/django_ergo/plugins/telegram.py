@@ -28,8 +28,9 @@ Other code can message a user with ``plugin.notify(user, text)``.
 
 Delegated work reaches Telegram too (``notify_delegations: true``, the
 default): when a reply from another thread lands in the user's root chat,
-the bot's answer to it is sent to their chat, and when a delegated request
-in the root chat stops for approval, the Approve and Deny buttons are.
+the bot's answer to it is sent to their chat, as is the answer to a
+scheduled message (see bots.schedules), and when a delegated request in the
+root chat stops for approval, the Approve and Deny buttons are.
 """
 
 from __future__ import annotations
@@ -161,14 +162,15 @@ class TelegramPlugin(BotPlugin):
         def lookup():
             found = (
                 ThreadMessage.objects.filter(id=message_id)
-                .values_list("in_reply_to_id", flat=True)
+                .values("in_reply_to_id", "metadata")
                 .first()
             )
-            return found, session.user
+            return found or {}, session.user
 
-        in_reply_to, user = await sync_to_async(lookup)()
-        is_reply = in_reply_to is not None
-        if not is_reply and not result.approvals:
+        found, user = await sync_to_async(lookup)()
+        is_reply = found.get("in_reply_to_id") is not None
+        scheduled = bool((found.get("metadata") or {}).get("schedule"))
+        if not (is_reply or scheduled or result.approvals):
             return  # a request answered back to its sender: nothing for the user here
         chat_id = self.chat_for(user)
         if chat_id is None:

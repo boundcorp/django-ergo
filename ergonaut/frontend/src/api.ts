@@ -106,6 +106,15 @@ export type BotDetail = Bot & {
   tools: { name: string; description: string; requires_approval: boolean }[]
   skills: { name: string; description: string; body: string }[]
   manages_repo?: boolean
+  schedules?: {
+    name: string
+    cron: string
+    message: string
+    to: 'root' | 'new'
+    users: string[]
+    enabled: boolean
+    next_run: string | null
+  }[]
 }
 
 export type AttachmentFile = {

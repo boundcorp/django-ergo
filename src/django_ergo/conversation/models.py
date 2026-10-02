@@ -446,6 +446,27 @@ class ThreadMessage(TimeStampedMixin):
         return f"{self.sender_session_id or 'person'} -> {self.recipient_session_id} ({self.status})"
 
 
+class ScheduleRun(models.Model):
+    """One run of a bot's schedule for one person, so it never runs twice in a minute."""
+
+    bot_name = models.CharField(max_length=100)
+    schedule = models.CharField(max_length=100)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="+")
+    minute = models.DateTimeField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["bot_name", "schedule", "user", "minute"],
+                name="unique_schedule_run",
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.bot_name}/{self.schedule} {self.minute:%Y-%m-%d %H:%M}"
+
+
 class KBUsageMode(models.TextChoices):
     READ = "read", "Read"
     WRITE = "write", "Write"

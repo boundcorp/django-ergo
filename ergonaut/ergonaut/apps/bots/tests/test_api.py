@@ -426,3 +426,19 @@ def test_a_turn_that_fails_early_is_recorded(cook, use_bots, monkeypatch):
     call = session.structured_calls.get()
     assert (call.status, call.request) == ("failed", "Dinner?")
     assert "no API key" in call.error
+
+
+@pytest.mark.django_db(transaction=True)
+def test_bot_page_lists_schedules(client, cook, bot_folder, use_bots):
+    (bot_folder / "bot.yaml").write_text(
+        BOT + 'schedules:\n  - {name: plan, cron: "0 17 * * sun", message: Plan dinners, to: new}\n'
+    )
+    use_bots(say("hi"))
+    [schedule] = client.get("/api/bots/kitchen").json()["schedules"]
+    assert (schedule["name"], schedule["cron"], schedule["to"], schedule["enabled"]) == (
+        "plan",
+        "0 17 * * sun",
+        "new",
+        True,
+    )
+    assert schedule["next_run"]
