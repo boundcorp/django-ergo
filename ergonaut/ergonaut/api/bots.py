@@ -25,7 +25,7 @@ from ninja import File, Router, Schema, UploadedFile
 from ninja.errors import HttpError
 from ninja.security import django_auth
 
-from ergonaut.apps.bots.tasks import queue_message, queue_turn, request_stop
+from ergonaut.apps.bots.tasks import peek_inbox, queue_message, queue_turn, request_stop, unsend
 
 router = Router(tags=["bots"], auth=django_auth)
 
@@ -148,6 +148,8 @@ class SessionDetailOut(Schema):
     calls: list[CallOut]
     requests: list[RequestOut] = []
     workers: list[dict] = []
+    # Messages sent while a turn runs that the model hasn't taken yet (they can be unsent).
+    inbox: list[dict] = []
 
 
 def workers_out(session: ConversationSession) -> list[dict]:
@@ -711,6 +713,10 @@ def session_detail(request, session_id: str):
         "calls": calls,
         "requests": requests_out(session),
         "workers": workers_out(session),
+        "inbox": [
+            {"id": item.get("id", ""), "text": item.get("text", ""), "files": len(item.get("attachment_ids") or [])}
+            for item in peek_inbox(session.id)
+        ],
     }
 
 
@@ -783,6 +789,16 @@ async def stop_turn(request, session_id: str):
     get_bot(session.bot_name, request.auth)
     running = await sync_to_async(request_stop)(session.id)
     return await sync_to_async(latest_turn)(session, queued=running)
+
+
+@router.delete("/sessions/{session_id}/inbox/{item_id}")
+async def unsend_message(request, session_id: str, item_id: str):
+    """Take back a message the running turn hasn't given the model yet."""
+    session = await get_session(request, session_id)
+    item = await sync_to_async(unsend)(session.id, item_id)
+    if item is None:
+        raise HttpError(409, "Too late: the model already has that message")
+    return {"text": item.get("text", ""), "attachment_ids": item.get("attachment_ids") or []}
 
 
 @router.post("/sessions/{session_id}/approvals", response=TurnOut)
