@@ -30,6 +30,25 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
 
+def usage_tokens(usage) -> tuple[int | None, int | None, int | None]:
+    """(uncached input, cached input, output) tokens from an OpenAI usage block.
+
+    OpenAI's ``prompt_tokens`` includes cached tokens, which bill at the lower
+    cached-input rate, so they're split out to be priced as cache reads.
+    """
+    if usage is None:
+        return None, None, None
+    details = getattr(usage, "prompt_tokens_details", None)
+    if isinstance(details, dict):
+        cached = details.get("cached_tokens") or 0
+    else:
+        cached = getattr(details, "cached_tokens", None) or 0
+    if not isinstance(cached, int):
+        cached = 0
+    prompt = usage.prompt_tokens or 0
+    return prompt - cached, cached, usage.completion_tokens
+
+
 def openai_message_dict(msg, attachments=(), *, audio_input: bool = False) -> dict:
     """Convert an OpenAIMessage row (plus its attachments) to an API message dict."""
     content = msg.content
@@ -223,10 +242,9 @@ class OpenAIAPIEngine(Engine):
                 if msg.tool_calls
                 else None,
                 sequence=seq,
-                input_tokens=response.usage.prompt_tokens if response.usage else None,
-                output_tokens=response.usage.completion_tokens
-                if response.usage
-                else None,
+                input_tokens=usage_tokens(response.usage)[0],
+                cache_read_input_tokens=usage_tokens(response.usage)[1],
+                output_tokens=usage_tokens(response.usage)[2],
                 model_name=self.model,
             )
 
@@ -456,8 +474,9 @@ class OpenAIAPIEngine(Engine):
             message=message,
             events=events,
             model=self.model,
-            input_tokens=(usage.prompt_tokens or 0) if usage else 0,
-            output_tokens=(usage.completion_tokens or 0) if usage else 0,
+            input_tokens=usage_tokens(usage)[0] or 0,
+            output_tokens=usage_tokens(usage)[2] or 0,
+            cache_read_input_tokens=usage_tokens(usage)[1] or 0,
         )
 
     def user_message(self, text: str, attachments: list | None = None) -> dict:

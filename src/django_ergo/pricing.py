@@ -10,9 +10,12 @@ model. Add or override prices in settings::
         },
     }
 
-``cache_write`` and ``cache_read`` default to the input price. OpenAI counts
-cached tokens inside ``input_tokens`` and Ergo doesn't split them out, so
-OpenAI costs are priced at the full input rate (a slight overestimate).
+``cache_write`` and ``cache_read`` default to the input price. Every call
+records uncached input, cache writes, cache reads and output separately, so
+each is billed at its own rate. Anthropic reports them that way; OpenAI counts
+cached tokens inside ``prompt_tokens``, so its engine splits them out
+(calls recorded before that are priced at the full input rate). OpenAI
+doesn't bill cache writes.
 """
 
 from __future__ import annotations

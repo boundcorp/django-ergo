@@ -325,3 +325,38 @@ class TestStartSession:
         assert system_msgs.count() == 1
         assert system_msgs.first().content == "You are a helpful assistant."
         assert system_msgs.first().sequence == 0
+
+
+class TestUsageTokens:
+    """OpenAI counts cached tokens inside prompt_tokens; Ergo splits them out."""
+
+    def test_splits_cached_tokens_out_of_the_prompt(self):
+        from types import SimpleNamespace
+
+        from django_ergo.conversation.engines.openai_api import usage_tokens
+
+        usage = SimpleNamespace(
+            prompt_tokens=1000,
+            completion_tokens=50,
+            prompt_tokens_details=SimpleNamespace(cached_tokens=800),
+        )
+        assert usage_tokens(usage) == (200, 800, 50)
+
+    def test_without_details_or_usage(self):
+        from types import SimpleNamespace
+
+        from django_ergo.conversation.engines.openai_api import usage_tokens
+
+        assert usage_tokens(SimpleNamespace(prompt_tokens=7, completion_tokens=3)) == (
+            7,
+            0,
+            3,
+        )
+        assert usage_tokens(
+            SimpleNamespace(
+                prompt_tokens=7,
+                completion_tokens=3,
+                prompt_tokens_details={"cached_tokens": 4},
+            )
+        ) == (3, 4, 3)
+        assert usage_tokens(None) == (None, None, None)

@@ -202,6 +202,8 @@ class OpenAIMessage(TimeStampedMixin):
     tool_call_id = models.CharField(max_length=255, null=True, blank=True)  # noqa: DJ001
     function_name = models.CharField(max_length=255, null=True, blank=True)  # noqa: DJ001
     input_tokens = models.IntegerField(null=True, blank=True)
+    # Cached prompt tokens, billed at the cached-input rate; input_tokens excludes them.
+    cache_read_input_tokens = models.IntegerField(null=True, blank=True)
     output_tokens = models.IntegerField(null=True, blank=True)
     model_name = models.CharField(max_length=100, null=True, blank=True)  # noqa: DJ001
     sequence = models.IntegerField()

@@ -82,8 +82,15 @@ export type KBArticle = { path: string; title: string; body: string }
 export type CostBucket = {
   name: string
   calls: number
+  // Uncached input only; cache writes and reads are separate.
   input_tokens: number
+  cache_write_tokens: number
+  cache_read_tokens: number
   output_tokens: number
+  input_cost: number
+  cache_write_cost: number
+  cache_read_cost: number
+  output_cost: number
   cost: number
   unpriced_calls: number
 }
