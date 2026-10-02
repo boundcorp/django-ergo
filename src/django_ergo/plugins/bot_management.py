@@ -12,6 +12,7 @@ The repository is the git checkout that contains the bot folder. Tools:
 
 - ``ergo_config_repo_status``, ``ergo_config_repo_list``, ``ergo_config_repo_read``, ``ergo_config_repo_diff``: look around.
 - ``ergo_config_repo_write``: change a file (nothing is published).
+- ``ergo_config_repo_delete``: delete a file (to move one, write it anew, then delete).
 - ``ergo_config_repo_preview``: render a ``.jhtml`` page from the changes, with
   the draft's tables and sample rows, all rolled back (``ergo_bot_preview``).
 - ``ergo_config_repo_publish``: commit everything. In ``merge_main`` mode it rebases on
@@ -190,6 +191,23 @@ class BotManagementPlugin(BotPlugin):
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content)
         return f"Wrote {target.relative_to(self.workdir)} ({len(content)} chars)"
+
+    def delete(self, path: str) -> str:
+        """Remove a file (not a folder); empty folders left behind go too."""
+        target = self.path(path)
+        if not target.exists():
+            msg = f"{path} doesn't exist"
+            raise ValueError(msg)
+        if target.is_dir():
+            msg = f"{path} is a folder; delete its files one by one"
+            raise ValueError(msg)
+        target.unlink()
+        work = self.workdir
+        parent = target.parent
+        while parent != work and parent.is_dir() and not any(parent.iterdir()):
+            parent.rmdir()
+            parent = parent.parent
+        return f"Deleted {target.relative_to(work)}"
 
     def make_migrations(self, work) -> str:
         """Write migrations for any bot tables changed in ``work`` (a separate
@@ -512,6 +530,15 @@ class BotManagementPlugin(BotPlugin):
         def write(path: str, content: str) -> str:
             """Create or replace a file in the bot repository (unpublished until ergo_config_repo_publish)."""
             return plugin.write(path, content)
+
+        @bot_tool(
+            name="ergo_config_repo_delete",
+            requires_approval=self.mode == "merge_main" and self.approve_publish,
+        )
+        def delete(path: str) -> str:
+            """Delete a file from the bot repository (unpublished until ergo_config_repo_publish).
+            To rename or move a file, write it at the new path, then delete the old one."""
+            return plugin.delete(path)
 
         @bot_tool(name="ergo_config_repo_diff")
         def diff() -> str:
