@@ -842,3 +842,34 @@ def test_attachments_access_rules(tmp_path, settings):
     updated = plugin.update(ctx, made["id"], "- eggs\n- milk")
     assert updated["size"] == len("- eggs\n- milk")
     assert plugin.read(ctx, made["id"]).endswith("- eggs\n- milk")
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_bot_looks_at_an_uploaded_image(tmp_path, settings):
+    from asgiref.sync import sync_to_async
+
+    from django_ergo.conversation.attachments import save_session_file
+
+    settings.MEDIA_ROOT = str(tmp_path / "media")
+    bot, engine, _ = files_bot(tmp_path, config="max_bytes: 100")
+    user = await User.objects.acreate(username="looker")
+    root = await bot.root_session(user)
+    photo = await sync_to_async(save_session_file)(root, "fridge.png", b"\x89PNGfake")
+    engine._client.responses = [
+        claude_tool("ergo_attachments_look", {"attachment_id": str(photo.id), "question": "Any eggs?"}),
+        claude_text("Yes, a dozen eggs on the top shelf."),
+        say("You have eggs."),
+    ]
+    result = await bot.ask(root, "What's in my fridge photo?")
+    assert result.text == "You have eggs."
+    look = engine._client.calls[1]
+    parts = look["messages"][0]["content"]
+    assert [p["type"] for p in parts] == ["image", "text"] or [p["type"] for p in parts] == ["text", "image"]
+    assert any(p.get("text") == "Any eggs?" for p in parts)
+    answer = engine._client.calls[2]["messages"][-1]["content"][0]["content"]
+    assert answer == "fridge.png: Yes, a dozen eggs on the top shelf."
+    from django_ergo.conversation.models import StructuredCall
+
+    looked = await StructuredCall.objects.aget(kind="attachment_look")
+    assert looked.user_id == user.id
+    assert looked.metadata["attachment"] == str(photo.id)

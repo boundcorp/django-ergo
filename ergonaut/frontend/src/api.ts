@@ -26,7 +26,7 @@ export type Session = {
 export type Block =
   | { type: 'text'; text: string }
   | { type: 'thinking'; text: string }
-  | { type: 'attachment'; label: string }
+  | { type: 'attachment'; label: string; id?: string; kind?: string; media_type?: string }
   | { type: 'context'; text: string }
   | { type: 'tool_use'; id: string; name: string; input: unknown }
   | { type: 'tool_result'; tool_use_id: string; name?: string; content: unknown; is_error?: boolean }
@@ -192,7 +192,8 @@ export const api = {
   newThread: (bot: string, title: string) => request<Session>('POST', `/bots/${bot}/threads`, { title }),
   session: (id: string) => request<SessionDetail>('GET', `/sessions/${id}`),
   call: (id: string) => request<Call & { system_prompt: string; transcript: unknown[]; metadata: unknown }>('GET', `/calls/${id}`),
-  send: (id: string, text: string) => request<Turn>('POST', `/sessions/${id}/messages`, { text }),
+  send: (id: string, text: string, attachmentIds: string[] = []) =>
+    request<Turn>('POST', `/sessions/${id}/messages`, { text, attachment_ids: attachmentIds }),
   approve: (id: string, approve: boolean) => request<Turn>('POST', `/sessions/${id}/approvals`, { approve }),
   close: (id: string) => request<Session>('POST', `/sessions/${id}/close`),
   attachments: (id: string) => request<AttachmentFile[]>('GET', `/sessions/${id}/attachments`),

@@ -271,7 +271,7 @@ def test_a_queued_turn_returns_at_once(client, cook, use_bots, monkeypatch, sett
     assert response.status_code == 200
     assert response.json()["queued"] is True
     assert response.json()["text"] == ""
-    assert queued == [(root["id"], "Eggs?", None)]
+    assert queued == [(root["id"], "Eggs?", None, [])]
 
 
 @pytest.mark.django_db(transaction=True)
@@ -286,3 +286,31 @@ def test_run_turn_answers_and_resumes(cook, use_bots):
     assert call.response["text"] == "Tacos."
     run_turn(str(session.id), approve=True)  # nothing waiting: a no-op
     assert session.structured_calls.count() == 1
+
+
+@pytest.mark.django_db(transaction=True)
+def test_files_sent_with_a_message_reach_the_model(client, cook, use_bots, settings, tmp_path):
+    from django.core.files.uploadedfile import SimpleUploadedFile
+
+    from django_ergo.conversation.models import ConversationSession
+
+    settings.MEDIA_ROOT = str(tmp_path / "media")
+    fake = use_bots(say("A fridge full of eggs."))
+    root = post(client, "/api/bots/kitchen/root").json()
+    photo = client.post(
+        f"/api/sessions/{root['id']}/attachments",
+        {"file": SimpleUploadedFile("fridge.png", b"\x89PNGfake", content_type="image/png")},
+    ).json()
+    sent = post(client, f"/api/sessions/{root['id']}/messages", {"text": "What's this?", "attachment_ids": [photo["id"]]})
+    assert sent.status_code == 200, sent.content
+    assert sent.json()["text"] == "A fridge full of eggs."
+    first = fake.calls[0]["messages"]
+    assert any(
+        isinstance(m["content"], list) and any(p.get("type") == "image" for p in m["content"]) for m in first
+    )
+    session = ConversationSession.objects.get(id=root["id"])
+    rows = list(session.attachments.values_list("filename", "source", "message_sequence"))
+    assert len(rows) == 1 and rows[0][:2] == ("fridge.png", "message") and rows[0][2] is not None
+
+    other = post(client, f"/api/sessions/{root['id']}/messages", {"text": "x", "attachment_ids": ["nope"]})
+    assert other.status_code == 400

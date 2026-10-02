@@ -376,7 +376,16 @@ class SessionSource(MessageSource):
         messages = self._claude_rows() or self._openai_rows()
         for message in messages:
             for row in attachments.get(message.line, []):
-                message.blocks.insert(0, {"type": "attachment", "label": describe(row)})
+                message.blocks.insert(
+                    0,
+                    {
+                        "type": "attachment",
+                        "label": describe(row),
+                        "id": str(row.id),
+                        "kind": row.kind,
+                        "media_type": row.media_type,
+                    },
+                )
         return _name_tool_results(messages)
 
     def _claude_rows(self) -> list[HistoryMessage]:

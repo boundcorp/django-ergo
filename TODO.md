@@ -17,7 +17,6 @@ Live on rigel from `~/p/boundcorp/django-ergo`, bots from `boundcorp/ergo-bots`.
 - [ ] Telegram: when a delegated reply lands in a root chat that a person reaches over Telegram, tell them there too.
 - [ ] Show ThreadMessage status (queued, working, waiting on approval, answered) in the UI, not only in the transcript headers.
 
-- [ ] Images and PDFs from the Files panel shown to the model, not just described.
 - [ ] "Changes" tab on the bot page: open ergo-bots PRs with diff, Merge and Discard.
 - [ ] Replace the 30s git-pull thread with a beat task.
 - [ ] A bot tool waiting on a @bot_task holds a worker slot; watch worker concurrency if many tools wait at once.
@@ -25,6 +24,8 @@ Live on rigel from `~/p/boundcorp/django-ergo`, bots from `boundcorp/ergo-bots`.
 - [ ] `test_telegram_webhook_mode` fails locally (async view under the sync test client); check CI.
 
 ### Done
+
+- [x] Bots see images and PDFs: 📎/paste attaches files to a message (native image/document parts), `ergo_attachments_look` for files already in a session, image thumbnails in the transcript.
 
 - [x] Kitchen bot on Ergonaut (Tandoor tools, meal-planning skill, KB), boundcorp root bot, nested bots, `ergo_bot_call`.
 - [x] Official plugins in `django_ergo/plugins`: ergo_kb, bot_management (draft worktree + PR), telegram, orca, bash, attachments.

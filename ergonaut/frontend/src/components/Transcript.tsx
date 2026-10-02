@@ -69,7 +69,25 @@ function MessageView({
             )
           }
           case 'attachment':
-            return (
+            if (block.id && block.kind === 'image')
+              return (
+                <a key={i} href={`/api/attachments/${block.id}/download`} title={block.label}>
+                  <img
+                    src={`/api/attachments/${block.id}/download?inline=1`}
+                    alt={block.label}
+                    className="max-h-60 max-w-[85%] rounded-lg border border-zinc-300 dark:border-zinc-700"
+                  />
+                </a>
+              )
+            return block.id ? (
+              <a
+                key={i}
+                href={`/api/attachments/${block.id}/download`}
+                className="rounded-md border border-zinc-300 px-2 py-1 text-xs text-indigo-600 hover:underline dark:border-zinc-700 dark:text-indigo-400"
+              >
+                📎 {block.label}
+              </a>
+            ) : (
               <div key={i} className="rounded-md border border-zinc-300 px-2 py-1 text-xs text-zinc-500 dark:border-zinc-700">
                 📎 {block.label}
               </div>

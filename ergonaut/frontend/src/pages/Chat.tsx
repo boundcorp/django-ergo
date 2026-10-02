@@ -25,6 +25,10 @@ export function Chat({ onChange }: { onChange: () => void }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [last, setLast] = useState<Turn | null>(null)
+  // Files picked or pasted for the next message, already uploaded to the session.
+  const [outgoing, setOutgoing] = useState<{ id: string; filename: string }[]>([])
+  const [uploading, setUploading] = useState(false)
+  const picker = useRef<HTMLInputElement>(null)
   // A turn a worker is running: what was sent and how the calls looked then.
   const [pending, setPending] = useState<{ text: string; calls: number; approvals: string } | null>(null)
   // The Files panel stays open or closed across sessions, per browser.
@@ -115,9 +119,33 @@ export function Chat({ onChange }: { onChange: () => void }) {
   }
 
   function send(message: string) {
-    if (!message.trim() || busy || pending) return
+    if ((!message.trim() && !outgoing.length) || busy || pending || uploading) return
+    const ids = outgoing.map(f => f.id)
     setText('')
-    run(() => api.send(id, message), message)
+    setOutgoing([])
+    run(() => api.send(id, message, ids), message || outgoing.map(f => f.filename).join(', '))
+  }
+
+  async function attach(files: FileList | File[] | null) {
+    if (!files || !files.length) return
+    setUploading(true)
+    setError('')
+    try {
+      for (const file of Array.from(files)) {
+        const saved = await api.uploadAttachment(id, file)
+        setOutgoing(list => [...list, { id: saved.id, filename: saved.filename }])
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setUploading(false)
+      if (picker.current) picker.current.value = ''
+    }
+  }
+
+  async function unattach(fileId: string) {
+    setOutgoing(list => list.filter(f => f.id !== fileId))
+    await api.deleteAttachment(fileId).catch(() => undefined)
   }
 
   if (!detail) return <div className="p-6 text-zinc-500">{error || 'Loading…'}</div>
@@ -210,6 +238,18 @@ export function Chat({ onChange }: { onChange: () => void }) {
           ))}
         </div>
       )}
+      {!!outgoing.length && (
+        <div className="mx-4 flex flex-wrap gap-2 pt-2">
+          {outgoing.map(file => (
+            <span key={file.id} className="flex items-center gap-1 rounded-full border border-zinc-300 px-2 py-0.5 text-xs dark:border-zinc-700">
+              📎 {file.filename}
+              <button type="button" className="text-zinc-400 hover:text-red-600" title="Remove" onClick={() => unattach(file.id)}>
+                ✕
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
       <form
         className="flex gap-2 border-t border-zinc-200 p-4 dark:border-zinc-800"
         onSubmit={e => {
@@ -217,7 +257,24 @@ export function Chat({ onChange }: { onChange: () => void }) {
           send(text)
         }}
       >
+        <input ref={picker} type="file" multiple hidden onChange={e => attach(e.target.files)} />
+        <button
+          type="button"
+          disabled={closed || !!waiting.length || uploading}
+          title="Attach images, PDFs or other files"
+          className="rounded-lg border border-zinc-300 px-3 text-lg disabled:opacity-50 dark:border-zinc-700"
+          onClick={() => picker.current?.click()}
+        >
+          {uploading ? '…' : '📎'}
+        </button>
         <textarea
+          onPaste={e => {
+            const files = Array.from(e.clipboardData.files)
+            if (files.length) {
+              e.preventDefault()
+              attach(files)
+            }
+          }}
           value={text}
           disabled={closed || !!waiting.length}
           onChange={e => setText(e.target.value)}
@@ -231,7 +288,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
           placeholder={closed ? 'This session is closed' : waiting.length ? 'Answer the approval first' : archived ? 'Archived: sending a message reopens it' : 'Message the bot'}
           className="flex-1 resize-none rounded-lg border border-zinc-300 bg-transparent px-3 py-2 focus:border-indigo-500 focus:outline-none dark:border-zinc-700"
         />
-        <button disabled={busy || !text.trim()} className="rounded-lg bg-indigo-600 px-4 text-white disabled:opacity-50">
+        <button disabled={busy || uploading || (!text.trim() && !outgoing.length)} className="rounded-lg bg-indigo-600 px-4 text-white disabled:opacity-50">
           Send
         </button>
       </form>

@@ -6,6 +6,7 @@ sessions). A turn runs inside the request and returns the bot's ChatReply.
 
 from __future__ import annotations
 
+import uuid
 from datetime import datetime
 from typing import Any
 
@@ -13,21 +14,15 @@ from asgiref.sync import sync_to_async
 from django.db.models import Q
 from django.http import FileResponse
 from django.shortcuts import aget_object_or_404
-from ninja import File
-from ninja import Router
-from ninja import Schema
-from ninja import UploadedFile
-from ninja.errors import HttpError
-from ninja.security import django_auth
-
-from django_ergo.bots import archival
-from django_ergo.bots import webhooks
+from django_ergo.bots import archival, webhooks
 from django_ergo.bots.runtime import Bot
 from django_ergo.conversation.attachments import save_session_file
 from django_ergo.conversation.history import SessionSource
-from django_ergo.conversation.models import ConversationAttachment
-from django_ergo.conversation.models import ConversationSession
-from django_ergo.conversation.models import StructuredCall
+from django_ergo.conversation.models import ConversationAttachment, ConversationSession, StructuredCall
+from ninja import File, Router, Schema, UploadedFile
+from ninja.errors import HttpError
+from ninja.security import django_auth
+
 from ergonaut.apps.bots.tasks import queue_turn
 
 router = Router(tags=["bots"], auth=django_auth)
@@ -123,6 +118,9 @@ class NewThreadIn(Schema):
 
 class MessageIn(Schema):
     text: str
+    # Files already uploaded to the session, to send with this message so
+    # the model sees them (images and PDFs natively).
+    attachment_ids: list[str] = []
 
 
 class ApprovalIn(Schema):
@@ -368,12 +366,24 @@ def queue_and_report(session: ConversationSession, **turn) -> dict:
 @router.post("/sessions/{session_id}/messages", response=TurnOut)
 async def send_message(request, session_id: str, data: MessageIn):
     session = await get_session(request, session_id)
-    if not data.text.strip():
+    if not data.text.strip() and not data.attachment_ids:
         raise HttpError(400, "Say something")
     get_bot(session.bot_name)
+    if data.attachment_ids:
+        try:
+            [uuid.UUID(str(a)) for a in data.attachment_ids]
+        except ValueError:
+            raise HttpError(400, "Attach files uploaded to this session") from None
+        found = await session.attachments.filter(
+            id__in=data.attachment_ids, message_sequence__isnull=True
+        ).acount()
+        if found != len(set(data.attachment_ids)):
+            raise HttpError(400, "Attach files uploaded to this session")
     if session.status == "completed" and (session.metadata or {}).get("bot_role") == "thread":
         await sync_to_async(archival.reopen)(session)  # a message brings an archived thread back
-    return await sync_to_async(queue_and_report)(session, message=data.text)
+    return await sync_to_async(queue_and_report)(
+        session, message=data.text or "(see the attached files)", attachment_ids=data.attachment_ids
+    )
 
 
 @router.post("/sessions/{session_id}/approvals", response=TurnOut)
@@ -551,11 +561,15 @@ def upload_attachment(request, session_id: str, file: UploadedFile = File(...)):
 
 
 @router.get("/attachments/{attachment_id}/download")
-def download_attachment(request, attachment_id: str):
+def download_attachment(request, attachment_id: str, inline: bool = False):
     row = visible_attachment(request.auth, attachment_id)
     if not row.file:
         raise HttpError(404, "This file has no stored copy")
-    return FileResponse(row.file.open("rb"), as_attachment=True, filename=row.filename, content_type=row.media_type)
+    # Inline only for images, so a stored HTML or SVG file can't run in the app's origin.
+    show = inline and row.media_type in ("image/png", "image/jpeg", "image/gif", "image/webp")
+    return FileResponse(
+        row.file.open("rb"), as_attachment=not show, filename=row.filename, content_type=row.media_type
+    )
 
 
 @router.delete("/attachments/{attachment_id}")

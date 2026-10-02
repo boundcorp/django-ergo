@@ -67,9 +67,37 @@ def notify(session_id) -> None:
         logger.debug("Could not publish a session change", exc_info=True)
 
 
+def take_uploads(session, attachment_ids: list[str]) -> tuple[list, list]:
+    """Session files to send with a message, as Attachments; the uploads are removed
+    once the message carries copies of them."""
+    from django_ergo.conversation.attachments import Attachment
+
+    rows = list(session.attachments.filter(id__in=attachment_ids, message_sequence__isnull=True))
+    attachments = []
+    for row in rows:
+        with row.file.open("rb") as handle:
+            data = handle.read()
+        attachments.append(
+            Attachment(
+                media_type=row.media_type,
+                data=data,
+                filename=row.filename,
+                transcript=row.transcript,
+                kind=row.kind,
+                metadata={**(row.metadata or {}), "uploaded_as": str(row.id)},
+            )
+        )
+    return attachments, rows
+
+
 @shared_task(name="ergonaut.run_turn", ignore_result=True)
-def run_turn(session_id: str, message: str | None = None, approve: bool | None = None) -> None:
-    """Answer a message, or resume a turn paused for approval."""
+def run_turn(
+    session_id: str,
+    message: str | None = None,
+    approve: bool | None = None,
+    attachment_ids: list[str] | None = None,
+) -> None:
+    """Answer a message (with any uploaded files), or resume a turn paused for approval."""
     from django_ergo.bots import webhooks
     from django_ergo.conversation.models import ConversationSession
 
@@ -81,17 +109,27 @@ def run_turn(session_id: str, message: str | None = None, approve: bool | None =
     bot = registry.get(session.bot_name)
     with session_lock(session_id):
         if message is not None:
-            async_to_sync(bot.ask)(session, message)
+            attachments, uploads = take_uploads(session, attachment_ids or [])
+            async_to_sync(bot.ask)(session, message, attachments=attachments or None)
+            for row in uploads:
+                row.file.delete(save=False)
+                row.delete()
         elif approve is not None and async_to_sync(bot.pending_call)(session) is not None:
             async_to_sync(bot.resume)(session, approve)
     notify(session_id)
 
 
-def queue_turn(session_id, *, message: str | None = None, approve: bool | None = None) -> bool:
+def queue_turn(
+    session_id,
+    *,
+    message: str | None = None,
+    approve: bool | None = None,
+    attachment_ids: list[str] | None = None,
+) -> bool:
     """Queue a turn. Returns True when a worker will run it, False when it already ran."""
     from django.conf import settings
 
-    result = run_turn.delay(str(session_id), message, approve)
+    result = run_turn.delay(str(session_id), message, approve, list(attachment_ids or []))
     notify(session_id)
     return not getattr(settings, "CELERY_TASK_ALWAYS_EAGER", False) and result is not None
 

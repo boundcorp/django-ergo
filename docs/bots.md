@@ -408,6 +408,10 @@ gets `ergo_attachments_list`, `ergo_attachments_read`,
 `ergo_attachments_create` and `ergo_attachments_update`. It writes text
 files only in its own session, reads files in the same user's other
 sessions, and sees the session's file list in every turn's context.
+`ergo_attachments_look(attachment_id, question)` lets it see an image or PDF:
+the file goes to the bot's own model as an attachment in a separate call
+(kind `attachment_look`), which works with every engine. Files sent with a
+message (Ergonaut's 📎 button or a pasted image) reach the model natively.
 
 ### telegram
 

@@ -15,6 +15,10 @@ Files come from three places: sent with a message, uploaded to the session
 - ``ergo_attachments_create``: write a new text file into this session.
 - ``ergo_attachments_update``: replace the contents of a text file in this
   session.
+- ``ergo_attachments_look``: look at an image or PDF (or any file) and
+  answer a question about it. The file goes to the bot's own model as an
+  attachment in a separate call (kind ``attachment_look``), so this works
+  with every engine.
 
 The bot only writes to its own session. It reads other sessions only when
 they belong to the same user. Every turn's context lists the session's
@@ -62,6 +66,7 @@ class AttachmentsPlugin(BotPlugin):
     def on_load(self) -> None:
         self.max_bytes = int(self.config.get("max_bytes", 5_000_000))
         self.other_sessions = bool(self.config.get("other_sessions", True))
+        self.max_look_bytes = int(self.config.get("max_look_bytes", 20_000_000))
 
     # -- access --------------------------------------------------------------
 
@@ -133,6 +138,55 @@ class AttachmentsPlugin(BotPlugin):
         self._check_size(data)
         return describe_row(replace_session_file(row, data))
 
+    def look(self, ctx: ToolContext, attachment_id: str, question: str = "") -> str:
+        from asgiref.sync import async_to_sync
+
+        from django_ergo.conversation.attachments import Attachment
+        from django_ergo.conversation.structured import StructuredCallSpec
+        from django_ergo.conversation.structured import run_structured_call
+
+        row = self.file_for(ctx, attachment_id)
+        if is_text(row.media_type):
+            return self.read(ctx, attachment_id)
+        if not row.file:
+            msg = f"{row.filename} has no stored copy to look at"
+            raise ValueError(msg)
+        if (row.size or 0) > self.max_look_bytes:
+            msg = f"{row.filename} is too large to look at ({row.size} bytes)"
+            raise ValueError(msg)
+        with row.file.open("rb") as handle:
+            data = handle.read()
+        attachment = Attachment(
+            media_type=row.media_type,
+            data=data,
+            filename=row.filename,
+            transcript=row.transcript,
+            kind=row.kind,
+        )
+        spec = StructuredCallSpec(
+            kind="attachment_look",
+            system_prompt=(
+                "You are looking at a file for another assistant. Answer its question "
+                "about the attached file accurately and concisely. If the file is a "
+                "document, quote the relevant parts; if it is an image, describe what "
+                "matters for the question."
+            ),
+            output_parser=str,
+            max_turns=1,
+        )
+        result = async_to_sync(run_structured_call)(
+            spec,
+            question or "Describe this file in detail.",
+            user=ctx.user,
+            engine=self.bot.make_engine(),
+            attachments=[attachment],
+            metadata={"attachment": str(row.id), "session": str(ctx.session.id)},
+        )
+        if result.parsed is None:
+            msg = f"Could not look at {row.filename}: {result.call.error or 'no answer'}"
+            raise ValueError(msg)
+        return f"{row.filename}: {result.parsed}"
+
     def _check_size(self, data: bytes) -> None:
         if len(data) > self.max_bytes:
             msg = f"File too large ({len(data)} bytes; the limit is {self.max_bytes})"
@@ -153,7 +207,8 @@ class AttachmentsPlugin(BotPlugin):
                 for r in rows
             ]
             return (
-                "Read one with ergo_attachments_read; write with "
+                "Read text with ergo_attachments_read, look at images and PDFs with "
+                "ergo_attachments_look; write with "
                 "ergo_attachments_create or ergo_attachments_update.\n" + "\n".join(lines)
             )
 
@@ -194,4 +249,23 @@ class AttachmentsPlugin(BotPlugin):
             """Replace the whole contents of a text file in this chat session."""
             return plugin.update(ctx, attachment_id, content)
 
-        return [fn.__bot_tool__ for fn in (list_files, read, create, update)]
+        @bot_tool(
+            name="ergo_attachments_look",
+            takes_context=True,
+            description=(
+                "Look at an image or PDF (or any file) by id and answer a question "
+                "about it, e.g. what's in a photo or what a receipt says."
+            ),
+            parameters={
+                "attachment_id": {"type": "string"},
+                "question": {
+                    "type": "string",
+                    "description": "What you want to know (default: describe it)",
+                },
+            },
+            required=["attachment_id"],
+        )
+        def look(ctx: ToolContext, attachment_id: str, question: str = "") -> str:
+            return plugin.look(ctx, attachment_id, question)
+
+        return [fn.__bot_tool__ for fn in (list_files, read, create, update, look)]
