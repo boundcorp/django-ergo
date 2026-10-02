@@ -1,15 +1,15 @@
 # Django Ergo - Development Tasks
 
-## 🤖 Ergonaut bots (PR #31, branch `claude/project-thread-epsqtb`)
+## 🤖 Ergonaut bots (PR #31 merged 2026-10-02 as b1bd99c)
 
 Live on rigel from `~/p/boundcorp/django-ergo`, bots from `boundcorp/ergo-bots`. Updated by whoever works the branch.
 
 ### Now (2026-10-02)
 
-- [ ] **PR #31 review and merge**: two review passes done (22 findings); fixes in 2e54508 and the Ergonaut fix commit; CI green, then merge.
+- [x] **PR #31 review and merge**: two review passes (22 findings) fixed in 2e54508/e3a2345; CI green; merged b1bd99c.
 - [x] **Bots that learn**: `ergo_kb` `write: true` gives `ergo_kb_write` (kb/*.md only, committed and pushed). Kitchen turned on in ergo-bots.
 - [ ] **Deploy plan** for Ergonaut on the octo cluster (modeled on kitchen-mgmt's infra/octo).
-- [ ] **Schedules in each bot's bot.yaml** (`schedules:` run by Celery beat).
+- [x] **Schedules in each bot's bot.yaml** (`schedules:`, run every minute by Celery beat; bot page lists them with the next run). PR from `claude/bot-schedules`.
 
 - [x] **Toolkit pre-seeding**: toolkits declare tool calls run and written into the chat before the first completion; orchestration pre-seeds `ergo_bot_list` (names + YAML descriptions); skills use the same path; boundcorp's instructions stop listing bots.
 - [x] **Turns as Celery tasks**: web messages and approvals queue a turn task (inline without a broker); Redis pub/sub wakes the SSE stream; rigel runs `up web worker beat`.

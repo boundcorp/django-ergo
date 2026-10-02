@@ -63,6 +63,31 @@ export function BotPage() {
         </Section>
       )}
 
+      {!!bot.schedules?.length && (
+        <Section title="Schedules" count={bot.schedules.length}>
+          <table className="w-full text-sm">
+            <tbody>
+              {bot.schedules.map(s => (
+                <tr key={s.name} className="border-t border-zinc-200 align-top dark:border-zinc-800">
+                  <td className="py-1.5 pr-4 font-mono text-xs whitespace-nowrap">{s.name}</td>
+                  <td className="py-1.5 pr-4 font-mono text-xs whitespace-nowrap text-zinc-500">{s.cron}</td>
+                  <td className="py-1.5 pr-4">
+                    {s.message}
+                    <div className="text-xs text-zinc-500">
+                      {s.to === 'new' ? 'in a new thread' : 'in the chat'}
+                      {s.users.length ? ` · for ${s.users.join(', ')}` : ''}
+                    </div>
+                  </td>
+                  <td className="py-1.5 text-xs whitespace-nowrap text-zinc-500">
+                    {!s.enabled ? 'off' : s.next_run ? `next ${new Date(s.next_run).toLocaleString()}` : 'not soon'}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Section>
+      )}
+
       <Section title="Skills" count={bot.skills.length}>
         {bot.skills.length ? (
           <ul className="divide-y divide-zinc-200 rounded-lg border border-zinc-200 dark:divide-zinc-800 dark:border-zinc-800">

@@ -294,3 +294,15 @@ def redispatch_thread_messages() -> int:
     from django_ergo.bots import messaging
 
     return messaging.redispatch_waiting(older_than=60)
+
+
+@shared_task(name="ergonaut.run_schedules", ignore_result=True)
+def run_schedules() -> list[str]:
+    """Send the bots' scheduled messages that are due this minute (beat runs this)."""
+    from django_ergo.bots import schedules, webhooks
+
+    registry = webhooks.get_registry()
+    ran = schedules.run_due(list(registry) if registry is not None else [])
+    if ran:
+        logger.info("Ran schedules: %s", ", ".join(ran))
+    return ran

@@ -96,6 +96,28 @@ can be async functions too. Arguments and results must be JSON-serializable.
 to its Celery workers; without it they run in a thread pool in the same
 process. A worker only runs tasks the bot's own tool files declared.
 
+## Schedules
+
+A bot can message its chats on a schedule, set in its bot.yaml:
+
+```yaml
+schedules:
+  - name: weekly-meal-plan
+    cron: "0 17 * * sun"      # minute hour day-of-month month day-of-week
+    message: Propose next week's dinners with the meal-planning skill.
+    to: root                  # the root chat (default), or new: a new thread each time
+    users: [lee]              # default: permissions.users, else everyone with a chat
+    enabled: true
+```
+
+Cron fields take `*`, numbers, ranges, `*/n` steps, lists and day/month
+names, read in each person's timezone (theirs, else the bot's, else
+`TIME_ZONE`). `django_ergo.bots.schedules.run_due(bots)` sends due messages
+(Ergonaut's beat runs it every minute); a `ScheduleRun` row keeps each from
+running twice. The bot answers in a turn of its own under a `[Scheduled
+message: <name>]` header, the reply stays in that chat, and the telegram
+plugin passes it on for a root chat.
+
 ## Skills
 
 A `skills/` folder (or the folder named by `skills:` in bot.yaml) holds

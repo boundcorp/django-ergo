@@ -62,6 +62,7 @@ class BotDetailOut(BotOut):
     tools: list[ToolOut]
     skills: list[SkillOut]
     manages_repo: bool = False  # has bot_management: show the Changes section
+    schedules: list[dict] = []
 
 
 class SessionOut(Schema):
@@ -164,6 +165,29 @@ def registry():
     if found is None:
         raise HttpError(503, "No bots are loaded")
     return found
+
+
+def schedules_out(bot: Bot, user) -> list[dict]:
+    """The bot's schedules, with the next run in the viewer's timezone."""
+    from django.utils import timezone
+    from django_ergo.bots.schedules import local_now
+
+    now = local_now(bot, user, timezone.now())
+    out = []
+    for schedule in bot.definition.schedules:
+        upcoming = schedule.cron.next_after(now) if schedule.enabled else None
+        out.append(
+            {
+                "name": schedule.name,
+                "cron": schedule.cron.expression,
+                "message": schedule.message,
+                "to": schedule.to,
+                "users": list(schedule.users),
+                "enabled": schedule.enabled,
+                "next_run": upcoming.isoformat() if upcoming else None,
+            }
+        )
+    return out
 
 
 def may_use(bot: Bot, user) -> bool:
@@ -401,6 +425,7 @@ async def bot_detail(request, bot: str):
         "instructions": definition.instructions,
         "plugins": [type(p).__name__ for p in found.plugins],
         "manages_repo": found.plugin("bot_management") is not None,
+        "schedules": schedules_out(found, request.auth),
         "tools": await sync_to_async(root_tools)(found, request.auth),
         "skills": [{"name": s.name, "description": s.description, "body": s.body} for s in found.skills],
     }

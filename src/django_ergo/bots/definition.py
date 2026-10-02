@@ -33,6 +33,8 @@ bot.yaml::
         knowledgebase: Kitchen
       - name: telegram
         token_env: KITCHEN_TELEGRAM_TOKEN
+    schedules:                         # see django_ergo.bots.schedules
+      - {name: weekly-plan, cron: "0 17 * * sun", message: Plan next week's dinners}
     permissions:
       call_bots: [sysadmin]            # other bots this bot may message
       users: [lee]                     # who may use it in apps like Ergonaut (default: everyone)
@@ -90,6 +92,7 @@ class BotDefinition:
     plugins: list[PluginSpec] = field(default_factory=list)
     call_bots: list[str] = field(default_factory=list)
     allowed_users: list[str] = field(default_factory=list)  # empty: everyone
+    schedules: list = field(default_factory=list)  # bots.schedules.Schedule
     raw: dict = field(default_factory=dict)
 
     @classmethod
@@ -139,6 +142,7 @@ class BotDefinition:
             allowed_users=[
                 str(u) for u in _mapping(data, "permissions").get("users") or []
             ],
+            schedules=_schedules(data.get("schedules") or []),
             raw=data,
         )
 
@@ -210,3 +214,22 @@ def _plugin(spec: Any) -> PluginSpec:
         return PluginSpec(name=spec["name"], config=config)
     msg = f"Invalid plugin entry: {spec!r}"
     raise BotDefinitionError(msg)
+
+
+def _schedules(items: list) -> list:
+    from django_ergo.bots.schedules import Schedule
+    from django_ergo.bots.schedules import ScheduleError
+
+    found, names = [], set()
+    for item in items:
+        try:
+            schedule = Schedule.from_config(item)
+        except ScheduleError as e:
+            msg = f"schedules: {e}"
+            raise BotDefinitionError(msg) from e
+        if schedule.name in names:
+            msg = f"schedules: two named {schedule.name!r}"
+            raise BotDefinitionError(msg)
+        names.add(schedule.name)
+        found.append(schedule)
+    return found
