@@ -10,6 +10,7 @@
         files_host: devbox         # ssh host holding the worktrees (default: the environment;
                                    # "" reads them on this host)
         max_attach_bytes: 20000000
+        worker_poll_seconds: 120   # how often orca_start_worker's watcher checks the agent
 
 The bot runs the CLI on the host Ergonaut runs on, as that user. Tools:
 
@@ -164,7 +165,7 @@ def is_secret(name: str) -> bool:
     )
 
 
-POLL_SECONDS = 60
+POLL_SECONDS = 120  # how often a watched Orca worker is checked (worker_poll_seconds)
 SETTLED = ("completed", "failed", "cancelled", "abandoned")
 
 
@@ -216,6 +217,7 @@ class OrcaPlugin(BotPlugin):
         self.timeout = int(self.config.get("timeout", 120))
         self.files_host = str(self.config.get("files_host", self.environment) or "")
         self.max_attach_bytes = int(self.config.get("max_attach_bytes", 20_000_000))
+        self.poll_seconds = float(self.config.get("worker_poll_seconds", POLL_SECONDS))
 
     def argv(self, args: list[str]) -> list[str]:
         args = [str(a) for a in args]
@@ -595,7 +597,7 @@ class OrcaPlugin(BotPlugin):
         progress = state or status or "starting"
         if liveness:
             progress += f" · {liveness}"
-        return ctx.again(POLL_SECONDS, progress=progress)
+        return ctx.again(self.poll_seconds, progress=progress)
 
     def run_messages(self, run: str, dispatch: str, task: str) -> list[dict]:
         """Messages to this Run about this dispatch, read without consuming them."""
