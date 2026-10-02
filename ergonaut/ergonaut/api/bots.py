@@ -263,7 +263,7 @@ async def open_root(request, bot: str):
 
 
 def root_tools(bot: Bot, user) -> list[dict]:
-    """The tools a root chat with ``bot`` gets, as the model sees them."""
+    """The tools a root chat with ``bot`` gets, without the send_reply output tool."""
     from django_ergo.conversation.adapters import ClaudeToolAdapter
 
     probe = ConversationSession(bot_name=bot.name, user=user, metadata={"bot_role": "root"})
@@ -279,10 +279,6 @@ def root_tools(bot: Bot, user) -> list[dict]:
                     "requires_approval": bool(approval and approval(schema["name"])),
                 }
             )
-    if spec.output_tool_name:
-        tools.append(
-            {"name": spec.output_tool_name, "description": "Answer the user, with optional suggested replies.", "requires_approval": False}
-        )
     return tools
 
 

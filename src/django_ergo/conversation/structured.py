@@ -282,13 +282,13 @@ async def _record_tools(call: StructuredCall, spec: StructuredCallSpec) -> None:
     adapter = ClaudeToolAdapter()
 
     def names():
-        tools = [
+        # The output tool is how the call returns its result, not a tool the
+        # model chooses to use, so it isn't listed.
+        return [
             schema["name"]
             for toolkit in spec.toolkits
             for schema in toolkit.get_tools_schema(adapter)
         ]
-        # A call with only its output tool has nothing worth recording.
-        return [*tools, spec.output_tool_name] if tools and spec.output_tool_name else tools
 
     tools = await sync_to_async(names)()
     if tools:

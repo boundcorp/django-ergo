@@ -131,7 +131,8 @@ def test_bot_page_lists_tools_and_skills_and_threads_follow_orchestration(client
     assert bot["engine"] == "claude"
     assert bot["instructions"] == "You run the kitchen."
     tools = {t["name"]: t for t in bot["tools"]}
-    assert {"pantry_count", "order", "list_skills", "load_skill", "send_reply"} <= set(tools)
+    assert {"pantry_count", "order", "list_skills", "load_skill"} <= set(tools)
+    assert "send_reply" not in tools  # the reply format, not a tool
     assert not [name for name in tools if name.startswith("threads_")]
     assert tools["order"]["requires_approval"] is True
     assert tools["pantry_count"]["requires_approval"] is False
@@ -145,7 +146,8 @@ def test_bot_page_lists_tools_and_skills_and_threads_follow_orchestration(client
     root = post(client, "/api/bots/kitchen/root").json()
     post(client, f"/api/sessions/{root['id']}/messages", {"text": "hi"})
     [call] = client.get(f"/api/sessions/{root['id']}").json()["calls"]
-    assert {"pantry_count", "load_skill", "send_reply"} <= set(call["tools"])
+    assert {"pantry_count", "load_skill"} <= set(call["tools"])
+    assert "send_reply" not in call["tools"]
 
 
 @pytest.mark.django_db(transaction=True)
