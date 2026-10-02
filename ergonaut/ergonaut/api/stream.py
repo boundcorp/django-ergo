@@ -113,14 +113,12 @@ async def session_events(request, session_id):
         quiet = 0.0
         loop = asyncio.get_running_loop()
         end = loop.time() + STREAM_SECONDS
-        first = True
         waits = changes()
         while loop.time() < end:
             messages, calls, requests = await sync_to_async(_snapshot)(session_id, last, seen)
-            if first:
-                # The client already has everything up to `after`; only
-                # remember the calls and requests it has seen.
-                calls, requests, first = [], None, False
+            # The first event carries every call and request too: something may
+            # have changed between the client's load (or the last stream) and now,
+            # and the client merges by id.
             if messages or calls or requests is not None:
                 if messages:
                     last = max(m["line"] for m in messages)

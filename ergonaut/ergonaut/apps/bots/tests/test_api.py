@@ -273,7 +273,7 @@ def test_a_queued_turn_returns_at_once(client, cook, use_bots, monkeypatch, sett
     assert response.status_code == 200
     assert response.json()["queued"] is True
     assert response.json()["text"] == ""
-    assert queued == [(root["id"], "Eggs?", None, [])]
+    assert queued == [(root["id"], "Eggs?", None, [], None)]
 
 
 @pytest.mark.django_db(transaction=True)
@@ -369,7 +369,7 @@ def test_changes_list_and_merge_need_a_manager_and_an_admin(client, cook, use_bo
             return f"Merged #{number}."
 
     fake = FakeManager()
-    monkeypatch.setattr(api, "change_manager", lambda bot: (api.get_bot(bot), fake))
+    monkeypatch.setattr(api, "change_manager", lambda bot, user=None: (api.get_bot(bot), fake))
     changes = client.get("/api/bots/kitchen/changes").json()
     assert changes["draft_diff"] == "+draft line"
     assert [(p["number"], p["author"]) for p in changes["pull_requests"]] == [(7, "bot")]
@@ -380,3 +380,49 @@ def test_changes_list_and_merge_need_a_manager_and_an_admin(client, cook, use_bo
     cook.save()
     assert post(client, "/api/bots/kitchen/changes/7/merge").json() == {"result": "Merged #7."}
     assert fake.merged == [7]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_stale_approvals_bad_ids_and_bot_access(client, cook, bot_folder, use_bots):
+    from django_ergo.conversation.models import ConversationSession
+
+    use_bots(tool_call("order", {"item": "milk"}), say("Ordered milk."))
+    root = post(client, "/api/bots/kitchen/root").json()
+    turn = post(client, f"/api/sessions/{root['id']}/messages", {"text": "Order milk"}).json()
+    shown = [a["id"] for a in turn["approvals"]]
+    stale = post(client, f"/api/sessions/{root['id']}/approvals", {"approve": True, "approval_ids": ["old"]})
+    assert stale.status_code == 409
+    ok = post(client, f"/api/sessions/{root['id']}/approvals", {"approve": True, "approval_ids": shown})
+    assert ok.json()["text"] == "Ordered milk."
+
+    assert client.get("/api/sessions/not-a-uuid").status_code == 404
+    assert post(client, "/api/sessions/not-a-uuid/messages", {"text": "hi"}).status_code == 404
+    assert client.get("/api/attachments/nope/download").status_code == 404
+
+    # permissions.users limits who may use a bot.
+    (bot_folder / "bot.yaml").write_text(BOT + "permissions: {users: [someone-else]}\n")
+    use_bots(say("hi"))
+    assert client.get("/api/bots/kitchen").status_code == 404
+    assert [b["name"] for b in client.get("/api/bots").json()] == []
+    assert ConversationSession.objects.filter(bot_name="kitchen").count() == 1
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_turn_that_fails_early_is_recorded(cook, use_bots, monkeypatch):
+    from django_ergo.conversation.models import ConversationSession
+
+    from ergonaut.apps.bots.tasks import run_turn
+
+    use_bots(say("never"))
+    session = ConversationSession.objects.create(user=cook, bot_name="kitchen", metadata={"bot_role": "root"})
+    from django_ergo.bots.runtime import Bot
+
+    def broken(self):
+        msg = "no API key"
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr(Bot, "make_engine", broken)
+    run_turn(str(session.id), "Dinner?")
+    call = session.structured_calls.get()
+    assert (call.status, call.request) == ("failed", "Dinner?")
+    assert "no API key" in call.error

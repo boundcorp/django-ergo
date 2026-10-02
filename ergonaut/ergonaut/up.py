@@ -224,6 +224,15 @@ def up(argv: list[str]) -> int:
     sup = Supervisor()
     data = data_dir()
     sup.env["DATA_DIR"] = str(data)
+    if not sup.env.get("SECRET_KEY"):
+        # A key of its own, kept with the data, instead of the insecure default.
+        key_file = data / "secret_key"
+        if not key_file.exists():
+            import secrets
+
+            key_file.write_text(secrets.token_urlsafe(50))
+            key_file.chmod(0o600)
+        sup.env["SECRET_KEY"] = key_file.read_text().strip()
     python = sys.executable
     roles = set(argv) or {"web", "worker", "beat", "bots"}
 
@@ -244,6 +253,24 @@ def up(argv: list[str]) -> int:
             sup.start("web", python, "-m", "uvicorn", "ergonaut.asgi:application", "--host", "0.0.0.0", "--port", port)
         if broker and "worker" in roles:
             sup.start("worker", python, "-m", "celery", "-A", "ergonaut", "worker", "-l", "info")
+            # @bot_task work gets its own worker, so turns waiting on it can't starve it.
+            sup.start(
+                "bot-tasks",
+                python,
+                "-m",
+                "celery",
+                "-A",
+                "ergonaut",
+                "worker",
+                "-l",
+                "info",
+                "-Q",
+                "bot_tasks",
+                "-n",
+                "bot-tasks@%h",
+                "-c",
+                "2",
+            )
         if broker and "beat" in roles:
             schedule = str(data / "celerybeat-schedule")
             sup.start("beat", python, "-m", "celery", "-A", "ergonaut", "beat", "-l", "info", "-s", schedule)

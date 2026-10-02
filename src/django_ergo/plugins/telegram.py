@@ -195,16 +195,18 @@ class TelegramPlugin(BotPlugin):
             return
         names = ", ".join(a.tool_name for a in result.approvals)
         text = (result.text + "\n\n" if result.text else "") + f"Approve {names}?"
-        # The buttons name the waiting call, so an old prompt can't approve a newer one.
+        # The buttons name the waiting call and what it waits on, so an old
+        # prompt can't approve a newer one (even in the same call).
         call_id = result.call.id if result.call else ""
+        stamp = approvals_stamp([a.tool_use_id for a in result.approvals])
         await self.send_text(
             chat_id,
             text,
             reply_markup={
                 "inline_keyboard": [
                     [
-                        {"text": "Approve", "callback_data": f"ok:{call_id}"},
-                        {"text": "Deny", "callback_data": f"no:{call_id}"},
+                        {"text": "Approve", "callback_data": f"ok:{call_id}:{stamp}"},
+                        {"text": "Deny", "callback_data": f"no:{call_id}:{stamp}"},
                     ]
                 ]
             },
@@ -310,7 +312,8 @@ class TelegramPlugin(BotPlugin):
         chat_id = query["message"]["chat"]["id"]
         # Only the person themselves can answer, never anyone else in a group chat.
         user = await self.user_for((query.get("from") or {}).get("id"))
-        action, _, call_id = (query.get("data") or "").partition(":")
+        action, _, rest = (query.get("data") or "").partition(":")
+        call_id, _, stamp = rest.partition(":")
         if user is None or action not in {"ok", "no"}:
             return
         call = await (
@@ -326,7 +329,16 @@ class TelegramPlugin(BotPlugin):
             return
         session = call.session
         pending = await self.bot.pending_call(session)
-        if pending is None or pending.id != call.id:
+        waiting = (
+            [a["id"] for a in (pending.metadata or {}).get("pending_approvals", [])]
+            if pending
+            else []
+        )
+        if (
+            pending is None
+            or pending.id != call.id
+            or approvals_stamp(waiting) != stamp
+        ):
             await self.send_text(chat_id, "That request was already handled.")
             return
         result = await self.bot.resume(session, action == "ok")
@@ -436,3 +448,8 @@ def _is_uuid(value: str) -> bool:
 
 async def _none():
     return None
+
+
+def approvals_stamp(tool_use_ids: list[str]) -> str:
+    """A short fingerprint of what a call waits on (Telegram button data is 64 bytes)."""
+    return hashlib.sha256(",".join(sorted(tool_use_ids)).encode()).hexdigest()[:8]

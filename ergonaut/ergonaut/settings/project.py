@@ -221,6 +221,13 @@ CORS_ALLOW_HEADERS = list(default_headers) + [
 ]
 
 SECRET_KEY = os.environ.get("SECRET_KEY", "secret")
+if SECRET_KEY == "secret" and not DEBUG and os.environ.get("ERGONAUT_ALLOW_DEFAULT_SECRET") != "1":
+    import warnings
+
+    warnings.warn(
+        "SECRET_KEY is the default; set SECRET_KEY (`ergonaut up` generates one under DATA_DIR)",
+        stacklevel=1,
+    )
 
 WHITENOISE_MANIFEST_STRICT = False
 
@@ -336,6 +343,8 @@ CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL")
 CELERY_BEAT_SCHEDULE = {
     # Bot threads idle past their bot's sessions.archive_after_days.
     "archive-idle-threads": {"task": "ergonaut.archive_idle_threads", "schedule": 60 * 60},
+    # Thread messages that waited for a busy recipient and were missed.
+    "redispatch-thread-messages": {"task": "ergonaut.redispatch_thread_messages", "schedule": 60},
 }
 if float(os.environ.get("ERGONAUT_BOTS_PULL_SECONDS") or 0) > 0:
     # Merged changes to the bot repo go live without a restart.

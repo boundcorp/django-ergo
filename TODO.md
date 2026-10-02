@@ -6,7 +6,7 @@ Live on rigel from `~/p/boundcorp/django-ergo`, bots from `boundcorp/ergo-bots`.
 
 ### Now (2026-10-02)
 
-- [ ] **PR #31 review and merge**: two review passes (Ergo bots/plugins, Ergonaut app); fix findings, CI green, merge.
+- [ ] **PR #31 review and merge**: two review passes done (22 findings); fixes in 2e54508 and the Ergonaut fix commit; CI green, then merge.
 - [x] **Bots that learn**: `ergo_kb` `write: true` gives `ergo_kb_write` (kb/*.md only, committed and pushed). Kitchen turned on in ergo-bots.
 - [ ] **Deploy plan** for Ergonaut on the octo cluster (modeled on kitchen-mgmt's infra/octo).
 - [ ] **Schedules in each bot's bot.yaml** (`schedules:` run by Celery beat).
@@ -18,6 +18,9 @@ Live on rigel from `~/p/boundcorp/django-ergo`, bots from `boundcorp/ergo-bots`.
 - [x] **`@bot_task` for custom tools**: run a bot-folder function on a worker and wait for or await its result.
 
 ### Next
+
+- [ ] Bots with bash/orca in a multi-user Ergonaut: approvals are admin-only now; consider per-plugin approver lists.
+- [ ] Managed brokers without REDIS_URL fall back to in-process turn locks only.
 
 
 - [ ] A bot tool waiting on a @bot_task holds a worker slot; watch worker concurrency if many tools wait at once.

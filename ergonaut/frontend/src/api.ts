@@ -232,7 +232,8 @@ export const api = {
     request<Call & { system_prompt: string; transcript: unknown[]; metadata: unknown }>('GET', `/calls/${id}`),
   send: (id: string, text: string, attachmentIds: string[] = []) =>
     request<Turn>('POST', `/sessions/${id}/messages`, { text, attachment_ids: attachmentIds }),
-  approve: (id: string, approve: boolean) => request<Turn>('POST', `/sessions/${id}/approvals`, { approve }),
+  approve: (id: string, approve: boolean, approvalIds?: string[]) =>
+    request<Turn>('POST', `/sessions/${id}/approvals`, { approve, approval_ids: approvalIds }),
   close: (id: string) => request<Session>('POST', `/sessions/${id}/close`),
   changes: (bot: string) => request<Changes>('GET', `/bots/${bot}/changes`),
   changeDiff: (bot: string, n: number) => request<{ diff: string }>('GET', `/bots/${bot}/changes/${n}/diff`),

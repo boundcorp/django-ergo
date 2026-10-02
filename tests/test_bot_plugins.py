@@ -404,7 +404,8 @@ async def test_telegram_approval_buttons_resume_the_turn(tmp_path):
     session = await ConversationSession.objects.aget()
     call = await session.structured_calls.aget()
     buttons = prompt["reply_markup"]["inline_keyboard"][0]
-    assert buttons[0]["callback_data"] == f"ok:{call.id}"
+    assert buttons[0]["callback_data"].startswith(f"ok:{call.id}:")
+    assert len(buttons[0]["callback_data"]) <= 64
 
     # Someone else in the chat can't answer for the user.
     stranger = {

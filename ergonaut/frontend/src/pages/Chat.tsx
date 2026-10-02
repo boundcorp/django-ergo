@@ -231,16 +231,32 @@ export function Chat({ onChange }: { onChange: () => void }) {
             <div className="mb-2 font-medium">Approve {waiting.map(a => a.name).join(', ')}?</div>
             <div className="flex gap-2">
               <button
-                disabled={busy}
+                disabled={busy || !!pending}
                 className="rounded-md bg-emerald-600 px-3 py-1 text-white disabled:opacity-50"
-                onClick={() => run(() => api.approve(id, true))}
+                onClick={() =>
+                  run(() =>
+                    api.approve(
+                      id,
+                      true,
+                      waiting.map(a => a.id),
+                    ),
+                  )
+                }
               >
                 Approve
               </button>
               <button
-                disabled={busy}
+                disabled={busy || !!pending}
                 className="rounded-md border border-zinc-300 px-3 py-1 disabled:opacity-50 dark:border-zinc-700"
-                onClick={() => run(() => api.approve(id, false))}
+                onClick={() =>
+                  run(() =>
+                    api.approve(
+                      id,
+                      false,
+                      waiting.map(a => a.id),
+                    ),
+                  )
+                }
               >
                 Deny
               </button>

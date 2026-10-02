@@ -35,6 +35,7 @@ bot.yaml::
         token_env: KITCHEN_TELEGRAM_TOKEN
     permissions:
       call_bots: [sysadmin]            # other bots this bot may message
+      users: [lee]                     # who may use it in apps like Ergonaut (default: everyone)
 
 Only files listed under ``tools`` are imported, and only from inside the bot
 folder, so reading a bot definition never runs code it didn't name.
@@ -88,6 +89,7 @@ class BotDefinition:
     toolkit_factories: list[str] = field(default_factory=list)
     plugins: list[PluginSpec] = field(default_factory=list)
     call_bots: list[str] = field(default_factory=list)
+    allowed_users: list[str] = field(default_factory=list)  # empty: everyone
     raw: dict = field(default_factory=dict)
 
     @classmethod
@@ -134,6 +136,9 @@ class BotDefinition:
             toolkit_factories=list(data.get("toolkits") or []),
             plugins=[_plugin(spec) for spec in data.get("plugins") or []],
             call_bots=list(_mapping(data, "permissions").get("call_bots") or []),
+            allowed_users=[
+                str(u) for u in _mapping(data, "permissions").get("users") or []
+            ],
             raw=data,
         )
 

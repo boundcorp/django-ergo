@@ -141,6 +141,8 @@ class MessageIn(Schema):
 
 class ApprovalIn(Schema):
     approve: bool
+    # The tool calls the user was shown; if the turn now waits on others, nothing runs.
+    approval_ids: list[str] | None = None
 
 
 class TurnOut(Schema):
@@ -164,11 +166,33 @@ def registry():
     return found
 
 
-def get_bot(name: str) -> Bot:
+def may_use(bot: Bot, user) -> bool:
+    """permissions.users in bot.yaml limits a bot to those people (admins always)."""
+    allowed = bot.definition.allowed_users
+    return not allowed or user is None or user.is_superuser or user.get_username() in allowed
+
+
+def get_bot(name: str, user=None) -> Bot:
     bots = registry()
-    if name not in bots:
+    if name not in bots or not may_use(bots.get(name), user):
         raise HttpError(404, f"No bot {name!r}")
     return bots.get(name)
+
+
+ADMIN_ONLY_PLUGINS = ("bash", "orca", "bot_management")
+
+
+def require_admin_for_risky_tools(bot: Bot, user) -> None:
+    """Shell, Orca and repo tools act on the host: only an admin may approve them."""
+    if not user.is_superuser and any(bot.plugin(name) for name in ADMIN_ONLY_PLUGINS):
+        raise HttpError(403, "Only an admin can approve this bot's tools")
+
+
+def uuid_or_404(value: str, what: str = "session") -> str:
+    try:
+        return str(uuid.UUID(str(value)))
+    except ValueError:
+        raise HttpError(404, f"No such {what}") from None
 
 
 def session_out(session: ConversationSession) -> dict:
@@ -275,7 +299,7 @@ def visible_sessions(user):
 
 
 async def get_session(request, session_id) -> ConversationSession:
-    return await aget_object_or_404(visible_sessions(request.auth), id=session_id)
+    return await aget_object_or_404(visible_sessions(request.auth), id=uuid_or_404(session_id))
 
 
 # -- endpoints ---------------------------------------------------------------
@@ -284,7 +308,7 @@ async def get_session(request, session_id) -> ConversationSession:
 @router.get("/bots", response=list[BotOut])
 async def list_bots(request):
     out = []
-    for bot in registry():
+    for bot in [b for b in registry() if may_use(b, request.auth)]:
         root = await (
             bot.sessions(request.auth)
             .filter(parent__isnull=True, metadata__bot_role="root")
@@ -323,7 +347,7 @@ def list_sessions(request, bot: str = "", q: str = "", status: str = ""):
 
 @router.post("/bots/{bot}/root", response=SessionOut)
 async def open_root(request, bot: str):
-    session = await get_bot(bot).root_session(request.auth)
+    session = await get_bot(bot, request.auth).root_session(request.auth)
     session.user = request.auth
     return session_out(session)
 
@@ -350,7 +374,7 @@ def root_tools(bot: Bot, user) -> list[dict]:
 
 @router.get("/bots/{bot}", response=BotDetailOut)
 async def bot_detail(request, bot: str):
-    found = get_bot(bot)
+    found = get_bot(bot, request.auth)
     root = await (
         found.sessions(request.auth)
         .filter(parent__isnull=True, metadata__bot_role="root")
@@ -384,7 +408,7 @@ async def bot_detail(request, bot: str):
 
 @router.post("/bots/{bot}/threads", response=SessionOut)
 async def new_thread(request, bot: str, data: NewThreadIn):
-    found = get_bot(bot)
+    found = get_bot(bot, request.auth)
     if not found.definition.orchestration:
         raise HttpError(409, f"{bot} has threads turned off (orchestration: false)")
     root = await found.root_session(request.auth)
@@ -395,7 +419,7 @@ async def new_thread(request, bot: str, data: NewThreadIn):
 
 @router.get("/sessions/{session_id}", response=SessionDetailOut)
 def session_detail(request, session_id: str):
-    session = visible_sessions(request.auth).filter(id=session_id).first()
+    session = visible_sessions(request.auth).filter(id=uuid_or_404(session_id)).first()
     if session is None:
         raise HttpError(404, "No such session")
     messages = [
@@ -414,7 +438,7 @@ def session_detail(request, session_id: str):
 
 @router.get("/calls/{call_id}", response=CallDetailOut)
 def call_detail(request, call_id: str):
-    call = StructuredCall.objects.select_related("session").filter(id=call_id).first()
+    call = StructuredCall.objects.select_related("session").filter(id=uuid_or_404(call_id, "call")).first()
     allowed = call is not None and (
         request.auth.is_superuser
         or call.user_id == request.auth.pk
@@ -451,7 +475,7 @@ async def send_message(request, session_id: str, data: MessageIn):
     session = await get_session(request, session_id)
     if not data.text.strip() and not data.attachment_ids:
         raise HttpError(400, "Say something")
-    get_bot(session.bot_name)
+    get_bot(session.bot_name, request.auth)
     if data.attachment_ids:
         try:
             [uuid.UUID(str(a)) for a in data.attachment_ids]
@@ -470,10 +494,16 @@ async def send_message(request, session_id: str, data: MessageIn):
 @router.post("/sessions/{session_id}/approvals", response=TurnOut)
 async def answer_approval(request, session_id: str, data: ApprovalIn):
     session = await get_session(request, session_id)
-    bot = get_bot(session.bot_name)
-    if await bot.pending_call(session) is None:
+    bot = get_bot(session.bot_name, request.auth)
+    pending = await bot.pending_call(session)
+    if pending is None:
         raise HttpError(409, "Nothing is waiting for approval")
-    return await sync_to_async(queue_and_report)(session, approve=data.approve)
+    if data.approve:
+        require_admin_for_risky_tools(bot, request.auth)
+    waiting = sorted(a["id"] for a in (pending.metadata or {}).get("pending_approvals", []))
+    if data.approval_ids is not None and sorted(data.approval_ids) != waiting:
+        raise HttpError(409, "That approval was already answered")
+    return await sync_to_async(queue_and_report)(session, approve=data.approve, approval_ids=data.approval_ids)
 
 
 @router.post("/sessions/{session_id}/close", response=SessionOut)
@@ -552,12 +582,12 @@ def bot_kbs(bot: Bot) -> list[dict]:
 
 @router.get("/bots/{bot}/kbs", response=list[KBOut])
 def list_kbs(request, bot: str):
-    return bot_kbs(get_bot(bot))
+    return bot_kbs(get_bot(bot, request.auth))
 
 
 @router.get("/bots/{bot}/kbs/{kb_id}/article", response=KBArticleDetailOut)
 def read_kb_article(request, bot: str, kb_id: str, path: str):
-    kb = next((k for k in bot_kbs(get_bot(bot)) if k["id"] == kb_id), None)
+    kb = next((k for k in bot_kbs(get_bot(bot, request.auth)) if k["id"] == kb_id), None)
     if kb is None:
         raise HttpError(404, "No such knowledge base")
     source = kb["_source"]
@@ -567,7 +597,7 @@ def read_kb_article(request, bot: str, kb_id: str, path: str):
         except (ValueError, FileNotFoundError, OSError) as e:
             raise HttpError(404, str(e)) from e
         return {"path": article.path, "title": article.title, "body": article.body}
-    article = source.articles.filter(id=path).first()
+    article = source.articles.filter(id=int(path)).first() if str(path).isdigit() else None
     if article is None:
         raise HttpError(404, "No such article")
     return {"path": str(article.id), "title": article.title, "body": article.content or ""}
@@ -607,7 +637,7 @@ def attachment_out(row: ConversationAttachment) -> dict:
 def visible_attachment(user, attachment_id: str) -> ConversationAttachment:
     row = (
         ConversationAttachment.objects.select_related("session")
-        .filter(id=attachment_id, session__in=visible_sessions(user))
+        .filter(id=uuid_or_404(attachment_id, "file"), session__in=visible_sessions(user))
         .first()
     )
     if row is None:
@@ -617,7 +647,7 @@ def visible_attachment(user, attachment_id: str) -> ConversationAttachment:
 
 @router.get("/sessions/{session_id}/attachments", response=list[AttachmentOut])
 def list_attachments(request, session_id: str):
-    session = visible_sessions(request.auth).filter(id=session_id).first()
+    session = visible_sessions(request.auth).filter(id=uuid_or_404(session_id)).first()
     if session is None:
         raise HttpError(404, "No such session")
     return [attachment_out(r) for r in session.attachments.order_by("-updated_at")]
@@ -625,7 +655,7 @@ def list_attachments(request, session_id: str):
 
 @router.post("/sessions/{session_id}/attachments", response=AttachmentOut)
 def upload_attachment(request, session_id: str, file: UploadedFile = File(...)):  # noqa: B008
-    session = visible_sessions(request.auth).filter(id=session_id).first()
+    session = visible_sessions(request.auth).filter(id=uuid_or_404(session_id)).first()
     if session is None:
         raise HttpError(404, "No such session")
     if file.size and file.size > MAX_UPLOAD_BYTES:
@@ -687,9 +717,9 @@ class ChangesOut(Schema):
     error: str = ""
 
 
-def change_manager(bot: str):
+def change_manager(bot: str, user=None):
     """The bot_management plugin that maintains ``bot``'s repo (its own, or a parent's)."""
-    found = get_bot(bot)
+    found = get_bot(bot, user)
     seen = set()
     current = found
     while current is not None and current.name not in seen:
@@ -708,7 +738,7 @@ def require_admin(request):
 
 @router.get("/bots/{bot}/changes", response=ChangesOut)
 def bot_changes(request, bot: str):
-    manager, plugin = change_manager(bot)
+    manager, plugin = change_manager(bot, request.auth)
     out = {
         "managed_by": manager.name,
         "repo": str(plugin.repo),
@@ -741,7 +771,7 @@ def bot_changes(request, bot: str):
 
 @router.get("/bots/{bot}/changes/{number}/diff")
 def bot_change_diff(request, bot: str, number: int):
-    _, plugin = change_manager(bot)
+    _, plugin = change_manager(bot, request.auth)
     try:
         return {"diff": plugin.pull_request_diff(number)}
     except ValueError as e:
@@ -751,7 +781,7 @@ def bot_change_diff(request, bot: str, number: int):
 @router.post("/bots/{bot}/changes/{number}/merge")
 def merge_bot_change(request, bot: str, number: int):
     require_admin(request)
-    _, plugin = change_manager(bot)
+    _, plugin = change_manager(bot, request.auth)
     try:
         return {"result": plugin.merge_pull_request(number)}
     except ValueError as e:
@@ -761,7 +791,7 @@ def merge_bot_change(request, bot: str, number: int):
 @router.post("/bots/{bot}/changes/{number}/close")
 def close_bot_change(request, bot: str, number: int):
     require_admin(request)
-    _, plugin = change_manager(bot)
+    _, plugin = change_manager(bot, request.auth)
     try:
         return {"result": plugin.close_pull_request(number)}
     except ValueError as e:
@@ -771,5 +801,5 @@ def close_bot_change(request, bot: str, number: int):
 @router.post("/bots/{bot}/changes/draft/discard")
 def discard_bot_draft(request, bot: str):
     require_admin(request)
-    _, plugin = change_manager(bot)
+    _, plugin = change_manager(bot, request.auth)
     return {"result": plugin.discard()}

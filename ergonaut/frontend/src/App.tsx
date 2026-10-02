@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
+import { BrowserRouter, Navigate, Route, Routes, useParams } from 'react-router-dom'
 import type { Bot, Session, User } from './api'
 import { ApiError, api } from './api'
 import { Sidebar } from './components/Sidebar'
@@ -55,7 +55,7 @@ function App() {
         <main className="min-w-0 flex-1">
           <Routes>
             <Route path="/" element={<Home bots={bots} />} />
-            <Route path="/s/:id" element={<Chat onChange={refresh} />} />
+            <Route path="/s/:id" element={<ChatRoute onChange={refresh} />} />
             <Route path="/sessions" element={<Sessions bots={bots} />} />
             <Route path="/costs" element={<CostsPage />} />
             <Route path="/bots/:name" element={<BotPage />} />
@@ -69,3 +69,9 @@ function App() {
 }
 
 export default App
+
+// A fresh Chat per session, so per-chat state (queued turn, attachments, draft) never carries over.
+function ChatRoute({ onChange }: { onChange: () => void }) {
+  const { id = '' } = useParams()
+  return <Chat key={id} onChange={onChange} />
+}
