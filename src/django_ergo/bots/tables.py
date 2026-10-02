@@ -53,6 +53,8 @@ _LOADING: contextvars.ContextVar[str] = contextvars.ContextVar(
     "ergo_bot_table_app", default=""
 )
 MAX_ROWS = 200
+# Each table file's module, so a bot's other code can use it without importing it again.
+MODULES: dict[Path, types.ModuleType] = {}
 
 
 def app_label_for(bot_name: str) -> str:
@@ -106,9 +108,10 @@ def register_app(bot_name: str, root_dir: Path) -> AppConfig:
         module.__path__ = [str(root_dir)]
         module.__file__ = str(root_dir / "__init__.py")
         sys.modules[name] = module
-        sys.modules.pop(f"{name}.migrations", None)
+        for stale in [m for m in sys.modules if m.startswith(f"{name}.")]:
+            sys.modules.pop(stale)
     config = global_apps.app_configs.get(label)
-    if config is None or config.name != name:
+    if config is None or config.name != name or config.module is not module:
         config = BotAppConfig(name, module)
         config.label = label
         config.verbose_name = f"Bot {bot_name}"
@@ -129,10 +132,12 @@ def load_tables(
         return []
     register_app(bot_name, root_dir)
     label = app_label_for(bot_name)
+    # Loading again (the bot's files changed) replaces its models rather than piling up.
+    global_apps.all_models[label].clear()
     token = _LOADING.set(label)
     try:
         for path in files:
-            load_tool_module(path, bot_name)
+            MODULES[path] = load_tool_module(path, bot_name).module
     finally:
         _LOADING.reset(token)
     global_apps.clear_cache()

@@ -150,8 +150,20 @@ export type AttachmentFile = {
   size: number | null
   source: 'message' | 'upload' | 'bot'
   message_sequence: number | null
+  pinned: boolean
   created_at: string
   updated_at: string
+}
+
+// Something pinned in a chat: a bot-folder file (chats.<name>.pins) or a pinned chat file.
+export type Pin = {
+  kind: 'bot_file' | 'file'
+  name: string
+  url: string
+  path?: string
+  id?: string
+  filename?: string
+  exists?: boolean
 }
 
 export type PullRequest = {
@@ -279,4 +291,7 @@ export const api = {
   uploadAttachment: (id: string, file: File) => upload<AttachmentFile>(`/sessions/${id}/attachments`, file),
   deleteAttachment: (id: string) => request<{ ok: boolean }>('DELETE', `/attachments/${id}`),
   downloadUrl: (id: string) => `/api/attachments/${id}/download`,
+  viewUrl: (id: string) => `/api/attachments/${id}/download?inline=true`,
+  pins: (id: string) => request<Pin[]>('GET', `/sessions/${id}/pins`),
+  pin: (id: string, pinned: boolean) => request<AttachmentFile>('POST', `/attachments/${id}/pin`, { pinned }),
 }

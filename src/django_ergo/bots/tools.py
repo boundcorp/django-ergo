@@ -83,6 +83,10 @@ class ToolContext:
 
         return BotTasks(self.bot)
 
+    def table(self, name: str):
+        """One of the bot's tables (a Django model), e.g. ``ctx.table("AdStat").objects.update_or_create(...)``."""
+        return self.bot.table(name)
+
     @property
     def is_root(self) -> bool:
         return bool(self.session and self.session.parent_id is None)

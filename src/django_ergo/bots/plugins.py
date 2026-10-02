@@ -45,6 +45,7 @@ OFFICIAL_PLUGINS = {
     "orca": "django_ergo.plugins.orca.OrcaPlugin",
     "bash": "django_ergo.plugins.bash.BashPlugin",
     "attachments": "django_ergo.plugins.attachments.AttachmentsPlugin",
+    "pages": "django_ergo.plugins.pages.PagesPlugin",
 }
 
 
@@ -81,6 +82,16 @@ class BotPlugin:
     @property
     def skill_name(self) -> str:
         return self.name
+
+    @property
+    def skill_instructions(self) -> str:
+        """What the model reads when it loads this plugin's skill."""
+        return ""
+
+    @property
+    def skill_requires(self) -> list[str]:
+        """Skills loaded along with this one."""
+        return []
 
     async def on_session_created(self, session: ConversationSession) -> None:
         pass

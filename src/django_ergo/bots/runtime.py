@@ -265,13 +265,17 @@ class Bot:
                 SkillDef(
                     plugin.skill_name,
                     plugin.description or f"The {plugin.name} plugin",
+                    instructions=plugin.skill_instructions,
                     toolkits=lambda ctx, plugin=plugin: plugin.toolkits(ctx) or [],
                     context=lambda ctx, message, plugin=plugin: plugin.context_sources(
                         ctx, message
                     )
                     or [],
                     hint=plugin.skill_hint,
-                    requires=requires.get(plugin.skill_name, []),
+                    requires=[
+                        *plugin.skill_requires,
+                        *requires.get(plugin.skill_name, []),
+                    ],
                     source=f"plugin {plugin.name}",
                 )
             )
@@ -309,10 +313,23 @@ class Bot:
         for module in self.tool_modules:
             if module.path == path:
                 return module.module
+        if path in self.definition.table_files:
+            from django_ergo.bots.tables import MODULES
+
+            return MODULES[path]
         cache = self.__dict__.setdefault("_code", {})
         if path not in cache:
             cache[path] = load_tool_module(path, self.name).module
         return cache[path]
+
+    def table(self, name: str):
+        """One of this bot's tables (a Django model) by class name, any case."""
+        for model in self.tables:
+            if model.__name__.lower() == str(name).lower():
+                return model
+        known = ", ".join(t.__name__ for t in self.tables) or "none"
+        msg = f"{self.name} has no table {name!r} (tables: {known})"
+        raise LookupError(msg)
 
     @staticmethod
     def _module_toolkits(module: ToolModule, ctx: ToolContext) -> list[Toolkit]:
