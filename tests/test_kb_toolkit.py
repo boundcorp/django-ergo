@@ -3,6 +3,7 @@
 
 import pytest
 from django.contrib.auth import get_user_model
+
 from django_ergo.kb_toolkit import KBToolkit
 from django_ergo.models import Article
 from django_ergo.models import Knowledgebase
@@ -15,12 +16,12 @@ ARTICLE_COUNT_FAQ = 2
 CONTENT_PREVIEW_MAX = 200
 
 
-@pytest.fixture()
+@pytest.fixture
 def user():
     return User.objects.create_user(username="testuser", password="testpass")
 
 
-@pytest.fixture()
+@pytest.fixture
 def docs_kb(user):
     kb = Knowledgebase.objects.create(
         name="Product Docs",
@@ -54,7 +55,7 @@ def docs_kb(user):
     return kb
 
 
-@pytest.fixture()
+@pytest.fixture
 def faq_kb(user):
     kb = Knowledgebase.objects.create(
         name="FAQ",
@@ -76,7 +77,7 @@ def faq_kb(user):
     return kb
 
 
-@pytest.fixture()
+@pytest.fixture
 def toolkit(docs_kb, faq_kb):
     return KBToolkit(knowledgebases=[docs_kb, faq_kb])
 

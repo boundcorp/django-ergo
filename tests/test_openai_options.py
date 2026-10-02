@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import pytest
+
 from django_ergo.conversation.engines.openai_api import OpenAIAPIEngine
 from django_ergo.openai_options import DEFAULT_OPENAI_MODEL
 from django_ergo.openai_options import chat_options
 from django_ergo.settings import api_settings
-
 from tests.test_conversation_structured import FakeOpenAIClient
 from tests.test_conversation_structured import openai_tool
 

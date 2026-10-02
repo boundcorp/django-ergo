@@ -378,6 +378,6 @@ def get_embedding_provider() -> EmbeddingProvider:
     # Create provider instance
     try:
         return provider_class(provider_config)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         msg = f"Failed to initialize embedding provider: {e}"
         raise ValueError(msg) from e

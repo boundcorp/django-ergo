@@ -926,7 +926,7 @@ try:
         ]
         list_filter = ["kind", "status", "engine_type"]
         search_fields = ["kind", "request", "error"]
-        readonly_fields = [f.name for f in StructuredCall._meta.fields]
+        readonly_fields = [f.name for f in StructuredCall._meta.fields]  # noqa: SLF001
 
         def has_add_permission(self, request):
             return False

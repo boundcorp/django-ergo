@@ -32,7 +32,11 @@ def find_bot_folders(directory: str | Path) -> list[Path]:
     if (root / CONFIG_FILE).is_file():
         found.append(root)
     for child in sorted(root.iterdir()) if root.is_dir() else []:
-        if child.is_dir() and not child.name.startswith(".") and child.name not in SKIP_DIRS:
+        if (
+            child.is_dir()
+            and not child.name.startswith(".")
+            and child.name not in SKIP_DIRS
+        ):
             found.extend(find_bot_folders(child))
     return found
 
@@ -58,9 +62,7 @@ class BotRegistry:
             if bot.definition.root_dir
         }
         for folder, bot in folders.items():
-            parent = next(
-                (folders[up] for up in folder.parents if up in folders), None
-            )
+            parent = next((folders[up] for up in folder.parents if up in folders), None)
             bot.parent_name = parent.name if parent else ""
 
     def children(self, bot: Bot) -> list[Bot]:
@@ -75,7 +77,9 @@ class BotRegistry:
     def callable_bots(self, caller: Bot) -> list[Bot]:
         """Bots ``caller`` may message: its sub-bots and ``call_bots``."""
         return [
-            b for b in self.bots.values() if b is not caller and self.may_call(caller, b.name)
+            b
+            for b in self.bots.values()
+            if b is not caller and self.may_call(caller, b.name)
         ]
 
     def load(self, path: str | Path, **kwargs) -> Bot:

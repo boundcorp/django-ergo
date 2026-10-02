@@ -77,9 +77,15 @@ export function Memory() {
                         active ? 'bg-zinc-200 font-medium dark:bg-zinc-800' : 'hover:bg-zinc-100 dark:hover:bg-zinc-900'
                       }`}
                     >
-                      {a.root && <span className="mr-1 text-amber-500" title="Root article: always in context">★</span>}
+                      {a.root && (
+                        <span className="mr-1 text-amber-500" title="Root article: always in context">
+                          ★
+                        </span>
+                      )}
                       {a.title}
-                      {kb.kind === 'folder' && <span className="ml-2 font-mono text-[11px] text-zinc-400">{a.path}</span>}
+                      {kb.kind === 'folder' && (
+                        <span className="ml-2 font-mono text-[11px] text-zinc-400">{a.path}</span>
+                      )}
                     </button>
                   )
                 })}

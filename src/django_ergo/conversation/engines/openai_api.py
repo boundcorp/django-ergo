@@ -21,9 +21,9 @@ from django_ergo.conversation.engine import EngineResponse
 from django_ergo.conversation.engine import SeededToolCall
 from django_ergo.conversation.engine import session_system_prompt
 from django_ergo.conversation.telemetry import record_usage
+from django_ergo.conversation.telemetry import trace_engine_call
 from django_ergo.openai_options import DEFAULT_OPENAI_MODEL
 from django_ergo.openai_options import chat_options
-from django_ergo.conversation.telemetry import trace_engine_call
 from django_ergo.tools import tool_registry
 
 if TYPE_CHECKING:
@@ -317,7 +317,7 @@ class OpenAIAPIEngine(Engine):
         async for event in self.respond(session, additional_tools):
             yield event
 
-    async def submit_tool_result(  # noqa: PLR0913
+    async def submit_tool_result(
         self,
         session,
         tool_use_id: str,

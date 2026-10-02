@@ -30,6 +30,7 @@ def test_profile_unauthenticated(client: Client):
 def test_profile_authenticated(test_user):
     user, client = test_user
     from ninja_jwt.tokens import AccessToken
+
     token = str(AccessToken.for_user(user))
     response = client.get("/api/auth/profile", HTTP_AUTHORIZATION=f"Bearer {token}")
     assert response.status_code == 200

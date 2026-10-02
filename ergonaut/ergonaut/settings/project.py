@@ -1,7 +1,4 @@
-# -*- coding: utf-8 -*-
 import os
-from datetime import timedelta
-from typing import List, Tuple
 
 
 class Environments:
@@ -21,18 +18,14 @@ DEBUG = os.environ.get("DJANGO_DEBUG", "") == "true"
 ROOT_URLCONF = "ergonaut.settings.urls"
 
 
-
 from pathlib import Path
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import parse_qs, urlparse
 
 # pgserver locale fix for containers
 for _lc_var in ("LC_ALL", "LANG", "LC_CTYPE", "LC_MESSAGES", "LC_COLLATE"):
     os.environ.setdefault(_lc_var, "C.UTF-8")
 
-DATA_DIR = Path(os.environ.get(
-    "DATA_DIR",
-    os.path.expanduser("~/.ergonaut")
-))
+DATA_DIR = Path(os.environ.get("DATA_DIR", os.path.expanduser("~/.ergonaut")))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 _database_url = os.environ.get("DATABASE_URL")
@@ -52,6 +45,7 @@ if _database_url:
     }
 else:
     import pgserver
+
     _pg = pgserver.get_server(str(DATA_DIR / "pgdata"), cleanup_mode=None)
     _parsed = urlparse(_pg.get_uri())
     _qs = parse_qs(_parsed.query)
@@ -138,14 +132,14 @@ STATIC_ROOT = root("static", "assets")
 STATIC_URL = "/dj-static/assets/"
 
 # Where to collect ^above^ from:
-STATICFILES_DIRS: List[Tuple[str, str]] = []
+STATICFILES_DIRS: list[tuple[str, str]] = []
 
 # Where the admin stuff lives
 ADMIN_MEDIA_PREFIX = "/dj-static/assets/admin/"
 
 # django-mediagenerator search directories
 # files are defined in assets.py
-GLOBAL_MEDIA_DIRS: List[str] = []
+GLOBAL_MEDIA_DIRS: list[str] = []
 
 TIME_ZONE = "UTC"
 LANGUAGE_CODE = "en-us"
@@ -160,9 +154,7 @@ LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
     "formatters": {
-        "verbose": {
-            "format": ("%(levelname)s %(asctime)s |" "%(pathname)s:%(lineno)d (in %(funcName)s) |" " %(message)s ")
-        },
+        "verbose": {"format": ("%(levelname)s %(asctime)s |%(pathname)s:%(lineno)d (in %(funcName)s) | %(message)s ")},
         "simple": {"format": "%(levelname)s %(message)s"},
     },
     "filters": {
@@ -306,6 +298,7 @@ if _s3_endpoint:
     credentials_file = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")
     if os.path.exists(credentials_file):
         from google.oauth2 import service_account
+
         STORAGES["default"] = {"BACKEND": "storages.backends.gcloud.GoogleCloudStorage"}
         GS_BUCKET_NAME = os.environ.get("GS_BUCKET_NAME", "")
         GS_PROJECT_ID = os.environ.get("GS_PROJECT_ID", "")

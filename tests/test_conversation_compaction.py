@@ -8,6 +8,7 @@ import pytest
 from asgiref.sync import sync_to_async
 from django.contrib.auth import get_user_model
 from django.utils import timezone
+
 from django_ergo.conversation.compaction import compact_session
 from django_ergo.conversation.compaction import decide_compaction
 from django_ergo.conversation.compaction import maybe_compact
@@ -16,11 +17,10 @@ from django_ergo.conversation.models import ClaudeContentBlock
 from django_ergo.conversation.models import ClaudeMessage
 from django_ergo.conversation.models import ConversationCompaction
 from django_ergo.conversation.models import ConversationSession
-from django_ergo.conversation.models import StructuredCall
 from django_ergo.conversation.models import OpenAIMessage
+from django_ergo.conversation.models import StructuredCall
 from django_ergo.conversation.renderer import ConversationRenderer
 from django_ergo.conversation.runner import run_conversation_turn
-
 from tests.test_conversation_structured import claude_engine
 from tests.test_conversation_structured import claude_text
 from tests.test_conversation_structured import claude_tool
@@ -30,7 +30,7 @@ User = get_user_model()
 pytestmark = pytest.mark.django_db(transaction=True)
 
 
-@pytest.fixture()
+@pytest.fixture
 def user():
     return User.objects.create_user(username="compaction", password="x")
 

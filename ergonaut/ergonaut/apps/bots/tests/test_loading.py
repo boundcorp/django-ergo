@@ -5,12 +5,9 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.core.management import call_command
 from django.core.management.base import CommandError
-
 from django_ergo.bots import webhooks
-from ergonaut.apps.bots.loading import ErgonautConfigError
-from ergonaut.apps.bots.loading import find_setup
-from ergonaut.apps.bots.loading import load_registry
-from ergonaut.apps.bots.loading import sync_people
+
+from ergonaut.apps.bots.loading import ErgonautConfigError, find_setup, load_registry, sync_people
 from ergonaut.cli import main
 
 KITCHEN = """

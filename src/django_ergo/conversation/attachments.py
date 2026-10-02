@@ -249,8 +249,21 @@ def guess_media_type(filename: str, default: str = "application/octet-stream") -
     guessed = mimetypes.guess_type(filename)[0]
     if guessed:
         return guessed
-    if Path(filename).suffix.lower() in {".md", ".markdown", ".txt", ".log", ".yaml", ".yml", ".toml", ".csv"}:
-        return "text/markdown" if filename.lower().endswith((".md", ".markdown")) else "text/plain"
+    if Path(filename).suffix.lower() in {
+        ".md",
+        ".markdown",
+        ".txt",
+        ".log",
+        ".yaml",
+        ".yml",
+        ".toml",
+        ".csv",
+    }:
+        return (
+            "text/markdown"
+            if filename.lower().endswith((".md", ".markdown"))
+            else "text/plain"
+        )
     return default
 
 
@@ -285,11 +298,16 @@ def save_session_file(  # noqa: PLR0913
     return row
 
 
-def replace_session_file(row: ConversationAttachment, data: bytes) -> ConversationAttachment:
+def replace_session_file(
+    row: ConversationAttachment, data: bytes
+) -> ConversationAttachment:
     """Overwrite a file's bytes, keeping its id; counts versions in metadata."""
     old = row.file.name if row.file else ""
     _store(row, data)
-    row.metadata = {**(row.metadata or {}), "version": int((row.metadata or {}).get("version", 1)) + 1}
+    row.metadata = {
+        **(row.metadata or {}),
+        "version": int((row.metadata or {}).get("version", 1)) + 1,
+    }
     row.save()
     if old and old != row.file.name:
         row.file.storage.delete(old)

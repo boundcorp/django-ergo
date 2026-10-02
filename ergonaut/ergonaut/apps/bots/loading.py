@@ -27,16 +27,13 @@ from __future__ import annotations
 
 import logging
 import os
-from dataclasses import dataclass
-from dataclasses import field
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
 from django.contrib.auth import get_user_model
-
 from django_ergo.bots.definition import CONFIG_FILE
-from django_ergo.bots.registry import BotRegistry
-from django_ergo.bots.registry import find_bot_folders
+from django_ergo.bots.registry import BotRegistry, find_bot_folders
 
 logger = logging.getLogger(__name__)
 

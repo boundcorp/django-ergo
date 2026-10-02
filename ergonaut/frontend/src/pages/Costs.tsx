@@ -9,11 +9,19 @@ function money(value: number) {
   if (value < 0.0001) return '<$0.0001'
   // Cheap models cost fractions of a cent per call; keep two significant digits.
   if (value < 0.01) return `$${value.toPrecision(2)}`
-  return value.toLocaleString(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: value < 10 ? 2 : 0 })
+  return value.toLocaleString(undefined, {
+    style: 'currency',
+    currency: 'USD',
+    maximumFractionDigits: value < 10 ? 2 : 0,
+  })
 }
 
 function tokens(value: number) {
-  return value >= 1_000_000 ? `${(value / 1_000_000).toFixed(1)}M` : value >= 1000 ? `${Math.round(value / 1000)}k` : String(value)
+  return value >= 1_000_000
+    ? `${(value / 1_000_000).toFixed(1)}M`
+    : value >= 1000
+      ? `${Math.round(value / 1000)}k`
+      : String(value)
 }
 
 function Tile({ label, value, note }: { label: string; value: string; note?: string }) {
@@ -36,7 +44,10 @@ function Daily({ days }: { days: Costs['by_day'] }) {
       <div className="mb-1 h-5 text-xs text-zinc-500">
         {shown ? `${shown.date}: ${money(shown.cost)} · ${shown.calls} calls` : 'Cost per day'}
       </div>
-      <div className="flex h-32 items-end gap-[2px] border-b border-zinc-200 dark:border-zinc-800" onMouseLeave={() => setHover(null)}>
+      <div
+        className="flex h-32 items-end gap-[2px] border-b border-zinc-200 dark:border-zinc-800"
+        onMouseLeave={() => setHover(null)}
+      >
         {days.map((d, i) => (
           <div key={d.date} className="flex h-full flex-1 items-end" onMouseEnter={() => setHover(i)}>
             <div
@@ -54,7 +65,17 @@ function Daily({ days }: { days: Costs['by_day'] }) {
   )
 }
 
-function Row({ bucket, nested, toggle, open }: { bucket: CostBucket; nested?: boolean; toggle?: () => void; open?: boolean }) {
+function Row({
+  bucket,
+  nested,
+  toggle,
+  open,
+}: {
+  bucket: CostBucket
+  nested?: boolean
+  toggle?: () => void
+  open?: boolean
+}) {
   return (
     <tr className={nested ? 'text-zinc-600 dark:text-zinc-400' : ''}>
       <td className={`py-1.5 font-mono text-xs ${nested ? 'pl-6' : ''}`}>
@@ -71,7 +92,11 @@ function Row({ bucket, nested, toggle, open }: { bucket: CostBucket; nested?: bo
       <td className="py-1.5 text-right tabular-nums">{tokens(bucket.output_tokens)}</td>
       <td className="py-1.5 text-right font-medium tabular-nums">
         {money(bucket.cost)}
-        {bucket.unpriced_calls > 0 && <span className="ml-1 text-amber-600" title={`${bucket.unpriced_calls} calls with no price`}>*</span>}
+        {bucket.unpriced_calls > 0 && (
+          <span className="ml-1 text-amber-600" title={`${bucket.unpriced_calls} calls with no price`}>
+            *
+          </span>
+        )}
       </td>
     </tr>
   )
@@ -170,11 +195,13 @@ export function CostsPage() {
 
       {!!data.unpriced_models.length && (
         <p className="mt-4 max-w-3xl text-xs text-amber-700 dark:text-amber-400">
-          * No price for {data.unpriced_models.join(', ')}; those calls count as $0. Add prices under DJANGO_ERGO["MODEL_PRICES"].
+          * No price for {data.unpriced_models.join(', ')}; those calls count as $0. Add prices under
+          DJANGO_ERGO["MODEL_PRICES"].
         </p>
       )}
       <p className="mt-2 max-w-3xl text-xs text-zinc-500">
-        Costs are worked out from token counts and list prices, so they are estimates. OpenAI cached input is priced at the full input rate.
+        Costs are worked out from token counts and list prices, so they are estimates. OpenAI cached input is priced at
+        the full input rate.
       </p>
     </div>
   )

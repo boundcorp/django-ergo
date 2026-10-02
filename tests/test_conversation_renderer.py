@@ -1,6 +1,7 @@
 """Tests for ConversationRenderer detail levels."""
 
 import pytest
+
 from django_ergo.conversation.renderer import ConversationRenderer
 
 # Sample Claude-format messages (content block arrays)

@@ -1,7 +1,6 @@
 from django.core.management.base import BaseCommand
 
-from ergonaut.apps.bots.loading import find_setup
-from ergonaut.apps.bots.loading import sync_people
+from ergonaut.apps.bots.loading import find_setup, sync_people
 
 
 class Command(BaseCommand):

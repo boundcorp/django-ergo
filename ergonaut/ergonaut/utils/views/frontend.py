@@ -4,9 +4,7 @@ import mimetypes
 from pathlib import Path
 
 from django.conf import settings
-from django.http import FileResponse
-from django.http import Http404
-from django.http import HttpResponse
+from django.http import FileResponse, Http404, HttpResponse
 
 
 def frontend(request, path=""):

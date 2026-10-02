@@ -87,7 +87,9 @@ def find_bot(bot_name: str, registry: BotRegistry | None = None) -> Bot:
     return bot
 
 
-def execute(bot_name: str, task_name: str, args: list, kwargs: dict, registry=None) -> Any:
+def execute(
+    bot_name: str, task_name: str, args: list, kwargs: dict, registry=None
+) -> Any:
     """Run a bot's task here and now (what a worker calls)."""
     bot = find_bot(bot_name, registry)
     function = bot.tasks.get(task_name)
@@ -125,5 +127,7 @@ class BotTasks:
             return thread_runner(self.bot, name, list(args), kwargs)
         return runner(self.bot.name, name, list(args), kwargs)
 
-    def run(self, task: Callable | str, *args, timeout: float | None = None, **kwargs) -> Any:
+    def run(
+        self, task: Callable | str, *args, timeout: float | None = None, **kwargs
+    ) -> Any:
         return self.start(task, *args, **kwargs).wait(timeout=timeout)

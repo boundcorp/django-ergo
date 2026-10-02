@@ -2,10 +2,10 @@ from django.conf import settings
 from django.conf.urls.static import static
 from django.urls import include, path, re_path
 
-from ergonaut.utils.admin import admin_site
 from ergonaut.api import api
 from ergonaut.api.stream import session_events
 from ergonaut.observability.views import metrics_view
+from ergonaut.utils.admin import admin_site
 from ergonaut.utils.views.frontend import frontend
 
 urlpatterns = [

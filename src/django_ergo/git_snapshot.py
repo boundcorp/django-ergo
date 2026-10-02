@@ -48,11 +48,11 @@ def repository_for(source) -> Path:
         repository = Path(repositories[source.repository_alias]).resolve()
     except KeyError as exc:
         raise GitSnapshotError(
-            "Unknown knowledge repository alias: %s" % source.repository_alias
+            "Unknown knowledge repository alias: %s" % source.repository_alias  # noqa: UP031
         ) from exc
     if not (repository / ".git").exists():
         raise GitSnapshotError(
-            "Configured repository is not a Git checkout: %s" % repository
+            "Configured repository is not a Git checkout: %s" % repository  # noqa: UP031
         )
     return repository
 
@@ -73,7 +73,7 @@ class GitSnapshot:
                 "rev-parse",
                 "--verify",
                 "--end-of-options",
-                "%s^{commit}" % target,
+                "%s^{commit}" % target,  # noqa: UP031
             )
         ).strip()
         allowed = str(
@@ -82,7 +82,7 @@ class GitSnapshot:
                 "rev-parse",
                 "--verify",
                 "--end-of-options",
-                "%s^{commit}" % self.source.allowed_ref,
+                "%s^{commit}" % self.source.allowed_ref,  # noqa: UP031
             )
         ).strip()
         result = subprocess.run(
@@ -102,7 +102,7 @@ class GitSnapshot:
         )
         if result.returncode:
             raise GitSnapshotError(
-                "Commit %s is outside the allowed ref %s."
+                "Commit %s is outside the allowed ref %s."  # noqa: UP031
                 % (commit, self.source.allowed_ref)
             )
         return commit
@@ -117,7 +117,7 @@ class GitSnapshot:
     def blob_oid(self, path: str) -> str:
         path = validate_relative_path(path)
         return str(
-            _git(self.repository, "rev-parse", "%s:%s" % (self.commit, path))
+            _git(self.repository, "rev-parse", "%s:%s" % (self.commit, path))  # noqa: UP031
         ).strip()
 
     def read_bytes(self, path: str) -> bytes:
@@ -142,7 +142,7 @@ class GitSnapshot:
         try:
             return self.read_bytes(path).decode("utf-8")
         except UnicodeDecodeError as exc:
-            raise GitSnapshotError("%s: content is not UTF-8" % path) from exc
+            raise GitSnapshotError("%s: content is not UTF-8" % path) from exc  # noqa: UP031
 
     def rename_map(self, old_commit: str | None) -> dict[str, str]:
         if not old_commit:

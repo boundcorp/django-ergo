@@ -3,6 +3,7 @@
 
 import pytest
 from django.contrib.auth import get_user_model
+
 from django_ergo.conversation.history_toolkit import ChatWithHistoryToolkit
 from django_ergo.conversation.models import ClaudeContentBlock
 from django_ergo.conversation.models import ClaudeMessage
@@ -12,12 +13,12 @@ User = get_user_model()
 pytestmark = pytest.mark.django_db
 
 
-@pytest.fixture()
+@pytest.fixture
 def user():
     return User.objects.create_user(username="testuser", password="testpass")
 
 
-@pytest.fixture()
+@pytest.fixture
 def session_a(user):
     s = ConversationSession.objects.create(
         user=user,
@@ -61,7 +62,7 @@ def session_a(user):
     return s
 
 
-@pytest.fixture()
+@pytest.fixture
 def session_b(user):
     s = ConversationSession.objects.create(
         user=user,
@@ -91,7 +92,7 @@ def session_b(user):
     return s
 
 
-@pytest.fixture()
+@pytest.fixture
 def toolkit(session_a, session_b):
     return ChatWithHistoryToolkit(sessions=[session_a, session_b])
 

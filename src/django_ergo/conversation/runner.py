@@ -14,10 +14,10 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
     from typing import Any
 
+    from django_ergo.conversation.context import ContextBuilder
     from django_ergo.conversation.engine import Engine
     from django_ergo.conversation.engine import EngineResponse
     from django_ergo.conversation.models import ConversationSession
-    from django_ergo.conversation.context import ContextBuilder
     from django_ergo.conversation.toolkit import Toolkit
 
 MAX_TOOL_ROUNDS = 30
@@ -132,7 +132,7 @@ async def _split_events(
     return other_events, tool_events
 
 
-async def run_conversation_turn(
+async def run_conversation_turn(  # noqa: PLR0913
     engine: Engine,
     session: ConversationSession,
     message: str,
@@ -201,7 +201,7 @@ async def _run_rounds(  # noqa: PLR0913
         yield event
 
 
-async def _drive(  # noqa: PLR0913
+async def _drive(  # noqa: C901, PLR0913
     engine: Engine,
     session: ConversationSession,
     first_response,

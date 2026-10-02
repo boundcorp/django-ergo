@@ -6,6 +6,7 @@ from django.conf import settings
 def _get_s3_client():
     import boto3
     from botocore.config import Config
+
     return boto3.client(
         "s3",
         endpoint_url=settings.AWS_S3_ENDPOINT_URL,
@@ -51,6 +52,7 @@ def presigned_get_object(key, expires=86400):
 
 def _gcp_presigned_put_object(key, content_type, expires=3600):
     from google.cloud import storage
+
     client = storage.Client(credentials=settings.GS_CREDENTIALS)
     bucket = client.bucket(settings.GS_BUCKET_NAME)
     blob = bucket.blob(key)
@@ -64,6 +66,7 @@ def _gcp_presigned_put_object(key, content_type, expires=3600):
 
 def _gcp_presigned_get_object(key, expires=86400):
     from google.cloud import storage
+
     client = storage.Client(credentials=settings.GS_CREDENTIALS)
     bucket = client.bucket(settings.GS_BUCKET_NAME)
     blob = bucket.blob(key)

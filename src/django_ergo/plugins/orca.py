@@ -172,7 +172,10 @@ class OrcaPlugin(BotPlugin):
         if proc.returncode:
             output = f"Exit {proc.returncode}:\n{(proc.stdout + proc.stderr).strip()}"
             return trim(output, MAX_OUTPUT_CHARS)
-        return trim(compact(proc.stdout.strip(), fields), MAX_OUTPUT_CHARS) or "(no output)"
+        return (
+            trim(compact(proc.stdout.strip(), fields), MAX_OUTPUT_CHARS)
+            or "(no output)"
+        )
 
     def read(self, args: list[str], fields: list[str] | None = None) -> str:
         if not is_read_only(args):

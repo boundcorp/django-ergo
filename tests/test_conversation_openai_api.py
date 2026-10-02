@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 from django.contrib.auth import get_user_model
+
 from django_ergo.conversation.engines.openai_api import OpenAIAPIEngine
 from django_ergo.conversation.models import ConversationSession
 from django_ergo.conversation.models import EngineType
@@ -23,7 +24,7 @@ User = get_user_model()
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture()
+@pytest.fixture
 def engine():
     return OpenAIAPIEngine(
         config={
@@ -35,7 +36,7 @@ def engine():
     )
 
 
-@pytest.fixture()
+@pytest.fixture
 def user(db):
     return User.objects.create_user(
         username="testuser_openai",
@@ -44,7 +45,7 @@ def user(db):
     )
 
 
-@pytest.fixture()
+@pytest.fixture
 def workflow(db):
     return Workflow.objects.create(
         name="OpenAI Test Workflow",
@@ -54,7 +55,7 @@ def workflow(db):
     )
 
 
-@pytest.fixture()
+@pytest.fixture
 def session(db, user):
     return ConversationSession.objects.create(
         user=user,
@@ -64,7 +65,7 @@ def session(db, user):
     )
 
 
-@pytest.fixture()
+@pytest.fixture
 def session_with_workflow(db, user, workflow):
     return ConversationSession.objects.create(
         user=user,
@@ -120,7 +121,7 @@ class TestOpenAIAPIEngineAttributes:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.django_db()
+@pytest.mark.django_db
 class TestReconstructMessages:
     def test_empty_session(self, engine, session):
         messages = engine.reconstruct_messages(session)

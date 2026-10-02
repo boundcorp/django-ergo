@@ -140,7 +140,7 @@ class APISettings:
 
     def __getattr__(self, attr):
         if attr not in self.defaults:
-            raise AttributeError("Invalid API setting: '%s'" % attr)
+            raise AttributeError("Invalid API setting: '%s'" % attr)  # noqa: UP031
 
         try:
             # Check if present in user settings

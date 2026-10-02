@@ -16,12 +16,15 @@ DEBUG = True
 
 PASSWORD_HASHERS = ("django.contrib.auth.hashers.MD5PasswordHasher",)
 EMAIL_BACKEND = "django.core.mail.backends.locmem.EmailBackend"
-STATICFILES_STORAGE = "django.contrib.staticfiles.storage.StaticFilesStorage"
+STORAGES = {
+    **STORAGES,
+    "staticfiles": {
+        "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
+    },
+}
 BASE_URL = f"http://localhost:{BACKEND_PORT}"
 
 # pgserver handles the database automatically — no override needed.
 # Tests use the same embedded postgres as dev, with a test-specific database.
 
-HAS_DOCKER_SERVICES = all(
-    os.environ.get(v) for v in ("DATABASE_URL", "CELERY_BROKER_URL", "S3_ENDPOINT_URL")
-)
+HAS_DOCKER_SERVICES = all(os.environ.get(v) for v in ("DATABASE_URL", "CELERY_BROKER_URL", "S3_ENDPOINT_URL"))

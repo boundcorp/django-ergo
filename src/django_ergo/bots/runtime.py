@@ -32,10 +32,10 @@ from typing import TYPE_CHECKING
 from asgiref.sync import sync_to_async
 from django.utils.module_loading import import_string
 
+from django_ergo.bots import messaging
 from django_ergo.bots.definition import BotDefinition
 from django_ergo.bots.definition import PluginSpec
 from django_ergo.bots.orchestrator import orchestrator_toolkit
-from django_ergo.bots import messaging
 from django_ergo.bots.plugins import BotPlugin
 from django_ergo.bots.plugins import resolve_plugin_class
 from django_ergo.bots.skills import Skill
@@ -68,10 +68,10 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from django_ergo.bots.registry import BotRegistry
-    from django_ergo.conversation.models import ThreadMessage
     from django_ergo.bots.tools import ToolModule
     from django_ergo.conversation.attachments import Attachment
     from django_ergo.conversation.engine import Engine
+    from django_ergo.conversation.models import ThreadMessage
     from django_ergo.conversation.runner import PendingApproval
     from django_ergo.conversation.structured import StructuredCallResult
     from django_ergo.conversation.toolkit import Toolkit
@@ -136,7 +136,11 @@ class Bot:
             load_tool_module(path, definition.name) for path in definition.tool_files
         ]
         # @bot_task functions from the tool files, by name (see bots.background).
-        self.tasks = {name: fn for module in self.tool_modules for name, fn in module.tasks.items()}
+        self.tasks = {
+            name: fn
+            for module in self.tool_modules
+            for name, fn in module.tasks.items()
+        }
         self.skills: list[Skill] = load_skills(definition.skills_dir)
         self.toolkit_factories = [
             import_string(path.replace(":", "."))
@@ -432,12 +436,16 @@ class Bot:
             attachments=attachments,
             context_builder=builder,
             allow_approvals=True,
-            metadata={"thread_message": str(thread_message.id)} if thread_message else None,
+            metadata={"thread_message": str(thread_message.id)}
+            if thread_message
+            else None,
         )
         result = TurnResult.from_call(session, outcome)
         for plugin in self.plugins:
             await _maybe_await(plugin.after_turn(session, message, result))
-        await sync_to_async(messaging.finish_turn, thread_sensitive=True)(self, session, result)
+        await sync_to_async(messaging.finish_turn, thread_sensitive=True)(
+            self, session, result
+        )
         return result
 
     async def pending_call(self, session: ConversationSession) -> StructuredCall | None:
@@ -475,7 +483,9 @@ class Bot:
         result = TurnResult.from_call(session, outcome)
         for plugin in self.plugins:
             await _maybe_await(plugin.after_turn(session, call.request, result))
-        await sync_to_async(messaging.finish_turn, thread_sensitive=True)(self, session, result)
+        await sync_to_async(messaging.finish_turn, thread_sensitive=True)(
+            self, session, result
+        )
         return result
 
     async def serve(self) -> None:

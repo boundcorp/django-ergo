@@ -4,16 +4,17 @@ from django.contrib.auth import get_user_model
 from django.db.models import Count
 from django.db.models import Q
 from django.shortcuts import get_object_or_404
-from django_ergo.models import Article
-from django_ergo.models import ChatMessage
-from django_ergo.models import Knowledgebase
-from django_ergo.models import UserChat
-from django_ergo.models import Workflow
 from ninja import NinjaAPI
 from ninja import Query
 from ninja.errors import HttpError
 from ninja.pagination import PageNumberPagination
 from ninja.pagination import paginate
+
+from django_ergo.models import Article
+from django_ergo.models import ChatMessage
+from django_ergo.models import Knowledgebase
+from django_ergo.models import UserChat
+from django_ergo.models import Workflow
 
 from .auth import ACCESS_TOKEN_EXPIRE_MINUTES
 from .auth import authenticate_user

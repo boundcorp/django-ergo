@@ -34,7 +34,8 @@ function Proposal({ bot, pr, onDone }: { bot: string; pr: PullRequest; onDone: (
     if (!confirm(`${verb} #${pr.number} “${pr.title}”?`)) return
     setBusy(true)
     try {
-      const { result } = kind === 'merge' ? await api.mergeChange(bot, pr.number) : await api.closeChange(bot, pr.number)
+      const { result } =
+        kind === 'merge' ? await api.mergeChange(bot, pr.number) : await api.closeChange(bot, pr.number)
       onDone(result + (kind === 'merge' ? ' The bots reload in a few seconds.' : ''))
     } catch (e) {
       onDone(`${verb} failed: ${e instanceof Error ? e.message : String(e)}`)
@@ -46,7 +47,12 @@ function Proposal({ bot, pr, onDone }: { bot: string; pr: PullRequest; onDone: (
   return (
     <div className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-800">
       <div className="flex flex-wrap items-center gap-2">
-        <a href={pr.url} target="_blank" rel="noreferrer" className="font-medium text-indigo-600 hover:underline dark:text-indigo-400">
+        <a
+          href={pr.url}
+          target="_blank"
+          rel="noreferrer"
+          className="font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+        >
           #{pr.number} {pr.title}
         </a>
         <span className="text-xs text-zinc-500">
@@ -61,16 +67,28 @@ function Proposal({ bot, pr, onDone }: { bot: string; pr: PullRequest; onDone: (
           >
             {diff === null ? 'Show diff' : 'Hide diff'}
           </button>
-          <button disabled={busy} className="rounded-md bg-emerald-600 px-2 py-0.5 text-xs text-white disabled:opacity-50" onClick={() => act('merge')}>
+          <button
+            disabled={busy}
+            className="rounded-md bg-emerald-600 px-2 py-0.5 text-xs text-white disabled:opacity-50"
+            onClick={() => act('merge')}
+          >
             Merge
           </button>
-          <button disabled={busy} className="rounded-md border border-zinc-300 px-2 py-0.5 text-xs disabled:opacity-50 dark:border-zinc-700" onClick={() => act('close')}>
+          <button
+            disabled={busy}
+            className="rounded-md border border-zinc-300 px-2 py-0.5 text-xs disabled:opacity-50 dark:border-zinc-700"
+            onClick={() => act('close')}
+          >
             Close
           </button>
         </div>
       </div>
       {pr.body && <p className="mt-1 text-sm whitespace-pre-wrap text-zinc-600 dark:text-zinc-400">{pr.body}</p>}
-      {diff !== null && <div className="mt-2"><Diff text={diff} /></div>}
+      {diff !== null && (
+        <div className="mt-2">
+          <Diff text={diff} />
+        </div>
+      )}
     </div>
   )
 }
@@ -79,7 +97,14 @@ function Proposal({ bot, pr, onDone }: { bot: string; pr: PullRequest; onDone: (
 export default function Changes({ bot }: { bot: string }) {
   const [data, setData] = useState<ChangesData | null>(null)
   const [note, setNote] = useState('')
-  const load = useCallback(() => api.changes(bot).then(setData).catch(e => setNote(String(e.message ?? e))), [bot])
+  const load = useCallback(
+    () =>
+      api
+        .changes(bot)
+        .then(setData)
+        .catch(e => setNote(String(e.message ?? e))),
+    [bot],
+  )
   useEffect(() => {
     load()
   }, [load])
@@ -116,7 +141,8 @@ export default function Changes({ bot }: { bot: string }) {
         </div>
       )}
       <p className="text-xs text-zinc-500">
-        {data.repo} · {data.mode === 'propose_pr' ? 'changes are proposed as pull requests' : 'changes are pushed to main'}
+        {data.repo} ·{' '}
+        {data.mode === 'propose_pr' ? 'changes are proposed as pull requests' : 'changes are pushed to main'}
       </p>
     </div>
   )

@@ -9,6 +9,7 @@ from datetime import timedelta
 import pytest
 from asgiref.sync import sync_to_async
 from django.contrib.auth import get_user_model
+
 from django_ergo.conversation.compaction import apply_native_window
 from django_ergo.conversation.context import ContextBuilder
 from django_ergo.conversation.context import MessageContextSource
@@ -18,7 +19,6 @@ from django_ergo.conversation.history import HistoryMessage
 from django_ergo.conversation.history import MessageSource
 from django_ergo.conversation.models import ConversationSession
 from django_ergo.conversation.stream import StreamChat
-
 from tests.test_conversation_compaction import add
 from tests.test_conversation_structured import claude_engine
 from tests.test_conversation_structured import claude_text

@@ -163,143 +163,180 @@ export function Chat({ onChange }: { onChange: () => void }) {
   const thinking = busy || !!pending || lastCall?.status === 'in_progress'
   const callError = !pending && lastCall?.status === 'failed' ? lastCall.error : ''
   // Show a queued message until the worker has stored it.
-  const echo = pending?.text && !detail.messages.some(m => m.role === 'user' && JSON.stringify(m.blocks).includes(JSON.stringify(pending.text).slice(1, -1))) ? pending.text : ''
+  const echo =
+    pending?.text &&
+    !detail.messages.some(
+      m => m.role === 'user' && JSON.stringify(m.blocks).includes(JSON.stringify(pending.text).slice(1, -1)),
+    )
+      ? pending.text
+      : ''
 
   return (
     <div className="flex h-full">
-    <div className="flex min-w-0 flex-1 flex-col">
-      <header className="flex items-center gap-3 border-b border-zinc-200 px-6 py-3 dark:border-zinc-800">
-        <div>
-          <div className="font-semibold">{detail.session.title}</div>
-          <div className="text-xs text-zinc-500">
-            {detail.session.bot} · {detail.session.role || 'session'} · {detail.messages.length} messages
+      <div className="flex min-w-0 flex-1 flex-col">
+        <header className="flex items-center gap-3 border-b border-zinc-200 px-6 py-3 dark:border-zinc-800">
+          <div>
+            <div className="font-semibold">{detail.session.title}</div>
+            <div className="text-xs text-zinc-500">
+              {detail.session.bot} · {detail.session.role || 'session'} · {detail.messages.length} messages
+            </div>
           </div>
-        </div>
-        {detail.session.role === 'thread' && (
-          <button
-            className="ml-auto rounded-md border border-zinc-300 px-2 py-0.5 text-xs text-zinc-600 disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-400"
-            disabled={archived || busy}
-            title={archived ? 'Archived; a new message reopens it' : 'Archive this thread'}
-            onClick={async () => {
-              await api.close(id).catch(e => setError(String(e.message ?? e)))
-              await load()
-              onChange()
-            }}
-          >
-            {archived ? 'Archived' : 'Archive'}
-          </button>
-        )}
-        <button
-          className={`${detail.session.role === 'thread' ? '' : 'ml-auto '}rounded-md border px-2 py-0.5 text-xs ${showFiles ? 'border-indigo-400 text-indigo-700 dark:text-indigo-300' : 'border-zinc-300 text-zinc-600 dark:border-zinc-700 dark:text-zinc-400'}`}
-          onClick={() => toggleFiles(!showFiles)}
-        >
-          📎 Files
-        </button>
-        <a
-          className="text-xs text-zinc-500 underline"
-          href={`data:application/json,${encodeURIComponent(JSON.stringify(detail, null, 2))}`}
-          download={`session-${detail.session.id}.json`}
-        >
-          Export JSON
-        </a>
-      </header>
-      <Requests requests={detail.requests ?? []} />
-      <div className="flex-1 overflow-y-auto px-6 py-4">
-        <Transcript messages={detail.messages} calls={detail.calls} />
-        {echo && (
-          <div className="mt-3 flex justify-end">
-            <div className="max-w-[80%] rounded-2xl bg-indigo-600/70 px-4 py-2 whitespace-pre-wrap text-white">{echo}</div>
-          </div>
-        )}
-        {thinking && <div className="mt-3 text-sm text-zinc-500">{pending && !lastCall?.status?.startsWith('in_') ? 'Queued…' : 'Thinking…'}</div>}
-        <div ref={bottom} />
-      </div>
-      {!!waiting.length && (
-        <div className="mx-6 mb-2 rounded-lg border border-amber-400/60 bg-amber-50 p-3 text-sm dark:bg-amber-950/30">
-          <div className="mb-2 font-medium">
-            Approve {waiting.map(a => a.name).join(', ')}?
-          </div>
-          <div className="flex gap-2">
-            <button disabled={busy} className="rounded-md bg-emerald-600 px-3 py-1 text-white disabled:opacity-50" onClick={() => run(() => api.approve(id, true))}>
-              Approve
-            </button>
-            <button disabled={busy} className="rounded-md border border-zinc-300 px-3 py-1 disabled:opacity-50 dark:border-zinc-700" onClick={() => run(() => api.approve(id, false))}>
-              Deny
-            </button>
-          </div>
-        </div>
-      )}
-      {(error || callError) && <div className="mx-6 mb-2 text-sm text-red-600">{error || callError}</div>}
-      {!!suggestions.length && (
-        <div className="mx-6 mb-2 flex flex-wrap gap-2">
-          {suggestions.map(s => (
+          {detail.session.role === 'thread' && (
             <button
-              key={s}
-              disabled={busy}
-              className="rounded-full border border-indigo-300 px-3 py-1 text-sm text-indigo-700 hover:bg-indigo-50 disabled:opacity-50 dark:border-indigo-700 dark:text-indigo-300 dark:hover:bg-indigo-950"
-              onClick={() => send(s)}
+              className="ml-auto rounded-md border border-zinc-300 px-2 py-0.5 text-xs text-zinc-600 disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-400"
+              disabled={archived || busy}
+              title={archived ? 'Archived; a new message reopens it' : 'Archive this thread'}
+              onClick={async () => {
+                await api.close(id).catch(e => setError(String(e.message ?? e)))
+                await load()
+                onChange()
+              }}
             >
-              {s}
+              {archived ? 'Archived' : 'Archive'}
             </button>
-          ))}
+          )}
+          <button
+            className={`${detail.session.role === 'thread' ? '' : 'ml-auto '}rounded-md border px-2 py-0.5 text-xs ${showFiles ? 'border-indigo-400 text-indigo-700 dark:text-indigo-300' : 'border-zinc-300 text-zinc-600 dark:border-zinc-700 dark:text-zinc-400'}`}
+            onClick={() => toggleFiles(!showFiles)}
+          >
+            📎 Files
+          </button>
+          <a
+            className="text-xs text-zinc-500 underline"
+            href={`data:application/json,${encodeURIComponent(JSON.stringify(detail, null, 2))}`}
+            download={`session-${detail.session.id}.json`}
+          >
+            Export JSON
+          </a>
+        </header>
+        <Requests requests={detail.requests ?? []} />
+        <div className="flex-1 overflow-y-auto px-6 py-4">
+          <Transcript messages={detail.messages} calls={detail.calls} />
+          {echo && (
+            <div className="mt-3 flex justify-end">
+              <div className="max-w-[80%] rounded-2xl bg-indigo-600/70 px-4 py-2 whitespace-pre-wrap text-white">
+                {echo}
+              </div>
+            </div>
+          )}
+          {thinking && (
+            <div className="mt-3 text-sm text-zinc-500">
+              {pending && !lastCall?.status?.startsWith('in_') ? 'Queued…' : 'Thinking…'}
+            </div>
+          )}
+          <div ref={bottom} />
         </div>
-      )}
-      {!!outgoing.length && (
-        <div className="mx-4 flex flex-wrap gap-2 pt-2">
-          {outgoing.map(file => (
-            <span key={file.id} className="flex items-center gap-1 rounded-full border border-zinc-300 px-2 py-0.5 text-xs dark:border-zinc-700">
-              📎 {file.filename}
-              <button type="button" className="text-zinc-400 hover:text-red-600" title="Remove" onClick={() => unattach(file.id)}>
-                ✕
+        {!!waiting.length && (
+          <div className="mx-6 mb-2 rounded-lg border border-amber-400/60 bg-amber-50 p-3 text-sm dark:bg-amber-950/30">
+            <div className="mb-2 font-medium">Approve {waiting.map(a => a.name).join(', ')}?</div>
+            <div className="flex gap-2">
+              <button
+                disabled={busy}
+                className="rounded-md bg-emerald-600 px-3 py-1 text-white disabled:opacity-50"
+                onClick={() => run(() => api.approve(id, true))}
+              >
+                Approve
               </button>
-            </span>
-          ))}
-        </div>
-      )}
-      <form
-        className="flex gap-2 border-t border-zinc-200 p-4 dark:border-zinc-800"
-        onSubmit={e => {
-          e.preventDefault()
-          send(text)
-        }}
-      >
-        <input ref={picker} type="file" multiple hidden onChange={e => attach(e.target.files)} />
-        <button
-          type="button"
-          disabled={closed || !!waiting.length || uploading}
-          title="Attach images, PDFs or other files"
-          className="rounded-lg border border-zinc-300 px-3 text-lg disabled:opacity-50 dark:border-zinc-700"
-          onClick={() => picker.current?.click()}
+              <button
+                disabled={busy}
+                className="rounded-md border border-zinc-300 px-3 py-1 disabled:opacity-50 dark:border-zinc-700"
+                onClick={() => run(() => api.approve(id, false))}
+              >
+                Deny
+              </button>
+            </div>
+          </div>
+        )}
+        {(error || callError) && <div className="mx-6 mb-2 text-sm text-red-600">{error || callError}</div>}
+        {!!suggestions.length && (
+          <div className="mx-6 mb-2 flex flex-wrap gap-2">
+            {suggestions.map(s => (
+              <button
+                key={s}
+                disabled={busy}
+                className="rounded-full border border-indigo-300 px-3 py-1 text-sm text-indigo-700 hover:bg-indigo-50 disabled:opacity-50 dark:border-indigo-700 dark:text-indigo-300 dark:hover:bg-indigo-950"
+                onClick={() => send(s)}
+              >
+                {s}
+              </button>
+            ))}
+          </div>
+        )}
+        {!!outgoing.length && (
+          <div className="mx-4 flex flex-wrap gap-2 pt-2">
+            {outgoing.map(file => (
+              <span
+                key={file.id}
+                className="flex items-center gap-1 rounded-full border border-zinc-300 px-2 py-0.5 text-xs dark:border-zinc-700"
+              >
+                📎 {file.filename}
+                <button
+                  type="button"
+                  className="text-zinc-400 hover:text-red-600"
+                  title="Remove"
+                  onClick={() => unattach(file.id)}
+                >
+                  ✕
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+        <form
+          className="flex gap-2 border-t border-zinc-200 p-4 dark:border-zinc-800"
+          onSubmit={e => {
+            e.preventDefault()
+            send(text)
+          }}
         >
-          {uploading ? '…' : '📎'}
-        </button>
-        <textarea
-          onPaste={e => {
-            const files = Array.from(e.clipboardData.files)
-            if (files.length) {
-              e.preventDefault()
-              attach(files)
+          <input ref={picker} type="file" multiple hidden onChange={e => attach(e.target.files)} />
+          <button
+            type="button"
+            disabled={closed || !!waiting.length || uploading}
+            title="Attach images, PDFs or other files"
+            className="rounded-lg border border-zinc-300 px-3 text-lg disabled:opacity-50 dark:border-zinc-700"
+            onClick={() => picker.current?.click()}
+          >
+            {uploading ? '…' : '📎'}
+          </button>
+          <textarea
+            onPaste={e => {
+              const files = Array.from(e.clipboardData.files)
+              if (files.length) {
+                e.preventDefault()
+                attach(files)
+              }
+            }}
+            value={text}
+            disabled={closed || !!waiting.length}
+            onChange={e => setText(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault()
+                send(text)
+              }
+            }}
+            rows={2}
+            placeholder={
+              closed
+                ? 'This session is closed'
+                : waiting.length
+                  ? 'Answer the approval first'
+                  : archived
+                    ? 'Archived: sending a message reopens it'
+                    : 'Message the bot'
             }
-          }}
-          value={text}
-          disabled={closed || !!waiting.length}
-          onChange={e => setText(e.target.value)}
-          onKeyDown={e => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-              e.preventDefault()
-              send(text)
-            }
-          }}
-          rows={2}
-          placeholder={closed ? 'This session is closed' : waiting.length ? 'Answer the approval first' : archived ? 'Archived: sending a message reopens it' : 'Message the bot'}
-          className="flex-1 resize-none rounded-lg border border-zinc-300 bg-transparent px-3 py-2 focus:border-indigo-500 focus:outline-none dark:border-zinc-700"
-        />
-        <button disabled={busy || uploading || (!text.trim() && !outgoing.length)} className="rounded-lg bg-indigo-600 px-4 text-white disabled:opacity-50">
-          Send
-        </button>
-      </form>
-    </div>
-    {showFiles && <Files sessionId={id} refreshKey={detail.messages.length} />}
+            className="flex-1 resize-none rounded-lg border border-zinc-300 bg-transparent px-3 py-2 focus:border-indigo-500 focus:outline-none dark:border-zinc-700"
+          />
+          <button
+            disabled={busy || uploading || (!text.trim() && !outgoing.length)}
+            className="rounded-lg bg-indigo-600 px-4 text-white disabled:opacity-50"
+          >
+            Send
+          </button>
+        </form>
+      </div>
+      {showFiles && <Files sessionId={id} refreshKey={detail.messages.length} />}
     </div>
   )
 }
@@ -320,10 +357,15 @@ function Requests({ requests }: { requests: DelegatedRequest[] }) {
     <div className="flex flex-col gap-1 border-b border-zinc-200 bg-zinc-50 px-6 py-2 text-xs dark:border-zinc-800 dark:bg-zinc-900/50">
       {open.map(r => (
         <div key={r.id} className="flex items-center gap-2 truncate">
-          <span className={r.status === 'waiting' ? 'text-amber-600' : 'text-teal-600'}>{r.direction === 'out' ? '⏳' : '📥'}</span>
+          <span className={r.status === 'waiting' ? 'text-amber-600' : 'text-teal-600'}>
+            {r.direction === 'out' ? '⏳' : '📥'}
+          </span>
           <span className="text-zinc-500">{r.direction === 'out' ? 'Waiting on' : 'Working for'}</span>
           {r.other_session_id ? (
-            <Link to={`/s/${r.other_session_id}`} className="font-medium text-indigo-600 hover:underline dark:text-indigo-400">
+            <Link
+              to={`/s/${r.other_session_id}`}
+              className="font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+            >
               {r.other}
             </Link>
           ) : (

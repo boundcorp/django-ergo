@@ -69,3 +69,8 @@ ignore_missing_imports = true
 DJANGO_SETTINGS_MODULE = "ergonaut.settings.test_settings"
 python_files = ["test_*.py", "*_test.py", "tests.py"]
 addopts = "--ds=ergonaut.settings.test_settings"
+
+[tool.djlint]
+# Email templates need inline styles and no meta tags; the SPA's index.html is
+# a Vite shell.
+ignore = "H005,H021,H030,H031,H037,T003"

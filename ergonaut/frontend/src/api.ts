@@ -228,7 +228,8 @@ export const api = {
   openRoot: (bot: string) => request<Session>('POST', `/bots/${bot}/root`),
   newThread: (bot: string, title: string) => request<Session>('POST', `/bots/${bot}/threads`, { title }),
   session: (id: string) => request<SessionDetail>('GET', `/sessions/${id}`),
-  call: (id: string) => request<Call & { system_prompt: string; transcript: unknown[]; metadata: unknown }>('GET', `/calls/${id}`),
+  call: (id: string) =>
+    request<Call & { system_prompt: string; transcript: unknown[]; metadata: unknown }>('GET', `/calls/${id}`),
   send: (id: string, text: string, attachmentIds: string[] = []) =>
     request<Turn>('POST', `/sessions/${id}/messages`, { text, attachment_ids: attachmentIds }),
   approve: (id: string, approve: boolean) => request<Turn>('POST', `/sessions/${id}/approvals`, { approve }),

@@ -366,7 +366,9 @@ class ConversationAttachment(TimeStampedMixin):
     )
     message_sequence = models.IntegerField(null=True, blank=True)
     source = models.CharField(
-        max_length=20, choices=AttachmentSource.choices, default=AttachmentSource.MESSAGE
+        max_length=20,
+        choices=AttachmentSource.choices,
+        default=AttachmentSource.MESSAGE,
     )
     position = models.IntegerField(default=0)
     kind = models.CharField(max_length=20, choices=AttachmentKind.choices)
@@ -384,7 +386,11 @@ class ConversationAttachment(TimeStampedMixin):
         indexes = [models.Index(fields=["session", "message_sequence"])]
 
     def __str__(self):
-        where = f"#{self.message_sequence}" if self.message_sequence is not None else self.source
+        where = (
+            f"#{self.message_sequence}"
+            if self.message_sequence is not None
+            else self.source
+        )
         return f"{self.session_id} {where} {self.filename or self.kind}"
 
 
@@ -424,7 +430,9 @@ class ThreadMessage(TimeStampedMixin):
     text = models.TextField()
     depth = models.PositiveIntegerField(default=0)
     status = models.CharField(
-        max_length=20, choices=ThreadMessageStatus.choices, default=ThreadMessageStatus.QUEUED
+        max_length=20,
+        choices=ThreadMessageStatus.choices,
+        default=ThreadMessageStatus.QUEUED,
     )
     reply_text = models.TextField(blank=True, default="")
     error = models.TextField(blank=True, default="")

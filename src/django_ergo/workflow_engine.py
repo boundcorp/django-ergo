@@ -88,7 +88,7 @@ class WorkflowEngine:
 
         try:
             self.openai_client = openai.OpenAI(api_key=api_key, timeout=self.timeout)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             msg = f"Failed to initialize OpenAI client: {e}"
             raise ValueError(msg) from e
 

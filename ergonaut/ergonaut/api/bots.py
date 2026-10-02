@@ -457,9 +457,7 @@ async def send_message(request, session_id: str, data: MessageIn):
             [uuid.UUID(str(a)) for a in data.attachment_ids]
         except ValueError:
             raise HttpError(400, "Attach files uploaded to this session") from None
-        found = await session.attachments.filter(
-            id__in=data.attachment_ids, message_sequence__isnull=True
-        ).acount()
+        found = await session.attachments.filter(id__in=data.attachment_ids, message_sequence__isnull=True).acount()
         if found != len(set(data.attachment_ids)):
             raise HttpError(400, "Attach files uploaded to this session")
     if session.status == "completed" and (session.metadata or {}).get("bot_role") == "thread":
@@ -650,9 +648,7 @@ def download_attachment(request, attachment_id: str, inline: bool = False):
         raise HttpError(404, "This file has no stored copy")
     # Inline only for images, so a stored HTML or SVG file can't run in the app's origin.
     show = inline and row.media_type in ("image/png", "image/jpeg", "image/gif", "image/webp")
-    return FileResponse(
-        row.file.open("rb"), as_attachment=not show, filename=row.filename, content_type=row.media_type
-    )
+    return FileResponse(row.file.open("rb"), as_attachment=not show, filename=row.filename, content_type=row.media_type)
 
 
 @router.delete("/attachments/{attachment_id}")

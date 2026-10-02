@@ -11,7 +11,9 @@ export function pretty(value: unknown): string {
 
 export function resultText(content: unknown): string {
   if (Array.isArray(content)) {
-    return content.map(part => (typeof part === 'object' && part && 'text' in part ? String(part.text) : pretty(part))).join('\n')
+    return content
+      .map(part => (typeof part === 'object' && part && 'text' in part ? String(part.text) : pretty(part)))
+      .join('\n')
   }
   return pretty(content)
 }

@@ -52,7 +52,9 @@ SNIPPET = 120
 
 def label(session: ConversationSession) -> str:
     meta = session.metadata or {}
-    title = meta.get("title") or ("Chat" if meta.get("bot_role") == "root" else "Thread")
+    title = meta.get("title") or (
+        "Chat" if meta.get("bot_role") == "root" else "Thread"
+    )
     return f"{session.bot_name} · {title}"
 
 
@@ -132,16 +134,22 @@ def dispatch(message_id: str, registry: BotRegistry | None = None) -> None:
         finally:
             close_old_connections()
 
-    threading.Thread(target=run, name=f"ergo-thread-message-{message_id}", daemon=True).start()
+    threading.Thread(
+        target=run, name=f"ergo-thread-message-{message_id}", daemon=True
+    ).start()
 
 
 # -- delivering ----------------------------------------------------------------
 
 
-def wait_until_idle(session: ConversationSession, timeout: float = IDLE_WAIT_SECONDS) -> bool:
+def wait_until_idle(
+    session: ConversationSession, timeout: float = IDLE_WAIT_SECONDS
+) -> bool:
     """Wait for any turn in progress on ``session`` to finish."""
     deadline = time.monotonic() + timeout
-    while session.structured_calls.filter(status=StructuredCallStatus.IN_PROGRESS).exists():
+    while session.structured_calls.filter(
+        status=StructuredCallStatus.IN_PROGRESS
+    ).exists():
         if time.monotonic() > deadline:
             return False
         time.sleep(0.5)
@@ -191,7 +199,9 @@ def fail(message: ThreadMessage, error: str) -> None:
         reply(message, f"(Could not deliver your message: {error})")
 
 
-def reply(message: ThreadMessage, text: str, registry: BotRegistry | None = None) -> None:
+def reply(
+    message: ThreadMessage, text: str, registry: BotRegistry | None = None
+) -> None:
     """Send the answer to ``message`` back to its sender."""
     send(
         message.recipient_session,
@@ -208,7 +218,11 @@ def finish_turn(bot: Bot, session: ConversationSession, result: TurnResult) -> N
     message_id = (call.metadata or {}).get("thread_message") if call else None
     if not message_id:
         return
-    message = ThreadMessage.objects.select_related("sender_session").filter(id=message_id).first()
+    message = (
+        ThreadMessage.objects.select_related("sender_session")
+        .filter(id=message_id)
+        .first()
+    )
     if message is None or message.status == ThreadMessageStatus.ANSWERED:
         return
     if result.needs_approval:

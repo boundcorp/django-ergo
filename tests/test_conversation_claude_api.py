@@ -2,6 +2,7 @@
 
 import pytest
 from django.contrib.auth import get_user_model
+
 from django_ergo.conversation.engines import ENGINE_REGISTRY
 from django_ergo.conversation.engines.claude_api import ClaudeAPIEngine
 from django_ergo.conversation.models import ClaudeContentBlock
@@ -24,7 +25,7 @@ User = get_user_model()
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture()
+@pytest.fixture
 def engine():
     return ClaudeAPIEngine(
         config={
@@ -35,7 +36,7 @@ def engine():
     )
 
 
-@pytest.fixture()
+@pytest.fixture
 def user(db):
     return User.objects.create_user(
         username="claudetest",
@@ -44,7 +45,7 @@ def user(db):
     )
 
 
-@pytest.fixture()
+@pytest.fixture
 def session(user):
     return ConversationSession.objects.create(
         user=user,
@@ -54,7 +55,7 @@ def session(user):
     )
 
 
-@pytest.fixture()
+@pytest.fixture
 def workflow(db):
     return Workflow.objects.create(
         name="Test Workflow",
@@ -120,7 +121,7 @@ class TestClaudeAPIEngineInit:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.django_db()
+@pytest.mark.django_db
 class TestReconstructMessages:
     def test_empty_session_returns_empty_list(self, engine, session):
         result = engine.reconstruct_messages(session)
@@ -331,7 +332,7 @@ class TestReconstructMessages:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.django_db()
+@pytest.mark.django_db
 class TestGetToolsSchema:
     def test_empty_workflow_tools_config(self, engine, workflow):
         """Workflow with no enabled_tools returns empty list."""

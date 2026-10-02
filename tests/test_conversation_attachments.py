@@ -9,6 +9,7 @@ import pytest
 from asgiref.sync import sync_to_async
 from django.contrib.auth import get_user_model
 from django.test import override_settings
+
 from django_ergo.conversation.attachments import Attachment
 from django_ergo.conversation.engines.openai_api import OpenAIAPIEngine
 from django_ergo.conversation.models import ConversationAttachment
@@ -16,7 +17,6 @@ from django_ergo.conversation.models import ConversationSession
 from django_ergo.conversation.runner import run_conversation_turn
 from django_ergo.conversation.structured import StructuredCallSpec
 from django_ergo.conversation.structured import run_structured_call
-
 from tests.test_conversation_structured import VALID_PLAN
 from tests.test_conversation_structured import FakeOpenAIClient
 from tests.test_conversation_structured import Plan
@@ -38,7 +38,7 @@ def media_root(settings, tmp_path):
     settings.MEDIA_ROOT = str(tmp_path)
 
 
-@pytest.fixture()
+@pytest.fixture
 def user():
     return User.objects.create_user(username="attach", password="x")
 

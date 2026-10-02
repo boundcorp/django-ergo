@@ -2,12 +2,14 @@ from django.contrib.auth.models import AbstractUser
 from django.core import signing
 from django.db import models
 
-from ergonaut.utils.models import TimestampMixin, MediumIDMixin
 from ergonaut.utils.email import MailMixin
+from ergonaut.utils.models import MediumIDMixin, TimestampMixin
+
 
 class AccountTypes(models.TextChoices):
     STAFF = "staff", "Staff"
     USER = "user", "User"
+
 
 class User(TimestampMixin, MediumIDMixin, AbstractUser, MailMixin):
     account_type = models.CharField(max_length=50, choices=AccountTypes.choices, default=AccountTypes.STAFF)
@@ -44,4 +46,4 @@ class User(TimestampMixin, MediumIDMixin, AbstractUser, MailMixin):
                 "Please click the button below to reset your password.",
                 "If you did not request a password reset, please ignore this email.",
             ],
-            )
+        )

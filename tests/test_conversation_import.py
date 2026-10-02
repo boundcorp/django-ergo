@@ -3,6 +3,7 @@
 import pytest
 from asgiref.sync import async_to_sync
 from django.contrib.auth import get_user_model
+
 from django_ergo.conversation.importers import ImportService
 from django_ergo.conversation.importers.claude_cli import ClaudeCLIImporter
 from django_ergo.conversation.models import ClaudeMessage
@@ -80,7 +81,7 @@ SAMPLE_SESSION = [
 ]
 
 
-@pytest.fixture()
+@pytest.fixture
 def user():
     return User.objects.create_user(username="testuser", password="testpass")
 

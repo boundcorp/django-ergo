@@ -1,11 +1,9 @@
 import asyncio
 
 from django.core.management.base import BaseCommand
-
 from django_ergo.bots import webhooks
-from ergonaut.apps.bots.loading import find_setup
-from ergonaut.apps.bots.loading import load_registry
-from ergonaut.apps.bots.loading import sync_people
+
+from ergonaut.apps.bots.loading import find_setup, load_registry, sync_people
 
 
 class Command(BaseCommand):

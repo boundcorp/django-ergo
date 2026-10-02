@@ -12,13 +12,11 @@ from collections import defaultdict
 from datetime import timedelta
 
 from django.utils import timezone
-from ninja import Router
-from ninja import Schema
-from ninja.security import django_auth
-
 from django_ergo.conversation.chat_reply import CHAT_REPLY_KIND
 from django_ergo.conversation.models import StructuredCall
 from django_ergo.pricing import call_cost
+from ninja import Router, Schema
+from ninja.security import django_auth
 
 router = Router(tags=["costs"], auth=django_auth)
 

@@ -9,6 +9,7 @@ from unittest.mock import MagicMock
 from unittest.mock import patch
 
 import pytest
+
 from django_ergo.embedding_providers import CustomEmbeddingProvider
 
 # Import the classes directly

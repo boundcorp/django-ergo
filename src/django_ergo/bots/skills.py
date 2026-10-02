@@ -91,7 +91,7 @@ def tool_overview(toolkits: list[Toolkit]) -> list[dict]:
     tools = []
     for toolkit in toolkits:
         for schema in toolkit.get_tools_schema(ClaudeToolAdapter()):
-            tools.append(
+            tools.append(  # noqa: PERF401
                 {"name": schema["name"], "description": schema.get("description", "")}
             )
     return tools

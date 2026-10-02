@@ -206,7 +206,9 @@ class MessageHistoryToolkit(Toolkit):
 
     def execute_tool(self, tool_name: str, arguments: dict) -> str:
         self._load_sources()
-        handler = getattr(self, f"_{tool_name.removeprefix('ergo_chat_history_')}", None)
+        handler = getattr(
+            self, f"_{tool_name.removeprefix('ergo_chat_history_')}", None
+        )
         if tool_name not in TOOL_NAMES or handler is None:
             msg = f"Unknown tool: {tool_name}"
             raise ValueError(msg)
@@ -220,7 +222,9 @@ class MessageHistoryToolkit(Toolkit):
             if len(self.sources) == 1:
                 source = next(iter(self.sources.values()))
             else:
-                msg = "source_id is required; call ergo_chat_history_sources to list them"
+                msg = (
+                    "source_id is required; call ergo_chat_history_sources to list them"
+                )
                 raise ValueError(msg)
         else:
             source = self.sources.get(source_id)
@@ -302,7 +306,9 @@ class MessageHistoryToolkit(Toolkit):
             page = after[:limit]
             notes = []
             if len(after) > len(page):
-                notes.append(f"More: ergo_chat_history_read start_line={after[len(page)].line}")
+                notes.append(
+                    f"More: ergo_chat_history_read start_line={after[len(page)].line}"
+                )
         body = self._render(page, granularity, include_source=len(self.sources) > 1)
         return "\n".join([body, *notes])
 
@@ -394,5 +400,7 @@ class MessageHistoryToolkit(Toolkit):
         more = len(hits) - len(lines)
         if more > 0:
             lines.append(f"({more} more matches; narrow the query or dates)")
-        lines.append("Expand a hit with ergo_chat_history_around source_id=... line=...")
+        lines.append(
+            "Expand a hit with ergo_chat_history_around source_id=... line=..."
+        )
         return "\n".join(lines)

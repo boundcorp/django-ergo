@@ -13,8 +13,8 @@ class PasswordSetter(factory.PostGenerationMethodCall):
 class UserFactory(factory.django.DjangoModelFactory):
     username = factory.lazy_attribute(lambda obj: obj.email)
     email = factory.Faker("email")
-    first_name = factory.Faker('first_name')
-    last_name = factory.Faker('last_name')
+    first_name = factory.Faker("first_name")
+    last_name = factory.Faker("last_name")
     password = PasswordSetter("set_password", "test")
 
     class Meta:

@@ -1,13 +1,13 @@
 """The ``ergonaut`` command.
 
-    ergonaut up       # everything in one process tree; see ergonaut/up.py
-    ergonaut web      # migrate, then serve the web app, API, admin and webhooks
-    ergonaut worker   # Celery worker
-    ergonaut beat     # Celery beat
-    ergonaut bots     # every bot's long-running plugins
-    ergonaut check    # load the bots and report problems
-    ergonaut chat BOT # chat with a bot's root session in the terminal
-    ergonaut manage … # any manage.py command
+ergonaut up       # everything in one process tree; see ergonaut/up.py
+ergonaut web      # migrate, then serve the web app, API, admin and webhooks
+ergonaut worker   # Celery worker
+ergonaut beat     # Celery beat
+ergonaut bots     # every bot's long-running plugins
+ergonaut check    # load the bots and report problems
+ergonaut chat BOT # chat with a bot's root session in the terminal
+ergonaut manage … # any manage.py command
 """
 
 import os
@@ -42,7 +42,9 @@ def main(argv: list[str] | None = None) -> int:
         return up(rest)
     if command == "web":
         manage("migrate", "--noinput")
-        return run(sys.executable, "-m", "uvicorn", "ergonaut.asgi:application", "--host", "0.0.0.0", "--port", port, *rest)
+        return run(
+            sys.executable, "-m", "uvicorn", "ergonaut.asgi:application", "--host", "0.0.0.0", "--port", port, *rest
+        )
     if command == "worker":
         return run(sys.executable, "-m", "celery", "-A", "ergonaut", "worker", "-l", "info", *rest)
     if command == "beat":

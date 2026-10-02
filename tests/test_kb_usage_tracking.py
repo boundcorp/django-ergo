@@ -2,6 +2,7 @@
 
 import pytest
 from django.contrib.auth import get_user_model
+
 from django_ergo.conversation.models import ConversationKBUsage
 from django_ergo.conversation.models import ConversationSession
 from django_ergo.conversation.models import KBUsageMode
@@ -11,12 +12,12 @@ User = get_user_model()
 pytestmark = pytest.mark.django_db
 
 
-@pytest.fixture()
+@pytest.fixture
 def user():
     return User.objects.create_user(username="testuser", password="testpass")
 
 
-@pytest.fixture()
+@pytest.fixture
 def kb(user):
     return Knowledgebase.objects.create(
         name="Test KB",
@@ -25,7 +26,7 @@ def kb(user):
     )
 
 
-@pytest.fixture()
+@pytest.fixture
 def session(user):
     return ConversationSession.objects.create(
         user=user,

@@ -159,7 +159,11 @@ class TelegramPlugin(BotPlugin):
         from django_ergo.conversation.models import ThreadMessage
 
         def lookup():
-            found = ThreadMessage.objects.filter(id=message_id).values_list("in_reply_to_id", flat=True).first()
+            found = (
+                ThreadMessage.objects.filter(id=message_id)
+                .values_list("in_reply_to_id", flat=True)
+                .first()
+            )
             return found, session.user
 
         in_reply_to, user = await sync_to_async(lookup)()
@@ -344,7 +348,9 @@ class TelegramPlugin(BotPlugin):
         env = self.config.get("secret_env")
         if env and os.environ.get(env):
             return os.environ[env]
-        return hashlib.sha256(f"ergo-telegram:{self.api.token}".encode()).hexdigest()[:48]
+        return hashlib.sha256(f"ergo-telegram:{self.api.token}".encode()).hexdigest()[
+            :48
+        ]
 
     @property
     def uses_webhook(self) -> bool:

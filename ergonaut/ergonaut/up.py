@@ -27,8 +27,7 @@ import signal
 import subprocess
 import sys
 import time
-from dataclasses import dataclass
-from dataclasses import field
+from dataclasses import dataclass, field
 from pathlib import Path
 
 GARAGE_CONFIG = """\
@@ -196,9 +195,7 @@ def start_garage(sup: Supervisor, data: Path) -> None:
     sup.start("garage", binary, "-c", str(config), "server")
 
     def garage(*args: str) -> str:
-        return subprocess.run(
-            [binary, "-c", str(config), *args], check=True, capture_output=True, text=True
-        ).stdout
+        return subprocess.run([binary, "-c", str(config), *args], check=True, capture_output=True, text=True).stdout
 
     wait_for(lambda: garage("status"), "garage")
     if not state["ready"]:
@@ -244,9 +241,7 @@ def up(argv: list[str]) -> int:
         subprocess.run([python, "-m", "ergonaut.cli", "manage", "migrate", "--noinput"], env=sup.env, check=True)
         if "web" in roles:
             port = sup.env.get("PORT", "8000")
-            sup.start(
-                "web", python, "-m", "uvicorn", "ergonaut.asgi:application", "--host", "0.0.0.0", "--port", port
-            )
+            sup.start("web", python, "-m", "uvicorn", "ergonaut.asgi:application", "--host", "0.0.0.0", "--port", port)
         if broker and "worker" in roles:
             sup.start("worker", python, "-m", "celery", "-A", "ergonaut", "worker", "-l", "info")
         if broker and "beat" in roles:

@@ -192,7 +192,7 @@ class ConversationRenderer:
             # thinking blocks are omitted in skeleton
         return msg_parts, tool_call_counter
 
-    def _render_full(self, messages: list[dict]) -> str:
+    def _render_full(self, messages: list[dict]) -> str:  # noqa: C901
         lines = []
         tool_call_counter = 0
         tool_id_to_number: dict[str, int] = {}

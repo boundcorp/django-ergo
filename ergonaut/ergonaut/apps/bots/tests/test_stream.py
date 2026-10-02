@@ -4,8 +4,8 @@ import json
 import pytest
 from asgiref.sync import sync_to_async
 from django.contrib.auth import get_user_model
-
 from django_ergo.conversation.models import ConversationSession
+
 from ergonaut.api import stream
 
 

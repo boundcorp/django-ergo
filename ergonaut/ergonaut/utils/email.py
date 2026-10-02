@@ -32,7 +32,7 @@ def prepare_email(data, template="email_base.html"):
     return as_html, plain_message.strip()
 
 
-class MailMixin(object):
+class MailMixin:
     def send_raw_mail(self, subject, html_message, plain_message=None, cc_emails=None):
         from django.core.mail import send_mail
 

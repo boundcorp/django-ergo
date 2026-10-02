@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
+
 from django_ergo.kb_tools import create_article
 from django_ergo.kb_tools import delete_user_article
 from django_ergo.kb_tools import get_article_by_hierarchy

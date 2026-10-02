@@ -354,7 +354,7 @@ class TestFeedbackIntegration:
         for j in range(2):
             feedback.thumbs_up(responses[1], f"user_{j}")
         for j in range(3):
-            feedback.thumbs_down(responses[1], f"user_{j+2}", "Could be better")
+            feedback.thumbs_down(responses[1], f"user_{j + 2}", "Could be better")
 
         # Response 2: Very negative
         for j in range(4):

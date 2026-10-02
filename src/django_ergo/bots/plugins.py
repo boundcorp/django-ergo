@@ -113,5 +113,5 @@ def resolve_plugin_class(name: str) -> type[BotPlugin]:
         raise ValueError(msg) from e
     if not (isinstance(cls, type) and issubclass(cls, BotPlugin)):
         msg = f"{path} is not a BotPlugin"
-        raise ValueError(msg)
+        raise ValueError(msg)  # noqa: TRY004
     return cls

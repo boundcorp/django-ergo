@@ -192,7 +192,9 @@ def test_browser_writes_pass_the_csrf_check(use_bots):
     token = browser.cookies["csrftoken"].value
 
     def write(url, data=None):
-        return browser.post(url, json.dumps(data or {}), content_type="application/json", headers={"X-CSRFToken": token})
+        return browser.post(
+            url, json.dumps(data or {}), content_type="application/json", headers={"X-CSRFToken": token}
+        )
 
     assert write("/api/auth/login", {"username": "cook", "password": "pw"}).status_code == 200
     token = browser.cookies["csrftoken"].value  # rotated on login
@@ -237,7 +239,10 @@ def test_upload_list_download_and_delete_session_files(client, cook, use_bots, s
     assert upload.status_code == 200, upload.content
     file = upload.json()
     assert (file["filename"], file["source"], file["media_type"], file["size"]) == (
-        "pantry.csv", "upload", "text/csv", 18,
+        "pantry.csv",
+        "upload",
+        "text/csv",
+        18,
     )
     listed = client.get(f"/api/sessions/{root['id']}/attachments").json()
     assert [f["id"] for f in listed] == [file["id"]]
@@ -298,13 +303,13 @@ def test_files_sent_with_a_message_reach_the_model(client, cook, use_bots, setti
         f"/api/sessions/{root['id']}/attachments",
         {"file": SimpleUploadedFile("fridge.png", b"\x89PNGfake", content_type="image/png")},
     ).json()
-    sent = post(client, f"/api/sessions/{root['id']}/messages", {"text": "What's this?", "attachment_ids": [photo["id"]]})
+    sent = post(
+        client, f"/api/sessions/{root['id']}/messages", {"text": "What's this?", "attachment_ids": [photo["id"]]}
+    )
     assert sent.status_code == 200, sent.content
     assert sent.json()["text"] == "A fridge full of eggs."
     first = fake.calls[0]["messages"]
-    assert any(
-        isinstance(m["content"], list) and any(p.get("type") == "image" for p in m["content"]) for m in first
-    )
+    assert any(isinstance(m["content"], list) and any(p.get("type") == "image" for p in m["content"]) for m in first)
     session = ConversationSession.objects.get(id=root["id"])
     rows = list(session.attachments.values_list("filename", "source", "message_sequence"))
     assert len(rows) == 1 and rows[0][:2] == ("fridge.png", "message") and rows[0][2] is not None
@@ -323,7 +328,9 @@ def test_sessions_show_delegated_requests(client, cook, use_bots):
     thread = ConversationSession.objects.create(
         user=cook, bot_name="kitchen", parent=parent, metadata={"bot_role": "thread", "title": "Meals"}
     )
-    ThreadMessage.objects.create(sender_session=parent, recipient_session=thread, text="Plan Tuesday", status="delivered")
+    ThreadMessage.objects.create(
+        sender_session=parent, recipient_session=thread, text="Plan Tuesday", status="delivered"
+    )
 
     detail = client.get(f"/api/sessions/{root['id']}").json()
     assert detail["session"]["open_out"] == 1

@@ -540,7 +540,7 @@ def codex_item(record: dict) -> dict | None:
     return None
 
 
-def codex_blocks(item: dict) -> tuple[str, list[dict]] | None:  # noqa: PLR0911
+def codex_blocks(item: dict) -> tuple[str, list[dict]] | None:  # noqa: C901, PLR0912
     kind = item.get("type")
     if kind == "message":
         role = item.get("role", "assistant")
@@ -653,7 +653,7 @@ def sources_from_paths(paths: Iterable[str | Path]) -> list[FileSource]:
         files = sorted(path.rglob("*.jsonl")) if path.is_dir() else [path]
         for candidate in files:
             if source := detect_file_source(candidate):
-                sources.append(source)
+                sources.append(source)  # noqa: PERF401
     return sources
 
 

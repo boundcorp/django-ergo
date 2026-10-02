@@ -2,9 +2,7 @@ import json
 
 import pytest
 from django.contrib.auth import get_user_model
-
-from django_ergo.conversation.models import ConversationSession
-from django_ergo.conversation.models import StructuredCall
+from django_ergo.conversation.models import ConversationSession, StructuredCall
 
 
 @pytest.fixture
@@ -25,8 +23,12 @@ def test_costs_by_kind_with_chat_replies_by_bot(client, lee):
         (boundcorp, "claude-sonnet-5-5", (million, million)),  # $2 + $10
     ]:
         StructuredCall.objects.create(
-            kind="chat_reply", session=session, user=lee, model_name=model,
-            input_tokens=tokens[0], output_tokens=tokens[1],
+            kind="chat_reply",
+            session=session,
+            user=lee,
+            model_name=model,
+            input_tokens=tokens[0],
+            output_tokens=tokens[1],
         )
     StructuredCall.objects.create(kind="compaction", user=lee, model_name="claude-haiku-4-5", output_tokens=million)
     StructuredCall.objects.create(kind="title", user=lee, model_name="mystery", input_tokens=10)

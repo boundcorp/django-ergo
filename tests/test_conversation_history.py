@@ -9,6 +9,7 @@ from datetime import datetime
 import pytest
 from asgiref.sync import async_to_sync
 from django.contrib.auth import get_user_model
+
 from django_ergo.conversation.history import ClaudeCodeSource
 from django_ergo.conversation.history import CodexSource
 from django_ergo.conversation.history import Granularity
@@ -158,12 +159,12 @@ def write_jsonl(path, records):
     return path
 
 
-@pytest.fixture()
+@pytest.fixture
 def claude_file(tmp_path):
     return write_jsonl(tmp_path / "abc.jsonl", CLAUDE_LINES)
 
 
-@pytest.fixture()
+@pytest.fixture
 def codex_file(tmp_path):
     folder = tmp_path / "sessions" / "2026" / "09" / "03"
     folder.mkdir(parents=True)
@@ -298,7 +299,7 @@ def test_session_source_reads_openai_rows():
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture()
+@pytest.fixture
 def toolkit(claude_file, codex_file):
     return MessageHistoryToolkit(
         [ClaudeCodeSource(claude_file), CodexSource(codex_file)]
@@ -370,7 +371,9 @@ def test_by_date_across_sources(toolkit):
     assert lines[1].startswith("[claude:abc L4 ")
     assert lines[2] == "More: ergo_chat_history_by_date since=2026-09-03T08:00:02+00:00"
 
-    later = toolkit.execute_tool("ergo_chat_history_by_date", {"since": "2026-09-03T08:00:02Z"})
+    later = toolkit.execute_tool(
+        "ergo_chat_history_by_date", {"since": "2026-09-03T08:00:02Z"}
+    )
     assert "Fix the failing test" in later
     assert "4 eggs" not in later
 
@@ -397,7 +400,8 @@ def test_search_finds_tool_content_and_filters(toolkit):
 def test_invalid_inputs(toolkit):
     with pytest.raises(ValueError, match="granularity"):
         toolkit.execute_tool(
-            "ergo_chat_history_tail", {"source_id": "claude:abc", "granularity": "verbose"}
+            "ergo_chat_history_tail",
+            {"source_id": "claude:abc", "granularity": "verbose"},
         )
     with pytest.raises(ValueError, match="Invalid date"):
         toolkit.execute_tool("ergo_chat_history_by_date", {"since": "yesterday"})

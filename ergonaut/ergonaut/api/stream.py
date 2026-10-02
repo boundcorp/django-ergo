@@ -99,9 +99,7 @@ async def session_events(request, session_id):
                 started = loop.time()
                 deadline = started + PUBSUB_POLL_SECONDS
                 while loop.time() < deadline:
-                    notice = await pubsub.get_message(
-                        ignore_subscribe_messages=True, timeout=deadline - loop.time()
-                    )
+                    notice = await pubsub.get_message(ignore_subscribe_messages=True, timeout=deadline - loop.time())
                     if notice and notice.get("data") == target:
                         break
                 yield loop.time() - started

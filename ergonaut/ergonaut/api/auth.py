@@ -1,9 +1,6 @@
-from django.contrib.auth import aauthenticate
-from django.contrib.auth import alogin
-from django.contrib.auth import alogout
+from django.contrib.auth import aauthenticate, alogin, alogout
 from django.middleware.csrf import get_token
-from ninja import Router
-from ninja import Schema
+from ninja import Router, Schema
 from ninja.errors import HttpError
 from ninja.security import django_auth
 from ninja_jwt.authentication import JWTAuth

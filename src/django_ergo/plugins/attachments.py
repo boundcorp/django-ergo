@@ -70,7 +70,9 @@ class AttachmentsPlugin(BotPlugin):
 
     # -- access --------------------------------------------------------------
 
-    def session_for(self, ctx: ToolContext, session_id: str = "") -> ConversationSession:
+    def session_for(
+        self, ctx: ToolContext, session_id: str = ""
+    ) -> ConversationSession:
         from django_ergo.conversation.models import ConversationSession
 
         if not session_id or session_id == str(ctx.session.id):
@@ -116,7 +118,9 @@ class AttachmentsPlugin(BotPlugin):
             text += "\n\nThis isn't a text file; use ergo_attachments_look to see what's in it."
         return text
 
-    def create(self, ctx: ToolContext, filename: str, content: str, media_type: str = "") -> dict:
+    def create(
+        self, ctx: ToolContext, filename: str, content: str, media_type: str = ""
+    ) -> dict:
         data = content.encode()
         self._check_size(data)
         row = save_session_file(
@@ -186,7 +190,9 @@ class AttachmentsPlugin(BotPlugin):
             metadata={"attachment": str(row.id), "session": str(ctx.session.id)},
         )
         if result.parsed is None:
-            msg = f"Could not look at {row.filename}: {result.call.error or 'no answer'}"
+            msg = (
+                f"Could not look at {row.filename}: {result.call.error or 'no answer'}"
+            )
             raise ValueError(msg)
         return f"{row.filename}: {result.parsed}"
 
@@ -212,7 +218,8 @@ class AttachmentsPlugin(BotPlugin):
             return (
                 "Read text with ergo_attachments_read, look at images and PDFs with "
                 "ergo_attachments_look; write with "
-                "ergo_attachments_create or ergo_attachments_update.\n" + "\n".join(lines)
+                "ergo_attachments_create or ergo_attachments_update.\n"
+                + "\n".join(lines)
             )
 
         return [TextContextSource("Files in this chat", listing)]
@@ -244,7 +251,9 @@ class AttachmentsPlugin(BotPlugin):
             },
             required=["filename", "content"],
         )
-        def create(ctx: ToolContext, filename: str, content: str, media_type: str = "") -> dict:
+        def create(
+            ctx: ToolContext, filename: str, content: str, media_type: str = ""
+        ) -> dict:
             return plugin.create(ctx, filename, content, media_type)
 
         @bot_tool(name="ergo_attachments_update", takes_context=True)

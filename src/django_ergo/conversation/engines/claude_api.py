@@ -334,7 +334,7 @@ class ClaudeAPIEngine(Engine):
         async for event in self.respond(session, additional_tools):
             yield event
 
-    async def submit_tool_result(  # noqa: PLR0913
+    async def submit_tool_result(
         self,
         session,
         tool_use_id: str,

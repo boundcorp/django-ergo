@@ -307,7 +307,7 @@ async def _run_pre_seeds(pre_seeds: list[PreSeedCall]) -> list[SeededToolCall]:
             result = await sync_to_async(seed.handler, thread_sensitive=True)(
                 seed.tool_input
             )
-        except Exception:
+        except Exception:  # noqa: BLE001
             log.warning("pre-seed %r raised; skipping", seed.tool_name, exc_info=True)
             continue
         calls.append(
@@ -448,7 +448,7 @@ def _storable(messages: list[dict]) -> list[dict]:
     for message in messages:
         content = message.get("content")
         if isinstance(content, list):
-            message = {**message, "content": [_strip_bytes(b) for b in content]}
+            message = {**message, "content": [_strip_bytes(b) for b in content]}  # noqa: PLW2901
         stored.append(message)
     return stored
 

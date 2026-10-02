@@ -7,6 +7,8 @@ from types import SimpleNamespace
 
 import pytest
 from django.contrib.auth import get_user_model
+from pydantic import BaseModel
+
 from django_ergo.conversation import structured
 from django_ergo.conversation.engines.claude_api import ClaudeAPIEngine
 from django_ergo.conversation.engines.openai_api import OpenAIAPIEngine
@@ -20,7 +22,6 @@ from django_ergo.conversation.structured import StructuredCallSpec
 from django_ergo.conversation.structured import revise_structured_call
 from django_ergo.conversation.structured import run_structured_call
 from django_ergo.conversation.toolkit import Toolkit
-from pydantic import BaseModel
 
 User = get_user_model()
 
@@ -138,7 +139,7 @@ class LookupToolkit(Toolkit):
         return ""
 
 
-@pytest.fixture()
+@pytest.fixture
 def user():
     return User.objects.create_user(username="structured", password="x")
 
@@ -423,11 +424,11 @@ async def test_max_tokens_stop_fails(user):
     assert "max_tokens" in result.error
 
 
-class APIConnectionError(Exception):  # noqa: N818 — mirrors the SDK class name
+class APIConnectionError(Exception):
     pass
 
 
-class AuthenticationError(Exception):  # noqa: N818
+class AuthenticationError(Exception):
     pass
 
 

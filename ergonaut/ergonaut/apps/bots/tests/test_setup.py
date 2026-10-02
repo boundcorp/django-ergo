@@ -2,8 +2,8 @@ import json
 
 import pytest
 from django.contrib.auth import get_user_model
-
 from django_ergo.conversation.models import ConversationSession
+
 from ergonaut.utils.admin import admin_site
 
 

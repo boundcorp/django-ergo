@@ -257,7 +257,11 @@ class FunctionToolkit(Toolkit):
         from django_ergo.conversation.structured import PreSeedCall
 
         return [
-            PreSeedCall(name, {}, lambda arguments, name=name: self.execute_tool(name, arguments))
+            PreSeedCall(
+                name,
+                {},
+                lambda arguments, name=name: self.execute_tool(name, arguments),
+            )
             for name in self.seed
         ]
 

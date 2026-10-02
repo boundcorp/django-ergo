@@ -179,7 +179,7 @@ def _python_units(path, text, maximum):
 
     def visit(body, parent=""):
         for node in body:
-            if not isinstance(
+            if not isinstance(  # noqa: UP038
                 node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
             ):
                 continue
@@ -320,7 +320,7 @@ def prepare_index(source, commit=None, *, semantic=True):
     if not isinstance(config, dict):
         _fail("Index configuration must be a mapping.")
     maximum = config.get("max_unit_characters")
-    if type(maximum) is not int or not 1 <= maximum <= 100000:
+    if type(maximum) is not int or not 1 <= maximum <= 100000:  # noqa: PLR2004
         _fail("max_unit_characters must be between 1 and 100000.")
     if semantic and config.get("embedding_dimensions") != _EMBEDDING_DIMENSIONS:
         _fail("Index configuration must require 1536 dimensions.")
@@ -339,7 +339,7 @@ def prepare_index(source, commit=None, *, semantic=True):
     return snapshot, _hash(config_text), files
 
 
-def index_repository_commit(  # noqa: C901, PLR0912, PLR0915 - atomic reconciliation.
+def index_repository_commit(  # noqa: PLR0912, PLR0915 - atomic reconciliation.
     source,
     *,
     commit=None,

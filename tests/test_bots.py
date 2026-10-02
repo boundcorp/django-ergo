@@ -415,7 +415,9 @@ def _texts(call):
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_a_bot_delegates_to_a_new_thread_and_gets_the_reply(tmp_path, thread_messages):
+async def test_a_bot_delegates_to_a_new_thread_and_gets_the_reply(
+    tmp_path, thread_messages
+):
     from django_ergo.conversation.models import ThreadMessage
 
     user = await User.objects.acreate(username="orchestrator")
@@ -461,7 +463,9 @@ async def test_a_bot_delegates_to_a_new_thread_and_gets_the_reply(tmp_path, thre
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_a_delegated_turn_waits_for_approval_before_replying(tmp_path, thread_messages):
+async def test_a_delegated_turn_waits_for_approval_before_replying(
+    tmp_path, thread_messages
+):
     from django_ergo.conversation.models import ThreadMessage
 
     user = await User.objects.acreate(username="approver")
@@ -469,7 +473,9 @@ async def test_a_delegated_turn_waits_for_approval_before_replying(tmp_path, thr
         tmp_path,
         claude_tool("ergo_thread_send", {"thread": "new", "message": "Add milk"}),
         say("Asked."),
-        claude_tool("add_to_list", {"item": "milk"}, tool_id="add1"),  # the thread pauses
+        claude_tool(
+            "add_to_list", {"item": "milk"}, tool_id="add1"
+        ),  # the thread pauses
         say("Added milk."),
     )
     root = await bot.root_session(user)
@@ -494,8 +500,14 @@ async def test_threads_are_listed_targeted_and_archived(tmp_path, thread_message
     thread = await bot.create_session(user, parent=root, title="Groceries")
     engine._client.responses = [
         claude_tool("ergo_thread_list", {}, tool_id="l1"),
-        claude_tool("ergo_thread_send", {"thread": str(thread.id), "message": "Eggs?"}, tool_id="s1"),
-        claude_tool("ergo_thread_send", {"thread": "nope", "message": "x"}, tool_id="s2"),
+        claude_tool(
+            "ergo_thread_send",
+            {"thread": str(thread.id), "message": "Eggs?"},
+            tool_id="s1",
+        ),
+        claude_tool(
+            "ergo_thread_send", {"thread": "nope", "message": "x"}, tool_id="s2"
+        ),
         claude_tool("ergo_thread_archive", {"thread_id": str(thread.id)}, tool_id="a1"),
         claude_tool("ergo_thread_list", {}, tool_id="l2"),
         say("Done."),
@@ -543,7 +555,9 @@ async def test_messages_reach_permitted_bots_only(tmp_path, thread_messages):
     chief, engine = make_bot(
         tmp_path,
         claude_tool("ergo_thread_send", {"bot": "sysadmin", "message": "Disk space?"}),
-        claude_tool("ergo_thread_send", {"bot": "kitchen", "message": "hi"}, tool_id="t2"),
+        claude_tool(
+            "ergo_thread_send", {"bot": "kitchen", "message": "hi"}, tool_id="t2"
+        ),
         say("Asked."),
         say("Disk is 40% full."),  # sysadmin's root, on the message
         say("The server is fine."),  # chief, on the reply
@@ -551,7 +565,9 @@ async def test_messages_reach_permitted_bots_only(tmp_path, thread_messages):
         name="chief",
     )
     sysadmin, _ = make_bot(
-        tmp_path, yaml_text="name: sysadmin\ndescription: Keeps servers up\n", name="sysadmin"
+        tmp_path,
+        yaml_text="name: sysadmin\ndescription: Keeps servers up\n",
+        name="sysadmin",
     )
     sysadmin._engine_factory = chief._engine_factory
     registry = BotRegistry()
@@ -569,7 +585,9 @@ async def test_messages_reach_permitted_bots_only(tmp_path, thread_messages):
     target = await sysadmin.root_session(user)
     assert target.id != root.id
     await thread_messages(registry)  # the reply reaches chief's root
-    assert any(text.endswith("Disk is 40% full.") for text in _texts(engine._client.calls[-1]))
+    assert any(
+        text.endswith("Disk is 40% full.") for text in _texts(engine._client.calls[-1])
+    )
 
 
 def test_run_bots_check_command(tmp_path):
@@ -758,7 +776,9 @@ async def test_skills_are_listed_up_front_and_loaded_on_demand(tmp_path):
     seeded = [
         block
         for message in first["messages"]
-        for block in (message["content"] if isinstance(message["content"], list) else [])
+        for block in (
+            message["content"] if isinstance(message["content"], list) else []
+        )
         if block.get("type") == "tool_result"
     ]
     assert len(seeded) == 1
@@ -779,8 +799,11 @@ async def test_skills_are_listed_up_front_and_loaded_on_demand(tmp_path):
     results = [
         block
         for message in engine._client.calls[2]["messages"]
-        for block in (message["content"] if isinstance(message["content"], list) else [])
-        if block.get("type") == "tool_result" and "Skills (load one" in str(block["content"])
+        for block in (
+            message["content"] if isinstance(message["content"], list) else []
+        )
+        if block.get("type") == "tool_result"
+        and "Skills (load one" in str(block["content"])
     ]
     assert len(results) == 1
 
@@ -792,15 +815,25 @@ def test_bots_without_a_skills_folder_have_no_skill_tools(tmp_path):
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_nested_bot_folders_make_sub_bots_the_parent_can_message(tmp_path, thread_messages):
+async def test_nested_bot_folders_make_sub_bots_the_parent_can_message(
+    tmp_path, thread_messages
+):
     user = await User.objects.acreate(username="lee")
-    parent = write_bot(tmp_path, "name: boundcorp\ndescription: Boundcorp\n", name="boundcorp")
-    write_bot(parent, "name: kitchen\ndescription: Runs the kitchen\norchestration: false\n", name="kitchen")
+    parent = write_bot(
+        tmp_path, "name: boundcorp\ndescription: Boundcorp\n", name="boundcorp"
+    )
+    write_bot(
+        parent,
+        "name: kitchen\ndescription: Runs the kitchen\norchestration: false\n",
+        name="kitchen",
+    )
     write_bot(parent / "kitchen", "name: pantry\n", name="pantry")
     (parent / "skills").mkdir()
     write_bot(parent / "skills", "name: notabot\n", name="ignored")
     engine = claude_engine(
-        claude_tool("ergo_thread_send", {"bot": "kitchen", "message": "What's for dinner?"}),
+        claude_tool(
+            "ergo_thread_send", {"bot": "kitchen", "message": "What's for dinner?"}
+        ),
         say("I asked the kitchen."),
         say("Tacos."),
         say("Kitchen says tacos."),
@@ -813,8 +846,14 @@ async def test_nested_bot_folders_make_sub_bots_the_parent_can_message(tmp_path,
 
     registry = BotRegistry.discover(parent, engine_factory=factory)
     assert [b.name for b in registry] == ["boundcorp", "kitchen", "pantry"]
-    boundcorp, kitchen, pantry = (registry.get(n) for n in ("boundcorp", "kitchen", "pantry"))
-    assert (boundcorp.parent_name, kitchen.parent_name, pantry.parent_name) == ("", "boundcorp", "kitchen")
+    boundcorp, kitchen, pantry = (
+        registry.get(n) for n in ("boundcorp", "kitchen", "pantry")
+    )
+    assert (boundcorp.parent_name, kitchen.parent_name, pantry.parent_name) == (
+        "",
+        "boundcorp",
+        "kitchen",
+    )
     assert [b.name for b in registry.children(boundcorp)] == ["kitchen"]
     assert registry.may_call(boundcorp, "kitchen")
     assert not registry.may_call(boundcorp, "pantry")
@@ -876,9 +915,13 @@ async def test_idle_threads_are_archived_and_reopen_on_a_message(tmp_path):
     old = await bot.create_session(user, parent=root, title="Old")
     busy = await bot.create_session(user, parent=root, title="Busy")
     fresh = await bot.create_session(user, parent=root, title="Fresh")
-    await ThreadMessage.objects.acreate(recipient_session=busy, text="still working", status="delivered")
+    await ThreadMessage.objects.acreate(
+        recipient_session=busy, text="still working", status="delivered"
+    )
     ago = timezone.now() - timedelta(days=8)
-    await ConversationSession.objects.filter(id__in=[root.id, old.id, busy.id]).aupdate(updated_at=ago)
+    await ConversationSession.objects.filter(id__in=[root.id, old.id, busy.id]).aupdate(
+        updated_at=ago
+    )
 
     archived = await sync_to_async(archival.archive_idle_threads)([bot])
     assert archived == [str(old.id)]
@@ -959,7 +1002,14 @@ def test_a_bot_task_runner_setting_takes_over(tmp_path, settings):
         return Done()
 
     settings.DJANGO_ERGO = {"BOT_TASK_RUNNER": runner}
-    bot = Bot.load(write_bot(tmp_path, "name: tasker\ntools: [tools/pantry.py]\n", name="tasker", tools=TASK_TOOLS))
+    bot = Bot.load(
+        write_bot(
+            tmp_path,
+            "name: tasker\ntools: [tools/pantry.py]\n",
+            name="tasker",
+            tools=TASK_TOOLS,
+        )
+    )
     assert ToolContext(bot=bot).tasks.run("slow_sum", [1, 2]) == "queued elsewhere"
     assert calls == [("tasker", "slow_sum", [[1, 2]], {})]
     assert background.execute("tasker", "slow_sum", [[1, 2]], {}) == 3

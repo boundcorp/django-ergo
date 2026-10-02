@@ -50,7 +50,11 @@ def _target(ctx: ToolContext, bot: str) -> Bot:
         return caller
     registry = caller.registry
     if registry is None or not registry.may_call(caller, bot) or bot not in registry:
-        allowed = ", ".join(b.name for b in registry.callable_bots(caller)) if registry else ""
+        allowed = (
+            ", ".join(b.name for b in registry.callable_bots(caller))
+            if registry
+            else ""
+        )
         msg = f"This bot may not message {bot!r} (allowed: {allowed or 'none'})."
         raise ValueError(msg)
     return registry.get(bot)
@@ -89,12 +93,16 @@ def ergo_bot_list(ctx: ToolContext) -> str:
     bots = registry.callable_bots(ctx.bot) if registry else []
     if not bots:
         return "There are no other bots you can message."
-    lines = [f"- {b.name}: {b.definition.description or 'no description'}" for b in bots]
+    lines = [
+        f"- {b.name}: {b.definition.description or 'no description'}" for b in bots
+    ]
     return "Bots you can message:\n" + "\n".join(lines)
 
 
 @bot_tool(takes_context=True)
-def ergo_thread_list(ctx: ToolContext, bot: str = "", include_archived: bool = False) -> list[dict]:  # noqa: FBT001, FBT002
+def ergo_thread_list(
+    ctx: ToolContext, bot: str = "", include_archived: bool = False
+) -> list[dict]:
     """List a bot's root chat and threads with the user (default: this bot), newest first."""
     target = _target(ctx, bot)
     qs = target.sessions().filter(user_id=ctx.session.user_id).order_by("-updated_at")

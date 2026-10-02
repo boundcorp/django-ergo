@@ -1,12 +1,8 @@
 import os
 
-from django.core.management.base import BaseCommand
-from django.core.management.base import CommandError
+from django.core.management.base import BaseCommand, CommandError
 
-from ergonaut.apps.bots.loading import ErgonautConfigError
-from ergonaut.apps.bots.loading import bot_paths
-from ergonaut.apps.bots.loading import find_setup
-from ergonaut.apps.bots.loading import load_registry
+from ergonaut.apps.bots.loading import ErgonautConfigError, bot_paths, find_setup, load_registry
 
 SECRET_KEYS = ("api_key_env", "token_env", "secret_env")
 

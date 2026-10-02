@@ -20,8 +20,20 @@ export function Login({ onLogin }: { onLogin: (user: User) => void }) {
       }}
     >
       <h1 className="text-xl font-semibold">Sign in to Ergonaut</h1>
-      <input autoFocus value={username} onChange={e => setUsername(e.target.value)} placeholder="Username" className="rounded-lg border border-zinc-300 bg-transparent px-3 py-2 dark:border-zinc-700" />
-      <input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Password" className="rounded-lg border border-zinc-300 bg-transparent px-3 py-2 dark:border-zinc-700" />
+      <input
+        autoFocus
+        value={username}
+        onChange={e => setUsername(e.target.value)}
+        placeholder="Username"
+        className="rounded-lg border border-zinc-300 bg-transparent px-3 py-2 dark:border-zinc-700"
+      />
+      <input
+        type="password"
+        value={password}
+        onChange={e => setPassword(e.target.value)}
+        placeholder="Password"
+        className="rounded-lg border border-zinc-300 bg-transparent px-3 py-2 dark:border-zinc-700"
+      />
       {error && <p className="text-sm text-red-600">{error}</p>}
       <button className="rounded-lg bg-indigo-600 py-2 text-white">Sign in</button>
     </form>

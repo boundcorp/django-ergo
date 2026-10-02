@@ -14,6 +14,7 @@ import openai
 import pytest
 from django.contrib.auth import get_user_model
 from django.test import TestCase
+
 from django_ergo.fields import SemanticTextField
 from django_ergo.fields import generate_embedding
 from django_ergo.fields import generate_summary
@@ -27,7 +28,7 @@ User = get_user_model()
 class TestGenerateSummary:
     """Test the generate_summary function with both real and mocked OpenAI API."""
 
-    @pytest.mark.openai_real()
+    @pytest.mark.openai_real
     def test_generate_summary_real_api(self):
         """Test generate_summary with real OpenAI API (costs credits)."""
         if not openai_test_manager.should_use_real_api():
@@ -65,7 +66,7 @@ class TestGenerateSummary:
 
         print(f"✅ Real API test completed. Generated summary: {result[:100]}...")
 
-    @pytest.mark.openai_mocked()
+    @pytest.mark.openai_mocked
     def test_generate_summary_mocked(self):
         """Test generate_summary with mocked OpenAI API using saved fixtures."""
         fixture = openai_test_manager.load_fixture("generate_summary_basic")
@@ -87,7 +88,7 @@ class TestGenerateSummary:
 
         print(f"✅ Mocked test completed. Result: {result[:100]}...")
 
-    @pytest.mark.openai_real()
+    @pytest.mark.openai_real
     def test_generate_summary_with_context_real_api(self):
         """Test generate_summary with user context using real API."""
         if not openai_test_manager.should_use_real_api():
@@ -121,7 +122,7 @@ class TestGenerateSummary:
             "chat.completions",
         )
 
-    @pytest.mark.openai_mocked()
+    @pytest.mark.openai_mocked
     def test_generate_summary_with_context_mocked(self):
         """Test generate_summary with context using mocked API."""
         fixture = openai_test_manager.load_fixture("generate_summary_with_context")
@@ -143,7 +144,7 @@ class TestGenerateSummary:
 class TestGenerateEmbedding:
     """Test the generate_embedding function with both real and mocked OpenAI API."""
 
-    @pytest.mark.openai_real()
+    @pytest.mark.openai_real
     def test_generate_embedding_real_api(self):
         """Test generate_embedding with real OpenAI API (costs credits)."""
         if not openai_test_manager.should_use_real_api():
@@ -173,7 +174,7 @@ class TestGenerateEmbedding:
             f"✅ Real API test completed. Generated {len(result)}-dimensional embedding"
         )
 
-    @pytest.mark.openai_mocked()
+    @pytest.mark.openai_mocked
     def test_generate_embedding_mocked(self):
         """Test generate_embedding with mocked OpenAI API using saved fixtures."""
         fixture = openai_test_manager.load_fixture("generate_embedding_basic")
@@ -195,7 +196,7 @@ class TestGenerateEmbedding:
 class TestSemanticTextField(TestCase):
     """Test the SemanticTextField custom Django field."""
 
-    @pytest.mark.openai_real()
+    @pytest.mark.openai_real
     def test_semantic_text_field_real_api(self):
         """Test SemanticTextField with real OpenAI API."""
         if not openai_test_manager.should_use_real_api():
@@ -208,7 +209,7 @@ class TestSemanticTextField(TestCase):
             "Full model test requires database setup - covered by integration tests"
         )
 
-    @pytest.mark.openai_mocked()
+    @pytest.mark.openai_mocked
     def test_semantic_text_field_mocked(self):
         """Test SemanticTextField with mocked APIs."""
         pytest.skip(
@@ -298,7 +299,7 @@ class TestFixtureGeneration:
         fixture = openai_test_manager.load_fixture("nonexistent_test")
         assert fixture is None
 
-    @pytest.mark.openai_real()
+    @pytest.mark.openai_real
     def test_minimal_summary_real_api(self):
         """Minimal test to generate a basic fixture."""
         if not openai_test_manager.should_use_real_api():

@@ -23,7 +23,11 @@ export default function Files({ sessionId, refreshKey }: { sessionId: string; re
   const input = useRef<HTMLInputElement>(null)
 
   const load = useCallback(
-    () => api.attachments(sessionId).then(setFiles).catch(e => setError(String(e.message ?? e))),
+    () =>
+      api
+        .attachments(sessionId)
+        .then(setFiles)
+        .catch(e => setError(String(e.message ?? e))),
     [sessionId],
   )
   useEffect(() => {
@@ -79,7 +83,11 @@ export default function Files({ sessionId, refreshKey }: { sessionId: string; re
         {files?.map(file => (
           <div key={file.id} className="group rounded-md px-2 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-900">
             <div className="flex items-center gap-2">
-              <a className="truncate text-sm text-indigo-600 hover:underline dark:text-indigo-400" href={api.downloadUrl(file.id)} title={file.filename}>
+              <a
+                className="truncate text-sm text-indigo-600 hover:underline dark:text-indigo-400"
+                href={api.downloadUrl(file.id)}
+                title={file.filename}
+              >
                 {file.filename || file.media_type}
               </a>
               {file.message_sequence == null && (

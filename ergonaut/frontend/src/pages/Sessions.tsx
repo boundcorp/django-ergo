@@ -24,13 +24,21 @@ export function Sessions({ bots }: { bots: Bot[] }) {
           placeholder="Search message text"
           className="min-w-60 flex-1 rounded-lg border border-zinc-300 bg-transparent px-3 py-2 dark:border-zinc-700"
         />
-        <select value={bot} onChange={e => setBot(e.target.value)} className="rounded-lg border border-zinc-300 bg-transparent px-2 dark:border-zinc-700">
+        <select
+          value={bot}
+          onChange={e => setBot(e.target.value)}
+          className="rounded-lg border border-zinc-300 bg-transparent px-2 dark:border-zinc-700"
+        >
           <option value="">All bots</option>
           {bots.map(b => (
             <option key={b.name}>{b.name}</option>
           ))}
         </select>
-        <select value={status} onChange={e => setStatus(e.target.value)} className="rounded-lg border border-zinc-300 bg-transparent px-2 dark:border-zinc-700">
+        <select
+          value={status}
+          onChange={e => setStatus(e.target.value)}
+          className="rounded-lg border border-zinc-300 bg-transparent px-2 dark:border-zinc-700"
+        >
           <option value="">Any status</option>
           <option value="active">Active</option>
           <option value="completed">Closed</option>

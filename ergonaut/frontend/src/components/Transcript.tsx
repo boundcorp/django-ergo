@@ -52,7 +52,10 @@ function MessageView({
             const from = user ? fromThread(block.text) : null
             if (from)
               return (
-                <div key={i} className="max-w-[85%] self-start rounded-2xl rounded-tl-sm border border-teal-500/50 bg-teal-50 px-4 py-2 dark:bg-teal-950/40">
+                <div
+                  key={i}
+                  className="max-w-[85%] self-start rounded-2xl rounded-tl-sm border border-teal-500/50 bg-teal-50 px-4 py-2 dark:bg-teal-950/40"
+                >
                   <div className="mb-1 text-xs font-medium text-teal-700 dark:text-teal-300">
                     {from.kind === 'reply' ? '↩ reply from' : '✉ message from'} {from.who}
                     {from.about && <span className="font-normal text-teal-600/80"> · re “{from.about}”</span>}
@@ -61,11 +64,16 @@ function MessageView({
                 </div>
               )
             return user ? (
-              <div key={i} className="max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-tr-sm bg-indigo-600 px-4 py-2 text-white">
+              <div
+                key={i}
+                className="max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-tr-sm bg-indigo-600 px-4 py-2 text-white"
+              >
                 {block.text}
               </div>
             ) : (
-              <div key={i} className="max-w-[85%] whitespace-pre-wrap text-sm text-zinc-500 italic">{block.text}</div>
+              <div key={i} className="max-w-[85%] whitespace-pre-wrap text-sm text-zinc-500 italic">
+                {block.text}
+              </div>
             )
           }
           case 'attachment':
@@ -88,7 +96,10 @@ function MessageView({
                 📎 {block.label}
               </a>
             ) : (
-              <div key={i} className="rounded-md border border-zinc-300 px-2 py-1 text-xs text-zinc-500 dark:border-zinc-700">
+              <div
+                key={i}
+                className="rounded-md border border-zinc-300 px-2 py-1 text-xs text-zinc-500 dark:border-zinc-700"
+              >
                 📎 {block.label}
               </div>
             )
@@ -122,7 +133,8 @@ function MessageView({
 
 // A message from another bot thread starts with a bracketed header
 // (see django_ergo.bots.messaging); show it as coming from that thread.
-const THREAD_HEADER = /^\[(Message|Reply) from (.+?) \(thread [0-9a-f-]+\)(?:\. [^\]]*| to your message: “([^”]*)”)\]\n\n([\s\S]*)$/
+const THREAD_HEADER =
+  /^\[(Message|Reply) from (.+?) \(thread [0-9a-f-]+\)(?:\. [^\]]*| to your message: “([^”]*)”)\]\n\n([\s\S]*)$/
 
 function fromThread(text: string) {
   const match = THREAD_HEADER.exec(text)
@@ -134,7 +146,11 @@ function CallHeader({ call }: { call: Call }) {
   const [detail, setDetail] = useState<unknown>(null)
   const tokens = call.input_tokens + call.output_tokens
   const tone =
-    call.status === 'completed' ? 'text-emerald-600' : call.status === 'awaiting_approval' ? 'text-amber-600' : 'text-red-600'
+    call.status === 'completed'
+      ? 'text-emerald-600'
+      : call.status === 'awaiting_approval'
+        ? 'text-amber-600'
+        : 'text-red-600'
   return (
     <div className="my-2 text-xs text-zinc-500">
       <button
@@ -172,9 +188,13 @@ export function Transcript({ messages, calls }: { messages: Message[]; calls: Ca
   const results = new Map<string, ToolResult>()
   for (const message of messages)
     for (const block of message.blocks) if (block.type === 'tool_result') results.set(block.tool_use_id, block)
-  const pending = new Set(calls.flatMap(c => (c.status === 'awaiting_approval' ? c.pending_approvals.map(a => a.id) : [])))
+  const pending = new Set(
+    calls.flatMap(c => (c.status === 'awaiting_approval' ? c.pending_approvals.map(a => a.id) : [])),
+  )
   const replies = messages.flatMap(m =>
-    m.blocks.flatMap(b => (b.type === 'tool_use' && b.name === REPLY_TOOL ? [String((b.input as Reply).text ?? '')] : [])),
+    m.blocks.flatMap(b =>
+      b.type === 'tool_use' && b.name === REPLY_TOOL ? [String((b.input as Reply).text ?? '')] : [],
+    ),
   )
   const starts = new Map<number, Call>()
   for (const call of calls) if (call.first_sequence != null) starts.set(call.first_sequence, call)

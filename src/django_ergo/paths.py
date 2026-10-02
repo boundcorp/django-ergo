@@ -15,7 +15,7 @@ def legacy_hierarchy_to_relative_path(hierarchy_code: str) -> str:
     value = hierarchy_code.strip().strip("/")
     if not value:
         raise ValueError("A legacy hierarchy code cannot be empty.")
-    if "/" in value:
+    if "/" in value:  # noqa: SIM108
         segments = value.split("/")
     else:
         segments = list(value)

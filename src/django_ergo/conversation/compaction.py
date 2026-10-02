@@ -43,7 +43,6 @@ if TYPE_CHECKING:
     from django_ergo.conversation.engine import Engine
     from django_ergo.conversation.models import ConversationCompaction
     from django_ergo.conversation.models import ConversationSession
-
     from django_ergo.conversation.structured import StructuredCallResult
 
     # Returns summary text, or a structured call result whose parsed value
@@ -178,7 +177,7 @@ def _prompt_tokens(row) -> int:
     )
 
 
-async def decide_compaction(
+async def decide_compaction(  # noqa: C901, PLR0911
     session: ConversationSession,
     *,
     now: datetime | None = None,
@@ -260,7 +259,7 @@ def structured_summarizer(engine: Engine, session: ConversationSession) -> Summa
     return summarize
 
 
-async def compact_session(  # noqa: PLR0913
+async def compact_session(
     session: ConversationSession,
     engine: Engine,
     *,

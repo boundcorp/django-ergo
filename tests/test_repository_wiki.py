@@ -251,7 +251,6 @@ class RepositoryToolkitTests(TransactionTestCase):
             )
 
     def test_proposal_runner_uses_architecture_fixture(self):
-
         captured = {}
 
         async def fake_runner(*, message, extra_tools, **kwargs):

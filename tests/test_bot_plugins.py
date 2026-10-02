@@ -188,7 +188,11 @@ async def test_bot_edits_and_merges_its_own_config(bot_repo):
             "ergo_config_repo_write",
             {"path": "bots/manager/agents.md", "content": "Be brief."},
         ),
-        claude_tool("ergo_config_repo_publish", {"message": "Shorter instructions"}, tool_id="p1"),
+        claude_tool(
+            "ergo_config_repo_publish",
+            {"message": "Shorter instructions"},
+            tool_id="p1",
+        ),
         say("Published."),
     )
     git(work, "add", "-A")
@@ -461,7 +465,9 @@ async def test_folder_kb_tools_and_prefetch(tmp_path):
 
     await bot.ask(root, "Does anyone avoid cilantro?")
     first = engine._client.calls[0]
-    assert {"ergo_kb_search", "ergo_kb_read", "ergo_kb_list"} <= {t["name"] for t in first["tools"]}
+    assert {"ergo_kb_search", "ergo_kb_read", "ergo_kb_list"} <= {
+        t["name"] for t in first["tools"]
+    }
     assert "## Knowledge base results for this message" in first["system"]
     assert "### Diet (preferences/diet.md)" in first["system"]
     read = engine._client.calls[1]["messages"][-1]["content"][0]["content"]
@@ -519,9 +525,15 @@ async def test_telegram_group_chat_speaks_as_each_sender(tmp_path):
     plugin.users["222"] = "sous"
     group = -500
 
-    await plugin.handle_update(update(1, chat_id=group, text="hi", **{"from": {"id": 111}}))
-    await plugin.handle_update(update(2, chat_id=group, text="yo", **{"from": {"id": 222}}))
-    await plugin.handle_update(update(3, chat_id=group, text="??", **{"from": {"id": 333}}))
+    await plugin.handle_update(
+        update(1, chat_id=group, text="hi", **{"from": {"id": 111}})
+    )
+    await plugin.handle_update(
+        update(2, chat_id=group, text="yo", **{"from": {"id": 222}})
+    )
+    await plugin.handle_update(
+        update(3, chat_id=group, text="??", **{"from": {"id": 333}})
+    )
 
     assert [m["chat_id"] for m in plugin.api.sent()] == [group, group]
     assert len(engine._client.calls) == 2
@@ -586,7 +598,9 @@ async def test_telegram_webhook_mode(tmp_path, settings, monkeypatch):
         url = "/hooks/kitchen/telegram/update/"
         denied = await client.post(url, body, content_type="application/json")
         assert denied.status_code == 403
-        missing = await client.post("/hooks/kitchen/nope/update/", body, content_type="application/json")
+        missing = await client.post(
+            "/hooks/kitchen/nope/update/", body, content_type="application/json"
+        )
         assert missing.status_code == 404
 
         ok = await client.post(
@@ -597,7 +611,10 @@ async def test_telegram_webhook_mode(tmp_path, settings, monkeypatch):
         )
         assert ok.status_code == 200
         await plugin.drain()
-        assert plugin.api.sent()[-1] == {"chat_id": 111, "text": "Hello from a webhook."}
+        assert plugin.api.sent()[-1] == {
+            "chat_id": 111,
+            "text": "Hello from a webhook.",
+        }
     finally:
         webhooks.set_registry(None)
 
@@ -641,7 +658,12 @@ def test_orca_read_runs_inventory_pinned_to_the_environment(tmp_path, orca_calls
     _, _, plugin = orca_bot(tmp_path)
     assert plugin.read(["worktree", "ps"]) == '{"ok":true}'
     assert orca_calls[-1] == [
-        "orca-test", "worktree", "ps", "--environment", "devbox", "--json",
+        "orca-test",
+        "worktree",
+        "ps",
+        "--environment",
+        "devbox",
+        "--json",
     ]
     plugin.read(["skills", "get", "orchestration"])
     assert "--json" not in orca_calls[-1]
@@ -652,7 +674,9 @@ def test_orca_read_runs_inventory_pinned_to_the_environment(tmp_path, orca_calls
 @pytest.mark.django_db
 def test_orca_read_refuses_changes_and_other_environments(tmp_path, orca_calls):
     _, _, plugin = orca_bot(tmp_path)
-    assert "use orca_run" in plugin.read(["orchestration", "worker-start", "--task", "t1"])
+    assert "use orca_run" in plugin.read(
+        ["orchestration", "worker-start", "--task", "t1"]
+    )
     assert "use orca_run" in plugin.read(["terminal", "send", "--text", "hi"])
     with pytest.raises(ValueError, match="only manages the 'devbox'"):
         plugin.run(["status", "--environment=prod"])
@@ -663,9 +687,12 @@ def test_orca_read_refuses_changes_and_other_environments(tmp_path, orca_calls):
 async def test_orca_run_waits_for_approval(tmp_path, orca_calls):
     bot, engine, _ = orca_bot(
         tmp_path,
-        claude_tool("orca_read", {"args": ["orchestration", "worker-list"]}, tool_id="r1"),
         claude_tool(
-            "orca_run", {"args": ["orchestration", "worker-stop", "--dispatch", "d1"]},
+            "orca_read", {"args": ["orchestration", "worker-list"]}, tool_id="r1"
+        ),
+        claude_tool(
+            "orca_run",
+            {"args": ["orchestration", "worker-stop", "--dispatch", "d1"]},
             tool_id="w1",
         ),
         say("Stopped."),
@@ -733,7 +760,9 @@ def test_bash_runs_commands_with_exit_code_and_output(tmp_path):
     _, _, plugin = bash_bot(tmp_path, config=f"cwd: {tmp_path}")
     assert plugin.run("pwd") == f"Exit 0\n{tmp_path}"
     assert plugin.run("echo oops >&2; exit 3") == "Exit 3\noops"
-    assert plugin.run("ls", cwd=str(tmp_path / "missing")).startswith("No such directory")
+    assert plugin.run("ls", cwd=str(tmp_path / "missing")).startswith(
+        "No such directory"
+    )
     long = plugin.run("seq 1 20000")
     assert "characters skipped" in long
     assert long.endswith("20000")
@@ -782,7 +811,8 @@ async def test_bot_writes_and_reads_files_in_its_session(tmp_path, settings):
     bot, engine, _ = files_bot(
         tmp_path,
         claude_tool(
-            "ergo_attachments_create", {"filename": "plan.md", "content": "# Plan\nTacos"}
+            "ergo_attachments_create",
+            {"filename": "plan.md", "content": "# Plan\nTacos"},
         ),
         say("Saved."),
         claude_tool("ergo_attachments_list", {}),
@@ -825,7 +855,9 @@ def test_attachments_access_rules(tmp_path, settings):
     ctx = ToolContext(bot=bot, session=mine, user=lee)
 
     assert plugin.read(ctx, str(recipe.id)).endswith("# Soup")
-    assert [f["filename"] for f in plugin.list_files(ctx, str(older.id))] == ["recipe.md"]
+    assert [f["filename"] for f in plugin.list_files(ctx, str(older.id))] == [
+        "recipe.md"
+    ]
     assert "image attachment: fridge.jpg" in plugin.read(ctx, str(photo.id))
     with pytest.raises(ValueError, match="No file"):
         plugin.read(ctx, str(secret.id))
@@ -856,7 +888,10 @@ async def test_bot_looks_at_an_uploaded_image(tmp_path, settings):
     root = await bot.root_session(user)
     photo = await sync_to_async(save_session_file)(root, "fridge.png", b"\x89PNGfake")
     engine._client.responses = [
-        claude_tool("ergo_attachments_look", {"attachment_id": str(photo.id), "question": "Any eggs?"}),
+        claude_tool(
+            "ergo_attachments_look",
+            {"attachment_id": str(photo.id), "question": "Any eggs?"},
+        ),
         claude_text("Yes, a dozen eggs on the top shelf."),
         say("You have eggs."),
     ]
@@ -864,7 +899,9 @@ async def test_bot_looks_at_an_uploaded_image(tmp_path, settings):
     assert result.text == "You have eggs."
     look = engine._client.calls[1]
     parts = look["messages"][0]["content"]
-    assert [p["type"] for p in parts] == ["image", "text"] or [p["type"] for p in parts] == ["text", "image"]
+    assert [p["type"] for p in parts] == ["image", "text"] or [
+        p["type"] for p in parts
+    ] == ["text", "image"]
     assert any(p.get("text") == "Any eggs?" for p in parts)
     answer = engine._client.calls[2]["messages"][-1]["content"][0]["content"]
     assert answer == "fridge.png: Yes, a dozen eggs on the top shelf."
@@ -911,22 +948,33 @@ def test_bot_management_review_helpers(bot_repo, monkeypatch):
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_telegram_hears_about_delegated_replies_in_the_root_chat(tmp_path, settings):
+async def test_telegram_hears_about_delegated_replies_in_the_root_chat(
+    tmp_path, settings
+):
     from asgiref.sync import sync_to_async
 
     from django_ergo.bots import messaging
     from django_ergo.conversation.models import ThreadMessage
 
     settings.DJANGO_ERGO = {"THREAD_MESSAGE_RUNNER": "tests.test_bots.record_message"}
-    bot, engine, plugin = telegram_bot(tmp_path, say("The meal thread says tacos."), say("Done."))
+    bot, engine, plugin = telegram_bot(
+        tmp_path, say("The meal thread says tacos."), say("Done.")
+    )
     cook = await User.objects.acreate(username="cook")
     root = await bot.root_session(cook)
     thread = await bot.create_session(cook, parent=root, title="Meals")
     request = await ThreadMessage.objects.acreate(
-        sender_session=root, recipient_session=thread, text="Plan dinner", status="answered"
+        sender_session=root,
+        recipient_session=thread,
+        text="Plan dinner",
+        status="answered",
     )
     reply = await ThreadMessage.objects.acreate(
-        sender_session=thread, recipient_session=root, in_reply_to=request, text="Tacos", depth=1
+        sender_session=thread,
+        recipient_session=root,
+        in_reply_to=request,
+        text="Tacos",
+        depth=1,
     )
     await sync_to_async(messaging.deliver)(str(reply.id))
     assert str(plugin.api.sent()[-1]["chat_id"]) == "111"
@@ -934,6 +982,8 @@ async def test_telegram_hears_about_delegated_replies_in_the_root_chat(tmp_path,
 
     # A request answered back to another thread isn't sent to Telegram.
     before = len(plugin.api.sent())
-    asked = await ThreadMessage.objects.acreate(sender_session=thread, recipient_session=root, text="Status?")
+    asked = await ThreadMessage.objects.acreate(
+        sender_session=thread, recipient_session=root, text="Status?"
+    )
     await sync_to_async(messaging.deliver)(str(asked.id))
     assert len(plugin.api.sent()) == before

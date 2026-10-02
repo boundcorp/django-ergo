@@ -13,6 +13,7 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.utils import timezone
+
 from django_ergo.models import MessageRole
 from django_ergo.models import MessageType
 from django_ergo.models import UserChat
@@ -20,7 +21,6 @@ from django_ergo.models import Workflow
 from django_ergo.workflow_engine import WorkflowContext
 from django_ergo.workflow_engine import WorkflowEngine
 from django_ergo.workflow_engine import tool_approval_requested
-
 from tests.openai_test_utils import openai_mocked
 from tests.openai_test_utils import openai_real
 from tests.openai_test_utils import openai_test_manager
@@ -218,7 +218,7 @@ class TestWorkflowEngineOpenAIIntegration(TestCase):
             user=self.user, workflow=self.workflow, title="Test Chat"
         )
 
-    @pytest.mark.openai_real()
+    @pytest.mark.openai_real
     @openai_real("simple_message", "chat.completions")
     def test_process_message_real_api(self):
         """Test message processing with real OpenAI API (generates fixture)."""
@@ -237,7 +237,7 @@ class TestWorkflowEngineOpenAIIntegration(TestCase):
         input_data = {"message": message, "workflow": self.workflow.name}
         save_openai_fixture("simple_message", input_data, response, "chat.completions")
 
-    @pytest.mark.openai_mocked()
+    @pytest.mark.openai_mocked
     @openai_mocked("simple_message")
     def test_process_message_mocked(self, fixture):
         """Test message processing with saved fixture (fast, no cost)."""
@@ -251,7 +251,7 @@ class TestWorkflowEngineOpenAIIntegration(TestCase):
         # Can now assert against fixture data
         # self.assertEqual(response.content, fixture.response_data["content"])
 
-    @pytest.mark.openai_real()
+    @pytest.mark.openai_real
     @openai_real("tool_approval", "chat.completions")
     def test_tool_approval_flow_real_api(self):
         """Test tool approval flow with real OpenAI API (generates fixture)."""
@@ -282,7 +282,7 @@ class TestWorkflowEngineOpenAIIntegration(TestCase):
         # When real OpenAI is enabled:
         # self.assertEqual(response.message_type, MessageType.TOOL_APPROVAL_REQUEST)
 
-    @pytest.mark.openai_mocked()
+    @pytest.mark.openai_mocked
     @openai_mocked("tool_approval")
     def test_tool_approval_flow_mocked(self, fixture):
         """Test tool approval flow with saved fixture (fast, no cost)."""
@@ -308,7 +308,7 @@ class TestWorkflowEngineOpenAIIntegration(TestCase):
 
         # Future: self.assertEqual(response.message_type, MessageType.TOOL_APPROVAL_REQUEST)
 
-    @pytest.mark.openai_real()
+    @pytest.mark.openai_real
     def test_conversation_history_real_api(self):
         """Test conversation history building with real OpenAI API."""
         if not openai_test_manager.should_use_real_api():
@@ -342,7 +342,7 @@ class TestWorkflowEngineOpenAIIntegration(TestCase):
         # input_data = {"chat_id": str(self.chat.id), "message_count": len(messages)}
         # save_openai_fixture("conversation_history", input_data, {"messages": messages}, "chat.completions")
 
-    @pytest.mark.openai_mocked()
+    @pytest.mark.openai_mocked
     def test_conversation_history_mocked(self):
         """Test conversation history building with mocked data."""
         # Add some messages

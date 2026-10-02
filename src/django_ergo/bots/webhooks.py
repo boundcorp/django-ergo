@@ -74,6 +74,5 @@ async def webhook_view(request, bot: str, plugin: str, hook: str):
     return JsonResponse(result, safe=False)
 
 
-
 # Set directly: Django < 5's @csrf_exempt wraps an async view in a sync one.
 webhook_view.csrf_exempt = True

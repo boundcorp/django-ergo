@@ -140,9 +140,7 @@ def deliver_thread_message(message_id: str) -> None:
     from django_ergo.bots import messaging
     from django_ergo.conversation.models import ThreadMessage
 
-    recipient_id = (
-        ThreadMessage.objects.filter(id=message_id).values_list("recipient_session_id", flat=True).first()
-    )
+    recipient_id = ThreadMessage.objects.filter(id=message_id).values_list("recipient_session_id", flat=True).first()
     if recipient_id is None:
         return
     with session_lock(str(recipient_id)):

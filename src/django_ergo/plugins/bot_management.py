@@ -86,7 +86,12 @@ class BotManagementPlugin(BotPlugin):
         if not draft.is_dir():
             self.git("fetch", self.remote, self.main_branch)
             self.git(
-                "worktree", "add", "--force", "-B", self.draft_branch, str(draft),
+                "worktree",
+                "add",
+                "--force",
+                "-B",
+                self.draft_branch,
+                str(draft),
                 f"{self.remote}/{self.main_branch}",
             )
         return draft
@@ -244,7 +249,9 @@ class BotManagementPlugin(BotPlugin):
     def pull_requests(self) -> list[dict]:
         """Open pull requests on the bot repository, newest first."""
         fields = "number,title,url,headRefName,author,createdAt,body,additions,deletions,changedFiles"
-        return json.loads(self.run(["gh", "pr", "list", "--state", "open", "--json", fields]) or "[]")
+        return json.loads(
+            self.run(["gh", "pr", "list", "--state", "open", "--json", fields]) or "[]"
+        )
 
     def pull_request_diff(self, number: int) -> str:
         return self.run(["gh", "pr", "diff", str(int(number))])

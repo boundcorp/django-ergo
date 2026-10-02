@@ -12,6 +12,7 @@ from unittest.mock import patch
 import pytest
 from django.contrib.auth import get_user_model
 from django.test import TestCase
+
 from django_ergo.models import MessageRole
 from django_ergo.models import MessageType
 from django_ergo.models import UserChat
@@ -73,7 +74,7 @@ class TestWorkflowEngineOpenAI(TestCase):
         assert response_message.message_type == MessageType.ASSISTANT_MESSAGE
         assert response_message.content == "Mocked assistant response"
 
-    @pytest.mark.openai_real()
+    @pytest.mark.openai_real
     def test_workflow_engine_with_real_openai_when_activated(self):
         """Test workflow engine with real OpenAI API (when uncommented)."""
         if not openai_test_manager.should_use_real_api():
@@ -121,7 +122,7 @@ class TestWorkflowEngineOpenAI(TestCase):
                 "workflow_engine_basic", input_data, mock_response, "chat.completions"
             )
 
-    @pytest.mark.openai_mocked()
+    @pytest.mark.openai_mocked
     def test_workflow_engine_with_mocked_openai(self):
         """Test workflow engine with mocked OpenAI API using fixtures."""
         fixture = openai_test_manager.load_fixture("workflow_engine_basic")
@@ -224,7 +225,7 @@ class TestWorkflowEngineToolCalls:
 
         self.engine = WorkflowEngine()
 
-    @pytest.mark.openai_real()
+    @pytest.mark.openai_real
     def test_tool_calls_real_api(self):
         """Test tool calls with real OpenAI API."""
         if not openai_test_manager.should_use_real_api():
@@ -281,7 +282,7 @@ class TestWorkflowEngineToolCalls:
                 "workflow_tool_calls", input_data, mock_response, "chat.completions"
             )
 
-    @pytest.mark.openai_mocked()
+    @pytest.mark.openai_mocked
     def test_tool_calls_mocked(self):
         """Test tool calls with mocked OpenAI API."""
         fixture = openai_test_manager.load_fixture("workflow_tool_calls")
@@ -306,7 +307,7 @@ class TestWorkflowEngineToolCalls:
             assert response_message.message_type == MessageType.ASSISTANT_MESSAGE
 
 
-@pytest.mark.django_db()
+@pytest.mark.django_db
 class TestWorkflowEngineContextManagement:
     """Test workflow context and state management."""
 
