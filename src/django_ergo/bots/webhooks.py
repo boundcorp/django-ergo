@@ -26,7 +26,6 @@ from typing import TYPE_CHECKING
 from django.http import Http404
 from django.http import HttpResponse
 from django.http import JsonResponse
-from django.views.decorators.csrf import csrf_exempt
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -61,7 +60,6 @@ def find_handler(bot_name: str, plugin_name: str, hook: str):
     return plugin.webhooks().get(hook)
 
 
-@csrf_exempt
 async def webhook_view(request, bot: str, plugin: str, hook: str):
     handler = find_handler(bot, plugin, hook)
     if handler is None:
@@ -74,3 +72,8 @@ async def webhook_view(request, bot: str, plugin: str, hook: str):
     if result is None:
         return HttpResponse(status=200)
     return JsonResponse(result, safe=False)
+
+
+
+# Set directly: Django < 5's @csrf_exempt wraps an async view in a sync one.
+webhook_view.csrf_exempt = True

@@ -21,9 +21,10 @@ Live on rigel from `~/p/boundcorp/django-ergo`, bots from `boundcorp/ergo-bots`.
 - [ ] Replace the 30s git-pull thread with a beat task.
 - [ ] A bot tool waiting on a @bot_task holds a worker slot; watch worker concurrency if many tools wait at once.
 - [ ] Reconcile the root pre-commit config (ruff, prettier) with the branch's code style.
-- [ ] `test_telegram_webhook_mode` fails locally (async view under the sync test client); check CI.
 
 ### Done
+
+- [x] `test_telegram_webhook_mode`: webhook_view is csrf-exempt by attribute (Django 4.2's decorator made it sync).
 
 - [x] Bots see images and PDFs: 📎/paste attaches files to a message (native image/document parts), `ergo_attachments_look` for files already in a session, image thumbnails in the transcript.
 
