@@ -11,16 +11,19 @@
 The repository is the git checkout that contains the bot folder. Tools:
 
 - ``repo_status``, ``repo_list``, ``repo_read``, ``repo_diff``: look around.
-- ``repo_write``: change a file in the working copy (nothing is published).
+- ``repo_write``: change a file (nothing is published).
 - ``repo_publish``: commit everything. In ``merge_main`` mode it rebases on
   the main branch and pushes to it. In ``propose_pr`` mode it pushes a new
-  branch and opens a pull request with the GitHub CLI (``gh``), then returns
-  to the main branch.
+  branch and opens a pull request with the GitHub CLI (``gh``).
+- ``repo_discard``: throw away unpublished changes.
 - ``repo_pull``: fast-forward the main branch from the remote.
 - ``repo_prs``: list open pull requests (``gh``).
 
-Changes to bot.yaml, agents.md or tool files take effect when the bot is
-loaded again.
+In ``merge_main`` mode the bot edits the checkout it runs from. In
+``propose_pr`` mode it edits a draft: a separate git worktree of the main
+branch (inside ``.git``), so the running bots never see a change until its
+pull request is merged and the checkout is pulled. Changes to bot.yaml,
+agents.md or tool files take effect when the bot is loaded again.
 """
 
 from __future__ import annotations
@@ -73,6 +76,36 @@ class BotManagementPlugin(BotPlugin):
             self._repo = Path(top.strip()).resolve()
         return self._repo
 
+    @property
+    def workdir(self) -> Path:
+        """Where the bot reads and writes: the checkout, or its draft."""
+        if self.mode == "merge_main":
+            return self.repo
+        draft = self.draft_dir
+        if not draft.is_dir():
+            self.git("fetch", self.remote, self.main_branch)
+            self.git(
+                "worktree", "add", "--force", "-B", self.draft_branch, str(draft),
+                f"{self.remote}/{self.main_branch}",
+            )
+        return draft
+
+    @property
+    def draft_dir(self) -> Path:
+        common = Path(self.git("rev-parse", "--git-common-dir").strip())
+        if not common.is_absolute():
+            common = self.repo / common
+        return common.resolve() / f"ergo-draft-{self.bot.name}"
+
+    @property
+    def draft_branch(self) -> str:
+        return f"bot/{self.bot.name}/draft"
+
+    def drop_draft(self) -> None:
+        if self.mode != "merge_main" and self.draft_dir.is_dir():
+            self.git("worktree", "remove", "--force", str(self.draft_dir))
+            self.git("branch", "-D", self.draft_branch)
+
     def run(self, args: list[str], cwd: Path | None = None) -> str:
         proc = subprocess.run(  # noqa: S603 — fixed argv, no shell
             args,
@@ -88,15 +121,13 @@ class BotManagementPlugin(BotPlugin):
             raise ValueError(msg)
         return proc.stdout
 
-    def git(self, *args: str) -> str:
-        return self.run(["git", *args])
+    def git(self, *args: str, cwd: Path | None = None) -> str:
+        return self.run(["git", *args], cwd=cwd)
 
     def path(self, relative: str) -> Path:
-        path = (self.repo / relative).resolve()
-        if (
-            not path.is_relative_to(self.repo)
-            or ".git" in path.relative_to(self.repo).parts
-        ):
+        root = self.workdir
+        path = (root / relative).resolve()
+        if not path.is_relative_to(root) or ".git" in path.relative_to(root).parts:
             msg = f"{relative} is outside the repository"
             raise ValueError(msg)
         return path
@@ -104,18 +135,23 @@ class BotManagementPlugin(BotPlugin):
     # -- tools -------------------------------------------------------------
 
     def status(self) -> str:
-        branch = self.git("rev-parse", "--abbrev-ref", "HEAD").strip()
-        changes = self.git("status", "--short").strip() or "(clean)"
-        log = self.git("log", "--oneline", "-5").strip()
+        work = self.workdir
+        branch = self.git("rev-parse", "--abbrev-ref", "HEAD", cwd=work).strip()
+        changes = self.git("status", "--short", cwd=work).strip() or "(clean)"
+        log = self.git("log", "--oneline", "-5", cwd=work).strip()
+        where = "draft of " if work != self.repo else ""
         return (
-            f"Repository: {self.repo}\nBranch: {branch}\nMode: {self.mode}\n\n"
+            f"Repository: {where}{self.repo}\nBranch: {branch}\nMode: {self.mode}\n\n"
             f"Changes:\n{changes}\n\nRecent commits:\n{log}"
         )
 
     def list_files(self, path: str = ".") -> str:
         base = self.path(path)
-        files = self.git("ls-files", "--cached", "--others", "--exclude-standard")
-        prefix = "" if base == self.repo else f"{base.relative_to(self.repo)}/"
+        work = self.workdir
+        files = self.git(
+            "ls-files", "--cached", "--others", "--exclude-standard", cwd=work
+        )
+        prefix = "" if base == work else f"{base.relative_to(work)}/"
         return "\n".join(f for f in files.splitlines() if f.startswith(prefix))
 
     def read(self, path: str) -> str:
@@ -128,19 +164,29 @@ class BotManagementPlugin(BotPlugin):
         target = self.path(path)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content)
-        return f"Wrote {target.relative_to(self.repo)} ({len(content)} chars)"
+        return f"Wrote {target.relative_to(self.workdir)} ({len(content)} chars)"
 
     def diff(self) -> str:
-        self.git("add", "--intent-to-add", "--all")
-        return self.git("diff").strip() or "(no changes)"
+        work = self.workdir
+        self.git("add", "--intent-to-add", "--all", cwd=work)
+        return self.git("diff", cwd=work).strip() or "(no changes)"
+
+    def discard(self) -> str:
+        if self.mode == "merge_main":
+            self.git("reset", "--hard")
+            self.git("clean", "-fd")
+        else:
+            self.drop_draft()
+        return "Discarded the unpublished changes."
 
     def pull(self) -> str:
         self.git("checkout", self.main_branch)
         return self.git("pull", "--ff-only", self.remote, self.main_branch).strip()
 
     def publish(self, message: str, title: str = "", body: str = "") -> str:
-        if not self.git("status", "--porcelain").strip():
-            return "Nothing to publish: the working copy is clean."
+        work = self.workdir
+        if not self.git("status", "--porcelain", cwd=work).strip():
+            return "Nothing to publish: there are no changes."
         if self.mode == "merge_main":
             self.git("add", "--all")
             self.git("commit", "-m", message)
@@ -152,29 +198,29 @@ class BotManagementPlugin(BotPlugin):
         stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
         slug = re.sub(r"[^a-z0-9]+", "-", (title or message).lower()).strip("-")
         branch = f"bot/{self.bot.name}/{stamp}-{slug[:40]}".rstrip("-")
-        self.git("checkout", "-b", branch)
-        try:
-            self.git("add", "--all")
-            self.git("commit", "-m", message)
-            self.git("push", "-u", self.remote, branch)
-            url = self.run(
-                [
-                    "gh",
-                    "pr",
-                    "create",
-                    "--base",
-                    self.main_branch,
-                    "--head",
-                    branch,
-                    "--title",
-                    title or message.splitlines()[0],
-                    "--body",
-                    body or message,
-                ]
-            ).strip()
-        finally:
-            self.git("checkout", self.main_branch)
-        return f"Opened {url} from {branch}."
+        self.git("checkout", "-b", branch, cwd=work)
+        self.git("add", "--all", cwd=work)
+        self.git("commit", "-m", message, cwd=work)
+        self.git("push", "-u", self.remote, branch, cwd=work)
+        url = self.run(
+            [
+                "gh",
+                "pr",
+                "create",
+                "--base",
+                self.main_branch,
+                "--head",
+                branch,
+                "--title",
+                title or message.splitlines()[0],
+                "--body",
+                body or message,
+            ],
+            cwd=work,
+        ).strip()
+        self.git("worktree", "remove", "--force", str(work))
+        self.git("branch", "-D", self.draft_branch)
+        return f"Opened {url} from {branch}; it goes live once merged."
 
     def prs(self) -> str:
         return self.run(
@@ -211,7 +257,7 @@ class BotManagementPlugin(BotPlugin):
 
         @bot_tool(name="repo_write")
         def write(path: str, content: str) -> str:
-            """Create or replace a file in the bot repository's working copy."""
+            """Create or replace a file in the bot repository (unpublished until repo_publish)."""
             return plugin.write(path, content)
 
         @bot_tool(name="repo_diff")
@@ -223,6 +269,11 @@ class BotManagementPlugin(BotPlugin):
         def pull() -> str:
             """Update the main branch from the remote (fast-forward only)."""
             return plugin.pull()
+
+        @bot_tool(name="repo_discard")
+        def discard() -> str:
+            """Throw away all unpublished changes."""
+            return plugin.discard()
 
         @bot_tool(
             name="repo_publish",
@@ -237,5 +288,5 @@ class BotManagementPlugin(BotPlugin):
             """List open pull requests on the bot repository."""
             return plugin.prs()
 
-        functions = [status, list_files, read, write, diff, pull, publish, prs]
+        functions = [status, list_files, read, write, diff, discard, pull, publish, prs]
         return [fn.__bot_tool__ for fn in functions]

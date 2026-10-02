@@ -248,7 +248,11 @@ of that mount (`https://bots.example.com/hooks`) and
 `plugin.webhook_url(name)` gives the full URL to register with the outside
 service. Handlers check their own secrets.
 
-## Built-in plugins
+## Official plugins
+
+Ergo's own plugins live in `django_ergo.plugins`, one module each, and bot.yaml
+names them by short name. Tools that belong to one bot (like a kitchen bot's
+Tandoor tools) go in that bot folder's `tools/` instead.
 
 ### ergo_kb
 
@@ -288,14 +292,40 @@ to date under your review.
 ```
 
 Lets the bot maintain the git repository its folder lives in, so it can
-change its own instructions, config and tools. `repo_status`, `repo_list`,
-`repo_read`, `repo_diff` and `repo_write` work on the working copy (paths
-can't leave the repo or touch `.git`). `repo_publish` commits everything,
-then either rebases on main and pushes (`merge_main`) or pushes a
-`bot/<name>/<time>-<title>` branch and opens a pull request with `gh`
-(`propose_pr`), returning to main afterwards. It needs approval unless
-`approve_publish: false`. `repo_pull` fast-forwards main and `repo_prs`
-lists open pull requests. Changes take effect when the bot is loaded again.
+change its own instructions, config and tools, or add new bots.
+`repo_status`, `repo_list`, `repo_read`, `repo_diff` and `repo_write` look
+at and edit the files (paths can't leave the repo or touch `.git`), and
+`repo_discard` throws unpublished edits away.
+
+In `merge_main` mode the bot edits the checkout it runs from, and
+`repo_publish` commits, rebases on main and pushes. In `propose_pr` mode it
+edits a draft instead: a separate git worktree of main kept inside `.git`,
+so the running bots don't change until you merge. `repo_publish` then pushes
+a `bot/<name>/<time>-<title>` branch and opens a pull request with `gh`.
+Publishing needs approval unless `approve_publish: false`. `repo_pull`
+fast-forwards main and `repo_prs` lists open pull requests. Changes take
+effect when the bot is loaded again (Ergonaut reloads changed bot files on
+its own, and with `ERGONAUT_BOTS_PULL_SECONDS` pulls merged changes too).
+
+### orca
+
+```yaml
+- name: orca
+  environment: devbox        # every call is pinned to this Orca environment
+  executable: orca-ide       # default: orca-ide if installed, else orca
+  approve_changes: true
+  root_only: true
+```
+
+Lets the bot run the Orca CLI on its host to manage worktrees, terminals and
+supervised workers. `orca_read` runs inventory commands with no approval
+(`status`, `worktree ps|list|show`, `terminal list|read|show`, `repo
+list|show`, `orchestration run-list|worker-list|worker-read|worker-show`,
+`search`, `skills get`, anything with `--help`). `orca_run` runs everything
+else, such as `worktree create`, `terminal send` or `orchestration
+worker-start`, and waits for approval unless `approve_changes: false`.
+Arguments are an argv list, never a shell string, and `--json` is added for
+the bot. With `environment` set, the bot can't point a call elsewhere.
 
 ### telegram
 

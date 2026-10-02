@@ -15,7 +15,8 @@ A plugin is a class with any of these hooks::
         async def serve(self): ...                     # long-running, e.g. a channel
         def webhooks(self): return {"update": handler} # see django_ergo.bots.webhooks
 
-``bot.yaml`` names plugins by short name (built-ins below, or
+``bot.yaml`` names plugins by short name (official plugins in
+``django_ergo.plugins``, listed below, or
 ``DJANGO_ERGO["BOT_PLUGINS"]``) or by dotted path ``module:Class``. Every
 other key in the plugin entry is passed as ``config``.
 """
@@ -37,12 +38,11 @@ if TYPE_CHECKING:
     from django_ergo.conversation.models import ConversationSession
     from django_ergo.conversation.toolkit import Toolkit
 
-BUILTIN_PLUGINS = {
-    "ergo_kb": "django_ergo.bots.builtin_plugins.kb.ErgoKBPlugin",
-    "bot_management": (
-        "django_ergo.bots.builtin_plugins.bot_management.BotManagementPlugin"
-    ),
-    "telegram": "django_ergo.bots.builtin_plugins.telegram.TelegramPlugin",
+OFFICIAL_PLUGINS = {
+    "ergo_kb": "django_ergo.plugins.kb.ErgoKBPlugin",
+    "bot_management": "django_ergo.plugins.bot_management.BotManagementPlugin",
+    "telegram": "django_ergo.plugins.telegram.TelegramPlugin",
+    "orca": "django_ergo.plugins.orca.OrcaPlugin",
 }
 
 
@@ -102,7 +102,7 @@ def resolve_plugin_class(name: str) -> type[BotPlugin]:
     from django_ergo.settings import api_settings
 
     custom = getattr(api_settings, "BOT_PLUGINS", None) or {}
-    path = custom.get(name) or BUILTIN_PLUGINS.get(name) or name
+    path = custom.get(name) or OFFICIAL_PLUGINS.get(name) or name
     path = path.replace(":", ".")
     try:
         cls = import_string(path)

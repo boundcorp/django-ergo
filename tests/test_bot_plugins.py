@@ -207,7 +207,7 @@ async def test_bot_edits_and_merges_its_own_config(bot_repo):
     assert "Shorter instructions" in git(remote, "log", "--oneline", "main")
     assert "Pushed" in engine._client.calls[-1]["messages"][-1]["content"][0]["content"]
     assert "(clean)" in plugin.status()
-    assert plugin.publish("again") == "Nothing to publish: the working copy is clean."
+    assert plugin.publish("again") == "Nothing to publish: there are no changes."
 
 
 @pytest.mark.django_db
@@ -231,23 +231,44 @@ def test_bot_proposes_pr_and_returns_to_main(bot_repo, monkeypatch):
     plugin.write("bots/manager/tools/new.py", "x = 1\n")
     assert "bots/manager/tools/new.py" in plugin.diff()
     assert "bots/manager/tools/new.py" in plugin.list_files("bots/manager")
+    # The draft lives beside the checkout: the running bots don't see it.
+    assert not (work / "bots/manager/tools/new.py").exists()
+    assert git(work, "status", "--porcelain").strip() == ""
     result = plugin.publish("Add a tool", title="New tool")
 
     assert result.startswith(
         "Opened https://github.com/acme/bots/pull/7 from bot/manager/"
     )
-    branch = result.split(" from ")[1].rstrip(".")
+    branch = result.split(" from ")[1].split(";")[0]
     assert branch.endswith("-new-tool")
     assert calls[0][:3] == ["gh", "pr", "create"]
     assert calls[0][calls[0].index("--head") + 1] == branch
     assert "Add a tool" in git(remote, "log", "--oneline", branch)
     assert git(work, "rev-parse", "--abbrev-ref", "HEAD").strip() == "main"
     assert not (work / "bots/manager/tools/new.py").exists()
+    assert result.endswith("it goes live once merged.")
+    assert not plugin.draft_dir.exists()
+    # The next draft starts again from main.
+    assert "(clean)" in plugin.status()
 
     with pytest.raises(ValueError, match="outside the repository"):
         plugin.read("../remote.git/config")
     with pytest.raises(ValueError, match="outside the repository"):
         plugin.write(".git/hooks/pre-commit", "evil")
+
+
+@pytest.mark.django_db
+def test_bot_discards_a_draft(bot_repo):
+    _, work = bot_repo
+    _, _, plugin = management_bot(work, "propose_pr")
+    git(work, "add", "-A")
+    git(work, "commit", "-m", "add bot")
+    git(work, "push")
+    plugin.write("bots/manager/agents.md", "Be loud.")
+    assert "Be loud." in plugin.diff()
+    assert plugin.discard() == "Discarded the unpublished changes."
+    assert plugin.diff() == "(no changes)"
+    assert "bot/manager/draft" in git(work, "branch")
 
 
 @pytest.mark.django_db(transaction=True)
@@ -587,3 +608,82 @@ def test_telegram_polling_without_public_url(tmp_path):
     plugin.mode = "webhook"
     with pytest.raises(RuntimeError, match="BOT_WEBHOOK_BASE_URL"):
         _ = plugin.uses_webhook
+
+
+# ---------------------------------------------------------------------------
+# orca
+# ---------------------------------------------------------------------------
+
+
+def orca_bot(tmp_path, *responses, config="environment: devbox, executable: orca-test"):
+    yaml_text = f"""
+        name: cto
+        plugins: [{{name: orca, {config}}}]
+    """
+    bot, engine = make_bot(tmp_path, *responses, yaml_text=yaml_text, name="cto")
+    return bot, engine, bot.plugin("orca")
+
+
+@pytest.fixture
+def orca_calls(monkeypatch):
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, 0, stdout='{"ok": true}', stderr="")
+
+    monkeypatch.setattr("django_ergo.plugins.orca.subprocess.run", fake_run)
+    return calls
+
+
+@pytest.mark.django_db
+def test_orca_read_runs_inventory_pinned_to_the_environment(tmp_path, orca_calls):
+    _, _, plugin = orca_bot(tmp_path)
+    assert plugin.read(["worktree", "ps"]) == '{"ok": true}'
+    assert orca_calls[-1] == [
+        "orca-test", "worktree", "ps", "--environment", "devbox", "--json",
+    ]
+    plugin.read(["skills", "get", "orchestration"])
+    assert "--json" not in orca_calls[-1]
+    plugin.read(["orchestration", "worker-start", "--help"])
+    assert len(orca_calls) == 3
+
+
+@pytest.mark.django_db
+def test_orca_read_refuses_changes_and_other_environments(tmp_path, orca_calls):
+    _, _, plugin = orca_bot(tmp_path)
+    assert "use orca_run" in plugin.read(["orchestration", "worker-start", "--task", "t1"])
+    assert "use orca_run" in plugin.read(["terminal", "send", "--text", "hi"])
+    with pytest.raises(ValueError, match="only manages the 'devbox'"):
+        plugin.run(["status", "--environment=prod"])
+    assert orca_calls == []
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_orca_run_waits_for_approval(tmp_path, orca_calls):
+    bot, engine, _ = orca_bot(
+        tmp_path,
+        claude_tool("orca_read", {"args": ["orchestration", "worker-list"]}, tool_id="r1"),
+        claude_tool(
+            "orca_run", {"args": ["orchestration", "worker-stop", "--dispatch", "d1"]},
+            tool_id="w1",
+        ),
+        say("Stopped."),
+    )
+    user = await User.objects.acreate(username="cto-user")
+    root = await bot.root_session(user)
+
+    paused = await bot.ask(root, "Stop worker d1")
+    assert [a.tool_name for a in paused.approvals] == ["orca_run"]
+    assert [c[1:3] for c in orca_calls] == [["orchestration", "worker-list"]]
+    assert "Orca" in engine._client.calls[0]["system"]
+
+    done = await bot.resume(root, {"w1": True})
+    assert done.text == "Stopped."
+    assert orca_calls[-1][1:3] == ["orchestration", "worker-stop"]
+
+
+@pytest.mark.django_db
+def test_orca_reports_a_missing_cli(tmp_path):
+    _, _, plugin = orca_bot(tmp_path, config="executable: no-such-orca-cli")
+    assert "is not installed" in plugin.read(["status"])

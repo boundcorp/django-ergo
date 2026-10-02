@@ -16,9 +16,9 @@ class BotsConfig(AppConfig):
             if not admin_site.is_registered(model):
                 admin_site.register(model, type(model_admin))
 
-        # Webhooks load the bots on the first request.
+        # The bots load on first use and reload when their files change.
         from django_ergo.bots import webhooks
 
-        from ergonaut.apps.bots.loading import load_registry
+        from ergonaut.apps.bots.reloading import ReloadingRegistry
 
-        webhooks.set_registry(load_registry)
+        webhooks.set_registry(ReloadingRegistry())
