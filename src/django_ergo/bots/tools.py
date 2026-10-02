@@ -205,14 +205,24 @@ def bot_tool(  # noqa: PLR0913
     return decorate(func) if func is not None else decorate
 
 
-def bot_task(func: Callable | None = None, *, name: str | None = None):
+def bot_task(
+    func: Callable | None = None,
+    *,
+    name: str | None = None,
+    requires_approval: bool = False,
+):
     """Mark a function as a background task of the bot whose tool file defines it.
 
-    Tools start it with ``ctx.tasks`` (see ``django_ergo.bots.background``).
+    Tools start it with ``ctx.tasks`` (see ``django_ergo.bots.background``) or
+    as a worker (``ctx.workers``). The ``workers`` skill's ``ergo_worker_start``
+    can start it directly, unless ``requires_approval``: then only the bot's own
+    tools can, so a tool that asks first (``@bot_tool(requires_approval=True)``)
+    can't be sidestepped.
     """
 
     def decorate(fn: Callable) -> Callable:
         fn.__bot_task__ = name or fn.__name__
+        fn.__bot_task_requires_approval__ = requires_approval
         return fn
 
     return decorate(func) if func is not None else decorate
