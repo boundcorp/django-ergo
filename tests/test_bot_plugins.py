@@ -921,6 +921,105 @@ def test_attachments_access_rules(tmp_path, settings):
     assert plugin.read(ctx, made["id"]).endswith("- eggs\n- milk")
 
 
+@pytest.mark.django_db
+def test_attachments_archive_and_unarchive(tmp_path, settings):
+    from datetime import timedelta
+
+    from django.utils import timezone
+
+    from django_ergo.bots.tools import ToolContext
+    from django_ergo.conversation.attachments import save_session_file
+    from django_ergo.conversation.models import ConversationAttachment
+
+    settings.MEDIA_ROOT = str(tmp_path / "media")
+    bot, _, plugin = files_bot(tmp_path)
+    lee = User.objects.create(username="lee-archive")
+    mine = ConversationSession.objects.create(user=lee, bot_name="filer")
+    elsewhere = ConversationSession.objects.create(user=lee, bot_name="kitchen")
+    ctx = ToolContext(bot=bot, session=mine, user=lee)
+    now = timezone.now()
+    rows = {}
+    for days, name in [(10, "old.md"), (5, "mid.md"), (1, "new.md"), (0, "now.md")]:
+        row = save_session_file(mine, name, name.encode())
+        ConversationAttachment.objects.filter(id=row.id).update(
+            updated_at=now - timedelta(days=days)
+        )
+        rows[name] = str(row.id)
+    other = save_session_file(elsewhere, "keep.md", b"x")
+
+    def names(**kw):
+        return [f["filename"] for f in plugin.list_files(ctx, **kw)]
+
+    # Needs ids or all_files; ids must be files of this session.
+    with pytest.raises(ValueError, match="all_files"):
+        plugin.archive(ctx)
+    with pytest.raises(ValueError, match="No file"):
+        plugin.archive(ctx, [str(other.id)])
+    with pytest.raises(ValueError, match="No file nope"):
+        plugin.archive(ctx, ["nope"])
+
+    done = plugin.archive(ctx, [rows["old.md"]])
+    assert [f["filename"] for f in done["archived"]] == ["old.md"]
+    assert done["archived"][0]["archived_at"]
+    assert done["remaining"] == 3
+    assert names() == ["now.md", "new.md", "mid.md"]
+    assert names(include_archived=True) == ["now.md", "new.md", "mid.md", "old.md"]
+    # Still readable by id, and its age is kept.
+    assert plugin.read(ctx, rows["old.md"]).endswith("old.md")
+    assert ConversationAttachment.objects.get(id=rows["old.md"]).updated_at < now
+
+    # All, but only older than 2 days and never the latest one.
+    done = plugin.archive(ctx, all_files=True, older_than_days=2, keep_latest=1)
+    assert [f["filename"] for f in done["archived"]] == ["mid.md"]
+    done = plugin.archive(ctx, all_files=True, keep_latest=1)
+    assert [f["filename"] for f in done["archived"]] == ["new.md"]
+    assert names() == ["now.md"]
+    assert ConversationAttachment.objects.get(id=other.id).archived_at is None
+
+    # Hidden from the context listing and the skill hint, with a note.
+    text = plugin.context_sources(ctx, "hi")[0].text()
+    assert "now.md" in text
+    assert "old.md" not in text
+    assert "3 archived files not listed" in text
+    assert plugin.skill_hint(ctx) == "1 file in this chat"
+
+    back = plugin.unarchive(ctx, [rows["old.md"], rows["now.md"]])
+    assert [f["filename"] for f in back["unarchived"]] == ["old.md"]
+    assert "archived_at" not in back["unarchived"][0]
+    assert names() == ["now.md", "old.md"]
+    with pytest.raises(ValueError, match="attachment_ids"):
+        plugin.unarchive(ctx, [])
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_bot_archives_its_files(tmp_path, settings):
+    from asgiref.sync import sync_to_async
+
+    from django_ergo.conversation.attachments import save_session_file
+
+    settings.MEDIA_ROOT = str(tmp_path / "media")
+    bot, engine, _ = files_bot(
+        tmp_path,
+        claude_tool("ergo_attachments_archive", {"all_files": True}),
+        say("Cleared."),
+        say("Nothing here."),
+    )
+    user = await User.objects.acreate(username="archiver")
+    root = await bot.root_session(user)
+    await sync_to_async(save_session_file)(root, "notes.txt", b"bring napkins")
+
+    await bot.ask(root, "Clear out the old files")
+    assert "notes.txt (text/plain" in engine._client.calls[0]["system"]
+    row = await root.attachments.aget()
+    assert row.archived_at is not None
+    assert row.file  # still stored
+
+    await bot.ask(root, "Any files?")
+    system = engine._client.calls[-1]["system"]
+    assert "notes.txt (text/plain" not in system
+    assert "1 archived file not listed" in system
+
+
 @pytest.mark.django_db(transaction=True)
 async def test_bot_looks_at_an_uploaded_image(tmp_path, settings):
     import base64

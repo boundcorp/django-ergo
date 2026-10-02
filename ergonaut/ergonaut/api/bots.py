@@ -900,6 +900,7 @@ class AttachmentOut(Schema):
     view: str = ""  # how the viewer shows it (django_ergo.bots.pages.view_kind); "" = download
     created_at: datetime
     updated_at: datetime
+    archived_at: datetime | None = None  # archived by the bot (ergo_attachments_archive)
 
 
 def attachment_out(row: ConversationAttachment) -> dict:
@@ -915,6 +916,7 @@ def attachment_out(row: ConversationAttachment) -> dict:
         "view": view_kind(row.filename, row.media_type),
         "created_at": row.created_at,
         "updated_at": row.updated_at,
+        "archived_at": row.archived_at,
     }
 
 

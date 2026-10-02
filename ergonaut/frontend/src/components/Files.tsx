@@ -32,7 +32,10 @@ export default function Files({
   const [files, setFiles] = useState<AttachmentFile[] | null>(null)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const [showArchived, setShowArchived] = useState(false)
   const input = useRef<HTMLInputElement>(null)
+  const archivedCount = files?.filter(f => f.archived_at).length ?? 0
+  const shown = files?.filter(f => showArchived || !f.archived_at)
 
   const load = useCallback(
     () =>
@@ -98,8 +101,11 @@ export default function Files({
         {files && !files.length && (
           <p className="p-2 text-sm text-zinc-500">No files yet. Upload or drop files here; the bot can read them.</p>
         )}
-        {files?.map(file => (
-          <div key={file.id} className="group rounded-md px-2 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-900">
+        {shown?.map(file => (
+          <div
+            key={file.id}
+            className={`group rounded-md px-2 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-900 ${file.archived_at ? 'opacity-60' : ''}`}
+          >
             <div className="flex items-center gap-2">
               {file.view ? (
                 <button
@@ -140,9 +146,18 @@ export default function Files({
             </div>
             <div className="text-xs text-zinc-500">
               {SOURCE_LABEL[file.source]} · {size(file.size)} · {new Date(file.updated_at).toLocaleString()}
+              {file.archived_at && ' · archived'}
             </div>
           </div>
         ))}
+        {archivedCount > 0 && (
+          <button
+            className="p-2 text-xs text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-300"
+            onClick={() => setShowArchived(v => !v)}
+          >
+            {showArchived ? 'Hide archived' : `Show ${archivedCount} archived`}
+          </button>
+        )}
       </div>
     </aside>
   )

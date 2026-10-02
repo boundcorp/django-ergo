@@ -168,6 +168,7 @@ export type AttachmentFile = {
   view: '' | 'page' | 'html' | 'image' | 'pdf' | 'media' | 'markdown' | 'csv' | 'json' | 'text'
   created_at: string
   updated_at: string
+  archived_at?: string | null
 }
 
 // Something pinned in a chat: a bot-folder file (chats.<name>.pins) or a pinned chat file.
