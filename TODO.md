@@ -24,8 +24,9 @@ Live on rigel from `~/p/boundcorp/django-ergo`, bots from `boundcorp/ergo-bots`.
 - [x] **BotTable** (PR #35, merged): real Django models per bot, migrations in the bot folder's `migrations/` (bot_management writes them into the proposal), `ergo_bot_migrate` at start and after pulls, `tables` skill.
 - [x] **Pages and pins** (PR #36, merged): live .jhtml pages (sandboxed Jinja over tables), blocks, the `pages` plugin, chat pins (bot-folder files and pinned chat files), page viewer in the chat, `ctx.table()` for schedule code.
 - [x] **Fixes from the Ad Manager test** (PR #37, merged): code-only schedules run once as the first admin; pulls only migrate after real changes; page sums are unknown, not zero.
-- [ ] **Ad Manager bot (`ads`, ergo-bots #3, merged)**: written by boundcorp; live on rigel, table migrated, dashboard pinned. Waiting on Lee to put the Meta token in ~/src/ergonaut-secrets.env, then restart and run the first pull.
-- [ ] Ideas from the test: preview a draft's pages before publishing (boundcorp can't render a page in its draft); a visual blocks editor in the UI.
+- [ ] **Ad Manager bot (`ads`, ergo-bots #3, merged)**: written by boundcorp; live on rigel, table migrated, dashboard pinned. Token in place 2026-10-02; first 30-day pull: 63 rows, 16 campaigns, $302.54 (matches the 10-01 report for Sep 29-30). Pulls every 12 h.
+- [x] Draft page preview (PR #38, merged): `ergo_config_repo_preview` / `ergo_bot_preview`.
+- [ ] A visual blocks editor in the UI. Campaign names are Ad Manager's internal `AM:<uuid>:campaign` labels; friendly names would need Ad Manager's mapping.
 - [x] **Bot data and pages** (decided 2026-10-02): pinned files (repo files and bot-written attachments), blocks-based page toolkit, live .jhtml Jinja pages served straight from the file/attachment endpoints, templates from bots or PRs. No sandbox origin; all users share rows.
 
 - [ ] Bots with bash/orca in a multi-user Ergonaut: approvals are admin-only now; consider per-plugin approver lists.
