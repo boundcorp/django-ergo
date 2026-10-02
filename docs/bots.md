@@ -248,6 +248,12 @@ Pages come from two places:
   pages and assets (`.html`, `.mjs`, `.js`, `.css`, images, JSON, CSV, never
   Python, YAML or dotfiles) at `/api/bots/<bot>/files/<path>`, in the app's
   origin, so a page can load its own scripts.
+  A bot proposing a page through `bot_management` can check it first with
+  `ergo_config_repo_preview(path)`: it renders the draft's page in a separate
+  process, inside a transaction that's rolled back, after applying the
+  draft's migrations and adding sample rows to empty tables (one filled in,
+  others with some or all optional fields empty). The same check is
+  `python -m django ergo_bot_preview <bot folder> <page>`.
 - **Files the bot writes** into a chat with the `pages` plugin. They're
   served from the file's own URL and sandboxed (`Content-Security-Policy:
   sandbox`): scripts run, but without the app's cookies or API.
