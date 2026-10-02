@@ -50,14 +50,6 @@ export function Chat({ onChange }: { onChange: () => void }) {
   }
   // The pinned page shown in place of the transcript, if any.
   const [openPin, setOpenPin] = useState<Pin | null>(null)
-  // ?pin=<url>&name=<name> (from the sidebar) opens that pin.
-  const [search, setSearch] = useSearchParams()
-  useEffect(() => {
-    const url = search.get('pin')
-    if (!url) return
-    setOpenPin({ kind: 'file', name: search.get('name') || 'Pinned', url })
-    setSearch({}, { replace: true })
-  }, [search, setSearch])
   // Bumped when the Files panel pins or unpins, so the strip reloads.
   const [pinsKey, setPinsKey] = useState(0)
   const bottom = useRef<HTMLDivElement>(null)
@@ -69,10 +61,19 @@ export function Chat({ onChange }: { onChange: () => void }) {
   useEffect(() => {
     setDetail(null)
     setLast(null)
-    // Keep a pin the sidebar asked for (?pin=); otherwise a new chat starts on its transcript.
-    if (!new URLSearchParams(window.location.search).get('pin')) setOpenPin(null)
+    setOpenPin(null)
     load().catch(e => setError(String(e.message ?? e)))
   }, [load])
+
+  // ?pin=<url>&name=<name> (from the sidebar) opens that pin. Declared after the effect above,
+  // which resets the viewer when the chat changes, so it runs second.
+  const [search, setSearch] = useSearchParams()
+  useEffect(() => {
+    const url = search.get('pin')
+    if (!url) return
+    setOpenPin({ kind: 'file', name: search.get('name') || 'Pinned', url })
+    setSearch({}, { replace: true })
+  }, [search, setSearch])
 
   // Follow the session live, whichever process runs its turns.
   const loaded = detail !== null
