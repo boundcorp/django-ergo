@@ -627,3 +627,39 @@ async def test_approval_tools_are_refused_without_allow_approvals(user):
     refused = result.call.transcript[2]["content"][0]
     assert refused["is_error"]
     assert "requires approval" in refused["content"]
+
+
+async def test_openai_calls_record_cached_tokens_and_their_cost(user):
+    response = openai_tool("submit_output", VALID_PLAN)
+    response.usage = SimpleNamespace(
+        prompt_tokens=1_000_000,
+        completion_tokens=100_000,
+        prompt_tokens_details=SimpleNamespace(
+            cached_tokens=600_000, cache_write_tokens=0
+        ),
+        completion_tokens_details=SimpleNamespace(reasoning_tokens=40_000),
+    )
+    engine = OpenAIAPIEngine(config={"model": "gpt-6-luna"})
+    engine._client = FakeOpenAIClient(response)
+    spec = StructuredCallSpec(
+        kind="planner", system_prompt="Plan.", response_model=Plan
+    )
+
+    result = await run_structured_call(spec, "Plan", user=user, engine=engine)
+
+    call = result.call
+    assert (
+        call.input_tokens,
+        call.cache_read_input_tokens,
+        call.output_tokens,
+        call.reasoning_tokens,
+    ) == (
+        400_000,
+        600_000,
+        100_000,
+        40_000,
+    )
+    # gpt-6-luna: 400K input $0.04, 600K cached $0.006, 100K output $0.05; a 1M-token prompt is over
+    # the 272K long-context line, so 2x input/cache and 1.5x output.
+    assert float(call.cost_usd) == pytest.approx(0.04 * 2 + 0.006 * 2 + 0.05 * 1.5)
+    assert call.metadata["cost_parts"]["cache_read"] == pytest.approx(0.012)

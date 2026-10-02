@@ -79,12 +79,20 @@ export type KB = {
 
 export type KBArticle = { path: string; title: string; body: string }
 
+// Billed separately: uncached input, cache reads, cache writes, output (incl. reasoning).
 export type CostBucket = {
   name: string
   calls: number
   input_tokens: number
+  cache_read_tokens: number
+  cache_write_tokens: number
   output_tokens: number
+  reasoning_tokens: number
   cost: number
+  input_cost: number
+  cache_read_cost: number
+  cache_write_cost: number
+  output_cost: number
   unpriced_calls: number
 }
 

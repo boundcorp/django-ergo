@@ -54,3 +54,45 @@ def test_people_only_see_their_own_costs(client):
     get_user_model().objects.create_user("cook", "c@example.com", "pw")
     client.post("/api/auth/login", json.dumps({"username": "cook", "password": "pw"}), content_type="application/json")
     assert client.get("/api/costs").json()["total"]["calls"] == 0
+
+
+@pytest.mark.django_db
+def test_costs_show_cached_input_cache_writes_and_reasoning_apart(client, lee):
+    from decimal import Decimal
+
+    million = 1_000_000
+    # Priced as it ran (recorded parts), and an older call priced from its totals.
+    StructuredCall.objects.create(
+        kind="chat_reply",
+        user=lee,
+        model_name="gpt-6-sol",
+        input_tokens=million,
+        cache_read_input_tokens=2 * million,
+        cache_creation_input_tokens=0,
+        output_tokens=million,
+        reasoning_tokens=300_000,
+        cost_usd=Decimal("12.4"),
+        metadata={"cost_parts": {"input": 2.0, "cache_write": 0.0, "cache_read": 0.4, "output": 10.0}},
+    )
+    StructuredCall.objects.create(
+        kind="chat_reply",
+        user=lee,
+        model_name="claude-opus-5-5",
+        input_tokens=million,
+        cache_creation_input_tokens=million,
+        cache_read_input_tokens=million,
+        output_tokens=0,
+    )
+    total = client.get("/api/costs").json()["total"]
+    assert (total["input_tokens"], total["cache_read_tokens"], total["cache_write_tokens"]) == (
+        2 * million,
+        3 * million,
+        million,
+    )
+    assert total["reasoning_tokens"] == 300_000
+    # Opus 5.5: $4 input, $5 cache writes, $0.20 cache reads.
+    assert total["cost"] == pytest.approx(12.4 + 4 + 5 + 0.2)
+    assert total["input_cost"] == pytest.approx(2 + 4)
+    assert total["cache_read_cost"] == pytest.approx(0.4 + 0.2)
+    assert total["cache_write_cost"] == pytest.approx(5)
+    assert total["output_cost"] == pytest.approx(10)

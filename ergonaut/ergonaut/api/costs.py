@@ -14,7 +14,7 @@ from datetime import timedelta
 from django.utils import timezone
 from django_ergo.conversation.chat_reply import CHAT_REPLY_KIND
 from django_ergo.conversation.models import StructuredCall
-from django_ergo.pricing import call_cost
+from django_ergo.pricing import call_cost, call_cost_parts
 from ninja import Router, Schema
 from ninja.security import django_auth
 
@@ -24,9 +24,18 @@ router = Router(tags=["costs"], auth=django_auth)
 class Bucket(Schema):
     name: str
     calls: int
+    # Billed separately: uncached input, cache reads, cache writes, and output (which
+    # includes reasoning; reasoning_tokens says how much).
     input_tokens: int
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
     output_tokens: int
+    reasoning_tokens: int = 0
     cost: float
+    input_cost: float = 0.0
+    cache_read_cost: float = 0.0
+    cache_write_cost: float = 0.0
+    output_cost: float = 0.0
     unpriced_calls: int
 
 
@@ -47,17 +56,36 @@ class CostsOut(Schema):
 
 
 def _empty(name: str) -> dict:
-    return {"name": name, "calls": 0, "input_tokens": 0, "output_tokens": 0, "cost": 0.0, "unpriced_calls": 0}
+    return {
+        "name": name,
+        "calls": 0,
+        "input_tokens": 0,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "output_tokens": 0,
+        "reasoning_tokens": 0,
+        "cost": 0.0,
+        "input_cost": 0.0,
+        "cache_read_cost": 0.0,
+        "cache_write_cost": 0.0,
+        "output_cost": 0.0,
+        "unpriced_calls": 0,
+    }
 
 
-def _add(bucket: dict, call: StructuredCall, cost: float | None) -> None:
+def _add(bucket: dict, call: StructuredCall, cost: float | None, parts: dict | None) -> None:
     bucket["calls"] += 1
-    bucket["input_tokens"] += call.input_tokens + call.cache_creation_input_tokens + call.cache_read_input_tokens
+    bucket["input_tokens"] += call.input_tokens
+    bucket["cache_read_tokens"] += call.cache_read_input_tokens
+    bucket["cache_write_tokens"] += call.cache_creation_input_tokens
     bucket["output_tokens"] += call.output_tokens
+    bucket["reasoning_tokens"] += getattr(call, "reasoning_tokens", 0) or 0
     if cost is None:
         bucket["unpriced_calls"] += 1
-    else:
-        bucket["cost"] += cost
+        return
+    bucket["cost"] += cost
+    for part in ("input", "cache_read", "cache_write", "output"):
+        bucket[f"{part}_cost"] += (parts or {}).get(part, 0.0)
 
 
 def _sorted(buckets: dict) -> list[dict]:
@@ -81,15 +109,16 @@ def costs(request, days: int = 30):
     unpriced: set[str] = set()
     for call in calls:
         cost = call_cost(call)
+        parts = call_cost_parts(call) if cost is not None else None
         if cost is None:
             unpriced.add(call.model_name or "(unknown)")
-        _add(total, call, cost)
-        _add(by_kind.setdefault(call.kind, _empty(call.kind)), call, cost)
+        _add(total, call, cost, parts)
+        _add(by_kind.setdefault(call.kind, _empty(call.kind)), call, cost, parts)
         model = call.model_name or "(unknown)"
-        _add(by_model.setdefault(model, _empty(model)), call, cost)
+        _add(by_model.setdefault(model, _empty(model)), call, cost, parts)
         if call.kind == CHAT_REPLY_KIND:
             bot = (call.session.bot_name if call.session else "") or "(no bot)"
-            _add(by_bot.setdefault(bot, _empty(bot)), call, cost)
+            _add(by_bot.setdefault(bot, _empty(bot)), call, cost, parts)
         day = by_day[timezone.localtime(call.created_at).date().isoformat()]
         day["calls"] += 1
         day["cost"] += cost or 0.0

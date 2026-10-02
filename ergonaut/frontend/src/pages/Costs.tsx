@@ -88,9 +88,25 @@ function Row({
         )}
       </td>
       <td className="py-1.5 text-right tabular-nums">{bucket.calls}</td>
-      <td className="py-1.5 text-right tabular-nums">{tokens(bucket.input_tokens)}</td>
-      <td className="py-1.5 text-right tabular-nums">{tokens(bucket.output_tokens)}</td>
-      <td className="py-1.5 text-right font-medium tabular-nums">
+      <td className="py-1.5 text-right tabular-nums" title={money(bucket.input_cost)}>
+        {tokens(bucket.input_tokens)}
+      </td>
+      <td className="py-1.5 text-right tabular-nums text-zinc-500" title={money(bucket.cache_read_cost)}>
+        {tokens(bucket.cache_read_tokens)}
+      </td>
+      <td className="py-1.5 text-right tabular-nums text-zinc-500" title={money(bucket.cache_write_cost)}>
+        {tokens(bucket.cache_write_tokens)}
+      </td>
+      <td
+        className="py-1.5 text-right tabular-nums"
+        title={`${money(bucket.output_cost)}${bucket.reasoning_tokens ? ` · ${tokens(bucket.reasoning_tokens)} of it reasoning` : ''}`}
+      >
+        {tokens(bucket.output_tokens)}
+      </td>
+      <td
+        className="py-1.5 text-right font-medium tabular-nums"
+        title={`input ${money(bucket.input_cost)} · cached ${money(bucket.cache_read_cost)} · cache writes ${money(bucket.cache_write_cost)} · output ${money(bucket.output_cost)}`}
+      >
         {money(bucket.cost)}
         {bucket.unpriced_calls > 0 && (
           <span className="ml-1 text-amber-600" title={`${bucket.unpriced_calls} calls with no price`}>
@@ -106,13 +122,23 @@ function Table({ title, children }: { title: string; children: React.ReactNode }
   return (
     <section className="mt-8">
       <h2 className="mb-2 text-sm font-semibold tracking-wide text-zinc-500 uppercase">{title}</h2>
-      <table className="w-full max-w-3xl text-sm">
+      <table className="w-full max-w-4xl text-sm">
         <thead className="text-xs text-zinc-500">
           <tr className="border-b border-zinc-200 dark:border-zinc-800">
             <th className="py-1 text-left font-normal">Name</th>
             <th className="py-1 text-right font-normal">Calls</th>
-            <th className="py-1 text-right font-normal">Input</th>
-            <th className="py-1 text-right font-normal">Output</th>
+            <th className="py-1 text-right font-normal" title="Uncached input tokens">
+              Input
+            </th>
+            <th className="py-1 text-right font-normal" title="Cached input (cache reads), billed at a discount">
+              Cached
+            </th>
+            <th className="py-1 text-right font-normal" title="Cache writes, billed at a premium">
+              Cache writes
+            </th>
+            <th className="py-1 text-right font-normal" title="Output tokens, including reasoning">
+              Output
+            </th>
             <th className="py-1 text-right font-normal">Cost</th>
           </tr>
         </thead>
@@ -158,8 +184,18 @@ export function CostsPage() {
       <div className="mt-4 grid max-w-3xl grid-cols-3 gap-3">
         <Tile label={`Spent, last ${data.days} days`} value={money(total.cost)} />
         <Tile label="Calls" value={total.calls.toLocaleString()} />
-        <Tile label="Tokens in / out" value={`${tokens(total.input_tokens)} / ${tokens(total.output_tokens)}`} />
+        <Tile
+          label="Tokens in / out"
+          value={`${tokens(total.input_tokens + total.cache_read_tokens + total.cache_write_tokens)} / ${tokens(total.output_tokens)}`}
+        />
       </div>
+      <p className="mt-2 max-w-3xl text-xs text-zinc-500">
+        Spend by part: input {money(total.input_cost)} · cached input {money(total.cache_read_cost)} (
+        {tokens(total.cache_read_tokens)} tokens) · cache writes {money(total.cache_write_cost)} · output{' '}
+        {money(total.output_cost)}
+        {total.reasoning_tokens ? ` (${tokens(total.reasoning_tokens)} reasoning tokens)` : ''}. Hover a number for its
+        cost.
+      </p>
 
       <div className="mt-6 max-w-3xl">
         <Daily days={data.by_day} />

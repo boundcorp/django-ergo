@@ -72,6 +72,7 @@ from django_ergo.conversation.runtime import EngineSpec
 from django_ergo.conversation.runtime import build_engine
 from django_ergo.conversation.runtime import get_default_engine_spec
 from django_ergo.conversation.toolkit import Toolkit
+from django_ergo.pricing import add_request_cost
 from django_ergo.tools import tool_registry
 
 if TYPE_CHECKING:
@@ -380,7 +381,9 @@ class _MemoryTranscript:
         call.output_tokens += completion.output_tokens
         call.cache_creation_input_tokens += completion.cache_creation_input_tokens
         call.cache_read_input_tokens += completion.cache_read_input_tokens
+        call.reasoning_tokens += completion.reasoning_tokens
         call.model_name = completion.model or call.model_name
+        add_request_cost(call, call.model_name, completion)
         return completion.events
 
     async def finish(self) -> None:
@@ -438,8 +441,10 @@ class _SessionTranscript:
             call.cache_read_input_tokens += (
                 getattr(row, "cache_read_input_tokens", None) or 0
             )
+            call.reasoning_tokens += getattr(row, "reasoning_tokens", None) or 0
             if row.model_name:
                 call.model_name = row.model_name
+            add_request_cost(call, row.model_name or call.model_name, row)
 
 
 def _storable(messages: list[dict]) -> list[dict]:

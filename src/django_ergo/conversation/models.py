@@ -203,6 +203,13 @@ class OpenAIMessage(TimeStampedMixin):
     function_name = models.CharField(max_length=255, null=True, blank=True)  # noqa: DJ001
     input_tokens = models.IntegerField(null=True, blank=True)
     output_tokens = models.IntegerField(null=True, blank=True)
+    # OpenAI counts cached input inside its prompt tokens; Ergo stores the parts
+    # apart (input_tokens is then the uncached rest), as Claude reports them.
+    cache_creation_input_tokens = models.IntegerField(null=True, blank=True)
+    cache_read_input_tokens = models.IntegerField(null=True, blank=True)
+    reasoning_tokens = models.IntegerField(
+        null=True, blank=True
+    )  # part of output_tokens
     model_name = models.CharField(max_length=100, null=True, blank=True)  # noqa: DJ001
     sequence = models.IntegerField()
 
@@ -285,6 +292,12 @@ class StructuredCall(TimeStampedMixin):
     output_tokens = models.IntegerField(default=0)
     cache_creation_input_tokens = models.IntegerField(default=0)
     cache_read_input_tokens = models.IntegerField(default=0)
+    reasoning_tokens = models.IntegerField(default=0)  # included in output_tokens
+    # What the call cost, priced request by request as it ran (tiered prices, such as a
+    # long-context surcharge, apply per request). None: an unpriced model, or an older call.
+    cost_usd = models.DecimalField(
+        max_digits=14, decimal_places=8, null=True, blank=True
+    )
     metadata = models.JSONField(default=dict, blank=True)
 
     class Meta:
