@@ -6,26 +6,28 @@ Each event is JSON: ``{"messages": [...], "calls": [...]}`` with the
 messages from line ``after`` on and every structured call that changed.
 The last message the client has is sent again, since its blocks may still
 have been arriving, so clients replace messages by line.
-The server checks the database twice a second, so a turn shows its tool
-calls as they happen, whichever process runs it (the web app, Telegram, a
-scheduled job). The stream ends after a few minutes; EventSource reconnects.
+The stream reads the database, so a turn shows its tool calls as they
+happen whichever process runs it (the web app, a Celery worker, Telegram, a
+scheduled job). With ``REDIS_URL`` set it wakes as soon as a session-changed
+notice arrives (see ``ergonaut.apps.bots.tasks``) and otherwise checks every
+few seconds; without Redis it checks twice a second. The stream ends after a
+few minutes; EventSource reconnects.
 """
 
 import asyncio
 import json
+import os
 
 from asgiref.sync import sync_to_async
 from django.core.serializers.json import DjangoJSONEncoder
-from django.http import HttpResponse
-from django.http import StreamingHttpResponse
-
+from django.http import HttpResponse, StreamingHttpResponse
 from django_ergo.conversation.history import SessionSource
-from django_ergo.conversation.models import ClaudeContentBlock
-from django_ergo.conversation.models import ConversationSession
-from ergonaut.api.bots import call_out
-from ergonaut.api.bots import visible_sessions
+from django_ergo.conversation.models import ClaudeContentBlock, ConversationSession
+
+from ergonaut.api.bots import call_out, visible_sessions
 
 POLL_SECONDS = 0.5
+PUBSUB_POLL_SECONDS = 3.0
 STREAM_SECONDS = 240
 KEEPALIVE_SECONDS = 15
 
@@ -70,6 +72,37 @@ async def session_events(request, session_id):
     except ValueError:
         after = -1
 
+    async def changes():
+        """Wait for this session to change: a Redis notice, or the poll interval."""
+        url = os.environ.get("REDIS_URL")
+        if not url:
+            while True:
+                await asyncio.sleep(POLL_SECONDS)
+                yield POLL_SECONDS
+        import redis.asyncio as aioredis
+
+        from ergonaut.apps.bots.tasks import CHANNEL
+
+        client = aioredis.Redis.from_url(url)
+        pubsub = client.pubsub()
+        await pubsub.subscribe(CHANNEL)
+        target = str(session_id).encode()
+        loop = asyncio.get_running_loop()
+        try:
+            while True:
+                started = loop.time()
+                deadline = started + PUBSUB_POLL_SECONDS
+                while loop.time() < deadline:
+                    notice = await pubsub.get_message(
+                        ignore_subscribe_messages=True, timeout=deadline - loop.time()
+                    )
+                    if notice and notice.get("data") == target:
+                        break
+                yield loop.time() - started
+        finally:
+            await pubsub.aclose()
+            await client.aclose()
+
     async def stream():
         seen: dict = {}
         last = after
@@ -77,6 +110,7 @@ async def session_events(request, session_id):
         loop = asyncio.get_running_loop()
         end = loop.time() + STREAM_SECONDS
         first = True
+        waits = changes()
         while loop.time() < end:
             messages, calls = await sync_to_async(_snapshot)(session_id, last, seen)
             if first:
@@ -88,12 +122,11 @@ async def session_events(request, session_id):
                     last = max(m["line"] for m in messages)
                 yield _event({"messages": messages, "calls": calls})
                 quiet = 0.0
-            else:
-                quiet += POLL_SECONDS
-                if quiet >= KEEPALIVE_SECONDS:
-                    yield ": keepalive\n\n"
-                    quiet = 0.0
-            await asyncio.sleep(POLL_SECONDS)
+            elif quiet >= KEEPALIVE_SECONDS:
+                yield ": keepalive\n\n"
+                quiet = 0.0
+            quiet += await anext(waits)
+        await waits.aclose()
 
     response = StreamingHttpResponse(stream(), content_type="text/event-stream")
     response["Cache-Control"] = "no-cache"

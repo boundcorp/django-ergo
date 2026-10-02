@@ -256,3 +256,33 @@ def test_upload_list_download_and_delete_session_files(client, cook, use_bots, s
     client.force_login(cook)
     assert client.delete(f"/api/attachments/{file['id']}").status_code == 200
     assert not ConversationSession.objects.get(id=root["id"]).attachments.exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_queued_turn_returns_at_once(client, cook, use_bots, monkeypatch, settings):
+    from ergonaut.apps.bots import tasks
+
+    use_bots(say("hi"))
+    root = post(client, "/api/bots/kitchen/root").json()
+    queued = []
+    monkeypatch.setattr(tasks.run_turn, "delay", lambda *args: queued.append(args) or object())
+    settings.CELERY_TASK_ALWAYS_EAGER = False
+    response = post(client, f"/api/sessions/{root['id']}/messages", {"text": "Eggs?"})
+    assert response.status_code == 200
+    assert response.json()["queued"] is True
+    assert response.json()["text"] == ""
+    assert queued == [(root["id"], "Eggs?", None)]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_run_turn_answers_and_resumes(cook, use_bots):
+    from django_ergo.conversation.models import ConversationSession
+    from ergonaut.apps.bots.tasks import run_turn
+
+    use_bots(say("Tacos."))
+    session = ConversationSession.objects.create(user=cook, bot_name="kitchen", metadata={"bot_role": "root"})
+    run_turn(str(session.id), "Dinner?")
+    call = session.structured_calls.get()
+    assert call.response["text"] == "Tacos."
+    run_turn(str(session.id), approve=True)  # nothing waiting: a no-op
+    assert session.structured_calls.count() == 1

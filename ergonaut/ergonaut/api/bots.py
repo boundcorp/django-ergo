@@ -22,12 +22,12 @@ from ninja.security import django_auth
 
 from django_ergo.bots import webhooks
 from django_ergo.bots.runtime import Bot
-from django_ergo.bots.runtime import TurnResult
 from django_ergo.conversation.attachments import save_session_file
 from django_ergo.conversation.history import SessionSource
 from django_ergo.conversation.models import ConversationAttachment
 from django_ergo.conversation.models import ConversationSession
 from django_ergo.conversation.models import StructuredCall
+from ergonaut.apps.bots.tasks import queue_turn
 
 router = Router(tags=["bots"], auth=django_auth)
 
@@ -136,6 +136,7 @@ class TurnOut(Schema):
     suggestions: list[str]
     approvals: list[dict]
     error: str
+    queued: bool = False  # a worker runs the turn; follow it over /events
 
 
 # -- helpers -----------------------------------------------------------------
@@ -191,21 +192,6 @@ def call_out(call: StructuredCall, detail: bool = False) -> dict:
     if detail:
         out.update(system_prompt=call.system_prompt, transcript=call.transcript, metadata=call.metadata)
     return out
-
-
-def turn_out(result: TurnResult) -> dict:
-    reply = result.reply
-    return {
-        "session_id": str(result.session.id),
-        "call_id": str(result.call.id) if result.call else None,
-        "type": reply.type if reply else None,
-        "text": result.text,
-        "suggestions": result.suggestions,
-        "approvals": [
-            {"id": a.tool_use_id, "name": a.tool_name, "input": a.arguments} for a in result.approvals
-        ],
-        "error": result.error,
-    }
 
 
 def visible_sessions(user):
@@ -357,13 +343,34 @@ def call_detail(request, call_id: str):
     return call_out(call, detail=True)
 
 
+def latest_turn(session: ConversationSession, *, queued: bool) -> dict:
+    """The session's newest chat reply as a TurnOut (empty while it's queued)."""
+    call = None if queued else session.structured_calls.order_by("-created_at").first()
+    response = (call.response if call else None) or {}
+    return {
+        "session_id": str(session.id),
+        "call_id": str(call.id) if call else None,
+        "type": response.get("type") if isinstance(response, dict) else None,
+        "text": response.get("text", "") if isinstance(response, dict) else "",
+        "suggestions": response.get("suggestions", []) if isinstance(response, dict) else [],
+        "approvals": (call.metadata or {}).get("pending_approvals", []) if call else [],
+        "error": call.error if call else "",
+        "queued": queued,
+    }
+
+
+def queue_and_report(session: ConversationSession, **turn) -> dict:
+    queued = queue_turn(session.id, **turn)
+    return latest_turn(session, queued=queued)
+
+
 @router.post("/sessions/{session_id}/messages", response=TurnOut)
 async def send_message(request, session_id: str, data: MessageIn):
     session = await get_session(request, session_id)
     if not data.text.strip():
         raise HttpError(400, "Say something")
-    result = await get_bot(session.bot_name).ask(session, data.text)
-    return turn_out(result)
+    get_bot(session.bot_name)
+    return await sync_to_async(queue_and_report)(session, message=data.text)
 
 
 @router.post("/sessions/{session_id}/approvals", response=TurnOut)
@@ -372,7 +379,7 @@ async def answer_approval(request, session_id: str, data: ApprovalIn):
     bot = get_bot(session.bot_name)
     if await bot.pending_call(session) is None:
         raise HttpError(409, "Nothing is waiting for approval")
-    return turn_out(await bot.resume(session, data.approve))
+    return await sync_to_async(queue_and_report)(session, approve=data.approve)
 
 
 @router.post("/sessions/{session_id}/close", response=SessionOut)

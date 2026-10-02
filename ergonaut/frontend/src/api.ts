@@ -115,6 +115,7 @@ export type Turn = {
   suggestions: string[]
   approvals: Approval[]
   error: string
+  queued?: boolean
 }
 
 export class ApiError extends Error {

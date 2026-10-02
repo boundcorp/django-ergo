@@ -25,6 +25,8 @@ export function Chat({ onChange }: { onChange: () => void }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [last, setLast] = useState<Turn | null>(null)
+  // A turn a worker is running: what was sent and how the calls looked then.
+  const [pending, setPending] = useState<{ text: string; calls: number; approvals: string } | null>(null)
   // The Files panel stays open or closed across sessions, per browser.
   const [showFiles, setShowFiles] = useState(() => {
     try {
@@ -71,15 +73,40 @@ export function Chat({ onChange }: { onChange: () => void }) {
     bottom.current?.scrollIntoView({ behavior: 'smooth' })
   }, [detail, busy])
 
-  async function run(action: () => Promise<Turn>) {
+  // A queued turn is done once its call has finished: a new call for a
+  // message, or the paused call moving on for an approval answer.
+  useEffect(() => {
+    if (!pending || !detail) return
+    const call = detail.calls[detail.calls.length - 1]
+    if (!call || call.status === 'in_progress') return
+    const done = pending.text
+      ? detail.calls.length > pending.calls
+      : call.status !== 'awaiting_approval' || JSON.stringify(call.pending_approvals ?? []) !== pending.approvals
+    if (done) {
+      setPending(null)
+      onChange()
+    }
+  }, [detail, pending, onChange])
+
+  async function run(action: () => Promise<Turn>, sent = '') {
     setBusy(true)
     setError('')
+    const calls = detail?.calls ?? []
+    const before = {
+      text: sent,
+      calls: calls.length,
+      approvals: JSON.stringify(calls[calls.length - 1]?.pending_approvals ?? []),
+    }
     try {
       const turn = await action()
       setLast(turn)
-      if (turn.error) setError(turn.error)
-      await load()
-      onChange()
+      if (turn.queued) {
+        setPending(before)
+      } else {
+        if (turn.error) setError(turn.error)
+        await load()
+        onChange()
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -88,9 +115,9 @@ export function Chat({ onChange }: { onChange: () => void }) {
   }
 
   function send(message: string) {
-    if (!message.trim() || busy) return
+    if (!message.trim() || busy || pending) return
     setText('')
-    run(() => api.send(id, message))
+    run(() => api.send(id, message), message)
   }
 
   if (!detail) return <div className="p-6 text-zinc-500">{error || 'Loading…'}</div>
@@ -99,7 +126,10 @@ export function Chat({ onChange }: { onChange: () => void }) {
   const waiting = lastCall?.status === 'awaiting_approval' ? lastCall.pending_approvals : []
   const suggestions = !waiting.length ? (last?.suggestions ?? lastCall?.response?.suggestions ?? []) : []
   const closed = detail.session.status === 'completed'
-  const thinking = busy || lastCall?.status === 'in_progress'
+  const thinking = busy || !!pending || lastCall?.status === 'in_progress'
+  const callError = !pending && lastCall?.status === 'failed' ? lastCall.error : ''
+  // Show a queued message until the worker has stored it.
+  const echo = pending?.text && !detail.messages.some(m => m.role === 'user' && JSON.stringify(m.blocks).includes(JSON.stringify(pending.text).slice(1, -1))) ? pending.text : ''
 
   return (
     <div className="flex h-full">
@@ -127,7 +157,12 @@ export function Chat({ onChange }: { onChange: () => void }) {
       </header>
       <div className="flex-1 overflow-y-auto px-6 py-4">
         <Transcript messages={detail.messages} calls={detail.calls} />
-        {thinking && <div className="mt-3 text-sm text-zinc-500">Thinking…</div>}
+        {echo && (
+          <div className="mt-3 flex justify-end">
+            <div className="max-w-[80%] rounded-2xl bg-indigo-600/70 px-4 py-2 whitespace-pre-wrap text-white">{echo}</div>
+          </div>
+        )}
+        {thinking && <div className="mt-3 text-sm text-zinc-500">{pending && !lastCall?.status?.startsWith('in_') ? 'Queued…' : 'Thinking…'}</div>}
         <div ref={bottom} />
       </div>
       {!!waiting.length && (
@@ -145,7 +180,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
           </div>
         </div>
       )}
-      {error && <div className="mx-6 mb-2 text-sm text-red-600">{error}</div>}
+      {(error || callError) && <div className="mx-6 mb-2 text-sm text-red-600">{error || callError}</div>}
       {!!suggestions.length && (
         <div className="mx-6 mb-2 flex flex-wrap gap-2">
           {suggestions.map(s => (
