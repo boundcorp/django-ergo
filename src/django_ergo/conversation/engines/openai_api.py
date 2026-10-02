@@ -27,6 +27,7 @@ from django_ergo.conversation.images import result_content
 from django_ergo.conversation.images import stored_result
 from django_ergo.conversation.telemetry import record_usage
 from django_ergo.conversation.telemetry import trace_engine_call
+from django_ergo.conversation.tool_results import trim_tool_results
 from django_ergo.openai_options import DEFAULT_OPENAI_MODEL
 from django_ergo.openai_options import chat_options
 from django_ergo.tools import tool_registry
@@ -213,7 +214,10 @@ class OpenAIAPIEngine(Engine):
                 position,
                 {"role": "user", "content": render_summary_message(compaction)},
             )
-        return prepare_messages(apply_native_window(session, messages), "openai")
+        messages = trim_tool_results(
+            apply_native_window(session, messages), keep=self.tool_results_in_context
+        )
+        return prepare_messages(messages, "openai")
 
     def get_tools_schema(self, workflow) -> list[dict]:
         """Return all registered tools converted to OpenAI function-calling format."""

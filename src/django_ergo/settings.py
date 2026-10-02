@@ -40,6 +40,11 @@ DEFAULTS = {
     # to IMAGE_MAX_SIDE pixels on the long side when Pillow is installed.
     "IMAGES_IN_CONTEXT": 2,
     "IMAGE_MAX_SIDE": 1024,
+    # Large tool results (over 500 chars) each model call carries in full: the
+    # latest N; older ones become a short stub naming the tool, so a long turn
+    # doesn't re-send every earlier dump. Stored history keeps them all.
+    # None = send every result in full.
+    "TOOL_RESULTS_IN_CONTEXT": 3,
     # Extra bot plugins by short name: {"name": "dotted.path.PluginClass"}.
     "BOT_PLUGINS": {},
     # Callable(message_id) that delivers a bot-to-bot thread message, e.g. by

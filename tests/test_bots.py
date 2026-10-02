@@ -156,8 +156,19 @@ def test_definition_defaults_and_inline_instructions():
     assert definition.recent == 15
     assert definition.allow_create_sessions is False
     assert definition.default_compaction_mode == "stream"
+    assert definition.tool_results_in_context is None
     with pytest.raises(BotDefinitionError, match="needs a name"):
         BotDefinition.from_dict({})
+
+
+def test_tool_results_in_context_reaches_the_engine(tmp_path):
+    bot, _ = make_bot(
+        tmp_path, yaml_text=KITCHEN_YAML + "    tool_results_in_context: 1\n"
+    )
+    assert bot.definition.tool_results_in_context == 1
+    assert bot.make_engine().tool_results_in_context == 1
+    with pytest.raises(BotDefinitionError, match="tool_results_in_context"):
+        BotDefinition.from_dict({"name": "k", "tool_results_in_context": "lots"})
 
 
 # ---------------------------------------------------------------------------
@@ -280,6 +291,10 @@ async def test_approval_tool_pauses_then_resumes_with_context(tmp_path):
     assert done.text == "Added."
     tool_result = engine._client.calls[-1]["messages"][-1]["content"][0]
     assert tool_result["content"] == "shopper added 2 milk"
+    # The resumed turn goes natively, not in the recent-messages block too.
+    resumed = engine._client.calls[-1]
+    assert resumed["messages"][0]["content"][0]["text"] == "We need milk"
+    assert "We need milk" not in resumed["system"]
 
 
 @pytest.mark.django_db(transaction=True)

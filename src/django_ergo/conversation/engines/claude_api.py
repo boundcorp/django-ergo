@@ -25,6 +25,7 @@ from django_ergo.conversation.images import result_content
 from django_ergo.conversation.images import stored_result
 from django_ergo.conversation.telemetry import record_usage
 from django_ergo.conversation.telemetry import trace_engine_call
+from django_ergo.conversation.tool_results import trim_tool_results
 from django_ergo.tools import tool_registry
 
 if TYPE_CHECKING:
@@ -137,7 +138,10 @@ class ClaudeAPIEngine(Engine):
                     ],
                 },
             )
-        return prepare_messages(apply_native_window(session, messages), "claude")
+        messages = trim_tool_results(
+            apply_native_window(session, messages), keep=self.tool_results_in_context
+        )
+        return prepare_messages(messages, "claude")
 
     def get_tools_schema(self, workflow) -> list[dict]:
         """Convert workflow tools to Claude API tool format."""
