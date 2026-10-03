@@ -415,7 +415,7 @@ user. The `orchestration` skill (loaded in main by default) has:
 | --- | --- |
 | `ergo_bot_list` | The bots it can message, with their `description`s (pre-seeded) |
 | `ergo_thread_list` | A bot's main chat, named chats and threads with the user (default: this bot) |
-| `ergo_thread_send` | Message a bot's `main` chat, a named chat, a thread id, or a `new` thread; returns at once |
+| `ergo_thread_send` | Message a bot's `main` chat, a named chat, a thread id, or a `new` thread; returns at once. `attachments` names files in this chat for the recipient to open |
 | `ergo_thread_archive` | Archive one of this bot's threads; its history stays readable |
 
 Messages between sessions are asynchronous, like thread-to-thread
@@ -426,7 +426,12 @@ header; when that turn finishes, its reply goes back to the sender as a new
 message (`[Reply from ...]`) and starts a turn there. Replies are never
 answered back, chains of delegation stop after six hops, a recipient that is
 mid-turn finishes first, and a turn that stops for approval replies once the
-user decides. A message from a person routes nothing back, so a bot's main
+user decides. A second message to a chat that hasn't answered the sender's
+first one joins it: added to it while it's queued, or handed to the turn
+working on it as steering (`DJANGO_ERGO["TURN_STEER"]`), so a handoff split
+into two sends costs one turn. Files named in `attachments` are listed at the
+end of the message with their ids; the recipient opens them with
+`ergo_attachments_look` or `ergo_attachments_read`. A message from a person routes nothing back, so a bot's main
 chat can take delegated work without its replies reaching Telegram.
 Delivery goes through `DJANGO_ERGO["THREAD_MESSAGE_RUNNER"]` (Ergonaut
 queues a Celery task) or a background thread. Starting a thread of the bot's

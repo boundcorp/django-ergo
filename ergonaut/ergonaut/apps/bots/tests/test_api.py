@@ -813,3 +813,37 @@ def test_chats_pick_a_model_from_providers(client, cook, use_bots, monkeypatch):
     assert post(client, f"/api/sessions/{root['id']}/model", {"model": "spare/claude-haiku-4-5"}).status_code == 409
     assert post(client, f"/api/sessions/{root['id']}/model", {"model": "nope/x"}).status_code == 400
     assert post(client, f"/api/sessions/{root['id']}/model", {"model": ""}).json()["model"] == ""
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_failed_turn_explains_itself_and_can_be_resumed_or_dismissed(client, cook, use_bots):
+    from django_ergo.conversation.models import StructuredCall
+
+    use_bots(say("Picked up where I left off."))
+    root = post(client, "/api/bots/kitchen/root").json()
+    failed = StructuredCall.objects.create(
+        kind="chat_reply",
+        session_id=root["id"],
+        user=cook,
+        request="Plan dinner",
+        status="failed",
+        error="API call failed: Error code: 429 - {'error': {'message': 'You have no credits remaining.'}}",
+    )
+
+    def listed():
+        return {s["id"]: s for s in client.get("/api/sessions").json()}[root["id"]]["attention"]
+
+    call = client.get(f"/api/sessions/{root['id']}").json()["calls"][-1]
+    assert call["error_summary"] == "The model provider's account is out of credits."
+    assert call["error_hint"] == "Add credits to the account, then Resume."
+    assert listed() is True
+
+    assert post(client, f"/api/calls/{failed.id}/dismiss").json()["dismissed"] is True
+    assert listed() is False
+
+    turn = post(client, f"/api/sessions/{root['id']}/resume").json()
+    assert turn["text"] == "Picked up where I left off."
+    latest = StructuredCall.objects.filter(session_id=root["id"]).latest("created_at")
+    assert latest.request.startswith("[Resume] Your last turn stopped before it finished (")
+    assert "out of credits" in latest.request
+    assert post(client, f"/api/sessions/{root['id']}/resume").status_code == 409  # it didn't fail this time

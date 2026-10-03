@@ -30,7 +30,6 @@ they're installed.
 | `ergonaut chat BOT [--user NAME]` | Chat with a bot in the terminal |
 | `ergonaut manage ...` | Any `manage.py` command |
 | `ergonaut manage wait_idle` | Wait until no bot turn is running; run it before a restart (`ergonaut manage wait_idle && <restart>`) so running turns aren't cut off |
-| `ergonaut manage resume_failed` | Resume every chat whose latest turn failed, e.g. after topping up API credits (`--hours`, `--kind credits`, `--dry-run`) |
 
 ## Layout
 

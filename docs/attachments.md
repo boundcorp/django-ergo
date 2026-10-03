@@ -36,7 +36,7 @@ Its `attachments` skill gives:
 | Tool | Does |
 | --- | --- |
 | `ergo_attachments_list` | files in this chat, or another of the person's chats |
-| `ergo_attachments_read` | a file's text (or a short description of a non-text file) |
+| `ergo_attachments_read` | a file's text (or a short description of a non-text file). Read and look take a file id, or a filename plus `session_id` (the chat it's in), so a thread can open files another thread sent it |
 | `ergo_attachments_look(attachment_id, question)` | see an image or PDF: an image comes back in the tool result so the bot looks itself; other files go to the bot's model in a separate call that answers the question |
 | `ergo_attachments_create`, `ergo_attachments_update` | write or replace a text file in this chat |
 | `ergo_attachments_archive`, `ergo_attachments_unarchive` | clear old files out of the working set (below) |

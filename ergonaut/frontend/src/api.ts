@@ -83,11 +83,10 @@ export type Call = {
   pending_approvals: Approval[]
   tools: string[]
   created_at: string
-  // A failed call's error in plain words.
-  problem?: Problem | null
+  error_summary?: string // a failure in plain words
+  error_hint?: string // what to do about it
+  dismissed?: boolean
 }
-
-export type Problem = { kind: string; title: string; hint: string; resumed?: boolean }
 
 export type KB = {
   id: string
@@ -338,6 +337,7 @@ export const api = {
     request<Turn>('POST', `/sessions/${id}/messages`, { text, attachment_ids: attachmentIds, mode }),
   stop: (id: string) => request<Turn>('POST', `/sessions/${id}/stop`),
   resume: (id: string) => request<Turn>('POST', `/sessions/${id}/resume`),
+  dismissCall: (callId: string) => request<Call>('POST', `/calls/${callId}/dismiss`),
   unsend: (id: string, itemId: string) =>
     request<{ text: string; attachment_ids: string[] }>('DELETE', `/sessions/${id}/inbox/${itemId}`),
   approve: (id: string, approve: boolean, approvalIds?: string[]) =>

@@ -167,6 +167,35 @@ def test_a_waiting_message_can_be_unsent_until_the_model_takes_it(client, cook, 
 
 
 @pytest.mark.django_db(transaction=True)
+def test_usage_is_saved_per_request_and_counted_once_across_an_approval(session, use_bots):  # noqa: F811
+    from django_ergo.conversation.models import StructuredCall
+
+    # Each fake response uses 10 input and 5 output tokens.
+    client = use_bots(tool_call("pantry_count", {"item": "eggs"}), tool_call("order", {"item": "eggs"}), say("Done."))
+    seen = []
+    create = client.create
+
+    async def watch(**kwargs):
+        if len(client.calls) == 1:  # the second request: the first one's usage is already saved
+            from asgiref.sync import sync_to_async
+
+            call = await sync_to_async(StructuredCall.objects.get)(session=session)
+            seen.append((call.status, call.input_tokens, call.output_tokens))
+        return await create(**kwargs)
+
+    client.create = watch
+    tasks.push_message(session.id, "Order eggs")
+    tasks.run_turn(str(session.id))
+    call = session.structured_calls.get()
+    assert seen == [("in_progress", 10, 5)]
+    assert (call.status, call.input_tokens, call.output_tokens) == ("awaiting_approval", 20, 10)
+
+    tasks.run_turn(str(session.id), approve=True)
+    call.refresh_from_db()
+    assert (call.status, call.input_tokens, call.output_tokens) == ("completed", 30, 15)
+
+
+@pytest.mark.django_db(transaction=True)
 def test_a_turn_answering_a_bot_takes_steering_and_its_follow_up(session, cook, use_bots):  # noqa: F811
     import threading
 

@@ -78,12 +78,6 @@ def snippet(text: str) -> str:
 def turn_text(message: ThreadMessage) -> str:
     """What the recipient sees: who it's from, and what to do with it."""
     sender = message.sender_session
-    if (message.metadata or {}).get("resumed") and sender is not None:
-        return (
-            f"[Resuming: your turn on the message from {label(sender)} (thread "
-            f"{sender.id}) stopped with an error before it finished. Carry on where "
-            "you left off; your final reply goes back to that thread automatically.]"
-        )
     if message.in_reply_to_id is not None:
         original = message.in_reply_to.text if message.in_reply_to else ""
         header = (
@@ -277,19 +271,6 @@ def deliver(message_id: str, registry: BotRegistry | None = None) -> None:
         if callable(getattr(control, "finish", None)):
             control.finish()
     redispatch_waiting(recipient, registry=registry)  # anything that queued meanwhile
-
-
-def resume(message: ThreadMessage, registry: BotRegistry | None = None) -> None:
-    """Run the recipient's turn on ``message`` again after it failed, continuing
-    from where it stopped; its reply goes back to the sender as usual."""
-    message.status = ThreadMessageStatus.QUEUED
-    message.error = ""
-    message.reply_text = ""
-    message.metadata = {**(message.metadata or {}), "resumed": True}
-    message.save(
-        update_fields=["status", "error", "reply_text", "metadata", "updated_at"]
-    )
-    transaction.on_commit(lambda: dispatch(str(message.id), registry))
 
 
 def requeue(message: ThreadMessage) -> None:
