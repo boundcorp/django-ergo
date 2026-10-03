@@ -1,8 +1,10 @@
 """Load several bots and look them up by name (for bots that call bots).
 
 Bot folders can nest: a bot folder inside another bot's folder is that
-bot's sub-bot. ``discover`` finds every ``bot.yaml`` under a folder, and a
-bot may call its sub-bots (as well as those in ``permissions.call_bots``)::
+bot's sub-bot. ``discover`` finds every ``bot.yaml`` under a folder. A bot
+may message its sub-bots (downward, with ``orchestration`` on), the bots in
+``permissions.call_bots`` (sideways), and its parent bot's main chat (upward,
+always, from its own main chat)::
 
     boundcorp/
       bot.yaml          # the parent, with orchestration on
@@ -79,12 +81,17 @@ class BotRegistry:
         return [b for b in self.bots.values() if b.parent_name == bot.name]
 
     def may_call(self, caller: Bot, name: str) -> bool:
-        if name in caller.definition.call_bots:
+        if name in caller.definition.call_bots or self.is_parent(caller, name):
             return True
         return name in self.bots and self.bots[name].parent_name == caller.name
 
+    def is_parent(self, caller: Bot, name: str) -> bool:
+        """``name`` is ``caller``'s parent bot, which it may always message upward
+        (main chat to main chat), unless ``call_bots`` grants more."""
+        return bool(name) and name == caller.parent_name and name in self.bots
+
     def callable_bots(self, caller: Bot) -> list[Bot]:
-        """Bots ``caller`` may message: its sub-bots and ``call_bots``."""
+        """Bots ``caller`` may message: its sub-bots, ``call_bots`` and its parent."""
         return [
             b
             for b in self.bots.values()

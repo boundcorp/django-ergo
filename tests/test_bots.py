@@ -500,6 +500,39 @@ async def test_a_bot_delegates_to_a_new_thread_and_gets_the_reply(
 
 
 @pytest.mark.django_db(transaction=True)
+async def test_no_nudge_right_after_a_reply(tmp_path, thread_messages):
+    user = await User.objects.acreate(username="nudger")
+    bot, engine = make_bot(
+        tmp_path,
+        claude_tool("ergo_thread_send", {"thread": "new", "message": "Plan Tuesday"}),
+        say("Asked."),
+        say("Started the plan; tacos so far."),  # the thread's turn
+    )
+    root = await bot.root_session(user)
+    await bot.ask(root, "Plan meals")
+    await thread_messages()  # the thread answers
+    thread_id = json.loads(
+        engine._client.calls[1]["messages"][-1]["content"][0]["content"]
+    )["thread_id"]
+    full = "Now plan Wednesday too: " + "a vegetarian dinner with leftovers. " * 12
+    engine._client.responses = [
+        claude_tool(
+            "ergo_thread_send",
+            {"thread": thread_id, "message": "Please continue with the started work"},
+            tool_id="n1",
+        ),
+        claude_tool(
+            "ergo_thread_send", {"thread": thread_id, "message": full}, tool_id="n2"
+        ),
+        say("Tacos so far; Wednesday is next."),
+    ]
+    await thread_messages()  # the reply reaches the root, which tries to nudge
+    nudge, follow_up = _tool_results(engine)[-2:]
+    assert nudge["is_error"] and "just replied" in nudge["content"]
+    assert json.loads(follow_up["content"])["thread_id"] == thread_id
+
+
+@pytest.mark.django_db(transaction=True)
 async def test_a_delegated_turn_waits_for_approval_before_replying(
     tmp_path, thread_messages
 ):
@@ -895,7 +928,8 @@ async def test_nested_bot_folders_make_sub_bots_the_parent_can_message(
     assert [b.name for b in registry.children(boundcorp)] == ["kitchen"]
     assert registry.may_call(boundcorp, "kitchen")
     assert not registry.may_call(boundcorp, "pantry")
-    assert not registry.may_call(kitchen, "boundcorp")
+    assert registry.may_call(kitchen, "boundcorp")  # upward: always
+    assert not registry.may_call(pantry, "boundcorp")
 
     root = await boundcorp.root_session(user)
     result = await boundcorp.ask(root, "Dinner?")
@@ -912,9 +946,195 @@ async def test_nested_bot_folders_make_sub_bots_the_parent_can_message(
     # The kitchen bot (orchestration off) has no thread or bot tools.
     kitchen_tools = _tool_names(engine._client.calls[2])
     assert not {t for t in kitchen_tools if t.startswith(("ergo_thread", "ergo_bot"))}
+    assert "ergo_message_up" in kitchen_tools  # but it can always message upward
 
     await thread_messages(registry)  # the reply reaches boundcorp
     assert any(text.endswith("Tacos.") for text in _texts(engine._client.calls[-1]))
+
+
+def _family(tmp_path, engine, parent_yaml, child_yaml):
+    """A parent bot with one sub-bot, sharing ``engine``'s scripted responses."""
+    parent = write_bot(tmp_path, parent_yaml, name="boundcorp")
+    write_bot(parent, child_yaml, name="design")
+
+    def factory():
+        fresh = claude_engine()
+        fresh._client = engine._client
+        return fresh
+
+    registry = BotRegistry.discover(parent, engine_factory=factory)
+    return registry, registry.get("boundcorp"), registry.get("design")
+
+
+def _tool_results(engine):
+    """Every tool result the model was sent, in order (the last call's messages)."""
+    return [
+        part
+        for message in engine._client.calls[-1]["messages"]
+        if isinstance(message["content"], list)
+        for part in message["content"]
+        if part.get("type") == "tool_result"
+    ]
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_a_bot_without_orchestration_can_always_message_upward(
+    tmp_path, thread_messages
+):
+    from django_ergo.conversation.models import ThreadMessage
+
+    user = await User.objects.acreate(username="upward")
+    engine = claude_engine(
+        claude_tool("ergo_message_up", {"to": "parent", "message": "Need a dev"}),
+        say("Asked boundcorp."),
+    )
+    registry, boundcorp, design = _family(
+        tmp_path,
+        engine,
+        "name: boundcorp\n",
+        "name: design\norchestration: false\nthreads: {allow_create: true}\n",
+    )
+    design_main = await design.root_session(user)
+    await design.ask(design_main, "Get this built")
+    tools = _tool_names(engine._client.calls[0])
+    assert "ergo_message_up" in tools
+    assert not {t for t in tools if t.startswith(("ergo_thread", "ergo_bot"))}
+    sent = await ThreadMessage.objects.select_related("recipient_session").aget()
+    assert sent.recipient_session.bot_name == "boundcorp"
+    assert sent.recipient_session.metadata["bot_role"] == "main"
+
+    # A design thread may message design's main chat, not the parent.
+    thread = await design.create_session(user, parent=design_main, title="Logo")
+    engine._client.responses = [
+        claude_tool("ergo_message_up", {"to": "parent", "message": "x"}, tool_id="u1"),
+        claude_tool("ergo_message_up", {"to": "main", "message": "Done"}, tool_id="u2"),
+        say("Reported."),
+    ]
+    await design.ask(thread, "Finish up")
+    refused, sent = _tool_results(engine)[-2:]
+    assert refused["is_error"] and "Only the main chat" in refused["content"]
+    assert json.loads(sent["content"])["sent_to"] == "design · Main"
+
+    # The main chat itself has nowhere to go but up to the parent.
+    root = await boundcorp.root_session(user)
+    engine._client.responses = [say("ok")]
+    await boundcorp.ask(root, "hi")
+    assert "ergo_message_up" not in _tool_names(engine._client.calls[-1])
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_upward_reaches_only_the_parents_main_chat(tmp_path, thread_messages):
+    user = await User.objects.acreate(username="up-main")
+    engine = claude_engine()
+    registry, boundcorp, design = _family(
+        tmp_path, engine, "name: boundcorp\n", "name: design\n"
+    )
+    root = await boundcorp.root_session(user)
+    side = await boundcorp.create_session(user, parent=root, title="Side")
+    design_main = await design.root_session(user)
+    engine._client.responses = [
+        claude_tool(
+            "ergo_thread_send",
+            {"bot": "boundcorp", "thread": str(side.id), "message": "x"},
+            tool_id="s1",
+        ),
+        claude_tool(
+            "ergo_thread_send", {"bot": "boundcorp", "message": "Status?"}, tool_id="s2"
+        ),
+        say("ok"),
+    ]
+    await design.ask(design_main, "Report")
+    refused, sent = _tool_results(engine)[-2:]
+    assert refused["is_error"] and "your parent bot" in refused["content"]
+    assert json.loads(sent["content"])["sent_to"] == "boundcorp · Main"
+    listing = next(t for t in _seeded(engine._client.calls[0]) if "boundcorp" in t)
+    assert "(your parent bot: its main chat only)" in listing
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_the_target_decides_whether_it_takes_new_threads(
+    tmp_path, thread_messages, settings
+):
+    from django.conf import settings as django_settings
+
+    stopped = []
+    settings.DJANGO_ERGO = {
+        **getattr(django_settings, "DJANGO_ERGO", {}),
+        "THREAD_MESSAGE_RUNNER": "tests.test_bots.record_message",
+        "TURN_STOPPER": lambda session_id: stopped.append(session_id) or True,
+    }
+    user = await User.objects.acreate(username="newthreads")
+    engine = claude_engine()
+    registry, boundcorp, design = _family(
+        tmp_path,
+        engine,
+        "name: boundcorp\n",
+        "name: design\norchestration: false\n",
+    )
+    root = await boundcorp.root_session(user)
+    engine._client.responses = [
+        claude_tool(
+            "ergo_thread_send",
+            {"bot": "design", "thread": "new", "message": "Logo"},
+            tool_id="n1",
+        ),
+        say("ok"),
+    ]
+    await boundcorp.ask(root, "Design a logo")
+    refused = _tool_results(engine)[-1]
+    assert (
+        refused["is_error"] and "design doesn't take new threads" in refused["content"]
+    )
+
+    design.definition.allow_create_sessions = True
+    engine._client.responses = [
+        claude_tool(
+            "ergo_thread_send",
+            {"bot": "design", "thread": "new", "title": "Logo", "message": "Logo"},
+            tool_id="n2",
+        ),
+        say("ok"),
+    ]
+    await boundcorp.ask(root, "Design a logo")
+    sent = json.loads(_tool_results(engine)[-1]["content"])
+    thread = await ConversationSession.objects.aget(id=sent["thread_id"])
+    assert thread.bot_name == "design"
+    assert thread.metadata["started_by"] == str(root.id)
+    assert thread.metadata["started_by_bot"] == "boundcorp"
+    assert thread.metadata["started_by_label"] == "boundcorp · Main"
+
+    # boundcorp manages the thread it started: stop it, then archive it.
+    other = await design.create_session(user, title="Not ours")
+    engine._client.responses = [
+        claude_tool(
+            "ergo_thread_stop",
+            {"bot": "design", "thread_id": str(thread.id)},
+            tool_id="x1",
+        ),
+        claude_tool(
+            "ergo_thread_archive",
+            {"bot": "design", "thread_id": str(other.id)},
+            tool_id="x2",
+        ),
+        claude_tool(
+            "ergo_thread_archive",
+            {"bot": "design", "thread_id": str(thread.id)},
+            tool_id="x3",
+        ),
+        say("Stopped and archived."),
+    ]
+    await boundcorp.ask(root, "Never mind the logo")
+    stop, not_ours, archived = _tool_results(engine)[-3:]
+    assert json.loads(stop["content"]) == {
+        "thread": "design · Logo",
+        "cancelled_messages": 1,  # the request was still queued
+        "stopped_running_turn": True,
+    }
+    assert stopped == [str(thread.id)]
+    assert not_ours["is_error"] and "wasn't started by this bot" in not_ours["content"]
+    assert archived["content"] == "Archived design · Logo"
+    await thread.arefresh_from_db()
+    assert thread.status == "completed"
 
 
 @pytest.mark.django_db(transaction=True)

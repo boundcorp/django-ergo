@@ -119,7 +119,7 @@ accepted):
 ```yaml
 threads:
   skills: []
-  allow_create: true          # may chats start threads of this bot?
+  allow_create: true          # may chats (this bot's or other bots') start threads of it?
   archive_after_days: 7       # idle threads are archived (messaging one reopens it)
   default_compaction: {mode: rolling, config: {keep_recent: 15}}
 ```

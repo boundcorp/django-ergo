@@ -18,6 +18,8 @@ export type Session = {
   title: string
   role: string
   parent_id: string | null
+  started_by?: string // another bot's chat that started this thread
+  started_by_id?: string | null
   status: string
   username: string
   created_at: string

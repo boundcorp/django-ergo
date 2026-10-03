@@ -123,6 +123,7 @@ DJANGO_ERGO = {
     "WORKER_RUNNER": "ergonaut.apps.bots.tasks.queue_worker",
     # Turns another bot or a finished worker starts can be steered and stopped like the user's own.
     "TURN_CONTROL": "ergonaut.apps.bots.tasks.InboxControl",
+    "TURN_STOPPER": "ergonaut.apps.bots.tasks.request_stop",
     "SESSION_NOTIFIER": "ergonaut.apps.bots.tasks.notify",
 }
 

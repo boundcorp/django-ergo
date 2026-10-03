@@ -20,7 +20,7 @@ bot.yaml::
       recent: 15
       budget_tokens: 8000
       granularity: conversation
-    orchestration: true                # may the bot delegate at all (default true)
+    orchestration: true                # may the bot delegate downward (default true; upward always works)
     timezone: America/Los_Angeles      # for the current time in context
     current_time: true                 # put the current date and time in context
     max_turns: 50                      # model calls one reply may use, tool calls included
@@ -35,7 +35,7 @@ bot.yaml::
         skills: [analytics]
     threads:                           # child threads of any chat
       skills: []
-      allow_create: true               # may chats start threads of this bot?
+      allow_create: true               # may chats (any bot's) start threads of this bot?
       archive_after_days: 7            # archive threads idle this long (0 = never)
       default_compaction: {mode: rolling, config: {keep_recent: 15}}  # "stream" still works
     skills:                            # see django_ergo.bots.skillset
