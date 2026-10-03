@@ -26,7 +26,7 @@ from ninja.errors import HttpError
 from ninja.security import django_auth
 
 from ergonaut.apps.bots.errors import describe_error
-from ergonaut.apps.bots.tasks import inbox_items, queue_message, queue_turn, request_stop, resume_session, unsend
+from ergonaut.apps.bots.tasks import peek_inbox, queue_message, queue_turn, request_stop, resume_session, unsend
 
 router = Router(tags=["bots"], auth=django_auth)
 
@@ -135,7 +135,7 @@ class CallOut(Schema):
     pending_approvals: list[dict]
     tools: list[str]
     created_at: datetime
-    # A failed call's error in plain words: {kind, title, hint}.
+    # A failed call's error in plain words: {kind, title, hint, resumed}.
     problem: dict | None = None
 
 
@@ -151,7 +151,7 @@ class SessionDetailOut(Schema):
     calls: list[CallOut]
     requests: list[RequestOut] = []
     workers: list[dict] = []
-    # Messages sent while a turn runs that the model hasn't seen yet; each can be unsent.
+    # Messages sent while a turn runs that the model hasn't taken yet (they can be unsent).
     inbox: list[dict] = []
 
 
@@ -721,23 +721,11 @@ def session_detail(request, session_id: str):
         "calls": calls,
         "requests": requests_out(session),
         "workers": workers_out(session),
-        "inbox": inbox_out(session),
+        "inbox": [
+            {"id": item.get("id", ""), "text": item.get("text", ""), "files": len(item.get("attachment_ids") or [])}
+            for item in peek_inbox(session.id)
+        ],
     }
-
-
-def inbox_out(session: ConversationSession) -> list[dict]:
-    items = inbox_items(session.id)
-    ids = {a for item in items for a in item.get("attachment_ids") or []}
-    names = dict(session.attachments.filter(id__in=ids).values_list("id", "filename")) if ids else {}
-    return [
-        {
-            "id": item.get("id", ""),
-            "text": item.get("text", ""),
-            "files": [names.get(uuid.UUID(a), "") for a in item.get("attachment_ids") or []],
-        }
-        for item in items
-        if item.get("id")
-    ]
 
 
 @router.get("/calls/{call_id}", response=CallDetailOut)
@@ -799,16 +787,6 @@ async def send_message(request, session_id: str, data: MessageIn):
     return await sync_to_async(latest_turn)(session, queued=queued)
 
 
-@router.delete("/sessions/{session_id}/inbox/{item_id}")
-async def unsend_message(request, session_id: str, item_id: str):
-    """Take back a message the running turn hasn't picked up yet."""
-    session = await get_session(request, session_id)
-    item = await sync_to_async(unsend)(session.id, item_id)
-    if item is None:
-        raise HttpError(409, "Too late: the bot already has that message")
-    return {"text": item.get("text", "")}
-
-
 @router.post("/sessions/{session_id}/resume", response=TurnOut)
 async def resume_turn(request, session_id: str):
     """Carry on a turn that failed (out of credits, a crash...) from where it stopped."""
@@ -830,6 +808,16 @@ async def stop_turn(request, session_id: str):
     get_bot(session.bot_name, request.auth)
     running = await sync_to_async(request_stop)(session.id)
     return await sync_to_async(latest_turn)(session, queued=running)
+
+
+@router.delete("/sessions/{session_id}/inbox/{item_id}")
+async def unsend_message(request, session_id: str, item_id: str):
+    """Take back a message the running turn hasn't given the model yet."""
+    session = await get_session(request, session_id)
+    item = await sync_to_async(unsend)(session.id, item_id)
+    if item is None:
+        raise HttpError(409, "Too late: the model already has that message")
+    return {"text": item.get("text", ""), "attachment_ids": item.get("attachment_ids") or []}
 
 
 @router.post("/sessions/{session_id}/approvals", response=TurnOut)

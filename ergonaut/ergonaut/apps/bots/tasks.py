@@ -167,7 +167,8 @@ def clear_stop(session_id) -> None:
 
 
 def push_message(session_id, text: str, attachment_ids: list[str] | None = None, *, from_bot: bool = False) -> str:
-    """Add a message to the session's inbox; returns its id (for ``unsend``)."""
+    """Queue a message for the session's turn. Returns its id (to unsend it). ``from_bot``
+    marks a bot's follow-up (see steer_running_turn), which isn't labeled as the user's."""
     item_id = uuid.uuid4().hex
     fields = {"id": item_id, "text": text, "attachment_ids": [str(a) for a in attachment_ids or []]}
     if from_bot:
@@ -193,40 +194,27 @@ def _inbox_raw(session_id) -> list:
     return client.lrange(_inbox_key(session_id), 0, -1)
 
 
-def inbox_items(session_id) -> list[dict]:
-    """Messages waiting for the session's turn, oldest first, without taking them."""
-    return [json.loads(raw) for raw in _inbox_raw(session_id)]
+def peek_inbox(session_id) -> list[dict]:
+    """Messages waiting for the model, oldest first, without taking them."""
+    return [json.loads(item) for item in _inbox_raw(session_id)]
 
 
 def unsend(session_id, item_id: str) -> dict | None:
-    """Take a message back out of the inbox before a turn picks it up.
-
-    Returns the message, or None when it's gone: the model already has it. Files
-    sent with it are removed.
-    """
-    client = redis_client()
+    """Take one waiting message back before the model sees it. Returns it, or None if a
+    turn already took it (or there's no such message)."""
     for raw in _inbox_raw(session_id):
         item = json.loads(raw)
         if item.get("id") != item_id:
             continue
+        client = redis_client()
         if client is None:
             with _local_guard:
-                inbox = _local_inboxes.get(str(session_id), [])
-                if raw not in inbox:
+                waiting = _local_inboxes.get(str(session_id), [])
+                if raw not in waiting:
                     return None
-                inbox.remove(raw)
+                waiting.remove(raw)
         elif not client.lrem(_inbox_key(session_id), 1, raw):
-            return None  # drained meanwhile
-        from django_ergo.conversation.models import ConversationAttachment
-
-        remove_uploads(
-            ConversationAttachment.objects.filter(
-                session_id=session_id,
-                id__in=item.get("attachment_ids") or [],
-                message_sequence__isnull=True,
-                source="upload",
-            )
-        )
+            return None  # drained between our read and the removal
         notify(session_id)
         return item
     return None

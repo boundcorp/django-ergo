@@ -148,6 +148,25 @@ def test_the_user_can_steer_and_stop_a_turn_another_chat_started(session, use_bo
 
 
 @pytest.mark.django_db(transaction=True)
+def test_a_waiting_message_can_be_unsent_until_the_model_takes_it(client, cook, use_bots):  # noqa: F811
+    use_bots(say("hi"))
+    root = post(client, "/api/bots/kitchen/root").json()
+    first = tasks.push_message(root["id"], "Use blue")
+    second = tasks.push_message(root["id"], "Actually red")
+
+    inbox = client.get(f"/api/sessions/{root['id']}").json()["inbox"]
+    assert [(i["id"], i["text"]) for i in inbox] == [(first, "Use blue"), (second, "Actually red")]
+
+    taken = client.delete(f"/api/sessions/{root['id']}/inbox/{first}")
+    assert taken.json() == {"text": "Use blue", "attachment_ids": []}
+    assert [i["text"] for i in tasks.peek_inbox(root["id"])] == ["Actually red"]
+
+    assert [i["text"] for i in tasks.drain_inbox(root["id"])] == ["Actually red"]  # the turn took it
+    assert client.delete(f"/api/sessions/{root['id']}/inbox/{second}").status_code == 409
+    assert client.get(f"/api/sessions/{root['id']}").json()["inbox"] == []
+
+
+@pytest.mark.django_db(transaction=True)
 def test_a_turn_answering_a_bot_takes_steering_and_its_follow_up(session, cook, use_bots):  # noqa: F811
     import threading
 
@@ -178,22 +197,3 @@ def test_a_turn_answering_a_bot_takes_steering_and_its_follow_up(session, cook, 
     assert request.status == "answered"
     assert request.text == "How many eggs?\n\nButter too."
     assert session.structured_calls.count() == 1
-
-
-@pytest.mark.django_db(transaction=True)
-def test_a_message_the_turn_hasnt_read_can_be_unsent(session, client, use_bots):  # noqa: F811
-    use_bots(tool_call("pantry_count", {"item": "eggs"}), say("Four eggs."))
-    first = tasks.push_message(session.id, "Oops, wrong chat")
-    tasks.push_message(session.id, "How many eggs?")
-    detail = client.get(f"/api/sessions/{session.id}").json()
-    assert [m["text"] for m in detail["inbox"]] == ["Oops, wrong chat", "How many eggs?"]
-
-    response = client.delete(f"/api/sessions/{session.id}/inbox/{first}")
-    assert response.status_code == 200
-    assert response.json() == {"text": "Oops, wrong chat"}
-    assert client.delete(f"/api/sessions/{session.id}/inbox/{first}").status_code == 409  # already gone
-
-    tasks.run_turn(str(session.id))
-    call = session.structured_calls.get()
-    assert call.request == "How many eggs?"
-    assert client.get(f"/api/sessions/{session.id}").json()["inbox"] == []

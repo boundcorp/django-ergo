@@ -240,11 +240,8 @@ export type SessionDetail = {
   calls: Call[]
   requests?: DelegatedRequest[]
   workers?: Worker[]
-  // Sent while a turn runs; the model hasn't seen them yet, so they can be unsent.
-  inbox?: InboxItem[]
+  inbox?: { id: string; text: string; files: number }[] // sent mid-turn, not yet given to the model
 }
-
-export type InboxItem = { id: string; text: string; files: string[] }
 
 export type Turn = {
   session_id: string
@@ -341,7 +338,8 @@ export const api = {
     request<Turn>('POST', `/sessions/${id}/messages`, { text, attachment_ids: attachmentIds, mode }),
   stop: (id: string) => request<Turn>('POST', `/sessions/${id}/stop`),
   resume: (id: string) => request<Turn>('POST', `/sessions/${id}/resume`),
-  unsend: (id: string, itemId: string) => request<{ text: string }>('DELETE', `/sessions/${id}/inbox/${itemId}`),
+  unsend: (id: string, itemId: string) =>
+    request<{ text: string; attachment_ids: string[] }>('DELETE', `/sessions/${id}/inbox/${itemId}`),
   approve: (id: string, approve: boolean, approvalIds?: string[]) =>
     request<Turn>('POST', `/sessions/${id}/approvals`, { approve, approval_ids: approvalIds }),
   close: (id: string) => request<Session>('POST', `/sessions/${id}/close`),

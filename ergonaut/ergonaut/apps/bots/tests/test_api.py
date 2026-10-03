@@ -288,7 +288,7 @@ def test_a_queued_turn_returns_at_once(client, cook, use_bots, monkeypatch, sett
     assert response.json()["text"] == ""
     # The message waits in the session's inbox for the queued turn.
     assert queued == [(root["id"], None, None, [], None)]
-    assert [(m["text"], m["attachment_ids"]) for m in tasks.drain_inbox(root["id"])] == [("Eggs?", [])]
+    assert [(i["text"], i["attachment_ids"]) for i in tasks.drain_inbox(root["id"])] == [("Eggs?", [])]
 
 
 @pytest.mark.django_db(transaction=True)
