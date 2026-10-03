@@ -26,6 +26,10 @@ The bot runs the CLI on the host Ergonaut runs on, as that user. Tools:
   inside the worktree (symlinks resolved), and secret-looking files (``.env*``,
   ``*.pem``, ``*.key``, anything named like a secret) are refused. Worktree
   files are read over ``ssh <files_host>``.
+- ``orca_upload``: copy chat files (this chat's, or files another chat shared,
+  by ``session_id``) into a folder of an Orca worktree, so a worker can use
+  them (design mockups, specs). Same approval as ``orca_run``; the folder must
+  stay inside the worktree, and secret-looking names are refused.
 - ``orca_start_worker``: start a supervised coding agent on a task (approval),
   watched by a thread Worker (``orca:watch``, see bots.workers) that polls the
   dispatch, passes the agent's questions to the chat and brings its
@@ -402,6 +406,77 @@ class OrcaPlugin(BotPlugin):
             "size": row.size,
         }
 
+    def push(self, root: str, folder: str, name: str, data: bytes) -> str:
+        """Write ``data`` as ``folder/name`` inside the worktree at ``root``; returns its path."""
+        import posixpath
+        import shlex
+
+        if "/" in name or name in ("", ".", "..") or is_secret(name):
+            msg = f"{name!r} can't be written to a worktree"
+            raise ValueError(msg)
+        target = posixpath.normpath(
+            folder if folder.startswith("/") else posixpath.join(root, folder or ".")
+        )
+        if target != root.rstrip("/") and not target.startswith(root.rstrip("/") + "/"):
+            msg = f"{folder} is outside the worktree"
+            raise ValueError(msg)
+        script = (
+            f"set -e; r=$(realpath -e -- {shlex.quote(root)}); "
+            f"mkdir -p -- {shlex.quote(target)}; d=$(realpath -e -- {shlex.quote(target)}); "
+            'case "$d" in "$r"|"$r"/*) ;; *) echo "outside the worktree" >&2; exit 3;; esac; '
+            f'f="$d"/{shlex.quote(name)}; '
+            'test -L "$f" && { echo "refusing to write through a symlink" >&2; exit 5; }; '
+            'cat > "$f"; printf "%s" "$f"'
+        )
+        argv = (
+            ["ssh", "-o", "BatchMode=yes", self.files_host, script]
+            if self.files_host
+            else ["sh", "-c", script]
+        )
+        proc = subprocess.run(  # noqa: S603 — fixed script; paths are shell-quoted
+            argv, input=data, capture_output=True, timeout=self.timeout, check=False
+        )
+        if proc.returncode:
+            msg = f"Couldn't write {name}: {proc.stderr.decode(errors='replace').strip()[:300]}"
+            raise ValueError(msg)
+        return proc.stdout.decode(errors="replace").strip()
+
+    def upload(
+        self,
+        ctx: ToolContext,
+        worktree: str,
+        files: list[str],
+        folder: str = "design",
+        session_id: str = "",
+    ) -> list[dict]:
+        """Copy chat files into ``folder`` of a worktree."""
+        from django_ergo.conversation.attachments import find_session_file
+        from django_ergo.conversation.models import ConversationSession
+
+        if ctx.session is None:
+            msg = "Uploading needs a chat"
+            raise ValueError(msg)
+        source = ctx.session
+        if session_id and session_id != str(ctx.session.id):
+            source = ConversationSession.objects.filter(
+                id=session_id, user_id=ctx.session.user_id
+            ).first()
+            if source is None:
+                msg = f"No chat {session_id} of yours"
+                raise ValueError(msg)
+        rows = [find_session_file(source, ref) for ref in files]
+        root = self.worktree_path(worktree)
+        written = []
+        for row in rows:
+            if row.size > self.max_attach_bytes:
+                msg = f"{row.filename} is larger than {self.max_attach_bytes} bytes"
+                raise ValueError(msg)
+            with row.file.open("rb") as handle:
+                data = handle.read()
+            path = self.push(root, folder, row.filename, data)
+            written.append({"file": row.filename, "path": path, "size": len(data)})
+        return written
+
     # -- supervised Orca workers as thread Workers ---------------------------
 
     def cli_json(self, args: list[str]) -> dict:
@@ -735,6 +810,46 @@ class OrcaPlugin(BotPlugin):
             return plugin.attach(ctx, worktree, path, filename)
 
         @bot_tool(
+            name="orca_upload",
+            takes_context=True,
+            description=(
+                "Copy files from this chat (or files another chat shared with you: pass "
+                "its session_id) into a folder of an Orca worktree, so a worker can use "
+                "them, e.g. design mockups and a Penpot tree export. Tell the worker the "
+                "paths in its brief."
+            ),
+            parameters={
+                "worktree": {
+                    "type": "string",
+                    "description": "Worktree selector, e.g. id:<repo-id>::<path> or a path",
+                },
+                "files": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Filenames or file ids",
+                },
+                "folder": {
+                    "type": "string",
+                    "description": 'Folder in the worktree (default "design"); created if missing',
+                },
+                "session_id": {
+                    "type": "string",
+                    "description": "The chat the files are in (default: this one)",
+                },
+            },
+            required=["worktree", "files"],
+            requires_approval=self.approve_changes,
+        )
+        def upload(
+            ctx: ToolContext,
+            worktree: str,
+            files: list[str],
+            folder: str = "design",
+            session_id: str = "",
+        ) -> list[dict]:
+            return plugin.upload(ctx, worktree, files, folder, session_id)
+
+        @bot_tool(
             name="orca_screenshot",
             takes_context=True,
             description=(
@@ -807,6 +922,7 @@ class OrcaPlugin(BotPlugin):
             read.__bot_tool__,
             run.__bot_tool__,
             attach.__bot_tool__,
+            upload.__bot_tool__,
             screenshot.__bot_tool__,
             start_worker.__bot_tool__,
         ]

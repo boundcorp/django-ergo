@@ -335,3 +335,28 @@ def read_text(row: ConversationAttachment, limit: int = 50_000) -> str:
     if len(data) > limit:
         text += f"\n[truncated at {limit} characters]"
     return text
+
+
+def find_session_file(session, ref: str) -> ConversationAttachment:
+    """A file in ``session`` by id or by filename (the newest with that name).
+    Raises ValueError naming what's there when nothing matches."""
+    import uuid
+
+    from django_ergo.conversation.models import ConversationAttachment
+
+    ref = str(ref).strip()
+    rows = ConversationAttachment.objects.filter(session=session)
+    try:
+        found = rows.filter(id=uuid.UUID(ref)).first()
+    except ValueError:
+        found = rows.filter(filename=ref).order_by("archived_at", "-updated_at").first()
+    if found is None:
+        names = list(
+            rows.filter(archived_at__isnull=True)
+            .order_by("-updated_at")
+            .values_list("filename", flat=True)[:20]
+        )
+        listing = ", ".join(names) or "no files"
+        msg = f"No file {ref!r} in that chat (it has: {listing})"
+        raise ValueError(msg)
+    return found
