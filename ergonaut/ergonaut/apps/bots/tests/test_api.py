@@ -891,7 +891,7 @@ def test_a_long_chat_comes_a_page_at_a_time(client, cook, use_bots):
 
     page = client.get(f"/api/sessions/{session.id}").json()
     assert [m["line"] for m in page["messages"]] == list(range(70, 120))
-    assert (page["first_line"], page["has_more"]) == (70, True)
+    assert (page["first_line"], page["has_more"], page["message_count"]) == (70, True, 120)
     assert {c["id"] for c in page["calls"]} == {str(span.id), str(new.id)}
 
     older = client.get(f"/api/sessions/{session.id}?before=70").json()

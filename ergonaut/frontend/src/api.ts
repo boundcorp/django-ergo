@@ -249,6 +249,7 @@ export type SessionDetail = {
   inbox?: { id: string; text: string; files: number }[] // sent mid-turn, not yet given to the model
   first_line?: number | null // the oldest line returned
   has_more?: boolean // older messages exist: ask with before=first_line
+  message_count?: number // in the whole session
 }
 
 export type Turn = {
