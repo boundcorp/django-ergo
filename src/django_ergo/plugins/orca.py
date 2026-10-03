@@ -556,6 +556,16 @@ class OrcaPlugin(BotPlugin):
             raise ValueError(msg)
         return f"id:{found}"
 
+    def pin_omp_model(self, worktree: str, model: str, effort: str = "") -> None:
+        """Make omp in this worktree use ``model`` (at ``effort``): a project
+        ``.omp/config.yml`` overrides its default model role. The folder ignores
+        itself, so the setting never shows up in git."""
+        root = self.worktree_path(worktree)
+        selector = f"{model}:{effort}" if effort else model
+        config = f"modelRoles:\n  default: {json.dumps(selector)}\n"
+        self.push(root, ".omp", "config.yml", config.encode())
+        self.push(root, ".omp", ".gitignore", b"*\n")
+
     def start_worker(  # noqa: PLR0913
         self,
         ctx: ToolContext,
@@ -604,10 +614,17 @@ class OrcaPlugin(BotPlugin):
             "--from",
             mailbox,
         ]
-        if model:
-            args += ["--model", model]
-        if effort:
-            args += ["--effort", effort]
+        if agent == "omp" and model:
+            # Orca can't pass a model to omp at launch; omp reads it from the worktree.
+            self.pin_omp_model(worktree, model, effort)
+        elif agent == "omp" and effort:
+            msg = "omp takes effort only together with a model"
+            raise ValueError(msg)
+        else:
+            if model:
+                args += ["--model", model]
+            if effort:
+                args += ["--effort", effort]
         receipt = self.cli_json(args)
         dispatch_id = _first_key(receipt, ("dispatchId", "dispatch_id"))
         if not dispatch_id:
@@ -901,8 +918,14 @@ class OrcaPlugin(BotPlugin):
                     "type": "string",
                     "description": "A short title for the task",
                 },
-                "model": {"type": "string"},
-                "effort": {"type": "string"},
+                "model": {
+                    "type": "string",
+                    "description": "Model id or provider/model selector (for omp, e.g. anthropic/claude-sonnet-5-5)",
+                },
+                "effort": {
+                    "type": "string",
+                    "description": "Reasoning effort (needs model)",
+                },
             },
             required=["spec", "worktree"],
             requires_approval=self.approve_changes,

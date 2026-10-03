@@ -333,7 +333,11 @@ def deploy(ctx, release: str) -> str:
 The Orca plugin's `orca_start_worker(spec, worktree, agent)` starts a
 supervised Orca worker (with approval) and a Worker (`orca:watch`) that polls
 its dispatch every minute, passes the agent's questions to the chat, and
-returns its `worker_done` report.
+returns its `worker_done` report. `model` and `effort` go to Orca's
+`--model`/`--effort`, except for `agent: omp`, which Orca can't give a model
+at launch: the plugin writes the worktree's `.omp/config.yml`
+(`modelRoles.default: <model>:<effort>`, git-ignored by its own folder) and omp
+picks it up.
 
 ## Chats
 
