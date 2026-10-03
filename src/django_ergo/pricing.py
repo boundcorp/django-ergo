@@ -261,6 +261,14 @@ def add_request_cost(call, model: str, usage) -> None:
     message row). Once a request is unpriced, the call stays unpriced."""
     from decimal import Decimal
 
+    fields = (
+        "input_tokens",
+        "output_tokens",
+        "cache_creation_input_tokens",
+        "cache_read_input_tokens",
+    )
+    if not any(getattr(usage, f, 0) for f in fields):
+        return  # not a model request (e.g. a pre-seeded tool call stored as a message)
     price = price_for(model)
     if price is None or getattr(call, "_ergo_unpriced", False):
         call.cost_usd = None

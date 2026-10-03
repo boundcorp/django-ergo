@@ -99,6 +99,10 @@ def test_requests_are_priced_one_by_one_with_the_long_context_surcharge():
     assert call_cost_parts(c) == pytest.approx(
         {"input": 0.6, "cache_write": 0, "cache_read": 0.08, "output": 0.25}
     )
+    # A stored message that wasn't a model request (a pre-seeded tool call: no model, no
+    # tokens) costs nothing and doesn't make the call unpriced.
+    add_request_cost(c, "", SimpleNamespace(input_tokens=0, output_tokens=None))
+    assert call_cost(c) == pytest.approx(0.3 + 0.63)
     # A request on an unpriced model drops the running cost; later requests don't restart it.
     add_request_cost(c, "mystery-model", SimpleNamespace(input_tokens=1))
     add_request_cost(c, "gpt-6-sol", SimpleNamespace(input_tokens=1_000))
