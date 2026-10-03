@@ -1297,3 +1297,44 @@ async def test_files_shared_with_a_thread_message_are_listed_for_the_recipient(
         failed["is_error"]
         and "No file 'nope.png' in that chat (it has: mock.png)" in failed["content"]
     )
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_a_chat_waits_for_its_open_request_instead_of_nudging(
+    tmp_path, thread_messages
+):
+    from django_ergo.conversation.models import ThreadMessage
+
+    user = await User.objects.acreate(username="nudger")
+    bot, engine = make_bot(tmp_path, say("ok"))
+    root = await bot.root_session(user)
+    thread = await bot.create_session(user, parent=root, title="Mockups")
+    engine._client.responses = [
+        claude_tool(
+            "ergo_thread_send", {"thread": str(thread.id), "message": "Draw it"}
+        ),
+        claude_tool(
+            "ergo_thread_send",
+            {"thread": str(thread.id), "message": "Still waiting, please send it"},
+            tool_id="nudge",
+        ),
+        say("Asked."),
+    ]
+    await bot.ask(root, "Get the mockups drawn")
+    nudge = engine._client.calls[2]["messages"][-1]["content"][0]
+    assert nudge["is_error"]
+    assert "is still open; its reply will arrive here. Don't nudge" in nudge["content"]
+    assert await ThreadMessage.objects.acount() == 1
+
+    # Once it's answered, new work can go out.
+    await ThreadMessage.objects.aupdate(status="answered")
+    engine._client.responses = [
+        claude_tool(
+            "ergo_thread_send",
+            {"thread": str(thread.id), "message": "Now the dark variant"},
+            tool_id="next",
+        ),
+        say("Asked again."),
+    ]
+    await bot.ask(root, "And dark mode")
+    assert await ThreadMessage.objects.acount() == 2
