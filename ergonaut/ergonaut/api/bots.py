@@ -134,6 +134,10 @@ class CallOut(Schema):
     pending_approvals: list[dict]
     tools: list[str]
     created_at: datetime
+    # A failure in plain words, and what to do about it ("" when the call didn't fail).
+    error_summary: str = ""
+    error_hint: str = ""
+    dismissed: bool = False  # the user dismissed this failure
 
 
 class CallDetailOut(CallOut):
@@ -379,7 +383,9 @@ def uuid_or_404(value: str, what: str = "session") -> str:
 def needs_attention(session: ConversationSession) -> bool:
     """The latest turn waits on the user: an approval, a question, or a failure."""
     status = getattr(session, "latest_status", None)
-    return status in ("awaiting_approval", "failed") or (
+    if status in RESUMABLE:
+        return not getattr(session, "latest_dismissed", None)
+    return status == "awaiting_approval" or (
         status == "completed" and getattr(session, "latest_type", None) == "question"
     )
 
@@ -433,6 +439,7 @@ def with_open_counts(qs):
         unread=Exists(finished.filter(updated_at__gt=OuterRef("read_at"))),
         latest_status=Subquery(latest.values("status")[:1]),
         latest_type=Subquery(latest.values("response__type")[:1]),
+        latest_dismissed=Subquery(latest.values("metadata__dismissed")[:1]),
         open_in=Count(
             "thread_messages",
             filter=Q(
@@ -485,6 +492,63 @@ def requests_out(session: ConversationSession, limit: int = 20) -> list[dict]:
     return out
 
 
+RESUMABLE = ("failed", "turn_limited")
+
+# (substrings of the error, summary, hint), first match wins.
+ERROR_KINDS = [
+    (
+        ("insufficient_quota", "no credits remaining", "exceeded your current quota"),
+        "The model provider's account is out of credits.",
+        "Add credits to the account, then Resume.",
+    ),
+    (
+        ("Incorrect API key", "invalid_api_key", "401"),
+        "The model provider rejected the API key.",
+        "Fix the key in the server's environment, then Resume.",
+    ),
+    (("environment variable",), "The bot's API key isn't set.", "Set it in the server's environment, then Resume."),
+    (
+        ("429", "rate limit", "Rate limit"),
+        "The model provider is rate-limiting requests.",
+        "Wait a minute, then Resume.",
+    ),
+    (
+        ("timed out", "Timeout", "Connection error", "APIConnectionError"),
+        "Couldn't reach the model provider.",
+        "Check the connection, then Resume.",
+    ),
+    (("max_tokens",), "The reply hit its output-length limit.", "Resume to let it continue in a new reply."),
+    (
+        ("Crashed", "died", "no longer running"),
+        "The turn stopped unexpectedly (the server restarted or crashed).",
+        "Resume to pick up where it left off.",
+    ),
+]
+
+
+def error_out(call: StructuredCall) -> dict:
+    """The call's failure in plain words, with a hint (see ERROR_KINDS)."""
+    if call.status == "turn_limited":
+        return {
+            "error_summary": f"Stopped after {call.turns_used} model calls without finishing.",
+            "error_hint": "Resume to let it continue.",
+        }
+    if call.status != "failed" or not call.error:
+        return {"error_summary": "", "error_hint": ""}
+    for needles, summary, hint in ERROR_KINDS:
+        if any(n in call.error for n in needles):
+            return {"error_summary": summary, "error_hint": hint}
+    first = call.error.strip().splitlines()[0][:200]
+    return {"error_summary": f"The turn failed: {first}", "error_hint": "Resume to try again."}
+
+
+RESUME_NOTE = (
+    "[Resume] Your last turn stopped before it finished ({why}). Pick up where you left off: "
+    "check what you already did above (tool calls and their results), don't repeat finished "
+    "steps, and complete the request."
+)
+
+
 def call_out(call: StructuredCall, detail: bool = False) -> dict:
     out = {
         "id": str(call.id),
@@ -502,6 +566,8 @@ def call_out(call: StructuredCall, detail: bool = False) -> dict:
         "pending_approvals": (call.metadata or {}).get("pending_approvals", []),
         "tools": (call.metadata or {}).get("tools", []),
         "created_at": call.created_at,
+        **error_out(call),
+        "dismissed": bool((call.metadata or {}).get("dismissed")),
     }
     if detail:
         out.update(system_prompt=call.system_prompt, transcript=call.transcript, metadata=call.metadata)
@@ -799,6 +865,32 @@ async def unsend_message(request, session_id: str, item_id: str):
     if item is None:
         raise HttpError(409, "Too late: the model already has that message")
     return {"text": item.get("text", ""), "attachment_ids": item.get("attachment_ids") or []}
+
+
+@router.post("/sessions/{session_id}/resume", response=TurnOut)
+async def resume_session(request, session_id: str):
+    """Continue a chat whose last turn failed or hit its step limit, as a new turn."""
+    session = await get_session(request, session_id)
+    last = await session.structured_calls.filter(kind="chat_reply").order_by("-created_at").afirst()
+    if last is None or last.status not in RESUMABLE:
+        raise HttpError(409, "The last turn didn't fail; there's nothing to resume")
+    why = error_out(last)["error_summary"].rstrip(".") or "it failed"
+    last.metadata = {**(last.metadata or {}), "dismissed": True, "resumed": True}
+    await last.asave(update_fields=["metadata", "updated_at"])
+    queued = await sync_to_async(queue_message)(session.id, RESUME_NOTE.format(why=why))
+    return await sync_to_async(latest_turn)(session, queued=queued)
+
+
+@router.post("/calls/{call_id}/dismiss", response=CallOut)
+async def dismiss_call(request, call_id: str):
+    """Hide a failed call's error banner (and its yellow dot) without resuming."""
+    session_ids = visible_sessions(request.auth).values("id")
+    call = await StructuredCall.objects.filter(id=uuid_or_404(call_id, "call"), session_id__in=session_ids).afirst()
+    if call is None:
+        raise HttpError(404, "No such call")
+    call.metadata = {**(call.metadata or {}), "dismissed": True}
+    await call.asave(update_fields=["metadata", "updated_at"])
+    return call_out(call)
 
 
 @router.post("/sessions/{session_id}/approvals", response=TurnOut)

@@ -248,7 +248,11 @@ export function Chat({ onChange }: { onChange: () => void }) {
   const thinking = busy || !!pending || lastCall?.status === 'in_progress'
   // A turn is running that Stop can reach (not just this browser's request in flight).
   const running = !!pending || lastCall?.status === 'in_progress'
-  const callError = !pending && lastCall?.status === 'failed' ? lastCall.error : ''
+  // The last turn failed (or hit its step limit) and the user hasn't resumed or dismissed it.
+  const failedCall =
+    !pending && lastCall && ['failed', 'turn_limited'].includes(lastCall.status) && !lastCall.dismissed
+      ? lastCall
+      : null
   // Show a queued message until the worker has stored it.
   const echo = pending?.text && !stored(detail.messages, pending.text, pending.line) ? pending.text : ''
 
@@ -378,7 +382,47 @@ export function Chat({ onChange }: { onChange: () => void }) {
             </div>
           </div>
         )}
-        {(error || callError) && <div className="mx-6 mb-2 text-sm text-red-600">{error || callError}</div>}
+        {error && <div className="mx-6 mb-2 text-sm text-red-600">{error}</div>}
+        {failedCall && (
+          <div className="mx-6 mb-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm dark:border-red-900 dark:bg-red-950/40">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-medium text-red-700 dark:text-red-300">
+                {failedCall.error_summary || 'The last turn failed.'}
+              </span>
+              {failedCall.error_hint && (
+                <span className="text-zinc-600 dark:text-zinc-400">{failedCall.error_hint}</span>
+              )}
+              <span className="ml-auto flex gap-2">
+                <button
+                  disabled={busy}
+                  className="rounded-md bg-indigo-600 px-2.5 py-0.5 text-xs font-medium text-white disabled:opacity-50"
+                  title="Continue this chat from where the last turn stopped"
+                  onClick={() => run(() => api.resume(id), '')}
+                >
+                  Resume
+                </button>
+                <button
+                  disabled={busy}
+                  className="rounded-md border border-zinc-300 px-2.5 py-0.5 text-xs text-zinc-600 disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-400"
+                  title="Hide this error without resuming"
+                  onClick={async () => {
+                    await api.dismissCall(failedCall.id).catch(e => setError(String(e.message ?? e)))
+                    await load()
+                    onChange()
+                  }}
+                >
+                  Dismiss
+                </button>
+              </span>
+            </div>
+            {failedCall.error && failedCall.error !== failedCall.error_summary && (
+              <details className="mt-1 text-xs text-zinc-500">
+                <summary className="cursor-pointer select-none">Details</summary>
+                <pre className="mt-1 whitespace-pre-wrap break-words">{failedCall.error}</pre>
+              </details>
+            )}
+          </div>
+        )}
         {!!suggestions.length && (
           <div className="mx-6 mb-2 flex flex-wrap gap-2">
             {suggestions.map(s => (
