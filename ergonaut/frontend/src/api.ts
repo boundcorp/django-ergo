@@ -5,6 +5,8 @@ export type User = { id: string; username: string; email: string; first_name: st
 export type Bot = {
   name: string
   description: string
+  icon?: string // bot.yaml icon (an emoji); '' = its first letter
+  color?: string // bot.yaml color: a palette name or hex; '' = picked from the name
   orchestration: boolean
   knowledge: boolean
   parent: string

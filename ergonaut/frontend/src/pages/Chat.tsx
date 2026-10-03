@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
-import type { Call, DelegatedRequest, Message, Pin, SessionDetail, Turn, Worker } from '../api'
+import type { AttachmentFile, Call, DelegatedRequest, Message, Pin, SessionDetail, Turn, Worker } from '../api'
 import { api } from '../api'
 import Files from '../components/Files'
+import Markdown from '../components/Markdown'
 import ModelPicker from '../components/ModelPicker'
 import { PageViewer, Pins } from '../components/Pins'
-import { Transcript } from '../components/Transcript'
+import { AttachmentView, Transcript } from '../components/Transcript'
 
 /** Fold a live update into the transcript: messages replace by line, calls by id. */
 function merge(detail: SessionDetail, messages: Message[], calls: Call[]): SessionDetail {
@@ -34,7 +35,12 @@ export function Chat({ onChange }: { onChange: () => void }) {
   const [error, setError] = useState('')
   const [last, setLast] = useState<Turn | null>(null)
   // Files picked or pasted for the next message, already uploaded to the session.
-  const [outgoing, setOutgoing] = useState<{ id: string; filename: string }[]>([])
+  type Outgoing = { id: string; filename: string; image: boolean }
+  const [outgoing, setOutgoing] = useState<Outgoing[]>([])
+  // Files sent with the queued message, shown with it until the worker stores it.
+  const [sentFiles, setSentFiles] = useState<Outgoing[]>([])
+  // The chat's files, so the transcript can show the ones a bot made where it made them.
+  const [files, setFiles] = useState<AttachmentFile[]>([])
   const [uploading, setUploading] = useState(false)
   const picker = useRef<HTMLInputElement>(null)
   // A turn a worker is running: what was sent, and how the calls and messages looked then.
@@ -71,8 +77,23 @@ export function Chat({ onChange }: { onChange: () => void }) {
     setDetail(null)
     setLast(null)
     setOpenPin(null)
+    setFiles([])
     load().catch(e => setError(String(e.message ?? e)))
   }, [load])
+
+  // A bot's new file is saved while its tool runs; the tool's result message arrives right after.
+  const messageCount = detail?.messages.length ?? 0
+  useEffect(() => {
+    if (!messageCount) return
+    let current = true
+    api
+      .attachments(id)
+      .then(list => current && setFiles(list))
+      .catch(() => undefined)
+    return () => {
+      current = false
+    }
+  }, [id, messageCount])
 
   // A thread's generated title arrives after it starts; show it in the sidebar too.
   const title = detail?.session.title
@@ -142,6 +163,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
       : call.status !== 'awaiting_approval' || JSON.stringify(call.pending_approvals ?? []) !== pending.approvals
     if (done) {
       setPending(null)
+      setSentFiles([])
       onChange()
     }
   }, [detail, pending, onChange])
@@ -186,6 +208,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
     if ((!message.trim() && !outgoing.length) || busy || uploading) return
     const ids = outgoing.map(f => f.id)
     setText('')
+    setSentFiles(outgoing)
     setOutgoing([])
     if (mode === 'interrupt') setStopping(true)
     run(() => api.send(id, message, ids, mode), message || outgoing.map(f => f.filename).join(', '))
@@ -223,7 +246,10 @@ export function Chat({ onChange }: { onChange: () => void }) {
     try {
       for (const file of Array.from(files)) {
         const saved = await api.uploadAttachment(id, file)
-        setOutgoing(list => [...list, { id: saved.id, filename: saved.filename }])
+        setOutgoing(list => [
+          ...list,
+          { id: saved.id, filename: saved.filename, image: saved.kind === 'image' || saved.view === 'image' },
+        ])
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -318,12 +344,12 @@ export function Chat({ onChange }: { onChange: () => void }) {
         <Pins sessionId={id} refreshKey={`${detail.messages.length}:${pinsKey}`} open={openPin} onOpen={setOpenPin} />
         {openPin && <PageViewer pin={openPin} refreshKey={detail.messages.length} onClose={() => setOpenPin(null)} />}
         <div className={`chat-transcript flex-1 overflow-y-auto px-6 py-5 ${openPin ? 'hidden' : ''}`}>
-          <Transcript messages={detail.messages} calls={detail.calls} />
+          <Transcript messages={detail.messages} calls={detail.calls} files={files} />
           {(detail.inbox ?? []).map(item => (
             <div key={item.id} className="mt-3 flex flex-col items-end">
-              <div className="max-w-[80%] rounded-card border border-accent bg-indigo-tint px-4 py-3 whitespace-pre-wrap text-ink">
-                {item.text}
-                {item.files > 0 && <span className="ml-2 text-xs opacity-80">📎 {item.files}</span>}
+              <div className="max-w-[80%] rounded-card border border-accent bg-indigo-tint px-4 py-3 text-ink">
+                <Markdown text={item.text} />
+                {item.files > 0 && <span className="text-xs opacity-80">📎 {item.files}</span>}
               </div>
               <div className="mt-1 flex items-center gap-2 text-xs text-zinc-500">
                 <span>Waiting for the model's next step</span>
@@ -340,10 +366,17 @@ export function Chat({ onChange }: { onChange: () => void }) {
             </div>
           ))}
           {echo && !(detail.inbox ?? []).some(item => item.text === echo) && (
-            <div className="mt-3 flex justify-end">
-              <div className="max-w-[80%] rounded-card bg-indigo-tint px-4 py-3 whitespace-pre-wrap text-ink">
-                {echo}
-              </div>
+            <div className="mt-3 flex flex-col items-end gap-1">
+              {sentFiles.map(file => (
+                <div key={file.id} className="max-w-[80%]">
+                  <AttachmentView id={file.id} label={file.filename} image={file.image} />
+                </div>
+              ))}
+              {(!sentFiles.length || echo !== sentFiles.map(f => f.filename).join(', ')) && (
+                <div className="max-w-[80%] rounded-card bg-indigo-tint px-4 py-3 text-ink">
+                  <Markdown text={echo} />
+                </div>
+              )}
             </div>
           )}
           {thinking && (
@@ -456,7 +489,8 @@ export function Chat({ onChange }: { onChange: () => void }) {
                 key={file.id}
                 className="flex items-center gap-1 rounded-full border border-zinc-300 px-2 py-0.5 text-xs dark:border-zinc-700"
               >
-                📎 {file.filename}
+                {file.image ? <img src={api.viewUrl(file.id)} alt="" className="h-6 w-6 rounded object-cover" /> : '📎'}{' '}
+                {file.filename}
                 <button
                   type="button"
                   className="text-zinc-400 hover:text-red-600"

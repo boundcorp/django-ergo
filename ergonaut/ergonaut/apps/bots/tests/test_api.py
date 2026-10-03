@@ -81,6 +81,8 @@ def test_chat_with_the_root_session_and_drill_into_tools(client, cook, use_bots)
         {
             "name": "kitchen",
             "description": "Runs the kitchen",
+            "icon": "",
+            "color": "",
             "orchestration": False,
             "knowledge": False,
             "parent": "",

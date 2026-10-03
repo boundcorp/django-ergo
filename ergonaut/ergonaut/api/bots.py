@@ -42,6 +42,8 @@ class ChatOut(Schema):
 class BotOut(Schema):
     name: str
     description: str
+    icon: str = ""  # bot.yaml icon: an emoji; "" = the app's default
+    color: str = ""  # bot.yaml color: a palette name or hex; "" = the app's default
     orchestration: bool
     knowledge: bool
     parent: str
@@ -606,6 +608,8 @@ async def list_bots(request):
             {
                 "name": bot.name,
                 "description": bot.definition.description,
+                "icon": bot.definition.icon,
+                "color": bot.definition.color,
                 "orchestration": bot.definition.orchestration,
                 "knowledge": any(p.name == "ergo_kb" for p in bot.plugins),
                 "parent": bot.parent_name,
@@ -725,6 +729,8 @@ async def bot_detail(request, bot: str):
     return {
         "name": found.name,
         "description": definition.description,
+        "icon": definition.icon,
+        "color": definition.color,
         "orchestration": definition.orchestration,
         "knowledge": any(p.name == "ergo_kb" for p in found.plugins),
         "parent": found.parent_name,

@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Link, NavLink, useMatch, useNavigate } from 'react-router-dom'
 import type { Bot, Session } from '../api'
 import { api } from '../api'
+import BotIcon from './BotIcon'
 
 function SessionLink({ session, nested }: { session: Session; nested?: boolean }) {
   // The open chat is being read, so its reply is never shown as unread.
@@ -138,11 +139,11 @@ export function Sidebar({
               <Link
                 to={`/bots/${bot.name}`}
                 title="Bot options: tools and skills"
-                className="rounded-lg px-2 py-2 text-sm font-semibold text-ink hover:bg-raised"
+                className="flex items-center gap-2 rounded-lg px-2 py-2 text-sm font-semibold text-ink hover:bg-raised"
               >
+                <BotIcon bot={bot} />
                 {bot.name} ⚙
               </Link>
-              {bot.parent && <span className="ml-1 text-[10px] text-zinc-400">in {bot.parent}</span>}
               {bot.orchestration && (
                 <button
                   className="ml-auto rounded px-1.5 text-xs text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-900"
@@ -203,8 +204,12 @@ export function Sidebar({
       })}
       {!bots.length && <p className="px-2 text-sm text-zinc-500">No bots are loaded. Set ERGONAUT_BOTS and restart.</p>}
       <div className="mt-auto flex flex-col gap-1 border-t border-stroke pt-4">
-        <Link to="/sessions" className="rounded-lg px-3 py-2 text-sm hover:bg-raised">🔎 All sessions</Link>
-        <Link to="/costs" className="rounded-lg px-3 py-2 text-sm hover:bg-raised">💲 Costs</Link>
+        <Link to="/sessions" className="rounded-lg px-3 py-2 text-sm hover:bg-raised">
+          🔎 All sessions
+        </Link>
+        <Link to="/costs" className="rounded-lg px-3 py-2 text-sm hover:bg-raised">
+          💲 Costs
+        </Link>
       </div>
     </nav>
   )

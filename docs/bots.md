@@ -19,6 +19,8 @@ Install the extra for YAML support: `pip install 'django-ergo[bots]'`.
 ```yaml
 name: kitchen
 description: Household kitchen manager
+icon: "🍳"                            # shown before the name in Ergonaut (default: its first letter)
+color: amber                         # a palette name or hex like "#f59e0b" (default: picked from the name)
 instructions: agents.md              # default
 engine:
   type: openai                       # or claude (optional); default is the settings engine (openai)
@@ -61,6 +63,11 @@ permissions:
 
 Only files listed under `tools` are imported, and only from inside the bot
 folder, so loading a definition never runs code it didn't name.
+
+`color` takes a hex color or one of `slate`, `red`, `orange`, `amber`,
+`yellow`, `lime`, `green`, `emerald`, `teal`, `cyan`, `sky`, `blue`,
+`indigo`, `violet`, `purple`, `fuchsia`, `pink` or `rose`. Ergonaut shows the
+icon in that color before the bot's name in the sidebar and on its page.
 
 ## Tools
 

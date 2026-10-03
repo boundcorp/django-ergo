@@ -142,6 +142,9 @@ def test_definition_loads_folder(tmp_path):
         ("name: x\nplugins: [{config: 1}]\n", "Invalid plugin"),
         ("name: x\nengine: claude\n", "engine must be a mapping"),
         ("- a list\n", "must be a mapping"),
+        ("name: x\ncolor: chartreuse\n", "color"),
+        ("name: x\ncolor: '#12'\n", "color"),
+        ("name: x\nicon: a whole sentence\n", "icon"),
     ],
 )
 def test_definition_rejects_bad_config(tmp_path, yaml_text, error):
@@ -159,6 +162,14 @@ def test_definition_defaults_and_inline_instructions():
     assert definition.tool_results_in_context is None
     with pytest.raises(BotDefinitionError, match="needs a name"):
         BotDefinition.from_dict({})
+
+
+def test_icon_and_color():
+    definition = BotDefinition.from_dict({"name": "k", "icon": "🍳", "color": "Amber"})
+    assert (definition.icon, definition.color) == ("🍳", "amber")
+    assert BotDefinition.from_dict({"name": "k", "color": "#F59E0B"}).color == "#F59E0B"
+    bare = BotDefinition.from_dict({"name": "k"})
+    assert (bare.icon, bare.color) == ("", "")
 
 
 def test_old_stream_compaction_mode_loads_as_rolling(tmp_path):
