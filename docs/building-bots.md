@@ -34,9 +34,9 @@ name: boundcorp
 description: Lee's chief of staff; delegates to the other bots
 instructions: agents.md          # default
 engine:
-  type: claude                   # or openai
-  config: {model: claude-sonnet-5-5}
-  api_key_env: BOUNDCORP_ANTHROPIC_KEY   # default: the SDK's ANTHROPIC_API_KEY / OPENAI_API_KEY
+  type: openai                   # the default; or claude
+  config: {model: gpt-6-luna}
+  api_key_env: BOUNDCORP_OPENAI_KEY      # default: the SDK's OPENAI_API_KEY
 timezone: America/Los_Angeles
 max_turns: 50                    # model calls one reply may use, tool calls included
 tools: [tools/github.py]
@@ -54,20 +54,23 @@ A `providers.yaml` at the top of a bot path (the first one found among the
 `ERGONAUT_BOTS` paths) lists the engines and models a deployment allows:
 
 ```yaml
-default: anthropic/claude-sonnet-5-5   # for bots without an engine, and chats with no pick
+default: openai/gpt-6-luna   # for bots without an engine, and chats with no pick
 providers:
-  anthropic:
-    type: claude
-    api_key_env: ANTHROPIC_API_KEY
-    models:
-      - claude-sonnet-5-5
-      - {name: claude-opus-5-5, label: Opus 5.5, config: {max_tokens: 16000}}
   openai:
     type: openai
     api_key_env: OPENAI_API_KEY
     config: {reasoning_effort: medium}   # shared by its models
-    models: [gpt-6-luna, gpt-6-sol]
+    models:
+      - gpt-6-luna
+      - {name: gpt-6-sol, label: Sol, config: {reasoning_effort: high}}
+  anthropic:                   # optional: only if you have an Anthropic key
+    type: claude
+    api_key_env: ANTHROPIC_API_KEY
+    models: [claude-sonnet-5-5]
 ```
+
+OpenAI is the default engine; Anthropic (Claude) is optional and only
+needed if you list it here or set `engine.type: claude`.
 
 Models are named `provider/model`. A bot picks one with
 `engine: {config: {model: openai/gpt-6-sol}}`; a bot with no `engine` uses

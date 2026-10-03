@@ -87,9 +87,10 @@ bot path; see [Models and providers](building-bots.md#models-and-providers).
 
 Bots read their own secrets (API keys, tokens) from the environment by the
 names their bot.yaml and tools use: `engine.api_key_env`, `token_env`,
-`ctx.secret("NAME")`, or the SDK defaults `ANTHROPIC_API_KEY` and
-`OPENAI_API_KEY`. `ergonaut check` lists any that are missing. Keep them
-in an env file outside the bot repo.
+`ctx.secret("NAME")`, or the SDK default `OPENAI_API_KEY` (plus
+`ANTHROPIC_API_KEY` if a bot uses the optional Claude engine).
+`ergonaut check` lists any that are missing. Keep them in an env file
+outside the bot repo.
 
 ## The web app
 

@@ -56,7 +56,8 @@ first. Details are in [How many images a call carries](#how-many-images-a-call-c
 
 ### Audio
 
-Voice notes need a transcript, since Claude can't hear audio. Set
+Voice notes reach the model as a transcript (OpenAI can take raw audio
+with `audio_input`, below; Claude can't hear it at all). Set
 `DJANGO_ERGO["AUDIO_TRANSCRIBER"] =
 "django_ergo.conversation.attachments.openai_transcriber"` (with
 `OPENAI_API_KEY`) to transcribe on arrival. Without a transcriber the bot
