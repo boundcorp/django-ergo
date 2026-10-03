@@ -205,9 +205,19 @@ class PagesPlugin(BotPlugin):
             source, title = read_text(row), (row.metadata or {}).get("title", "")
         return self.check(ctx, source, title)
 
-    def pin(self, ctx: ToolContext, attachment_id: str, pinned: bool = True) -> str:
+    def pin(
+        self,
+        ctx: ToolContext,
+        attachment_id: str,
+        pinned: bool = True,
+        title: str = "",
+        icon: str = "",
+    ) -> str:
         row = self.page_row(ctx, attachment_id)
-        row.metadata = {**(row.metadata or {}), "pinned": bool(pinned)}
+        labels = {
+            k: v.strip() for k, v in (("title", title), ("icon", icon)) if v.strip()
+        }
+        row.metadata = {**(row.metadata or {}), **labels, "pinned": bool(pinned)}
         row.save(update_fields=["metadata", "updated_at"])
         return f"{'Pinned' if pinned else 'Unpinned'} {row.filename}"
 
@@ -292,10 +302,30 @@ class PagesPlugin(BotPlugin):
         def preview(ctx: ToolContext, page: str = "", source: str = "") -> dict:
             return plugin.preview(ctx, page, source)
 
-        @bot_tool(name="ergo_page_pin", takes_context=True)
-        def pin(ctx: ToolContext, attachment_id: str, pinned: bool = True) -> str:
-            """Pin a file in this chat (it shows at the top), or unpin it with pinned=false."""
-            return plugin.pin(ctx, attachment_id, pinned)
+        @bot_tool(
+            name="ergo_page_pin",
+            takes_context=True,
+            description=(
+                "Pin a file in this chat (it shows at the top and in the sidebar), or unpin it with "
+                "pinned=false. title and icon (an emoji) label the pin; they default to the file name "
+                "and an icon for its type."
+            ),
+            parameters={
+                "attachment_id": {"type": "string"},
+                "pinned": {"type": "boolean"},
+                "title": {"type": "string"},
+                "icon": {"type": "string", "description": "An emoji"},
+            },
+            required=["attachment_id"],
+        )
+        def pin(
+            ctx: ToolContext,
+            attachment_id: str,
+            pinned: bool = True,
+            title: str = "",
+            icon: str = "",
+        ) -> str:
+            return plugin.pin(ctx, attachment_id, pinned, title, icon)
 
         return [fn.__bot_tool__ for fn in (write, get, preview, pin)]
 

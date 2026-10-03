@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { BrowserRouter, Navigate, Route, Routes, useParams } from 'react-router-dom'
-import type { Bot, Session, User } from './api'
+import type { Bot, Session, SidebarPin, User } from './api'
 import { ApiError, api } from './api'
 import { Sidebar } from './components/Sidebar'
 import { Chat } from './pages/Chat'
@@ -29,7 +29,7 @@ function App() {
   const [user, setUser] = useState<User | null | undefined>(undefined)
   const [bots, setBots] = useState<Bot[]>([])
   const [sessions, setSessions] = useState<Session[]>([])
-  const [pins, setPins] = useState<Record<string, { name: string; url: string }[]>>({})
+  const [pins, setPins] = useState<Record<string, SidebarPin[]>>({})
   const [botErrors, setBotErrors] = useState<{ folder: string; name: string; error: string }[]>([])
 
   useEffect(() => {

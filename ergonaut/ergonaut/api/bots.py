@@ -42,6 +42,8 @@ class ChatOut(Schema):
 class BotOut(Schema):
     name: str
     description: str
+    icon: str = ""  # bot.yaml icon: an emoji; "" = the app's default
+    color: str = ""  # bot.yaml color: a palette name or hex; "" = the app's default
     orchestration: bool
     knowledge: bool
     parent: str
@@ -156,6 +158,35 @@ class SessionDetailOut(Schema):
     workers: list[dict] = []
     # Messages sent while a turn runs that the model hasn't taken yet (they can be unsent).
     inbox: list[dict] = []
+    # Paging: the first line returned, and whether older messages exist (ask with before=first_line).
+    first_line: int | None = None
+    has_more: bool = False
+
+
+PAGE_MESSAGES = 50
+
+
+def page_start(session: ConversationSession, before: int | None, limit: int) -> int | None:
+    """The first sequence of the ``limit`` messages before ``before`` (None: from the start)."""
+    rows = session.claude_messages if session.claude_messages.exists() else session.openai_messages
+    if before is not None:
+        rows = rows.filter(sequence__lt=before)
+    found = list(rows.order_by("-sequence").values_list("sequence", flat=True)[limit - 1 : limit + 1])
+    # Only a start when there is something older than it.
+    return found[0] if len(found) > 1 else None
+
+
+def calls_in(session: ConversationSession, first_line: int | None, before: int | None):
+    """The session's calls that touch lines [first_line, before); calls with no lines go with the newest page."""
+    calls = session.structured_calls.order_by("created_at")
+    if before is not None:
+        calls = calls.filter(first_sequence__lt=before)
+    if first_line is not None:
+        span = Q(last_sequence__gte=first_line)
+        if before is None:
+            span |= Q(last_sequence__isnull=True)
+        calls = calls.filter(span)
+    return calls
 
 
 def workers_out(session: ConversationSession) -> list[dict]:
@@ -606,6 +637,8 @@ async def list_bots(request):
             {
                 "name": bot.name,
                 "description": bot.definition.description,
+                "icon": bot.definition.icon,
+                "color": bot.definition.color,
                 "orchestration": bot.definition.orchestration,
                 "knowledge": any(p.name == "ergo_kb" for p in bot.plugins),
                 "parent": bot.parent_name,
@@ -725,6 +758,8 @@ async def bot_detail(request, bot: str):
     return {
         "name": found.name,
         "description": definition.description,
+        "icon": definition.icon,
+        "color": definition.color,
         "orchestration": definition.orchestration,
         "knowledge": any(p.name == "ergo_kb" for p in found.plugins),
         "parent": found.parent_name,
@@ -772,15 +807,17 @@ def provisional_title(message: str) -> str:
 
 
 @router.get("/sessions/{session_id}", response=SessionDetailOut)
-def session_detail(request, session_id: str):
+def session_detail(request, session_id: str, before: int | None = None, limit: int = PAGE_MESSAGES):
+    """The session with its newest ``limit`` messages, or the ``limit`` before line ``before``."""
     session = visible_sessions(request.auth).filter(id=uuid_or_404(session_id)).first()
     if session is None:
         raise HttpError(404, "No such session")
+    first_line = page_start(session, before, max(1, min(limit, 500)))
     messages = [
         {"line": m.line, "role": m.role, "blocks": m.blocks, "timestamp": m.timestamp}
-        for m in SessionSource(session).messages()
+        for m in SessionSource(session, first_line=first_line, before_line=before).messages()
     ]
-    calls = [call_out(c) for c in session.structured_calls.order_by("created_at")]
+    calls = [call_out(c) for c in calls_in(session, first_line, before)]
     if session.user_id == request.auth.pk:
         ConversationSession.objects.filter(id=session.id).update(read_at=timezone.now())
     session = with_open_counts(visible_sessions(request.auth).filter(id=session.id)).first()
@@ -794,6 +831,8 @@ def session_detail(request, session_id: str):
             {"id": item.get("id", ""), "text": item.get("text", ""), "files": len(item.get("attachment_ids") or [])}
             for item in peek_inbox(session.id)
         ],
+        "first_line": messages[0]["line"] if messages else first_line,
+        "has_more": first_line is not None,
     }
 
 
@@ -1205,12 +1244,15 @@ def download_attachment(request, attachment_id: str, inline: bool = False):
 
 class PinIn(Schema):
     pinned: bool = True
+    title: str | None = None  # the pin's label ("" clears it: the file name)
+    icon: str | None = None  # an emoji ("" clears it: an icon for the file type)
 
 
 @router.post("/attachments/{attachment_id}/pin", response=AttachmentOut)
 def pin_attachment(request, attachment_id: str, payload: PinIn):
     row = visible_attachment(request.auth, attachment_id)
-    row.metadata = {**(row.metadata or {}), "pinned": payload.pinned}
+    labels = {k: v.strip() for k, v in (("title", payload.title), ("icon", payload.icon)) if v is not None}
+    row.metadata = {**(row.metadata or {}), **labels, "pinned": payload.pinned}
     row.save(update_fields=["metadata", "updated_at"])
     return attachment_out(row)
 
@@ -1262,6 +1304,7 @@ def bot_errors(request):
 @router.get("/pins")
 def all_pins(request):
     """What's pinned in each of your chats, by session id (for the sidebar)."""
+    from django_ergo.bots.pages import pin_label
     from django_ergo.bots.runtime import Bot as BotClass
 
     bots = registry()
@@ -1272,9 +1315,14 @@ def all_pins(request):
         chat = BotClass.chat_name(session)
         if bot is None or chat is None:
             continue
-        for relative in bot.definition.chat(chat).pins:
+        definition = bot.definition.chat(chat)
+        for relative in definition.pins:
             out.setdefault(str(session.id), []).append(
-                {"name": relative.rsplit("/", 1)[-1], "url": f"/api/bots/{bot.name}/files/{relative}"}
+                {
+                    **pin_label(definition, relative),
+                    "filename": relative.rsplit("/", 1)[-1],
+                    "url": f"/api/bots/{bot.name}/files/{relative}",
+                }
             )
     pinned = ConversationAttachment.objects.filter(
         metadata__pinned=True, session__in=visible_sessions(request.auth).filter(user=request.auth)
@@ -1283,6 +1331,8 @@ def all_pins(request):
         out.setdefault(str(row.session_id), []).append(
             {
                 "name": (row.metadata or {}).get("title") or row.filename,
+                "icon": (row.metadata or {}).get("icon") or "",
+                "filename": row.filename,
                 "url": f"/api/attachments/{row.id}/download?inline=true",
             }
         )

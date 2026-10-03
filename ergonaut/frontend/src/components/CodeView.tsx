@@ -62,6 +62,17 @@ export function languageFor(path: string): string | null {
   return BY_EXTENSION[ext] ?? null
 }
 
+/** Highlighted HTML for a code block in a known language, or null. */
+export function highlight(code: string, language: string): string | null {
+  const name = BY_EXTENSION[language.toLowerCase()] ?? language.toLowerCase()
+  if (!hljs.getLanguage(name) || code.length > 300_000) return null
+  try {
+    return hljs.highlight(code, { language: name, ignoreIllegals: true }).value
+  } catch {
+    return null
+  }
+}
+
 /** Split highlighted HTML into lines, closing and reopening spans that cross a line break. */
 function splitLines(html: string): string[] {
   const lines: string[] = []
