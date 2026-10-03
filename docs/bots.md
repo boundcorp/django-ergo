@@ -42,7 +42,7 @@ chats:
     skills: [analytics]
 threads:                             # child threads (`sessions:` also works)
   skills: []
-  allow_create: true                 # may chats start threads of this bot?
+  allow_create: true                 # may chats (this bot's or other bots') start threads of it?
   archive_after_days: 7              # archive threads idle this long (0 = never)
   default_compaction: {mode: rolling, config: {keep_recent: 15}}   # the default; `stream` also works
 skills:
@@ -416,7 +416,8 @@ user. The `orchestration` skill (loaded in main by default) has:
 | `ergo_bot_list` | The bots it can message, with their `description`s (pre-seeded) |
 | `ergo_thread_list` | A bot's main chat, named chats and threads with the user (default: this bot) |
 | `ergo_thread_send` | Message a bot's `main` chat, a named chat, a thread id, or a `new` thread; returns at once |
-| `ergo_thread_archive` | Archive one of this bot's threads; its history stays readable |
+| `ergo_thread_stop` | Stop the running turn of a thread this bot started (or one of its own) and cancel what it queued there |
+| `ergo_thread_archive` | Archive one of this bot's threads, or a sub-bot thread it started; its history stays readable |
 
 Messages between sessions are asynchronous, like thread-to-thread
 delegation in Codex (`django_ergo.bots.messaging`). `ergo_thread_send`
@@ -429,10 +430,33 @@ mid-turn finishes first, and a turn that stops for approval replies once the
 user decides. A message from a person routes nothing back, so a bot's main
 chat can take delegated work without its replies reaching Telegram.
 Delivery goes through `DJANGO_ERGO["THREAD_MESSAGE_RUNNER"]` (Ergonaut
-queues a Celery task) or a background thread. Starting a thread of the bot's
-own needs `sessions.allow_create`; set `orchestration: false` for a bot that
-never delegates; it has no `orchestration` skill (it still
-answers messages sent to it).
+queues a Celery task) or a background thread. Set `orchestration: false` for
+a bot that never delegates; it has no `orchestration` skill (it still
+answers messages sent to it, and can message upward, below).
+
+Who may message whom:
+
+- **Upward, always.** Any chat may message its own bot's main chat, and a
+  bot's main chat may message its parent bot's main chat (not its threads or
+  named chats). Bots with `orchestration: false` get one always-loaded tool
+  for this, `ergo_message_up` (`to: main` or `to: parent`); with
+  orchestration on, `ergo_thread_send` does it and `ergo_bot_list` marks the
+  parent.
+- **Downward** to sub-bots needs `orchestration` (on by default).
+- **Sideways** to any other bot needs `permissions.call_bots`, which also
+  lifts the main-chat-only rule for a parent listed there.
+- **New threads are the target's call.** `thread: "new"` needs the target
+  bot's `threads.allow_create`, whether the sender is the bot itself or
+  another bot; otherwise the sender messages its main chat. A thread another
+  bot started records `started_by` (the sending chat), `started_by_bot` and
+  `started_by_label` in its metadata; Ergonaut links back to that chat from
+  the thread's header, and `ergo_thread_list` shows it.
+- **Managing what it started.** `ergo_thread_stop` and `ergo_thread_archive`
+  (with `bot`) work on threads of other bots that a chat of this bot
+  started. Stopping a running turn goes through
+  `DJANGO_ERGO["TURN_STOPPER"]` (`callable(session_id) -> bool`; Ergonaut
+  sets its stop flag, which the turn checks at its next step). Without it,
+  `ergo_thread_stop` only cancels this bot's queued messages there.
 
 Threads idle longer than `sessions.archive_after_days` (default 7) are
 archived by `django_ergo.bots.archival.archive_idle_threads`, which
@@ -444,7 +468,8 @@ chats are never archived. A message to an archived thread reopens it.
 has a `bot.yaml`, and lets bots find each other by name. Bot folders can
 nest: a bot folder inside another bot's folder is its sub-bot, and the
 parent may message its sub-bots with `ergo_thread_send` (as well as
-any bot in `permissions.call_bots`). Each session starts with an
+any bot in `permissions.call_bots`), and each sub-bot's main chat may
+message the parent's main chat. Each session starts with an
 `ergo_bot_list` result already in its history, built from each bot's
 `description` in bot.yaml, so instructions don't need to list the bots.
 

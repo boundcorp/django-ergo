@@ -191,6 +191,7 @@ class Bot:
     def _skill_defs(self) -> list[SkillDef]:
         """Everything this bot can load, as skills (see bots.skillset)."""
         from django_ergo.bots.orchestrator import orchestrator_toolkit
+        from django_ergo.bots.orchestrator import upward_toolkit
 
         requires = self.definition.skill_requires
         defs = [
@@ -224,6 +225,17 @@ class Bot:
                     "orchestration",
                     "Delegate to your threads and to other bots, and check on them",
                     toolkits=lambda ctx: [orchestrator_toolkit(ctx)],
+                    source="built-in",
+                )
+            )
+        else:
+            # Upward messages are always allowed (bots.orchestrator).
+            defs.append(
+                SkillDef(
+                    "upward",
+                    "Message your main chat, or your parent bot's main chat",
+                    toolkits=lambda ctx: [upward_toolkit(ctx)],
+                    always=True,
                     source="built-in",
                 )
             )

@@ -86,6 +86,8 @@ class SessionOut(Schema):
     title: str
     role: str
     parent_id: str | None
+    started_by: str = ""  # another bot's chat that started this thread, e.g. "boundcorp · Main"
+    started_by_id: str | None = None
     status: str
     username: str
     created_at: datetime
@@ -390,6 +392,14 @@ def needs_attention(session: ConversationSession) -> bool:
     )
 
 
+def started_by(session: ConversationSession) -> dict:
+    """The other bot's chat that started this thread, if one did (bots.orchestrator)."""
+    meta = session.metadata or {}
+    if not meta.get("started_by") or meta.get("started_by_bot") in (None, "", session.bot_name):
+        return {}
+    return {"started_by": str(meta.get("started_by_label") or ""), "started_by_id": str(meta["started_by"])}
+
+
 def session_out(session: ConversationSession) -> dict:
     meta = session.metadata or {}
     return {
@@ -398,6 +408,7 @@ def session_out(session: ConversationSession) -> dict:
         "title": meta.get("title") or ("Main" if meta.get("bot_role") in ("root", "main") else "Thread"),
         "role": meta.get("bot_role") or "",
         "parent_id": str(session.parent_id) if session.parent_id else None,
+        **started_by(session),
         "status": session.status,
         "username": session.user.get_username() if session.user_id else "",
         "created_at": session.created_at,

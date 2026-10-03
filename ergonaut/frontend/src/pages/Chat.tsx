@@ -264,6 +264,14 @@ export function Chat({ onChange }: { onChange: () => void }) {
             <div className="text-2xl font-bold">{detail.session.title}</div>
             <div className="mt-1 text-sm text-muted">
               {detail.session.bot} · {detail.session.role || 'session'} · {detail.messages.length} messages
+              {detail.session.started_by && detail.session.started_by_id && (
+                <>
+                  {' · started by '}
+                  <Link className="underline" to={`/s/${detail.session.started_by_id}`}>
+                    {detail.session.started_by}
+                  </Link>
+                </>
+              )}
             </div>
           </div>
           <div className="ml-auto">
@@ -382,7 +390,11 @@ export function Chat({ onChange }: { onChange: () => void }) {
             </div>
           </div>
         )}
-        {error && <div className="mx-6 mb-2 rounded-card border border-danger/40 bg-red-tint p-3 text-sm text-danger">{error}</div>}
+        {error && (
+          <div className="mx-6 mb-2 rounded-card border border-danger/40 bg-red-tint p-3 text-sm text-danger">
+            {error}
+          </div>
+        )}
         {failedCall && (
           <div className="mx-6 mb-2 rounded-card border border-danger/40 bg-red-tint px-4 py-3 text-sm">
             <div className="flex flex-wrap items-center gap-2">
