@@ -1251,6 +1251,57 @@ def test_max_turns_comes_from_bot_yaml(tmp_path):
 
 
 @pytest.mark.django_db(transaction=True)
+async def test_files_shared_with_a_thread_message_are_listed_for_the_recipient(
+    tmp_path, thread_messages
+):
+    from asgiref.sync import sync_to_async
+
+    from django_ergo.bots.messaging import turn_text
+    from django_ergo.conversation.attachments import save_session_file
+    from django_ergo.conversation.models import ThreadMessage
+
+    user = await User.objects.acreate(username="sharer")
+    bot, engine = make_bot(
+        tmp_path,
+        claude_tool(
+            "ergo_thread_send",
+            {"thread": "new", "message": "Build this", "attachments": ["mock.png"]},
+        ),
+        claude_tool(
+            "ergo_thread_send",
+            {"thread": "new", "message": "x", "attachments": ["nope.png"]},
+            tool_id="s2",
+        ),
+        say("Sent."),
+    )
+    root = await bot.root_session(user)
+    png = await sync_to_async(save_session_file)(root, "mock.png", b"\x89PNG fake")
+    await bot.ask(root, "Hand off the mockup")
+
+    request = await ThreadMessage.objects.select_related(
+        "sender_session", "recipient_session"
+    ).aget()
+    assert request.metadata["attachments"] == [
+        {
+            "id": str(png.id),
+            "filename": "mock.png",
+            "media_type": "image/png",
+            "size": png.size,
+            "session": str(root.id),
+        }
+    ]
+    text = await sync_to_async(turn_text)(request)
+    assert f"- mock.png (image/png, {png.size:,} bytes), id {png.id}" in text
+    assert f"they stay in thread {root.id}" in text
+    # An unknown file fails the send, naming what the chat has.
+    failed = engine._client.calls[2]["messages"][-1]["content"][0]
+    assert (
+        failed["is_error"]
+        and "No file 'nope.png' in that chat (it has: mock.png)" in failed["content"]
+    )
+
+
+@pytest.mark.django_db(transaction=True)
 def test_a_second_message_joins_the_queued_one(tmp_path, thread_messages):
     from django_ergo.bots import messaging
     from django_ergo.conversation.models import ThreadMessage

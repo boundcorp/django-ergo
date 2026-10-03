@@ -11,9 +11,9 @@ Files come from three places: sent with a message, uploaded to the session
 - ``ergo_attachments_list``: the files in this session, or in another of
   the user's sessions (archived files only with ``include_archived``).
 - ``ergo_attachments_read``: a file's text (or a description of an image,
-  audio clip or binary file).
-  Read and look take a file id, or a filename plus the ``session_id`` of the
-  chat it's in, so a thread can open files another thread sent it.
+  audio clip or binary file). Read and look take a file id, or a filename in
+  this chat or another (``session_id``), e.g. files another chat shared with
+  a message (see ``django_ergo.bots.orchestrator``).
 - ``ergo_attachments_create``: write a new text file into this session.
 - ``ergo_attachments_update``: replace the contents of a text file in this
   session.
@@ -126,25 +126,21 @@ class AttachmentsPlugin(BotPlugin):
     def file_for(
         self, ctx: ToolContext, attachment_id: str, session_id: str = ""
     ) -> ConversationAttachment:
-        """A file by id, or by filename within ``session_id`` (default: this session)."""
+        """A file by id, or by filename in this chat (or ``session_id``'s)."""
+        from django_ergo.conversation.attachments import find_session_file
         from django_ergo.conversation.models import ConversationAttachment
 
-        rows = ConversationAttachment.objects.select_related("session").filter(
-            session__user_id=ctx.session.user_id
-        )
         try:
-            row = rows.filter(id=uuid.UUID(str(attachment_id))).first()
+            uuid.UUID(str(attachment_id))
         except ValueError:
-            # A filename: the newest file by that name in the session.
-            session = self.session_for(ctx, session_id)
-            named = rows.filter(session=session, filename=attachment_id)
-            row = (
-                named.filter(archived_at__isnull=True).order_by("-updated_at").first()
-                or named.order_by("-updated_at").first()
-            )
+            return find_session_file(self.session_for(ctx, session_id), attachment_id)
+        row = (
+            ConversationAttachment.objects.select_related("session")
+            .filter(id=attachment_id, session__user_id=ctx.session.user_id)
+            .first()
+        )
         if row is None:
-            where = f" in session {session_id}" if session_id else ""
-            msg = f"No file {attachment_id}{where}"
+            msg = f"No file {attachment_id}"
             raise ValueError(msg)
         if row.session_id != ctx.session.id and not self.other_sessions:
             msg = "This bot can only read files in its own session."
@@ -213,7 +209,7 @@ class AttachmentsPlugin(BotPlugin):
 
         row = self.file_for(ctx, attachment_id, session_id)
         if is_text(row.media_type):
-            return self.read(ctx, str(row.id))
+            return self.read(ctx, attachment_id)
         if not row.file:
             msg = f"{row.filename} has no stored copy to look at"
             raise ValueError(msg)
@@ -407,8 +403,7 @@ class AttachmentsPlugin(BotPlugin):
             takes_context=True,
             description=(
                 "Read a file: its text, or a description of an image, audio clip or "
-                "binary file. Name it by id, or by filename plus the session_id of the "
-                "chat it's in (e.g. files another thread told you about)."
+                "binary file. By id, or by filename in this chat or another (session_id)."
             ),
             parameters={
                 "attachment_id": {
@@ -417,7 +412,7 @@ class AttachmentsPlugin(BotPlugin):
                 },
                 "session_id": {
                     "type": "string",
-                    "description": "For a filename: the chat or thread it's in (default: this one)",
+                    "description": "The chat a filename is in (default: this one)",
                 },
             },
             required=["attachment_id"],
@@ -453,23 +448,23 @@ class AttachmentsPlugin(BotPlugin):
             name="ergo_attachments_look",
             takes_context=True,
             description=(
-                "Look at an image or PDF (or any file), by id, or by filename plus "
-                "the session_id of the chat it's in. You see an image yourself in "
-                "the result; for a PDF or other file, the question is answered for "
-                "you, e.g. what a receipt says."
+                "Look at an image or PDF (or any file) by id, or by filename in this "
+                "chat or another (session_id). You see an image yourself in the result; "
+                "for a PDF or other file, the question is answered for you, e.g. what a "
+                "receipt says."
             ),
             parameters={
                 "attachment_id": {
                     "type": "string",
                     "description": "File id or filename",
                 },
+                "session_id": {
+                    "type": "string",
+                    "description": "The chat a filename is in (default: this one)",
+                },
                 "question": {
                     "type": "string",
                     "description": "What you want to know (default: describe it)",
-                },
-                "session_id": {
-                    "type": "string",
-                    "description": "For a filename: the chat or thread it's in (default: this one)",
                 },
             },
             required=["attachment_id"],

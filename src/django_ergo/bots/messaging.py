@@ -106,7 +106,34 @@ def turn_text(message: ThreadMessage) -> str:
         header = f"[Scheduled message: {schedule}. The user will see your reply.]"
     else:
         header = "[Message from the user]"
-    return f"{header}\n\n{message.text}"
+    return f"{header}\n\n{message.text}{files_note(message)}"
+
+
+def shared_file(row) -> dict:
+    """A file shared with a thread message, as stored in its metadata."""
+    return {
+        "id": str(row.id),
+        "filename": row.filename,
+        "media_type": row.media_type,
+        "size": row.size,
+        "session": str(row.session_id),
+    }
+
+
+def files_note(message: ThreadMessage) -> str:
+    """The files shared with a message, for the recipient to open."""
+    files = (message.metadata or {}).get("attachments") or []
+    if not files:
+        return ""
+    lines = [
+        f"- {f['filename']} ({f['media_type']}, {f['size']:,} bytes), id {f['id']}"
+        for f in files
+    ]
+    return (
+        f"\n\n[Files shared with this message (they stay in thread {files[0]['session']}). "
+        "Look at images and PDFs with ergo_attachments_look and read text with "
+        "ergo_attachments_read, by id:]\n" + "\n".join(lines)
+    )
 
 
 # -- sending -----------------------------------------------------------------

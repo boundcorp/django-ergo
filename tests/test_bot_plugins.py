@@ -915,50 +915,17 @@ def test_attachments_access_rules(tmp_path, settings):
     with pytest.raises(ValueError, match="too large"):
         plugin.create(ctx, "big.txt", "x" * 101)
 
+    # Files in another of the user's chats open by filename with its session id.
+    assert plugin.read(ctx, "recipe.md", str(older.id)).endswith("# Soup")
+    with pytest.raises(ValueError, match="No file 'stew.md' in that chat"):
+        plugin.read(ctx, "stew.md", str(older.id))
+    with pytest.raises(ValueError, match="No session"):
+        plugin.read(ctx, "secret.txt", str(theirs.id))
+
     made = plugin.create(ctx, "list.md", "- eggs")
     updated = plugin.update(ctx, made["id"], "- eggs\n- milk")
     assert updated["size"] == len("- eggs\n- milk")
     assert plugin.read(ctx, made["id"]).endswith("- eggs\n- milk")
-
-
-@pytest.mark.django_db
-def test_files_open_by_name_in_another_thread(tmp_path, settings):
-    from django_ergo.bots.orchestrator import ergo_thread_send
-    from django_ergo.bots.tools import ToolContext
-    from django_ergo.conversation.attachments import save_session_file
-    from django_ergo.conversation.models import ThreadMessage
-
-    settings.MEDIA_ROOT = str(tmp_path / "media")
-    bot, _, plugin = files_bot(tmp_path)
-    lee = User.objects.create(username="lee-shares")
-    x = ConversationSession.objects.create(
-        user=lee, bot_name="filer", metadata={"bot_role": "main"}
-    )
-    y = ConversationSession.objects.create(
-        user=lee, bot_name="filer", metadata={"bot_role": "thread", "title": "Y"}
-    )
-    save_session_file(x, "1.md", b"old draft")
-    newest = save_session_file(x, "1.md", b"# Cover")
-    save_session_file(x, "2.png", b"\x89PNGfake", media_type="image/png")
-
-    # Y opens X's file by name, with X's thread id.
-    at_y = ToolContext(bot=bot, session=y, user=lee)
-    assert plugin.read(at_y, "1.md", str(x.id)).endswith("# Cover")
-    with pytest.raises(ValueError, match=r"No file 3\.md in session"):
-        plugin.read(at_y, "3.md", str(x.id))
-    with pytest.raises(ValueError, match=r"No file 1\.md"):
-        plugin.read(at_y, "1.md")  # not in Y itself
-
-    # X names its files when it sends; Y gets ids it can open.
-    at_x = ToolContext(bot=bot, session=x, user=lee)
-    sent = ergo_thread_send(
-        at_x, "Review these", thread=str(y.id), attachments=["1.md", "2.png"]
-    )
-    text = ThreadMessage.objects.get(id=sent["message_id"]).text
-    assert text.startswith("Review these\n\n[Files from filer · Main")
-    assert f"1.md (id {newest.id})" in text
-    with pytest.raises(ValueError, match=r"No file nope\.png in this chat"):
-        ergo_thread_send(at_x, "x", thread=str(y.id), attachments=["nope.png"])
 
 
 @pytest.mark.django_db
@@ -1374,6 +1341,60 @@ def test_orca_attach_copies_a_worktree_file_into_the_chat(
     plugin.max_attach_bytes = 3
     with pytest.raises(ValueError, match="larger than 3 bytes"):
         plugin.attach(ctx, "wt", "out/report.md")
+
+
+@pytest.mark.django_db(transaction=True)
+def test_orca_upload_copies_chat_files_into_a_worktree_folder(
+    tmp_path, monkeypatch, settings
+):
+    from asgiref.sync import async_to_sync
+
+    from django_ergo.bots.tools import ToolContext
+    from django_ergo.conversation.attachments import save_session_file
+
+    settings.MEDIA_ROOT = str(tmp_path / "media")
+    bot, _, plugin = orca_bot(
+        tmp_path, config='environment: devbox, executable: orca-test, files_host: ""'
+    )
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    (tmp_path / "elsewhere").mkdir()
+    (worktree / "escape").symlink_to(tmp_path / "elsewhere")
+    monkeypatch.setattr(type(plugin), "worktree_path", lambda self, w: str(worktree))
+    tool = next(t for t in plugin._tools() if t.name == "orca_upload")
+    assert tool.requires_approval
+
+    user = User.objects.create(username="uploader")
+    session = async_to_sync(bot.main_session)(user)
+    design = ConversationSession.objects.create(user=user, bot_name="design")
+    save_session_file(design, "home.png", b"\x89PNG home")
+    save_session_file(design, "tree.json", b'{"boards": []}')
+    save_session_file(session, "brief.md", b"# Build it")
+    ctx = ToolContext(bot=bot, session=session, user=user)
+
+    written = plugin.upload(
+        ctx, "wt", ["home.png", "tree.json"], "design", str(design.id)
+    )
+    assert [(w["file"], w["size"]) for w in written] == [
+        ("home.png", 9),
+        ("tree.json", 14),
+    ]
+    assert (worktree / "design" / "home.png").read_bytes() == b"\x89PNG home"
+    plugin.upload(
+        ctx, "wt", ["brief.md"], "docs/spec"
+    )  # this chat's files, a nested folder
+    assert (worktree / "docs" / "spec" / "brief.md").read_text() == "# Build it"
+
+    for files, folder, error in (
+        (["home.png"], "../out", "outside the worktree"),
+        (["home.png"], "escape", "outside the worktree"),
+        (["nope.png"], "design", "No file 'nope.png'"),
+    ):
+        with pytest.raises(ValueError, match=error):
+            plugin.upload(ctx, "wt", files, folder, str(design.id))
+    with pytest.raises(ValueError, match="can't be written"):
+        plugin.push(str(worktree), "design", ".env", b"x")
+    assert not (tmp_path / "elsewhere" / "home.png").exists()
 
 
 @pytest.mark.django_db(transaction=True)
