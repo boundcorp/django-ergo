@@ -183,7 +183,7 @@ def test_the_workers_skill_lists_starts_and_cancels(tmp_path, workers):
 
 
 @pytest.mark.django_db(transaction=True)
-def test_orca_start_worker_watches_the_dispatch_and_reports_back(
+def test_orca_start_worker_watches_the_dispatch_and_reports_back(  # noqa: PLR0915
     tmp_path, workers, monkeypatch
 ):
     import subprocess
@@ -262,6 +262,39 @@ def test_orca_start_worker_watches_the_dispatch_and_reports_back(
     # A second worker in the same chat reuses its mailbox and Run.
     plugin.start_worker(ctx, "Another task", "id:repo::/home/dev/p/site")
     assert sum(c[1:3] == ["terminal", "create"] for c in calls) == 1
+
+    # omp takes its model from the worktree, not from Orca's --model.
+    pinned = []
+    monkeypatch.setattr(
+        type(plugin),
+        "push",
+        lambda self, root, folder, name, data: pinned.append(
+            (root, folder, name, data)
+        ),
+    )
+    plugin.start_worker(
+        ctx,
+        "Omp task",
+        "id:repo::/home/dev/p/site",
+        agent="omp",
+        model="anthropic/claude-sonnet-5-5",
+        effort="high",
+    )
+    omp_start = [c for c in calls if c[1:3] == ["orchestration", "worker-start"]][-1]
+    assert "--model" not in omp_start and "--effort" not in omp_start
+    assert pinned == [
+        (
+            "/home/dev/p/site",
+            ".omp",
+            "config.yml",
+            b'modelRoles:\n  default: "anthropic/claude-sonnet-5-5:high"\n',
+        ),
+        ("/home/dev/p/site", ".omp", ".gitignore", b"*\n"),
+    ]
+    with pytest.raises(ValueError, match="omp takes effort only"):
+        plugin.start_worker(
+            ctx, "x", "id:repo::/home/dev/p/site", agent="omp", effort="high"
+        )
 
     worker_id = started["id"]
     assert w.run(worker_id, bot.registry) == "running"
