@@ -6,7 +6,7 @@ The bots and Ergonaut backlog. Older 2025 tasks are in [docs/archive/TODO-2025.m
 
 Live on rigel from `~/p/boundcorp/django-ergo`, bots from `boundcorp/ergo-bots`. Updated by whoever works the branch.
 
-### Now (2026-10-02)
+### Now (2026-10-02, refreshed 2026-10-03)
 
 - [x] **PR #31 review and merge**: two review passes (22 findings) fixed in 2e54508/e3a2345; CI green; merged b1bd99c.
 - [x] **Bots that learn**: `ergo_kb` `write: true` gives `ergo_kb_write` (kb/*.md only, committed and pushed). Kitchen turned on in ergo-bots.
@@ -21,7 +21,7 @@ Live on rigel from `~/p/boundcorp/django-ergo`, bots from `boundcorp/ergo-bots`.
 
 ### Next
 
-- [ ] **Docs** (PR #69): full README; guides for getting started, building bots, skills, tools, plugins, memory and KBs, data tables, attachments, schedules, running Ergonaut, development; 2025 planning docs and old specs moved to `docs/archive/`.
+- [x] **Docs** (PR #69, merged; OpenAI-default follow-up in draft PR #72): full README; guides for getting started, building bots, skills, tools, plugins, memory and KBs, data tables, attachments, schedules, running Ergonaut, development; 2025 planning docs and old specs moved to `docs/archive/`.
 - [x] **Skills unified + named chats** (PR #33, merged): lazy skills (load/unload, always per chat, requires), main replaces root, named chats in bot.yaml, schedule targets.
 - [x] **Schedule actions** (PR #34, merged): ordered `prompt` and `run` steps; `run` calls bot-folder Python and records a BotJob.
 - [x] **BotTable** (PR #35, merged): real Django models per bot, migrations in the bot folder's `migrations/` (bot_management writes them into the proposal), `ergo_bot_migrate` at start and after pulls, `tables` skill.
@@ -33,6 +33,11 @@ Live on rigel from `~/p/boundcorp/django-ergo`, bots from `boundcorp/ergo-bots`.
 - [x] A broken bot folder no longer stops the others: skipped at start, its last good version kept on reload, shown to admins in the sidebar.
 - [x] Workers under threads (#48): polling workers, busy while running, result back to the thread; `orca_start_worker`.
 - [x] Stop, steer and interrupt a running turn: messages go through a per-session inbox and steer the turn at its next step; Stop (`POST /sessions/{id}/stop`) ends it as `stopped`; "Stop & send" interrupts (`mode: "interrupt"`).
+- [x] Model picker from `providers.yaml` (#65, #67); recover chats left busy by a dead turn (#66); `ergonaut manage wait_idle` (#70); window/rolling compaction names (#71); stub older large tool results (#68).
+- [x] Steer and stop turns another chat or worker started (#73); Unsend (#75); usage saved after every request (#76, #77); Resume a failed turn with plain-words error cards and `resume_failed --kind credits` (#78); files shared with thread messages and `orca_upload` (#79).
+- [ ] Bot handoffs: a follow-up to an unanswered request joins it (PR #74, green, awaiting merge).
+- [ ] Stop bot-to-bot thank-you ping-pong: a courtesy reply to a handoff answer shouldn't cost the other bot a turn.
+- [ ] Try the Design to devbox handoff live (Penpot export, `orca_upload`, worker builds the Ergonaut screens).
 - [ ] Try `orca_start_worker` live on devbox (after the Orca display restart).
 - [ ] A visual blocks editor in the UI. Campaign names are Ad Manager's internal `AM:<uuid>:campaign` labels; friendly names would need Ad Manager's mapping.
 - [x] **Bot data and pages** (decided 2026-10-02): pinned files (repo files and bot-written attachments), blocks-based page toolkit, live .jhtml Jinja pages served straight from the file/attachment endpoints, templates from bots or PRs. No sandbox origin; all users share rows.
