@@ -3,7 +3,9 @@
     GET /api/sessions/<id>/events?after=<line>
 
 Each event is JSON: ``{"messages": [...], "calls": [...]}`` with the
-messages from line ``after`` on and every structured call that changed.
+messages from line ``after`` on and every structured call that changed
+(among those that reach line ``after``, so a long session's old calls aren't
+re-read).
 The last message the client has is sent again, since its blocks may still
 have been arriving, so clients replace messages by line.
 The stream reads the database, so a turn shows its tool calls as they
@@ -20,6 +22,7 @@ import os
 
 from asgiref.sync import sync_to_async
 from django.core.serializers.json import DjangoJSONEncoder
+from django.db.models import Q
 from django.http import HttpResponse, StreamingHttpResponse
 from django_ergo.conversation.history import SessionSource
 from django_ergo.conversation.models import ClaudeContentBlock, ConversationSession
@@ -44,8 +47,7 @@ def _snapshot(session_id, after: int, seen: dict):
         seen["count"] = count
         messages = [
             {"line": m.line, "role": m.role, "blocks": m.blocks, "timestamp": m.timestamp}
-            for m in SessionSource(session).messages()
-            if m.line >= after
+            for m in SessionSource(session, first_line=max(after, 0)).messages()
         ]
     requests = requests_out(session)
     key = [(r["id"], r["status"]) for r in requests]
@@ -54,7 +56,15 @@ def _snapshot(session_id, after: int, seen: dict):
     else:
         seen["requests"] = key
     calls = []
-    for call in session.structured_calls.order_by("created_at"):
+    # Calls the client's page can show: any that reach its newest line, or have no lines yet.
+    recent = session.structured_calls.order_by("created_at")
+    if after > 0:
+        recent = recent.filter(
+            Q(last_sequence__isnull=True)
+            | Q(last_sequence__gte=after)
+            | Q(status__in=("in_progress", "awaiting_approval"))
+        )
+    for call in recent:
         key = (call.status, call.updated_at.isoformat(), call.output_tokens)
         if seen.setdefault("calls", {}).get(str(call.id)) != key:
             seen["calls"][str(call.id)] = key

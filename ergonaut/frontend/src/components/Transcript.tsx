@@ -71,13 +71,16 @@ function shownFileIds(messages: Message[]): Set<string> {
 }
 
 /** Files a bot made (ergo_attachments_create, orca_attach, …), keyed by the last message written before each. */
-function placeFiles(messages: Message[], files: AttachmentFile[]): Map<number, AttachmentFile[]> {
+function placeFiles(messages: Message[], files: AttachmentFile[], complete: boolean): Map<number, AttachmentFile[]> {
   const shown = shownFileIds(messages)
   const placed = new Map<number, AttachmentFile[]>()
   const stamped = messages.filter(m => m.timestamp)
+  // Only part of a long chat is loaded: files from before it wait until it is.
+  const loadedFrom = !complete && stamped.length ? Date.parse(stamped[0].timestamp!) : -Infinity
   for (const file of files) {
     if (file.source !== 'bot' || file.message_sequence != null || file.archived_at || shown.has(file.id)) continue
     const created = Date.parse(file.created_at)
+    if (created < loadedFrom) continue
     let line = messages.length ? messages[messages.length - 1].line : -1
     const after = stamped.find(m => Date.parse(m.timestamp!) > created)
     if (after) {
@@ -302,10 +305,12 @@ export function Transcript({
   messages,
   calls,
   files = [],
+  complete = true,
 }: {
   messages: Message[]
   calls: Call[]
   files?: AttachmentFile[]
+  complete?: boolean // every message is loaded (no older page)
 }) {
   const results = new Map<string, ToolResult>()
   for (const message of messages)
@@ -320,7 +325,7 @@ export function Transcript({
   )
   const starts = new Map<number, Call>()
   for (const call of calls) if (call.first_sequence != null) starts.set(call.first_sequence, call)
-  const made = placeFiles(messages, files)
+  const made = placeFiles(messages, files, complete)
   return (
     <div className="flex flex-col gap-6">
       {made.has(-1) && <BotFiles files={made.get(-1)!} />}

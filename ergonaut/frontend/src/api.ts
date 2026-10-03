@@ -244,6 +244,8 @@ export type SessionDetail = {
   requests?: DelegatedRequest[]
   workers?: Worker[]
   inbox?: { id: string; text: string; files: number }[] // sent mid-turn, not yet given to the model
+  first_line?: number | null // the oldest line returned
+  has_more?: boolean // older messages exist: ask with before=first_line
 }
 
 export type Turn = {
@@ -333,7 +335,9 @@ export const api = {
     request<Session>('POST', `/bots/${bot}/threads`, { title, message, model }),
   models: (bot: string) => request<BotModels>('GET', `/bots/${bot}/models`),
   setModel: (id: string, model: string) => request<Session>('POST', `/sessions/${id}/model`, { model }),
-  session: (id: string) => request<SessionDetail>('GET', `/sessions/${id}`),
+  // The newest page of messages, or the page before line `before`.
+  session: (id: string, before?: number) =>
+    request<SessionDetail>('GET', `/sessions/${id}${before == null ? '' : `?before=${before}`}`),
   call: (id: string) =>
     request<Call & { system_prompt: string; transcript: unknown[]; metadata: unknown }>('GET', `/calls/${id}`),
   // While a turn runs, "send" steers it and "interrupt" stops it and starts a new one.

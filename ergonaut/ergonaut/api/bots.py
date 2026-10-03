@@ -158,6 +158,35 @@ class SessionDetailOut(Schema):
     workers: list[dict] = []
     # Messages sent while a turn runs that the model hasn't taken yet (they can be unsent).
     inbox: list[dict] = []
+    # Paging: the first line returned, and whether older messages exist (ask with before=first_line).
+    first_line: int | None = None
+    has_more: bool = False
+
+
+PAGE_MESSAGES = 50
+
+
+def page_start(session: ConversationSession, before: int | None, limit: int) -> int | None:
+    """The first sequence of the ``limit`` messages before ``before`` (None: from the start)."""
+    rows = session.claude_messages if session.claude_messages.exists() else session.openai_messages
+    if before is not None:
+        rows = rows.filter(sequence__lt=before)
+    found = list(rows.order_by("-sequence").values_list("sequence", flat=True)[limit - 1 : limit + 1])
+    # Only a start when there is something older than it.
+    return found[0] if len(found) > 1 else None
+
+
+def calls_in(session: ConversationSession, first_line: int | None, before: int | None):
+    """The session's calls that touch lines [first_line, before); calls with no lines go with the newest page."""
+    calls = session.structured_calls.order_by("created_at")
+    if before is not None:
+        calls = calls.filter(first_sequence__lt=before)
+    if first_line is not None:
+        span = Q(last_sequence__gte=first_line)
+        if before is None:
+            span |= Q(last_sequence__isnull=True)
+        calls = calls.filter(span)
+    return calls
 
 
 def workers_out(session: ConversationSession) -> list[dict]:
@@ -778,15 +807,17 @@ def provisional_title(message: str) -> str:
 
 
 @router.get("/sessions/{session_id}", response=SessionDetailOut)
-def session_detail(request, session_id: str):
+def session_detail(request, session_id: str, before: int | None = None, limit: int = PAGE_MESSAGES):
+    """The session with its newest ``limit`` messages, or the ``limit`` before line ``before``."""
     session = visible_sessions(request.auth).filter(id=uuid_or_404(session_id)).first()
     if session is None:
         raise HttpError(404, "No such session")
+    first_line = page_start(session, before, max(1, min(limit, 500)))
     messages = [
         {"line": m.line, "role": m.role, "blocks": m.blocks, "timestamp": m.timestamp}
-        for m in SessionSource(session).messages()
+        for m in SessionSource(session, first_line=first_line, before_line=before).messages()
     ]
-    calls = [call_out(c) for c in session.structured_calls.order_by("created_at")]
+    calls = [call_out(c) for c in calls_in(session, first_line, before)]
     if session.user_id == request.auth.pk:
         ConversationSession.objects.filter(id=session.id).update(read_at=timezone.now())
     session = with_open_counts(visible_sessions(request.auth).filter(id=session.id)).first()
@@ -800,6 +831,8 @@ def session_detail(request, session_id: str):
             {"id": item.get("id", ""), "text": item.get("text", ""), "files": len(item.get("attachment_ids") or [])}
             for item in peek_inbox(session.id)
         ],
+        "first_line": messages[0]["line"] if messages else first_line,
+        "has_more": first_line is not None,
     }
 
 

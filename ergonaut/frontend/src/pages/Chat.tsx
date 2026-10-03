@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 import type { AttachmentFile, Call, DelegatedRequest, Message, Pin, SessionDetail, Turn, Worker } from '../api'
 import { api } from '../api'
@@ -44,7 +44,9 @@ export function Chat({ onChange }: { onChange: () => void }) {
   const [uploading, setUploading] = useState(false)
   const picker = useRef<HTMLInputElement>(null)
   // A turn a worker is running: what was sent, and how the calls and messages looked then.
-  const [pending, setPending] = useState<{ text: string; calls: number; line: number; approvals: string } | null>(null)
+  const [pending, setPending] = useState<{ text: string; lastCall: string; line: number; approvals: string } | null>(
+    null,
+  )
   // Stop was pressed; the turn ends at its next step.
   const [stopping, setStopping] = useState(false)
   // The Files panel stays open or closed across sessions, per browser.
@@ -71,7 +73,46 @@ export function Chat({ onChange }: { onChange: () => void }) {
   const latest = useRef<SessionDetail | null>(null)
   latest.current = detail
 
-  const load = useCallback(async () => setDetail(await api.session(id)), [id])
+  // Reloads fetch the newest page; older pages already loaded (See more) stay.
+  const load = useCallback(async () => {
+    const fresh = await api.session(id)
+    setDetail(d => {
+      const from = fresh.first_line
+      if (!d || d.session.id !== fresh.session.id || d.first_line == null || from == null || d.first_line >= from)
+        return fresh
+      const older = { ...fresh, messages: d.messages.filter(m => m.line < from), calls: d.calls }
+      return { ...merge(older, fresh.messages, fresh.calls), first_line: d.first_line, has_more: d.has_more }
+    })
+  }, [id])
+
+  // Older messages of a long chat, a page at a time; the view stays where it was.
+  const transcript = useRef<HTMLDivElement>(null)
+  const keepScroll = useRef<number | null>(null)
+  const skipScroll = useRef(false)
+  const [loadingOlder, setLoadingOlder] = useState(false)
+  async function loadOlder() {
+    if (!detail?.has_more || detail.first_line == null || loadingOlder) return
+    setLoadingOlder(true)
+    const el = transcript.current
+    try {
+      const page = await api.session(id, detail.first_line)
+      keepScroll.current = el ? el.scrollHeight - el.scrollTop : null
+      setDetail(d =>
+        d ? { ...merge(d, page.messages, page.calls), first_line: page.first_line, has_more: page.has_more } : d,
+      )
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setLoadingOlder(false)
+    }
+  }
+  useLayoutEffect(() => {
+    const el = transcript.current
+    if (keepScroll.current == null || !el) return
+    el.scrollTop = el.scrollHeight - keepScroll.current
+    keepScroll.current = null
+    skipScroll.current = true
+  }, [detail])
 
   useEffect(() => {
     setDetail(null)
@@ -148,6 +189,10 @@ export function Chat({ onChange }: { onChange: () => void }) {
   }, [id, loaded])
 
   useEffect(() => {
+    if (skipScroll.current) {
+      skipScroll.current = false
+      return
+    }
     bottom.current?.scrollIntoView({ behavior: 'smooth' })
   }, [detail, busy])
 
@@ -159,7 +204,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
     const call = detail.calls[detail.calls.length - 1]
     if (!call || call.status === 'in_progress') return
     const done = pending.text
-      ? detail.calls.length > pending.calls || stored(detail.messages, pending.text, pending.line)
+      ? call.id !== pending.lastCall || stored(detail.messages, pending.text, pending.line)
       : call.status !== 'awaiting_approval' || JSON.stringify(call.pending_approvals ?? []) !== pending.approvals
     if (done) {
       setPending(null)
@@ -182,7 +227,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
     const messages = detail?.messages ?? []
     const before = {
       text: sent,
-      calls: calls.length,
+      lastCall: calls[calls.length - 1]?.id ?? '',
       line: messages.length ? messages[messages.length - 1].line : -1,
       approvals: JSON.stringify(calls[calls.length - 1]?.pending_approvals ?? []),
     }
@@ -343,8 +388,19 @@ export function Chat({ onChange }: { onChange: () => void }) {
         <Workers workers={detail.workers ?? []} />
         <Pins sessionId={id} refreshKey={`${detail.messages.length}:${pinsKey}`} open={openPin} onOpen={setOpenPin} />
         {openPin && <PageViewer pin={openPin} refreshKey={detail.messages.length} onClose={() => setOpenPin(null)} />}
-        <div className={`chat-transcript flex-1 overflow-y-auto px-6 py-5 ${openPin ? 'hidden' : ''}`}>
-          <Transcript messages={detail.messages} calls={detail.calls} files={files} />
+        <div ref={transcript} className={`chat-transcript flex-1 overflow-y-auto px-6 py-5 ${openPin ? 'hidden' : ''}`}>
+          {detail.has_more && (
+            <div className="mb-4 flex justify-center">
+              <button
+                disabled={loadingOlder}
+                className="rounded-full border border-stroke px-3 py-1 text-xs text-muted hover:bg-raised disabled:opacity-50"
+                onClick={loadOlder}
+              >
+                {loadingOlder ? 'Loading…' : 'See more'}
+              </button>
+            </div>
+          )}
+          <Transcript messages={detail.messages} calls={detail.calls} files={files} complete={!detail.has_more} />
           {(detail.inbox ?? []).map(item => (
             <div key={item.id} className="mt-3 flex flex-col items-end">
               <div className="max-w-[80%] rounded-card border border-accent bg-indigo-tint px-4 py-3 text-ink">
