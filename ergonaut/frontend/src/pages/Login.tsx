@@ -9,7 +9,7 @@ export function Login({ onLogin }: { onLogin: (user: User) => void }) {
 
   return (
     <form
-      className="mx-auto mt-24 flex w-80 flex-col gap-3"
+      className="surface-card mx-auto mt-24 flex w-80 flex-col gap-4 p-6"
       onSubmit={async e => {
         e.preventDefault()
         try {
@@ -25,17 +25,17 @@ export function Login({ onLogin }: { onLogin: (user: User) => void }) {
         value={username}
         onChange={e => setUsername(e.target.value)}
         placeholder="Username"
-        className="rounded-lg border border-zinc-300 bg-transparent px-3 py-2 dark:border-zinc-700"
+        className="rounded-control border border-stroke bg-raised px-3 py-2"
       />
       <input
         type="password"
         value={password}
         onChange={e => setPassword(e.target.value)}
         placeholder="Password"
-        className="rounded-lg border border-zinc-300 bg-transparent px-3 py-2 dark:border-zinc-700"
+        className="rounded-control border border-stroke bg-raised px-3 py-2"
       />
       {error && <p className="text-sm text-red-600">{error}</p>}
-      <button className="rounded-lg bg-indigo-600 py-2 text-white">Sign in</button>
+      <button className="rounded-control bg-accent py-2 font-semibold text-canvas">Sign in</button>
     </form>
   )
 }

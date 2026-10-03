@@ -11,7 +11,7 @@ type Reply = { type?: string; text?: string; suggestions?: string[] }
 
 function ReplyBubble({ reply }: { reply: Reply }) {
   return (
-    <div className="max-w-[85%] rounded-2xl rounded-tl-sm bg-zinc-100 px-4 py-2 dark:bg-zinc-800">
+    <div className="max-w-[85%] rounded-card border border-stroke bg-surface px-4 py-3">
       {reply.type === 'question' && <div className="mb-1 text-xs font-medium text-amber-600">Question</div>}
       <div className="whitespace-pre-wrap">{reply.text}</div>
       {!!reply.suggestions?.length && (
@@ -64,7 +64,7 @@ function MessageView({
               return (
                 <div
                   key={i}
-                  className="max-w-[85%] self-start rounded-2xl rounded-tl-sm border border-teal-500/50 bg-teal-50 px-4 py-2 dark:bg-teal-950/40"
+                  className="max-w-[85%] self-start rounded-card border border-teal/40 bg-teal-tint px-4 py-3"
                 >
                   <div className="mb-1 text-xs font-medium text-teal-700 dark:text-teal-300">
                     {from.kind === 'reply' ? '↩ reply from' : '✉ message from'} {from.who}
@@ -76,12 +76,12 @@ function MessageView({
             return user ? (
               <div
                 key={i}
-                className="max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-tr-sm bg-indigo-600 px-4 py-2 text-white"
+                className="max-w-[85%] whitespace-pre-wrap rounded-card border border-accent/20 bg-indigo-tint px-4 py-3 text-ink"
               >
                 {block.text}
               </div>
             ) : (
-              <div key={i} className="max-w-[85%] whitespace-pre-wrap text-sm text-zinc-500 italic">
+              <div key={i} className="max-w-[85%] whitespace-pre-wrap rounded-card border border-stroke bg-surface px-4 py-3 text-sm text-ink">
                 {block.text}
               </div>
             )
@@ -218,7 +218,7 @@ export function Transcript({ messages, calls }: { messages: Message[]; calls: Ca
   const starts = new Map<number, Call>()
   for (const call of calls) if (call.first_sequence != null) starts.set(call.first_sequence, call)
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex flex-col gap-6">
       {messages.map(message => (
         <div key={message.line}>
           {starts.has(message.line) && <CallHeader call={starts.get(message.line)!} />}

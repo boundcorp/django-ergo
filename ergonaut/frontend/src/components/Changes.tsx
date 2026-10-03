@@ -69,7 +69,7 @@ function Proposal({ bot, pr, onDone }: { bot: string; pr: PullRequest; onDone: (
           </button>
           <button
             disabled={busy}
-            className="rounded-md bg-emerald-600 px-2 py-0.5 text-xs text-white disabled:opacity-50"
+            className="rounded-control bg-success px-2 py-0.5 text-xs text-canvas disabled:opacity-50"
             onClick={() => act('merge')}
           >
             Merge

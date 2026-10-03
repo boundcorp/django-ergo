@@ -236,7 +236,7 @@ export default function BotFiles({ bot }: { bot: string }) {
             </a>
             <button
               disabled={busy}
-              className="ml-auto rounded-md bg-emerald-600 px-3 py-1 text-xs text-white disabled:opacity-50"
+              className="ml-auto rounded-control bg-success px-3 py-1 text-xs text-canvas disabled:opacity-50"
               onClick={() =>
                 act(() => api.mergeChange(bot, proposal.number!), `Merge PR #${proposal.number} and make it live?`)
               }

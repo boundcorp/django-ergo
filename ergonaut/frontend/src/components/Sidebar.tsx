@@ -11,8 +11,8 @@ function SessionLink({ session, nested }: { session: Session; nested?: boolean }
     <NavLink
       to={`/s/${session.id}`}
       className={({ isActive }) =>
-        `flex items-center gap-2 truncate rounded-md px-2 py-1 text-sm ${nested ? 'ml-4' : ''} ${
-          isActive ? 'bg-zinc-200 font-medium dark:bg-zinc-800' : 'hover:bg-zinc-100 dark:hover:bg-zinc-900'
+        `flex items-center gap-2 truncate rounded-lg px-3 py-2 text-sm ${nested ? 'ml-3' : ''} ${
+          isActive ? 'bg-indigo-tint font-medium text-ink' : 'hover:bg-raised'
         }`
       }
     >
@@ -111,8 +111,8 @@ export function Sidebar({
   }
 
   return (
-    <nav className="flex h-full flex-col gap-4 overflow-y-auto p-3">
-      <Link to="/" className="px-2 text-lg font-semibold">
+    <nav className="flex h-full flex-col gap-5 overflow-y-auto p-4">
+      <Link to="/" className="px-2 py-3 text-lg font-bold tracking-tight">
         Ergonaut
       </Link>
       {botErrors.map(e => (
@@ -124,9 +124,7 @@ export function Sidebar({
           ⚠ {e.name} didn't load: <span className="break-words">{e.error.slice(0, 160)}</span>
         </div>
       ))}
-      <Link to="/sessions" className="rounded-md px-2 py-1 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-900">
-        🔎 All sessions
-      </Link>
+      <div className="px-2 text-xs font-semibold uppercase tracking-wide text-muted">Bots</div>
       {bots.map(bot => {
         const mine = sessions.filter(s => s.bot === bot.name)
         const chats = bot.chats?.length
@@ -135,12 +133,12 @@ export function Sidebar({
         const threads = mine.filter(s => s.role === 'thread' && s.status !== 'completed')
         const archived = mine.filter(s => s.role === 'thread' && s.status === 'completed')
         return (
-          <section key={bot.name}>
+          <section key={bot.name} className="space-y-1">
             <div className="mb-1 flex items-center px-2">
               <Link
                 to={`/bots/${bot.name}`}
                 title="Bot options: tools and skills"
-                className="text-xs font-semibold tracking-wide text-zinc-500 uppercase hover:text-zinc-800 dark:hover:text-zinc-200"
+                className="rounded-lg px-2 py-2 text-sm font-semibold text-ink hover:bg-raised"
               >
                 {bot.name} ⚙
               </Link>
@@ -204,9 +202,10 @@ export function Sidebar({
         )
       })}
       {!bots.length && <p className="px-2 text-sm text-zinc-500">No bots are loaded. Set ERGONAUT_BOTS and restart.</p>}
-      <Link to="/costs" className="mt-auto rounded-md px-2 py-1 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-900">
-        💲 Costs
-      </Link>
+      <div className="mt-auto flex flex-col gap-1 border-t border-stroke pt-4">
+        <Link to="/sessions" className="rounded-lg px-3 py-2 text-sm hover:bg-raised">🔎 All sessions</Link>
+        <Link to="/costs" className="rounded-lg px-3 py-2 text-sm hover:bg-raised">💲 Costs</Link>
+      </div>
     </nav>
   )
 }

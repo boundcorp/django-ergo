@@ -15,8 +15,11 @@ function Home({ bots }: { bots: Bot[] }) {
   const root = bots.find(b => b.root_session_id)
   if (root) return <Navigate to={`/s/${root.root_session_id}`} replace />
   return (
-    <div className="p-6 text-zinc-500">
-      {bots.length ? 'Pick a bot on the left and start chatting.' : 'No bots are loaded yet.'}
+    <div className="page-content">
+      <h1 className="page-title mb-4">Ergonaut</h1>
+      <div className="surface-card p-8 text-zinc-500">
+        {bots.length ? 'Pick a bot on the left and start chatting.' : 'No bots are loaded yet.'}
+      </div>
     </div>
   )
 }
@@ -66,21 +69,27 @@ function App() {
 
   return (
     <BrowserRouter>
-      <div className="flex h-screen">
-        <aside className="w-64 shrink-0 border-r border-zinc-200 dark:border-zinc-800">
+      <div className="app-shell flex h-screen">
+        <aside className="app-sidebar shrink-0">
           <Sidebar bots={bots} sessions={sessions} pins={pins} botErrors={botErrors} onChange={refresh} />
         </aside>
-        <main className="min-w-0 flex-1">
-          <Routes>
-            <Route path="/" element={<Home bots={bots} />} />
-            <Route path="/s/:id" element={<ChatRoute onChange={refresh} />} />
-            <Route path="/sessions" element={<Sessions bots={bots} />} />
-            <Route path="/costs" element={<CostsPage />} />
-            <Route path="/bots/:name" element={<BotPage />} />
-            <Route path="/bots/:name/new-thread" element={<NewThread onChange={refresh} />} />
-            <Route path="/bots/:name/kb" element={<Memory />} />
-            <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
+        <main className="app-main min-w-0 flex-1">
+          <div className="app-topbar flex items-center gap-6">
+            <span className="text-xl font-bold text-accent">Ergonaut</span>
+            <span className="text-sm text-muted">{user.first_name || user.username}</span>
+          </div>
+          <div className="min-h-0 flex-1 overflow-hidden">
+            <Routes>
+              <Route path="/" element={<Home bots={bots} />} />
+              <Route path="/s/:id" element={<ChatRoute onChange={refresh} />} />
+              <Route path="/sessions" element={<Sessions bots={bots} />} />
+              <Route path="/costs" element={<CostsPage />} />
+              <Route path="/bots/:name" element={<BotPage />} />
+              <Route path="/bots/:name/new-thread" element={<NewThread onChange={refresh} />} />
+              <Route path="/bots/:name/kb" element={<Memory />} />
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
+          </div>
         </main>
       </div>
     </BrowserRouter>

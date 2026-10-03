@@ -25,8 +25,8 @@ function BotFilesSection({ bot }: { bot: string }) {
 
 function Section({ title, count, children }: { title: string; count?: number; children: React.ReactNode }) {
   return (
-    <section className="mt-6">
-      <h2 className="mb-2 text-sm font-semibold tracking-wide text-zinc-500 uppercase">
+    <section className="surface-card mt-6 p-5">
+      <h2 className="mb-3 text-sm font-semibold tracking-wide text-muted uppercase">
         {title}
         {count != null && <span className="ml-2 font-normal">{count}</span>}
       </h2>
@@ -62,14 +62,14 @@ export function BotPage() {
   ]
 
   return (
-    <div className="h-full overflow-y-auto px-6 py-6">
-      <h1 className="text-xl font-semibold">{bot.name}</h1>
+    <div className="page-content h-full overflow-y-auto">
+      <h1 className="page-title">{bot.name}</h1>
       {bot.description && <p className="mt-1 text-zinc-600 dark:text-zinc-400">{bot.description}</p>}
       <Link to={`/bots/${bot.name}/kb`} className="mt-2 inline-block text-sm text-indigo-600 hover:underline">
         Browse knowledge →
       </Link>
 
-      <dl className="mt-4 grid grid-cols-[max-content_1fr] gap-x-6 gap-y-1 text-sm">
+      <dl className="surface-card mt-6 grid grid-cols-[max-content_1fr] gap-x-6 gap-y-2 p-5 text-sm">
         {facts.map(([label, value]) => (
           <div key={label} className="contents">
             <dt className="text-zinc-500">{label}</dt>

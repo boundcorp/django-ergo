@@ -15,19 +15,19 @@ export function Sessions({ bots }: { bots: Bot[] }) {
   }, [q, bot, status])
 
   return (
-    <div className="mx-auto max-w-4xl p-6">
-      <h1 className="mb-4 text-xl font-semibold">Sessions</h1>
-      <div className="mb-4 flex flex-wrap gap-2">
+    <div className="page-content h-full overflow-y-auto">
+      <h1 className="page-title mb-6">Sessions</h1>
+      <div className="mb-6 flex flex-wrap gap-4">
         <input
           value={q}
           onChange={e => setQ(e.target.value)}
           placeholder="Search message text"
-          className="min-w-60 flex-1 rounded-lg border border-zinc-300 bg-transparent px-3 py-2 dark:border-zinc-700"
+          className="min-w-60 flex-1 rounded-card border border-stroke bg-raised px-4 py-3 text-sm"
         />
         <select
           value={bot}
           onChange={e => setBot(e.target.value)}
-          className="rounded-lg border border-zinc-300 bg-transparent px-2 dark:border-zinc-700"
+          className="min-w-40 rounded-card border border-stroke bg-raised px-4 py-3 text-sm"
         >
           <option value="">All bots</option>
           {bots.map(b => (
@@ -37,7 +37,7 @@ export function Sessions({ bots }: { bots: Bot[] }) {
         <select
           value={status}
           onChange={e => setStatus(e.target.value)}
-          className="rounded-lg border border-zinc-300 bg-transparent px-2 dark:border-zinc-700"
+          className="min-w-40 rounded-card border border-stroke bg-raised px-4 py-3 text-sm"
         >
           <option value="">Any status</option>
           <option value="active">Active</option>
@@ -49,10 +49,11 @@ export function Sessions({ bots }: { bots: Bot[] }) {
       ) : !sessions.length ? (
         <p className="text-zinc-500">No sessions match.</p>
       ) : (
+        <div className="data-scroll rounded-card border border-stroke">
         <table className="w-full text-sm">
           <thead className="text-left text-xs text-zinc-500">
             <tr>
-              <th className="py-2">Session</th>
+              <th>Session</th>
               <th>Bot</th>
               <th>Kind</th>
               <th>Person</th>
@@ -63,8 +64,8 @@ export function Sessions({ bots }: { bots: Bot[] }) {
           <tbody>
             {sessions.map(s => (
               <tr key={s.id} className="border-t border-zinc-200 dark:border-zinc-800">
-                <td className="py-2">
-                  <Link className="text-indigo-600 hover:underline" to={`/s/${s.id}`}>
+                <td>
+                  <Link className="text-accent hover:underline" to={`/s/${s.id}`}>
                     {s.title}
                   </Link>
                 </td>
@@ -77,6 +78,7 @@ export function Sessions({ bots }: { bots: Bot[] }) {
             ))}
           </tbody>
         </table>
+        </div>
       )}
     </div>
   )
