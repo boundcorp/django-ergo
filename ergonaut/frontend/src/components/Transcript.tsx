@@ -50,6 +50,16 @@ function MessageView({
         switch (block.type) {
           case 'text': {
             const from = user ? fromThread(block.text) : null
+            // Resume's note to the model (see api/bots.py RESUME_NOTE) reads as a divider, not a message.
+            const resumed = user
+              ? /^\[Resume\] Your last turn stopped before it finished \((.*?)\)\./.exec(block.text)
+              : null
+            if (resumed)
+              return (
+                <div key={i} className="self-center text-xs text-zinc-500" title={block.text}>
+                  ↻ Resumed after: {resumed[1]}
+                </div>
+              )
             if (from)
               return (
                 <div
@@ -167,8 +177,11 @@ function CallHeader({ call }: { call: Call }) {
         <span className="h-px flex-1 bg-zinc-200 dark:bg-zinc-800" />
       </button>
       {call.error && (
-        <div className={`mt-1 text-center ${call.status === 'stopped' ? 'text-zinc-500' : 'text-red-600'}`}>
-          {call.status === 'stopped' ? `⏹ ${call.error}` : call.error}
+        <div
+          title={call.error_summary ? call.error : undefined}
+          className={`mt-1 text-center ${call.status === 'stopped' ? 'text-zinc-500' : 'text-red-600'}`}
+        >
+          {call.status === 'stopped' ? `⏹ ${call.error}` : call.error_summary || call.error}
         </div>
       )}
       {detail != null && !!call.tools?.length && (
