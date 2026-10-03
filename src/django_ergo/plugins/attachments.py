@@ -11,7 +11,9 @@ Files come from three places: sent with a message, uploaded to the session
 - ``ergo_attachments_list``: the files in this session, or in another of
   the user's sessions (archived files only with ``include_archived``).
 - ``ergo_attachments_read``: a file's text (or a description of an image,
-  audio clip or binary file).
+  audio clip or binary file). Read and look take a file id, or a filename in
+  this chat or another (``session_id``), e.g. files another chat shared with
+  a message (see ``django_ergo.bots.orchestrator``).
 - ``ergo_attachments_create``: write a new text file into this session.
 - ``ergo_attachments_update``: replace the contents of a text file in this
   session.
@@ -121,9 +123,17 @@ class AttachmentsPlugin(BotPlugin):
             raise ValueError(msg)
         return found
 
-    def file_for(self, ctx: ToolContext, attachment_id: str) -> ConversationAttachment:
+    def file_for(
+        self, ctx: ToolContext, attachment_id: str, session_id: str = ""
+    ) -> ConversationAttachment:
+        """A file by id, or by filename in this chat (or ``session_id``'s)."""
+        from django_ergo.conversation.attachments import find_session_file
         from django_ergo.conversation.models import ConversationAttachment
 
+        try:
+            uuid.UUID(str(attachment_id))
+        except ValueError:
+            return find_session_file(self.session_for(ctx, session_id), attachment_id)
         row = (
             ConversationAttachment.objects.select_related("session")
             .filter(id=attachment_id, session__user_id=ctx.session.user_id)
@@ -148,8 +158,8 @@ class AttachmentsPlugin(BotPlugin):
             rows = rows.filter(archived_at__isnull=True)
         return [describe_row(r) for r in rows.order_by("-updated_at")[:MAX_LISTED]]
 
-    def read(self, ctx: ToolContext, attachment_id: str) -> str:
-        row = self.file_for(ctx, attachment_id)
+    def read(self, ctx: ToolContext, attachment_id: str, session_id: str = "") -> str:
+        row = self.file_for(ctx, attachment_id, session_id)
         text = f"# {row.filename} ({row.media_type})\n\n{read_text(row)}"
         if not is_text(row.media_type):
             text += "\n\nThis isn't a text file; use ergo_attachments_look to see what's in it."
@@ -183,7 +193,11 @@ class AttachmentsPlugin(BotPlugin):
         return describe_row(replace_session_file(row, data))
 
     def look(
-        self, ctx: ToolContext, attachment_id: str, question: str = ""
+        self,
+        ctx: ToolContext,
+        attachment_id: str,
+        question: str = "",
+        session_id: str = "",
     ) -> str | ToolResult:
         from asgiref.sync import async_to_sync
 
@@ -193,7 +207,7 @@ class AttachmentsPlugin(BotPlugin):
         from django_ergo.conversation.structured import StructuredCallSpec
         from django_ergo.conversation.structured import run_structured_call
 
-        row = self.file_for(ctx, attachment_id)
+        row = self.file_for(ctx, attachment_id, session_id)
         if is_text(row.media_type):
             return self.read(ctx, attachment_id)
         if not row.file:
@@ -384,10 +398,27 @@ class AttachmentsPlugin(BotPlugin):
         ) -> list[dict]:
             return plugin.list_files(ctx, session_id, include_archived)
 
-        @bot_tool(name="ergo_attachments_read", takes_context=True)
-        def read(ctx: ToolContext, attachment_id: str) -> str:
-            """Read a file by id: its text, or a description of an image, audio clip or binary file."""
-            return plugin.read(ctx, attachment_id)
+        @bot_tool(
+            name="ergo_attachments_read",
+            takes_context=True,
+            description=(
+                "Read a file: its text, or a description of an image, audio clip or "
+                "binary file. By id, or by filename in this chat or another (session_id)."
+            ),
+            parameters={
+                "attachment_id": {
+                    "type": "string",
+                    "description": "File id or filename",
+                },
+                "session_id": {
+                    "type": "string",
+                    "description": "The chat a filename is in (default: this one)",
+                },
+            },
+            required=["attachment_id"],
+        )
+        def read(ctx: ToolContext, attachment_id: str, session_id: str = "") -> str:
+            return plugin.read(ctx, attachment_id, session_id)
 
         @bot_tool(
             name="ergo_attachments_create",
@@ -417,12 +448,20 @@ class AttachmentsPlugin(BotPlugin):
             name="ergo_attachments_look",
             takes_context=True,
             description=(
-                "Look at an image or PDF (or any file) by id. You see an image "
-                "yourself in the result; for a PDF or other file, the question is "
-                "answered for you, e.g. what a receipt says."
+                "Look at an image or PDF (or any file) by id, or by filename in this "
+                "chat or another (session_id). You see an image yourself in the result; "
+                "for a PDF or other file, the question is answered for you, e.g. what a "
+                "receipt says."
             ),
             parameters={
-                "attachment_id": {"type": "string"},
+                "attachment_id": {
+                    "type": "string",
+                    "description": "File id or filename",
+                },
+                "session_id": {
+                    "type": "string",
+                    "description": "The chat a filename is in (default: this one)",
+                },
                 "question": {
                     "type": "string",
                     "description": "What you want to know (default: describe it)",
@@ -431,9 +470,12 @@ class AttachmentsPlugin(BotPlugin):
             required=["attachment_id"],
         )
         def look(
-            ctx: ToolContext, attachment_id: str, question: str = ""
+            ctx: ToolContext,
+            attachment_id: str,
+            question: str = "",
+            session_id: str = "",
         ) -> str | ToolResult:
-            return plugin.look(ctx, attachment_id, question)
+            return plugin.look(ctx, attachment_id, question, session_id)
 
         @bot_tool(
             name="ergo_attachments_archive",

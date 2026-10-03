@@ -10,6 +10,8 @@
   arrives later as a new message in this session (see
   ``django_ergo.bots.messaging``). Starting a thread of this bot needs
   ``sessions.allow_create: true``.
+  Files from this chat can go with it (``attachments``): the recipient sees them
+  listed, with ids, and opens them with the attachments tools.
 - ``ergo_thread_archive``: archive one of this bot's threads that is done.
 
 Reading another session's history is done with the history tools, which
@@ -29,6 +31,7 @@ from django_ergo.bots import messaging
 from django_ergo.bots.tools import BotTool
 from django_ergo.bots.tools import FunctionToolkit
 from django_ergo.bots.tools import bot_tool
+from django_ergo.conversation.attachments import find_session_file
 from django_ergo.conversation.models import ConversationSession
 from django_ergo.conversation.models import ThreadMessageStatus
 
@@ -136,11 +139,24 @@ def ergo_thread_list(
             "description": '"main" for its main chat, a named chat, "new" for a new thread, or a thread id',
         },
         "title": {"type": "string", "description": "Title for a new thread"},
+        "attachments": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": (
+                "Files from this chat to share (filenames or file ids). The recipient "
+                "can open them; they stay in this chat."
+            ),
+        },
     },
     required=["message"],
 )
-def ergo_thread_send(
-    ctx: ToolContext, message: str, bot: str = "", thread: str = "main", title: str = ""
+def ergo_thread_send(  # noqa: PLR0913
+    ctx: ToolContext,
+    message: str,
+    bot: str = "",
+    thread: str = "main",
+    title: str = "",
+    attachments: list[str] | None = None,
 ) -> dict:
     """Send a message to a bot's main chat, a named chat, a thread, or a new thread.
 
@@ -148,6 +164,10 @@ def ergo_thread_send(
     """
     target = _target(ctx, bot)
     user = ctx.session.user
+    shared = [
+        messaging.shared_file(find_session_file(ctx.session, ref))
+        for ref in attachments or []
+    ]
     thread = (thread or "main").strip()
     if thread in ("main", "root") or thread in target.definition.chats:
         recipient = async_to_sync(target.chat_session)(user, thread)
@@ -166,12 +186,19 @@ def ergo_thread_send(
     if recipient.id == ctx.session.id:
         msg = "That is this chat; send it somewhere else."
         raise ValueError(msg)
-    sent = messaging.send(ctx.session, recipient, message, registry=ctx.bot.registry)
+    sent = messaging.send(
+        ctx.session,
+        recipient,
+        message,
+        registry=ctx.bot.registry,
+        metadata={"attachments": shared} if shared else None,
+    )
     return {
         "sent_to": messaging.label(recipient),
         "thread_id": str(recipient.id),
         "message_id": str(sent.id),
         "note": "The reply will arrive as a new message in this chat.",
+        **({"shared_files": [f["filename"] for f in shared]} if shared else {}),
     }
 
 
