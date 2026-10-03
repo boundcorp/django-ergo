@@ -1,4 +1,15 @@
 import os
+import sys
+
+# A command run next to a live ``ergonaut up`` (``ergonaut manage shell``, ``ergonaut chat``)
+# uses its database, broker and storage (see ergonaut.up.attach). It has to happen here:
+# importing the ergonaut package loads these settings, before the CLI gets a chance, and
+# without the broker every task (a bot's whole turn) would run inside the command.
+# Never under pytest, so tests can't reach a running instance.
+if sys.argv[1:2] != ["up"] and "pytest" not in sys.modules:
+    from ergonaut.up import attach
+
+    attach()
 
 
 class Environments:

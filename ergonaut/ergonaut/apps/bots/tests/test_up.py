@@ -77,3 +77,22 @@ def test_a_stopped_up_is_ignored(tmp_path, monkeypatch):
 
     assert up.attach() == []
     assert "CELERY_BROKER_URL" not in up.os.environ
+
+
+def test_a_command_next_to_up_queues_tasks_instead_of_running_them(tmp_path, monkeypatch):
+    """Importing ergonaut loads its settings, so attach() must already have run by then."""
+    import json
+    import os
+    import subprocess
+
+    sup = up.Supervisor()
+    sup.env["CELERY_BROKER_URL"] = "redis://127.0.0.1:6400/0"
+    up.write_state(sup, tmp_path)  # this test process stands in for the running up
+    env = {k: v for k, v in os.environ.items() if k not in ("CELERY_BROKER_URL", "REDIS_URL")}
+    env.update(DATA_DIR=str(tmp_path), DJANGO_SETTINGS_MODULE="ergonaut.settings")
+    code = (
+        "import json, ergonaut; from django.conf import settings; "
+        "print(json.dumps([settings.CELERY_BROKER_URL, getattr(settings, 'CELERY_TASK_ALWAYS_EAGER', False)]))"
+    )
+    out = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, check=True)
+    assert json.loads(out.stdout.strip().splitlines()[-1]) == ["redis://127.0.0.1:6400/0", False]
