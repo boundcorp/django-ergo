@@ -124,7 +124,11 @@ export default function Files({
                   {file.filename || file.media_type}
                 </a>
               )}
-              <a className="text-xs text-zinc-400 hover:text-zinc-700" href={api.downloadUrl(file.id)} title="Download">
+              <a
+                className="text-xs text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-100"
+                href={api.downloadUrl(file.id)}
+                title="Download"
+              >
                 ⬇
               </a>
               <button

@@ -10,6 +10,7 @@ import { BotPage } from './pages/BotPage'
 import { NewThread } from './pages/NewThread'
 import { Memory } from './pages/Memory'
 import { CostsPage } from './pages/Costs'
+import { ThemeToggle } from './theme'
 
 function Home({ bots }: { bots: Bot[] }) {
   const root = bots.find(b => b.root_session_id)
@@ -74,9 +75,11 @@ function App() {
           <Sidebar bots={bots} sessions={sessions} pins={pins} botErrors={botErrors} onChange={refresh} />
         </aside>
         <main className="app-main min-w-0 flex-1">
-          <div className="app-topbar flex items-center gap-6">
-            <span className="text-xl font-bold text-accent">Ergonaut</span>
+          <div className="app-topbar flex items-center gap-4">
             <span className="text-sm text-muted">{user.first_name || user.username}</span>
+            <span className="ml-auto">
+              <ThemeToggle />
+            </span>
           </div>
           <div className="min-h-0 flex-1 overflow-hidden">
             <Routes>

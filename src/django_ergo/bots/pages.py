@@ -388,10 +388,13 @@ LAYOUT = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{title}</title>
+<script>/* ?theme=dark|light from the app that shows this page (Ergonaut's theme toggle) */
+document.documentElement.dataset.theme = new URLSearchParams(location.search).get("theme") || "";</script>
 <script src="{chart_js}"></script>
 <style>
 :root {{ --bg:#fff; --fg:#1d1d1f; --muted:#6b6b70; --line:#e4e4e7; --card:#f7f7f8; }}
-@media (prefers-color-scheme: dark) {{ :root {{ --bg:#18181b; --fg:#f4f4f5; --muted:#a1a1aa; --line:#3f3f46; --card:#232327; }} }}
+@media (prefers-color-scheme: dark) {{ :root:not([data-theme=light]) {{ --bg:#18181b; --fg:#f4f4f5; --muted:#a1a1aa; --line:#3f3f46; --card:#232327; }} }}
+:root[data-theme=dark] {{ --bg:#1b2534; --fg:#f5f7fb; --muted:#b9c5d8; --line:#3b4b62; --card:#253246; color-scheme:dark; }}
 body {{ background:var(--bg); color:var(--fg); font:15px/1.5 system-ui,sans-serif; margin:0; padding:20px 16px; }}
 main {{ max-width:1100px; margin:0 auto; }}
 h1 {{ font-size:24px; }} h2 {{ font-size:19px; margin-top:28px; }} h3 {{ font-size:15px; color:var(--muted); }}
