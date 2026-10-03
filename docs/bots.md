@@ -451,6 +451,11 @@ Who may message whom:
   bot started records `started_by` (the sending chat), `started_by_bot` and
   `started_by_label` in its metadata; Ergonaut links back to that chat from
   the thread's header, and `ergo_thread_list` shows it.
+- **No nudges.** A chat can't send a second request to a chat while its
+  earlier one there is still open, and in the turn that handles a chat's
+  reply it can't send that chat a short follow-up ("please continue"):
+  under 400 characters is refused unless the reply asked a question. A
+  complete new request still goes through.
 - **Managing what it started.** `ergo_thread_stop` and `ergo_thread_archive`
   (with `bot`) work on threads of other bots that a chat of this bot
   started. Stopping a running turn goes through
