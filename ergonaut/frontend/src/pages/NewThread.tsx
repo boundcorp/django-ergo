@@ -41,11 +41,11 @@ export function NewThread({ onChange }: { onChange: () => void }) {
   }
 
   return (
-    <div className="mx-auto flex h-full max-w-3xl flex-col justify-center px-6">
-      <h1 className="mb-1 text-lg font-semibold">New thread with {name}</h1>
-      <p className="mb-4 flex items-center gap-2 text-sm text-zinc-500">
+    <div className="page-content h-full overflow-y-auto">
+      <h1 className="page-title mb-1">New thread with {name}</h1>
+      <p className="page-lede mb-6 flex flex-wrap items-center gap-3">
         <span>Say what it's about; the thread gets its title from your message.</span>
-        <span className="ml-auto">
+        <span className="block basis-full">
           <ModelPicker bot={name} value={model} onPick={setModel} />
         </span>
       </p>
@@ -69,7 +69,7 @@ export function NewThread({ onChange }: { onChange: () => void }) {
         </div>
       )}
       <form
-        className="flex gap-2"
+        className="surface-card flex max-w-3xl flex-wrap items-end gap-3 p-4"
         onSubmit={e => {
           e.preventDefault()
           start()
@@ -80,7 +80,7 @@ export function NewThread({ onChange }: { onChange: () => void }) {
           type="button"
           disabled={busy}
           title="Attach images, PDFs or other files"
-          className="rounded-lg border border-zinc-300 px-3 text-lg disabled:opacity-50 dark:border-zinc-700"
+          className="rounded-control border border-stroke bg-raised px-3 py-2 text-lg disabled:opacity-50"
           onClick={() => picker.current?.click()}
         >
           📎
@@ -106,11 +106,11 @@ export function NewThread({ onChange }: { onChange: () => void }) {
           }}
           rows={4}
           placeholder="What's this thread about?"
-          className="flex-1 resize-none rounded-lg border border-zinc-300 bg-transparent px-3 py-2 focus:border-indigo-500 focus:outline-none dark:border-zinc-700"
+          className="min-w-48 flex-1 resize-none rounded-card border border-stroke bg-raised px-4 py-3 focus:outline-none"
         />
         <button
           disabled={busy || (!text.trim() && !files.length)}
-          className="rounded-lg bg-indigo-600 px-4 text-white disabled:opacity-50"
+          className="rounded-control bg-accent px-5 py-2.5 font-semibold text-canvas disabled:opacity-50"
         >
           {busy ? 'Starting…' : 'Send'}
         </button>

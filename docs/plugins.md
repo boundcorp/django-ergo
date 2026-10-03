@@ -222,7 +222,7 @@ from django_ergo.bots.runtime import Bot
 
 def test_crm_plugin(tmp_path, monkeypatch):
     (tmp_path / "bot.yaml").write_text(
-        "name: t\nengine: {type: claude}\n"
+        "name: t\nengine: {type: openai}\n"
         "plugins:\n  - name: myapp.plugins:CRMPlugin\n    base_url: http://crm\n"
     )
     (tmp_path / "agents.md").write_text("Test bot.")

@@ -19,7 +19,7 @@ source .venv/bin/activate
 
 ```bash
 export ERGONAUT_BOTS=../examples/hello
-export ANTHROPIC_API_KEY=sk-ant-...      # hello uses the Claude engine
+export OPENAI_API_KEY=sk-...             # hello runs on OpenAI's gpt-6-luna
 ergonaut check
 ```
 
@@ -74,8 +74,8 @@ Edit `bot.yaml`:
 name: notes
 description: Keeps my running notes and reminders
 engine:
-  type: claude
-  config: {model: claude-sonnet-5-5}
+  type: openai
+  config: {model: gpt-6-luna}
 tools: [tools/notes.py]
 ```
 

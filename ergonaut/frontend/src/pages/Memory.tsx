@@ -38,9 +38,11 @@ export function Memory() {
 
   const needle = filter.toLowerCase()
   return (
-    <div className="flex h-full">
-      <div className="flex w-72 shrink-0 flex-col border-r border-zinc-200 dark:border-zinc-800">
-        <div className="border-b border-zinc-200 p-3 dark:border-zinc-800">
+    <div className="page-content flex h-full flex-col overflow-y-auto">
+      <h1 className="page-title mb-1">{name} memory</h1>
+      <div className="surface-card mt-6 flex min-h-0 flex-1 flex-col overflow-hidden sm:flex-row">
+      <div className="flex w-full shrink-0 flex-col border-b border-stroke bg-raised sm:w-72 sm:border-r sm:border-b-0">
+        <div className="border-b border-stroke p-4">
           <div className="text-sm font-semibold">
             <Link to={`/bots/${name}`} className="hover:underline">
               {name}
@@ -51,7 +53,7 @@ export function Memory() {
             value={filter}
             onChange={e => setFilter(e.target.value)}
             placeholder="Filter articles"
-            className="mt-2 w-full rounded-md border border-zinc-300 bg-transparent px-2 py-1 text-sm dark:border-zinc-700"
+            className="mt-3 w-full rounded-control border border-stroke bg-surface px-3 py-2 text-sm"
           />
         </div>
         <div className="flex-1 overflow-y-auto p-2">
@@ -74,7 +76,7 @@ export function Memory() {
                       key={a.path}
                       onClick={() => setSelected({ kb: kb.id, path: a.path })}
                       className={`block w-full truncate rounded-md px-2 py-1 text-left text-sm ${
-                        active ? 'bg-zinc-200 font-medium dark:bg-zinc-800' : 'hover:bg-zinc-100 dark:hover:bg-zinc-900'
+                        active ? 'bg-indigo-tint font-medium text-accent-soft' : 'hover:bg-surface'
                       }`}
                     >
                       {a.root && (
@@ -94,16 +96,17 @@ export function Memory() {
           ))}
         </div>
       </div>
-      <div className="min-w-0 flex-1 overflow-y-auto px-8 py-6">
+      <div className="min-w-0 flex-1 overflow-y-auto px-6 py-6">
         {error && <p className="text-sm text-red-600">{error}</p>}
         {article ? (
           <>
-            <div className="mb-4 font-mono text-xs text-zinc-500">{article.path}</div>
+            <div className="mb-4 font-mono text-xs text-teal">{article.path}</div>
             <div className="max-w-3xl text-sm leading-6 whitespace-pre-wrap">{article.body}</div>
           </>
         ) : (
           !error && <p className="text-zinc-500">Pick an article.</p>
         )}
+      </div>
       </div>
     </div>
   )

@@ -9,7 +9,9 @@
   this bot or one it can message. It returns at once; the recipient's reply
   arrives later as a new message in this session (see
   ``django_ergo.bots.messaging``). Starting a thread of this bot needs
-  ``sessions.allow_create: true``.
+  ``sessions.allow_create: true``. A chat can't send another request to a chat
+  while its earlier one there is still open (no nudges or acknowledgements: each
+  message starts a turn there).
   Files from this chat can go with it (``attachments``): the recipient sees them
   listed, with ids, and opens them with the attachments tools.
 - ``ergo_thread_archive``: archive one of this bot's threads that is done.
@@ -185,6 +187,23 @@ def ergo_thread_send(  # noqa: PLR0913
         recipient = _session(target, ctx, thread)
     if recipient.id == ctx.session.id:
         msg = "That is this chat; send it somewhere else."
+        raise ValueError(msg)
+    if open_request := (
+        ctx.session.sent_thread_messages.filter(
+            recipient_session=recipient,
+            in_reply_to__isnull=True,
+            status__in=OPEN_STATUSES,
+        )
+        .order_by("-created_at")
+        .first()
+    ):
+        # Nudges and "thanks, keep going" messages each start a full turn there.
+        msg = (
+            f"Your request to {messaging.label(recipient)} from "
+            f"{open_request.created_at:%H:%M} UTC (“{messaging.snippet(open_request.text)}”) "
+            "is still open; its reply will arrive here. Don't nudge or add to it: wait "
+            "for the reply, then send new work if there is any."
+        )
         raise ValueError(msg)
     sent = messaging.send(
         ctx.session,

@@ -21,7 +21,7 @@ Live on rigel from `~/p/boundcorp/django-ergo`, bots from `boundcorp/ergo-bots`.
 
 ### Next
 
-- [x] **Docs** (PR #69, merged; OpenAI-default follow-up in draft PR #72): full README; guides for getting started, building bots, skills, tools, plugins, memory and KBs, data tables, attachments, schedules, running Ergonaut, development; 2025 planning docs and old specs moved to `docs/archive/`.
+- [x] **Docs** (PR #69; OpenAI made the default in examples and docs in a follow-up): full README; guides for getting started, building bots, skills, tools, plugins, memory and KBs, data tables, attachments, schedules, running Ergonaut, development; 2025 planning docs and old specs moved to `docs/archive/`.
 - [x] **Skills unified + named chats** (PR #33, merged): lazy skills (load/unload, always per chat, requires), main replaces root, named chats in bot.yaml, schedule targets.
 - [x] **Schedule actions** (PR #34, merged): ordered `prompt` and `run` steps; `run` calls bot-folder Python and records a BotJob.
 - [x] **BotTable** (PR #35, merged): real Django models per bot, migrations in the bot folder's `migrations/` (bot_management writes them into the proposal), `ergo_bot_migrate` at start and after pulls, `tables` skill.
@@ -35,8 +35,8 @@ Live on rigel from `~/p/boundcorp/django-ergo`, bots from `boundcorp/ergo-bots`.
 - [x] Stop, steer and interrupt a running turn: messages go through a per-session inbox and steer the turn at its next step; Stop (`POST /sessions/{id}/stop`) ends it as `stopped`; "Stop & send" interrupts (`mode: "interrupt"`).
 - [x] Model picker from `providers.yaml` (#65, #67); recover chats left busy by a dead turn (#66); `ergonaut manage wait_idle` (#70); window/rolling compaction names (#71); stub older large tool results (#68).
 - [x] Steer and stop turns another chat or worker started (#73); Unsend (#75); usage saved after every request (#76, #77); Resume a failed turn with plain-words error cards and `resume_failed --kind credits` (#78); files shared with thread messages and `orca_upload` (#79).
-- [ ] Bot handoffs: a follow-up to an unanswered request joins it (PR #74, green, awaiting merge).
-- [ ] Stop bot-to-bot thank-you ping-pong: a courtesy reply to a handoff answer shouldn't cost the other bot a turn.
+- [x] Stop bot-to-bot ping-pong (#81, replaced #74): a second request to a chat with one still open is refused; reply headers tell bots not to send thanks or nudges.
+- [x] Ergonaut restyled to the dark design handoff (#83).
 - [ ] Try the Design to devbox handoff live (Penpot export, `orca_upload`, worker builds the Ergonaut screens).
 - [ ] Try `orca_start_worker` live on devbox (after the Orca display restart).
 - [ ] A visual blocks editor in the UI. Campaign names are Ad Manager's internal `AM:<uuid>:campaign` labels; friendly names would need Ad Manager's mapping.

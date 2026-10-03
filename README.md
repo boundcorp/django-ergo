@@ -4,7 +4,7 @@
 
 Ergo is a toolkit for building AI agents in Django. It has three layers:
 
-- **The library** (`django_ergo`): conversation sessions on Claude or OpenAI,
+- **The library** (`django_ergo`): conversation sessions on OpenAI (the default) or Claude,
   structured calls, compaction, history tools, a context builder, knowledge
   bases with semantic search, and file attachments. Use the pieces in any
   Django project.
@@ -27,7 +27,7 @@ cd django-ergo/ergonaut
 make venv && source .venv/bin/activate
 (cd frontend && npm install && npm run build)   # the web app; needs Node
 
-export ANTHROPIC_API_KEY=sk-ant-...
+export OPENAI_API_KEY=sk-...      # bots run on OpenAI by default
 export ERGONAUT_BOTS=../examples/hello
 ergonaut check                      # loads the bot, lists its tools and missing secrets
 ergonaut up                         # web, worker, beat and bots; http://localhost:8000
@@ -40,7 +40,7 @@ image from the repo root, then run it from any folder holding a `bot.yaml`:
 ```bash
 docker build -f ergonaut/Dockerfile --target aio -t ergonaut .
 docker run -v "$PWD:/bot" -v ergonaut-data:/data -p 8000:8000 \
-  -e ANTHROPIC_API_KEY --name ergonaut ergonaut
+  -e OPENAI_API_KEY --name ergonaut ergonaut
 docker exec -it ergonaut ergonaut manage createsuperuser
 ```
 
@@ -64,7 +64,7 @@ kitchen/
 # bot.yaml
 name: kitchen
 description: Household kitchen manager
-engine: {type: claude, config: {model: claude-sonnet-5-5}}
+engine: {type: openai, config: {model: gpt-6-luna}}
 tools: [tools/tandoor.py]
 chats:
   main: {skills: [orchestration, tandoor]}
@@ -168,7 +168,7 @@ INSTALLED_APPS = [
 ]
 
 DJANGO_ERGO = {
-    "CONVERSATION_ENGINE_TYPE": "claude",            # or "openai"
+    "CONVERSATION_ENGINE_TYPE": "openai",            # the default; or "claude"
     "EMBEDDING_PROVIDER": "django_ergo.embedding_providers.OpenAIEmbeddingProvider",
 }
 ```
@@ -180,7 +180,7 @@ from django_ergo.conversation.manager import SessionManager
 from django_ergo.conversation.runner import run_conversation_turn
 
 manager = SessionManager()
-session = await manager.create_session(user=user, workflow=None, engine_type="claude",
+session = await manager.create_session(user=user, workflow=None, engine_type="openai",
                                        transport_type="api", system_prompt="You are terse.")
 engine = await manager.get_engine(session)
 async for event in run_conversation_turn(engine, session, "Hello", extra_tools=[my_toolkit]):
