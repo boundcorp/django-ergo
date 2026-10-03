@@ -3,6 +3,22 @@ import type { Pin } from '../api'
 import { api } from '../api'
 import { themed, useTheme } from '../theme'
 
+const TYPE_ICONS: [RegExp, string][] = [
+  [/\.(jhtml|html?)$/i, '📊'],
+  [/\.(png|jpe?g|gif|webp|svg)$/i, '🖼️'],
+  [/\.pdf$/i, '📕'],
+  [/\.(md|txt)$/i, '📝'],
+  [/\.(csv|json|xlsx?)$/i, '📋'],
+  [/\.(mp4|webm|mov|mp3|wav)$/i, '🎞️'],
+]
+
+/** A pin's icon: its own, or one for its file type. */
+export function pinIcon(pin: { icon?: string; filename?: string; path?: string; name: string }): string {
+  if (pin.icon) return pin.icon
+  const file = pin.path ?? pin.filename ?? pin.name
+  return TYPE_ICONS.find(([pattern]) => pattern.test(file))?.[1] ?? '📄'
+}
+
 // The chat's pinned files, as a strip of tabs under the header.
 export function Pins({
   sessionId,
@@ -38,7 +54,7 @@ export function Pins({
             className={`rounded-full border px-2.5 py-0.5 text-xs disabled:opacity-50 ${active ? 'border-indigo-500 bg-indigo-50 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300' : 'border-zinc-300 text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900'}`}
             onClick={() => onOpen(active ? null : pin)}
           >
-            📌 {pin.name}
+            {pinIcon(pin)} {pin.name}
           </button>
         )
       })}

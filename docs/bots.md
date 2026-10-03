@@ -282,7 +282,10 @@ the bot folder. A page without an `<html>` tag gets a layout with Chart.js.
 Pages come from two places:
 
 - **The bot folder**, reviewed like the rest of the repo. Pin them in a chat
-  with `chats.<name>.pins: [pages/dashboard.jhtml]`. Ergonaut serves bot-folder
+  with `chats.<name>.pins: [pages/dashboard.jhtml]`, or give a pin a title
+  and an icon: `pins: [{path: pages/dashboard.jhtml, title: Dashboard, icon: "📊"}]`.
+  Without them a pin shows its file name and an icon for its file type, in the
+  chat's pin bar and under the chat in the sidebar. Ergonaut serves bot-folder
   pages and assets (`.html`, `.mjs`, `.js`, `.css`, images, JSON, CSV, never
   Python, YAML or dotfiles) at `/api/bots/<bot>/files/<path>`, in the app's
   origin, so a page can load its own scripts.
@@ -623,7 +626,8 @@ blocks | source, pin=true)` writes or rewrites a `.jhtml` page from blocks
 and returns a text preview of the render or the error, so the bot can fix it
 in the same turn. `ergo_page_get` returns a page's blocks and source,
 `ergo_page_preview` renders a chat page, a bot-folder page or some source, and
-`ergo_page_pin` pins or unpins any file in the chat. Loading the skill loads
+`ergo_page_pin` pins or unpins any file in the chat, with an optional `title`
+and `icon` (an emoji) for the pin. Loading the skill loads
 `tables` too.
 
 ### bot_management

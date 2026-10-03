@@ -497,6 +497,22 @@ def test_pins_bot_files_and_live_pages(client, cook, bot_folder, use_bots, setti
     assert [(p["kind"], p["name"]) for p in pins] == [("bot_file", "home.jhtml"), ("file", "Board")]
     assert [p["name"] for p in client.get("/api/pins").json()[root["id"]]] == ["home.jhtml", "Board"]
 
+    # Pins take a title and an icon: in bot.yaml, and on a chat file.
+    (bot_folder / "bot.yaml").write_text(
+        BOT + 'chats:\n  main: {pins: [{path: pages/home.jhtml, title: Home, icon: "🏡"}]}\n'
+    )
+    use_bots(say("hi"))
+    post(client, f"/api/attachments/{page.id}/pin", {"pinned": True, "icon": "📋"})
+    labelled = client.get(f"/api/sessions/{root['id']}/pins").json()
+    assert [(p["name"], p["icon"], p.get("path")) for p in labelled] == [
+        ("Home", "🏡", "pages/home.jhtml"),
+        ("Board", "📋", None),
+    ]
+    assert [(p["name"], p["icon"], p["filename"]) for p in client.get("/api/pins").json()[root["id"]]] == [
+        ("Home", "🏡", "home.jhtml"),
+        ("Board", "📋", "board.jhtml"),
+    ]
+
     # A bot-folder page renders in the app's origin; assets come as files; code and config don't.
     home = client.get("/api/bots/kitchen/files/pages/home.jhtml")
     assert b"Hello cook from kitchen" in home.content

@@ -164,6 +164,29 @@ def test_definition_defaults_and_inline_instructions():
         BotDefinition.from_dict({})
 
 
+def test_pins_with_titles_and_icons():
+    definition = BotDefinition.from_dict(
+        {
+            "name": "k",
+            "chats": {
+                "main": {
+                    "pins": [
+                        "pages/a.jhtml",
+                        {"path": "./pages/b.jhtml", "title": "Board", "icon": "📊"},
+                    ]
+                }
+            },
+        }
+    )
+    main = definition.chat("main")
+    assert main.pins == ["pages/a.jhtml", "pages/b.jhtml"]
+    assert main.pin_labels == {"pages/b.jhtml": {"title": "Board", "icon": "📊"}}
+    with pytest.raises(BotDefinitionError, match="pins"):
+        BotDefinition.from_dict(
+            {"name": "k", "chats": {"main": {"pins": [{"title": "x"}]}}}
+        )
+
+
 def test_icon_and_color():
     definition = BotDefinition.from_dict({"name": "k", "icon": "🍳", "color": "Amber"})
     assert (definition.icon, definition.color) == ("🍳", "amber")

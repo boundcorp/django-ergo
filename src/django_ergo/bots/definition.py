@@ -32,6 +32,7 @@ bot.yaml::
       main:                            # every user's main chat (always there)
         skills: [orchestration, tandoor]   # loaded from the start (default: orchestration)
         pins: [pages/dashboard.jhtml]      # bot-folder files pinned in this chat (see bots.pages)
+        # or with a title and icon: [{path: pages/dashboard.jhtml, title: Dashboard, icon: "📊"}]
       reports:                         # a named chat: one per user, its own purpose
         description: Weekly analytics
         instructions: Keep each report short.   # added to agents.md in this chat
@@ -130,6 +131,8 @@ class ChatDefinition:
     pins: list[str] = field(
         default_factory=list
     )  # bot-folder files shown pinned in the chat
+    # Titles and icons given for pins, by path: {"title": ..., "icon": ...}.
+    pin_labels: dict[str, dict] = field(default_factory=dict)
 
 
 @dataclass
@@ -367,11 +370,28 @@ def _color(value: Any) -> str:
 
 
 def _pin(chat: str, value: Any) -> str:
+    if isinstance(value, dict):
+        value = value.get("path", "")
     pin = str(value).strip().lstrip("./")
     if not pin or pin.startswith("/") or ".." in pin.split("/"):
         msg = f"chats: {chat} pins {value!r}; pins are paths inside the bot folder"
         raise BotDefinitionError(msg)
     return pin
+
+
+def _pin_labels(chat: str, values: list) -> dict[str, dict]:
+    """The ``title`` and ``icon`` of pins written as mappings, by path."""
+    labels = {}
+    for value in values:
+        if not isinstance(value, dict):
+            continue
+        label = {
+            "title": str(value.get("title") or "").strip(),
+            "icon": _icon(value.get("icon")),
+        }
+        if any(label.values()):
+            labels[_pin(chat, value)] = label
+    return labels
 
 
 def _chats(data: dict, *, orchestration: bool) -> dict[str, ChatDefinition]:
@@ -391,5 +411,6 @@ def _chats(data: dict, *, orchestration: bool) -> dict[str, ChatDefinition]:
             instructions=str(config.get("instructions") or ""),
             skills=[str(s) for s in config.get("skills", default_skills) or []],
             pins=[_pin(name, p) for p in config.get("pins") or []],
+            pin_labels=_pin_labels(name, config.get("pins") or []),
         )
     return chats

@@ -1,8 +1,9 @@
 import { useState } from 'react'
 import { Link, NavLink, useMatch, useNavigate } from 'react-router-dom'
-import type { Bot, Session } from '../api'
+import type { Bot, Session, SidebarPin } from '../api'
 import { api } from '../api'
 import BotIcon from './BotIcon'
+import { pinIcon } from './Pins'
 
 function SessionLink({ session, nested }: { session: Session; nested?: boolean }) {
   // The open chat is being read, so its reply is never shown as unread.
@@ -59,15 +60,7 @@ function SessionLink({ session, nested }: { session: Session; nested?: boolean }
 }
 
 // A chat's pinned files under it; each opens in that chat's viewer.
-function PinLinks({
-  session,
-  pins,
-  nested,
-}: {
-  session: Session
-  pins?: { name: string; url: string }[]
-  nested?: boolean
-}) {
+function PinLinks({ session, pins, nested }: { session: Session; pins?: SidebarPin[]; nested?: boolean }) {
   if (!pins?.length) return null
   return (
     <>
@@ -78,7 +71,7 @@ function PinLinks({
           className={`block truncate rounded-md px-2 py-0.5 text-xs text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-900 ${nested ? 'ml-10' : 'ml-6'}`}
           title={pin.name}
         >
-          📌 {pin.name}
+          {pinIcon(pin)} {pin.name}
         </Link>
       ))}
     </>
@@ -94,7 +87,7 @@ export function Sidebar({
 }: {
   bots: Bot[]
   sessions: Session[]
-  pins: Record<string, { name: string; url: string }[]>
+  pins: Record<string, SidebarPin[]>
   botErrors?: { folder: string; name: string; error: string }[]
   onChange: () => void
 }) {

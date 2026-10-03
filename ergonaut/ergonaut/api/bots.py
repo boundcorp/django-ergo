@@ -1244,12 +1244,15 @@ def download_attachment(request, attachment_id: str, inline: bool = False):
 
 class PinIn(Schema):
     pinned: bool = True
+    title: str | None = None  # the pin's label ("" clears it: the file name)
+    icon: str | None = None  # an emoji ("" clears it: an icon for the file type)
 
 
 @router.post("/attachments/{attachment_id}/pin", response=AttachmentOut)
 def pin_attachment(request, attachment_id: str, payload: PinIn):
     row = visible_attachment(request.auth, attachment_id)
-    row.metadata = {**(row.metadata or {}), "pinned": payload.pinned}
+    labels = {k: v.strip() for k, v in (("title", payload.title), ("icon", payload.icon)) if v is not None}
+    row.metadata = {**(row.metadata or {}), **labels, "pinned": payload.pinned}
     row.save(update_fields=["metadata", "updated_at"])
     return attachment_out(row)
 
@@ -1301,6 +1304,7 @@ def bot_errors(request):
 @router.get("/pins")
 def all_pins(request):
     """What's pinned in each of your chats, by session id (for the sidebar)."""
+    from django_ergo.bots.pages import pin_label
     from django_ergo.bots.runtime import Bot as BotClass
 
     bots = registry()
@@ -1311,9 +1315,14 @@ def all_pins(request):
         chat = BotClass.chat_name(session)
         if bot is None or chat is None:
             continue
-        for relative in bot.definition.chat(chat).pins:
+        definition = bot.definition.chat(chat)
+        for relative in definition.pins:
             out.setdefault(str(session.id), []).append(
-                {"name": relative.rsplit("/", 1)[-1], "url": f"/api/bots/{bot.name}/files/{relative}"}
+                {
+                    **pin_label(definition, relative),
+                    "filename": relative.rsplit("/", 1)[-1],
+                    "url": f"/api/bots/{bot.name}/files/{relative}",
+                }
             )
     pinned = ConversationAttachment.objects.filter(
         metadata__pinned=True, session__in=visible_sessions(request.auth).filter(user=request.auth)
@@ -1322,6 +1331,8 @@ def all_pins(request):
         out.setdefault(str(row.session_id), []).append(
             {
                 "name": (row.metadata or {}).get("title") or row.filename,
+                "icon": (row.metadata or {}).get("icon") or "",
+                "filename": row.filename,
                 "url": f"/api/attachments/{row.id}/download?inline=true",
             }
         )

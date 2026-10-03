@@ -191,10 +191,13 @@ export type AttachmentFile = {
   archived_at?: string | null
 }
 
+export type SidebarPin = { name: string; url: string; icon?: string; filename?: string }
+
 // Something pinned in a chat: a bot-folder file (chats.<name>.pins) or a pinned chat file.
 export type Pin = {
   kind: 'bot_file' | 'file'
-  name: string
+  name: string // its title, or the file name
+  icon?: string // an emoji; '' = one for the file type (pinIcon)
   url: string
   path?: string
   id?: string
@@ -405,7 +408,7 @@ export const api = {
       'GET',
       `/bots/${bot}/tables/${encodeURIComponent(table)}/rows?page=${opts.page ?? 1}&order=${encodeURIComponent(opts.order ?? '')}&q=${encodeURIComponent(opts.q ?? '')}`,
     ),
-  allPins: () => request<Record<string, { name: string; url: string }[]>>('GET', '/pins'),
+  allPins: () => request<Record<string, SidebarPin[]>>('GET', '/pins'),
   pins: (id: string) => request<Pin[]>('GET', `/sessions/${id}/pins`),
   pin: (id: string, pinned: boolean) => request<AttachmentFile>('POST', `/attachments/${id}/pin`, { pinned }),
 }
