@@ -1,9 +1,17 @@
 <!DOCTYPE html>
-<html lang="en" class="dark">
+<html lang="en">
     <head>
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <title>Ergonaut</title>
+        <script>
+      // Dark unless this browser chose light (src/theme.tsx), set before first paint.
+      try {
+        if (localStorage.getItem('ergonaut-theme') !== 'light') document.documentElement.classList.add('dark')
+      } catch (e) {
+        document.documentElement.classList.add('dark')
+      }
+        </script>
     </head>
     <body>
         <div id="root"></div>

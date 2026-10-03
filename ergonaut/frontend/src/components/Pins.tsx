@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { Pin } from '../api'
 import { api } from '../api'
+import { themed, useTheme } from '../theme'
 
 // The chat's pinned files, as a strip of tabs under the header.
 export function Pins({
@@ -47,6 +48,7 @@ export function Pins({
 
 // A pinned page or file, live: reloads when the chat changes (new rows may have landed).
 export function PageViewer({ pin, refreshKey, onClose }: { pin: Pin; refreshKey: unknown; onClose: () => void }) {
+  const theme = useTheme()
   const [nonce, setNonce] = useState(0)
   useEffect(() => setNonce(n => n + 1), [refreshKey])
   return (
@@ -63,7 +65,12 @@ export function PageViewer({ pin, refreshKey, onClose }: { pin: Pin; refreshKey:
           Back to chat ✕
         </button>
       </div>
-      <iframe key={nonce} title={pin.name} src={pin.url} className="min-h-0 w-full flex-1 bg-white" />
+      <iframe
+        key={`${nonce}:${theme}`}
+        title={pin.name}
+        src={themed(pin.url, theme)}
+        className="min-h-0 w-full flex-1"
+      />
     </div>
   )
 }

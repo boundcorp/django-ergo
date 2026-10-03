@@ -49,6 +49,9 @@ def test_jhtml_renders_over_tables_read_only(realty_bot):
     assert "2 houses" in html
     assert "Top: 12 Oak St" in html
     assert "<html" in html  # wrapped in the layout
+    # The app that shows the page picks its theme with ?theme=dark|light.
+    assert 'get("theme")' in html
+    assert ":root[data-theme=dark]" in html
 
     source = (
         "{% for g in table('House').group('address', price='sum') %}{{ g.address }}={{ g.price | money }};{% endfor %}"
