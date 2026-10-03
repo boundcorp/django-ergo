@@ -257,12 +257,12 @@ export function Chat({ onChange }: { onChange: () => void }) {
   const echo = pending?.text && !stored(detail.messages, pending.text, pending.line) ? pending.text : ''
 
   return (
-    <div className="flex h-full">
+    <div className="chat-session flex h-full">
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex items-center gap-3 border-b border-zinc-200 px-6 py-3 dark:border-zinc-800">
+        <header className="chat-header flex flex-wrap items-center gap-3 px-6 py-4">
           <div>
-            <div className="font-semibold">{detail.session.title}</div>
-            <div className="text-xs text-zinc-500">
+            <div className="text-2xl font-bold">{detail.session.title}</div>
+            <div className="mt-1 text-sm text-muted">
               {detail.session.bot} · {detail.session.role || 'session'} · {detail.messages.length} messages
             </div>
           </div>
@@ -309,11 +309,11 @@ export function Chat({ onChange }: { onChange: () => void }) {
         <Workers workers={detail.workers ?? []} />
         <Pins sessionId={id} refreshKey={`${detail.messages.length}:${pinsKey}`} open={openPin} onOpen={setOpenPin} />
         {openPin && <PageViewer pin={openPin} refreshKey={detail.messages.length} onClose={() => setOpenPin(null)} />}
-        <div className={`flex-1 overflow-y-auto px-6 py-4 ${openPin ? 'hidden' : ''}`}>
+        <div className={`chat-transcript flex-1 overflow-y-auto px-6 py-5 ${openPin ? 'hidden' : ''}`}>
           <Transcript messages={detail.messages} calls={detail.calls} />
           {(detail.inbox ?? []).map(item => (
             <div key={item.id} className="mt-3 flex flex-col items-end">
-              <div className="max-w-[80%] rounded-2xl border border-dashed border-indigo-400 bg-indigo-600/50 px-4 py-2 whitespace-pre-wrap text-white">
+              <div className="max-w-[80%] rounded-card border border-accent bg-indigo-tint px-4 py-3 whitespace-pre-wrap text-ink">
                 {item.text}
                 {item.files > 0 && <span className="ml-2 text-xs opacity-80">📎 {item.files}</span>}
               </div>
@@ -333,7 +333,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
           ))}
           {echo && !(detail.inbox ?? []).some(item => item.text === echo) && (
             <div className="mt-3 flex justify-end">
-              <div className="max-w-[80%] rounded-2xl bg-indigo-600/70 px-4 py-2 whitespace-pre-wrap text-white">
+              <div className="max-w-[80%] rounded-card bg-indigo-tint px-4 py-3 whitespace-pre-wrap text-ink">
                 {echo}
               </div>
             </div>
@@ -346,12 +346,12 @@ export function Chat({ onChange }: { onChange: () => void }) {
           <div ref={bottom} />
         </div>
         {!!waiting.length && (
-          <div className="mx-6 mb-2 rounded-lg border border-amber-400/60 bg-amber-50 p-3 text-sm dark:bg-amber-950/30">
+          <div className="mx-6 mb-3 rounded-card border border-warning/40 bg-amber-tint p-4 text-sm">
             <div className="mb-2 font-medium">Approve {waiting.map(a => a.name).join(', ')}?</div>
             <div className="flex gap-2">
               <button
                 disabled={busy || !!pending}
-                className="rounded-md bg-emerald-600 px-3 py-1 text-white disabled:opacity-50"
+                className="rounded-control bg-warning px-4 py-2 font-semibold text-canvas disabled:opacity-50"
                 onClick={() =>
                   run(() =>
                     api.approve(
@@ -366,7 +366,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
               </button>
               <button
                 disabled={busy || !!pending}
-                className="rounded-md border border-zinc-300 px-3 py-1 disabled:opacity-50 dark:border-zinc-700"
+                className="rounded-control border border-warning/50 px-4 py-2 disabled:opacity-50"
                 onClick={() =>
                   run(() =>
                     api.approve(
@@ -382,9 +382,9 @@ export function Chat({ onChange }: { onChange: () => void }) {
             </div>
           </div>
         )}
-        {error && <div className="mx-6 mb-2 text-sm text-red-600">{error}</div>}
+        {error && <div className="mx-6 mb-2 rounded-card border border-danger/40 bg-red-tint p-3 text-sm text-danger">{error}</div>}
         {failedCall && (
-          <div className="mx-6 mb-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm dark:border-red-900 dark:bg-red-950/40">
+          <div className="mx-6 mb-2 rounded-card border border-danger/40 bg-red-tint px-4 py-3 text-sm">
             <div className="flex flex-wrap items-center gap-2">
               <span className="font-medium text-red-700 dark:text-red-300">
                 {failedCall.error_summary || 'The last turn failed.'}
@@ -395,7 +395,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
               <span className="ml-auto flex gap-2">
                 <button
                   disabled={busy}
-                  className="rounded-md bg-indigo-600 px-2.5 py-0.5 text-xs font-medium text-white disabled:opacity-50"
+                  className="rounded-control bg-accent px-3 py-1 text-xs font-semibold text-canvas disabled:opacity-50"
                   title="Continue this chat from where the last turn stopped"
                   onClick={() => run(() => api.resume(id), '')}
                 >
@@ -458,7 +458,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
           </div>
         )}
         <form
-          className="flex gap-2 border-t border-zinc-200 p-4 dark:border-zinc-800"
+          className="chat-composer mx-4 mb-2 flex flex-wrap items-end gap-2 rounded-panel border border-stroke bg-surface p-4"
           onSubmit={e => {
             e.preventDefault()
             send(text)
@@ -469,7 +469,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
             type="button"
             disabled={closed || !!waiting.length || uploading}
             title="Attach images, PDFs or other files"
-            className="rounded-lg border border-zinc-300 px-3 text-lg disabled:opacity-50 dark:border-zinc-700"
+            className="rounded-control border border-stroke bg-raised px-3 py-2 text-lg disabled:opacity-50"
             onClick={() => picker.current?.click()}
           >
             {uploading ? '…' : '📎'}
@@ -503,7 +503,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
                       ? 'Steer the bot: your message joins this turn'
                       : 'Message the bot'
             }
-            className="flex-1 resize-none rounded-lg border border-zinc-300 bg-transparent px-3 py-2 focus:border-indigo-500 focus:outline-none dark:border-zinc-700"
+            className="min-w-48 flex-1 resize-none rounded-card border border-stroke bg-raised px-3 py-2 focus:outline-none"
           />
           {running && (
             <div className="flex flex-col gap-1">
@@ -511,7 +511,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
                 type="button"
                 disabled={stopping}
                 title="Stop the bot after the step it's on"
-                className="flex-1 rounded-lg border border-zinc-300 px-3 text-sm disabled:opacity-50 dark:border-zinc-700"
+                className="flex-1 rounded-control border border-stroke bg-raised px-3 py-2 text-sm disabled:opacity-50"
                 onClick={stop}
               >
                 ⏹ Stop
@@ -521,7 +521,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
                   type="button"
                   disabled={busy || uploading || stopping}
                   title="Stop the bot and answer this message instead"
-                  className="flex-1 rounded-lg border border-indigo-300 px-3 text-sm text-indigo-700 disabled:opacity-50 dark:border-indigo-700 dark:text-indigo-300"
+                  className="flex-1 rounded-control bg-accent px-3 py-2 text-sm font-semibold text-canvas disabled:opacity-50"
                   onClick={() => send(text, 'interrupt')}
                 >
                   Stop &amp; send
@@ -532,7 +532,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
           <button
             disabled={busy || uploading || (!text.trim() && !outgoing.length)}
             title={running ? 'Send now; the bot sees it after the step it is on' : undefined}
-            className="rounded-lg bg-indigo-600 px-4 text-white disabled:opacity-50"
+            className="rounded-control bg-accent px-5 py-2.5 font-semibold text-canvas disabled:opacity-50"
           >
             Send
           </button>
@@ -575,7 +575,7 @@ function Workers({ workers }: { workers: Worker[] }) {
   const done = workers.filter(w => !running.includes(w))
   if (!workers.length) return null
   return (
-    <div className="flex flex-col gap-1 border-b border-zinc-200 bg-zinc-50 px-6 py-2 text-xs dark:border-zinc-800 dark:bg-zinc-900/50">
+    <div className="mx-6 mb-2 flex flex-col gap-2 rounded-card border border-stroke bg-surface px-4 py-3 text-xs">
       {running.map(w => (
         <div key={w.id} className="flex items-center gap-2 truncate">
           {w.status === 'running' ? (
@@ -610,7 +610,7 @@ function Requests({ requests }: { requests: DelegatedRequest[] }) {
   const open = requests.filter(r => r.status !== 'answered' && r.status !== 'failed')
   if (!open.length) return null
   return (
-    <div className="flex flex-col gap-1 border-b border-zinc-200 bg-zinc-50 px-6 py-2 text-xs dark:border-zinc-800 dark:bg-zinc-900/50">
+    <div className="mx-6 mb-2 flex flex-col gap-2 rounded-card border border-teal/40 bg-teal-tint px-4 py-3 text-xs">
       {open.map(r => (
         <div key={r.id} className="flex items-center gap-2 truncate">
           <span className={r.status === 'waiting' ? 'text-amber-600' : 'text-teal-600'}>

@@ -1,11 +1,153 @@
 @import 'tailwindcss';
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-sans: Inter, ui-sans-serif, system-ui, sans-serif;
+  --radius-control: 8px;
+  --radius-card: 12px;
+  --radius-panel: 16px;
+  --color-canvas: var(--semantic-canvas);
+  --color-surface: var(--semantic-surface);
+  --color-raised: var(--semantic-raised);
+  --color-sidebar: var(--semantic-sidebar);
+  --color-stroke: var(--semantic-stroke);
+  --color-ink: var(--semantic-ink);
+  --color-muted: var(--semantic-muted);
+  --color-accent: var(--semantic-accent);
+  --color-accent-soft: var(--semantic-accent-soft);
+  --color-mint: var(--semantic-mint);
+  --color-teal: var(--semantic-teal);
+  --color-success: var(--semantic-success);
+  --color-warning: var(--semantic-warning);
+  --color-danger: var(--semantic-danger);
+  --color-indigo-tint: var(--semantic-indigo-tint);
+  --color-teal-tint: var(--semantic-teal-tint);
+  --color-amber-tint: var(--semantic-amber-tint);
+  --color-red-tint: var(--semantic-red-tint);
+}
 
 :root {
-  color-scheme: light dark;
+  color-scheme: light;
+  font-family: var(--font-sans);
+  font-size: 16px;
+  line-height: 1.5;
+  /* Retain the original light mode's neutral feel when the dark class is removed. */
+  --semantic-canvas: #ffffff;
+  --semantic-surface: #fafafa;
+  --semantic-raised: #f4f4f5;
+  --semantic-sidebar: #f4f4f5;
+  --semantic-stroke: #d4d4d8;
+  --semantic-ink: #18181b;
+  --semantic-muted: #52525b;
+  --semantic-accent: #4f46e5;
+  --semantic-accent-soft: #4338ca;
+  --semantic-mint: #0f766e;
+  --semantic-teal: #0f766e;
+  --semantic-success: #15803d;
+  --semantic-warning: #92400e;
+  --semantic-danger: #b91c1c;
+  --semantic-indigo-tint: #e0e7ff;
+  --semantic-teal-tint: #ccfbf1;
+  --semantic-amber-tint: #fef3c7;
+  --semantic-red-tint: #fee2e2;
 }
 
 body {
   @apply bg-white text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100;
+  margin: 0;
+}
+
+.dark {
+  color-scheme: dark;
+  --semantic-canvas: #101723;
+  --semantic-surface: #1b2534;
+  --semantic-raised: #253246;
+  --semantic-sidebar: #202a3a;
+  --semantic-stroke: #3b4b62;
+  --semantic-ink: #f5f7fb;
+  --semantic-muted: #b9c5d8;
+  --semantic-accent: #aaa4ff;
+  --semantic-accent-soft: #c4beff;
+  --semantic-mint: #45d6b5;
+  --semantic-teal: #79ddcb;
+  --semantic-success: #72d9ad;
+  --semantic-warning: #ffd08a;
+  --semantic-danger: #ff98a5;
+  --semantic-indigo-tint: #30305a;
+  --semantic-teal-tint: #173e43;
+  --semantic-amber-tint: #493b29;
+  --semantic-red-tint: #482f3c;
+  /* Bridge existing utility classes to the Penpot semantic palette. */
+  --color-zinc-950: var(--color-canvas);
+  --color-zinc-900: var(--color-surface);
+  --color-zinc-800: var(--color-raised);
+  --color-zinc-700: var(--color-stroke);
+  --color-zinc-600: var(--color-muted);
+  --color-zinc-500: var(--color-muted);
+  --color-zinc-400: var(--color-muted);
+  --color-zinc-300: var(--color-stroke);
+  --color-zinc-200: var(--color-stroke);
+  --color-zinc-100: var(--color-ink);
+  --color-zinc-50: var(--color-surface);
+  --color-indigo-300: var(--color-accent-soft);
+  --color-indigo-400: var(--color-accent);
+  --color-indigo-500: var(--color-accent);
+  --color-indigo-600: var(--color-accent);
+  --color-indigo-700: var(--color-accent-soft);
+  --color-indigo-950: var(--color-indigo-tint);
+  --color-teal-300: var(--color-teal);
+  --color-teal-500: var(--color-teal);
+  --color-teal-700: var(--color-teal);
+  --color-teal-950: var(--color-teal-tint);
+  --color-amber-300: var(--color-warning);
+  --color-amber-400: var(--color-warning);
+  --color-amber-600: var(--color-warning);
+  --color-amber-950: var(--color-amber-tint);
+  --color-red-300: var(--color-danger);
+  --color-red-600: var(--color-danger);
+  --color-red-950: var(--color-red-tint);
+  --color-emerald-600: var(--color-success);
+}
+
+.dark :where(input, textarea, select) {
+  background-color: var(--color-raised);
+  border-color: var(--color-stroke);
+  color: var(--color-ink);
+}
+.dark :where(input, textarea)::placeholder { color: var(--color-muted); opacity: .75; }
+:where(a, button, input, select, textarea, summary):focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+:where(button, input, select, textarea):disabled { cursor: not-allowed; }
+.dark :where(.bg-indigo-600, .bg-indigo-500) { color: var(--color-canvas); }
+.dark :where(.bg-indigo-600, .bg-indigo-500):hover:not(:disabled) { filter: brightness(1.07); }
+
+.app-shell { gap: 16px; padding: 16px; background: var(--color-canvas); }
+.app-sidebar { width: 320px; border: 0; border-radius: var(--radius-panel); background: var(--color-sidebar); }
+.app-main { display: flex; flex-direction: column; min-width: 0; }
+.app-topbar { min-height: 80px; margin-bottom: 16px; padding: 16px 24px; border: 1px solid var(--color-stroke); border-radius: var(--radius-panel); background: var(--color-surface); }
+.page-content { width: min(100%, 1120px); margin: 0 auto; padding: 8px 24px 40px; }
+.page-title { font-size: 24px; line-height: 1.333; font-weight: 700; }
+.page-lede { color: var(--color-muted); font-size: 14px; line-height: 1.429; }
+.surface-card { border: 1px solid var(--color-stroke); border-radius: var(--radius-card); background: var(--color-surface); }
+.data-scroll { overflow-x: auto; }
+.data-scroll table { min-width: 640px; border-collapse: separate; border-spacing: 0; }
+.dark .data-scroll thead { background: var(--color-raised); color: var(--color-muted); text-transform: uppercase; }
+.data-scroll th, .data-scroll td { padding: 14px 16px; }
+.dark .data-scroll tbody tr { background: var(--color-surface); }
+.dark .data-scroll tbody tr:hover { background: var(--color-raised); }
+
+@media (max-width: 900px) {
+  .app-sidebar { width: 232px; }
+  .page-content { padding-inline: 16px; }
+}
+@media (max-width: 640px) {
+  .app-shell { flex-direction: column; gap: 8px; padding: 8px; }
+  .app-sidebar { width: 100%; max-height: 176px; overflow: auto; }
+  .app-sidebar nav { padding: 8px; gap: 4px; }
+  .app-main { min-height: 0; }
+  .app-topbar { min-height: 56px; padding: 10px 16px; }
 }
 
 /* Syntax colours for the file browser (highlight.js classes), light and dark. */
@@ -20,8 +162,7 @@ body {
   --hl-tag: #116329;
   --hl-literal: #0550ae;
 }
-@media (prefers-color-scheme: dark) {
-  .hljs-view {
+.dark .hljs-view {
     --hl-keyword: #ff7b72;
     --hl-string: #a5d6ff;
     --hl-number: #79c0ff;
@@ -31,7 +172,6 @@ body {
     --hl-meta: #ffa657;
     --hl-tag: #7ee787;
     --hl-literal: #79c0ff;
-  }
 }
 .hljs-view .hljs-keyword,
 .hljs-view .hljs-selector-tag,

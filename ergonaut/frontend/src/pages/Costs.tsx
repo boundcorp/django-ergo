@@ -26,8 +26,8 @@ function tokens(value: number) {
 
 function Tile({ label, value, note }: { label: string; value: string; note?: string }) {
   return (
-    <div className="rounded-lg border border-zinc-200 px-4 py-3 dark:border-zinc-800">
-      <div className="text-xs text-zinc-500">{label}</div>
+    <div className="surface-card min-h-28 px-5 py-4">
+      <div className="text-xs font-semibold uppercase tracking-wide text-muted">{label}</div>
       <div className="mt-1 text-2xl font-semibold tabular-nums">{value}</div>
       {note && <div className="mt-0.5 text-xs text-zinc-500">{note}</div>}
     </div>
@@ -127,8 +127,9 @@ function Row({
 
 function Table({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <section className="mt-8">
-      <h2 className="mb-2 text-sm font-semibold tracking-wide text-zinc-500 uppercase">{title}</h2>
+    <section className="mt-8 data-scroll">
+      <h2 className="mb-3 text-xl font-semibold">{title}</h2>
+      <div className="rounded-card border border-stroke overflow-x-auto">
       <table className="w-full max-w-4xl text-sm">
         <thead className="text-xs text-zinc-500">
           <tr className="border-b border-zinc-200 dark:border-zinc-800">
@@ -144,6 +145,7 @@ function Table({ title, children }: { title: string; children: React.ReactNode }
         </thead>
         <tbody className="divide-y divide-zinc-100 dark:divide-zinc-900">{children}</tbody>
       </table>
+      </div>
     </section>
   )
 }
@@ -165,15 +167,15 @@ export function CostsPage() {
 
   const { total } = data
   return (
-    <div className="h-full overflow-y-auto px-6 py-6">
+    <div className="page-content h-full overflow-y-auto">
       <div className="flex items-center gap-3">
-        <h1 className="text-xl font-semibold">Costs</h1>
-        <div className="ml-auto flex gap-1">
+        <h1 className="page-title">Costs</h1>
+        <div className="ml-auto flex gap-1 rounded-card border border-stroke bg-surface p-1">
           {RANGES.map(r => (
             <button
               key={r}
               onClick={() => setDays(r)}
-              className={`rounded-md px-2 py-1 text-sm ${r === days ? 'bg-zinc-200 font-medium dark:bg-zinc-800' : 'hover:bg-zinc-100 dark:hover:bg-zinc-900'}`}
+              className={`rounded-control px-4 py-2 text-sm ${r === days ? 'bg-indigo-tint font-medium text-accent-soft' : 'hover:bg-raised'}`}
             >
               {r} days
             </button>
@@ -181,7 +183,7 @@ export function CostsPage() {
         </div>
       </div>
 
-      <div className="mt-4 grid max-w-3xl grid-cols-3 gap-3">
+      <div className="mt-6 grid max-w-4xl grid-cols-1 gap-4 sm:grid-cols-3">
         <Tile label={`Spent, last ${data.days} days`} value={money(total.cost)} />
         <Tile label="Calls" value={total.calls.toLocaleString()} />
         <Tile
@@ -191,7 +193,7 @@ export function CostsPage() {
         />
       </div>
 
-      <div className="mt-3 grid max-w-3xl grid-cols-2 gap-3 sm:grid-cols-4">
+      <div className="mt-4 grid max-w-4xl grid-cols-2 gap-4 sm:grid-cols-4">
         {PARTS.map(([part, label]) => (
           <Tile
             key={part}
@@ -202,7 +204,7 @@ export function CostsPage() {
         ))}
       </div>
 
-      <div className="mt-6 max-w-3xl">
+      <div className="surface-card mt-8 max-w-4xl p-5">
         <Daily days={data.by_day} />
       </div>
 

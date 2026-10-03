@@ -30,12 +30,12 @@ export function ToolCard({ use, result, pending }: { use: ToolUse; result?: Tool
   const [open, setOpen] = useState(false)
   const state = pending ? 'waiting for approval' : !result ? 'no result' : result.is_error ? 'error' : 'ok'
   const tone = pending
-    ? 'border-amber-400/60 bg-amber-50 dark:bg-amber-950/30'
+    ? 'border-warning/50 border-l-4 bg-amber-tint'
     : result?.is_error
-      ? 'border-red-400/60 bg-red-50 dark:bg-red-950/30'
-      : 'border-zinc-200 bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900'
+      ? 'border-danger/50 border-l-4 bg-red-tint'
+      : 'border-stroke border-l-4 border-l-teal bg-surface'
   return (
-    <div className={`my-1 rounded-lg border text-sm ${tone}`}>
+    <div className={`my-1 rounded-card border text-sm ${tone}`}>
       <button
         className="flex w-full items-center gap-2 px-3 py-1.5 text-left"
         onClick={() => setOpen(!open)}
