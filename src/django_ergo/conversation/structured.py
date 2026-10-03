@@ -446,6 +446,7 @@ class _MemoryTranscript:
         call.reasoning_tokens += completion.reasoning_tokens
         call.model_name = completion.model or call.model_name
         add_request_cost(call, call.model_name, completion)
+        await _save_usage(call)
         return completion.events
 
     async def finish(self) -> None:
@@ -483,20 +484,25 @@ class _SessionTranscript:
         self.engine.ephemeral_context = "\n\n".join(
             p for p in (self.extra_system, note) if p
         )
+        before = await self._rows().acount()
         try:
             return [
                 event async for event in self.engine.respond(self.session, tool_schemas)
             ]
         finally:
             self.engine.ephemeral_context = ""
+            # Count this request now, so a long turn's usage shows as it goes and a
+            # turn that crashes or pauses for approval keeps what it used.
+            await self._add_usage(since=before)
 
     async def finish(self) -> None:
         call = self.call
-        rows = self._rows()
-        first = call.first_sequence or 0
-        total = await rows.acount()
+        total = await self._rows().acount()
         call.last_sequence = total - 1 if total else None
-        async for row in rows.filter(sequence__gte=first, role="assistant"):
+
+    async def _add_usage(self, since: int) -> None:
+        call = self.call
+        async for row in self._rows().filter(sequence__gte=since, role="assistant"):
             call.input_tokens += row.input_tokens or 0
             call.output_tokens += row.output_tokens or 0
             call.cache_creation_input_tokens += (
@@ -509,6 +515,26 @@ class _SessionTranscript:
             if row.model_name:
                 call.model_name = row.model_name
             add_request_cost(call, row.model_name or call.model_name, row)
+        await _save_usage(call)
+
+
+USAGE_FIELDS = [
+    "input_tokens",
+    "output_tokens",
+    "cache_creation_input_tokens",
+    "cache_read_input_tokens",
+    "reasoning_tokens",
+    "model_name",
+    "cost_usd",
+    "metadata",
+    "updated_at",
+]
+
+
+async def _save_usage(call: StructuredCall) -> None:
+    """Save a call's running usage and cost (it's saved in full when it ends)."""
+    if call.pk is not None:
+        await call.asave(update_fields=USAGE_FIELDS)
 
 
 def _storable(messages: list[dict]) -> list[dict]:
