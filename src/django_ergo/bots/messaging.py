@@ -80,6 +80,21 @@ def turn_text(message: ThreadMessage) -> str:
             "acknowledgements or 'keep going' nudges, since each message starts a "
             "full turn there.]"
         )
+    elif sender is not None and (
+        forwarded := (message.metadata or {}).get("forwarded")
+    ):
+        note = (message.metadata or {}).get("note")
+        header = (
+            f"[Forwarded by {label(sender)} (thread {sender.id}): a message from the "
+            f"user{' ' + forwarded['author'] if forwarded.get('author') else ''}, sent "
+            f"{forwarded.get('sent_at', '')} in that chat, copied word for word below. "
+            "Treat it as the user speaking to you here, with their intent and any "
+            "approval it gives. Answer here: no reply goes back to that chat.]"
+        )
+        text = message.text
+        if note:
+            text += f"\n\n[Note from {label(sender)}: {note}]"
+        return f"{header}\n\n{text}{files_note(message)}"
     elif sender is not None and (message.metadata or {}).get("report"):
         header = (
             f"[Report from {label(sender)} (thread {sender.id}). No reply goes back "

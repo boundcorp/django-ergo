@@ -1781,6 +1781,55 @@ async def test_a_report_upward_gets_no_reply_unless_it_asks(tmp_path, thread_mes
 
 
 @pytest.mark.django_db(transaction=True)
+async def test_forward_hands_the_users_own_message_to_a_thread(
+    tmp_path, thread_messages
+):
+    from django_ergo.conversation.attachments import Attachment
+    from django_ergo.conversation.models import ThreadMessage
+
+    user = await User.objects.acreate(username="forwarder", first_name="Lee")
+    bot, engine = make_bot(tmp_path, say("ok"))
+    root = await bot.root_session(user)
+    thread = await bot.create_session(user, parent=root, title="Deploy")
+    engine._client.responses = [
+        claude_tool(
+            "ergo_thread_forward",
+            {"thread": str(thread.id), "note": "Deploy owns octo."},
+            tool_id="fwd",
+        ),
+        say("Sent to kitchen · Deploy."),
+    ]
+    words = "Yes, go ahead and merge the octo fix."
+    await bot.ask(
+        root,
+        words,
+        attachments=[Attachment("text/plain", data=b"log", filename="log.txt")],
+    )
+    sent = json.loads(_tool_results(engine)[-1]["content"])
+    assert sent["forwarded_to"] == "kitchen · Deploy"
+    assert sent["shared_files"] == ["log.txt"]
+
+    forwarded = await ThreadMessage.objects.aget(recipient_session=thread)
+    assert forwarded.text == words  # verbatim, not retold
+    meta = forwarded.metadata
+    assert meta["forwarded"]["author"] == "Lee" and meta["report"] is True
+    assert meta["note"] == "Deploy owns octo."
+
+    engine._client.responses = [say("Merging now.")]
+    await thread_messages()
+    text = engine._client.calls[-1]["messages"][0]["content"][0]["text"]
+    assert text.startswith("[Forwarded by kitchen · Main")
+    assert words in text and "[Note from kitchen · Main: Deploy owns octo.]" in text
+    assert "log.txt" in text
+    assert SENT == []  # the thread answers the user there; nothing comes back
+
+    # A turn that answers another chat has no user message to forward.
+    from django_ergo.bots import orchestrator
+
+    assert await sync_to_async(orchestrator.user_message)(root) is None
+
+
+@pytest.mark.django_db(transaction=True)
 async def test_finished_threads_are_resolved_and_unfinished_ones_refused(
     tmp_path, thread_messages
 ):
