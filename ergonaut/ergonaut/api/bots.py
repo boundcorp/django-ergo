@@ -235,19 +235,12 @@ CARD_STATUS = {"queued": "queued", "delivered": "working", "waiting": "waiting",
 
 
 def thread_summary(session: ConversationSession) -> dict:
-    """A chat as thread cards and links show it, from a ``with_open_counts`` row.
+    """A chat as thread cards and links show it: ``orchestrator.thread_status`` (the same
+    status the orchestrator's "Bots and threads" block reads), plus its title, bot, role,
+    whether it's archived, and whether it waits on the user (from a ``with_open_counts`` row)."""
+    from django_ergo.bots.orchestrator import thread_status
 
-    The status fields have the shape of ``django_ergo.bots.orchestrator.thread_status``
-    (``state``, ``last_activity``, ``started_by``, ``started_by_id``, ``working_for``,
-    ``waiting_on``, ``workers_running``) so this can read from it once that's on main.
-    """
     meta = session.metadata or {}
-    if getattr(session, "latest_status", None) == "awaiting_approval":
-        state = "waiting_for_approval"
-    elif getattr(session, "busy", False):
-        state = "working"
-    else:
-        state = "idle"
     role = meta.get("bot_role") or ""
     return {
         "id": str(session.id),
@@ -256,14 +249,7 @@ def thread_summary(session: ConversationSession) -> dict:
         "role": role,
         "archived": session.status == "completed" and role == "thread",
         "attention": needs_attention(session),
-        "state": state,
-        "last_activity": session.updated_at,
-        "started_by": "",
-        "started_by_id": "",
-        **started_by(session),
-        "working_for": getattr(session, "open_in", 0) or 0,
-        "waiting_on": getattr(session, "open_out", 0) or 0,
-        "workers_running": getattr(session, "workers_running", 0) or 0,
+        **thread_status(session),
     }
 
 
@@ -278,12 +264,7 @@ def sent_out(session: ConversationSession, limit: int = 30) -> list[dict]:
         ThreadMessage.objects.filter(sender_session=session, in_reply_to__isnull=True).order_by("-created_at")[:limit]
     )
     ids = {row.recipient_session_id for row in rows}
-    threads = {
-        s.id: s
-        for s in with_open_counts(ConversationSession.objects.filter(id__in=ids)).annotate(
-            workers_running=Count("workers", filter=Q(workers__status__in=["queued", "running"]), distinct=True)
-        )
-    }
+    threads = {s.id: s for s in with_open_counts(ConversationSession.objects.filter(id__in=ids))}
     prs: dict = {}
     for pr in ConversationAttachment.objects.filter(session_id__in=ids, metadata__link=GITHUB_PR).order_by(
         "created_at"

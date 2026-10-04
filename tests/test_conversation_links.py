@@ -90,3 +90,34 @@ def test_a_failed_gh_call_leaves_the_row(monkeypatch):
         lambda args, **kw: subprocess.CompletedProcess(args, 1, "", "not found"),
     )
     assert not links.refresh_pull_request(Row())
+
+
+@pytest.mark.django_db
+def test_open_pull_requests_feed_the_orchestrator_block():
+    from types import SimpleNamespace
+
+    user = get_user_model().objects.create_user("lee")
+    devbox = ConversationSession.objects.create(user=user, bot_name="devbox")
+    kitchen = ConversationSession.objects.create(user=user, bot_name="kitchen")
+    [mine] = links.record_pull_requests(
+        devbox, "https://github.com/boundcorp/django-ergo/pull/1"
+    )
+    [merged] = links.record_pull_requests(
+        devbox, "https://github.com/boundcorp/django-ergo/pull/2"
+    )
+    merged.metadata["state"] = "merged"
+    merged.save()
+    [watched] = links.record_pull_requests(
+        kitchen, "https://github.com/boundcorp/ergo-bots/pull/3"
+    )
+    watched.metadata.update(state="draft", title="Icons")
+    watched.save()
+    links.record_pull_requests(kitchen, "https://github.com/other/repo/pull/4")
+
+    bot = SimpleNamespace(
+        name="devbox", definition=SimpleNamespace(pull_requests=["boundcorp/ergo-bots"])
+    )
+    assert links.open_pull_requests(bot) == [
+        {"repo": "boundcorp/ergo-bots", "number": 3, "title": "Icons", "draft": True},
+        {"repo": "boundcorp/django-ergo", "number": 1, "title": "", "draft": False},
+    ]

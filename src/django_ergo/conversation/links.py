@@ -139,6 +139,41 @@ def refresh_pull_request(row: ConversationAttachment) -> bool:
     return True
 
 
+def open_pull_requests(bot) -> list[dict]:
+    """``DJANGO_ERGO["OPEN_PRS"]`` from recorded pull requests: the open ones reported in
+    the bot's chats, or in any chat for a repo in the bot's ``pull_requests``, newest
+    first, as {repo, number, title, draft}."""
+    from django.db.models import Q
+
+    from django_ergo.conversation.models import ConversationAttachment
+
+    rows = (
+        ConversationAttachment.objects.filter(
+            metadata__link=GITHUB_PR, metadata__state__in=["open", "draft", ""]
+        )
+        .filter(
+            Q(session__bot_name=bot.name)
+            | Q(metadata__repo__in=list(bot.definition.pull_requests))
+        )
+        .order_by("-created_at")
+    )
+    seen, out = set(), []
+    for row in rows[:100]:
+        if row.url in seen:
+            continue
+        seen.add(row.url)
+        meta = row.metadata or {}
+        out.append(
+            {
+                "repo": meta.get("repo", ""),
+                "number": meta.get("number"),
+                "title": meta.get("title", ""),
+                "draft": meta.get("state") == "draft",
+            }
+        )
+    return out
+
+
 def pull_requests_to_refresh():
     """Recorded pull requests that may still change (not merged or closed)."""
     from django_ergo.conversation.models import ConversationAttachment
