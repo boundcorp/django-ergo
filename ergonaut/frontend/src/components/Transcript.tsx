@@ -5,6 +5,7 @@ import { DirectoryContext } from './BotIcon'
 import Markdown from './Markdown'
 import { PrChip, ThreadCard, ThreadLink, WorkerCard, linkThreads } from './Threads'
 import { ToolCard, pretty, resultText } from './ToolCard'
+import { clock } from '../time'
 
 // Tools that send work to another chat or start a worker; their calls show as cards.
 const THREAD_TOOLS = new Set(['ergo_thread_send', 'ergo_message_up'])
@@ -24,11 +25,18 @@ const VISIBLE_CALLS = 3
 type FoldRow = { key: string; hidden: number; summary: string; open: boolean }
 type Folds = {
   hidden: Set<string> // tool call ids folded away
+  folded: Set<string> // tool call ids in a fold (shown as one-line rows when it's open)
   rows: Map<string, FoldRow> // by the id of the run's first call: where its "+N more" row goes
   durations: Map<string, number> // tool call id -> ms until its result
   toggle: (key: string) => void
 }
-const FoldContext = createContext<Folds>({ hidden: new Set(), rows: new Map(), durations: new Map(), toggle: () => {} })
+const FoldContext = createContext<Folds>({
+  hidden: new Set(),
+  folded: new Set(),
+  rows: new Map(),
+  durations: new Map(),
+  toggle: () => {},
+})
 
 /** "penpot_apply ×12, penpot_render ×4": the commonest tools in a fold. */
 function foldSummary(names: string[]): string {
@@ -49,8 +57,9 @@ function foldRuns(
   starts: Map<number, Call>,
   replies: string[],
   open: Set<string>,
-): Pick<Folds, 'hidden' | 'rows'> {
+): Pick<Folds, 'hidden' | 'folded' | 'rows'> {
   const hidden = new Set<string>()
+  const folded = new Set<string>()
   const rows = new Map<string, FoldRow>()
   let run: ToolUse[] = []
   const close = () => {
@@ -61,6 +70,7 @@ function foldRuns(
       const key = run[0].id
       const isOpen = open.has(key)
       rows.set(key, { key, hidden: foldable.length, summary: foldSummary(foldable.map(u => u.name)), open: isOpen })
+      for (const use of foldable) folded.add(use.id)
       if (!isOpen) for (const use of foldable) hidden.add(use.id)
     }
     run = []
@@ -80,7 +90,7 @@ function foldRuns(
     }
   }
   close()
-  return { hidden, rows }
+  return { hidden, folded, rows }
 }
 
 /** How long each tool call took: from its message to its result's. */
@@ -128,7 +138,7 @@ function resultJson(result?: ToolResult): Record<string, unknown> | null {
 /** A tool call: a card for work sent to another chat or a worker, otherwise the call itself. */
 function ToolCall({ use, result, pending }: { use: ToolUse; result?: ToolResult; pending: boolean }) {
   const { cards, workers } = useContext(DelegatedContext)
-  const { durations } = useContext(FoldContext)
+  const { durations, folded } = useContext(FoldContext)
   const data = resultJson(result)
   const card = data && THREAD_TOOLS.has(use.name) ? cards.get(String(data.message_id ?? '')) : undefined
   if (card) return <ThreadCard card={card} />
@@ -138,7 +148,13 @@ function ToolCall({ use, result, pending }: { use: ToolUse; result?: ToolResult;
   }
   return (
     <>
-      <ToolCard use={use} result={result} pending={pending} duration={durations.get(use.id)} />
+      <ToolCard
+        use={use}
+        result={result}
+        pending={pending}
+        duration={durations.get(use.id)}
+        compact={folded.has(use.id)}
+      />
       <ToolImages result={result} />
     </>
   )
@@ -265,6 +281,7 @@ type Reply = { type?: string; text?: string; suggestions?: string[] }
 function ReplyBubble({ reply }: { reply: Reply }) {
   return (
     <div className="max-w-[85%] rounded-card border border-stroke bg-surface px-4 py-3">
+      <RoleLabel who="Assistant" timestamp={null} />
       {reply.type === 'question' && <div className="mb-1 text-xs font-medium text-amber-600">Question</div>}
       <BotMarkdown text={reply.text ?? ''} />
       {!!reply.suggestions?.length && (
@@ -278,6 +295,16 @@ function ReplyBubble({ reply }: { reply: Reply }) {
 // replay history); the reply bubble already shows it.
 function echoesReply(text: string, replies: string[]): boolean {
   return replies.some(r => text === r || text.startsWith(`${r}\n\nSuggested replies:`))
+}
+
+// "YOU · 10:42": who wrote a message, and when.
+function RoleLabel({ who, timestamp }: { who: string; timestamp: string | null }) {
+  return (
+    <div className="mb-1 font-mono text-[11px] font-semibold tracking-wide text-mint uppercase">
+      {who}
+      {timestamp && ` · ${clock(timestamp)}`}
+    </div>
+  )
 }
 
 function MessageView({
@@ -352,6 +379,7 @@ function MessageView({
                 key={i}
                 className="max-w-[85%] rounded-card border border-accent/20 bg-indigo-tint px-4 py-3 text-ink"
               >
+                <RoleLabel who="You" timestamp={message.timestamp} />
                 <Markdown text={block.text} />
               </div>
             ) : (
@@ -359,6 +387,7 @@ function MessageView({
                 key={i}
                 className="max-w-[85%] rounded-card border border-stroke bg-surface px-4 py-3 text-sm text-ink"
               >
+                <RoleLabel who="Assistant" timestamp={message.timestamp} />
                 <BotMarkdown text={block.text} />
               </div>
             )

@@ -4,7 +4,17 @@ from __future__ import annotations
 
 from abc import ABC
 from abc import abstractmethod
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
+
+
+@dataclass(frozen=True)
+class ApprovalPreview:
+    """Bounded, safe information shown before an approval decision."""
+
+    text: str
+    is_error: bool = False
+
 
 if TYPE_CHECKING:
     from django_ergo.conversation.adapters import ToolAdapter
@@ -42,6 +52,12 @@ class Toolkit(ABC):
         resume_conversation_turn() continues once there's a decision.
         """
         return False
+
+    def approval_preview(
+        self, tool_name: str, arguments: dict
+    ) -> ApprovalPreview | None:
+        """Return information to show before approving a tool call, if any."""
+        return None
 
     def pre_seeds(self) -> list[PreSeedCall]:
         """Tool calls to run and write into the chat before the first model call.

@@ -310,6 +310,10 @@ class SkillSet(Toolkit):
         found = self.owner_of(tool_name)
         return bool(found and found[1].requires_approval(tool_name))
 
+    def approval_preview(self, tool_name: str, arguments: dict):
+        found = self.owner_of(tool_name)
+        return found[1].approval_preview(tool_name, arguments) if found else None
+
     def render_overview(self) -> str:
         return ""
 

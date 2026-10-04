@@ -5,6 +5,8 @@ from ninja.errors import HttpError
 from ninja.security import django_auth
 from ninja_jwt.authentication import JWTAuth
 
+from ergonaut.utils.throttle import login_blocked, login_failed, login_succeeded
+
 router = Router(tags=["auth"])
 
 
@@ -35,9 +37,13 @@ def csrf(request):
 
 @router.post("/login", response=UserProfileSchema)
 async def login(request, data: LoginSchema):
+    if login_blocked(request, data.username):
+        raise HttpError(429, "Too many failed logins; try again later")
     user = await aauthenticate(request, username=data.username, password=data.password)
     if user is None:
+        login_failed(request, data.username)
         raise HttpError(401, "Wrong username or password")
+    login_succeeded(request, data.username)
     await alogin(request, user)
     return user
 

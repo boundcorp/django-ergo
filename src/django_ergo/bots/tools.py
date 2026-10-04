@@ -48,6 +48,7 @@ from typing import get_type_hints
 from django_ergo.conversation.adapters import OpenAIToolAdapter
 from django_ergo.conversation.images import ToolResult
 from django_ergo.conversation.images import as_tool_result
+from django_ergo.conversation.toolkit import ApprovalPreview
 from django_ergo.conversation.toolkit import Toolkit
 
 if TYPE_CHECKING:
@@ -143,6 +144,7 @@ class BotTool:
     parameters: dict
     required: list[str]
     requires_approval: bool = False
+    approval_preview: Callable | None = None
     takes_context: bool = False
 
     def json_schema(self) -> dict:
@@ -183,6 +185,7 @@ def bot_tool(  # noqa: PLR0913
     parameters: dict | None = None,
     required: list[str] | None = None,
     requires_approval: bool = False,
+    approval_preview: Callable | None = None,
     takes_context: bool = False,
 ):
     """Mark a function as a bot tool. Usable bare (@bot_tool) or with options."""
@@ -200,6 +203,7 @@ def bot_tool(  # noqa: PLR0913
             parameters=props,
             required=req,
             requires_approval=requires_approval,
+            approval_preview=approval_preview,
             takes_context=takes_context,
         )
         return fn
@@ -307,6 +311,20 @@ class FunctionToolkit(Toolkit):
     def requires_approval(self, tool_name: str) -> bool:
         return self.tools[tool_name].requires_approval
 
+    def approval_preview(
+        self, tool_name: str, arguments: dict
+    ) -> ApprovalPreview | None:
+        tool = self.tools[tool_name]
+        if tool.approval_preview is None:
+            return None
+        args = [self.context] if tool.takes_context else []
+        preview = tool.approval_preview(*args, **(arguments or {}))
+        return (
+            preview
+            if isinstance(preview, ApprovalPreview)
+            else ApprovalPreview(str(preview))
+        )
+
     def get_tools_schema(self, adapter: ToolAdapter) -> list[dict]:
         schemas = []
         for tool in self.tools.values():
@@ -338,7 +356,7 @@ class FunctionToolkit(Toolkit):
             raise ValueError(msg)
         args = [self.context] if tool.takes_context else []
         result = as_tool_result(tool.function(*args, **(arguments or {})))
-        if isinstance(result, (str, ToolResult)):
+        if isinstance(result, str | ToolResult):
             return result
         return json.dumps(result, default=str)
 

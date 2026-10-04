@@ -44,6 +44,7 @@ OFFICIAL_PLUGINS = {
     "telegram": "django_ergo.plugins.telegram.TelegramPlugin",
     "orca": "django_ergo.plugins.orca.OrcaPlugin",
     "bash": "django_ergo.plugins.bash.BashPlugin",
+    "kubectl": "django_ergo.plugins.kubectl.KubectlPlugin",
     "attachments": "django_ergo.plugins.attachments.AttachmentsPlugin",
     "pages": "django_ergo.plugins.pages.PagesPlugin",
 }

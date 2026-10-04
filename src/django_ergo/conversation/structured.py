@@ -94,6 +94,7 @@ from django_ergo.conversation.runtime import EngineSpec
 from django_ergo.conversation.runtime import build_engine
 from django_ergo.conversation.runtime import get_default_engine_spec
 from django_ergo.conversation.tool_results import trim_tool_results
+from django_ergo.conversation.toolkit import ApprovalPreview
 from django_ergo.conversation.toolkit import Toolkit
 from django_ergo.pricing import add_request_cost
 from django_ergo.tools import tool_registry
@@ -635,6 +636,19 @@ class _Run:
             name, args, self.toolkits, self.user, self.workflow
         )
 
+    async def approval_preview(self, name: str, args: dict) -> ApprovalPreview | None:
+        toolkit = _find_toolkit_for_tool(self.toolkits, name)
+        preview = getattr(toolkit, "approval_preview", None)
+        if not callable(preview):
+            return None
+        try:
+            return await sync_to_async(preview, thread_sensitive=True)(name, args)
+        except Exception:  # noqa: BLE001 -- preview errors must never permit execution
+            return ApprovalPreview(
+                "Preview failed before approval; this tool call will not run.",
+                is_error=True,
+            )
+
     async def steer(self) -> bool:
         """Add any steering messages to the call; True when the control says stop."""
         if self.control is None:
@@ -696,9 +710,14 @@ async def _run_loop(run: _Run) -> StructuredCallResult:  # noqa: C901, PLR0912, 
                 tool_id = event.tool_use["id"]
                 if run.needs_approval(name):
                     if run.allow_approvals:
+                        preview = await run.approval_preview(name, args)
                         approvals.append(
                             PendingApproval(
-                                tool_use_id=tool_id, tool_name=name, arguments=args
+                                tool_use_id=tool_id,
+                                tool_name=name,
+                                arguments=args,
+                                preview=preview.text if preview else "",
+                                preview_error=preview.is_error if preview else False,
                             )
                         )
                         continue
@@ -716,7 +735,13 @@ async def _run_loop(run: _Run) -> StructuredCallResult:  # noqa: C901, PLR0912, 
                 call.metadata = {
                     **call.metadata,
                     "pending_approvals": [
-                        {"id": a.tool_use_id, "name": a.tool_name, "input": a.arguments}
+                        {
+                            "id": a.tool_use_id,
+                            "name": a.tool_name,
+                            "input": a.arguments,
+                            **({"preview": a.preview} if a.preview else {}),
+                            **({"preview_error": True} if a.preview_error else {}),
+                        }
                         for a in approvals
                     ],
                 }
@@ -959,8 +984,10 @@ async def resume_structured_call(  # noqa: PLR0913
     )
     results = []
     for item in pending:
-        if decisions.get(item["id"]):
+        if decisions.get(item["id"]) and not item.get("preview_error"):
             result, is_error = await run.run_tool(item["name"], item["input"])
+        elif item.get("preview_error"):
+            result, is_error = "The preview failed; the tool was not executed.", True
         else:
             result, is_error = "The user declined this tool call.", True
         results.append((item["id"], result, is_error))

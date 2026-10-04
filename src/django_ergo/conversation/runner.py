@@ -30,6 +30,8 @@ class PendingApproval:
     tool_use_id: str
     tool_name: str
     arguments: dict
+    preview: str = ""
+    preview_error: bool = False
 
 
 def _tool_requires_approval(

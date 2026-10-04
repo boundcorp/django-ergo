@@ -9,13 +9,15 @@ from django_ergo.conversation.models import ConversationSession
 from ergonaut.api import stream
 
 
-async def read_events(response, count):
+async def read_events(response, done):
+    """Events until ``done(events)`` is true. A change can span several polls
+    (the message, then its blocks), so tests wait for a state, not a count."""
     events = []
     async for chunk in response.streaming_content:
         text = chunk.decode() if isinstance(chunk, bytes) else chunk
         if text.startswith("data: "):
             events.append(json.loads(text[6:]))
-            if len(events) == count:
+            if done(events):
                 break
     return events
 
@@ -55,7 +57,11 @@ async def test_stream_sends_new_messages_and_call_changes(async_client, fast):
         await call.asave()
 
     writer = asyncio.create_task(write())
-    events = await asyncio.wait_for(read_events(response, 3), timeout=5)
+
+    def completed(events):
+        return any(c["status"] == "completed" for e in events for c in e["calls"])
+
+    events = await asyncio.wait_for(read_events(response, completed), timeout=5)
     await writer
 
     latest = {m["line"]: m for e in events for m in e["messages"]}

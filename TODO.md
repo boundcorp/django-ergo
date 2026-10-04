@@ -40,10 +40,12 @@ Live on rigel from `~/p/boundcorp/django-ergo`, bots from `boundcorp/ergo-bots`.
 - [x] Inter-bot permissions: upward messages always allowed (`ergo_message_up` for bots without orchestration), new threads decided by the target's `threads.allow_create`, cross-bot threads record who started them, `ergo_thread_stop` and `ergo_thread_archive` for threads a bot started (`TURN_STOPPER`).
 - [x] Markdown in chat messages, KB articles, skills and instructions; tool images and files a bot makes shown in the transcript as they arrive; bot.yaml `icon` and `color` in the sidebar; titles and icons on pins; thin scrollbars; long chats load the newest 50 messages with See more for older ones.
 - [x] Thread cards (status, reply, PRs) for work sent to other chats and workers; collapsed replies; "Sent to" notes; thread links; PRs recorded from replies and worker results with live state from `gh`.
-- [ ] Wire `DJANGO_ERGO["OPEN_PRS"]` (the orchestrator block in #91) to the recorded PRs once #91 is on main, and switch `thread_summary` to `orchestrator.thread_status`.
+- [x] Ergonaut's `DJANGO_ERGO["OPEN_PRS"]` reads the recorded PRs, and thread cards use `orchestrator.thread_status`.
 - [x] Claude on a subscription: `transport: cli` providers run Claude through the logged-in Claude Code CLI (`conversation/engines/claude_code.py`).
 - [ ] Ergonaut image: install the Claude Code CLI and keep its login (`CLAUDE_CONFIG_DIR` volume or `CLAUDE_CODE_OAUTH_TOKEN`); show subscription usage as such on Costs instead of list prices.
 - [ ] `ergonaut manage resume_failed --kind credits` (resume every chat a credit outage failed): written in bda8305 on the closed #74 branch, never merged.
+- [x] `ergo_thread_resolve` (was archive): finished threads are resolved by their orchestrator or themselves, refused while anything is open; the block marks "ready to resolve".
+- [x] Each chat is told which chat it is ("This chat" block), and upward messages are one-way reports unless they `ask` (no acknowledgement turns).
 - [x] "Bots and threads" context block for orchestrating chats: every reachable bot, its chats with their status, latest-message snippets and open PRs, capped near 3k tokens (`bots/overview.py`, `orchestrator.thread_status`, `pull_requests:`, `OPEN_PRS`).
 - [x] Design to devbox handoff run live 2026-10-03: Design sent the History handoff itself, devbox picked Sonnet 5.5 from ModelsAvailable, an omp worker built it (#87 fixed omp model pinning), draft PR #88.
 - [x] `introspection` built-in skill for every bot loaded from a folder: read-only `ergo_self_overview`, `ergo_self_files`, `ergo_self_read` (bot folder, and Ergo's source via `ergo:` paths).
@@ -76,7 +78,7 @@ Live on rigel from `~/p/boundcorp/django-ergo`, bots from `boundcorp/ergo-bots`.
 - [x] Bots see images directly: tools can return `ToolResult`/`ToolImage` (Claude: image blocks in the tool result; OpenAI: a user message after the tool messages), `ergo_attachments_look` returns the image itself, images are downscaled to 1024px (Pillow) and only the latest two are sent, older ones become `[image omitted: ...]`.
 
 - [x] Kitchen bot on Ergonaut (Tandoor tools, meal-planning skill, KB), boundcorp root bot, nested bots, `ergo_bot_call`.
-- [x] Official plugins in `django_ergo/plugins`: ergo_kb, bot_management (draft worktree + PR), telegram, orca, bash, attachments.
+- [x] Official plugins in `django_ergo/plugins`: ergo_kb, bot_management (draft worktree + PR), telegram, orca, bash, kubectl, attachments.
 - [x] Live bot reloads on file changes; auto-pull of the bot repo.
 - [x] CTO bot (orca on devbox, bash, threads) proposed by boundcorp and merged (ergo-bots #1).
 - [x] Costs page, bot pages, Memory page, Files panel; tool names prefixed `ergo_*`.

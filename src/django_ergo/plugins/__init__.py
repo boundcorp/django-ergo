@@ -7,8 +7,8 @@ One module per plugin:
 - ``telegram`` (telegram.py): a Telegram channel for a bot.
 - ``orca`` (orca.py): manage Orca worktrees, terminals and workers with the Orca CLI.
 - ``bash`` (bash.py): run shell commands on the host, with approval.
+- ``kubectl`` (kubectl.py): inspect configured Kubernetes clusters and run approved changes.
 - ``attachments`` (attachments.py): read and write files in chat sessions.
-- ``pages`` (pages.py): live .jhtml pages over the bot's tables, built from blocks.
 
 Bot-specific tools don't belong here; put them in the bot folder's ``tools/``.
 """

@@ -59,3 +59,36 @@ jobs:
       - name: Container logs
         if: always()
         run: docker logs aio 2>&1 | tail -200 || true
+
+  # Publishes the release image. Runs only for pushes to main (never PRs), after
+  # tests and the image smoke job pass; the concurrency group serialises
+  # publishes so a push never races an older one.
+  publish:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [test, image]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    concurrency:
+      group: ergonaut-publish
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push the release image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ergonaut/Dockerfile
+          target: release
+          push: true
+          tags: |
+            ghcr.io/boundcorp/ergonaut:main
+            ghcr.io/boundcorp/ergonaut:sha-${{ github.sha }}

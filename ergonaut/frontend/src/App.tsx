@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { BrowserRouter, Navigate, Route, Routes, useParams } from 'react-router-dom'
+import { BrowserRouter, Link, Navigate, Route, Routes, useLocation, useParams } from 'react-router-dom'
 import type { Bot, Session, SidebarPin, User } from './api'
 import { ApiError, api } from './api'
 import { Sidebar } from './components/Sidebar'
@@ -11,16 +11,81 @@ import { NewThread } from './pages/NewThread'
 import { Memory } from './pages/Memory'
 import { CostsPage } from './pages/Costs'
 import { ThemeToggle } from './theme'
+import { ago } from './time'
 import { DirectoryContext } from './components/BotIcon'
 
-function Home({ bots }: { bots: Bot[] }) {
-  const root = bots.find(b => b.root_session_id)
-  if (root) return <Navigate to={`/s/${root.root_session_id}`} replace />
+function Home({ user, bots, sessions }: { user: User; bots: Bot[]; sessions: Session[] }) {
+  const recent = sessions.slice(0, 4)
+  const name = user.first_name || user.username
   return (
-    <div className="page-content">
-      <h1 className="page-title mb-4">Ergonaut</h1>
-      <div className="surface-card p-8 text-zinc-500">
-        {bots.length ? 'Pick a bot on the left and start chatting.' : 'No bots are loaded yet.'}
+    <div className="page-content h-full overflow-y-auto">
+      <p className="eyebrow">Your workspace</p>
+      <h1 className="page-title mt-3">Good to see you, {name}</h1>
+      <p className="page-lede mt-3">Pick up a conversation or start a focused thread with a bot.</p>
+      <div className="mt-10 grid gap-8 lg:grid-cols-[1.15fr_0.85fr]">
+        <section className="surface-card flex min-h-64 flex-col items-center justify-center px-6 py-10 text-center">
+          <div className="h-16 w-16 rounded-panel bg-raised" aria-hidden="true" />
+          <h2 className="mt-6 text-lg font-semibold">Start with a question</h2>
+          <p className="mt-2 max-w-sm text-sm text-muted">
+            Choose a bot or open a recent thread to continue your work.
+          </p>
+          {!!bots.length && (
+            <div className="mt-6 flex flex-wrap justify-center gap-2">
+              {bots.map(bot => (
+                <Link
+                  key={bot.name}
+                  to={`/bots/${bot.name}/new-thread`}
+                  className="rounded-control border border-accent px-3 py-2 text-sm font-semibold text-accent hover:bg-indigo-tint"
+                >
+                  New thread with {bot.name}
+                </Link>
+              ))}
+            </div>
+          )}
+        </section>
+        <section>
+          <h2 className="font-display text-2xl font-bold">Recent threads</h2>
+          {recent.length ? (
+            <ul className="mt-5 space-y-3">
+              {recent.map(session => {
+                const unread = !!session.unread && !session.attention
+                const tone = session.attention
+                  ? 'border-warning bg-amber-tint'
+                  : unread
+                    ? 'border-accent bg-indigo-tint/60'
+                    : 'border-stroke bg-surface hover:border-accent'
+                return (
+                  <li key={session.id}>
+                    <Link
+                      to={`/s/${session.id}`}
+                      className={`flex items-center gap-3 rounded-card border px-4 py-3 ${tone}`}
+                    >
+                      <span
+                        className={`h-6 w-6 shrink-0 rounded-md ${session.attention ? 'bg-warning' : session.busy ? 'bg-mint' : 'bg-accent'}`}
+                        aria-hidden="true"
+                      />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate font-semibold">{session.title}</span>
+                        <span className="block truncate text-xs text-muted">
+                          {session.bot} ·{' '}
+                          {session.attention ? 'action required' : session.busy ? 'working' : ago(session.updated_at)}
+                        </span>
+                      </span>
+                      {unread && (
+                        <>
+                          <span className="h-2 w-2 shrink-0 rounded-full bg-mint" aria-hidden="true" />
+                          <span className="sr-only">Unread reply</span>
+                        </>
+                      )}
+                    </Link>
+                  </li>
+                )
+              })}
+            </ul>
+          ) : (
+            <p className="mt-5 text-sm text-muted">No recent threads yet.</p>
+          )}
+        </section>
       </div>
     </div>
   )
@@ -72,33 +137,71 @@ function App() {
   return (
     <BrowserRouter>
       <DirectoryContext.Provider value={{ bots, sessions }}>
-        <div className="app-shell flex h-screen">
-          <aside className="app-sidebar shrink-0">
-            <Sidebar bots={bots} sessions={sessions} pins={pins} botErrors={botErrors} onChange={refresh} />
-          </aside>
-          <main className="app-main min-w-0 flex-1">
-            <div className="app-topbar flex items-center gap-4">
-              <span className="text-sm text-muted">{user.first_name || user.username}</span>
-              <span className="ml-auto">
-                <ThemeToggle />
-              </span>
-            </div>
-            <div className="min-h-0 flex-1 overflow-hidden">
-              <Routes>
-                <Route path="/" element={<Home bots={bots} />} />
-                <Route path="/s/:id" element={<ChatRoute onChange={refresh} />} />
-                <Route path="/sessions" element={<Sessions bots={bots} />} />
-                <Route path="/costs" element={<CostsPage />} />
-                <Route path="/bots/:name" element={<BotPage />} />
-                <Route path="/bots/:name/new-thread" element={<NewThread onChange={refresh} />} />
-                <Route path="/bots/:name/kb" element={<Memory />} />
-                <Route path="*" element={<Navigate to="/" replace />} />
-              </Routes>
-            </div>
-          </main>
-        </div>
+        <Shell user={user} bots={bots} sessions={sessions} pins={pins} botErrors={botErrors} refresh={refresh} />
       </DirectoryContext.Provider>
     </BrowserRouter>
+  )
+}
+
+// Below 640px the sidebar is a menu opened from the top bar, so pages keep the whole screen.
+function Shell({
+  user,
+  bots,
+  sessions,
+  pins,
+  botErrors,
+  refresh,
+}: {
+  user: User
+  bots: Bot[]
+  sessions: Session[]
+  pins: Record<string, SidebarPin[]>
+  botErrors: { folder: string; name: string; error: string }[]
+  refresh: () => Promise<void>
+}) {
+  const [navOpen, setNavOpen] = useState(false)
+  const { pathname } = useLocation()
+  useEffect(() => setNavOpen(false), [pathname])
+
+  return (
+    <div className="app-shell flex h-dvh">
+      <aside id="app-sidebar" className="app-sidebar shrink-0" data-open={navOpen}>
+        <Sidebar bots={bots} sessions={sessions} pins={pins} botErrors={botErrors} onChange={refresh} />
+      </aside>
+      <main className="app-main min-w-0 flex-1">
+        <div className="app-topbar flex items-center gap-4">
+          <button
+            type="button"
+            className="nav-toggle"
+            aria-controls="app-sidebar"
+            aria-expanded={navOpen}
+            onClick={() => setNavOpen(open => !open)}
+          >
+            {navOpen ? 'Close' : 'Menu'}
+          </button>
+          <Link to="/" className="topbar-brand">
+            ERGONAUT_
+          </Link>
+          <span className="topbar-crumb hidden sm:inline">Workspace</span>
+          <span className="topbar-crumb hidden sm:inline">/</span>
+          <span className="topbar-crumb hidden sm:inline">Your journey</span>
+          <span className="ml-auto text-sm font-semibold text-ink">{user.first_name || user.username}</span>
+          <ThemeToggle />
+        </div>
+        <div className="min-h-0 flex-1 overflow-hidden">
+          <Routes>
+            <Route path="/" element={<Home user={user} bots={bots} sessions={sessions} />} />
+            <Route path="/s/:id" element={<ChatRoute onChange={refresh} />} />
+            <Route path="/sessions" element={<Sessions bots={bots} />} />
+            <Route path="/costs" element={<CostsPage />} />
+            <Route path="/bots/:name" element={<BotPage />} />
+            <Route path="/bots/:name/new-thread" element={<NewThread onChange={refresh} />} />
+            <Route path="/bots/:name/kb" element={<Memory />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </div>
+      </main>
+    </div>
   )
 }
 

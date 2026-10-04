@@ -58,6 +58,7 @@ logger = logging.getLogger(__name__)
 API_BASE = "https://api.telegram.org"
 MAX_MESSAGE = 4096
 REQUEST_TIMEOUT = 60
+MAX_APPROVAL_PREVIEW_CHARS = 3_000
 
 
 class TelegramAPI:
@@ -196,7 +197,19 @@ class TelegramPlugin(BotPlugin):
             await self.send_text(chat_id, text, **extra)
             return
         names = ", ".join(a.tool_name for a in result.approvals)
+        previews = "\n\n".join(
+            f"{approval.tool_name} preview:\n{approval.preview}"
+            for approval in result.approvals
+            if approval.preview
+        )
+        if len(previews) > MAX_APPROVAL_PREVIEW_CHARS:
+            previews = (
+                previews[:MAX_APPROVAL_PREVIEW_CHARS]
+                + "\n[... preview truncated for Telegram ...]"
+            )
         text = (result.text + "\n\n" if result.text else "") + f"Approve {names}?"
+        if previews:
+            text += f"\n\n{previews}"
         # The buttons name the waiting call and what it waits on, so an old
         # prompt can't approve a newer one (even in the same call).
         call_id = result.call.id if result.call else ""
