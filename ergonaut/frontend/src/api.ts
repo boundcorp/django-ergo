@@ -33,6 +33,8 @@ export type Session = {
   attention?: boolean // the latest turn waits on the user: an approval, a question, or a failure
   engine_type?: string // openai or claude: a chat keeps its engine
   model?: string // the provider/model picked for this chat ('' = the bot's default)
+  resolved_by?: string // the bot that resolved this thread (ergo_thread_resolve)
+  resolved_summary?: string // its one-line summary of how the thread ended
 }
 
 export type ModelChoice = {
@@ -217,6 +219,9 @@ export type ThreadSummary = {
   working_for: number
   waiting_on: number
   workers_running: number
+  resolved_by?: string
+  resolved_summary?: string
+  ready_to_resolve?: boolean // orchestrator.thread_status: its work looks done
 }
 
 // A request this chat sent to another chat (ergo_thread_send, ergo_message_up).

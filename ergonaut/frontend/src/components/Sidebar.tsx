@@ -54,7 +54,17 @@ function SessionLink({ session, nested }: { session: Session; nested?: boolean }
       }
     >
       <StatusDot session={session} unread={!!unread} />
-      <span className="truncate">{session.title}</span>
+      {session.resolved_summary ? (
+        <span
+          className="flex min-w-0 flex-col"
+          title={`Resolved${session.resolved_by ? ` by ${session.resolved_by}` : ''}: ${session.resolved_summary}`}
+        >
+          <span className="truncate">{session.title}</span>
+          <span className="truncate text-xs text-muted">{session.resolved_summary}</span>
+        </span>
+      ) : (
+        <span className="truncate">{session.title}</span>
+      )}
       {!!session.open_out && (
         <span className="ml-auto shrink-0 text-xs text-zinc-400" title="Waiting on other threads">
           ⏳{session.open_out > 1 ? session.open_out : ''}

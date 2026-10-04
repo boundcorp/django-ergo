@@ -368,6 +368,12 @@ export function Chat({ onChange }: { onChange: () => void }) {
                 </>
               )}
             </div>
+            {archived && detail.session.resolved_summary && (
+              <div className="mt-1 text-sm text-success">
+                ✓ Resolved{detail.session.resolved_by ? ` by ${detail.session.resolved_by}` : ''}:{' '}
+                <span className="text-ink">{detail.session.resolved_summary}</span>
+              </div>
+            )}
           </div>
           <div className="ml-auto">
             <ModelPicker

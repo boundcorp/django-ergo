@@ -942,3 +942,35 @@ def test_thread_cards_and_pull_requests(client, cook, use_bots):
     assert [(p["number"], p["state"]) for p in detail["prs"]] == [(40, "")]
     [file] = [f for f in client.get(f"/api/sessions/{root['id']}/attachments").json() if f["link"]]
     assert (file["filename"], file["view"], file["link"]["number"]) == ("ergo-bots#40", "", 40)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_resolved_thread_shows_who_resolved_it_and_why(client, cook, use_bots):
+    from django_ergo.conversation.models import ConversationSession, ThreadMessage
+
+    use_bots(say("hi"))
+    root = post(client, "/api/bots/kitchen/root").json()
+    sender = ConversationSession.objects.get(id=root["id"])
+    thread = ConversationSession.objects.create(
+        user=cook,
+        bot_name="kitchen",
+        parent=sender,
+        status="completed",
+        metadata={
+            "bot_role": "thread",
+            "title": "Build it",
+            "resolved_by": "kitchen · Main",
+            "resolved_summary": "Shipped in PR 40",
+        },
+    )
+    ThreadMessage.objects.create(sender_session=sender, recipient_session=thread, text="Build it", status="answered")
+
+    detail = client.get(f"/api/sessions/{thread.id}").json()["session"]
+    assert (detail["resolved_by"], detail["resolved_summary"]) == ("kitchen · Main", "Shipped in PR 40")
+    [card] = client.get(f"/api/sessions/{root['id']}").json()["sent"]
+    assert (card["thread"]["archived"], card["thread"]["resolved_summary"]) == (True, "Shipped in PR 40")
+
+    # Reopened, it isn't resolved any more (even if the metadata lingers).
+    thread.status = "active"
+    thread.save()
+    assert client.get(f"/api/sessions/{thread.id}").json()["session"]["resolved_summary"] == ""

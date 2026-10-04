@@ -102,6 +102,9 @@ class SessionOut(Schema):
     attention: bool = False  # the latest turn waits on the user (approval, question, failure)
     engine_type: str = ""  # openai or claude: its messages are stored per engine
     model: str = ""  # the provider/model picked for this chat ("" = the bot's default)
+    # Set when a bot resolved the thread (ergo_thread_resolve): who, and a one-line summary.
+    resolved_by: str = ""
+    resolved_summary: str = ""
 
 
 class RequestOut(Schema):
@@ -249,6 +252,7 @@ def thread_summary(session: ConversationSession) -> dict:
         "role": role,
         "archived": session.status == "completed" and role == "thread",
         "attention": needs_attention(session),
+        **resolution(session),
         **thread_status(session),
     }
 
@@ -556,6 +560,18 @@ def session_out(session: ConversationSession) -> dict:
         "attention": needs_attention(session),
         "engine_type": session.engine_type,
         "model": str(meta.get("model") or ""),
+        **resolution(session),
+    }
+
+
+def resolution(session: ConversationSession) -> dict:
+    """Who resolved a finished thread and its one-line summary, when a bot resolved it."""
+    meta = session.metadata or {}
+    if session.status != "completed":
+        return {"resolved_by": "", "resolved_summary": ""}
+    return {
+        "resolved_by": str(meta.get("resolved_by") or ""),
+        "resolved_summary": str(meta.get("resolved_summary") or ""),
     }
 
 
