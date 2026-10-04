@@ -2,18 +2,16 @@ import { useEffect, useState } from 'react'
 import type { BotModels } from '../api'
 import { api } from '../api'
 
-// Pick the model a chat uses, from providers.yaml. A chat keeps its engine (its messages are
-// stored per engine), so models of another engine are shown but only a new thread can use them.
+// Pick the model a chat uses, from providers.yaml. Picking a model on another engine converts
+// the chat's history to that engine, so any available model works in any chat.
 export default function ModelPicker({
   bot,
   value,
-  engineType,
   onPick,
   large,
 }: {
   bot: string
   value: string
-  engineType?: string
   onPick: (model: string) => void
   large?: boolean
 }) {
@@ -46,16 +44,12 @@ export default function ModelPicker({
       onChange={e => onPick(e.target.value)}
     >
       <option value="">Default{defaultLabel ? ` (${defaultLabel})` : ''}</option>
-      {models.models.map(m => {
-        const otherEngine = !!engineType && m.engine_type !== engineType
-        const why = !m.available ? ' — no API key' : otherEngine ? ' — new thread only' : ''
-        return (
-          <option key={m.id} value={m.id} disabled={!m.available || otherEngine}>
-            {m.provider} · {m.label}
-            {why}
-          </option>
-        )
-      })}
+      {models.models.map(m => (
+        <option key={m.id} value={m.id} disabled={!m.available}>
+          {m.provider} · {m.label}
+          {m.available ? '' : ' — no API key'}
+        </option>
+      ))}
     </select>
   )
   return large ? (

@@ -730,12 +730,20 @@ def test_running_workers_show_in_the_chat_and_keep_it_busy(client, cook, use_bot
         function="orca:watch",
         status="running",
         progress="running · alive",
+        state={"activity": {"entries": [{"kind": "tool", "text": "Bash pytest", "at": None}], "at": 1790000000}},
     )
     assert {s["id"]: s["busy"] for s in client.get("/api/sessions").json()}[root["id"]] is True
     detail = client.get(f"/api/sessions/{root['id']}").json()
     assert [(w["title"], w["status"], w["progress"]) for w in detail["workers"]] == [
         ("Fix footer", "running", "running · alive")
     ]
+    assert detail["workers"][0]["session_id"] == root["id"]
+    assert detail["workers"][0]["activity"]["at"] == 1790000000
+
+    # Its log: this bot has no Orca plugin to read it from now, so it's what was kept.
+    log = client.get(f"/api/sessions/{root['id']}/workers/{worker.pk}/log").json()
+    assert (log["live"], log["entries"][0]["text"]) == (False, "Bash pytest")
+    assert client.get(f"/api/sessions/{root['id']}/workers/{root['id']}/log").status_code == 404
 
     # A worker whose next step is long overdue (a restart lost it) is started again.
     started = []
@@ -889,10 +897,23 @@ def test_chats_pick_a_model_from_providers(client, cook, use_bots, monkeypatch):
 
     picked = post(client, f"/api/sessions/{root['id']}/model", {"model": "anthropic/claude-opus-5-5"})
     assert picked.json()["model"] == "anthropic/claude-opus-5-5"
-    assert post(client, f"/api/sessions/{root['id']}/model", {"model": "openai/gpt-6-sol"}).status_code == 409
     assert post(client, f"/api/sessions/{root['id']}/model", {"model": "spare/claude-haiku-4-5"}).status_code == 409
     assert post(client, f"/api/sessions/{root['id']}/model", {"model": "nope/x"}).status_code == 400
-    assert post(client, f"/api/sessions/{root['id']}/model", {"model": ""}).json()["model"] == ""
+
+    # A model on another engine takes the next turn; the history stays as it is.
+    from django_ergo.conversation.models import ConversationSession, MessageBlock, SessionMessage
+
+    session = ConversationSession.objects.get(id=root["id"])
+    asked = SessionMessage.objects.create(session=session, role="user", sequence=0)
+    MessageBlock.objects.create(message=asked, block_type="text", sequence=0, text="Dinner?")
+    moved = post(client, f"/api/sessions/{root['id']}/model", {"model": "openai/gpt-6-sol"}).json()
+    assert (moved["engine_type"], moved["model"]) == ("openai", "openai/gpt-6-sol")
+    assert [m.content_blocks.get().text for m in session.messages.all()] == ["Dinner?"]
+
+    # Even while a turn runs (it finishes on its model); "" goes back to the bot's default.
+    monkeypatch.setattr("ergonaut.apps.bots.tasks.turn_running", lambda session_id: True)
+    back = post(client, f"/api/sessions/{root['id']}/model", {"model": ""}).json()
+    assert (back["engine_type"], back["model"]) == ("claude", "")
 
 
 @pytest.mark.django_db(transaction=True)
@@ -931,16 +952,15 @@ def test_a_failed_turn_explains_itself_and_can_be_resumed_or_dismissed(client, c
 
 @pytest.mark.django_db(transaction=True)
 def test_a_long_chat_comes_a_page_at_a_time(client, cook, use_bots):
-    from django_ergo.conversation.models import ConversationSession, OpenAIMessage, StructuredCall
+    from django_ergo.conversation.models import ConversationSession, MessageBlock, SessionMessage, StructuredCall
 
     use_bots(say("hi"))
     session = ConversationSession.objects.create(
         user=cook, bot_name="kitchen", engine_type="openai", metadata={"bot_role": "root"}
     )
     for n in range(120):
-        OpenAIMessage.objects.create(
-            session=session, role="user" if n % 2 == 0 else "assistant", content=f"m{n}", sequence=n
-        )
+        message = SessionMessage.objects.create(session=session, role="user" if n % 2 == 0 else "assistant", sequence=n)
+        MessageBlock.objects.create(message=message, block_type="text", sequence=0, text=f"m{n}")
     old = StructuredCall.objects.create(
         kind="chat_reply", session=session, status="completed", first_sequence=0, last_sequence=1
     )

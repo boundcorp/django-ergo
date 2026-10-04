@@ -18,6 +18,7 @@ import Markdown from '../components/Markdown'
 import ModelPicker from '../components/ModelPicker'
 import { PageViewer, Pins } from '../components/Pins'
 import { AttachmentView, Transcript } from '../components/Transcript'
+import { WorkerActivityView, WorkerPulse } from '../components/WorkerActivity'
 import { agoLong } from '../time'
 
 /** Fold a live update into the transcript: messages replace by line, calls by id. */
@@ -101,6 +102,24 @@ export function Chat({ onChange }: { onChange: () => void }) {
   const transcript = useRef<HTMLDivElement>(null)
   const keepScroll = useRef<number | null>(null)
   const skipScroll = useRef(false)
+  // The view follows new messages only while it's at the bottom; scrolled up, it stays put.
+  const atBottom = useRef(true)
+  const [scrolledUp, setScrolledUp] = useState(false)
+  const [unseen, setUnseen] = useState(false)
+  const seenCount = useRef(0)
+  function onTranscriptScroll() {
+    const el = transcript.current
+    if (!el) return
+    atBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80
+    setScrolledUp(!atBottom.current)
+    if (atBottom.current) setUnseen(false)
+  }
+  function toBottom(behavior: ScrollBehavior = 'auto') {
+    atBottom.current = true
+    setScrolledUp(false)
+    setUnseen(false)
+    bottom.current?.scrollIntoView({ behavior })
+  }
   const [loadingOlder, setLoadingOlder] = useState(false)
   async function loadOlder() {
     if (!detail?.has_more || detail.first_line == null || loadingOlder) return
@@ -129,6 +148,9 @@ export function Chat({ onChange }: { onChange: () => void }) {
   useEffect(() => {
     setDetail(null)
     setLast(null)
+    atBottom.current = true
+    setScrolledUp(false)
+    setUnseen(false)
     setOpenPin(null)
     setFiles([])
     load().catch(e => setError(String(e.message ?? e)))
@@ -217,7 +239,9 @@ export function Chat({ onChange }: { onChange: () => void }) {
       skipScroll.current = false
       return
     }
-    bottom.current?.scrollIntoView({ behavior: 'smooth' })
+    if (atBottom.current) bottom.current?.scrollIntoView()
+    else if ((detail?.messages.length ?? 0) > seenCount.current) setUnseen(true)
+    seenCount.current = detail?.messages.length ?? 0
   }, [detail, busy])
 
   // A queued turn is done once its call has finished: a new call for a
@@ -280,6 +304,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
     setSentFiles(outgoing)
     setOutgoing([])
     if (mode === 'interrupt') setStopping(true)
+    toBottom()
     run(() => api.send(id, message, ids, mode), message || outgoing.map(f => f.filename).join(', '))
   }
 
@@ -413,6 +438,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
         {openPin && <PageViewer pin={openPin} refreshKey={detail.messages.length} onClose={() => setOpenPin(null)} />}
         <div
           ref={transcript}
+          onScroll={onTranscriptScroll}
           className={`chat-transcript min-h-24 flex-1 overflow-y-auto px-4 py-5 sm:px-6 ${openPin ? 'hidden' : ''}`}
         >
           {detail.has_more && (
@@ -474,6 +500,17 @@ export function Chat({ onChange }: { onChange: () => void }) {
             </div>
           )}
           <div ref={bottom} />
+          {scrolledUp && (
+            <div className="pointer-events-none sticky bottom-2 flex h-0 justify-center">
+              <button
+                className="pointer-events-auto -translate-y-full rounded-full border border-stroke bg-surface px-3 py-1 text-xs text-ink shadow-md hover:bg-raised"
+                title="Jump to the latest message"
+                onClick={() => toBottom('smooth')}
+              >
+                ↓ {unseen ? 'New messages' : 'Jump to bottom'}
+              </button>
+            </div>
+          )}
         </div>
         {!!waiting.length && (
           <div className="mx-4 mb-3 grid max-h-[45dvh] gap-2 overflow-y-auto sm:mx-6">
@@ -639,7 +676,6 @@ export function Chat({ onChange }: { onChange: () => void }) {
             <ModelPicker
               bot={detail.session.bot}
               value={detail.session.model ?? ''}
-              engineType={detail.session.engine_type}
               onPick={async model => {
                 await api.setModel(id, model).catch(e => setError(String(e.message ?? e)))
                 await load()
@@ -710,8 +746,9 @@ const WORKER_ICON: Record<Worker['status'], string> = {
   cancelled: '⊘',
 }
 
-// Long-running work this chat started: running ones with their latest progress, and the
-// last few that finished (their results also arrive as messages).
+// Long-running work this chat started: running ones with their latest progress and output
+// (the full log a click away), and the last few that finished (their results also arrive
+// as messages).
 function Workers({ workers }: { workers: Worker[] }) {
   const [showDone, setShowDone] = useState(false)
   const running = workers.filter(w => w.status === 'queued' || w.status === 'running')
@@ -722,14 +759,19 @@ function Workers({ workers }: { workers: Worker[] }) {
   return (
     <div className="mx-4 mb-2 flex flex-col gap-2 rounded-card border border-stroke bg-surface px-4 py-3 text-xs sm:mx-6">
       {running.map(w => (
-        <div key={w.id} className="flex items-center gap-2 truncate">
-          {w.status === 'running' ? (
-            <span className="h-2.5 w-2.5 shrink-0 animate-spin rounded-full border-[1.5px] border-indigo-500 border-t-transparent" />
-          ) : (
-            <span className="text-zinc-400">{WORKER_ICON[w.status]}</span>
-          )}
-          <span className="font-medium">{w.title}</span>
-          <span className="truncate text-zinc-500">{w.progress || w.status}</span>
+        <div key={w.id} className="min-w-0">
+          <div className="flex items-center gap-2 truncate">
+            {w.status === 'running' ? (
+              <span className="h-2.5 w-2.5 shrink-0 animate-spin rounded-full border-[1.5px] border-indigo-500 border-t-transparent" />
+            ) : (
+              <span className="text-zinc-400">{WORKER_ICON[w.status]}</span>
+            )}
+            <span className="font-medium">{w.title}</span>
+            <span className="truncate text-zinc-500">{w.progress || w.status}</span>
+            <span className="ml-auto" />
+            <WorkerPulse worker={w} />
+          </div>
+          <WorkerActivityView worker={w} lines={2} />
         </div>
       ))}
       {!!done.length && (

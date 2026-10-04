@@ -6,16 +6,16 @@ from typing import Any
 
 from django_ergo.conversation.history import db_timestamp
 from django_ergo.conversation.history import parse_timestamp
-from django_ergo.conversation.models import ClaudeContentBlock
-from django_ergo.conversation.models import ClaudeMessage
 from django_ergo.conversation.models import ConversationSession
+from django_ergo.conversation.models import MessageBlock
+from django_ergo.conversation.models import SessionMessage
 
 
-async def _keep_original_timestamp(message: ClaudeMessage, value: Any) -> None:
+async def _keep_original_timestamp(message: SessionMessage, value: Any) -> None:
     """Set created_at to the transcript's timestamp (auto_now_add ignores it on create)."""
     timestamp = parse_timestamp(value)
     if timestamp is not None:
-        await ClaudeMessage.objects.filter(pk=message.pk).aupdate(
+        await SessionMessage.objects.filter(pk=message.pk).aupdate(
             created_at=db_timestamp(timestamp)
         )
         message.created_at = timestamp
@@ -81,7 +81,7 @@ class ClaudeCLIImporter:
             role = "user" if msg_type == "user" else "assistant"
             usage = message_obj.get("usage", {})
 
-            claude_msg = await ClaudeMessage.objects.acreate(
+            message_row = await SessionMessage.objects.acreate(
                 session=session,
                 role=role,
                 sequence=seq,
@@ -94,45 +94,45 @@ class ClaudeCLIImporter:
             )
 
             content = message_obj.get("content", "")
-            await self._import_content_blocks(claude_msg, content)
-            await _keep_original_timestamp(claude_msg, msg_data.get("timestamp"))
+            await self._import_content_blocks(message_row, content)
+            await _keep_original_timestamp(message_row, msg_data.get("timestamp"))
         return session
 
     async def _import_content_blocks(
-        self, claude_msg: ClaudeMessage, content: Any
+        self, message_row: SessionMessage, content: Any
     ) -> None:
         if isinstance(content, str):
-            await ClaudeContentBlock.objects.acreate(
-                message=claude_msg,
+            await MessageBlock.objects.acreate(
+                message=message_row,
                 block_type="text",
                 sequence=0,
                 text=content,
             )
         elif isinstance(content, list):
             for block_seq, block in enumerate(content):
-                await self._import_block(claude_msg, block, block_seq)
+                await self._import_block(message_row, block, block_seq)
 
     async def _import_block(
-        self, claude_msg: ClaudeMessage, block: dict, block_seq: int
+        self, message_row: SessionMessage, block: dict, block_seq: int
     ) -> None:
         block_type = block.get("type", "text")
         if block_type == "text":
-            await ClaudeContentBlock.objects.acreate(
-                message=claude_msg,
+            await MessageBlock.objects.acreate(
+                message=message_row,
                 block_type="text",
                 sequence=block_seq,
                 text=block.get("text", ""),
             )
         elif block_type == "thinking":
-            await ClaudeContentBlock.objects.acreate(
-                message=claude_msg,
+            await MessageBlock.objects.acreate(
+                message=message_row,
                 block_type="thinking",
                 sequence=block_seq,
                 thinking=block.get("thinking", ""),
             )
         elif block_type == "tool_use":
-            await ClaudeContentBlock.objects.acreate(
-                message=claude_msg,
+            await MessageBlock.objects.acreate(
+                message=message_row,
                 block_type="tool_use",
                 sequence=block_seq,
                 tool_use_id=block.get("id", ""),
@@ -140,8 +140,8 @@ class ClaudeCLIImporter:
                 tool_input=block.get("input"),
             )
         elif block_type == "tool_result":
-            await ClaudeContentBlock.objects.acreate(
-                message=claude_msg,
+            await MessageBlock.objects.acreate(
+                message=message_row,
                 block_type="tool_result",
                 sequence=block_seq,
                 tool_result_for=block.get("tool_use_id", ""),

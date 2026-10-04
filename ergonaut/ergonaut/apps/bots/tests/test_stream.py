@@ -49,7 +49,7 @@ async def test_stream_sends_new_messages_and_call_changes(async_client, fast):
 
     async def write():
         await asyncio.sleep(0.2)
-        message = await session.claude_messages.acreate(role="user", sequence=0)
+        message = await session.messages.acreate(role="user", sequence=0)
         await message.content_blocks.acreate(block_type="text", text="How many eggs?", sequence=0)
         call = await session.structured_calls.acreate(kind="chat_reply", status="in_progress")
         await asyncio.sleep(0.2)

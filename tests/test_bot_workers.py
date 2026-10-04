@@ -243,6 +243,8 @@ def test_orca_start_worker_watches_the_dispatch_and_reports_back(  # noqa: PLR09
             }
         if command == ("orchestration", "inbox"):
             return {"messages": state["inbox"]}
+        if command == ("orchestration", "worker-read"):
+            return state.get("output") or {"terminal": {"tail": []}}
         return fixed[command]
 
     def fake_run(argv, **kwargs):
@@ -521,3 +523,144 @@ def test_orca_watch_fails_a_worker_whose_agent_terminal_is_gone(
     assert w.run(worker_id, bot.registry) == "failed"
     row.refresh_from_db()
     assert "agent terminal gone without reporting done" in row.error
+
+
+def test_orca_worker_output_reads_transcripts_and_screens():
+    from django_ergo.plugins.orca import output_entries
+
+    source, entries = output_entries(
+        {
+            "source": "transcript",
+            "transcript": {
+                "messages": [
+                    {
+                        "role": "assistant",
+                        "timestamp": 1_790_000_000_000,
+                        "blocks": [
+                            {"type": "text", "text": "Running the tests."},
+                            {
+                                "type": "tool-call",
+                                "name": "Bash",
+                                "input": {"command": "pytest -q", "timeout": 60},
+                            },
+                        ],
+                    },
+                    {
+                        "role": "tool",
+                        "timestamp": None,
+                        "blocks": [
+                            {
+                                "type": "tool-result",
+                                "output": "2 failed",
+                                "isError": True,
+                            }
+                        ],
+                    },
+                ]
+            },
+        }
+    )
+    assert source == "transcript"
+    assert entries == [
+        {"kind": "assistant", "text": "Running the tests.", "at": 1_790_000_000.0},
+        {"kind": "tool", "text": "Bash pytest -q", "at": 1_790_000_000.0},
+        {"kind": "error", "text": "2 failed", "at": None},
+    ]
+    # Older hosts and agents with no transcript give the screen, with its colors.
+    source, entries = output_entries(
+        {"terminal": {"tail": ["\x1b[1;32m✓ built\x1b[0m", "", "  waiting  "]}}
+    )
+    assert source == "terminal"
+    assert [e["text"] for e in entries] == ["✓ built", "waiting"]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_orca_watcher_keeps_the_agents_activity_and_reads_its_log(
+    tmp_path, workers, monkeypatch
+):
+    import subprocess
+
+    from django_ergo.bots import workers as w
+    from django_ergo.conversation.models import Worker
+    from tests.test_bot_plugins import orca_bot
+
+    bot, _, _ = orca_bot(tmp_path, config="environment: devbox, stall_minutes: 5")
+    clock = {"now": 1_790_000_000.0}
+    monkeypatch.setattr("django_ergo.plugins.orca.time.time", lambda: clock["now"])
+    screen = {"tail": ["Reading src/app.py"]}
+    reads = []
+
+    def fake_run(argv, **kwargs):
+        command = tuple(argv[1:3])
+        if command == ("orchestration", "worker-show"):
+            result = {
+                "dispatch": {"status": "dispatched", "last_heartbeat_at": None},
+                "worker": {"state": "running"},
+                "observation": {"agentWait": None},
+                "projection": {"liveness": {"verdict": "live"}},
+            }
+        elif command == ("orchestration", "inbox"):
+            result = {"messages": []}
+        elif command == ("orchestration", "worker-read"):
+            reads.append(argv)
+            result = {"source": "terminal", "terminal": dict(screen)}
+        else:
+            result = {}
+        body = {"ok": True, "result": result}
+        return subprocess.CompletedProcess(argv, 0, stdout=json.dumps(body), stderr="")
+
+    monkeypatch.setattr("django_ergo.plugins.orca.subprocess.run", fake_run)
+    user = get_user_model().objects.create(username="watcher")
+    session = async_to_sync(bot.main_session)(user)
+    worker = Worker.objects.create(
+        session=session,
+        bot_name=bot.name,
+        title="codex: Fix footer",
+        function="orca:watch",
+        args={"dispatch": "ctx_1", "run": "run_1"},
+        state={"task": "task_1", "seen": [], "nudged": True},
+    )
+
+    assert w.run(str(worker.pk), bot.registry) == "running"
+    worker.refresh_from_db()
+    shown = w.activity(worker)
+    assert shown["entries"] == [
+        {"kind": "terminal", "text": "Reading src/app.py", "at": None}
+    ]
+    assert (shown["at"], shown["stall_after"], shown["liveness"]) == (
+        clock["now"],
+        300,
+        "live",
+    )
+    started = clock["now"]
+
+    # Ten minutes on with the same screen: the last activity stays where it was.
+    clock["now"] += 600
+    assert w.run(str(worker.pk), bot.registry) == "running"
+    worker.refresh_from_db()
+    assert w.activity(worker)["at"] == started
+    assert w.activity(worker)["checked_at"] == clock["now"]
+
+    # New output moves it on.
+    screen["tail"] = ["Reading src/app.py", "Editing footer.html"]
+    clock["now"] += 120
+    w.run(str(worker.pk), bot.registry)
+    worker.refresh_from_db()
+    assert w.activity(worker)["at"] == clock["now"]
+    assert [e["text"] for e in w.activity(worker)["entries"]][
+        -1
+    ] == "Editing footer.html"
+
+    # The full log is read now, with a bigger limit.
+    log = w.log(bot, worker)
+    assert log["live"] and log["source"] == "terminal" and len(log["entries"]) == 2
+    assert reads[-1][reads[-1].index("--limit") + 1] == "400"
+
+    # When Orca can't be reached, the log is what the last check kept.
+    def broken(argv, **kwargs):
+        return subprocess.CompletedProcess(argv, 1, stdout="", stderr="no orca")
+
+    monkeypatch.setattr("django_ergo.plugins.orca.subprocess.run", broken)
+    log = w.log(bot, worker)
+    assert not log["live"] and "no orca" in log["error"]
+    assert [e["text"] for e in log["entries"]][-1] == "Editing footer.html"

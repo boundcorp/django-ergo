@@ -107,7 +107,7 @@ class SessionOut(Schema):
     busy: bool = False  # a turn is running in it right now
     unread: bool = False  # a reply came after its owner last opened it
     attention: bool = False  # the latest turn waits on the user (approval, question, failure)
-    engine_type: str = ""  # openai or claude: its messages are stored per engine
+    engine_type: str = ""  # openai or claude: the engine its latest turn ran on
     model: str = ""  # the provider/model picked for this chat ("" = the bot's default)
     # Set when a bot resolved the thread (ergo_thread_resolve): who, and a one-line summary.
     resolved_by: str = ""
@@ -194,7 +194,7 @@ PAGE_MESSAGES = 50
 
 def page_start(session: ConversationSession, before: int | None, limit: int) -> int | None:
     """The first sequence of the ``limit`` messages before ``before`` (None: from the start)."""
-    rows = session.claude_messages if session.claude_messages.exists() else session.openai_messages
+    rows = session.messages.all()
     if before is not None:
         rows = rows.filter(sequence__lt=before)
     found = list(rows.order_by("-sequence").values_list("sequence", flat=True)[limit - 1 : limit + 1])
@@ -220,14 +220,16 @@ def workers_out(session: ConversationSession) -> list[dict]:
     the pull requests its result links (``prs``)."""
     import json
 
-    from django_ergo.bots.workers import describe
+    from django_ergo.bots.workers import activity, describe
 
     active = list(session.workers.filter(status__in=["queued", "running"]))
     done = list(session.workers.exclude(status__in=["queued", "running"])[:5])
     out = []
     for worker in active + done:
         urls = [url for url, _, _ in pull_request_urls(json.dumps(worker.result, default=str))]
-        out.append({**describe(worker), "prs": prs_by_url(urls)})
+        out.append(
+            {**describe(worker), "session_id": str(session.id), "prs": prs_by_url(urls), "activity": activity(worker)}
+        )
     return out
 
 
@@ -576,7 +578,7 @@ def session_out(session: ConversationSession) -> dict:
         "unread": bool(getattr(session, "unread", False)),
         "attention": needs_attention(session),
         "engine_type": session.engine_type,
-        "model": str(meta.get("model") or ""),
+        "model": session.model,
         **resolution(session),
         **threads_by_status(session),
     }
@@ -881,11 +883,7 @@ def list_sessions(request, bot: str = "", q: str = "", status: str = ""):
     if status:
         qs = qs.filter(status=status)
     if q:
-        qs = qs.filter(
-            Q(claude_messages__content_blocks__text__icontains=q)
-            | Q(openai_messages__content__icontains=q)
-            | Q(metadata__title__icontains=q)
-        ).distinct()
+        qs = qs.filter(Q(messages__content_blocks__text__icontains=q) | Q(metadata__title__icontains=q)).distinct()
     rows = attach_prs(list(with_open_counts(qs).order_by("-updated_at")[:200]))
     return [session_out(s) for s in rows]
 
@@ -1043,10 +1041,23 @@ def session_detail(request, session_id: str, before: int | None = None, limit: i
         ],
         "first_line": messages[0]["line"] if messages else first_line,
         "has_more": first_line is not None,
-        "message_count": session.claude_messages.count() or session.openai_messages.count(),
+        "message_count": session.messages.count(),
         "sent": sent_out(session),
         "prs": session_prs(session),
     }
+
+
+@router.get("/sessions/{session_id}/workers/{worker_id}/log")
+def worker_log(request, session_id: str, worker_id: str):
+    """A worker's recent output (an Orca agent's transcript or screen), read now when its
+    plugin can, else what its last check kept."""
+    from django_ergo.bots import workers
+
+    session = visible_sessions(request.auth).filter(id=uuid_or_404(session_id)).first()
+    worker = session and session.workers.filter(id=uuid_or_404(worker_id, "worker")).first()
+    if worker is None:
+        raise HttpError(404, "No such worker")
+    return {"id": str(worker.pk), "title": worker.title, **workers.log(get_bot(worker.bot_name, request.auth), worker)}
 
 
 @router.get("/calls/{call_id}", response=CallDetailOut)
@@ -1201,15 +1212,13 @@ def models_out(bot: Bot) -> dict:
     }
 
 
-def check_model(bot: Bot, model: str, engine_type: str = "") -> None:
+def check_model(bot: Bot, model: str) -> None:
     found = bot.providers.find(model)
     if found is None:
         raise HttpError(400, f"{model!r} isn't a model in providers.yaml")
     provider, _ = found
     if not provider.available:
         raise HttpError(409, f"{provider.name} has no API key set ({provider.api_key_env})")
-    if engine_type and provider.type != engine_type:
-        raise HttpError(409, f"This chat runs on {engine_type}; start a new thread to use {provider.name} models")
 
 
 @router.get("/bots/{bot}/models")
@@ -1219,19 +1228,14 @@ def bot_models(request, bot: str):
 
 @router.post("/sessions/{session_id}/model", response=SessionOut)
 async def set_session_model(request, session_id: str, data: ModelIn):
-    """Pick the model this chat's next turns use (same engine type as the chat)."""
+    """Pick the model this chat's next turns use, on any engine (messages are
+    stored engine-neutral). A running turn finishes on the model it started with."""
     session = await get_session(request, session_id)
     found = get_bot(session.bot_name, request.auth)
     model = data.model.strip()
     if model:
-        check_model(found, model, session.engine_type)
-    metadata = dict(session.metadata or {})
-    if model:
-        metadata["model"] = model
-    else:
-        metadata.pop("model", None)
-    session.metadata = metadata
-    await session.asave(update_fields=["metadata", "updated_at"])
+        check_model(found, model)
+    await sync_to_async(found.pick_model)(session, model)
     return await sync_to_async(session_out)(session)
 
 

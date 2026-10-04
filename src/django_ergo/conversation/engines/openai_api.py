@@ -2,16 +2,13 @@
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING
 from typing import Any
 
-from django.db import models
-
 from django_ergo.conversation.adapters import OpenAIToolAdapter
-from django_ergo.conversation.attachments import Attachment
 from django_ergo.conversation.attachments import attachments_by_sequence
 from django_ergo.conversation.attachments import openai_part
-from django_ergo.conversation.attachments import save_attachments
 from django_ergo.conversation.compaction import apply_native_window
 from django_ergo.conversation.compaction import latest_compaction
 from django_ergo.conversation.compaction import render_summary_message
@@ -23,8 +20,9 @@ from django_ergo.conversation.engine import session_system_prompt
 from django_ergo.conversation.images import attachment_ref
 from django_ergo.conversation.images import memory_result
 from django_ergo.conversation.images import prepare_messages
-from django_ergo.conversation.images import result_content
-from django_ergo.conversation.images import stored_result
+from django_ergo.conversation.messages import StoredMessagesMixin
+from django_ergo.conversation.messages import add_message
+from django_ergo.conversation.messages import tool_use_block
 from django_ergo.conversation.telemetry import record_usage
 from django_ergo.conversation.telemetry import trace_engine_call
 from django_ergo.conversation.tool_results import trim_tool_results
@@ -104,29 +102,58 @@ def attachment_part(row, *, audio_input: bool = False) -> dict:
     return openai_part(row, audio_input=audio_input)
 
 
-def openai_message_dict(msg, attachments=(), *, audio_input: bool = False) -> dict:
-    """Convert an OpenAIMessage row (plus its attachments) to an API message dict.
+def openai_message_dicts(msg, attachments=(), *, audio_input: bool = False) -> list:
+    """Render a SessionMessage row (plus its attachments) as OpenAI message dicts.
 
-    A tool message with images gets list content (text plus image references);
-    prepare_messages moves the images into a user message.
+    Tool results become ``tool`` messages (images as list content, which
+    prepare_messages moves into a user message), ahead of any user text. An
+    assistant's tool calls become ``tool_calls``; thinking is left out, as
+    OpenAI can't take another model's reasoning back.
     """
-    content = msg.content
-    if attachments:
-        content = [
-            *([{"type": "text", "text": msg.content}] if msg.content else []),
-            *(attachment_part(row, audio_input=audio_input) for row in attachments),
+    blocks = list(msg.content_blocks.all())
+    texts = [b.text or "" for b in blocks if b.block_type == "text"]
+    if msg.role == "assistant":
+        calls = [
+            {
+                "id": b.tool_use_id,
+                "type": "function",
+                "function": {
+                    "name": b.tool_name,
+                    "arguments": json.dumps(b.tool_input or {}),
+                },
+            }
+            for b in blocks
+            if b.block_type == "tool_use"
         ]
-    elif images := getattr(msg, "images", None):
-        content = result_content(msg.content or "", images)
-    entry = {"role": msg.role, "content": content}
-    if msg.tool_calls:
-        entry["tool_calls"] = msg.tool_calls
-    if msg.tool_call_id:
-        entry["tool_call_id"] = msg.tool_call_id
-    return entry
+        text = "\n\n".join(t for t in texts if t)
+        if not (text or calls):
+            return []
+        entry: dict = {"role": "assistant", "content": text or None}
+        if calls:
+            entry["tool_calls"] = calls
+        return [entry]
+    out = [
+        {
+            "role": "tool",
+            "tool_call_id": b.tool_result_for,
+            "content": b.tool_result_content or "",
+        }
+        for b in blocks
+        if b.block_type == "tool_result"
+    ]
+    if texts or attachments:
+        text = "\n\n".join(texts)
+        content = text
+        if attachments:
+            content = [
+                *([{"type": "text", "text": text}] if text else []),
+                *(attachment_part(row, audio_input=audio_input) for row in attachments),
+            ]
+        out.append({"role": "user", "content": content})
+    return out
 
 
-class OpenAIAPIEngine(Engine):
+class OpenAIAPIEngine(StoredMessagesMixin, Engine):
     """Engine implementation using the OpenAI API SDK."""
 
     engine_type = "openai"
@@ -177,43 +204,37 @@ class OpenAIAPIEngine(Engine):
         return self._adapter
 
     def history_rows(self, session, after_sequence: int | None = None) -> list:
-        """Return [(OpenAIMessage, message dict), ...] in sequence order.
+        """Return [(SessionMessage, message dict), ...] in sequence order.
 
-        System messages are always included, whatever after_sequence says.
+        A row of several tool results gives one entry per result.
         """
-        rows = session.openai_messages.all()
+        rows = session.messages.prefetch_related("content_blocks")
         if after_sequence is not None:
-            rows = rows.filter(
-                models.Q(sequence__gt=after_sequence) | models.Q(role="system")
-            )
+            rows = rows.filter(sequence__gt=after_sequence)
         attachments = attachments_by_sequence(session)
         return [
-            (
-                msg,
-                openai_message_dict(
-                    msg,
-                    attachments.get(msg.sequence, ()),
-                    audio_input=self.audio_input,
-                ),
-            )
+            (msg, message)
             for msg in rows
+            for message in openai_message_dicts(
+                msg, attachments.get(msg.sequence, ()), audio_input=self.audio_input
+            )
         ]
 
     def reconstruct_messages(self, session) -> list[dict]:
-        """Build OpenAI message list from DB-stored OpenAIMessage rows.
+        """Build the OpenAI message list: the system prompt, then the history.
 
         When the session has been compacted, the latest summary replaces the
-        messages it covers, after any system message.
+        messages it covers.
         """
         compaction = latest_compaction(session)
         after = compaction.upto_sequence if compaction else None
         messages = [message for _, message in self.history_rows(session, after)]
         if compaction:
-            position = sum(1 for m in messages if m["role"] == "system")
             messages.insert(
-                position,
-                {"role": "user", "content": render_summary_message(compaction)},
+                0, {"role": "user", "content": render_summary_message(compaction)}
             )
+        if system := session_system_prompt(session):
+            messages.insert(0, {"role": "system", "content": system})
         messages = trim_tool_results(
             apply_native_window(session, messages), keep=self.tool_results_in_context
         )
@@ -225,20 +246,7 @@ class OpenAIAPIEngine(Engine):
         return [self._adapter.to_engine_schema(tool) for tool in tools]
 
     async def start_session(self, session) -> str:
-        """Optionally inject a system message from workflow instructions."""
-        from asgiref.sync import sync_to_async
-
-        from django_ergo.conversation.models import OpenAIMessage
-        from django_ergo.conversation.models import OpenAIMessageRole
-
-        system = session_system_prompt(session)
-        if system:
-            await sync_to_async(OpenAIMessage.objects.create)(
-                session=session,
-                role=OpenAIMessageRole.SYSTEM,
-                content=system,
-                sequence=0,
-            )
+        """No-op: the system prompt is sent from the session on every call."""
         return str(session.id)
 
     async def resume_session(self, session) -> None:
@@ -247,14 +255,10 @@ class OpenAIAPIEngine(Engine):
     async def close_session(self, session) -> None:
         """No-op — OpenAI API is stateless."""
 
-    async def _call_and_persist(
-        self, session, seq: int, additional_tools: list[dict] | None = None
+    async def _call(
+        self, session, additional_tools: list[dict] | None = None
     ) -> AsyncIterator[EngineResponse]:
         """Rebuild history, call the API, persist the assistant reply, and yield responses."""
-        import json
-
-        from django_ergo.conversation.models import OpenAIMessage
-
         with trace_engine_call(
             operation="send",
             engine_type=self.engine_type,
@@ -298,16 +302,22 @@ class OpenAIAPIEngine(Engine):
                 else None,
             )
 
-            await OpenAIMessage.objects.acreate(
-                session=session,
-                role="assistant",
-                content=msg.content,
-                tool_calls=[tc.model_dump() for tc in msg.tool_calls]
-                if msg.tool_calls
-                else None,
-                sequence=seq,
-                **usage_parts(response.usage),
+            blocks = (
+                [{"block_type": "text", "text": msg.content}] if msg.content else []
+            )
+            blocks += [
+                tool_use_block(
+                    tc.id, tc.function.name, json.loads(tc.function.arguments or "{}")
+                )
+                for tc in msg.tool_calls or []
+            ]
+            await add_message(
+                session,
+                "assistant",
+                blocks,
+                stop_reason="tool_use" if msg.tool_calls else choice.finish_reason,
                 model_name=self.model,
+                **usage_parts(response.usage),
             )
 
             if msg.content:
@@ -328,157 +338,6 @@ class OpenAIAPIEngine(Engine):
             yield EngineResponse(
                 event_type="done", raw={"finish_reason": choice.finish_reason}
             )
-
-    async def append_user_message(
-        self,
-        session,
-        message: str,
-        attachments: list[Attachment] | None = None,
-    ) -> None:
-        from django_ergo.conversation.models import OpenAIMessage
-
-        seq = await session.openai_messages.acount()
-        await OpenAIMessage.objects.acreate(
-            session=session, role="user", content=message, sequence=seq
-        )
-        if attachments:
-            await save_attachments(session, seq, attachments)
-
-    async def append_tool_exchange(self, session, calls: list[SeededToolCall]) -> None:
-        import json
-
-        from django_ergo.conversation.models import OpenAIMessage
-
-        if not calls:
-            return
-        seq = await session.openai_messages.acount()
-        await OpenAIMessage.objects.acreate(
-            session=session,
-            role="assistant",
-            content=None,
-            tool_calls=[
-                {
-                    "id": call.tool_use_id,
-                    "type": "function",
-                    "function": {
-                        "name": call.name,
-                        "arguments": json.dumps(call.input),
-                    },
-                }
-                for call in calls
-            ],
-            sequence=seq,
-        )
-        for offset, call in enumerate(calls, start=1):
-            text, images = await stored_result(session, call.result)
-            await OpenAIMessage.objects.acreate(
-                session=session,
-                role="tool",
-                content=text,
-                images=images or None,
-                tool_call_id=call.tool_use_id,
-                sequence=seq + offset,
-            )
-
-    async def respond(
-        self, session, additional_tools: list[dict] | None = None
-    ) -> AsyncIterator[EngineResponse]:
-        seq = await session.openai_messages.acount()
-        async for event in self._call_and_persist(session, seq, additional_tools):
-            yield event
-
-    async def send(
-        self,
-        session,
-        message: str,
-        additional_tools: list[dict] | None = None,
-        attachments: list[Attachment] | None = None,
-    ) -> AsyncIterator[EngineResponse]:
-        """Persist the user message, call the API, and yield response events."""
-        await self.append_user_message(session, message, attachments)
-        async for event in self.respond(session, additional_tools):
-            yield event
-
-    async def submit_tool_result(
-        self,
-        session,
-        tool_use_id: str,
-        result: Any,
-        is_error: bool = False,
-        additional_tools: list[dict] | None = None,
-    ) -> AsyncIterator[EngineResponse]:
-        """Persist the tool result, call the API again, and yield response events."""
-        from django_ergo.conversation.models import OpenAIMessage
-
-        seq = await session.openai_messages.acount()
-        text, images = await stored_result(session, result)
-        await OpenAIMessage.objects.acreate(
-            session=session,
-            role="tool",
-            content=text,
-            images=images or None,
-            tool_call_id=tool_use_id,
-            sequence=seq,
-        )
-
-        async for event in self._call_and_persist(session, seq + 1, additional_tools):
-            yield event
-
-    async def _persist_tool_result(
-        self,
-        session,
-        tool_use_id: str,
-        result: Any,
-        is_error: bool = False,
-    ) -> None:
-        from django_ergo.conversation.models import OpenAIMessage
-
-        seq = await session.openai_messages.acount()
-        text, images = await stored_result(session, result)
-        await OpenAIMessage.objects.acreate(
-            session=session,
-            role="tool",
-            content=text,
-            images=images or None,
-            tool_call_id=tool_use_id,
-            sequence=seq,
-        )
-
-    async def submit_tool_results_batch(
-        self,
-        session,
-        results: list[tuple[str, Any, bool]],
-        additional_tools: list[dict] | None = None,
-    ) -> AsyncIterator[EngineResponse]:
-        from django_ergo.conversation.models import OpenAIMessage
-
-        seq = await session.openai_messages.acount()
-        for tool_use_id, result, _is_error in results:
-            text, images = await stored_result(session, result)
-            await OpenAIMessage.objects.acreate(
-                session=session,
-                role="tool",
-                content=text,
-                images=images or None,
-                tool_call_id=tool_use_id,
-                sequence=seq,
-            )
-            seq += 1
-
-        async for event in self._call_and_persist(session, seq, additional_tools):
-            yield event
-
-    async def append_assistant_text(self, session, text: str) -> None:
-        from django_ergo.conversation.models import OpenAIMessage
-
-        seq = await session.openai_messages.acount()
-        await OpenAIMessage.objects.acreate(
-            session=session,
-            role="assistant",
-            content=text,
-            sequence=seq,
-            model_name=self.model,
-        )
 
     # -- Sessionless calls ------------------------------------------------
 

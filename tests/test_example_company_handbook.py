@@ -14,9 +14,9 @@ from asgiref.sync import async_to_sync
 from django.contrib.auth import get_user_model
 
 from django_ergo.conversation.history_toolkit import ChatWithHistoryToolkit
-from django_ergo.conversation.models import ClaudeContentBlock
-from django_ergo.conversation.models import ClaudeMessage
 from django_ergo.conversation.models import ConversationSession
+from django_ergo.conversation.models import MessageBlock
+from django_ergo.conversation.models import SessionMessage
 from django_ergo.kb_pipelines import absorb_conversation
 from django_ergo.kb_toolkit import KBToolkit
 from django_ergo.models import Article
@@ -35,8 +35,8 @@ def _create_conversation(user, messages):
         status="completed",
     )
     for seq, (role, text) in enumerate(messages):
-        msg = ClaudeMessage.objects.create(session=session, role=role, sequence=seq)
-        ClaudeContentBlock.objects.create(
+        msg = SessionMessage.objects.create(session=session, role=role, sequence=seq)
+        MessageBlock.objects.create(
             message=msg,
             block_type="text",
             sequence=0,

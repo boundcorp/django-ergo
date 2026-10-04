@@ -1923,3 +1923,38 @@ def test_seeded_bot_tools_pre_seed_their_results():
         @bot_tool(seed=True)
         def needs(query: str) -> str:
             return query
+
+
+def test_default_skills_reach_every_folder_bot_unless_it_opts_out(tmp_path, settings):
+    settings.DJANGO_ERGO = {**settings.DJANGO_ERGO, "DEFAULT_SKILLS": ["skillbuilder"]}
+    plain = Bot.load(
+        write_bot(tmp_path, "name: plain\nengine: {type: claude}\n", name="plain")
+    )
+    assert "skillbuilder" in {s.name for s in plain.skill_defs}
+    assert plain.plugin("bot_management").mode == "propose_pr"
+
+    for name, skills in [
+        ("out", "{exclude: [skillbuilder]}"),
+        ("none", "{defaults: false}"),
+    ]:
+        bot = Bot.load(
+            write_bot(tmp_path, f"name: {name}\nskills: {skills}\n", name=name)
+        )
+        assert "skillbuilder" not in {s.name for s in bot.skill_defs}
+        assert bot.plugin("bot_management") is None
+
+    # A default that clashes with bot.yaml is left out; a named one fails the load.
+    clash = write_bot(
+        tmp_path,
+        "name: clash\nplugins: [{name: bot_management, mode: merge_main}]\n",
+        name="clash",
+    )
+    bot = Bot.load(clash)
+    assert "skillbuilder" not in {s.name for s in bot.skill_defs}
+    assert bot.plugin("bot_management").mode == "merge_main"
+    (clash / "bot.yaml").write_text(
+        "name: clash\nplugins: [{name: bot_management, mode: merge_main}]\n"
+        "skills: {include: [skillbuilder]}\n"
+    )
+    with pytest.raises(ValueError, match="skillbuilder needs bot_management"):
+        Bot.load(clash)

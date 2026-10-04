@@ -119,9 +119,7 @@ class ErgoKBPlugin(BotPlugin):
         if self.prefetch == "every_turn":
             return True
         session = ctx.session
-        return not (
-            session.claude_messages.exists() or session.openai_messages.exists()
-        )
+        return not (session.messages.exists())
 
     def always_context_sources(
         self, ctx: ToolContext, message: str

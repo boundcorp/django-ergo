@@ -79,7 +79,7 @@ class ConversationRenderer:
     def _get_messages_from_session(self, session: ConversationSession) -> list[dict]:
         """Build message dicts from DB models."""
         messages = []
-        for msg in session.claude_messages.prefetch_related("content_blocks").all():
+        for msg in session.messages.prefetch_related("content_blocks").all():
             content = []
             for block in msg.content_blocks.all():
                 if block.block_type == "text":
@@ -105,12 +105,6 @@ class ConversationRenderer:
                         }
                     )
             messages.append({"role": msg.role, "content": content})
-
-        # Fallback: try OpenAI messages if no Claude messages
-        if not messages:
-            for msg in session.openai_messages.all():
-                entry = {"role": msg.role, "content": msg.content}
-                messages.append(entry)
 
         return messages
 

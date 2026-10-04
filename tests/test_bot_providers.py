@@ -86,13 +86,15 @@ def test_bots_and_chats_pick_models_from_providers(tmp_path, monkeypatch):
         "api_key": "sk-test",
     }
 
-    # A chat's pick wins, when it runs on the chat's engine.
+    # A chat's pick wins, on any engine.
+    monkeypatch.setenv("TEST_ANTHROPIC_KEY", "sk-ant")
     bot = bot_with(found)
-    chat = SimpleNamespace(engine_type="openai", metadata={"model": "openai/gpt-6-sol"})
+    chat = SimpleNamespace(engine_type="openai", model="openai/gpt-6-sol")
     assert bot.engine_spec(chat).config["model"] == "gpt-6-sol"
-    chat.metadata["model"] = "anthropic/claude-opus-5-5"  # another engine: ignored
-    assert bot.engine_spec(chat).config["model"] == "gpt-6-luna"
-    chat.metadata["model"] = "openai/gone"  # no longer listed: ignored
+    chat.model = "anthropic/claude-opus-5-5"
+    spec = bot.engine_spec(chat)
+    assert (spec.engine_type, spec.config["model"]) == ("claude", "claude-opus-5-5")
+    chat.model = "openai/gone"  # no longer listed: ignored
     assert bot.engine_spec(chat).config["model"] == "gpt-6-luna"
 
     # The old engine form still works without providers.
@@ -104,7 +106,7 @@ def test_bots_and_chats_pick_models_from_providers(tmp_path, monkeypatch):
         bot.engine_spec()
 
 
-def test_chats_keep_their_engine_when_the_bot_moves_to_another(tmp_path, monkeypatch):
+def test_chats_follow_the_bot_to_another_engine(tmp_path, monkeypatch):
     monkeypatch.setenv("TEST_OPENAI_KEY", "sk-test")
     monkeypatch.setenv("TEST_ANTHROPIC_KEY", "sk-ant")
     found = Providers.from_dict(
@@ -113,17 +115,9 @@ def test_chats_keep_their_engine_when_the_bot_moves_to_another(tmp_path, monkeyp
     bot = bot_with(found)
     assert bot.engine_spec().engine_type == "claude"  # new chats
 
-    # An existing chat stored on OpenAI stays there, on an available OpenAI model.
-    old = SimpleNamespace(engine_type="openai", metadata={})
+    # Messages are engine-neutral: a chat last run on OpenAI follows the default.
+    old = SimpleNamespace(engine_type="openai", model="")
     spec = bot.engine_spec(old)
-    assert (spec.engine_type, spec.config["model"]) == ("openai", "gpt-6-luna")
-    # A chat on Claude, or one that picked a model, is unchanged.
-    assert (
-        bot.engine_spec(SimpleNamespace(engine_type="claude", metadata={})).engine_type
-        == "claude"
-    )
-    picked = SimpleNamespace(
-        engine_type="openai", metadata={"model": "openai/gpt-6-sol"}
-    )
+    assert (spec.engine_type, spec.config["model"]) == ("claude", "claude-opus-5-5")
+    picked = SimpleNamespace(engine_type="claude", model="openai/gpt-6-sol")
     assert bot.engine_spec(picked).config["model"] == "gpt-6-sol"
-    assert found.model_on("gemini") == ""

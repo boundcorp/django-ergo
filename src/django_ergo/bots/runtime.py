@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import logging
 import os
 from dataclasses import dataclass
 from dataclasses import field
@@ -83,6 +84,8 @@ if TYPE_CHECKING:
     from django_ergo.conversation.structured import StructuredCallResult
     from django_ergo.conversation.structured import TurnControl
     from django_ergo.conversation.toolkit import Toolkit
+
+logger = logging.getLogger(__name__)
 
 MAIN_ROLE = "main"
 CHAT_ROLE = "chat"  # a named chat from bot.yaml
@@ -153,8 +156,11 @@ class Bot:
             for name, fn in module.tasks.items()
         }
         self.skills: list[Skill] = load_skills(definition.skills_dir)
+        named = self._named_skills()
+        # Default skills nothing named: left out quietly if they don't fit.
+        self.default_skills = self._default_skills() - named
         self.skills += library_skills(
-            self._named_skills(), exclude={s.name for s in self.skills}
+            named | self.default_skills, exclude={s.name for s in self.skills}
         )
         self.tables = []
         if definition.table_files:
@@ -205,26 +211,49 @@ class Bot:
             names |= set(skill.requires)
         return names
 
+    def _default_skills(self) -> set[str]:
+        """``DJANGO_ERGO["DEFAULT_SKILLS"]`` for this bot, minus what bot.yaml excludes."""
+        from django_ergo.settings import api_settings
+
+        definition = self.definition
+        if definition.root_dir is None or not definition.use_default_skills:
+            return set()
+        return {str(n) for n in api_settings.DEFAULT_SKILLS or []} - set(
+            definition.skill_excludes
+        )
+
     def _with_skill_plugins(self, specs: list[PluginSpec]) -> list[PluginSpec]:
         """Add the plugins skills ask for; refuse settings that contradict bot.yaml."""
         specs = [PluginSpec(spec.name, dict(spec.config)) for spec in specs]
-        for skill in self.skills:
+        for skill in list(self.skills):
+            wanted_specs = []
+            clash = ""
             for name, wanted in skill.plugins.items():
                 cls = resolve_plugin_class(name)
                 spec = next(
                     (s for s in specs if resolve_plugin_class(s.name) is cls), None
                 )
+                for key, value in wanted.items():
+                    if spec is not None and key in spec.config:
+                        if spec.config[key] != value:
+                            clash = (
+                                f"Skill {skill.name} needs {name} with {key}: {value}, "
+                                f"but bot.yaml sets {key}: {spec.config[key]}"
+                            )
+                wanted_specs.append((name, spec, wanted))
+            if clash:
+                if skill.name in self.default_skills:
+                    logger.warning(
+                        "%s: leaving out default skill (%s)", self.name, clash
+                    )
+                    self.skills.remove(skill)
+                    continue
+                raise ValueError(clash)
+            for name, spec, wanted in wanted_specs:
                 if spec is None:
                     specs.append(PluginSpec(name, dict(wanted)))
-                    continue
-                for key, value in wanted.items():
-                    if key in spec.config and spec.config[key] != value:
-                        msg = (
-                            f"Skill {skill.name} needs {name} with {key}: {value}, "
-                            f"but bot.yaml sets {key}: {spec.config[key]}"
-                        )
-                        raise ValueError(msg)
-                    spec.config[key] = value
+                else:
+                    spec.config.update(wanted)
         return specs
 
     def _skill_defs(self) -> list[SkillDef]:
@@ -348,10 +377,9 @@ class Bot:
                     plugin.description or f"The {plugin.name} plugin",
                     instructions=plugin.skill_instructions,
                     toolkits=lambda ctx, plugin=plugin: plugin.toolkits(ctx) or [],
-                    context=lambda ctx, message, plugin=plugin: plugin.context_sources(
-                        ctx, message
-                    )
-                    or [],
+                    context=lambda ctx, message, plugin=plugin: (
+                        plugin.context_sources(ctx, message) or []
+                    ),
                     hint=plugin.skill_hint,
                     requires=[
                         *plugin.skill_requires,
@@ -453,32 +481,33 @@ class Bot:
         return ""
 
     def session_model(self, session: ConversationSession | None) -> str:
-        """The model picked for this chat, if it's still enabled and runs on the
-        chat's engine (its messages are stored per engine type)."""
+        """The model picked for this chat, if it's still enabled."""
         if session is None:
             return ""
-        ref = self.session_model_ref((session.metadata or {}).get("model"))
-        found = self.providers.find(ref) if ref else None
-        return ref if found and found[0].type == session.engine_type else ""
+        return self.session_model_ref(session.model)
+
+    def pick_model(self, session: ConversationSession, model: str) -> None:
+        """Set the model a chat's next turns use ("" = the bot's default).
+
+        Messages are stored the same way for every engine, so a model on
+        another engine just takes the next turn. Runs the ORM.
+        """
+        session.model = self.session_model_ref(model)
+        spec = self.engine_spec(session)
+        fields = ["model", "updated_at"]
+        if (spec.engine_type, spec.transport_type) != (
+            session.engine_type,
+            session.transport_type,
+        ):
+            session.engine_type = spec.engine_type
+            session.transport_type = spec.transport_type
+            session.session_id = ""  # an engine-native session doesn't carry over
+            fields += ["engine_type", "transport_type", "session_id"]
+        session.save(update_fields=fields)
 
     def session_model_ref(self, picked) -> str:
         picked = str(picked or "")
         return picked if picked and self.providers.find(picked) else ""
-
-    def keep_session_engine(self, session: ConversationSession, ref: str) -> str:
-        """A chat stays on the engine its messages are stored in. When the
-        bot's model now runs on another engine (bot.yaml or the default
-        changed), the chat uses a model on its own engine instead."""
-        found = self.providers.find(ref) if ref else None
-        if found:
-            engine_type = found[0].type
-        else:
-            engine_type = (
-                self.definition.engine_type or get_default_engine_spec().engine_type
-            )
-        if not session.engine_type or engine_type == session.engine_type:
-            return ref
-        return self.providers.model_on(session.engine_type) or ref
 
     def engine_spec(
         self, session: ConversationSession | None = None, model: str = ""
@@ -486,8 +515,6 @@ class Bot:
         """The engine for a chat: the model picked for it (or ``model``), else the bot's."""
         default = get_default_engine_spec()
         ref = model or self.session_model(session) or self.model_ref()
-        if session is not None and not model:
-            ref = self.keep_session_engine(session, ref)
         transport = default.transport_type
         if ref:
             engine_type, config, key_env = self.providers.engine(ref)
@@ -682,12 +709,14 @@ class Bot:
         system_prompt=None,
         metadata=None,
     ) -> ConversationSession:
-        model = self.session_model_ref((metadata or {}).get("model"))
+        metadata = dict(metadata or {})
+        model = self.session_model_ref(metadata.pop("model", ""))
         engine = self.make_engine(model=model)
         session = await ConversationSession.objects.acreate(
             user=user,
             parent=parent,
             bot_name=self.name,
+            model=model,
             engine_type=getattr(engine, "engine_type", None)
             or self.engine_spec(model=model).engine_type,
             transport_type=getattr(engine, "transport_type", "api"),
