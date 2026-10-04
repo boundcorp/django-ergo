@@ -28,3 +28,7 @@ BASE_URL = f"http://localhost:{BACKEND_PORT}"
 # Tests use the same embedded postgres as dev, with a test-specific database.
 
 HAS_DOCKER_SERVICES = all(os.environ.get(v) for v in ("DATABASE_URL", "CELERY_BROKER_URL", "S3_ENDPOINT_URL"))
+
+# Test bots start without Ergo's default skills (bot_management would need a
+# git checkout); tests that want them set DEFAULT_SKILLS themselves.
+DJANGO_ERGO = {**DJANGO_ERGO, "DEFAULT_SKILLS": []}  # noqa: F405

@@ -47,6 +47,11 @@ DEFAULTS = {
     "TOOL_RESULTS_IN_CONTEXT": 3,
     # Extra bot plugins by short name: {"name": "dotted.path.PluginClass"}.
     "BOT_PLUGINS": {},
+    # Skills from Ergo's skill library (bots/skill_library) that every bot
+    # loaded from a folder gets. A bot opts out in bot.yaml with
+    # skills: {exclude: [...]} or skills: {defaults: false}; a default skill
+    # whose plugin settings clash with bot.yaml is left out with a warning.
+    "DEFAULT_SKILLS": ["skillbuilder"],
     # Callable(message_id) that delivers a bot-to-bot thread message, e.g. by
     # queueing a Celery task. None = deliver in a background thread.
     "THREAD_MESSAGE_RUNNER": None,

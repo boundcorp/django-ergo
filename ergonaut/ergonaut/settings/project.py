@@ -401,6 +401,12 @@ if float(os.environ.get("ERGONAUT_BOTS_PULL_SECONDS") or 0) > 0:
         "task": "ergonaut.pull_bot_repos",
         "schedule": float(os.environ["ERGONAUT_BOTS_PULL_SECONDS"]),
     }
+if float(os.environ.get("ERGONAUT_AUTO_UPGRADE_SECONDS") or 0) > 0:
+    # A newer GitHub release is installed by ERGONAUT_UPGRADER once nothing is running.
+    CELERY_BEAT_SCHEDULE["auto-upgrade"] = {
+        "task": "ergonaut.auto_upgrade",
+        "schedule": float(os.environ["ERGONAUT_AUTO_UPGRADE_SECONDS"]),
+    }
 if CELERY_BROKER_URL:
     CELERY_RESULT_BACKEND = os.environ.get("CELERY_RESULT_BACKEND", CELERY_BROKER_URL)
 else:

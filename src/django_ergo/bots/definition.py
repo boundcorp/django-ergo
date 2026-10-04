@@ -48,6 +48,8 @@ bot.yaml::
       unload_after_turns: 30           # drop a lazily loaded skill unused this long
       requires: {meal-planning: [tandoor]}
       include: [skillbuilder]          # skills from Ergo's library (bots.skills)
+      exclude: [skillbuilder]          # leave out some of DJANGO_ERGO["DEFAULT_SKILLS"]
+      defaults: true                   # false: none of the default skills
     tools: [tools/tandoor.py]
     tables: [tables.py]                # BotTable models (see django_ergo.bots.tables)
     toolkits: ["myapp.toolkits:make_toolkit"]   # factory(ctx) -> Toolkit
@@ -178,6 +180,8 @@ class BotDefinition:
     tool_results_in_context: int | None = None
     skill_requires: dict[str, list[str]] = field(default_factory=dict)
     skill_includes: list[str] = field(default_factory=list)
+    skill_excludes: list[str] = field(default_factory=list)
+    use_default_skills: bool = True
 
     def chat(self, name: str) -> ChatDefinition:
         return self.chats.get(name) or ChatDefinition(name=name)
@@ -256,6 +260,8 @@ class BotDefinition:
                 for k, vs in (skills_config.get("requires") or {}).items()
             },
             skill_includes=[str(s) for s in skills_config.get("include") or []],
+            skill_excludes=[str(s) for s in skills_config.get("exclude") or []],
+            use_default_skills=bool(skills_config.get("defaults", True)),
             schedules=schedules,
             max_turns=max(1, int(data.get("max_turns", 50) or 50)),
             tool_results_in_context=_optional_int(data, "tool_results_in_context"),

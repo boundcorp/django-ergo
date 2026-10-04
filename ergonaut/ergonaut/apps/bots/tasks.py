@@ -597,6 +597,18 @@ def pull_bot_repos() -> dict[str, str]:
     return pull_all()
 
 
+@shared_task(name="ergonaut.auto_upgrade", ignore_result=True)
+def auto_upgrade() -> str:
+    """Upgrade to a newer GitHub release if there is one and nothing is running
+    (beat runs this every ``ERGONAUT_AUTO_UPGRADE_SECONDS``; see ergonaut/upgrades).
+    A busy instance is checked again next time instead of holding the worker."""
+    from ergonaut import upgrades
+
+    result = upgrades.run(wait_timeout=60, quiet_for=20)
+    logger.info("auto upgrade: %s", result)
+    return result
+
+
 @shared_task(name="ergonaut.redispatch_thread_messages", ignore_result=True)
 def redispatch_thread_messages() -> int:
     """Send on thread messages that have waited over a minute (beat runs this)."""

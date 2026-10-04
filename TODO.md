@@ -25,7 +25,7 @@ Live on rigel from `~/p/boundcorp/django-ergo`, bots from `boundcorp/ergo-bots`.
 - [x] **Skills unified + named chats** (PR #33, merged): lazy skills (load/unload, always per chat, requires), main replaces root, named chats in bot.yaml, schedule targets.
 - [x] **Skill library + skillbuilder**: Ergo ships reusable skill folders (`bots/skill_library/`) a bot includes by name (`skills.include`, chat skills or `requires`); skills declare the plugins they need (`plugins:` front matter, conflicting bot.yaml settings fail the load); `@bot_tool(seed=True)`. First library skill: `skillbuilder` (config_repo in PR mode plus a guide to tools, workers, attachments, seeding, tables, schedules and .jhtml pages).
 - [x] **Switch a chat's model across engines**: the picker sets `ConversationSession.model` for every later turn. Messages are engine-neutral (`SessionMessage` + `MessageBlock`, rendered per engine when sent; migration 0030 copied OpenAI chats in). Drop the legacy `OpenAIMessage` table next release.
-- [ ] Turn on `skillbuilder` for the bots that should write their own tools (ergo-bots: boundcorp, devbox).
+- [x] Every bot gets `skillbuilder` (ergo-bots #48), and `DJANGO_ERGO["DEFAULT_SKILLS"]` (default `["skillbuilder"]`) gives it to every folder bot unless bot.yaml excludes it.
 - [x] **Schedule actions** (PR #34, merged): ordered `prompt` and `run` steps; `run` calls bot-folder Python and records a BotJob.
 - [x] **BotTable** (PR #35, merged): real Django models per bot, migrations in the bot folder's `migrations/` (bot_management writes them into the proposal), `ergo_bot_migrate` at start and after pulls, `tables` skill.
 - [x] **Pages and pins** (PR #36, merged): live .jhtml pages (sandboxed Jinja over tables), blocks, the `pages` plugin, chat pins (bot-folder files and pinned chat files), page viewer in the chat, `ctx.table()` for schedule code.
@@ -57,6 +57,8 @@ Live on rigel from `~/p/boundcorp/django-ergo`, bots from `boundcorp/ergo-bots`.
 - [ ] A visual blocks editor in the UI. Campaign names are Ad Manager's internal `AM:<uuid>:campaign` labels; friendly names would need Ad Manager's mapping.
 - [x] **Bot data and pages** (decided 2026-10-02): pinned files (repo files and bot-written attachments), blocks-based page toolkit, live .jhtml Jinja pages served straight from the file/attachment endpoints, templates from bots or PRs. No sandbox origin; all users share rows.
 
+- [x] Upgrade path: `wait_idle` also waits for queued or running workers; `ergonaut upgrade` and `ERGONAUT_AUTO_UPGRADE_SECONDS` upgrade to a new GitHub release once idle through a pluggable `ERGONAUT_UPGRADER` (`systemd`, `command`, or a class in the bot repo); images record `ERGONAUT_VERSION`.
+- [ ] Start publishing GitHub releases of django-ergo (auto-upgrades follow `releases` by default; `ERGONAUT_UPGRADE_CHANNEL=branch:main` follows main).
 - [ ] Bots with bash/orca in a multi-user Ergonaut: approvals are admin-only now; consider per-plugin approver lists.
 - [ ] Managed brokers without REDIS_URL fall back to in-process turn locks only.
 

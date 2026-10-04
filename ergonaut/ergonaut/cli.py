@@ -7,6 +7,7 @@ ergonaut beat     # Celery beat
 ergonaut bots     # every bot's long-running plugins
 ergonaut check    # load the bots and report problems
 ergonaut chat BOT # chat with a bot's root session in the terminal
+ergonaut upgrade  # upgrade to the newest GitHub release once idle; see ergonaut/upgrades
 ergonaut manage … # any manage.py command
 """
 
@@ -59,6 +60,8 @@ def main(argv: list[str] | None = None) -> int:
         return manage("bots_check", *rest)
     if command == "chat":
         return manage("bots_chat", *rest)
+    if command == "upgrade":
+        return manage("upgrade", *rest)
     if command == "manage":
         return manage(*rest)
     print(f"Unknown command {command!r}\n{USAGE}", file=sys.stderr)
