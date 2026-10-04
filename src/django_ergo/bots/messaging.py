@@ -7,7 +7,8 @@ message, which starts a turn there. Sending returns at once, like Codex's
 thread-to-thread delegation.
 
 - A message with no sender session came from a person: nothing is routed back.
-- A reply is never answered back, so two bots can't ping-pong; ``depth``
+- A reply is never answered back, so two bots can't ping-pong; a report upward
+  (``metadata["report"]``, see ``bots.orchestrator``) gets no reply at all; ``depth``
   caps chains of delegation (A asks B, which asks C...) at ``MAX_DEPTH``.
 - A recipient that is mid-turn or waiting for approval keeps the message
   queued until it is free.
@@ -78,6 +79,11 @@ def turn_text(message: ThreadMessage) -> str:
             "chat only with new work it hasn't been given; never send thanks, "
             "acknowledgements or 'keep going' nudges, since each message starts a "
             "full turn there.]"
+        )
+    elif sender is not None and (message.metadata or {}).get("report"):
+        header = (
+            f"[Report from {label(sender)} (thread {sender.id}). No reply goes back "
+            "to it: act on it if it needs action, and tell the user what matters.]"
         )
     elif sender is not None:
         header = (
@@ -353,5 +359,6 @@ def _route_reply(bot: Bot, session: ConversationSession, result: TurnResult) -> 
     message.status = ThreadMessageStatus.ANSWERED
     message.reply_text = text
     message.save(update_fields=["status", "reply_text", "updated_at"])
-    if message.sender_session_id and message.in_reply_to_id is None:
+    report = (message.metadata or {}).get("report")  # a one-way report: no reply back
+    if message.sender_session_id and message.in_reply_to_id is None and not report:
         reply(message, text, registry=bot.registry)

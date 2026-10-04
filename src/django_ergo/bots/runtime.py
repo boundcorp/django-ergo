@@ -190,6 +190,7 @@ class Bot:
 
     def _skill_defs(self) -> list[SkillDef]:
         """Everything this bot can load, as skills (see bots.skillset)."""
+        from django_ergo.bots.orchestrator import ORCHESTRATION_INSTRUCTIONS
         from django_ergo.bots.orchestrator import orchestrator_toolkit
         from django_ergo.bots.orchestrator import upward_toolkit
         from django_ergo.bots.overview import OverviewSource
@@ -225,6 +226,7 @@ class Bot:
                 SkillDef(
                     "orchestration",
                     "Delegate to your threads and to other bots, and check on them",
+                    instructions=ORCHESTRATION_INSTRUCTIONS,
                     toolkits=lambda ctx: [orchestrator_toolkit(ctx)],
                     context=lambda ctx, message: [OverviewSource(ctx)],
                     source="built-in",
@@ -716,7 +718,10 @@ class Bot:
         """The turn's context. ``incoming`` is False when resuming a stored turn."""
         ctx = self.tool_context(session)
         builder = ContextBuilder(budget_tokens=self.definition.budget_tokens)
-        empty = True
+        from django_ergo.bots.orchestrator import chat_identity
+
+        builder.add(TextContextSource("This chat", chat_identity(session), weight=3))
+        empty = False
         if self.definition.current_time:
             builder.add(
                 TextContextSource(
