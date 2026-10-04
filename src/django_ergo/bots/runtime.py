@@ -260,6 +260,18 @@ class Bot:
                 source="built-in",
             )
         )
+        if self.definition.root_dir is not None:
+            from django_ergo.bots.introspection import introspection_toolkit
+
+            defs.append(
+                SkillDef(
+                    "introspection",
+                    "Read your own config, instructions, tool code and files (read-only), "
+                    "and Ergo's source",
+                    toolkits=lambda ctx: [introspection_toolkit(self, ctx)],
+                    source="built-in",
+                )
+            )
         if self.definition.orchestration:
             defs.append(
                 SkillDef(

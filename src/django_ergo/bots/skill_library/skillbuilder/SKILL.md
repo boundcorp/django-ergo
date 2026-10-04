@@ -1,7 +1,7 @@
 ---
 name: skillbuilder
 description: Build or change this bot's skills, tools, tables, schedules and dashboard pages, and propose them as a pull request. Load it before writing any Python, bot.yaml, skill or .jhtml change.
-requires: [config_repo]
+requires: [config_repo, introspection]
 plugins:
   bot_management: {mode: propose_pr}
 ---
@@ -14,7 +14,10 @@ pull request. Nothing you write runs until a person merges it.
    change that's already proposed. `ergo_config_repo_pull` if main moved.
 2. Read before you write: `ergo_config_repo_list` the bot folder, then
    `ergo_config_repo_read` its `bot.yaml`, `agents.md` and the tool files
-   closest to what you're adding. Copy their style.
+   closest to what you're adding. Copy their style. To see how an Ergo
+   API works, load `introspection` and read its source with
+   `ergo_self_read("ergo:bots/tools.py")` (or `ergo:bots/pages.py`,
+   `ergo:bots/workers.py`, ...).
 3. Write with `ergo_config_repo_write` (whole files) and
    `ergo_config_repo_delete`. You're editing a draft worktree of main, so the
    running bots don't change.

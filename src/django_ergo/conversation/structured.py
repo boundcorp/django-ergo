@@ -65,6 +65,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import uuid
 from dataclasses import dataclass
 from dataclasses import field
 from typing import TYPE_CHECKING
@@ -357,6 +358,8 @@ async def _record_tools(call: StructuredCall, spec: StructuredCallSpec) -> None:
 
 async def _run_pre_seeds(pre_seeds: list[PreSeedCall]) -> list[SeededToolCall]:
     calls = []
+    # Unique per run: seeds repeat in every turn that pre-seeds, and a chat's tool ids should not.
+    batch = uuid.uuid4().hex[:8]
     for index, seed in enumerate(pre_seeds):
         try:
             result = await sync_to_async(seed.handler, thread_sensitive=True)(
@@ -367,7 +370,7 @@ async def _run_pre_seeds(pre_seeds: list[PreSeedCall]) -> list[SeededToolCall]:
             continue
         calls.append(
             SeededToolCall(
-                tool_use_id=f"preseed_{index}",
+                tool_use_id=f"preseed_{batch}_{index}",
                 name=seed.tool_name,
                 input=seed.tool_input,
                 result=result,

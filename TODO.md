@@ -50,6 +50,7 @@ Live on rigel from `~/p/boundcorp/django-ergo`, bots from `boundcorp/ergo-bots`.
 - [x] Each chat is told which chat it is ("This chat" block), and upward messages are one-way reports unless they `ask` (no acknowledgement turns).
 - [x] "Bots and threads" context block for orchestrating chats: every reachable bot, its chats with their status, latest-message snippets and open PRs, capped near 3k tokens (`bots/overview.py`, `orchestrator.thread_status`, `pull_requests:`, `OPEN_PRS`).
 - [x] Design to devbox handoff run live 2026-10-03: Design sent the History handoff itself, devbox picked Sonnet 5.5 from ModelsAvailable, an omp worker built it (#87 fixed omp model pinning), draft PR #88.
+- [x] `introspection` built-in skill for every bot loaded from a folder: read-only `ergo_self_overview`, `ergo_self_files`, `ergo_self_read` (bot folder, and Ergo's source via `ergo:` paths).
 - [ ] Try `orca_start_worker` live on devbox (after the Orca display restart).
 - [ ] A visual blocks editor in the UI. Campaign names are Ad Manager's internal `AM:<uuid>:campaign` labels; friendly names would need Ad Manager's mapping.
 - [x] **Bot data and pages** (decided 2026-10-02): pinned files (repo files and bot-written attachments), blocks-based page toolkit, live .jhtml Jinja pages served straight from the file/attachment endpoints, templates from bots or PRs. No sandbox origin; all users share rows.
