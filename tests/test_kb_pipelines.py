@@ -31,23 +31,23 @@ def source_session(user):
         transport_type="api",
         status="completed",
     )
-    from django_ergo.conversation.models import ClaudeContentBlock
-    from django_ergo.conversation.models import ClaudeMessage
+    from django_ergo.conversation.models import MessageBlock
+    from django_ergo.conversation.models import SessionMessage
 
-    m0 = ClaudeMessage.objects.create(session=session, role="user", sequence=0)
-    ClaudeContentBlock.objects.create(
+    m0 = SessionMessage.objects.create(session=session, role="user", sequence=0)
+    MessageBlock.objects.create(
         message=m0,
         block_type="text",
         sequence=0,
         text="I prefer morning deployments and use pytest for testing.",
     )
-    m1 = ClaudeMessage.objects.create(
+    m1 = SessionMessage.objects.create(
         session=session,
         role="assistant",
         sequence=1,
         stop_reason="end_turn",
     )
-    ClaudeContentBlock.objects.create(
+    MessageBlock.objects.create(
         message=m1,
         block_type="text",
         sequence=1,

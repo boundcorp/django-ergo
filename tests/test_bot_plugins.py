@@ -1323,7 +1323,7 @@ async def test_bot_looks_at_an_uploaded_image(tmp_path, settings):
     from asgiref.sync import sync_to_async
 
     from django_ergo.conversation.attachments import save_session_file
-    from django_ergo.conversation.models import ClaudeContentBlock
+    from django_ergo.conversation.models import MessageBlock
     from django_ergo.conversation.models import StructuredCall
 
     settings.MEDIA_ROOT = str(tmp_path / "media")
@@ -1356,7 +1356,7 @@ async def test_bot_looks_at_an_uploaded_image(tmp_path, settings):
         },
     }
     # History keeps a reference to the file, not the bytes.
-    block = await ClaudeContentBlock.objects.aget(
+    block = await MessageBlock.objects.aget(
         block_type="tool_result", message__session=root, tool_result_for="toolu_1"
     )
     assert block.tool_result_content[1]["attachment_id"] == str(photo.id)

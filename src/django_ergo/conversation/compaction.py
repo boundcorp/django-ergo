@@ -202,9 +202,7 @@ def _is_tool_results(message: dict) -> bool:
 
 
 def _message_rows(session: ConversationSession):
-    if session.engine_type == "openai":
-        return session.openai_messages
-    return session.claude_messages
+    return session.messages
 
 
 def _is_turn_start(message: dict) -> bool:
@@ -245,7 +243,7 @@ async def decide_compaction(  # noqa: C901, PLR0911
         return None
     config = compaction_config(session)
     current = await sync_to_async(latest_compaction)(session)
-    rows = _message_rows(session).exclude(role="system")
+    rows = _message_rows(session).all()
     if current:
         rows = rows.filter(sequence__gt=current.upto_sequence)
 

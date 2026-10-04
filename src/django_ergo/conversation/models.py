@@ -69,6 +69,10 @@ class ConversationSession(TimeStampedMixin):
         choices=TransportType.choices,
     )
     session_id = models.CharField(max_length=255, blank=True, default="")
+    # The provider/model picked for this chat (a providers.yaml ref, e.g.
+    # "claude/claude-opus-5-5"); "" uses the bot's default. Messages are stored
+    # engine-neutral (SessionMessage), so any model can take the next turn.
+    model = models.CharField(max_length=200, blank=True, default="")
     status = models.CharField(
         max_length=20,
         choices=SessionStatus.choices,
@@ -108,27 +112,36 @@ class ConversationSession(TimeStampedMixin):
         return f"{self.user} - {self.engine_type} ({self.status})"
 
 
-class ClaudeMessageRole(models.TextChoices):
+class SessionMessageRole(models.TextChoices):
     USER = "user", "User"
     ASSISTANT = "assistant", "Assistant"
 
 
-class ClaudeMessage(TimeStampedMixin):
-    """A message in a Claude conversation."""
+class SessionMessage(TimeStampedMixin):
+    """A message in a conversation, stored the same way for every engine.
+
+    A message is a role and a list of content blocks (text, tool calls, tool
+    results, thinking). Tool results go in user messages. Each engine renders
+    these rows into its own API's format when it sends them (see
+    ``claude_message_dict`` and ``openai_message_dicts``), so a chat can move
+    between models on different engines. The system prompt isn't stored here:
+    it comes from the session on every call.
+    """
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     session = models.ForeignKey(
         ConversationSession,
         on_delete=models.CASCADE,
-        related_name="claude_messages",
+        related_name="messages",
     )
     role = models.CharField(
         max_length=20,
-        choices=ClaudeMessageRole.choices,
+        choices=SessionMessageRole.choices,
     )
     stop_reason = models.CharField(max_length=30, null=True, blank=True)  # noqa: DJ001
     input_tokens = models.IntegerField(null=True, blank=True)
     output_tokens = models.IntegerField(null=True, blank=True)
+    reasoning_tokens = models.IntegerField(null=True, blank=True)  # in output_tokens
     model_name = models.CharField(max_length=100, null=True, blank=True)  # noqa: DJ001
     cache_creation_input_tokens = models.IntegerField(null=True, blank=True)
     cache_read_input_tokens = models.IntegerField(null=True, blank=True)
@@ -151,11 +164,11 @@ class ContentBlockType(models.TextChoices):
     THINKING = "thinking", "Thinking"
 
 
-class ClaudeContentBlock(TimeStampedMixin):
-    """A content block within a Claude message."""
+class MessageBlock(TimeStampedMixin):
+    """A content block within a SessionMessage."""
 
     message = models.ForeignKey(
-        ClaudeMessage,
+        SessionMessage,
         on_delete=models.CASCADE,
         related_name="content_blocks",
     )
@@ -191,6 +204,11 @@ class ClaudeContentBlock(TimeStampedMixin):
         return f"{self.message} - {self.block_type} [{self.sequence}]"
 
 
+# The names these models had before messages were engine-neutral.
+ClaudeMessage = SessionMessage
+ClaudeContentBlock = MessageBlock
+
+
 class OpenAIMessageRole(models.TextChoices):
     USER = "user", "User"
     ASSISTANT = "assistant", "Assistant"
@@ -199,13 +217,17 @@ class OpenAIMessageRole(models.TextChoices):
 
 
 class OpenAIMessage(TimeStampedMixin):
-    """A message in an OpenAI conversation."""
+    """Legacy: OpenAI chats' messages before they moved to SessionMessage.
+
+    Migration 0030 copied these rows into SessionMessage. Nothing reads or
+    writes them now; the table is kept for one release, then dropped.
+    """
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     session = models.ForeignKey(
         ConversationSession,
         on_delete=models.CASCADE,
-        related_name="openai_messages",
+        related_name="legacy_openai_messages",
     )
     role = models.CharField(
         max_length=20,

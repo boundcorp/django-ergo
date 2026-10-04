@@ -13,11 +13,10 @@ from django_ergo.conversation.compaction import compact_session
 from django_ergo.conversation.compaction import decide_compaction
 from django_ergo.conversation.compaction import maybe_compact
 from django_ergo.conversation.engines.openai_api import OpenAIAPIEngine
-from django_ergo.conversation.models import ClaudeContentBlock
-from django_ergo.conversation.models import ClaudeMessage
 from django_ergo.conversation.models import ConversationCompaction
 from django_ergo.conversation.models import ConversationSession
-from django_ergo.conversation.models import OpenAIMessage
+from django_ergo.conversation.models import MessageBlock
+from django_ergo.conversation.models import SessionMessage
 from django_ergo.conversation.models import StructuredCall
 from django_ergo.conversation.renderer import ConversationRenderer
 from django_ergo.conversation.runner import run_conversation_turn
@@ -47,16 +46,16 @@ def make_session(user, mode="none", config=None, engine_type="claude"):
 
 
 def add(session, role, text=None, *, tool_use=None, tool_result=None, **fields):
-    seq = session.claude_messages.count()
-    msg = ClaudeMessage.objects.create(
+    seq = session.messages.count()
+    msg = SessionMessage.objects.create(
         session=session, role=role, sequence=seq, **fields
     )
     if text is not None:
-        ClaudeContentBlock.objects.create(
+        MessageBlock.objects.create(
             message=msg, block_type="text", sequence=0, text=text
         )
     if tool_use:
-        ClaudeContentBlock.objects.create(
+        MessageBlock.objects.create(
             message=msg,
             block_type="tool_use",
             sequence=1,
@@ -65,7 +64,7 @@ def add(session, role, text=None, *, tool_use=None, tool_result=None, **fields):
             tool_input={},
         )
     if tool_result:
-        ClaudeContentBlock.objects.create(
+        MessageBlock.objects.create(
             message=msg,
             block_type="tool_result",
             sequence=0,
@@ -76,7 +75,7 @@ def add(session, role, text=None, *, tool_use=None, tool_result=None, **fields):
 
 
 def chat(session, turns):
-    start = session.claude_messages.count() // 2
+    start = session.messages.count() // 2
     for i in range(start, start + turns):
         add(session, "user", f"question {i}")
         add(session, "assistant", f"answer {i}")
@@ -384,24 +383,15 @@ async def test_openai_summary_goes_after_system_message(user):
         user, "rolling", {"keep_recent": 0}, engine_type="openai"
     )
 
-    def build():
-        OpenAIMessage.objects.create(
-            session=session, role="system", content="Be brief.", sequence=0
-        )
-        OpenAIMessage.objects.create(
-            session=session, role="user", content="q0", sequence=1
-        )
-        OpenAIMessage.objects.create(
-            session=session, role="assistant", content="a0", sequence=2
-        )
-
-    await sync_to_async(build)()
+    session.system_prompt = "Be brief."
+    await session.asave()
+    await sync_to_async(chat)(session, 1)
     engine = OpenAIAPIEngine(config={})
     compaction = await compact_session(
         session, engine, keep_recent=0, summarizer=RecordingSummarizer()
     )
 
-    assert compaction.from_sequence == 1
+    assert compaction.from_sequence == 0
     context = await _context(engine, session)
     assert [m["role"] for m in context] == ["system", "user"]
     assert context[0]["content"] == "Be brief."

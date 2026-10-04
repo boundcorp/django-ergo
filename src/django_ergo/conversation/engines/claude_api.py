@@ -6,10 +6,8 @@ from typing import TYPE_CHECKING
 from typing import Any
 
 from django_ergo.conversation.adapters import ClaudeToolAdapter
-from django_ergo.conversation.attachments import Attachment
 from django_ergo.conversation.attachments import attachments_by_sequence
 from django_ergo.conversation.attachments import claude_block
-from django_ergo.conversation.attachments import save_attachments
 from django_ergo.conversation.compaction import apply_native_window
 from django_ergo.conversation.compaction import latest_compaction
 from django_ergo.conversation.compaction import render_summary_message
@@ -21,8 +19,10 @@ from django_ergo.conversation.engine import session_system_prompt
 from django_ergo.conversation.images import attachment_ref
 from django_ergo.conversation.images import memory_result
 from django_ergo.conversation.images import prepare_messages
-from django_ergo.conversation.images import result_content
-from django_ergo.conversation.images import stored_result
+from django_ergo.conversation.messages import StoredMessagesMixin
+from django_ergo.conversation.messages import add_message
+from django_ergo.conversation.messages import tool_result_content  # noqa: F401
+from django_ergo.conversation.messages import tool_use_block
 from django_ergo.conversation.telemetry import record_usage
 from django_ergo.conversation.telemetry import trace_engine_call
 from django_ergo.conversation.tool_results import trim_tool_results
@@ -35,12 +35,6 @@ if TYPE_CHECKING:
 def attachment_block(row) -> dict:
     """A user-message attachment: images as references (sent by prepare_messages)."""
     return attachment_ref(row) if row.kind == "image" else claude_block(row)
-
-
-async def tool_result_content(session, result: Any) -> str | list[dict]:
-    """What a tool_result block stores: the text, or text plus image references."""
-    text, refs = await stored_result(session, result)
-    return result_content(text, refs) if refs else text
 
 
 def without_unsigned_thinking(messages: list[dict]) -> list[dict]:
@@ -59,7 +53,7 @@ def without_unsigned_thinking(messages: list[dict]) -> list[dict]:
 
 
 def claude_message_dict(msg) -> dict:
-    """Convert a ClaudeMessage row (with content_blocks) to an API message dict."""
+    """Convert a SessionMessage row (with content_blocks) to an API message dict."""
     content = []
     for block in msg.content_blocks.all():
         if block.block_type == "text":
@@ -87,7 +81,7 @@ def claude_message_dict(msg) -> dict:
     return {"role": msg.role, "content": content}
 
 
-class ClaudeAPIEngine(Engine):
+class ClaudeAPIEngine(StoredMessagesMixin, Engine):
     """Engine implementation that uses the Anthropic Claude API directly."""
 
     engine_type = "claude"
@@ -118,8 +112,8 @@ class ClaudeAPIEngine(Engine):
         return self._adapter
 
     def history_rows(self, session, after_sequence: int | None = None) -> list:
-        """Return [(ClaudeMessage, message dict), ...] in sequence order."""
-        rows = session.claude_messages.prefetch_related("content_blocks")
+        """Return [(SessionMessage, message dict), ...] in sequence order."""
+        rows = session.messages.prefetch_related("content_blocks")
         if after_sequence is not None:
             rows = rows.filter(sequence__gt=after_sequence)
         attachments = attachments_by_sequence(session)
@@ -132,7 +126,13 @@ class ClaudeAPIEngine(Engine):
                     *(attachment_block(row) for row in attachments[msg.sequence]),
                     *message["content"],
                 ]
-            result.append((msg, message))
+            # The API refuses empty text blocks and empty messages (e.g. a
+            # files-only message, or an empty reply stored by another engine).
+            content = [
+                b for b in message["content"] if b["type"] != "text" or b.get("text")
+            ]
+            if content:
+                result.append((msg, {**message, "content": content}))
         return result
 
     def reconstruct_messages(self, session) -> list[dict]:
@@ -183,13 +183,10 @@ class ClaudeAPIEngine(Engine):
         """No-op: the API is stateless, nothing to clean up."""
         return
 
-    async def _process_response(
-        self, session, seq: int, additional_tools: list[dict] | None = None
+    async def _call(
+        self, session, additional_tools: list[dict] | None = None
     ) -> AsyncIterator[EngineResponse]:
         """Call the API with current session history and persist + yield response blocks."""
-        from django_ergo.conversation.models import ClaudeContentBlock
-        from django_ergo.conversation.models import ClaudeMessage
-
         with trace_engine_call(
             operation="send",
             engine_type=self.engine_type,
@@ -240,10 +237,44 @@ class ClaudeAPIEngine(Engine):
                 cache_read=getattr(response.usage, "cache_read_input_tokens", None),
             )
 
-            assistant_msg = await ClaudeMessage.objects.acreate(
-                session=session,
-                role="assistant",
-                sequence=seq,
+            blocks: list[dict] = []
+            events: list[EngineResponse] = []
+            for block in response.content:
+                if block.type == "text":
+                    blocks.append({"block_type": "text", "text": block.text})
+                    events.append(
+                        EngineResponse(
+                            event_type="text", raw={"type": "text"}, text=block.text
+                        )
+                    )
+                elif block.type == "tool_use":
+                    blocks.append(tool_use_block(block.id, block.name, block.input))
+                    events.append(
+                        EngineResponse(
+                            event_type="tool_use",
+                            raw={"type": "tool_use"},
+                            tool_use={
+                                "id": block.id,
+                                "name": block.name,
+                                "input": block.input,
+                            },
+                        )
+                    )
+                elif block.type == "thinking":
+                    blocks.append(
+                        {"block_type": "thinking", "thinking": block.thinking}
+                    )
+                    events.append(
+                        EngineResponse(
+                            event_type="thinking",
+                            raw={"type": "thinking"},
+                            thinking=block.thinking,
+                        )
+                    )
+            await add_message(
+                session,
+                "assistant",
+                blocks,
                 stop_reason=response.stop_reason,
                 input_tokens=response.usage.input_tokens,
                 output_tokens=response.usage.output_tokens,
@@ -255,186 +286,12 @@ class ClaudeAPIEngine(Engine):
                     response.usage, "cache_read_input_tokens", None
                 ),
             )
-
-            for block_seq, block in enumerate(response.content):
-                if block.type == "text":
-                    await ClaudeContentBlock.objects.acreate(
-                        message=assistant_msg,
-                        block_type="text",
-                        sequence=block_seq,
-                        text=block.text,
-                    )
-                    yield EngineResponse(
-                        event_type="text", raw={"type": "text"}, text=block.text
-                    )
-                elif block.type == "tool_use":
-                    await ClaudeContentBlock.objects.acreate(
-                        message=assistant_msg,
-                        block_type="tool_use",
-                        sequence=block_seq,
-                        tool_use_id=block.id,
-                        tool_name=block.name,
-                        tool_input=block.input,
-                    )
-                    yield EngineResponse(
-                        event_type="tool_use",
-                        raw={"type": "tool_use"},
-                        tool_use={
-                            "id": block.id,
-                            "name": block.name,
-                            "input": block.input,
-                        },
-                    )
-                elif block.type == "thinking":
-                    await ClaudeContentBlock.objects.acreate(
-                        message=assistant_msg,
-                        block_type="thinking",
-                        sequence=block_seq,
-                        thinking=block.thinking,
-                    )
-                    yield EngineResponse(
-                        event_type="thinking",
-                        raw={"type": "thinking"},
-                        thinking=block.thinking,
-                    )
+            for event in events:
+                yield event
 
             yield EngineResponse(
                 event_type="done", raw={"stop_reason": response.stop_reason}
             )
-
-    async def append_user_message(
-        self,
-        session,
-        message: str,
-        attachments: list[Attachment] | None = None,
-    ) -> None:
-        from django_ergo.conversation.models import ClaudeContentBlock
-        from django_ergo.conversation.models import ClaudeMessage
-
-        seq = await session.claude_messages.acount()
-        user_msg = await ClaudeMessage.objects.acreate(
-            session=session, role="user", sequence=seq
-        )
-        await ClaudeContentBlock.objects.acreate(
-            message=user_msg, block_type="text", sequence=0, text=message
-        )
-        if attachments:
-            await save_attachments(session, seq, attachments)
-
-    async def append_tool_exchange(self, session, calls: list[SeededToolCall]) -> None:
-        from django_ergo.conversation.models import ClaudeContentBlock
-        from django_ergo.conversation.models import ClaudeMessage
-
-        if not calls:
-            return
-        seq = await session.claude_messages.acount()
-        call_msg = await ClaudeMessage.objects.acreate(
-            session=session, role="assistant", sequence=seq, stop_reason="tool_use"
-        )
-        result_msg = await ClaudeMessage.objects.acreate(
-            session=session, role="user", sequence=seq + 1
-        )
-        for block_seq, call in enumerate(calls):
-            await ClaudeContentBlock.objects.acreate(
-                message=call_msg,
-                block_type="tool_use",
-                sequence=block_seq,
-                tool_use_id=call.tool_use_id,
-                tool_name=call.name,
-                tool_input=call.input,
-            )
-            await ClaudeContentBlock.objects.acreate(
-                message=result_msg,
-                block_type="tool_result",
-                sequence=block_seq,
-                tool_result_for=call.tool_use_id,
-                tool_result_content=await tool_result_content(session, call.result),
-                is_error=call.is_error,
-            )
-
-    async def respond(
-        self, session, additional_tools: list[dict] | None = None
-    ) -> AsyncIterator[EngineResponse]:
-        seq = await session.claude_messages.acount()
-        async for event in self._process_response(session, seq, additional_tools):
-            yield event
-
-    async def send(
-        self,
-        session,
-        message: str,
-        additional_tools: list[dict] | None = None,
-        attachments: list[Attachment] | None = None,
-    ) -> AsyncIterator[EngineResponse]:
-        await self.append_user_message(session, message, attachments)
-        async for event in self.respond(session, additional_tools):
-            yield event
-
-    async def submit_tool_result(
-        self,
-        session,
-        tool_use_id: str,
-        result: Any,
-        is_error: bool = False,
-        additional_tools: list[dict] | None = None,
-    ) -> AsyncIterator[EngineResponse]:
-        from django_ergo.conversation.models import ClaudeContentBlock
-        from django_ergo.conversation.models import ClaudeMessage
-
-        seq = await session.claude_messages.acount()
-        result_msg = await ClaudeMessage.objects.acreate(
-            session=session, role="user", sequence=seq
-        )
-        await ClaudeContentBlock.objects.acreate(
-            message=result_msg,
-            block_type="tool_result",
-            sequence=0,
-            tool_result_for=tool_use_id,
-            tool_result_content=await tool_result_content(session, result),
-            is_error=is_error,
-        )
-
-        async for event in self._process_response(session, seq + 1, additional_tools):
-            yield event
-
-    async def _persist_tool_result(
-        self,
-        session,
-        tool_use_id: str,
-        result: Any,
-        is_error: bool = False,
-    ) -> None:
-        from django_ergo.conversation.models import ClaudeContentBlock
-        from django_ergo.conversation.models import ClaudeMessage
-
-        seq = await session.claude_messages.acount()
-        result_msg = await ClaudeMessage.objects.acreate(
-            session=session, role="user", sequence=seq
-        )
-        await ClaudeContentBlock.objects.acreate(
-            message=result_msg,
-            block_type="tool_result",
-            sequence=0,
-            tool_result_for=tool_use_id,
-            tool_result_content=await tool_result_content(session, result),
-            is_error=is_error,
-        )
-
-    async def append_assistant_text(self, session, text: str) -> None:
-        from django_ergo.conversation.models import ClaudeContentBlock
-        from django_ergo.conversation.models import ClaudeMessage
-
-        seq = await session.claude_messages.acount()
-        msg = await ClaudeMessage.objects.acreate(
-            session=session,
-            role="assistant",
-            sequence=seq,
-            stop_reason="end_turn",
-            model_name=self.model,
-        )
-        await ClaudeContentBlock.objects.acreate(
-            message=msg, block_type="text", sequence=0, text=text
-        )
 
     # -- Sessionless calls ------------------------------------------------
 

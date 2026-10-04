@@ -1,6 +1,6 @@
 ---
 name: skillbuilder
-description: Build or change this bot's skills, tools, tables, schedules and dashboard pages, and propose them as a pull request. Load it before writing any Python, bot.yaml, skill or .jhtml change.
+description: Build or change this bot's dashboards and pages (.jhtml), tables, tools, schedules and skills, and propose them as a pull request. Use it for any change to a bot's own folder, such as a new dashboard or a column on a table, instead of Orca workers. Load it before writing any Python, bot.yaml, skill or .jhtml change.
 requires: [config_repo, introspection]
 plugins:
   bot_management: {mode: propose_pr}

@@ -675,7 +675,6 @@ export function Chat({ onChange }: { onChange: () => void }) {
             <ModelPicker
               bot={detail.session.bot}
               value={detail.session.model ?? ''}
-              engineType={detail.session.engine_type}
               onPick={async model => {
                 await api.setModel(id, model).catch(e => setError(String(e.message ?? e)))
                 await load()

@@ -35,14 +35,13 @@ class BotsConfig(AppConfig):
                 notify(instance.sender_session_id)
                 return
             session_id = getattr(instance, "session_id", None)
-            if session_id is None and sender is ergo_models.ClaudeContentBlock:
+            if session_id is None and sender is ergo_models.MessageBlock:
                 session_id = getattr(instance.message, "session_id", None)
             notify(session_id)
 
         for model in (
-            ergo_models.ClaudeMessage,
-            ergo_models.ClaudeContentBlock,
-            ergo_models.OpenAIMessage,
+            ergo_models.SessionMessage,
+            ergo_models.MessageBlock,
             ergo_models.StructuredCall,
             ergo_models.ConversationAttachment,
             ergo_models.ThreadMessage,

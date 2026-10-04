@@ -6,7 +6,7 @@ from django.contrib.auth import get_user_model
 
 from django_ergo.conversation.importers import ImportService
 from django_ergo.conversation.importers.claude_cli import ClaudeCLIImporter
-from django_ergo.conversation.models import ClaudeMessage
+from django_ergo.conversation.models import SessionMessage
 
 User = get_user_model()
 pytestmark = pytest.mark.django_db
@@ -106,7 +106,7 @@ class TestClaudeCLIImporter:
         assert session.metadata.get("imported_from") == "cli_session"
 
         messages = list(
-            ClaudeMessage.objects.filter(session=session).order_by("sequence")
+            SessionMessage.objects.filter(session=session).order_by("sequence")
         )
         assert len(messages) == EXPECTED_MESSAGE_COUNT
 
