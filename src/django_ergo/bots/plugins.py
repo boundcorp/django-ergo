@@ -46,6 +46,7 @@ OFFICIAL_PLUGINS = {
     "bash": "django_ergo.plugins.bash.BashPlugin",
     "kubectl": "django_ergo.plugins.kubectl.KubectlPlugin",
     "attachments": "django_ergo.plugins.attachments.AttachmentsPlugin",
+    "pages": "django_ergo.plugins.pages.PagesPlugin",
 }
 
 
