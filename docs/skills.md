@@ -14,7 +14,7 @@ carries a short tool list and the prompt stays small.
 | a tool file in `tools:` (`tools/tandoor.py`) | `tandoor` | the module docstring's first line |
 | a plugin with tools (`orca`, `bash`, `attachments`, `pages`, ...) | the plugin's name (`ergo_kb` is `kb`, `bot_management` is `config_repo`) | the plugin |
 | a `toolkits:` factory (`myapp.toolkits:make_toolkit`) | the factory's name (`make_toolkit`) | the factory's docstring |
-| built-ins | `history`, `orchestration`, `workers`, `tables` (when the bot has tables) | |
+| built-ins | `history`, `orchestration`, `workers`, `introspection` (bots loaded from a folder), `tables` (when the bot has tables) | |
 
 ## Writing a skill
 
