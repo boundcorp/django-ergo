@@ -177,6 +177,12 @@ export function Chat({ onChange }: { onChange: () => void }) {
         d
           ? {
               ...merge(d, messages, calls),
+              // New lines past the newest one count toward the session's total.
+              message_count:
+                d.message_count == null
+                  ? undefined
+                  : d.message_count +
+                    new Set(messages.map(m => m.line).filter(line => !d.messages.some(m => m.line === line))).size,
               ...(requests ? { requests } : {}),
               ...(title ? { session: { ...d.session, title } } : {}),
               ...(workers ? { workers } : {}),
@@ -334,7 +340,8 @@ export function Chat({ onChange }: { onChange: () => void }) {
           <div>
             <div className="text-2xl font-bold">{detail.session.title}</div>
             <div className="mt-1 text-sm text-muted">
-              {detail.session.bot} · {detail.session.role || 'session'} · {detail.messages.length} messages
+              {detail.session.bot} · {detail.session.role || 'session'} ·{' '}
+              {(detail.message_count ?? detail.messages.length).toLocaleString()} messages
               {detail.session.started_by && detail.session.started_by_id && (
                 <>
                   {' · started by '}

@@ -99,7 +99,7 @@ bots whose `permissions.users` include them (or that set none), and only
 their own sessions. Only admins can approve tools of bots with the `bash`,
 `orca` or `bot_management` plugins.
 
-- **Sidebar**: each bot, with its icon and color from bot.yaml, and your main chat, named chats and threads. A
+- **Sidebar**: each bot with its icon and color from bot.yaml; the bot's name opens your main chat (its pins sit under it), then named chats and threads. A
   spinner means a turn or worker is running; a blue dot, unread replies; a
   yellow dot, a chat waiting on you (an approval or a question).
 - **Chat**: a model picker in the header (with a `providers.yaml`), the

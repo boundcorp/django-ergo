@@ -5,6 +5,41 @@ import { api } from '../api'
 import BotIcon from './BotIcon'
 import { pinIcon } from './Pins'
 
+// A chat's state: a spinner while it works, otherwise a dot (attention, unread, delegated, done, open).
+function StatusDot({ session, unread }: { session: Session; unread: boolean }) {
+  return session.busy ? (
+    <span
+      title="Working"
+      className="h-2.5 w-2.5 shrink-0 animate-spin rounded-full border-[1.5px] border-indigo-500 border-t-transparent"
+    />
+  ) : (
+    <span
+      title={
+        session.attention
+          ? 'Needs your attention'
+          : unread
+            ? 'Unread reply'
+            : session.open_in
+              ? 'Working on a delegated request'
+              : session.open_out
+                ? 'Waiting on another thread'
+                : undefined
+      }
+      className={`shrink-0 rounded-full ${
+        session.attention
+          ? 'h-2 w-2 bg-amber-400'
+          : unread
+            ? 'h-2 w-2 bg-sky-500'
+            : session.open_in
+              ? 'h-1.5 w-1.5 animate-pulse bg-indigo-400'
+              : session.status === 'completed'
+                ? 'h-1.5 w-1.5 bg-zinc-400'
+                : 'h-1.5 w-1.5 bg-emerald-500'
+      }`}
+    />
+  )
+}
+
 function SessionLink({ session, nested }: { session: Session; nested?: boolean }) {
   // The open chat is being read, so its reply is never shown as unread.
   const open = useMatch(`/s/${session.id}`)
@@ -18,37 +53,7 @@ function SessionLink({ session, nested }: { session: Session; nested?: boolean }
         }`
       }
     >
-      {session.busy ? (
-        <span
-          title="Working"
-          className="h-2.5 w-2.5 shrink-0 animate-spin rounded-full border-[1.5px] border-indigo-500 border-t-transparent"
-        />
-      ) : (
-        <span
-          title={
-            session.attention
-              ? 'Needs your attention'
-              : unread
-                ? 'Unread reply'
-                : session.open_in
-                  ? 'Working on a delegated request'
-                  : session.open_out
-                    ? 'Waiting on another thread'
-                    : undefined
-          }
-          className={`shrink-0 rounded-full ${
-            session.attention
-              ? 'h-2 w-2 bg-amber-400'
-              : unread
-                ? 'h-2 w-2 bg-sky-500'
-                : session.open_in
-                  ? 'h-1.5 w-1.5 animate-pulse bg-indigo-400'
-                  : session.status === 'completed'
-                    ? 'h-1.5 w-1.5 bg-zinc-400'
-                    : 'h-1.5 w-1.5 bg-emerald-500'
-          }`}
-        />
-      )}
+      <StatusDot session={session} unread={!!unread} />
       <span className="truncate">{session.title}</span>
       {!!session.open_out && (
         <span className="ml-auto shrink-0 text-xs text-zinc-400" title="Waiting on other threads">
@@ -56,6 +61,38 @@ function SessionLink({ session, nested }: { session: Session; nested?: boolean }
         </span>
       )}
     </NavLink>
+  )
+}
+
+// The bot's name, opening its main chat (and showing that chat's state), or starting it.
+function BotTitle({ bot, main, onStart }: { bot: Bot; main?: Session; onStart: () => void }) {
+  const open = useMatch(main ? `/s/${main.id}` : '/__none__')
+  const unread = !!main?.unread && !open
+  const body = (
+    <>
+      <BotIcon bot={bot} />
+      <span className="truncate">{bot.name}</span>
+      {main && <StatusDot session={main} unread={unread} />}
+      {!!main?.open_out && (
+        <span className="text-xs font-normal text-zinc-400" title="Waiting on other threads">
+          ⏳{main.open_out > 1 ? main.open_out : ''}
+        </span>
+      )}
+    </>
+  )
+  const style = 'flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-2 text-sm font-semibold text-ink'
+  return main ? (
+    <NavLink
+      to={`/s/${main.id}`}
+      title={bot.description || undefined}
+      className={({ isActive }) => `${style} ${isActive ? 'bg-indigo-tint' : 'hover:bg-raised'}`}
+    >
+      {body}
+    </NavLink>
+  ) : (
+    <button title="Start chatting" className={`${style} text-left hover:bg-raised`} onClick={onStart}>
+      {body}
+    </button>
   )
 }
 
@@ -124,18 +161,19 @@ export function Sidebar({
         const chats = bot.chats?.length
           ? bot.chats
           : [{ name: 'main', description: '', session_id: bot.root_session_id }]
+        const main = mine.find(s => s.id === chats.find(c => c.name === 'main')?.session_id)
         const threads = mine.filter(s => s.role === 'thread' && s.status !== 'completed')
         const archived = mine.filter(s => s.role === 'thread' && s.status === 'completed')
         return (
           <section key={bot.name} className="space-y-1">
-            <div className="mb-1 flex items-center px-2">
+            <div className="flex items-center gap-1">
+              <BotTitle bot={bot} main={main} onStart={() => openChat(bot, 'main')} />
               <Link
                 to={`/bots/${bot.name}`}
                 title="Bot options: tools and skills"
-                className="flex items-center gap-2 rounded-lg px-2 py-2 text-sm font-semibold text-ink hover:bg-raised"
+                className="rounded px-1 text-sm text-zinc-500 hover:bg-raised"
               >
-                <BotIcon bot={bot} />
-                {bot.name} ⚙
+                ⚙
               </Link>
               {bot.orchestration && (
                 <button
@@ -147,24 +185,27 @@ export function Sidebar({
                 </button>
               )}
             </div>
-            {chats.map(chat => {
-              const session = mine.find(s => s.id === chat.session_id)
-              return session ? (
-                <div key={chat.name}>
-                  <SessionLink session={session} />
-                  <PinLinks session={session} pins={pins[session.id]} />
-                </div>
-              ) : (
-                <button
-                  key={chat.name}
-                  title={chat.description || undefined}
-                  className="w-full rounded-md px-2 py-1 text-left text-sm text-indigo-600 hover:bg-zinc-100 dark:hover:bg-zinc-900"
-                  onClick={() => openChat(bot, chat.name)}
-                >
-                  {chat.name === 'main' ? 'Start chatting' : `Open ${chat.description || chat.name}`}
-                </button>
-              )
-            })}
+            {main && <PinLinks session={main} pins={pins[main.id]} />}
+            {chats
+              .filter(chat => chat.name !== 'main')
+              .map(chat => {
+                const session = mine.find(s => s.id === chat.session_id)
+                return session ? (
+                  <div key={chat.name}>
+                    <SessionLink session={session} />
+                    <PinLinks session={session} pins={pins[session.id]} />
+                  </div>
+                ) : (
+                  <button
+                    key={chat.name}
+                    title={chat.description || undefined}
+                    className="w-full rounded-md px-2 py-1 text-left text-sm text-indigo-600 hover:bg-zinc-100 dark:hover:bg-zinc-900"
+                    onClick={() => openChat(bot, chat.name)}
+                  >
+                    Open {chat.description || chat.name}
+                  </button>
+                )
+              })}
             {threads.map(t => (
               <div key={t.id}>
                 <SessionLink session={t} nested />

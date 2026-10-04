@@ -161,6 +161,7 @@ class SessionDetailOut(Schema):
     # Paging: the first line returned, and whether older messages exist (ask with before=first_line).
     first_line: int | None = None
     has_more: bool = False
+    message_count: int = 0  # in the whole session, not just this page
 
 
 PAGE_MESSAGES = 50
@@ -833,6 +834,7 @@ def session_detail(request, session_id: str, before: int | None = None, limit: i
         ],
         "first_line": messages[0]["line"] if messages else first_line,
         "has_more": first_line is not None,
+        "message_count": session.claude_messages.count() or session.openai_messages.count(),
     }
 
 
