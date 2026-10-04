@@ -839,6 +839,17 @@ def test_threads_are_grouped_by_status_with_the_bots_status_line(client, cook, u
         url="https://github.com/acme/app/pull/40",
         metadata={"link": GITHUB_PR, "repo": "acme/app", "number": 40, "state": "merged"},
     )
+    # A quiet thread with an open pull request is ready for review.
+    review = ConversationSession.objects.create(
+        user=cook, bot_name="kitchen", parent_id=root["id"], metadata={"bot_role": "thread", "title": "Fix it"}
+    )
+    ConversationAttachment.objects.create(
+        session=review,
+        url="https://github.com/acme/app/pull/41",
+        metadata={"link": GITHUB_PR, "repo": "acme/app", "number": 41, "state": "open"},
+    )
+    assert listed(str(review.id))["bucket"] == "review"
+
     s = listed(str(thread.id))
     assert (s["bucket"], s["status_line"]) == ("resolved", "Shipped in PR 40")
     assert [(pr["number"], pr["state"]) for pr in s["prs"]] == [(40, "merged")]

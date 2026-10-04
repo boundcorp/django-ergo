@@ -112,9 +112,10 @@ refuse logins until the window passes.
 
 - **Sidebar**: each bot with its icon and color from bot.yaml; the bot's
   name opens your main chat (its pins sit under it), then named chats, then
-  its threads grouped by status: Pinned, Waiting on you, Working, Idle and
-  Resolved (Idle and Resolved start folded; a message reopens a resolved
-  thread). Each thread shows the bot's one-line status from its latest reply
+  its threads grouped by status: Pinned, Ready for review (quiet, with an
+  open pull request), Waiting on you, Working, Idle and Resolved. Idle and
+  Resolved show a few rows, then "Show more"; Resolved starts folded and its
+  rows are a dimmed title (a message reopens a resolved thread). Each thread shows the bot's one-line status from its latest reply
   (`ChatReply.status`), led by Approval, Question or Failed when it waits on
   you. A spinner means a turn or worker is running; a blue dot, unread
   replies; a yellow dot, a chat waiting on you.

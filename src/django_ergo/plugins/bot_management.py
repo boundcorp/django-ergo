@@ -66,7 +66,8 @@ MAX_READ_CHARS = 50_000
 class BotManagementPlugin(BotPlugin):
     name = "bot_management"
     description = (
-        "Read and change this bot repository: config, instructions, skills, new bots"
+        "Read and change this bot repository: config, instructions, skills, tools, tables, "
+        "schedules, dashboards and pages, new bots"
     )
 
     @property
