@@ -26,7 +26,14 @@ from ninja import File, Router, Schema, UploadedFile
 from ninja.errors import HttpError
 from ninja.security import django_auth
 
-from ergonaut.apps.bots.tasks import peek_inbox, queue_message, queue_turn, request_stop, unsend
+from ergonaut.apps.bots.tasks import (
+    peek_inbox,
+    queue_message,
+    queue_turn,
+    recover_stopped_session,
+    request_stop,
+    unsend,
+)
 
 router = Router(tags=["bots"], auth=django_auth)
 
@@ -1107,6 +1114,9 @@ async def stop_turn(request, session_id: str):
     session = await get_session(request, session_id)
     get_bot(session.bot_name, request.auth)
     running = await sync_to_async(request_stop)(session.id)
+    if not running:
+        # Nothing holds the lock: a call still in progress belongs to a turn that died.
+        await sync_to_async(recover_stopped_session)(session.id)
     return await sync_to_async(latest_turn)(session, queued=running)
 
 

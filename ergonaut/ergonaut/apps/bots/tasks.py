@@ -730,6 +730,31 @@ def resume_workers() -> int:
 # A call still in progress, untouched this long, whose session holds no turn lock,
 # belongs to a turn that died (a killed worker or shell, a restart).
 DEAD_TURN_MINUTES = 10
+# When someone presses stop and no turn holds the lock, a call this old is dead: a
+# live turn's lock outlives its holder by at most LOCK_TTL_SECONDS.
+STOPPED_DEAD_SECONDS = 2 * LOCK_TTL_SECONDS
+DEAD_TURN_ERROR = "The turn stopped without finishing (its worker or process exited)."
+
+
+def fail_dead_calls(calls) -> int:
+    """Fail the given in-progress calls whose session holds no turn lock; needs Redis."""
+    from django.utils import timezone
+    from django_ergo.conversation.models import StructuredCall
+
+    if redis_client() is None:
+        return 0
+    recovered = 0
+    for call in calls.only("id", "session_id")[:100]:
+        if turn_running(call.session_id):
+            continue
+        updated = StructuredCall.objects.filter(id=call.id, status="in_progress").update(
+            status="failed", error=DEAD_TURN_ERROR, updated_at=timezone.now()
+        )
+        if updated:
+            recovered += 1
+            notify(call.session_id)
+            queue_waiting(call.session_id)
+    return recovered
 
 
 @shared_task(name="ergonaut.recover_dead_turns", ignore_result=True)
@@ -740,21 +765,19 @@ def recover_dead_turns() -> int:
     from django.utils import timezone
     from django_ergo.conversation.models import StructuredCall
 
-    if redis_client() is None:
-        return 0
     old = timezone.now() - timezone.timedelta(minutes=DEAD_TURN_MINUTES)
-    calls = StructuredCall.objects.filter(status="in_progress", updated_at__lt=old, session__isnull=False)
-    recovered = 0
-    for call in calls.only("id", "session_id")[:100]:
-        if turn_running(call.session_id):
-            continue
-        updated = StructuredCall.objects.filter(id=call.id, status="in_progress").update(
-            status="failed",
-            error="The turn stopped without finishing (its worker or process exited).",
-            updated_at=timezone.now(),
-        )
-        if updated:
-            recovered += 1
-            notify(call.session_id)
-            queue_waiting(call.session_id)
-    return recovered
+    return fail_dead_calls(
+        StructuredCall.objects.filter(status="in_progress", updated_at__lt=old, session__isnull=False)
+    )
+
+
+def recover_stopped_session(session_id) -> int:
+    """Stop pressed with no turn running: fail the session's dead calls now, instead of
+    leaving the chat on "Stopping" until recover_dead_turns gets to them."""
+    from django.utils import timezone
+    from django_ergo.conversation.models import StructuredCall
+
+    old = timezone.now() - timezone.timedelta(seconds=STOPPED_DEAD_SECONDS)
+    return fail_dead_calls(
+        StructuredCall.objects.filter(status="in_progress", updated_at__lt=old, session_id=session_id)
+    )
