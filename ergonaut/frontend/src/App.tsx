@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { BrowserRouter, Navigate, Route, Routes, useParams } from 'react-router-dom'
+import { BrowserRouter, Link, Navigate, Route, Routes, useParams } from 'react-router-dom'
 import type { Bot, Session, SidebarPin, User } from './api'
 import { ApiError, api } from './api'
 import { Sidebar } from './components/Sidebar'
@@ -13,14 +13,58 @@ import { CostsPage } from './pages/Costs'
 import { ThemeToggle } from './theme'
 import { DirectoryContext } from './components/BotIcon'
 
-function Home({ bots }: { bots: Bot[] }) {
-  const root = bots.find(b => b.root_session_id)
-  if (root) return <Navigate to={`/s/${root.root_session_id}`} replace />
+function Home({ bots, sessions }: { bots: Bot[]; sessions: Session[] }) {
+  const recent = sessions.slice(0, 4)
   return (
-    <div className="page-content">
-      <h1 className="page-title mb-4">Ergonaut</h1>
-      <div className="surface-card p-8 text-zinc-500">
-        {bots.length ? 'Pick a bot on the left and start chatting.' : 'No bots are loaded yet.'}
+    <div className="page-content h-full overflow-y-auto">
+      <p className="eyebrow">Your workspace</p>
+      <h1 className="page-title mt-3">Good to see you</h1>
+      <p className="page-lede mt-3">Pick up a conversation or start a focused thread with a bot.</p>
+      <div className="mt-10 grid gap-8 lg:grid-cols-[1.15fr_0.85fr]">
+        <section className="surface-card flex min-h-64 flex-col items-center justify-center px-6 py-10 text-center">
+          <div className="h-16 w-16 rounded-panel bg-raised" aria-hidden="true" />
+          <h2 className="mt-6 text-lg font-semibold">Start with a question</h2>
+          <p className="mt-2 max-w-sm text-sm text-muted">
+            Choose a bot or open a recent thread to continue your work.
+          </p>
+          {!!bots.length && (
+            <div className="mt-6 flex flex-wrap justify-center gap-2">
+              {bots.map(bot => (
+                <Link
+                  key={bot.name}
+                  to={`/bots/${bot.name}/new-thread`}
+                  className="rounded-control border border-accent px-3 py-2 text-sm font-semibold text-accent hover:bg-indigo-tint"
+                >
+                  New thread with {bot.name}
+                </Link>
+              ))}
+            </div>
+          )}
+        </section>
+        <section>
+          <h2 className="font-display text-2xl font-bold">Recent threads</h2>
+          {recent.length ? (
+            <ul className="mt-5 space-y-3">
+              {recent.map(session => (
+                <li key={session.id}>
+                  <Link
+                    to={`/s/${session.id}`}
+                    className="flex items-center gap-3 rounded-card border border-stroke bg-surface px-4 py-3 hover:border-accent"
+                  >
+                    <span
+                      className={`h-3 w-3 shrink-0 rounded-full ${session.attention ? 'bg-warning' : session.busy ? 'bg-mint' : 'bg-accent'}`}
+                      aria-hidden="true"
+                    />
+                    <span className="min-w-0 flex-1 truncate font-semibold">{session.title}</span>
+                    <span className="text-xs text-muted">{session.bot}</span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="mt-5 text-sm text-muted">No recent threads yet.</p>
+          )}
+        </section>
       </div>
     </div>
   )
@@ -78,14 +122,18 @@ function App() {
           </aside>
           <main className="app-main min-w-0 flex-1">
             <div className="app-topbar flex items-center gap-4">
-              <span className="text-sm text-muted">{user.first_name || user.username}</span>
-              <span className="ml-auto">
-                <ThemeToggle />
-              </span>
+              <Link to="/" className="topbar-brand">
+                ERGONAUT_
+              </Link>
+              <span className="topbar-crumb hidden sm:inline">Workspace</span>
+              <span className="topbar-crumb hidden sm:inline">/</span>
+              <span className="topbar-crumb hidden sm:inline">Your journey</span>
+              <span className="ml-auto text-sm font-semibold text-ink">{user.first_name || user.username}</span>
+              <ThemeToggle />
             </div>
             <div className="min-h-0 flex-1 overflow-hidden">
               <Routes>
-                <Route path="/" element={<Home bots={bots} />} />
+                <Route path="/" element={<Home bots={bots} sessions={sessions} />} />
                 <Route path="/s/:id" element={<ChatRoute onChange={refresh} />} />
                 <Route path="/sessions" element={<Sessions bots={bots} />} />
                 <Route path="/costs" element={<CostsPage />} />

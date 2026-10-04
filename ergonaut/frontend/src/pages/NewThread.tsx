@@ -42,10 +42,11 @@ export function NewThread({ onChange }: { onChange: () => void }) {
 
   return (
     <div className="page-content h-full overflow-y-auto">
-      <h1 className="page-title mb-1">New thread with {name}</h1>
-      <p className="page-lede mb-6 flex flex-wrap items-center gap-3">
-        <span>Say what it's about; the thread gets its title from your message.</span>
-        <span className="block basis-full">
+      <p className="eyebrow">New thread</p>
+      <h1 className="page-title mt-3">New thread / {name}</h1>
+      <p className="page-lede mt-3 flex flex-wrap items-center gap-3">
+        <span>Set the model, write your first prompt, and add context files before starting.</span>
+        <span className="block basis-full pt-3">
           <ModelPicker bot={name} value={model} onPick={setModel} />
         </span>
       </p>
@@ -69,7 +70,12 @@ export function NewThread({ onChange }: { onChange: () => void }) {
         </div>
       )}
       <form
-        className="surface-card flex max-w-3xl flex-wrap items-end gap-3 p-4"
+        className="surface-card mt-6 flex max-w-3xl flex-wrap items-end gap-3 p-4"
+        onDragOver={e => e.preventDefault()}
+        onDrop={e => {
+          e.preventDefault()
+          add(e.dataTransfer.files)
+        }}
         onSubmit={e => {
           e.preventDefault()
           start()
@@ -115,7 +121,24 @@ export function NewThread({ onChange }: { onChange: () => void }) {
           {busy ? 'Starting…' : 'Send'}
         </button>
       </form>
-      {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
+      <button
+        type="button"
+        className="mt-6 flex min-h-20 w-full max-w-sm flex-col items-center justify-center rounded-card border border-dashed border-accent bg-surface px-4 py-3 text-sm font-semibold text-ink hover:bg-raised"
+        onClick={() => picker.current?.click()}
+      >
+        Drop files here to attach
+        <span className="mt-1 text-xs font-normal text-muted">or browse from your device</span>
+      </button>
+      {busy && <p className="mt-4 text-sm text-mint">Working · generating reply</p>}
+      {error && (
+        <div className="mt-4 flex max-w-md items-center gap-3 rounded-card border border-danger bg-red-tint px-4 py-3 text-sm">
+          <span className="font-semibold text-danger">Request failed</span>
+          <button type="button" className="text-accent hover:underline" onClick={start}>
+            Retry
+          </button>
+          <span className="truncate text-muted">{error}</span>
+        </div>
+      )}
     </div>
   )
 }

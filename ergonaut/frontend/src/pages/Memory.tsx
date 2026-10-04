@@ -35,12 +35,45 @@ export function Memory() {
       .catch(e => setError(String(e.message ?? e)))
   }, [name, selected])
 
-  if (!kbs) return <div className="p-6 text-zinc-500">{error || 'Loading…'}</div>
+  if (!kbs) {
+    return (
+      <div className="page-content">
+        {error ? (
+          <div className="surface-card max-w-xl border-danger bg-red-tint p-6">
+            <h1 className="page-title text-2xl">We couldn’t load this view</h1>
+            <p className="mt-3 text-sm text-muted">Try again. Your current conversation is still safe.</p>
+            <button
+              type="button"
+              className="mt-5 rounded-control bg-accent px-4 py-2 text-sm font-semibold text-canvas"
+              onClick={() => {
+                setError('')
+                setKbs(null)
+                api
+                  .kbs(name)
+                  .then(found => {
+                    setKbs(found)
+                    const first = found.find(kb => kb.articles.length)
+                    if (first) setSelected({ kb: first.id, path: first.articles[0].path })
+                  })
+                  .catch(e => setError(String(e.message ?? e)))
+              }}
+            >
+              Retry
+            </button>
+          </div>
+        ) : (
+          <p className="text-muted">Loading…</p>
+        )}
+      </div>
+    )
+  }
 
   const needle = filter.toLowerCase()
   return (
     <div className="page-content flex h-full flex-col overflow-y-auto">
-      <h1 className="page-title mb-1">{name} memory</h1>
+      <p className="eyebrow">Knowledge</p>
+      <h1 className="page-title mt-3">Knowledge / {name}</h1>
+      <p className="page-lede mt-3">Browse context files by title or path. Root notes are always included.</p>
       <div className="surface-card mt-6 flex min-h-0 flex-1 flex-col overflow-hidden sm:flex-row">
         <div className="flex w-full shrink-0 flex-col border-b border-stroke bg-raised sm:w-72 sm:border-r sm:border-b-0">
           <div className="border-b border-stroke p-4">

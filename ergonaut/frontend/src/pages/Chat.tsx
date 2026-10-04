@@ -474,40 +474,29 @@ export function Chat({ onChange }: { onChange: () => void }) {
           <div ref={bottom} />
         </div>
         {!!waiting.length && (
-          <div className="mx-6 mb-3 rounded-card border border-warning/40 bg-amber-tint p-4 text-sm">
-            <div className="mb-2 font-medium">Approve {waiting.map(a => a.name).join(', ')}?</div>
-            <div className="flex gap-2">
-              <button
-                disabled={busy || !!pending}
-                className="rounded-control bg-warning px-4 py-2 font-semibold text-canvas disabled:opacity-50"
-                onClick={() =>
-                  run(() =>
-                    api.approve(
-                      id,
-                      true,
-                      waiting.map(a => a.id),
-                    ),
-                  )
-                }
-              >
-                Approve
-              </button>
-              <button
-                disabled={busy || !!pending}
-                className="rounded-control border border-warning/50 px-4 py-2 disabled:opacity-50"
-                onClick={() =>
-                  run(() =>
-                    api.approve(
-                      id,
-                      false,
-                      waiting.map(a => a.id),
-                    ),
-                  )
-                }
-              >
-                Deny
-              </button>
-            </div>
+          <div className="mx-6 mb-3 grid gap-2">
+            {waiting.map(approval => (
+              <section key={approval.id} className="rounded-card border border-warning/40 bg-amber-tint p-4 text-sm">
+                <div className="font-medium">Tool approval requested: {approval.name}</div>
+                <p className="mt-1 text-muted">Review this tool call; the composer waits for its decision.</p>
+                <div className="mt-3 flex gap-2">
+                  <button
+                    disabled={busy || !!pending}
+                    className="rounded-control bg-warning px-4 py-2 font-semibold text-canvas disabled:opacity-50"
+                    onClick={() => run(() => api.approve(id, true, [approval.id]))}
+                  >
+                    Approve
+                  </button>
+                  <button
+                    disabled={busy || !!pending}
+                    className="rounded-control border border-warning/50 px-4 py-2 disabled:opacity-50"
+                    onClick={() => run(() => api.approve(id, false, [approval.id]))}
+                  >
+                    Reject
+                  </button>
+                </div>
+              </section>
+            ))}
           </div>
         )}
         {error && (
@@ -705,7 +694,9 @@ const WORKER_ICON: Record<Worker['status'], string> = {
 function Workers({ workers }: { workers: Worker[] }) {
   const [showDone, setShowDone] = useState(false)
   const running = workers.filter(w => w.status === 'queued' || w.status === 'running')
-  const done = workers.filter(w => !running.includes(w))
+  const finished = workers.filter(w => !running.includes(w))
+  const done = finished.slice(-5)
+  const hiddenDone = finished.length - done.length
   if (!workers.length) return null
   return (
     <div className="mx-6 mb-2 flex flex-col gap-2 rounded-card border border-stroke bg-surface px-4 py-3 text-xs">
@@ -723,6 +714,7 @@ function Workers({ workers }: { workers: Worker[] }) {
       {!!done.length && (
         <button className="self-start text-zinc-400 hover:text-zinc-600" onClick={() => setShowDone(s => !s)}>
           {showDone ? '▾' : '▸'} {done.length} finished worker{done.length === 1 ? '' : 's'}
+          {hiddenDone ? ` (latest; ${hiddenDone} earlier)` : ''}
         </button>
       )}
       {showDone &&

@@ -65,14 +65,26 @@ export function BotPage() {
 
   return (
     <div className="page-content h-full overflow-y-auto">
-      <h1 className="page-title flex items-center gap-3">
+      <p className="eyebrow">Bot overview</p>
+      <h1 className="page-title mt-3 flex items-center gap-3">
         <BotIcon bot={bot} size={34} />
         {bot.name}
       </h1>
-      {bot.description && <p className="mt-1 text-zinc-600 dark:text-zinc-400">{bot.description}</p>}
-      <Link to={`/bots/${bot.name}/kb`} className="mt-2 inline-block text-sm text-indigo-600 hover:underline">
-        Browse knowledge →
-      </Link>
+      <p className="page-lede mt-3">
+        {bot.description || 'Configuration, knowledge, schedules, actions, skills, and tools in one place.'}
+      </p>
+      <div className="mt-6 grid gap-4 sm:grid-cols-2">
+        <Link to={`/bots/${bot.name}/kb`} className="surface-card p-6 hover:border-accent">
+          <p className="eyebrow">Knowledge</p>
+          <h2 className="mt-3 text-xl font-semibold">Browse context</h2>
+          <p className="mt-3 text-sm text-muted">Open files, root notes, and related guidance.</p>
+        </Link>
+        <a href={bot.schedules?.length ? '#schedules' : undefined} className="surface-card p-6 hover:border-accent">
+          <p className="eyebrow">Automations</p>
+          <h2 className="mt-3 text-xl font-semibold">Schedules &amp; actions</h2>
+          <p className="mt-3 text-sm text-muted">Review next runs, enabled jobs, and tools.</p>
+        </a>
+      </div>
 
       <dl className="surface-card mt-6 grid grid-cols-[max-content_1fr] gap-x-6 gap-y-2 p-5 text-sm">
         {facts.map(([label, value]) => (
@@ -91,7 +103,7 @@ export function BotPage() {
 
       {!!bot.schedules?.length && (
         <Section title="Schedules" count={bot.schedules.length}>
-          <table className="w-full text-sm">
+          <table id="schedules" className="w-full text-sm">
             <tbody>
               {bot.schedules.map(s => (
                 <tr key={s.name} className="border-t border-zinc-200 align-top dark:border-zinc-800">

@@ -34,7 +34,7 @@ function Tile({ label, value, note }: { label: string; value: string; note?: str
   )
 }
 
-// One series (cost per day): a single hue, no legend; hover shows the day.
+// Daily spend alternates the two chart hues in the handoff and keeps exact values on hover.
 function Daily({ days }: { days: Costs['by_day'] }) {
   const [hover, setHover] = useState<number | null>(null)
   const max = Math.max(...days.map(d => d.cost), 0.0001)
@@ -51,7 +51,7 @@ function Daily({ days }: { days: Costs['by_day'] }) {
         {days.map((d, i) => (
           <div key={d.date} className="flex h-full flex-1 items-end" onMouseEnter={() => setHover(i)}>
             <div
-              className={`w-full rounded-t ${hover === i ? 'bg-indigo-700 dark:bg-indigo-300' : 'bg-indigo-500 dark:bg-indigo-400'}`}
+              className={`${i % 2 ? 'bg-mint' : 'bg-accent'} w-full rounded-t`}
               style={{ height: d.cost ? `${Math.max(2, (d.cost / max) * 100)}%` : 0 }}
             />
           </div>
@@ -130,21 +130,21 @@ function Table({ title, children }: { title: string; children: React.ReactNode }
     <section className="mt-8 data-scroll">
       <h2 className="mb-3 text-xl font-semibold">{title}</h2>
       <div className="rounded-card border border-stroke overflow-x-auto">
-      <table className="w-full max-w-4xl text-sm">
-        <thead className="text-xs text-zinc-500">
-          <tr className="border-b border-zinc-200 dark:border-zinc-800">
-            <th className="py-1 text-left font-normal">Name</th>
-            <th className="py-1 text-right font-normal">Calls</th>
-            {PARTS.map(([part, label]) => (
-              <th key={part} className="py-1 text-right font-normal">
-                {label}
-              </th>
-            ))}
-            <th className="py-1 text-right font-normal">Cost</th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-zinc-100 dark:divide-zinc-900">{children}</tbody>
-      </table>
+        <table className="w-full max-w-4xl text-sm">
+          <thead className="text-xs text-zinc-500">
+            <tr className="border-b border-zinc-200 dark:border-zinc-800">
+              <th className="py-1 text-left font-normal">Name</th>
+              <th className="py-1 text-right font-normal">Calls</th>
+              {PARTS.map(([part, label]) => (
+                <th key={part} className="py-1 text-right font-normal">
+                  {label}
+                </th>
+              ))}
+              <th className="py-1 text-right font-normal">Cost</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-zinc-100 dark:divide-zinc-900">{children}</tbody>
+        </table>
       </div>
     </section>
   )
@@ -168,14 +168,19 @@ export function CostsPage() {
   const { total } = data
   return (
     <div className="page-content h-full overflow-y-auto">
-      <div className="flex items-center gap-3">
-        <h1 className="page-title">Costs</h1>
+      <div className="flex flex-wrap items-start gap-4">
+        <div>
+          <p className="eyebrow">Usage</p>
+          <h1 className="page-title mt-3">Costs &amp; usage</h1>
+          <p className="page-lede mt-3">Estimated usage across bots, models, and call types.</p>
+        </div>
         <div className="ml-auto flex gap-1 rounded-card border border-stroke bg-surface p-1">
           {RANGES.map(r => (
             <button
               key={r}
               onClick={() => setDays(r)}
-              className={`rounded-control px-4 py-2 text-sm ${r === days ? 'bg-indigo-tint font-medium text-accent-soft' : 'hover:bg-raised'}`}
+              aria-pressed={r === days}
+              className={`rounded-control px-4 py-2 text-sm ${r === days ? 'bg-accent font-semibold text-canvas' : 'text-muted hover:bg-raised'}`}
             >
               {r} days
             </button>
