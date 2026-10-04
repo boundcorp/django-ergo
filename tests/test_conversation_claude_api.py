@@ -79,8 +79,10 @@ class TestEngineRegistry:
             "django_ergo.conversation.engines.claude_api.ClaudeAPIEngine"
         )
 
-    def test_claude_cli_not_registered(self):
-        assert ("claude", "cli") not in ENGINE_REGISTRY
+    def test_claude_cli_registered(self):
+        assert ENGINE_REGISTRY[("claude", "cli")] == (
+            "django_ergo.conversation.engines.claude_code.ClaudeCodeEngine"
+        )
 
     def test_openai_api_registered(self):
         assert ("openai", "api") in ENGINE_REGISTRY
