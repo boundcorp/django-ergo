@@ -29,7 +29,8 @@ they're installed.
 | `ergonaut check` | Load the bots; list tools, plugins, people and missing secrets |
 | `ergonaut chat BOT [--user NAME]` | Chat with a bot in the terminal |
 | `ergonaut manage ...` | Any `manage.py` command |
-| `ergonaut manage wait_idle` | Wait until no bot turn is running; run it before a restart (`ergonaut manage wait_idle && <restart>`) so running turns aren't cut off |
+| `ergonaut manage wait_idle` | Wait until no bot turn or worker is running; run it before a restart (`ergonaut manage wait_idle && <restart>`) so running turns aren't cut off |
+| `ergonaut upgrade` | Upgrade to the newest GitHub release once idle, through `ERGONAUT_UPGRADER` (`systemd`, `command` or your own); see docs/ergonaut.md |
 
 ## Layout
 
