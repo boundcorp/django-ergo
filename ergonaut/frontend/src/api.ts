@@ -128,6 +128,7 @@ export type CostBucket = {
   output_cost: number
   cost: number
   unpriced_calls: number
+  subscription_calls: number
 }
 
 export type Costs = {
@@ -138,6 +139,35 @@ export type Costs = {
   by_model: CostBucket[]
   by_day: { date: string; cost: number; calls: number }[]
   unpriced_models: string[]
+  usage: {
+    headline: {
+      threads: number
+      tokens: number
+      cache_hit: number
+      main_chats: number
+      subscription: number
+      api_spend: number
+      compaction: number
+    }
+    threads: UsageThread[]
+  }
+}
+
+export type UsageThread = {
+  id: string
+  title: string
+  bot: string
+  model: string
+  role: string
+  subscription: boolean
+  input_tokens: number
+  output_tokens: number
+  cache_write_tokens: number
+  cache_read_tokens: number
+  tokens: number
+  cache_hit: number
+  share: number
+  cost: number
 }
 
 export type BotDetail = Bot & {
@@ -427,7 +457,8 @@ export const api = {
   logout: () => request<{ ok: boolean }>('POST', '/auth/logout'),
   bots: () => request<Bot[]>('GET', '/bots'),
   bot: (name: string) => request<BotDetail>('GET', `/bots/${name}`),
-  costs: (days: number) => request<Costs>('GET', `/costs?days=${days}`),
+  costs: (days: number, bot = '') =>
+    request<Costs>('GET', `/costs?days=${days}${bot ? `&bot=${encodeURIComponent(bot)}` : ''}`),
   version: () => request<Version>('GET', '/version'),
   kbs: (bot: string) => request<KB[]>('GET', `/bots/${bot}/kbs`),
   kbArticle: (bot: string, kb: string, path: string) =>
