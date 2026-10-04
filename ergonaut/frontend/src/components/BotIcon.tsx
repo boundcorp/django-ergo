@@ -1,4 +1,14 @@
-import type { Bot } from '../api'
+import { createContext, useContext } from 'react'
+import type { Bot, Session } from '../api'
+
+// The loaded bots and the user's chats, for components that show a bot or link a chat by id.
+export const DirectoryContext = createContext<{ bots: Bot[]; sessions: Session[] }>({ bots: [], sessions: [] })
+
+/** A bot's badge by name (the default letter badge if it isn't loaded). */
+export function BotBadge({ name, size }: { name: string; size?: number }) {
+  const { bots } = useContext(DirectoryContext)
+  return <BotIcon bot={bots.find(b => b.name === name) ?? { name }} size={size} />
+}
 
 // bot.yaml `color` names (django_ergo.bots.definition.COLORS), as Tailwind's 500 shades.
 const PALETTE: Record<string, string> = {

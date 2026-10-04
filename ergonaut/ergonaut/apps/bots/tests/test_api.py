@@ -903,3 +903,42 @@ def test_a_long_chat_comes_a_page_at_a_time(client, cook, use_bots):
     assert [m["line"] for m in oldest["messages"]] == list(range(20))
     assert (oldest["first_line"], oldest["has_more"]) == (0, False)
     assert {c["id"] for c in oldest["calls"]} == {str(old.id)}
+
+
+@pytest.mark.django_db(transaction=True)
+def test_thread_cards_and_pull_requests(client, cook, use_bots):
+    from django_ergo.conversation.links import record_pull_requests
+    from django_ergo.conversation.models import ConversationSession, ThreadMessage
+
+    use_bots(say("Opened https://github.com/boundcorp/ergo-bots/pull/40 for it."))
+    root = post(client, "/api/bots/kitchen/root").json()
+    sender = ConversationSession.objects.get(id=root["id"])
+    thread = ConversationSession.objects.create(
+        user=cook, bot_name="kitchen", parent=sender, metadata={"bot_role": "thread", "title": "Build it"}
+    )
+    message = ThreadMessage.objects.create(
+        sender_session=sender, recipient_session=thread, text="Please build it", status="delivered"
+    )
+    record_pull_requests(thread, "https://github.com/boundcorp/django-ergo/pull/7")
+
+    [card] = client.get(f"/api/sessions/{root['id']}").json()["sent"]
+    assert (card["message_id"], card["status"], card["text"]) == (str(message.id), "working", "Please build it")
+    assert (card["thread"]["id"], card["thread"]["title"], card["thread"]["state"]) == (
+        str(thread.id),
+        "Build it",
+        "idle",
+    )
+    assert [(p["repo"], p["number"]) for p in card["prs"]] == [("boundcorp/django-ergo", 7)]
+
+    message.status, message.reply_text = "answered", "Done: https://github.com/boundcorp/ergo-bots/pull/41"
+    message.save()
+    [card] = client.get(f"/api/sessions/{root['id']}").json()["sent"]
+    assert card["status"] == "done"
+    assert [p["number"] for p in card["prs"]] == [7, 41]
+
+    # A reply that links a pull request records it in the chat, as a file with a link.
+    post(client, f"/api/sessions/{root['id']}/messages", {"text": "Ship it"})
+    detail = client.get(f"/api/sessions/{root['id']}").json()
+    assert [(p["number"], p["state"]) for p in detail["prs"]] == [(40, "")]
+    [file] = [f for f in client.get(f"/api/sessions/{root['id']}/attachments").json() if f["link"]]
+    assert (file["filename"], file["view"], file["link"]["number"]) == ("ergo-bots#40", "", 40)

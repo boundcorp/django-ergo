@@ -189,6 +189,45 @@ export type AttachmentFile = {
   created_at: string
   updated_at: string
   archived_at?: string | null
+  link?: PrLink | null // a pull request the bot reported (no stored file)
+}
+
+// A pull request a bot or worker reported (django_ergo.conversation.links); state is read with gh.
+export type PrLink = {
+  id: string
+  url: string
+  repo: string
+  number: number | null
+  title: string
+  state: '' | 'open' | 'draft' | 'merged' | 'closed'
+  checks: '' | 'passing' | 'failing' | 'pending'
+}
+
+// A chat as thread cards and links show it (api/bots.py thread_summary).
+export type ThreadSummary = {
+  id: string
+  title: string
+  bot: string
+  role: string
+  archived: boolean
+  attention: boolean
+  state: 'working' | 'waiting_for_approval' | 'idle'
+  started_by: string
+  started_by_id: string
+  working_for: number
+  waiting_on: number
+  workers_running: number
+}
+
+// A request this chat sent to another chat (ergo_thread_send, ergo_message_up).
+export type SentCard = {
+  message_id: string
+  created_at: string
+  status: 'queued' | 'working' | 'waiting' | 'done' | 'failed'
+  text: string
+  reply: string
+  thread: ThreadSummary
+  prs: PrLink[]
 }
 
 export type SidebarPin = { name: string; url: string; icon?: string; filename?: string }
@@ -238,6 +277,7 @@ export type Worker = {
   error: string
   created_at: string
   completed_at: string | null
+  prs?: PrLink[] // pull requests its result links
 }
 
 export type SessionDetail = {
@@ -250,6 +290,8 @@ export type SessionDetail = {
   first_line?: number | null // the oldest line returned
   has_more?: boolean // older messages exist: ask with before=first_line
   message_count?: number // in the whole session
+  sent?: SentCard[] // requests this chat sent, newest first
+  prs?: PrLink[] // pull requests reported in this chat
 }
 
 export type Turn = {

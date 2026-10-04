@@ -20,6 +20,7 @@ from django_ergo.bots.pages import text_page, view_kind
 from django_ergo.bots.runtime import Bot
 from django_ergo.conversation.attachments import save_session_file
 from django_ergo.conversation.history import SessionSource
+from django_ergo.conversation.links import GITHUB_PR, pull_request_out, pull_request_urls
 from django_ergo.conversation.models import ConversationAttachment, ConversationSession, StructuredCall, Worker
 from ninja import File, Router, Schema, UploadedFile
 from ninja.errors import HttpError
@@ -162,6 +163,10 @@ class SessionDetailOut(Schema):
     first_line: int | None = None
     has_more: bool = False
     message_count: int = 0  # in the whole session, not just this page
+    # Requests this chat sent to other chats, newest first, for thread cards (sent_out).
+    sent: list[dict] = []
+    # Pull requests reported in this chat (django_ergo.conversation.links).
+    prs: list[dict] = []
 
 
 PAGE_MESSAGES = 50
@@ -191,12 +196,130 @@ def calls_in(session: ConversationSession, first_line: int | None, before: int |
 
 
 def workers_out(session: ConversationSession) -> list[dict]:
-    """The session's workers: every running one, then the latest few finished."""
+    """The session's workers: every running one, then the latest few finished, each with
+    the pull requests its result links (``prs``)."""
+    import json
+
     from django_ergo.bots.workers import describe
 
     active = list(session.workers.filter(status__in=["queued", "running"]))
     done = list(session.workers.exclude(status__in=["queued", "running"])[:5])
-    return [describe(w) for w in active + done]
+    out = []
+    for worker in active + done:
+        urls = [url for url, _, _ in pull_request_urls(json.dumps(worker.result, default=str))]
+        out.append({**describe(worker), "prs": prs_by_url(urls)})
+    return out
+
+
+def prs_by_url(urls: list[str]) -> list[dict]:
+    """Recorded pull requests for these URLs, in order (unrecorded ones with no state yet)."""
+    if not urls:
+        return []
+    rows = {}
+    for row in ConversationAttachment.objects.filter(url__in=urls, metadata__link=GITHUB_PR).order_by("-updated_at"):
+        rows.setdefault(row.url, row)
+    out = []
+    for url in urls:
+        if url in rows:
+            out.append(pull_request_out(rows[url]))
+            continue
+        _, repo, number = pull_request_urls(url)[0]
+        out.append({"id": "", "url": url, "repo": repo, "number": number, "title": "", "state": "", "checks": ""})
+    return out
+
+
+# -- thread cards ----------------------------------------------------------------------
+
+# A thread message's status, as a card shows it.
+CARD_STATUS = {"queued": "queued", "delivered": "working", "waiting": "waiting", "answered": "done", "failed": "failed"}
+
+
+def thread_summary(session: ConversationSession) -> dict:
+    """A chat as thread cards and links show it, from a ``with_open_counts`` row.
+
+    The status fields have the shape of ``django_ergo.bots.orchestrator.thread_status``
+    (``state``, ``last_activity``, ``started_by``, ``started_by_id``, ``working_for``,
+    ``waiting_on``, ``workers_running``) so this can read from it once that's on main.
+    """
+    meta = session.metadata or {}
+    if getattr(session, "latest_status", None) == "awaiting_approval":
+        state = "waiting_for_approval"
+    elif getattr(session, "busy", False):
+        state = "working"
+    else:
+        state = "idle"
+    role = meta.get("bot_role") or ""
+    return {
+        "id": str(session.id),
+        "title": meta.get("title") or ("Main" if role in ("root", "main") else "Thread"),
+        "bot": session.bot_name,
+        "role": role,
+        "archived": session.status == "completed" and role == "thread",
+        "attention": needs_attention(session),
+        "state": state,
+        "last_activity": session.updated_at,
+        "started_by": "",
+        "started_by_id": "",
+        **started_by(session),
+        "working_for": getattr(session, "open_in", 0) or 0,
+        "waiting_on": getattr(session, "open_out", 0) or 0,
+        "workers_running": getattr(session, "workers_running", 0) or 0,
+    }
+
+
+def sent_out(session: ConversationSession, limit: int = 30) -> list[dict]:
+    """Requests this chat sent (ergo_thread_send, ergo_message_up), newest first: each with
+    its status, the reply so far, the chat it went to, and that chat's outputs while it
+    worked on it (pull requests it reported, or ones the reply links)."""
+    from django_ergo.bots.messaging import snippet
+    from django_ergo.conversation.models import ThreadMessage
+
+    rows = list(
+        ThreadMessage.objects.filter(sender_session=session, in_reply_to__isnull=True).order_by("-created_at")[:limit]
+    )
+    ids = {row.recipient_session_id for row in rows}
+    threads = {
+        s.id: s
+        for s in with_open_counts(ConversationSession.objects.filter(id__in=ids)).annotate(
+            workers_running=Count("workers", filter=Q(workers__status__in=["queued", "running"]), distinct=True)
+        )
+    }
+    prs: dict = {}
+    for pr in ConversationAttachment.objects.filter(session_id__in=ids, metadata__link=GITHUB_PR).order_by(
+        "created_at"
+    ):
+        prs.setdefault(pr.session_id, []).append(pr)
+    out = []
+    for row in rows:
+        thread = threads.get(row.recipient_session_id)
+        if thread is None:
+            continue
+        done = row.status in ("answered", "failed")
+        reported = [
+            pr.url
+            for pr in prs.get(thread.id, [])
+            if pr.created_at >= row.created_at
+            and (not done or pr.created_at <= row.updated_at + timezone.timedelta(minutes=1))
+        ]
+        linked = [url for url, _, _ in pull_request_urls(row.reply_text)]
+        out.append(
+            {
+                "message_id": str(row.id),
+                "created_at": row.created_at,
+                "status": CARD_STATUS.get(row.status, row.status),
+                "text": snippet(row.text),
+                "reply": snippet(row.reply_text or row.error),
+                "thread": thread_summary(thread),
+                "prs": prs_by_url(list(dict.fromkeys(reported + linked))),
+            }
+        )
+    return out
+
+
+def session_prs(session: ConversationSession) -> list[dict]:
+    return [
+        pull_request_out(row) for row in session.attachments.filter(metadata__link=GITHUB_PR).order_by("created_at")
+    ]
 
 
 class NewThreadIn(Schema):
@@ -835,6 +958,8 @@ def session_detail(request, session_id: str, before: int | None = None, limit: i
         "first_line": messages[0]["line"] if messages else first_line,
         "has_more": first_line is not None,
         "message_count": session.claude_messages.count() or session.openai_messages.count(),
+        "sent": sent_out(session),
+        "prs": session_prs(session),
     }
 
 
@@ -1136,6 +1261,7 @@ class AttachmentOut(Schema):
     created_at: datetime
     updated_at: datetime
     archived_at: datetime | None = None  # archived by the bot (ergo_attachments_archive)
+    link: dict | None = None  # a pull request (django_ergo.conversation.links.pull_request_out)
 
 
 def attachment_out(row: ConversationAttachment) -> dict:
@@ -1148,7 +1274,8 @@ def attachment_out(row: ConversationAttachment) -> dict:
         "source": row.source,
         "message_sequence": row.message_sequence,
         "pinned": bool((row.metadata or {}).get("pinned")),
-        "view": view_kind(row.filename, row.media_type),
+        "view": "" if row.url and not row.file else view_kind(row.filename, row.media_type),
+        "link": pull_request_out(row) if (row.metadata or {}).get("link") == GITHUB_PR else None,
         "created_at": row.created_at,
         "updated_at": row.updated_at,
         "archived_at": row.archived_at,

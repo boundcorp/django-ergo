@@ -27,7 +27,7 @@ from django.http import HttpResponse, StreamingHttpResponse
 from django_ergo.conversation.history import SessionSource
 from django_ergo.conversation.models import ClaudeContentBlock, ConversationSession
 
-from ergonaut.api.bots import call_out, requests_out, visible_sessions, workers_out
+from ergonaut.api.bots import call_out, requests_out, sent_out, session_prs, visible_sessions, workers_out
 
 POLL_SECONDS = 0.5
 PUBSUB_POLL_SECONDS = 3.0
@@ -70,7 +70,7 @@ def _snapshot(session_id, after: int, seen: dict):
             seen["calls"][str(call.id)] = key
             calls.append(call_out(call))
     workers = workers_out(session)
-    key = [(w["id"], w["status"], w["progress"]) for w in workers]
+    key = [(w["id"], w["status"], w["progress"], [p["state"] for p in w["prs"]]) for w in workers]
     if seen.get("workers") == key:
         workers = None
     else:
@@ -81,7 +81,14 @@ def _snapshot(session_id, after: int, seen: dict):
         title = None
     else:
         seen["title"] = title
-    return messages, calls, requests, title, workers
+    # Thread cards and pull requests: sent when anything in them changed.
+    extra = {}
+    for name, value in (("sent", sent_out(session)), ("prs", session_prs(session))):
+        key = json.dumps(value, cls=DjangoJSONEncoder)
+        if seen.get(name) != key:
+            seen[name] = key
+            extra[name] = value
+    return messages, calls, requests, title, workers, extra
 
 
 def _event(payload) -> str:
@@ -137,11 +144,11 @@ async def session_events(request, session_id):
         end = loop.time() + STREAM_SECONDS
         waits = changes()
         while loop.time() < end:
-            messages, calls, requests, title, workers = await sync_to_async(_snapshot)(session_id, last, seen)
+            messages, calls, requests, title, workers, extra = await sync_to_async(_snapshot)(session_id, last, seen)
             # The first event carries every call and request too: something may
             # have changed between the client's load (or the last stream) and now,
             # and the client merges by id.
-            if messages or calls or requests is not None or title or workers is not None:
+            if messages or calls or requests is not None or title or workers is not None or extra:
                 if messages:
                     last = max(m["line"] for m in messages)
                 event = {"messages": messages, "calls": calls}
@@ -151,6 +158,7 @@ async def session_events(request, session_id):
                     event["title"] = title
                 if workers is not None:
                     event["workers"] = workers
+                event.update(extra)
                 yield _event(event)
                 quiet = 0.0
             elif quiet >= KEEPALIVE_SECONDS:

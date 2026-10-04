@@ -1,6 +1,17 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
-import type { AttachmentFile, Call, DelegatedRequest, Message, Pin, SessionDetail, Turn, Worker } from '../api'
+import type {
+  AttachmentFile,
+  Call,
+  DelegatedRequest,
+  Message,
+  Pin,
+  PrLink,
+  SentCard,
+  SessionDetail,
+  Turn,
+  Worker,
+} from '../api'
 import { api } from '../api'
 import Files from '../components/Files'
 import Markdown from '../components/Markdown'
@@ -123,7 +134,9 @@ export function Chat({ onChange }: { onChange: () => void }) {
   }, [load])
 
   // A bot's new file is saved while its tool runs; the tool's result message arrives right after.
+  // Pull requests are recorded when the turn ends, just after its reply: refetch when they change too.
   const messageCount = detail?.messages.length ?? 0
+  const prKey = (detail?.prs ?? []).map(p => p.url).join()
   useEffect(() => {
     if (!messageCount) return
     let current = true
@@ -134,7 +147,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
     return () => {
       current = false
     }
-  }, [id, messageCount])
+  }, [id, messageCount, prKey])
 
   // A thread's generated title arrives after it starts; show it in the sidebar too.
   const title = detail?.session.title
@@ -166,12 +179,14 @@ export function Chat({ onChange }: { onChange: () => void }) {
     const after = messages.length ? messages[messages.length - 1].line : -1
     const events = new EventSource(`/api/sessions/${id}/events?after=${after}`)
     events.onmessage = e => {
-      const { messages, calls, requests, title, workers } = JSON.parse(e.data) as {
+      const { messages, calls, requests, title, workers, sent, prs } = JSON.parse(e.data) as {
         messages: Message[]
         calls: Call[]
         requests?: DelegatedRequest[]
         title?: string
         workers?: Worker[]
+        sent?: SentCard[]
+        prs?: PrLink[]
       }
       setDetail(d =>
         d
@@ -186,6 +201,8 @@ export function Chat({ onChange }: { onChange: () => void }) {
               ...(requests ? { requests } : {}),
               ...(title ? { session: { ...d.session, title } } : {}),
               ...(workers ? { workers } : {}),
+              ...(sent ? { sent } : {}),
+              ...(prs ? { prs } : {}),
             }
           : d,
       )
@@ -407,7 +424,14 @@ export function Chat({ onChange }: { onChange: () => void }) {
               </button>
             </div>
           )}
-          <Transcript messages={detail.messages} calls={detail.calls} files={files} complete={!detail.has_more} />
+          <Transcript
+            messages={detail.messages}
+            calls={detail.calls}
+            files={files}
+            complete={!detail.has_more}
+            sent={detail.sent}
+            workers={detail.workers}
+          />
           {(detail.inbox ?? []).map(item => (
             <div key={item.id} className="mt-3 flex flex-col items-end">
               <div className="max-w-[80%] rounded-card border border-accent bg-indigo-tint px-4 py-3 text-ink">
