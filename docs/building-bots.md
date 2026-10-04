@@ -78,6 +78,9 @@ Models are named `provider/model`. A bot picks one with
 model picker listing every model whose provider's key is set. A new thread
 can start on any of them; an existing chat can only switch to another model
 on the same engine, because its history is stored in that engine's format.
+For the same reason, when a bot's model moves to another engine (its bot.yaml
+or `default` changes), existing chats stay on their engine: they use
+`default` if it's on that engine, else the first available model there.
 The file reloads like the bot folders. If an edit breaks it, the last good
 version stays in use and admins see the error.
 

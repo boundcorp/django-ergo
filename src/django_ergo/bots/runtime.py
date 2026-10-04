@@ -407,12 +407,29 @@ class Bot:
         picked = str(picked or "")
         return picked if picked and self.providers.find(picked) else ""
 
+    def keep_session_engine(self, session: ConversationSession, ref: str) -> str:
+        """A chat stays on the engine its messages are stored in. When the
+        bot's model now runs on another engine (bot.yaml or the default
+        changed), the chat uses a model on its own engine instead."""
+        found = self.providers.find(ref) if ref else None
+        if found:
+            engine_type = found[0].type
+        else:
+            engine_type = (
+                self.definition.engine_type or get_default_engine_spec().engine_type
+            )
+        if not session.engine_type or engine_type == session.engine_type:
+            return ref
+        return self.providers.model_on(session.engine_type) or ref
+
     def engine_spec(
         self, session: ConversationSession | None = None, model: str = ""
     ) -> EngineSpec:
         """The engine for a chat: the model picked for it (or ``model``), else the bot's."""
         default = get_default_engine_spec()
         ref = model or self.session_model(session) or self.model_ref()
+        if session is not None and not model:
+            ref = self.keep_session_engine(session, ref)
         transport = default.transport_type
         if ref:
             engine_type, config, key_env = self.providers.engine(ref)
