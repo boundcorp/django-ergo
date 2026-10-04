@@ -165,7 +165,15 @@ refuse logins until the window passes.
   and Discard.
 - **Memory**: the bot's knowledge base articles, rendered as Markdown.
 - **Sessions**: every session, searchable, including threads.
-- **Costs**: spend by day, by kind of call (chat replies split by bot) and by model.
+- **Costs**: usage for the last 7, 30, or 90 days, optionally filtered by bot.
+  Headline figures show sessions with calls, total tokens, cache hit rate,
+  main-chat and subscription token shares, API spend, and compaction token
+  share. A token-mix bar splits input, output, cache writes, and cache reads;
+  the sortable per-thread table can be grouped by thread, bot, or model and
+  links to each chat. Claude CLI subscription calls contribute tokens but
+  show `sub` instead of dollars and are excluded from estimated API spend.
+  Below Usage, spend remains broken down by day, call kind (chat replies
+  split by bot), and model. Admins see everyone's calls; others see their own.
 
 Django's admin is at `/mgmt/`. The API is at `/api/` with docs at
 `/api/docs`.
