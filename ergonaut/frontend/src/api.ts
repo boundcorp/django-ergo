@@ -349,6 +349,22 @@ export type Turn = {
   queued?: boolean
 }
 
+export type Version = {
+  commit: string
+  date: string
+  repo: string
+  available: boolean
+  latest: { tag: string; sha: string; url: string; date: string; name: string } | null
+  // Admins only:
+  status?: string
+  channel?: string
+  upgrader?: string
+  auto_seconds?: number
+  error?: string
+  last_check?: { at: number | null; result: string }
+  last_attempt?: { at: number | null; status: string; error: string; message: string; tag: string }
+}
+
 export class ApiError extends Error {
   status: number
   constructor(status: number, message: string) {
@@ -412,6 +428,7 @@ export const api = {
   bots: () => request<Bot[]>('GET', '/bots'),
   bot: (name: string) => request<BotDetail>('GET', `/bots/${name}`),
   costs: (days: number) => request<Costs>('GET', `/costs?days=${days}`),
+  version: () => request<Version>('GET', '/version'),
   kbs: (bot: string) => request<KB[]>('GET', `/bots/${bot}/kbs`),
   kbArticle: (bot: string, kb: string, path: string) =>
     request<KBArticle>('GET', `/bots/${bot}/kbs/${kb}/article?path=${encodeURIComponent(path)}`),

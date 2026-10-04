@@ -48,6 +48,7 @@ class Release:
     repo: str = DEFAULT_REPO
     url: str = ""
     name: str = ""
+    date: str = ""  # when it was published (a release) or committed (a branch head), ISO 8601
 
     def env(self) -> dict[str, str]:
         return {
@@ -149,7 +150,11 @@ def settings() -> dict:
     }
 
 
-# State: the last attempt, in DATA_DIR/upgrade.json, so a failing release isn't retried every tick.
+# State: the last check and the last attempt, so a failing release isn't retried every
+# tick and the web app can show what happened. In Redis when there is one (every
+# workload sees it), else DATA_DIR/upgrade.json.
+
+STATE_KEY = "ergonaut:upgrade:state"
 
 
 def _state_path() -> Path:
@@ -158,8 +163,18 @@ def _state_path() -> Path:
     return Path(django_settings.DATA_DIR) / "upgrade.json"
 
 
+def _redis():
+    from ergonaut.apps.bots import tasks
+
+    return tasks.redis_client()
+
+
 def load_state() -> dict:
     with contextlib.suppress(Exception):
+        client = _redis()
+        if client is not None:
+            raw = client.get(STATE_KEY)
+            return json.loads(raw) if raw else {}
         return json.loads(_state_path().read_text())
     return {}
 
@@ -167,7 +182,11 @@ def load_state() -> dict:
 def save_state(**fields) -> None:
     state = load_state() | fields
     with contextlib.suppress(Exception):
-        _state_path().write_text(json.dumps(state, indent=2))
+        client = _redis()
+        if client is not None:
+            client.set(STATE_KEY, json.dumps(state))
+        else:
+            _state_path().write_text(json.dumps(state, indent=2))
 
 
 @contextlib.contextmanager
@@ -225,7 +244,19 @@ def check(upgrader: Upgrader | None = None) -> Check:
     return Check(current, release, status, getattr(upgrader, "name", "") if upgrader else "")
 
 
-def run(
+def run(**kwargs) -> str:
+    """Upgrade if a newer release is out and nothing is running. Returns what
+    happened, and records it (``checked_at``, ``result``) for the web app."""
+    try:
+        result = _run(**kwargs)
+    except Exception as exc:
+        save_state(checked_at=time.time(), result=f"check failed: {exc}"[:500])
+        raise
+    save_state(checked_at=time.time(), result=result[:500])
+    return result
+
+
+def _run(
     *,
     force: bool = False,
     wait_timeout: float = 30 * 60,
@@ -234,7 +265,6 @@ def run(
     workers: bool = True,
     log=logger.info,
 ) -> str:
-    """Upgrade if a newer release is out and nothing is running. Returns what happened."""
     from ergonaut.apps.bots.management.commands.wait_idle import wait_until_idle
 
     upgrader = load_upgrader()
@@ -271,3 +301,49 @@ def run(
             raise
         save_state(status="started", at=time.time(), message=message or "")
         return message or f"upgrading to {release.tag}"
+
+
+def version_info(*, cache_seconds: int = 300) -> dict:
+    """What the web app shows: the running commit and its date, the newest
+    release, whether it's newer, and the last check. GitHub answers are cached."""
+    from django.core.cache import cache
+
+    from ergonaut.upgrades import github
+
+    conf = settings()
+    info = cache.get("ergonaut:version")
+    if info is None:
+        current = current_version()
+        info = {
+            "commit": current or "",
+            "date": "",
+            "latest": None,
+            "status": "unknown",
+            "repo": conf["repo"],
+            "channel": conf["channel"],
+            "error": "",
+        }
+        try:
+            if current:
+                info["date"] = github.commit(conf["repo"], current)[1]
+            result = check()
+            info["status"] = result.status
+            if result.release is not None:
+                info["latest"] = asdict(result.release)
+        except Exception as exc:
+            info["error"] = str(exc)[:300]
+        cache.set("ergonaut:version", info, cache_seconds)
+    state = load_state()
+    return info | {
+        "available": info["status"] == "ahead",
+        "upgrader": conf["upgrader"],
+        "auto_seconds": float(os.environ.get("ERGONAUT_AUTO_UPGRADE_SECONDS") or 0),
+        "last_check": {"at": state.get("checked_at"), "result": state.get("result", "")},
+        "last_attempt": {
+            "at": state.get("at"),
+            "status": state.get("status", ""),
+            "error": state.get("error", ""),
+            "message": state.get("message", ""),
+            "tag": (state.get("release") or {}).get("tag", ""),
+        },
+    }

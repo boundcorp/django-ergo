@@ -211,8 +211,15 @@ on GitHub. The steps are fixed and only the last one is pluggable:
 ```bash
 ergonaut upgrade --check      # running commit, latest release, whether it's newer
 ergonaut upgrade              # wait for idle (--timeout), then upgrade
-ergonaut upgrade --status     # the last attempt (DATA_DIR/upgrade.json)
+ergonaut upgrade --status     # the last check and attempt
 ```
+
+The bottom of the web app's sidebar shows the running commit and its date,
+and a notice when a newer one is out. Admins also see when the last check
+ran, what it found, and a failed upgrade's error. The last check and attempt
+are kept in Redis (`ergonaut:upgrade:state`), or `DATA_DIR/upgrade.json`
+without it. GitHub calls use `GITHUB_TOKEN`, `GH_TOKEN` or the logged-in
+`gh` CLI's token when there is one.
 
 With `ERGONAUT_AUTO_UPGRADE_SECONDS` set (say `900`), beat runs the same
 check on that interval. A busy instance waits up to a minute and is checked
@@ -225,7 +232,7 @@ again next time; a release whose upgrade failed is retried after six hours
 | `ERGONAUT_AUTO_UPGRADE_SECONDS` | unset | check for a new release on this interval (needs beat) |
 | `ERGONAUT_UPGRADE_REPO` | `boundcorp/django-ergo` | where releases come from (a fork) |
 | `ERGONAUT_UPGRADE_CHANNEL` | `releases` | `releases`, or `branch:main` to follow a branch's head |
-| `GITHUB_TOKEN` or `GH_TOKEN` | unset | GitHub API token; without one, 60 checks an hour |
+| `GITHUB_TOKEN` or `GH_TOKEN` | the `gh` CLI's login | GitHub API token; without any, 60 requests an hour |
 
 ### systemd
 

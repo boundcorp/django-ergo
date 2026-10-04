@@ -158,3 +158,41 @@ def test_systemd_moves_the_checkout_and_rolls_back_a_failed_install(tmp_path, mo
     monkeypatch.setattr(upgrader, "install", lambda path: None)
     assert "installed v2" in upgrader.upgrade(Release(tag="v2", sha=second))
     assert head() == second
+
+
+def test_every_check_is_recorded_for_the_web_app(env):
+    env.setattr(github, "compare", lambda repo, current, target: "identical")
+    upgrades.run(quiet_for=0, poll=0)
+    state = upgrades.load_state()
+    assert state["checked_at"] and "up to date" in state["result"]
+
+    def offline(repo, channel):
+        raise OSError("network down")
+
+    env.setattr(github, "latest", offline)
+    with pytest.raises(OSError):
+        upgrades.run(quiet_for=0, poll=0)
+    assert upgrades.load_state()["result"] == "check failed: network down"
+
+
+@pytest.mark.django_db
+def test_version_endpoint_shows_admins_the_last_check(env, client, django_user_model):
+    from django.core.cache import cache
+
+    cache.clear()
+    env.setenv("ERGONAUT_VERSION", "a" * 40)
+    env.setattr(github, "commit", lambda repo, ref: (ref, "2026-10-04T18:00:00Z"))
+    upgrades.save_state(checked_at=1.0, result="up to date")
+
+    user = django_user_model.objects.create_user(username="cook", password="x")
+    client.force_login(user)
+    body = client.get("/api/version").json()
+    assert body["commit"] == "a" * 40 and body["date"] == "2026-10-04T18:00:00Z"
+    assert body["available"] and body["latest"]["sha"] == "b" * 40
+    assert "last_check" not in body
+
+    admin = django_user_model.objects.create_superuser(username="lee", password="x")
+    client.force_login(admin)
+    body = client.get("/api/version").json()
+    assert body["last_check"]["result"] == "up to date"
+    assert body["upgrader"].endswith(":Recorder")

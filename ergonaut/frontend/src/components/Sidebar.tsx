@@ -4,6 +4,7 @@ import { api } from '../api'
 import BotIcon from './BotIcon'
 import { pinIcon } from './Pins'
 import { StatusDot, ThreadGroups } from './ThreadList'
+import VersionFooter from './VersionFooter'
 
 function SessionLink({ session, nested }: { session: Session; nested?: boolean }) {
   // The open chat is being read, so its reply is never shown as unread.
@@ -236,6 +237,7 @@ export function Sidebar({
         <Link to="/costs" className="rounded-lg px-3 py-2 text-sm hover:bg-raised">
           Costs
         </Link>
+        <VersionFooter />
       </div>
     </nav>
   )
