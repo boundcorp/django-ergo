@@ -35,3 +35,6 @@ Bump Orca: `--build-arg ORCA_VERSION=... --build-arg ORCA_LINUX_APPIMAGE_SHA256=
 - Claude Code and omp are unpinned (latest at build time), matching devbox's latest-install approach.
 - Image size grows (Electron libs + Orca ~ hundreds of MB).
 - Orca `serve` headless was not exercised, only the CLI.
+
+## Commit / PR
+00bddde — https://github.com/boundcorp/django-ergo/pull/100 (not merged)
