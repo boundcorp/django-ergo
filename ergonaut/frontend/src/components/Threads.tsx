@@ -61,7 +61,8 @@ function threadNote(thread: ThreadSummary): string {
   if (thread.attention) return 'waiting on you'
   if (thread.workers_running) return `${thread.workers_running} worker${thread.workers_running > 1 ? 's' : ''} running`
   if (thread.waiting_on) return `waiting on ${thread.waiting_on} other chat${thread.waiting_on > 1 ? 's' : ''}`
-  if (thread.archived) return 'archived'
+  if (thread.archived) return thread.resolved_by ? `resolved by ${thread.resolved_by}` : 'resolved'
+  if (thread.ready_to_resolve) return 'ready to resolve'
   return ''
 }
 
@@ -87,6 +88,11 @@ export function ThreadCard({ card }: { card: SentCard }) {
       <div className="mt-1 truncate text-xs text-muted" title={card.text}>
         → {card.text}
       </div>
+      {card.thread.archived && card.thread.resolved_summary && (
+        <div className="mt-1 line-clamp-2 text-xs text-success" title={card.thread.resolved_summary}>
+          ✓ {card.thread.resolved_summary}
+        </div>
+      )}
       {card.reply && card.status !== 'working' && card.status !== 'queued' && (
         <div className="mt-1 line-clamp-2 text-xs text-ink" title={card.reply}>
           ↩ {card.reply}

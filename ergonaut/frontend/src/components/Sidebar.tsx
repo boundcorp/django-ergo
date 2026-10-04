@@ -54,7 +54,17 @@ function SessionLink({ session, nested }: { session: Session; nested?: boolean }
       }
     >
       <StatusDot session={session} unread={!!unread} />
-      <span className="truncate">{session.title}</span>
+      {session.resolved_summary ? (
+        <span
+          className="flex min-w-0 flex-col"
+          title={`Resolved${session.resolved_by ? ` by ${session.resolved_by}` : ''}: ${session.resolved_summary}`}
+        >
+          <span className="truncate">{session.title}</span>
+          <span className="truncate text-xs text-muted">{session.resolved_summary}</span>
+        </span>
+      ) : (
+        <span className="truncate">{session.title}</span>
+      )}
       {!!session.open_out && (
         <span className="ml-auto shrink-0 text-xs text-zinc-400" title="Waiting on other threads">
           ⏳{session.open_out > 1 ? session.open_out : ''}
@@ -217,7 +227,7 @@ export function Sidebar({
                 className="ml-4 px-2 py-0.5 text-xs text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300"
                 onClick={() => setShowArchived(open => ({ ...open, [bot.name]: !open[bot.name] }))}
               >
-                {showArchived[bot.name] ? '▾' : '▸'} {archived.length} archived
+                {showArchived[bot.name] ? '▾' : '▸'} {archived.length} resolved
               </button>
             )}
             {showArchived[bot.name] && archived.map(t => <SessionLink key={t.id} session={t} nested />)}

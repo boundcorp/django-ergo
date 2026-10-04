@@ -41,7 +41,7 @@ export function Sessions({ bots }: { bots: Bot[] }) {
         >
           <option value="">Any status</option>
           <option value="active">Active</option>
-          <option value="completed">Closed</option>
+          <option value="completed">Resolved</option>
         </select>
       </div>
       {sessions === null ? (
@@ -50,34 +50,34 @@ export function Sessions({ bots }: { bots: Bot[] }) {
         <p className="text-zinc-500">No sessions match.</p>
       ) : (
         <div className="data-scroll rounded-card border border-stroke">
-        <table className="w-full text-sm">
-          <thead className="text-left text-xs text-zinc-500">
-            <tr>
-              <th>Session</th>
-              <th>Bot</th>
-              <th>Kind</th>
-              <th>Person</th>
-              <th>Status</th>
-              <th>Last active</th>
-            </tr>
-          </thead>
-          <tbody>
-            {sessions.map(s => (
-              <tr key={s.id} className="border-t border-zinc-200 dark:border-zinc-800">
-                <td>
-                  <Link className="text-accent hover:underline" to={`/s/${s.id}`}>
-                    {s.title}
-                  </Link>
-                </td>
-                <td>{s.bot}</td>
-                <td>{s.role || '-'}</td>
-                <td>{s.username}</td>
-                <td>{s.status}</td>
-                <td>{new Date(s.updated_at).toLocaleString()}</td>
+          <table className="w-full text-sm">
+            <thead className="text-left text-xs text-zinc-500">
+              <tr>
+                <th>Session</th>
+                <th>Bot</th>
+                <th>Kind</th>
+                <th>Person</th>
+                <th>Status</th>
+                <th>Last active</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {sessions.map(s => (
+                <tr key={s.id} className="border-t border-zinc-200 dark:border-zinc-800">
+                  <td>
+                    <Link className="text-accent hover:underline" to={`/s/${s.id}`}>
+                      {s.title}
+                    </Link>
+                  </td>
+                  <td>{s.bot}</td>
+                  <td>{s.role || '-'}</td>
+                  <td>{s.username}</td>
+                  <td>{s.status === 'completed' ? (s.role === 'thread' ? 'resolved' : 'closed') : s.status}</td>
+                  <td>{new Date(s.updated_at).toLocaleString()}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
     </div>
