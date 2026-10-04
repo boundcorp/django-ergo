@@ -180,7 +180,10 @@ bots: pass them to `run_conversation_turn(..., extra_tools=[...])` or a
 A toolkit's `pre_seeds()` are tool calls run before the session's first
 model call and written into its history, so the model starts out knowing
 their results. `FunctionToolkit(tools, ctx, seed=["tool_name"])` seeds
-zero-argument tools.
+zero-argument tools, and in a tool file `@bot_tool(seed=True)` does the
+same for one tool (no required parameters) while its skill is loaded. Seed
+what a chat needs nearly every time; use `@bot_context` for a small status
+that should be fresh each turn, and a plain tool for anything occasional.
 
 ## Plugins
 

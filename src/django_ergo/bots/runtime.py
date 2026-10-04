@@ -42,6 +42,7 @@ from django_ergo.bots.plugins import BotPlugin
 from django_ergo.bots.plugins import resolve_plugin_class
 from django_ergo.bots.providers import Providers
 from django_ergo.bots.skills import Skill
+from django_ergo.bots.skills import library_skills
 from django_ergo.bots.skills import load_skills
 from django_ergo.bots.skillset import STATE_KEY
 from django_ergo.bots.skillset import SkillDef
@@ -152,6 +153,9 @@ class Bot:
             for name, fn in module.tasks.items()
         }
         self.skills: list[Skill] = load_skills(definition.skills_dir)
+        self.skills += library_skills(
+            self._named_skills(), exclude={s.name for s in self.skills}
+        )
         self.tables = []
         if definition.table_files:
             from django_ergo.bots.tables import load_tables
@@ -172,6 +176,7 @@ class Bot:
         ):
             # A kb/ folder in the bot folder is its knowledge base.
             specs.append(PluginSpec("ergo_kb", {"path": "kb"}))
+        specs = self._with_skill_plugins(specs)
         messaging.KNOWN_BOTS[definition.name] = self
         self.plugins: list[BotPlugin] = [
             resolve_plugin_class(spec.name)(self, spec.config) for spec in specs
@@ -187,6 +192,40 @@ class Bot:
         for module in self.skill_tool_modules.values():
             self.tasks.update(module.tasks)
         self.skill_defs: list[SkillDef] = self._skill_defs()
+
+    def _named_skills(self) -> set[str]:
+        """Every skill name bot.yaml or the bot's skills mention (for the library)."""
+        definition = self.definition
+        names = set(definition.skill_includes) | set(definition.thread_skills)
+        for chat in definition.chats.values():
+            names |= set(chat.skills)
+        for required in definition.skill_requires.values():
+            names |= set(required)
+        for skill in self.skills:
+            names |= set(skill.requires)
+        return names
+
+    def _with_skill_plugins(self, specs: list[PluginSpec]) -> list[PluginSpec]:
+        """Add the plugins skills ask for; refuse settings that contradict bot.yaml."""
+        specs = [PluginSpec(spec.name, dict(spec.config)) for spec in specs]
+        for skill in self.skills:
+            for name, wanted in skill.plugins.items():
+                cls = resolve_plugin_class(name)
+                spec = next(
+                    (s for s in specs if resolve_plugin_class(s.name) is cls), None
+                )
+                if spec is None:
+                    specs.append(PluginSpec(name, dict(wanted)))
+                    continue
+                for key, value in wanted.items():
+                    if key in spec.config and spec.config[key] != value:
+                        msg = (
+                            f"Skill {skill.name} needs {name} with {key}: {value}, "
+                            f"but bot.yaml sets {key}: {spec.config[key]}"
+                        )
+                        raise ValueError(msg)
+                    spec.config[key] = value
+        return specs
 
     def _skill_defs(self) -> list[SkillDef]:
         """Everything this bot can load, as skills (see bots.skillset)."""
@@ -323,7 +362,12 @@ class Bot:
                     else None,
                     requires=[*skill.requires, *requires.get(skill.name, [])],
                     always=skill.always_load,
-                    source=f"skills/{skill.path.parent.name if skill.path.name == 'SKILL.md' else skill.path.name}",
+                    source=("ergo:skill_library/" if skill.library else "skills/")
+                    + (
+                        skill.path.parent.name
+                        if skill.path.name == "SKILL.md"
+                        else skill.path.name
+                    ),
                 )
             )
         return defs

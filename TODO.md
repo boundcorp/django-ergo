@@ -23,6 +23,8 @@ Live on rigel from `~/p/boundcorp/django-ergo`, bots from `boundcorp/ergo-bots`.
 
 - [x] **Docs** (PR #69; OpenAI made the default in examples and docs in a follow-up): full README; guides for getting started, building bots, skills, tools, plugins, memory and KBs, data tables, attachments, schedules, running Ergonaut, development; 2025 planning docs and old specs moved to `docs/archive/`.
 - [x] **Skills unified + named chats** (PR #33, merged): lazy skills (load/unload, always per chat, requires), main replaces root, named chats in bot.yaml, schedule targets.
+- [x] **Skill library + skillbuilder**: Ergo ships reusable skill folders (`bots/skill_library/`) a bot includes by name (`skills.include`, chat skills or `requires`); skills declare the plugins they need (`plugins:` front matter, conflicting bot.yaml settings fail the load); `@bot_tool(seed=True)`. First library skill: `skillbuilder` (config_repo in PR mode plus a guide to tools, workers, attachments, seeding, tables, schedules and .jhtml pages).
+- [ ] Turn on `skillbuilder` for the bots that should write their own tools (ergo-bots: boundcorp, devbox).
 - [x] **Schedule actions** (PR #34, merged): ordered `prompt` and `run` steps; `run` calls bot-folder Python and records a BotJob.
 - [x] **BotTable** (PR #35, merged): real Django models per bot, migrations in the bot folder's `migrations/` (bot_management writes them into the proposal), `ergo_bot_migrate` at start and after pulls, `tables` skill.
 - [x] **Pages and pins** (PR #36, merged): live .jhtml pages (sandboxed Jinja over tables), blocks, the `pages` plugin, chat pins (bot-folder files and pinned chat files), page viewer in the chat, `ctx.table()` for schedule code.
