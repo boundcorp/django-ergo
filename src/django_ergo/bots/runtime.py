@@ -713,7 +713,10 @@ class Bot:
         """The turn's context. ``incoming`` is False when resuming a stored turn."""
         ctx = self.tool_context(session)
         builder = ContextBuilder(budget_tokens=self.definition.budget_tokens)
-        empty = True
+        from django_ergo.bots.orchestrator import chat_identity
+
+        builder.add(TextContextSource("This chat", chat_identity(session), weight=3))
+        empty = False
         if self.definition.current_time:
             builder.add(
                 TextContextSource(

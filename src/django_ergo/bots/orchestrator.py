@@ -87,6 +87,29 @@ def _target(ctx: ToolContext, bot: str) -> Bot:
     return registry.get(bot)
 
 
+def chat_identity(session: ConversationSession) -> str:
+    """Which chat this is, for its own context: a thread must know it's the
+    thread, not the main chat its instructions also describe."""
+    meta = session.metadata or {}
+    role = meta.get("bot_role")
+    if role in ("root", "main"):
+        return f"You are {session.bot_name} · Main, the main chat."
+    if role == "chat":
+        return f"You are {session.bot_name} · {meta.get('chat') or meta.get('title')}, a named chat."
+    started = meta.get("started_by_label")
+    if not started and session.parent_id:
+        started = messaging.label(session.parent)
+    title = meta.get("title") or "Thread"
+    if not started:
+        return f"You are {session.bot_name} · {title}, a thread. Do its work here."
+    return (
+        f"You are {session.bot_name} · {title}, a thread started by {started}. "
+        f"Do the work here; don't hand it to another {session.bot_name} thread. Your "
+        f"final reply to a message from {started} goes back to it automatically, so "
+        "report there with that reply, not with extra messages."
+    )
+
+
 def thread_status(session: ConversationSession) -> dict:
     """What a chat is doing, for orchestrators and UIs (the "Bots and threads"
     block uses it; so can an API).
@@ -238,6 +261,14 @@ def ergo_thread_list(
             "description": '"main" for its main chat, a named chat, "new" for a new thread, or a thread id',
         },
         "title": {"type": "string", "description": "Title for a new thread"},
+        "ask": {
+            "type": "boolean",
+            "description": (
+                "Only for messages upward (to your own main chat, or your parent bot's): "
+                "true when you need an answer back. Otherwise it's a one-way report and "
+                "no reply comes back."
+            ),
+        },
         "attachments": {
             "type": "array",
             "items": {"type": "string"},
@@ -256,12 +287,14 @@ def ergo_thread_send(  # noqa: PLR0913
     thread: str = "main",
     title: str = "",
     attachments: list[str] | None = None,
+    ask: bool = False,
 ) -> dict:
     """Send a message to a bot's main chat, a named chat, a thread, or a new thread.
 
-    Returns at once. The reply arrives later as a new message in this chat.
+    Returns at once. The reply arrives later as a new message in this chat, except
+    for a report upward (see ``ask``).
     """
-    return _send(ctx, _target(ctx, bot), message, thread, title, attachments)
+    return _send(ctx, _target(ctx, bot), message, thread, title, attachments, ask=ask)
 
 
 def _send(  # noqa: PLR0913
@@ -271,6 +304,8 @@ def _send(  # noqa: PLR0913
     thread: str = "main",
     title: str = "",
     attachments: list[str] | None = None,
+    *,
+    ask: bool = False,
 ) -> dict:
     user = ctx.session.user
     thread = (thread or "main").strip()
@@ -333,18 +368,32 @@ def _send(  # noqa: PLR0913
             "for the reply, then send new work if there is any."
         )
         raise ValueError(msg)
+    # Upward (a thread to its main chat, a main chat to its parent's) is a report
+    # unless it asks: no reply goes back, so a status update doesn't cost a turn
+    # here for the recipient's acknowledgement.
+    upward = _is_main(recipient) and (
+        (target is ctx.bot and not _is_main(ctx.session)) or _upward_only(ctx, target)
+    )
+    report = upward and not ask
+    metadata = {"attachments": shared} if shared else {}
+    if report:
+        metadata["report"] = True
     sent = messaging.send(
         ctx.session,
         recipient,
         message,
         registry=ctx.bot.registry,
-        metadata={"attachments": shared} if shared else None,
+        metadata=metadata or None,
     )
     return {
         "sent_to": messaging.label(recipient),
         "thread_id": str(recipient.id),
         "message_id": str(sent.id),
-        "note": "The reply will arrive as a new message in this chat.",
+        "note": (
+            "Sent as a report: no reply comes back (ask=true when you need one)."
+            if report
+            else "The reply will arrive as a new message in this chat."
+        ),
         **({"shared_files": [f["filename"] for f in shared]} if shared else {}),
     }
 
@@ -440,15 +489,27 @@ def ergo_thread_archive(ctx: ToolContext, thread_id: str, bot: str = "") -> str:
             "items": {"type": "string"},
             "description": "Files from this chat to share (filenames or file ids)",
         },
+        "ask": {
+            "type": "boolean",
+            "description": (
+                "true when you need an answer back. Otherwise it's a one-way report and "
+                "no reply comes back."
+            ),
+        },
     },
     required=["message", "to"],
 )
 def ergo_message_up(
-    ctx: ToolContext, message: str, to: str, attachments: list[str] | None = None
+    ctx: ToolContext,
+    message: str,
+    to: str,
+    attachments: list[str] | None = None,
+    ask: bool = False,
 ) -> dict:
     """Message upward: this bot's main chat, or the parent bot's main chat.
 
-    Returns at once. The reply arrives later as a new message in this chat.
+    Returns at once. A report gets no reply; with ``ask`` the reply arrives later
+    as a new message in this chat.
     """
     if to == "parent":
         registry = ctx.bot.registry
@@ -466,7 +527,7 @@ def ergo_message_up(
     else:
         msg = 'to must be "main" or "parent"'
         raise ValueError(msg)
-    return _send(ctx, target, message, "main", attachments=attachments)
+    return _send(ctx, target, message, "main", attachments=attachments, ask=ask)
 
 
 def upward_targets(ctx: ToolContext) -> list[str]:

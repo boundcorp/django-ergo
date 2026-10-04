@@ -472,6 +472,12 @@ snippets first, then drop out, and the block says how many it left out
 (`ergo_thread_list` and the history tools still reach them). With seven bots
 and nine open chats it is about 2.4k tokens.
 
+Every bot chat also gets a short **This chat** block saying which chat it is:
+"You are devbox · Main, the main chat", or for a thread "You are devbox ·
+Deploy, a thread started by boundcorp · Main. Do the work here; … your final
+reply goes back to it automatically" (`orchestrator.chat_identity`). Shared
+agents.md instructions can then say what main does and what a thread does.
+
 Who may message whom:
 
 - **Upward, always.** Any chat may message its own bot's main chat, and a
@@ -489,6 +495,12 @@ Who may message whom:
   bot started records `started_by` (the sending chat), `started_by_bot` and
   `started_by_label` in its metadata; Ergonaut links back to that chat from
   the thread's header, and `ergo_thread_list` shows it.
+- **Reports upward get no reply.** A thread's message to its own main chat,
+  or a main chat's to its parent's, is a one-way report: the recipient's turn
+  starts with `[Report from …]` and its reply isn't sent back, so a status
+  update doesn't cost the sender another turn for an acknowledgement. Pass
+  `ask: true` (to `ergo_thread_send` or `ergo_message_up`) when an answer is
+  needed.
 - **No nudges.** A chat can't send a second request to a chat while its
   earlier one there is still open, and in the turn that handles a chat's
   reply it can't send that chat a short follow-up ("please continue"):

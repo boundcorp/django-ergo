@@ -1681,3 +1681,58 @@ def test_open_prs_come_from_the_open_prs_setting(tmp_path, settings):
         ],
     }
     assert overview.open_prs(bot) == ["- a/b #7 (draft): Fix it", "- a/b #8: Ship it"]
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_a_report_upward_gets_no_reply_unless_it_asks(tmp_path, thread_messages):
+    from django_ergo.conversation.models import ThreadMessage
+
+    user = await User.objects.acreate(username="reporter")
+    bot, engine = make_bot(tmp_path, say("ok"))
+    root = await bot.root_session(user)
+    thread = await bot.create_session(
+        user,
+        parent=root,
+        title="Deploy",
+        metadata={"started_by": str(root.id), "started_by_label": "kitchen · Main"},
+    )
+    engine._client.responses = [
+        claude_tool(
+            "ergo_thread_send", {"thread": "main", "message": "Deployed."}, tool_id="r1"
+        ),
+        say("Reported."),
+    ]
+    await bot.ask(thread, "Ship it")
+    # The thread knows it's the thread, and who started it.
+    system = engine._client.calls[0]["system"]
+    assert (
+        "## This chat\nYou are kitchen · Deploy, a thread started by kitchen · Main."
+        in system
+    )
+    sent = json.loads(_tool_results(engine)[-1]["content"])
+    assert sent["note"].startswith("Sent as a report")
+
+    engine._client.responses = [say("Noted: deployed.")]
+    await thread_messages()  # main reads the report...
+    report = await ThreadMessage.objects.aget(recipient_session=root)
+    assert report.metadata["report"] is True and report.status == "answered"
+    assert engine._client.calls[-1]["messages"][0]["content"][0]["text"].startswith(
+        "[Report from kitchen · Deploy"
+    )
+    assert SENT == []  # ...and no acknowledgement starts a turn in the thread
+
+    # Asking gets an answer back.
+    engine._client.responses = [
+        claude_tool(
+            "ergo_thread_send",
+            {"thread": "main", "message": "Which cluster?", "ask": True},
+            tool_id="r2",
+        ),
+        say("Asked."),
+        say("The octo cluster."),
+    ]
+    await bot.ask(thread, "Next step")
+    await thread_messages()
+    assert len(SENT) == 1  # the answer is on its way back to the thread
+    main_system = engine._client.calls[-1]["system"]
+    assert "## This chat\nYou are kitchen · Main, the main chat." in main_system
