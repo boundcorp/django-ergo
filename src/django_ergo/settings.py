@@ -44,7 +44,8 @@ DEFAULTS = {
     # latest N; older ones become a short stub naming the tool, so a long turn
     # doesn't re-send every earlier dump. Stored history keeps them all.
     # None = send every result in full.
-    "TOOL_RESULTS_IN_CONTEXT": 3,
+    "TOOL_RESULTS_IN_CONTEXT": None,
+    "TOOL_RESULTS_TOKENS": None,
     # Extra bot plugins by short name: {"name": "dotted.path.PluginClass"}.
     "BOT_PLUGINS": {},
     # Skills from Ergo's skill library (bots/skill_library) that every bot

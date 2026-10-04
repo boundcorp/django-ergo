@@ -215,6 +215,7 @@ def price_for(model: str) -> Price | None:
     """The price of ``model``, or None when it isn't in the table."""
     if not model:
         return None
+    model = model.removesuffix("[1m]")
     table = price_table()
     matches = [key for key in table if model == key or model.startswith(key)]
     if not matches:

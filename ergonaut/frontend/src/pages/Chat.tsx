@@ -455,6 +455,8 @@ export function Chat({ onChange }: { onChange: () => void }) {
           <Transcript
             messages={detail.messages}
             calls={detail.calls}
+            compactions={detail.compactions}
+            sessionId={detail.session.id}
             files={files}
             complete={!detail.has_more}
             sent={detail.sent}

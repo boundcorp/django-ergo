@@ -163,6 +163,7 @@ class CallOut(Schema):
     error_summary: str = ""
     error_hint: str = ""
     dismissed: bool = False  # the user dismissed this failure
+    context: dict | None = None
 
 
 class CallDetailOut(CallOut):
@@ -175,6 +176,7 @@ class SessionDetailOut(Schema):
     session: SessionOut
     messages: list[MessageOut]
     calls: list[CallOut]
+    compactions: list[dict] = []
     requests: list[RequestOut] = []
     workers: list[dict] = []
     # Messages sent while a turn runs that the model hasn't taken yet (they can be unsent).
@@ -355,6 +357,7 @@ class ApprovalIn(Schema):
 
 
 class TurnOut(Schema):
+    context: dict | None = None
     session_id: str
     call_id: str | None
     type: str | None
@@ -802,6 +805,20 @@ RESUME_NOTE = (
 )
 
 
+def context_out(call: StructuredCall) -> dict | None:
+    context = (call.metadata or {}).get("context")
+    if context is None:
+        return None
+    return {
+        **{key: value for key, value in context.items() if key != "sections"},
+        "sections": [
+            {key: value for key, value in section.items() if key != "text"} for section in context.get("sections", [])
+        ],
+        "section_tokens": sum(section.get("tokens", 0) for section in context.get("sections", [])),
+        "prompt_tokens": call.input_tokens + call.cache_creation_input_tokens + call.cache_read_input_tokens,
+    }
+
+
 def call_out(call: StructuredCall, detail: bool = False) -> dict:
     out = {
         "id": str(call.id),
@@ -816,6 +833,7 @@ def call_out(call: StructuredCall, detail: bool = False) -> dict:
         "input_tokens": call.input_tokens,
         "output_tokens": call.output_tokens,
         "turns_used": call.turns_used,
+        "context": context_out(call),
         "pending_approvals": (call.metadata or {}).get("pending_approvals", []),
         "tools": (call.metadata or {}).get("tools", []),
         "created_at": call.created_at,
@@ -1033,6 +1051,17 @@ def session_detail(request, session_id: str, before: int | None = None, limit: i
         "session": session_out(session),
         "messages": messages,
         "calls": calls,
+        "compactions": [
+            {
+                "id": str(c.pk),
+                "upto_sequence": c.upto_sequence,
+                "from_sequence": c.from_sequence,
+                "message_count": c.message_count,
+                "reason": c.reason,
+                "created_at": c.created_at,
+            }
+            for c in session.compactions.all()
+        ],
         "requests": requests_out(session),
         "workers": workers_out(session),
         "inbox": [
@@ -1073,6 +1102,34 @@ def call_detail(request, call_id: str):
     return call_out(call, detail=True)
 
 
+@router.get("/calls/{call_id}/context")
+def call_context(request, call_id: str):
+    detail = call_detail(request, call_id)
+    context = (detail["metadata"] or {}).get("context")
+    if context is None:
+        return None
+    context = {**context, "prompt_tokens": (detail["context"] or {}).get("prompt_tokens", 0)}
+    active = context.get("compaction")
+    if active:
+        call = StructuredCall.objects.get(pk=call_id)
+        compaction = (
+            call.session.compactions.filter(pk=uuid_or_404(active["id"], "compaction")).first()
+            if call.session
+            else None
+        )
+        context["compaction"] = {**active, "summary": compaction.summary if compaction else ""}
+    return context
+
+
+@router.get("/sessions/{session_id}/compactions/{compaction_id}")
+def compaction_detail(request, session_id: str, compaction_id: str):
+    session = visible_sessions(request.auth).filter(pk=uuid_or_404(session_id)).first()
+    compaction = session and session.compactions.filter(pk=uuid_or_404(compaction_id, "compaction")).first()
+    if compaction is None:
+        raise HttpError(404, "No such compaction")
+    return {"summary": compaction.summary}
+
+
 def latest_turn(session: ConversationSession, *, queued: bool) -> dict:
     """The session's newest chat reply as a TurnOut (empty while it's queued)."""
     call = None if queued else session.structured_calls.order_by("-created_at").first()
@@ -1080,6 +1137,7 @@ def latest_turn(session: ConversationSession, *, queued: bool) -> dict:
     return {
         "session_id": str(session.id),
         "call_id": str(call.id) if call else None,
+        "context": context_out(call) if call else None,
         "type": response.get("type") if isinstance(response, dict) else None,
         "text": response.get("text", "") if isinstance(response, dict) else "",
         "suggestions": response.get("suggestions", []) if isinstance(response, dict) else [],
@@ -1202,7 +1260,7 @@ def models_out(bot: Bot) -> dict:
             {
                 "id": m.id,
                 "name": m.name,
-                "label": m.label or m.name,
+                "label": (m.label or m.name).removesuffix("[1m]"),
                 "provider": m.provider,
                 "engine_type": bot.providers.providers[m.provider].type,
                 "available": bot.providers.providers[m.provider].available,

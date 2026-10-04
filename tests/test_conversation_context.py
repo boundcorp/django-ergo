@@ -239,8 +239,9 @@ async def test_window_chat_sends_recent_window_and_history_tools():
 
     assert events[-1].event_type == "done"
     first, second = engine._client.calls
-    system = first["system"]
-    assert system.startswith("You are the kitchen bot.\n\n<context>")
+    assert first["system"] == "You are the kitchen bot."
+    system = first["messages"][0]["content"][0]["text"]
+    assert system.startswith("<turn-context>\n<context>")
     assert "latest 4 of 20" in system
     assert "[L16 " in system
     assert "question 7" not in system
@@ -248,7 +249,7 @@ async def test_window_chat_sends_recent_window_and_history_tools():
     assert "## Pantry\neggs: 4" in system
     # Only the current turn is sent natively.
     assert [m["role"] for m in first["messages"]] == ["user"]
-    assert first["messages"][0]["content"][0]["text"] == "What fridge did we pick?"
+    assert first["messages"][0]["content"][1]["text"] == "What fridge did we pick?"
     assert "ergo_chat_history_read" in [t["name"] for t in first["tools"]]
 
     # The tool call ran against the chat's own history.
@@ -262,7 +263,10 @@ async def test_window_chat_sends_recent_window_and_history_tools():
     # The next turn sees the previous one in its recent window.
     engine._client.responses = [claude_text("ok")]
     _ = [e async for e in chat.send("thanks")]
-    assert "We decided on the blue fridge." in engine._client.calls[-1]["system"]
+    assert (
+        "We decided on the blue fridge."
+        in engine._client.calls[-1]["messages"][0]["content"][0]["text"]
+    )
 
 
 @pytest.mark.django_db(transaction=True)
@@ -339,9 +343,9 @@ async def test_new_message_is_only_sent_natively():
 
     assert result.ok
     call = engine._client.calls[0]
-    assert "earlier question" in call["system"]
-    assert "Plan the new thing" not in call["system"]
-    assert call["messages"][0]["content"][0]["text"] == "Plan the new thing"
+    assert "earlier question" in call["messages"][0]["content"][0]["text"]
+    assert "Plan the new thing" not in call["messages"][0]["content"][0]["text"]
+    assert call["messages"][0]["content"][1]["text"] == "Plan the new thing"
 
 
 @pytest.mark.django_db(transaction=True)
@@ -374,9 +378,9 @@ async def test_resumed_turn_is_not_repeated_in_context():
 
     assert done.ok
     call = engine._client.calls[1]
-    assert call["messages"][0]["content"][0]["text"] == "Clean up"
-    assert "earlier answer" in call["system"]
-    assert "Clean up" not in call["system"]
+    assert call["messages"][0]["content"][1]["text"] == "Clean up"
+    assert "earlier answer" in call["messages"][0]["content"][0]["text"]
+    assert "Clean up" not in call["messages"][0]["content"][0]["text"]
 
 
 @pytest.mark.django_db(transaction=True)
@@ -403,6 +407,77 @@ async def test_continued_turn_is_not_repeated_in_context():
 
     assert result.ok
     call = engine._client.calls[0]
-    assert call["messages"][0]["content"][0]["text"] == "Look it up"
-    assert "earlier answer" in call["system"]
-    assert "Look it up" not in call["system"]
+    assert call["messages"][0]["content"][1]["text"] == "Look it up"
+    assert "earlier answer" in call["messages"][0]["content"][0]["text"]
+    assert "Look it up" not in call["messages"][0]["content"][0]["text"]
+
+
+def test_oversized_newest_message_still_renders_history_section():
+    messages = [
+        HistoryMessage("test:chat", i, "user", [{"type": "text", "text": "short"}], T0)
+        for i in range(10)
+    ]
+    messages.append(
+        HistoryMessage(
+            "test:chat", 10, "user", [{"type": "text", "text": "x" * 20000}], T0
+        )
+    )
+    source = MessageContextSource(ListSource(messages), granularity="conversation")
+    section = source.render(200)
+    assert section is not None
+    assert "[L10" in section.body
+    assert "truncated, read it with ergo_chat_history_read" in section.body
+    assert not section.complete
+    assert len(section.body) < 1200
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("kind", ["claude", "openai"])
+async def test_turn_context_is_first_user_block_and_storage_unchanged(kind):
+    from django_ergo.conversation.engines.claude_api import ClaudeAPIEngine
+    from django_ergo.conversation.engines.openai_api import OpenAIAPIEngine
+
+    user = await User.objects.acreate(username=f"context-{kind}")
+    session = await ConversationSession.objects.acreate(
+        user=user, engine_type=kind, system_prompt="stable"
+    )
+    await sync_to_async(add)(session, "user", "old question")
+    await sync_to_async(add)(session, "assistant", "old answer")
+    await sync_to_async(add)(session, "user", "current question")
+    engine = (ClaudeAPIEngine if kind == "claude" else OpenAIAPIEngine)({})
+    engine.ephemeral_context = "Current time: 12:34"
+    messages = await sync_to_async(engine.reconstruct_messages)(session)
+    current = messages[-1]["content"]
+    text = current[0]["text"] if isinstance(current, list) else current
+    assert text.startswith("<turn-context>\nCurrent time: 12:34\n</turn-context>")
+    history = await sync_to_async(engine.history_rows)(session)
+    assert "turn-context" not in str(history)
+    assert "Current time" not in str(messages[:-1])
+    assert engine.last_request_info["native_messages"] == {
+        "count": 3,
+        "first_sequence": 0,
+    }
+    if kind == "openai":
+        assert messages[0] == {"role": "system", "content": "stable"}
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_recorded_context_sections_cap_text_and_preserve_token_counts():
+    user = await User.objects.acreate(username="context-cap")
+    session = await ConversationSession.objects.acreate(user=user, engine_type="claude")
+    engine = claude_engine(claude_tool("submit_output", VALID_PLAN))
+    builder = ContextBuilder(budget_tokens=10000)
+    builder.add(TextContextSource("Long note", "n" * 30000))
+    result = await run_structured_call(
+        StructuredCallSpec(kind="cap", response_model=Plan),
+        "go",
+        session=session,
+        engine=engine,
+        context_builder=builder,
+    )
+    assert result.ok
+    context = result.call.metadata["context"]
+    assert context["sections"] == [
+        {"title": "Long note", "tokens": 7500, "complete": True, "text": "n" * 20000}
+    ]
+    assert len(engine._client.calls[0]["messages"][0]["content"][0]["text"]) > 30000

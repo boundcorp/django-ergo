@@ -1,28 +1,8 @@
-"""How many large tool results each model call carries in full.
+"""Budget large tool-result text, preserving ids, images, errors and short results.
 
-A long turn calls tools step after step, and every model call re-sends the
-results of every earlier step. A tool that returns a big dump (a design tree,
-a file listing, a page of rows) makes each later step pay for all the earlier
-dumps again.
-
-Each model call carries only the newest ``DJANGO_ERGO["TOOL_RESULTS_IN_CONTEXT"]``
-large tool results in full (default 3). Older large results become a short
-stub naming the tool and its size::
-
-    [penpot_tree result, 180 lines, 9,412 chars; superseded, call the tool again if you need it]
-
-Only what is sent changes. Stored history keeps every result in full, so
-history tools and later readers still see them, and the model can run the
-tool again. A result counts as large when its text is longer than
-``STUB_MIN_CHARS``; shorter results and errors always stay as they are, and
-don't count toward the limit. Tool call ids are untouched, so every
-tool_use still has its tool_result (Claude) and every tool call its tool
-message (OpenAI). Images inside a stubbed result stay, so the image window
-in ``conversation.images`` decides about them as before.
-
-An engine's ``tool_results_in_context`` (set per bot with
-``tool_results_in_context`` in bot.yaml) overrides the setting. ``None``
-in the setting turns trimming off.
+The default budget is 20% of the engine context window. The latest three
+large results always survive. An explicitly configured legacy count takes
+precedence. Only request copies change; stored history remains complete.
 """
 
 from __future__ import annotations
@@ -108,29 +88,49 @@ def _stubbed_content(content, stub: str):
     return [{"type": "text", "text": stub}, *rest]
 
 
-def trim_tool_results(
+def trim_tool_results(  # noqa: C901, PLR0913, PLR0912
     messages: list[dict],
     *,
     keep: int | None = None,
     min_chars: int = STUB_MIN_CHARS,
+    budget_tokens: int | None = None,
+    protect_latest: int = 3,
+    stats: dict | None = None,
 ) -> list[dict]:
-    """Stub all but the newest ``keep`` large tool results, for one model call.
+    """Return a request copy, recording the stub count in ``stats`` if supplied.
 
-    ``keep`` defaults to ``DJANGO_ERGO["TOOL_RESULTS_IN_CONTEXT"]``; when that
-    is ``None`` (or ``keep`` is negative) nothing changes. Works on Claude and
-    OpenAI messages alike. The input list and its messages are not changed.
+    ``keep`` or the legacy setting applies the count rule when non-None.
+    Otherwise use ``budget_tokens`` (40k by default); protected results count
+    toward the budget even when they exceed it.
     """
+    if stats is not None:
+        stats["stubbed_results"] = 0
     if keep is None:
         keep = api_settings.TOOL_RESULTS_IN_CONTEXT
-    if keep is None or keep < 0:
+    if keep is not None and keep < 0:
         return messages
+    if budget_tokens is None:
+        budget_tokens = api_settings.TOOL_RESULTS_TOKENS
+    if budget_tokens is None:
+        budget_tokens = 40_000
     large = [
         (i, j, result)
         for i, j, result in _results(messages)
         if not result.get("is_error")
         and sum(len(t) for t in _text_parts(result.get("content"))) > min_chars
     ]
-    old = large[: max(len(large) - keep, 0)]
+    if keep is not None:
+        old = large[: max(len(large) - keep, 0)]
+    else:
+        old = []
+        used = 0
+        for index, item in enumerate(reversed(large)):
+            size = (sum(len(t) for t in _text_parts(item[2].get("content"))) + 3) // 4
+            if index >= protect_latest and used > budget_tokens:
+                old.append(item)
+            used += size
+    if stats is not None:
+        stats["stubbed_results"] = len(old)
     if not old:
         return messages
     names = _tool_names(messages)

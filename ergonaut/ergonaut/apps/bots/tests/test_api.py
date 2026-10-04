@@ -1056,3 +1056,61 @@ def test_a_resolved_thread_shows_who_resolved_it_and_why(client, cook, use_bots)
     thread.status = "active"
     thread.save()
     assert client.get(f"/api/sessions/{thread.id}").json()["session"]["resolved_summary"] == ""
+
+
+@pytest.mark.django_db(transaction=True)
+def test_context_snapshot_compactions_and_visibility(client, cook, use_bots):
+    from django_ergo.conversation.models import ConversationCompaction, ConversationSession, StructuredCall
+
+    use_bots(say("first"), say("second"))
+    session_id = post(client, "/api/bots/kitchen/root").json()["id"]
+    first = post(client, f"/api/sessions/{session_id}/messages", {"text": "hello"}).json()
+    assert first["context"]["context_window"] == 200000
+    assert all("text" not in section for section in first["context"]["sections"])
+    context = client.get(f"/api/calls/{first['call_id']}/context").json()
+    assert context["context_window"] == 200000
+    assert context["compact_at_tokens"] == 150000
+    assert context["compaction"] is None
+    assert context["native_messages"]["first_sequence"] == 0
+    assert context["sections"][0]["title"] == "This chat"
+    assert context["sections"][0]["text"]
+    session = ConversationSession.objects.get(pk=session_id)
+    compaction = ConversationCompaction.objects.create(
+        session=session,
+        mode="context_size",
+        from_sequence=0,
+        upto_sequence=session.messages.latest("sequence").sequence,
+        message_count=session.messages.count(),
+        reason="test",
+        summary="User said hello; first reply sent",
+    )
+    second = post(client, f"/api/sessions/{session_id}/messages", {"text": "continue"}).json()
+    context = client.get(f"/api/calls/{second['call_id']}/context").json()
+    assert context["compaction"]["summary"] == compaction.summary
+    assert context["compaction"]["id"] == str(compaction.pk)
+    payload = client.get(f"/api/sessions/{session_id}").json()
+    assert payload["compactions"] == [
+        {
+            "id": str(compaction.pk),
+            "upto_sequence": compaction.upto_sequence,
+            "from_sequence": 0,
+            "message_count": compaction.message_count,
+            "reason": "test",
+            "created_at": compaction.created_at.isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+        }
+    ]
+    latest = next(c for c in payload["calls"] if c["id"] == second["call_id"])
+    assert all("text" not in s for s in latest["context"]["sections"])
+    assert latest["context"]["section_tokens"] > 0
+    assert client.get(f"/api/sessions/{session_id}/compactions/{compaction.pk}").json() == {
+        "summary": compaction.summary
+    }
+    old = StructuredCall.objects.create(user=cook, kind="old", session=session)
+    assert client.get(f"/api/calls/{old.pk}/context").json() is None
+    other = get_user_model().objects.create_user("other-context", password="pw")
+    client.force_login(other)
+    assert client.get(f"/api/calls/{second['call_id']}/context").status_code == 404
+    assert client.get(f"/api/sessions/{session_id}/compactions/{compaction.pk}").status_code == 404
+    other.is_superuser = True
+    other.save()
+    assert client.get(f"/api/calls/{second['call_id']}/context").status_code == 200

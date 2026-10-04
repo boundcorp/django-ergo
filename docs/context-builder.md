@@ -41,10 +41,18 @@ built.text    # "<context>\n## ...\n</context>"
   subclassing `ContextSource` and implementing `render(budget_tokens)`.
 
 Pass `context_builder=builder` to `run_conversation_turn` to send the built
-text as extra system context on every model call in that turn. It is never
-stored.
+text as a `<turn-context>` block at the start of the current turn's user
+message on every model call. The system prompt stays stable and stored
+message rows are unchanged. In-session structured calls record sections
+(title, tokens, completeness and text capped at 20,000 characters) in
+`metadata["context"]` for Ergonaut's Context panel. A newest message that
+exceeds its section budget is truncated with a history-tool hint, so recent
+history never vanishes solely because that message is long.
 
 ## WindowChat
+
+Bots now use native history with [token compaction](compaction.md).
+`WindowChat` and `native_history: turn` remain available for library callers.
 
 A long-running chat whose context stays the same size however long it runs.
 (It was called `StreamChat` in `conversation.stream`; those names still

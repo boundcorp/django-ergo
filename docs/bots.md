@@ -28,14 +28,15 @@ engine:
   api_key_env: KITCHEN_OPENAI_KEY    # read at runtime, never stored
   # with a providers.yaml: config: {model: openai/gpt-6-sol}
   # transport: cli                   # claude only: the logged-in Claude Code CLI, no key
-root:                                # window settings for main and named chats
-  recent: 15                         # latest messages always in context
+root:                                # context budget for main and named chats
+  recent: 15                         # legacy; ignored by bots
   budget_tokens: 8000
-  granularity: conversation          # or reasoning / full
+  granularity: conversation          # legacy; ignored by bots
 orchestration: true                  # may the bot delegate at all (false: never)
 timezone: America/Los_Angeles        # default for users without a timezone
 current_time: true                   # current date and time in every turn
-tool_results_in_context: 3           # large tool results each model call keeps in full
+tool_results_tokens: 40000           # optional; default 20% of model window
+# tool_results_in_context: 3         # optional legacy count; overrides token budget
 chats:
   main:                              # every user's main chat (always there)
     skills: [orchestration, tandoor] # loaded from the start (default: [orchestration])
@@ -47,7 +48,7 @@ threads:                             # child threads (`sessions:` also works)
   skills: []
   allow_create: true                 # may chats (this bot's or other bots') start threads of it?
   archive_after_days: 7              # archive threads idle this long (0 = never)
-  default_compaction: {mode: rolling, config: {keep_recent: 15}}   # the default; `stream` also works
+  default_compaction: {mode: context_size, config: {compact_at_tokens: 150000, keep_tokens: 50000}} # optional; window-relative defaults
 skills:
   folder: skills                     # default
   unload_after_turns: 30             # drop a loaded skill unused this many turns
@@ -109,13 +110,13 @@ latest two images go to the model on each call (`DJANGO_ERGO["IMAGES_IN_CONTEXT"
 downscaled to 1024px with Pillow when it's installed; older ones show as
 `[image omitted: name (id=...)]`. See [attachments.md](attachments.md).
 
-Large tool results get the same treatment: each model call carries the
-newest three (`tool_results_in_context` in bot.yaml, default
-`DJANGO_ERGO["TOOL_RESULTS_IN_CONTEXT"]`) in full, and older ones over 500
-characters go as a stub naming the tool and its size, so a long turn that
-keeps reading a big dump doesn't re-send every earlier copy. History keeps
-every result; the bot calls the tool again if it needs an old one. See
-[structured-calls.md](structured-calls.md).
+Large tool results use a token budget: `tool_results_tokens` in bot.yaml
+or `DJANGO_ERGO["TOOL_RESULTS_TOKENS"]`, defaulting to 20% of the engine's
+context window. The newest three large results stay in full even if they
+exceed that budget. Older results become stubs after the budget is consumed;
+errors, images and results of 500 characters or less stay. An explicit
+`tool_results_in_context` or `TOOL_RESULTS_IN_CONTEXT` still uses the old
+count rule; both defaults are `None`. History keeps every result.
 
 A tool module can also define
 `toolkits(ctx) -> list[Toolkit]` for class-based toolkits.
@@ -383,7 +384,7 @@ chat why.
 
 Every user has a **main** chat with each bot (formerly the root session),
 plus one chat for each named chat in `chats:`, created when first opened.
-Main and named chats are window chats with history tools over every session
+Main and named chats keep native history with token compaction and history tools over every session
 the bot has with the user. A named chat adds its own `instructions` to
 agents.md and loads its own skills. Threads are child sessions of any chat.
 Instructions are rebuilt every turn, so edits to agents.md and bot.yaml reach
@@ -452,11 +453,13 @@ marked `requires_approval` pauses the turn (`result.approvals`), and
 `chat_reply_spec` live in `django_ergo.conversation.chat_reply` and work for
 any chat session, not only bots.
 
-The **main chat** (and each named chat) is a window chat (see
-[context-builder.md](context-builder.md)): each turn it sees the latest
-`recent` messages through a context block, sends only the current turn
-natively, and has history tools over every session this bot has with the
-user. The `orchestration` skill (loaded in main by default) has:
+The **main chat** and each named chat keep full native history, compacted
+by tokens (see [compaction.md](compaction.md)), and have history tools over
+every session this bot has with the user. `root.recent` and
+`root.granularity` still parse but do nothing for bots;
+`root.budget_tokens` sizes the per-turn context block. That block is
+prepended to the current turn's user message, preserving a stable system
+prompt for caching. The `orchestration` skill (loaded in main by default) has:
 
 | Tool | What it does |
 | --- | --- |
@@ -491,7 +494,7 @@ answer "what's going on?" without asking anyone:
   requests open in and out, and running workers
   (`orchestrator.thread_status(session)`, which UIs can use too);
 - the latest five messages of each chat as short snippets (the newest gets
-  more room; the current chat's are already in its window);
+  more room; the current chat's are in its native history);
 - open pull requests of the repos in bot.yaml's `pull_requests`, from the gh
   CLI (cached five minutes), or from `DJANGO_ERGO["OPEN_PRS"]`
   (`callable(bot) -> [{repo, number, title, draft}]`) when an app keeps its
@@ -569,8 +572,8 @@ message the parent's main chat. Each session starts with an
 
 A toolkit's `pre_seeds()` names tool calls that run before a session's first
 model call; their results are written into the history as if the model had
-made the calls (each turn for window chats, whose model calls carry only
-the current turn). `FunctionToolkit(tools, ctx, seed=["tool_name"])` seeds
+made the calls. They are seeded once per session, and again on the first
+turn after compaction folds the prior seeded call. `FunctionToolkit(tools, ctx, seed=["tool_name"])` seeds
 zero-argument tools. Skills seed `list_skills`; the bots a chat can reach
 are in the "Bots and threads" context block instead.
 
@@ -849,3 +852,25 @@ arrive as one turn. Photos, voice notes, audio
 and documents become attachments. A turn that stops for approval replies
 with Approve and Deny buttons that resume it. `plugin.notify(user, text)`
 sends a message from other code.
+
+
+### Model context windows
+
+In `providers.yaml`, a model may set `context_window` directly or inside
+`config`. For example:
+
+```yaml
+providers:
+  subscription:
+    type: claude
+    transport: cli
+    models:
+      - name: claude-opus-5-5[1m]
+        context_window: 1000000
+```
+
+When unset, `[1m]` names use 1,000,000 tokens and all other names use 200,000.
+The CLI receives the model name unchanged; display labels and price lookup
+strip the suffix. Native compaction defaults to 75% of that window and
+keeps 25% verbatim. `max_context_tokens` remains a threshold alias;
+`rolling`/`stream` map to `context_size` and ignore message-count keys.

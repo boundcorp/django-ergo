@@ -70,7 +70,10 @@ class Engine(ABC):
     """Abstract engine protocol. All engines implement this interface."""
 
     engine_type: str
-    # Extra system text for the current turn (e.g. a ContextBuilder's output).
+    context_window: int = 200_000
+    tool_results_tokens: int | None = None
+    last_request_info: dict | None = None
+    # Extra text for the current turn (e.g. a ContextBuilder's output).
     # Sent with every model call while set, never stored.
     ephemeral_context: str = ""
     # Large tool results each model call carries in full; None uses

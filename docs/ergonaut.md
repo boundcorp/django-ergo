@@ -6,6 +6,14 @@ Celery beat for schedules and housekeeping, and each bot's long-running
 plugins such as Telegram. It lives in this repo so Ergo changes and the
 Ergonaut code that uses them land together.
 
+Each assistant reply has a **Context** button showing its first request's
+context sections, native message count, stubbed tool results, active summary,
+and the model window. Prompt tokens are the turn total from the call's usage
+fields. Sections and the active summary expand to their recorded text;
+click an “Earlier messages summarized” divider to read an older summary.
+Older replies made before context recording have no Context button. See
+[Session compaction](compaction.md) for policy keys and migration rollout.
+
 ## Which bots it runs
 
 `ERGONAUT_BOTS` (default `/bot`) is a path, or several joined with `:`.

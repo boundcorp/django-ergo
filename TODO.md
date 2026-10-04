@@ -36,6 +36,7 @@ Live on rigel from `~/p/boundcorp/django-ergo`, bots from `boundcorp/ergo-bots`.
 - [x] A broken bot folder no longer stops the others: skipped at start, its last good version kept on reload, shown to admins in the sidebar.
 - [x] Workers under threads (#48): polling workers, busy while running, result back to the thread; `orca_start_worker`.
 - [x] Stop, steer and interrupt a running turn: messages go through a per-session inbox and steer the turn at its next step; Stop (`POST /sessions/{id}/stop`) ends it as `stopped`; "Stop & send" interrupts (`mode: "interrupt"`).
+- [x] Native history and token-based compaction for bots; digest/chunk summaries, token-budget tool results, stable prompts, reversible policy migration, and Ergonaut Context inspection.
 - [x] Model picker from `providers.yaml` (#65, #67); recover chats left busy by a dead turn (#66); `ergonaut manage wait_idle` (#70); window/rolling compaction names (#71); stub older large tool results (#68).
 - [x] Steer and stop turns another chat or worker started (#73); Unsend (#75); usage saved after every request (#76, #77); Resume button for a failed turn with plain-words error cards (#78); files shared with thread messages and `orca_upload` (#79).
 - [x] Stop bot-to-bot ping-pong (#81, replaced #74): a second request to a chat with one still open is refused; reply headers tell bots not to send thanks or nudges.

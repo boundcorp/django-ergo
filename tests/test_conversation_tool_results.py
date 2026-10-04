@@ -213,6 +213,7 @@ async def test_session_call_sends_stubs_but_stores_full_results(user):
         user=user, engine_type="claude", transport_type="api", status="active"
     )
     engine = claude_engine(*_tree_calls(5), claude_tool("submit_output", VALID_PLAN))
+    engine.tool_results_tokens = 1
     spec = StructuredCallSpec(
         kind="designer", response_model=Plan, toolkits=[TreeToolkit()]
     )
@@ -220,6 +221,8 @@ async def test_session_call_sends_stubs_but_stores_full_results(user):
     result = await run_structured_call(spec, "Draw it", session=session, engine=engine)
 
     assert result.ok
+    assert result.call.metadata["context"]["stubbed_results"] == 0
+    assert engine.last_request_info["stubbed_results"] == 2
     sent = _results(engine._client.calls[-1]["messages"])
     assert [s.startswith("[tree result") for s in sent] == [True] * 2 + [False] * 3
     stored = await sync_to_async(engine.history_rows)(session)
@@ -252,3 +255,66 @@ async def test_openai_session_call_stubs_older_results(user):
     assert tools[0]["content"].startswith("[tree result")
     assert tools[1]["content"].startswith("[tree result")
     assert tools[2]["content"].startswith("tree #2")
+
+
+@pytest.mark.parametrize("exchange", [claude_exchange, openai_exchange])
+def test_token_budget_protects_latest_counts_and_keeps_request_copy(exchange):
+    messages = [m for i in range(8) for m in exchange(f"t{i}", "x" * 1000)]
+    before = copy.deepcopy(messages)
+    stats = {}
+    sent = trim_tool_results(messages, budget_tokens=500, protect_latest=3, stats=stats)
+    assert stats["stubbed_results"] == 5
+    assert _results(sent)[-3:] == ["x" * 1000] * 3
+    assert all("superseded" in r for r in _results(sent)[:-3])
+    assert messages == before
+    assert trim_tool_results(messages, budget_tokens=3000) is messages
+
+
+def test_budget_setting_and_legacy_count_take_precedence(settings):
+    messages = [m for i in range(6) for m in claude_exchange(f"t{i}", BIG)]
+    settings.DJANGO_ERGO = {"TOOL_RESULTS_TOKENS": 1}
+    assert sum("superseded" in r for r in _results(trim_tool_results(messages))) == 3
+    settings.DJANGO_ERGO = {"TOOL_RESULTS_TOKENS": 1, "TOOL_RESULTS_IN_CONTEXT": 5}
+    assert sum("superseded" in r for r in _results(trim_tool_results(messages))) == 1
+    assert trim_tool_results(messages, keep=-1) is messages
+
+
+def test_result_crossing_budget_is_kept_and_older_results_stubbed():
+    messages = [m for i in range(4) for m in claude_exchange(f"t{i}", "x" * 1000)]
+    sent = trim_tool_results(messages, budget_tokens=500, protect_latest=0)
+    assert _results(sent)[1:] == ["x" * 1000] * 3
+    assert "superseded" in _results(sent)[0]
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_openai_errors_survive_trimming_and_are_not_sent_as_api_fields(user):
+    from django_ergo.conversation.engine import SeededToolCall
+    from django_ergo.conversation.images import prepare_messages
+    from django_ergo.conversation.renderer import ConversationRenderer
+
+    engine = OpenAIAPIEngine(config={})
+    engine.tool_results_in_context = 0
+    calls = [
+        SeededToolCall("error", "read", {}, "ERROR /repo/file " + BIG, True),
+        SeededToolCall("normal", "read", {}, BIG),
+    ]
+    raw = engine.tool_result_messages(
+        [(c.tool_use_id, c.result, c.is_error) for c in calls]
+    )
+    trimmed = trim_tool_results(raw, keep=0)
+    assert trimmed[0]["content"].startswith("ERROR /repo/file")
+    assert trimmed[1]["content"].startswith("[tool result")
+    sent = prepare_messages(trimmed, "openai")
+    assert all("is_error" not in message for message in sent)
+    assert raw[0]["is_error"]
+    session = await ConversationSession.objects.acreate(user=user, engine_type="openai")
+    await engine.append_tool_exchange(session, calls)
+    sent = await sync_to_async(engine.reconstruct_messages)(session)
+    assert sent[1]["content"].startswith("ERROR /repo/file")
+    assert "is_error" not in sent[1]
+    history = await sync_to_async(engine.history_rows)(session)
+    digest = ConversationRenderer(detail="digest").render_messages(
+        [message for _, message in history]
+    )
+    assert "tool_result #1 ERROR" in digest
+    assert "ERROR /repo/file" in digest
