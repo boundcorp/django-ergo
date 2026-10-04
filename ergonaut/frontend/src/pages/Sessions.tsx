@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import type { Bot, Session } from '../api'
 import { api } from '../api'
+import { ago } from '../time'
 
 export function Sessions({ bots }: { bots: Bot[] }) {
   const [q, setQ] = useState('')
@@ -88,12 +89,16 @@ export function Sessions({ bots }: { bots: Bot[] }) {
                     </Link>
                   </td>
                   <td>{s.bot}</td>
-                  <td>{s.role || '-'}</td>
-                  <td>{s.username}</td>
+                  <td className="capitalize">{s.role || '-'}</td>
+                  <td className="capitalize">{s.username}</td>
                   <td className={s.status === 'completed' ? 'status-closed' : 'status-active'}>
                     {s.status === 'completed' ? 'Closed' : 'Active'}
                   </td>
-                  <td>{new Date(s.updated_at).toLocaleString()}</td>
+                  <td>
+                    <time dateTime={s.updated_at} title={new Date(s.updated_at).toLocaleString()}>
+                      {ago(s.updated_at)}
+                    </time>
+                  </td>
                 </tr>
               ))}
             </tbody>

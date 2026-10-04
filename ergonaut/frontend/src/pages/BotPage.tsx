@@ -62,6 +62,10 @@ export function BotPage() {
     ['Plugins', bot.plugins.join(', ') || 'none'],
     ['Folder', bot.folder],
   ]
+  const nextRuns = (bot.schedules ?? [])
+    .filter(s => s.enabled && s.next_run)
+    .sort((a, b) => new Date(a.next_run!).getTime() - new Date(b.next_run!).getTime())
+    .slice(0, 2)
 
   return (
     <div className="page-content h-full overflow-y-auto">
@@ -73,7 +77,18 @@ export function BotPage() {
       <p className="page-lede mt-3">
         {bot.description || 'Configuration, knowledge, schedules, actions, skills, and tools in one place.'}
       </p>
-      <div className="mt-6 grid gap-4 sm:grid-cols-2">
+      {!!nextRuns.length && (
+        <div className="mt-6 grid gap-4 sm:grid-cols-2">
+          {nextRuns.map(s => (
+            <a key={s.name} href="#schedules" className="surface-card bg-raised px-5 py-4">
+              <p className="text-xs font-semibold tracking-wide text-muted uppercase">Next run · {s.name}</p>
+              <p className="mt-1 font-semibold">{new Date(s.next_run!).toLocaleString()}</p>
+            </a>
+          ))}
+        </div>
+      )}
+      <h2 className="mt-8 font-display text-2xl font-bold">Explore the bot</h2>
+      <div className="mt-4 grid gap-4 sm:grid-cols-2">
         <Link to={`/bots/${bot.name}/kb`} className="surface-card p-6 hover:border-accent">
           <p className="eyebrow">Knowledge</p>
           <h2 className="mt-3 text-xl font-semibold">Browse context</h2>

@@ -44,12 +44,10 @@ export function NewThread({ onChange }: { onChange: () => void }) {
     <div className="page-content h-full overflow-y-auto">
       <p className="eyebrow">New thread</p>
       <h1 className="page-title mt-3">New thread / {name}</h1>
-      <p className="page-lede mt-3 flex flex-wrap items-center gap-3">
-        <span>Set the model, write your first prompt, and add context files before starting.</span>
-        <span className="block basis-full pt-3">
-          <ModelPicker bot={name} value={model} onPick={setModel} />
-        </span>
-      </p>
+      <p className="page-lede mt-3">Set the model, write your first prompt, and add context files before starting.</p>
+      <div className="mt-8 flex flex-wrap items-center gap-3">
+        <ModelPicker bot={name} value={model} onPick={setModel} large />
+      </div>
       {!!files.length && (
         <div className="mb-2 flex flex-wrap gap-2">
           {files.map((file, i) => (
@@ -69,8 +67,9 @@ export function NewThread({ onChange }: { onChange: () => void }) {
           ))}
         </div>
       )}
+      <p className="eyebrow mt-8">Your first message</p>
       <form
-        className="surface-card mt-6 flex max-w-3xl flex-wrap items-end gap-3 p-4"
+        className="surface-card mt-3 max-w-3xl p-4"
         onDragOver={e => e.preventDefault()}
         onDrop={e => {
           e.preventDefault()
@@ -82,15 +81,6 @@ export function NewThread({ onChange }: { onChange: () => void }) {
         }}
       >
         <input ref={picker} type="file" multiple hidden onChange={e => add(e.target.files)} />
-        <button
-          type="button"
-          disabled={busy}
-          title="Attach images, PDFs or other files"
-          className="rounded-control border border-stroke bg-raised px-3 py-2 text-lg disabled:opacity-50"
-          onClick={() => picker.current?.click()}
-        >
-          📎
-        </button>
         {/* Voice input goes here. */}
         <textarea
           autoFocus
@@ -111,32 +101,56 @@ export function NewThread({ onChange }: { onChange: () => void }) {
             }
           }}
           rows={4}
+          aria-label="First message"
           placeholder="What's this thread about?"
-          className="min-w-48 flex-1 resize-none rounded-card border border-stroke bg-raised px-4 py-3 focus:outline-none"
+          className="block w-full resize-none rounded-card border border-stroke bg-raised px-4 py-3 focus:outline-none"
         />
-        <button
-          disabled={busy || (!text.trim() && !files.length)}
-          className="rounded-control bg-accent px-5 py-2.5 font-semibold text-canvas disabled:opacity-50"
-        >
-          {busy ? 'Starting…' : 'Send'}
-        </button>
+        <div className="mt-3 flex items-center gap-3 border-t border-stroke pt-3">
+          <button
+            type="button"
+            disabled={busy}
+            title="Attach images, PDFs or other files"
+            className="rounded-control px-2 py-2 text-sm font-semibold text-mint hover:bg-raised disabled:opacity-50"
+            onClick={() => picker.current?.click()}
+          >
+            + Attach
+          </button>
+          <button
+            disabled={busy || (!text.trim() && !files.length)}
+            className="ml-auto rounded-control bg-accent px-5 py-2.5 font-semibold text-canvas disabled:opacity-50"
+          >
+            {busy ? 'Starting…' : 'Send'}
+          </button>
+        </div>
       </form>
       <button
         type="button"
-        className="mt-6 flex min-h-20 w-full max-w-sm flex-col items-center justify-center rounded-card border border-dashed border-accent bg-surface px-4 py-3 text-sm font-semibold text-ink hover:bg-raised"
+        className="mt-6 flex min-h-20 w-full max-w-sm flex-col items-center justify-center rounded-card border border-accent bg-indigo-tint/50 px-4 py-3 text-sm font-semibold text-ink hover:bg-indigo-tint"
         onClick={() => picker.current?.click()}
       >
         Drop files here to attach
         <span className="mt-1 text-xs font-normal text-muted">or browse from your device</span>
       </button>
-      {busy && <p className="mt-4 text-sm text-mint">Working · generating reply</p>}
+      {busy && (
+        <p
+          role="status"
+          className="mt-6 inline-flex items-center gap-3 rounded-card border border-mint bg-surface px-4 py-3 text-sm font-semibold"
+        >
+          <span className="h-3 w-3 rounded-full bg-indigo-500" aria-hidden="true" />
+          Working · generating reply
+        </p>
+      )}
       {error && (
-        <div className="mt-4 flex max-w-md items-center gap-3 rounded-card border border-danger bg-red-tint px-4 py-3 text-sm">
-          <span className="font-semibold text-danger">Request failed</span>
-          <button type="button" className="text-accent hover:underline" onClick={start}>
+        <div
+          role="alert"
+          className="mt-6 flex max-w-xl flex-wrap items-center gap-3 rounded-card border border-danger bg-surface px-4 py-3 text-sm"
+        >
+          <span className="h-3 w-3 shrink-0 rounded-full bg-danger" aria-hidden="true" />
+          <span className="font-semibold">Request failed</span>
+          <button type="button" className="font-semibold text-accent hover:underline" onClick={start}>
             Retry
           </button>
-          <span className="truncate text-muted">{error}</span>
+          <span className="min-w-0 flex-1 truncate text-muted">{error}</span>
         </div>
       )}
     </div>

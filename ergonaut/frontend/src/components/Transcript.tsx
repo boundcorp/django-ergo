@@ -5,6 +5,7 @@ import { DirectoryContext } from './BotIcon'
 import Markdown from './Markdown'
 import { PrChip, ThreadCard, ThreadLink, WorkerCard, linkThreads } from './Threads'
 import { ToolCard, pretty, resultText } from './ToolCard'
+import { clock } from '../time'
 
 // Tools that send work to another chat or start a worker; their calls show as cards.
 const THREAD_TOOLS = new Set(['ergo_thread_send', 'ergo_message_up'])
@@ -280,6 +281,7 @@ type Reply = { type?: string; text?: string; suggestions?: string[] }
 function ReplyBubble({ reply }: { reply: Reply }) {
   return (
     <div className="max-w-[85%] rounded-card border border-stroke bg-surface px-4 py-3">
+      <RoleLabel who="Assistant" timestamp={null} />
       {reply.type === 'question' && <div className="mb-1 text-xs font-medium text-amber-600">Question</div>}
       <BotMarkdown text={reply.text ?? ''} />
       {!!reply.suggestions?.length && (
@@ -293,6 +295,16 @@ function ReplyBubble({ reply }: { reply: Reply }) {
 // replay history); the reply bubble already shows it.
 function echoesReply(text: string, replies: string[]): boolean {
   return replies.some(r => text === r || text.startsWith(`${r}\n\nSuggested replies:`))
+}
+
+// "YOU · 10:42": who wrote a message, and when.
+function RoleLabel({ who, timestamp }: { who: string; timestamp: string | null }) {
+  return (
+    <div className="mb-1 font-mono text-[11px] font-semibold tracking-wide text-mint uppercase">
+      {who}
+      {timestamp && ` · ${clock(timestamp)}`}
+    </div>
+  )
 }
 
 function MessageView({
@@ -367,6 +379,7 @@ function MessageView({
                 key={i}
                 className="max-w-[85%] rounded-card border border-accent/20 bg-indigo-tint px-4 py-3 text-ink"
               >
+                <RoleLabel who="You" timestamp={message.timestamp} />
                 <Markdown text={block.text} />
               </div>
             ) : (
@@ -374,6 +387,7 @@ function MessageView({
                 key={i}
                 className="max-w-[85%] rounded-card border border-stroke bg-surface px-4 py-3 text-sm text-ink"
               >
+                <RoleLabel who="Assistant" timestamp={message.timestamp} />
                 <BotMarkdown text={block.text} />
               </div>
             )

@@ -69,6 +69,9 @@ export function Memory() {
   }
 
   const needle = filter.toLowerCase()
+  const isRoot = !!kbs.find(kb => kb.id === selected?.kb)?.articles.find(a => a.path === selected?.path)?.root
+  // The reader shows the title itself, so drop a first heading that only repeats it.
+  const body = article ? article.body.replace(/^\s*#\s+(.+)\n+/, (m, h) => (h.trim() === article.title ? '' : m)) : ''
   return (
     <div className="page-content flex h-full flex-col overflow-y-auto">
       <p className="eyebrow">Knowledge</p>
@@ -136,8 +139,14 @@ export function Memory() {
           {error && <p className="text-sm text-red-600">{error}</p>}
           {article ? (
             <>
-              <div className="mb-4 font-mono text-xs text-teal">{article.path}</div>
-              <Markdown text={article.body} className="max-w-3xl text-sm leading-6" />
+              <div className="font-mono text-xs tracking-wide text-teal uppercase">Knowledge / {article.path}</div>
+              <h2 className="mt-3 font-display text-2xl font-bold">{article.title}</h2>
+              {isRoot && (
+                <p className="mt-2 text-xs font-semibold tracking-wide text-accent uppercase">
+                  Root · Always in context
+                </p>
+              )}
+              <Markdown text={body} className="mt-5 max-w-3xl text-sm leading-6" />
             </>
           ) : (
             !error && <p className="text-zinc-500">Pick an article.</p>

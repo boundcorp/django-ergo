@@ -9,11 +9,7 @@ function money(value: number) {
   if (value < 0.0001) return '<$0.0001'
   // Cheap models cost fractions of a cent per call; keep two significant digits.
   if (value < 0.01) return `$${value.toPrecision(2)}`
-  return value.toLocaleString(undefined, {
-    style: 'currency',
-    currency: 'USD',
-    maximumFractionDigits: value < 10 ? 2 : 0,
-  })
+  return value.toLocaleString(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 2 })
 }
 
 function tokens(value: number) {
@@ -41,8 +37,8 @@ function Daily({ days }: { days: Costs['by_day'] }) {
   const shown = hover != null ? days[hover] : null
   return (
     <div>
-      <div className="mb-1 h-5 text-xs text-zinc-500">
-        {shown ? `${shown.date}: ${money(shown.cost)} · ${shown.calls} calls` : 'Cost per day'}
+      <div className={`mb-1 h-5 text-xs ${shown ? 'text-muted' : 'text-sm font-semibold text-ink'}`}>
+        {shown ? `${shown.date}: ${money(shown.cost)} · ${shown.calls} calls` : 'Daily estimated spend'}
       </div>
       <div
         className="flex h-32 items-end gap-[2px] border-b border-zinc-200 dark:border-zinc-800"
@@ -129,8 +125,8 @@ function Table({ title, children }: { title: string; children: React.ReactNode }
   return (
     <section className="mt-8 data-scroll">
       <h2 className="mb-3 text-xl font-semibold">{title}</h2>
-      <div className="rounded-card border border-stroke overflow-x-auto">
-        <table className="w-full max-w-4xl text-sm">
+      <div className="max-w-4xl overflow-x-auto rounded-card border border-stroke">
+        <table className="w-full text-sm">
           <thead className="text-xs text-zinc-500">
             <tr className="border-b border-zinc-200 dark:border-zinc-800">
               <th className="py-1 text-left font-normal">Name</th>
@@ -151,7 +147,7 @@ function Table({ title, children }: { title: string; children: React.ReactNode }
 }
 
 export function CostsPage() {
-  const [days, setDays] = useState(30)
+  const [days, setDays] = useState(7)
   const [data, setData] = useState<Costs | null>(null)
   const [error, setError] = useState('')
   const [open, setOpen] = useState(true)
@@ -189,7 +185,7 @@ export function CostsPage() {
       </div>
 
       <div className="mt-6 grid max-w-4xl grid-cols-1 gap-4 sm:grid-cols-3">
-        <Tile label={`Spent, last ${data.days} days`} value={money(total.cost)} />
+        <Tile label="Estimated spend" value={money(total.cost)} note={`Last ${data.days} days`} />
         <Tile label="Calls" value={total.calls.toLocaleString()} />
         <Tile
           label="Prompt served from cache"

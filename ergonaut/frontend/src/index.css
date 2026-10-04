@@ -210,11 +210,26 @@ body {
   letter-spacing: 0.04em;
   text-transform: uppercase;
 }
-.topbar-brand {
+.topbar-brand,
+.sidebar-brand {
   color: var(--color-mint);
   font-family: var(--font-display);
   font-size: 24px;
   font-weight: 700;
+}
+.sidebar-brand {
+  font-size: 20px;
+}
+.nav-toggle {
+  display: none;
+  align-items: center;
+  padding: 6px 12px;
+  border: 1px solid var(--color-stroke);
+  border-radius: var(--radius-control);
+  background: var(--color-raised);
+  color: var(--color-ink);
+  font-size: 13px;
+  font-weight: 600;
 }
 .topbar-crumb {
   color: var(--color-muted);
@@ -237,6 +252,10 @@ body {
 .status-closed {
   color: var(--color-muted);
 }
+.dark .status-closed {
+  /* Neon / Acid Lime: the handoff's closed status colour. */
+  color: #d8ff62;
+}
 
 @media (max-width: 900px) {
   .app-sidebar {
@@ -253,24 +272,34 @@ body {
     padding: 8px;
   }
   .app-sidebar {
-    width: 100%;
-    max-height: 176px;
+    display: none;
+  }
+  .app-sidebar[data-open='true'] {
+    display: block;
+    position: fixed;
+    z-index: 40;
+    inset: 72px 8px 8px 8px;
+    width: auto;
     overflow: auto;
   }
-  .app-sidebar nav {
-    padding: 8px;
-    gap: 4px;
+  .nav-toggle {
+    display: inline-flex;
   }
   .app-main {
     min-height: 0;
+    flex: 1;
   }
   .app-topbar {
     min-height: 56px;
     margin-bottom: 8px;
     padding: 8px 12px;
+    gap: 12px;
   }
   .topbar-brand {
     font-size: 20px;
+  }
+  .page-content {
+    padding-inline: 12px;
   }
 }
 
