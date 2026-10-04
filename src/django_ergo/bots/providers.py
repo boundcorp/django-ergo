@@ -96,6 +96,23 @@ class Providers:
         model = provider.models.get(model_name) if provider else None
         return (provider, model) if model else None
 
+    def model_on(self, engine_type: str) -> str:
+        """A model on an engine type: the default if it is one, else the first
+        available, else the first listed ("" when there's none)."""
+        found = self.find(self.default) if self.default else None
+        if found and found[0].type == engine_type:
+            return self.default
+        listed = [
+            (p, m)
+            for p in self.providers.values()
+            if p.type == engine_type
+            for m in p.models.values()
+        ]
+        for provider, model in listed:
+            if provider.available:
+                return model.id
+        return listed[0][1].id if listed else ""
+
     def engine(self, ref: str) -> tuple[str, dict, str]:
         """Engine type, engine config and API key env var for a model."""
         found = self.find(ref)
