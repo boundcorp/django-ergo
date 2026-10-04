@@ -51,7 +51,7 @@ export function Pins({
             key={pin.url}
             disabled={pin.exists === false}
             title={pin.exists === false ? `${pin.path} isn't in the bot folder yet` : (pin.path ?? pin.filename)}
-            className={`rounded-full border px-2.5 py-0.5 text-xs disabled:opacity-50 ${active ? 'border-indigo-500 bg-indigo-50 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300' : 'border-zinc-300 text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900'}`}
+            className={`rounded-full border px-2.5 py-0.5 text-xs disabled:opacity-50 ${active ? 'border-indigo-500 bg-indigo-50 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300' : 'border-zinc-300 text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-900'}`}
             onClick={() => onOpen(active ? null : pin)}
           >
             {pinIcon(pin)} {pin.name}

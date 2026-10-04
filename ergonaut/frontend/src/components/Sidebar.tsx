@@ -214,7 +214,7 @@ export function Sidebar({
             ))}
             {!!archived.length && (
               <button
-                className="ml-4 px-2 py-0.5 text-xs text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300"
+                className="ml-4 px-2 py-0.5 text-xs text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-100"
                 onClick={() => setShowArchived(open => ({ ...open, [bot.name]: !open[bot.name] }))}
               >
                 {showArchived[bot.name] ? '▾' : '▸'} {archived.length} archived

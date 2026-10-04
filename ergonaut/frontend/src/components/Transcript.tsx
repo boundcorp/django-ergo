@@ -473,7 +473,7 @@ function CallHeader({ call }: { call: Call }) {
   return (
     <div className="my-2 text-xs text-zinc-500">
       <button
-        className="flex w-full items-center gap-2 hover:text-zinc-800 dark:hover:text-zinc-200"
+        className="flex w-full items-center gap-2 hover:text-zinc-800 dark:hover:text-zinc-100"
         onClick={async () => setDetail(detail ? null : await api.call(call.id))}
       >
         <span className="h-px flex-1 bg-zinc-200 dark:bg-zinc-800" />
