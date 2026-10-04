@@ -217,7 +217,7 @@ export function Sidebar({
                 className="ml-4 px-2 py-0.5 text-xs text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300"
                 onClick={() => setShowArchived(open => ({ ...open, [bot.name]: !open[bot.name] }))}
               >
-                {showArchived[bot.name] ? '▾' : '▸'} {archived.length} archived
+                {showArchived[bot.name] ? '▾' : '▸'} {archived.length} resolved
               </button>
             )}
             {showArchived[bot.name] && archived.map(t => <SessionLink key={t.id} session={t} nested />)}

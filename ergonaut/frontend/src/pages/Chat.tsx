@@ -384,14 +384,14 @@ export function Chat({ onChange }: { onChange: () => void }) {
             <button
               className="rounded-md border border-zinc-300 px-2 py-0.5 text-xs text-zinc-600 disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-400"
               disabled={archived || busy}
-              title={archived ? 'Archived; a new message reopens it' : 'Archive this thread'}
+              title={archived ? 'Resolved; a new message reopens it' : 'Mark this thread resolved'}
               onClick={async () => {
                 await api.close(id).catch(e => setError(String(e.message ?? e)))
                 await load()
                 onChange()
               }}
             >
-              {archived ? 'Archived' : 'Archive'}
+              {archived ? 'Resolved' : 'Resolve'}
             </button>
           )}
           <button
@@ -631,7 +631,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
                 : waiting.length
                   ? 'Answer the approval first'
                   : archived
-                    ? 'Archived: sending a message reopens it'
+                    ? 'Resolved: sending a message reopens it'
                     : running
                       ? 'Steer the bot: your message joins this turn'
                       : 'Message the bot'

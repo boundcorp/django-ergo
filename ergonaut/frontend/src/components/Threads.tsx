@@ -61,7 +61,7 @@ function threadNote(thread: ThreadSummary): string {
   if (thread.attention) return 'waiting on you'
   if (thread.workers_running) return `${thread.workers_running} worker${thread.workers_running > 1 ? 's' : ''} running`
   if (thread.waiting_on) return `waiting on ${thread.waiting_on} other chat${thread.waiting_on > 1 ? 's' : ''}`
-  if (thread.archived) return 'archived'
+  if (thread.archived) return 'resolved'
   return ''
 }
 
