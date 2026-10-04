@@ -311,8 +311,21 @@ def finish_turn(bot: Bot, session: ConversationSession, result: TurnResult) -> N
     try:
         _route_reply(bot, session, result)
     finally:
+        _record_outputs(session, result)
         if not result.needs_approval:
             redispatch_waiting(session, registry=bot.registry)
+
+
+def _record_outputs(session: ConversationSession, result: TurnResult) -> None:
+    """Record the pull requests a reply links as chat files (conversation.links)."""
+    if result.reply is None:
+        return
+    try:
+        from django_ergo.conversation.links import record_pull_requests
+
+        record_pull_requests(session, result.reply.as_message())
+    except Exception:  # noqa: BLE001 - outputs are extra; the turn already finished
+        logger.warning("Couldn't record pull requests", exc_info=True)
 
 
 def _route_reply(bot: Bot, session: ConversationSession, result: TurnResult) -> None:

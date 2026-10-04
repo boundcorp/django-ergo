@@ -1,10 +1,61 @@
 import { useState } from 'react'
-import type { AttachmentFile, Block, Call, Message } from '../api'
+import { createContext, useContext } from 'react'
+import type { AttachmentFile, Block, Call, Message, SentCard, Worker } from '../api'
 import { api } from '../api'
+import { DirectoryContext } from './BotIcon'
 import Markdown from './Markdown'
-import { ToolCard, pretty } from './ToolCard'
+import { PrChip, ThreadCard, ThreadLink, WorkerCard, linkThreads } from './Threads'
+import { ToolCard, pretty, resultText } from './ToolCard'
+
+// Tools that send work to another chat or start a worker; their calls show as cards.
+const THREAD_TOOLS = new Set(['ergo_thread_send', 'ergo_message_up'])
+const WORKER_TOOLS = new Set(['orca_start_worker', 'ergo_worker_start'])
+
+// What the transcript knows about the chat's delegated work (from the session API).
+type Delegated = {
+  cards: Map<string, SentCard> // by thread message id
+  workers: Map<string, Worker> // by worker id
+  known: Map<string, string> // chat id -> title, for links in the text
+}
+const DelegatedContext = createContext<Delegated>({ cards: new Map(), workers: new Map(), known: new Map() })
+
+/** A tool result's JSON object, if it is one. */
+function resultJson(result?: ToolResult): Record<string, unknown> | null {
+  if (!result || result.is_error) return null
+  try {
+    const value = JSON.parse(resultText(result.content))
+    return value && typeof value === 'object' ? value : null
+  } catch {
+    return null
+  }
+}
+
+/** A tool call: a card for work sent to another chat or a worker, otherwise the call itself. */
+function ToolCall({ use, result, pending }: { use: ToolUse; result?: ToolResult; pending: boolean }) {
+  const { cards, workers } = useContext(DelegatedContext)
+  const data = resultJson(result)
+  const card = data && THREAD_TOOLS.has(use.name) ? cards.get(String(data.message_id ?? '')) : undefined
+  if (card) return <ThreadCard card={card} />
+  if (data && WORKER_TOOLS.has(use.name)) {
+    const worker = workers.get(String(data.id ?? '')) ?? (data.title && data.status ? (data as Worker) : null)
+    if (worker) return <WorkerCard worker={worker} />
+  }
+  return (
+    <>
+      <ToolCard use={use} result={result} pending={pending} />
+      <ToolImages result={result} />
+    </>
+  )
+}
+
+/** Bot text with the chats it names (by id) as links. */
+function BotMarkdown({ text }: { text: string }) {
+  const { known } = useContext(DelegatedContext)
+  return <Markdown text={known.size ? linkThreads(text, known) : text} />
+}
 
 type ToolResult = Extract<Block, { type: 'tool_result' }>
+type ToolUse = Extract<Block, { type: 'tool_use' }>
 
 const REPLY_TOOL = 'send_reply'
 
@@ -14,12 +65,15 @@ export function AttachmentView({
   label,
   image,
   note,
+  link,
 }: {
   id?: string
   label: string
   image?: boolean
   note?: string
+  link?: AttachmentFile['link']
 }) {
+  if (link) return <PrChip pr={link} />
   if (id && image)
     return (
       <a href={api.viewUrl(id)} target="_blank" rel="noreferrer" title={note ? `${label} · ${note}` : label}>
@@ -103,6 +157,7 @@ function BotFiles({ files }: { files: AttachmentFile[] }) {
           label={file.filename}
           image={file.kind === 'image' || file.view === 'image'}
           note="made by the bot"
+          link={file.link}
         />
       ))}
     </div>
@@ -115,7 +170,7 @@ function ReplyBubble({ reply }: { reply: Reply }) {
   return (
     <div className="max-w-[85%] rounded-card border border-stroke bg-surface px-4 py-3">
       {reply.type === 'question' && <div className="mb-1 text-xs font-medium text-amber-600">Question</div>}
-      <Markdown text={reply.text ?? ''} />
+      <BotMarkdown text={reply.text ?? ''} />
       {!!reply.suggestions?.length && (
         <div className="mt-1 text-xs text-zinc-500">Suggested: {reply.suggestions.join(' · ')}</div>
       )}
@@ -162,6 +217,23 @@ function MessageView({
                   ↻ Resumed after: {resumed[1]}
                 </div>
               )
+            if (from?.kind === 'reply')
+              // A reply to work this chat sent: one row to open; the card above has its status.
+              return (
+                <details
+                  key={i}
+                  className="group w-full max-w-[85%] self-start rounded-card border border-teal/40 bg-teal-tint px-3 py-2"
+                >
+                  <summary className="flex cursor-pointer list-none items-center gap-2 text-xs text-teal-700 dark:text-teal-300">
+                    <span className="transition-transform group-open:rotate-90">▸</span>
+                    <span className="font-medium">↩ Reply from {from.who}</span>
+                    {from.about && <span className="truncate opacity-80">· re “{from.about}”</span>}
+                  </summary>
+                  <div className="mt-2 text-sm">
+                    <BotMarkdown text={from.body} />
+                  </div>
+                </details>
+              )
             if (from)
               return (
                 <div
@@ -169,10 +241,10 @@ function MessageView({
                   className="max-w-[85%] self-start rounded-card border border-teal/40 bg-teal-tint px-4 py-3"
                 >
                   <div className="mb-1 text-xs font-medium text-teal-700 dark:text-teal-300">
-                    {from.kind === 'reply' ? '↩ reply from' : '✉ message from'} {from.who}
+                    ✉ message from {from.who}
                     {from.about && <span className="font-normal text-teal-600/80"> · re “{from.about}”</span>}
                   </div>
-                  <Markdown text={from.body} />
+                  <BotMarkdown text={from.body} />
                 </div>
               )
             return user ? (
@@ -187,7 +259,7 @@ function MessageView({
                 key={i}
                 className="max-w-[85%] rounded-card border border-stroke bg-surface px-4 py-3 text-sm text-ink"
               >
-                <Markdown text={block.text} />
+                <BotMarkdown text={block.text} />
               </div>
             )
           }
@@ -214,8 +286,7 @@ function MessageView({
             if (block.name === REPLY_TOOL) return <ReplyBubble key={i} reply={block.input as Reply} />
             return (
               <div key={i} className="w-full max-w-[85%]">
-                <ToolCard use={block} result={results.get(block.id)} pending={pending.has(block.id)} />
-                <ToolImages result={results.get(block.id)} />
+                <ToolCall use={block} result={results.get(block.id)} pending={pending.has(block.id)} />
               </div>
             )
           default:
@@ -306,12 +377,17 @@ export function Transcript({
   calls,
   files = [],
   complete = true,
+  sent = [],
+  workers = [],
 }: {
   messages: Message[]
   calls: Call[]
   files?: AttachmentFile[]
   complete?: boolean // every message is loaded (no older page)
+  sent?: SentCard[] // requests this chat sent (thread cards)
+  workers?: Worker[]
 }) {
+  const { sessions } = useContext(DirectoryContext)
   const results = new Map<string, ToolResult>()
   for (const message of messages)
     for (const block of message.blocks) if (block.type === 'tool_result') results.set(block.tool_use_id, block)
@@ -326,16 +402,60 @@ export function Transcript({
   const starts = new Map<number, Call>()
   for (const call of calls) if (call.first_sequence != null) starts.set(call.first_sequence, call)
   const made = placeFiles(messages, files, complete)
+  const delegated: Delegated = {
+    cards: new Map(sent.map(c => [c.message_id, c])),
+    workers: new Map(workers.map(w => [w.id, w])),
+    known: new Map([
+      ...sessions.map(s => [s.id, s.title] as const),
+      ...sent.map(c => [c.thread.id, c.thread.title] as const),
+    ]),
+  }
+  const sentFrom = sentNotes(messages, calls, results, delegated.cards)
   return (
-    <div className="flex flex-col gap-6">
-      {made.has(-1) && <BotFiles files={made.get(-1)!} />}
-      {messages.map(message => (
-        <div key={message.line}>
-          {starts.has(message.line) && <CallHeader call={starts.get(message.line)!} />}
-          <MessageView message={message} results={results} pending={pending} replies={replies} />
-          {made.has(message.line) && <BotFiles files={made.get(message.line)!} />}
-        </div>
-      ))}
-    </div>
+    <DelegatedContext.Provider value={delegated}>
+      <div className="flex flex-col gap-6">
+        {made.has(-1) && <BotFiles files={made.get(-1)!} />}
+        {messages.map(message => (
+          <div key={message.line}>
+            {starts.has(message.line) && <CallHeader call={starts.get(message.line)!} />}
+            <MessageView message={message} results={results} pending={pending} replies={replies} />
+            {sentFrom.has(message.line) && (
+              <div className="mt-1 flex flex-wrap items-center justify-end gap-1.5 text-xs text-muted">
+                ↪ Sent to
+                {sentFrom.get(message.line)!.map(card => (
+                  <ThreadLink key={card.message_id} id={card.thread.id}>
+                    {card.thread.title}
+                  </ThreadLink>
+                ))}
+              </div>
+            )}
+            {made.has(message.line) && <BotFiles files={made.get(message.line)!} />}
+          </div>
+        ))}
+      </div>
+    </DelegatedContext.Provider>
   )
+}
+
+/** The requests each turn sent on, keyed by the line of the user message that started it. */
+function sentNotes(
+  messages: Message[],
+  calls: Call[],
+  results: Map<string, ToolResult>,
+  cards: Map<string, SentCard>,
+): Map<number, SentCard[]> {
+  const notes = new Map<number, SentCard[]>()
+  for (const message of messages)
+    for (const block of message.blocks) {
+      if (block.type !== 'tool_use' || !THREAD_TOOLS.has(block.name)) continue
+      const card = cards.get(String(resultJson(results.get(block.id))?.message_id ?? ''))
+      const call = calls.find(
+        c =>
+          c.first_sequence != null && c.first_sequence <= message.line && (c.last_sequence ?? Infinity) >= message.line,
+      )
+      const start = call && messages.find(m => m.line === call.first_sequence && m.role === 'user')
+      if (!card || !start) continue
+      notes.set(start.line, [...(notes.get(start.line) ?? []), card])
+    }
+  return notes
 }

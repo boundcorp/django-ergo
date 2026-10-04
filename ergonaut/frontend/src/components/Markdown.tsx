@@ -2,6 +2,7 @@ import type { ComponentProps } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { highlight } from './CodeView'
+import { ThreadLink } from './Threads'
 
 type Node = { type: string; value?: string; children?: Node[] }
 
@@ -30,6 +31,9 @@ function Code({ className, children, ...props }: ComponentProps<'code'>) {
 }
 
 function Link({ href, children, ...props }: ComponentProps<'a'>) {
+  // Another chat (linkThreads): a chip with its status.
+  const thread = /^\/s\/([0-9a-f-]{36})$/.exec(href ?? '')
+  if (thread) return <ThreadLink id={thread[1]}>{children}</ThreadLink>
   const external = !!href && /^https?:/.test(href)
   return (
     <a href={href} {...(external ? { target: '_blank', rel: 'noreferrer' } : {})} {...props}>

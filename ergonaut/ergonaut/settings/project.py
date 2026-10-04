@@ -371,6 +371,8 @@ CELERY_BEAT_SCHEDULE = {
     "resume-workers": {"task": "ergonaut.resume_workers", "schedule": 60},
     # Each bot's schedules (bot.yaml); the task checks which are due this minute.
     "run-bot-schedules": {"task": "ergonaut.run_schedules", "schedule": crontab()},
+    # Pull requests bots and workers reported: their state for thread cards and chips.
+    "refresh-pull-requests": {"task": "ergonaut.refresh_pull_requests", "schedule": 60},
 }
 if float(os.environ.get("ERGONAUT_BOTS_PULL_SECONDS") or 0) > 0:
     # Merged changes to the bot repo go live without a restart.

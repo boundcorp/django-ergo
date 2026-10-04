@@ -29,6 +29,11 @@ def launch(target: str):
 
 
 @bot_task
+def open_pr():
+    return {"pr": "https://github.com/boundcorp/django-ergo/pull/12", "status": "done"}
+
+
+@bot_task
 def explode():
     raise RuntimeError("the build broke")
 
@@ -106,6 +111,25 @@ def test_a_polling_worker_reports_back_to_its_thread(tmp_path, workers):
     # Finished workers don't run again.
     assert w.run(str(worker.pk), bot.registry) == "completed"
     assert Worker.objects.count() == 1
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_worker_s_pull_requests_are_recorded_in_its_chat(tmp_path, workers):
+    from django_ergo.bots import workers as w
+    from django_ergo.bots.tools import ToolContext
+
+    bot, _ = make_bot(tmp_path, yaml_text=YAML, tools=TOOLS)
+    user = get_user_model().objects.create(username="w")
+    session = async_to_sync(bot.main_session)(user)
+    worker = ToolContext(bot=bot, session=session, user=user).workers.start(
+        "open_pr", title="Open the PR"
+    )
+    assert w.run(str(worker.pk), bot.registry) == "completed"
+    [pr] = session.attachments.filter(metadata__link="github_pr")
+    assert (pr.url, pr.metadata["number"]) == (
+        "https://github.com/boundcorp/django-ergo/pull/12",
+        12,
+    )
 
 
 @pytest.mark.django_db(transaction=True)

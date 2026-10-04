@@ -530,6 +530,31 @@ def archive_idle_threads() -> list[str]:
     return archived
 
 
+@shared_task(name="ergonaut.refresh_pull_requests", ignore_result=True)
+def refresh_pull_requests(max_age_seconds: int = 120) -> int:
+    """Read the live state of recorded pull requests that may still change (not merged or
+    closed, last checked over ``max_age_seconds`` ago), so cards and chips stay current."""
+    from datetime import datetime
+
+    from django.utils import timezone
+    from django_ergo.conversation.links import pull_requests_to_refresh, refresh_pull_request
+
+    stale = timezone.now() - timezone.timedelta(seconds=max_age_seconds)
+    refreshed = 0
+    for row in pull_requests_to_refresh()[:50]:
+        checked = (row.metadata or {}).get("checked_at")
+        if checked and datetime.fromisoformat(checked) > stale:
+            continue
+        before = dict(row.metadata or {})
+        if refresh_pull_request(row):
+            refreshed += 1
+            if {k: before.get(k) for k in ("title", "state", "checks")} != {
+                k: row.metadata.get(k) for k in ("title", "state", "checks")
+            }:
+                notify(row.session_id)
+    return refreshed
+
+
 @shared_task(name="ergonaut.run_bot_task", queue="bot_tasks")
 def run_bot_task(bot_name: str, task_name: str, args: list, kwargs: dict):
     """Run a bot's @bot_task on a worker (see django_ergo.bots.background)."""

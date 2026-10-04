@@ -11,6 +11,7 @@ import { NewThread } from './pages/NewThread'
 import { Memory } from './pages/Memory'
 import { CostsPage } from './pages/Costs'
 import { ThemeToggle } from './theme'
+import { DirectoryContext } from './components/BotIcon'
 
 function Home({ bots }: { bots: Bot[] }) {
   const root = bots.find(b => b.root_session_id)
@@ -70,31 +71,33 @@ function App() {
 
   return (
     <BrowserRouter>
-      <div className="app-shell flex h-screen">
-        <aside className="app-sidebar shrink-0">
-          <Sidebar bots={bots} sessions={sessions} pins={pins} botErrors={botErrors} onChange={refresh} />
-        </aside>
-        <main className="app-main min-w-0 flex-1">
-          <div className="app-topbar flex items-center gap-4">
-            <span className="text-sm text-muted">{user.first_name || user.username}</span>
-            <span className="ml-auto">
-              <ThemeToggle />
-            </span>
-          </div>
-          <div className="min-h-0 flex-1 overflow-hidden">
-            <Routes>
-              <Route path="/" element={<Home bots={bots} />} />
-              <Route path="/s/:id" element={<ChatRoute onChange={refresh} />} />
-              <Route path="/sessions" element={<Sessions bots={bots} />} />
-              <Route path="/costs" element={<CostsPage />} />
-              <Route path="/bots/:name" element={<BotPage />} />
-              <Route path="/bots/:name/new-thread" element={<NewThread onChange={refresh} />} />
-              <Route path="/bots/:name/kb" element={<Memory />} />
-              <Route path="*" element={<Navigate to="/" replace />} />
-            </Routes>
-          </div>
-        </main>
-      </div>
+      <DirectoryContext.Provider value={{ bots, sessions }}>
+        <div className="app-shell flex h-screen">
+          <aside className="app-sidebar shrink-0">
+            <Sidebar bots={bots} sessions={sessions} pins={pins} botErrors={botErrors} onChange={refresh} />
+          </aside>
+          <main className="app-main min-w-0 flex-1">
+            <div className="app-topbar flex items-center gap-4">
+              <span className="text-sm text-muted">{user.first_name || user.username}</span>
+              <span className="ml-auto">
+                <ThemeToggle />
+              </span>
+            </div>
+            <div className="min-h-0 flex-1 overflow-hidden">
+              <Routes>
+                <Route path="/" element={<Home bots={bots} />} />
+                <Route path="/s/:id" element={<ChatRoute onChange={refresh} />} />
+                <Route path="/sessions" element={<Sessions bots={bots} />} />
+                <Route path="/costs" element={<CostsPage />} />
+                <Route path="/bots/:name" element={<BotPage />} />
+                <Route path="/bots/:name/new-thread" element={<NewThread onChange={refresh} />} />
+                <Route path="/bots/:name/kb" element={<Memory />} />
+                <Route path="*" element={<Navigate to="/" replace />} />
+              </Routes>
+            </div>
+          </main>
+        </div>
+      </DirectoryContext.Provider>
     </BrowserRouter>
   )
 }
