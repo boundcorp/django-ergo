@@ -374,7 +374,10 @@ at launch: the plugin writes the worktree's `.omp/config.yml`
 (`modelRoles.default: <model>:<effort>`, git-ignored by its own folder) and omp
 picks it up. Each chat keeps one Orca mailbox terminal and Run for its
 workers; if Orca no longer knows them (their worktree was removed, Orca was
-reset), `orca_start_worker` makes new ones and tries once more.
+reset), `orca_start_worker` makes new ones and tries once more. If a worker's agent
+terminal exits or vanishes without a `worker_done` (Orca keeps such a dispatch
+"dispatched"), the watcher fails the worker after five minutes and tells the
+chat why.
 
 ## Chats
 

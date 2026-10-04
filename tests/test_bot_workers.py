@@ -230,6 +230,7 @@ def test_orca_start_worker_watches_the_dispatch_and_reports_back(  # noqa: PLR09
         ("orchestration", "task-create"): {"task": {"id": "task_1"}},
         ("orchestration", "worker-start"): {"dispatchId": "ctx_1", "taskId": "task_1"},
         ("terminal", "send"): {"send": {"accepted": True}},
+        ("terminal", "show"): {"terminal": {"connected": True, "paneRuntimeId": 7}},
     }
 
     def respond(args):
@@ -440,6 +441,88 @@ def test_orca_start_worker_replaces_a_mailbox_whose_terminal_is_gone(
     fixed[("orchestration", "worker-start")] = {}
     with pytest.raises(ValueError, match="no dispatch id"):
         plugin.start_worker(ctx, "Again", "path:/home/dev/p/site")
+
+
+@pytest.mark.django_db(transaction=True)
+def test_orca_watch_fails_a_worker_whose_agent_terminal_is_gone(
+    tmp_path, workers, monkeypatch
+):
+    import subprocess
+    from datetime import timedelta
+
+    from django.utils import timezone
+
+    from django_ergo.bots import workers as w
+    from django_ergo.bots.tools import ToolContext
+    from django_ergo.conversation.models import Worker
+    from django_ergo.plugins import orca
+    from tests.test_bot_plugins import orca_bot
+
+    bot, _, plugin = orca_bot(tmp_path)
+    terminal = {"show": {"terminal": {"connected": True, "paneRuntimeId": 7}}}
+    fixed = {
+        ("terminal", "create"): {"terminal": {"handle": "term_mail"}},
+        ("orchestration", "run-create"): {"run": {"id": "run_1"}},
+        ("worktree", "show"): {
+            "worktree": {"id": "repo::/home/dev/p/site", "path": "/home/dev/p/site"}
+        },
+        ("orchestration", "task-create"): {"task": {"id": "task_1"}},
+        ("orchestration", "worker-start"): {"dispatchId": "ctx_1", "taskId": "task_1"},
+        ("orchestration", "inbox"): {"messages": []},
+        ("terminal", "send"): {"send": {"accepted": True}},
+        ("orchestration", "worker-show"): {
+            "dispatch": {"status": "dispatched", "last_heartbeat_at": "x"},
+            "worker": {"state": "ready", "agent_terminal_handle": "term_agent"},
+        },
+    }
+
+    def fake_run(argv, **kwargs):
+        if argv[1:3] == ["terminal", "show"]:
+            body = terminal["show"]
+            code = 0 if body.get("ok", True) else 1
+            payload = body if "ok" in body else {"ok": True, "result": body}
+            return subprocess.CompletedProcess(
+                argv, code, stdout=json.dumps(payload), stderr=""
+            )
+        body = {"ok": True, "result": fixed[tuple(argv[1:3])]}
+        return subprocess.CompletedProcess(argv, 0, stdout=json.dumps(body), stderr="")
+
+    monkeypatch.setattr("django_ergo.plugins.orca.subprocess.run", fake_run)
+    user = get_user_model().objects.create(username="gone")
+    session = async_to_sync(bot.main_session)(user)
+    ctx = ToolContext(bot=bot, session=session, user=user)
+    worker_id = plugin.start_worker(ctx, "Count files", "path:/home/dev/p/site")["id"]
+
+    assert w.run(worker_id, bot.registry) == "running"  # terminal live
+
+    # The agent's terminal exits (Orca still says "dispatched")...
+    terminal["show"] = {
+        "terminal": {
+            "connected": False,
+            "paneRuntimeId": -1,
+            "preview": "zsh: warning: 1 jobs SIGHUPed",
+        }
+    }
+    assert w.run(worker_id, bot.registry) == "running"  # ...first seen: wait
+    row = Worker.objects.get(id=worker_id)
+    assert "terminal_gone_since" in row.state
+    assert "agent terminal exited" in row.progress
+
+    # ...and if it comes back before the grace period ends, nothing happens.
+    terminal["show"] = {"terminal": {"connected": True, "paneRuntimeId": 7}}
+    assert w.run(worker_id, bot.registry) == "running"
+    assert "terminal_gone_since" not in Worker.objects.get(id=worker_id).state
+
+    # Gone for good: once the grace period passes, the worker fails with the reason.
+    terminal["show"] = {"ok": False, "error": {"message": "terminal_handle_stale"}}
+    assert w.run(worker_id, bot.registry) == "running"
+    row = Worker.objects.get(id=worker_id)
+    past = timezone.now() - timedelta(seconds=orca.TERMINAL_GONE_GRACE_SECONDS + 1)
+    row.state = {**row.state, "terminal_gone_since": past.isoformat()}
+    row.save(update_fields=["state"])
+    assert w.run(worker_id, bot.registry) == "failed"
+    row.refresh_from_db()
+    assert "agent terminal gone without reporting done" in row.error
 
 
 def test_orca_worker_output_reads_transcripts_and_screens():

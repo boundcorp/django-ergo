@@ -180,6 +180,9 @@ def is_secret(name: str) -> bool:
 
 POLL_SECONDS = 120  # how often a watched Orca worker is checked (worker_poll_seconds)
 SETTLED = ("completed", "failed", "cancelled", "abandoned")
+# An agent terminal that has exited or vanished for this long, with no worker_done,
+# fails the worker (Orca keeps such a dispatch "dispatched" indefinitely).
+TERMINAL_GONE_GRACE_SECONDS = 300
 STALL_MINUTES = 10  # no new output for this long: the card says stalled (stall_minutes)
 EPOCH_MS_FROM = 1e11  # epoch times bigger than this are milliseconds
 ACTIVITY_ENTRIES = 8  # entries kept on the worker for its card
@@ -848,11 +851,58 @@ class OrcaPlugin(BotPlugin):
                 "report": body,
                 "dispatch": dispatch,
             }
+        self.fail_if_terminal_gone(ctx, shown)
         self.submit_brief_once(ctx, shown, status)
         progress = state or status or "starting"
         if liveness:
             progress += f" · {liveness}"
+        if ctx.state.get("terminal_gone_since"):
+            progress += f" · agent terminal {ctx.state.get('terminal')}; failing it if it stays that way"
         return ctx.again(self.poll_seconds, progress=progress)
+
+    def agent_terminal(self, shown: dict) -> tuple[str, str]:
+        """The agent's terminal: ("live" | "exited" | "gone" | "unknown", last output)."""
+        handle = (shown.get("worker") or {}).get("agent_terminal_handle") or (
+            shown.get("dispatch") or {}
+        ).get("assignee_handle")
+        if not handle:
+            return "unknown", ""
+        try:
+            terminal = self.cli_json(["terminal", "show", "--terminal", handle])
+        except ValueError as exc:
+            stale = "terminal_handle_stale" in str(exc) or "not_found" in str(exc)
+            return ("gone" if stale else "unknown"), ""
+        info = terminal.get("terminal", terminal) if isinstance(terminal, dict) else {}
+        preview = str(info.get("preview") or "")
+        if info.get("connected") is False and info.get("paneRuntimeId") == -1:
+            return "exited", preview
+        return "live", preview
+
+    def fail_if_terminal_gone(self, ctx, shown: dict) -> None:
+        """Fail the worker when its agent terminal exited or vanished without a
+        worker_done and stays that way for ``TERMINAL_GONE_GRACE_SECONDS``."""
+        from django.utils import timezone
+
+        state, preview = self.agent_terminal(shown)
+        if state not in ("exited", "gone"):
+            ctx.state.pop("terminal_gone_since", None)
+            ctx.state.pop("terminal", None)
+            return
+        now = timezone.now()
+        since = ctx.state.get("terminal_gone_since")
+        if not since:
+            ctx.state["terminal_gone_since"] = now.isoformat()
+            ctx.state["terminal"] = state
+            return
+        gone_for = (now - datetime.fromisoformat(since)).total_seconds()
+        if gone_for < TERMINAL_GONE_GRACE_SECONDS:
+            return
+        last = f" Its last output: {preview.strip()[:300]}" if preview.strip() else ""
+        msg = (
+            f"The Orca worker's agent terminal {state} without reporting done.{last} "
+            "Start it again with orca_start_worker if the task still needs doing."
+        )
+        raise RuntimeError(msg)
 
     def record_activity(self, ctx, dispatch: str, shown: dict) -> None:
         """Keep the agent's latest output on the worker, with when it last did
