@@ -348,10 +348,9 @@ class Bot:
                     plugin.description or f"The {plugin.name} plugin",
                     instructions=plugin.skill_instructions,
                     toolkits=lambda ctx, plugin=plugin: plugin.toolkits(ctx) or [],
-                    context=lambda ctx, message, plugin=plugin: plugin.context_sources(
-                        ctx, message
-                    )
-                    or [],
+                    context=lambda ctx, message, plugin=plugin: (
+                        plugin.context_sources(ctx, message) or []
+                    ),
                     hint=plugin.skill_hint,
                     requires=[
                         *plugin.skill_requires,
@@ -457,9 +456,22 @@ class Bot:
         chat's engine (its messages are stored per engine type)."""
         if session is None:
             return ""
-        ref = self.session_model_ref((session.metadata or {}).get("model"))
+        ref = self.session_model_ref(session.model)
         found = self.providers.find(ref) if ref else None
         return ref if found and found[0].type == session.engine_type else ""
+
+    def pick_model(self, session: ConversationSession, model: str) -> bool:
+        """Set the model a chat's next turns use ("" = the bot's default). A model
+        on another engine converts the chat's history to that engine first.
+        Runs the ORM; call it while no turn runs. Returns whether the engine changed."""
+        from django_ergo.conversation.engine_switch import switch_engine
+
+        model = self.session_model_ref(model)
+        spec = self.engine_spec(model=model)  # no session: where a new chat would run
+        switched = switch_engine(session, spec.engine_type, spec.transport_type)
+        session.model = model
+        session.save(update_fields=["model", "updated_at"])
+        return switched
 
     def session_model_ref(self, picked) -> str:
         picked = str(picked or "")
@@ -682,12 +694,14 @@ class Bot:
         system_prompt=None,
         metadata=None,
     ) -> ConversationSession:
-        model = self.session_model_ref((metadata or {}).get("model"))
+        metadata = dict(metadata or {})
+        model = self.session_model_ref(metadata.pop("model", ""))
         engine = self.make_engine(model=model)
         session = await ConversationSession.objects.acreate(
             user=user,
             parent=parent,
             bot_name=self.name,
+            model=model,
             engine_type=getattr(engine, "engine_type", None)
             or self.engine_spec(model=model).engine_type,
             transport_type=getattr(engine, "transport_type", "api"),

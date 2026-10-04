@@ -878,10 +878,26 @@ def test_chats_pick_a_model_from_providers(client, cook, use_bots, monkeypatch):
 
     picked = post(client, f"/api/sessions/{root['id']}/model", {"model": "anthropic/claude-opus-5-5"})
     assert picked.json()["model"] == "anthropic/claude-opus-5-5"
-    assert post(client, f"/api/sessions/{root['id']}/model", {"model": "openai/gpt-6-sol"}).status_code == 409
     assert post(client, f"/api/sessions/{root['id']}/model", {"model": "spare/claude-haiku-4-5"}).status_code == 409
     assert post(client, f"/api/sessions/{root['id']}/model", {"model": "nope/x"}).status_code == 400
-    assert post(client, f"/api/sessions/{root['id']}/model", {"model": ""}).json()["model"] == ""
+
+    # A model on another engine moves the chat (and its history) there.
+    from django_ergo.conversation.models import ClaudeContentBlock, ClaudeMessage, ConversationSession
+
+    ConversationSession.objects.filter(id=root["id"]).update(engine_type="claude")
+    session = ConversationSession.objects.get(id=root["id"])
+    asked = ClaudeMessage.objects.create(session=session, role="user", sequence=0)
+    ClaudeContentBlock.objects.create(message=asked, block_type="text", sequence=0, text="Dinner?")
+    moved = post(client, f"/api/sessions/{root['id']}/model", {"model": "openai/gpt-6-sol"}).json()
+    assert (moved["engine_type"], moved["model"]) == ("openai", "openai/gpt-6-sol")
+    assert [(m.role, m.content) for m in session.openai_messages.all() if m.role != "system"] == [("user", "Dinner?")]
+
+    # Not while a turn runs; "" goes back to the bot's default (and its engine).
+    monkeypatch.setattr("ergonaut.api.bots.turn_running", lambda session_id: True)
+    assert post(client, f"/api/sessions/{root['id']}/model", {"model": ""}).status_code == 409
+    monkeypatch.setattr("ergonaut.api.bots.turn_running", lambda session_id: False)
+    back = post(client, f"/api/sessions/{root['id']}/model", {"model": ""}).json()
+    assert (back["engine_type"], back["model"]) == ("claude", "")
 
 
 @pytest.mark.django_db(transaction=True)

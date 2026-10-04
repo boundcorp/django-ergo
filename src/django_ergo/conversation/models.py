@@ -69,6 +69,10 @@ class ConversationSession(TimeStampedMixin):
         choices=TransportType.choices,
     )
     session_id = models.CharField(max_length=255, blank=True, default="")
+    # The provider/model picked for this chat (a providers.yaml ref, e.g.
+    # "claude/claude-opus-5-5"); "" uses the bot's default. Picking one on
+    # another engine converts the history (conversation.engine_switch).
+    model = models.CharField(max_length=200, blank=True, default="")
     status = models.CharField(
         max_length=20,
         choices=SessionStatus.choices,

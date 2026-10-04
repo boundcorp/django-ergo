@@ -32,6 +32,7 @@ from ergonaut.apps.bots.tasks import (
     queue_turn,
     recover_stopped_session,
     request_stop,
+    turn_running,
     unsend,
 )
 
@@ -576,7 +577,7 @@ def session_out(session: ConversationSession) -> dict:
         "unread": bool(getattr(session, "unread", False)),
         "attention": needs_attention(session),
         "engine_type": session.engine_type,
-        "model": str(meta.get("model") or ""),
+        "model": session.model,
         **resolution(session),
         **threads_by_status(session),
     }
@@ -1198,15 +1199,13 @@ def models_out(bot: Bot) -> dict:
     }
 
 
-def check_model(bot: Bot, model: str, engine_type: str = "") -> None:
+def check_model(bot: Bot, model: str) -> None:
     found = bot.providers.find(model)
     if found is None:
         raise HttpError(400, f"{model!r} isn't a model in providers.yaml")
     provider, _ = found
     if not provider.available:
         raise HttpError(409, f"{provider.name} has no API key set ({provider.api_key_env})")
-    if engine_type and provider.type != engine_type:
-        raise HttpError(409, f"This chat runs on {engine_type}; start a new thread to use {provider.name} models")
 
 
 @router.get("/bots/{bot}/models")
@@ -1216,19 +1215,16 @@ def bot_models(request, bot: str):
 
 @router.post("/sessions/{session_id}/model", response=SessionOut)
 async def set_session_model(request, session_id: str, data: ModelIn):
-    """Pick the model this chat's next turns use (same engine type as the chat)."""
+    """Pick the model this chat's next turns use. A model on another engine
+    converts the chat's history to that engine (django_ergo.conversation.engine_switch)."""
     session = await get_session(request, session_id)
     found = get_bot(session.bot_name, request.auth)
     model = data.model.strip()
     if model:
-        check_model(found, model, session.engine_type)
-    metadata = dict(session.metadata or {})
-    if model:
-        metadata["model"] = model
-    else:
-        metadata.pop("model", None)
-    session.metadata = metadata
-    await session.asave(update_fields=["metadata", "updated_at"])
+        check_model(found, model)
+    if await sync_to_async(turn_running)(session.id):
+        raise HttpError(409, "Wait for the running turn to finish, then switch models")
+    await sync_to_async(found.pick_model)(session, model)
     return await sync_to_async(session_out)(session)
 
 

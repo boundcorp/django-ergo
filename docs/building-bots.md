@@ -75,12 +75,15 @@ needed if you list it here or set `engine.type: claude`.
 Models are named `provider/model`. A bot picks one with
 `engine: {config: {model: openai/gpt-6-sol}}`; a bot with no `engine` uses
 `default`. In Ergonaut, the chat header and the New thread page have a
-model picker listing every model whose provider's key is set. A new thread
-can start on any of them; an existing chat can only switch to another model
-on the same engine, because its history is stored in that engine's format.
-For the same reason, when a bot's model moves to another engine (its bot.yaml
-or `default` changes), existing chats stay on their engine: they use
-`default` if it's on that engine, else the first available model there.
+model picker listing every model whose provider's key is set. Any chat can
+switch to any of them, and the pick (stored on the chat as
+`ConversationSession.model`) applies to every later turn. A chat's history is
+stored in its engine's format, so picking a model on another engine converts
+the history first (`django_ergo.conversation.engine_switch`); it can't happen
+while a turn is running. When a bot's model moves to another engine (its
+bot.yaml or `default` changes) and nobody picks, existing chats stay on their
+engine: they use `default` if it's on that engine, else the first available
+model there. Picking "Default" moves them to the bot's default.
 The file reloads like the bot folders. If an edit breaks it, the last good
 version stays in use and admins see the error.
 
