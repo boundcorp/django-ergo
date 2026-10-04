@@ -28,5 +28,22 @@ class CustomAdmin(AdminSite):
     # Text to put in each page's <h1> (and above login form).
     site_header = "ergonaut"
 
+    def login(self, request, extra_context=None):
+        """The admin login, with the same failed-login limit as the API's."""
+        from django.http import HttpResponse
+
+        from ergonaut.utils.throttle import login_blocked, login_failed, login_succeeded
+
+        username = request.POST.get("username", "") if request.method == "POST" else ""
+        if username and login_blocked(request, username):
+            return HttpResponse("Too many failed logins; try again later.", status=429, content_type="text/plain")
+        response = super().login(request, extra_context)
+        if username:
+            if response.status_code == 302:  # logged in, sent on
+                login_succeeded(request, username)
+            else:
+                login_failed(request, username)
+        return response
+
 
 admin_site = CustomAdmin()

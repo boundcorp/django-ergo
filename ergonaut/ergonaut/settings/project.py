@@ -84,6 +84,8 @@ AUTHENTICATION_BACKENDS = ["django.contrib.auth.backends.ModelBackend"]
 TELEMETRY_NAMESPACE = os.environ.get("TELEMETRY_NAMESPACE", "ergonaut").replace("-", "_")
 TELEMETRY_METRICS_ENABLED = env_variable_truthy("TELEMETRY_METRICS_ENABLED", "true")
 TELEMETRY_METRICS_PATH = os.environ.get("TELEMETRY_METRICS_PATH", "metrics").strip("/") or "metrics"
+# Outside DEBUG, metrics need this bearer token (or an admin's session).
+TELEMETRY_METRICS_TOKEN = os.environ.get("TELEMETRY_METRICS_TOKEN", "")
 
 INSTALLED_APPS = [
     "django.contrib.auth",
@@ -304,6 +306,18 @@ TEMPLATES = [
 
 
 ALLOWED_HOSTS = ["127.0.0.1", "localhost", "*"]
+if os.environ.get("ERGONAUT_ALLOWED_HOSTS"):
+    # Comma-separated; localhost stays so probes and `ergonaut` commands still reach it.
+    ALLOWED_HOSTS = ["127.0.0.1", "localhost"] + [
+        h.strip() for h in os.environ["ERGONAUT_ALLOWED_HOSTS"].split(",") if h.strip()
+    ]
+
+# Behind a proxy that ends TLS (a Kubernetes ingress): trust its X-Forwarded-Proto so
+# Django sees https (CSRF's origin check needs it) and only send cookies over https.
+if env_variable_truthy("ERGONAUT_BEHIND_TLS_PROXY"):
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
 
 # Object storage: S3-compatible (Garage/MinIO/AWS) or local filesystem
 STORAGES = {
@@ -345,6 +359,10 @@ if not DEBUG:
     EMAIL_HOST_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
     EMAIL_USE_TLS = os.environ.get("EMAIL_USE_TLS", "") == "true"
     BACKEND_URL = os.environ.get("BACKEND_URL", BASE_URL)
+    # The web app's own origin, plus any others (comma-separated) allowed to POST.
+    CSRF_TRUSTED_ORIGINS = [BASE_URL.rstrip("/")] + [
+        o.strip() for o in os.environ.get("ERGONAUT_CSRF_TRUSTED_ORIGINS", "").split(",") if o.strip()
+    ]
 
 else:
     # DEV SETTINGS
