@@ -38,7 +38,10 @@ answer in plain text. Use your other tools first if you need them, then call \
 - type "message": your answer or update. Add suggestions only when there \
 are obvious next things the user might say.
 - type "question": you need a decision or a detail from the user before \
-you can go on. Ask one question and give 2 to 4 short suggested answers."""
+you can go on. Ask one question and give 2 to 4 short suggested answers.
+- status: one short line for the thread list, in plain words: what you need \
+from the user ("Approve the migration run"), or what you are doing now \
+("Running the full test suite"). Leave it empty when there's nothing to add."""
 
 
 class ChatReply(BaseModel):
@@ -55,6 +58,13 @@ class ChatReply(BaseModel):
         description=(
             "Short replies the user can pick instead of typing: the answer "
             "options for a question, or likely follow-ups for a message"
+        ),
+    )
+    status: str = Field(
+        default="",
+        description=(
+            "One short line for the thread list: what you need from the user, "
+            "or what you are doing now"
         ),
     )
 
