@@ -730,12 +730,20 @@ def test_running_workers_show_in_the_chat_and_keep_it_busy(client, cook, use_bot
         function="orca:watch",
         status="running",
         progress="running · alive",
+        state={"activity": {"entries": [{"kind": "tool", "text": "Bash pytest", "at": None}], "at": 1790000000}},
     )
     assert {s["id"]: s["busy"] for s in client.get("/api/sessions").json()}[root["id"]] is True
     detail = client.get(f"/api/sessions/{root['id']}").json()
     assert [(w["title"], w["status"], w["progress"]) for w in detail["workers"]] == [
         ("Fix footer", "running", "running · alive")
     ]
+    assert detail["workers"][0]["session_id"] == root["id"]
+    assert detail["workers"][0]["activity"]["at"] == 1790000000
+
+    # Its log: this bot has no Orca plugin to read it from now, so it's what was kept.
+    log = client.get(f"/api/sessions/{root['id']}/workers/{worker.pk}/log").json()
+    assert (log["live"], log["entries"][0]["text"]) == (False, "Bash pytest")
+    assert client.get(f"/api/sessions/{root['id']}/workers/{root['id']}/log").status_code == 404
 
     # A worker whose next step is long overdue (a restart lost it) is started again.
     started = []

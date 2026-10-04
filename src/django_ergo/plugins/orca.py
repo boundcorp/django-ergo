@@ -11,6 +11,7 @@
                                    # "" reads them on this host)
         max_attach_bytes: 20000000
         worker_poll_seconds: 120   # how often orca_start_worker's watcher checks the agent
+        stall_minutes: 10          # a running worker with no new output this long shows as stalled
 
 The bot runs the CLI on the host Ergonaut runs on, as that user. Tools:
 
@@ -34,7 +35,10 @@ The bot runs the CLI on the host Ergonaut runs on, as that user. Tools:
   watched by a thread Worker (``orca:watch``, see bots.workers) that polls the
   dispatch, passes the agent's questions to the chat and brings its
   ``worker_done`` report back as a message. Each chat gets its own Orca Run
-  and mailbox terminal, made on first use.
+  and mailbox terminal, made on first use. Each check also reads the agent's
+  latest output (``worker-read``: its transcript, or its terminal) into the
+  worker's activity, which Ergonaut's worker cards show with the time since it
+  last did something; ``worker_log`` reads the whole recent log on demand.
 - ``orca_run``: every other command (creating worktrees, starting and
   stopping workers, sending to terminals...). Each call needs approval unless
   ``approve_changes: false``.
@@ -46,9 +50,14 @@ call anywhere else.
 
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 import shutil
 import subprocess
+import time
+from datetime import UTC
+from datetime import datetime
 from typing import TYPE_CHECKING
 
 from django_ergo.bots.plugins import BotPlugin
@@ -171,6 +180,119 @@ def is_secret(name: str) -> bool:
 
 POLL_SECONDS = 120  # how often a watched Orca worker is checked (worker_poll_seconds)
 SETTLED = ("completed", "failed", "cancelled", "abandoned")
+STALL_MINUTES = 10  # no new output for this long: the card says stalled (stall_minutes)
+EPOCH_MS_FROM = 1e11  # epoch times bigger than this are milliseconds
+ACTIVITY_ENTRIES = 8  # entries kept on the worker for its card
+ACTIVITY_CHARS = 300  # per entry on the card
+LOG_CHARS = 4000  # per entry in the full log
+# The full log's screen lines (a transcript stops at Orca's 50 messages).
+LOG_LINES = 400
+ANSI = re.compile(
+    r"\x1b(?:\[[0-9;?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[()#][0-9A-Za-z]|[@-Z\\-_])"
+)
+# Tool inputs that say what a call did, best first (Bash's command, Read's path...).
+INPUT_KEYS = (
+    "command",
+    "cmd",
+    "file_path",
+    "path",
+    "pattern",
+    "query",
+    "url",
+    "description",
+    "prompt",
+)
+
+
+def _clip(text: str, limit: int) -> str:
+    text = text.strip()
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
+def _tool_input(value) -> str:
+    """A tool call's input in a line: its telling field, else compact JSON."""
+    if isinstance(value, dict):
+        for key in INPUT_KEYS:
+            if isinstance(value.get(key), str) and value[key].strip():
+                return value[key]
+    if value in (None, {}, []):
+        return ""
+    return json.dumps(value, separators=(",", ":"), ensure_ascii=False, default=str)
+
+
+def _block_text(block) -> str:
+    """A transcript block's text (text blocks, or a result's output)."""
+    if not isinstance(block, dict):
+        return str(block)
+    for key in ("text", "output", "content"):
+        value = block.get(key)
+        if isinstance(value, str):
+            return value
+        if isinstance(value, list):
+            return "\n".join(_block_text(v) for v in value)
+    return ""
+
+
+def _epoch(value) -> float | None:
+    """Seconds since the epoch from Orca's times: epoch ms/s numbers or ISO text."""
+    if isinstance(value, bool) or value in (None, ""):
+        return None
+    if isinstance(value, int | float):
+        return value / 1000 if value > EPOCH_MS_FROM else float(value)
+    try:
+        when = datetime.fromisoformat(
+            str(value).strip().replace(" ", "T").replace("Z", "+00:00")
+        )
+    except ValueError:
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=UTC)  # SQLite's datetime('now') is UTC
+    return when.timestamp()
+
+
+def output_entries(read: dict, chars: int = LOG_CHARS) -> tuple[str, list[dict]]:
+    """``orchestration worker-read`` as (source, entries), oldest first. An entry is
+    ``{"kind", "text", "at"}``: kind is the speaker (assistant, user, reasoning),
+    ``tool`` for a call, ``result`` or ``error`` for its output, or ``terminal``
+    for a screen line; ``at`` is epoch seconds when the source has a time."""
+    transcript = read.get("transcript")
+    if isinstance(transcript, dict):
+        entries = []
+        for message in transcript.get("messages") or []:
+            role = str(message.get("role") or "assistant")
+            at = _epoch(message.get("timestamp"))
+            for block in message.get("blocks") or []:
+                kind = block.get("type") if isinstance(block, dict) else "text"
+                if kind == "tool-call":
+                    name = str(block.get("name") or "tool")
+                    text = f"{name} {_tool_input(block.get('input'))}".strip()
+                    entries.append(
+                        {"kind": "tool", "text": _clip(text, chars), "at": at}
+                    )
+                elif kind == "tool-result":
+                    text = _block_text(block)
+                    entries.append(
+                        {
+                            "kind": "error" if block.get("isError") else "result",
+                            "text": _clip(text, chars),
+                            "at": at,
+                        }
+                    )
+                elif kind == "text":
+                    text = _block_text(block)
+                    if text.strip():
+                        entries.append(
+                            {"kind": role, "text": _clip(text, chars), "at": at}
+                        )
+        return "transcript", entries
+    terminal = read.get("terminal") or {}
+    lines = [ANSI.sub("", str(line)).rstrip() for line in terminal.get("tail") or []]
+    entries = [
+        {"kind": "terminal", "text": _clip(line, chars), "at": None}
+        for line in lines
+        if line.strip()
+    ]
+    return "terminal", entries
 
 
 def _first_key(value, keys: tuple[str, ...]):
@@ -222,6 +344,7 @@ class OrcaPlugin(BotPlugin):
         self.files_host = str(self.config.get("files_host", self.environment) or "")
         self.max_attach_bytes = int(self.config.get("max_attach_bytes", 20_000_000))
         self.poll_seconds = float(self.config.get("worker_poll_seconds", POLL_SECONDS))
+        self.stall_minutes = float(self.config.get("stall_minutes", STALL_MINUTES))
 
     def argv(self, args: list[str]) -> list[str]:
         args = [str(a) for a in args]
@@ -708,6 +831,7 @@ class OrcaPlugin(BotPlugin):
                     f'["orchestration", "reply", "--id", "{message["id"]}", "--body", "<answer>"].'
                 )
         ctx.state["seen"] = sorted(seen)
+        self.record_activity(ctx, dispatch, shown)
         if ctx.stopping:
             return None
         if report is not None or status in SETTLED:
@@ -729,6 +853,72 @@ class OrcaPlugin(BotPlugin):
         if liveness:
             progress += f" · {liveness}"
         return ctx.again(self.poll_seconds, progress=progress)
+
+    def record_activity(self, ctx, dispatch: str, shown: dict) -> None:
+        """Keep the agent's latest output on the worker, with when it last did
+        something: the newest transcript time or heartbeat, or this check if its
+        output changed since the last one. Best effort: a failed read keeps the last."""
+        try:
+            read = self.cli_json(
+                [
+                    "orchestration",
+                    "worker-read",
+                    "--dispatch",
+                    dispatch,
+                    "--limit",
+                    "20",
+                ]
+            )
+        except Exception:  # noqa: BLE001 — the card keeps what the last check read
+            read = None
+        now = time.time()
+        previous = ctx.state.get("activity") or {}
+        source, entries = output_entries(read, ACTIVITY_CHARS) if read else ("", [])
+        fingerprint = hashlib.sha1(  # noqa: S324 — a change check, not security
+            json.dumps(entries, sort_keys=True).encode()
+        ).hexdigest()
+        times = [e["at"] for e in entries if e["at"]]
+        times.append(_epoch((shown.get("dispatch") or {}).get("last_heartbeat_at")))
+        if read is not None and fingerprint != ctx.state.get("activity_fingerprint"):
+            times.append(now)
+        times.append(_epoch(previous.get("at")))
+        last = max((t for t in times if t), default=None)
+        if read is not None:
+            ctx.state["activity_fingerprint"] = fingerprint
+        wait = (shown.get("observation") or {}).get("agentWait") or {}
+        liveness = ((shown.get("projection") or {}).get("liveness") or {}).get(
+            "verdict"
+        )
+        ctx.activity(
+            entries[-ACTIVITY_ENTRIES:]
+            if read is not None
+            else previous.get("entries") or [],
+            at=last,
+            source=source or previous.get("source") or "",
+            waiting=str(wait.get("reason") or "interactive prompt") if wait else "",
+            liveness=str(liveness or ""),
+            stall_after=self.stall_minutes * 60,
+            checked_at=now,
+        )
+
+    def worker_log(self, worker) -> dict | None:
+        """The whole recent output of an ``orca:watch`` worker, read now."""
+        dispatch = (worker.args or {}).get("dispatch")
+        if worker.function != "orca:watch" or not dispatch:
+            return None
+        # Orca clamps the limit: 50 transcript messages, or this many screen lines.
+        read = self.cli_json(
+            [
+                "orchestration",
+                "worker-read",
+                "--dispatch",
+                dispatch,
+                "--limit",
+                str(LOG_LINES),
+            ]
+        )
+        source, entries = output_entries(read)
+        return {"source": source, "entries": entries}
 
     def submit_brief_once(self, ctx, shown: dict, status: str) -> None:
         """Older Orca hosts can leave the injected brief unsubmitted in the agent's input

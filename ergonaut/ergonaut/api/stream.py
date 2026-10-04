@@ -70,7 +70,10 @@ def _snapshot(session_id, after: int, seen: dict):
             seen["calls"][str(call.id)] = key
             calls.append(call_out(call))
     workers = workers_out(session)
-    key = [(w["id"], w["status"], w["progress"], [p["state"] for p in w["prs"]]) for w in workers]
+    key = [
+        (w["id"], w["status"], w["progress"], [p["state"] for p in w["prs"]], json.dumps(w["activity"], default=str))
+        for w in workers
+    ]
     if seen.get("workers") == key:
         workers = None
     else:

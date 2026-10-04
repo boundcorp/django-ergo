@@ -220,14 +220,16 @@ def workers_out(session: ConversationSession) -> list[dict]:
     the pull requests its result links (``prs``)."""
     import json
 
-    from django_ergo.bots.workers import describe
+    from django_ergo.bots.workers import activity, describe
 
     active = list(session.workers.filter(status__in=["queued", "running"]))
     done = list(session.workers.exclude(status__in=["queued", "running"])[:5])
     out = []
     for worker in active + done:
         urls = [url for url, _, _ in pull_request_urls(json.dumps(worker.result, default=str))]
-        out.append({**describe(worker), "prs": prs_by_url(urls)})
+        out.append(
+            {**describe(worker), "session_id": str(session.id), "prs": prs_by_url(urls), "activity": activity(worker)}
+        )
     return out
 
 
@@ -1047,6 +1049,19 @@ def session_detail(request, session_id: str, before: int | None = None, limit: i
         "sent": sent_out(session),
         "prs": session_prs(session),
     }
+
+
+@router.get("/sessions/{session_id}/workers/{worker_id}/log")
+def worker_log(request, session_id: str, worker_id: str):
+    """A worker's recent output (an Orca agent's transcript or screen), read now when its
+    plugin can, else what its last check kept."""
+    from django_ergo.bots import workers
+
+    session = visible_sessions(request.auth).filter(id=uuid_or_404(session_id)).first()
+    worker = session and session.workers.filter(id=uuid_or_404(worker_id, "worker")).first()
+    if worker is None:
+        raise HttpError(404, "No such worker")
+    return {"id": str(worker.pk), "title": worker.title, **workers.log(get_bot(worker.bot_name, request.auth), worker)}
 
 
 @router.get("/calls/{call_id}", response=CallDetailOut)

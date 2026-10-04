@@ -357,8 +357,15 @@ def deploy(ctx, release: str) -> str:
 
 The Orca plugin's `orca_start_worker(spec, worktree, agent)` starts a
 supervised Orca worker (with approval) and a Worker (`orca:watch`) that polls
-its dispatch every minute, passes the agent's questions to the chat, and
-returns its `worker_done` report. `model` and `effort` go to Orca's
+its dispatch every `worker_poll_seconds` (default 120), passes the agent's
+questions to the chat, and returns its `worker_done` report. Each check also
+reads the agent's latest output (`orchestration worker-read`: its transcript,
+or its terminal) into the worker's activity (`WorkerContext.activity`), with
+the time it last did something: the newest transcript time or heartbeat, or
+the check that first saw new output. A running worker quiet for
+`stall_minutes` (default 10) shows as stalled, unless Orca says it's waiting
+on a person. `BotPlugin.worker_log` reads a worker's full recent output on
+demand (Orca: up to 50 transcript messages or 400 screen lines). `model` and `effort` go to Orca's
 `--model`/`--effort`, except for `agent: omp`, which Orca can't give a model
 at launch: the plugin writes the worktree's `.omp/config.yml`
 (`modelRoles.default: <model>:<effort>`, git-ignored by its own folder) and omp
