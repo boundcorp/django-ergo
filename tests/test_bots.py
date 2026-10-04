@@ -604,6 +604,9 @@ async def test_threads_are_listed_targeted_and_archived(tmp_path, thread_message
     thread = await bot.create_session(user, parent=root, title="Groceries")
     engine._client.responses = [
         claude_tool("ergo_thread_list", {}, tool_id="l1"),
+        # ergo_thread_archive is the old name of ergo_thread_resolve.
+        claude_tool("ergo_thread_archive", {"thread_id": str(thread.id)}, tool_id="a1"),
+        claude_tool("ergo_thread_list", {}, tool_id="l2"),
         claude_tool(
             "ergo_thread_send",
             {"thread": str(thread.id), "message": "Eggs?"},
@@ -612,8 +615,6 @@ async def test_threads_are_listed_targeted_and_archived(tmp_path, thread_message
         claude_tool(
             "ergo_thread_send", {"thread": "nope", "message": "x"}, tool_id="s2"
         ),
-        claude_tool("ergo_thread_archive", {"thread_id": str(thread.id)}, tool_id="a1"),
-        claude_tool("ergo_thread_list", {}, tool_id="l2"),
         say("Done."),
     ]
     await bot.ask(root, "Tidy up")
@@ -624,12 +625,12 @@ async def test_threads_are_listed_targeted_and_archived(tmp_path, thread_message
         ("main", "kitchen · Main"),
     ]
     assert listing[1]["you_are_here"] is True
-    assert json.loads(results[1]["content"])["thread_id"] == str(thread.id)
-    assert results[2]["is_error"] and "No thread nope" in results[2]["content"]
-    assert results[3]["content"] == "Archived kitchen · Groceries"
-    assert [r["thread"] for r in json.loads(results[4]["content"])] == ["main"]
+    assert results[1]["content"].startswith("Resolved kitchen · Groceries")
+    assert [r["thread"] for r in json.loads(results[2]["content"])] == ["main"]
+    assert json.loads(results[3]["content"])["thread_id"] == str(thread.id)
+    assert results[4]["is_error"] and "No thread nope" in results[4]["content"]
 
-    # A message to an archived thread reopens it.
+    # A message to a resolved thread reopens it.
     engine._client.responses = [say("Four eggs.")]
     await thread_messages()
     await thread.arefresh_from_db()
@@ -1156,6 +1157,7 @@ async def test_orchestrators_see_every_bots_chats_and_latest_messages(
     system = engine._client.calls[-1]["system"]
     assert "## Bots and threads" in system
     assert "    reply: Hi from design main." in system
+    assert "Resolving threads: keep the thread list" in system  # the built-in rule
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1239,7 +1241,7 @@ async def test_the_target_decides_whether_it_takes_new_threads(
     }
     assert stopped == [str(thread.id)]
     assert not_ours["is_error"] and "wasn't started by this bot" in not_ours["content"]
-    assert archived["content"] == "Archived design · Logo"
+    assert archived["content"].startswith("Resolved design · Logo")
     await thread.arefresh_from_db()
     assert thread.status == "completed"
 
@@ -1736,3 +1738,64 @@ async def test_a_report_upward_gets_no_reply_unless_it_asks(tmp_path, thread_mes
     assert len(SENT) == 1  # the answer is on its way back to the thread
     main_system = engine._client.calls[-1]["system"]
     assert "## This chat\nYou are kitchen · Main, the main chat." in main_system
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_finished_threads_are_resolved_and_unfinished_ones_refused(
+    tmp_path, thread_messages
+):
+    from django_ergo.bots import orchestrator
+    from django_ergo.conversation.models import Worker
+
+    user = await User.objects.acreate(username="resolver")
+    bot, engine = make_bot(tmp_path, say("ok"))
+    root = await bot.root_session(user)
+    asking = await bot.create_session(user, parent=root, title="Asks")
+    engine._client.responses = [say("Which day?", kind="question")]
+    await bot.ask(asking, "Plan dinner")
+    busy = await bot.create_session(user, parent=root, title="Busy")
+    await Worker.objects.acreate(
+        session=busy, bot_name="kitchen", title="build", function="x", status="running"
+    )
+    done = await bot.create_session(user, parent=root, title="Done")
+
+    engine._client.responses = [
+        claude_tool("ergo_thread_resolve", {"thread_id": str(asking.id)}, tool_id="q1"),
+        claude_tool("ergo_thread_resolve", {"thread_id": str(busy.id)}, tool_id="q2"),
+        claude_tool(
+            "ergo_thread_resolve",
+            {"thread_id": str(done.id), "summary": "PR #88 merged"},
+            tool_id="q3",
+        ),
+        claude_tool("ergo_thread_resolve", {}, tool_id="q4"),  # main can't
+        say("Tidied."),
+    ]
+    await bot.ask(root, "Tidy up")
+    q1, q2, q3, q4 = _tool_results(engine)[-4:]
+    assert q1["is_error"] and "asks the user something" in q1["content"]
+    assert q2["is_error"] and "1 worker(s) are running" in q2["content"]
+    assert q3["content"].startswith("Resolved kitchen · Done")
+    assert q4["is_error"] and "only threads are" in q4["content"]
+    await done.arefresh_from_db()
+    assert done.status == "completed"
+    assert done.metadata["resolved_summary"] == "PR #88 merged"
+    assert done.metadata["resolved_by"] == "kitchen · Main"
+
+    # A thread resolves itself when its task is done, during its final turn.
+    engine._client.responses = [
+        claude_tool("ergo_thread_resolve", {"summary": "answered"}, tool_id="s1"),
+        say("Done, and resolved."),
+    ]
+    await bot.ask(asking, "Tuesday. That's all.")
+    await asking.arefresh_from_db()
+    assert asking.status == "completed"
+    # A new message reopens it (Ergonaut's message endpoint and thread-message
+    # delivery call archival.reopen), and the resolution notes go.
+    from django_ergo.bots import archival
+
+    assert await sync_to_async(archival.reopen)(asking)
+    await asking.arefresh_from_db()
+    assert asking.status == "active" and "resolved_summary" not in asking.metadata
+
+    status = await sync_to_async(orchestrator.thread_status)(busy)
+    assert status["ready_to_resolve"] is False

@@ -190,6 +190,7 @@ class Bot:
 
     def _skill_defs(self) -> list[SkillDef]:
         """Everything this bot can load, as skills (see bots.skillset)."""
+        from django_ergo.bots.orchestrator import ORCHESTRATION_INSTRUCTIONS
         from django_ergo.bots.orchestrator import orchestrator_toolkit
         from django_ergo.bots.orchestrator import upward_toolkit
         from django_ergo.bots.overview import OverviewSource
@@ -225,6 +226,7 @@ class Bot:
                 SkillDef(
                     "orchestration",
                     "Delegate to your threads and to other bots, and check on them",
+                    instructions=ORCHESTRATION_INSTRUCTIONS,
                     toolkits=lambda ctx: [orchestrator_toolkit(ctx)],
                     context=lambda ctx, message: [OverviewSource(ctx)],
                     source="built-in",
