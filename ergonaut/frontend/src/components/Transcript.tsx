@@ -24,11 +24,18 @@ const VISIBLE_CALLS = 3
 type FoldRow = { key: string; hidden: number; summary: string; open: boolean }
 type Folds = {
   hidden: Set<string> // tool call ids folded away
+  folded: Set<string> // tool call ids in a fold (shown as one-line rows when it's open)
   rows: Map<string, FoldRow> // by the id of the run's first call: where its "+N more" row goes
   durations: Map<string, number> // tool call id -> ms until its result
   toggle: (key: string) => void
 }
-const FoldContext = createContext<Folds>({ hidden: new Set(), rows: new Map(), durations: new Map(), toggle: () => {} })
+const FoldContext = createContext<Folds>({
+  hidden: new Set(),
+  folded: new Set(),
+  rows: new Map(),
+  durations: new Map(),
+  toggle: () => {},
+})
 
 /** "penpot_apply ×12, penpot_render ×4": the commonest tools in a fold. */
 function foldSummary(names: string[]): string {
@@ -49,8 +56,9 @@ function foldRuns(
   starts: Map<number, Call>,
   replies: string[],
   open: Set<string>,
-): Pick<Folds, 'hidden' | 'rows'> {
+): Pick<Folds, 'hidden' | 'folded' | 'rows'> {
   const hidden = new Set<string>()
+  const folded = new Set<string>()
   const rows = new Map<string, FoldRow>()
   let run: ToolUse[] = []
   const close = () => {
@@ -61,6 +69,7 @@ function foldRuns(
       const key = run[0].id
       const isOpen = open.has(key)
       rows.set(key, { key, hidden: foldable.length, summary: foldSummary(foldable.map(u => u.name)), open: isOpen })
+      for (const use of foldable) folded.add(use.id)
       if (!isOpen) for (const use of foldable) hidden.add(use.id)
     }
     run = []
@@ -80,7 +89,7 @@ function foldRuns(
     }
   }
   close()
-  return { hidden, rows }
+  return { hidden, folded, rows }
 }
 
 /** How long each tool call took: from its message to its result's. */
@@ -128,7 +137,7 @@ function resultJson(result?: ToolResult): Record<string, unknown> | null {
 /** A tool call: a card for work sent to another chat or a worker, otherwise the call itself. */
 function ToolCall({ use, result, pending }: { use: ToolUse; result?: ToolResult; pending: boolean }) {
   const { cards, workers } = useContext(DelegatedContext)
-  const { durations } = useContext(FoldContext)
+  const { durations, folded } = useContext(FoldContext)
   const data = resultJson(result)
   const card = data && THREAD_TOOLS.has(use.name) ? cards.get(String(data.message_id ?? '')) : undefined
   if (card) return <ThreadCard card={card} />
@@ -138,7 +147,13 @@ function ToolCall({ use, result, pending }: { use: ToolUse; result?: ToolResult;
   }
   return (
     <>
-      <ToolCard use={use} result={result} pending={pending} duration={durations.get(use.id)} />
+      <ToolCard
+        use={use}
+        result={result}
+        pending={pending}
+        duration={durations.get(use.id)}
+        compact={folded.has(use.id)}
+      />
       <ToolImages result={result} />
     </>
   )
