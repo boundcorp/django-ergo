@@ -94,6 +94,23 @@ skills:
   include: [skillbuilder]
 ```
 
+### Default skills
+
+`DJANGO_ERGO["DEFAULT_SKILLS"]` lists library skills every bot loaded from a
+folder gets without naming them (default: `["skillbuilder"]`). A bot opts
+out in bot.yaml:
+
+```yaml
+skills:
+  exclude: [skillbuilder]   # leave out some defaults
+  defaults: false           # or all of them
+```
+
+A default skill whose plugin settings clash with bot.yaml (skillbuilder on a
+bot whose `bot_management` is in `merge_main` mode) is left out with a
+warning; a skill the bot names itself fails the load instead. Set
+`DEFAULT_SKILLS: []` to turn defaults off for every bot.
+
 ## Loading and unloading
 
 Every chat begins with an `ergo_skills_list` result already in its history:
@@ -123,6 +140,7 @@ skills:
   unload_after_turns: 30
   requires: {meal-planning: [tandoor]}  # same as front matter requires
   include: [skillbuilder]               # skills from Ergo's library
+  exclude: [skillbuilder]               # leave out some default skills
 ```
 
 `history` and `workers` are always loaded everywhere. Skills marked `always_load` are

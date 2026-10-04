@@ -156,3 +156,7 @@ if ISOLATED_TESTS:
         "EMBEDDING_PROVIDER": "django_ergo.embedding_providers.DeterministicEmbeddingProvider",
         "EMBEDDING_PROVIDER_CONFIG": {"dimensions": 1536},
     }
+
+# Bots in tests start without Ergo's default skills; tests that need them set
+# DEFAULT_SKILLS themselves.
+DJANGO_ERGO = {**globals().get("DJANGO_ERGO", {}), "DEFAULT_SKILLS": []}
