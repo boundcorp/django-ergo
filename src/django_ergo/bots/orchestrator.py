@@ -24,6 +24,10 @@ Who may message whom:
   message starts a turn there).
   Files from this chat can go with it (``attachments``): the recipient sees them
   listed, with ids, and opens them with the attachments tools.
+- ``ergo_thread_forward``: hand the user's own message (the one this turn is
+  answering) to another chat or thread, copied verbatim with its author, time
+  and files, plus a short note. The recipient treats it as the user speaking and
+  answers there; nothing comes back here, so this chat just says where it went.
 - ``ergo_thread_stop``: stop the running turn of a thread this bot started (or
   one of its own threads) and cancel what this bot queued for it. Stopping a
   running turn needs ``DJANGO_ERGO["TURN_STOPPER"]``.
@@ -54,7 +58,9 @@ from django_ergo.bots.tools import BotTool
 from django_ergo.bots.tools import FunctionToolkit
 from django_ergo.bots.tools import bot_tool
 from django_ergo.conversation.attachments import find_session_file
+from django_ergo.conversation.models import ConversationAttachment
 from django_ergo.conversation.models import ConversationSession
+from django_ergo.conversation.models import StructuredCallStatus
 from django_ergo.conversation.models import ThreadMessage
 from django_ergo.conversation.models import ThreadMessageStatus
 from django_ergo.settings import api_settings
@@ -117,6 +123,13 @@ def chat_identity(session: ConversationSession) -> str:
 
 
 ORCHESTRATION_INSTRUCTIONS = """\
+Routing: when the user's message belongs to work that another chat or thread
+already owns (or should own), hand it over with ergo_thread_forward instead of
+retelling it with ergo_thread_send. Forwarding copies the user's own words, so
+their intent and any approval reach the thread unchanged; add a note only for
+context the thread lacks. Then reply here in one line saying where it went.
+Use ergo_thread_send for your own requests and questions.
+
 Resolving threads: keep the thread list to work that is still going on.
 - Resolve a thread (ergo_thread_resolve, with a one-line summary) when its work is
   finished: its PR was merged or closed, its answer was delivered, or the user
@@ -357,30 +370,118 @@ def ergo_thread_send(  # noqa: PLR0913
     return _send(ctx, _target(ctx, bot), message, thread, title, attachments, ask=ask)
 
 
-def _send(  # noqa: PLR0913
-    ctx: ToolContext,
-    target: Bot,
-    message: str,
-    thread: str = "main",
-    title: str = "",
-    attachments: list[str] | None = None,
-    *,
-    ask: bool = False,
+def user_message(session: ConversationSession) -> dict | None:
+    """The user's own message this session's running turn answers: its text,
+    author, time and files. None when the turn answers another chat, a worker
+    or a schedule rather than the user."""
+    call = (
+        session.structured_calls.filter(status=StructuredCallStatus.IN_PROGRESS)
+        .order_by("-created_at")
+        .first()
+    )
+    if call is None or (call.metadata or {}).get("thread_message"):
+        return None
+    files = ConversationAttachment.objects.filter(
+        session=session, message_sequence__gte=call.first_sequence or 0
+    )
+    if call.last_sequence is not None:
+        files = files.filter(message_sequence__lte=call.last_sequence)
+    user = session.user
+    return {
+        "text": call.request,
+        "author": (user.get_full_name() or user.get_username()) if user else "",
+        "user_id": session.user_id,
+        "sent_at": call.created_at.isoformat(timespec="seconds"),
+        "source_call": str(call.id),
+        "attachments": [messaging.shared_file(f) for f in files],
+    }
+
+
+@bot_tool(
+    takes_context=True,
+    parameters={
+        "thread": {
+            "type": "string",
+            "description": (
+                'Where it goes: a thread id, "main", a named chat, or "new" for a '
+                "new thread"
+            ),
+        },
+        "bot": {
+            "type": "string",
+            "description": "Which bot: empty for this bot, or a name from the Bots and threads block",
+        },
+        "note": {
+            "type": "string",
+            "description": (
+                "Optional: one or two lines of context the thread lacks. The user's "
+                "words go as they are; don't retell them here."
+            ),
+        },
+        "title": {"type": "string", "description": "Title for a new thread"},
+    },
+    required=["thread"],
+)
+def ergo_thread_forward(
+    ctx: ToolContext, thread: str, bot: str = "", note: str = "", title: str = ""
 ) -> dict:
-    user = ctx.session.user
-    thread = (thread or "main").strip()
-    if _upward_only(ctx, target) and (
-        thread not in ("main", "root") or not _is_main(ctx.session)
-    ):
+    """Hand the user's message (the one you're answering) to the chat or thread
+    that owns that work, word for word with its author, time and files.
+
+    The recipient treats it as the user speaking and answers there; nothing comes
+    back here. Then tell the user in one line where it went.
+    """
+    original = user_message(ctx.session)
+    if original is None:
         msg = (
-            f"{target.name} is your parent bot: only your main chat may message it, "
-            "and only its main chat."
+            "This turn isn't answering a message from the user, so there's nothing "
+            "to forward; use ergo_thread_send for your own request."
         )
         raise ValueError(msg)
-    shared = [
-        messaging.shared_file(find_session_file(ctx.session, ref))
-        for ref in attachments or []
-    ]
+    target = _target(ctx, bot)
+    if _upward_only(ctx, target):
+        msg = f"{target.name} is your parent bot; report to it with ergo_message_up."
+        raise ValueError(msg)
+    thread = (thread or "").strip()
+    if not thread:
+        msg = 'Name the thread: an id, "main", a named chat, or "new".'
+        raise ValueError(msg)
+    recipient = _recipient(
+        ctx, target, thread, title or messaging.snippet(original["text"])[:60]
+    )
+    files = original.pop("attachments")
+    metadata = {
+        "forwarded": {**original, "from_label": messaging.label(ctx.session)},
+        # The recipient answers the user where it is: no reply comes back here.
+        "report": True,
+        **({"note": note.strip()} if note.strip() else {}),
+        **({"attachments": files} if files else {}),
+    }
+    sent = messaging.send(
+        ctx.session,
+        recipient,
+        original["text"],
+        registry=ctx.bot.registry,
+        metadata=metadata,
+    )
+    where = messaging.label(recipient)
+    return {
+        "forwarded_to": where,
+        "thread_id": str(recipient.id),
+        "message_id": str(sent.id),
+        "note": (
+            f"Forwarded verbatim; {where} answers the user there and nothing comes "
+            f"back here. Tell the user in one line: sent to {where}."
+        ),
+        **({"shared_files": [f["filename"] for f in files]} if files else {}),
+    }
+
+
+def _recipient(
+    ctx: ToolContext, target: Bot, thread: str, title: str
+) -> ConversationSession:
+    """The chat ``thread`` names on ``target``: main, a named chat, "new" or an id."""
+    user = ctx.session.user
     if thread in ("main", "root") or thread in target.definition.chats:
         recipient = async_to_sync(target.chat_session)(user, thread)
     elif thread == "new":
@@ -398,7 +499,7 @@ def _send(  # noqa: PLR0913
         recipient = async_to_sync(target.create_session)(
             user,
             parent=ctx.session if target is ctx.bot else None,
-            title=title or messaging.snippet(message)[:60],
+            title=title,
             metadata={
                 "started_by": str(ctx.session.id),
                 "started_by_bot": ctx.bot.name,
@@ -410,6 +511,35 @@ def _send(  # noqa: PLR0913
     if recipient.id == ctx.session.id:
         msg = "That is this chat; send it somewhere else."
         raise ValueError(msg)
+    return recipient
+
+
+def _send(  # noqa: PLR0913
+    ctx: ToolContext,
+    target: Bot,
+    message: str,
+    thread: str = "main",
+    title: str = "",
+    attachments: list[str] | None = None,
+    *,
+    ask: bool = False,
+) -> dict:
+    thread = (thread or "main").strip()
+    if _upward_only(ctx, target) and (
+        thread not in ("main", "root") or not _is_main(ctx.session)
+    ):
+        msg = (
+            f"{target.name} is your parent bot: only your main chat may message it, "
+            "and only its main chat."
+        )
+        raise ValueError(msg)
+    shared = [
+        messaging.shared_file(find_session_file(ctx.session, ref))
+        for ref in attachments or []
+    ]
+    recipient = _recipient(
+        ctx, target, thread, title or messaging.snippet(message)[:60]
+    )
     _refuse_nudge_after_reply(ctx, recipient, message)
     if open_request := (
         ctx.session.sent_thread_messages.filter(
@@ -674,6 +804,7 @@ def orchestrator_toolkit(ctx: ToolContext) -> FunctionToolkit:
         ergo_bot_list,
         ergo_thread_list,
         ergo_thread_send,
+        ergo_thread_forward,
         ergo_thread_stop,
         ergo_thread_resolve,
         ergo_thread_archive,
