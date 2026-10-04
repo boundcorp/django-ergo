@@ -575,7 +575,7 @@ def session_pins(bot: Bot, session) -> list[dict]:
     pins = [
         {
             "kind": "bot_file",
-            "name": relative.rsplit("/", 1)[-1],
+            **pin_label(definition, relative),
             "path": relative,
             "exists": bot_file(bot, relative) is not None,
         }
@@ -585,6 +585,7 @@ def session_pins(bot: Bot, session) -> list[dict]:
         {
             "kind": "file",
             "name": (row.metadata or {}).get("title") or row.filename,
+            "icon": (row.metadata or {}).get("icon") or "",
             "id": str(row.id),
             "filename": row.filename,
         }
@@ -593,6 +594,15 @@ def session_pins(bot: Bot, session) -> list[dict]:
         )
     )
     return pins
+
+
+def pin_label(chat, relative: str) -> dict:
+    """A bot-folder pin's ``name`` (its title, or the file name) and ``icon`` ("" = by file type)."""
+    label = chat.pin_labels.get(relative, {}) if chat else {}
+    return {
+        "name": label.get("title") or relative.rsplit("/", 1)[-1],
+        "icon": label.get("icon", ""),
+    }
 
 
 # -- viewing files ----------------------------------------------------------------------

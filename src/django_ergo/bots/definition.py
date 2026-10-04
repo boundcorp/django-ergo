@@ -9,6 +9,9 @@ bot.yaml::
 
     name: kitchen
     description: Household kitchen manager
+    icon: "🍳"                          # shown before the name in apps (default: its first letter)
+    color: amber                       # a palette name (see COLORS) or a hex like "#f59e0b"
+                                       # (default: one picked from the name)
     instructions: agents.md            # default
     engine:
       type: claude                     # or openai
@@ -29,6 +32,7 @@ bot.yaml::
       main:                            # every user's main chat (always there)
         skills: [orchestration, tandoor]   # loaded from the start (default: orchestration)
         pins: [pages/dashboard.jhtml]      # bot-folder files pinned in this chat (see bots.pages)
+        # or with a title and icon: [{path: pages/dashboard.jhtml, title: Dashboard, icon: "📊"}]
       reports:                         # a named chat: one per user, its own purpose
         description: Weekly analytics
         instructions: Keep each report short.   # added to agents.md in this chat
@@ -77,6 +81,29 @@ from django_ergo.conversation.models import CompactionMode
 from django_ergo.conversation.models import normalize_compaction_mode
 
 CONFIG_FILE = "bot.yaml"
+# Named colors for ``color:`` (Tailwind's palette names; apps map them to a shade).
+COLORS = (
+    "slate",
+    "red",
+    "orange",
+    "amber",
+    "yellow",
+    "lime",
+    "green",
+    "emerald",
+    "teal",
+    "cyan",
+    "sky",
+    "blue",
+    "indigo",
+    "violet",
+    "purple",
+    "fuchsia",
+    "pink",
+    "rose",
+)
+MAX_ICON_LENGTH = 8  # an emoji with modifiers, or a few letters
+HEX_COLOR = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
 DEFAULT_INSTRUCTIONS = "agents.md"
 
 
@@ -105,6 +132,8 @@ class ChatDefinition:
     pins: list[str] = field(
         default_factory=list
     )  # bot-folder files shown pinned in the chat
+    # Titles and icons given for pins, by path: {"title": ..., "icon": ...}.
+    pin_labels: dict[str, dict] = field(default_factory=dict)
 
 
 @dataclass
@@ -112,6 +141,8 @@ class BotDefinition:
     name: str
     root_dir: Path | None = None
     description: str = ""
+    icon: str = ""  # an emoji or a few characters; "" = the app's default
+    color: str = ""  # a COLORS name or a hex color; "" = the app's default
     instructions: str = ""
     engine_type: str = ""
     engine_config: dict = field(default_factory=dict)
@@ -184,6 +215,8 @@ class BotDefinition:
             name=name,
             root_dir=root_dir,
             description=data.get("description", ""),
+            icon=_icon(data.get("icon")),
+            color=_color(data.get("color")),
             instructions=_instructions(data, root_dir),
             engine_type=engine.get("type", ""),
             engine_config=dict(engine.get("config") or {}),
@@ -323,12 +356,45 @@ def _schedules(items: list) -> list:
     return found
 
 
+def _icon(value: Any) -> str:
+    icon = str(value or "").strip()
+    if len(icon) > MAX_ICON_LENGTH:
+        msg = f"icon: {value!r} is too long; use an emoji or a few characters"
+        raise BotDefinitionError(msg)
+    return icon
+
+
+def _color(value: Any) -> str:
+    color = str(value or "").strip()
+    if color and color.lower() not in COLORS and not HEX_COLOR.match(color):
+        msg = f"color: {value!r} must be a hex color like '#f59e0b' or one of {', '.join(COLORS)}"
+        raise BotDefinitionError(msg)
+    return color.lower() if color.lower() in COLORS else color
+
+
 def _pin(chat: str, value: Any) -> str:
+    if isinstance(value, dict):
+        value = value.get("path", "")
     pin = str(value).strip().lstrip("./")
     if not pin or pin.startswith("/") or ".." in pin.split("/"):
         msg = f"chats: {chat} pins {value!r}; pins are paths inside the bot folder"
         raise BotDefinitionError(msg)
     return pin
+
+
+def _pin_labels(chat: str, values: list) -> dict[str, dict]:
+    """The ``title`` and ``icon`` of pins written as mappings, by path."""
+    labels = {}
+    for value in values:
+        if not isinstance(value, dict):
+            continue
+        label = {
+            "title": str(value.get("title") or "").strip(),
+            "icon": _icon(value.get("icon")),
+        }
+        if any(label.values()):
+            labels[_pin(chat, value)] = label
+    return labels
 
 
 def _chats(data: dict, *, orchestration: bool) -> dict[str, ChatDefinition]:
@@ -348,5 +414,6 @@ def _chats(data: dict, *, orchestration: bool) -> dict[str, ChatDefinition]:
             instructions=str(config.get("instructions") or ""),
             skills=[str(s) for s in config.get("skills", default_skills) or []],
             pins=[_pin(name, p) for p in config.get("pins") or []],
+            pin_labels=_pin_labels(name, config.get("pins") or []),
         )
     return chats
