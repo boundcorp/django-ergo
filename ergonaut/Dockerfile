@@ -179,6 +179,11 @@ ENV PATH=/app/.venv/bin:$PATH
 
 RUN python manage.py collectstatic --noinput
 
+# The django-ergo commit this image was built from; `ergonaut upgrade` compares
+# it with the newest release. CI passes the pushed commit.
+ARG ERGONAUT_VERSION=""
+ENV ERGONAUT_VERSION=${ERGONAUT_VERSION}
+
 #
 # All-in-one Stage: `ergonaut up` runs Postgres (pgserver), Redis and Garage
 # inside the container unless DATABASE_URL, CELERY_BROKER_URL or

@@ -47,3 +47,22 @@ def test_returns_when_idle_and_fails_after_the_timeout(monkeypatch):
     monkeypatch.setattr(wait_idle, "running_sessions", lambda: ["abc"])
     with pytest.raises(SystemExit):
         call_command("wait_idle", timeout=0, poll=0)
+
+
+@pytest.mark.django_db
+def test_active_workers_block_unless_ignored(cook, monkeypatch):  # noqa: F811
+    from django_ergo.conversation.models import Worker
+
+    session = ConversationSession.objects.create(user=cook, bot_name="kitchen")
+    monkeypatch.setattr(wait_idle, "running_sessions", lambda: [])
+    worker = Worker.objects.create(session=session, bot_name="kitchen", title="Build", function="task:build")
+
+    assert wait_idle.busy() == ["worker kitchen: Build"]
+    assert wait_idle.busy(workers=False) == []
+    with pytest.raises(SystemExit):
+        call_command("wait_idle", timeout=0, poll=0)
+    call_command("wait_idle", timeout=0, quiet_for=0, poll=0, ignore_workers=True)
+
+    worker.status = "completed"
+    worker.save()
+    call_command("wait_idle", quiet_for=0, poll=0)

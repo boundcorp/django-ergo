@@ -36,7 +36,8 @@ Telegram plugin. `people:` may also sit in a bot's own bot.yaml.
 | `ergonaut check` | Load the bots; list skills, tools, plugins, people and missing secrets |
 | `ergonaut chat BOT [--user NAME]` | Chat with a bot's main chat in the terminal |
 | `ergonaut manage ...` | Any `manage.py` command, e.g. `ergo_bot_makemigrations`, `ergo_bot_preview` |
-| `ergonaut manage wait_idle` | Wait until no bot turn is running, before a restart |
+| `ergonaut manage wait_idle` | Wait until no bot turn or worker is running, before a restart |
+| `ergonaut upgrade [--check]` | Upgrade to the newest GitHub release once idle (see [Upgrading](#upgrading)) |
 
 Commands other than `up` find a running `ergonaut up` on the same machine
 (through `DATA_DIR/up.json`) and use its database, broker and storage, so
@@ -85,6 +86,7 @@ Data lives under `DATA_DIR` (default `~/.ergonaut`, `/data` in the image).
 | `ERGONAUT_CSRF_TRUSTED_ORIGINS` | `BASE_URL` | extra origins (comma-separated) allowed to send writes, outside `DEBUG` |
 | `TELEMETRY_METRICS_TOKEN` | unset | outside `DEBUG`, `/metrics/` answers only with `Authorization: Bearer <token>` or an admin's session |
 | `SENTRY_BACKEND_URL` | unset | Sentry DSN |
+| `ERGONAUT_UPGRADER`, `ERGONAUT_AUTO_UPGRADE_SECONDS` | unset | how and how often to upgrade to new releases; see [Upgrading](#upgrading) |
 
 Which models chats may use comes from a `providers.yaml` at the top of the
 bot path; see [Models and providers](building-bots.md#models-and-providers).
@@ -177,10 +179,121 @@ every chat. Wait for idle first:
 ergonaut manage wait_idle --quiet-for 30 && systemctl restart ergonaut   # or your run script
 ```
 
-`wait_idle` exits once no turn is running (`--quiet-for` waits until none
-has run for that many seconds in a row), or fails after `--timeout`
-(30 minutes by default). Workers survive restarts (beat
-resumes them), and thread messages that were waiting are redelivered.
+`wait_idle` exits once no turn is running and no worker is queued or
+running (`--quiet-for` waits until nothing has run for that many seconds in
+a row), or fails after `--timeout` (30 minutes by default).
+`--ignore-workers` waits for turns only: a polling worker survives a
+restart (beat resumes it), but one in the middle of a step loses that step.
+Thread messages that were waiting are redelivered.
+
+## Upgrading
+
+Ergonaut can upgrade itself when a new release of django-ergo is published
+on GitHub. The steps are fixed and only the last one is pluggable:
+
+1. Find the running commit: `ERGONAUT_VERSION` (the image sets it to the
+   commit it was built from), else the commit pip recorded for a `git+`
+   install, else the HEAD of the checkout Ergonaut runs from.
+2. Find the newest release (not a draft or prerelease) and ask GitHub
+   whether it is ahead of the running commit. An instance that is up to
+   date, or runs a newer commit, is left alone.
+3. Wait until no turn or worker is running (the `wait_idle` gate).
+4. Hand the release to the upgrader.
+
+```bash
+ergonaut upgrade --check      # running commit, latest release, whether it's newer
+ergonaut upgrade              # wait for idle (--timeout), then upgrade
+ergonaut upgrade --status     # the last attempt (DATA_DIR/upgrade.json)
+```
+
+With `ERGONAUT_AUTO_UPGRADE_SECONDS` set (say `900`), beat runs the same
+check on that interval. A busy instance waits up to a minute and is checked
+again next time; a release whose upgrade failed is retried after six hours
+(or with `ergonaut upgrade --force`).
+
+| Variable | Default | What it does |
+| --- | --- | --- |
+| `ERGONAUT_UPGRADER` | unset (no upgrades) | `systemd`, `command`, or your own upgrader as `package.module:Class` or `/path/to/file.py:Class` |
+| `ERGONAUT_AUTO_UPGRADE_SECONDS` | unset | check for a new release on this interval (needs beat) |
+| `ERGONAUT_UPGRADE_REPO` | `boundcorp/django-ergo` | where releases come from (a fork) |
+| `ERGONAUT_UPGRADE_CHANNEL` | `releases` | `releases`, or `branch:main` to follow a branch's head |
+| `GITHUB_TOKEN` or `GH_TOKEN` | unset | GitHub API token; without one, 60 checks an hour |
+
+### systemd
+
+For Ergonaut run from a git checkout under systemd, for example this unit
+running `ergonaut up`:
+
+```ini
+# /etc/systemd/system/ergonaut.service
+[Service]
+User=ergonaut
+WorkingDirectory=/srv/django-ergo/ergonaut
+EnvironmentFile=/etc/ergonaut.env
+ExecStart=/srv/django-ergo/ergonaut/.venv/bin/ergonaut up
+Restart=always
+KillMode=mixed
+TimeoutStopSec=60
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+ERGONAUT_UPGRADER=systemd
+ERGONAUT_AUTO_UPGRADE_SECONDS=900
+```
+
+The `systemd` upgrader checks out the release's commit (refusing if the
+checkout has local changes), reinstalls it into the running virtualenv
+(`uv pip` or `pip`, `-e .[legacy,bots] -e ergonaut`), rebuilds the frontend
+with `npm ci && npm run build`, and runs `systemctl --no-block restart
+ergonaut`. If the install fails, the checkout goes back to the old commit.
+`ergonaut up` and `ergonaut web` run the migrations as they start.
+
+| Variable | Default | What it does |
+| --- | --- | --- |
+| `ERGONAUT_SYSTEMD_UNITS` | `ergonaut` | units to restart (space-separated, or a target) |
+| `ERGONAUT_SYSTEMD_USER` | unset | `1` for user units (`systemctl --user`) |
+| `ERGONAUT_SYSTEMD_RESTART` | unset | your own restart command instead, e.g. `sudo systemctl restart ergonaut` |
+| `ERGONAUT_UPGRADE_CHECKOUT` | the checkout Ergonaut runs from | the django-ergo checkout to move |
+| `ERGONAUT_UPGRADE_EXTRAS` | `legacy,bots` | django-ergo extras to install |
+| `ERGONAUT_UPGRADE_FRONTEND` | `1` | `0` skips the frontend build |
+
+A system unit's own user can't restart it without permission: run it as a
+user unit, or allow the restart with a sudoers line or a polkit rule and set
+`ERGONAUT_SYSTEMD_RESTART`.
+
+### Your own upgrader
+
+`command` runs `ERGONAUT_UPGRADE_COMMAND` in a shell with
+`ERGONAUT_UPGRADE_TAG`, `ERGONAUT_UPGRADE_SHA`, `ERGONAUT_UPGRADE_REPO` and
+`ERGONAUT_UPGRADE_URL` set. For more, subclass `Upgrader`, for example in
+your bot repo, to roll out a Kubernetes deployment:
+
+```python
+# deploy/upgrader.py; ERGONAUT_UPGRADER=/bot/deploy/upgrader.py:KubeUpgrader
+import subprocess
+
+from ergonaut.upgrades import Release, Upgrader
+
+
+class KubeUpgrader(Upgrader):
+    name = "kubernetes"
+
+    def upgrade(self, release: Release) -> str:
+        image = f"ghcr.io/you/ergonaut:sha-{release.sha}"
+        for deployment in ["ergonaut-web", "ergonaut-worker", "ergonaut-beat", "ergonaut-bots"]:
+            subprocess.run(["kubectl", "set", "image", f"deployment/{deployment}", f"*={image}"], check=True)
+        return f"rolling out {release.tag}"
+```
+
+`upgrade(release)` runs after the idle gate, in a Celery worker or in
+`ergonaut upgrade`, and may restart the process it runs in. Return a line
+saying what it did; raise `NotReady` when the release can't be installed
+yet (its image isn't published), so the next check tries again; raise
+anything else to report a failure. Override `current_version()`
+if the running commit is known some other way (the deployed image tag).
 
 ## Development
 
@@ -230,7 +343,7 @@ Run the `release` image as separate workloads with external Postgres
 
 | Workload | Command | Replicas |
 | --- | --- | --- |
-| web | `ergonaut web` (or `infra/prod/start-uvicorn.sh`) | any |
+| web | `ergonaut web` (or `infra/prod/start-uvicorn.sh`) | any (two or more for rolling updates) |
 | worker | `ergonaut worker -Q celery,bot_tasks` (or `infra/prod/start-celery-worker.sh`) | any |
 | beat | `ergonaut beat` | exactly one |
 | bots | `ergonaut bots` | exactly one |
@@ -240,3 +353,11 @@ Mount or check out the bot repo at `ERGONAUT_BOTS` in every workload, run
 Django's own migrations), and set `ERGONAUT_PUBLIC_URL` so channels use
 webhooks. With `ERGONAUT_BOTS_PULL_SECONDS`, each workload's checkout must
 be able to pull.
+
+To keep the web app answering through an upgrade, run two or more web
+replicas and roll them one at a time (on Kubernetes, `maxUnavailable: 0`,
+`maxSurge: 1`) with a readiness check on `GET /api/healthz`, so the old pods
+serve until a new one is ready. Workers end the turns they are running
+when they stop, so gate the rollout with the upgrade's idle check (above),
+or `ergonaut manage wait_idle` in a pre-stop hook with a long enough grace
+period.
