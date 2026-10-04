@@ -7,9 +7,15 @@ A session's ``compaction_mode`` decides when to compact:
 - ``context_size``: the last model call's prompt plus output exceeded
   ``max_context_tokens``. Older messages are folded, keeping ``keep_recent``.
 - ``rolling``: summaries roll up in batches. Once more than
-  ``keep_recent + batch`` messages sit past the last summary, everything but
-  the latest ``keep_recent`` is folded into a new summary. (Formerly named
-  ``stream``; that value is still accepted and read as ``rolling``.)
+  ``keep_recent + batch`` messages sit past the last summary and the last
+  model call's prompt reached ``min_tokens``, everything but the latest
+  ``keep_recent`` is folded into a new summary. (Formerly named ``stream``;
+  that value is still accepted and read as ``rolling``.)
+
+Every compaction rewrites the start of the prompt, so the next call pays for
+a fresh prompt-cache write instead of cheap cached reads. ``min_tokens`` keeps
+rolling compaction from firing on small contexts, where that costs more than
+it saves (tool-heavy turns add many messages but few tokens).
 
 Compaction never deletes messages. ``ConversationCompaction`` records the
 summary and the sequence it covers, and engines substitute it when they
@@ -55,7 +61,7 @@ log = logging.getLogger(__name__)
 DEFAULT_CONFIG = {
     "time": {"idle_seconds": 3600, "keep_recent": 0},
     "context_size": {"max_context_tokens": 100_000, "keep_recent": 6},
-    "rolling": {"keep_recent": 15, "batch": 10},
+    "rolling": {"keep_recent": 15, "batch": 10, "min_tokens": 80_000},
 }
 DEFAULT_CONFIG["stream"] = DEFAULT_CONFIG["rolling"]  # deprecated alias
 
@@ -269,12 +275,19 @@ async def decide_compaction(  # noqa: C901, PLR0911
 
     if mode == CompactionMode.ROLLING:
         count = await rows.acount()
-        if count > config["keep_recent"] + config["batch"]:
-            return CompactionDecision(
-                reason=f"{count} messages past the last summary",
-                keep_recent=config["keep_recent"],
-            )
-        return None
+        if count <= config["keep_recent"] + config["batch"]:
+            return None
+        size = 0
+        if config["min_tokens"]:
+            last = await rows.filter(role="assistant").order_by("-sequence").afirst()
+            size = _prompt_tokens(last) if last else 0
+            if size < config["min_tokens"]:
+                return None
+        return CompactionDecision(
+            reason=f"{count} messages past the last summary"
+            + (f", context {size} tokens" if size else ""),
+            keep_recent=config["keep_recent"],
+        )
 
     msg = f"Unknown compaction mode: {mode}"
     raise ValueError(msg)

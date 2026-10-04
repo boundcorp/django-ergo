@@ -3,6 +3,7 @@
 
 @theme {
   --font-sans: Inter, ui-sans-serif, system-ui, sans-serif;
+  --font-display: 'Space Grotesk', ui-sans-serif, system-ui, sans-serif;
   --radius-control: 8px;
   --radius-card: 12px;
   --radius-panel: 16px;
@@ -59,20 +60,20 @@ body {
 
 .dark {
   color-scheme: dark;
-  --semantic-canvas: #101723;
-  --semantic-surface: #1b2534;
-  --semantic-raised: #253246;
-  --semantic-sidebar: #202a3a;
-  --semantic-stroke: #3b4b62;
-  --semantic-ink: #f5f7fb;
-  --semantic-muted: #b9c5d8;
-  --semantic-accent: #aaa4ff;
-  --semantic-accent-soft: #c4beff;
-  --semantic-mint: #45d6b5;
-  --semantic-teal: #79ddcb;
+  --semantic-canvas: #090b12;
+  --semantic-surface: #111522;
+  --semantic-raised: #191f30;
+  --semantic-sidebar: #111522;
+  --semantic-stroke: #2a3650;
+  --semantic-ink: #f2f4ff;
+  --semantic-muted: #9ba8c7;
+  --semantic-accent: #a879ff;
+  --semantic-accent-soft: #caaeff;
+  --semantic-mint: #61f4e2;
+  --semantic-teal: #61f4e2;
   --semantic-success: #72d9ad;
   --semantic-warning: #ffd08a;
-  --semantic-danger: #ff98a5;
+  --semantic-danger: #ff648a;
   --semantic-indigo-tint: #30305a;
   --semantic-teal-tint: #173e43;
   --semantic-amber-tint: #493b29;
@@ -133,13 +134,13 @@ body {
 }
 
 .app-shell {
-  gap: 16px;
+  gap: 24px;
   padding: 16px;
   background: var(--color-canvas);
 }
 .app-sidebar {
   width: 320px;
-  border: 0;
+  border: 1px solid var(--color-stroke);
   border-radius: var(--radius-panel);
   background: var(--color-sidebar);
 }
@@ -149,9 +150,9 @@ body {
   min-width: 0;
 }
 .app-topbar {
-  min-height: 44px;
-  margin-bottom: 12px;
-  padding: 6px 16px;
+  min-height: 80px;
+  margin-bottom: 16px;
+  padding: 12px 24px;
   border: 1px solid var(--color-stroke);
   border-radius: var(--radius-panel);
   background: var(--color-surface);
@@ -159,17 +160,19 @@ body {
 .page-content {
   width: min(100%, 1120px);
   margin: 0 auto;
-  padding: 8px 24px 40px;
+  padding: 8px 32px 48px;
 }
 .page-title {
-  font-size: 24px;
-  line-height: 1.333;
+  font-family: var(--font-display);
+  font-size: clamp(28px, 3vw, 40px);
+  line-height: 1.1;
   font-weight: 700;
+  letter-spacing: -0.03em;
 }
 .page-lede {
   color: var(--color-muted);
-  font-size: 14px;
-  line-height: 1.429;
+  font-size: 16px;
+  line-height: 1.5;
 }
 .surface-card {
   border: 1px solid var(--color-stroke);
@@ -186,7 +189,7 @@ body {
 }
 .dark .data-scroll thead {
   background: var(--color-raised);
-  color: var(--color-muted);
+  color: var(--color-mint);
   text-transform: uppercase;
 }
 .data-scroll th,
@@ -198,6 +201,60 @@ body {
 }
 .dark .data-scroll tbody tr:hover {
   background: var(--color-raised);
+}
+.eyebrow {
+  color: var(--color-mint);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.topbar-brand,
+.sidebar-brand {
+  color: var(--color-mint);
+  font-family: var(--font-display);
+  font-size: 24px;
+  font-weight: 700;
+}
+.sidebar-brand {
+  font-size: 20px;
+}
+.nav-toggle {
+  display: none;
+  align-items: center;
+  padding: 6px 12px;
+  border: 1px solid var(--color-stroke);
+  border-radius: var(--radius-control);
+  background: var(--color-raised);
+  color: var(--color-ink);
+  font-size: 13px;
+  font-weight: 600;
+}
+.topbar-crumb {
+  color: var(--color-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+.status-active,
+.status-closed {
+  font-size: 12px;
+  font-weight: 600;
+}
+.status-active::before,
+.status-closed::before {
+  content: '●';
+  margin-right: 6px;
+}
+.status-active {
+  color: var(--color-success);
+}
+.status-closed {
+  color: var(--color-muted);
+}
+.dark .status-closed {
+  /* Neon / Acid Lime: the handoff's closed status colour. */
+  color: #d8ff62;
 }
 
 @media (max-width: 900px) {
@@ -215,20 +272,34 @@ body {
     padding: 8px;
   }
   .app-sidebar {
-    width: 100%;
-    max-height: 176px;
+    display: none;
+  }
+  .app-sidebar[data-open='true'] {
+    display: block;
+    position: fixed;
+    z-index: 40;
+    inset: 72px 8px 8px 8px;
+    width: auto;
     overflow: auto;
   }
-  .app-sidebar nav {
-    padding: 8px;
-    gap: 4px;
+  .nav-toggle {
+    display: inline-flex;
   }
   .app-main {
     min-height: 0;
+    flex: 1;
   }
   .app-topbar {
-    min-height: 40px;
-    padding: 4px 12px;
+    min-height: 56px;
+    margin-bottom: 8px;
+    padding: 8px 12px;
+    gap: 12px;
+  }
+  .topbar-brand {
+    font-size: 20px;
+  }
+  .page-content {
+    padding-inline: 12px;
   }
 }
 

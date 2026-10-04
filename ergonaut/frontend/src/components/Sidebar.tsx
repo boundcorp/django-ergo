@@ -153,8 +153,8 @@ export function Sidebar({
 
   return (
     <nav className="flex h-full flex-col gap-5 overflow-y-auto p-4">
-      <Link to="/" className="px-2 py-3 text-lg font-bold tracking-tight">
-        Ergonaut
+      <Link to="/" className="sidebar-brand px-2 py-3">
+        ERGONAUT_
       </Link>
       {botErrors.map(e => (
         <div
@@ -249,10 +249,10 @@ export function Sidebar({
       {!bots.length && <p className="px-2 text-sm text-zinc-500">No bots are loaded. Set ERGONAUT_BOTS and restart.</p>}
       <div className="mt-auto flex flex-col gap-1 border-t border-stroke pt-4">
         <Link to="/sessions" className="rounded-lg px-3 py-2 text-sm hover:bg-raised">
-          🔎 All sessions
+          History
         </Link>
         <Link to="/costs" className="rounded-lg px-3 py-2 text-sm hover:bg-raised">
-          💲 Costs
+          Costs
         </Link>
       </div>
     </nav>

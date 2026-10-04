@@ -3,6 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
+import yaml
 
 from django_ergo.bots.definition import BotDefinition
 from django_ergo.bots.providers import Providers
@@ -101,3 +102,28 @@ def test_bots_and_chats_pick_models_from_providers(tmp_path, monkeypatch):
     monkeypatch.delenv("TEST_OPENAI_KEY")
     with pytest.raises(RuntimeError, match="TEST_OPENAI_KEY"):
         bot.engine_spec()
+
+
+def test_chats_keep_their_engine_when_the_bot_moves_to_another(tmp_path, monkeypatch):
+    monkeypatch.setenv("TEST_OPENAI_KEY", "sk-test")
+    monkeypatch.setenv("TEST_ANTHROPIC_KEY", "sk-ant")
+    found = Providers.from_dict(
+        {**yaml.safe_load(PROVIDERS), "default": "anthropic/claude-opus-5-5"}
+    )
+    bot = bot_with(found)
+    assert bot.engine_spec().engine_type == "claude"  # new chats
+
+    # An existing chat stored on OpenAI stays there, on an available OpenAI model.
+    old = SimpleNamespace(engine_type="openai", metadata={})
+    spec = bot.engine_spec(old)
+    assert (spec.engine_type, spec.config["model"]) == ("openai", "gpt-6-luna")
+    # A chat on Claude, or one that picked a model, is unchanged.
+    assert (
+        bot.engine_spec(SimpleNamespace(engine_type="claude", metadata={})).engine_type
+        == "claude"
+    )
+    picked = SimpleNamespace(
+        engine_type="openai", metadata={"model": "openai/gpt-6-sol"}
+    )
+    assert bot.engine_spec(picked).config["model"] == "gpt-6-sol"
+    assert found.model_on("gemini") == ""

@@ -55,7 +55,8 @@ def reopen(session: ConversationSession) -> bool:
     session.metadata = {
         k: v
         for k, v in (session.metadata or {}).items()
-        if k not in ("archived_at", "archived_reason")
+        if k
+        not in ("archived_at", "archived_reason", "resolved_by", "resolved_summary")
     }
     session.save(update_fields=["status", "metadata", "updated_at"])
     return True

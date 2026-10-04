@@ -193,7 +193,17 @@ loads the same way (`django_ergo.bots.skillset`):
   module docstring is the description);
 - a plugin that adds tools (`kb`, `config_repo`, `orca`, `bash`,
   `attachments`, ...) and each `toolkits:` factory;
-- built-ins: `history` (always loaded) and `orchestration`.
+- built-ins: `history` (always loaded), `workers`, `orchestration`, and
+  `introspection` for bots loaded from a folder.
+
+`introspection` is read-only and needs no plugin, so every bot can see what
+it's made of, whether or not it can change its repository (that's
+`bot_management`): `ergo_self_overview` (folder, model, skills and their
+sources, plugins with secret-looking config hidden, tables, schedules, chats,
+sub-bots), `ergo_self_files` and `ergo_self_read` (files in the bot folder, by
+line range; `ergo:` paths read Ergo's own source, e.g.
+`ergo:plugins/attachments.py`). Hidden files such as `.env` are never listed
+or read.
 
 ```markdown
 ---
@@ -435,7 +445,7 @@ user. The `orchestration` skill (loaded in main by default) has:
 | `ergo_thread_list` | A bot's main chat, named chats and threads with the user (default: this bot) |
 | `ergo_thread_send` | Message a bot's `main` chat, a named chat, a thread id, or a `new` thread; returns at once |
 | `ergo_thread_stop` | Stop the running turn of a thread this bot started (or one of its own) and cancel what it queued there |
-| `ergo_thread_archive` | Archive one of this bot's threads, or a sub-bot thread it started; its history stays readable |
+| `ergo_thread_resolve` | Resolve a finished thread (this one, one of this bot's, or another bot's it started), with a one-line `summary`; refused while workers run, a request is open, an approval is pending, or its last reply asks the user something. History stays readable; a new message reopens it. `ergo_thread_archive` is a deprecated alias |
 
 Messages between sessions are asynchronous, like thread-to-thread
 delegation in Codex (`django_ergo.bots.messaging`). `ergo_thread_send`
@@ -473,6 +483,12 @@ snippets first, then drop out, and the block says how many it left out
 (`ergo_thread_list` and the history tools still reach them). With seven bots
 and nine open chats it is about 2.4k tokens.
 
+Every bot chat also gets a short **This chat** block saying which chat it is:
+"You are devbox · Main, the main chat", or for a thread "You are devbox ·
+Deploy, a thread started by boundcorp · Main. Do the work here; … your final
+reply goes back to it automatically" (`orchestrator.chat_identity`). Shared
+agents.md instructions can then say what main does and what a thread does.
+
 Who may message whom:
 
 - **Upward, always.** Any chat may message its own bot's main chat, and a
@@ -490,12 +506,25 @@ Who may message whom:
   bot started records `started_by` (the sending chat), `started_by_bot` and
   `started_by_label` in its metadata; Ergonaut links back to that chat from
   the thread's header, and `ergo_thread_list` shows it.
+- **Resolving.** The orchestration skill's instructions tell every
+  orchestrator when to resolve: when the work is finished (PR merged or
+  closed, answer delivered, the user wrapped it up), never while it waits on
+  the user, a worker, a reply or an approval, or has an open PR. The Bots and
+  threads block marks quiet threads with nothing open as "ready to resolve",
+  and a thread resolves itself after its final report. A resolved thread keeps
+  `resolved_by` and `resolved_summary` in its metadata until it reopens.
+- **Reports upward get no reply.** A thread's message to its own main chat,
+  or a main chat's to its parent's, is a one-way report: the recipient's turn
+  starts with `[Report from …]` and its reply isn't sent back, so a status
+  update doesn't cost the sender another turn for an acknowledgement. Pass
+  `ask: true` (to `ergo_thread_send` or `ergo_message_up`) when an answer is
+  needed.
 - **No nudges.** A chat can't send a second request to a chat while its
   earlier one there is still open, and in the turn that handles a chat's
   reply it can't send that chat a short follow-up ("please continue"):
   under 400 characters is refused unless the reply asked a question. A
   complete new request still goes through.
-- **Managing what it started.** `ergo_thread_stop` and `ergo_thread_archive`
+- **Managing what it started.** `ergo_thread_stop` and `ergo_thread_resolve`
   (with `bot`) work on threads of other bots that a chat of this bot
   started. Stopping a running turn goes through
   `DJANGO_ERGO["TURN_STOPPER"]` (`callable(session_id) -> bool`; Ergonaut
@@ -703,6 +732,36 @@ else, such as `worktree create`, `terminal send` or `orchestration
 worker-start`, and waits for approval unless `approve_changes: false`.
 Arguments are an argv list, never a shell string, and `--json` is added for
 the bot. With `environment` set, the bot can't point a call elsewhere.
+
+### kubectl
+
+```yaml
+- name: kubectl
+  clusters:
+    cluster-name:
+      kubeconfig: /mounted/kubeconfig
+      namespace: default       # optional default for calls without -n/--namespace
+  approve: true                # required; every kubectl_run call waits for approval
+  timeout: 120
+  root_only: true
+```
+
+Runs the `kubectl` binary only against named clusters configured in the bot
+file. `kubectl_read(cluster, args)` needs no approval, but permits only
+`get`, `describe`, `logs`, `top`, `events`, `explain`, `api-resources`,
+`version`, and `auth can-i`; aliases and packed shell-style arguments are not
+accepted. Every `kubectl_run(cluster, args)` call needs individual approval;
+`approve: false` is rejected. Before approval, `apply`, `patch`, `delete`,
+`scale`, `rollout`, `label`, `annotate`, and `create` first run against the
+selected cluster with `--dry-run=server`; `apply` and `patch` also run
+`kubectl diff`. The approval request shows bounded, redacted output. `exec`
+and `rollout restart`, `undo`, or `status` explicitly state that their preview
+is skipped because Kubernetes has no safe cluster-state preview for them.
+Arguments are always an argv list. The plugin pins the selected cluster's
+kubeconfig and rejects flags that could change the kubeconfig, context, server,
+or identity. It redacts structured `data`, `stringData`, and credential-shaped
+output and refuses `get secret` custom formats, so Secret values are never
+returned.
 
 ### bash
 

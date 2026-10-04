@@ -10,7 +10,7 @@ checks the policy and, when it applies, folds older messages into a summary.
 | `none` | never | |
 | `time` | the last message is older than `idle_seconds` | `idle_seconds=3600`, `keep_recent=0` |
 | `context_size` | the last model call's prompt plus output exceeds `max_context_tokens` (cached tokens count) | `max_context_tokens=100000`, `keep_recent=6` |
-| `rolling` | more than `keep_recent + batch` messages sit past the last summary | `keep_recent=15`, `batch=10` |
+| `rolling` | more than `keep_recent + batch` messages sit past the last summary and the last model call's prompt plus output reached `min_tokens` (cached tokens count) | `keep_recent=15`, `batch=10`, `min_tokens=80000` |
 
 `rolling` was called `stream` before; `stream` is still accepted (in bot.yaml
 and on stored sessions) and read as `rolling`. Don't confuse it with window
@@ -20,6 +20,13 @@ turn instead of summarizing.
 `keep_recent` counts stored engine messages, and tool calls and tool results
 count as messages. The cut always moves back to a user message that starts a
 turn, so a tool call is never separated from its result.
+
+Each compaction changes the start of the prompt, so the next model call
+writes a fresh prompt cache (billed near full input price) instead of reading
+the cached prefix cheaply. On a small context that costs more than the
+summary saves, and a tool-heavy turn adds many messages but few tokens, so
+`rolling` waits for `min_tokens` too. Set `min_tokens: 0` to compact on
+message count alone.
 
 ## What happens on compaction
 

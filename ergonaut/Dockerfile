@@ -111,6 +111,66 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpng-dev \
     && rm -rf /var/lib/apt/lists/*
 
+# Agent toolchain: bots shell out to git/ssh/gh, kubectl, the Claude Code and omp
+# CLIs, and the Orca CLI. Installed here so both `release` and `aio` have it.
+ARG ORCA_VERSION=1.4.180
+ARG ORCA_LINUX_APPIMAGE_SHA256=af3b6e6a67fcc3cd034ca469ff8ee1d224b1a6e2df6215fd8452afd0fd8e92ab
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
+    openssh-client \
+    ca-certificates \
+    gnupg \
+    kubernetes-client \
+    && mkdir -p -m 755 /etc/apt/keyrings \
+    && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+        -o /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+    && chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+        > /etc/apt/sources.list.d/github-cli.list \
+    && apt-get update && apt-get install -y --no-install-recommends gh \
+    && rm -rf /var/lib/apt/lists/*
+
+# omp runs on Bun.
+RUN npm install -g bun @anthropic-ai/claude-code @oh-my-pi/pi-coding-agent \
+    && npm cache clean --force
+
+# Orca: pinned Linux AppImage, checksum verified before extraction. Extracted
+# (no FUSE needed) and exposed through its bundled CLI. Libraries are the
+# Electron runtime dependencies of the extracted app.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgtk-3-0 \
+    libnss3 \
+    libnspr4 \
+    libatk1.0-0 \
+    libatk-bridge2.0-0 \
+    libatspi2.0-0 \
+    libcups2 \
+    libdrm2 \
+    libgbm1 \
+    libxkbcommon0 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxfixes3 \
+    libxrandr2 \
+    libpango-1.0-0 \
+    libcairo2 \
+    libasound2 \
+    libpulse0 \
+    libsndfile1 \
+    xvfb \
+    && rm -rf /var/lib/apt/lists/*
+RUN curl -fsSL \
+        "https://github.com/stablyai/orca/releases/download/v${ORCA_VERSION}/orca-linux.AppImage" \
+        -o /tmp/orca.AppImage \
+    && echo "${ORCA_LINUX_APPIMAGE_SHA256}  /tmp/orca.AppImage" | sha256sum --check \
+    && chmod 0755 /tmp/orca.AppImage \
+    && cd /tmp && ./orca.AppImage --appimage-extract >/dev/null \
+    && mv /tmp/squashfs-root /opt/orca \
+    && chmod -R a+rX /opt/orca \
+    && rm -f /tmp/orca.AppImage \
+    && ln -s /opt/orca/resources/bin/orca-ide /usr/local/bin/orca
+
 COPY --from=builder /app /app
 WORKDIR /app
 
