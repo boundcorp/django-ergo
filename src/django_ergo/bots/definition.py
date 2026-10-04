@@ -56,6 +56,7 @@ bot.yaml::
         token_env: KITCHEN_TELEGRAM_TOKEN
     schedules:                         # see django_ergo.bots.schedules
       - {name: weekly-plan, cron: "0 17 * * sun", message: Plan next week's dinners}
+    pull_requests: [boundcorp/ergo-bots]   # repos whose open PRs orchestrating chats see (gh CLI)
     permissions:
       call_bots: [sysadmin]            # other bots this bot may message
       users: [lee]                     # who may use it in apps like Ergonaut (default: everyone)
@@ -162,6 +163,7 @@ class BotDefinition:
     toolkit_factories: list[str] = field(default_factory=list)
     plugins: list[PluginSpec] = field(default_factory=list)
     call_bots: list[str] = field(default_factory=list)
+    pull_requests: list[str] = field(default_factory=list)
     allowed_users: list[str] = field(default_factory=list)  # empty: everyone
     schedules: list = field(default_factory=list)  # bots.schedules.Schedule
     chats: dict[str, ChatDefinition] = field(default_factory=dict)  # main + named
@@ -237,6 +239,7 @@ class BotDefinition:
             toolkit_factories=list(data.get("toolkits") or []),
             plugins=[_plugin(spec) for spec in data.get("plugins") or []],
             call_bots=list(_mapping(data, "permissions").get("call_bots") or []),
+            pull_requests=[str(r) for r in data.get("pull_requests") or []],
             allowed_users=[
                 str(u) for u in _mapping(data, "permissions").get("users") or []
             ],

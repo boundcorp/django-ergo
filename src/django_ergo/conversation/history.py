@@ -361,17 +361,21 @@ class SessionSource(MessageSource):
         *,
         first_line: int | None = None,
         before_line: int | None = None,
+        last_rows: int | None = None,
     ):
         super().__init__()
         self.session = session
         self.first_line = first_line
         self.before_line = before_line
+        self.last_rows = last_rows  # read only the latest rows (cheap previews)
 
     def _window(self, rows):
         if self.first_line is not None:
             rows = rows.filter(sequence__gte=self.first_line)
         if self.before_line is not None:
             rows = rows.filter(sequence__lt=self.before_line)
+        if self.last_rows is not None:
+            rows = reversed(list(rows.order_by("-sequence")[: self.last_rows]))
         return rows
 
     @property
@@ -410,8 +414,8 @@ class SessionSource(MessageSource):
     def _claude_rows(self) -> list[HistoryMessage]:
         from django_ergo.conversation.engines.claude_api import claude_message_dict
 
-        rows = self._window(self.session.claude_messages).prefetch_related(
-            "content_blocks"
+        rows = self._window(
+            self.session.claude_messages.prefetch_related("content_blocks")
         )
         return [
             HistoryMessage(

@@ -681,7 +681,7 @@ async def test_messages_reach_permitted_bots_only(tmp_path, thread_messages):
     root = await chief.root_session(user)
     await chief.ask(root, "How is the server?")
     first = engine._client.calls[0]
-    assert any("- sysadmin: Keeps servers up" in text for text in _seeded(first))
+    assert "### sysadmin: Keeps servers up" in first["system"]
     refused = engine._client.calls[2]["messages"][-1]["content"][0]
     assert refused["is_error"] and "may not message 'kitchen'" in refused["content"]
 
@@ -970,9 +970,12 @@ async def test_nested_bot_folders_make_sub_bots_the_parent_can_message(
     assert result.text == "I asked the kitchen."
     first = engine._client.calls[0]
     assert "ergo_thread_send" in _tool_names(first)
-    # The bots it can reach are pre-seeded as an ergo_bot_list result.
-    assert any("- kitchen: Runs the kitchen" in text for text in _seeded(first))
-    assert "- kitchen: Runs the kitchen" not in first["system"]
+    # The bots it can reach are in the "Bots and threads" context block.
+    assert "## Bots and threads\n### boundcorp (this bot)" in first["system"]
+    assert "### kitchen: Runs the kitchen" in first["system"]
+    assert not _seeded(first) or not any(
+        "Bots you can message" in t for t in _seeded(first)
+    )
 
     await thread_messages(registry)  # kitchen's root chat answers
     kitchen_root = await kitchen.sessions(user).aget()
@@ -1081,8 +1084,78 @@ async def test_upward_reaches_only_the_parents_main_chat(tmp_path, thread_messag
     refused, sent = _tool_results(engine)[-2:]
     assert refused["is_error"] and "your parent bot" in refused["content"]
     assert json.loads(sent["content"])["sent_to"] == "boundcorp · Main"
-    listing = next(t for t in _seeded(engine._client.calls[0]) if "boundcorp" in t)
-    assert "(your parent bot: its main chat only)" in listing
+    assert (
+        "### boundcorp (your parent bot: message its main chat only)"
+        in engine._client.calls[0]["system"]
+    )
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_orchestrators_see_every_bots_chats_and_latest_messages(
+    tmp_path, thread_messages, monkeypatch
+):
+    from django_ergo.bots import overview
+    from django_ergo.bots.tools import ToolContext
+
+    user = await User.objects.acreate(username="overseer")
+    engine = claude_engine()
+    registry, boundcorp, design = _family(
+        tmp_path,
+        engine,
+        "name: boundcorp\ndescription: Routes things\npull_requests: [boundcorp/ergo-bots]\n",
+        "name: design\ndescription: Designs things\nthreads: {allow_create: true}\n",
+    )
+    monkeypatch.setattr(
+        overview,
+        "gh_open_prs",
+        lambda repos: [f"- {r} #88 (draft): Restyle" for r in repos],
+    )
+    root = await boundcorp.root_session(user)
+    design_main = await design.root_session(user)
+    logo = await design.create_session(
+        user,
+        title="Logo",
+        metadata={
+            "started_by": str(root.id),
+            "started_by_bot": "boundcorp",
+            "started_by_label": "boundcorp · Main",
+        },
+    )
+    engine._client.responses = [say("Here is the logo, in navy.")]
+    await design.ask(logo, "Make a logo " + "with care " * 100)
+    engine._client.responses = [say("Hi from design main.")]
+    await design.ask(design_main, "Hello design")
+
+    ctx = ToolContext(bot=boundcorp, session=root, user=user)
+    text = await sync_to_async(overview.overview)(ctx)
+    lines = text.splitlines()
+    assert lines[0] == "### boundcorp (this bot): Routes things"
+    assert "- main: idle, last just now, you are here" in lines
+    assert "### design: Designs things" in lines
+    logo_line = next(line for line in lines if line.startswith("- Logo (thread"))
+    assert "started by boundcorp · Main" in logo_line
+    # Snippets: oldest first, long messages clipped, the newest one with more room.
+    at = lines.index(logo_line)
+    assert lines[at + 1].startswith("    in: Make a logo with care")
+    assert lines[at + 1].endswith("…") and len(lines[at + 1]) <= 4 + 4 + 250
+    assert lines[at + 2] == "    reply: Here is the logo, in navy."
+    assert "### Open pull requests" in lines
+    assert "- boundcorp/ergo-bots #88 (draft): Restyle" in lines
+
+    # Over the cap: older chats lose their snippets, then drop out, with a note.
+    small = await sync_to_async(overview.overview)(ctx, 400)
+    # The most recently active chat keeps its snippets; the older one is one line.
+    assert "    reply: Hi from design main." in small
+    assert "- Logo (thread" in small and "Make a logo" not in small
+    tiny = await sync_to_async(overview.overview)(ctx, 200)
+    assert "older chat(s) not shown" in tiny and "- Logo (thread" not in tiny
+
+    # The block is in an orchestrating main chat's context, not seeded.
+    engine._client.responses = [say("ok")]
+    await boundcorp.ask(root, "What's going on?")
+    system = engine._client.calls[-1]["system"]
+    assert "## Bots and threads" in system
+    assert "    reply: Hi from design main." in system
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1592,3 +1665,19 @@ async def test_a_chat_waits_for_its_open_request_instead_of_nudging(
     ]
     await bot.ask(root, "And dark mode")
     assert await ThreadMessage.objects.acount() == 2
+
+
+def test_open_prs_come_from_the_open_prs_setting(tmp_path, settings):
+    from django.conf import settings as django_settings
+
+    from django_ergo.bots import overview
+
+    bot = Bot.load(write_bot(tmp_path, "name: lister\npull_requests: [a/b]\n"))
+    settings.DJANGO_ERGO = {
+        **getattr(django_settings, "DJANGO_ERGO", {}),
+        "OPEN_PRS": lambda bot: [
+            {"repo": "a/b", "number": 7, "title": "Fix it", "draft": True},
+            {"repo": "a/b", "number": 8, "title": "Ship it"},
+        ],
+    }
+    assert overview.open_prs(bot) == ["- a/b #7 (draft): Fix it", "- a/b #8: Ship it"]

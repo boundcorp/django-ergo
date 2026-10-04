@@ -57,6 +57,7 @@ plugins:
   - name: ergo_kb
     knowledgebase: Kitchen
   - name: myapp.plugins:AuditPlugin
+pull_requests: [boundcorp/ergo-bots] # repos whose open PRs orchestrating chats see
 permissions:
   call_bots: [sysadmin]              # other bots this bot may message
 ```
@@ -347,7 +348,9 @@ returns its `worker_done` report. `model` and `effort` go to Orca's
 `--model`/`--effort`, except for `agent: omp`, which Orca can't give a model
 at launch: the plugin writes the worktree's `.omp/config.yml`
 (`modelRoles.default: <model>:<effort>`, git-ignored by its own folder) and omp
-picks it up.
+picks it up. Each chat keeps one Orca mailbox terminal and Run for its
+workers; if Orca no longer knows them (their worktree was removed, Orca was
+reset), `orca_start_worker` makes new ones and tries once more.
 
 ## Chats
 
@@ -427,7 +430,7 @@ user. The `orchestration` skill (loaded in main by default) has:
 
 | Tool | What it does |
 | --- | --- |
-| `ergo_bot_list` | The bots it can message, with their `description`s (pre-seeded) |
+| `ergo_bot_list` | The bots it can message, with their `description`s (also in the context block below) |
 | `ergo_thread_list` | A bot's main chat, named chats and threads with the user (default: this bot) |
 | `ergo_thread_send` | Message a bot's `main` chat, a named chat, a thread id, or a `new` thread; returns at once |
 | `ergo_thread_stop` | Stop the running turn of a thread this bot started (or one of its own) and cancel what it queued there |
@@ -447,6 +450,27 @@ Delivery goes through `DJANGO_ERGO["THREAD_MESSAGE_RUNNER"]` (Ergonaut
 queues a Celery task) or a background thread. Set `orchestration: false` for
 a bot that never delegates; it has no `orchestration` skill (it still
 answers messages sent to it, and can message upward, below).
+
+Every turn of a chat with the `orchestration` skill loaded also gets a
+**Bots and threads** context block (`django_ergo.bots.overview`), so it can
+answer "what's going on?" without asking anyone:
+
+- this bot and each bot it can message, with its description;
+- under each, its main chat, named chats and open threads with this user:
+  working, waiting for approval or idle, when it last moved, who started it,
+  requests open in and out, and running workers
+  (`orchestrator.thread_status(session)`, which UIs can use too);
+- the latest five messages of each chat as short snippets (the newest gets
+  more room; the current chat's are already in its window);
+- open pull requests of the repos in bot.yaml's `pull_requests`, from the gh
+  CLI (cached five minutes), or from `DJANGO_ERGO["OPEN_PRS"]`
+  (`callable(bot) -> [{repo, number, title, draft}]`) when an app keeps its
+  own record of them.
+
+It's capped at about 3k tokens: the least recently active chats lose their
+snippets first, then drop out, and the block says how many it left out
+(`ergo_thread_list` and the history tools still reach them). With seven bots
+and nine open chats it is about 2.4k tokens.
 
 Who may message whom:
 
@@ -498,8 +522,8 @@ A toolkit's `pre_seeds()` names tool calls that run before a session's first
 model call; their results are written into the history as if the model had
 made the calls (each turn for window chats, whose model calls carry only
 the current turn). `FunctionToolkit(tools, ctx, seed=["tool_name"])` seeds
-zero-argument tools. The orchestrator seeds `ergo_bot_list` and skills seed
-`list_skills`.
+zero-argument tools. Skills seed `list_skills`; the bots a chat can reach
+are in the "Bots and threads" context block instead.
 
 ```
 boundcorp/

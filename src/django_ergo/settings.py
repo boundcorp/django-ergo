@@ -64,6 +64,9 @@ DEFAULTS = {
     # Callable(session_id) -> bool that asks a session's running turn to stop at its next
     # step (returns whether one was running), for ergo_thread_stop. None = can't stop turns.
     "TURN_STOPPER": None,
+    # Callable(bot) -> [{repo, number, title, draft}]: the open pull requests shown in
+    # orchestrating chats' "Bots and threads" block. None = gh CLI on bot.yaml's pull_requests.
+    "OPEN_PRS": None,
     # Called with a session id when its workers change, to wake live views.
     "SESSION_NOTIFIER": None,
     # Public base URL that django_ergo.bots.urls is mounted at, e.g.
@@ -98,6 +101,7 @@ IMPORT_STRINGS = [
     "WORKER_RUNNER",
     "TURN_CONTROL",
     "TURN_STOPPER",
+    "OPEN_PRS",
     "SESSION_NOTIFIER",
 ]
 

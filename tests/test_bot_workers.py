@@ -356,3 +356,61 @@ def test_orca_start_worker_watches_the_dispatch_and_reports_back(  # noqa: PLR09
     assert (
         len([c for c in calls if c[1:3] == ["terminal", "send"]]) == 1
     )  # Enter was pressed only once
+
+
+@pytest.mark.django_db(transaction=True)
+def test_orca_start_worker_replaces_a_mailbox_whose_terminal_is_gone(
+    tmp_path, workers, monkeypatch
+):
+    import subprocess
+
+    from django_ergo.bots.tools import ToolContext
+    from tests.test_bot_plugins import orca_bot
+
+    bot, _, plugin = orca_bot(tmp_path)
+    calls = []
+    fixed = {
+        ("terminal", "create"): {"terminal": {"handle": "term_new"}},
+        ("orchestration", "run-create"): {"run": {"id": "run_new"}},
+        ("worktree", "show"): {
+            "worktree": {"id": "repo::/home/dev/p/site", "path": "/home/dev/p/site"}
+        },
+        ("orchestration", "task-create"): {"task": {"id": "task_1"}},
+        ("orchestration", "worker-start"): {"dispatchId": "ctx_1", "taskId": "task_1"},
+    }
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        if argv[1:3] == ["orchestration", "worker-start"] and "term_gone" in argv:
+            body = {"ok": False, "error": {"message": "selector_not_found"}}
+            return subprocess.CompletedProcess(
+                argv, 1, stdout=json.dumps(body), stderr=""
+            )
+        body = {"ok": True, "result": fixed[tuple(argv[1:3])]}
+        return subprocess.CompletedProcess(argv, 0, stdout=json.dumps(body), stderr="")
+
+    monkeypatch.setattr("django_ergo.plugins.orca.subprocess.run", fake_run)
+    user = get_user_model().objects.create(username="stale")
+    session = async_to_sync(bot.main_session)(user)
+    # The mailbox lived in a worktree that has since been removed.
+    session.metadata = {
+        **session.metadata,
+        "orca": {"devbox": {"mailbox": "term_gone", "run": "run_old"}},
+    }
+    session.save(update_fields=["metadata"])
+    ctx = ToolContext(bot=bot, session=session, user=user)
+
+    started = plugin.start_worker(ctx, "Fix it", "path:/home/dev/p/site")
+    assert started["orca"]["run"] == "run_new"
+    starts = [c for c in calls if c[1:3] == ["orchestration", "worker-start"]]
+    assert [c[c.index("--from") + 1] for c in starts] == ["term_gone", "term_new"]
+    session.refresh_from_db()
+    assert session.metadata["orca"]["devbox"] == {
+        "mailbox": "term_new",
+        "run": "run_new",
+    }
+
+    # Any other failure is reported as it is, without a retry.
+    fixed[("orchestration", "worker-start")] = {}
+    with pytest.raises(ValueError, match="no dispatch id"):
+        plugin.start_worker(ctx, "Again", "path:/home/dev/p/site")
