@@ -785,6 +785,159 @@ def test_orca_reports_a_missing_cli(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# kubectl
+# ---------------------------------------------------------------------------
+
+
+def kubectl_bot(
+    tmp_path,
+    *responses,
+    config="""\
+clusters:
+  configured:
+    kubeconfig: /mounted/kubeconfig
+    namespace: default
+executable: kubectl-test""",
+):
+    yaml_text = f"""
+        name: kube
+        chats: {{main: {{skills: [kubectl]}}}}
+        plugins:
+          - name: kubectl
+{textwrap.indent(config, "            ")}
+    """
+    bot, engine = make_bot(tmp_path, *responses, yaml_text=yaml_text, name="kube")
+    return bot, engine, bot.plugin("kubectl")
+
+
+@pytest.fixture
+def kubectl_calls(monkeypatch):
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, 0, stdout="pod/example", stderr="")
+
+    monkeypatch.setattr("django_ergo.plugins.kubectl.subprocess.run", fake_run)
+    return calls
+
+
+@pytest.mark.django_db
+def test_kubectl_read_is_pinned_to_a_configured_cluster(tmp_path, kubectl_calls):
+    _, _, plugin = kubectl_bot(tmp_path)
+
+    assert plugin.read("configured", ["get", "pods"]) == "Exit 0\npod/example"
+    assert kubectl_calls[-1] == [
+        "kubectl-test",
+        "get",
+        "pods",
+        "--kubeconfig",
+        "/mounted/kubeconfig",
+        "--namespace",
+        "default",
+    ]
+    plugin.read("configured", ["get", "pods", "-n", "other"])
+    assert kubectl_calls[-1][-2:] == ["--kubeconfig", "/mounted/kubeconfig"]
+    with pytest.raises(ValueError, match="not configured"):
+        plugin.read("other", ["get", "pods"])
+    with pytest.raises(ValueError, match="not configured"):
+        plugin.run("other", ["delete", "pod", "example"])
+
+
+@pytest.mark.django_db
+def test_kubectl_read_refuses_aliases_sensitive_flags_and_secret_formats(
+    tmp_path, kubectl_calls
+):
+    _, _, plugin = kubectl_bot(tmp_path)
+
+    assert "only permits" in plugin.read("configured", ["g", "pods"])
+    assert "only permits" in plugin.read("configured", ["get pods"])
+    assert (
+        "pins kubeconfig"
+        in pytest.raises(
+            ValueError,
+            plugin.read,
+            "configured",
+            ["get", "pods", "--context=other"],
+        ).value.args[0]
+    )
+    assert "Secret reads" in plugin.read("configured", ["get", "secrets.v1", "-ojson"])
+    assert "does not permit output formats" in plugin.read(
+        "configured",
+        ["get", "pods,secrets", "-ojsonpath={.items[*].data.token}"],
+    )
+    assert kubectl_calls == []
+
+
+def test_kubectl_redacts_nested_secret_data_from_json_and_yaml():
+    from django_ergo.plugins.kubectl import redact_secret_data
+
+    json_output = json.dumps(
+        {
+            "items": [
+                {"data": {"token": "secret-value"}},
+                {"nested": {"stringData": {"password": "another-secret"}}},
+            ]
+        }
+    )
+    redacted = redact_secret_data(json_output)
+    assert "secret-value" not in redacted
+    assert "another-secret" not in redacted
+    assert json.loads(redacted) == {
+        "items": [{"data": "[REDACTED]"}, {"nested": {"stringData": "[REDACTED]"}}]
+    }
+    assert "secret-value" not in redact_secret_data(
+        "items:\n  - data:\n      token: secret-value\n"
+    )
+
+
+@pytest.mark.django_db
+def test_kubectl_run_approval_can_be_disabled(tmp_path):
+    _, _, plugin = kubectl_bot(
+        tmp_path,
+        config="""\
+clusters:
+  configured:
+    kubeconfig: /mounted/kubeconfig
+approve: false""",
+    )
+
+    run_tool = next(tool for tool in plugin._tools() if tool.name == "kubectl_run")
+    assert not run_tool.requires_approval
+
+
+@pytest.mark.django_db(transaction=True)
+def test_kubectl_run_waits_for_each_approval(tmp_path, kubectl_calls):
+    from asgiref.sync import async_to_sync
+
+    bot, engine, _ = kubectl_bot(
+        tmp_path,
+        claude_tool(
+            "kubectl_read",
+            {"cluster": "configured", "args": ["get", "pods"]},
+            tool_id="r1",
+        ),
+        claude_tool(
+            "kubectl_run",
+            {"cluster": "configured", "args": ["delete", "pod", "example"]},
+            tool_id="w1",
+        ),
+        say("Deleted."),
+    )
+    user = User.objects.create(username="kube-user")
+    root = async_to_sync(bot.root_session)(user)
+
+    paused = async_to_sync(bot.ask)(root, "Remove the example pod")
+    assert [approval.tool_name for approval in paused.approvals] == ["kubectl_run"]
+    assert kubectl_calls[-1][1:3] == ["get", "pods"]
+    assert "Kubernetes" in engine._client.calls[0]["system"]
+
+    done = async_to_sync(bot.resume)(root, {"w1": True})
+    assert done.text == "Deleted."
+    assert kubectl_calls[-1][1:4] == ["delete", "pod", "example"]
+
+
+# ---------------------------------------------------------------------------
 # bash
 # ---------------------------------------------------------------------------
 

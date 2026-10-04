@@ -44,9 +44,11 @@ it. A plugin without tools (like `telegram`) is always active.
 | `telegram` | | a Telegram bot, by webhook or polling, with approval buttons |
 | `orca` | `orca` | the Orca CLI: worktrees, terminals and supervised coding workers |
 | `bash` | `bash` | shell commands on the host, each approved by default |
+| `kubectl` | `kubectl` | configured-cluster Kubernetes inspection and approved changes; Secret values redacted |
 
-`bash`, `orca` and `bot_management` default to `root_only: true` (top-level
-chats only, never threads) and ask for approval before changing anything.
+`bash`, `orca`, `kubectl` and `bot_management` default to `root_only: true`
+(top-level chats only, never threads) and ask for approval before changing
+anything.
 In Ergonaut only admins can approve their tools. Every option is in the
 [bot reference](bots.md#official-plugins).
 

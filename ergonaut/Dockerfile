@@ -111,8 +111,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpng-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Agent toolchain: bots shell out to git/ssh/gh, the Claude Code and omp CLIs,
-# and the Orca CLI. Installed here so both `release` and `aio` have it.
+# Agent toolchain: bots shell out to git/ssh/gh, kubectl, the Claude Code and omp
+# CLIs, and the Orca CLI. Installed here so both `release` and `aio` have it.
 ARG ORCA_VERSION=1.4.180
 ARG ORCA_LINUX_APPIMAGE_SHA256=af3b6e6a67fcc3cd034ca469ff8ee1d224b1a6e2df6215fd8452afd0fd8e92ab
 
@@ -121,6 +121,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     openssh-client \
     ca-certificates \
     gnupg \
+    kubernetes-client \
     && mkdir -p -m 755 /etc/apt/keyrings \
     && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
         -o /etc/apt/keyrings/githubcli-archive-keyring.gpg \

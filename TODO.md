@@ -75,7 +75,7 @@ Live on rigel from `~/p/boundcorp/django-ergo`, bots from `boundcorp/ergo-bots`.
 - [x] Bots see images directly: tools can return `ToolResult`/`ToolImage` (Claude: image blocks in the tool result; OpenAI: a user message after the tool messages), `ergo_attachments_look` returns the image itself, images are downscaled to 1024px (Pillow) and only the latest two are sent, older ones become `[image omitted: ...]`.
 
 - [x] Kitchen bot on Ergonaut (Tandoor tools, meal-planning skill, KB), boundcorp root bot, nested bots, `ergo_bot_call`.
-- [x] Official plugins in `django_ergo/plugins`: ergo_kb, bot_management (draft worktree + PR), telegram, orca, bash, attachments.
+- [x] Official plugins in `django_ergo/plugins`: ergo_kb, bot_management (draft worktree + PR), telegram, orca, bash, kubectl, attachments.
 - [x] Live bot reloads on file changes; auto-pull of the bot repo.
 - [x] CTO bot (orca on devbox, bash, threads) proposed by boundcorp and merged (ergo-bots #1).
 - [x] Costs page, bot pages, Memory page, Files panel; tool names prefixed `ergo_*`.

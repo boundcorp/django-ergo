@@ -704,6 +704,30 @@ worker-start`, and waits for approval unless `approve_changes: false`.
 Arguments are an argv list, never a shell string, and `--json` is added for
 the bot. With `environment` set, the bot can't point a call elsewhere.
 
+### kubectl
+
+```yaml
+- name: kubectl
+  clusters:
+    cluster-name:
+      kubeconfig: /mounted/kubeconfig
+      namespace: default       # optional default for calls without -n/--namespace
+  approve: true                # every kubectl_run call waits for approval
+  timeout: 120
+  root_only: true
+```
+
+Runs the `kubectl` binary only against named clusters configured in the bot
+file. `kubectl_read(cluster, args)` needs no approval, but permits only
+`get`, `describe`, `logs`, `top`, `events`, `explain`, `api-resources`,
+`version`, and `auth can-i`; aliases and packed shell-style arguments are not
+accepted. `kubectl_run(cluster, args)` handles every other verb and needs
+approval for each call unless `approve: false`. Arguments are always an argv
+list. The plugin pins the selected cluster's kubeconfig and rejects flags that
+could change the kubeconfig, context, server, or identity. It redacts
+structured `data` and `stringData` output and refuses `get secret` custom
+formats, so Secret values are never returned.
+
 ### bash
 
 ```yaml
