@@ -194,6 +194,13 @@ docker build -f ergonaut/Dockerfile --target release -t ergonaut .   # app only
 docker build -f ergonaut/Dockerfile --target aio -t ergonaut-aio .   # plus Redis and Garage
 ```
 
+Both images include an agent toolchain for bots that shell out: `git`,
+`openssh-client`, `gh`, Claude Code (`claude`), `omp` (with Bun) and the Orca
+CLI (`orca`). Orca is a pinned Linux AppImage (`ORCA_VERSION`,
+`ORCA_LINUX_APPIMAGE_SHA256` build args), checksum-verified, extracted to
+`/opt/orca`. Pushes to `main` publish the `release` image to
+`ghcr.io/boundcorp/ergonaut` (tags `main` and `sha-<commit>`).
+
 The `aio` image runs `ergonaut up` as an unprivileged user with data in the
 `/data` volume and bots at `/bot`:
 
