@@ -113,7 +113,7 @@ def _texts(messages):
 
 async def test_rolling_folds_all_but_recent(user):
     session = await sync_to_async(make_session)(
-        user, "rolling", {"keep_recent": 2, "batch": 2, "min_tokens": 0}
+        user, "rolling", {"compact_at_tokens": 70, "keep_tokens": 20}
     )
     await sync_to_async(chat)(session, 2)  # 4 messages: at threshold
     engine = claude_engine()
@@ -127,7 +127,7 @@ async def test_rolling_folds_all_but_recent(user):
     assert compaction.upto_sequence == 3
     assert compaction.from_sequence == 0
     assert compaction.message_count == 4
-    assert compaction.mode == "rolling"
+    assert compaction.mode == "context_size"
     previous, transcript = summarizer.calls[0]
     assert previous == ""
     assert "question 0" in transcript
@@ -146,7 +146,7 @@ async def test_rolling_folds_all_but_recent(user):
 
 async def test_rolling_summaries_roll_forward(user):
     session = await sync_to_async(make_session)(
-        user, "rolling", {"keep_recent": 2, "batch": 2, "min_tokens": 0}
+        user, "rolling", {"compact_at_tokens": 70, "keep_tokens": 20}
     )
     engine = claude_engine()
     summarizer = RecordingSummarizer()
@@ -167,27 +167,27 @@ async def test_rolling_summaries_roll_forward(user):
     assert texts[1:] == ["question 4", "answer 4"]
 
 
-async def test_legacy_stream_mode_compacts_as_rolling(user):
+async def test_legacy_stream_mode_compacts_as_context_size(user):
     # Rows saved before the rename may still say "stream".
     session = await sync_to_async(make_session)(
-        user, "stream", {"keep_recent": 2, "batch": 2, "min_tokens": 0}
+        user, "stream", {"compact_at_tokens": 70, "keep_tokens": 20}
     )
     await sync_to_async(chat)(session, 3)
     decision = await decide_compaction(session)
     assert decision is not None
-    assert decision.keep_recent == 2
+    assert decision.keep_tokens == 20
 
     compaction = await maybe_compact(
         session, claude_engine(), summarizer=RecordingSummarizer()
     )
-    assert compaction.mode == "rolling"
+    assert compaction.mode == "context_size"
 
 
-async def test_rolling_waits_for_min_tokens(user):
+async def test_rolling_uses_prompt_tokens_threshold(user):
     # Tool-heavy turns pile up messages while the prompt is still small;
     # compacting then only throws away the prompt cache.
     session = await sync_to_async(make_session)(
-        user, "rolling", {"keep_recent": 2, "batch": 2, "min_tokens": 1000}
+        user, "rolling", {"compact_at_tokens": 1000, "keep_tokens": 25}
     )
 
     def build(cached):
@@ -200,11 +200,11 @@ async def test_rolling_waits_for_min_tokens(user):
 
     await sync_to_async(build)(1200)
     decision = await decide_compaction(session)
-    assert decision.keep_recent == 2
+    assert decision.keep_tokens == 25
     assert "1200 tokens" in decision.reason
 
 
-async def test_rolling_min_tokens_default(user):
+async def test_rolling_ignores_old_message_count_keys(user):
     session = await sync_to_async(make_session)(
         user, "rolling", {"keep_recent": 2, "batch": 2}
     )
@@ -270,7 +270,7 @@ async def test_time_mode_compacts_after_idle_gap(user):
 
 async def test_context_size_mode_uses_last_prompt_size(user):
     session = await sync_to_async(make_session)(
-        user, "context_size", {"max_context_tokens": 1000, "keep_recent": 2}
+        user, "context_size", {"max_context_tokens": 1000, "keep_tokens": 10}
     )
 
     def build():
@@ -288,8 +288,8 @@ async def test_context_size_mode_uses_last_prompt_size(user):
 
     await sync_to_async(build)()
     decision = await decide_compaction(session)
-    assert decision.keep_recent == 2
-    assert "1110 tokens" in decision.reason
+    assert decision.keep_tokens == 10
+    assert "1100 tokens" in decision.reason
 
     compaction = await maybe_compact(
         session, claude_engine(), summarizer=RecordingSummarizer()
@@ -330,7 +330,7 @@ async def test_failed_summary_does_not_block(user):
 
 async def test_turn_compacts_with_a_structured_call_before_sending(user):
     session = await sync_to_async(make_session)(
-        user, "rolling", {"keep_recent": 0, "batch": 1, "min_tokens": 0}
+        user, "rolling", {"compact_at_tokens": 1, "keep_tokens": 0}
     )
     await sync_to_async(chat)(session, 1)
     engine = claude_engine(
@@ -366,7 +366,7 @@ async def test_turn_compacts_with_a_structured_call_before_sending(user):
 
 async def test_failed_compaction_call_leaves_session_uncompacted(user):
     session = await sync_to_async(make_session)(
-        user, "rolling", {"keep_recent": 0, "batch": 1, "min_tokens": 0}
+        user, "rolling", {"compact_at_tokens": 1, "keep_tokens": 0}
     )
     await sync_to_async(chat)(session, 1)
     engine = claude_engine(claude_text("no tool", stop="max_tokens"), claude_text("hi"))
@@ -396,3 +396,153 @@ async def test_openai_summary_goes_after_system_message(user):
     assert [m["role"] for m in context] == ["system", "user"]
     assert context[0]["content"] == "Be brief."
     assert "SUMMARY 1" in context[1]["content"]
+
+
+async def test_first_native_turn_measures_full_history_and_excludes_old_summary(user):
+    session = await sync_to_async(make_session)(
+        user, "context_size", {"compact_at_tokens": 1000}
+    )
+    await sync_to_async(add)(session, "user", "history" * 1000)
+    decision = await decide_compaction(session)
+    assert decision is not None  # no assistant usage yet: estimate triggers
+    await ConversationCompaction.objects.acreate(
+        session=session,
+        mode="context_size",
+        from_sequence=0,
+        upto_sequence=0,
+        summary="old",
+        message_count=1,
+    )
+    await sync_to_async(add)(
+        session, "assistant", "tiny", input_tokens=5, output_tokens=2000
+    )
+    assert await decide_compaction(session) is None  # output is not prompt usage
+
+
+async def test_thresholds_scale_with_engine_window(user):
+    session = await sync_to_async(make_session)(user, "context_size")
+    await sync_to_async(add)(session, "assistant", "answer", input_tokens=160000)
+    assert (await decide_compaction(session)).keep_tokens == 50000
+    assert await decide_compaction(session, context_window=1000000) is None
+    session.compaction_config = {"max_context_tokens": 150000, "keep_recent": 999}
+    assert (
+        await decide_compaction(session, context_window=1000000)
+    ).keep_tokens == 250000
+
+
+async def test_keep_tokens_preserves_large_whole_tool_turn(user):
+    session = await sync_to_async(make_session)(user, "context_size")
+    await sync_to_async(chat)(session, 2)
+    await sync_to_async(add)(session, "user", "lookup")
+    await sync_to_async(add)(session, "assistant", tool_use="t")
+    await sync_to_async(add)(session, "user", tool_result="t")
+    await sync_to_async(add)(session, "assistant", "done" * 1000)
+    compacted = await compact_session(
+        session, claude_engine(), keep_tokens=100, summarizer=RecordingSummarizer()
+    )
+    assert compacted.upto_sequence == 3  # cut moves back from answer to user
+    assert compacted.message_count == 4
+    assert (
+        await compact_session(
+            session, claude_engine(), keep_tokens=100, summarizer=RecordingSummarizer()
+        )
+        is None
+    )
+
+
+async def test_chunked_digest_summaries_chain_in_order(user):
+    session = await sync_to_async(make_session)(user, "context_size")
+    await sync_to_async(chat)(session, 12)
+    engine = claude_engine()
+    engine.context_window = 100
+    summarizer = RecordingSummarizer()
+    compacted = await compact_session(
+        session, engine, keep_tokens=0, summarizer=summarizer
+    )
+    assert len(summarizer.calls) > 1
+    assert all(len(transcript) <= 160 for _, transcript in summarizer.calls)
+    assert summarizer.calls[0][0] == ""
+    for index, (previous, _) in enumerate(summarizer.calls[1:], 1):
+        assert previous == f"SUMMARY {index}"
+    assert compacted.summary == f"SUMMARY {len(summarizer.calls)}"
+    assert compacted.message_count == 24
+    assert await session.compactions.acount() == 1
+
+
+def test_digest_preserves_bounded_tool_findings_and_errors():
+    transcript = ConversationRenderer(detail="digest").render_messages(
+        [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "t",
+                        "name": "read_file",
+                        "input": {"path": "/repo/file", "query": "q" * 400},
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "t",
+                        "is_error": True,
+                        "content": "id=42 /repo/file ERROR denied " + "x" * 2000,
+                    }
+                ],
+            },
+        ]
+    )
+    assert "id=42 /repo/file ERROR denied" in transcript
+    assert "tool_result #1 ERROR" in transcript
+    assert "more chars]" in transcript
+    assert "x" * 1501 not in transcript
+    assert "q" * 301 not in transcript
+
+
+def test_openai_digest_shows_tool_arguments_and_results():
+    transcript = ConversationRenderer(detail="digest").render_messages(
+        [
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "t",
+                        "function": {"name": "lookup", "arguments": '{"id": 42}'},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "t", "content": "found /path"},
+        ]
+    )
+    assert "lookup" in transcript
+    assert "42" in transcript
+    assert "found /path" in transcript
+
+
+async def test_chunk_calls_are_recorded_and_final_call_is_linked(user):
+    session = await sync_to_async(make_session)(user, "context_size")
+    await sync_to_async(chat)(session, 8)
+    engine = claude_engine(
+        *[claude_tool("submit_output", {"summary": f"chunk {i}"}) for i in range(16)]
+    )
+    engine.context_window = 100
+    compaction = await compact_session(session, engine, keep_tokens=0)
+    calls = [
+        call
+        async for call in StructuredCall.objects.filter(kind="compaction").order_by(
+            "created_at"
+        )
+    ]
+    assert len(calls) > 1
+    assert all(call.session_id is None and call.status == "completed" for call in calls)
+    assert compaction.structured_call_id == calls[-1].pk
+    assert compaction.summary == calls[-1].response["summary"]
+    assert compaction.message_count == 16
+    assert len(engine._client.calls) == len(calls)
+    assert f"Previous summary:\n{calls[0].response['summary']}" in calls[1].request
+    assert await session.compactions.acount() == 1

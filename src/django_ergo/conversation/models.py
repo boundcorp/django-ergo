@@ -34,9 +34,12 @@ class CompactionMode(models.TextChoices):
 
 # Deprecated: rolling compaction used to be called "stream". The old member
 # name still resolves, and stored or configured "stream" values are read as
-# "rolling" (see normalize_compaction_mode).
+# "context_size" (see normalize_compaction_mode).
 CompactionMode.STREAM = CompactionMode.ROLLING
-LEGACY_COMPACTION_MODES = {"stream": CompactionMode.ROLLING}
+LEGACY_COMPACTION_MODES = {
+    "stream": CompactionMode.CONTEXT_SIZE,
+    "rolling": CompactionMode.CONTEXT_SIZE,
+}
 
 
 def normalize_compaction_mode(mode: str | None) -> str | None:

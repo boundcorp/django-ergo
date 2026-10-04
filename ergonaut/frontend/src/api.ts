@@ -81,9 +81,31 @@ export type Message = { line: number; role: string; blocks: Block[]; timestamp: 
 
 export type Approval = { id: string; name: string; input: unknown; preview?: string; preview_error?: boolean }
 
+export type Compaction = {
+  id: string
+  upto_sequence: number
+  from_sequence?: number
+  message_count: number
+  reason: string
+  created_at: string
+  summary?: string
+}
+
+export type TurnContext = {
+  sections: { title: string; tokens: number; complete: boolean; text?: string }[]
+  compaction: Compaction | null
+  native_messages: { count: number; first_sequence: number | null }
+  stubbed_results: number
+  estimated_tokens: number
+  context_window: number
+  compact_at_tokens: number | null
+  prompt_tokens: number
+}
+
 export type Call = {
   id: string
   kind: string
+  context?: TurnContext | null
   // in_progress, awaiting_approval, completed, failed, turn_limited or stopped
   status: string
   request: string
@@ -325,6 +347,7 @@ export type Worker = {
 }
 
 export type SessionDetail = {
+  compactions?: Compaction[]
   session: Session
   messages: Message[]
   calls: Call[]
@@ -339,6 +362,7 @@ export type SessionDetail = {
 }
 
 export type Turn = {
+  context?: TurnContext | null
   session_id: string
   call_id: string | null
   type: string | null
@@ -447,6 +471,9 @@ export const api = {
     request<SessionDetail>('GET', `/sessions/${id}${before == null ? '' : `?before=${before}`}`),
   workerLog: (sessionId: string, workerId: string) =>
     request<WorkerLog>('GET', `/sessions/${sessionId}/workers/${workerId}/log`),
+  callContext: (id: string) => request<TurnContext | null>('GET', `/calls/${id}/context`),
+  compaction: (sessionId: string, id: string) =>
+    request<{ summary: string }>('GET', `/sessions/${sessionId}/compactions/${id}`),
   call: (id: string) =>
     request<Call & { system_prompt: string; transcript: unknown[]; metadata: unknown }>('GET', `/calls/${id}`),
   // While a turn runs, "send" steers it and "interrupt" stops it and starts a new one.
