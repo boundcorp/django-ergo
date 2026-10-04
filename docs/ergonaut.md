@@ -110,9 +110,17 @@ their own sessions. Only admins can approve tools of bots with the `bash`,
 username (or 50 from one address) in 15 minutes, the web app and `/mgmt/`
 refuse logins until the window passes.
 
-- **Sidebar**: each bot with its icon and color from bot.yaml; the bot's name opens your main chat (its pins sit under it), then named chats and threads. A
-  spinner means a turn or worker is running; a blue dot, unread replies; a
-  yellow dot, a chat waiting on you (an approval or a question).
+- **Sidebar**: each bot with its icon and color from bot.yaml; the bot's
+  name opens your main chat (its pins sit under it), then named chats, then
+  its threads grouped by status: Pinned, Waiting on you, Working, Idle and
+  Resolved (Idle and Resolved start folded; a message reopens a resolved
+  thread). Each thread shows the bot's one-line status from its latest reply
+  (`ChatReply.status`), led by Approval, Question or Failed when it waits on
+  you. A spinner means a turn or worker is running; a blue dot, unread
+  replies; a yellow dot, a chat waiting on you.
+- **Threads** (top of the sidebar, or ⤢ next to a bot): the same groups for
+  every bot on one page, with "N threads are waiting on you", bot filters,
+  pull request and worker chips, and a star to pin a thread to the top.
 - **Chat**: a model picker in the header (with a `providers.yaml`), the
   transcript (Markdown rendered) with tool calls you can open, images a
   tool returned under its call, files the bot made where it made them,

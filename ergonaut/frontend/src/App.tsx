@@ -10,6 +10,7 @@ import { BotPage } from './pages/BotPage'
 import { NewThread } from './pages/NewThread'
 import { Memory } from './pages/Memory'
 import { CostsPage } from './pages/Costs'
+import { ThreadsPage } from './pages/ThreadsPage'
 import { ThemeToggle } from './theme'
 import { ago } from './time'
 import { DirectoryContext } from './components/BotIcon'
@@ -191,6 +192,10 @@ function Shell({
         <div className="min-h-0 flex-1 overflow-hidden">
           <Routes>
             <Route path="/" element={<Home user={user} bots={bots} sessions={sessions} />} />
+            <Route
+              path="/threads"
+              element={<ThreadsPage user={user} bots={bots} sessions={sessions} onChange={refresh} />}
+            />
             <Route path="/s/:id" element={<ChatRoute onChange={refresh} />} />
             <Route path="/sessions" element={<Sessions bots={bots} />} />
             <Route path="/costs" element={<CostsPage />} />

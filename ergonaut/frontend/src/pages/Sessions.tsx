@@ -47,7 +47,7 @@ export function Sessions({ bots }: { bots: Bot[] }) {
           {[
             ['', 'Any status'],
             ['active', 'Active'],
-            ['completed', 'Closed'],
+            ['completed', 'Resolved'],
           ].map(([value, label]) => (
             <button
               key={value}
@@ -92,7 +92,7 @@ export function Sessions({ bots }: { bots: Bot[] }) {
                   <td className="capitalize">{s.role || '-'}</td>
                   <td className="capitalize">{s.username}</td>
                   <td className={s.status === 'completed' ? 'status-closed' : 'status-active'}>
-                    {s.status === 'completed' ? 'Closed' : 'Active'}
+                    {s.status === 'completed' ? (s.role === 'thread' ? 'Resolved' : 'Closed') : 'Active'}
                   </td>
                   <td>
                     <time dateTime={s.updated_at} title={new Date(s.updated_at).toLocaleString()}>

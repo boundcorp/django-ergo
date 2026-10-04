@@ -800,6 +800,57 @@ def test_sessions_show_unread_replies_and_what_needs_attention(client, cook, use
 
 
 @pytest.mark.django_db(transaction=True)
+def test_threads_are_grouped_by_status_with_the_bots_status_line(client, cook, use_bots):
+    from django_ergo.conversation.links import GITHUB_PR
+    from django_ergo.conversation.models import ConversationAttachment, ConversationSession, StructuredCall
+
+    use_bots(
+        say("On it.", status="Checking the pantry"),
+        say("Which store?", ["Safeway", "Costco"], kind="question", status="Pick a store"),
+    )
+    root = post(client, "/api/bots/kitchen/root").json()
+
+    def listed(session_id=root["id"]):
+        return {s["id"]: s for s in client.get("/api/sessions").json()}[session_id]
+
+    assert (listed()["bucket"], listed()["status_line"]) == ("idle", "")
+    post(client, f"/api/sessions/{root['id']}/messages", {"text": "How many eggs?"})
+    assert (listed()["bucket"], listed()["status_line"]) == ("idle", "Checking the pantry")
+    post(client, f"/api/sessions/{root['id']}/messages", {"text": "Buy more"})
+    s = listed()
+    assert (s["bucket"], s["waiting_for"], s["status_line"]) == ("waiting", "question", "Pick a store")
+
+    # A failed turn waits on the user too, and a running one is working.
+    StructuredCall.objects.create(kind="chat_reply", session_id=root["id"], user=cook, status="failed")
+    assert (listed()["bucket"], listed()["waiting_for"]) == ("waiting", "failure")
+    StructuredCall.objects.create(kind="chat_reply", session_id=root["id"], user=cook, status="in_progress")
+    assert (listed()["bucket"], listed()["waiting_for"]) == ("working", "")
+
+    # A resolved thread shows its summary; its pull requests come along as chips.
+    thread = ConversationSession.objects.create(
+        user=cook,
+        bot_name="kitchen",
+        parent_id=root["id"],
+        status="completed",
+        metadata={"bot_role": "thread", "title": "Build it", "resolved_summary": "Shipped in PR 40"},
+    )
+    ConversationAttachment.objects.create(
+        session=thread,
+        url="https://github.com/acme/app/pull/40",
+        metadata={"link": GITHUB_PR, "repo": "acme/app", "number": 40, "state": "merged"},
+    )
+    s = listed(str(thread.id))
+    assert (s["bucket"], s["status_line"]) == ("resolved", "Shipped in PR 40")
+    assert [(pr["number"], pr["state"]) for pr in s["prs"]] == [(40, "merged")]
+
+    # Pinning doesn't count as activity.
+    before = listed(str(thread.id))["updated_at"]
+    assert post(client, f"/api/sessions/{thread.id}/pin", {"pinned": True}).json()["pinned"] is True
+    assert (listed(str(thread.id))["pinned"], listed(str(thread.id))["updated_at"]) == (True, before)
+    assert post(client, f"/api/sessions/{thread.id}/pin", {"pinned": False}).json()["pinned"] is False
+
+
+@pytest.mark.django_db(transaction=True)
 def test_chats_pick_a_model_from_providers(client, cook, use_bots, monkeypatch):
     from django_ergo.bots.providers import Providers
 
@@ -942,3 +993,35 @@ def test_thread_cards_and_pull_requests(client, cook, use_bots):
     assert [(p["number"], p["state"]) for p in detail["prs"]] == [(40, "")]
     [file] = [f for f in client.get(f"/api/sessions/{root['id']}/attachments").json() if f["link"]]
     assert (file["filename"], file["view"], file["link"]["number"]) == ("ergo-bots#40", "", 40)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_resolved_thread_shows_who_resolved_it_and_why(client, cook, use_bots):
+    from django_ergo.conversation.models import ConversationSession, ThreadMessage
+
+    use_bots(say("hi"))
+    root = post(client, "/api/bots/kitchen/root").json()
+    sender = ConversationSession.objects.get(id=root["id"])
+    thread = ConversationSession.objects.create(
+        user=cook,
+        bot_name="kitchen",
+        parent=sender,
+        status="completed",
+        metadata={
+            "bot_role": "thread",
+            "title": "Build it",
+            "resolved_by": "kitchen · Main",
+            "resolved_summary": "Shipped in PR 40",
+        },
+    )
+    ThreadMessage.objects.create(sender_session=sender, recipient_session=thread, text="Build it", status="answered")
+
+    detail = client.get(f"/api/sessions/{thread.id}").json()["session"]
+    assert (detail["resolved_by"], detail["resolved_summary"]) == ("kitchen · Main", "Shipped in PR 40")
+    [card] = client.get(f"/api/sessions/{root['id']}").json()["sent"]
+    assert (card["thread"]["archived"], card["thread"]["resolved_summary"]) == (True, "Shipped in PR 40")
+
+    # Reopened, it isn't resolved any more (even if the metadata lingers).
+    thread.status = "active"
+    thread.save()
+    assert client.get(f"/api/sessions/{thread.id}").json()["session"]["resolved_summary"] == ""

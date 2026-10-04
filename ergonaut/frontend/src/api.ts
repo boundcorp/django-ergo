@@ -33,6 +33,17 @@ export type Session = {
   attention?: boolean // the latest turn waits on the user: an approval, a question, or a failure
   engine_type?: string // openai or claude: a chat keeps its engine
   model?: string // the provider/model picked for this chat ('' = the bot's default)
+  resolved_by?: string // the bot that resolved this thread (ergo_thread_resolve)
+  resolved_summary?: string // its one-line summary of how the thread ended
+  // Threads by status (components/ThreadList): the group, why it waits, the bot's status line.
+  bucket?: 'waiting' | 'working' | 'idle' | 'resolved' | ''
+  waiting_for?: 'approval' | 'question' | 'failure' | ''
+  status_line?: string // the bot's one line from its latest reply (a resolved thread's summary)
+  pinned?: boolean
+  last_activity?: string | null // when its latest turn moved
+  workers_running?: number
+  workers_total?: number
+  prs?: PrLink[] // pull requests it reported, newest first
 }
 
 export type ModelChoice = {
@@ -217,6 +228,9 @@ export type ThreadSummary = {
   working_for: number
   waiting_on: number
   workers_running: number
+  resolved_by?: string
+  resolved_summary?: string
+  ready_to_resolve?: boolean // orchestrator.thread_status: its work looks done
 }
 
 // A request this chat sent to another chat (ergo_thread_send, ergo_message_up).
@@ -397,6 +411,7 @@ export const api = {
   approve: (id: string, approve: boolean, approvalIds?: string[]) =>
     request<Turn>('POST', `/sessions/${id}/approvals`, { approve, approval_ids: approvalIds }),
   close: (id: string) => request<Session>('POST', `/sessions/${id}/close`),
+  pinSession: (id: string, pinned: boolean) => request<Session>('POST', `/sessions/${id}/pin`, { pinned }),
   changes: (bot: string) => request<Changes>('GET', `/bots/${bot}/changes`),
   changeDiff: (bot: string, n: number) => request<{ diff: string }>('GET', `/bots/${bot}/changes/${n}/diff`),
   mergeChange: (bot: string, n: number) => request<{ result: string }>('POST', `/bots/${bot}/changes/${n}/merge`),

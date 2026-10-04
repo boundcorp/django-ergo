@@ -109,6 +109,19 @@ class SessionOut(Schema):
     attention: bool = False  # the latest turn waits on the user (approval, question, failure)
     engine_type: str = ""  # openai or claude: its messages are stored per engine
     model: str = ""  # the provider/model picked for this chat ("" = the bot's default)
+    # Set when a bot resolved the thread (ergo_thread_resolve): who, and a one-line summary.
+    resolved_by: str = ""
+    resolved_summary: str = ""
+    # Threads by status (Sidebar, Threads page): which group it sits in, why it waits,
+    # the bot's one-line status from its latest reply, and what it has going.
+    bucket: str = ""  # waiting, working, idle or resolved
+    waiting_for: str = ""  # approval, question or failure, when bucket is waiting
+    status_line: str = ""
+    pinned: bool = False
+    last_activity: datetime | None = None  # when its latest turn moved
+    workers_running: int = 0
+    workers_total: int = 0
+    prs: list[dict] = []
 
 
 class RequestOut(Schema):
@@ -256,6 +269,7 @@ def thread_summary(session: ConversationSession) -> dict:
         "role": role,
         "archived": session.status == "completed" and role == "thread",
         "attention": needs_attention(session),
+        **resolution(session),
         **thread_status(session),
     }
 
@@ -563,6 +577,72 @@ def session_out(session: ConversationSession) -> dict:
         "attention": needs_attention(session),
         "engine_type": session.engine_type,
         "model": str(meta.get("model") or ""),
+        **resolution(session),
+        **threads_by_status(session),
+    }
+
+
+def waiting_for(session: ConversationSession) -> str:
+    """Why the latest turn waits on the user: an approval, a question, or a failure."""
+    if not needs_attention(session):
+        return ""
+    status = getattr(session, "latest_status", None)
+    if status == "awaiting_approval":
+        return "approval"
+    return "failure" if status in RESUMABLE else "question"
+
+
+def bucket(session: ConversationSession) -> str:
+    """The group a chat sits in on the threads lists: waiting (on the user), working, idle or resolved."""
+    if session.status == "completed":
+        return "resolved"
+    if needs_attention(session):
+        return "waiting"
+    if getattr(session, "busy", False) or getattr(session, "open_in", 0) or getattr(session, "open_out", 0):
+        return "working"
+    return "idle"
+
+
+def threads_by_status(session: ConversationSession) -> dict:
+    """The fields the threads lists group and describe a chat by (from ``with_open_counts`` rows)."""
+    meta = session.metadata or {}
+    group = bucket(session)
+    line = str(getattr(session, "latest_line", "") or "")
+    if group == "resolved":
+        line = str(meta.get("resolved_summary") or "")
+    latest = getattr(session, "latest_activity", None)
+    return {
+        "bucket": group,
+        "waiting_for": waiting_for(session),
+        "status_line": line[:300],
+        "pinned": bool(meta.get("pinned")),
+        "last_activity": max(latest, session.updated_at) if latest else session.updated_at,
+        "workers_running": getattr(session, "workers_running", 0) or 0,
+        "workers_total": getattr(session, "workers_total", 0) or 0,
+        "prs": getattr(session, "pr_links", []),
+    }
+
+
+def attach_prs(sessions: list[ConversationSession]) -> list[ConversationSession]:
+    """Set ``pr_links`` on each session: the pull requests it reported, newest first."""
+    by_session: dict = {}
+    for row in ConversationAttachment.objects.filter(
+        session_id__in=[s.id for s in sessions], metadata__link=GITHUB_PR
+    ).order_by("-created_at"):
+        by_session.setdefault(row.session_id, []).append(pull_request_out(row))
+    for session in sessions:
+        session.pr_links = by_session.get(session.id, [])[:5]
+    return sessions
+
+
+def resolution(session: ConversationSession) -> dict:
+    """Who resolved a finished thread and its one-line summary, when a bot resolved it."""
+    meta = session.metadata or {}
+    if session.status != "completed":
+        return {"resolved_by": "", "resolved_summary": ""}
+    return {
+        "resolved_by": str(meta.get("resolved_by") or ""),
+        "resolved_summary": str(meta.get("resolved_summary") or ""),
     }
 
 
@@ -581,6 +661,10 @@ def with_open_counts(qs):
 
     finished = StructuredCall.objects.filter(session=OuterRef("pk"), kind="chat_reply").exclude(status="in_progress")
     latest = StructuredCall.objects.filter(session=OuterRef("pk"), kind="chat_reply").order_by("-created_at")
+    replied = StructuredCall.objects.filter(session=OuterRef("pk"), kind="chat_reply", status="completed").order_by(
+        "-created_at"
+    )
+    moved = StructuredCall.objects.filter(session=OuterRef("pk")).order_by("-updated_at")
 
     running = StructuredCall.objects.filter(
         session=OuterRef("pk"),
@@ -594,6 +678,16 @@ def with_open_counts(qs):
         latest_status=Subquery(latest.values("status")[:1]),
         latest_type=Subquery(latest.values("response__type")[:1]),
         latest_dismissed=Subquery(latest.values("metadata__dismissed")[:1]),
+        latest_line=Subquery(replied.values("response__status")[:1]),
+        latest_activity=Subquery(moved.values("updated_at")[:1]),
+        workers_running=Subquery(working.order_by().values("session").annotate(n=Count("pk")).values("n")[:1]),
+        workers_total=Subquery(
+            Worker.objects.filter(session=OuterRef("pk"))
+            .order_by()
+            .values("session")
+            .annotate(n=Count("pk"))
+            .values("n")[:1]
+        ),
         open_in=Count(
             "thread_messages",
             filter=Q(
@@ -789,7 +883,8 @@ def list_sessions(request, bot: str = "", q: str = "", status: str = ""):
             | Q(openai_messages__content__icontains=q)
             | Q(metadata__title__icontains=q)
         ).distinct()
-    return [session_out(s) for s in with_open_counts(qs).order_by("-updated_at")[:200]]
+    rows = attach_prs(list(with_open_counts(qs).order_by("-updated_at")[:200]))
+    return [session_out(s) for s in rows]
 
 
 @router.post("/bots/{bot}/root", response=SessionOut)
@@ -1144,6 +1239,25 @@ async def close_session(request, session_id: str):
     if (session.metadata or {}).get("bot_role") in ("root", "main", "chat"):
         raise HttpError(409, "Main and named chats can't be archived")
     await sync_to_async(archival.archive)(session, "archived by the user")
+    return await sync_to_async(session_out)(session)
+
+
+class PinSessionIn(Schema):
+    pinned: bool = True
+
+
+@router.post("/sessions/{session_id}/pin", response=SessionOut)
+async def pin_session(request, session_id: str, data: PinSessionIn):
+    """Pin a chat to the top of the threads lists, or unpin it. Not activity, so
+    ``updated_at`` is left alone."""
+    session = await get_session(request, session_id)
+    metadata = dict(session.metadata or {})
+    if data.pinned:
+        metadata["pinned"] = True
+    else:
+        metadata.pop("pinned", None)
+    await ConversationSession.objects.filter(pk=session.pk).aupdate(metadata=metadata)
+    session = await with_open_counts(ConversationSession.objects.filter(pk=session.pk)).select_related("user").aget()
     return await sync_to_async(session_out)(session)
 
 

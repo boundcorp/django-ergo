@@ -20,8 +20,10 @@ def tool_call(name, tool_input):
     return SimpleNamespace(content=[block], stop_reason="tool_use", usage=_usage())
 
 
-def say(text, suggestions=None, kind="message"):
+def say(text, suggestions=None, kind="message", status=None):
     reply = {"type": kind, "text": text, "suggestions": suggestions or []}
+    if status is not None:
+        reply["status"] = status
     return tool_call("send_reply", reply)
 
 

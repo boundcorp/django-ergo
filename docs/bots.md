@@ -428,6 +428,9 @@ by calling `send_reply` with a `ChatReply`:
 - `type: question`: something the bot needs from the user, with 2 to 4
   suggested answers. Channels show suggestions as buttons, and the user can
   still type anything.
+- `status` (optional, both types): one line for thread lists, saying what
+  the bot needs from the user or what it is doing now. Ergonaut shows it
+  under the thread's title.
 
 History stores each reply as readable text, with its suggestions, so later
 turns and the history tools see the conversation as the user did. A tool
