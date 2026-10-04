@@ -101,6 +101,24 @@ export function Chat({ onChange }: { onChange: () => void }) {
   const transcript = useRef<HTMLDivElement>(null)
   const keepScroll = useRef<number | null>(null)
   const skipScroll = useRef(false)
+  // The view follows new messages only while it's at the bottom; scrolled up, it stays put.
+  const atBottom = useRef(true)
+  const [scrolledUp, setScrolledUp] = useState(false)
+  const [unseen, setUnseen] = useState(false)
+  const seenCount = useRef(0)
+  function onTranscriptScroll() {
+    const el = transcript.current
+    if (!el) return
+    atBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80
+    setScrolledUp(!atBottom.current)
+    if (atBottom.current) setUnseen(false)
+  }
+  function toBottom(behavior: ScrollBehavior = 'auto') {
+    atBottom.current = true
+    setScrolledUp(false)
+    setUnseen(false)
+    bottom.current?.scrollIntoView({ behavior })
+  }
   const [loadingOlder, setLoadingOlder] = useState(false)
   async function loadOlder() {
     if (!detail?.has_more || detail.first_line == null || loadingOlder) return
@@ -129,6 +147,9 @@ export function Chat({ onChange }: { onChange: () => void }) {
   useEffect(() => {
     setDetail(null)
     setLast(null)
+    atBottom.current = true
+    setScrolledUp(false)
+    setUnseen(false)
     setOpenPin(null)
     setFiles([])
     load().catch(e => setError(String(e.message ?? e)))
@@ -217,7 +238,9 @@ export function Chat({ onChange }: { onChange: () => void }) {
       skipScroll.current = false
       return
     }
-    bottom.current?.scrollIntoView({ behavior: 'smooth' })
+    if (atBottom.current) bottom.current?.scrollIntoView()
+    else if ((detail?.messages.length ?? 0) > seenCount.current) setUnseen(true)
+    seenCount.current = detail?.messages.length ?? 0
   }, [detail, busy])
 
   // A queued turn is done once its call has finished: a new call for a
@@ -280,6 +303,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
     setSentFiles(outgoing)
     setOutgoing([])
     if (mode === 'interrupt') setStopping(true)
+    toBottom()
     run(() => api.send(id, message, ids, mode), message || outgoing.map(f => f.filename).join(', '))
   }
 
@@ -413,6 +437,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
         {openPin && <PageViewer pin={openPin} refreshKey={detail.messages.length} onClose={() => setOpenPin(null)} />}
         <div
           ref={transcript}
+          onScroll={onTranscriptScroll}
           className={`chat-transcript min-h-24 flex-1 overflow-y-auto px-4 py-5 sm:px-6 ${openPin ? 'hidden' : ''}`}
         >
           {detail.has_more && (
@@ -474,6 +499,17 @@ export function Chat({ onChange }: { onChange: () => void }) {
             </div>
           )}
           <div ref={bottom} />
+          {scrolledUp && (
+            <div className="pointer-events-none sticky bottom-2 flex h-0 justify-center">
+              <button
+                className="pointer-events-auto -translate-y-full rounded-full border border-stroke bg-surface px-3 py-1 text-xs text-ink shadow-md hover:bg-raised"
+                title="Jump to the latest message"
+                onClick={() => toBottom('smooth')}
+              >
+                ↓ {unseen ? 'New messages' : 'Jump to bottom'}
+              </button>
+            </div>
+          )}
         </div>
         {!!waiting.length && (
           <div className="mx-4 mb-3 grid max-h-[45dvh] gap-2 overflow-y-auto sm:mx-6">

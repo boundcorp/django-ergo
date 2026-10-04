@@ -131,7 +131,10 @@ refuse logins until the window passes.
   Approve and Deny, suggested replies as buttons, file uploads and pasted
   images. Send while the bot is working to steer the running turn; Stop
   ends it, and Stop & send interrupts it with your message. Pinned files
-  and pages open as tabs above the transcript.
+  and pages open as tabs above the transcript. The transcript follows new
+  messages only while you're at the bottom; scrolled up, it stays put and a
+  "Jump to bottom" button (or "New messages") takes you back. Sending a
+  message always scrolls to the bottom.
 - **Tool calls**: a run of calls shows its last three in full (name,
   arguments and result, streaming in as they run); the earlier ones fold into
   a "+N more" row naming the tools, which unfolds them in place as one-line
