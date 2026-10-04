@@ -32,7 +32,6 @@ from ergonaut.apps.bots.tasks import (
     queue_turn,
     recover_stopped_session,
     request_stop,
-    turn_running,
     unsend,
 )
 
@@ -108,7 +107,7 @@ class SessionOut(Schema):
     busy: bool = False  # a turn is running in it right now
     unread: bool = False  # a reply came after its owner last opened it
     attention: bool = False  # the latest turn waits on the user (approval, question, failure)
-    engine_type: str = ""  # openai or claude: its messages are stored per engine
+    engine_type: str = ""  # openai or claude: the engine its latest turn ran on
     model: str = ""  # the provider/model picked for this chat ("" = the bot's default)
     # Set when a bot resolved the thread (ergo_thread_resolve): who, and a one-line summary.
     resolved_by: str = ""
@@ -195,7 +194,7 @@ PAGE_MESSAGES = 50
 
 def page_start(session: ConversationSession, before: int | None, limit: int) -> int | None:
     """The first sequence of the ``limit`` messages before ``before`` (None: from the start)."""
-    rows = session.claude_messages if session.claude_messages.exists() else session.openai_messages
+    rows = session.messages.all()
     if before is not None:
         rows = rows.filter(sequence__lt=before)
     found = list(rows.order_by("-sequence").values_list("sequence", flat=True)[limit - 1 : limit + 1])
@@ -882,11 +881,7 @@ def list_sessions(request, bot: str = "", q: str = "", status: str = ""):
     if status:
         qs = qs.filter(status=status)
     if q:
-        qs = qs.filter(
-            Q(claude_messages__content_blocks__text__icontains=q)
-            | Q(openai_messages__content__icontains=q)
-            | Q(metadata__title__icontains=q)
-        ).distinct()
+        qs = qs.filter(Q(messages__content_blocks__text__icontains=q) | Q(metadata__title__icontains=q)).distinct()
     rows = attach_prs(list(with_open_counts(qs).order_by("-updated_at")[:200]))
     return [session_out(s) for s in rows]
 
@@ -1044,7 +1039,7 @@ def session_detail(request, session_id: str, before: int | None = None, limit: i
         ],
         "first_line": messages[0]["line"] if messages else first_line,
         "has_more": first_line is not None,
-        "message_count": session.claude_messages.count() or session.openai_messages.count(),
+        "message_count": session.messages.count(),
         "sent": sent_out(session),
         "prs": session_prs(session),
     }
@@ -1218,15 +1213,13 @@ def bot_models(request, bot: str):
 
 @router.post("/sessions/{session_id}/model", response=SessionOut)
 async def set_session_model(request, session_id: str, data: ModelIn):
-    """Pick the model this chat's next turns use. A model on another engine
-    converts the chat's history to that engine (django_ergo.conversation.engine_switch)."""
+    """Pick the model this chat's next turns use, on any engine (messages are
+    stored engine-neutral). A running turn finishes on the model it started with."""
     session = await get_session(request, session_id)
     found = get_bot(session.bot_name, request.auth)
     model = data.model.strip()
     if model:
         check_model(found, model)
-    if await sync_to_async(turn_running)(session.id):
-        raise HttpError(409, "Wait for the running turn to finish, then switch models")
     await sync_to_async(found.pick_model)(session, model)
     return await sync_to_async(session_out)(session)
 

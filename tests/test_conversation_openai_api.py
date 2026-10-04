@@ -8,8 +8,8 @@ from django.contrib.auth import get_user_model
 from django_ergo.conversation.engines.openai_api import OpenAIAPIEngine
 from django_ergo.conversation.models import ConversationSession
 from django_ergo.conversation.models import EngineType
-from django_ergo.conversation.models import OpenAIMessage
-from django_ergo.conversation.models import OpenAIMessageRole
+from django_ergo.conversation.models import MessageBlock
+from django_ergo.conversation.models import SessionMessage
 from django_ergo.conversation.models import SessionStatus
 from django_ergo.conversation.models import TransportType
 from django_ergo.models import Workflow
@@ -128,127 +128,100 @@ class TestReconstructMessages:
         assert messages == []
 
     def test_text_only_conversation(self, engine, session):
-        OpenAIMessage.objects.create(
-            session=session,
-            role=OpenAIMessageRole.USER,
-            content="Hello!",
-            sequence=0,
-        )
-        OpenAIMessage.objects.create(
-            session=session,
-            role=OpenAIMessageRole.ASSISTANT,
-            content="Hi there!",
-            sequence=1,
-        )
+        _msg(session, 0, "user", {"block_type": "text", "text": "Hello!"})
+        _msg(session, 1, "assistant", {"block_type": "text", "text": "Hi there!"})
 
         messages = engine.reconstruct_messages(session)
 
-        expected_count = 2
-        assert len(messages) == expected_count
-        assert messages[0] == {"role": "user", "content": "Hello!"}
-        assert messages[1] == {"role": "assistant", "content": "Hi there!"}
+        assert messages == [
+            {"role": "user", "content": "Hello!"},
+            {"role": "assistant", "content": "Hi there!"},
+        ]
 
     def test_tool_calls_and_tool_response(self, engine, session):
-        tool_calls = [
+        _msg(session, 0, "user", {"block_type": "text", "text": "Search for test"})
+        _msg(
+            session,
+            1,
+            "assistant",
+            {"block_type": "thinking", "thinking": "Claude's, not sent"},
             {
-                "id": "call_abc",
-                "type": "function",
-                "function": {"name": "search_kb", "arguments": '{"query": "test"}'},
-            }
+                "block_type": "tool_use",
+                "tool_use_id": "call_abc",
+                "tool_name": "search_kb",
+                "tool_input": {"query": "test"},
+            },
+        )
+        _msg(
+            session,
+            2,
+            "user",
+            {
+                "block_type": "tool_result",
+                "tool_result_for": "call_abc",
+                "tool_result_content": "Found 3 results",
+            },
+            {
+                "block_type": "tool_result",
+                "tool_result_for": "call_def",
+                "tool_result_content": "Nothing",
+            },
+            {"block_type": "text", "text": "Also, hurry"},
+        )
+
+        messages = engine.reconstruct_messages(session)
+
+        assert messages == [
+            {"role": "user", "content": "Search for test"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_abc",
+                        "type": "function",
+                        "function": {
+                            "name": "search_kb",
+                            "arguments": '{"query": "test"}',
+                        },
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_abc", "content": "Found 3 results"},
+            {"role": "tool", "tool_call_id": "call_def", "content": "Nothing"},
+            {"role": "user", "content": "Also, hurry"},
         ]
-        # User turn
-        OpenAIMessage.objects.create(
-            session=session,
-            role=OpenAIMessageRole.USER,
-            content="Search for test",
-            sequence=0,
-        )
-        # Assistant calls a tool
-        OpenAIMessage.objects.create(
-            session=session,
-            role=OpenAIMessageRole.ASSISTANT,
-            content=None,
-            tool_calls=tool_calls,
-            sequence=1,
-        )
-        # Tool result
-        OpenAIMessage.objects.create(
-            session=session,
-            role=OpenAIMessageRole.TOOL,
-            content="Found 3 results",
-            tool_call_id="call_abc",
-            sequence=2,
-        )
+
+    def test_system_prompt_comes_from_the_session(self, engine, session):
+        session.system_prompt = "You are a helpful assistant."
+        session.save()
+        _msg(session, 0, "user", {"block_type": "text", "text": "Hi"})
 
         messages = engine.reconstruct_messages(session)
 
-        expected_count = 3
-        assert len(messages) == expected_count
-
-        # User message
-        assert messages[0]["role"] == "user"
-        assert messages[0]["content"] == "Search for test"
-        assert "tool_calls" not in messages[0]
-        assert "tool_call_id" not in messages[0]
-
-        # Assistant with tool_calls
-        assert messages[1]["role"] == "assistant"
-        assert messages[1]["tool_calls"] == tool_calls
-
-        # Tool response
-        assert messages[2]["role"] == "tool"
-        assert messages[2]["content"] == "Found 3 results"
-        assert messages[2]["tool_call_id"] == "call_abc"
-
-    def test_system_message_included(self, engine, session):
-        OpenAIMessage.objects.create(
-            session=session,
-            role=OpenAIMessageRole.SYSTEM,
-            content="You are a helpful assistant.",
-            sequence=0,
-        )
-        OpenAIMessage.objects.create(
-            session=session,
-            role=OpenAIMessageRole.USER,
-            content="Hi",
-            sequence=1,
-        )
-
-        messages = engine.reconstruct_messages(session)
-
-        expected_count = 2
-        assert len(messages) == expected_count
-        assert messages[0]["role"] == "system"
-        assert messages[0]["content"] == "You are a helpful assistant."
-        assert messages[1]["role"] == "user"
+        assert messages == [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": "Hi"},
+        ]
 
     def test_ordering_preserved(self, engine, session):
         """Messages must come back in sequence order."""
         # Insert deliberately out of sequence order
-        OpenAIMessage.objects.create(
-            session=session,
-            role=OpenAIMessageRole.ASSISTANT,
-            content="Response",
-            sequence=2,
-        )
-        OpenAIMessage.objects.create(
-            session=session,
-            role=OpenAIMessageRole.SYSTEM,
-            content="System",
-            sequence=0,
-        )
-        OpenAIMessage.objects.create(
-            session=session,
-            role=OpenAIMessageRole.USER,
-            content="Question",
-            sequence=1,
-        )
+        _msg(session, 2, "assistant", {"block_type": "text", "text": "Response"})
+        _msg(session, 1, "user", {"block_type": "text", "text": "Question"})
 
         messages = engine.reconstruct_messages(session)
 
-        assert messages[0]["role"] == "system"
-        assert messages[1]["role"] == "user"
-        assert messages[2]["role"] == "assistant"
+        assert [m["role"] for m in messages] == ["user", "assistant"]
+
+
+def _msg(session, sequence, role, *blocks):
+    message = SessionMessage.objects.create(
+        session=session, role=role, sequence=sequence
+    )
+    for i, block in enumerate(blocks):
+        MessageBlock.objects.create(message=message, sequence=i, **block)
+    return message
 
 
 # ---------------------------------------------------------------------------
@@ -306,25 +279,13 @@ class TestStartSession:
         session_id = async_to_sync(engine.start_session)(session)
         assert session_id == str(session.id)
 
-    def test_start_session_without_workflow_no_system_message(self, engine, session):
-        from asgiref.sync import async_to_sync
-
-        async_to_sync(engine.start_session)(session)
-        assert OpenAIMessage.objects.filter(session=session).count() == 0
-
-    def test_start_session_with_workflow_creates_system_message(
+    def test_start_session_stores_no_system_message(
         self, engine, session_with_workflow
     ):
         from asgiref.sync import async_to_sync
 
         async_to_sync(engine.start_session)(session_with_workflow)
-        system_msgs = OpenAIMessage.objects.filter(
-            session=session_with_workflow,
-            role=OpenAIMessageRole.SYSTEM,
-        )
-        assert system_msgs.count() == 1
-        assert system_msgs.first().content == "You are a helpful assistant."
-        assert system_msgs.first().sequence == 0
+        assert not session_with_workflow.messages.exists()
 
 
 class TestUsageTokens:

@@ -834,13 +834,13 @@ class ChatMessageAdmin(admin.ModelAdmin):
 
 
 # ---------------------------------------------------------------------------
-# Conversation admin (ConversationSession, ClaudeMessage, ClaudeContentBlock)
+# Conversation admin (ConversationSession, SessionMessage, MessageBlock)
 # ---------------------------------------------------------------------------
 
 try:
-    from django_ergo.conversation.models import ClaudeContentBlock
-    from django_ergo.conversation.models import ClaudeMessage
     from django_ergo.conversation.models import ConversationSession
+    from django_ergo.conversation.models import MessageBlock
+    from django_ergo.conversation.models import SessionMessage
     from django_ergo.conversation.models import StructuredCall
 
     class StructuredCallInline(admin.TabularInline):
@@ -866,8 +866,8 @@ try:
         def has_delete_permission(self, request, obj=None):
             return False
 
-    class ClaudeMessageInline(admin.TabularInline):
-        model = ClaudeMessage
+    class SessionMessageInline(admin.TabularInline):
+        model = SessionMessage
         extra = 0
         fields = [
             "sequence",
@@ -887,8 +887,8 @@ try:
         def has_delete_permission(self, request, obj=None):
             return False
 
-    class ClaudeContentBlockInline(admin.TabularInline):
-        model = ClaudeContentBlock
+    class MessageBlockInline(admin.TabularInline):
+        model = MessageBlock
         extra = 0
         fields = ["sequence", "block_type", "content_preview"]
         readonly_fields = fields
@@ -946,7 +946,7 @@ try:
         list_filter = ["engine_type", "compaction_mode", "status"]
         search_fields = ["session_id", "bot_name", "metadata"]
         readonly_fields = ["id", "created_at", "updated_at"]
-        inlines = [StructuredCallInline, ClaudeMessageInline]
+        inlines = [StructuredCallInline, SessionMessageInline]
 
         def get_urls(self):
             urls = super().get_urls()
@@ -969,7 +969,7 @@ try:
 
         @admin.display(description="Msgs")
         def message_count(self, obj):
-            return obj.claude_messages.count()
+            return obj.messages.count()
 
         @admin.display(description="Info")
         def metadata_preview(self, obj):
@@ -985,9 +985,9 @@ try:
 
         def transcript_view(self, request, object_id):
             session = ConversationSession.objects.get(pk=object_id)
-            messages = session.claude_messages.prefetch_related(
-                "content_blocks"
-            ).order_by("sequence")
+            messages = session.messages.prefetch_related("content_blocks").order_by(
+                "sequence"
+            )
 
             transcript = []
             for msg in messages:
@@ -1034,8 +1034,8 @@ try:
                 request, "admin/django_ergo/conversation_transcript.html", context
             )
 
-    @admin.register(ClaudeMessage)
-    class ClaudeMessageAdmin(admin.ModelAdmin):
+    @admin.register(SessionMessage)
+    class SessionMessageAdmin(admin.ModelAdmin):
         list_display = [
             "session_short",
             "sequence",
@@ -1047,7 +1047,7 @@ try:
         list_filter = ["role", "model_name"]
         readonly_fields = ["created_at", "updated_at"]
         ordering = ["session", "sequence"]
-        inlines = [ClaudeContentBlockInline]
+        inlines = [MessageBlockInline]
 
         @admin.display(description="Session")
         def session_short(self, obj):

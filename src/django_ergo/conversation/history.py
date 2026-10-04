@@ -396,7 +396,7 @@ class SessionSource(MessageSource):
         from django_ergo.conversation.attachments import describe
 
         attachments = attachments_by_sequence(self.session)
-        messages = self._claude_rows() or self._openai_rows()
+        messages = self._rows()
         for message in messages:
             for row in attachments.get(message.line, []):
                 message.blocks.insert(
@@ -411,12 +411,10 @@ class SessionSource(MessageSource):
                 )
         return _name_tool_results(messages)
 
-    def _claude_rows(self) -> list[HistoryMessage]:
+    def _rows(self) -> list[HistoryMessage]:
         from django_ergo.conversation.engines.claude_api import claude_message_dict
 
-        rows = self._window(
-            self.session.claude_messages.prefetch_related("content_blocks")
-        )
+        rows = self._window(self.session.messages.prefetch_related("content_blocks"))
         return [
             HistoryMessage(
                 source_id=self.source_id,
@@ -427,59 +425,6 @@ class SessionSource(MessageSource):
             )
             for row in rows
         ]
-
-    def _openai_rows(self) -> list[HistoryMessage]:
-        messages = []
-        for row in self._window(self.session.openai_messages.all()):
-            blocks: list[dict] = []
-            if row.role == "system":
-                blocks.append({"type": "context", "text": row.content or ""})
-            elif row.role == "tool":
-                blocks.append(
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": row.tool_call_id or "",
-                        "content": (
-                            [
-                                {"type": "text", "text": row.content or ""},
-                                *row.images,
-                            ]
-                            if row.images
-                            else row.content or ""
-                        ),
-                        "is_error": False,
-                    }
-                )
-            elif row.content:
-                blocks.append(
-                    _user_text_block(row.content)
-                    if row.role == "user"
-                    else _text(row.content)
-                )
-            for call in row.tool_calls or []:
-                function = call.get("function", {})
-                try:
-                    args = json.loads(function.get("arguments") or "{}")
-                except json.JSONDecodeError:
-                    args = function.get("arguments")
-                blocks.append(
-                    {
-                        "type": "tool_use",
-                        "id": call.get("id", ""),
-                        "name": function.get("name", ""),
-                        "input": args,
-                    }
-                )
-            messages.append(
-                HistoryMessage(
-                    source_id=self.source_id,
-                    line=row.sequence,
-                    role=row.role,
-                    blocks=blocks,
-                    timestamp=as_aware(row.created_at),
-                )
-            )
-        return messages
 
 
 # ---------------------------------------------------------------------------

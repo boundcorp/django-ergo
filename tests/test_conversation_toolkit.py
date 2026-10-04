@@ -5,9 +5,9 @@ import pytest
 from django.contrib.auth import get_user_model
 
 from django_ergo.conversation.history_toolkit import ChatWithHistoryToolkit
-from django_ergo.conversation.models import ClaudeContentBlock
-from django_ergo.conversation.models import ClaudeMessage
 from django_ergo.conversation.models import ConversationSession
+from django_ergo.conversation.models import MessageBlock
+from django_ergo.conversation.models import SessionMessage
 
 User = get_user_model()
 pytestmark = pytest.mark.django_db
@@ -27,14 +27,14 @@ def session_a(user):
         status="completed",
         metadata={"slug": "red-fox-jumps"},
     )
-    m0 = ClaudeMessage.objects.create(session=s, role="user", sequence=0)
-    ClaudeContentBlock.objects.create(
+    m0 = SessionMessage.objects.create(session=s, role="user", sequence=0)
+    MessageBlock.objects.create(
         message=m0, block_type="text", sequence=0, text="List files"
     )
-    m1 = ClaudeMessage.objects.create(
+    m1 = SessionMessage.objects.create(
         session=s, role="assistant", sequence=1, stop_reason="tool_use"
     )
-    ClaudeContentBlock.objects.create(
+    MessageBlock.objects.create(
         message=m1,
         block_type="tool_use",
         sequence=0,
@@ -42,18 +42,18 @@ def session_a(user):
         tool_name="Bash",
         tool_input={"command": "ls /tmp"},
     )
-    m2 = ClaudeMessage.objects.create(session=s, role="user", sequence=2)
-    ClaudeContentBlock.objects.create(
+    m2 = SessionMessage.objects.create(session=s, role="user", sequence=2)
+    MessageBlock.objects.create(
         message=m2,
         block_type="tool_result",
         sequence=0,
         tool_result_for="toolu_01",
         tool_result_content="file1.txt\nfile2.txt",
     )
-    m3 = ClaudeMessage.objects.create(
+    m3 = SessionMessage.objects.create(
         session=s, role="assistant", sequence=3, stop_reason="end_turn"
     )
-    ClaudeContentBlock.objects.create(
+    MessageBlock.objects.create(
         message=m3,
         block_type="text",
         sequence=0,
@@ -70,20 +70,20 @@ def session_b(user):
         transport_type="api",
         status="completed",
     )
-    m0 = ClaudeMessage.objects.create(session=s, role="user", sequence=0)
-    ClaudeContentBlock.objects.create(
+    m0 = SessionMessage.objects.create(session=s, role="user", sequence=0)
+    MessageBlock.objects.create(
         message=m0, block_type="text", sequence=0, text="Explain auth"
     )
-    m1 = ClaudeMessage.objects.create(
+    m1 = SessionMessage.objects.create(
         session=s, role="assistant", sequence=1, stop_reason="end_turn"
     )
-    ClaudeContentBlock.objects.create(
+    MessageBlock.objects.create(
         message=m1,
         block_type="thinking",
         sequence=0,
         thinking="Let me think about auth...",
     )
-    ClaudeContentBlock.objects.create(
+    MessageBlock.objects.create(
         message=m1,
         block_type="text",
         sequence=1,

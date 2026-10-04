@@ -77,13 +77,13 @@ Models are named `provider/model`. A bot picks one with
 `default`. In Ergonaut, the chat header and the New thread page have a
 model picker listing every model whose provider's key is set. Any chat can
 switch to any of them, and the pick (stored on the chat as
-`ConversationSession.model`) applies to every later turn. A chat's history is
-stored in its engine's format, so picking a model on another engine converts
-the history first (`django_ergo.conversation.engine_switch`); it can't happen
-while a turn is running. When a bot's model moves to another engine (its
-bot.yaml or `default` changes) and nobody picks, existing chats stay on their
-engine: they use `default` if it's on that engine, else the first available
-model there. Picking "Default" moves them to the bot's default.
+`ConversationSession.model`) applies to every later turn (a running turn
+finishes on the model it started with). Messages are stored the same way for every engine
+(`SessionMessage` rows of text, tool call, tool result and thinking blocks)
+and each engine renders them into its API's format when it sends them, so a
+chat moves between OpenAI and Claude models with its history intact. Thinking
+from one provider isn't sent to another. Chats left on "Default" follow the
+bot's model, even when it moves to another engine.
 The file reloads like the bot folders. If an edit breaks it, the last good
 version stays in use and admins see the error.
 

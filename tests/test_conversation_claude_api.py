@@ -5,12 +5,12 @@ from django.contrib.auth import get_user_model
 
 from django_ergo.conversation.engines import ENGINE_REGISTRY
 from django_ergo.conversation.engines.claude_api import ClaudeAPIEngine
-from django_ergo.conversation.models import ClaudeContentBlock
-from django_ergo.conversation.models import ClaudeMessage
-from django_ergo.conversation.models import ClaudeMessageRole
 from django_ergo.conversation.models import ContentBlockType
 from django_ergo.conversation.models import ConversationSession
 from django_ergo.conversation.models import EngineType
+from django_ergo.conversation.models import MessageBlock
+from django_ergo.conversation.models import SessionMessage
+from django_ergo.conversation.models import SessionMessageRole
 from django_ergo.conversation.models import SessionStatus
 from django_ergo.conversation.models import TransportType
 from django_ergo.models import Workflow
@@ -129,26 +129,41 @@ class TestReconstructMessages:
         result = engine.reconstruct_messages(session)
         assert result == []
 
+    def test_empty_text_and_empty_messages_are_left_out(self, engine, session):
+        # As another engine may have stored them: an empty reply, a files-only message.
+        SessionMessage.objects.create(session=session, role="assistant", sequence=0)
+        asked = SessionMessage.objects.create(session=session, role="user", sequence=1)
+        MessageBlock.objects.create(
+            message=asked, block_type="text", sequence=0, text=""
+        )
+        MessageBlock.objects.create(
+            message=asked, block_type="text", sequence=1, text="Dinner?"
+        )
+
+        assert engine.reconstruct_messages(session) == [
+            {"role": "user", "content": [{"type": "text", "text": "Dinner?"}]}
+        ]
+
     def test_text_only_conversation(self, engine, session):
-        user_msg = ClaudeMessage.objects.create(
+        user_msg = SessionMessage.objects.create(
             session=session,
-            role=ClaudeMessageRole.USER,
+            role=SessionMessageRole.USER,
             sequence=0,
         )
-        ClaudeContentBlock.objects.create(
+        MessageBlock.objects.create(
             message=user_msg,
             block_type=ContentBlockType.TEXT,
             sequence=0,
             text="Hello, Claude!",
         )
 
-        assistant_msg = ClaudeMessage.objects.create(
+        assistant_msg = SessionMessage.objects.create(
             session=session,
-            role=ClaudeMessageRole.ASSISTANT,
+            role=SessionMessageRole.ASSISTANT,
             sequence=1,
             stop_reason="end_turn",
         )
-        ClaudeContentBlock.objects.create(
+        MessageBlock.objects.create(
             message=assistant_msg,
             block_type=ContentBlockType.TEXT,
             sequence=0,
@@ -167,13 +182,13 @@ class TestReconstructMessages:
 
     def test_tool_use_and_tool_result_blocks(self, engine, session):
         # Assistant message with a tool_use block
-        assistant_msg = ClaudeMessage.objects.create(
+        assistant_msg = SessionMessage.objects.create(
             session=session,
-            role=ClaudeMessageRole.ASSISTANT,
+            role=SessionMessageRole.ASSISTANT,
             sequence=0,
             stop_reason="tool_use",
         )
-        ClaudeContentBlock.objects.create(
+        MessageBlock.objects.create(
             message=assistant_msg,
             block_type=ContentBlockType.TOOL_USE,
             sequence=0,
@@ -183,12 +198,12 @@ class TestReconstructMessages:
         )
 
         # User message with a tool_result block
-        user_msg = ClaudeMessage.objects.create(
+        user_msg = SessionMessage.objects.create(
             session=session,
-            role=ClaudeMessageRole.USER,
+            role=SessionMessageRole.USER,
             sequence=1,
         )
-        ClaudeContentBlock.objects.create(
+        MessageBlock.objects.create(
             message=user_msg,
             block_type=ContentBlockType.TOOL_RESULT,
             sequence=0,
@@ -214,12 +229,12 @@ class TestReconstructMessages:
         assert tool_result_block["is_error"] is False
 
     def test_tool_result_error_flag(self, engine, session):
-        user_msg = ClaudeMessage.objects.create(
+        user_msg = SessionMessage.objects.create(
             session=session,
-            role=ClaudeMessageRole.USER,
+            role=SessionMessageRole.USER,
             sequence=0,
         )
-        ClaudeContentBlock.objects.create(
+        MessageBlock.objects.create(
             message=user_msg,
             block_type=ContentBlockType.TOOL_RESULT,
             sequence=0,
@@ -232,18 +247,18 @@ class TestReconstructMessages:
         assert result[0]["content"][0]["is_error"] is True
 
     def test_thinking_blocks(self, engine, session):
-        assistant_msg = ClaudeMessage.objects.create(
+        assistant_msg = SessionMessage.objects.create(
             session=session,
-            role=ClaudeMessageRole.ASSISTANT,
+            role=SessionMessageRole.ASSISTANT,
             sequence=0,
         )
-        ClaudeContentBlock.objects.create(
+        MessageBlock.objects.create(
             message=assistant_msg,
             block_type=ContentBlockType.THINKING,
             sequence=0,
             thinking="Let me reason step by step...",
         )
-        ClaudeContentBlock.objects.create(
+        MessageBlock.objects.create(
             message=assistant_msg,
             block_type=ContentBlockType.TEXT,
             sequence=1,
@@ -262,12 +277,12 @@ class TestReconstructMessages:
         assert content[1] == {"type": "text", "text": "Here is my answer."}
 
     def test_tool_input_defaults_to_empty_dict_when_null(self, engine, session):
-        assistant_msg = ClaudeMessage.objects.create(
+        assistant_msg = SessionMessage.objects.create(
             session=session,
-            role=ClaudeMessageRole.ASSISTANT,
+            role=SessionMessageRole.ASSISTANT,
             sequence=0,
         )
-        ClaudeContentBlock.objects.create(
+        MessageBlock.objects.create(
             message=assistant_msg,
             block_type=ContentBlockType.TOOL_USE,
             sequence=0,
@@ -282,12 +297,12 @@ class TestReconstructMessages:
     def test_tool_result_content_defaults_to_empty_string_when_null(
         self, engine, session
     ):
-        user_msg = ClaudeMessage.objects.create(
+        user_msg = SessionMessage.objects.create(
             session=session,
-            role=ClaudeMessageRole.USER,
+            role=SessionMessageRole.USER,
             sequence=0,
         )
-        ClaudeContentBlock.objects.create(
+        MessageBlock.objects.create(
             message=user_msg,
             block_type=ContentBlockType.TOOL_RESULT,
             sequence=0,
@@ -301,23 +316,23 @@ class TestReconstructMessages:
 
     def test_message_ordering_by_sequence(self, engine, session):
         """Messages should be returned in sequence order."""
-        msg2 = ClaudeMessage.objects.create(
+        msg2 = SessionMessage.objects.create(
             session=session,
-            role=ClaudeMessageRole.ASSISTANT,
+            role=SessionMessageRole.ASSISTANT,
             sequence=1,
         )
-        ClaudeContentBlock.objects.create(
+        MessageBlock.objects.create(
             message=msg2,
             block_type=ContentBlockType.TEXT,
             sequence=0,
             text="Second",
         )
-        msg1 = ClaudeMessage.objects.create(
+        msg1 = SessionMessage.objects.create(
             session=session,
-            role=ClaudeMessageRole.USER,
+            role=SessionMessageRole.USER,
             sequence=0,
         )
-        ClaudeContentBlock.objects.create(
+        MessageBlock.objects.create(
             message=msg1,
             block_type=ContentBlockType.TEXT,
             sequence=0,

@@ -892,21 +892,18 @@ def test_chats_pick_a_model_from_providers(client, cook, use_bots, monkeypatch):
     assert post(client, f"/api/sessions/{root['id']}/model", {"model": "spare/claude-haiku-4-5"}).status_code == 409
     assert post(client, f"/api/sessions/{root['id']}/model", {"model": "nope/x"}).status_code == 400
 
-    # A model on another engine moves the chat (and its history) there.
-    from django_ergo.conversation.models import ClaudeContentBlock, ClaudeMessage, ConversationSession
+    # A model on another engine takes the next turn; the history stays as it is.
+    from django_ergo.conversation.models import ConversationSession, MessageBlock, SessionMessage
 
-    ConversationSession.objects.filter(id=root["id"]).update(engine_type="claude")
     session = ConversationSession.objects.get(id=root["id"])
-    asked = ClaudeMessage.objects.create(session=session, role="user", sequence=0)
-    ClaudeContentBlock.objects.create(message=asked, block_type="text", sequence=0, text="Dinner?")
+    asked = SessionMessage.objects.create(session=session, role="user", sequence=0)
+    MessageBlock.objects.create(message=asked, block_type="text", sequence=0, text="Dinner?")
     moved = post(client, f"/api/sessions/{root['id']}/model", {"model": "openai/gpt-6-sol"}).json()
     assert (moved["engine_type"], moved["model"]) == ("openai", "openai/gpt-6-sol")
-    assert [(m.role, m.content) for m in session.openai_messages.all() if m.role != "system"] == [("user", "Dinner?")]
+    assert [m.content_blocks.get().text for m in session.messages.all()] == ["Dinner?"]
 
-    # Not while a turn runs; "" goes back to the bot's default (and its engine).
-    monkeypatch.setattr("ergonaut.api.bots.turn_running", lambda session_id: True)
-    assert post(client, f"/api/sessions/{root['id']}/model", {"model": ""}).status_code == 409
-    monkeypatch.setattr("ergonaut.api.bots.turn_running", lambda session_id: False)
+    # Even while a turn runs (it finishes on its model); "" goes back to the bot's default.
+    monkeypatch.setattr("ergonaut.apps.bots.tasks.turn_running", lambda session_id: True)
     back = post(client, f"/api/sessions/{root['id']}/model", {"model": ""}).json()
     assert (back["engine_type"], back["model"]) == ("claude", "")
 
@@ -947,16 +944,15 @@ def test_a_failed_turn_explains_itself_and_can_be_resumed_or_dismissed(client, c
 
 @pytest.mark.django_db(transaction=True)
 def test_a_long_chat_comes_a_page_at_a_time(client, cook, use_bots):
-    from django_ergo.conversation.models import ConversationSession, OpenAIMessage, StructuredCall
+    from django_ergo.conversation.models import ConversationSession, MessageBlock, SessionMessage, StructuredCall
 
     use_bots(say("hi"))
     session = ConversationSession.objects.create(
         user=cook, bot_name="kitchen", engine_type="openai", metadata={"bot_role": "root"}
     )
     for n in range(120):
-        OpenAIMessage.objects.create(
-            session=session, role="user" if n % 2 == 0 else "assistant", content=f"m{n}", sequence=n
-        )
+        message = SessionMessage.objects.create(session=session, role="user" if n % 2 == 0 else "assistant", sequence=n)
+        MessageBlock.objects.create(message=message, block_type="text", sequence=0, text=f"m{n}")
     old = StructuredCall.objects.create(
         kind="chat_reply", session=session, status="completed", first_sequence=0, last_sequence=1
     )

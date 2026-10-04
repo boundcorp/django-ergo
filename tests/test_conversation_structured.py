@@ -802,3 +802,55 @@ async def test_steering_in_a_window_session_keeps_the_turns_tool_work(user):
     sent = engine._client.calls[1]["messages"]
     assert sent[0]["content"][0]["text"] == "Plan X"
     assert sent[-1]["content"][0]["text"] == "Shorter"
+
+
+async def test_a_session_moves_between_engines_with_its_history(user):
+    session = await _chat_session(user, engine_type="openai")
+    spec = StructuredCallSpec(
+        kind="planner", response_model=Plan, toolkits=[LookupToolkit()]
+    )
+    openai = OpenAIAPIEngine(config={"model": "gpt-test"})
+    openai._client = FakeOpenAIClient(
+        openai_tool("lookup", {"q": "docs"}),
+        openai_tool("submit_output", VALID_PLAN, call_id="call_2"),
+        openai_tool("submit_output", VALID_PLAN, call_id="call_3"),
+    )
+    claude = claude_engine(
+        claude_tool("lookup", {"q": "more"}, tool_id="toolu_1"),
+        claude_tool("submit_output", VALID_PLAN, tool_id="toolu_2"),
+    )
+
+    for engine, text in ((openai, "Plan"), (claude, "Again"), (openai, "Once more")):
+        result = await run_structured_call(spec, text, session=session, engine=engine)
+        assert result.ok
+        await session.arefresh_from_db()
+        assert session.engine_type == engine.engine_type
+
+    # Claude gets OpenAI's tool calls as tool_use blocks, each answered.
+    sent = claude._client.calls[0]
+    assert sent["system"] == "You are helpful."
+    calls = [
+        b for m in sent["messages"] for b in m["content"] if b["type"] == "tool_use"
+    ]
+    results = [
+        b["tool_use_id"]
+        for m in sent["messages"]
+        if m["role"] == "user"
+        for b in m["content"]
+        if b["type"] == "tool_result"
+    ]
+    assert [c["id"] for c in calls] == ["call_1", "call_2"]
+    assert results == ["call_1", "call_2"]
+    assert calls[0]["input"] == {"q": "docs"}
+
+    # And OpenAI gets Claude's back as tool_calls with tool messages.
+    messages = openai._client.calls[2]["messages"]
+    assert messages[0] == {"role": "system", "content": "You are helpful."}
+    called = [c["id"] for m in messages for c in m.get("tool_calls") or []]
+    answered = [m["tool_call_id"] for m in messages if m["role"] == "tool"]
+    assert called == answered == ["call_1", "call_2", "toolu_1", "toolu_2"]
+    assert [m["content"] for m in messages if m["role"] == "user"] == [
+        "Plan",
+        "Again",
+        "Once more",
+    ]

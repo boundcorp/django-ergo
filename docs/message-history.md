@@ -8,7 +8,7 @@ and search those records.
 
 | Source | Reads | `source_id` | `line` is |
 | --- | --- | --- | --- |
-| `SessionSource(session)` | a `ConversationSession` (Claude or OpenAI rows, plus attachments) | `session:<uuid>` | message sequence |
+| `SessionSource(session)` | a `ConversationSession` (its `SessionMessage` rows, plus attachments) | `session:<uuid>` | message sequence |
 | `ClaudeCodeSource(path)` | a Claude Code transcript, `~/.claude/projects/*/<id>.jsonl` | `claude:<id>` | JSONL line number |
 | `CodexSource(path)` | a Codex CLI rollout, `~/.codex/sessions/**/rollout-*.jsonl` (new and legacy formats) | `codex:<date-id>` | JSONL line number |
 

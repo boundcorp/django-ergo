@@ -145,9 +145,8 @@ tool messages.
 
 In a session, image bytes are saved as a session file (source `bot`), and the
 stored tool result keeps an `image_ref` item (`attachment_id`, `name`,
-`media_type`), not base64: in `ClaudeContentBlock.tool_result_content` for
-Claude, in `OpenAIMessage.images` for OpenAI. Standalone structured calls
-keep a note instead of the bytes in their transcript.
+`media_type`) in `MessageBlock.tool_result_content`, not base64. Standalone
+structured calls keep a note instead of the bytes in their transcript.
 
 ## How many images a call carries
 

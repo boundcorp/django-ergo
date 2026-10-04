@@ -8,9 +8,9 @@ from django_ergo.conversation.history import codex_blocks
 from django_ergo.conversation.history import codex_item
 from django_ergo.conversation.history import db_timestamp
 from django_ergo.conversation.history import parse_timestamp
-from django_ergo.conversation.models import ClaudeContentBlock
-from django_ergo.conversation.models import ClaudeMessage
 from django_ergo.conversation.models import ConversationSession
+from django_ergo.conversation.models import MessageBlock
+from django_ergo.conversation.models import SessionMessage
 
 _CODEX_LINE_TYPES = {"session_meta", "response_item", "turn_context", "event_msg"}
 
@@ -64,18 +64,18 @@ class CodexCLIImporter:
             if not parsed or not parsed[1]:
                 continue
             role, blocks = parsed
-            message = await ClaudeMessage.objects.acreate(
+            message = await SessionMessage.objects.acreate(
                 session=session,
                 role="assistant" if role == "assistant" else "user",
                 sequence=line_no,
             )
             for block_seq, block in enumerate(blocks):
-                await ClaudeContentBlock.objects.acreate(
+                await MessageBlock.objects.acreate(
                     message=message, sequence=block_seq, **_block_fields(block)
                 )
             timestamp = parse_timestamp(record.get("timestamp"))
             if timestamp is not None:
-                await ClaudeMessage.objects.filter(pk=message.pk).aupdate(
+                await SessionMessage.objects.filter(pk=message.pk).aupdate(
                     created_at=db_timestamp(timestamp)
                 )
         return session

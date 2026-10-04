@@ -452,45 +452,33 @@ class Bot:
         return ""
 
     def session_model(self, session: ConversationSession | None) -> str:
-        """The model picked for this chat, if it's still enabled and runs on the
-        chat's engine (its messages are stored per engine type)."""
+        """The model picked for this chat, if it's still enabled."""
         if session is None:
             return ""
-        ref = self.session_model_ref(session.model)
-        found = self.providers.find(ref) if ref else None
-        return ref if found and found[0].type == session.engine_type else ""
+        return self.session_model_ref(session.model)
 
-    def pick_model(self, session: ConversationSession, model: str) -> bool:
-        """Set the model a chat's next turns use ("" = the bot's default). A model
-        on another engine converts the chat's history to that engine first.
-        Runs the ORM; call it while no turn runs. Returns whether the engine changed."""
-        from django_ergo.conversation.engine_switch import switch_engine
+    def pick_model(self, session: ConversationSession, model: str) -> None:
+        """Set the model a chat's next turns use ("" = the bot's default).
 
-        model = self.session_model_ref(model)
-        spec = self.engine_spec(model=model)  # no session: where a new chat would run
-        switched = switch_engine(session, spec.engine_type, spec.transport_type)
-        session.model = model
-        session.save(update_fields=["model", "updated_at"])
-        return switched
+        Messages are stored the same way for every engine, so a model on
+        another engine just takes the next turn. Runs the ORM.
+        """
+        session.model = self.session_model_ref(model)
+        spec = self.engine_spec(session)
+        fields = ["model", "updated_at"]
+        if (spec.engine_type, spec.transport_type) != (
+            session.engine_type,
+            session.transport_type,
+        ):
+            session.engine_type = spec.engine_type
+            session.transport_type = spec.transport_type
+            session.session_id = ""  # an engine-native session doesn't carry over
+            fields += ["engine_type", "transport_type", "session_id"]
+        session.save(update_fields=fields)
 
     def session_model_ref(self, picked) -> str:
         picked = str(picked or "")
         return picked if picked and self.providers.find(picked) else ""
-
-    def keep_session_engine(self, session: ConversationSession, ref: str) -> str:
-        """A chat stays on the engine its messages are stored in. When the
-        bot's model now runs on another engine (bot.yaml or the default
-        changed), the chat uses a model on its own engine instead."""
-        found = self.providers.find(ref) if ref else None
-        if found:
-            engine_type = found[0].type
-        else:
-            engine_type = (
-                self.definition.engine_type or get_default_engine_spec().engine_type
-            )
-        if not session.engine_type or engine_type == session.engine_type:
-            return ref
-        return self.providers.model_on(session.engine_type) or ref
 
     def engine_spec(
         self, session: ConversationSession | None = None, model: str = ""
@@ -498,8 +486,6 @@ class Bot:
         """The engine for a chat: the model picked for it (or ``model``), else the bot's."""
         default = get_default_engine_spec()
         ref = model or self.session_model(session) or self.model_ref()
-        if session is not None and not model:
-            ref = self.keep_session_engine(session, ref)
         transport = default.transport_type
         if ref:
             engine_type, config, key_env = self.providers.engine(ref)

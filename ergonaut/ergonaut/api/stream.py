@@ -25,7 +25,7 @@ from django.core.serializers.json import DjangoJSONEncoder
 from django.db.models import Q
 from django.http import HttpResponse, StreamingHttpResponse
 from django_ergo.conversation.history import SessionSource
-from django_ergo.conversation.models import ClaudeContentBlock, ConversationSession
+from django_ergo.conversation.models import ConversationSession, MessageBlock
 
 from ergonaut.api.bots import call_out, requests_out, sent_out, session_prs, visible_sessions, workers_out
 
@@ -38,9 +38,8 @@ KEEPALIVE_SECONDS = 15
 def _snapshot(session_id, after: int, seen: dict):
     session = ConversationSession.objects.get(id=session_id)
     count = (
-        session.claude_messages.count(),
-        ClaudeContentBlock.objects.filter(message__session=session).count(),
-        session.openai_messages.count(),
+        session.messages.count(),
+        MessageBlock.objects.filter(message__session=session).count(),
     )
     messages = []
     if count != seen.get("count"):
