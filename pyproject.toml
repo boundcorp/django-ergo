@@ -86,6 +86,15 @@ dev = [
 # https://setuptools.pypa.io/en/latest/userguide/datafiles.html
 where = ["src"]
 
+[tool.setuptools.package-data]
+# Without git metadata (the Ergonaut image build copies src/ alone) only
+# package-data is read, not MANIFEST.in, so list every non-Python file here.
+django_ergo = [
+    "bots/skill_library/**/*.md",
+    "bots/skill_library/**/*.py",
+    "templates/**/*.html",
+]
+
 [tool.setuptools.dynamic]
 version = { attr = "django_ergo.__version__" }
 readme = { file = ["README.md", "HISTORY.md"], content-type = "text/markdown" }
