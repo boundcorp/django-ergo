@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import logging
 import os
 from dataclasses import dataclass
 from dataclasses import field
@@ -83,6 +84,8 @@ if TYPE_CHECKING:
     from django_ergo.conversation.structured import StructuredCallResult
     from django_ergo.conversation.structured import TurnControl
     from django_ergo.conversation.toolkit import Toolkit
+
+logger = logging.getLogger(__name__)
 
 MAIN_ROLE = "main"
 CHAT_ROLE = "chat"  # a named chat from bot.yaml
@@ -153,8 +156,11 @@ class Bot:
             for name, fn in module.tasks.items()
         }
         self.skills: list[Skill] = load_skills(definition.skills_dir)
+        named = self._named_skills()
+        # Default skills nothing named: left out quietly if they don't fit.
+        self.default_skills = self._default_skills() - named
         self.skills += library_skills(
-            self._named_skills(), exclude={s.name for s in self.skills}
+            named | self.default_skills, exclude={s.name for s in self.skills}
         )
         self.tables = []
         if definition.table_files:
@@ -205,26 +211,49 @@ class Bot:
             names |= set(skill.requires)
         return names
 
+    def _default_skills(self) -> set[str]:
+        """``DJANGO_ERGO["DEFAULT_SKILLS"]`` for this bot, minus what bot.yaml excludes."""
+        from django_ergo.settings import api_settings
+
+        definition = self.definition
+        if definition.root_dir is None or not definition.use_default_skills:
+            return set()
+        return {str(n) for n in api_settings.DEFAULT_SKILLS or []} - set(
+            definition.skill_excludes
+        )
+
     def _with_skill_plugins(self, specs: list[PluginSpec]) -> list[PluginSpec]:
         """Add the plugins skills ask for; refuse settings that contradict bot.yaml."""
         specs = [PluginSpec(spec.name, dict(spec.config)) for spec in specs]
-        for skill in self.skills:
+        for skill in list(self.skills):
+            wanted_specs = []
+            clash = ""
             for name, wanted in skill.plugins.items():
                 cls = resolve_plugin_class(name)
                 spec = next(
                     (s for s in specs if resolve_plugin_class(s.name) is cls), None
                 )
+                for key, value in wanted.items():
+                    if spec is not None and key in spec.config:
+                        if spec.config[key] != value:
+                            clash = (
+                                f"Skill {skill.name} needs {name} with {key}: {value}, "
+                                f"but bot.yaml sets {key}: {spec.config[key]}"
+                            )
+                wanted_specs.append((name, spec, wanted))
+            if clash:
+                if skill.name in self.default_skills:
+                    logger.warning(
+                        "%s: leaving out default skill (%s)", self.name, clash
+                    )
+                    self.skills.remove(skill)
+                    continue
+                raise ValueError(clash)
+            for name, spec, wanted in wanted_specs:
                 if spec is None:
                     specs.append(PluginSpec(name, dict(wanted)))
-                    continue
-                for key, value in wanted.items():
-                    if key in spec.config and spec.config[key] != value:
-                        msg = (
-                            f"Skill {skill.name} needs {name} with {key}: {value}, "
-                            f"but bot.yaml sets {key}: {spec.config[key]}"
-                        )
-                        raise ValueError(msg)
-                    spec.config[key] = value
+                else:
+                    spec.config.update(wanted)
         return specs
 
     def _skill_defs(self) -> list[SkillDef]:

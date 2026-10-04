@@ -53,6 +53,8 @@ skills:
   unload_after_turns: 30             # drop a loaded skill unused this many turns
   requires: {meal-planning: [tandoor]}
   include: [skillbuilder]            # skills from Ergo's library (docs/skills.md)
+  exclude: [skillbuilder]            # leave out some of DJANGO_ERGO["DEFAULT_SKILLS"]
+  defaults: true                     # false: none of the default skills
 tools: [tools/tandoor.py]
 toolkits: ["myapp.toolkits:make_toolkit"]   # factory(ctx) -> Toolkit or list
 plugins:
@@ -196,7 +198,8 @@ loads the same way (`django_ergo.bots.skillset`):
   `attachments`, ...) and each `toolkits:` factory;
 - built-ins: `history` (always loaded), `workers`, `orchestration`, and
   `introspection` for bots loaded from a folder;
-- Ergo's skill library (`skillbuilder`), when bot.yaml or a skill names one.
+- Ergo's skill library (`skillbuilder`), when bot.yaml or a skill names one,
+  or by default (`DJANGO_ERGO["DEFAULT_SKILLS"]`, unless bot.yaml excludes it).
 
 `introspection` is read-only and needs no plugin, so every bot can see what
 it's made of, whether or not it can change its repository (that's
