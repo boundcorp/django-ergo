@@ -1,11 +1,23 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
-import type { Call, DelegatedRequest, Message, Pin, SessionDetail, Turn, Worker } from '../api'
+import type {
+  AttachmentFile,
+  Call,
+  DelegatedRequest,
+  Message,
+  Pin,
+  PrLink,
+  SentCard,
+  SessionDetail,
+  Turn,
+  Worker,
+} from '../api'
 import { api } from '../api'
 import Files from '../components/Files'
+import Markdown from '../components/Markdown'
 import ModelPicker from '../components/ModelPicker'
 import { PageViewer, Pins } from '../components/Pins'
-import { Transcript } from '../components/Transcript'
+import { AttachmentView, Transcript } from '../components/Transcript'
 
 /** Fold a live update into the transcript: messages replace by line, calls by id. */
 function merge(detail: SessionDetail, messages: Message[], calls: Call[]): SessionDetail {
@@ -34,11 +46,18 @@ export function Chat({ onChange }: { onChange: () => void }) {
   const [error, setError] = useState('')
   const [last, setLast] = useState<Turn | null>(null)
   // Files picked or pasted for the next message, already uploaded to the session.
-  const [outgoing, setOutgoing] = useState<{ id: string; filename: string }[]>([])
+  type Outgoing = { id: string; filename: string; image: boolean }
+  const [outgoing, setOutgoing] = useState<Outgoing[]>([])
+  // Files sent with the queued message, shown with it until the worker stores it.
+  const [sentFiles, setSentFiles] = useState<Outgoing[]>([])
+  // The chat's files, so the transcript can show the ones a bot made where it made them.
+  const [files, setFiles] = useState<AttachmentFile[]>([])
   const [uploading, setUploading] = useState(false)
   const picker = useRef<HTMLInputElement>(null)
   // A turn a worker is running: what was sent, and how the calls and messages looked then.
-  const [pending, setPending] = useState<{ text: string; calls: number; line: number; approvals: string } | null>(null)
+  const [pending, setPending] = useState<{ text: string; lastCall: string; line: number; approvals: string } | null>(
+    null,
+  )
   // Stop was pressed; the turn ends at its next step.
   const [stopping, setStopping] = useState(false)
   // The Files panel stays open or closed across sessions, per browser.
@@ -65,14 +84,70 @@ export function Chat({ onChange }: { onChange: () => void }) {
   const latest = useRef<SessionDetail | null>(null)
   latest.current = detail
 
-  const load = useCallback(async () => setDetail(await api.session(id)), [id])
+  // Reloads fetch the newest page; older pages already loaded (See more) stay.
+  const load = useCallback(async () => {
+    const fresh = await api.session(id)
+    setDetail(d => {
+      const from = fresh.first_line
+      if (!d || d.session.id !== fresh.session.id || d.first_line == null || from == null || d.first_line >= from)
+        return fresh
+      const older = { ...fresh, messages: d.messages.filter(m => m.line < from), calls: d.calls }
+      return { ...merge(older, fresh.messages, fresh.calls), first_line: d.first_line, has_more: d.has_more }
+    })
+  }, [id])
+
+  // Older messages of a long chat, a page at a time; the view stays where it was.
+  const transcript = useRef<HTMLDivElement>(null)
+  const keepScroll = useRef<number | null>(null)
+  const skipScroll = useRef(false)
+  const [loadingOlder, setLoadingOlder] = useState(false)
+  async function loadOlder() {
+    if (!detail?.has_more || detail.first_line == null || loadingOlder) return
+    setLoadingOlder(true)
+    const el = transcript.current
+    try {
+      const page = await api.session(id, detail.first_line)
+      keepScroll.current = el ? el.scrollHeight - el.scrollTop : null
+      setDetail(d =>
+        d ? { ...merge(d, page.messages, page.calls), first_line: page.first_line, has_more: page.has_more } : d,
+      )
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setLoadingOlder(false)
+    }
+  }
+  useLayoutEffect(() => {
+    const el = transcript.current
+    if (keepScroll.current == null || !el) return
+    el.scrollTop = el.scrollHeight - keepScroll.current
+    keepScroll.current = null
+    skipScroll.current = true
+  }, [detail])
 
   useEffect(() => {
     setDetail(null)
     setLast(null)
     setOpenPin(null)
+    setFiles([])
     load().catch(e => setError(String(e.message ?? e)))
   }, [load])
+
+  // A bot's new file is saved while its tool runs; the tool's result message arrives right after.
+  // Pull requests are recorded when the turn ends, just after its reply: refetch when they change too.
+  const messageCount = detail?.messages.length ?? 0
+  const prKey = (detail?.prs ?? []).map(p => p.url).join()
+  useEffect(() => {
+    if (!messageCount) return
+    let current = true
+    api
+      .attachments(id)
+      .then(list => current && setFiles(list))
+      .catch(() => undefined)
+    return () => {
+      current = false
+    }
+  }, [id, messageCount, prKey])
 
   // A thread's generated title arrives after it starts; show it in the sidebar too.
   const title = detail?.session.title
@@ -104,20 +179,30 @@ export function Chat({ onChange }: { onChange: () => void }) {
     const after = messages.length ? messages[messages.length - 1].line : -1
     const events = new EventSource(`/api/sessions/${id}/events?after=${after}`)
     events.onmessage = e => {
-      const { messages, calls, requests, title, workers } = JSON.parse(e.data) as {
+      const { messages, calls, requests, title, workers, sent, prs } = JSON.parse(e.data) as {
         messages: Message[]
         calls: Call[]
         requests?: DelegatedRequest[]
         title?: string
         workers?: Worker[]
+        sent?: SentCard[]
+        prs?: PrLink[]
       }
       setDetail(d =>
         d
           ? {
               ...merge(d, messages, calls),
+              // New lines past the newest one count toward the session's total.
+              message_count:
+                d.message_count == null
+                  ? undefined
+                  : d.message_count +
+                    new Set(messages.map(m => m.line).filter(line => !d.messages.some(m => m.line === line))).size,
               ...(requests ? { requests } : {}),
               ...(title ? { session: { ...d.session, title } } : {}),
               ...(workers ? { workers } : {}),
+              ...(sent ? { sent } : {}),
+              ...(prs ? { prs } : {}),
             }
           : d,
       )
@@ -127,6 +212,10 @@ export function Chat({ onChange }: { onChange: () => void }) {
   }, [id, loaded])
 
   useEffect(() => {
+    if (skipScroll.current) {
+      skipScroll.current = false
+      return
+    }
     bottom.current?.scrollIntoView({ behavior: 'smooth' })
   }, [detail, busy])
 
@@ -138,10 +227,11 @@ export function Chat({ onChange }: { onChange: () => void }) {
     const call = detail.calls[detail.calls.length - 1]
     if (!call || call.status === 'in_progress') return
     const done = pending.text
-      ? detail.calls.length > pending.calls || stored(detail.messages, pending.text, pending.line)
+      ? call.id !== pending.lastCall || stored(detail.messages, pending.text, pending.line)
       : call.status !== 'awaiting_approval' || JSON.stringify(call.pending_approvals ?? []) !== pending.approvals
     if (done) {
       setPending(null)
+      setSentFiles([])
       onChange()
     }
   }, [detail, pending, onChange])
@@ -160,7 +250,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
     const messages = detail?.messages ?? []
     const before = {
       text: sent,
-      calls: calls.length,
+      lastCall: calls[calls.length - 1]?.id ?? '',
       line: messages.length ? messages[messages.length - 1].line : -1,
       approvals: JSON.stringify(calls[calls.length - 1]?.pending_approvals ?? []),
     }
@@ -186,6 +276,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
     if ((!message.trim() && !outgoing.length) || busy || uploading) return
     const ids = outgoing.map(f => f.id)
     setText('')
+    setSentFiles(outgoing)
     setOutgoing([])
     if (mode === 'interrupt') setStopping(true)
     run(() => api.send(id, message, ids, mode), message || outgoing.map(f => f.filename).join(', '))
@@ -223,7 +314,10 @@ export function Chat({ onChange }: { onChange: () => void }) {
     try {
       for (const file of Array.from(files)) {
         const saved = await api.uploadAttachment(id, file)
-        setOutgoing(list => [...list, { id: saved.id, filename: saved.filename }])
+        setOutgoing(list => [
+          ...list,
+          { id: saved.id, filename: saved.filename, image: saved.kind === 'image' || saved.view === 'image' },
+        ])
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -263,7 +357,8 @@ export function Chat({ onChange }: { onChange: () => void }) {
           <div>
             <div className="text-2xl font-bold">{detail.session.title}</div>
             <div className="mt-1 text-sm text-muted">
-              {detail.session.bot} · {detail.session.role || 'session'} · {detail.messages.length} messages
+              {detail.session.bot} · {detail.session.role || 'session'} ·{' '}
+              {(detail.message_count ?? detail.messages.length).toLocaleString()} messages
               {detail.session.started_by && detail.session.started_by_id && (
                 <>
                   {' · started by '}
@@ -317,13 +412,31 @@ export function Chat({ onChange }: { onChange: () => void }) {
         <Workers workers={detail.workers ?? []} />
         <Pins sessionId={id} refreshKey={`${detail.messages.length}:${pinsKey}`} open={openPin} onOpen={setOpenPin} />
         {openPin && <PageViewer pin={openPin} refreshKey={detail.messages.length} onClose={() => setOpenPin(null)} />}
-        <div className={`chat-transcript flex-1 overflow-y-auto px-6 py-5 ${openPin ? 'hidden' : ''}`}>
-          <Transcript messages={detail.messages} calls={detail.calls} />
+        <div ref={transcript} className={`chat-transcript flex-1 overflow-y-auto px-6 py-5 ${openPin ? 'hidden' : ''}`}>
+          {detail.has_more && (
+            <div className="mb-4 flex justify-center">
+              <button
+                disabled={loadingOlder}
+                className="rounded-full border border-stroke px-3 py-1 text-xs text-muted hover:bg-raised disabled:opacity-50"
+                onClick={loadOlder}
+              >
+                {loadingOlder ? 'Loading…' : 'See more'}
+              </button>
+            </div>
+          )}
+          <Transcript
+            messages={detail.messages}
+            calls={detail.calls}
+            files={files}
+            complete={!detail.has_more}
+            sent={detail.sent}
+            workers={detail.workers}
+          />
           {(detail.inbox ?? []).map(item => (
             <div key={item.id} className="mt-3 flex flex-col items-end">
-              <div className="max-w-[80%] rounded-card border border-accent bg-indigo-tint px-4 py-3 whitespace-pre-wrap text-ink">
-                {item.text}
-                {item.files > 0 && <span className="ml-2 text-xs opacity-80">📎 {item.files}</span>}
+              <div className="max-w-[80%] rounded-card border border-accent bg-indigo-tint px-4 py-3 text-ink">
+                <Markdown text={item.text} />
+                {item.files > 0 && <span className="text-xs opacity-80">📎 {item.files}</span>}
               </div>
               <div className="mt-1 flex items-center gap-2 text-xs text-zinc-500">
                 <span>Waiting for the model's next step</span>
@@ -340,10 +453,17 @@ export function Chat({ onChange }: { onChange: () => void }) {
             </div>
           ))}
           {echo && !(detail.inbox ?? []).some(item => item.text === echo) && (
-            <div className="mt-3 flex justify-end">
-              <div className="max-w-[80%] rounded-card bg-indigo-tint px-4 py-3 whitespace-pre-wrap text-ink">
-                {echo}
-              </div>
+            <div className="mt-3 flex flex-col items-end gap-1">
+              {sentFiles.map(file => (
+                <div key={file.id} className="max-w-[80%]">
+                  <AttachmentView id={file.id} label={file.filename} image={file.image} />
+                </div>
+              ))}
+              {(!sentFiles.length || echo !== sentFiles.map(f => f.filename).join(', ')) && (
+                <div className="max-w-[80%] rounded-card bg-indigo-tint px-4 py-3 text-ink">
+                  <Markdown text={echo} />
+                </div>
+              )}
             </div>
           )}
           {thinking && (
@@ -456,7 +576,8 @@ export function Chat({ onChange }: { onChange: () => void }) {
                 key={file.id}
                 className="flex items-center gap-1 rounded-full border border-zinc-300 px-2 py-0.5 text-xs dark:border-zinc-700"
               >
-                📎 {file.filename}
+                {file.image ? <img src={api.viewUrl(file.id)} alt="" className="h-6 w-6 rounded object-cover" /> : '📎'}{' '}
+                {file.filename}
                 <button
                   type="button"
                   className="text-zinc-400 hover:text-red-600"

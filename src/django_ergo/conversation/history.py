@@ -347,13 +347,36 @@ def _name_tool_results(messages: list[HistoryMessage]) -> list[HistoryMessage]:
 
 
 class SessionSource(MessageSource):
-    """A ConversationSession read from the database (Claude or OpenAI rows)."""
+    """A ConversationSession read from the database (Claude or OpenAI rows).
+
+    ``first_line`` and ``before_line`` read only the messages in that range
+    of sequences, for paging a long session.
+    """
 
     kind = "session"
 
-    def __init__(self, session: ConversationSession):
+    def __init__(
+        self,
+        session: ConversationSession,
+        *,
+        first_line: int | None = None,
+        before_line: int | None = None,
+        last_rows: int | None = None,
+    ):
         super().__init__()
         self.session = session
+        self.first_line = first_line
+        self.before_line = before_line
+        self.last_rows = last_rows  # read only the latest rows (cheap previews)
+
+    def _window(self, rows):
+        if self.first_line is not None:
+            rows = rows.filter(sequence__gte=self.first_line)
+        if self.before_line is not None:
+            rows = rows.filter(sequence__lt=self.before_line)
+        if self.last_rows is not None:
+            rows = reversed(list(rows.order_by("-sequence")[: self.last_rows]))
+        return rows
 
     @property
     def source_id(self) -> str:
@@ -391,7 +414,9 @@ class SessionSource(MessageSource):
     def _claude_rows(self) -> list[HistoryMessage]:
         from django_ergo.conversation.engines.claude_api import claude_message_dict
 
-        rows = self.session.claude_messages.prefetch_related("content_blocks")
+        rows = self._window(
+            self.session.claude_messages.prefetch_related("content_blocks")
+        )
         return [
             HistoryMessage(
                 source_id=self.source_id,
@@ -405,7 +430,7 @@ class SessionSource(MessageSource):
 
     def _openai_rows(self) -> list[HistoryMessage]:
         messages = []
-        for row in self.session.openai_messages.all():
+        for row in self._window(self.session.openai_messages.all()):
             blocks: list[dict] = []
             if row.role == "system":
                 blocks.append({"type": "context", "text": row.content or ""})

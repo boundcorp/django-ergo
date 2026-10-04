@@ -3,7 +3,9 @@
     GET /api/sessions/<id>/events?after=<line>
 
 Each event is JSON: ``{"messages": [...], "calls": [...]}`` with the
-messages from line ``after`` on and every structured call that changed.
+messages from line ``after`` on and every structured call that changed
+(among those that reach line ``after``, so a long session's old calls aren't
+re-read).
 The last message the client has is sent again, since its blocks may still
 have been arriving, so clients replace messages by line.
 The stream reads the database, so a turn shows its tool calls as they
@@ -20,11 +22,12 @@ import os
 
 from asgiref.sync import sync_to_async
 from django.core.serializers.json import DjangoJSONEncoder
+from django.db.models import Q
 from django.http import HttpResponse, StreamingHttpResponse
 from django_ergo.conversation.history import SessionSource
 from django_ergo.conversation.models import ClaudeContentBlock, ConversationSession
 
-from ergonaut.api.bots import call_out, requests_out, visible_sessions, workers_out
+from ergonaut.api.bots import call_out, requests_out, sent_out, session_prs, visible_sessions, workers_out
 
 POLL_SECONDS = 0.5
 PUBSUB_POLL_SECONDS = 3.0
@@ -44,8 +47,7 @@ def _snapshot(session_id, after: int, seen: dict):
         seen["count"] = count
         messages = [
             {"line": m.line, "role": m.role, "blocks": m.blocks, "timestamp": m.timestamp}
-            for m in SessionSource(session).messages()
-            if m.line >= after
+            for m in SessionSource(session, first_line=max(after, 0)).messages()
         ]
     requests = requests_out(session)
     key = [(r["id"], r["status"]) for r in requests]
@@ -54,13 +56,21 @@ def _snapshot(session_id, after: int, seen: dict):
     else:
         seen["requests"] = key
     calls = []
-    for call in session.structured_calls.order_by("created_at"):
+    # Calls the client's page can show: any that reach its newest line, or have no lines yet.
+    recent = session.structured_calls.order_by("created_at")
+    if after > 0:
+        recent = recent.filter(
+            Q(last_sequence__isnull=True)
+            | Q(last_sequence__gte=after)
+            | Q(status__in=("in_progress", "awaiting_approval"))
+        )
+    for call in recent:
         key = (call.status, call.updated_at.isoformat(), call.output_tokens)
         if seen.setdefault("calls", {}).get(str(call.id)) != key:
             seen["calls"][str(call.id)] = key
             calls.append(call_out(call))
     workers = workers_out(session)
-    key = [(w["id"], w["status"], w["progress"]) for w in workers]
+    key = [(w["id"], w["status"], w["progress"], [p["state"] for p in w["prs"]]) for w in workers]
     if seen.get("workers") == key:
         workers = None
     else:
@@ -71,7 +81,14 @@ def _snapshot(session_id, after: int, seen: dict):
         title = None
     else:
         seen["title"] = title
-    return messages, calls, requests, title, workers
+    # Thread cards and pull requests: sent when anything in them changed.
+    extra = {}
+    for name, value in (("sent", sent_out(session)), ("prs", session_prs(session))):
+        key = json.dumps(value, cls=DjangoJSONEncoder)
+        if seen.get(name) != key:
+            seen[name] = key
+            extra[name] = value
+    return messages, calls, requests, title, workers, extra
 
 
 def _event(payload) -> str:
@@ -127,11 +144,11 @@ async def session_events(request, session_id):
         end = loop.time() + STREAM_SECONDS
         waits = changes()
         while loop.time() < end:
-            messages, calls, requests, title, workers = await sync_to_async(_snapshot)(session_id, last, seen)
+            messages, calls, requests, title, workers, extra = await sync_to_async(_snapshot)(session_id, last, seen)
             # The first event carries every call and request too: something may
             # have changed between the client's load (or the last stream) and now,
             # and the client merges by id.
-            if messages or calls or requests is not None or title or workers is not None:
+            if messages or calls or requests is not None or title or workers is not None or extra:
                 if messages:
                     last = max(m["line"] for m in messages)
                 event = {"messages": messages, "calls": calls}
@@ -141,6 +158,7 @@ async def session_events(request, session_id):
                     event["title"] = title
                 if workers is not None:
                     event["workers"] = workers
+                event.update(extra)
                 yield _event(event)
                 quiet = 0.0
             elif quiet >= KEEPALIVE_SECONDS:

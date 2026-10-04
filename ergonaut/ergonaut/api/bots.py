@@ -20,6 +20,7 @@ from django_ergo.bots.pages import text_page, view_kind
 from django_ergo.bots.runtime import Bot
 from django_ergo.conversation.attachments import save_session_file
 from django_ergo.conversation.history import SessionSource
+from django_ergo.conversation.links import GITHUB_PR, pull_request_out, pull_request_urls
 from django_ergo.conversation.models import ConversationAttachment, ConversationSession, StructuredCall, Worker
 from ninja import File, Router, Schema, UploadedFile
 from ninja.errors import HttpError
@@ -42,6 +43,8 @@ class ChatOut(Schema):
 class BotOut(Schema):
     name: str
     description: str
+    icon: str = ""  # bot.yaml icon: an emoji; "" = the app's default
+    color: str = ""  # bot.yaml color: a palette name or hex; "" = the app's default
     orchestration: bool
     knowledge: bool
     parent: str
@@ -156,15 +159,167 @@ class SessionDetailOut(Schema):
     workers: list[dict] = []
     # Messages sent while a turn runs that the model hasn't taken yet (they can be unsent).
     inbox: list[dict] = []
+    # Paging: the first line returned, and whether older messages exist (ask with before=first_line).
+    first_line: int | None = None
+    has_more: bool = False
+    message_count: int = 0  # in the whole session, not just this page
+    # Requests this chat sent to other chats, newest first, for thread cards (sent_out).
+    sent: list[dict] = []
+    # Pull requests reported in this chat (django_ergo.conversation.links).
+    prs: list[dict] = []
+
+
+PAGE_MESSAGES = 50
+
+
+def page_start(session: ConversationSession, before: int | None, limit: int) -> int | None:
+    """The first sequence of the ``limit`` messages before ``before`` (None: from the start)."""
+    rows = session.claude_messages if session.claude_messages.exists() else session.openai_messages
+    if before is not None:
+        rows = rows.filter(sequence__lt=before)
+    found = list(rows.order_by("-sequence").values_list("sequence", flat=True)[limit - 1 : limit + 1])
+    # Only a start when there is something older than it.
+    return found[0] if len(found) > 1 else None
+
+
+def calls_in(session: ConversationSession, first_line: int | None, before: int | None):
+    """The session's calls that touch lines [first_line, before); calls with no lines go with the newest page."""
+    calls = session.structured_calls.order_by("created_at")
+    if before is not None:
+        calls = calls.filter(first_sequence__lt=before)
+    if first_line is not None:
+        span = Q(last_sequence__gte=first_line)
+        if before is None:
+            span |= Q(last_sequence__isnull=True)
+        calls = calls.filter(span)
+    return calls
 
 
 def workers_out(session: ConversationSession) -> list[dict]:
-    """The session's workers: every running one, then the latest few finished."""
+    """The session's workers: every running one, then the latest few finished, each with
+    the pull requests its result links (``prs``)."""
+    import json
+
     from django_ergo.bots.workers import describe
 
     active = list(session.workers.filter(status__in=["queued", "running"]))
     done = list(session.workers.exclude(status__in=["queued", "running"])[:5])
-    return [describe(w) for w in active + done]
+    out = []
+    for worker in active + done:
+        urls = [url for url, _, _ in pull_request_urls(json.dumps(worker.result, default=str))]
+        out.append({**describe(worker), "prs": prs_by_url(urls)})
+    return out
+
+
+def prs_by_url(urls: list[str]) -> list[dict]:
+    """Recorded pull requests for these URLs, in order (unrecorded ones with no state yet)."""
+    if not urls:
+        return []
+    rows = {}
+    for row in ConversationAttachment.objects.filter(url__in=urls, metadata__link=GITHUB_PR).order_by("-updated_at"):
+        rows.setdefault(row.url, row)
+    out = []
+    for url in urls:
+        if url in rows:
+            out.append(pull_request_out(rows[url]))
+            continue
+        _, repo, number = pull_request_urls(url)[0]
+        out.append({"id": "", "url": url, "repo": repo, "number": number, "title": "", "state": "", "checks": ""})
+    return out
+
+
+# -- thread cards ----------------------------------------------------------------------
+
+# A thread message's status, as a card shows it.
+CARD_STATUS = {"queued": "queued", "delivered": "working", "waiting": "waiting", "answered": "done", "failed": "failed"}
+
+
+def thread_summary(session: ConversationSession) -> dict:
+    """A chat as thread cards and links show it, from a ``with_open_counts`` row.
+
+    The status fields have the shape of ``django_ergo.bots.orchestrator.thread_status``
+    (``state``, ``last_activity``, ``started_by``, ``started_by_id``, ``working_for``,
+    ``waiting_on``, ``workers_running``) so this can read from it once that's on main.
+    """
+    meta = session.metadata or {}
+    if getattr(session, "latest_status", None) == "awaiting_approval":
+        state = "waiting_for_approval"
+    elif getattr(session, "busy", False):
+        state = "working"
+    else:
+        state = "idle"
+    role = meta.get("bot_role") or ""
+    return {
+        "id": str(session.id),
+        "title": meta.get("title") or ("Main" if role in ("root", "main") else "Thread"),
+        "bot": session.bot_name,
+        "role": role,
+        "archived": session.status == "completed" and role == "thread",
+        "attention": needs_attention(session),
+        "state": state,
+        "last_activity": session.updated_at,
+        "started_by": "",
+        "started_by_id": "",
+        **started_by(session),
+        "working_for": getattr(session, "open_in", 0) or 0,
+        "waiting_on": getattr(session, "open_out", 0) or 0,
+        "workers_running": getattr(session, "workers_running", 0) or 0,
+    }
+
+
+def sent_out(session: ConversationSession, limit: int = 30) -> list[dict]:
+    """Requests this chat sent (ergo_thread_send, ergo_message_up), newest first: each with
+    its status, the reply so far, the chat it went to, and that chat's outputs while it
+    worked on it (pull requests it reported, or ones the reply links)."""
+    from django_ergo.bots.messaging import snippet
+    from django_ergo.conversation.models import ThreadMessage
+
+    rows = list(
+        ThreadMessage.objects.filter(sender_session=session, in_reply_to__isnull=True).order_by("-created_at")[:limit]
+    )
+    ids = {row.recipient_session_id for row in rows}
+    threads = {
+        s.id: s
+        for s in with_open_counts(ConversationSession.objects.filter(id__in=ids)).annotate(
+            workers_running=Count("workers", filter=Q(workers__status__in=["queued", "running"]), distinct=True)
+        )
+    }
+    prs: dict = {}
+    for pr in ConversationAttachment.objects.filter(session_id__in=ids, metadata__link=GITHUB_PR).order_by(
+        "created_at"
+    ):
+        prs.setdefault(pr.session_id, []).append(pr)
+    out = []
+    for row in rows:
+        thread = threads.get(row.recipient_session_id)
+        if thread is None:
+            continue
+        done = row.status in ("answered", "failed")
+        reported = [
+            pr.url
+            for pr in prs.get(thread.id, [])
+            if pr.created_at >= row.created_at
+            and (not done or pr.created_at <= row.updated_at + timezone.timedelta(minutes=1))
+        ]
+        linked = [url for url, _, _ in pull_request_urls(row.reply_text)]
+        out.append(
+            {
+                "message_id": str(row.id),
+                "created_at": row.created_at,
+                "status": CARD_STATUS.get(row.status, row.status),
+                "text": snippet(row.text),
+                "reply": snippet(row.reply_text or row.error),
+                "thread": thread_summary(thread),
+                "prs": prs_by_url(list(dict.fromkeys(reported + linked))),
+            }
+        )
+    return out
+
+
+def session_prs(session: ConversationSession) -> list[dict]:
+    return [
+        pull_request_out(row) for row in session.attachments.filter(metadata__link=GITHUB_PR).order_by("created_at")
+    ]
 
 
 class NewThreadIn(Schema):
@@ -606,6 +761,8 @@ async def list_bots(request):
             {
                 "name": bot.name,
                 "description": bot.definition.description,
+                "icon": bot.definition.icon,
+                "color": bot.definition.color,
                 "orchestration": bot.definition.orchestration,
                 "knowledge": any(p.name == "ergo_kb" for p in bot.plugins),
                 "parent": bot.parent_name,
@@ -725,6 +882,8 @@ async def bot_detail(request, bot: str):
     return {
         "name": found.name,
         "description": definition.description,
+        "icon": definition.icon,
+        "color": definition.color,
         "orchestration": definition.orchestration,
         "knowledge": any(p.name == "ergo_kb" for p in found.plugins),
         "parent": found.parent_name,
@@ -772,15 +931,17 @@ def provisional_title(message: str) -> str:
 
 
 @router.get("/sessions/{session_id}", response=SessionDetailOut)
-def session_detail(request, session_id: str):
+def session_detail(request, session_id: str, before: int | None = None, limit: int = PAGE_MESSAGES):
+    """The session with its newest ``limit`` messages, or the ``limit`` before line ``before``."""
     session = visible_sessions(request.auth).filter(id=uuid_or_404(session_id)).first()
     if session is None:
         raise HttpError(404, "No such session")
+    first_line = page_start(session, before, max(1, min(limit, 500)))
     messages = [
         {"line": m.line, "role": m.role, "blocks": m.blocks, "timestamp": m.timestamp}
-        for m in SessionSource(session).messages()
+        for m in SessionSource(session, first_line=first_line, before_line=before).messages()
     ]
-    calls = [call_out(c) for c in session.structured_calls.order_by("created_at")]
+    calls = [call_out(c) for c in calls_in(session, first_line, before)]
     if session.user_id == request.auth.pk:
         ConversationSession.objects.filter(id=session.id).update(read_at=timezone.now())
     session = with_open_counts(visible_sessions(request.auth).filter(id=session.id)).first()
@@ -794,6 +955,11 @@ def session_detail(request, session_id: str):
             {"id": item.get("id", ""), "text": item.get("text", ""), "files": len(item.get("attachment_ids") or [])}
             for item in peek_inbox(session.id)
         ],
+        "first_line": messages[0]["line"] if messages else first_line,
+        "has_more": first_line is not None,
+        "message_count": session.claude_messages.count() or session.openai_messages.count(),
+        "sent": sent_out(session),
+        "prs": session_prs(session),
     }
 
 
@@ -1095,6 +1261,7 @@ class AttachmentOut(Schema):
     created_at: datetime
     updated_at: datetime
     archived_at: datetime | None = None  # archived by the bot (ergo_attachments_archive)
+    link: dict | None = None  # a pull request (django_ergo.conversation.links.pull_request_out)
 
 
 def attachment_out(row: ConversationAttachment) -> dict:
@@ -1107,7 +1274,8 @@ def attachment_out(row: ConversationAttachment) -> dict:
         "source": row.source,
         "message_sequence": row.message_sequence,
         "pinned": bool((row.metadata or {}).get("pinned")),
-        "view": view_kind(row.filename, row.media_type),
+        "view": "" if row.url and not row.file else view_kind(row.filename, row.media_type),
+        "link": pull_request_out(row) if (row.metadata or {}).get("link") == GITHUB_PR else None,
         "created_at": row.created_at,
         "updated_at": row.updated_at,
         "archived_at": row.archived_at,
@@ -1205,12 +1373,15 @@ def download_attachment(request, attachment_id: str, inline: bool = False):
 
 class PinIn(Schema):
     pinned: bool = True
+    title: str | None = None  # the pin's label ("" clears it: the file name)
+    icon: str | None = None  # an emoji ("" clears it: an icon for the file type)
 
 
 @router.post("/attachments/{attachment_id}/pin", response=AttachmentOut)
 def pin_attachment(request, attachment_id: str, payload: PinIn):
     row = visible_attachment(request.auth, attachment_id)
-    row.metadata = {**(row.metadata or {}), "pinned": payload.pinned}
+    labels = {k: v.strip() for k, v in (("title", payload.title), ("icon", payload.icon)) if v is not None}
+    row.metadata = {**(row.metadata or {}), **labels, "pinned": payload.pinned}
     row.save(update_fields=["metadata", "updated_at"])
     return attachment_out(row)
 
@@ -1262,6 +1433,7 @@ def bot_errors(request):
 @router.get("/pins")
 def all_pins(request):
     """What's pinned in each of your chats, by session id (for the sidebar)."""
+    from django_ergo.bots.pages import pin_label
     from django_ergo.bots.runtime import Bot as BotClass
 
     bots = registry()
@@ -1272,9 +1444,14 @@ def all_pins(request):
         chat = BotClass.chat_name(session)
         if bot is None or chat is None:
             continue
-        for relative in bot.definition.chat(chat).pins:
+        definition = bot.definition.chat(chat)
+        for relative in definition.pins:
             out.setdefault(str(session.id), []).append(
-                {"name": relative.rsplit("/", 1)[-1], "url": f"/api/bots/{bot.name}/files/{relative}"}
+                {
+                    **pin_label(definition, relative),
+                    "filename": relative.rsplit("/", 1)[-1],
+                    "url": f"/api/bots/{bot.name}/files/{relative}",
+                }
             )
     pinned = ConversationAttachment.objects.filter(
         metadata__pinned=True, session__in=visible_sessions(request.auth).filter(user=request.auth)
@@ -1283,6 +1460,8 @@ def all_pins(request):
         out.setdefault(str(row.session_id), []).append(
             {
                 "name": (row.metadata or {}).get("title") or row.filename,
+                "icon": (row.metadata or {}).get("icon") or "",
+                "filename": row.filename,
                 "url": f"/api/attachments/{row.id}/download?inline=true",
             }
         )

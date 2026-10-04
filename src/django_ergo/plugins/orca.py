@@ -556,25 +556,28 @@ class OrcaPlugin(BotPlugin):
             raise ValueError(msg)
         return f"id:{found}"
 
-    def start_worker(  # noqa: PLR0913
+    def pin_omp_model(self, worktree: str, model: str, effort: str = "") -> None:
+        """Make omp in this worktree use ``model`` (at ``effort``): a project
+        ``.omp/config.yml`` overrides its default model role. The folder ignores
+        itself, so the setting never shows up in git."""
+        root = self.worktree_path(worktree)
+        selector = f"{model}:{effort}" if effort else model
+        config = f"modelRoles:\n  default: {json.dumps(selector)}\n"
+        self.push(root, ".omp", "config.yml", config.encode())
+        self.push(root, ".omp", ".gitignore", b"*\n")
+
+    def dispatch(  # noqa: PLR0913
         self,
         ctx: ToolContext,
         spec: str,
         worktree: str,
-        agent: str = "codex",
-        title: str = "",
+        agent: str,
+        title: str,
         model: str = "",
         effort: str = "",
-    ) -> dict:
-        """Start a supervised Orca worker, and a thread Worker that watches it."""
-        from django_ergo.bots.workers import describe
-
-        if ctx.session is None:
-            msg = "Workers belong to a chat"
-            raise ValueError(msg)
-        worktree = self.exact_worktree(worktree)
+    ) -> tuple[str, str, dict]:
+        """Create the task and start its worker: (task id, run id, receipt)."""
         mailbox, run_id = self.mailbox(ctx, worktree)
-        title = (title or spec.strip().splitlines()[0])[:120]
         task = self.cli_json(
             [
                 "orchestration",
@@ -604,11 +607,63 @@ class OrcaPlugin(BotPlugin):
             "--from",
             mailbox,
         ]
-        if model:
-            args += ["--model", model]
-        if effort:
-            args += ["--effort", effort]
+        if agent == "omp" and model:
+            # Orca can't pass a model to omp at launch; omp reads it from the worktree.
+            self.pin_omp_model(worktree, model, effort)
+        elif agent == "omp" and effort:
+            msg = "omp takes effort only together with a model"
+            raise ValueError(msg)
+        else:
+            if model:
+                args += ["--model", model]
+            if effort:
+                args += ["--effort", effort]
         receipt = self.cli_json(args)
+        return task_id, run_id, receipt
+
+    def forget_mailbox(self, ctx: ToolContext) -> bool:
+        """Drop the chat's saved mailbox and Run; returns whether there was one."""
+        from django_ergo.conversation.models import ConversationSession
+
+        meta = dict(ctx.session.metadata or {})
+        orca = dict(meta.get("orca") or {})
+        if orca.pop(self.environment or "local", None) is None:
+            return False
+        meta["orca"] = orca
+        ConversationSession.objects.filter(pk=ctx.session.pk).update(metadata=meta)
+        ctx.session.metadata = meta
+        return True
+
+    def start_worker(  # noqa: PLR0913
+        self,
+        ctx: ToolContext,
+        spec: str,
+        worktree: str,
+        agent: str = "codex",
+        title: str = "",
+        model: str = "",
+        effort: str = "",
+    ) -> dict:
+        """Start a supervised Orca worker, and a thread Worker that watches it."""
+        from django_ergo.bots.workers import describe
+
+        if ctx.session is None:
+            msg = "Workers belong to a chat"
+            raise ValueError(msg)
+        worktree = self.exact_worktree(worktree)
+        title = (title or spec.strip().splitlines()[0])[:120]
+        try:
+            task_id, run_id, receipt = self.dispatch(
+                ctx, spec, worktree, agent, title, model, effort
+            )
+        except ValueError as exc:
+            # The chat's saved mailbox terminal or Run is gone (its worktree was
+            # removed, Orca restarted): make new ones and try once more.
+            if "selector_not_found" not in str(exc) or not self.forget_mailbox(ctx):
+                raise
+            task_id, run_id, receipt = self.dispatch(
+                ctx, spec, worktree, agent, title, model, effort
+            )
         dispatch_id = _first_key(receipt, ("dispatchId", "dispatch_id"))
         if not dispatch_id:
             msg = f"worker-start gave no dispatch id: {json.dumps(receipt)[:400]}"
@@ -901,8 +956,14 @@ class OrcaPlugin(BotPlugin):
                     "type": "string",
                     "description": "A short title for the task",
                 },
-                "model": {"type": "string"},
-                "effort": {"type": "string"},
+                "model": {
+                    "type": "string",
+                    "description": "Model id or provider/model selector (for omp, e.g. anthropic/claude-sonnet-5-5)",
+                },
+                "effort": {
+                    "type": "string",
+                    "description": "Reasoning effort (needs model)",
+                },
             },
             required=["spec", "worktree"],
             requires_approval=self.approve_changes,

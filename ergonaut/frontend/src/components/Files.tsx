@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { AttachmentFile, Pin } from '../api'
 import { api } from '../api'
+import { PrChip } from './Threads'
 
 const SOURCE_LABEL: Record<AttachmentFile['source'], string> = {
   message: 'sent',
@@ -106,48 +107,56 @@ export default function Files({
             key={file.id}
             className={`group rounded-md px-2 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-900 ${file.archived_at ? 'opacity-60' : ''}`}
           >
-            <div className="flex items-center gap-2">
-              {file.view ? (
-                <button
-                  className="truncate text-left text-sm text-indigo-600 hover:underline dark:text-indigo-400"
-                  title={`View ${file.filename}`}
-                  onClick={() => onView({ kind: 'file', name: file.filename, id: file.id, url: api.viewUrl(file.id) })}
-                >
-                  {file.filename || file.media_type}
-                </button>
-              ) : (
+            {file.link ? (
+              <div className="flex items-center gap-2">
+                <PrChip pr={file.link} />
+              </div>
+            ) : (
+              <div className="flex items-center gap-2">
+                {file.view ? (
+                  <button
+                    className="truncate text-left text-sm text-indigo-600 hover:underline dark:text-indigo-400"
+                    title={`View ${file.filename}`}
+                    onClick={() =>
+                      onView({ kind: 'file', name: file.filename, id: file.id, url: api.viewUrl(file.id) })
+                    }
+                  >
+                    {file.filename || file.media_type}
+                  </button>
+                ) : (
+                  <a
+                    className="truncate text-sm text-indigo-600 hover:underline dark:text-indigo-400"
+                    href={api.downloadUrl(file.id)}
+                    title={file.filename}
+                  >
+                    {file.filename || file.media_type}
+                  </a>
+                )}
                 <a
-                  className="truncate text-sm text-indigo-600 hover:underline dark:text-indigo-400"
+                  className="text-xs text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-100"
                   href={api.downloadUrl(file.id)}
-                  title={file.filename}
+                  title="Download"
                 >
-                  {file.filename || file.media_type}
+                  ⬇
                 </a>
-              )}
-              <a
-                className="text-xs text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-100"
-                href={api.downloadUrl(file.id)}
-                title="Download"
-              >
-                ⬇
-              </a>
-              <button
-                className={`ml-auto text-xs ${file.pinned ? '' : 'hidden opacity-50 group-hover:block'}`}
-                title={file.pinned ? 'Unpin' : 'Pin to the top of the chat'}
-                onClick={() => togglePin(file)}
-              >
-                📌
-              </button>
-              {file.message_sequence == null && (
                 <button
-                  className="hidden text-xs text-zinc-400 hover:text-red-600 group-hover:block"
-                  title="Delete"
-                  onClick={() => remove(file)}
+                  className={`ml-auto text-xs ${file.pinned ? '' : 'hidden opacity-50 group-hover:block'}`}
+                  title={file.pinned ? 'Unpin' : 'Pin to the top of the chat'}
+                  onClick={() => togglePin(file)}
                 >
-                  ✕
+                  📌
                 </button>
-              )}
-            </div>
+                {file.message_sequence == null && (
+                  <button
+                    className="hidden text-xs text-zinc-400 hover:text-red-600 group-hover:block"
+                    title="Delete"
+                    onClick={() => remove(file)}
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
+            )}
             <div className="text-xs text-zinc-500">
               {SOURCE_LABEL[file.source]} · {size(file.size)} · {new Date(file.updated_at).toLocaleString()}
               {file.archived_at && ' · archived'}

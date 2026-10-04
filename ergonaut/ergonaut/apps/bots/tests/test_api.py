@@ -81,6 +81,8 @@ def test_chat_with_the_root_session_and_drill_into_tools(client, cook, use_bots)
         {
             "name": "kitchen",
             "description": "Runs the kitchen",
+            "icon": "",
+            "color": "",
             "orchestration": False,
             "knowledge": False,
             "parent": "",
@@ -495,6 +497,22 @@ def test_pins_bot_files_and_live_pages(client, cook, bot_folder, use_bots, setti
     assert [(p["kind"], p["name"]) for p in pins] == [("bot_file", "home.jhtml"), ("file", "Board")]
     assert [p["name"] for p in client.get("/api/pins").json()[root["id"]]] == ["home.jhtml", "Board"]
 
+    # Pins take a title and an icon: in bot.yaml, and on a chat file.
+    (bot_folder / "bot.yaml").write_text(
+        BOT + 'chats:\n  main: {pins: [{path: pages/home.jhtml, title: Home, icon: "🏡"}]}\n'
+    )
+    use_bots(say("hi"))
+    post(client, f"/api/attachments/{page.id}/pin", {"pinned": True, "icon": "📋"})
+    labelled = client.get(f"/api/sessions/{root['id']}/pins").json()
+    assert [(p["name"], p["icon"], p.get("path")) for p in labelled] == [
+        ("Home", "🏡", "pages/home.jhtml"),
+        ("Board", "📋", None),
+    ]
+    assert [(p["name"], p["icon"], p["filename"]) for p in client.get("/api/pins").json()[root["id"]]] == [
+        ("Home", "🏡", "home.jhtml"),
+        ("Board", "📋", "board.jhtml"),
+    ]
+
     # A bot-folder page renders in the app's origin; assets come as files; code and config don't.
     home = client.get("/api/bots/kitchen/files/pages/home.jhtml")
     assert b"Hello cook from kitchen" in home.content
@@ -847,3 +865,80 @@ def test_a_failed_turn_explains_itself_and_can_be_resumed_or_dismissed(client, c
     assert latest.request.startswith("[Resume] Your last turn stopped before it finished (")
     assert "out of credits" in latest.request
     assert post(client, f"/api/sessions/{root['id']}/resume").status_code == 409  # it didn't fail this time
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_long_chat_comes_a_page_at_a_time(client, cook, use_bots):
+    from django_ergo.conversation.models import ConversationSession, OpenAIMessage, StructuredCall
+
+    use_bots(say("hi"))
+    session = ConversationSession.objects.create(
+        user=cook, bot_name="kitchen", engine_type="openai", metadata={"bot_role": "root"}
+    )
+    for n in range(120):
+        OpenAIMessage.objects.create(
+            session=session, role="user" if n % 2 == 0 else "assistant", content=f"m{n}", sequence=n
+        )
+    old = StructuredCall.objects.create(
+        kind="chat_reply", session=session, status="completed", first_sequence=0, last_sequence=1
+    )
+    span = StructuredCall.objects.create(
+        kind="chat_reply", session=session, status="completed", first_sequence=60, last_sequence=75
+    )
+    new = StructuredCall.objects.create(
+        kind="chat_reply", session=session, status="completed", first_sequence=118, last_sequence=119
+    )
+
+    page = client.get(f"/api/sessions/{session.id}").json()
+    assert [m["line"] for m in page["messages"]] == list(range(70, 120))
+    assert (page["first_line"], page["has_more"], page["message_count"]) == (70, True, 120)
+    assert {c["id"] for c in page["calls"]} == {str(span.id), str(new.id)}
+
+    older = client.get(f"/api/sessions/{session.id}?before=70").json()
+    assert [m["line"] for m in older["messages"]] == list(range(20, 70))
+    assert (older["first_line"], older["has_more"]) == (20, True)
+    assert {c["id"] for c in older["calls"]} == {str(span.id)}
+
+    oldest = client.get(f"/api/sessions/{session.id}?before=20").json()
+    assert [m["line"] for m in oldest["messages"]] == list(range(20))
+    assert (oldest["first_line"], oldest["has_more"]) == (0, False)
+    assert {c["id"] for c in oldest["calls"]} == {str(old.id)}
+
+
+@pytest.mark.django_db(transaction=True)
+def test_thread_cards_and_pull_requests(client, cook, use_bots):
+    from django_ergo.conversation.links import record_pull_requests
+    from django_ergo.conversation.models import ConversationSession, ThreadMessage
+
+    use_bots(say("Opened https://github.com/boundcorp/ergo-bots/pull/40 for it."))
+    root = post(client, "/api/bots/kitchen/root").json()
+    sender = ConversationSession.objects.get(id=root["id"])
+    thread = ConversationSession.objects.create(
+        user=cook, bot_name="kitchen", parent=sender, metadata={"bot_role": "thread", "title": "Build it"}
+    )
+    message = ThreadMessage.objects.create(
+        sender_session=sender, recipient_session=thread, text="Please build it", status="delivered"
+    )
+    record_pull_requests(thread, "https://github.com/boundcorp/django-ergo/pull/7")
+
+    [card] = client.get(f"/api/sessions/{root['id']}").json()["sent"]
+    assert (card["message_id"], card["status"], card["text"]) == (str(message.id), "working", "Please build it")
+    assert (card["thread"]["id"], card["thread"]["title"], card["thread"]["state"]) == (
+        str(thread.id),
+        "Build it",
+        "idle",
+    )
+    assert [(p["repo"], p["number"]) for p in card["prs"]] == [("boundcorp/django-ergo", 7)]
+
+    message.status, message.reply_text = "answered", "Done: https://github.com/boundcorp/ergo-bots/pull/41"
+    message.save()
+    [card] = client.get(f"/api/sessions/{root['id']}").json()["sent"]
+    assert card["status"] == "done"
+    assert [p["number"] for p in card["prs"]] == [7, 41]
+
+    # A reply that links a pull request records it in the chat, as a file with a link.
+    post(client, f"/api/sessions/{root['id']}/messages", {"text": "Ship it"})
+    detail = client.get(f"/api/sessions/{root['id']}").json()
+    assert [(p["number"], p["state"]) for p in detail["prs"]] == [(40, "")]
+    [file] = [f for f in client.get(f"/api/sessions/{root['id']}/attachments").json() if f["link"]]
+    assert (file["filename"], file["view"], file["link"]["number"]) == ("ergo-bots#40", "", 40)

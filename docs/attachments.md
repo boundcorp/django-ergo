@@ -77,6 +77,17 @@ Tools can return images with `ToolResult` (below), and read a chat's files
 through the session: `ctx.session.attachments.all()`, with
 `django_ergo.conversation.attachments.read_text(row)` for text.
 
+## Pull requests
+
+A pull request a bot links in its reply, or a worker links in its result, is
+recorded as a chat file with no stored bytes (`django_ergo.conversation.links`):
+`url` is the PR, and `metadata` has `link: github_pr`, `repo`, `number`,
+`title`, `state` (`open`, `draft`, `merged`, `closed`) and `checks`
+(`passing`, `failing`, `pending`). `record_pull_requests(session, text)` adds
+the new ones; `refresh_pull_request(row)` reads the live state with the GitHub
+CLI, which apps run on a schedule (Ergonaut: every minute, for PRs not merged
+or closed).
+
 ## Library: attachments on messages
 
 User messages can carry images, audio and documents:

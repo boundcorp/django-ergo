@@ -12,7 +12,7 @@ Who may message whom:
 
 - ``ergo_bot_list``: the bots this bot can message (sub-bots nested in its
   folder, bots in ``permissions.call_bots`` and its parent), with their
-  descriptions. Pre-seeded into every session.
+  descriptions (also in the "Bots and threads" context block, bots.overview).
 - ``ergo_thread_list``: a bot's main chat, named chats and threads with this
   user, so the bot can choose where a message should go.
 - ``ergo_thread_send``: message a main or named chat, a thread, or a new thread, of
@@ -85,6 +85,49 @@ def _target(ctx: ToolContext, bot: str) -> Bot:
         msg = f"This bot may not message {bot!r} (allowed: {allowed or 'none'})."
         raise ValueError(msg)
     return registry.get(bot)
+
+
+def thread_status(session: ConversationSession) -> dict:
+    """What a chat is doing, for orchestrators and UIs (the "Bots and threads"
+    block uses it; so can an API).
+
+    ``state`` is ``working``, ``waiting_for_approval`` or ``idle``;
+    ``last_activity`` is when its latest turn moved (sessions aren't touched per
+    turn); ``started_by``/``started_by_id`` name another bot's chat that started
+    it; ``working_for``/``waiting_on`` count open requests in and out;
+    ``workers_running`` counts queued or running workers.
+    """
+    from django_ergo.conversation.models import StructuredCallStatus
+    from django_ergo.conversation.models import Worker
+    from django_ergo.conversation.models import WorkerStatus
+
+    calls = session.structured_calls
+    if calls.filter(status=StructuredCallStatus.AWAITING_APPROVAL).exists():
+        state = "waiting_for_approval"
+    elif messaging.busy(session):
+        state = "working"
+    else:
+        state = "idle"
+    latest = calls.order_by("-updated_at").values_list("updated_at", flat=True).first()
+    meta = session.metadata or {}
+    other_bot = meta.get("started_by_bot") not in (None, "", session.bot_name)
+    return {
+        "state": state,
+        "last_activity": max(latest, session.updated_at)
+        if latest
+        else session.updated_at,
+        "started_by": str(meta.get("started_by_label") or "") if other_bot else "",
+        "started_by_id": str(meta.get("started_by") or "") if other_bot else "",
+        "working_for": session.thread_messages.filter(
+            status__in=OPEN_STATUSES, in_reply_to__isnull=True
+        ).count(),
+        "waiting_on": session.sent_thread_messages.filter(
+            status__in=OPEN_STATUSES, in_reply_to__isnull=True
+        ).count(),
+        "workers_running": Worker.objects.filter(
+            session=session, status__in=[WorkerStatus.QUEUED, WorkerStatus.RUNNING]
+        ).count(),
+    }
 
 
 def _is_main(session: ConversationSession) -> bool:
@@ -447,8 +490,6 @@ def upward_toolkit(ctx: ToolContext) -> FunctionToolkit:
 
 
 def orchestrator_toolkit(ctx: ToolContext) -> FunctionToolkit:
-    registry = ctx.bot.registry
-    reachable = registry.callable_bots(ctx.bot) if registry else []
     functions = [
         ergo_bot_list,
         ergo_thread_list,
@@ -457,5 +498,6 @@ def orchestrator_toolkit(ctx: ToolContext) -> FunctionToolkit:
         ergo_thread_archive,
     ]
     tools: list[BotTool] = [fn.__bot_tool__ for fn in functions]
-    # Every session starts knowing which bots it can reach.
-    return FunctionToolkit(tools, ctx, seed=["ergo_bot_list"] if reachable else [])
+    # The bots it can reach, and their chats, are in the "Bots and threads"
+    # context block (bots.overview), so nothing is pre-seeded.
+    return FunctionToolkit(tools, ctx)

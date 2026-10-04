@@ -104,21 +104,41 @@ bots whose `permissions.users` include them (or that set none), and only
 their own sessions. Only admins can approve tools of bots with the `bash`,
 `orca` or `bot_management` plugins.
 
-- **Sidebar**: each bot with your main chat, named chats and threads. A
+- **Sidebar**: each bot with its icon and color from bot.yaml; the bot's name opens your main chat (its pins sit under it), then named chats and threads. A
   spinner means a turn or worker is running; a blue dot, unread replies; a
   yellow dot, a chat waiting on you (an approval or a question).
 - **Chat**: a model picker in the header (with a `providers.yaml`), the
-  transcript with tool calls you can open, approvals with
+  transcript (Markdown rendered) with tool calls you can open, images a
+  tool returned under its call, files the bot made where it made them,
+  approvals with
   Approve and Deny, suggested replies as buttons, file uploads and pasted
   images. Send while the bot is working to steer the running turn; Stop
   ends it, and Stop & send interrupts it with your message. Pinned files
   and pages open as tabs above the transcript.
-- **Files** panel: the chat's files, which you can pin, download and archive.
-- **Bot page**: description, skills, schedules with their next run, recent
+- **Tool calls**: each call is one line (status, name, arguments, time)
+  that opens to its arguments and result. A run of calls shows its last
+  three; the earlier ones fold into a "+N more" row naming the tools, which
+  unfolds in place. Calls that need approval or failed, and thread cards,
+  always show.
+- **Thread cards**: work a chat sends to another chat (`ergo_thread_send`,
+  `ergo_message_up`) shows as a card instead of a tool call: the chat it went
+  to, with the bot's icon, a live status (queued, working, waiting on you,
+  done, failed), the reply, and the pull requests that came out of it. The
+  card opens that chat. Workers (`orca_start_worker`, `ergo_worker_start`)
+  get a card with their status, progress and PRs. A reply from another chat
+  is one row you can open, the user message whose turn sent work on says
+  "Sent to" the chat, and chat ids in a bot's text are links with a status
+  dot.
+- **Pull requests**: a PR URL in a bot's reply or a worker's result is
+  recorded as a file in that chat (see [attachments.md](attachments.md)),
+  shown as a chip with its live state (open, draft, merged, closed) and CI.
+  Ergonaut reads the state with `gh` every minute (`refresh-pull-requests`).
+- **Files** panel: the chat's files and pull requests; files can be pinned, downloaded and archived.
+- **Bot page**: description, instructions and skills (as Markdown), schedules with their next run, recent
   jobs, tables with a row browser, the bot folder's files, and for a bot
   with `bot_management`, its proposed changes with diffs and Merge, Close
   and Discard.
-- **Memory**: the bot's knowledge base articles.
+- **Memory**: the bot's knowledge base articles, rendered as Markdown.
 - **Sessions**: every session, searchable, including threads.
 - **Costs**: spend by day, by kind of call (chat replies split by bot) and by model.
 

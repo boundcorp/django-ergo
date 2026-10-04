@@ -3,8 +3,10 @@ import { Link, useParams } from 'react-router-dom'
 import type { BotDetail } from '../api'
 import { api } from '../api'
 import BotFiles from '../components/BotFiles'
+import BotIcon from '../components/BotIcon'
 import TableBrowser from '../components/TableBrowser'
 import Changes from '../components/Changes'
+import Markdown from '../components/Markdown'
 
 // The bot folder's files, for admins (the API refuses everyone else, and then this hides).
 function BotFilesSection({ bot }: { bot: string }) {
@@ -63,7 +65,10 @@ export function BotPage() {
 
   return (
     <div className="page-content h-full overflow-y-auto">
-      <h1 className="page-title">{bot.name}</h1>
+      <h1 className="page-title flex items-center gap-3">
+        <BotIcon bot={bot} size={34} />
+        {bot.name}
+      </h1>
       {bot.description && <p className="mt-1 text-zinc-600 dark:text-zinc-400">{bot.description}</p>}
       <Link to={`/bots/${bot.name}/kb`} className="mt-2 inline-block text-sm text-indigo-600 hover:underline">
         Browse knowledge →
@@ -226,9 +231,7 @@ export function BotPage() {
                 <div className="mx-3 mb-3 flex flex-col gap-2">
                   {skill.source && <div className="text-xs text-zinc-500">from {skill.source}</div>}
                   {skill.body && (
-                    <pre className="overflow-auto rounded bg-zinc-50 p-3 text-xs whitespace-pre-wrap dark:bg-zinc-900">
-                      {skill.body}
-                    </pre>
+                    <Markdown text={skill.body} className="rounded bg-zinc-50 p-3 text-sm dark:bg-zinc-900" />
                   )}
                   {!!skill.tools?.length && (
                     <table className="w-full text-sm">
@@ -257,9 +260,7 @@ export function BotPage() {
       </Section>
 
       <Section title="Instructions">
-        <pre className="overflow-auto rounded-lg bg-zinc-50 p-3 text-xs whitespace-pre-wrap dark:bg-zinc-900">
-          {bot.instructions || '(none)'}
-        </pre>
+        <Markdown text={bot.instructions || '(none)'} className="rounded-lg bg-zinc-50 p-4 text-sm dark:bg-zinc-900" />
       </Section>
     </div>
   )

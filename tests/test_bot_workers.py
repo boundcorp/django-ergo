@@ -29,6 +29,11 @@ def launch(target: str):
 
 
 @bot_task
+def open_pr():
+    return {"pr": "https://github.com/boundcorp/django-ergo/pull/12", "status": "done"}
+
+
+@bot_task
 def explode():
     raise RuntimeError("the build broke")
 
@@ -109,6 +114,25 @@ def test_a_polling_worker_reports_back_to_its_thread(tmp_path, workers):
 
 
 @pytest.mark.django_db(transaction=True)
+def test_a_worker_s_pull_requests_are_recorded_in_its_chat(tmp_path, workers):
+    from django_ergo.bots import workers as w
+    from django_ergo.bots.tools import ToolContext
+
+    bot, _ = make_bot(tmp_path, yaml_text=YAML, tools=TOOLS)
+    user = get_user_model().objects.create(username="w")
+    session = async_to_sync(bot.main_session)(user)
+    worker = ToolContext(bot=bot, session=session, user=user).workers.start(
+        "open_pr", title="Open the PR"
+    )
+    assert w.run(str(worker.pk), bot.registry) == "completed"
+    [pr] = session.attachments.filter(metadata__link="github_pr")
+    assert (pr.url, pr.metadata["number"]) == (
+        "https://github.com/boundcorp/django-ergo/pull/12",
+        12,
+    )
+
+
+@pytest.mark.django_db(transaction=True)
 def test_failed_and_cancelled_workers(tmp_path, workers):
     from django_ergo.bots import workers as w
     from django_ergo.bots.tools import ToolContext
@@ -183,7 +207,7 @@ def test_the_workers_skill_lists_starts_and_cancels(tmp_path, workers):
 
 
 @pytest.mark.django_db(transaction=True)
-def test_orca_start_worker_watches_the_dispatch_and_reports_back(
+def test_orca_start_worker_watches_the_dispatch_and_reports_back(  # noqa: PLR0915
     tmp_path, workers, monkeypatch
 ):
     import subprocess
@@ -263,6 +287,39 @@ def test_orca_start_worker_watches_the_dispatch_and_reports_back(
     plugin.start_worker(ctx, "Another task", "id:repo::/home/dev/p/site")
     assert sum(c[1:3] == ["terminal", "create"] for c in calls) == 1
 
+    # omp takes its model from the worktree, not from Orca's --model.
+    pinned = []
+    monkeypatch.setattr(
+        type(plugin),
+        "push",
+        lambda self, root, folder, name, data: pinned.append(
+            (root, folder, name, data)
+        ),
+    )
+    plugin.start_worker(
+        ctx,
+        "Omp task",
+        "id:repo::/home/dev/p/site",
+        agent="omp",
+        model="anthropic/claude-sonnet-5-5",
+        effort="high",
+    )
+    omp_start = [c for c in calls if c[1:3] == ["orchestration", "worker-start"]][-1]
+    assert "--model" not in omp_start and "--effort" not in omp_start
+    assert pinned == [
+        (
+            "/home/dev/p/site",
+            ".omp",
+            "config.yml",
+            b'modelRoles:\n  default: "anthropic/claude-sonnet-5-5:high"\n',
+        ),
+        ("/home/dev/p/site", ".omp", ".gitignore", b"*\n"),
+    ]
+    with pytest.raises(ValueError, match="omp takes effort only"):
+        plugin.start_worker(
+            ctx, "x", "id:repo::/home/dev/p/site", agent="omp", effort="high"
+        )
+
     worker_id = started["id"]
     assert w.run(worker_id, bot.registry) == "running"
     # First check: no heartbeat yet, so Enter goes to the agent's terminal, once.
@@ -323,3 +380,61 @@ def test_orca_start_worker_watches_the_dispatch_and_reports_back(
     assert (
         len([c for c in calls if c[1:3] == ["terminal", "send"]]) == 1
     )  # Enter was pressed only once
+
+
+@pytest.mark.django_db(transaction=True)
+def test_orca_start_worker_replaces_a_mailbox_whose_terminal_is_gone(
+    tmp_path, workers, monkeypatch
+):
+    import subprocess
+
+    from django_ergo.bots.tools import ToolContext
+    from tests.test_bot_plugins import orca_bot
+
+    bot, _, plugin = orca_bot(tmp_path)
+    calls = []
+    fixed = {
+        ("terminal", "create"): {"terminal": {"handle": "term_new"}},
+        ("orchestration", "run-create"): {"run": {"id": "run_new"}},
+        ("worktree", "show"): {
+            "worktree": {"id": "repo::/home/dev/p/site", "path": "/home/dev/p/site"}
+        },
+        ("orchestration", "task-create"): {"task": {"id": "task_1"}},
+        ("orchestration", "worker-start"): {"dispatchId": "ctx_1", "taskId": "task_1"},
+    }
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        if argv[1:3] == ["orchestration", "worker-start"] and "term_gone" in argv:
+            body = {"ok": False, "error": {"message": "selector_not_found"}}
+            return subprocess.CompletedProcess(
+                argv, 1, stdout=json.dumps(body), stderr=""
+            )
+        body = {"ok": True, "result": fixed[tuple(argv[1:3])]}
+        return subprocess.CompletedProcess(argv, 0, stdout=json.dumps(body), stderr="")
+
+    monkeypatch.setattr("django_ergo.plugins.orca.subprocess.run", fake_run)
+    user = get_user_model().objects.create(username="stale")
+    session = async_to_sync(bot.main_session)(user)
+    # The mailbox lived in a worktree that has since been removed.
+    session.metadata = {
+        **session.metadata,
+        "orca": {"devbox": {"mailbox": "term_gone", "run": "run_old"}},
+    }
+    session.save(update_fields=["metadata"])
+    ctx = ToolContext(bot=bot, session=session, user=user)
+
+    started = plugin.start_worker(ctx, "Fix it", "path:/home/dev/p/site")
+    assert started["orca"]["run"] == "run_new"
+    starts = [c for c in calls if c[1:3] == ["orchestration", "worker-start"]]
+    assert [c[c.index("--from") + 1] for c in starts] == ["term_gone", "term_new"]
+    session.refresh_from_db()
+    assert session.metadata["orca"]["devbox"] == {
+        "mailbox": "term_new",
+        "run": "run_new",
+    }
+
+    # Any other failure is reported as it is, without a retry.
+    fixed[("orchestration", "worker-start")] = {}
+    with pytest.raises(ValueError, match="no dispatch id"):
+        plugin.start_worker(ctx, "Again", "path:/home/dev/p/site")

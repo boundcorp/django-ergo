@@ -5,6 +5,8 @@ export type User = { id: string; username: string; email: string; first_name: st
 export type Bot = {
   name: string
   description: string
+  icon?: string // bot.yaml icon (an emoji); '' = its first letter
+  color?: string // bot.yaml color: a palette name or hex; '' = picked from the name
   orchestration: boolean
   knowledge: boolean
   parent: string
@@ -187,12 +189,54 @@ export type AttachmentFile = {
   created_at: string
   updated_at: string
   archived_at?: string | null
+  link?: PrLink | null // a pull request the bot reported (no stored file)
 }
+
+// A pull request a bot or worker reported (django_ergo.conversation.links); state is read with gh.
+export type PrLink = {
+  id: string
+  url: string
+  repo: string
+  number: number | null
+  title: string
+  state: '' | 'open' | 'draft' | 'merged' | 'closed'
+  checks: '' | 'passing' | 'failing' | 'pending'
+}
+
+// A chat as thread cards and links show it (api/bots.py thread_summary).
+export type ThreadSummary = {
+  id: string
+  title: string
+  bot: string
+  role: string
+  archived: boolean
+  attention: boolean
+  state: 'working' | 'waiting_for_approval' | 'idle'
+  started_by: string
+  started_by_id: string
+  working_for: number
+  waiting_on: number
+  workers_running: number
+}
+
+// A request this chat sent to another chat (ergo_thread_send, ergo_message_up).
+export type SentCard = {
+  message_id: string
+  created_at: string
+  status: 'queued' | 'working' | 'waiting' | 'done' | 'failed'
+  text: string
+  reply: string
+  thread: ThreadSummary
+  prs: PrLink[]
+}
+
+export type SidebarPin = { name: string; url: string; icon?: string; filename?: string }
 
 // Something pinned in a chat: a bot-folder file (chats.<name>.pins) or a pinned chat file.
 export type Pin = {
   kind: 'bot_file' | 'file'
-  name: string
+  name: string // its title, or the file name
+  icon?: string // an emoji; '' = one for the file type (pinIcon)
   url: string
   path?: string
   id?: string
@@ -233,6 +277,7 @@ export type Worker = {
   error: string
   created_at: string
   completed_at: string | null
+  prs?: PrLink[] // pull requests its result links
 }
 
 export type SessionDetail = {
@@ -242,6 +287,11 @@ export type SessionDetail = {
   requests?: DelegatedRequest[]
   workers?: Worker[]
   inbox?: { id: string; text: string; files: number }[] // sent mid-turn, not yet given to the model
+  first_line?: number | null // the oldest line returned
+  has_more?: boolean // older messages exist: ask with before=first_line
+  message_count?: number // in the whole session
+  sent?: SentCard[] // requests this chat sent, newest first
+  prs?: PrLink[] // pull requests reported in this chat
 }
 
 export type Turn = {
@@ -331,7 +381,9 @@ export const api = {
     request<Session>('POST', `/bots/${bot}/threads`, { title, message, model }),
   models: (bot: string) => request<BotModels>('GET', `/bots/${bot}/models`),
   setModel: (id: string, model: string) => request<Session>('POST', `/sessions/${id}/model`, { model }),
-  session: (id: string) => request<SessionDetail>('GET', `/sessions/${id}`),
+  // The newest page of messages, or the page before line `before`.
+  session: (id: string, before?: number) =>
+    request<SessionDetail>('GET', `/sessions/${id}${before == null ? '' : `?before=${before}`}`),
   call: (id: string) =>
     request<Call & { system_prompt: string; transcript: unknown[]; metadata: unknown }>('GET', `/calls/${id}`),
   // While a turn runs, "send" steers it and "interrupt" stops it and starts a new one.
@@ -399,7 +451,7 @@ export const api = {
       'GET',
       `/bots/${bot}/tables/${encodeURIComponent(table)}/rows?page=${opts.page ?? 1}&order=${encodeURIComponent(opts.order ?? '')}&q=${encodeURIComponent(opts.q ?? '')}`,
     ),
-  allPins: () => request<Record<string, { name: string; url: string }[]>>('GET', '/pins'),
+  allPins: () => request<Record<string, SidebarPin[]>>('GET', '/pins'),
   pins: (id: string) => request<Pin[]>('GET', `/sessions/${id}/pins`),
   pin: (id: string, pinned: boolean) => request<AttachmentFile>('POST', `/attachments/${id}/pin`, { pinned }),
 }

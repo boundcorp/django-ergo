@@ -26,25 +26,51 @@ function summarize(input: unknown): string {
   return text.length > 80 ? `${text.slice(0, 77)}…` : text
 }
 
-export function ToolCard({ use, result, pending }: { use: ToolUse; result?: ToolResult; pending?: boolean }) {
+function seconds(ms: number): string {
+  if (ms < 1000) return `${Math.max(0, Math.round(ms))}ms`
+  if (ms < 60_000) return `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)}s`
+  return `${Math.floor(ms / 60_000)}m${Math.round((ms % 60_000) / 1000)}s`
+}
+
+/** A tool call as one line (status, name, arguments, time); the arguments and result open on click. */
+export function ToolCard({
+  use,
+  result,
+  pending,
+  duration,
+}: {
+  use: ToolUse
+  result?: ToolResult
+  pending?: boolean
+  duration?: number | null // ms from the call to its result
+}) {
   const [open, setOpen] = useState(false)
-  const state = pending ? 'waiting for approval' : !result ? 'no result' : result.is_error ? 'error' : 'ok'
-  const tone = pending
-    ? 'border-warning/50 border-l-4 bg-amber-tint'
-    : result?.is_error
-      ? 'border-danger/50 border-l-4 bg-red-tint'
-      : 'border-stroke border-l-4 border-l-teal bg-surface'
+  const [icon, state, tone] = pending
+    ? ['⏸', 'needs approval', 'border-warning/50 bg-amber-tint']
+    : !result
+      ? ['…', 'running', 'border-stroke bg-surface']
+      : result.is_error
+        ? ['✗', 'error', 'border-danger/50 bg-red-tint']
+        : ['✓', 'ok', 'border-stroke bg-surface']
   return (
-    <div className={`my-1 rounded-card border text-sm ${tone}`}>
+    <div className={`rounded-control border text-xs ${tone}`}>
       <button
-        className="flex w-full items-center gap-2 px-3 py-1.5 text-left"
+        className="flex w-full items-center gap-2 px-2.5 py-1 text-left"
         onClick={() => setOpen(!open)}
         aria-expanded={open}
+        title={state}
       >
-        <span className="font-mono text-xs text-zinc-500">{open ? '▾' : '▸'}</span>
-        <span className="font-mono font-medium">{use.name}</span>
-        <span className="truncate font-mono text-xs text-zinc-500">{summarize(use.input)}</span>
-        <span className="ml-auto shrink-0 text-xs text-zinc-500">{state}</span>
+        <span
+          className={`w-3 shrink-0 text-center ${result?.is_error ? 'text-danger' : pending ? 'text-warning' : result ? 'text-success' : 'animate-pulse text-accent'}`}
+        >
+          {icon}
+        </span>
+        <span className="shrink-0 font-mono font-medium">{use.name}</span>
+        <span className="min-w-0 truncate font-mono text-zinc-500">{summarize(use.input)}</span>
+        <span className="ml-auto shrink-0 text-zinc-500">
+          {duration != null && result ? seconds(duration) : pending ? state : ''}
+        </span>
+        <span className="shrink-0 font-mono text-zinc-400">{open ? '▾' : '▸'}</span>
       </button>
       {open && (
         <div className="space-y-2 border-t border-inherit px-3 py-2">
