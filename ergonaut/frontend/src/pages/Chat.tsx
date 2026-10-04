@@ -18,6 +18,7 @@ import Markdown from '../components/Markdown'
 import ModelPicker from '../components/ModelPicker'
 import { PageViewer, Pins } from '../components/Pins'
 import { AttachmentView, Transcript } from '../components/Transcript'
+import { agoLong } from '../time'
 
 /** Fold a live update into the transcript: messages replace by line, calls by id. */
 function merge(detail: SessionDetail, messages: Message[], calls: Call[]): SessionDetail {
@@ -353,12 +354,13 @@ export function Chat({ onChange }: { onChange: () => void }) {
   return (
     <div className="chat-session flex h-full">
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="chat-header flex flex-wrap items-center gap-3 px-6 py-4">
-          <div>
-            <div className="text-2xl font-bold">{detail.session.title}</div>
+        <header className="chat-header flex flex-wrap items-center gap-3 px-4 py-4 sm:px-6">
+          <div className="min-w-0">
+            <h1 className="font-display text-2xl font-bold">{detail.session.title}</h1>
             <div className="mt-1 text-sm text-muted">
               {detail.session.bot} · {detail.session.role || 'session'} ·{' '}
-              {(detail.message_count ?? detail.messages.length).toLocaleString()} messages
+              {(detail.message_count ?? detail.messages.length).toLocaleString()} messages · Updated{' '}
+              {agoLong(detail.session.updated_at)} · Session {archived ? 'archived' : closed ? 'closed' : 'active'}
               {detail.session.started_by && detail.session.started_by_id && (
                 <>
                   {' · started by '}
@@ -369,50 +371,44 @@ export function Chat({ onChange }: { onChange: () => void }) {
               )}
             </div>
           </div>
-          <div className="ml-auto">
-            <ModelPicker
-              bot={detail.session.bot}
-              value={detail.session.model ?? ''}
-              engineType={detail.session.engine_type}
-              onPick={async model => {
-                await api.setModel(id, model).catch(e => setError(String(e.message ?? e)))
-                await load()
-              }}
-            />
-          </div>
-          {detail.session.role === 'thread' && (
+          <div className="ml-auto flex flex-wrap items-center gap-3">
+            {detail.session.role === 'thread' && (
+              <button
+                className="rounded-md border border-zinc-300 px-2 py-0.5 text-xs text-zinc-600 disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-400"
+                disabled={archived || busy}
+                title={archived ? 'Archived; a new message reopens it' : 'Archive this thread'}
+                onClick={async () => {
+                  await api.close(id).catch(e => setError(String(e.message ?? e)))
+                  await load()
+                  onChange()
+                }}
+              >
+                {archived ? 'Archived' : 'Archive'}
+              </button>
+            )}
             <button
-              className="rounded-md border border-zinc-300 px-2 py-0.5 text-xs text-zinc-600 disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-400"
-              disabled={archived || busy}
-              title={archived ? 'Archived; a new message reopens it' : 'Archive this thread'}
-              onClick={async () => {
-                await api.close(id).catch(e => setError(String(e.message ?? e)))
-                await load()
-                onChange()
-              }}
+              className={`rounded-md border px-2 py-0.5 text-xs ${showFiles ? 'border-indigo-400 text-indigo-700 dark:text-indigo-300' : 'border-zinc-300 text-zinc-600 dark:border-zinc-700 dark:text-zinc-400'}`}
+              onClick={() => toggleFiles(!showFiles)}
             >
-              {archived ? 'Archived' : 'Archive'}
+              📎 Files
             </button>
-          )}
-          <button
-            className={`rounded-md border px-2 py-0.5 text-xs ${showFiles ? 'border-indigo-400 text-indigo-700 dark:text-indigo-300' : 'border-zinc-300 text-zinc-600 dark:border-zinc-700 dark:text-zinc-400'}`}
-            onClick={() => toggleFiles(!showFiles)}
-          >
-            📎 Files
-          </button>
-          <a
-            className="text-xs text-zinc-500 underline"
-            href={`data:application/json,${encodeURIComponent(JSON.stringify(detail, null, 2))}`}
-            download={`session-${detail.session.id}.json`}
-          >
-            Export JSON
-          </a>
+            <a
+              className="text-xs text-zinc-500 underline"
+              href={`data:application/json,${encodeURIComponent(JSON.stringify(detail, null, 2))}`}
+              download={`session-${detail.session.id}.json`}
+            >
+              Export JSON
+            </a>
+          </div>
         </header>
         <Requests requests={detail.requests ?? []} />
         <Workers workers={detail.workers ?? []} />
         <Pins sessionId={id} refreshKey={`${detail.messages.length}:${pinsKey}`} open={openPin} onOpen={setOpenPin} />
         {openPin && <PageViewer pin={openPin} refreshKey={detail.messages.length} onClose={() => setOpenPin(null)} />}
-        <div ref={transcript} className={`chat-transcript flex-1 overflow-y-auto px-6 py-5 ${openPin ? 'hidden' : ''}`}>
+        <div
+          ref={transcript}
+          className={`chat-transcript min-h-24 flex-1 overflow-y-auto px-4 py-5 sm:px-6 ${openPin ? 'hidden' : ''}`}
+        >
           {detail.has_more && (
             <div className="mb-4 flex justify-center">
               <button
@@ -474,49 +470,38 @@ export function Chat({ onChange }: { onChange: () => void }) {
           <div ref={bottom} />
         </div>
         {!!waiting.length && (
-          <div className="mx-6 mb-3 rounded-card border border-warning/40 bg-amber-tint p-4 text-sm">
-            <div className="mb-2 font-medium">Approve {waiting.map(a => a.name).join(', ')}?</div>
-            <div className="flex gap-2">
-              <button
-                disabled={busy || !!pending}
-                className="rounded-control bg-warning px-4 py-2 font-semibold text-canvas disabled:opacity-50"
-                onClick={() =>
-                  run(() =>
-                    api.approve(
-                      id,
-                      true,
-                      waiting.map(a => a.id),
-                    ),
-                  )
-                }
-              >
-                Approve
-              </button>
-              <button
-                disabled={busy || !!pending}
-                className="rounded-control border border-warning/50 px-4 py-2 disabled:opacity-50"
-                onClick={() =>
-                  run(() =>
-                    api.approve(
-                      id,
-                      false,
-                      waiting.map(a => a.id),
-                    ),
-                  )
-                }
-              >
-                Deny
-              </button>
-            </div>
+          <div className="mx-4 mb-3 grid max-h-[45dvh] gap-2 overflow-y-auto sm:mx-6">
+            {waiting.map(approval => (
+              <section key={approval.id} className="rounded-card border border-warning/40 bg-amber-tint p-4 text-sm">
+                <div className="font-medium">Tool approval requested: {approval.name}</div>
+                <p className="mt-1 text-muted">Review this tool call; the composer waits for its decision.</p>
+                <div className="mt-3 flex gap-2">
+                  <button
+                    disabled={busy || !!pending}
+                    className="rounded-control bg-warning px-4 py-2 font-semibold text-canvas disabled:opacity-50"
+                    onClick={() => run(() => api.approve(id, true, [approval.id]))}
+                  >
+                    Approve
+                  </button>
+                  <button
+                    disabled={busy || !!pending}
+                    className="rounded-control border border-warning/50 px-4 py-2 disabled:opacity-50"
+                    onClick={() => run(() => api.approve(id, false, [approval.id]))}
+                  >
+                    Reject
+                  </button>
+                </div>
+              </section>
+            ))}
           </div>
         )}
         {error && (
-          <div className="mx-6 mb-2 rounded-card border border-danger/40 bg-red-tint p-3 text-sm text-danger">
+          <div className="mx-4 mb-2 rounded-card border border-danger/40 bg-red-tint p-3 text-sm text-danger sm:mx-6">
             {error}
           </div>
         )}
         {failedCall && (
-          <div className="mx-6 mb-2 rounded-card border border-danger/40 bg-red-tint px-4 py-3 text-sm">
+          <div className="mx-4 mb-2 rounded-card border border-danger/40 bg-red-tint px-4 py-3 text-sm sm:mx-6">
             <div className="flex flex-wrap items-center gap-2">
               <span className="font-medium text-red-700 dark:text-red-300">
                 {failedCall.error_summary || 'The last turn failed.'}
@@ -556,7 +541,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
           </div>
         )}
         {!!suggestions.length && (
-          <div className="mx-6 mb-2 flex flex-wrap gap-2">
+          <div className="mx-4 mb-2 flex flex-wrap gap-2 sm:mx-6">
             {suggestions.map(s => (
               <button
                 key={s}
@@ -591,22 +576,13 @@ export function Chat({ onChange }: { onChange: () => void }) {
           </div>
         )}
         <form
-          className="chat-composer mx-4 mb-2 flex flex-wrap items-end gap-2 rounded-panel border border-stroke bg-surface p-4"
+          className="chat-composer mx-4 mb-2 rounded-panel border border-stroke bg-surface p-4"
           onSubmit={e => {
             e.preventDefault()
             send(text)
           }}
         >
           <input ref={picker} type="file" multiple hidden onChange={e => attach(e.target.files)} />
-          <button
-            type="button"
-            disabled={closed || !!waiting.length || uploading}
-            title="Attach images, PDFs or other files"
-            className="rounded-control border border-stroke bg-raised px-3 py-2 text-lg disabled:opacity-50"
-            onClick={() => picker.current?.click()}
-          >
-            {uploading ? '…' : '📎'}
-          </button>
           <textarea
             onPaste={e => {
               const files = Array.from(e.clipboardData.files)
@@ -625,6 +601,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
               }
             }}
             rows={2}
+            aria-label="Message"
             placeholder={
               closed
                 ? 'This session is closed'
@@ -636,39 +613,61 @@ export function Chat({ onChange }: { onChange: () => void }) {
                       ? 'Steer the bot: your message joins this turn'
                       : 'Message the bot'
             }
-            className="min-w-48 flex-1 resize-none rounded-card border border-stroke bg-raised px-3 py-2 focus:outline-none"
+            className="block w-full resize-none rounded-card border border-stroke bg-raised px-3 py-2 focus:outline-none"
           />
-          {running && (
-            <div className="flex flex-col gap-1">
-              <button
-                type="button"
-                disabled={stopping}
-                title="Stop the bot after the step it's on"
-                className="flex-1 rounded-control border border-stroke bg-raised px-3 py-2 text-sm disabled:opacity-50"
-                onClick={stop}
-              >
-                ⏹ Stop
-              </button>
-              {(!!text.trim() || !!outgoing.length) && (
-                <button
-                  type="button"
-                  disabled={busy || uploading || stopping}
-                  title="Stop the bot and answer this message instead"
-                  className="flex-1 rounded-control bg-accent px-3 py-2 text-sm font-semibold text-canvas disabled:opacity-50"
-                  onClick={() => send(text, 'interrupt')}
-                >
-                  Stop &amp; send
-                </button>
+          <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-stroke pt-3">
+            <button
+              type="button"
+              disabled={closed || !!waiting.length || uploading}
+              title="Attach images, PDFs or other files"
+              className="rounded-control px-2 py-2 text-sm font-semibold text-mint hover:bg-raised disabled:opacity-50"
+              onClick={() => picker.current?.click()}
+            >
+              {uploading ? 'Attaching…' : '+ Attach'}
+            </button>
+            <ModelPicker
+              bot={detail.session.bot}
+              value={detail.session.model ?? ''}
+              engineType={detail.session.engine_type}
+              onPick={async model => {
+                await api.setModel(id, model).catch(e => setError(String(e.message ?? e)))
+                await load()
+              }}
+            />
+            <div className="ml-auto flex items-center gap-2">
+              {running && (
+                <>
+                  <button
+                    type="button"
+                    disabled={stopping}
+                    title="Stop the bot after the step it's on"
+                    className="rounded-control border border-stroke bg-raised px-3 py-2 text-sm disabled:opacity-50"
+                    onClick={stop}
+                  >
+                    Stop
+                  </button>
+                  {(!!text.trim() || !!outgoing.length) && (
+                    <button
+                      type="button"
+                      disabled={busy || uploading || stopping}
+                      title="Stop the bot and answer this message instead"
+                      className="rounded-control bg-accent px-3 py-2 text-sm font-semibold text-canvas disabled:opacity-50"
+                      onClick={() => send(text, 'interrupt')}
+                    >
+                      Stop &amp; send
+                    </button>
+                  )}
+                </>
               )}
+              <button
+                disabled={busy || uploading || (!text.trim() && !outgoing.length)}
+                title={running ? 'Send now; the bot sees it after the step it is on' : undefined}
+                className="rounded-control bg-accent px-5 py-2.5 font-semibold text-canvas disabled:opacity-50"
+              >
+                Send
+              </button>
             </div>
-          )}
-          <button
-            disabled={busy || uploading || (!text.trim() && !outgoing.length)}
-            title={running ? 'Send now; the bot sees it after the step it is on' : undefined}
-            className="rounded-control bg-accent px-5 py-2.5 font-semibold text-canvas disabled:opacity-50"
-          >
-            Send
-          </button>
+          </div>
         </form>
       </div>
       {showFiles && (
@@ -705,10 +704,12 @@ const WORKER_ICON: Record<Worker['status'], string> = {
 function Workers({ workers }: { workers: Worker[] }) {
   const [showDone, setShowDone] = useState(false)
   const running = workers.filter(w => w.status === 'queued' || w.status === 'running')
-  const done = workers.filter(w => !running.includes(w))
+  const finished = workers.filter(w => !running.includes(w))
+  const done = finished.slice(-5)
+  const hiddenDone = finished.length - done.length
   if (!workers.length) return null
   return (
-    <div className="mx-6 mb-2 flex flex-col gap-2 rounded-card border border-stroke bg-surface px-4 py-3 text-xs">
+    <div className="mx-4 mb-2 flex flex-col gap-2 rounded-card border border-stroke bg-surface px-4 py-3 text-xs sm:mx-6">
       {running.map(w => (
         <div key={w.id} className="flex items-center gap-2 truncate">
           {w.status === 'running' ? (
@@ -723,6 +724,7 @@ function Workers({ workers }: { workers: Worker[] }) {
       {!!done.length && (
         <button className="self-start text-zinc-400 hover:text-zinc-600" onClick={() => setShowDone(s => !s)}>
           {showDone ? '▾' : '▸'} {done.length} finished worker{done.length === 1 ? '' : 's'}
+          {hiddenDone ? ` (latest; ${hiddenDone} earlier)` : ''}
         </button>
       )}
       {showDone &&
@@ -743,7 +745,7 @@ function Requests({ requests }: { requests: DelegatedRequest[] }) {
   const open = requests.filter(r => r.status !== 'answered' && r.status !== 'failed')
   if (!open.length) return null
   return (
-    <div className="mx-6 mb-2 flex flex-col gap-2 rounded-card border border-teal/40 bg-teal-tint px-4 py-3 text-xs">
+    <div className="mx-4 mb-2 flex flex-col gap-2 rounded-card border border-teal/40 bg-teal-tint px-4 py-3 text-xs sm:mx-6">
       {open.map(r => (
         <div key={r.id} className="flex items-center gap-2 truncate">
           <span className={r.status === 'waiting' ? 'text-amber-600' : 'text-teal-600'}>
