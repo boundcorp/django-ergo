@@ -165,7 +165,7 @@ export default function Files({
         ))}
         {archivedCount > 0 && (
           <button
-            className="p-2 text-xs text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-300"
+            className="p-2 text-xs text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-100"
             onClick={() => setShowArchived(v => !v)}
           >
             {showArchived ? 'Hide archived' : `Show ${archivedCount} archived`}
