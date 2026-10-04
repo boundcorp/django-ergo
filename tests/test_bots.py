@@ -1685,6 +1685,46 @@ def test_open_prs_come_from_the_open_prs_setting(tmp_path, settings):
     assert overview.open_prs(bot) == ["- a/b #7 (draft): Fix it", "- a/b #8: Ship it"]
 
 
+def test_introspection_reads_the_bot_folder_and_ergo_but_nothing_hidden(tmp_path):
+    from django_ergo.bots.introspection import introspection_toolkit
+    from django_ergo.bots.tools import ToolContext
+
+    bot, _ = make_bot(tmp_path)
+    folder = bot.definition.root_dir
+    (folder / ".env").write_text("SECRET=1")
+    (folder / "tools" / "big.py").write_text(
+        "\n".join(f"x{i} = {i}" for i in range(1000))
+    )
+    skill = next(s for s in bot.skill_defs if s.name == "introspection")
+    assert skill.source == "built-in"
+    tools = {
+        name: tool.function
+        for name, tool in introspection_toolkit(bot, ToolContext(bot=bot)).tools.items()
+    }
+    assert set(tools) == {"ergo_self_overview", "ergo_self_files", "ergo_self_read"}
+
+    overview = tools["ergo_self_overview"]()
+    assert overview["name"] == "kitchen"
+    assert {"name": "pantry", "source": "tools/pantry.py"}.items() <= next(
+        s for s in overview["skills"] if s["name"] == "pantry"
+    ).items()
+    listing = tools["ergo_self_files"]()
+    assert "bot.yaml" in listing and "tools/pantry.py" in listing
+    assert ".env" not in listing
+    assert "kitchen" in tools["ergo_self_read"]("bot.yaml")
+    piece = tools["ergo_self_read"]("tools/big.py", start_line=401)
+    assert piece.startswith(
+        "tools/big.py lines 401-800 of 1000 (read on with start_line=801)"
+    )
+    assert "def introspection_toolkit" in tools["ergo_self_read"](
+        "ergo:bots/introspection.py"
+    )
+    assert "plugins/attachments.py" in tools["ergo_self_files"]("ergo:plugins")
+    for bad in (".env", "../other", "/etc/passwd", "ergo:../../x"):
+        with pytest.raises(ValueError, match="outside|hidden|exist"):
+            tools["ergo_self_read"](bad)
+
+
 @pytest.mark.django_db(transaction=True)
 async def test_a_report_upward_gets_no_reply_unless_it_asks(tmp_path, thread_messages):
     from django_ergo.conversation.models import ThreadMessage

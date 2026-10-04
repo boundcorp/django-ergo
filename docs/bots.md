@@ -193,7 +193,17 @@ loads the same way (`django_ergo.bots.skillset`):
   module docstring is the description);
 - a plugin that adds tools (`kb`, `config_repo`, `orca`, `bash`,
   `attachments`, ...) and each `toolkits:` factory;
-- built-ins: `history` (always loaded) and `orchestration`.
+- built-ins: `history` (always loaded), `workers`, `orchestration`, and
+  `introspection` for bots loaded from a folder.
+
+`introspection` is read-only and needs no plugin, so every bot can see what
+it's made of, whether or not it can change its repository (that's
+`bot_management`): `ergo_self_overview` (folder, model, skills and their
+sources, plugins with secret-looking config hidden, tables, schedules, chats,
+sub-bots), `ergo_self_files` and `ergo_self_read` (files in the bot folder, by
+line range; `ergo:` paths read Ergo's own source, e.g.
+`ergo:plugins/attachments.py`). Hidden files such as `.env` are never listed
+or read.
 
 ```markdown
 ---
