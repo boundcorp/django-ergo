@@ -83,6 +83,7 @@ from django_ergo.conversation.engine import SeededToolCall
 from django_ergo.conversation.images import is_ref
 from django_ergo.conversation.images import prepare_messages
 from django_ergo.conversation.images import storable_ref
+from django_ergo.conversation.messages import anext_sequence
 from django_ergo.conversation.models import ConversationSession
 from django_ergo.conversation.models import StructuredCall
 from django_ergo.conversation.models import StructuredCallStatus
@@ -467,9 +468,7 @@ class _SessionTranscript:
         self.extra_system = extra_system
 
     def _rows(self):
-        if self.session.engine_type == "openai":
-            return self.session.openai_messages
-        return self.session.claude_messages
+        return self.session.messages
 
     async def append_user(self, text: str, attachments=None) -> None:
         await self.engine.append_user_message(self.session, text, attachments)
@@ -488,7 +487,7 @@ class _SessionTranscript:
         self.engine.ephemeral_context = "\n\n".join(
             p for p in (self.extra_system, note) if p
         )
-        before = await self._rows().acount()
+        before = await anext_sequence(self.session)
         try:
             return [
                 event async for event in self.engine.respond(self.session, tool_schemas)
@@ -501,8 +500,8 @@ class _SessionTranscript:
 
     async def finish(self) -> None:
         call = self.call
-        total = await self._rows().acount()
-        call.last_sequence = total - 1 if total else None
+        following = await anext_sequence(self.session)
+        call.last_sequence = following - 1 if following else None
 
     async def _add_usage(self, since: int) -> None:
         call = self.call
@@ -823,13 +822,19 @@ def _engine(spec: StructuredCallSpec, engine_spec: EngineSpec | None) -> Engine:
 async def _session_engine(
     spec: StructuredCallSpec, session: ConversationSession, engine: Engine | None
 ) -> Engine:
-    if engine is not None:
-        return engine
-    from django_ergo.conversation.manager import SessionManager
+    if engine is None:
+        from django_ergo.conversation.manager import SessionManager
 
-    engine = await SessionManager().get_engine(session)
-    if spec.max_tokens is not None:
-        engine.max_tokens = spec.max_tokens
+        engine = await SessionManager().get_engine(session)
+        if spec.max_tokens is not None:
+            engine.max_tokens = spec.max_tokens
+    # Any engine can take a session's next turn (messages are engine-neutral);
+    # note the one this turn runs on.
+    engine_type = getattr(engine, "engine_type", "") or session.engine_type
+    transport = getattr(engine, "transport_type", "") or session.transport_type
+    if (engine_type, transport) != (session.engine_type, session.transport_type):
+        session.engine_type, session.transport_type = engine_type, transport
+        await session.asave(update_fields=["engine_type", "transport_type"])
     return engine
 
 
@@ -878,11 +883,6 @@ async def run_structured_call(  # noqa: PLR0913
     pre_seeds = await sync_to_async(spec.all_pre_seeds, thread_sensitive=True)()
     if session is not None:
         active = await _session_engine(spec, session, engine)
-        rows = (
-            session.openai_messages
-            if session.engine_type == "openai"
-            else session.claude_messages
-        )
         # Pre-seeds go in once per session, the first time a turn has them.
         seed = bool(pre_seeds) and (
             spec.pre_seed_each_turn
@@ -899,7 +899,7 @@ async def run_structured_call(  # noqa: PLR0913
             parent=parent,
             request=message,
             engine_type=session.engine_type,
-            first_sequence=await rows.acount(),
+            first_sequence=await anext_sequence(session),
             metadata=metadata or {},
         )
         if spec.toolkits:

@@ -31,7 +31,7 @@ export type Session = {
   busy?: boolean // a turn is running now
   unread?: boolean // a reply came after the owner last opened it
   attention?: boolean // the latest turn waits on the user: an approval, a question, or a failure
-  engine_type?: string // openai or claude: a chat keeps its engine
+  engine_type?: string // openai or claude: the engine its latest turn ran on
   model?: string // the provider/model picked for this chat ('' = the bot's default)
   resolved_by?: string // the bot that resolved this thread (ergo_thread_resolve)
   resolved_summary?: string // its one-line summary of how the thread ended
@@ -280,9 +280,38 @@ export type Changes = {
   error: string
 }
 
+// One line of what a worker's agent did: a message, a tool call and its result, or a screen line.
+export type WorkerEntry = {
+  kind: 'assistant' | 'user' | 'reasoning' | 'tool' | 'result' | 'error' | 'terminal' | string
+  text: string
+  at: number | null // epoch seconds, when the source has a time
+}
+
+// What a worker did lately, kept at its last check (WorkerContext.activity); times in epoch seconds.
+export type WorkerActivity = {
+  entries: WorkerEntry[]
+  source: string // transcript or terminal
+  at: number | null // when it last did something
+  checked_at: number | null
+  waiting: string // what it's waiting on a person for
+  liveness: string
+  stall_after: number | null // seconds without activity before it counts as stalled
+}
+
+// A worker's recent output, read now (live) or as kept at its last check.
+export type WorkerLog = {
+  id: string
+  title: string
+  source: string
+  entries: WorkerEntry[]
+  live: boolean
+  error: string
+}
+
 // Long-running work a chat started (django_ergo.bots.workers).
 export type Worker = {
   id: string
+  session_id?: string
   title: string
   function: string
   status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'
@@ -292,6 +321,7 @@ export type Worker = {
   created_at: string
   completed_at: string | null
   prs?: PrLink[] // pull requests its result links
+  activity?: WorkerActivity | null
 }
 
 export type SessionDetail = {
@@ -398,6 +428,8 @@ export const api = {
   // The newest page of messages, or the page before line `before`.
   session: (id: string, before?: number) =>
     request<SessionDetail>('GET', `/sessions/${id}${before == null ? '' : `?before=${before}`}`),
+  workerLog: (sessionId: string, workerId: string) =>
+    request<WorkerLog>('GET', `/sessions/${sessionId}/workers/${workerId}/log`),
   call: (id: string) =>
     request<Call & { system_prompt: string; transcript: unknown[]; metadata: unknown }>('GET', `/calls/${id}`),
   // While a turn runs, "send" steers it and "interrupt" stops it and starts a new one.

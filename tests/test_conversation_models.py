@@ -1,19 +1,19 @@
 """
 Tests for conversation storage models:
-ConversationSession, ClaudeMessage, ClaudeContentBlock, OpenAIMessage
+ConversationSession, SessionMessage, MessageBlock, OpenAIMessage
 """
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 
-from django_ergo.conversation.models import ClaudeContentBlock
-from django_ergo.conversation.models import ClaudeMessage
-from django_ergo.conversation.models import ClaudeMessageRole
 from django_ergo.conversation.models import ContentBlockType
 from django_ergo.conversation.models import ConversationSession
 from django_ergo.conversation.models import EngineType
+from django_ergo.conversation.models import MessageBlock
 from django_ergo.conversation.models import OpenAIMessage
 from django_ergo.conversation.models import OpenAIMessageRole
+from django_ergo.conversation.models import SessionMessage
+from django_ergo.conversation.models import SessionMessageRole
 from django_ergo.conversation.models import SessionStatus
 from django_ergo.conversation.models import TransportType
 from django_ergo.models import Workflow
@@ -153,7 +153,7 @@ class ConversationSessionTestCase(TestCase):
 
 
 class ClaudeMessageTestCase(TestCase):
-    """Tests for ClaudeMessage model."""
+    """Tests for SessionMessage model."""
 
     def setUp(self):
         self.user = User.objects.create_user(
@@ -169,10 +169,10 @@ class ClaudeMessageTestCase(TestCase):
         )
 
     def test_claude_message_creation(self):
-        """Test creating a ClaudeMessage with all fields."""
-        msg = ClaudeMessage.objects.create(
+        """Test creating a SessionMessage with all fields."""
+        msg = SessionMessage.objects.create(
             session=self.session,
-            role=ClaudeMessageRole.USER,
+            role=SessionMessageRole.USER,
             sequence=0,
         )
         self.assertIsNotNone(msg.id)
@@ -184,10 +184,10 @@ class ClaudeMessageTestCase(TestCase):
         self.assertIsNone(msg.output_tokens)
 
     def test_claude_message_with_usage_tokens(self):
-        """Test creating a ClaudeMessage with token usage data."""
-        msg = ClaudeMessage.objects.create(
+        """Test creating a SessionMessage with token usage data."""
+        msg = SessionMessage.objects.create(
             session=self.session,
-            role=ClaudeMessageRole.ASSISTANT,
+            role=SessionMessageRole.ASSISTANT,
             sequence=1,
             stop_reason="end_turn",
             input_tokens=100,
@@ -198,10 +198,10 @@ class ClaudeMessageTestCase(TestCase):
         self.assertEqual(msg.output_tokens, 250)
 
     def test_claude_message_cost_tracking_fields(self):
-        """Test creating a ClaudeMessage with cost tracking fields."""
-        msg = ClaudeMessage.objects.create(
+        """Test creating a SessionMessage with cost tracking fields."""
+        msg = SessionMessage.objects.create(
             session=self.session,
-            role=ClaudeMessageRole.ASSISTANT,
+            role=SessionMessageRole.ASSISTANT,
             sequence=1,
             stop_reason="end_turn",
             input_tokens=500,
@@ -216,9 +216,9 @@ class ClaudeMessageTestCase(TestCase):
 
     def test_claude_message_cost_tracking_fields_default_null(self):
         """Test that cost tracking fields default to None."""
-        msg = ClaudeMessage.objects.create(
+        msg = SessionMessage.objects.create(
             session=self.session,
-            role=ClaudeMessageRole.USER,
+            role=SessionMessageRole.USER,
             sequence=0,
         )
         self.assertIsNone(msg.model_name)
@@ -227,41 +227,45 @@ class ClaudeMessageTestCase(TestCase):
 
     def test_claude_message_ordering_by_sequence(self):
         """Test that messages are ordered by sequence."""
-        ClaudeMessage.objects.create(
+        SessionMessage.objects.create(
             session=self.session,
-            role=ClaudeMessageRole.ASSISTANT,
+            role=SessionMessageRole.ASSISTANT,
             sequence=2,
         )
-        ClaudeMessage.objects.create(
+        SessionMessage.objects.create(
             session=self.session,
-            role=ClaudeMessageRole.USER,
+            role=SessionMessageRole.USER,
             sequence=0,
         )
-        ClaudeMessage.objects.create(
+        SessionMessage.objects.create(
             session=self.session,
-            role=ClaudeMessageRole.USER,
+            role=SessionMessageRole.USER,
             sequence=1,
         )
-        messages = list(ClaudeMessage.objects.filter(session=self.session))
+        messages = list(SessionMessage.objects.filter(session=self.session))
         self.assertEqual(messages[0].sequence, 0)
         self.assertEqual(messages[1].sequence, 1)
         self.assertEqual(messages[2].sequence, 2)
 
     def test_claude_message_cascade_delete(self):
         """Test that messages are deleted when session is deleted."""
-        ClaudeMessage.objects.create(
+        SessionMessage.objects.create(
             session=self.session,
-            role=ClaudeMessageRole.USER,
+            role=SessionMessageRole.USER,
             sequence=0,
         )
         session_id = self.session.id
         self.session.delete()
-        self.assertEqual(ClaudeMessage.objects.filter(session_id=session_id).count(), 0)
+        self.assertEqual(
+            SessionMessage.objects.filter(session_id=session_id).count(), 0
+        )
 
     def test_claude_message_both_roles(self):
         """Test both message roles."""
-        for i, role in enumerate([ClaudeMessageRole.USER, ClaudeMessageRole.ASSISTANT]):
-            msg = ClaudeMessage.objects.create(
+        for i, role in enumerate(
+            [SessionMessageRole.USER, SessionMessageRole.ASSISTANT]
+        ):
+            msg = SessionMessage.objects.create(
                 session=self.session,
                 role=role,
                 sequence=i,
@@ -269,8 +273,8 @@ class ClaudeMessageTestCase(TestCase):
             self.assertEqual(msg.role, role)
 
 
-class ClaudeContentBlockTestCase(TestCase):
-    """Tests for ClaudeContentBlock model."""
+class MessageBlockTestCase(TestCase):
+    """Tests for MessageBlock model."""
 
     def setUp(self):
         self.user = User.objects.create_user(
@@ -284,15 +288,15 @@ class ClaudeContentBlockTestCase(TestCase):
             transport_type=TransportType.API,
             status=SessionStatus.ACTIVE,
         )
-        self.message = ClaudeMessage.objects.create(
+        self.message = SessionMessage.objects.create(
             session=self.session,
-            role=ClaudeMessageRole.ASSISTANT,
+            role=SessionMessageRole.ASSISTANT,
             sequence=0,
         )
 
     def test_text_content_block(self):
         """Test creating a text content block."""
-        block = ClaudeContentBlock.objects.create(
+        block = MessageBlock.objects.create(
             message=self.message,
             block_type=ContentBlockType.TEXT,
             sequence=0,
@@ -306,7 +310,7 @@ class ClaudeContentBlockTestCase(TestCase):
 
     def test_thinking_content_block(self):
         """Test creating a thinking content block."""
-        block = ClaudeContentBlock.objects.create(
+        block = MessageBlock.objects.create(
             message=self.message,
             block_type=ContentBlockType.THINKING,
             sequence=0,
@@ -318,7 +322,7 @@ class ClaudeContentBlockTestCase(TestCase):
 
     def test_tool_use_content_block(self):
         """Test creating a tool_use content block."""
-        block = ClaudeContentBlock.objects.create(
+        block = MessageBlock.objects.create(
             message=self.message,
             block_type=ContentBlockType.TOOL_USE,
             sequence=1,
@@ -333,7 +337,7 @@ class ClaudeContentBlockTestCase(TestCase):
 
     def test_tool_result_content_block(self):
         """Test creating a tool_result content block."""
-        block = ClaudeContentBlock.objects.create(
+        block = MessageBlock.objects.create(
             message=self.message,
             block_type=ContentBlockType.TOOL_RESULT,
             sequence=2,
@@ -351,7 +355,7 @@ class ClaudeContentBlockTestCase(TestCase):
 
     def test_tool_result_with_error(self):
         """Test a tool_result block that signals an error."""
-        block = ClaudeContentBlock.objects.create(
+        block = MessageBlock.objects.create(
             message=self.message,
             block_type=ContentBlockType.TOOL_RESULT,
             sequence=3,
@@ -363,19 +367,19 @@ class ClaudeContentBlockTestCase(TestCase):
 
     def test_content_block_ordering_within_message(self):
         """Test that content blocks are ordered by sequence within a message."""
-        ClaudeContentBlock.objects.create(
+        MessageBlock.objects.create(
             message=self.message,
             block_type=ContentBlockType.TEXT,
             sequence=2,
             text="Third",
         )
-        ClaudeContentBlock.objects.create(
+        MessageBlock.objects.create(
             message=self.message,
             block_type=ContentBlockType.THINKING,
             sequence=0,
             thinking="First",
         )
-        ClaudeContentBlock.objects.create(
+        MessageBlock.objects.create(
             message=self.message,
             block_type=ContentBlockType.TOOL_USE,
             sequence=1,
@@ -383,14 +387,14 @@ class ClaudeContentBlockTestCase(TestCase):
             tool_name="my_tool",
             tool_input={},
         )
-        blocks = list(ClaudeContentBlock.objects.filter(message=self.message))
+        blocks = list(MessageBlock.objects.filter(message=self.message))
         self.assertEqual(blocks[0].sequence, 0)
         self.assertEqual(blocks[1].sequence, 1)
         self.assertEqual(blocks[2].sequence, 2)
 
     def test_content_block_cascade_delete_from_message(self):
         """Test that content blocks are deleted when message is deleted."""
-        ClaudeContentBlock.objects.create(
+        MessageBlock.objects.create(
             message=self.message,
             block_type=ContentBlockType.TEXT,
             sequence=0,
@@ -398,9 +402,7 @@ class ClaudeContentBlockTestCase(TestCase):
         )
         message_id = self.message.id
         self.message.delete()
-        self.assertEqual(
-            ClaudeContentBlock.objects.filter(message_id=message_id).count(), 0
-        )
+        self.assertEqual(MessageBlock.objects.filter(message_id=message_id).count(), 0)
 
 
 class OpenAIMessageTestCase(TestCase):

@@ -145,7 +145,12 @@ refuse logins until the window passes.
   to, with the bot's icon, a live status (queued, working, waiting on you,
   done, failed), the reply, and the pull requests that came out of it. The
   card opens that chat. Workers (`orca_start_worker`, `ergo_worker_start`)
-  get a card with their status, progress and PRs. A reply from another chat
+  get a card with their status, progress and PRs. An Orca worker's card also
+  shows the agent's last few tool calls and output lines, how long ago it
+  last did something ("stalled" past the plugin's `stall_minutes`, or
+  "waiting on you" when it's parked on a prompt), and "Open full log", which
+  reads its recent transcript or screen from Orca and refreshes while it
+  runs. A reply from another chat
   is one row you can open, the user message whose turn sent work on says
   "Sent to" the chat, and chat ids in a bot's text are links with a status
   dot.

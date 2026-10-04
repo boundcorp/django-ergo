@@ -97,6 +97,32 @@ class WorkerContext:
             },
         )
 
+    def activity(  # noqa: PLR0913
+        self,
+        entries: list[dict],
+        *,
+        at: float | None = None,
+        source: str = "",
+        waiting: str = "",
+        liveness: str = "",
+        stall_after: float | None = None,
+        checked_at: float | None = None,
+    ) -> None:
+        """Keep what the work did lately for the chat's worker card (saved with
+        ``ctx.state`` when the step ends): its latest output ``entries``
+        (``{"kind", "text", "at"}``), when it last did something (``at``, epoch
+        seconds), what it waits on, and after how many idle seconds it counts
+        as stalled."""
+        self.state["activity"] = {
+            "entries": list(entries),
+            "source": source,
+            "at": at,
+            "checked_at": checked_at,
+            "waiting": waiting,
+            "liveness": liveness,
+            "stall_after": stall_after,
+        }
+
     def again(self, seconds: float = 30.0, progress: str = "") -> Again:
         return Again(seconds=seconds, progress=progress)
 
@@ -396,6 +422,34 @@ def _jsonable(value: Any) -> Any:
     except (TypeError, ValueError):
         return str(value)
     return value
+
+
+def activity(worker: Worker) -> dict | None:
+    """What a worker did lately (``WorkerContext.activity``), if its function keeps it."""
+    found = (worker.state or {}).get("activity")
+    return found if isinstance(found, dict) else None
+
+
+def log(bot: Bot, worker: Worker) -> dict:
+    """A worker's recent output, read now from its plugin (``BotPlugin.worker_log``) when
+    the plugin can, else the activity kept at its last check (``live`` says which)."""
+    kind, _, _ = worker.function.partition(":")
+    plugin = bot.plugin(kind) if kind != "task" else None
+    error = ""
+    if plugin is not None:
+        try:
+            found = plugin.worker_log(worker)
+        except Exception as exc:  # noqa: BLE001 — fall back to what was kept
+            found, error = None, f"{type(exc).__name__}: {exc}"[:600]
+        if found is not None:
+            return {**found, "live": True, "error": ""}
+    kept = activity(worker) or {}
+    return {
+        "source": kept.get("source") or "",
+        "entries": kept.get("entries") or [],
+        "live": False,
+        "error": error,
+    }
 
 
 def describe(worker: Worker) -> dict:

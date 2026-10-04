@@ -18,11 +18,10 @@ from django_ergo.conversation.history import render_messages
 from django_ergo.conversation.history import sources_from_paths
 from django_ergo.conversation.history_search_toolkit import MessageHistoryToolkit
 from django_ergo.conversation.importers import ImportService
-from django_ergo.conversation.models import ClaudeContentBlock
-from django_ergo.conversation.models import ClaudeMessage
 from django_ergo.conversation.models import ConversationAttachment
 from django_ergo.conversation.models import ConversationSession
-from django_ergo.conversation.models import OpenAIMessage
+from django_ergo.conversation.models import MessageBlock
+from django_ergo.conversation.models import SessionMessage
 
 User = get_user_model()
 
@@ -234,8 +233,8 @@ def test_session_source_reads_db_rows_and_attachments(tmp_path, settings):
     session = ConversationSession.objects.create(
         user=user, engine_type="claude", transport_type="api", status="active"
     )
-    first = ClaudeMessage.objects.create(session=session, role="user", sequence=0)
-    ClaudeContentBlock.objects.create(
+    first = SessionMessage.objects.create(session=session, role="user", sequence=0)
+    MessageBlock.objects.create(
         message=first, block_type="text", sequence=0, text="what is this"
     )
     ConversationAttachment.objects.create(
@@ -245,8 +244,8 @@ def test_session_source_reads_db_rows_and_attachments(tmp_path, settings):
         media_type="image/png",
         filename="fridge.png",
     )
-    reply = ClaudeMessage.objects.create(session=session, role="assistant", sequence=1)
-    ClaudeContentBlock.objects.create(
+    reply = SessionMessage.objects.create(session=session, role="assistant", sequence=1)
+    MessageBlock.objects.create(
         message=reply, block_type="text", sequence=0, text="a fridge"
     )
 
@@ -256,42 +255,6 @@ def test_session_source_reads_db_rows_and_attachments(tmp_path, settings):
     assert f"[session:{session.pk} L0 " in text
     assert "[image attachment: fridge.png (image/png)]\nwhat is this" in text
     assert text.endswith("ASSISTANT] a fridge")
-
-
-@pytest.mark.django_db
-def test_session_source_reads_openai_rows():
-    user = User.objects.create_user(username="hist-oa", password="x")
-    session = ConversationSession.objects.create(
-        user=user, engine_type="openai", transport_type="api", status="active"
-    )
-    OpenAIMessage.objects.create(
-        session=session, role="system", content="Be brief", sequence=0
-    )
-    OpenAIMessage.objects.create(session=session, role="user", content="hi", sequence=1)
-    OpenAIMessage.objects.create(
-        session=session,
-        role="assistant",
-        content=None,
-        tool_calls=[
-            {
-                "id": "c1",
-                "type": "function",
-                "function": {"name": "lookup", "arguments": '{"q": "x"}'},
-            }
-        ],
-        sequence=2,
-    )
-    OpenAIMessage.objects.create(
-        session=session, role="tool", content="found", tool_call_id="c1", sequence=3
-    )
-
-    messages = SessionSource(session).messages()
-    reasoning = render_messages(messages, Granularity.REASONING, include_source=False)
-
-    assert reasoning.splitlines()[0].endswith("USER] hi")
-    assert '[tool_call lookup(q="x")]' in reasoning
-    assert "[tool_result lookup: 1 lines] found" in reasoning
-    assert "Be brief" in render_messages(messages, Granularity.FULL)
 
 
 # ---------------------------------------------------------------------------
@@ -435,8 +398,8 @@ def test_live_session_source_refreshes():
     toolkit = MessageHistoryToolkit([SessionSource(session)])
     assert toolkit.execute_tool("ergo_chat_history_tail", {}) == "(no messages)"
 
-    message = ClaudeMessage.objects.create(session=session, role="user", sequence=0)
-    ClaudeContentBlock.objects.create(
+    message = SessionMessage.objects.create(session=session, role="user", sequence=0)
+    MessageBlock.objects.create(
         message=message, block_type="text", sequence=0, text="new message"
     )
     assert "new message" in toolkit.execute_tool("ergo_chat_history_tail", {})

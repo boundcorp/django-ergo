@@ -8,9 +8,9 @@ from asgiref.sync import async_to_sync
 from django.contrib.auth import get_user_model
 
 from django_ergo.conversation.engine import EngineResponse
-from django_ergo.conversation.models import ClaudeContentBlock
-from django_ergo.conversation.models import ClaudeMessage
 from django_ergo.conversation.models import ConversationSession
+from django_ergo.conversation.models import MessageBlock
+from django_ergo.conversation.models import SessionMessage
 from django_ergo.conversation.pipelines import COMPACT_SYSTEM
 from django_ergo.conversation.pipelines import SUMMARIZE_SYSTEM
 from django_ergo.conversation.pipelines import CompactedConversation
@@ -38,15 +38,15 @@ def session_with_messages(user):
         transport_type="api",
         status="completed",
     )
-    m0 = ClaudeMessage.objects.create(session=session, role="user", sequence=0)
-    ClaudeContentBlock.objects.create(
+    m0 = SessionMessage.objects.create(session=session, role="user", sequence=0)
+    MessageBlock.objects.create(
         message=m0, block_type="text", sequence=0, text="What files are in /tmp?"
     )
 
-    m1 = ClaudeMessage.objects.create(
+    m1 = SessionMessage.objects.create(
         session=session, role="assistant", sequence=1, stop_reason="tool_use"
     )
-    ClaudeContentBlock.objects.create(
+    MessageBlock.objects.create(
         message=m1,
         block_type="tool_use",
         sequence=0,
@@ -55,8 +55,8 @@ def session_with_messages(user):
         tool_input={"command": "ls /tmp"},
     )
 
-    m2 = ClaudeMessage.objects.create(session=session, role="user", sequence=2)
-    ClaudeContentBlock.objects.create(
+    m2 = SessionMessage.objects.create(session=session, role="user", sequence=2)
+    MessageBlock.objects.create(
         message=m2,
         block_type="tool_result",
         sequence=0,
@@ -64,10 +64,10 @@ def session_with_messages(user):
         tool_result_content="file1.txt\nfile2.txt",
     )
 
-    m3 = ClaudeMessage.objects.create(
+    m3 = SessionMessage.objects.create(
         session=session, role="assistant", sequence=3, stop_reason="end_turn"
     )
-    ClaudeContentBlock.objects.create(
+    MessageBlock.objects.create(
         message=m3,
         block_type="text",
         sequence=0,

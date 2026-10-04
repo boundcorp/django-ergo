@@ -18,10 +18,9 @@ from django_ergo.conversation.images import ToolResult
 from django_ergo.conversation.images import image_ref
 from django_ergo.conversation.images import prepare_image
 from django_ergo.conversation.images import prepare_messages
-from django_ergo.conversation.models import ClaudeContentBlock
 from django_ergo.conversation.models import ConversationAttachment
 from django_ergo.conversation.models import ConversationSession
-from django_ergo.conversation.models import OpenAIMessage
+from django_ergo.conversation.models import MessageBlock
 from django_ergo.conversation.structured import StructuredCallSpec
 from django_ergo.conversation.structured import run_structured_call
 from django_ergo.conversation.toolkit import Toolkit
@@ -131,7 +130,7 @@ async def test_claude_session_keeps_a_reference_to_a_saved_file(user):
         "bot",
         None,
     )
-    block = await ClaudeContentBlock.objects.aget(
+    block = await MessageBlock.objects.aget(
         block_type="tool_result", tool_result_for="toolu_1"
     )
     assert block.tool_result_content == [
@@ -176,10 +175,13 @@ async def test_openai_moves_tool_images_into_a_user_message(user):
         "type": "image_url",
         "image_url": {"url": f"data:image/png;base64,{CHART_B64}"},
     }
-    tool_row = await OpenAIMessage.objects.aget(session=session, tool_call_id="call_1")
-    assert tool_row.content == "Chart chart.png"
-    assert tool_row.images[0]["attachment_id"] == str(row.id)
-    assert "data" not in tool_row.images[0]
+    block = await MessageBlock.objects.aget(
+        message__session=session, tool_result_for="call_1"
+    )
+    text, ref = block.tool_result_content
+    assert text == {"type": "text", "text": "Chart chart.png"}
+    assert ref["attachment_id"] == str(row.id)
+    assert "data" not in ref
 
 
 async def test_openai_standalone_call_sends_tool_images(user):

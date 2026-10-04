@@ -161,4 +161,6 @@ def test_path_migration_keeps_unmapped_data_and_drops_only_code_uniqueness():
             == 3
         )
     finally:
-        MigrationExecutor(connection).migrate(current)
+        executor = MigrationExecutor(connection)
+        executor.loader.build_graph()
+        executor.migrate(executor.loader.graph.leaf_nodes())
