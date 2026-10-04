@@ -81,6 +81,38 @@ on the same engine, because its history is stored in that engine's format.
 The file reloads like the bot folders. If an edit breaks it, the last good
 version stays in use and admins see the error.
 
+### Claude on your subscription
+
+`transport: cli` runs Claude models through the Claude Code CLI, on the
+Claude Pro or Max plan it's logged in with, instead of an API key:
+
+```yaml
+providers:
+  claude:
+    type: claude
+    transport: cli
+    config: {effort: medium}   # optional: command, config_dir, effort, timeout
+    models: [claude-sonnet-5-5, claude-opus-5-5]
+```
+
+Install the CLI (`npm install -g @anthropic-ai/claude-code`) where turns
+run, and log it in with `claude auth login`, or set `CLAUDE_CODE_OAUTH_TOKEN`
+to a token from `claude setup-token`. The provider shows as available when
+the `claude` command is found. Without a `providers.yaml`, a bot can ask for
+it directly with `engine: {type: claude, transport: cli}`.
+
+Each model call runs `claude -p` once with the chat history. Ergo still runs
+the tools, approvals and compaction; the CLI's own tools, skills and settings
+are off. The CLI ignores any `ANTHROPIC_API_KEY` or gateway in the
+environment, so usage always comes from the subscription, at the rate
+Anthropic meters `claude -p` and the Agent SDK. Token costs shown in
+Ergonaut are API list prices, not what the plan charges.
+
+Anthropic allows this for your own login on the unmodified CLI. It doesn't
+allow serving other people's requests on your login: in a deployment other
+people use, each of them needs their own login, so keep a CLI provider to
+bots only you use.
+
 ## agents.md
 
 The system prompt, rebuilt every turn, so edits reach existing chats at

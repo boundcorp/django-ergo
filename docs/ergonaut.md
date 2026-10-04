@@ -92,6 +92,11 @@ names their bot.yaml and tools use: `engine.api_key_env`, `token_env`,
 `ergonaut check` lists any that are missing. Keep them in an env file
 outside the bot repo.
 
+A provider with `transport: cli` needs the Claude Code CLI installed where
+turns run (the worker) and logged in, either in its `CLAUDE_CONFIG_DIR` or
+with `CLAUDE_CODE_OAUTH_TOKEN`; see
+[Claude on your subscription](building-bots.md#claude-on-your-subscription).
+
 ## The web app
 
 Sign in with a Django user. Admins see everything; other users see the

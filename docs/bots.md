@@ -25,6 +25,7 @@ engine:
   config: {model: gpt-6-luna}
   api_key_env: KITCHEN_OPENAI_KEY    # read at runtime, never stored
   # with a providers.yaml: config: {model: openai/gpt-6-sol}
+  # transport: cli                   # claude only: the logged-in Claude Code CLI, no key
 root:                                # window settings for main and named chats
   recent: 15                         # latest messages always in context
   budget_tokens: 8000

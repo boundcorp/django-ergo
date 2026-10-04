@@ -43,6 +43,21 @@ async def tool_result_content(session, result: Any) -> str | list[dict]:
     return result_content(text, refs) if refs else text
 
 
+def without_unsigned_thinking(messages: list[dict]) -> list[dict]:
+    """Drop thinking the API wouldn't take back: stored thinking has no
+    signature (e.g. thinking from the Claude Code engine)."""
+
+    def keep(block: dict) -> bool:
+        return block.get("type") != "thinking" or bool(block.get("signature"))
+
+    return [
+        {**m, "content": [b for b in m["content"] if keep(b)]}
+        if isinstance(m.get("content"), list)
+        else m
+        for m in messages
+    ]
+
+
 def claude_message_dict(msg) -> dict:
     """Convert a ClaudeMessage row (with content_blocks) to an API message dict."""
     content = []
@@ -76,6 +91,7 @@ class ClaudeAPIEngine(Engine):
     """Engine implementation that uses the Anthropic Claude API directly."""
 
     engine_type = "claude"
+    transport_type = "api"
 
     def __init__(self, config: dict):
         self.model = config.get("model", "claude-3-5-sonnet-20241022")
@@ -179,7 +195,7 @@ class ClaudeAPIEngine(Engine):
             engine_type=self.engine_type,
             model=self.model,
             session_id=str(session.id) if session else "",
-            transport_type="api",
+            transport_type=self.transport_type,
             max_tokens=self.max_tokens,
         ) as span:
             from asgiref.sync import sync_to_async
@@ -196,7 +212,7 @@ class ClaudeAPIEngine(Engine):
             kwargs: dict[str, Any] = {
                 "model": self.model,
                 "max_tokens": self.max_tokens,
-                "messages": messages,
+                "messages": without_unsigned_thinking(messages),
             }
             system = "\n\n".join(
                 part
@@ -433,13 +449,13 @@ class ClaudeAPIEngine(Engine):
             operation="complete",
             engine_type=self.engine_type,
             model=self.model,
-            transport_type="api",
+            transport_type=self.transport_type,
             max_tokens=self.max_tokens,
         ) as span:
             kwargs: dict[str, Any] = {
                 "model": self.model,
                 "max_tokens": self.max_tokens,
-                "messages": messages,
+                "messages": without_unsigned_thinking(messages),
             }
             if system:
                 kwargs["system"] = system
@@ -554,7 +570,7 @@ class ClaudeAPIEngine(Engine):
             operation="generate",
             engine_type=self.engine_type,
             model=self.model,
-            transport_type="api",
+            transport_type=self.transport_type,
             max_tokens=self.max_tokens,
         ) as span:
             client = self._get_client()

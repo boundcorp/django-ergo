@@ -14,6 +14,7 @@ bot.yaml::
       type: claude                     # or openai
       config: {model: claude-sonnet-4-5}
       api_key_env: KITCHEN_ANTHROPIC_KEY   # read at runtime, never stored
+      # transport: cli                 # claude only: the logged-in Claude Code CLI, no key
       # or, with a providers.yaml (django_ergo.bots.providers):
       # config: {model: anthropic/claude-sonnet-5-5}
     root:                              # window settings for main and named chats
@@ -114,6 +115,7 @@ class BotDefinition:
     instructions: str = ""
     engine_type: str = ""
     engine_config: dict = field(default_factory=dict)
+    engine_transport: str = ""  # "cli": Claude Code on a subscription login
     api_key_env: str = ""
     recent: int = 15
     budget_tokens: int = 8000
@@ -185,6 +187,7 @@ class BotDefinition:
             instructions=_instructions(data, root_dir),
             engine_type=engine.get("type", ""),
             engine_config=dict(engine.get("config") or {}),
+            engine_transport=str(engine.get("transport") or ""),
             api_key_env=engine.get("api_key_env", ""),
             recent=int(root.get("recent", 15)),
             budget_tokens=int(root.get("budget_tokens", 8000)),
