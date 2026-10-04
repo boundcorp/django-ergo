@@ -6,15 +6,16 @@
           cluster-name:
             kubeconfig: /mounted/kubeconfig
             namespace: default       # optional default for calls without -n/--namespace
-        approve: true                # kubectl_run waits for every approval
+        approve: true                # required; every kubectl_run waits for approval
         timeout: 120                 # seconds per command
         root_only: true              # only the root session gets these tools
 
 ``kubectl_read`` only permits inspection verbs (``get``, ``describe``,
 ``logs``, ``top``, ``events``, ``explain``, ``api-resources``, ``version`` and
-``auth can-i``) without approval. ``kubectl_run`` handles every other verb and
-requires approval unless ``approve: false``. Both tools require the configured
-cluster name and execute an argv list with that cluster's kubeconfig.
+``auth can-i``) without approval. ``kubectl_run`` handles every other verb,
+always requires approval, and previews supported writes with server-side
+dry-run before approval. Both tools require the configured cluster name and
+execute an argv list with that cluster's kubeconfig.
 
 Secret bodies are never returned: structured ``data`` and ``stringData`` fields
 are redacted from every command result, and ``get secret`` rejects custom output
@@ -34,6 +35,7 @@ from django_ergo.bots.tools import BotTool
 from django_ergo.bots.tools import FunctionToolkit
 from django_ergo.bots.tools import bot_tool
 from django_ergo.conversation.context import TextContextSource
+from django_ergo.conversation.toolkit import ApprovalPreview
 from django_ergo.plugins.bash import trim
 
 if TYPE_CHECKING:
@@ -42,6 +44,7 @@ if TYPE_CHECKING:
     from django_ergo.conversation.toolkit import Toolkit
 
 MAX_OUTPUT_CHARS = 40_000
+MAX_PREVIEW_CHARS = 3_000
 READ_ONLY_VERBS = {
     "get",
     "describe",
@@ -78,6 +81,41 @@ SECRET_DATA_KEYS = {"data", "stringdata"}
 DATA_KEY_LINE = re.compile(
     r"^(?P<indent>\s*)(?P<list>-\s+)?(?P<key>['\"]?(?:data|stringData)['\"]?)\s*:"
 )
+SENSITIVE_VALUE_KEYS = SECRET_DATA_KEYS | {
+    "apikey",
+    "authorization",
+    "clientcertificate",
+    "clientcertificatedata",
+    "clientkey",
+    "clientkeydata",
+    "credential",
+    "credentials",
+    "password",
+    "secret",
+    "token",
+}
+SENSITIVE_KEY_LINE = re.compile(
+    r"^(?P<indent>\s*)(?P<list>-\s+)?(?P<key>['\"]?(?:api[_-]?key|authorization|"
+    r"client[_-]?(?:certificate|key)(?:[_-]?data)?|credentials?|password|secret|"
+    r"token)['\"]?)\s*:",
+    re.IGNORECASE,
+)
+CREDENTIAL_VALUE = re.compile(
+    r"(?im)\b(?P<key>api[_-]?key|authorization|client[_-]?(?:certificate|key)"
+    r"(?:[_-]?data)?|credentials?|password|secret|token)\s*(?P<separator>[:=])"
+    r"\s*(?:Bearer\s+)?[^\s,;]+"
+)
+PREVIEW_VERBS = {
+    "apply",
+    "patch",
+    "delete",
+    "scale",
+    "rollout",
+    "label",
+    "annotate",
+    "create",
+}
+UNPREVIEWABLE_ROLLOUTS = {"restart", "status", "undo"}
 
 ARGS_SCHEMA = {
     "cluster": {
@@ -90,6 +128,11 @@ ARGS_SCHEMA = {
         "description": 'Arguments after kubectl, for example ["get", "pods"]',
     },
 }
+
+
+def trim_preview(text: str) -> str:
+    """Bound previews even after trim adds its omission marker."""
+    return trim(text, MAX_PREVIEW_CHARS - 100)
 
 
 def command_of(args: list[str]) -> tuple[str, ...]:
@@ -194,7 +237,8 @@ def _redact_data(value: Any) -> Any:
     if isinstance(value, dict):
         return {
             key: "[REDACTED]"
-            if str(key).replace("-", "").replace("_", "").lower() in SECRET_DATA_KEYS
+            if str(key).replace("-", "").replace("_", "").lower()
+            in SENSITIVE_VALUE_KEYS
             else _redact_data(item)
             for key, item in value.items()
         }
@@ -212,7 +256,7 @@ def _redact_yaml_data(text: str) -> str:
                 data_indent = None
             else:
                 continue
-        match = DATA_KEY_LINE.match(line)
+        match = DATA_KEY_LINE.match(line) or SENSITIVE_KEY_LINE.match(line)
         if match:
             output.append(
                 f"{match.group('indent')}{match.group('list') or ''}{match.group('key')}: [REDACTED]\n"
@@ -224,12 +268,19 @@ def _redact_yaml_data(text: str) -> str:
 
 
 def redact_secret_data(text: str) -> str:
-    """Redact Kubernetes Secret body fields from JSON and YAML-looking output."""
+    """Redact Secret bodies and credential-shaped values from command output."""
     try:
         value = json.loads(text)
     except ValueError:
-        return _redact_yaml_data(text)
-    return json.dumps(_redact_data(value), separators=(",", ":"), ensure_ascii=False)
+        clean = _redact_yaml_data(text)
+    else:
+        clean = json.dumps(
+            _redact_data(value), separators=(",", ":"), ensure_ascii=False
+        )
+    return CREDENTIAL_VALUE.sub(
+        lambda match: f"{match.group('key')}{match.group('separator')}[REDACTED]",
+        clean,
+    )
 
 
 class KubectlPlugin(BotPlugin):
@@ -258,7 +309,10 @@ class KubectlPlugin(BotPlugin):
                 raise TypeError(msg)
             self.clusters[name] = {"kubeconfig": kubeconfig, "namespace": namespace}
         self.executable = str(self.config.get("executable") or "kubectl")
-        self.approve = bool(self.config.get("approve", True))
+        if not bool(self.config.get("approve", True)):
+            msg = "kubectl requires approve: true; cluster writes always need approval."
+            raise ValueError(msg)
+        self.approve = True
         self.root_only = bool(self.config.get("root_only", True))
         self.timeout = int(self.config.get("timeout", 120))
 
@@ -289,14 +343,10 @@ class KubectlPlugin(BotPlugin):
             argv.extend(["--namespace", selected["namespace"]])
         return argv
 
-    def execute(self, cluster: str, args: list[str]) -> str:
-        if command_of(args) == ("get",) and _get_can_flatten_output(args):
-            return "kubectl get does not permit output formats that can extract field values."
-        if _reads_secret(args) and not _secret_output_is_safe(args):
-            return "Secret reads do not permit custom output formats; use the default table or -o name."
+    def _run_argv(self, argv: list[str]) -> tuple[int | None, str]:
         try:
             proc = subprocess.run(  # noqa: S603 -- argv list, no shell
-                self.argv(cluster, args),
+                argv,
                 capture_output=True,
                 text=True,
                 timeout=self.timeout,
@@ -304,19 +354,87 @@ class KubectlPlugin(BotPlugin):
                 check=False,
             )
         except FileNotFoundError:
-            return f"The kubectl CLI ({self.executable}) is not installed on this host."
+            return None, redact_secret_data(
+                f"The kubectl CLI ({self.executable}) is not installed on this host."
+            )
         except subprocess.TimeoutExpired as exc:
             partial = (exc.stdout or "") + (exc.stderr or "")
             if isinstance(partial, bytes):
                 partial = partial.decode(errors="replace")
-            return trim(
-                redact_secret_data(f"Timed out after {self.timeout}s.\n{partial}"),
-                MAX_OUTPUT_CHARS,
+            return None, redact_secret_data(
+                f"Timed out after {self.timeout}s.\n{partial}"
+            ).strip()
+        return proc.returncode, redact_secret_data((proc.stdout + proc.stderr).strip())
+
+    def execute(self, cluster: str, args: list[str]) -> str:
+        if command_of(args) == ("get",) and _get_can_flatten_output(args):
+            return "kubectl get does not permit output formats that can extract field values."
+        if _reads_secret(args) and not _secret_output_is_safe(args):
+            return "Secret reads do not permit custom output formats; use the default table or -o name."
+        code, output = self._run_argv(self.argv(cluster, args))
+        if code is None:
+            return trim(output, MAX_OUTPUT_CHARS)
+        return trim(f"Exit {code}\n{output or '(no output)'}", MAX_OUTPUT_CHARS)
+
+    def _preview_skip_reason(self, args: list[str]) -> str | None:
+        command = command_of(args)
+        if command == ("exec",):
+            return (
+                "kubectl exec can change a container but has no cluster-state preview."
             )
-        output = redact_secret_data((proc.stdout + proc.stderr).strip())
-        return trim(
-            f"Exit {proc.returncode}\n{output or '(no output)'}", MAX_OUTPUT_CHARS
-        )
+        if command == ("rollout",):
+            action = next((arg for arg in args[1:] if not arg.startswith("-")), "")
+            if action in UNPREVIEWABLE_ROLLOUTS:
+                return f"kubectl rollout {action} does not support a safe preview."
+        if command not in {(verb,) for verb in PREVIEW_VERBS}:
+            name = " ".join(command) or "this command"
+            return f"kubectl {name} has no supported server-side preview."
+        return None
+
+    def preview(self, cluster: str, args: list[str]) -> ApprovalPreview:
+        """Run read-only server validation before this tool call can be approved."""
+        self._cluster(cluster)
+        reason = self._preview_skip_reason(args)
+        if reason:
+            return ApprovalPreview(f"Preview skipped: {reason}")
+        try:
+            dry_run_argv = self.argv(cluster, [*args, "--dry-run=server"])
+        except ValueError:
+            return ApprovalPreview(
+                "Preview failed before approval; the command arguments are invalid.",
+                is_error=True,
+            )
+        code, output = self._run_argv(dry_run_argv)
+        report = f"Server-side dry-run (exit {code if code is not None else 'error'}):\n{output or '(no output)'}"
+        if code != 0:
+            return ApprovalPreview(
+                trim_preview(f"Preview failed; the command will not run.\n{report}"),
+                is_error=True,
+            )
+        reports = [report]
+        if command_of(args) in {("apply",), ("patch",)}:
+            diff_args = ["diff", *args[1:]]
+            try:
+                diff_argv = self.argv(cluster, diff_args)
+            except ValueError:
+                return ApprovalPreview(
+                    "Preview failed before approval; the diff arguments are invalid.",
+                    is_error=True,
+                )
+            diff_code, diff_output = self._run_argv(diff_argv)
+            diff_report = (
+                f"kubectl diff (exit {diff_code if diff_code is not None else 'error'}):\n"
+                f"{diff_output or '(no output)'}"
+            )
+            if diff_code is None or diff_code > 1:
+                return ApprovalPreview(
+                    trim_preview(
+                        f"Preview failed; the command will not run.\n{report}\n\n{diff_report}"
+                    ),
+                    is_error=True,
+                )
+            reports.append(diff_report)
+        return ApprovalPreview(trim_preview("\n\n".join(reports)))
 
     def read(self, cluster: str, args: list[str]) -> str:
         self._cluster(cluster)
@@ -341,17 +459,15 @@ class KubectlPlugin(BotPlugin):
     def context_sources(self, ctx: ToolContext, message: str) -> list[ContextSource]:
         if not self._applies(ctx):
             return []
-        approval = (
-            "Each kubectl_run call waits for approval."
-            if self.approve
-            else "kubectl_run calls do not wait for approval."
-        )
         return [
             TextContextSource(
                 "Kubernetes",
                 "kubectl_read can inspect only the configured clusters "
-                f"({', '.join(self.clusters)}). kubectl_run changes a selected cluster. "
-                f"{approval} Pass arguments as a list, never a shell command. Secret data is never returned.",
+                f"({', '.join(self.clusters)}). kubectl_run changes a selected cluster "
+                "only after individual approval. Supported changes get a bounded, "
+                "redacted server-side preview before approval; unsupported commands "
+                "explicitly say why preview was skipped. Pass arguments as a list, "
+                "never a shell command. Secret data is never returned.",
             )
         ]
 
@@ -373,12 +489,14 @@ class KubectlPlugin(BotPlugin):
         @bot_tool(
             name="kubectl_run",
             description=(
-                "Run a non-read-only kubectl command against one configured cluster. Each call changes or "
-                "may change state and requires approval unless this bot explicitly disables it."
+                "Run a non-read-only kubectl command against one configured cluster. "
+                "Each call requires approval; apply, patch, delete, scale, rollout, "
+                "label, annotate, and create show a server-side preview first."
             ),
             parameters=ARGS_SCHEMA,
             required=["cluster", "args"],
-            requires_approval=self.approve,
+            requires_approval=True,
+            approval_preview=plugin.preview,
         )
         def run(cluster: str, args: list[str]) -> str:
             return plugin.run(cluster, args)

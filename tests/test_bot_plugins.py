@@ -892,22 +892,155 @@ def test_kubectl_redacts_nested_secret_data_from_json_and_yaml():
 
 
 @pytest.mark.django_db
-def test_kubectl_run_approval_can_be_disabled(tmp_path):
-    _, _, plugin = kubectl_bot(
-        tmp_path,
-        config="""\
+def test_kubectl_rejects_disabled_write_approval(tmp_path):
+    with pytest.raises(ValueError, match="always need approval"):
+        kubectl_bot(
+            tmp_path,
+            config="""\
 clusters:
   configured:
     kubeconfig: /mounted/kubeconfig
 approve: false""",
-    )
+        )
 
-    run_tool = next(tool for tool in plugin._tools() if tool.name == "kubectl_run")
-    assert not run_tool.requires_approval
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["apply", "-f", "workload.yaml"],
+        ["patch", "deployment", "example", "--type=merge", "-p", "{}"],
+        ["delete", "pod", "example"],
+        ["scale", "deployment", "example", "--replicas=2"],
+        ["rollout", "pause", "deployment/example"],
+        ["label", "pod", "example", "team=platform"],
+        ["annotate", "pod", "example", "owner=lee"],
+        ["create", "configmap", "example", "--from-literal=key=value"],
+    ],
+)
+def test_kubectl_supported_writes_get_server_dry_run_previews(
+    tmp_path, kubectl_calls, args
+):
+    _, _, plugin = kubectl_bot(tmp_path)
+
+    preview = plugin.preview("configured", args)
+
+    assert not preview.is_error
+    assert "Server-side dry-run (exit 0)" in preview.text
+    assert kubectl_calls[0][1 : len(args) + 1] == args
+    assert "--dry-run=server" in kubectl_calls[0]
+    assert kubectl_calls[0][-4:] == [
+        "--kubeconfig",
+        "/mounted/kubeconfig",
+        "--namespace",
+        "default",
+    ]
+    if args[0] in {"apply", "patch"}:
+        assert len(kubectl_calls) == 2
+        assert kubectl_calls[1][1] == "diff"
+        assert kubectl_calls[1][2 : len(args) + 1] == args[1:]
+        assert "kubectl diff (exit 0)" in preview.text
+    else:
+        assert len(kubectl_calls) == 1
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("args", "reason"),
+    [
+        (["exec", "pod/example", "--", "touch", "/tmp/changed"], "kubectl exec"),
+        (["rollout", "restart", "deployment/example"], "rollout restart"),
+        (["rollout", "undo", "deployment/example"], "rollout undo"),
+        (["rollout", "status", "deployment/example"], "rollout status"),
+    ],
+)
+def test_kubectl_unsupported_previews_explain_the_skip(
+    tmp_path, kubectl_calls, args, reason
+):
+    _, _, plugin = kubectl_bot(tmp_path)
+
+    preview = plugin.preview("configured", args)
+
+    assert not preview.is_error
+    assert preview.text.startswith("Preview skipped:")
+    assert reason in preview.text
+    assert kubectl_calls == []
+
+
+@pytest.mark.django_db
+def test_kubectl_preview_redacts_and_bounds_output(
+    tmp_path, kubectl_calls, monkeypatch
+):
+    _, _, plugin = kubectl_bot(tmp_path)
+
+    def fake_run(argv, **kwargs):
+        kubectl_calls.append(argv)
+        return subprocess.CompletedProcess(
+            argv,
+            0,
+            stdout=(
+                "data:\n  token: secret-value\npassword: another-secret\n"
+                "Authorization: Bearer credential-value\n" + "x" * 4_000
+            ),
+            stderr="",
+        )
+
+    monkeypatch.setattr("django_ergo.plugins.kubectl.subprocess.run", fake_run)
+
+    preview = plugin.preview("configured", ["delete", "pod", "example"])
+
+    assert len(preview.text) <= 3_000
+    assert "[... " in preview.text
+    assert "secret-value" not in preview.text
+    assert "another-secret" not in preview.text
+    assert "credential-value" not in preview.text
 
 
 @pytest.mark.django_db(transaction=True)
-def test_kubectl_run_waits_for_each_approval(tmp_path, kubectl_calls):
+def test_kubectl_preview_error_blocks_approved_write(
+    tmp_path, kubectl_calls, monkeypatch
+):
+    from asgiref.sync import async_to_sync
+
+    def fake_run(argv, **kwargs):
+        kubectl_calls.append(argv)
+        if "--dry-run=server" not in argv:
+            pytest.fail("an approved write ran after its preview failed")
+        return subprocess.CompletedProcess(
+            argv,
+            1,
+            stdout="data:\n  token: secret-value\n",
+            stderr="Authorization: Bearer credential-value",
+        )
+
+    monkeypatch.setattr("django_ergo.plugins.kubectl.subprocess.run", fake_run)
+    bot, _, _ = kubectl_bot(
+        tmp_path,
+        claude_tool(
+            "kubectl_run",
+            {"cluster": "configured", "args": ["delete", "pod", "example"]},
+            tool_id="w1",
+        ),
+        say("Preview failed."),
+    )
+    user = User.objects.create(username="preview-error")
+    root = async_to_sync(bot.root_session)(user)
+
+    paused = async_to_sync(bot.ask)(root, "Remove the example pod")
+
+    approval = paused.approvals[0]
+    assert approval.preview_error
+    assert "Preview failed" in approval.preview
+    assert "secret-value" not in approval.preview
+    assert "credential-value" not in approval.preview
+    assert paused.call.metadata["pending_approvals"][0]["preview"] == approval.preview
+    done = async_to_sync(bot.resume)(root, {"w1": True})
+    assert done.text == "Preview failed."
+    assert len(kubectl_calls) == 1
+
+
+@pytest.mark.django_db(transaction=True)
+def test_kubectl_run_waits_for_each_approval_and_shows_preview(tmp_path, kubectl_calls):
     from asgiref.sync import async_to_sync
 
     bot, engine, _ = kubectl_bot(
@@ -929,7 +1062,10 @@ def test_kubectl_run_waits_for_each_approval(tmp_path, kubectl_calls):
 
     paused = async_to_sync(bot.ask)(root, "Remove the example pod")
     assert [approval.tool_name for approval in paused.approvals] == ["kubectl_run"]
-    assert kubectl_calls[-1][1:3] == ["get", "pods"]
+    assert "Server-side dry-run" in paused.approvals[0].preview
+    assert kubectl_calls[-1][1:4] == ["delete", "pod", "example"]
+    assert "--dry-run=server" in kubectl_calls[-1]
+    assert kubectl_calls[-2][1:3] == ["get", "pods"]
     assert "Kubernetes" in engine._client.calls[0]["system"]
 
     done = async_to_sync(bot.resume)(root, {"w1": True})

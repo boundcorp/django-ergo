@@ -40,7 +40,15 @@ class Command(BaseCommand):
             result = await bot.ask(session, text)
             while result.needs_approval:
                 names = ", ".join(a.tool_name for a in result.approvals)
-                answer = await asyncio.to_thread(input, f"Approve {names}? [y/N] ")
+                previews = "\n\n".join(
+                    f"{approval.tool_name} preview:\n{approval.preview}"
+                    for approval in result.approvals
+                    if approval.preview
+                )
+                prompt = f"Approve {names}?"
+                if previews:
+                    prompt += f"\n\n{previews}"
+                answer = await asyncio.to_thread(input, f"{prompt} [y/N] ")
                 result = await bot.resume(session, answer.strip().lower() in {"y", "yes"})
             self.stdout.write(result.text or f"(error: {result.error})")
             if result.suggestions:
