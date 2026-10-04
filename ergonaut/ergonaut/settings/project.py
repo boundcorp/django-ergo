@@ -125,6 +125,9 @@ DJANGO_ERGO = {
     "TURN_CONTROL": "ergonaut.apps.bots.tasks.InboxControl",
     "TURN_STOPPER": "ergonaut.apps.bots.tasks.request_stop",
     "SESSION_NOTIFIER": "ergonaut.apps.bots.tasks.notify",
+    # The orchestrator block's open PRs come from the PRs bots and workers reported
+    # (django_ergo.conversation.links), not a gh call per repo.
+    "OPEN_PRS": "django_ergo.conversation.links.open_pull_requests",
 }
 
 SITE_ROOT = PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))

@@ -40,7 +40,7 @@ Live on rigel from `~/p/boundcorp/django-ergo`, bots from `boundcorp/ergo-bots`.
 - [x] Inter-bot permissions: upward messages always allowed (`ergo_message_up` for bots without orchestration), new threads decided by the target's `threads.allow_create`, cross-bot threads record who started them, `ergo_thread_stop` and `ergo_thread_archive` for threads a bot started (`TURN_STOPPER`).
 - [x] Markdown in chat messages, KB articles, skills and instructions; tool images and files a bot makes shown in the transcript as they arrive; bot.yaml `icon` and `color` in the sidebar; titles and icons on pins; thin scrollbars; long chats load the newest 50 messages with See more for older ones.
 - [x] Thread cards (status, reply, PRs) for work sent to other chats and workers; collapsed replies; "Sent to" notes; thread links; PRs recorded from replies and worker results with live state from `gh`.
-- [ ] Wire `DJANGO_ERGO["OPEN_PRS"]` (the orchestrator block in #91) to the recorded PRs once #91 is on main, and switch `thread_summary` to `orchestrator.thread_status`.
+- [x] Ergonaut's `DJANGO_ERGO["OPEN_PRS"]` reads the recorded PRs, and thread cards use `orchestrator.thread_status`.
 - [x] Claude on a subscription: `transport: cli` providers run Claude through the logged-in Claude Code CLI (`conversation/engines/claude_code.py`).
 - [ ] Ergonaut image: install the Claude Code CLI and keep its login (`CLAUDE_CONFIG_DIR` volume or `CLAUDE_CODE_OAUTH_TOKEN`); show subscription usage as such on Costs instead of list prices.
 - [ ] `ergonaut manage resume_failed --kind credits` (resume every chat a credit outage failed): written in bda8305 on the closed #74 branch, never merged.
