@@ -1839,3 +1839,87 @@ async def test_finished_threads_are_resolved_and_unfinished_ones_refused(
 
     status = await sync_to_async(orchestrator.thread_status)(busy)
     assert status["ready_to_resolve"] is False
+
+
+# ---------------------------------------------------------------------------
+# Library skills and seeded tools
+# ---------------------------------------------------------------------------
+
+LIBRARY_YAML = """
+    name: builder
+    engine: {type: claude, config: {model: claude-test}}
+    tools: [tools/pantry.py]
+    skills: {include: [skillbuilder]}
+"""
+
+
+def test_library_skills_come_with_their_plugins(tmp_path):
+    bot = Bot.load(write_bot(tmp_path, LIBRARY_YAML, name="builder"))
+    skill = next(s for s in bot.skill_defs if s.name == "skillbuilder")
+    assert skill.source == "ergo:skill_library/skillbuilder"
+    assert skill.requires == ["config_repo", "introspection"]
+    assert "ergo_config_repo_publish" in skill.instructions
+    plugin = bot.plugin("bot_management")
+    assert plugin is not None and plugin.mode == "propose_pr"
+    assert "config_repo" in {s.name for s in bot.skill_defs}
+
+
+def test_library_skills_load_when_required_and_respect_bot_yaml(tmp_path):
+    folder = write_bot(
+        tmp_path,
+        """
+        name: builder
+        engine: {type: claude, config: {model: claude-test}}
+        plugins: [{name: bot_management, approve_publish: false}]
+        """,
+        name="builder",
+    )
+    (folder / "skills").mkdir()
+    (folder / "skills" / "tools-help.md").write_text(
+        "---\nrequires: [skillbuilder]\n---\nBuild tools."
+    )
+    bot = Bot.load(folder)
+    assert "skillbuilder" in {s.name for s in bot.skill_defs}
+    plugin = bot.plugin("bot_management")
+    assert plugin.mode == "propose_pr" and plugin.approve_publish is False
+
+    (folder / "bot.yaml").write_text(
+        textwrap.dedent(LIBRARY_YAML)
+        + "plugins: [{name: bot_management, mode: merge_main}]\n"
+    )
+    with pytest.raises(ValueError, match="skillbuilder needs bot_management"):
+        Bot.load(folder)
+
+    # A skill in the bot's own folder wins over the library's.
+    (folder / "bot.yaml").write_text(textwrap.dedent(LIBRARY_YAML))
+    (folder / "skills" / "skillbuilder.md").write_text("Our own way.")
+    bot = Bot.load(folder)
+    ours = next(s for s in bot.skill_defs if s.name == "skillbuilder")
+    assert ours.instructions == "Our own way."
+    assert bot.plugin("bot_management") is None
+
+
+def test_skills_without_library_names_get_no_library_skills(tmp_path):
+    bot, _ = make_bot(tmp_path)
+    assert not any(s.source.startswith("ergo:") for s in bot.skill_defs)
+
+
+def test_seeded_bot_tools_pre_seed_their_results():
+    @bot_tool(seed=True)
+    def limits() -> str:
+        """Account limits."""
+        return "10 left"
+
+    @bot_tool
+    def other() -> str:
+        return "no"
+
+    toolkit = FunctionToolkit.from_functions([limits, other])
+    seeds = toolkit.pre_seeds()
+    assert [s.tool_name for s in seeds] == ["limits"]
+    assert seeds[0].handler({}) == "10 left"
+    with pytest.raises(ValueError, match="required parameters"):
+
+        @bot_tool(seed=True)
+        def needs(query: str) -> str:
+            return query

@@ -15,6 +15,7 @@ carries a short tool list and the prompt stays small.
 | a plugin with tools (`orca`, `bash`, `attachments`, `pages`, ...) | the plugin's name (`ergo_kb` is `kb`, `bot_management` is `config_repo`) | the plugin |
 | a `toolkits:` factory (`myapp.toolkits:make_toolkit`) | the factory's name (`make_toolkit`) | the factory's docstring |
 | built-ins | `history`, `orchestration`, `workers`, `introspection` (bots loaded from a folder), `tables` (when the bot has tables) | |
+| Ergo's skill library (`skillbuilder`) | the folder name, when the bot names it (below) | front matter `description` |
 
 ## Writing a skill
 
@@ -27,6 +28,7 @@ name: meal-planning
 description: Plan a week of dinners from the recipe library
 requires: [tandoor]      # load these with it
 always_load: false       # true: loaded in every chat from the start
+plugins: [attachments]   # plugins it needs (below)
 ---
 1. Look at the last 60 days of the meal plan with view_meal_plan.
 2. Skip anything cooked in the last two weeks.
@@ -52,6 +54,45 @@ A tool file listed under `tools:` is a skill too, with no instructions: its
 module docstring's first line is the description, so write one.
 
 Plugins without tools, like `telegram`, aren't skills.
+
+### Skills that use other skills
+
+`requires` is how one skill includes others: loading it loads them too,
+along with their instructions and tools, transitively. Any kind of skill can
+be required, so a Markdown skill can bundle a tool file, a plugin and
+another Markdown skill.
+
+A skill can also bring the plugins it needs, with the settings it depends
+on:
+
+```markdown
+---
+requires: [config_repo]
+plugins:
+  bot_management: {mode: propose_pr}
+---
+```
+
+If bot.yaml doesn't list the plugin, the bot gets it with those settings.
+If bot.yaml lists it, the skill's settings are added to it, and a setting
+bot.yaml gives a different value fails the bot's load, so a skill that
+depends on pull requests can't end up merging to main.
+
+### Ergo's skill library
+
+Ergo ships reusable skill folders in `django_ergo/bots/skill_library/`. A
+bot gets one by naming it: in `skills: {include: [...]}`, in a chat's or
+thread's `skills`, or in any skill's `requires`. A skill in the bot's own
+folder with the same name replaces the library's.
+
+| Skill | For |
+| --- | --- |
+| `skillbuilder` | Writing the bot's own skills, tool files, workers, tables, schedules and `.jhtml` dashboards, proposed as pull requests. Requires `config_repo` and `introspection`, and brings `bot_management` in `propose_pr` mode. |
+
+```yaml
+skills:
+  include: [skillbuilder]
+```
 
 ## Loading and unloading
 
@@ -81,6 +122,7 @@ skills:
   folder: skills                        # default
   unload_after_turns: 30
   requires: {meal-planning: [tandoor]}  # same as front matter requires
+  include: [skillbuilder]               # skills from Ergo's library
 ```
 
 `history` and `workers` are always loaded everywhere. Skills marked `always_load` are

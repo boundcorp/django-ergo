@@ -52,6 +52,7 @@ skills:
   folder: skills                     # default
   unload_after_turns: 30             # drop a loaded skill unused this many turns
   requires: {meal-planning: [tandoor]}
+  include: [skillbuilder]            # skills from Ergo's library (docs/skills.md)
 tools: [tools/tandoor.py]
 toolkits: ["myapp.toolkits:make_toolkit"]   # factory(ctx) -> Toolkit or list
 plugins:
@@ -194,7 +195,8 @@ loads the same way (`django_ergo.bots.skillset`):
 - a plugin that adds tools (`kb`, `config_repo`, `orca`, `bash`,
   `attachments`, ...) and each `toolkits:` factory;
 - built-ins: `history` (always loaded), `workers`, `orchestration`, and
-  `introspection` for bots loaded from a folder.
+  `introspection` for bots loaded from a folder;
+- Ergo's skill library (`skillbuilder`), when bot.yaml or a skill names one.
 
 `introspection` is read-only and needs no plugin, so every bot can see what
 it's made of, whether or not it can change its repository (that's
@@ -211,6 +213,7 @@ name: meal-planning
 description: Plan a week of dinners from the recipe library
 requires: [tandoor]      # load these too
 always_load: false       # load in every chat from the start
+plugins: {bot_management: {mode: propose_pr}}   # plugins it needs, with settings
 ---
 1. Review the last 60 days of the meal plan with view_meal_plan.
 ```

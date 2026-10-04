@@ -16,6 +16,18 @@ A folder skill can ship tools too: ``skills/<name>/tools.py`` (with
 ``@bot_tool`` functions) is imported when the bot loads, and its tools are
 offered once the skill is loaded. See ``django_ergo.bots.skillset`` for how
 skills, tool files and plugins all load the same way.
+
+A skill can bring the plugins it needs, with the settings it depends on::
+
+    plugins: {bot_management: {mode: propose_pr}}
+
+The bot gets the plugin if bot.yaml doesn't list it; if bot.yaml lists it
+with a different value for one of those settings, the bot fails to load.
+
+Ergo ships a library of skill folders (``skill_library/``, e.g.
+``skillbuilder``). A bot gets one by naming it: in ``skills: {include: [...]}``,
+in a chat's or thread's ``skills``, or in any skill's ``requires``. A skill
+in the bot's own folder with the same name wins.
 """
 
 from __future__ import annotations
@@ -45,6 +57,8 @@ class Skill:
     requires: list[str] = field(default_factory=list)
     always_load: bool = False
     tools_file: Path | None = None
+    plugins: dict[str, dict] = field(default_factory=dict)
+    library: bool = False
 
 
 def _parse(path: Path, default_name: str) -> Skill:
@@ -73,7 +87,24 @@ def _parse(path: Path, default_name: str) -> Skill:
         requires=[str(r) for r in meta.get("requires") or []],
         always_load=bool(meta.get("always_load", False)),
         tools_file=tools_file if tools_file and tools_file.is_file() else None,
+        plugins=_plugins(meta.get("plugins"), path),
     )
+
+
+def _plugins(value, path: Path) -> dict[str, dict]:
+    """Front matter ``plugins``: a list of names, or names mapped to settings."""
+    if not value:
+        return {}
+    if isinstance(value, list):
+        value = {name: {} for name in value}
+    if not isinstance(value, dict) or not all(
+        isinstance(v, dict | None) for v in value.values()
+    ):
+        msg = (
+            f"{path}: plugins must be a list of names or a mapping of name to settings"
+        )
+        raise ValueError(msg)
+    return {str(k): dict(v or {}) for k, v in value.items()}
 
 
 def load_skills(folder: Path | None) -> list[Skill]:
@@ -87,3 +118,26 @@ def load_skills(folder: Path | None) -> list[Skill]:
         elif entry.is_file() and entry.suffix == ".md":
             skills.append(_parse(entry, entry.stem))
     return sorted(skills, key=lambda skill: skill.name)
+
+
+def library_dir() -> Path:
+    """Ergo's own skill folders, which any bot can include by name."""
+    from pathlib import Path
+
+    return Path(__file__).resolve().parent / "skill_library"
+
+
+def library_skills(names: set[str], exclude: set[str]) -> list[Skill]:
+    """The library skills named in ``names`` and those they require, minus ``exclude``."""
+    available = {skill.name: skill for skill in load_skills(library_dir())}
+    found: dict[str, Skill] = {}
+    todo = [n for n in names if n not in exclude]
+    while todo:
+        name = todo.pop()
+        if name in found or name in exclude or name not in available:
+            continue
+        skill = available[name]
+        skill.library = True
+        found[name] = skill
+        todo.extend(skill.requires)
+    return sorted(found.values(), key=lambda skill: skill.name)

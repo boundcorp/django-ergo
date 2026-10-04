@@ -146,6 +146,7 @@ class BotTool:
     requires_approval: bool = False
     approval_preview: Callable | None = None
     takes_context: bool = False
+    seed: bool = False  # run before the chat's first model call (see FunctionToolkit)
 
     def json_schema(self) -> dict:
         return {
@@ -187,8 +188,15 @@ def bot_tool(  # noqa: PLR0913
     requires_approval: bool = False,
     approval_preview: Callable | None = None,
     takes_context: bool = False,
+    seed: bool = False,
 ):
-    """Mark a function as a bot tool. Usable bare (@bot_tool) or with options."""
+    """Mark a function as a bot tool. Usable bare (@bot_tool) or with options.
+
+    ``seed=True`` (for a tool without required parameters) runs it before the
+    chat's first model call while its skill is loaded, and writes the result
+    into the history as if the model had called it (every turn in window
+    chats).
+    """
 
     def decorate(fn: Callable) -> Callable:
         if parameters is not None:
@@ -196,6 +204,9 @@ def bot_tool(  # noqa: PLR0913
             req = list(parameters.keys()) if required is None else list(required)
         else:
             props, req = _infer_parameters(fn, skip_first=takes_context)
+        if seed and req:
+            msg = f"{fn.__name__}: a seeded tool can't have required parameters"
+            raise ValueError(msg)
         fn.__bot_tool__ = BotTool(
             name=name or fn.__name__,
             description=description or (inspect.getdoc(fn) or fn.__name__),
@@ -205,6 +216,7 @@ def bot_tool(  # noqa: PLR0913
             requires_approval=requires_approval,
             approval_preview=approval_preview,
             takes_context=takes_context,
+            seed=seed,
         )
         return fn
 
@@ -278,7 +290,9 @@ class FunctionToolkit(Toolkit):
             raise ValueError(msg)
         self.context = context or ToolContext()
         # Tools (taking no arguments) whose results start every session.
-        self.seed = [name for name in seed or [] if name in self.tools]
+        if seed is None:
+            seed = [tool.name for tool in tools if tool.seed]
+        self.seed = [name for name in seed if name in self.tools]
 
     def pre_seeds(self):
         from django_ergo.conversation.structured import PreSeedCall

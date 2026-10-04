@@ -6,3 +6,4 @@ include README.md
 # recursive-include requirements/ *.txt
 
 # recursive-include src/django_ergo/data/ *.toml
+recursive-include src/django_ergo/bots/skill_library *.md *.py
