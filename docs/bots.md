@@ -348,7 +348,9 @@ returns its `worker_done` report. `model` and `effort` go to Orca's
 `--model`/`--effort`, except for `agent: omp`, which Orca can't give a model
 at launch: the plugin writes the worktree's `.omp/config.yml`
 (`modelRoles.default: <model>:<effort>`, git-ignored by its own folder) and omp
-picks it up.
+picks it up. Each chat keeps one Orca mailbox terminal and Run for its
+workers; if Orca no longer knows them (their worktree was removed, Orca was
+reset), `orca_start_worker` makes new ones and tries once more.
 
 ## Chats
 
