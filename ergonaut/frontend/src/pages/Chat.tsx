@@ -18,6 +18,7 @@ import Markdown from '../components/Markdown'
 import ModelPicker from '../components/ModelPicker'
 import { PageViewer, Pins } from '../components/Pins'
 import { AttachmentView, Transcript } from '../components/Transcript'
+import { WorkerActivityView, WorkerPulse } from '../components/WorkerActivity'
 import { agoLong } from '../time'
 
 /** Fold a live update into the transcript: messages replace by line, calls by id. */
@@ -745,8 +746,9 @@ const WORKER_ICON: Record<Worker['status'], string> = {
   cancelled: '⊘',
 }
 
-// Long-running work this chat started: running ones with their latest progress, and the
-// last few that finished (their results also arrive as messages).
+// Long-running work this chat started: running ones with their latest progress and output
+// (the full log a click away), and the last few that finished (their results also arrive
+// as messages).
 function Workers({ workers }: { workers: Worker[] }) {
   const [showDone, setShowDone] = useState(false)
   const running = workers.filter(w => w.status === 'queued' || w.status === 'running')
@@ -757,14 +759,19 @@ function Workers({ workers }: { workers: Worker[] }) {
   return (
     <div className="mx-4 mb-2 flex flex-col gap-2 rounded-card border border-stroke bg-surface px-4 py-3 text-xs sm:mx-6">
       {running.map(w => (
-        <div key={w.id} className="flex items-center gap-2 truncate">
-          {w.status === 'running' ? (
-            <span className="h-2.5 w-2.5 shrink-0 animate-spin rounded-full border-[1.5px] border-indigo-500 border-t-transparent" />
-          ) : (
-            <span className="text-zinc-400">{WORKER_ICON[w.status]}</span>
-          )}
-          <span className="font-medium">{w.title}</span>
-          <span className="truncate text-zinc-500">{w.progress || w.status}</span>
+        <div key={w.id} className="min-w-0">
+          <div className="flex items-center gap-2 truncate">
+            {w.status === 'running' ? (
+              <span className="h-2.5 w-2.5 shrink-0 animate-spin rounded-full border-[1.5px] border-indigo-500 border-t-transparent" />
+            ) : (
+              <span className="text-zinc-400">{WORKER_ICON[w.status]}</span>
+            )}
+            <span className="font-medium">{w.title}</span>
+            <span className="truncate text-zinc-500">{w.progress || w.status}</span>
+            <span className="ml-auto" />
+            <WorkerPulse worker={w} />
+          </div>
+          <WorkerActivityView worker={w} lines={2} />
         </div>
       ))}
       {!!done.length && (

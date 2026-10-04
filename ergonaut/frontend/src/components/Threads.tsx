@@ -2,6 +2,7 @@ import { useContext } from 'react'
 import { Link } from 'react-router-dom'
 import type { PrLink, SentCard, Session, ThreadSummary, Worker } from '../api'
 import { BotBadge, DirectoryContext } from './BotIcon'
+import { WorkerActivityView, WorkerPulse } from './WorkerActivity'
 
 const PR_TONE: Record<PrLink['state'], string> = {
   '': 'border-stroke text-muted',
@@ -117,7 +118,8 @@ const WORKER_STATUS: Record<Worker['status'], { label: string; tone: string }> =
   cancelled: { label: 'Cancelled', tone: 'text-muted' },
 }
 
-/** A worker this chat started (orca_start_worker, ergo_workers_start): status, progress and PRs. */
+/** A worker this chat started (orca_start_worker, ergo_workers_start): status, progress, what its
+ * agent did last (with a stalled flag and its full log) and PRs. */
 export function WorkerCard({ worker }: { worker: Worker }) {
   const status = WORKER_STATUS[worker.status] ?? WORKER_STATUS.queued
   return (
@@ -130,9 +132,14 @@ export function WorkerCard({ worker }: { worker: Worker }) {
           {status.label}
         </span>
       </div>
-      {(worker.error || worker.progress) && (
-        <div className="mt-1 line-clamp-2 text-xs text-muted">{worker.error || worker.progress}</div>
+      {(worker.error || worker.progress || worker.activity) && (
+        <div className="mt-1 flex items-center gap-2 text-xs text-muted">
+          <span className="line-clamp-2">{worker.error || worker.progress}</span>
+          <span className="ml-auto" />
+          <WorkerPulse worker={worker} />
+        </div>
       )}
+      <WorkerActivityView worker={worker} />
       {!!worker.prs?.length && (
         <div className="mt-1.5 flex flex-wrap gap-1.5">
           {worker.prs.map(pr => (

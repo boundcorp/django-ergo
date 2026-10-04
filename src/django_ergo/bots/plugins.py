@@ -88,6 +88,11 @@ class BotPlugin:
         """Functions this plugin's tools start as workers, by name ("<plugin>:<name>")."""
         return {}
 
+    def worker_log(self, worker) -> dict | None:
+        """The recent output of one of this plugin's workers, read now, as
+        ``{"source", "entries": [{"kind", "text", "at"}]}``; None if it has none."""
+        return None
+
     @property
     def skill_instructions(self) -> str:
         """What the model reads when it loads this plugin's skill."""
