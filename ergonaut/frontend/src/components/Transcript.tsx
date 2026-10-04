@@ -1,5 +1,4 @@
-import { useState } from 'react'
-import { createContext, useContext } from 'react'
+import { Fragment, createContext, useContext, useState } from 'react'
 import type { AttachmentFile, Block, Call, Message, SentCard, Worker } from '../api'
 import { api } from '../api'
 import { DirectoryContext } from './BotIcon'
@@ -19,6 +18,102 @@ type Delegated = {
 }
 const DelegatedContext = createContext<Delegated>({ cards: new Map(), workers: new Map(), known: new Map() })
 
+// Long runs of tool calls show their last few; the rest fold into a "+N more" row.
+const VISIBLE_CALLS = 3
+
+type FoldRow = { key: string; hidden: number; summary: string; open: boolean }
+type Folds = {
+  hidden: Set<string> // tool call ids folded away
+  rows: Map<string, FoldRow> // by the id of the run's first call: where its "+N more" row goes
+  durations: Map<string, number> // tool call id -> ms until its result
+  toggle: (key: string) => void
+}
+const FoldContext = createContext<Folds>({ hidden: new Set(), rows: new Map(), durations: new Map(), toggle: () => {} })
+
+/** "penpot_apply ×12, penpot_render ×4": the commonest tools in a fold. */
+function foldSummary(names: string[]): string {
+  const counts = new Map<string, number>()
+  for (const name of names) counts.set(name, (counts.get(name) ?? 0) + 1)
+  const top = [...counts.entries()].sort((a, b) => b[1] - a[1])
+  const shown = top.slice(0, 3).map(([name, n]) => (n > 1 ? `${name} ×${n}` : name))
+  return shown.join(', ') + (top.length > 3 ? ', …' : '')
+}
+
+/** Split each turn's tool calls into runs (broken by text, a reply, a user message or a new turn)
+ *  and fold all but the last few of each. Calls waiting on approval, failed calls, and cards for
+ *  work sent elsewhere always stay in view. */
+function foldRuns(
+  messages: Message[],
+  results: Map<string, ToolResult>,
+  pending: Set<string>,
+  starts: Map<number, Call>,
+  replies: string[],
+  open: Set<string>,
+): Pick<Folds, 'hidden' | 'rows'> {
+  const hidden = new Set<string>()
+  const rows = new Map<string, FoldRow>()
+  let run: ToolUse[] = []
+  const close = () => {
+    const pinned = (use: ToolUse) =>
+      pending.has(use.id) || !!results.get(use.id)?.is_error || THREAD_TOOLS.has(use.name) || WORKER_TOOLS.has(use.name)
+    const foldable = run.filter(use => !pinned(use)).slice(0, -VISIBLE_CALLS)
+    if (foldable.length) {
+      const key = run[0].id
+      const isOpen = open.has(key)
+      rows.set(key, { key, hidden: foldable.length, summary: foldSummary(foldable.map(u => u.name)), open: isOpen })
+      if (!isOpen) for (const use of foldable) hidden.add(use.id)
+    }
+    run = []
+  }
+  for (const message of messages) {
+    if (starts.has(message.line)) close()
+    for (const block of message.blocks) {
+      if (block.type === 'tool_use') {
+        if (block.name === REPLY_TOOL) close()
+        else run.push(block)
+      } else if (block.type === 'text') {
+        if (message.role !== 'user' && echoesReply(block.text, replies)) continue
+        close()
+      } else if (block.type === 'attachment') {
+        close()
+      }
+    }
+  }
+  close()
+  return { hidden, rows }
+}
+
+/** How long each tool call took: from its message to its result's. */
+function toolDurations(messages: Message[]): Map<string, number> {
+  const called = new Map<string, number>()
+  const durations = new Map<string, number>()
+  for (const message of messages) {
+    const at = message.timestamp ? Date.parse(message.timestamp) : NaN
+    for (const block of message.blocks) {
+      if (block.type === 'tool_use' && !Number.isNaN(at)) called.set(block.id, at)
+      if (block.type === 'tool_result' && !Number.isNaN(at) && called.has(block.tool_use_id))
+        durations.set(block.tool_use_id, at - called.get(block.tool_use_id)!)
+    }
+  }
+  return durations
+}
+
+function FoldToggle({ row }: { row: FoldRow }) {
+  const { toggle } = useContext(FoldContext)
+  return (
+    <button
+      className="flex w-full items-center gap-2 rounded-control border border-dashed border-stroke px-2.5 py-1 text-left text-xs text-muted hover:border-accent hover:text-ink"
+      onClick={() => toggle(row.key)}
+    >
+      <span className="w-3 text-center">{row.open ? '−' : '+'}</span>
+      <span className="shrink-0 font-medium">
+        {row.open ? `Hide ${row.hidden} earlier calls` : `${row.hidden} more call${row.hidden > 1 ? 's' : ''}`}
+      </span>
+      {!row.open && <span className="truncate font-mono">{row.summary}</span>}
+    </button>
+  )
+}
+
 /** A tool result's JSON object, if it is one. */
 function resultJson(result?: ToolResult): Record<string, unknown> | null {
   if (!result || result.is_error) return null
@@ -33,6 +128,7 @@ function resultJson(result?: ToolResult): Record<string, unknown> | null {
 /** A tool call: a card for work sent to another chat or a worker, otherwise the call itself. */
 function ToolCall({ use, result, pending }: { use: ToolUse; result?: ToolResult; pending: boolean }) {
   const { cards, workers } = useContext(DelegatedContext)
+  const { durations } = useContext(FoldContext)
   const data = resultJson(result)
   const card = data && THREAD_TOOLS.has(use.name) ? cards.get(String(data.message_id ?? '')) : undefined
   if (card) return <ThreadCard card={card} />
@@ -42,7 +138,7 @@ function ToolCall({ use, result, pending }: { use: ToolUse; result?: ToolResult;
   }
   return (
     <>
-      <ToolCard use={use} result={result} pending={pending} />
+      <ToolCard use={use} result={result} pending={pending} duration={durations.get(use.id)} />
       <ToolImages result={result} />
     </>
   )
@@ -196,9 +292,13 @@ function MessageView({
   replies: string[]
 }) {
   const [showContext, setShowContext] = useState(false)
+  const { hidden, rows } = useContext(FoldContext)
   const user = message.role === 'user'
   const parts = message.blocks.filter(
-    b => b.type !== 'tool_result' && !(b.type === 'text' && !user && echoesReply(b.text, replies)),
+    b =>
+      b.type !== 'tool_result' &&
+      !(b.type === 'text' && !user && echoesReply(b.text, replies)) &&
+      !(b.type === 'tool_use' && hidden.has(b.id) && !rows.has(b.id)),
   )
   if (!parts.length) return null
   return (
@@ -285,9 +385,18 @@ function MessageView({
           case 'tool_use':
             if (block.name === REPLY_TOOL) return <ReplyBubble key={i} reply={block.input as Reply} />
             return (
-              <div key={i} className="w-full max-w-[85%]">
-                <ToolCall use={block} result={results.get(block.id)} pending={pending.has(block.id)} />
-              </div>
+              <Fragment key={i}>
+                {rows.has(block.id) && (
+                  <div className="w-full max-w-[85%]">
+                    <FoldToggle row={rows.get(block.id)!} />
+                  </div>
+                )}
+                {!hidden.has(block.id) && (
+                  <div className="w-full max-w-[85%]">
+                    <ToolCall use={block} result={results.get(block.id)} pending={pending.has(block.id)} />
+                  </div>
+                )}
+              </Fragment>
             )
           default:
             return null
@@ -388,6 +497,7 @@ export function Transcript({
   workers?: Worker[]
 }) {
   const { sessions } = useContext(DirectoryContext)
+  const [openFolds, setOpenFolds] = useState<Set<string>>(new Set())
   const results = new Map<string, ToolResult>()
   for (const message of messages)
     for (const block of message.blocks) if (block.type === 'tool_result') results.set(block.tool_use_id, block)
@@ -411,29 +521,56 @@ export function Transcript({
     ]),
   }
   const sentFrom = sentNotes(messages, calls, results, delegated.cards)
+  const folds: Folds = {
+    ...foldRuns(messages, results, pending, starts, replies, openFolds),
+    durations: toolDurations(messages),
+    toggle: key =>
+      setOpenFolds(open => {
+        const next = new Set(open)
+        if (next.has(key)) next.delete(key)
+        else next.add(key)
+        return next
+      }),
+  }
   return (
     <DelegatedContext.Provider value={delegated}>
-      <div className="flex flex-col gap-6">
-        {made.has(-1) && <BotFiles files={made.get(-1)!} />}
-        {messages.map(message => (
-          <div key={message.line}>
-            {starts.has(message.line) && <CallHeader call={starts.get(message.line)!} />}
-            <MessageView message={message} results={results} pending={pending} replies={replies} />
-            {sentFrom.has(message.line) && (
-              <div className="mt-1 flex flex-wrap items-center justify-end gap-1.5 text-xs text-muted">
-                ↪ Sent to
-                {sentFrom.get(message.line)!.map(card => (
-                  <ThreadLink key={card.message_id} id={card.thread.id}>
-                    {card.thread.title}
-                  </ThreadLink>
-                ))}
-              </div>
-            )}
-            {made.has(message.line) && <BotFiles files={made.get(message.line)!} />}
-          </div>
-        ))}
-      </div>
+      <FoldContext.Provider value={folds}>
+        <div className="flex flex-col">
+          {made.has(-1) && <BotFiles files={made.get(-1)!} />}
+          {messages.map(message => (
+            <div
+              key={message.line}
+              className={`empty:hidden ${toolsOnly(message) && !starts.has(message.line) ? 'mt-1.5' : 'mt-6'}`}
+            >
+              {starts.has(message.line) && <CallHeader call={starts.get(message.line)!} />}
+              <MessageView message={message} results={results} pending={pending} replies={replies} />
+              {sentFrom.has(message.line) && (
+                <div className="mt-1 flex flex-wrap items-center justify-end gap-1.5 text-xs text-muted">
+                  ↪ Sent to
+                  {sentFrom.get(message.line)!.map(card => (
+                    <ThreadLink key={card.message_id} id={card.thread.id}>
+                      {card.thread.title}
+                    </ThreadLink>
+                  ))}
+                </div>
+              )}
+              {made.has(message.line) && <BotFiles files={made.get(message.line)!} />}
+            </div>
+          ))}
+        </div>
+      </FoldContext.Provider>
     </DelegatedContext.Provider>
+  )
+}
+
+/** A message that only carries tool calls and results: it sits close to the calls around it. */
+function toolsOnly(message: Message): boolean {
+  return message.blocks.every(
+    b =>
+      b.type === 'tool_result' ||
+      b.type === 'thinking' ||
+      b.type === 'context' ||
+      (b.type === 'tool_use' && b.name !== REPLY_TOOL),
   )
 }
 
