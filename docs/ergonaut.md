@@ -92,6 +92,11 @@ names their bot.yaml and tools use: `engine.api_key_env`, `token_env`,
 `ergonaut check` lists any that are missing. Keep them in an env file
 outside the bot repo.
 
+A provider with `transport: cli` needs the Claude Code CLI installed where
+turns run (the worker) and logged in, either in its `CLAUDE_CONFIG_DIR` or
+with `CLAUDE_CODE_OAUTH_TOKEN`; see
+[Claude on your subscription](building-bots.md#claude-on-your-subscription).
+
 ## The web app
 
 Sign in with a Django user. Admins see everything; other users see the
@@ -110,11 +115,11 @@ their own sessions. Only admins can approve tools of bots with the `bash`,
   images. Send while the bot is working to steer the running turn; Stop
   ends it, and Stop & send interrupts it with your message. Pinned files
   and pages open as tabs above the transcript.
-- **Tool calls**: each call is one line (status, name, arguments, time)
-  that opens to its arguments and result. A run of calls shows its last
-  three; the earlier ones fold into a "+N more" row naming the tools, which
-  unfolds in place. Calls that need approval or failed, and thread cards,
-  always show.
+- **Tool calls**: a run of calls shows its last three in full (name,
+  arguments and result, streaming in as they run); the earlier ones fold into
+  a "+N more" row naming the tools, which unfolds them in place as one-line
+  rows that open on click. Calls that need approval or failed, and thread
+  cards, always show.
 - **Thread cards**: work a chat sends to another chat (`ergo_thread_send`,
   `ergo_message_up`) shows as a card instead of a tool call: the chat it went
   to, with the bot's icon, a live status (queued, working, waiting on you,

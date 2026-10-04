@@ -15,10 +15,18 @@ A ``providers.yaml`` at the top of a bot path lists them::
         models:
           - claude-sonnet-5-5
           - {name: claude-opus-5-5, label: Opus 5.5, config: {max_tokens: 16000}}
+      subscription:
+        type: claude
+        transport: cli                 # the Claude Code CLI logged in on this machine
+        models: [claude-sonnet-5-5, claude-opus-5-5]
 
 A model is named ``provider/model``. A bot can use one with
 ``engine: {model: openai/gpt-6-sol}``, and a chat can switch to any enabled
 model whose provider's key is set (the chat model picker).
+
+``transport: cli`` runs Claude models through the Claude Code CLI on the
+subscription it's logged in with (``conversation.engines.claude_code``); it
+needs no key, and is available when the CLI is installed.
 """
 
 from __future__ import annotations
@@ -32,6 +40,7 @@ import yaml
 
 PROVIDERS_FILE = "providers.yaml"
 ENGINE_TYPES = ("openai", "claude")
+TRANSPORTS = {"openai": ("api",), "claude": ("api", "cli")}
 
 
 class ProvidersError(ValueError):
@@ -55,12 +64,17 @@ class Provider:
     name: str
     type: str
     api_key_env: str = ""
+    transport: str = "api"
     config: dict = field(default_factory=dict)
     models: dict[str, Model] = field(default_factory=dict)
 
     @property
     def available(self) -> bool:
-        """Its key is set (or it needs none)."""
+        """Its key is set (or it needs none); for the CLI, the CLI is installed."""
+        if self.transport == "cli":
+            from django_ergo.conversation.engines.claude_code import claude_installed
+
+            return claude_installed(self.config.get("command", ""))
         return not self.api_key_env or bool(os.environ.get(self.api_key_env))
 
 
@@ -106,9 +120,14 @@ class Providers:
                     f"Provider {name!r}: type must be one of {', '.join(ENGINE_TYPES)}"
                 )
                 raise ProvidersError(msg)
+            transport = str(spec.get("transport") or "api")
+            if transport not in TRANSPORTS[kind]:
+                msg = f"Provider {name!r}: transport {transport!r} doesn't work with {kind}"
+                raise ProvidersError(msg)
             provider = Provider(
                 name=str(name),
                 type=kind,
+                transport=transport,
                 api_key_env=str(spec.get("api_key_env") or ""),
                 config=dict(spec.get("config") or {}),
             )

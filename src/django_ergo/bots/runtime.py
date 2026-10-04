@@ -413,8 +413,10 @@ class Bot:
         """The engine for a chat: the model picked for it (or ``model``), else the bot's."""
         default = get_default_engine_spec()
         ref = model or self.session_model(session) or self.model_ref()
+        transport = default.transport_type
         if ref:
             engine_type, config, key_env = self.providers.engine(ref)
+            transport = self.providers.find(ref)[0].transport
             extra = {
                 k: v for k, v in self.definition.engine_config.items() if k != "model"
             }
@@ -426,6 +428,7 @@ class Bot:
             config = {} if self.definition.engine_type else dict(default.config)
             config.update(self.definition.engine_config)
             key_env = self.definition.api_key_env
+            transport = self.definition.engine_transport or transport
         if key_env:
             key = os.environ.get(key_env)
             if not key:
@@ -434,7 +437,7 @@ class Bot:
             config["api_key"] = key
         return EngineSpec(
             engine_type=engine_type,
-            transport_type=default.transport_type,
+            transport_type=transport,
             config=config,
         )
 
@@ -612,7 +615,7 @@ class Bot:
             bot_name=self.name,
             engine_type=getattr(engine, "engine_type", None)
             or self.engine_spec(model=model).engine_type,
-            transport_type="api",
+            transport_type=getattr(engine, "transport_type", "api"),
             status="active",
             metadata={**(metadata or {}), "bot_role": role},
             compaction_mode=compaction_mode,
