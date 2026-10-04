@@ -435,7 +435,7 @@ user. The `orchestration` skill (loaded in main by default) has:
 | `ergo_thread_list` | A bot's main chat, named chats and threads with the user (default: this bot) |
 | `ergo_thread_send` | Message a bot's `main` chat, a named chat, a thread id, or a `new` thread; returns at once |
 | `ergo_thread_stop` | Stop the running turn of a thread this bot started (or one of its own) and cancel what it queued there |
-| `ergo_thread_archive` | Archive one of this bot's threads, or a sub-bot thread it started; its history stays readable |
+| `ergo_thread_resolve` | Resolve a finished thread (this one, one of this bot's, or another bot's it started), with a one-line `summary`; refused while workers run, a request is open, an approval is pending, or its last reply asks the user something. History stays readable; a new message reopens it. `ergo_thread_archive` is a deprecated alias |
 
 Messages between sessions are asynchronous, like thread-to-thread
 delegation in Codex (`django_ergo.bots.messaging`). `ergo_thread_send`
@@ -473,6 +473,12 @@ snippets first, then drop out, and the block says how many it left out
 (`ergo_thread_list` and the history tools still reach them). With seven bots
 and nine open chats it is about 2.4k tokens.
 
+Every bot chat also gets a short **This chat** block saying which chat it is:
+"You are devbox · Main, the main chat", or for a thread "You are devbox ·
+Deploy, a thread started by boundcorp · Main. Do the work here; … your final
+reply goes back to it automatically" (`orchestrator.chat_identity`). Shared
+agents.md instructions can then say what main does and what a thread does.
+
 Who may message whom:
 
 - **Upward, always.** Any chat may message its own bot's main chat, and a
@@ -490,12 +496,25 @@ Who may message whom:
   bot started records `started_by` (the sending chat), `started_by_bot` and
   `started_by_label` in its metadata; Ergonaut links back to that chat from
   the thread's header, and `ergo_thread_list` shows it.
+- **Resolving.** The orchestration skill's instructions tell every
+  orchestrator when to resolve: when the work is finished (PR merged or
+  closed, answer delivered, the user wrapped it up), never while it waits on
+  the user, a worker, a reply or an approval, or has an open PR. The Bots and
+  threads block marks quiet threads with nothing open as "ready to resolve",
+  and a thread resolves itself after its final report. A resolved thread keeps
+  `resolved_by` and `resolved_summary` in its metadata until it reopens.
+- **Reports upward get no reply.** A thread's message to its own main chat,
+  or a main chat's to its parent's, is a one-way report: the recipient's turn
+  starts with `[Report from …]` and its reply isn't sent back, so a status
+  update doesn't cost the sender another turn for an acknowledgement. Pass
+  `ask: true` (to `ergo_thread_send` or `ergo_message_up`) when an answer is
+  needed.
 - **No nudges.** A chat can't send a second request to a chat while its
   earlier one there is still open, and in the turn that handles a chat's
   reply it can't send that chat a short follow-up ("please continue"):
   under 400 characters is refused unless the reply asked a question. A
   complete new request still goes through.
-- **Managing what it started.** `ergo_thread_stop` and `ergo_thread_archive`
+- **Managing what it started.** `ergo_thread_stop` and `ergo_thread_resolve`
   (with `bot`) work on threads of other bots that a chat of this bot
   started. Stopping a running turn goes through
   `DJANGO_ERGO["TURN_STOPPER"]` (`callable(session_id) -> bool`; Ergonaut

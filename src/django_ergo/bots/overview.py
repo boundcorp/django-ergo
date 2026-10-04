@@ -85,6 +85,10 @@ def facts(
         out.append(f"waiting on {status['waiting_on']} reply(s)")
     if status["workers_running"]:
         out.append(f"{status['workers_running']} worker(s) running")
+    if status["last_asks"]:
+        out.append("asked the user something")
+    if status["ready_to_resolve"]:
+        out.append("looks finished: ready to resolve")
     if session.id == current.id:
         out.append("you are here")
     return out
@@ -266,7 +270,15 @@ class OverviewSource(ContextSource):
     def render(self, budget_tokens: int) -> ContextSection | None:
         if self.ctx.session is None:
             return None
-        text = overview(self.ctx, min(MAX_CHARS, max(budget_tokens, 0) * 4))
+        from django_ergo.bots.orchestrator import ORCHESTRATION_INSTRUCTIONS
+
+        room = min(MAX_CHARS, max(budget_tokens, 0) * 4) - len(
+            ORCHESTRATION_INSTRUCTIONS
+        )
+        text = overview(self.ctx, max(room, 0))
         if not text.strip():
             return None
+        # The built-in rule for resolving threads rides with the block it refers to
+        # (skill instructions only show when a skill is loaded by the tool).
+        text = f"{text}\n\n{ORCHESTRATION_INSTRUCTIONS}"
         return ContextSection(TITLE, text, estimate_tokens(text))

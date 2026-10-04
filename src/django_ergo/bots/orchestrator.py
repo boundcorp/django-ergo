@@ -27,8 +27,11 @@ Who may message whom:
 - ``ergo_thread_stop``: stop the running turn of a thread this bot started (or
   one of its own threads) and cancel what this bot queued for it. Stopping a
   running turn needs ``DJANGO_ERGO["TURN_STOPPER"]``.
-- ``ergo_thread_archive``: archive one of this bot's threads, or a sub-bot thread
-  this bot started, that is done.
+- ``ergo_thread_resolve``: resolve a finished thread (this one, one of this
+  bot's, or another bot's thread this bot started). Refused while workers run, a
+  request is open, an approval is pending, or its last reply asks the user
+  something. History stays readable; a new message reopens it.
+  ``ergo_thread_archive`` is a deprecated alias.
 - ``ergo_message_up``: message this bot's main chat, or the parent bot's main
   chat from this bot's main chat (always available, even without orchestration).
 
@@ -38,6 +41,7 @@ cover every session this bot has with the user.
 
 from __future__ import annotations
 
+from datetime import timedelta
 from typing import TYPE_CHECKING
 
 from asgiref.sync import async_to_sync
@@ -63,6 +67,8 @@ TOP_ROLES = {"root", "main", "chat"}  # main and named chats (not threads)
 # In a turn that a chat's reply started, a message back to that chat this short is
 # taken for a nudge ("please continue") unless the reply asked a question.
 FOLLOW_UP_MIN_CHARS = 400
+# A thread this quiet, with nothing open, is shown as ready to resolve.
+READY_AFTER = timedelta(minutes=15)
 OPEN_STATUSES = [
     ThreadMessageStatus.QUEUED,
     ThreadMessageStatus.DELIVERED,
@@ -87,6 +93,43 @@ def _target(ctx: ToolContext, bot: str) -> Bot:
     return registry.get(bot)
 
 
+def chat_identity(session: ConversationSession) -> str:
+    """Which chat this is, for its own context: a thread must know it's the
+    thread, not the main chat its instructions also describe."""
+    meta = session.metadata or {}
+    role = meta.get("bot_role")
+    if role in ("root", "main"):
+        return f"You are {session.bot_name} · Main, the main chat."
+    if role == "chat":
+        return f"You are {session.bot_name} · {meta.get('chat') or meta.get('title')}, a named chat."
+    started = meta.get("started_by_label")
+    if not started and session.parent_id:
+        started = messaging.label(session.parent)
+    title = meta.get("title") or "Thread"
+    if not started:
+        return f"You are {session.bot_name} · {title}, a thread. Do its work here."
+    return (
+        f"You are {session.bot_name} · {title}, a thread started by {started}. "
+        f"Do the work here; don't hand it to another {session.bot_name} thread. Your "
+        f"final reply to a message from {started} goes back to it automatically, so "
+        "report there with that reply, not with extra messages."
+    )
+
+
+ORCHESTRATION_INSTRUCTIONS = """\
+Resolving threads: keep the thread list to work that is still going on.
+- Resolve a thread (ergo_thread_resolve, with a one-line summary) when its work is
+  finished: its PR was merged or closed, its answer was delivered, or the user
+  wrapped it up. A thread resolves itself after its final report when nothing is
+  left open.
+- Never resolve one that is waiting on the user (its last reply asks something),
+  on a worker, on a reply, or for an approval, or that has an open PR. The tool
+  refuses the first ones; open PRs are up to you.
+- Each turn, check the Bots and threads block: threads marked "ready to resolve"
+  look finished. Resolve the ones you started that are, and leave the rest.
+- Resolving keeps the history readable, and a new message reopens the thread."""
+
+
 def thread_status(session: ConversationSession) -> dict:
     """What a chat is doing, for orchestrators and UIs (the "Bots and threads"
     block uses it; so can an API).
@@ -95,8 +138,12 @@ def thread_status(session: ConversationSession) -> dict:
     ``last_activity`` is when its latest turn moved (sessions aren't touched per
     turn); ``started_by``/``started_by_id`` name another bot's chat that started
     it; ``working_for``/``waiting_on`` count open requests in and out;
-    ``workers_running`` counts queued or running workers.
+    ``workers_running`` counts queued or running workers; ``last_asks`` is
+    whether its last reply was a question to the user; ``ready_to_resolve`` marks
+    a thread that looks finished (quiet, nothing open, not asking anything).
     """
+    from django.utils import timezone
+
     from django_ergo.conversation.models import StructuredCallStatus
     from django_ergo.conversation.models import Worker
     from django_ergo.conversation.models import WorkerStatus
@@ -110,8 +157,15 @@ def thread_status(session: ConversationSession) -> dict:
         state = "idle"
     latest = calls.order_by("-updated_at").values_list("updated_at", flat=True).first()
     meta = session.metadata or {}
+    last_reply = (
+        calls.filter(kind="chat_reply", status=StructuredCallStatus.COMPLETED)
+        .order_by("-created_at")
+        .values_list("response", flat=True)
+        .first()
+    )
+    last_asks = isinstance(last_reply, dict) and last_reply.get("type") == "question"
     other_bot = meta.get("started_by_bot") not in (None, "", session.bot_name)
-    return {
+    status = {
         "state": state,
         "last_activity": max(latest, session.updated_at)
         if latest
@@ -127,7 +181,36 @@ def thread_status(session: ConversationSession) -> dict:
         "workers_running": Worker.objects.filter(
             session=session, status__in=[WorkerStatus.QUEUED, WorkerStatus.RUNNING]
         ).count(),
+        "last_asks": last_asks,
     }
+    quiet = timezone.now() - status["last_activity"] > READY_AFTER
+    status["ready_to_resolve"] = (
+        meta.get("bot_role") not in TOP_ROLES
+        and session.status != "completed"
+        and quiet
+        and not resolve_blockers(status)
+    )
+    return status
+
+
+def resolve_blockers(
+    status: dict, *, skip_open: int = 0, own_turn: bool = False
+) -> list[str]:
+    """Why a thread can't be resolved yet (empty: it can). In the thread's own turn
+    (``own_turn``), the request it is answering (``skip_open``) and a question its
+    previous reply asked (this turn is the answer) don't count."""
+    blockers = []
+    if status["state"] == "waiting_for_approval":
+        blockers.append("an approval is pending")
+    if status["workers_running"]:
+        blockers.append(f"{status['workers_running']} worker(s) are running")
+    if status["working_for"] - skip_open > 0:
+        blockers.append("it is still working on a request")
+    if status["waiting_on"]:
+        blockers.append("it is waiting on a reply")
+    if status["last_asks"] and not own_turn:
+        blockers.append("its last reply asks the user something")
+    return blockers
 
 
 def _is_main(session: ConversationSession) -> bool:
@@ -181,7 +264,7 @@ def _row(session: ConversationSession, current: ConversationSession) -> dict:
         "thread": _thread_key(session),
         "id": str(session.id),
         "title": messaging.label(session),
-        "status": "archived" if session.status == "completed" else session.status,
+        "status": "resolved" if session.status == "completed" else session.status,
         "last_activity": session.updated_at.isoformat(timespec="seconds"),
         "open_requests": open_requests,
     }
@@ -238,6 +321,14 @@ def ergo_thread_list(
             "description": '"main" for its main chat, a named chat, "new" for a new thread, or a thread id',
         },
         "title": {"type": "string", "description": "Title for a new thread"},
+        "ask": {
+            "type": "boolean",
+            "description": (
+                "Only for messages upward (to your own main chat, or your parent bot's): "
+                "true when you need an answer back. Otherwise it's a one-way report and "
+                "no reply comes back."
+            ),
+        },
         "attachments": {
             "type": "array",
             "items": {"type": "string"},
@@ -256,12 +347,14 @@ def ergo_thread_send(  # noqa: PLR0913
     thread: str = "main",
     title: str = "",
     attachments: list[str] | None = None,
+    ask: bool = False,
 ) -> dict:
     """Send a message to a bot's main chat, a named chat, a thread, or a new thread.
 
-    Returns at once. The reply arrives later as a new message in this chat.
+    Returns at once. The reply arrives later as a new message in this chat, except
+    for a report upward (see ``ask``).
     """
-    return _send(ctx, _target(ctx, bot), message, thread, title, attachments)
+    return _send(ctx, _target(ctx, bot), message, thread, title, attachments, ask=ask)
 
 
 def _send(  # noqa: PLR0913
@@ -271,6 +364,8 @@ def _send(  # noqa: PLR0913
     thread: str = "main",
     title: str = "",
     attachments: list[str] | None = None,
+    *,
+    ask: bool = False,
 ) -> dict:
     user = ctx.session.user
     thread = (thread or "main").strip()
@@ -333,18 +428,32 @@ def _send(  # noqa: PLR0913
             "for the reply, then send new work if there is any."
         )
         raise ValueError(msg)
+    # Upward (a thread to its main chat, a main chat to its parent's) is a report
+    # unless it asks: no reply goes back, so a status update doesn't cost a turn
+    # here for the recipient's acknowledgement.
+    upward = _is_main(recipient) and (
+        (target is ctx.bot and not _is_main(ctx.session)) or _upward_only(ctx, target)
+    )
+    report = upward and not ask
+    metadata = {"attachments": shared} if shared else {}
+    if report:
+        metadata["report"] = True
     sent = messaging.send(
         ctx.session,
         recipient,
         message,
         registry=ctx.bot.registry,
-        metadata={"attachments": shared} if shared else None,
+        metadata=metadata or None,
     )
     return {
         "sent_to": messaging.label(recipient),
         "thread_id": str(recipient.id),
         "message_id": str(sent.id),
-        "note": "The reply will arrive as a new message in this chat.",
+        "note": (
+            "Sent as a report: no reply comes back (ask=true when you need one)."
+            if report
+            else "The reply will arrive as a new message in this chat."
+        ),
         **({"shared_files": [f["filename"] for f in shared]} if shared else {}),
     }
 
@@ -414,13 +523,68 @@ def ergo_thread_stop(ctx: ToolContext, thread_id: str, bot: str = "") -> dict:
     return result
 
 
+def resolve(
+    ctx: ToolContext, thread_id: str = "", bot: str = "", summary: str = ""
+) -> str:
+    """Resolve a finished thread (see ``ergo_thread_resolve``)."""
+    current = ctx.session
+    if not thread_id or thread_id == str(current.id):
+        if (current.metadata or {}).get("bot_role") in TOP_ROLES:
+            msg = "Main and named chats aren't resolved; only threads are."
+            raise ValueError(msg)
+        thread, own_turn = current, True
+    else:
+        thread, own_turn = _managed_thread(ctx, bot, thread_id), False
+    status = thread_status(thread)
+    if not own_turn and status["state"] == "working":
+        msg = f"{messaging.label(thread)} is working; stop it with ergo_thread_stop first."
+        raise ValueError(msg)
+    handling = messaging.current_thread_message(thread) if own_turn else None
+    open_here = int(bool(handling and handling.in_reply_to_id is None))
+    if blockers := resolve_blockers(status, skip_open=open_here, own_turn=own_turn):
+        msg = f"{messaging.label(thread)} isn't finished: " + "; ".join(blockers) + "."
+        raise ValueError(msg)
+    archival.archive(thread, reason=f"resolved by {messaging.label(current)}")
+    meta = {**(thread.metadata or {}), "resolved_by": messaging.label(current)}
+    if summary:
+        meta["resolved_summary"] = summary[:2000]
+    ConversationSession.objects.filter(pk=thread.pk).update(metadata=meta)
+    thread.metadata = meta
+    return f"Resolved {messaging.label(thread)}. Its history stays readable; a new message reopens it."
+
+
+@bot_tool(
+    takes_context=True,
+    parameters={
+        "thread_id": {
+            "type": "string",
+            "description": "The thread to resolve; empty for this thread",
+        },
+        "bot": {
+            "type": "string",
+            "description": "Its bot, for a thread of another bot this bot started",
+        },
+        "summary": {
+            "type": "string",
+            "description": "One line: how it ended (e.g. 'PR #88 merged')",
+        },
+    },
+)
+def ergo_thread_resolve(
+    ctx: ToolContext, thread_id: str = "", bot: str = "", summary: str = ""
+) -> str:
+    """Resolve a finished thread: this one (empty thread_id), one of this bot's, or
+    another bot's thread this bot started. Resolve when the work is finished (PR
+    merged or closed, the answer delivered, the user wrapped it up); never while it
+    waits on the user, a worker or a reply, or has an open PR. Its history stays
+    readable, and a new message reopens it."""
+    return resolve(ctx, thread_id, bot, summary)
+
+
 @bot_tool(takes_context=True)
 def ergo_thread_archive(ctx: ToolContext, thread_id: str, bot: str = "") -> str:
-    """Archive a thread that is done: one of this bot's, or a sub-bot thread this
-    bot started (``bot``). Its history stays readable."""
-    thread = _managed_thread(ctx, bot, thread_id)
-    archival.archive(thread, reason=f"archived by {ctx.bot.name}")
-    return f"Archived {messaging.label(thread)}"
+    """Deprecated: use ergo_thread_resolve (the same thing)."""
+    return resolve(ctx, thread_id, bot)
 
 
 @bot_tool(
@@ -440,15 +604,27 @@ def ergo_thread_archive(ctx: ToolContext, thread_id: str, bot: str = "") -> str:
             "items": {"type": "string"},
             "description": "Files from this chat to share (filenames or file ids)",
         },
+        "ask": {
+            "type": "boolean",
+            "description": (
+                "true when you need an answer back. Otherwise it's a one-way report and "
+                "no reply comes back."
+            ),
+        },
     },
     required=["message", "to"],
 )
 def ergo_message_up(
-    ctx: ToolContext, message: str, to: str, attachments: list[str] | None = None
+    ctx: ToolContext,
+    message: str,
+    to: str,
+    attachments: list[str] | None = None,
+    ask: bool = False,
 ) -> dict:
     """Message upward: this bot's main chat, or the parent bot's main chat.
 
-    Returns at once. The reply arrives later as a new message in this chat.
+    Returns at once. A report gets no reply; with ``ask`` the reply arrives later
+    as a new message in this chat.
     """
     if to == "parent":
         registry = ctx.bot.registry
@@ -466,7 +642,7 @@ def ergo_message_up(
     else:
         msg = 'to must be "main" or "parent"'
         raise ValueError(msg)
-    return _send(ctx, target, message, "main", attachments=attachments)
+    return _send(ctx, target, message, "main", attachments=attachments, ask=ask)
 
 
 def upward_targets(ctx: ToolContext) -> list[str]:
@@ -484,9 +660,13 @@ def upward_targets(ctx: ToolContext) -> list[str]:
 
 def upward_toolkit(ctx: ToolContext) -> FunctionToolkit:
     """For bots without orchestration: just the upward messages."""
-    if not upward_targets(ctx):
-        return FunctionToolkit([], ctx)
-    return FunctionToolkit([ergo_message_up.__bot_tool__], ctx)
+    tools = [ergo_message_up.__bot_tool__] if upward_targets(ctx) else []
+    if (
+        not _is_main(ctx.session)
+        and (ctx.session.metadata or {}).get("bot_role") not in TOP_ROLES
+    ):
+        tools.append(ergo_thread_resolve.__bot_tool__)  # a thread may resolve itself
+    return FunctionToolkit(tools, ctx)
 
 
 def orchestrator_toolkit(ctx: ToolContext) -> FunctionToolkit:
@@ -495,6 +675,7 @@ def orchestrator_toolkit(ctx: ToolContext) -> FunctionToolkit:
         ergo_thread_list,
         ergo_thread_send,
         ergo_thread_stop,
+        ergo_thread_resolve,
         ergo_thread_archive,
     ]
     tools: list[BotTool] = [fn.__bot_tool__ for fn in functions]
