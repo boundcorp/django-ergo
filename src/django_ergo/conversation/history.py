@@ -351,9 +351,15 @@ class SessionSource(MessageSource):
 
     kind = "session"
 
-    def __init__(self, session: ConversationSession):
+    def __init__(self, session: ConversationSession, *, last_rows: int | None = None):
         super().__init__()
         self.session = session
+        self.last_rows = last_rows  # read only the latest rows (cheap previews)
+
+    def _rows(self, qs):
+        if self.last_rows is None:
+            return qs
+        return reversed(list(qs.order_by("-sequence")[: self.last_rows]))
 
     @property
     def source_id(self) -> str:
@@ -391,7 +397,9 @@ class SessionSource(MessageSource):
     def _claude_rows(self) -> list[HistoryMessage]:
         from django_ergo.conversation.engines.claude_api import claude_message_dict
 
-        rows = self.session.claude_messages.prefetch_related("content_blocks")
+        rows = self._rows(
+            self.session.claude_messages.prefetch_related("content_blocks")
+        )
         return [
             HistoryMessage(
                 source_id=self.source_id,
@@ -405,7 +413,7 @@ class SessionSource(MessageSource):
 
     def _openai_rows(self) -> list[HistoryMessage]:
         messages = []
-        for row in self.session.openai_messages.all():
+        for row in self._rows(self.session.openai_messages.all()):
             blocks: list[dict] = []
             if row.role == "system":
                 blocks.append({"type": "context", "text": row.content or ""})
