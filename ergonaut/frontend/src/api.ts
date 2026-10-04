@@ -36,7 +36,7 @@ export type Session = {
   resolved_by?: string // the bot that resolved this thread (ergo_thread_resolve)
   resolved_summary?: string // its one-line summary of how the thread ended
   // Threads by status (components/ThreadList): the group, why it waits, the bot's status line.
-  bucket?: 'waiting' | 'working' | 'idle' | 'resolved' | ''
+  bucket?: 'waiting' | 'working' | 'review' | 'idle' | 'resolved' | ''
   waiting_for?: 'approval' | 'question' | 'failure' | ''
   status_line?: string // the bot's one line from its latest reply (a resolved thread's summary)
   pinned?: boolean

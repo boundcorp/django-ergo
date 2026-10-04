@@ -114,7 +114,7 @@ class SessionOut(Schema):
     resolved_summary: str = ""
     # Threads by status (Sidebar, Threads page): which group it sits in, why it waits,
     # the bot's one-line status from its latest reply, and what it has going.
-    bucket: str = ""  # waiting, working, idle or resolved
+    bucket: str = ""  # waiting, working, review (idle with an open PR), idle or resolved
     waiting_for: str = ""  # approval, question or failure, when bucket is waiting
     status_line: str = ""
     pinned: bool = False
@@ -607,6 +607,9 @@ def threads_by_status(session: ConversationSession) -> dict:
     """The fields the threads lists group and describe a chat by (from ``with_open_counts`` rows)."""
     meta = session.metadata or {}
     group = bucket(session)
+    prs = getattr(session, "pr_links", [])
+    if group == "idle" and any(pr["state"] == "open" for pr in prs):
+        group = "review"  # quiet, with a pull request open: it waits on a reviewer
     line = str(getattr(session, "latest_line", "") or "")
     if group == "resolved":
         line = str(meta.get("resolved_summary") or "")
@@ -619,7 +622,7 @@ def threads_by_status(session: ConversationSession) -> dict:
         "last_activity": max(latest, session.updated_at) if latest else session.updated_at,
         "workers_running": getattr(session, "workers_running", 0) or 0,
         "workers_total": getattr(session, "workers_total", 0) or 0,
-        "prs": getattr(session, "pr_links", []),
+        "prs": prs,
     }
 
 

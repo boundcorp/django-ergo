@@ -9,20 +9,27 @@ import { PrChip } from './Threads'
 
 // Threads by status: the sidebar's slim list under each bot, and the full Threads page.
 
-type GroupKey = 'pinned' | 'waiting' | 'working' | 'idle' | 'resolved'
+type GroupKey = 'pinned' | 'review' | 'waiting' | 'working' | 'idle' | 'resolved'
 
-const GROUPS: { key: GroupKey; label: string; open: boolean }[] = [
-  { key: 'pinned', label: 'Pinned', open: true },
-  { key: 'waiting', label: 'Waiting on you', open: true },
-  { key: 'working', label: 'Working', open: true },
-  { key: 'idle', label: 'Idle', open: false },
-  { key: 'resolved', label: 'Resolved', open: false },
+// open: unfolded at first (sidebar, then full page); capped: shows a few rows, then "Show more".
+const GROUPS: { key: GroupKey; label: string; open: [boolean, boolean]; capped?: boolean }[] = [
+  { key: 'pinned', label: 'Pinned', open: [true, true] },
+  { key: 'review', label: 'Ready for review', open: [true, true] },
+  { key: 'waiting', label: 'Waiting on you', open: [true, true] },
+  { key: 'working', label: 'Working', open: [true, true] },
+  { key: 'idle', label: 'Idle', open: [true, true], capped: true },
+  { key: 'resolved', label: 'Resolved', open: [false, true], capped: true },
 ]
 
 export function groupOf(session: Session): GroupKey {
   if (session.pinned) return 'pinned'
   if (session.bucket) return session.bucket
   return session.status === 'completed' ? 'resolved' : 'idle'
+}
+
+// Resolved rows are just a dimmed title; the summary is in the tooltip.
+function resolved(session: Session): boolean {
+  return session.bucket === 'resolved' || session.status === 'completed'
 }
 
 function activity(session: Session): string {
@@ -127,6 +134,8 @@ export function ThreadGroups({
   after?: (session: Session) => ReactNode // under a slim row (the sidebar shows its pinned files)
 }) {
   const [open, toggle] = useOpenGroups(scope)
+  const [more, setMore] = useState<Record<string, boolean>>({})
+  const cap = full ? 5 : 3
   const grouped = new Map<GroupKey, Session[]>()
   for (const session of sessions) {
     const key = groupOf(session)
@@ -136,7 +145,8 @@ export function ThreadGroups({
     <div className={full ? 'space-y-2' : 'space-y-0.5'}>
       {GROUPS.filter(g => grouped.get(g.key)?.length).map(group => {
         const rows = grouped.get(group.key)!.sort((a, b) => activity(b).localeCompare(activity(a)))
-        const shown = open[group.key] ?? group.open
+        const shown = open[group.key] ?? group.open[full ? 1 : 0]
+        const visible = group.capped && !more[group.key] ? rows.slice(0, cap) : rows
         return (
           <div key={group.key}>
             <button
@@ -155,7 +165,7 @@ export function ThreadGroups({
             </button>
             {shown && (
               <div className={full ? 'mt-1 space-y-0.5' : ''}>
-                {rows.map(session =>
+                {visible.map(session =>
                   full ? (
                     <FullRow key={session.id} session={session} onPinned={onChange} />
                   ) : (
@@ -164,6 +174,19 @@ export function ThreadGroups({
                       {after?.(session)}
                     </Fragment>
                   ),
+                )}
+                {visible.length < rows.length && (
+                  <button
+                    type="button"
+                    onClick={() => setMore(m => ({ ...m, [group.key]: true }))}
+                    className={
+                      full
+                        ? 'w-full py-2 text-center text-sm text-muted hover:text-ink'
+                        : 'ml-6 px-2 py-0.5 text-xs text-muted hover:text-ink'
+                    }
+                  >
+                    Show {rows.length - visible.length} more
+                  </button>
                 )}
               </div>
             )}
@@ -195,8 +218,8 @@ export function SlimRow({ session }: { session: Session }) {
     >
       <StatusDot session={session} unread={unread} />
       <span className="min-w-0 flex-1">
-        <span className="block truncate">{session.title}</span>
-        <StatusLine session={session} />
+        <span className={`block truncate ${resolved(session) ? 'text-muted' : ''}`}>{session.title}</span>
+        {!resolved(session) && <StatusLine session={session} />}
       </span>
       <span className="shrink-0 self-start pt-0.5 text-[11px] font-normal text-muted">
         {shortAgo(activity(session))}
@@ -212,17 +235,23 @@ export function FullRow({ session, onPinned }: { session: Session; onPinned?: ()
     <div className="group flex items-center gap-3 rounded-lg px-3 py-2 hover:bg-raised">
       <span className="w-2">{session.unread && <span className="block h-2 w-2 rounded-full bg-sky-500" />}</span>
       <BotBadge name={session.bot} size={22} />
-      <Link to={`/s/${session.id}`} className="min-w-0 flex-1">
+      <Link
+        to={`/s/${session.id}`}
+        className="min-w-0 flex-1"
+        title={resolved(session) && session.status_line ? `Resolved: ${session.status_line}` : undefined}
+      >
         <span className="flex items-center gap-2">
-          <span className="truncate text-sm font-medium text-ink">{session.title}</span>
+          <span className={`truncate text-sm ${resolved(session) ? 'text-muted' : 'font-medium text-ink'}`}>
+            {session.title}
+          </span>
           <span className="shrink-0 text-xs text-muted">{session.bot}</span>
           {session.busy && (
             <span className="h-2.5 w-2.5 shrink-0 animate-spin rounded-full border-[1.5px] border-indigo-500 border-t-transparent" />
           )}
         </span>
-        <StatusLine session={session} />
+        {!resolved(session) && <StatusLine session={session} />}
       </Link>
-      <span className="hidden shrink-0 items-center gap-1.5 sm:flex">
+      <span className={`hidden shrink-0 items-center gap-1.5 ${resolved(session) ? '' : 'sm:flex'}`}>
         {!!session.workers_running && (
           <span
             className="rounded-full border border-stroke px-2 py-0.5 text-xs text-muted"
