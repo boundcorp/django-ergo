@@ -32,19 +32,22 @@ function seconds(ms: number): string {
   return `${Math.floor(ms / 60_000)}m${Math.round((ms % 60_000) / 1000)}s`
 }
 
-/** A tool call as one line (status, name, arguments, time); the arguments and result open on click. */
+/** A tool call: its status, name, arguments and time, with the full arguments and result below.
+ *  ``compact`` (calls folded into "+N more") starts as one line that opens on click. */
 export function ToolCard({
   use,
   result,
   pending,
   duration,
+  compact = false,
 }: {
   use: ToolUse
   result?: ToolResult
   pending?: boolean
   duration?: number | null // ms from the call to its result
+  compact?: boolean
 }) {
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(!compact)
   const [icon, state, tone] = pending
     ? ['⏸', 'needs approval', 'border-warning/50 bg-amber-tint']
     : !result
@@ -53,9 +56,9 @@ export function ToolCard({
         ? ['✗', 'error', 'border-danger/50 bg-red-tint']
         : ['✓', 'ok', 'border-stroke bg-surface']
   return (
-    <div className={`rounded-control border text-xs ${tone}`}>
+    <div className={`rounded-control border ${compact ? 'text-xs' : 'text-sm'} ${tone}`}>
       <button
-        className="flex w-full items-center gap-2 px-2.5 py-1 text-left"
+        className={`flex w-full items-center gap-2 px-2.5 text-left ${compact ? 'py-1' : 'py-1.5'}`}
         onClick={() => setOpen(!open)}
         aria-expanded={open}
         title={state}
@@ -66,8 +69,10 @@ export function ToolCard({
           {icon}
         </span>
         <span className="shrink-0 font-mono font-medium">{use.name}</span>
-        <span className="min-w-0 truncate font-mono text-zinc-500">{summarize(use.input)}</span>
-        <span className="ml-auto shrink-0 text-zinc-500">
+        {(compact || !open) && (
+          <span className="min-w-0 truncate font-mono text-xs text-zinc-500">{summarize(use.input)}</span>
+        )}
+        <span className="ml-auto shrink-0 text-xs text-zinc-500">
           {duration != null && result ? seconds(duration) : pending ? state : ''}
         </span>
         <span className="shrink-0 font-mono text-zinc-400">{open ? '▾' : '▸'}</span>
