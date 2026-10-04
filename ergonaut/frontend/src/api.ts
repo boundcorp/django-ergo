@@ -68,7 +68,7 @@ export type Block =
 
 export type Message = { line: number; role: string; blocks: Block[]; timestamp: string | null }
 
-export type Approval = { id: string; name: string; input: unknown }
+export type Approval = { id: string; name: string; input: unknown; preview?: string; preview_error?: boolean }
 
 export type Call = {
   id: string

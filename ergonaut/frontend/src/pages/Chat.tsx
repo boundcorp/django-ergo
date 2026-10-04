@@ -475,6 +475,11 @@ export function Chat({ onChange }: { onChange: () => void }) {
               <section key={approval.id} className="rounded-card border border-warning/40 bg-amber-tint p-4 text-sm">
                 <div className="font-medium">Tool approval requested: {approval.name}</div>
                 <p className="mt-1 text-muted">Review this tool call; the composer waits for its decision.</p>
+                {approval.preview && (
+                  <pre className="mt-3 max-h-56 overflow-auto whitespace-pre-wrap rounded-control border border-warning/30 bg-canvas p-3 text-xs text-ink">
+                    {approval.preview}
+                  </pre>
+                )}
                 <div className="mt-3 flex gap-2">
                   <button
                     disabled={busy || !!pending}

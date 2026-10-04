@@ -704,6 +704,36 @@ worker-start`, and waits for approval unless `approve_changes: false`.
 Arguments are an argv list, never a shell string, and `--json` is added for
 the bot. With `environment` set, the bot can't point a call elsewhere.
 
+### kubectl
+
+```yaml
+- name: kubectl
+  clusters:
+    cluster-name:
+      kubeconfig: /mounted/kubeconfig
+      namespace: default       # optional default for calls without -n/--namespace
+  approve: true                # required; every kubectl_run call waits for approval
+  timeout: 120
+  root_only: true
+```
+
+Runs the `kubectl` binary only against named clusters configured in the bot
+file. `kubectl_read(cluster, args)` needs no approval, but permits only
+`get`, `describe`, `logs`, `top`, `events`, `explain`, `api-resources`,
+`version`, and `auth can-i`; aliases and packed shell-style arguments are not
+accepted. Every `kubectl_run(cluster, args)` call needs individual approval;
+`approve: false` is rejected. Before approval, `apply`, `patch`, `delete`,
+`scale`, `rollout`, `label`, `annotate`, and `create` first run against the
+selected cluster with `--dry-run=server`; `apply` and `patch` also run
+`kubectl diff`. The approval request shows bounded, redacted output. `exec`
+and `rollout restart`, `undo`, or `status` explicitly state that their preview
+is skipped because Kubernetes has no safe cluster-state preview for them.
+Arguments are always an argv list. The plugin pins the selected cluster's
+kubeconfig and rejects flags that could change the kubeconfig, context, server,
+or identity. It redacts structured `data`, `stringData`, and credential-shaped
+output and refuses `get secret` custom formats, so Secret values are never
+returned.
+
 ### bash
 
 ```yaml
