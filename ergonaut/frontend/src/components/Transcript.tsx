@@ -1,4 +1,4 @@
-import { Fragment, createContext, useContext, useState } from 'react'
+import { Fragment, createContext, useContext, useMemo, useState } from 'react'
 import type { AttachmentFile, Block, Call, Message, SentCard, Worker } from '../api'
 import { api } from '../api'
 import { DirectoryContext } from './BotIcon'
@@ -510,8 +510,32 @@ function CallHeader({ call }: { call: Call }) {
   )
 }
 
+/** Tool call ids aren't unique across turns: pre-seeded calls are `preseed_0`, `preseed_1`… in
+ *  every turn. Give repeated ids a per-message suffix (and point their results at it), so folds,
+ *  results and durations of one turn don't leak into another. */
+function uniqueToolIds(messages: Message[]): Message[] {
+  const seen = new Map<string, number>()
+  for (const message of messages)
+    for (const block of message.blocks) if (block.type === 'tool_use') seen.set(block.id, (seen.get(block.id) ?? 0) + 1)
+  if (![...seen.values()].some(n => n > 1)) return messages
+  const current = new Map<string, string>()
+  return messages.map(message => ({
+    ...message,
+    blocks: message.blocks.map(block => {
+      if (block.type === 'tool_use' && seen.get(block.id)! > 1) {
+        const id = `${block.id}@${message.line}`
+        current.set(block.id, id)
+        return { ...block, id }
+      }
+      if (block.type === 'tool_result' && current.has(block.tool_use_id))
+        return { ...block, tool_use_id: current.get(block.tool_use_id)! }
+      return block
+    }),
+  }))
+}
+
 export function Transcript({
-  messages,
+  messages: rawMessages,
   calls,
   files = [],
   complete = true,
@@ -526,6 +550,7 @@ export function Transcript({
   workers?: Worker[]
 }) {
   const { sessions } = useContext(DirectoryContext)
+  const messages = useMemo(() => uniqueToolIds(rawMessages), [rawMessages])
   const [openFolds, setOpenFolds] = useState<Set<string>>(new Set())
   const results = new Map<string, ToolResult>()
   for (const message of messages)

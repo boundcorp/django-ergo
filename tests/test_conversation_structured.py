@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from types import SimpleNamespace
 
 import pytest
@@ -526,14 +527,9 @@ async def test_pre_seeds_are_written_before_first_call(user):
     assert result.ok
     sent = engine._client.calls[0]["messages"]
     assert [m["role"] for m in sent] == ["user", "assistant", "user"]
-    assert sent[1]["content"] == [
-        {
-            "type": "tool_use",
-            "id": "preseed_0",
-            "name": "get_ticket",
-            "input": {"id": 7},
-        }
-    ]
+    [seeded] = sent[1]["content"]
+    assert re.fullmatch(r"preseed_[0-9a-f]{8}_0", seeded.pop("id"))
+    assert seeded == {"type": "tool_use", "name": "get_ticket", "input": {"id": 7}}
     assert sent[2]["content"][0]["content"] == "{'ticket': 7}"
 
 
