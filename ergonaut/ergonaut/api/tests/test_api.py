@@ -101,3 +101,12 @@ def test_admin_login_limits_failed_attempts(client: Client, django_user_model):
         assert client.post("/mgmt/login/", {"username": "root", "password": "wrong"}).status_code == 200
     assert client.post("/mgmt/login/", {"username": "root", "password": "right"}).status_code == 429
     cache.clear()
+
+
+@pytest.mark.django_db
+def test_api_docs_need_staff(client: Client, django_user_model):
+    assert client.get("/api/docs").status_code == 302  # to the admin login
+    client.force_login(django_user_model.objects.create_user("joe", "joe@example.com", "pw"))
+    assert client.get("/api/docs").status_code == 302
+    client.force_login(django_user_model.objects.create_superuser("root", "root@example.com", "pw"))
+    assert client.get("/api/docs").status_code == 200

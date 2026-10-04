@@ -1,6 +1,8 @@
+from django.contrib.admin.views.decorators import staff_member_required
 from ninja import NinjaAPI
 
-api = NinjaAPI(title="ergonaut", version="1.0.0")
+# The schema browser (/api/docs) is for staff; every endpoint checks its own auth anyway.
+api = NinjaAPI(title="ergonaut", version="1.0.0", docs_decorator=staff_member_required)
 
 
 @api.get("/healthz")
