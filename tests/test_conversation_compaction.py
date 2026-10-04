@@ -114,7 +114,7 @@ def _texts(messages):
 
 async def test_rolling_folds_all_but_recent(user):
     session = await sync_to_async(make_session)(
-        user, "rolling", {"keep_recent": 2, "batch": 2}
+        user, "rolling", {"keep_recent": 2, "batch": 2, "min_tokens": 0}
     )
     await sync_to_async(chat)(session, 2)  # 4 messages: at threshold
     engine = claude_engine()
@@ -147,7 +147,7 @@ async def test_rolling_folds_all_but_recent(user):
 
 async def test_rolling_summaries_roll_forward(user):
     session = await sync_to_async(make_session)(
-        user, "rolling", {"keep_recent": 2, "batch": 2}
+        user, "rolling", {"keep_recent": 2, "batch": 2, "min_tokens": 0}
     )
     engine = claude_engine()
     summarizer = RecordingSummarizer()
@@ -171,7 +171,7 @@ async def test_rolling_summaries_roll_forward(user):
 async def test_legacy_stream_mode_compacts_as_rolling(user):
     # Rows saved before the rename may still say "stream".
     session = await sync_to_async(make_session)(
-        user, "stream", {"keep_recent": 2, "batch": 2}
+        user, "stream", {"keep_recent": 2, "batch": 2, "min_tokens": 0}
     )
     await sync_to_async(chat)(session, 3)
     decision = await decide_compaction(session)
@@ -182,6 +182,35 @@ async def test_legacy_stream_mode_compacts_as_rolling(user):
         session, claude_engine(), summarizer=RecordingSummarizer()
     )
     assert compaction.mode == "rolling"
+
+
+async def test_rolling_waits_for_min_tokens(user):
+    # Tool-heavy turns pile up messages while the prompt is still small;
+    # compacting then only throws away the prompt cache.
+    session = await sync_to_async(make_session)(
+        user, "rolling", {"keep_recent": 2, "batch": 2, "min_tokens": 1000}
+    )
+
+    def build(cached):
+        for i in range(3):
+            add(session, "user", f"question {i}")
+            add(session, "assistant", f"answer {i}", cache_read_input_tokens=cached)
+
+    await sync_to_async(build)(500)
+    assert await decide_compaction(session) is None
+
+    await sync_to_async(build)(1200)
+    decision = await decide_compaction(session)
+    assert decision.keep_recent == 2
+    assert "1200 tokens" in decision.reason
+
+
+async def test_rolling_min_tokens_default(user):
+    session = await sync_to_async(make_session)(
+        user, "rolling", {"keep_recent": 2, "batch": 2}
+    )
+    await sync_to_async(chat)(session, 5)
+    assert await decide_compaction(session) is None
 
 
 async def test_cut_never_splits_tool_call_from_result(user):
@@ -302,7 +331,7 @@ async def test_failed_summary_does_not_block(user):
 
 async def test_turn_compacts_with_a_structured_call_before_sending(user):
     session = await sync_to_async(make_session)(
-        user, "rolling", {"keep_recent": 0, "batch": 1}
+        user, "rolling", {"keep_recent": 0, "batch": 1, "min_tokens": 0}
     )
     await sync_to_async(chat)(session, 1)
     engine = claude_engine(
@@ -338,7 +367,7 @@ async def test_turn_compacts_with_a_structured_call_before_sending(user):
 
 async def test_failed_compaction_call_leaves_session_uncompacted(user):
     session = await sync_to_async(make_session)(
-        user, "rolling", {"keep_recent": 0, "batch": 1}
+        user, "rolling", {"keep_recent": 0, "batch": 1, "min_tokens": 0}
     )
     await sync_to_async(chat)(session, 1)
     engine = claude_engine(claude_text("no tool", stop="max_tokens"), claude_text("hi"))
