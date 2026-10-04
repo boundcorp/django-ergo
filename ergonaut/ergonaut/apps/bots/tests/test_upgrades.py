@@ -81,6 +81,17 @@ def test_a_failed_release_is_not_retried_every_tick(env):
     assert "failed recently" in upgrades.run(quiet_for=0, poll=0)
 
 
+def test_not_ready_is_retried_next_time_not_failed(env):
+    def later(self, release):
+        raise upgrades.NotReady("image not published")
+
+    env.setattr(Recorder, "upgrade", later)
+    assert "isn't ready" in upgrades.run(quiet_for=0, poll=0)
+    assert upgrades.load_state()["status"] == "waiting"
+    env.setattr(Recorder, "upgrade", lambda self, release: "done")
+    assert upgrades.run(quiet_for=0, poll=0) == "done"
+
+
 def test_check_reports_without_upgrading(env):
     result = upgrades.check(upgrades.load_upgrader())
     assert result.available

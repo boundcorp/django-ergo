@@ -289,7 +289,9 @@ class KubeUpgrader(Upgrader):
 
 `upgrade(release)` runs after the idle gate, in a Celery worker or in
 `ergonaut upgrade`, and may restart the process it runs in. Return a line
-saying what it did; raise to report a failure. Override `current_version()`
+saying what it did; raise `NotReady` when the release can't be installed
+yet (its image isn't published), so the next check tries again; raise
+anything else to report a failure. Override `current_version()`
 if the running commit is known some other way (the deployed image tag).
 
 ## Development

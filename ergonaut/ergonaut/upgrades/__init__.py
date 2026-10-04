@@ -58,14 +58,21 @@ class Release:
         }
 
 
+class NotReady(Exception):  # noqa: N818
+    """Raised by an upgrader when the release can't be installed yet (its image
+    isn't published); the next check tries again, with no failure recorded."""
+
+
 class Upgrader:
     """Rolls this instance forward to a release. Subclass it and point
     ``ERGONAUT_UPGRADER`` at the subclass.
 
     ``upgrade`` runs after the idle gate, inside a Celery worker (beat) or
     ``ergonaut upgrade``. It may restart the process it runs in, so record
-    anything you need first; return a line saying what it did, and raise to
-    report a failure (the same release is retried after ``RETRY_SECONDS``).
+    anything you need first; return a line saying what it did, raise
+    ``NotReady`` if the release can't be installed yet (checked again next
+    time), and raise anything else to report a failure (the same release is
+    retried after ``RETRY_SECONDS``).
     """
 
     name = "upgrader"
@@ -255,6 +262,9 @@ def run(
         save_state(status="upgrading", at=time.time(), error="", release=asdict(release), sha=release.sha)
         try:
             message = upgrader.upgrade(release)
+        except NotReady as exc:
+            save_state(status="waiting", at=time.time(), error=str(exc)[:500])
+            return f"{release.tag} isn't ready: {exc}"
         except Exception as exc:
             logger.exception("upgrade to %s failed", release.tag)
             save_state(status="failed", at=time.time(), error=str(exc)[:500])
