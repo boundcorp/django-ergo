@@ -54,6 +54,16 @@ A one-off prompt tweak to cover a library bug hides the bug.
    and link the thread that showed the problem. Then run the same kind of
    task again to confirm it helped.
 
+### Use the web app too, when you have a browser
+
+`ergonaut-remote` covers most of the loop, but the person uses Ergonaut
+through its web front end. If a browser session is available to you, also
+drive the web app: start or follow the thread there, watch worker activity,
+answer approvals, and check pages, dashboards and the Costs page as they
+render. Use it to test what you built (a UI change isn't done until you've
+seen it work in the browser) and to spot friction the client hides. Without
+a browser, stay with `ergonaut-remote`.
+
 ## Working in django-ergo
 
 - Read `CLAUDE.md` and `docs/development.md` first. Tests: `make pytest`
