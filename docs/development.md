@@ -51,7 +51,9 @@ hook passes on main; don't commit with hooks skipped.
   check, and an installed-wheel check.
 - `.github/workflows/ergonaut.yml`: Ergonaut's tests, then builds the
   `release` and `aio` images and starts the `aio` image with
-  `examples/hello` as a smoke test.
+  `examples/hello` as a smoke test. Image layers are cached in the GitHub
+  Actions cache (buildx `type=gha`), so every runner and the publish job
+  reuse main's layers instead of building from scratch.
 
 Pushes and pull requests from branches in this repository run on
 self-hosted runners; pull requests from forks run on GitHub-hosted runners

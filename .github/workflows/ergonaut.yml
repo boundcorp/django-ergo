@@ -45,10 +45,32 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+      # Layers are cached in the GitHub Actions cache, shared by every runner
+      # and by the publish job, so a fresh runner pod doesn't rebuild from
+      # scratch. Main's cache is readable by PRs; a PR's cache stays with it.
+      - uses: docker/setup-buildx-action@v3
       - name: Build the release image
-        run: docker build -f ergonaut/Dockerfile --target release -t ergonaut:ci .
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ergonaut/Dockerfile
+          target: release
+          load: true
+          tags: ergonaut:ci
+          cache-from: type=gha,scope=ergonaut-release
+          cache-to: type=gha,scope=ergonaut-release,mode=max
       - name: Build the all-in-one image
-        run: docker build -f ergonaut/Dockerfile --target aio -t ergonaut:aio .
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ergonaut/Dockerfile
+          target: aio
+          load: true
+          tags: ergonaut:aio
+          cache-from: |
+            type=gha,scope=ergonaut-release
+            type=gha,scope=ergonaut-aio
+          cache-to: type=gha,scope=ergonaut-aio,mode=max
       - name: Start the all-in-one image with the hello bot
         run: |
           docker run -d --name aio -p 8000:8000 -v "$PWD/examples/hello:/bot:ro" ergonaut:aio
@@ -103,6 +125,7 @@ jobs:
           target: release
           build-args: ERGONAUT_VERSION=${{ github.sha }}
           push: true
+          cache-from: type=gha,scope=ergonaut-release
           tags: |
             ghcr.io/boundcorp/ergonaut:main
             ghcr.io/boundcorp/ergonaut:sha-${{ github.sha }}
