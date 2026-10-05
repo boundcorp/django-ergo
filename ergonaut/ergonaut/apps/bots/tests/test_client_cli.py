@@ -1,4 +1,4 @@
-"""The Ergo client skill's ``ergo`` command against a live server, with an API key."""
+"""The Ergo client skill's ``ergonaut-remote`` command against a live server, with an API key."""
 
 import importlib.util
 import textwrap
@@ -12,7 +12,7 @@ from ergonaut.apps.bots.loading import load_registry
 from ergonaut.apps.bots.tests.fakes import fake_registry, say, tool_call
 from ergonaut.apps.users.models import ApiKey
 
-SCRIPT = django_ergo.bots.__path__[0] + "/skill_library/ergo-client/scripts/ergo.py"
+SCRIPT = django_ergo.bots.__path__[0] + "/skill_library/ergo-client/scripts/ergonaut_remote.py"
 
 BOT = """
 name: kitchen
@@ -36,8 +36,8 @@ def ergo(tmp_path, monkeypatch, live_server):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     monkeypatch.setattr(module, "CONFIG", tmp_path / "client.json")
-    monkeypatch.delenv("ERGO_URL", raising=False)
-    monkeypatch.delenv("ERGO_API_KEY", raising=False)
+    monkeypatch.delenv("ERGONAUT_URL", raising=False)
+    monkeypatch.delenv("ERGONAUT_API_KEY", raising=False)
     user = get_user_model().objects.create_user("cook", "cook@example.com", "pw")
     _, key = ApiKey.issue(user, "test")
     assert module.main(["login", live_server.url, "--name", "test", "--key", key]) == 0
@@ -98,3 +98,13 @@ def test_ergo_client_runs_a_thread_end_to_end(ergo, kitchen, capsys):
 def test_ergo_client_reports_a_bad_key(ergo, capsys):
     assert ergo.main(["login", ergo.load_config()["servers"]["test"]["url"], "--key", "ergo_wrong"]) == 1
     assert "HTTP 401" in capsys.readouterr().err
+
+
+def test_ergonaut_remote_runs_the_client(tmp_path, monkeypatch, capsys):
+    from ergonaut.cli import main
+
+    monkeypatch.setenv("ERGONAUT_REMOTE_CONFIG", str(tmp_path / "remote.json"))
+    assert main(["remote", "servers"]) == 0
+    with pytest.raises(SystemExit):
+        main(["remote", "-h"])
+    assert "ergonaut-remote" in capsys.readouterr().out

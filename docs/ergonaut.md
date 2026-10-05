@@ -37,6 +37,7 @@ Telegram plugin. `people:` may also sit in a bot's own bot.yaml.
 | `ergonaut chat BOT [--user NAME]` | Chat with a bot's main chat in the terminal |
 | `ergonaut manage ...` | Any `manage.py` command, e.g. `ergo_bot_makemigrations`, `ergo_bot_preview` |
 | `ergonaut manage wait_idle` | Wait until no bot turn or worker is running, before a restart |
+| `ergonaut remote ...` | Use another Ergonaut server's bots over its API (the [`ergonaut-remote` client](agent-skills.md)) |
 | `ergonaut manage api_key create USER --name WHERE` | Make an API key (also `list`, `revoke ID`); see [API keys](#api-keys) |
 | `ergonaut upgrade [--check]` | Upgrade to the newest GitHub release once idle (see [Upgrading](#upgrading)) |
 
@@ -194,7 +195,7 @@ ergonaut manage api_key revoke <id>
 
 Only a hash is stored. Keys are made and revoked from a signed-in session
 (`/api/auth/keys`), not with another key. Make one per place a key is used
-so each can be revoked alone. The [`ergo` command](agent-skills.md) uses them.
+so each can be revoked alone. The [`ergonaut-remote` command](agent-skills.md) uses them.
 
 ## Reloading
 

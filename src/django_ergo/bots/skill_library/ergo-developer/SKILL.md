@@ -32,19 +32,19 @@ A one-off prompt tweak to cover a library bug hides the bug.
 
 ## The loop
 
-1. **Delegate.** `ergo new <bot> "<task>" --title "<short name>"`. Write a
+1. **Delegate.** `ergonaut-remote new <bot> "<task>" --title "<short name>"`. Write a
    brief that stands alone: the repo, the goal, what done means (usually a
    PR), and the constraints. For code work, pick the bot that runs coding
-   workers. `ergo bots` and `ergo bot <name>` show what each one can do.
-2. **Watch, without hovering.** Use `ergo threads --bot <bot>`,
-   `ergo show <session>`, and `ergo worker-log` for a stalled worker. Answer
+   workers. `ergonaut-remote bots` and `ergonaut-remote bot <name>` show what each one can do.
+2. **Watch, without hovering.** Use `ergonaut-remote threads --bot <bot>`,
+   `ergonaut-remote show <session>`, and `ergonaut-remote worker-log` for a stalled worker. Answer
    questions and approvals as the person would want, and escalate anything
    only they can decide. Don't hold a `--wait` open for hours; check back.
 3. **Review the output** the way a reviewer would: the PR diff, its CI and
-   its tests. Send corrections to the same thread with `ergo send`, so the
+   its tests. Send corrections to the same thread with `ergonaut-remote send`, so the
    bot learns in context.
-4. **Review the run.** Read the transcript (`ergo show --full`, and
-   `ergo api GET /calls/<id>` for the exact prompt). Look at the Costs page
+4. **Review the run.** Read the transcript (`ergonaut-remote show --full`, and
+   `ergonaut-remote api GET /calls/<id>` for the exact prompt). Look at the Costs page
    for tokens. Note each place where the bot:
    - didn't find a tool, or loaded the wrong skill
    - repeated work, or had a context gap or a compaction loss
@@ -79,8 +79,8 @@ django-ergo checkout:
 
 ```bash
 python3 src/django_ergo/bots/skill_library/install.py --bin ~/.local/bin
-ergo login <server-url>          # with an API key from that server
+ergonaut-remote login <server-url>          # with an API key from that server
 ```
 
 Symlinks keep the skills current with `git pull`. Then start delegating:
-`ergo bots`, then `ergo new <bot> "..."`.
+`ergonaut-remote bots`, then `ergonaut-remote new <bot> "..."`.

@@ -59,7 +59,7 @@ def test_client_tools_need_a_server(tmp_path):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     ctx = SimpleNamespace(secret=lambda name, default=None: None)
-    with pytest.raises(RuntimeError, match="ERGO_URL and ERGO_API_KEY"):
+    with pytest.raises(RuntimeError, match="ERGONAUT_URL and ERGONAUT_API_KEY"):
         module.run(ctx, "bots")
 
 
@@ -79,8 +79,8 @@ def test_installer_links_only_the_agent_skills(tmp_path, monkeypatch):
             .startswith("---\nname: ergo-client\n")
         )
     assert (
-        tmp_path / "bin" / "ergo"
-    ).resolve() == library_dir() / "ergo-client" / "scripts" / "ergo.py"
+        tmp_path / "bin" / "ergonaut-remote"
+    ).resolve() == library_dir() / "ergo-client" / "scripts" / "ergonaut_remote.py"
 
     # Someone's own skill of the same name is left alone; reinstalling replaces ours.
     own = tmp_path / "codex" / "skills" / "ergo-hosting"
@@ -95,7 +95,7 @@ def test_installer_links_only_the_agent_skills(tmp_path, monkeypatch):
     assert [p.name for p in (tmp_path / "codex" / "skills").iterdir()] == [
         "ergo-hosting"
     ]
-    assert not (tmp_path / "bin" / "ergo").exists()
+    assert not (tmp_path / "bin" / "ergonaut-remote").exists()
 
 
 def test_installer_copies_without_bot_only_files(tmp_path):
@@ -103,7 +103,7 @@ def test_installer_copies_without_bot_only_files(tmp_path):
     dest = tmp_path / "skills"
     assert installer.main(["--target", "codex", "--dest", str(dest), "--copy"]) == 0
     client = dest / "ergo-client"
-    assert (client / "scripts" / "ergo.py").is_file() and not (
+    assert (client / "scripts" / "ergonaut_remote.py").is_file() and not (
         client / "tools.py"
     ).exists()
     assert (

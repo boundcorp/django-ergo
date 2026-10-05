@@ -1,4 +1,4 @@
-"""Use another Ergonaut server's bots: list them, start and follow threads, answer approvals (the ergo command's API client)."""
+"""Use another Ergonaut server's bots: list them, start and follow threads, answer approvals (the ergonaut-remote client)."""
 
 import importlib.util
 import io
@@ -10,11 +10,11 @@ _cli = None
 
 
 def cli():
-    """scripts/ergo.py, the same client Claude Code and Codex run."""
+    """scripts/ergonaut_remote.py, the same client Claude Code and Codex run."""
     global _cli
     if _cli is None:
         spec = importlib.util.spec_from_file_location(
-            "ergo_client_cli", Path(__file__).parent / "scripts" / "ergo.py"
+            "ergo_client_cli", Path(__file__).parent / "scripts" / "ergonaut_remote.py"
         )
         _cli = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(_cli)
@@ -22,11 +22,11 @@ def cli():
 
 
 def run(ctx, *argv: str) -> str:
-    """Run one ``ergo`` command against ERGO_URL with ERGO_API_KEY; its output as text."""
-    url, key = ctx.secret("ERGO_URL"), ctx.secret("ERGO_API_KEY")
+    """Run one ``ergonaut-remote`` command against ERGONAUT_URL with ERGONAUT_API_KEY; its output as text."""
+    url, key = ctx.secret("ERGONAUT_URL"), ctx.secret("ERGONAUT_API_KEY")
     if not url or not key:
         raise RuntimeError(
-            "Set ERGO_URL and ERGO_API_KEY (an API key from that server) to use the Ergo client."
+            "Set ERGONAUT_URL and ERGONAUT_API_KEY (an API key from that server) to use the Ergo client."
         )
     module = cli()
     args = module.parser().parse_args(list(argv))

@@ -99,8 +99,8 @@ show tokens, not dollars.
 2. `ergonaut check` lists every bot and reports no missing secrets.
 3. Sign in to the web app and send a message in a main chat. Check that a
    reply arrives and the sidebar spinner clears.
-4. From another machine, `ergo login <url>`, then `ergo whoami`, then
-   `ergo new <bot> "Say hello" --wait`.
+4. From another machine, `ergonaut-remote login <url>`, then `ergonaut-remote whoami`, then
+   `ergonaut-remote new <bot> "Say hello" --wait`.
 5. If a bot has schedules, check the bot page's next-run times, and its
    jobs list after one fires (this needs beat and Redis).
 
@@ -121,9 +121,9 @@ show tokens, not dollars.
 
 ## When something is wrong
 
-- **A turn failed:** `ergo show <session>` gives the error summary and
-  hint; `ergo resume <session>` retries it. A call's full prompt and
-  transcript: `ergo api GET /calls/<id>`.
+- **A turn failed:** `ergonaut-remote show <session>` gives the error summary and
+  hint; `ergonaut-remote resume <session>` retries it. A call's full prompt and
+  transcript: `ergonaut-remote api GET /calls/<id>`.
 - **A bot is missing from the sidebar:** it failed to load. Admins see the
   error in the sidebar, and `ergonaut check` prints it. The last good
   version stays loaded.

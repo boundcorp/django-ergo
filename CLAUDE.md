@@ -21,7 +21,7 @@ User docs are in `README.md` and `docs/`. Start with `docs/README.md`.
 ## How we develop
 
 The goal is that Ergo builds Ergo. Feature work should run through the
-platform: delegate it to a bot with the `ergo` client, watch the run, and
+platform: delegate it to a bot with the `ergonaut-remote` client, watch the run, and
 improve whichever layer fell short (the bot, the library or Ergonaut). The
 `ergo-developer` skill describes the loop. Install it and the other agent
 skills with `python3 src/django_ergo/bots/skill_library/install.py --bin ~/.local/bin`

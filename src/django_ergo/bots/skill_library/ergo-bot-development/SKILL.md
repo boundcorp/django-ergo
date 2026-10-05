@@ -1,6 +1,6 @@
 ---
 name: ergo-bot-development
-description: Build or change Ergo bot folders in a bot repo, writing bot.yaml, agents.md, tools, skills, tables, schedules and .jhtml pages, then test them with ergonaut and the ergo client. Use it when writing a new bot or changing one from a checkout. A bot changing its own folder from inside Ergonaut uses skillbuilder instead.
+description: Build or change Ergo bot folders in a bot repo, writing bot.yaml, agents.md, tools, skills, tables, schedules and .jhtml pages, then test them with ergonaut and ergonaut-remote. Use it when writing a new bot or changing one from a checkout. A bot changing its own folder from inside Ergonaut uses skillbuilder instead.
 install: [claude, codex]
 ---
 # Developing Ergo bots
@@ -90,9 +90,9 @@ ergonaut manage ergo_bot_preview ~/bots/receipts pages/receipts.jhtml
 Against a running server with the `ergo-client` skill:
 
 ```bash
-ergo bot receipts                                   # did it load with the skills and tools you expect?
-ergo new receipts "File yesterday's receipts" --wait
-ergo show <session> --full                          # which tools it called, with what, and what came back
+ergonaut-remote bot receipts                                   # did it load with the skills and tools you expect?
+ergonaut-remote new receipts "File yesterday's receipts" --wait
+ergonaut-remote show <session> --full                          # which tools it called, with what, and what came back
 ```
 
 Run the turn and read the transcript. Look for tools the bot didn't find,

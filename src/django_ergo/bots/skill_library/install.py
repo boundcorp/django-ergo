@@ -8,7 +8,7 @@ symlinked into ``~/.claude/skills`` (``$CLAUDE_CONFIG_DIR/skills``) and
 current. Standard library only; run it from a django-ergo checkout::
 
     python3 src/django_ergo/bots/skill_library/install.py                  # both agents
-    python3 src/django_ergo/bots/skill_library/install.py --bin ~/.local/bin   # and the ergo command
+    python3 src/django_ergo/bots/skill_library/install.py --bin ~/.local/bin   # and the ergonaut-remote command
     python3 src/django_ergo/bots/skill_library/install.py --target codex --copy
     python3 src/django_ergo/bots/skill_library/install.py --uninstall
 """
@@ -99,7 +99,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--bin",
         type=Path,
-        help="also link the ergo command into this folder, e.g. ~/.local/bin",
+        help="also link the ergonaut-remote command into this folder, e.g. ~/.local/bin",
     )
     parser.add_argument("--uninstall", action="store_true")
     parser.add_argument(
@@ -127,9 +127,9 @@ def main(argv: list[str] | None = None) -> int:
         dest.mkdir(parents=True, exist_ok=True)
         for skill in skills:
             print(install(skill, dest, args.copy, args.force))
-    script = LIBRARY / "ergo-client" / "scripts" / "ergo.py"
+    script = LIBRARY / "ergo-client" / "scripts" / "ergonaut_remote.py"
     if args.bin and not args.list:
-        command = args.bin.expanduser() / "ergo"
+        command = args.bin.expanduser() / "ergonaut-remote"
         if args.uninstall:
             if command.is_symlink() and command.resolve() == script:
                 command.unlink()
@@ -144,7 +144,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"linked {command} -> {script}")
     if not args.list and not args.uninstall:
         print(
-            "\nNext: ergo login <server-url> (make an API key under API keys in the web app)."
+            "\nNext: ergonaut-remote login <server-url> (make an API key under API keys in the web app)."
         )
     return 0
 

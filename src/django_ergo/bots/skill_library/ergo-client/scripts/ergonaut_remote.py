@@ -1,21 +1,23 @@
 #!/usr/bin/env python3
-"""ergo: a command-line client for an Ergonaut server's API.
+"""ergonaut-remote: a command-line client for an Ergonaut server's API.
 
 Standard library only, so it runs anywhere Python 3.10+ does (Claude Code,
-Codex, a bot's shell). Servers and keys live in ~/.config/ergo/client.json
-(ERGO_CONFIG to move it); ERGO_URL and ERGO_API_KEY override the saved server.
+Codex, a bot's shell), with no Ergonaut install. Where Ergonaut is installed,
+``ergonaut remote ...`` runs the same commands. Servers and keys live in
+~/.config/ergonaut/remote.json (ERGONAUT_REMOTE_CONFIG to move it);
+ERGONAUT_URL and ERGONAUT_API_KEY override the saved server.
 
-    ergo login https://ergo.example.com --name prod     # asks for an API key
-    ergo bots                                           # bots you can use
-    ergo new devbox "Fix the flaky upload test" --wait  # start a thread, wait for the reply
-    ergo threads --bucket waiting                       # threads waiting on you
-    ergo show <session>                                 # transcript, workers, approvals
-    ergo send <session> "Yes, go ahead" --wait
-    ergo approve <session>                              # or --deny
+    ergonaut-remote login https://ergo.example.com --name prod     # asks for an API key
+    ergonaut-remote bots                                           # bots you can use
+    ergonaut-remote new devbox "Fix the flaky upload test" --wait  # start a thread, wait for the reply
+    ergonaut-remote threads --bucket waiting                       # threads waiting on you
+    ergonaut-remote show <session>                                 # transcript, workers, approvals
+    ergonaut-remote send <session> "Yes, go ahead" --wait
+    ergonaut-remote approve <session>                              # or --deny
 
 Make a key in the web app (API keys, at the bottom of the sidebar) or with
-``ergonaut manage api_key create <user> --name <where>``. Run ``ergo -h`` or
-``ergo <command> -h`` for everything else; ``--json`` prints raw API output.
+``ergonaut manage api_key create <user> --name <where>``. Run ``ergonaut-remote -h`` or
+``ergonaut-remote <command> -h`` for everything else; ``--json`` prints raw API output.
 """
 
 from __future__ import annotations
@@ -33,7 +35,9 @@ import urllib.request
 from pathlib import Path
 
 CONFIG = Path(
-    os.environ.get("ERGO_CONFIG", Path.home() / ".config" / "ergo" / "client.json")
+    os.environ.get(
+        "ERGONAUT_REMOTE_CONFIG", Path.home() / ".config" / "ergonaut" / "remote.json"
+    )
 )
 TERMINAL = {
     "completed",
@@ -86,16 +90,20 @@ def save_config(config: dict) -> None:
 
 
 def server(name: str = "") -> tuple[str, str]:
-    """The (url, key) to use: ERGO_URL/ERGO_API_KEY, else the named or default saved server."""
-    if os.environ.get("ERGO_URL") and os.environ.get("ERGO_API_KEY") and not name:
-        return os.environ["ERGO_URL"].rstrip("/"), os.environ["ERGO_API_KEY"]
+    """The (url, key) to use: ERGONAUT_URL/ERGONAUT_API_KEY, else the named or default saved server."""
+    if (
+        os.environ.get("ERGONAUT_URL")
+        and os.environ.get("ERGONAUT_API_KEY")
+        and not name
+    ):
+        return os.environ["ERGONAUT_URL"].rstrip("/"), os.environ["ERGONAUT_API_KEY"]
     config = load_config()
-    name = name or os.environ.get("ERGO_SERVER") or config.get("default", "")
+    name = name or os.environ.get("ERGONAUT_SERVER") or config.get("default", "")
     found = config.get("servers", {}).get(name)
     if not found:
         known = ", ".join(config.get("servers", {})) or "none"
         sys.exit(
-            f"No Ergonaut server {name!r} (saved: {known}). Run: ergo login URL --name NAME"
+            f"No Ergonaut server {name!r} (saved: {known}). Run: ergonaut-remote login URL --name NAME"
         )
     return found["url"].rstrip("/"), found["key"]
 
@@ -189,7 +197,7 @@ def print_reply(call: dict, session_id: str) -> None:
             echo(
                 f"  - {item.get('name')} {json.dumps(item.get('input', item.get('arguments', {})))[:300]}"
             )
-        echo(f"Answer with: ergo approve {session_id}   (or --deny)")
+        echo(f"Answer with: ergonaut-remote approve {session_id}   (or --deny)")
     elif call.get("status") != "completed":
         echo(
             f"\n[{call.get('status')}] {call.get('error_summary') or call.get('error') or ''}".rstrip()
@@ -222,7 +230,7 @@ def send_and_maybe_wait(client: Client, session_id: str, text: str, args) -> int
         end_progress()
     if call is None:
         echo(
-            f"Still working after {args.timeout:.0f}s. Check later: ergo show {session_id}",
+            f"Still working after {args.timeout:.0f}s. Check later: ergonaut-remote show {session_id}",
             file=sys.stderr,
         )
         return 3
@@ -256,7 +264,7 @@ def resolve_session(client: Client, ref: str) -> str:
 
 
 def cmd_login(args) -> int:
-    key = args.key or os.environ.get("ERGO_API_KEY") or ""
+    key = args.key or os.environ.get("ERGONAUT_API_KEY") or ""
     if not key:
         import getpass
 
@@ -280,8 +288,8 @@ def cmd_servers(args) -> int:
     config = load_config()
     for name, found in config.get("servers", {}).items():
         echo(f"{'*' if name == config.get('default') else ' '} {name}  {found['url']}")
-    if os.environ.get("ERGO_URL"):
-        echo(f"  (ERGO_URL={os.environ['ERGO_URL']} overrides the default)")
+    if os.environ.get("ERGONAUT_URL"):
+        echo(f"  (ERGONAUT_URL={os.environ['ERGONAUT_URL']} overrides the default)")
     return 0
 
 
@@ -406,7 +414,9 @@ def cmd_show(client, args) -> int:
     if s.get("status_line"):
         echo(s["status_line"])
     if detail.get("has_more"):
-        echo(f"(older messages: ergo show {s['id']} --limit {args.limit * 2})")
+        echo(
+            f"(older messages: ergonaut-remote show {s['id']} --limit {args.limit * 2})"
+        )
     for message in detail["messages"]:
         lines = [t for t in (block_text(b, args.full) for b in message["blocks"]) if t]
         if lines:
@@ -430,7 +440,7 @@ def cmd_show(client, args) -> int:
         and not calls[-1].get("dismissed")
     ):
         echo(
-            f"\nLast turn {calls[-1]['status']}: {calls[-1].get('error_summary')}  (ergo resume {s['id']})"
+            f"\nLast turn {calls[-1]['status']}: {calls[-1].get('error_summary')}  (ergonaut-remote resume {s['id']})"
         )
     if detail.get("inbox"):
         echo(f"\n{len(detail['inbox'])} message(s) queued for the running turn")
@@ -543,7 +553,7 @@ def cmd_api(client, args) -> int:
 
 def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="ergo",
+        prog="ergonaut-remote",
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -572,7 +582,9 @@ def parser() -> argparse.ArgumentParser:
     c = add("login", cmd_login, "save a server and its API key", needs_client=False)
     c.add_argument("url")
     c.add_argument("--name", default="")
-    c.add_argument("--key", default="", help="the key (else ERGO_API_KEY, else asked)")
+    c.add_argument(
+        "--key", default="", help="the key (else ERGONAUT_API_KEY, else asked)"
+    )
     c.add_argument("--default", action="store_true", help="make it the default server")
     add("servers", cmd_servers, "saved servers", needs_client=False)
     add("whoami", cmd_whoami, "who the key acts as, and the server's version")
@@ -648,7 +660,9 @@ def parser() -> argparse.ArgumentParser:
     c.add_argument("--days", type=int, default=7)
     c.add_argument("--bot", default="")
     c = add(
-        "api", cmd_api, "call any API endpoint, e.g. ergo api GET /bots/devbox/tree"
+        "api",
+        cmd_api,
+        "call any API endpoint, e.g. ergonaut-remote api GET /bots/devbox/tree",
     )
     c.add_argument("method")
     c.add_argument("path")
