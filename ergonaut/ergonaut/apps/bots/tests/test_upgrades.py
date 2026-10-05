@@ -63,6 +63,16 @@ def test_waits_while_turns_or_workers_run(env):
     assert Recorder.calls == []
 
 
+def test_workers_can_be_left_out_of_the_idle_gate(env):
+    def busy(workers=True):
+        return [] if not workers else ["worker devbox: Survey"]
+
+    env.setattr(wait_idle, "busy", busy)
+    assert "waiting" in upgrades.run(wait_timeout=0, quiet_for=0, poll=0)
+    env.setenv("ERGONAUT_UPGRADE_WAIT_FOR_WORKERS", "0")
+    assert upgrades.run(wait_timeout=0, quiet_for=0, poll=0) == "rolled out v1.2.0"
+
+
 @pytest.mark.parametrize("status", ["identical", "behind", "diverged"])
 def test_leaves_up_to_date_or_newer_instances_alone(env, status):
     env.setattr(github, "compare", lambda repo, current, target: status)

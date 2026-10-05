@@ -226,6 +226,14 @@ a row), or fails after `--timeout` (30 minutes by default).
 restart (beat resumes it), but one in the middle of a step loses that step.
 Thread messages that were waiting are redelivered.
 
+With Celery a restart is gentler on workers than that suggests: each worker
+is a database row plus one short Celery step at a time, a step in flight
+finishes during Celery's warm shutdown, and beat's `resume_workers`
+reschedules any worker whose next step is over 3 minutes late. A worker whose
+real work runs outside Ergonaut (an Orca agent in another pod) isn't touched
+at all. Such a deployment can stop the automatic upgrade from waiting for
+workers with `ERGONAUT_UPGRADE_WAIT_FOR_WORKERS=0`.
+
 ## Upgrading
 
 Ergonaut can upgrade itself when a new release of django-ergo is published
@@ -264,6 +272,7 @@ again next time; a release whose upgrade failed is retried after six hours
 | `ERGONAUT_AUTO_UPGRADE_SECONDS` | unset | check for a new release on this interval (needs beat) |
 | `ERGONAUT_UPGRADE_REPO` | `boundcorp/django-ergo` | where releases come from (a fork) |
 | `ERGONAUT_UPGRADE_CHANNEL` | `releases` | `releases`, or `branch:main` to follow a branch's head |
+| `ERGONAUT_UPGRADE_WAIT_FOR_WORKERS` | `1` | `0` makes the idle gate wait for bot turns only, not queued or running workers |
 | `GITHUB_TOKEN` or `GH_TOKEN` | the `gh` CLI's login | GitHub API token; without any, 60 requests an hour |
 
 ### systemd
