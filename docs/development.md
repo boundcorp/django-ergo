@@ -53,6 +53,12 @@ hook passes on main; don't commit with hooks skipped.
   `release` and `aio` images and starts the `aio` image with
   `examples/hello` as a smoke test.
 
+Pushes and pull requests from branches in this repository run on
+self-hosted runners; pull requests from forks run on GitHub-hosted runners
+and need a maintainer's approval to start. If the self-hosted runners are
+down, set the repository variable `CI_GITHUB_HOSTED` to `true` and every job
+runs on GitHub-hosted runners until it is removed.
+
 ## Conventions
 
 - Docs change with the code. New or changed bot.yaml keys, plugin options,
