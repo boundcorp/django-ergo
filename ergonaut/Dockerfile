@@ -134,8 +134,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get update && apt-get install -y --no-install-recommends gh \
     && rm -rf /var/lib/apt/lists/*
 
-# omp runs on Bun.
-RUN npm install -g bun @anthropic-ai/claude-code @oh-my-pi/pi-coding-agent \
+# omp runs on Bun. Codex runs OpenAI models on a ChatGPT login (transport: cli).
+RUN npm install -g bun @anthropic-ai/claude-code @openai/codex @oh-my-pi/pi-coding-agent \
     && npm cache clean --force
 
 # Orca: pinned Linux AppImage, checksum verified before extraction. Extracted
