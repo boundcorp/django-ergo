@@ -219,6 +219,10 @@ def with_context(ctx, label: str) -> str:
 
 def broken() -> None:
     raise RuntimeError("the API is down")
+
+
+def alerts(found: bool = False) -> list:
+    return ["sync is stale"] if found else []
 """
 
 
@@ -287,6 +291,43 @@ def test_run_steps_feed_the_next_prompt_and_failures_stop_the_rest(tmp_path, set
     assert "the API is down" in failed.error
     assert "RuntimeError" in failed.traceback
     assert ThreadMessage.objects.count() == 1  # the prompt after it never went out
+
+
+@pytest.mark.django_db(transaction=True)
+def test_stop_if_empty_skips_the_prompt_when_nothing_is_found(tmp_path, settings):
+    from django_ergo.bots import schedules
+    from django_ergo.conversation.models import BotJob
+    from django_ergo.conversation.models import ThreadMessage
+
+    settings.DJANGO_ERGO = {"THREAD_MESSAGE_RUNNER": "tests.test_bots.record_message"}
+    yaml_text = """
+        name: stats
+        timezone: America/Los_Angeles
+        schedules:
+          - name: quiet
+            cron: "0 8 * * *"
+            users: [lee]
+            actions:
+              - {run: "jobs/stats.py:alerts", stop_if_empty: true}
+              - {prompt: "Alerts: {result}"}
+          - name: loud
+            cron: "0 9 * * *"
+            users: [lee]
+            actions:
+              - {run: "jobs/stats.py:alerts", args: {found: true}, stop_if_empty: true}
+              - {prompt: "Alerts: {result}"}
+    """
+    bot, _ = make_bot(tmp_path, yaml_text=yaml_text, name="stats")
+    (bot.definition.root_dir / "jobs").mkdir()
+    (bot.definition.root_dir / "jobs" / "stats.py").write_text(STATS_TOOLS)
+    User.objects.create(username="lee")
+
+    schedules.run_due([bot], datetime(2026, 10, 5, 8, 0, tzinfo=LA).astimezone(UTC))
+    assert BotJob.objects.get().status == "completed"  # empty, but not a failure
+    assert not ThreadMessage.objects.exists()
+
+    schedules.run_due([bot], datetime(2026, 10, 5, 9, 0, tzinfo=LA).astimezone(UTC))
+    assert "sync is stale" in ThreadMessage.objects.get().text
 
 
 @pytest.mark.django_db(transaction=True)

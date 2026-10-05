@@ -170,6 +170,7 @@ schedules:
     actions:
       - run: tools/analytics.py:pull_stats   # a function in a .py file in the bot folder
         args: {days: 7}                      # it may take ctx (a ToolContext) first
+        stop_if_empty: true                  # returns nothing: skip the rest, quietly
       - prompt: "Summarize last week: {result}"   # {result}: the last run step's value
         to: {thread: "Stats {date:%b %d}"}
     users: [lee]              # default: permissions.users, else everyone with a chat
