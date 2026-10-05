@@ -114,6 +114,32 @@ environment, so usage always comes from the subscription, at the rate
 Anthropic meters `claude -p` and the Agent SDK. Token costs shown in
 Ergonaut are API list prices, not what the plan charges.
 
+### OpenAI on your ChatGPT subscription
+
+The same `transport: cli` on an `openai` provider runs OpenAI models through
+the Codex CLI, on the ChatGPT plan it's logged in with:
+
+```yaml
+providers:
+  chatgpt:
+    type: openai
+    transport: cli
+    config: {effort: medium}   # optional: command, codex_home, effort, timeout
+    models: [gpt-6-sol, gpt-6-luna]
+```
+
+Install the CLI (`npm install -g @openai/codex`) where turns run and log it
+in with `codex login`. Each model call starts `codex app-server` once: the
+chat history goes in as Responses API items, Ergo's tools as client-run
+tools, and the process stops after one response, so Ergo still runs the
+tools, approvals and compaction. Codex's own tools, skills, plugins,
+sub-agents and code mode are off. Calls refuse to run unless the login is a
+ChatGPT account, and `OPENAI_API_KEY` is not passed to the CLI, so usage
+never bills an API key. Codex still adds a global `AGENTS.md` from its
+`CODEX_HOME` to the prompt; set `codex_home` to a folder without one if
+that matters. `thread/inject_items` and client-run tools are experimental
+in Codex's app server (checked with Codex 0.160.0).
+
 Anthropic allows this for your own login on the unmodified CLI. It doesn't
 allow serving other people's requests on your login: in a deployment other
 people use, each of them needs their own login, so keep a CLI provider to

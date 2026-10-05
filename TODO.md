@@ -46,6 +46,7 @@ Live on rigel from `~/p/boundcorp/django-ergo`, bots from `boundcorp/ergo-bots`.
 - [x] Thread cards (status, reply, PRs) for work sent to other chats and workers; collapsed replies; "Sent to" notes; thread links; PRs recorded from replies and worker results with live state from `gh`.
 - [x] Ergonaut's `DJANGO_ERGO["OPEN_PRS"]` reads the recorded PRs, and thread cards use `orchestrator.thread_status`.
 - [x] Claude on a subscription: `transport: cli` providers run Claude through the logged-in Claude Code CLI (`conversation/engines/claude_code.py`).
+- [ ] OpenAI on a ChatGPT subscription: `transport: cli` on `openai` providers runs Codex `app-server` (`conversation/engines/codex_cli.py`); try it on a logged-in machine (`examples/codex_subscription_demo.py`), then install Codex in the Ergonaut image.
 - [ ] Ergonaut image: install the Claude Code CLI and keep its login (`CLAUDE_CONFIG_DIR` volume or `CLAUDE_CODE_OAUTH_TOKEN`); show subscription usage as such on Costs instead of list prices.
 - [ ] `ergonaut manage resume_failed --kind credits` (resume every chat a credit outage failed): written in bda8305 on the closed #74 branch, never merged.
 - [x] `ergo_thread_resolve` (was archive): finished threads are resolved by their orchestrator or themselves, refused while anything is open; the block marks "ready to resolve".

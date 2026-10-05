@@ -102,6 +102,9 @@ A provider with `transport: cli` needs the Claude Code CLI installed where
 turns run (the worker) and logged in, either in its `CLAUDE_CONFIG_DIR` or
 with `CLAUDE_CODE_OAUTH_TOKEN`; see
 [Claude on your subscription](building-bots.md#claude-on-your-subscription).
+An `openai` provider with `transport: cli` needs the Codex CLI there instead,
+logged in with ChatGPT (`codex login`, kept in its `CODEX_HOME`); see
+[OpenAI on your ChatGPT subscription](building-bots.md#openai-on-your-chatgpt-subscription).
 
 ## The web app
 

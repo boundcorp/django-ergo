@@ -19,14 +19,21 @@ A ``providers.yaml`` at the top of a bot path lists them::
         type: claude
         transport: cli                 # the Claude Code CLI logged in on this machine
         models: [claude-sonnet-5-5, claude-opus-5-5]
+      chatgpt:
+        type: openai
+        transport: cli                 # the Codex CLI logged in with ChatGPT
+        config: {effort: medium}
+        models: [gpt-6-sol, gpt-6-luna]
 
 A model is named ``provider/model``. A bot can use one with
 ``engine: {model: openai/gpt-6-sol}``, and a chat can switch to any enabled
 model whose provider's key is set (the chat model picker).
 
-``transport: cli`` runs Claude models through the Claude Code CLI on the
-subscription it's logged in with (``conversation.engines.claude_code``); it
-needs no key, and is available when the CLI is installed.
+``transport: cli`` runs models on the subscription a CLI on this machine is
+logged in with: Claude models through the Claude Code CLI
+(``conversation.engines.claude_code``), OpenAI models through the Codex CLI
+on a ChatGPT login (``conversation.engines.codex_cli``). It needs no key,
+and is available when the CLI is installed.
 """
 
 from __future__ import annotations
@@ -40,7 +47,7 @@ import yaml
 
 PROVIDERS_FILE = "providers.yaml"
 ENGINE_TYPES = ("openai", "claude")
-TRANSPORTS = {"openai": ("api",), "claude": ("api", "cli")}
+TRANSPORTS = {"openai": ("api", "cli"), "claude": ("api", "cli")}
 
 
 class ProvidersError(ValueError):
@@ -71,6 +78,10 @@ class Provider:
     @property
     def available(self) -> bool:
         """Its key is set (or it needs none); for the CLI, the CLI is installed."""
+        if self.transport == "cli" and self.type == "openai":
+            from django_ergo.conversation.engines.codex_cli import codex_installed
+
+            return codex_installed(self.config.get("command", ""))
         if self.transport == "cli":
             from django_ergo.conversation.engines.claude_code import claude_installed
 
