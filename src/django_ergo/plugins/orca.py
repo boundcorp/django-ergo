@@ -769,13 +769,23 @@ class OrcaPlugin(BotPlugin):
         title: str = "",
         model: str = "",
         effort: str = "",
+        tier: str = "",
     ) -> dict:
-        """Start a supervised Orca worker, and a thread Worker that watches it."""
+        """Start a supervised Orca worker, and a thread Worker that watches it.
+
+        With ``tier`` (low, medium, high), the agent, model and effort come
+        from providers.yaml's ``agents`` tiers, on whichever subscription has
+        room (``bots.routing.pick_agent``)."""
         from django_ergo.bots.workers import describe
 
         if ctx.session is None:
             msg = "Workers belong to a chat"
             raise ValueError(msg)
+        if tier:
+            from django_ergo.bots.routing import pick_agent
+
+            choice = pick_agent(ctx.bot.providers, tier)
+            agent, model, effort = choice.agent, choice.model, choice.effort
         worktree = self.exact_worktree(worktree)
         title = (title or spec.strip().splitlines()[0])[:120]
         try:
@@ -1204,6 +1214,14 @@ class OrcaPlugin(BotPlugin):
                     "type": "string",
                     "description": "Reasoning effort (needs model)",
                 },
+                "tier": {
+                    "type": "string",
+                    "enum": ["low", "medium", "high"],
+                    "description": (
+                        "Pick agent, model and effort for this tier from the subscription "
+                        "with the most room (replaces agent, model and effort)"
+                    ),
+                },
             },
             required=["spec", "worktree"],
             requires_approval=self.approve_changes,
@@ -1216,8 +1234,11 @@ class OrcaPlugin(BotPlugin):
             title: str = "",
             model: str = "",
             effort: str = "",
+            tier: str = "",
         ) -> dict:
-            return plugin.start_worker(ctx, spec, worktree, agent, title, model, effort)
+            return plugin.start_worker(
+                ctx, spec, worktree, agent, title, model, effort, tier
+            )
 
         return [
             read.__bot_tool__,

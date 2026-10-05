@@ -628,3 +628,27 @@ class ConversationKBUsage(TimeStampedMixin):
 
     def __str__(self):
         return f"{self.session_id} -> {self.knowledgebase_id} ({self.mode})"
+
+
+class ProviderUsage(models.Model):
+    """The latest subscription windows a provider's engine reported, e.g.
+    ``{"five_hour": {"used": 42.0, "resets_at": 1791170000}}`` (see bots.routing)."""
+
+    provider = models.CharField(max_length=100, unique=True)
+    windows = models.JSONField(default=dict, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return self.provider
+
+
+class RoutingPolicy(models.Model):
+    """routing.md compiled into routing rules, keyed by the text's hash."""
+
+    source_sha = models.CharField(max_length=64, unique=True)
+    source = models.TextField(blank=True, default="")
+    rules = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return self.source_sha[:12]

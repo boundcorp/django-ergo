@@ -145,6 +145,53 @@ allow serving other people's requests on your login: in a deployment other
 people use, each of them needs their own login, so keep a CLI provider to
 bots only you use.
 
+### Routing by tier
+
+Instead of a fixed model, a chat (the model picker's `auto` entries) or a
+bot (`engine: {model: auto/medium}`, or `default: auto/medium` in
+providers.yaml) can ask for a tier: `auto/low`, `auto/medium` or
+`auto/high`. Each turn then takes the first model in that tier whose
+subscription still has room. A chat keeps the model it had while that model
+qualifies, so its prompt cache isn't thrown away.
+
+```yaml
+tiers:                # bot chats: candidates in order of preference
+  low:    [claude/claude-sonnet-5-5, chatgpt/gpt-6-luna]
+  medium: [claude/claude-opus-5-5, chatgpt/gpt-6-sol]
+  high:   [claude/claude-opus-5-5, chatgpt/gpt-6-sol, openai/gpt-6-sol]
+agents:               # coding agents (orca_start_worker tier=...), subscriptions only
+  medium:
+    - {agent: claude, model: claude-opus-5-5, provider: claude}
+    - {agent: codex, model: gpt-6-sol, effort: medium, provider: chatgpt}
+routing:
+  limits:             # skip a provider once a window is this % used
+    - {provider: claude, window: five_hour, max_used: 85}
+    - {provider: chatgpt, window: weekly, max_used: 80}
+```
+
+The windows come from the CLIs themselves: every Claude Code and Codex call
+records its subscription's 5-hour and weekly usage (`ProviderUsage`), and a
+call refused for its limit counts that window as used up until it resets.
+Without limits, a provider is skipped only at 98% used. When every candidate
+is over a limit, the one with the most room is used. Agent candidates must
+name a `transport: cli` provider, so agents never run on an API key. Note
+that a chat routed onto an API-key provider (like `openai/gpt-6-sol` above)
+bills that key.
+
+The same priorities can be written in words, in a `routing.md` next to
+providers.yaml:
+
+```markdown
+Lean on Claude: use it until its 5-hour window is 85% used.
+Keep Codex's weekly window under 80%, since it runs out first.
+```
+
+The first turn after the file changes compiles it into limits with one
+structured call, in the background; the `routing:` limits apply until it's
+done. `GET /api/bots/<bot>/routing` in Ergonaut shows the tiers, the rules in
+force and each subscription's usage. `DJANGO_ERGO["MODEL_ROUTER"]` replaces
+the policy with your own callable `(candidates, usage, rules, current)`.
+
 ## agents.md
 
 The system prompt, rebuilt every turn, so edits reach existing chats at

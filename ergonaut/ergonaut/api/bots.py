@@ -1208,11 +1208,24 @@ def models_out(bot: Bot) -> dict:
                 "available": bot.providers.providers[m.provider].available,
             }
             for m in bot.providers.models()
+        ]
+        + [
+            {
+                "id": f"auto/{tier}",
+                "name": f"auto/{tier}",
+                "label": tier,
+                "provider": "auto",
+                "engine_type": "auto",
+                "available": True,
+            }
+            for tier in bot.providers.routing.tiers
         ],
     }
 
 
 def check_model(bot: Bot, model: str) -> None:
+    if model.startswith("auto/") and bot.providers.knows(model):
+        return
     found = bot.providers.find(model)
     if found is None:
         raise HttpError(400, f"{model!r} isn't a model in providers.yaml")
@@ -1224,6 +1237,14 @@ def check_model(bot: Bot, model: str) -> None:
 @router.get("/bots/{bot}/models")
 def bot_models(request, bot: str):
     return models_out(get_bot(bot, request.auth))
+
+
+@router.get("/bots/{bot}/routing")
+def bot_routing(request, bot: str):
+    """The auto/<tier> routing a bot's chats get: tiers, rules, subscription usage."""
+    from django_ergo.bots.routing import routing_report
+
+    return routing_report(get_bot(bot, request.auth).providers)
 
 
 @router.post("/sessions/{session_id}/model", response=SessionOut)

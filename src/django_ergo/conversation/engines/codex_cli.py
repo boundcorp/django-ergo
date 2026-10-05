@@ -341,6 +341,8 @@ class CodexClient:
         self.env = env or {}
         self.require_chatgpt = require_chatgpt
         self.chat = SimpleNamespace(completions=self)
+        # Called with each response's rate-limit snapshot (bots.routing reads it).
+        self.on_rate_limit = None
 
     async def create(
         self,
@@ -377,6 +379,8 @@ class CodexClient:
             return await session.call(model, instructions, items, tools or [])
         finally:
             await session.stop()
+            if session.rate_limits and self.on_rate_limit:
+                await self.on_rate_limit(session.rate_limits)
 
 
 class _Session:
@@ -573,6 +577,7 @@ class CodexCLIEngine(OpenAIAPIEngine):
         self.timeout = float(config.get("timeout", 300))
         self.codex_config = dict(config.get("codex_config") or {})
         self.require_chatgpt = bool(config.get("require_chatgpt", True))
+        self.provider = config.get("provider", "")
 
     def _get_client(self):
         if self._client is None:
@@ -584,4 +589,13 @@ class CodexCLIEngine(OpenAIAPIEngine):
                 config=self.codex_config,
                 require_chatgpt=self.require_chatgpt,
             )
+            if provider := self.provider:
+
+                async def record(rate_limits, provider=provider):
+                    from django_ergo.bots.routing import arecord_usage_windows
+                    from django_ergo.bots.routing import codex_windows
+
+                    await arecord_usage_windows(provider, codex_windows(rate_limits))
+
+                self._client.on_rate_limit = record
         return self._client

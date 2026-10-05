@@ -27,7 +27,10 @@ A ``providers.yaml`` at the top of a bot path lists them::
 
 A model is named ``provider/model``. A bot can use one with
 ``engine: {model: openai/gpt-6-sol}``, and a chat can switch to any enabled
-model whose provider's key is set (the chat model picker).
+model whose provider's key is set (the chat model picker). ``tiers``,
+``agents`` and ``routing`` (plus an optional ``routing.md``) let a chat or
+bot ask for ``auto/low``, ``auto/medium`` or ``auto/high`` instead, picked
+per turn from what's left on each subscription (``bots.routing``).
 
 ``transport: cli`` runs models on the subscription a CLI on this machine is
 logged in with: Claude models through the Claude Code CLI
@@ -45,7 +48,15 @@ from pathlib import Path
 
 import yaml
 
+from django_ergo.bots.routing import TIERS
+from django_ergo.bots.routing import AgentChoice
+from django_ergo.bots.routing import Routing
+from django_ergo.bots.routing import RoutingRules
+from django_ergo.bots.routing import is_auto
+from django_ergo.bots.routing import tier_of
+
 PROVIDERS_FILE = "providers.yaml"
+ROUTING_FILE = "routing.md"
 ENGINE_TYPES = ("openai", "claude")
 TRANSPORTS = {"openai": ("api", "cli"), "claude": ("api", "cli")}
 
@@ -93,6 +104,7 @@ class Provider:
 class Providers:
     providers: dict[str, Provider] = field(default_factory=dict)
     default: str = ""
+    routing: Routing = field(default_factory=Routing)
 
     def __bool__(self) -> bool:
         return bool(self.providers)
@@ -153,10 +165,55 @@ class Providers:
                 provider.models[model.name] = model
             providers[provider.name] = provider
         result = cls(providers=providers, default=str(data.get("default") or ""))
-        if result.default and result.find(result.default) is None:
+        result.routing = result._routing(data)
+        if result.default and not result.knows(result.default):
             msg = f"default {result.default!r} isn't one of the listed models"
             raise ProvidersError(msg)
         return result
+
+    def _routing(self, data: dict) -> Routing:
+        tiers = {}
+        for tier, refs in (data.get("tiers") or {}).items():
+            self._check_tier(tier)
+            tiers[tier] = [str(r) for r in refs or []]
+            for ref in tiers[tier]:
+                if self.find(ref) is None:
+                    msg = f"tiers.{tier}: {ref!r} isn't one of the listed models"
+                    raise ProvidersError(msg)
+        agents = {}
+        for tier, listed in (data.get("agents") or {}).items():
+            self._check_tier(tier)
+            try:
+                agents[tier] = [AgentChoice.from_dict(c) for c in listed or []]
+            except (KeyError, TypeError) as exc:
+                msg = f"agents.{tier}: each entry needs agent and provider ({exc})"
+                raise ProvidersError(msg) from exc
+            for choice in agents[tier]:
+                provider = self.providers.get(choice.provider)
+                if provider is None or provider.transport != "cli":
+                    msg = (
+                        f"agents.{tier}: provider {choice.provider!r} must be a "
+                        "listed subscription (transport: cli)"
+                    )
+                    raise ProvidersError(msg)
+        try:
+            rules = RoutingRules.model_validate(data.get("routing") or {})
+        except ValueError as exc:
+            msg = f"routing: {exc}"
+            raise ProvidersError(msg) from exc
+        return Routing(tiers=tiers, agents=agents, rules=rules)
+
+    @staticmethod
+    def _check_tier(tier) -> None:
+        if tier not in TIERS:
+            msg = f"Tier {tier!r} must be one of {', '.join(TIERS)}"
+            raise ProvidersError(msg)
+
+    def knows(self, ref: str) -> bool:
+        """A listed model, or ``auto/<tier>`` for a tier that's set up."""
+        if is_auto(ref):
+            return tier_of(ref) in self.routing.tiers
+        return self.find(ref) is not None
 
 
 def load_providers(paths: list[Path]) -> Providers:
@@ -164,5 +221,9 @@ def load_providers(paths: list[Path]) -> Providers:
     for path in paths:
         file = Path(path) / PROVIDERS_FILE
         if file.is_file():
-            return Providers.from_dict(yaml.safe_load(file.read_text()) or {})
+            providers = Providers.from_dict(yaml.safe_load(file.read_text()) or {})
+            text = Path(path) / ROUTING_FILE
+            if text.is_file():
+                providers.routing.text = text.read_text().strip()
+            return providers
     return Providers()
