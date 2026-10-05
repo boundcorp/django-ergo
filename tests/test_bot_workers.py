@@ -386,6 +386,89 @@ def test_orca_start_worker_watches_the_dispatch_and_reports_back(  # noqa: PLR09
 
 
 @pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize(
+    ("shown", "expected_worktree"),
+    [
+        (
+            {"worktree": {"id": "repo::/home/dev/p/site"}},
+            "id:repo::/home/dev/p/site",
+        ),
+        (ValueError("worktree show unavailable"), "path:/home/dev/p/site"),
+    ],
+    ids=["missing-path", "show-error"],
+)
+def test_orca_start_worker_skips_usage_without_a_worktree_path(
+    tmp_path, workers, monkeypatch, shown, expected_worktree
+):
+    from django_ergo.bots.tools import ToolContext
+    from django_ergo.bots.workers import WorkerContext
+    from django_ergo.conversation.models import Worker
+    from tests.test_bot_plugins import orca_bot
+
+    bot, _, plugin = orca_bot(tmp_path)
+    user = get_user_model().objects.create(username="no-usage-path")
+    session = async_to_sync(bot.main_session)(user)
+    ctx = ToolContext(bot=bot, session=session, user=user)
+    dispatched = []
+
+    def cli_json(args):
+        if isinstance(shown, Exception):
+            raise shown
+        return shown
+
+    def dispatch(*args):
+        dispatched.append(args[2])
+        return "task_1", "run_1", {"dispatchId": "ctx_1"}
+
+    def reject_scan(*args, **kwargs):
+        msg = "usage scan must not run without a worktree path"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(plugin, "cli_json", cli_json)
+    monkeypatch.setattr(plugin, "dispatch", dispatch)
+    monkeypatch.setattr("django_ergo.plugins.orca.subprocess.run", reject_scan)
+
+    started = plugin.start_worker(ctx, "Count tokens", "path:/home/dev/p/site")
+
+    assert dispatched == [expected_worktree]
+    worker = Worker.objects.get(pk=started["id"])
+    assert worker.state == {"task": "task_1", "seen": [], "agent": "codex"}
+    plugin.scan_usage(WorkerContext(bot, worker), settled=True)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_orca_start_worker_keeps_id_selector_as_a_shortcut(
+    tmp_path, workers, monkeypatch
+):
+    from django_ergo.bots.tools import ToolContext
+    from django_ergo.conversation.models import Worker
+    from tests.test_bot_plugins import orca_bot
+
+    bot, _, plugin = orca_bot(tmp_path)
+    user = get_user_model().objects.create(username="id-worktree")
+    session = async_to_sync(bot.main_session)(user)
+    ctx = ToolContext(bot=bot, session=session, user=user)
+    dispatched = []
+
+    def cli_json(args):
+        msg = "id selector must not resolve the worktree"
+        raise AssertionError(msg)
+
+    def dispatch(*args):
+        dispatched.append(args[2])
+        return "task_1", "run_1", {"dispatchId": "ctx_1"}
+
+    monkeypatch.setattr(plugin, "cli_json", cli_json)
+    monkeypatch.setattr(plugin, "dispatch", dispatch)
+
+    started = plugin.start_worker(ctx, "Count tokens", "id:repo::/home/dev/p/site")
+
+    assert dispatched == ["id:repo::/home/dev/p/site"]
+    worker = Worker.objects.get(pk=started["id"])
+    assert worker.state == {"task": "task_1", "seen": [], "agent": "codex"}
+
+
+@pytest.mark.django_db(transaction=True)
 def test_orca_start_worker_replaces_a_mailbox_whose_terminal_is_gone(
     tmp_path, workers, monkeypatch
 ):

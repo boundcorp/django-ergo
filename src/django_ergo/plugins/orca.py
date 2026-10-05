@@ -2,12 +2,12 @@
 
     plugins:
       - name: orca
-        environment: devhost        # pin every call to this Orca environment
+        environment: devbox        # pin every call to this Orca environment
         executable: orca-ide       # default: orca-ide if installed, else orca
         approve_changes: true      # orca_run waits for the user's approval
         root_only: true            # only the root session gets these tools
         timeout: 120               # seconds per command
-        files_host: devhost        # ssh host holding the worktrees (default: the environment;
+        files_host: devbox         # ssh host holding the worktrees (default: the environment;
                                    # "" reads them on this host)
         max_attach_bytes: 20000000
         worker_poll_seconds: 120   # how often orca_start_worker's watcher checks the agent
@@ -683,15 +683,22 @@ class OrcaPlugin(BotPlugin):
         session.metadata = meta
         return handle, run_id
 
-    def resolved_worktree(self, selector: str) -> tuple[str, str]:
-        """Resolve the stable Orca selector and host path together, once."""
-        shown = self.cli_json(["worktree", "show", "--worktree", selector])
+    def resolved_worktree(self, selector: str) -> tuple[str, str | None]:
+        """Resolve the stable Orca selector and, when available, its host path."""
+        if selector.startswith("id:"):
+            return selector, None
+        try:
+            shown = self.cli_json(["worktree", "show", "--worktree", selector])
+        except (OSError, subprocess.TimeoutExpired, ValueError):
+            log.warning(
+                "Couldn't resolve worktree path for usage capture", exc_info=True
+            )
+            return selector, None
         worktree_id = _first_key(shown, ("id",))
-        path = _first_path(shown)
-        if not worktree_id or not path:
+        if not worktree_id:
             msg = f"No worktree {selector!r}"
             raise ValueError(msg)
-        return f"id:{worktree_id}", path
+        return f"id:{worktree_id}", _first_path(shown)
 
     def pin_omp_model(self, worktree: str, model: str, effort: str = "") -> None:
         """Make omp in this worktree use ``model`` (at ``effort``): a project
@@ -805,15 +812,17 @@ class OrcaPlugin(BotPlugin):
         if not dispatch_id:
             msg = f"worker-start gave no dispatch id: {json.dumps(receipt)[:400]}"
             raise ValueError(msg)
+        state = {
+            "task": task_id,
+            "seen": [],
+            "agent": agent,
+        }
+        if worktree_path:
+            state["worktree"] = worktree_path
         worker = ctx.workers.start(
             "orca:watch",
             title=f"{agent}: {title}",
-            state={
-                "task": task_id,
-                "seen": [],
-                "agent": agent,
-                "worktree": worktree_path,
-            },
+            state=state,
             dispatch=dispatch_id,
             run=run_id,
         )
