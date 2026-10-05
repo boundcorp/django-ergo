@@ -76,6 +76,43 @@ def test_jhtml_renders_over_tables_read_only(realty_bot):
 
 
 @pytest.mark.django_db(transaction=True)
+def test_date_filters_do_math_on_row_dates(realty_bot):
+    import datetime as dt
+
+    from django_ergo.bots.pages import as_datetime
+    from django_ergo.bots.pages import duration
+    from django_ergo.bots.pages import seconds_until
+
+    assert as_datetime("2026-10-05T20:00:00Z") == dt.datetime(
+        2026, 10, 5, 20, tzinfo=dt.UTC
+    )
+    assert as_datetime("2026-10-05") == dt.datetime(2026, 10, 5)  # noqa: DTZ001
+    assert as_datetime(None) is None and seconds_until("") is None
+    soon = (
+        dt.datetime.now(tz=dt.UTC) + dt.timedelta(hours=2, minutes=15, seconds=30)
+    ).isoformat()
+    assert 2 * 3600 + 15 * 60 < seconds_until(soon) <= 2 * 3600 + 15 * 60 + 30
+    assert duration(2 * 3600 + 15 * 60 + 30) == "2h 15m"
+    assert duration(3 * 86400 + 4 * 3600) == "3d 4h"
+    assert duration(45) == "45s"
+    assert duration(0) == "0s"
+    assert duration(-90) == "-1m 30s"
+    assert duration(None) == "—"
+
+    # In a page (the sandbox allows datetime arithmetic and these filters).
+    from django_ergo.bots.pages import page_text
+    from django_ergo.bots.pages import render_page
+
+    bot, user = realty_bot
+    source = (
+        "{% set left = when | seconds_until %}{{ left | duration }}|"
+        "{{ (100 * (18000 - left) / 18000) | round | int }}%|"
+        "{{ ((when | as_datetime) - (when | as_datetime)).total_seconds() | int }}"
+    ).replace("when", repr(soon))
+    assert "2h 15m|55%|0" in page_text(render_page(bot, source, user=user))
+
+
+@pytest.mark.django_db(transaction=True)
 def test_blocks_render_metrics_tables_and_charts(realty_bot):
     from django_ergo.bots.pages import blocks_source
     from django_ergo.bots.pages import page_text

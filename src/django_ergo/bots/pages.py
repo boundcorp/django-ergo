@@ -21,6 +21,10 @@ group, first, rows), never a queryset. ``{% include %}`` and
 ``<html>`` tag is wrapped in a plain layout that has Chart.js and styles for
 the blocks.
 
+Rows give dates as ISO strings; the ``as_datetime``, ``seconds_until`` and
+``duration`` filters turn them back into something to do math with
+(``{{ row.resets_at | seconds_until | duration }}`` shows ``2h 15m``).
+
 ``blocks`` (see ``BLOCK_TYPES``) are the building blocks the pages plugin
 writes pages from; hand-written pages can use them too.
 """
@@ -200,6 +204,44 @@ def money(value) -> str:
     if value is None:
         return "—"
     return f"${float(value):,.2f}"
+
+
+def as_datetime(value) -> dt.datetime | None:
+    """A row's ISO date string back to a datetime, so pages can do date math."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, dt.datetime):
+        return value
+    if isinstance(value, dt.date):
+        return dt.datetime.combine(value, dt.time())
+    return dt.datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+
+
+def seconds_until(value) -> float | None:
+    """Seconds from now until a date (negative once it's past); None stays None."""
+    when = as_datetime(value)
+    if when is None:
+        return None
+    return (when - dt.datetime.now(tz=when.tzinfo)).total_seconds()
+
+
+DURATION_UNITS = 2
+
+
+def duration(seconds) -> str:
+    """Seconds as the two largest units: ``2h 15m``, ``3d 4h``, ``45s``."""
+    if seconds is None:
+        return "—"
+    total = int(abs(float(seconds)))
+    parts = []
+    for unit, size in (("d", 86400), ("h", 3600), ("m", 60), ("s", 1)):
+        if total >= size or (unit == "s" and not parts):
+            parts.append(f"{total // size}{unit}")
+            total %= size
+        if len(parts) == DURATION_UNITS:
+            break
+    sign = "-" if float(seconds) < 0 else ""
+    return sign + " ".join(parts)
 
 
 def number(value) -> str:
@@ -473,6 +515,9 @@ def make_environment(bot: Bot):
         number=number,
         markdown=markdown,
         percent=lambda v: _fmt(v, "percent"),
+        as_datetime=as_datetime,
+        seconds_until=seconds_until,
+        duration=duration,
     )
     return env
 
