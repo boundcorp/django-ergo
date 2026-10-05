@@ -684,9 +684,10 @@ class OrcaPlugin(BotPlugin):
         return handle, run_id
 
     def resolved_worktree(self, selector: str) -> tuple[str, str | None]:
-        """Resolve the stable Orca selector and, when available, its host path."""
+        """Resolve the stable Orca selector and, when encoded, its host path."""
         if selector.startswith("id:"):
-            return selector, None
+            _, separator, path = selector.partition("::")
+            return selector, path if separator and path.startswith("/") else None
         try:
             shown = self.cli_json(["worktree", "show", "--worktree", selector])
         except (OSError, subprocess.TimeoutExpired, ValueError):
