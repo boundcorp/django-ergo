@@ -17,9 +17,10 @@ from django_ergo.conversation.chat_reply import CHAT_REPLY_KIND
 from django_ergo.conversation.models import StructuredCall
 from django_ergo.pricing import call_cost_parts
 from ninja import Router, Schema
-from ninja.security import django_auth
 
-router = Router(tags=["costs"], auth=django_auth)
+from ergonaut.api.auth import user_auth
+
+router = Router(tags=["costs"], auth=user_auth)
 
 
 class Bucket(Schema):

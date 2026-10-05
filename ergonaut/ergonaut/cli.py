@@ -9,6 +9,7 @@ ergonaut check    # load the bots and report problems
 ergonaut chat BOT # chat with a bot's root session in the terminal
 ergonaut upgrade  # upgrade to the newest GitHub release once idle; see ergonaut/upgrades
 ergonaut manage … # any manage.py command
+ergonaut remote … # use another Ergonaut server's bots over its API (ergonaut remote -h)
 """
 
 import os
@@ -30,12 +31,28 @@ def run(*args: str) -> int:
     return subprocess.call(list(args))
 
 
+def remote(argv: list[str]) -> int:
+    """The Ergo client skill's ergonaut-remote script, which also runs on its own."""
+    import importlib.util
+    from pathlib import Path
+
+    import django_ergo.bots
+
+    path = Path(django_ergo.bots.__file__).parent / "skill_library" / "ergo-client" / "scripts" / "ergonaut_remote.py"
+    spec = importlib.util.spec_from_file_location("ergonaut_remote", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.main(argv)
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if not argv or argv[0] in {"-h", "--help", "help"}:
         print(USAGE)
         return 0
     command, rest = argv[0], argv[1:]
+    if command == "remote":
+        return remote(rest)
     if command != "up":
         from ergonaut.up import attach
 

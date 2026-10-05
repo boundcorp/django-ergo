@@ -267,6 +267,8 @@ dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
 "src/django_ergo/repository_index.py" = ["TRY003", "EM101", "EM102", "C901", "PLR0913"]
 "src/django_ergo/bots/tables.py" = ["SLF001"]  # Django model _meta
 "tests/*.py" = ["PT018", "FBT003", "PLR2004", "SLF001", "S603", "S607"]
+# Standalone scripts for agents (the ergo client, the skill installer) and the client's bot tools.
+"src/django_ergo/bots/skill_library/**/*.py" = ["T201", "S310", "PLR2004", "C901", "PLR0912", "PLR0915", "EM101", "EM102", "TRY003", "PLW0603", "INP001", "FBT001", "FBT002"]
 "src/django_ergo/knowledge/schema.py" = ["PLC0415", "PLR0915"]
 "src/django_ergo/knowledge/database.py" = ["PLC0415"]
 "src/django_ergo/knowledge/articles.py" = ["PLC0415", "SLF001"]

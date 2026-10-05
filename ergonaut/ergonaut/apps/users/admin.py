@@ -1,4 +1,5 @@
 # type: ignore
+from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
 
 from ergonaut.utils.admin import register
@@ -50,3 +51,10 @@ class CustomUserAdmin(UserAdmin):
             },
         ),
     )
+
+
+@register(models.ApiKey)
+class ApiKeyAdmin(admin.ModelAdmin):
+    list_display = ["name", "hint", "user", "created_at", "last_used_at", "revoked_at"]
+    search_fields = ["name", "user__email", "user__username"]
+    readonly_fields = ["hint", "key_hash", "last_used_at"]

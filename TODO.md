@@ -56,6 +56,8 @@ Live on rigel from `~/p/boundcorp/django-ergo`, bots from `boundcorp/ergo-bots`.
 - [x] Live Orca worker activity: worker cards show the agent's latest tool calls and output, time since its last activity with a stalled flag (`stall_minutes`), and its full recent log (`/api/sessions/<id>/workers/<id>/log`).
 - [ ] Try `orca_start_worker` live on devbox (after the Orca display restart).
 - [ ] A visual blocks editor in the UI. Campaign names are Ad Manager's internal `AM:<uuid>:campaign` labels; friendly names would need Ad Manager's mapping.
+- [x] **Agent skills**: `ergo-client` (with the `ergonaut-remote` command and `ergo_client_*` bot tools), `ergo-hosting`, `ergo-bot-development` and `ergo-developer` in the skill library, installable for Claude Code and Codex (`skill_library/install.py`); Ergonaut API keys (`Authorization: Bearer ergo_...`, API keys page, `ergonaut manage api_key`).
+- [ ] Install the agent skills on the dev box, make an API key on the production server, and start delegating django-ergo and ergo-bots work through `ergonaut-remote`; feed what the runs show back into the skills.
 - [x] **Bot data and pages** (decided 2026-10-02): pinned files (repo files and bot-written attachments), blocks-based page toolkit, live .jhtml Jinja pages served straight from the file/attachment endpoints, templates from bots or PRs. No sandbox origin; all users share rows.
 
 - [x] Upgrade path: `wait_idle` also waits for queued or running workers; `ergonaut upgrade` and `ERGONAUT_AUTO_UPGRADE_SECONDS` upgrade to a new GitHub release once idle through a pluggable `ERGONAUT_UPGRADER` (`systemd`, `command`, or a class in the bot repo); images record `ERGONAUT_VERSION`.

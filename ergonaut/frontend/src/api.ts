@@ -450,7 +450,12 @@ async function upload<T>(path: string, file: File): Promise<T> {
   return response.json() as Promise<T>
 }
 
+export type ApiKey = { id: string; name: string; hint: string; created_at: string; last_used_at: string | null }
+
 export const api = {
+  apiKeys: () => request<ApiKey[]>('GET', '/auth/keys'),
+  createApiKey: (name: string) => request<ApiKey & { key: string }>('POST', '/auth/keys', { name }),
+  revokeApiKey: (id: string) => request<{ ok: boolean }>('DELETE', `/auth/keys/${id}`),
   csrf: () => request<{ csrftoken: string }>('GET', '/auth/csrf'),
   me: () => request<User>('GET', '/auth/me'),
   login: (username: string, password: string) => request<User>('POST', '/auth/login', { username, password }),

@@ -1,13 +1,32 @@
+from datetime import datetime
+
 from django.contrib.auth import aauthenticate, alogin, alogout
 from django.middleware.csrf import get_token
 from ninja import Router, Schema
 from ninja.errors import HttpError
-from ninja.security import django_auth
+from ninja.security import HttpBearer, django_auth
 from ninja_jwt.authentication import JWTAuth
 
 from ergonaut.utils.throttle import login_blocked, login_failed, login_succeeded
 
 router = Router(tags=["auth"])
+
+
+class ApiKeyAuth(HttpBearer):
+    """``Authorization: Bearer ergo_...``: an API key made in Settings or with
+    ``ergonaut manage api_key create``. It acts as the key's user."""
+
+    def authenticate(self, request, token):
+        from ergonaut.apps.users.models import ApiKey
+
+        user = ApiKey.user_for(token)
+        if user is not None:
+            request.user = user
+        return user
+
+
+# The API's own endpoints: an API key, else the web app's session (with CSRF).
+user_auth = [ApiKeyAuth(), django_auth]
 
 
 class UserProfileSchema(Schema):
@@ -54,6 +73,49 @@ async def logout(request):
     return {"ok": True}
 
 
-@router.get("/me", auth=django_auth, response=UserProfileSchema)
+@router.get("/me", auth=user_auth, response=UserProfileSchema)
 def me(request):
     return request.auth
+
+
+class ApiKeyOut(Schema):
+    id: str
+    name: str
+    hint: str
+    created_at: datetime
+    last_used_at: datetime | None
+
+
+class NewApiKeyIn(Schema):
+    name: str
+
+
+class NewApiKeyOut(ApiKeyOut):
+    key: str  # shown this once
+
+
+# Keys are made and revoked from a signed-in session, not with another key.
+@router.get("/keys", auth=django_auth, response=list[ApiKeyOut])
+def list_keys(request):
+    return request.auth.api_keys.filter(revoked_at__isnull=True)
+
+
+@router.post("/keys", auth=django_auth, response=NewApiKeyOut)
+def create_key(request, data: NewApiKeyIn):
+    from ergonaut.apps.users.models import ApiKey
+
+    name = data.name.strip()
+    if not name:
+        raise HttpError(400, "Name the key after where it will be used")
+    row, key = ApiKey.issue(request.auth, name[:100])
+    return {**ApiKeyOut.from_orm(row).dict(), "key": key}
+
+
+@router.delete("/keys/{key_id}", auth=django_auth)
+def revoke_key(request, key_id: str):
+    from django.utils import timezone
+
+    revoked = request.auth.api_keys.filter(id=key_id, revoked_at__isnull=True).update(revoked_at=timezone.now())
+    if not revoked:
+        raise HttpError(404, "No such key")
+    return {"ok": True}
