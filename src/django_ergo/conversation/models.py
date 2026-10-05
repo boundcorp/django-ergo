@@ -652,3 +652,41 @@ class RoutingPolicy(models.Model):
 
     def __str__(self):
         return self.source_sha[:12]
+
+
+class RoutingText(models.Model):
+    """Routing priorities saved from Ergonaut's Routing page. While a row
+    exists its text replaces routing.md (see bots.routing.routing_text)."""
+
+    text = models.TextField(blank=True, default="")
+    updated_by = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True, related_name="+"
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return self.text[:40]
+
+
+class RoutingSwitch(models.Model):
+    """A chat or coding agent that the router moved off its first choice."""
+
+    session = models.ForeignKey(
+        ConversationSession,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="routing_switches",
+    )
+    label = models.CharField(max_length=300, blank=True, default="")
+    tier = models.CharField(max_length=20)
+    from_model = models.CharField(max_length=200, blank=True, default="")
+    to_model = models.CharField(max_length=200)
+    reason = models.CharField(max_length=300, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.from_model} -> {self.to_model}"

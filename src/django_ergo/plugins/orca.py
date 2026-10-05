@@ -788,6 +788,12 @@ class OrcaPlugin(BotPlugin):
             agent, model, effort = choice.agent, choice.model, choice.effort
         worktree = self.exact_worktree(worktree)
         title = (title or spec.strip().splitlines()[0])[:120]
+        if tier:
+            from django_ergo.bots.routing import record_agent_pick
+
+            record_agent_pick(
+                ctx.bot.providers, tier, choice, f"Orca worker · {title}", ctx.session
+            )
         try:
             task_id, run_id, receipt = self.dispatch(
                 ctx, spec, worktree, agent, title, model, effort

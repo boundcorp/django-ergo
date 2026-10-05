@@ -1247,6 +1247,69 @@ def bot_routing(request, bot: str):
     return routing_report(get_bot(bot, request.auth).providers)
 
 
+class RoutingIn(Schema):
+    text: str
+
+
+def routing_out(request) -> dict:
+    from django_ergo.bots.routing import routing_report
+
+    return {**routing_report(registry().providers), "editable": request.auth.is_superuser}
+
+
+def compile_routing_text(retry: bool = False) -> None:
+    """Compile the routing text in the background on a loaded bot's default engine."""
+    from django_ergo.bots.routing import ensure_compiled
+
+    bots = registry()
+    bot = next(iter(bots), None)
+    if bot is None:
+        return
+    ensure_compiled(
+        bots.providers,
+        lambda: bot.make_engine(model=bot.resolve_ref("auto/low", None)),
+        retry=retry,
+    )
+
+
+@router.get("/routing")
+def routing(request):
+    """The Routing page: subscriptions against their limits, what each tier
+    picks now, the routing text and recent switches (shared by every bot)."""
+    return routing_out(request)
+
+
+@router.put("/routing")
+def save_routing(request, data: RoutingIn):
+    """Save this deployment's routing priorities in plain words (replacing
+    routing.md) and compile them."""
+    from django_ergo.conversation.models import RoutingText
+
+    if not request.auth.is_superuser:
+        raise HttpError(403, "Only an admin can change routing")
+    text = data.text.strip()
+    if len(text) > 4000:
+        raise HttpError(400, "Keep the routing text under 4000 characters")
+    saved = RoutingText.objects.first() or RoutingText()
+    saved.text, saved.updated_by = text, request.auth
+    saved.save()
+    RoutingText.objects.exclude(pk=saved.pk).delete()
+    compile_routing_text(retry=True)
+    return routing_out(request)
+
+
+@router.delete("/routing")
+def reset_routing(request):
+    """Go back to the bot repo's routing.md."""
+    from django_ergo.conversation.models import RoutingText
+
+    if not request.auth.is_superuser:
+        raise HttpError(403, "Only an admin can change routing")
+    RoutingText.objects.all().delete()
+    compile_routing_text(retry=True)
+    return routing_out(request)
+
+
 @router.post("/sessions/{session_id}/model", response=SessionOut)
 async def set_session_model(request, session_id: str, data: ModelIn):
     """Pick the model this chat's next turns use, on any engine (messages are

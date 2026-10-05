@@ -45,6 +45,7 @@ from django_ergo.bots.providers import Providers
 from django_ergo.bots.routing import ensure_compiled
 from django_ergo.bots.routing import is_auto
 from django_ergo.bots.routing import pick_model as route_model
+from django_ergo.bots.routing import record_switch
 from django_ergo.bots.routing import tier_of
 from django_ergo.bots.skills import Skill
 from django_ergo.bots.skills import library_skills
@@ -520,14 +521,16 @@ class Bot:
         ref = self.session_model(session) or self.model_ref()
         if not is_auto(ref):
             return ""
-        if self.providers.routing.text:
-            ensure_compiled(
-                self.providers,
-                lambda: self.make_engine(model=self.resolve_ref("auto/low", None)),
-            )
+        ensure_compiled(
+            self.providers,
+            lambda: self.make_engine(model=self.resolve_ref("auto/low", None)),
+        )
         meta = session.metadata or {}
-        picked = route_model(self.providers, tier_of(ref), meta.get("routed_model", ""))
-        if picked != meta.get("routed_model"):
+        before = meta.get("routed_model", "")
+        picked = route_model(self.providers, tier_of(ref), before)
+        if picked != before:
+            if before:
+                record_switch(self.providers, session, tier_of(ref), before, picked)
             session.metadata = {**meta, "routed_model": picked}
             spec = self.engine_spec(session)
             session.engine_type = spec.engine_type

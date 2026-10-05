@@ -188,9 +188,12 @@ Keep Codex's weekly window under 80%, since it runs out first.
 
 The first turn after the file changes compiles it into limits with one
 structured call, in the background; the `routing:` limits apply until it's
-done. `GET /api/bots/<bot>/routing` in Ergonaut shows the tiers, the rules in
-force and each subscription's usage. `DJANGO_ERGO["MODEL_ROUTER"]` replaces
-the policy with your own callable `(candidates, usage, rules, current)`.
+done. Ergonaut's **Routing** page shows each subscription's windows against
+its limits, what every tier picks now and why, and the chats and workers
+recently moved off their first choice. An admin can rewrite the priorities
+there; the saved text replaces `routing.md` for that deployment until they
+switch back. `DJANGO_ERGO["MODEL_ROUTER"]` replaces the policy with your own
+callable `(candidates, usage, rules, current)`.
 
 ## agents.md
 

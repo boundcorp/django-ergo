@@ -31,7 +31,8 @@ each CLI engine reports (Claude Code's ``rate_limit_event``, Codex's
 as fully used until the window resets.
 
 ``routing.md`` next to ``providers.yaml`` states the priorities in plain
-words ("lean on Claude until its 5-hour window is 85% used, keep Codex's
+words (Ergonaut's Routing page can replace it per deployment, see
+:func:`routing_text`) ("lean on Claude until its 5-hour window is 85% used, keep Codex's
 weekly window under 80%"). :func:`compile_routing` turns it into the same
 ``limits`` once per change of the file (a structured call), stored in
 :class:`RoutingPolicy`; until then the YAML ``routing`` rules apply. Without
@@ -63,6 +64,7 @@ TIERS = ("low", "medium", "high")
 AUTO = "auto/"
 WINDOWS = ("five_hour", "weekly")
 DEFAULT_MAX_USED = 98.0
+WINDOW_NAMES = {"five_hour": "5-hour window", "weekly": "weekly window"}
 
 
 class Limit(BaseModel):
@@ -105,7 +107,20 @@ class Routing:
 
     @property
     def text_sha(self) -> str:
-        return hashlib.sha256(self.text.encode()).hexdigest() if self.text else ""
+        return text_sha(self.text)
+
+
+def text_sha(text: str) -> str:
+    return hashlib.sha256(text.encode()).hexdigest() if text else ""
+
+
+def routing_text(routing: Routing) -> str:
+    """The priorities in force: the text saved on Ergonaut's Routing page
+    (:class:`RoutingText`) while there is one, else routing.md. Runs the ORM."""
+    from django_ergo.conversation.models import RoutingText
+
+    saved = RoutingText.objects.values_list("text", flat=True).first()
+    return (routing.text if saved is None else saved).strip()
 
 
 def is_auto(ref: str) -> bool:
@@ -206,11 +221,12 @@ def current_usage(now: float | None = None) -> dict[str, dict]:
 
 def active_rules(routing: Routing) -> RoutingRules:
     """routing.md's compiled rules when they're current, else the YAML rules."""
-    if routing.text:
+    text = routing_text(routing)
+    if text:
         from django_ergo.conversation.models import RoutingPolicy
 
         compiled = (
-            RoutingPolicy.objects.filter(source_sha=routing.text_sha)
+            RoutingPolicy.objects.filter(source_sha=text_sha(text))
             .values_list("rules", flat=True)
             .first()
         )
@@ -219,14 +235,31 @@ def active_rules(routing: Routing) -> RoutingRules:
     return routing.rules
 
 
-def over_limit(provider: str, usage: dict, rules: RoutingRules) -> bool:
+def limit_of(provider: str, window: str, rules: RoutingRules) -> float:
+    caps = [
+        r.max_used
+        for r in rules.limits
+        if r.provider in (provider, "*") and r.window == window
+    ]
+    return min(caps, default=DEFAULT_MAX_USED)
+
+
+def why_over(provider: str, usage: dict, rules: RoutingRules) -> str:
+    """Why a provider is skipped ("claude 5-hour window at 87% (limit 85%)"),
+    or "" while it's under every limit."""
     used = usage.get(provider) or {}
-    limits = [r for r in rules.limits if r.provider in (provider, "*")]
     for window in WINDOWS:
-        caps = [r.max_used for r in limits if r.window == window]
-        if used.get(window, 0) >= min(caps, default=DEFAULT_MAX_USED):
-            return True
-    return False
+        cap = limit_of(provider, window, rules)
+        if used.get(window, 0) >= cap:
+            return (
+                f"{provider} {WINDOW_NAMES[window]} at {used[window]:.0f}% "
+                f"(limit {cap:g}%)"
+            )
+    return ""
+
+
+def over_limit(provider: str, usage: dict, rules: RoutingRules) -> bool:
+    return bool(why_over(provider, usage, rules))
 
 
 def headroom(provider: str, usage: dict) -> float:
@@ -325,9 +358,10 @@ def providers_summary(providers: Providers) -> str:
 
 
 async def compile_routing(
-    providers: Providers, *, user=None, engine=None
+    providers: Providers, *, text: str | None = None, user=None, engine=None
 ) -> RoutingRules:
-    """Compile routing.md into rules and store them (one structured call)."""
+    """Compile the routing text (routing.md, or the Routing page's) into
+    rules and store them (one structured call)."""
     from asgiref.sync import sync_to_async
 
     from django_ergo.conversation.models import RoutingPolicy
@@ -335,7 +369,9 @@ async def compile_routing(
     from django_ergo.conversation.structured import run_structured_call
 
     routing = providers.routing
-    if not routing.text:
+    if text is None:
+        text = await sync_to_async(routing_text)(routing)
+    if not text:
         return routing.rules
     spec = StructuredCallSpec(
         kind="routing_rules",
@@ -344,66 +380,287 @@ async def compile_routing(
         max_turns=2,
     )
     result = await run_structured_call(
-        spec, routing.text, user=user, engine=engine, metadata={"routing": "compile"}
+        spec, text, user=user, engine=engine, metadata={"routing": "compile"}
     )
     if result.parsed is None:
         msg = f"Couldn't compile routing.md: {result.call.error or 'no rules returned'}"
         raise ValueError(msg)
     rules = result.parsed
     await sync_to_async(RoutingPolicy.objects.update_or_create)(
-        source_sha=routing.text_sha,
-        defaults={"source": routing.text, "rules": rules.model_dump()},
+        source_sha=text_sha(text),
+        defaults={"source": text, "rules": rules.model_dump()},
     )
     return rules
 
 
 _compiling: set[str] = set()
+_failed: dict[str, str] = {}  # sha -> why it didn't compile, for the Routing page
 
 
-def ensure_compiled(providers: Providers, make_engine) -> None:
-    """Compile routing.md in the background if this version isn't stored yet
-    (runs the ORM). Picks use the YAML rules until it's done."""
+def ensure_compiled(providers: Providers, make_engine, *, retry: bool = False) -> None:
+    """Compile the routing text in the background if this version isn't
+    stored yet (runs the ORM). Picks use the YAML rules until it's done. A
+    version that failed to compile is tried again only with ``retry``."""
     from django_ergo.conversation.models import RoutingPolicy
 
-    sha = providers.routing.text_sha
-    if not sha or sha in _compiling:
+    text = routing_text(providers.routing)
+    sha = text_sha(text)
+    if not sha or sha in _compiling or (sha in _failed and not retry):
         return
     if RoutingPolicy.objects.filter(source_sha=sha).exists():
         return
     _compiling.add(sha)
+    _failed.pop(sha, None)
 
     def run():
         from django.db import close_old_connections
 
         try:
-            asyncio.run(compile_routing(providers, engine=make_engine()))
-        except Exception:  # noqa: BLE001 - the YAML rules stay in use
+            asyncio.run(compile_routing(providers, text=text, engine=make_engine()))
+        except Exception as exc:  # noqa: BLE001 - the YAML rules stay in use
             logger.warning("Couldn't compile routing.md", exc_info=True)
-            _compiling.discard(sha)  # try again on a later turn
+            _failed[sha] = str(exc)[:300]
         finally:
+            _compiling.discard(sha)
             close_old_connections()
 
     threading.Thread(target=run, name="ergo-routing-compile", daemon=True).start()
 
 
+# -- switches and the Routing page ----------------------------------------------
+
+
+def switch_reason(
+    providers: Providers, before: str, after: str, usage: dict, rules: RoutingRules
+) -> str:
+    """Why a chat moved from ``before`` to ``after`` (both provider/model)."""
+    old = before.partition("/")[0]
+    found = providers.find(before)
+    if found is None or not found[0].available:
+        return f"{before} isn't available"
+    if why := why_over(old, usage, rules):
+        return why
+    return f"{after.partition('/')[0]} is back under its limits"
+
+
+def record_switch(
+    providers: Providers, session, tier: str, before: str, after: str
+) -> None:
+    """Log a chat's move to another model for the Routing page (runs the ORM)."""
+    from django_ergo.conversation.models import RoutingSwitch
+
+    reason = switch_reason(
+        providers, before, after, current_usage(), active_rules(providers.routing)
+    )
+    meta = session.metadata or {}
+    title = meta.get("title") or (
+        "Main" if meta.get("bot_role") in ("root", "main") else "Thread"
+    )
+    RoutingSwitch.objects.create(
+        session=session,
+        label=f"{session.bot_name} · {title}"[:300],
+        tier=tier,
+        from_model=before,
+        to_model=after,
+        reason=reason[:300],
+    )
+
+
+def agent_label(choice: AgentChoice) -> str:
+    return " · ".join(x for x in (choice.agent, choice.model, choice.effort) if x)
+
+
+def record_agent_pick(
+    providers: Providers, tier: str, choice: AgentChoice, label: str, session=None
+) -> None:
+    """Log a coding agent started on a fallback, i.e. not its tier's first
+    choice (runs the ORM)."""
+    from django_ergo.conversation.models import RoutingSwitch
+
+    first = (providers.routing.agents.get(tier) or [None])[0]
+    if first is None or first == choice:
+        return
+    usage, rules = current_usage(), active_rules(providers.routing)
+    provider = providers.providers.get(first.provider)
+    if provider is None or provider.transport != "cli":
+        reason = f"{first.provider} isn't a subscription"
+    else:
+        reason = why_over(first.provider, usage, rules) or "picked by MODEL_ROUTER"
+    RoutingSwitch.objects.create(
+        session=session,
+        label=label[:300],
+        tier=tier,
+        from_model=agent_label(first),
+        to_model=agent_label(choice),
+        reason=reason[:300],
+    )
+
+
+def _unavailable(provider) -> str:
+    if provider.transport == "cli":
+        cli = "Codex" if provider.type == "openai" else "Claude Code"
+        return f"{cli} CLI isn't installed"
+    return f"{provider.api_key_env} isn't set"
+
+
+@dataclass
+class _Now:
+    """What a Routing page report is computed against."""
+
+    providers: Providers
+    usage: dict
+    rules: RoutingRules
+
+    def state(self, name: str, *, is_pick: bool = False) -> tuple[str, str]:
+        provider = self.providers.providers.get(name)
+        if provider is None:
+            return "unavailable", f"{name} isn't in providers.yaml"
+        if not provider.available:
+            return "unavailable", _unavailable(provider)
+        why = why_over(name, self.usage, self.rules)
+        if is_pick:
+            return "pick", why
+        return ("skip", why) if why else ("ok", "")
+
+
+def _tier_rows(now: _Now) -> list[dict]:
+    from django_ergo.conversation.models import ConversationSession
+
+    out = []
+    for tier, refs in now.providers.routing.tiers.items():
+        try:
+            picked = pick_model(now.providers, tier)
+        except ValueError:
+            picked = ""
+        rows = []
+        for ref in refs:
+            name = ref.partition("/")[0]
+            state, reason = now.state(name, is_pick=ref == picked)
+            found = now.providers.find(ref)
+            label = (found[1].label or found[1].name) if found else ref
+            rows.append(
+                {
+                    "provider": name,
+                    "ref": ref,
+                    "label": label,
+                    "state": state,
+                    "reason": reason,
+                }
+            )
+        chats = ConversationSession.objects.filter(model=f"{AUTO}{tier}").count()
+        out.append({"name": tier, "picked": picked, "chats": chats, "candidates": rows})
+    return out
+
+
+def _agent_rows(now: _Now) -> list[dict]:
+    out = []
+    for tier, choices in now.providers.routing.agents.items():
+        try:
+            picked = pick_agent(now.providers, tier)
+        except ValueError:
+            picked = None
+        rows = []
+        for choice in choices:
+            state, reason = now.state(choice.provider, is_pick=choice == picked)
+            rows.append(
+                {
+                    **vars(choice),
+                    "label": agent_label(choice),
+                    "state": state,
+                    "reason": reason,
+                }
+            )
+        out.append({"name": tier, "candidates": rows})
+    return out
+
+
+def _provider_rows(now: _Now, in_use: set[str]) -> list[dict]:
+    from django_ergo.conversation.models import ProviderUsage
+
+    reported = {row.provider: row for row in ProviderUsage.objects.all()}
+    clock = time.time()
+    out = []
+    for name, provider in now.providers.providers.items():
+        row = reported.get(name)
+        windows = {}
+        for window in WINDOWS:
+            seen = ((row.windows or {}) if row else {}).get(window) or {}
+            resets = seen.get("resets_at")
+            fresh = bool(seen) and not (resets and resets <= clock)
+            windows[window] = {
+                "used": float(seen.get("used") or 0) if fresh else None,
+                "resets_at": resets if fresh else None,
+                "limit": limit_of(name, window, now.rules),
+            }
+        state, reason = now.state(name)
+        status = {"unavailable": "unavailable", "skip": "skipped"}.get(state)
+        if status is None:
+            status = (
+                "in_use"
+                if name in in_use
+                else ("standby" if provider.transport == "cli" else "api_key")
+            )
+        out.append(
+            {
+                "name": name,
+                "type": provider.type,
+                "transport": provider.transport,
+                "subscription": provider.transport == "cli",
+                "api_key_env": provider.api_key_env,
+                "status": status,
+                "reason": reason,
+                "windows": windows,
+                "reported_at": row.updated_at.isoformat() if row else None,
+            }
+        )
+    return out
+
+
 def routing_report(providers: Providers) -> dict:
-    """What the router sees: tiers, rules in force, and each provider's usage."""
+    """What the router sees and would pick now, for Ergonaut's Routing page:
+    each provider's windows against its limits, every tier's candidates, the
+    routing text and whether it's compiled, and recent switches."""
     from django_ergo.conversation.models import RoutingPolicy
+    from django_ergo.conversation.models import RoutingSwitch
+    from django_ergo.conversation.models import RoutingText
 
     routing = providers.routing
-    compiled = (
-        RoutingPolicy.objects.filter(source_sha=routing.text_sha).exists()
-        if routing.text
-        else False
-    )
+    saved = RoutingText.objects.first()
+    text = routing_text(routing)
+    sha = text_sha(text)
+    now = _Now(providers, current_usage(), active_rules(routing))
+    tiers, agents = _tier_rows(now), _agent_rows(now)
+    in_use = {
+        c["provider"]
+        for t in tiers + agents
+        for c in t["candidates"]
+        if c["state"] == "pick"
+    }
+    source = "page" if saved is not None else ("file" if routing.text else "")
     return {
-        "tiers": routing.tiers,
-        "agents": {
-            tier: [vars(choice) for choice in choices]
-            for tier, choices in routing.agents.items()
-        },
-        "text": routing.text,
-        "compiled": compiled,
-        "rules": active_rules(routing).model_dump(),
-        "usage": current_usage(),
+        "providers": _provider_rows(now, in_use),
+        "tiers": tiers,
+        "agents": agents,
+        "text": text,
+        "text_source": source,
+        "file_text": routing.text,
+        "updated_at": saved.updated_at.isoformat() if saved else None,
+        "compiled": bool(sha) and RoutingPolicy.objects.filter(source_sha=sha).exists(),
+        "compiling": sha in _compiling,
+        "compile_error": _failed.get(sha, ""),
+        "rules": now.rules.model_dump(),
+        "default_max_used": DEFAULT_MAX_USED,
+        "usage": now.usage,
+        "switches": [
+            {
+                "at": switch.created_at.isoformat(),
+                "session_id": str(switch.session_id) if switch.session_id else None,
+                "label": switch.label,
+                "tier": switch.tier,
+                "from": switch.from_model,
+                "to": switch.to_model,
+                "reason": switch.reason,
+            }
+            for switch in RoutingSwitch.objects.all()[:20]
+        ],
     }

@@ -1056,3 +1056,45 @@ def test_a_resolved_thread_shows_who_resolved_it_and_why(client, cook, use_bots)
     thread.status = "active"
     thread.save()
     assert client.get(f"/api/sessions/{thread.id}").json()["session"]["resolved_summary"] == ""
+
+
+@pytest.mark.django_db(transaction=True)
+def test_routing_page_shows_tiers_and_admins_set_the_priorities(client, cook, use_bots, monkeypatch):
+    from django_ergo.bots.providers import Providers
+    from django_ergo.conversation.models import RoutingText
+
+    use_bots(say("hi"))
+    webhooks.get_registry().providers = Providers.from_dict(
+        {
+            "providers": {
+                "openai": {"type": "openai", "models": ["gpt-6-sol", "gpt-6-luna"]},
+            },
+            "tiers": {"low": ["openai/gpt-6-luna"], "medium": ["openai/gpt-6-sol"]},
+        }
+    )
+    compiles = []
+    monkeypatch.setattr(
+        "django_ergo.bots.routing.ensure_compiled", lambda providers, make_engine, retry=False: compiles.append(retry)
+    )
+
+    page = client.get("/api/routing").json()
+    assert [(t["name"], t["picked"]) for t in page["tiers"]] == [
+        ("low", "openai/gpt-6-luna"),
+        ("medium", "openai/gpt-6-sol"),
+    ]
+    assert page["providers"][0]["status"] == "in_use"
+    assert (page["text"], page["editable"]) == ("", False)
+
+    text = {"text": "Lean on Claude until its 5-hour window is 85% used."}
+    assert client.put("/api/routing", json.dumps(text), content_type="application/json").status_code == 403
+
+    cook.is_superuser = True
+    cook.save()
+    saved = client.put("/api/routing", json.dumps(text), content_type="application/json").json()
+    assert (saved["text"], saved["text_source"], saved["editable"]) == (text["text"], "page", True)
+    assert RoutingText.objects.get().updated_by == cook
+    assert compiles == [True]
+
+    reset = client.delete("/api/routing").json()
+    assert (reset["text"], reset["text_source"]) == ("", "")
+    assert not RoutingText.objects.exists()

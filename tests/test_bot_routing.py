@@ -232,3 +232,118 @@ def test_route_remembers_the_pick_on_the_chat(django_user_model):
         user=user, bot_name="kitchen", model="claude/claude-sonnet-5-5"
     )
     assert bot.route(fixed) == ""
+
+
+@pytest.mark.django_db
+def test_route_logs_a_switch_with_the_reason(django_user_model):
+    from django_ergo.conversation.models import ConversationSession
+    from django_ergo.conversation.models import RoutingSwitch
+
+    bot = bot_with(found())
+    user = django_user_model.objects.create(username="lee")
+    chat = ConversationSession.objects.create(
+        user=user,
+        bot_name="kitchen",
+        model="auto/medium",
+        engine_type="claude",
+        metadata={"title": "Menu ideas"},
+    )
+    assert bot.route(chat) == "claude/claude-opus-5-5"
+    assert not RoutingSwitch.objects.exists()  # a first pick isn't a switch
+    record_usage_windows("claude", {"five_hour": {"used": 90, "resets_at": soon()}})
+    assert bot.route(chat) == "chatgpt/gpt-6-sol"
+    switch = RoutingSwitch.objects.get()
+    assert (switch.label, switch.tier, switch.from_model, switch.to_model) == (
+        "kitchen · Menu ideas",
+        "medium",
+        "claude/claude-opus-5-5",
+        "chatgpt/gpt-6-sol",
+    )
+    assert switch.reason == "claude 5-hour window at 90% (limit 85%)"
+
+
+@pytest.mark.django_db
+def test_text_saved_on_the_page_replaces_routing_md(tmp_path):
+    from django_ergo.conversation.models import RoutingText
+
+    providers = found(tmp_path, "Use Claude until its 5-hour window is half used.")
+    assert routing.routing_text(providers.routing).startswith("Use Claude")
+    RoutingText.objects.create(text="Codex: weekly under 60%, please.\n")
+    text = routing.routing_text(providers.routing)
+    assert text == "Codex: weekly under 60%, please."
+    record_usage_windows("chatgpt", {"weekly": {"used": 70, "resets_at": soon(48)}})
+    record_usage_windows("claude", {"five_hour": {"used": 90, "resets_at": soon()}})
+    # Not compiled yet: the YAML limits (chatgpt weekly 80) apply.
+    assert pick_model(providers, "low") == "chatgpt/gpt-6-luna"
+    RoutingPolicy.objects.create(
+        source_sha=routing.text_sha(text),
+        rules={"limits": [{"provider": "chatgpt", "window": "weekly", "max_used": 60}]},
+    )
+    # The compiled rules replace the YAML limits: Claude at 90% is under the
+    # default 98%, and Codex is over its 60%.
+    assert pick_model(providers, "low") == "claude/claude-sonnet-5-5"
+    assert routing.why_over(
+        "chatgpt", routing.current_usage(), routing.active_rules(providers.routing)
+    ) == ("chatgpt weekly window at 70% (limit 60%)")
+
+
+@pytest.mark.django_db
+def test_routing_report_explains_each_tier():
+    from django_ergo.conversation.models import RoutingText
+
+    providers = found()
+    record_usage_windows("claude", {"five_hour": {"used": 90, "resets_at": soon()}})
+    record_usage_windows("chatgpt", {"weekly": {"used": 40, "resets_at": soon(48)}})
+    report = routing.routing_report(providers)
+
+    medium = next(t for t in report["tiers"] if t["name"] == "medium")
+    assert medium["picked"] == "chatgpt/gpt-6-sol"
+    assert [(c["ref"], c["state"]) for c in medium["candidates"]] == [
+        ("claude/claude-opus-5-5", "skip"),
+        ("chatgpt/gpt-6-sol", "pick"),
+        ("openai/gpt-6-sol", "ok"),
+    ]
+    assert (
+        medium["candidates"][0]["reason"] == "claude 5-hour window at 90% (limit 85%)"
+    )
+    high = report["agents"][0]
+    assert [(c["label"], c["state"]) for c in high["candidates"]] == [
+        ("claude · claude-opus-5-5 · high", "skip"),
+        ("codex · gpt-6-sol · high", "pick"),
+    ]
+
+    by_name = {p["name"]: p for p in report["providers"]}
+    assert by_name["claude"]["status"] == "skipped"
+    assert by_name["chatgpt"]["status"] == "in_use"
+    assert by_name["openai"]["status"] == "api_key"
+    assert by_name["claude"]["windows"]["five_hour"] == {
+        "used": 90.0,
+        "resets_at": pytest.approx(soon(), abs=60),
+        "limit": 85,
+    }
+    assert by_name["claude"]["windows"]["weekly"]["used"] is None  # not reported
+    assert by_name["chatgpt"]["windows"]["weekly"]["limit"] == 80
+    assert report["text_source"] == "" and not report["compiled"]
+
+    RoutingText.objects.create(text="Lean on Claude.")
+    report = routing.routing_report(providers)
+    assert (report["text"], report["text_source"]) == ("Lean on Claude.", "page")
+
+
+@pytest.mark.django_db
+def test_agent_fallbacks_are_logged(django_user_model):
+    from django_ergo.conversation.models import RoutingSwitch
+
+    providers = found()
+    choice = pick_agent(providers, "high")
+    routing.record_agent_pick(providers, "high", choice, "Orca worker · fix tests")
+    assert not RoutingSwitch.objects.exists()  # the first choice
+    record_usage_windows("claude", {"five_hour": {"used": 92, "resets_at": soon()}})
+    choice = pick_agent(providers, "high")
+    routing.record_agent_pick(providers, "high", choice, "Orca worker · fix tests")
+    switch = RoutingSwitch.objects.get()
+    assert (switch.from_model, switch.to_model) == (
+        "claude · claude-opus-5-5 · high",
+        "codex · gpt-6-sol · high",
+    )
+    assert switch.reason == "claude 5-hour window at 92% (limit 85%)"

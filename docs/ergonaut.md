@@ -169,6 +169,14 @@ refuse logins until the window passes.
 - **Memory**: the bot's knowledge base articles, rendered as Markdown.
 - **Sessions**: every session, searchable, including threads.
 - **Costs**: usage for the last 7, 30, or 90 days, optionally filtered by bot.
+- **Routing**: for chats on an Auto model and Orca workers started with a
+  tier: each subscription's 5-hour and weekly windows against the limits, the
+  model each tier picks now (skipped candidates struck through, with the
+  reason), the priorities in plain words with the rules compiled from them,
+  and recent switches. Admins can edit the priorities; the text is saved in
+  the database and replaces the bot repo's `routing.md` until **Use
+  routing.md**. The data is `GET /api/routing` (`PUT` and `DELETE` to save or
+  reset the text).
   Headline figures show sessions with calls, total tokens, cache hit rate,
   main-chat and subscription token shares, API spend, and compaction token
   share. A token-mix bar splits input, output, cache writes, and cache reads;

@@ -10,6 +10,7 @@ import { BotPage } from './pages/BotPage'
 import { NewThread } from './pages/NewThread'
 import { Memory } from './pages/Memory'
 import { CostsPage } from './pages/Costs'
+import { RoutingPage } from './pages/Routing'
 import { ThreadsPage } from './pages/ThreadsPage'
 import { ThemeToggle } from './theme'
 import { ago } from './time'
@@ -199,6 +200,7 @@ function Shell({
             <Route path="/s/:id" element={<ChatRoute onChange={refresh} />} />
             <Route path="/sessions" element={<Sessions bots={bots} />} />
             <Route path="/costs" element={<CostsPage />} />
+            <Route path="/routing" element={<RoutingPage />} />
             <Route path="/bots/:name" element={<BotPage />} />
             <Route path="/bots/:name/new-thread" element={<NewThread onChange={refresh} />} />
             <Route path="/bots/:name/kb" element={<Memory />} />

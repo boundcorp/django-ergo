@@ -46,6 +46,59 @@ export type Session = {
   prs?: PrLink[] // pull requests it reported, newest first
 }
 
+// The Routing page (GET /api/routing): what auto/<tier> chats and Orca tiers pick now.
+export type RoutingWindow = { used: number | null; resets_at: number | null; limit: number }
+
+export type RoutingProvider = {
+  name: string
+  type: string
+  transport: string
+  subscription: boolean // a CLI on a subscription, not an API key
+  api_key_env: string
+  status: 'in_use' | 'standby' | 'skipped' | 'api_key' | 'unavailable'
+  reason: string
+  windows: { five_hour: RoutingWindow; weekly: RoutingWindow }
+  reported_at: string | null
+}
+
+export type RoutingCandidate = {
+  provider: string
+  label: string
+  ref?: string
+  agent?: string
+  model?: string
+  effort?: string
+  state: 'pick' | 'ok' | 'skip' | 'unavailable'
+  reason: string
+}
+
+export type RoutingSwitch = {
+  at: string
+  session_id: string | null
+  label: string
+  tier: string
+  from: string
+  to: string
+  reason: string
+}
+
+export type Routing = {
+  providers: RoutingProvider[]
+  tiers: { name: string; picked: string; chats: number; candidates: RoutingCandidate[] }[]
+  agents: { name: string; candidates: RoutingCandidate[] }[]
+  text: string
+  text_source: 'page' | 'file' | ''
+  file_text: string
+  updated_at: string | null
+  compiled: boolean
+  compiling: boolean
+  compile_error: string
+  rules: { limits: { provider: string; window: string; max_used: number }[] }
+  default_max_used: number
+  switches: RoutingSwitch[]
+  editable: boolean
+}
+
 export type ModelChoice = {
   id: string // provider/model
   name: string
@@ -460,6 +513,9 @@ export const api = {
   costs: (days: number, bot = '') =>
     request<Costs>('GET', `/costs?days=${days}${bot ? `&bot=${encodeURIComponent(bot)}` : ''}`),
   version: () => request<Version>('GET', '/version'),
+  routing: () => request<Routing>('GET', '/routing'),
+  saveRouting: (text: string) => request<Routing>('PUT', '/routing', { text }),
+  resetRouting: () => request<Routing>('DELETE', '/routing'),
   kbs: (bot: string) => request<KB[]>('GET', `/bots/${bot}/kbs`),
   kbArticle: (bot: string, kb: string, path: string) =>
     request<KBArticle>('GET', `/bots/${bot}/kbs/${kb}/article?path=${encodeURIComponent(path)}`),
