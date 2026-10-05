@@ -14,7 +14,7 @@ from datetime import timedelta
 
 from django.utils import timezone
 from django_ergo.conversation.chat_reply import CHAT_REPLY_KIND
-from django_ergo.conversation.models import StructuredCall
+from django_ergo.conversation.models import AgentUsage, StructuredCall
 from django_ergo.pricing import call_cost_parts
 from ninja import Router, Schema
 
@@ -79,6 +79,36 @@ class UsageOut(Schema):
     threads: list[UsageThread]
 
 
+class AgentHeadline(Schema):
+    sessions: int
+    tokens: int
+    cache_hit: float
+
+
+class AgentUsageRow(Schema):
+    worker_id: str
+    worker_title: str
+    agent: str
+    model: str
+    chat_id: str
+    chat_title: str
+    bot: str
+    worker_status: str
+    input_tokens: int
+    cache_write_tokens: int
+    cache_read_tokens: int
+    output_tokens: int
+    reasoning_tokens: int
+    tokens: int
+    cache_hit: float
+    requests: int
+
+
+class AgentsOut(Schema):
+    headline: AgentHeadline
+    rows: list[AgentUsageRow]
+
+
 class CostsOut(Schema):
     days: int
     total: Bucket
@@ -87,6 +117,7 @@ class CostsOut(Schema):
     by_model: list[Bucket]
     by_day: list[DayOut]
     unpriced_models: list[str]
+    agents: AgentsOut
     usage: UsageOut
 
 
@@ -212,6 +243,54 @@ def _usage(
     }
 
 
+def _agents(rows: list[AgentUsage]) -> dict:
+    output = []
+    total = {"input_tokens": 0, "cache_write_tokens": 0, "cache_read_tokens": 0}
+    workers = set()
+    for usage in rows:
+        session = usage.session
+        worker = usage.worker
+        tokens = usage.input_tokens + usage.cache_write_tokens + usage.cache_read_tokens + usage.output_tokens
+        workers.add(usage.worker_id)
+        total["input_tokens"] += usage.input_tokens
+        total["cache_write_tokens"] += usage.cache_write_tokens
+        total["cache_read_tokens"] += usage.cache_read_tokens
+        output.append(
+            {
+                "worker_id": str(usage.worker_id or ""),
+                "worker_title": worker.title if worker else "(deleted worker)",
+                "agent": usage.agent,
+                "model": usage.model,
+                "chat_id": str(session.id),
+                "chat_title": (session.metadata or {}).get("title") or f"{session.bot_name or 'Bot'} main",
+                "bot": usage.bot_name,
+                "worker_status": worker.status if worker else "deleted",
+                "input_tokens": usage.input_tokens,
+                "cache_write_tokens": usage.cache_write_tokens,
+                "cache_read_tokens": usage.cache_read_tokens,
+                "output_tokens": usage.output_tokens,
+                "reasoning_tokens": usage.reasoning_tokens,
+                "tokens": tokens,
+                "cache_hit": (
+                    usage.cache_read_tokens / (usage.input_tokens + usage.cache_write_tokens + usage.cache_read_tokens)
+                    if usage.input_tokens + usage.cache_write_tokens + usage.cache_read_tokens
+                    else 0.0
+                ),
+                "requests": usage.requests,
+            }
+        )
+    output.sort(key=lambda row: (-row["tokens"], row["worker_title"], row["model"]))
+    denominator = total["input_tokens"] + total["cache_write_tokens"] + total["cache_read_tokens"]
+    return {
+        "headline": {
+            "sessions": len(workers),
+            "tokens": sum(row["tokens"] for row in output),
+            "cache_hit": total["cache_read_tokens"] / denominator if denominator else 0.0,
+        },
+        "rows": output,
+    }
+
+
 @router.get("/costs", response=CostsOut)
 def costs(request, days: int = 30, bot: str = ""):
     days = max(1, min(days, 366))
@@ -222,6 +301,13 @@ def costs(request, days: int = 30, bot: str = ""):
     if bot:
         calls = calls.filter(session__bot_name=bot)
     calls = list(calls.order_by("created_at"))
+    agent_rows = AgentUsage.objects.filter(last_at__gte=since, last_at__lte=timezone.now()).select_related(
+        "worker", "session"
+    )
+    if not request.auth.is_superuser:
+        agent_rows = agent_rows.filter(session__user=request.auth)
+    if bot:
+        agent_rows = agent_rows.filter(bot_name=bot)
 
     total = _empty("total")
     by_kind: dict[str, dict] = {}
@@ -265,5 +351,6 @@ def costs(request, days: int = 30, bot: str = ""):
         "by_model": _sorted(by_model),
         "by_day": series,
         "unpriced_models": sorted(unpriced),
+        "agents": _agents(list(agent_rows)),
         "usage": _usage(total, by_session, main_tokens, subscription_tokens, compaction_tokens),
     }

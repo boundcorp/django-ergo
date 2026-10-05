@@ -11,6 +11,7 @@
                                    # "" reads them on this host)
         max_attach_bytes: 20000000
         worker_poll_seconds: 120   # how often orca_start_worker's watcher checks the agent
+        usage_minutes: 10          # minimum minutes between agent-session usage scans
         stall_minutes: 10          # a running worker with no new output this long shows as stalled
 
 The bot runs the CLI on the host Ergonaut runs on, as that user. Tools:
@@ -39,6 +40,10 @@ The bot runs the CLI on the host Ergonaut runs on, as that user. Tools:
   latest output (``worker-read``: its transcript, or its terminal) into the
   worker's activity, which Ergonaut's worker cards show with the time since it
   last did something; ``worker_log`` reads the whole recent log on demand.
+- ``orca:watch`` also reads the coding agent's own session files from
+  ``files_host`` (or this host) every ``usage_minutes`` and when it settles.
+  It records Claude Code, Codex, and omp token counts per worker for Costs;
+  scanning is best effort and never changes the worker outcome.
 - ``orca_run``: every other command (creating worktrees, starting and
   stopping workers, sending to terminals...). Each call needs approval unless
   ``approve_changes: false``.
@@ -52,12 +57,16 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
+import shlex
 import shutil
 import subprocess
 import time
 from datetime import UTC
 from datetime import datetime
+from datetime import timedelta
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from django_ergo.bots.plugins import BotPlugin
@@ -189,6 +198,8 @@ ACTIVITY_ENTRIES = 8  # entries kept on the worker for its card
 ACTIVITY_CHARS = 300  # per entry on the card
 LOG_CHARS = 4000  # per entry in the full log
 # The full log's screen lines (a transcript stops at Orca's 50 messages).
+USAGE_MINUTES = 10  # session-file scan interval (usage_minutes)
+log = logging.getLogger(__name__)
 LOG_LINES = 400
 ANSI = re.compile(
     r"\x1b(?:\[[0-9;?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[()#][0-9A-Za-z]|[@-Z\\-_])"
@@ -345,6 +356,7 @@ class OrcaPlugin(BotPlugin):
         self.root_only = bool(self.config.get("root_only", True))
         self.timeout = int(self.config.get("timeout", 120))
         self.files_host = str(self.config.get("files_host", self.environment) or "")
+        self.usage_minutes = float(self.config.get("usage_minutes", USAGE_MINUTES))
         self.max_attach_bytes = int(self.config.get("max_attach_bytes", 20_000_000))
         self.poll_seconds = float(self.config.get("worker_poll_seconds", POLL_SECONDS))
         self.stall_minutes = float(self.config.get("stall_minutes", STALL_MINUTES))
@@ -671,16 +683,23 @@ class OrcaPlugin(BotPlugin):
         session.metadata = meta
         return handle, run_id
 
-    def exact_worktree(self, selector: str) -> str:
-        """Orca's exact id:<repo>::<path> selector (remote calls want it)."""
+    def resolved_worktree(self, selector: str) -> tuple[str, str | None]:
+        """Resolve the stable Orca selector and, when encoded, its host path."""
         if selector.startswith("id:"):
-            return selector
-        shown = self.cli_json(["worktree", "show", "--worktree", selector])
-        found = _first_key(shown, ("id",))
-        if not found:
+            _, separator, path = selector.partition("::")
+            return selector, path if separator and path.startswith("/") else None
+        try:
+            shown = self.cli_json(["worktree", "show", "--worktree", selector])
+        except (OSError, subprocess.TimeoutExpired, ValueError):
+            log.warning(
+                "Couldn't resolve worktree path for usage capture", exc_info=True
+            )
+            return selector, None
+        worktree_id = _first_key(shown, ("id",))
+        if not worktree_id:
             msg = f"No worktree {selector!r}"
             raise ValueError(msg)
-        return f"id:{found}"
+        return f"id:{worktree_id}", _first_path(shown)
 
     def pin_omp_model(self, worktree: str, model: str, effort: str = "") -> None:
         """Make omp in this worktree use ``model`` (at ``effort``): a project
@@ -776,7 +795,7 @@ class OrcaPlugin(BotPlugin):
         if ctx.session is None:
             msg = "Workers belong to a chat"
             raise ValueError(msg)
-        worktree = self.exact_worktree(worktree)
+        worktree, worktree_path = self.resolved_worktree(worktree)
         title = (title or spec.strip().splitlines()[0])[:120]
         try:
             task_id, run_id, receipt = self.dispatch(
@@ -794,10 +813,17 @@ class OrcaPlugin(BotPlugin):
         if not dispatch_id:
             msg = f"worker-start gave no dispatch id: {json.dumps(receipt)[:400]}"
             raise ValueError(msg)
+        state = {
+            "task": task_id,
+            "seen": [],
+            "agent": agent,
+        }
+        if worktree_path:
+            state["worktree"] = worktree_path
         worker = ctx.workers.start(
             "orca:watch",
             title=f"{agent}: {title}",
-            state={"task": task_id, "seen": []},
+            state=state,
             dispatch=dispatch_id,
             run=run_id,
         )
@@ -810,6 +836,104 @@ class OrcaPlugin(BotPlugin):
                 "worktree": worktree,
             },
         }
+
+    def scan_usage(self, ctx, *, settled: bool = False) -> None:
+        """Best-effort usage scan; failure leaves the last stored snapshot intact."""
+        if not (agent := ctx.state.get("agent")) or not (
+            worktree := ctx.state.get("worktree")
+        ):
+            return
+        now = time.time()
+        previous = float(ctx.state.get("usage_scanned_at") or 0)
+        if not settled and now - previous < self.usage_minutes * 60:
+            return
+        from django.utils import timezone
+
+        from django_ergo.conversation.models import AgentUsage
+
+        since = ctx.worker.created_at - timedelta(minutes=1)
+        until = ctx.worker.completed_at or timezone.now()
+        script = (
+            Path(__file__).with_name("agent_usage_scan.py").read_text(encoding="utf-8")
+        )
+        args = [str(agent), str(worktree), since.isoformat(), until.isoformat()]
+        argv = (
+            [
+                "ssh",
+                "-o",
+                "BatchMode=yes",
+                self.files_host,
+                f"python3 - {shlex.join(args)}",
+            ]
+            if self.files_host
+            else ["python3", "-", *args]
+        )
+        try:
+            proc = subprocess.run(  # noqa: S603 — fixed interpreter and scanner source
+                argv,
+                input=script,
+                capture_output=True,
+                text=True,
+                timeout=self.timeout,
+                check=False,
+            )
+            if proc.returncode:
+                log.warning(
+                    "Couldn't scan %s usage for worker %s: %s",
+                    agent,
+                    ctx.worker.pk,
+                    (proc.stderr or proc.stdout).strip()[:300],
+                )
+                return
+            data = json.loads(proc.stdout)
+            models = data.get("models") if isinstance(data, dict) else None
+            if not isinstance(models, dict):
+                log.warning(
+                    "Usage scanner returned no models for worker %s", ctx.worker.pk
+                )
+                return
+
+            def parse_at(value):
+                return (
+                    datetime.fromisoformat(value.replace("Z", "+00:00"))
+                    if isinstance(value, str)
+                    else None
+                )
+
+            seen = []
+            for model, usage in models.items():
+                if not isinstance(model, str) or not isinstance(usage, dict):
+                    continue
+                seen.append(model)
+                AgentUsage.objects.update_or_create(
+                    worker=ctx.worker,
+                    model=model,
+                    defaults={
+                        "session": ctx.session,
+                        "bot_name": ctx.worker.bot_name,
+                        "source": "orca",
+                        "agent": agent,
+                        "input_tokens": int(usage.get("input", 0)),
+                        "cache_write_tokens": int(usage.get("cache_write", 0)),
+                        "cache_read_tokens": int(usage.get("cache_read", 0)),
+                        "output_tokens": int(usage.get("output", 0)),
+                        "reasoning_tokens": int(usage.get("reasoning", 0)),
+                        "requests": int(usage.get("requests", 0)),
+                        "first_at": parse_at(usage.get("first_at")),
+                        "last_at": parse_at(usage.get("last_at")),
+                    },
+                )
+            AgentUsage.objects.filter(worker=ctx.worker).exclude(
+                model__in=seen
+            ).delete()
+            ctx.state["usage_scanned_at"] = now
+        except Exception:  # noqa: BLE001 — agent session files are best effort
+            log.warning(
+                "Couldn't scan %s usage for worker %s",
+                agent,
+                ctx.worker.pk,
+                exc_info=True,
+            )
 
     def watch(self, ctx, dispatch: str, run: str):
         """Worker function ``orca:watch``: poll the dispatch until it settles, pass the
@@ -835,6 +959,7 @@ class OrcaPlugin(BotPlugin):
                 )
         ctx.state["seen"] = sorted(seen)
         self.record_activity(ctx, dispatch, shown)
+        self.scan_usage(ctx, settled=report is not None or status in SETTLED)
         if ctx.stopping:
             return None
         if report is not None or status in SETTLED:

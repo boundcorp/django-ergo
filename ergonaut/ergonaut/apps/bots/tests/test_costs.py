@@ -2,7 +2,8 @@ import json
 
 import pytest
 from django.contrib.auth import get_user_model
-from django_ergo.conversation.models import ConversationSession, StructuredCall
+from django.utils import timezone
+from django_ergo.conversation.models import AgentUsage, ConversationSession, StructuredCall, Worker
 
 
 @pytest.fixture
@@ -236,3 +237,69 @@ def test_usage_respects_user_scope_and_bot_filter(client):
     assert usage["headline"]["threads"] == 1
     assert usage["headline"]["tokens"] == 10
     assert [row["bot"] for row in usage["threads"]] == ["kitchen"]
+
+
+@pytest.mark.django_db
+def test_agent_usage_has_its_own_scoped_and_filtered_costs_block(client):
+    cook = get_user_model().objects.create_user("cook", "cook@example.com", "pw")
+    other = get_user_model().objects.create_user("other", "other@example.com", "pw")
+    kitchen = ConversationSession.objects.create(user=cook, bot_name="kitchen", engine_type="openai")
+    helper = ConversationSession.objects.create(user=cook, bot_name="helper", engine_type="openai")
+    hidden = ConversationSession.objects.create(user=other, bot_name="kitchen", engine_type="openai")
+    rows = [
+        (kitchen, "kitchen", "Fix recipe", "claude-sonnet", 10, 20),
+        (helper, "helper", "Fix helper", "gpt-6-codex", 5, 5),
+        (hidden, "kitchen", "Private work", "claude-opus", 99, 99),
+    ]
+    for session, bot, title, model, input_tokens, output_tokens in rows:
+        worker = Worker.objects.create(
+            session=session, bot_name=bot, title=title, function="orca:watch", status="completed"
+        )
+        AgentUsage.objects.create(
+            worker=worker,
+            session=session,
+            bot_name=bot,
+            agent="codex",
+            model=model,
+            input_tokens=input_tokens,
+            cache_read_tokens=5,
+            output_tokens=output_tokens,
+            requests=2,
+            last_at=timezone.now(),
+        )
+    client.post(
+        "/api/auth/login",
+        json.dumps({"username": "cook", "password": "pw"}),
+        content_type="application/json",
+    )
+
+    agents = client.get("/api/costs?bot=kitchen").json()["agents"]
+
+    assert agents["headline"] == {
+        "sessions": 1,
+        "tokens": 35,
+        "cache_hit": pytest.approx(5 / 15),
+    }
+    assert agents["rows"] == [
+        {
+            "worker_id": str(Worker.objects.get(title="Fix recipe").id),
+            "worker_title": "Fix recipe",
+            "agent": "codex",
+            "model": "claude-sonnet",
+            "chat_id": str(kitchen.id),
+            "chat_title": "kitchen main",
+            "bot": "kitchen",
+            "worker_status": "completed",
+            "input_tokens": 10,
+            "cache_write_tokens": 0,
+            "cache_read_tokens": 5,
+            "output_tokens": 20,
+            "reasoning_tokens": 0,
+            "tokens": 35,
+            "cache_hit": pytest.approx(5 / 15),
+            "requests": 2,
+        }
+    ]
+
+    AgentUsage.objects.filter(session=kitchen).update(last_at=timezone.now() - timezone.timedelta(days=31))
+    assert client.get("/api/costs?bot=kitchen").json()["agents"]["rows"] == []

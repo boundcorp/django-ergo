@@ -382,6 +382,14 @@ reset), `orca_start_worker` makes new ones and tries once more. If a worker's ag
 terminal exits or vanishes without a `worker_done` (Orca keeps such a dispatch
 "dispatched"), the watcher fails the worker after five minutes and tells the
 chat why.
+  The watcher also scans its agent's session files on the worktree host every
+  `usage_minutes` (default 10) and once after settlement. Claude Code, Codex,
+  and omp tokens appear per worker under **Agent sessions** on Costs. Set
+  `files_host` to the SSH host that holds the worktrees, or `""` to scan files
+  locally. It is best effort: an unreadable session file preserves the last
+  recorded counts and does not fail the worker. Counts are attributed by
+  worktree and the worker time window, so overlapping workers in one worktree
+  can each include the same agent requests.
 
 ## Chats
 
@@ -741,8 +749,10 @@ For review screens the plugin also has `draft_diff()`, `pull_requests()`,
 
 ```yaml
 - name: orca
-  environment: devbox        # every call is pinned to this Orca environment
+  environment: devhost        # every call is pinned to this Orca environment
   executable: orca-ide       # default: orca-ide if installed, else orca
+  files_host: devhost        # SSH host holding worktrees; "" means local
+  usage_minutes: 10          # minimum minutes between agent session scans
   approve_changes: true
   root_only: true
 ```

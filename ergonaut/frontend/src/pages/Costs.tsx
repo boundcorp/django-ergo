@@ -207,6 +207,92 @@ function Usage({ data }: { data: Costs }) {
   )
 }
 
+export function AgentSessions({ data }: { data: Costs }) {
+  const { headline, rows } = data.agents
+  const totals = PARTS.map(([part]) => ({
+    part,
+    tokens: rows.reduce((sum, row) => sum + row[`${part}_tokens`], 0),
+  }))
+  return (
+    <section className="mt-8">
+      <h2 className="font-display text-2xl font-semibold">Agent sessions</h2>
+      <div className="mt-4 grid gap-3 sm:grid-cols-3">
+        <Tile label="Agent sessions" value={headline.sessions.toLocaleString()} />
+        <Tile label="Tokens" value={tokens(headline.tokens)} />
+        <Tile label="Cache hit" value={percent(headline.cache_hit)} />
+      </div>
+      <div className="surface-card mt-4 p-5">
+        <h3 className="text-sm font-semibold">Token mix</h3>
+        <div
+          className="mt-3 flex h-5 overflow-hidden rounded-control bg-raised"
+          role="img"
+          aria-label="Agent token mix"
+        >
+          {totals.map(
+            ({ part, tokens: count }, index) =>
+              count > 0 && (
+                <div
+                  key={part}
+                  className={PART_COLORS[index]}
+                  style={{ width: `${(100 * count) / Math.max(1, headline.tokens)}%` }}
+                />
+              ),
+          )}
+        </div>
+        <div className="mt-3 flex flex-wrap gap-x-6 gap-y-2 text-xs text-muted">
+          {totals.map(({ part, tokens: count }, index) => (
+            <div key={part} className="flex items-center gap-2">
+              <span className={`h-2.5 w-2.5 rounded-sm ${PART_COLORS[index]}`} />
+              <span>
+                {PARTS[index][1]}: {count.toLocaleString()}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className="mt-4 overflow-x-auto rounded-card border border-stroke">
+        <table className="w-full min-w-[850px] text-sm">
+          <thead className="border-b border-stroke text-xs text-muted">
+            <tr>
+              <th className="px-3 py-2 text-left font-normal">Worker</th>
+              <th className="px-3 py-2 text-left font-normal">Agent</th>
+              <th className="px-3 py-2 text-left font-normal">Model</th>
+              <th className="px-3 py-2 text-right font-normal">Tokens</th>
+              <th className="px-3 py-2 text-right font-normal">Cache hit</th>
+              <th className="px-3 py-2 text-right font-normal">Requests</th>
+              <th className="px-3 py-2 text-left font-normal">Status</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-stroke">
+            {rows.map(row => (
+              <tr key={`${row.worker_id}-${row.model}`}>
+                <td className="max-w-56 truncate px-3 py-2">
+                  <Link to={`/s/${row.chat_id}`} className="text-accent hover:underline" title={row.chat_title}>
+                    {row.worker_title}
+                  </Link>
+                </td>
+                <td className="px-3 py-2 text-muted">{row.agent}</td>
+                <td className="px-3 py-2 text-muted">{row.model}</td>
+                <td className="px-3 py-2 text-right tabular-nums">{row.tokens.toLocaleString()}</td>
+                <td className="px-3 py-2 text-right tabular-nums">{percent(row.cache_hit)}</td>
+                <td className="px-3 py-2 text-right tabular-nums">{row.requests.toLocaleString()}</td>
+                <td className="px-3 py-2 text-muted">{row.worker_status}</td>
+              </tr>
+            ))}
+            {!rows.length && (
+              <tr>
+                <td colSpan={7} className="px-3 py-4 text-muted">
+                  No agent sessions in this period.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  )
+}
+
 // Tokens, with what they cost at that part's rate on hover.
 function PartCell({ bucket, part }: { bucket: CostBucket; part: (typeof PARTS)[number][0] }) {
   const count = bucket[`${part}_tokens`]
@@ -358,6 +444,7 @@ export function CostsPage() {
       </div>
 
       <Usage data={data} />
+      <AgentSessions data={data} />
 
       <h2 className="mt-12 font-display text-2xl font-semibold">Costs</h2>
       <div className="mt-6 grid max-w-4xl grid-cols-1 gap-4 sm:grid-cols-3">

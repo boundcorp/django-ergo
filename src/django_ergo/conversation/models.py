@@ -602,6 +602,44 @@ class Worker(TimeStampedMixin):
         return self.status in (WorkerStatus.QUEUED, WorkerStatus.RUNNING)
 
 
+class AgentUsage(TimeStampedMixin):
+    """Token usage an Orca worker's coding agent wrote to its own session files."""
+
+    worker = models.ForeignKey(
+        Worker,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="agent_usage",
+    )
+    session = models.ForeignKey(
+        ConversationSession, on_delete=models.CASCADE, related_name="agent_usage"
+    )
+    bot_name = models.CharField(max_length=100, db_index=True)
+    source = models.CharField(max_length=20, default="orca")
+    agent = models.CharField(max_length=20)
+    model = models.CharField(max_length=200)
+    input_tokens = models.PositiveBigIntegerField(default=0)
+    cache_write_tokens = models.PositiveBigIntegerField(default=0)
+    cache_read_tokens = models.PositiveBigIntegerField(default=0)
+    output_tokens = models.PositiveBigIntegerField(default=0)
+    reasoning_tokens = models.PositiveBigIntegerField(default=0)
+    requests = models.PositiveIntegerField(default=0)
+    first_at = models.DateTimeField(null=True, blank=True)
+    last_at = models.DateTimeField(null=True, blank=True, db_index=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["worker", "model"], name="agent_usage_worker_model"
+            )
+        ]
+        indexes = [models.Index(fields=["session", "last_at"])]
+
+    def __str__(self):
+        return f"{self.agent} {self.model} for {self.worker_id or self.session_id}"
+
+
 class KBUsageMode(models.TextChoices):
     READ = "read", "Read"
     WRITE = "write", "Write"
