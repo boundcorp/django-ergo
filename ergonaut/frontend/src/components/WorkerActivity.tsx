@@ -78,7 +78,7 @@ export function WorkerPulse({ worker }: { worker: Worker }) {
 export function WorkerActivityView({ worker, lines = 4 }: { worker: Worker; lines?: number }) {
   const [open, setOpen] = useState(false)
   const entries = worker.activity?.entries ?? []
-  const canLog = !!worker.session_id && worker.function.startsWith('orca:')
+  const canLog = !!worker.session_id && (worker.function.startsWith('orca:') || worker.function.startsWith('agent:'))
   if (!entries.length && !canLog) return null
   return (
     <div className="mt-1.5">
@@ -136,7 +136,9 @@ function WorkerLogView({ sessionId, worker }: { sessionId: string; worker: Worke
       </div>
       {(error || log?.error) && <div className="mb-1 text-[11px] text-danger">{error || log?.error}</div>}
       <div className="flex max-h-96 flex-col gap-1 overflow-y-auto">
-        {log?.entries.map((entry, i) => <Entry key={i} entry={entry} full />)}
+        {log?.entries.map((entry, i) => (
+          <Entry key={i} entry={entry} full />
+        ))}
         {log && !log.entries.length && <div className="text-[11px] text-muted">No output yet.</div>}
       </div>
     </div>

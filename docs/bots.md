@@ -355,17 +355,22 @@ def deploy(ctx, release: str) -> str:
   `ctx.progress(text)` updates the status line, `ctx.tell(text)` sends the chat
   a message while it keeps running (e.g. a question), and `ctx.stopping` turns
   true when it's cancelled.
-- Functions are the bot's `@bot_task`s (`task:<name>`) and plugin worker
-  functions (`<plugin>:<name>`, from `BotPlugin.worker_functions()`).
-- Every chat has the `workers` skill: `ergo_worker_list`, `ergo_worker_cancel`,
-  and `ergo_worker_start` for the bot's `@bot_task`s.
+- Functions are the bot's `@bot_task`s (`task:<name>`), plugin worker
+  functions (`<plugin>:<name>`, from `BotPlugin.worker_functions()`) and
+  agent watchers (`agent:<manager>`, see [Agents](#agents)).
+- Every chat has the `workers` skill: `ergo_worker_list`, `ergo_worker_cancel`
+  (which also stops a coding agent the worker watches), and `ergo_worker_start`
+  for the bot's `@bot_task`s.
 - `DJANGO_ERGO["WORKER_RUNNER"]` runs the steps (default: a thread);
   `SESSION_NOTIFIER` wakes live views when a worker changes.
 
-The Orca plugin's `orca_start_worker(spec, worktree, agent)` starts a
-supervised Orca worker (with approval) and a Worker (`orca:watch`) that polls
-its dispatch every `worker_poll_seconds` (default 120), passes the agent's
-questions to the chat, and returns its `worker_done` report. Each check also
+The Orca plugin's agent manager starts a supervised Orca worker (with
+approval) in the worktree the brief names, and its watcher polls the dispatch
+every `worker_poll_seconds` (default 120), passes the agent's questions to the
+chat (`ergo_agent_reply` answers them with `orchestration reply`), and returns
+its `worker_done` report. `orca_start_worker(spec, worktree, agent)` is the
+same as `ergo_agent_start` with Orca's parameter names; workers started before
+agents existed (`orca:watch`) keep working. Each check also
 reads the agent's latest output (`orchestration worker-read`: its transcript,
 or its terminal) into the worker's activity (`WorkerContext.activity`), with
 the time it last did something: the newest transcript time or heartbeat, or
@@ -380,7 +385,7 @@ picks it up. With `tier: low|medium|high` instead, the agent, model and effort
 come from the `agents` tiers in providers.yaml, on whichever subscription has
 room (see [Routing by tier](building-bots.md#routing-by-tier)). Each chat keeps one Orca mailbox terminal and Run for its
 workers; if Orca no longer knows them (their worktree was removed, Orca was
-reset), `orca_start_worker` makes new ones and tries once more. If a worker's agent
+reset), starting an agent makes new ones and tries once more. If a worker's agent
 terminal exits or vanishes without a `worker_done` (Orca keeps such a dispatch
 "dispatched"), the watcher fails the worker after five minutes and tells the
 chat why.
@@ -392,6 +397,56 @@ chat why.
   recorded counts and does not fail the worker. Counts are attributed by
   worktree and the worker time window, so overlapping workers in one worktree
   can each include the same agent requests.
+
+## Agents
+
+A coding agent (Codex, Claude Code, omp) works on a brief for minutes to
+hours, on a subscription and never an API key. An **agent manager** is
+whatever can run one: the Orca plugin today; a host over ssh and a local
+shell are next. A plugin adds managers from `agent_managers()`:
+
+```python
+from django_ergo.bots.agents import AgentCheck, AgentManager, AgentQuestion
+
+class BoxAgents(AgentManager):
+    agents = ("codex", "claude")     # empty: any
+    requires_approval = True         # start, reply and stop ask first
+    poll_seconds = 120
+    where = "the build box"
+
+    def start(self, ctx, spec): ...  # AgentSpec(brief, workspace, agent, model,
+                                     # effort, title, tier); return a JSON handle
+    def check(self, ctx, handle):    # one look, from the watcher
+        return AgentCheck("running", progress="editing", questions=[
+            AgentQuestion(id="q1", body="Blue or red?")])
+        # or AgentCheck("done", report=...), AgentCheck("failed", error=...)
+    def reply(self, ctx, handle, question_id, text): ...
+    def stop(self, handle): ...      # optional
+    def log(self, worker, handle): ...  # optional: full recent output
+
+class BoxPlugin(BotPlugin):
+    name = "box"
+    def on_load(self): self.manager = BoxAgents()
+    def agent_managers(self): return {"box": self.manager}
+```
+
+A bot with a manager has the `agents` skill:
+
+- `ergo_agent_start(brief, workspace, title, tier | agent/model/effort,
+  manager)` asks the manager to start the agent and starts a polling Worker,
+  `agent:<manager>`, with the handle as its argument. With `tier`, the agent,
+  model and effort come from providers.yaml's `agents` tiers (see
+  [Routing by tier](building-bots.md#routing-by-tier)); the manager must run
+  the picked agent. `manager` is needed only when the chat has more than one.
+- Each check (`AgentManager.check`) passes new questions to the chat once,
+  as a message naming the worker and question; `ergo_agent_reply(worker_id,
+  question_id, answer)` answers. `done` finishes the worker with the report
+  as its result, which comes back as a message; `failed` fails it.
+- `ergo_agent_stop(worker_id)`, or cancelling the worker, calls the
+  manager's `stop` and cancels the worker.
+- The worker card's log (`workers.log`) reads `AgentManager.log`. A check
+  may also keep activity and state on the worker (`ctx.activity`,
+  `ctx.state`), as Orca's does.
 
 ## Chats
 
@@ -619,6 +674,8 @@ class AuditPlugin(BotPlugin):
     async def after_turn(self, session, message, result): ...
     async def on_session_closed(self, session): ...
     async def serve(self): ...                        # long-running, e.g. a chat channel
+    def worker_functions(self): return {}             # "<plugin>:<name>" workers
+    def agent_managers(self): return {}               # where coding agents run (Agents)
 ```
 
 Hooks may be sync or async. Every key in a plugin's `bot.yaml` entry other
@@ -771,6 +828,9 @@ else, such as `worktree create`, `terminal send` or `orchestration
 worker-start`, and waits for approval unless `approve_changes: false`.
 Arguments are an argv list, never a shell string, and `--json` is added for
 the bot. With `environment` set, the bot can't point a call elsewhere.
+It is also the `orca` agent manager (see [Agents](#agents)): `agents`
+(default `[codex, claude, omp]`) lists what `ergo_agent_start` may start, and
+loading the `orca` skill loads `agents` with it.
 
 ### kubectl
 

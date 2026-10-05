@@ -149,7 +149,7 @@ refuse logins until the window passes.
   `ergo_message_up`) shows as a card instead of a tool call: the chat it went
   to, with the bot's icon, a live status (queued, working, waiting on you,
   done, failed), the reply, and the pull requests that came out of it. The
-  card opens that chat. Workers (`orca_start_worker`, `ergo_worker_start`)
+  card opens that chat. Workers (`ergo_agent_start`, `orca_start_worker`, `ergo_worker_start`)
   get a card with their status, progress and PRs. An Orca worker's card also
   shows the agent's last few tool calls and output lines, how long ago it
   last did something ("stalled" past the plugin's `stall_minutes`, or
