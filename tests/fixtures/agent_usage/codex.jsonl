@@ -1,0 +1,7 @@
+{"type":"session_meta","payload":{"cwd":"/work/project"}}
+{"type":"turn_context","payload":{"model":"gpt-6-codex"}}
+{"type":"event_msg","timestamp":"2026-10-04T12:00:00Z","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":100,"cached_input_tokens":30,"output_tokens":20,"reasoning_output_tokens":5}}}}
+{"type":"event_msg","timestamp":"2026-10-04T12:00:01Z","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":100,"cached_input_tokens":30,"output_tokens":20,"reasoning_output_tokens":5}}}}
+{"type":"event_msg","timestamp":"2026-10-04T12:00:02Z","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":150,"cached_input_tokens":40,"output_tokens":30}}}}
+{"type":"event_msg","timestamp":"2026-10-04T12:00:03Z","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":180,"cached_input_tokens":45,"output_tokens":40}}}}
+{"type":"event_msg","timestamp":"2026-10-04T12:00:04Z","payload":{"type":"token_count","info":null}}

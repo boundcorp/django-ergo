@@ -151,6 +151,10 @@ export type Costs = {
     }
     threads: UsageThread[]
   }
+  agents: {
+    headline: { sessions: number; tokens: number; cache_hit: number }
+    rows: AgentUsage[]
+  }
 }
 
 export type UsageThread = {
@@ -168,6 +172,25 @@ export type UsageThread = {
   cache_hit: number
   share: number
   cost: number
+}
+
+export type AgentUsage = {
+  worker_id: string
+  worker_title: string
+  agent: string
+  model: string
+  chat_id: string
+  chat_title: string
+  bot: string
+  worker_status: string
+  input_tokens: number
+  cache_write_tokens: number
+  cache_read_tokens: number
+  output_tokens: number
+  reasoning_tokens: number
+  tokens: number
+  cache_hit: number
+  requests: number
 }
 
 export type BotDetail = Bot & {

@@ -174,8 +174,13 @@ refuse logins until the window passes.
   the sortable per-thread table can be grouped by thread, bot, or model and
   links to each chat. Claude CLI subscription calls contribute tokens but
   show `sub` instead of dollars and are excluded from estimated API spend.
-  Below Usage, spend remains broken down by day, call kind (chat replies
-  split by bot), and model. Admins see everyone's calls; others see their own.
+  **Agent sessions** follows Usage and separately shows Claude Code, Codex,
+  and omp tokens that Orca workers record from the agents' session files.
+  Those subscription tokens are not dollar estimates and do not affect Usage
+  totals. Agent rows link to their chat and show the worker, agent, model,
+  cache hit, request count, and status. Below Usage, spend remains broken down
+  by day, call kind (chat replies split by bot), and model. Admins see
+  everyone's calls and agent sessions; others see their own.
 
 Django's admin is at `/mgmt/`. The API is at `/api/` with docs at
 `/api/docs`.
