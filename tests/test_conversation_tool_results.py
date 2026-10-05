@@ -28,6 +28,12 @@ User = get_user_model()
 BIG = "\n".join(f"node {i}: rect" for i in range(60))  # 60 lines, > 500 chars
 
 
+@pytest.fixture(autouse=True)
+def count_only(settings):
+    """Most tests here check the count; the size budget would keep every BIG."""
+    settings.DJANGO_ERGO = {"TOOL_RESULTS_CHARS_IN_CONTEXT": 0}
+
+
 def claude_exchange(tool_id, result, *, name="tree", is_error=False):
     return [
         {
@@ -94,7 +100,7 @@ def test_claude_keeps_newest_large_results_and_stubs_older_ones():
     assert results[2:] == [BIG, BIG, BIG]
     assert results[0] == results[1]
     assert results[0].startswith("[tree result, 60 lines, ")
-    assert "superseded, call the tool again if you need it]" in results[0]
+    assert "trimmed from context to save space, call the tool again" in results[0]
     assert messages == before  # stored history is untouched
     # Pairing stays valid: every tool_use still has its tool_result.
     uses = [b["id"] for m in sent if m["role"] == "assistant" for b in m["content"]]
@@ -152,11 +158,34 @@ def test_setting_controls_the_default_and_none_turns_it_off(settings):
     messages = [*claude_exchange("t0", BIG), *claude_exchange("t1", BIG)]
     assert _results(trim_tool_results(messages))[0] == BIG  # default keeps 3
 
-    settings.DJANGO_ERGO = {"TOOL_RESULTS_IN_CONTEXT": 1}
+    settings.DJANGO_ERGO = {
+        "TOOL_RESULTS_IN_CONTEXT": 1,
+        "TOOL_RESULTS_CHARS_IN_CONTEXT": 0,
+    }
     assert _results(trim_tool_results(messages))[0].startswith("[tree result")
 
     settings.DJANGO_ERGO = {"TOOL_RESULTS_IN_CONTEXT": None}
     assert trim_tool_results(messages) is messages
+
+
+def test_size_budget_keeps_more_small_results(settings):
+    settings.DJANGO_ERGO = {}  # defaults: keep 3, 40,000 chars
+    small = [m for i in range(10) for m in claude_exchange(f"f{i}", BIG)]
+    assert _results(trim_tool_results(small)) == [BIG] * 10
+
+    huge = "x" * 15_000
+    messages = [
+        *claude_exchange("old", BIG),
+        *claude_exchange("h0", huge),
+        *claude_exchange("h1", huge),
+        *claude_exchange("h2", huge),
+        *claude_exchange("new", BIG),
+    ]
+    sent = _results(trim_tool_results(messages))
+    # The newest three always stay; h0 would go over the budget, so it and
+    # everything older is stubbed.
+    assert sent[2:] == [huge, huge, BIG]
+    assert sent[0].startswith("[tree result") and sent[1].startswith("[tree result")
 
 
 # ---------------------------------------------------------------------------

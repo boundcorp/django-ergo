@@ -111,8 +111,11 @@ downscaled to 1024px with Pillow when it's installed; older ones show as
 
 Large tool results get the same treatment: each model call carries the
 newest three (`tool_results_in_context` in bot.yaml, default
-`DJANGO_ERGO["TOOL_RESULTS_IN_CONTEXT"]`) in full, and older ones over 500
-characters go as a stub naming the tool and its size, so a long turn that
+`DJANGO_ERGO["TOOL_RESULTS_IN_CONTEXT"]`) in full, plus older ones while the
+kept results total at most 40,000 characters
+(`DJANGO_ERGO["TOOL_RESULTS_CHARS_IN_CONTEXT"]`), so a turn reading a handful
+of small files keeps them all. Older ones over 500 characters go as a stub
+naming the tool and its size, so a long turn that
 keeps reading a big dump doesn't re-send every earlier copy. History keeps
 every result; the bot calls the tool again if it needs an old one. See
 [structured-calls.md](structured-calls.md).
