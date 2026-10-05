@@ -17,7 +17,7 @@ import Files from '../components/Files'
 import Markdown from '../components/Markdown'
 import ModelPicker from '../components/ModelPicker'
 import { PageViewer, Pins } from '../components/Pins'
-import { AttachmentView, Transcript } from '../components/Transcript'
+import { AttachmentView, replySuggestions, Transcript } from '../components/Transcript'
 import { WorkerActivityView, WorkerPulse } from '../components/WorkerActivity'
 import { agoLong } from '../time'
 
@@ -374,8 +374,12 @@ export function Chat({ onChange }: { onChange: () => void }) {
 
   const lastCall = detail.calls[detail.calls.length - 1]
   const waiting = lastCall?.status === 'awaiting_approval' ? lastCall.pending_approvals : []
-  const suggestions = !waiting.length ? (last?.suggestions ?? lastCall?.response?.suggestions ?? []) : []
+  const suggestions = !waiting.length ? replySuggestions(last?.suggestions ?? lastCall?.response?.suggestions) : []
   const archived = detail.session.status === 'completed' && detail.session.role === 'thread'
+  // A turn doesn't touch the session row, so its updated_at stays at creation.
+  const lastActivity = [detail.session.updated_at, detail.messages[detail.messages.length - 1]?.timestamp]
+    .filter((t): t is string => !!t)
+    .reduce((a, b) => (Date.parse(b) > Date.parse(a) ? b : a))
   const closed = detail.session.status === 'completed' && !archived
   const thinking = busy || !!pending || lastCall?.status === 'in_progress'
   // A turn is running that Stop can reach (not just this browser's request in flight).
@@ -397,7 +401,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
             <div className="mt-1 text-sm text-muted">
               {detail.session.bot} · {detail.session.role || 'session'} ·{' '}
               {(detail.message_count ?? detail.messages.length).toLocaleString()} messages · Updated{' '}
-              {agoLong(detail.session.updated_at)} · Session {archived ? 'archived' : closed ? 'closed' : 'active'}
+              {agoLong(lastActivity)} · Session {archived ? 'archived' : closed ? 'closed' : 'active'}
               {detail.session.started_by && detail.session.started_by_id && (
                 <>
                   {' · started by '}

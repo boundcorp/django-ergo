@@ -278,15 +278,27 @@ function BotFiles({ files }: { files: AttachmentFile[] }) {
 
 type Reply = { type?: string; text?: string; suggestions?: string[] }
 
+// The input is what the model sent, which may not match the schema
+// (suggestions as a JSON string, say), so don't trust its shape.
+export function replySuggestions(value: unknown): string[] {
+  if (typeof value === 'string') {
+    try {
+      value = JSON.parse(value)
+    } catch {
+      return []
+    }
+  }
+  return Array.isArray(value) ? value.map(String) : []
+}
+
 function ReplyBubble({ reply }: { reply: Reply }) {
+  const suggestions = replySuggestions(reply.suggestions)
   return (
     <div className="max-w-[85%] rounded-card border border-stroke bg-surface px-4 py-3">
       <RoleLabel who="Assistant" timestamp={null} />
       {reply.type === 'question' && <div className="mb-1 text-xs font-medium text-amber-600">Question</div>}
       <BotMarkdown text={reply.text ?? ''} />
-      {!!reply.suggestions?.length && (
-        <div className="mt-1 text-xs text-zinc-500">Suggested: {reply.suggestions.join(' · ')}</div>
-      )}
+      {!!suggestions.length && <div className="mt-1 text-xs text-zinc-500">Suggested: {suggestions.join(' · ')}</div>}
     </div>
   )
 }
@@ -412,7 +424,11 @@ function MessageView({
               </button>
             )
           case 'tool_use':
-            if (block.name === REPLY_TOOL) return <ReplyBubble key={i} reply={block.input as Reply} />
+            if (block.name === REPLY_TOOL) {
+              // A rejected reply was retried; the accepted one follows.
+              if (results.get(block.id)?.is_error) return null
+              return <ReplyBubble key={i} reply={block.input as Reply} />
+            }
             return (
               <Fragment key={i}>
                 {rows.has(block.id) && (
