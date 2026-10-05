@@ -275,7 +275,7 @@ without it. GitHub calls use `GITHUB_TOKEN`, `GH_TOKEN` or the logged-in
 `gh` CLI's token when there is one.
 
 With `ERGONAUT_AUTO_UPGRADE_SECONDS` set (say `900`), beat runs the same
-check on that interval. A busy instance waits up to a minute and is checked
+check on that interval. A busy instance waits up to 5 minutes (`ERGONAUT_AUTO_UPGRADE_WAIT_SECONDS`) and is checked
 again next time; a release whose upgrade failed is retried after six hours
 (or with `ergonaut upgrade --force`).
 
@@ -285,6 +285,7 @@ again next time; a release whose upgrade failed is retried after six hours
 | `ERGONAUT_AUTO_UPGRADE_SECONDS` | unset | check for a new release on this interval (needs beat) |
 | `ERGONAUT_UPGRADE_REPO` | `boundcorp/django-ergo` | where releases come from (a fork) |
 | `ERGONAUT_UPGRADE_CHANNEL` | `releases` | `releases`, or `branch:main` to follow a branch's head |
+| `ERGONAUT_AUTO_UPGRADE_WAIT_SECONDS` | `300` | how long each automatic check waits for a 20-second gap with no turn running before giving up until the next check |
 | `ERGONAUT_UPGRADE_WAIT_FOR_WORKERS` | `1` | `0` makes the idle gate wait for bot turns only, not queued or running workers |
 | `GITHUB_TOKEN` or `GH_TOKEN` | the `gh` CLI's login | GitHub API token; without any, 60 requests an hour |
 
