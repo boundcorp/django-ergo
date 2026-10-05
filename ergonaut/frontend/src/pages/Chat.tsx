@@ -13,6 +13,7 @@ import type {
   Worker,
 } from '../api'
 import { api } from '../api'
+import { useDraft } from '../draft'
 import Files from '../components/Files'
 import Markdown from '../components/Markdown'
 import ModelPicker from '../components/ModelPicker'
@@ -55,7 +56,7 @@ function stored(messages: Message[], text: string, line: number): boolean {
 export function Chat({ onChange }: { onChange: () => void }) {
   const { id = '' } = useParams()
   const [detail, setDetail] = useState<SessionDetail | null>(null)
-  const [text, setText] = useState('')
+  const [text, setText] = useDraft(id)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [last, setLast] = useState<Turn | null>(null)

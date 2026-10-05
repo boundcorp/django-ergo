@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { api } from '../api'
+import { clearDraft, useDraft } from '../draft'
 import ModelPicker from '../components/ModelPicker'
 
 // Start a thread by writing its first message (with files). The thread gets a title from the
@@ -8,7 +9,8 @@ import ModelPicker from '../components/ModelPicker'
 export function NewThread({ onChange }: { onChange: () => void }) {
   const { name = '' } = useParams()
   const navigate = useNavigate()
-  const [text, setText] = useState('')
+  const draftKey = `new-thread.${name}`
+  const [text, setText] = useDraft(draftKey)
   const [files, setFiles] = useState<File[]>([])
   const [busy, setBusy] = useState(false)
   const [model, setModel] = useState('')
@@ -30,6 +32,7 @@ export function NewThread({ onChange }: { onChange: () => void }) {
       const ids = []
       for (const file of files) ids.push((await api.uploadAttachment(thread.id, file)).id)
       await api.send(thread.id, text, ids)
+      clearDraft(draftKey)
       onChange()
       navigate(`/s/${thread.id}`)
       // The generated title lands a moment later; refresh the sidebar for it.
