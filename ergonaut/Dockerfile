@@ -116,8 +116,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ARG ORCA_VERSION=1.4.180
 ARG ORCA_LINUX_APPIMAGE_SHA256=af3b6e6a67fcc3cd034ca469ff8ee1d224b1a6e2df6215fd8452afd0fd8e92ab
 
+# tini reaps the git/gh children bots leave behind; run Celery as `tini -- celery ...`
+# when it is PID 1 (a container whose command is Celery itself).
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
+    tini \
     openssh-client \
     ca-certificates \
     gnupg \
