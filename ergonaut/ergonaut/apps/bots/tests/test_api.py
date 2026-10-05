@@ -235,6 +235,7 @@ def test_browse_a_bots_knowledge_base(client, cook, bot_folder, use_bots):
 
 @pytest.mark.django_db(transaction=True)
 def test_upload_list_download_and_delete_session_files(client, cook, use_bots, settings, tmp_path):
+    from django.core.files.base import ContentFile
     from django.core.files.uploadedfile import SimpleUploadedFile
     from django_ergo.conversation.models import ConversationSession
 
@@ -263,6 +264,16 @@ def test_upload_list_download_and_delete_session_files(client, cook, use_bots, s
     assert listed[0]["archived_at"]
     download = client.get(f"/api/attachments/{file['id']}/download")
     assert b"".join(download.streaming_content) == b"item,count\neggs,4\n"
+
+    # A row whose file is gone (wiped media) is a 404 that says so, not a 500.
+    row = ConversationSession.objects.get(id=root["id"]).attachments.get()
+    content = row.file.read()
+    row.file.close()
+    row.file.storage.delete(row.file.name)
+    missing = client.get(f"/api/attachments/{file['id']}/download?inline=true")
+    assert missing.status_code == 404
+    assert "missing" in missing.json()["detail"]
+    row.file.storage.save(row.file.name, ContentFile(content))
 
     # Someone else can't see it.
     other = get_user_model().objects.create_user("other", "o@example.com", "pw")

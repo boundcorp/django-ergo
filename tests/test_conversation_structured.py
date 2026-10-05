@@ -219,6 +219,33 @@ async def test_invalid_output_is_returned_to_model(user):
     assert "failed validation" in error_block["content"]
 
 
+async def test_list_sent_as_json_string_is_decoded(user):
+    # Models sometimes encode a list argument as a JSON string; accept it
+    # instead of spending a turn on a validation error.
+    as_string = {**VALID_PLAN, "steps": json.dumps(VALID_PLAN["steps"])}
+    engine = claude_engine(claude_tool("submit_output", as_string))
+    spec = StructuredCallSpec(kind="planner", response_model=Plan)
+
+    result = await run_structured_call(spec, "Plan", user=user, engine=engine)
+
+    assert result.ok
+    assert result.call.turns_used == 1
+    assert result.parsed.steps == VALID_PLAN["steps"]
+
+
+def test_json_string_is_kept_for_str_fields():
+    class Note(BaseModel):
+        text: str
+        tags: list[str] | None = None
+
+    decoded = structured._decode_json_fields(Note, {"text": "[1]", "tags": '["a"]'})
+    assert decoded == {"text": "[1]", "tags": ["a"]}
+    assert (
+        structured._decode_json_fields(Note, {"text": "x", "tags": "not json"})["tags"]
+        == "not json"
+    )
+
+
 async def test_plain_text_answer_gets_correction(user):
     engine = claude_engine(
         claude_text("Here is the plan: ..."),

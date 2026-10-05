@@ -6,6 +6,7 @@ sessions). A turn runs inside the request and returns the bot's ChatReply.
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import datetime
 from typing import Any, Literal
@@ -34,6 +35,8 @@ from ergonaut.apps.bots.tasks import (
     request_stop,
     unsend,
 )
+
+logger = logging.getLogger(__name__)
 
 router = Router(tags=["bots"], auth=user_auth)
 
@@ -1565,6 +1568,10 @@ def download_attachment(request, attachment_id: str, inline: bool = False):
     row = visible_attachment(request.auth, attachment_id)
     if not row.file:
         raise HttpError(404, "This file has no stored copy")
+    if not row.file.storage.exists(row.file.name):
+        # The row outlived its file: MEDIA_ROOT isn't on persistent storage, say.
+        logger.warning("Attachment %s: stored file %s is missing", row.id, row.file.name)
+        raise HttpError(404, "This file's stored copy is missing")
     if inline and row.filename.endswith(".jhtml"):
         # A live page: rendered now, over the bot's tables.
         from django_ergo.conversation.attachments import read_text
