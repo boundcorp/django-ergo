@@ -602,13 +602,13 @@ def auto_upgrade() -> str:
     """Upgrade to a newer GitHub release if there is one and nothing is running
     (beat runs this every ``ERGONAUT_AUTO_UPGRADE_SECONDS``; see ergonaut/upgrades).
     A busy instance is checked again next time instead of holding the worker: each
-    check waits ``ERGONAUT_AUTO_UPGRADE_WAIT_SECONDS`` (default 300) for a 20-second
+    check waits ``ERGONAUT_AUTO_UPGRADE_WAIT_SECONDS`` (default 60) for a 20-second
     gap with no turn running."""
     import os
 
     from ergonaut import upgrades
 
-    wait = float(os.environ.get("ERGONAUT_AUTO_UPGRADE_WAIT_SECONDS") or 300)
+    wait = float(os.environ.get("ERGONAUT_AUTO_UPGRADE_WAIT_SECONDS") or 60)
     result = upgrades.run(wait_timeout=wait, quiet_for=20)
     logger.info("auto upgrade: %s", result)
     return result
