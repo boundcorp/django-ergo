@@ -25,7 +25,10 @@ The repository is the git checkout that contains the bot folder. Tools:
 In ``merge_main`` mode the bot edits the checkout it runs from. In
 ``propose_pr`` mode it edits a draft: a separate git worktree of the main
 branch (inside ``.git``), so the running bots never see a change until its
-pull request is merged and the checkout is pulled. Changes to bot.yaml,
+pull request is merged and the checkout is pulled. A draft with no changes
+follows the remote main branch, so work after a merge starts from it; a
+draft with changes is rebased onto it when published, and ``status`` says
+when main has moved on. Changes to bot.yaml,
 agents.md or tool files take effect when the bot is loaded again.
 """
 
@@ -34,6 +37,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+import time
 from datetime import UTC
 from datetime import datetime
 from pathlib import Path
@@ -104,8 +108,10 @@ class BotManagementPlugin(BotPlugin):
         if self.mode == "merge_main":
             return self.repo
         draft = self.draft_dir
-        if not draft.is_dir():
-            self.git("fetch", self.remote, self.main_branch)
+        if draft.is_dir():
+            self._follow_main(draft)
+        else:
+            self._fetch_main(force=True)
             self.git(
                 "worktree",
                 "add",
@@ -116,6 +122,37 @@ class BotManagementPlugin(BotPlugin):
                 f"{self.remote}/{self.main_branch}",
             )
         return draft
+
+    @property
+    def remote_main(self) -> str:
+        return f"{self.remote}/{self.main_branch}"
+
+    def _fetch_main(self, *, force: bool = False) -> None:
+        """Fetch the remote main branch, at most every PR_FETCH_SECONDS."""
+        last = self.__dict__.get("_main_fetched", -1e9)
+        if force or time.monotonic() - last > PR_FETCH_SECONDS:
+            self.git("fetch", self.remote, self.main_branch)
+            self._main_fetched = time.monotonic()
+
+    def _follow_main(self, draft: Path) -> None:
+        """Move a draft with no changes up to the remote main branch.
+
+        Without this, a draft made before a PR merged keeps the old main,
+        and the next change re-proposes (and conflicts with) what merged.
+        """
+        try:
+            self._fetch_main()
+        except ValueError:
+            return  # offline: keep working on the draft as it is
+        if self.git("status", "--porcelain", cwd=draft).strip():
+            return
+        if self._behind(draft):
+            self.git("reset", "--hard", self.remote_main, cwd=draft)
+
+    def _behind(self, work: Path) -> int:
+        """How many commits the remote main has that ``work`` doesn't."""
+        count = self.git("rev-list", "--count", f"HEAD..{self.remote_main}", cwd=work)
+        return int(count.strip() or 0)
 
     @property
     def draft_dir(self) -> Path:
@@ -167,9 +204,15 @@ class BotManagementPlugin(BotPlugin):
         changes = self.git("status", "--short", cwd=work).strip() or "(clean)"
         log = self.git("log", "--oneline", "-5", cwd=work).strip()
         where = "draft of " if work != self.repo else ""
+        behind = ""
+        if work != self.repo and (count := self._behind(work)):
+            behind = (
+                f"\n\n{self.remote_main} has {count} commit(s) this draft doesn't; "
+                "publishing rebases the changes onto it."
+            )
         return (
             f"Repository: {where}{self.repo}\nBranch: {branch}\nMode: {self.mode}\n\n"
-            f"Changes:\n{changes}\n\nRecent commits:\n{log}"
+            f"Changes:\n{changes}\n\nRecent commits:\n{log}{behind}"
         )
 
     def list_files(self, path: str = ".") -> str:
@@ -342,6 +385,7 @@ class BotManagementPlugin(BotPlugin):
         self.git("add", "--all", cwd=work)
         self.git("commit", "-m", message, cwd=work)
         try:
+            self._rebase_on_main(work)
             self.git("push", "-u", self.remote, branch, cwd=work)
             url = self._open_pr(branch, message, title, body, work)
         except ValueError:
@@ -352,6 +396,25 @@ class BotManagementPlugin(BotPlugin):
         self.git("worktree", "remove", "--force", str(work))
         self.git("branch", "-D", self.draft_branch)
         return f"Opened {url} from {branch}; it goes live once merged."
+
+    def _rebase_on_main(self, work: Path) -> None:
+        """Put the commit on the latest remote main, so the PR holds only this change."""
+        self._fetch_main(force=True)
+        if not self._behind(work):
+            return
+        try:
+            self.git("rebase", self.remote_main, cwd=work)
+        except ValueError:
+            conflicts = self.git(
+                "diff", "--name-only", "--diff-filter=U", cwd=work
+            ).split()
+            self.git("rebase", "--abort", cwd=work)
+            msg = (
+                f"The changes conflict with {self.remote_main} in "
+                f"{', '.join(conflicts) or 'some files'}: discard the draft, "
+                "or read those files from main and write the changes again."
+            )
+            raise ValueError(msg) from None
 
     def _open_pr(self, branch: str, message: str, title: str, body: str, work) -> str:
         return self.run(
@@ -401,8 +464,6 @@ class BotManagementPlugin(BotPlugin):
 
     def _pr_ref(self, number: int) -> str:
         """Fetch a pull request's head into a local ref (at most every 30 seconds)."""
-        import time
-
         ref = f"refs/ergo/pr/{int(number)}"
         fetched = self.__dict__.setdefault("_pr_fetched", {})
         if time.monotonic() - fetched.get(ref, -1e9) > PR_FETCH_SECONDS:

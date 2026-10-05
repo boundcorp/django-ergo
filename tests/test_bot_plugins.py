@@ -1560,6 +1560,87 @@ def test_merge_main_discard_stashes_and_writes_need_approval(bot_repo):
     assert plugin.discard() == "Nothing to discard."
 
 
+def _merge_on_remote(tmp_path, remote, path, text, message):
+    """Someone else's change lands on the remote main (a PR merged)."""
+    other = tmp_path / "other"
+    if not other.exists():
+        git(tmp_path, "clone", "-b", "main", str(remote), str(other))
+    git(other, "pull", "origin", "main")
+    (other / path).parent.mkdir(parents=True, exist_ok=True)
+    (other / path).write_text(text)
+    git(other, "add", "-A")
+    git(other, "commit", "-m", message)
+    git(other, "push", "origin", "main")
+
+
+@pytest.mark.django_db
+def test_a_clean_draft_follows_main_after_a_merge(bot_repo, tmp_path, monkeypatch):
+    remote, work = bot_repo
+    _, _, plugin = management_bot(work, "propose_pr")
+    git(work, "add", "-A")
+    git(work, "commit", "-m", "add bot")
+    git(work, "push")
+    monkeypatch.setattr("django_ergo.plugins.bot_management.PR_FETCH_SECONDS", 0)
+    assert "(clean)" in plugin.status()  # the draft exists, made from main
+
+    _merge_on_remote(tmp_path, remote, "bots/manager/skills/new.md", "hi", "merged PR")
+
+    assert plugin.read("bots/manager/skills/new.md") == "hi"
+    assert "merged PR" in plugin.status()
+    assert plugin.diff() == "(no changes)"
+
+
+@pytest.mark.django_db
+def test_publish_rebases_a_draft_that_main_moved_past(bot_repo, tmp_path, monkeypatch):
+    remote, work = bot_repo
+    _, _, plugin = management_bot(work, "propose_pr")
+    git(work, "add", "-A")
+    git(work, "commit", "-m", "add bot")
+    git(work, "push")
+    real_run = plugin.run
+    monkeypatch.setattr(
+        plugin,
+        "run",
+        lambda args, cwd=None: (
+            "https://github.com/acme/bots/pull/8\n"
+            if args[0] == "gh"
+            else real_run(args, cwd)
+        ),
+    )
+    monkeypatch.setattr("django_ergo.plugins.bot_management.PR_FETCH_SECONDS", 0)
+    plugin.write("bots/manager/agents.md", "Be kind.")
+    _merge_on_remote(tmp_path, remote, "bots/manager/skills/new.md", "hi", "merged PR")
+
+    assert "has 1 commit(s) this draft doesn't" in plugin.status()
+    assert "Be kind." in plugin.diff()  # changes are never moved under the bot
+
+    branch = plugin.publish("Kinder", title="Kinder").split(" from ")[1].split(";")[0]
+    log = git(remote, "log", "--format=%s", branch).splitlines()
+    assert log[:2] == ["Kinder", "merged PR"]
+    files = git(remote, "diff", "--name-only", f"main...{branch}").split()
+    assert files == ["bots/manager/agents.md"]
+
+
+@pytest.mark.django_db
+def test_publish_refuses_a_draft_that_conflicts_with_main(
+    bot_repo, tmp_path, monkeypatch
+):
+    remote, work = bot_repo
+    _, _, plugin = management_bot(work, "propose_pr")
+    git(work, "add", "-A")
+    git(work, "commit", "-m", "add bot")
+    git(work, "push")
+    plugin.write("bots/manager/agents.md", "Be kind.")
+    _merge_on_remote(tmp_path, remote, "bots/manager/agents.md", "Be terse.", "x")
+
+    with pytest.raises(
+        ValueError, match="conflict with origin/main in bots/manager/agents.md"
+    ):
+        plugin.publish("Kinder", title="Kinder")
+    assert "Be kind." in plugin.diff()  # kept, uncommitted, on the draft
+    assert "bot/manager/draft" in git(work, "branch")
+
+
 @pytest.mark.django_db
 def test_a_failed_publish_keeps_the_draft(bot_repo, monkeypatch):
     _, work = bot_repo
