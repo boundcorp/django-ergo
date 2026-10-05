@@ -6,7 +6,7 @@
         main_branch: main
         remote: origin
         approve_publish: true   # ergo_config_repo_publish waits for the user's approval
-        root_only: true         # only the root session gets these tools
+        root_only: false        # true: only top-level chats get these tools, not threads
 
 The repository is the git checkout that contains the bot folder. Tools:
 
@@ -86,7 +86,7 @@ class BotManagementPlugin(BotPlugin):
         self.main_branch = self.config.get("main_branch", "main")
         self.remote = self.config.get("remote", "origin")
         self.approve_publish = bool(self.config.get("approve_publish", True))
-        self.root_only = bool(self.config.get("root_only", True))
+        self.root_only = bool(self.config.get("root_only", False))
         self._repo: Path | None = None
 
     # -- commands ----------------------------------------------------------

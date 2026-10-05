@@ -299,7 +299,10 @@ Pages run in Jinja's sandbox and can only read: `table(name)` is a view with
 markdown, metric, table, chart, html) render common pieces; `now`, `today`,
 `days_ago(n)`, `user`, `bot` and the `money`, `number`, `percent` and
 `markdown` filters are there too, and `{% include %}` loads other files from
-the bot folder. A page without an `<html>` tag gets a layout with Chart.js.
+the bot folder. Rows give dates as ISO strings, so for date math use
+`as_datetime` (back to a datetime), `seconds_until` (seconds from now,
+negative once past) and `duration` (seconds as `2h 15m`):
+`{{ row.resets_at | seconds_until | duration }}`. A page without an `<html>` tag gets a layout with Chart.js.
 
 Pages come from two places:
 
@@ -725,7 +728,7 @@ and `icon` (an emoji) for the pin. Loading the skill loads
   mode: propose_pr      # or merge_main
   main_branch: main
   approve_publish: true
-  root_only: true
+  root_only: false     # true: top-level chats only, not threads
 ```
 
 Lets the bot maintain the git repository its folder lives in, so it can

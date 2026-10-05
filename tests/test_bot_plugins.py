@@ -168,14 +168,14 @@ def bot_repo(tmp_path, monkeypatch):
     return remote, work
 
 
-def management_bot(work, mode, *responses):
+def management_bot(work, mode, *responses, root_only=False):
     yaml_text = f"""
         name: manager
         chats: {{main: {{skills: [config_repo]}}}}
-        plugins: [{{name: bot_management, mode: {mode}}}]
+        plugins: [{{name: bot_management, mode: {mode}, root_only: {str(root_only).lower()}}}]
     """
     folder = work / "bots"
-    folder.mkdir()
+    folder.mkdir(exist_ok=True)
     bot, engine = make_bot(folder, *responses, yaml_text=yaml_text, name="manager")
     return bot, engine, bot.plugin("bot_management")
 
@@ -309,18 +309,24 @@ def test_bot_moves_a_file_by_writing_then_deleting(bot_repo):
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_bot_management_tools_are_root_only(bot_repo):
+async def test_bot_management_tools_reach_threads_unless_root_only(bot_repo):
     _, work = bot_repo
-    bot, engine, _ = management_bot(work, "merge_main", say("a"), say("b"))
-    user = await User.objects.acreate(username="root-only")
+    load = claude_tool("ergo_skill_load", {"name": "config_repo"})
+    bot, engine, plugin = management_bot(
+        work, "merge_main", load, say("a"), load, say("b")
+    )
+    user = await User.objects.acreate(username="threads")
     root = await bot.root_session(user)
-    thread = await bot.create_session(user, parent=root)
-    await bot.ask(root, "hi")
-    await bot.ask(thread, "hi")
-    root_tools = {t["name"] for t in engine._client.calls[0]["tools"]}
-    thread_tools = {t["name"] for t in engine._client.calls[1]["tools"]}
-    assert "ergo_config_repo_publish" in root_tools
-    assert "ergo_config_repo_publish" not in thread_tools
+
+    async def thread_tools():
+        await bot.ask(await bot.create_session(user, parent=root), "hi")
+        return {t["name"] for t in engine._client.calls[-1]["tools"]}
+
+    # By default a task thread can change its own folder.
+    assert "ergo_config_repo_publish" in await thread_tools()
+    # root_only: true keeps the tools to top-level chats.
+    plugin.root_only = True
+    assert "ergo_config_repo_publish" not in await thread_tools()
 
 
 # ---------------------------------------------------------------------------
