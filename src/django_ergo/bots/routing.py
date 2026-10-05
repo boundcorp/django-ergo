@@ -443,13 +443,13 @@ def switch_reason(
     return f"{after.partition('/')[0]} is back under its limits"
 
 
-def record_switch(
-    providers: Providers, session, tier: str, before: str, after: str
+def record_switch(  # noqa: PLR0913
+    providers: Providers, session, tier: str, before: str, after: str, reason: str = ""
 ) -> None:
     """Log a chat's move to another model for the Routing page (runs the ORM)."""
     from django_ergo.conversation.models import RoutingSwitch
 
-    reason = switch_reason(
+    reason = reason or switch_reason(
         providers, before, after, current_usage(), active_rules(providers.routing)
     )
     meta = session.metadata or {}
@@ -464,6 +464,43 @@ def record_switch(
         to_model=after,
         reason=reason[:300],
     )
+
+
+# Substrings of a failed turn's error that mean a provider refused it for a
+# subscription or rate limit.
+LIMIT_ERRORS = (
+    "usage limit",
+    "rate limit",
+    "rate_limit",
+    "limit reached",
+    "hit your limit",
+    "429",
+)
+
+
+def is_limit_error(error: str) -> bool:
+    error = (error or "").lower()
+    return any(needle in error for needle in LIMIT_ERRORS)
+
+
+def retry_model(providers: Providers, tier: str, failed: str, error: str) -> str:
+    """Another model in ``tier`` to offer for a turn that ``failed``'s
+    provider refused at its limit: the first one on another provider that's
+    available and under its limits, or "". Nothing retries on its own; the
+    chat offers it (runs the ORM)."""
+    routing = providers.routing
+    usage, rules = current_usage(), active_rules(routing)
+    failed_provider = failed.partition("/")[0]
+    if not (is_limit_error(error) or over_limit(failed_provider, usage, rules)):
+        return ""
+    for ref in routing.tiers.get(tier, []):
+        name = ref.partition("/")[0]
+        found = providers.find(ref)
+        if name == failed_provider or found is None or not found[0].available:
+            continue
+        if not over_limit(name, usage, rules):
+            return ref
+    return ""
 
 
 def agent_label(choice: AgentChoice) -> str:

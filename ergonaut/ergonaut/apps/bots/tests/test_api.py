@@ -1098,3 +1098,47 @@ def test_routing_page_shows_tiers_and_admins_set_the_priorities(client, cook, us
     reset = client.delete("/api/routing").json()
     assert (reset["text"], reset["text_source"]) == ("", "")
     assert not RoutingText.objects.exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_turn_refused_at_its_limit_offers_a_retry_on_another_model(client, cook, use_bots, monkeypatch):
+    from django_ergo.bots.providers import Providers
+    from django_ergo.conversation.models import ConversationSession, StructuredCall
+
+    use_bots(say("Back on it."))
+    webhooks.get_registry().providers = Providers.from_dict(
+        {
+            "providers": {
+                "anthropic": {"type": "claude", "models": ["claude-opus-5-5"]},
+                "openai": {"type": "openai", "models": ["gpt-6-sol"]},
+            },
+            "tiers": {"medium": ["anthropic/claude-opus-5-5", "openai/gpt-6-sol"]},
+        }
+    )
+    root = post(client, "/api/bots/kitchen/root").json()
+    assert post(client, f"/api/sessions/{root['id']}/model", {"model": "auto/medium"}).status_code == 200
+    session = ConversationSession.objects.get(id=root["id"])
+    session.metadata = {**session.metadata, "routed_model": "anthropic/claude-opus-5-5"}
+    session.save()
+    failed = StructuredCall.objects.create(
+        kind="chat_reply",
+        session_id=root["id"],
+        user=cook,
+        request="Plan dinner",
+        status="failed",
+        error="Claude Code failed: Claude AI usage limit reached|1791200000",
+    )
+
+    detail = client.get(f"/api/sessions/{root['id']}").json()
+    assert detail["retry_model"] == "openai/gpt-6-sol"
+    session.refresh_from_db()
+    assert session.metadata["routed_model"] == "anthropic/claude-opus-5-5"  # nothing moved on its own
+
+    assert post(client, f"/api/sessions/{root['id']}/resume?model=nope/x").status_code == 400
+    turn = post(client, f"/api/sessions/{root['id']}/resume?model=openai/gpt-6-sol").json()
+    assert turn["text"] == "Back on it."
+    session.refresh_from_db()
+    assert session.metadata["routed_model"] == "openai/gpt-6-sol"
+    failed.refresh_from_db()
+    assert failed.metadata["resumed"] is True
+    assert client.get(f"/api/sessions/{root['id']}").json()["retry_model"] == ""

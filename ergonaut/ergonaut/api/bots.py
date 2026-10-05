@@ -187,6 +187,9 @@ class SessionDetailOut(Schema):
     sent: list[dict] = []
     # Pull requests reported in this chat (django_ergo.conversation.links).
     prs: list[dict] = []
+    # For an Auto chat whose last turn a provider refused at its limit: another
+    # model in its tier to retry on (Resume with ?model=). Never used on its own.
+    retry_model: str = ""
 
 
 PAGE_MESSAGES = 50
@@ -1043,6 +1046,7 @@ def session_detail(request, session_id: str, before: int | None = None, limit: i
         "has_more": first_line is not None,
         "message_count": session.messages.count(),
         "sent": sent_out(session),
+        "retry_model": retry_model_for(session, request.auth),
         "prs": session_prs(session),
     }
 
@@ -1144,14 +1148,33 @@ async def unsend_message(request, session_id: str, item_id: str):
     return {"text": item.get("text", ""), "attachment_ids": item.get("attachment_ids") or []}
 
 
+def retry_model_for(session: ConversationSession, user) -> str:
+    """The model to offer a retry on when the chat's last turn was refused at a limit."""
+    last = session.structured_calls.filter(kind="chat_reply").order_by("-created_at").first()
+    if last is None or last.status != "failed" or (last.metadata or {}).get("dismissed"):
+        return ""
+    try:
+        return get_bot(session.bot_name, user).retry_model(session, last.error)
+    except HttpError:
+        return ""
+
+
 @router.post("/sessions/{session_id}/resume", response=TurnOut)
-async def resume_session(request, session_id: str):
-    """Continue a chat whose last turn failed or hit its step limit, as a new turn."""
+async def resume_session(request, session_id: str, model: str = ""):
+    """Continue a chat whose last turn failed or hit its step limit, as a new turn.
+    With ``model`` (an Auto chat's other tier candidate), the chat moves to it
+    first: the user's choice after a provider refused the turn at its limit."""
     session = await get_session(request, session_id)
     last = await session.structured_calls.filter(kind="chat_reply").order_by("-created_at").afirst()
     if last is None or last.status not in RESUMABLE:
         raise HttpError(409, "The last turn didn't fail; there's nothing to resume")
     why = error_out(last)["error_summary"].rstrip(".") or "it failed"
+    if model:
+        bot = get_bot(session.bot_name, request.auth)
+        try:
+            await sync_to_async(bot.reroute)(session, model, f"retried by hand after: {why}")
+        except ValueError as e:
+            raise HttpError(400, str(e)) from e
     last.metadata = {**(last.metadata or {}), "dismissed": True, "resumed": True}
     await last.asave(update_fields=["metadata", "updated_at"])
     queued = await sync_to_async(queue_message)(session.id, RESUME_NOTE.format(why=why))

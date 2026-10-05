@@ -347,3 +347,43 @@ def test_agent_fallbacks_are_logged(django_user_model):
         "codex · gpt-6-sol · high",
     )
     assert switch.reason == "claude 5-hour window at 92% (limit 85%)"
+
+
+@pytest.mark.django_db
+def test_a_turn_refused_at_its_limit_offers_a_retry_but_never_takes_it(
+    django_user_model,
+):
+    from django_ergo.conversation.models import ConversationSession
+    from django_ergo.conversation.models import RoutingSwitch
+
+    bot = bot_with(found())
+    user = django_user_model.objects.create(username="lee")
+    chat = ConversationSession.objects.create(
+        user=user, bot_name="kitchen", model="auto/medium", engine_type="claude"
+    )
+    assert bot.route(chat) == "claude/claude-opus-5-5"
+    assert bot.retry_model(chat, "Claude Code failed: boom") == ""  # not a limit
+    refused = "Claude AI usage limit reached|1791200000"
+    assert bot.retry_model(chat, refused) == "chatgpt/gpt-6-sol"
+    chat.refresh_from_db()
+    assert chat.metadata["routed_model"] == "claude/claude-opus-5-5"  # only offered
+
+    bot.reroute(chat, "chatgpt/gpt-6-sol", "retried by hand after: limit")
+    chat.refresh_from_db()
+    assert chat.metadata["routed_model"] == "chatgpt/gpt-6-sol"
+    assert (chat.engine_type, chat.transport_type) == ("openai", "cli")
+    assert RoutingSwitch.objects.get().reason == "retried by hand after: limit"
+    # It stays while it qualifies, though Claude is first in the tier.
+    assert bot.route(chat) == "chatgpt/gpt-6-sol"
+    with pytest.raises(ValueError, match="isn't a model in this chat's tier"):
+        bot.reroute(chat, "chatgpt/gpt-6-luna", "")
+
+    # Usage that shows the provider over its limit counts too, whatever the error.
+    record_usage_windows("chatgpt", {"weekly": {"used": 90, "resets_at": soon(48)}})
+    assert bot.retry_model(chat, "Codex failed") == "claude/claude-opus-5-5"
+    record_usage_windows("claude", {"five_hour": {"used": 100, "resets_at": soon()}})
+    assert bot.retry_model(chat, "Codex failed") == "openai/gpt-6-sol"
+    fixed = ConversationSession.objects.create(
+        user=user, bot_name="kitchen", model="claude/claude-opus-5-5"
+    )
+    assert bot.retry_model(fixed, refused) == ""

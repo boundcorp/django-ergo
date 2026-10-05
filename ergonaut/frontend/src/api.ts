@@ -442,6 +442,7 @@ export type SessionDetail = {
   message_count?: number // in the whole session
   sent?: SentCard[] // requests this chat sent, newest first
   prs?: PrLink[] // pull requests reported in this chat
+  retry_model?: string // an Auto chat's last turn hit a limit: another model in its tier to retry on
 }
 
 export type Turn = {
@@ -568,7 +569,8 @@ export const api = {
   send: (id: string, text: string, attachmentIds: string[] = [], mode: 'send' | 'interrupt' = 'send') =>
     request<Turn>('POST', `/sessions/${id}/messages`, { text, attachment_ids: attachmentIds, mode }),
   stop: (id: string) => request<Turn>('POST', `/sessions/${id}/stop`),
-  resume: (id: string) => request<Turn>('POST', `/sessions/${id}/resume`),
+  resume: (id: string, model = '') =>
+    request<Turn>('POST', `/sessions/${id}/resume${model ? `?model=${encodeURIComponent(model)}` : ''}`),
   dismissCall: (callId: string) => request<Call>('POST', `/calls/${callId}/dismiss`),
   unsend: (id: string, itemId: string) =>
     request<{ text: string; attachment_ids: string[] }>('DELETE', `/sessions/${id}/inbox/${itemId}`),

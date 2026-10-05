@@ -46,6 +46,7 @@ from django_ergo.bots.routing import ensure_compiled
 from django_ergo.bots.routing import is_auto
 from django_ergo.bots.routing import pick_model as route_model
 from django_ergo.bots.routing import record_switch
+from django_ergo.bots.routing import retry_model as routing_retry_model
 from django_ergo.bots.routing import tier_of
 from django_ergo.bots.skills import Skill
 from django_ergo.bots.skills import library_skills
@@ -525,25 +526,49 @@ class Bot:
             self.providers,
             lambda: self.make_engine(model=self.resolve_ref("auto/low", None)),
         )
+        before = (session.metadata or {}).get("routed_model", "")
+        picked = route_model(self.providers, tier_of(ref), before)
+        self._set_routed(session, tier_of(ref), picked)
+        return picked
+
+    def _set_routed(
+        self, session: ConversationSession, tier: str, picked: str, reason: str = ""
+    ) -> None:
         meta = session.metadata or {}
         before = meta.get("routed_model", "")
-        picked = route_model(self.providers, tier_of(ref), before)
-        if picked != before:
-            if before:
-                record_switch(self.providers, session, tier_of(ref), before, picked)
-            session.metadata = {**meta, "routed_model": picked}
-            spec = self.engine_spec(session)
-            session.engine_type = spec.engine_type
-            session.transport_type = spec.transport_type
-            session.save(
-                update_fields=[
-                    "metadata",
-                    "engine_type",
-                    "transport_type",
-                    "updated_at",
-                ]
-            )
-        return picked
+        if picked == before:
+            return
+        if before:
+            record_switch(self.providers, session, tier, before, picked, reason)
+        session.metadata = {**meta, "routed_model": picked}
+        spec = self.engine_spec(session)
+        session.engine_type = spec.engine_type
+        session.transport_type = spec.transport_type
+        session.save(
+            update_fields=["metadata", "engine_type", "transport_type", "updated_at"]
+        )
+
+    def retry_model(self, session: ConversationSession, error: str) -> str:
+        """For an ``auto/<tier>`` chat whose turn failed with ``error``: the
+        model to offer a retry on when its provider refused for a limit, or
+        "". Never applied on its own (see :meth:`reroute`). Runs the ORM."""
+        ref = self.session_model(session) or self.model_ref()
+        if not is_auto(ref):
+            return ""
+        failed = self.resolve_ref(ref, session)
+        return routing_retry_model(self.providers, tier_of(ref), failed, error)
+
+    def reroute(self, session: ConversationSession, model: str, reason: str) -> None:
+        """Move an ``auto/<tier>`` chat to ``model``, one of its tier's
+        candidates, for its next turns (it stays while that model qualifies).
+        Runs the ORM."""
+        ref = self.session_model(session) or self.model_ref()
+        if not is_auto(ref) or model not in self.providers.routing.tiers.get(
+            tier_of(ref), []
+        ):
+            msg = f"{model!r} isn't a model in this chat's tier"
+            raise ValueError(msg)
+        self._set_routed(session, tier_of(ref), model, reason)
 
     def resolve_ref(self, ref: str, session: ConversationSession | None) -> str:
         """``auto/<tier>`` as a concrete model: the one routed for this chat,

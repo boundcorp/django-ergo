@@ -172,6 +172,11 @@ routing:
 The windows come from the CLIs themselves: every Claude Code and Codex call
 records its subscription's 5-hour and weekly usage (`ProviderUsage`), and a
 call refused for its limit counts that window as used up until it resets.
+A turn refused that way is never retried on its own: the chat's error offers
+**Retry on** the tier's next model with room (`POST
+/api/sessions/<id>/resume?model=...`), next to Resume, which waits for the
+same model. The chat then stays on the model it moved to while that model
+qualifies.
 Without limits, a provider is skipped only at 98% used. When every candidate
 is over a limit, the one with the most room is used. Agent candidates must
 name a `transport: cli` provider, so agents never run on an API key. Note

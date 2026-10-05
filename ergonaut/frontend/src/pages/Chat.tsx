@@ -563,9 +563,23 @@ export function Chat({ onChange }: { onChange: () => void }) {
                 {failedCall.error_summary || 'The last turn failed.'}
               </span>
               {failedCall.error_hint && (
-                <span className="text-zinc-600 dark:text-zinc-400">{failedCall.error_hint}</span>
+                <span className="text-zinc-600 dark:text-zinc-400">
+                  {detail?.retry_model
+                    ? `It hit its subscription limit. Wait for the reset and Resume, or retry on ${detail.retry_model}.`
+                    : failedCall.error_hint}
+                </span>
               )}
               <span className="ml-auto flex gap-2">
+                {detail?.retry_model && (
+                  <button
+                    disabled={busy}
+                    className="rounded-control border border-accent px-3 py-1 text-xs font-semibold text-accent disabled:opacity-50"
+                    title="Move this chat to that model and continue from where the last turn stopped"
+                    onClick={() => run(() => api.resume(id, detail.retry_model), '')}
+                  >
+                    Retry on {detail.retry_model}
+                  </button>
+                )}
                 <button
                   disabled={busy}
                   className="rounded-control bg-accent px-3 py-1 text-xs font-semibold text-canvas disabled:opacity-50"
