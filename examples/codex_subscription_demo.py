@@ -79,7 +79,7 @@ async def main(args) -> None:
         },
         {"role": "user", "content": "Can I make pesto tonight? Check each ingredient."},
     ]
-    for step in range(1, 5):
+    for step in range(1, 9):
         started = time.monotonic()
         response = await client.chat.completions.create(
             model=args.model, messages=messages, tools=TOOLS
@@ -100,7 +100,10 @@ async def main(args) -> None:
             break
         for call in message.tool_calls:
             ingredient = json.loads(call.function.arguments).get("ingredient", "")
-            result = STOCK.get(ingredient.lower(), "none")
+            result = next(
+                (have for name, have in STOCK.items() if name in ingredient.lower()),
+                "none",
+            )
             print(f"  tool kitchen_stock({ingredient!r}) -> {result}")
             messages.append(
                 {"role": "tool", "tool_call_id": call.id, "content": result}

@@ -451,6 +451,13 @@ class _Session:
                 msg = "Codex request failed"
                 raise CodexCLIError(await self.detail(msg))
             await self.handle(message)
+        if not (self.rate_limits or {}).get("primary"):
+            # Codex doesn't always announce the windows after a short turn.
+            with contextlib.suppress(CodexCLIError, TimeoutError):
+                read = await asyncio.wait_for(
+                    self.request("account/rateLimits/read", {}), 10
+                )
+                self.rate_limits = (read or {}).get("rateLimits") or self.rate_limits
         return self.response.completion(model, self.rate_limits)
 
     async def handle(self, message: dict) -> None:
