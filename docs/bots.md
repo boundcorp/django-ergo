@@ -728,7 +728,7 @@ and `icon` (an emoji) for the pin. Loading the skill loads
   mode: propose_pr      # or merge_main
   main_branch: main
   approve_publish: true
-  root_only: true
+  root_only: false     # true: top-level chats only, not threads
 ```
 
 Lets the bot maintain the git repository its folder lives in, so it can
