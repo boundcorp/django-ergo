@@ -735,8 +735,11 @@ at and edit the files (paths can't leave the repo or touch `.git`), and
 In `merge_main` mode the bot edits the checkout it runs from, and
 `ergo_config_repo_publish` commits, rebases on main and pushes. In `propose_pr` mode it
 edits a draft instead: a separate git worktree of main kept inside `.git`,
-so the running bots don't change until you merge. `ergo_config_repo_publish` then pushes
-a `bot/<name>/<time>-<title>` branch and opens a pull request with `gh`.
+so the running bots don't change until you merge. `ergo_config_repo_publish` then rebases
+the changes onto the latest main, pushes a `bot/<name>/<time>-<title>` branch and opens a
+pull request with `gh`; if the changes conflict with main it refuses and names the files.
+A draft with no changes follows main, so work after a merge starts from the merged
+version, and `ergo_config_repo_status` says when main has moved past a draft with changes.
 Publishing needs approval unless `approve_publish: false`. `ergo_config_repo_pull`
 fast-forwards main and `ergo_config_repo_prs` lists open pull requests. Changes take
 effect when the bot is loaded again (Ergonaut reloads changed bot files on
