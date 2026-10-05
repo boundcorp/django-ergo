@@ -10,8 +10,11 @@ permissions:
   contents: read
 
 jobs:
+  # runs-on: pushes and PRs from branches of this repo run on our self-hosted
+  # runners; PRs from forks run on GitHub-hosted runners. Setting the
+  # repository variable CI_GITHUB_HOSTED=true sends every job to GitHub-hosted.
   test:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ (vars.CI_GITHUB_HOSTED != 'true' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","boundcorp"]') || 'ubuntu-24.04' }}
     timeout-minutes: 20
     env:
       ERGO_TEST_ISOLATED: "1"
@@ -64,7 +67,7 @@ jobs:
           retention-days: 30
 
   minimal-wheel:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ (vars.CI_GITHUB_HOSTED != 'true' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","boundcorp"]') || 'ubuntu-24.04' }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4

@@ -10,8 +10,11 @@ permissions:
   contents: read
 
 jobs:
+  # runs-on: pushes and PRs from branches of this repo run on our self-hosted
+  # runners; PRs from forks run on GitHub-hosted runners. Setting the
+  # repository variable CI_GITHUB_HOSTED=true sends every job to GitHub-hosted.
   test:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ (vars.CI_GITHUB_HOSTED != 'true' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","boundcorp"]') || 'ubuntu-24.04' }}
     timeout-minutes: 20
     defaults:
       run:
@@ -32,7 +35,7 @@ jobs:
         run: env -u DATABASE_URL .venv/bin/python manage.py makemigrations --check --dry-run
 
   image:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ (vars.CI_GITHUB_HOSTED != 'true' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","boundcorp"]') || 'ubuntu-24.04' }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -60,7 +63,9 @@ jobs:
           docker exec aio python -c "import django_ergo, pathlib; p = pathlib.Path(django_ergo.__file__).parent; missing = [f for f in ['bots/skill_library/skillbuilder/SKILL.md', 'templates/admin/django_ergo/chat_history.html'] if not (p / f).exists()]; assert not missing, missing"
       - name: Container logs
         if: always()
-        run: docker logs aio 2>&1 | tail -200 || true
+        run: |
+          docker logs aio 2>&1 | tail -200 || true
+          docker rm -f aio || true
 
   # Publishes the release image. Runs only for pushes to main (never PRs), after
   # tests and the image smoke job pass; the concurrency group serialises
@@ -68,7 +73,7 @@ jobs:
   publish:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: [test, image]
-    runs-on: ubuntu-24.04
+    runs-on: ${{ (vars.CI_GITHUB_HOSTED != 'true' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","boundcorp"]') || 'ubuntu-24.04' }}
     timeout-minutes: 30
     permissions:
       contents: read
