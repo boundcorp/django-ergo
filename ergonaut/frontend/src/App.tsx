@@ -11,6 +11,7 @@ import { NewThread } from './pages/NewThread'
 import { Memory } from './pages/Memory'
 import { CostsPage } from './pages/Costs'
 import { ThreadsPage } from './pages/ThreadsPage'
+import { ApiKeysPage } from './pages/ApiKeys'
 import { ThemeToggle } from './theme'
 import { ago } from './time'
 import { DirectoryContext } from './components/BotIcon'
@@ -199,6 +200,7 @@ function Shell({
             <Route path="/s/:id" element={<ChatRoute onChange={refresh} />} />
             <Route path="/sessions" element={<Sessions bots={bots} />} />
             <Route path="/costs" element={<CostsPage />} />
+            <Route path="/api-keys" element={<ApiKeysPage />} />
             <Route path="/bots/:name" element={<BotPage />} />
             <Route path="/bots/:name/new-thread" element={<NewThread onChange={refresh} />} />
             <Route path="/bots/:name/kb" element={<Memory />} />

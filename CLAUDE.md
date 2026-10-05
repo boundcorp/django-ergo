@@ -18,6 +18,15 @@ Django Ergo is a toolkit for building AI agents in Django, in three layers:
 
 User docs are in `README.md` and `docs/`. Start with `docs/README.md`.
 
+## How we develop
+
+The goal is that Ergo builds Ergo. Feature work should run through the
+platform: delegate it to a bot with the `ergo` client, watch the run, and
+improve whichever layer fell short (the bot, the library or Ergonaut). The
+`ergo-developer` skill describes the loop. Install it and the other agent
+skills with `python3 src/django_ergo/bots/skill_library/install.py --bin ~/.local/bin`
+(see `docs/agent-skills.md`).
+
 ## Commands
 
 ```bash
@@ -44,6 +53,7 @@ and prettier (for `ergonaut/frontend`); every hook should pass.
 - `bots/messaging.py`, `bots/orchestrator.py`: async thread messages between bots
 - `bots/schedules.py`, `bots/workers.py`, `bots/background.py`, `bots/archival.py`
 - `bots/tables.py`, `bots/pages.py`: `BotTable` models and `.jhtml` pages
+- `bots/skill_library/`: library skills (skillbuilder; the agent skills ergo-client, ergo-hosting, ergo-bot-development, ergo-developer, with `install.py` for Claude Code and Codex)
 - `plugins/`: `ergo_kb` (`kb.py`), `bot_management`, `pages`, `attachments`, `telegram`, `orca`, `bash`
 - `conversation/structured.py`: `StructuredCall` and `run_structured_call`; every bot turn is one (`chat_reply`)
 - `conversation/compaction.py`, `conversation/context.py`, `conversation/window.py` (window chats), `conversation/history*.py`

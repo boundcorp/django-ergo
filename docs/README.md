@@ -15,6 +15,7 @@
 | [Plugins](plugins.md) | Official plugins, writing your own, hooks, channels, webhooks, workers |
 | [Bot reference](bots.md) | Every bot.yaml key and official plugin option |
 | [Running Ergonaut](ergonaut.md) | Commands, settings, the web app, reloading, containers, production |
+| [Agent skills](agent-skills.md) | Ergo's skills for Claude Code and Codex, the `ergo` command and API keys |
 
 ## Library
 
