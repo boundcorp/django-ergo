@@ -59,6 +59,10 @@ and need a maintainer's approval to start. If the self-hosted runners are
 down, set the repository variable `CI_GITHUB_HOSTED` to `true` and every job
 runs on GitHub-hosted runners until it is removed.
 
+Image builds keep their Docker layers in the GitHub Actions cache (scope
+`ergonaut`), shared by the `image` and `publish` jobs, and Python installs
+use the pip and uv caches, so a fresh runner doesn't start from scratch.
+
 ## Conventions
 
 - Docs change with the code. New or changed bot.yaml keys, plugin options,
