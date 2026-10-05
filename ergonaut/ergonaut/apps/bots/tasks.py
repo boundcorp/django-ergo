@@ -601,10 +601,15 @@ def pull_bot_repos() -> dict[str, str]:
 def auto_upgrade() -> str:
     """Upgrade to a newer GitHub release if there is one and nothing is running
     (beat runs this every ``ERGONAUT_AUTO_UPGRADE_SECONDS``; see ergonaut/upgrades).
-    A busy instance is checked again next time instead of holding the worker."""
+    A busy instance is checked again next time instead of holding the worker: each
+    check waits ``ERGONAUT_AUTO_UPGRADE_WAIT_SECONDS`` (default 300) for a 20-second
+    gap with no turn running."""
+    import os
+
     from ergonaut import upgrades
 
-    result = upgrades.run(wait_timeout=60, quiet_for=20)
+    wait = float(os.environ.get("ERGONAUT_AUTO_UPGRADE_WAIT_SECONDS") or 300)
+    result = upgrades.run(wait_timeout=wait, quiet_for=20)
     logger.info("auto upgrade: %s", result)
     return result
 
