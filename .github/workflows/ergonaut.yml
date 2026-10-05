@@ -9,6 +9,12 @@ on:
 permissions:
   contents: read
 
+# A newer push to the same branch or PR cancels the older run, so the
+# runners work on the latest commit instead of a backlog.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   # runs-on: pushes and PRs from branches of this repo run on our self-hosted
   # runners; PRs from forks run on GitHub-hosted runners. Setting the
