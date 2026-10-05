@@ -246,7 +246,7 @@ def test_providers_and_bots_select_the_cli_transport(tmp_path, monkeypatch):
     assert not found.providers["elsewhere"].available
     with pytest.raises(ProvidersError, match="doesn't work with openai"):
         Providers.from_dict(
-            {"providers": {"openai": {"transport": "cli", "models": ["g"]}}}
+            {"providers": {"openai": {"transport": "grpc", "models": ["g"]}}}
         )
 
     bot = Bot(BotDefinition.from_dict({"name": "kitchen"}))

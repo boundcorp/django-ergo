@@ -42,6 +42,11 @@ from django_ergo.bots.definition import PluginSpec
 from django_ergo.bots.plugins import BotPlugin
 from django_ergo.bots.plugins import resolve_plugin_class
 from django_ergo.bots.providers import Providers
+from django_ergo.bots.routing import ensure_compiled
+from django_ergo.bots.routing import is_auto
+from django_ergo.bots.routing import pick_model as route_model
+from django_ergo.bots.routing import record_switch
+from django_ergo.bots.routing import tier_of
 from django_ergo.bots.skills import Skill
 from django_ergo.bots.skills import library_skills
 from django_ergo.bots.skills import load_skills
@@ -474,7 +479,7 @@ class Bot:
     def model_ref(self) -> str:
         """The ``provider/model`` this bot uses by default, when providers.yaml names it."""
         model = str(self.definition.engine_config.get("model") or "")
-        if "/" in model and self.providers.find(model):
+        if "/" in model and self.providers.knows(model):
             return model
         if not self.definition.engine_type and self.providers.default:
             return self.providers.default
@@ -507,7 +512,53 @@ class Bot:
 
     def session_model_ref(self, picked) -> str:
         picked = str(picked or "")
-        return picked if picked and self.providers.find(picked) else ""
+        return picked if picked and self.providers.knows(picked) else ""
+
+    def route(self, session: ConversationSession) -> str:
+        """For a chat on ``auto/<tier>``, pick this turn's model from what's
+        left on each subscription and remember it (``bots.routing``). Returns
+        the model, or "" for a chat with a fixed model. Runs the ORM."""
+        ref = self.session_model(session) or self.model_ref()
+        if not is_auto(ref):
+            return ""
+        ensure_compiled(
+            self.providers,
+            lambda: self.make_engine(model=self.resolve_ref("auto/low", None)),
+        )
+        meta = session.metadata or {}
+        before = meta.get("routed_model", "")
+        picked = route_model(self.providers, tier_of(ref), before)
+        if picked != before:
+            if before:
+                record_switch(self.providers, session, tier_of(ref), before, picked)
+            session.metadata = {**meta, "routed_model": picked}
+            spec = self.engine_spec(session)
+            session.engine_type = spec.engine_type
+            session.transport_type = spec.transport_type
+            session.save(
+                update_fields=[
+                    "metadata",
+                    "engine_type",
+                    "transport_type",
+                    "updated_at",
+                ]
+            )
+        return picked
+
+    def resolve_ref(self, ref: str, session: ConversationSession | None) -> str:
+        """``auto/<tier>`` as a concrete model: the one routed for this chat,
+        else the tier's first available one. No ORM."""
+        if not is_auto(ref):
+            return ref
+        tier = self.providers.routing.tiers.get(tier_of(ref), [])
+        routed = ((session.metadata or {}) if session else {}).get("routed_model")
+        if routed in tier:
+            return routed
+        for candidate in tier:
+            found = self.providers.find(candidate)
+            if found and found[0].available:
+                return candidate
+        return tier[0] if tier else ""
 
     def engine_spec(
         self, session: ConversationSession | None = None, model: str = ""
@@ -515,10 +566,14 @@ class Bot:
         """The engine for a chat: the model picked for it (or ``model``), else the bot's."""
         default = get_default_engine_spec()
         ref = model or self.session_model(session) or self.model_ref()
+        ref = self.resolve_ref(ref, session)
         transport = default.transport_type
         if ref:
             engine_type, config, key_env = self.providers.engine(ref)
             transport = self.providers.find(ref)[0].transport
+            config["provider"] = ref.partition("/")[
+                0
+            ]  # usage windows are kept by provider
             extra = {
                 k: v for k, v in self.definition.engine_config.items() if k != "model"
             }
@@ -928,6 +983,7 @@ class Bot:
         for plugin in self.plugins:
             await _maybe_await(plugin.before_turn(session, message))
         toolkits, builder = await self._prepare(session, message)
+        await sync_to_async(self.route, thread_sensitive=True)(session)
         outcome = await run_structured_call(
             self.reply_spec(toolkits, session),
             message,
@@ -978,6 +1034,7 @@ class Bot:
             pending = (call.metadata or {}).get("pending_approvals", [])
             decisions = {item["id"]: decisions for item in pending}
         toolkits, builder = await self._prepare(session, "", incoming=False)
+        await sync_to_async(self.route, thread_sensitive=True)(session)
         try:
             outcome = await resume_structured_call(
                 self.reply_spec(toolkits),

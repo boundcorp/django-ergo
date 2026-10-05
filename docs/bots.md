@@ -27,7 +27,7 @@ engine:
   config: {model: gpt-6-luna}
   api_key_env: KITCHEN_OPENAI_KEY    # read at runtime, never stored
   # with a providers.yaml: config: {model: openai/gpt-6-sol}
-  # transport: cli                   # claude only: the logged-in Claude Code CLI, no key
+  # transport: cli                   # the logged-in Claude Code or Codex CLI, no key
 root:                                # window settings for main and named chats
   recent: 15                         # latest messages always in context
   budget_tokens: 8000
@@ -376,7 +376,9 @@ demand (Orca: up to 50 transcript messages or 400 screen lines). `model` and `ef
 `--model`/`--effort`, except for `agent: omp`, which Orca can't give a model
 at launch: the plugin writes the worktree's `.omp/config.yml`
 (`modelRoles.default: <model>:<effort>`, git-ignored by its own folder) and omp
-picks it up. Each chat keeps one Orca mailbox terminal and Run for its
+picks it up. With `tier: low|medium|high` instead, the agent, model and effort
+come from the `agents` tiers in providers.yaml, on whichever subscription has
+room (see [Routing by tier](building-bots.md#routing-by-tier)). Each chat keeps one Orca mailbox terminal and Run for its
 workers; if Orca no longer knows them (their worktree was removed, Orca was
 reset), `orca_start_worker` makes new ones and tries once more. If a worker's agent
 terminal exits or vanishes without a `worker_done` (Orca keeps such a dispatch

@@ -54,6 +54,9 @@ DEFAULTS = {
     # skills: {exclude: [...]} or skills: {defaults: false}; a default skill
     # whose plugin settings clash with bot.yaml is left out with a warning.
     "DEFAULT_SKILLS": ["skillbuilder"],
+    # Dotted path to a callable (candidates, usage, rules, current) -> candidate
+    # that replaces the built-in tier routing policy (django_ergo.bots.routing).
+    "MODEL_ROUTER": None,
     # Callable(message_id) that delivers a bot-to-bot thread message, e.g. by
     # queueing a Celery task. None = deliver in a background thread.
     "THREAD_MESSAGE_RUNNER": None,

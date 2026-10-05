@@ -114,10 +114,86 @@ environment, so usage always comes from the subscription, at the rate
 Anthropic meters `claude -p` and the Agent SDK. Token costs shown in
 Ergonaut are API list prices, not what the plan charges.
 
+### OpenAI on your ChatGPT subscription
+
+The same `transport: cli` on an `openai` provider runs OpenAI models through
+the Codex CLI, on the ChatGPT plan it's logged in with:
+
+```yaml
+providers:
+  chatgpt:
+    type: openai
+    transport: cli
+    config: {effort: medium}   # optional: command, codex_home, effort, timeout
+    models: [gpt-6-sol, gpt-6-luna]
+```
+
+Install the CLI (`npm install -g @openai/codex`) where turns run and log it
+in with `codex login`. Each model call starts `codex app-server` once: the
+chat history goes in as Responses API items, Ergo's tools as client-run
+tools, and the process stops after one response, so Ergo still runs the
+tools, approvals and compaction. Codex's own tools, skills, plugins,
+sub-agents and code mode are off. Calls refuse to run unless the login is a
+ChatGPT account, and `OPENAI_API_KEY` is not passed to the CLI, so usage
+never bills an API key. Codex still adds a global `AGENTS.md` from its
+`CODEX_HOME` to the prompt; set `codex_home` to a folder without one if
+that matters. `thread/inject_items` and client-run tools are experimental
+in Codex's app server (checked with Codex 0.160.0).
+
 Anthropic allows this for your own login on the unmodified CLI. It doesn't
 allow serving other people's requests on your login: in a deployment other
 people use, each of them needs their own login, so keep a CLI provider to
 bots only you use.
+
+### Routing by tier
+
+Instead of a fixed model, a chat (the model picker's `auto` entries) or a
+bot (`engine: {model: auto/medium}`, or `default: auto/medium` in
+providers.yaml) can ask for a tier: `auto/low`, `auto/medium` or
+`auto/high`. Each turn then takes the first model in that tier whose
+subscription still has room. A chat keeps the model it had while that model
+qualifies, so its prompt cache isn't thrown away.
+
+```yaml
+tiers:                # bot chats: candidates in order of preference
+  low:    [claude/claude-sonnet-5-5, chatgpt/gpt-6-luna]
+  medium: [claude/claude-opus-5-5, chatgpt/gpt-6-sol]
+  high:   [claude/claude-opus-5-5, chatgpt/gpt-6-sol, openai/gpt-6-sol]
+agents:               # coding agents (orca_start_worker tier=...), subscriptions only
+  medium:
+    - {agent: claude, model: claude-opus-5-5, provider: claude}
+    - {agent: codex, model: gpt-6-sol, effort: medium, provider: chatgpt}
+routing:
+  limits:             # skip a provider once a window is this % used
+    - {provider: claude, window: five_hour, max_used: 85}
+    - {provider: chatgpt, window: weekly, max_used: 80}
+```
+
+The windows come from the CLIs themselves: every Claude Code and Codex call
+records its subscription's 5-hour and weekly usage (`ProviderUsage`), and a
+call refused for its limit counts that window as used up until it resets.
+Without limits, a provider is skipped only at 98% used. When every candidate
+is over a limit, the one with the most room is used. Agent candidates must
+name a `transport: cli` provider, so agents never run on an API key. Note
+that a chat routed onto an API-key provider (like `openai/gpt-6-sol` above)
+bills that key.
+
+The same priorities can be written in words, in a `routing.md` next to
+providers.yaml:
+
+```markdown
+Lean on Claude: use it until its 5-hour window is 85% used.
+Keep Codex's weekly window under 80%, since it runs out first.
+```
+
+The first turn after the file changes compiles it into limits with one
+structured call, in the background; the `routing:` limits apply until it's
+done. Ergonaut's **Routing** page shows each subscription's windows against
+its limits, what every tier picks now and why, and the chats and workers
+recently moved off their first choice. An admin can rewrite the priorities
+there; the saved text replaces `routing.md` for that deployment until they
+switch back. `DJANGO_ERGO["MODEL_ROUTER"]` replaces the policy with your own
+callable `(candidates, usage, rules, current)`.
 
 ## agents.md
 
