@@ -1421,6 +1421,13 @@ class OrcaAgents(AgentManager):
         )
         return f"Sent the answer to {question_id}."
 
+    def stop(self, handle: dict) -> str:
+        return (
+            f"The Orca worker (dispatch {handle.get('dispatch')}) may keep running; "
+            "stop it with orca_run as the CLI's orchestration guide says (orca_read "
+            '["skills", "get", "orchestration"])'
+        )
+
     def log(self, worker, handle: dict) -> dict | None:
         return self.plugin.worker_log(worker)
 
