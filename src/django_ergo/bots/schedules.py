@@ -9,6 +9,7 @@
         actions:
           - run: tools/analytics.py:pull_stats    # a function in a .py file in the bot folder
             args: {days: 7}                       # (it may take ctx first: a ToolContext)
+            stop_if_empty: true                   # nothing returned: skip the rest, quietly
           - prompt: "Summarize last week: {result}"   # {result}: the last run step's value
             to: {thread: "Stats {date:%b %d}"}
         to: main                        # main (default), a named chat, or a new thread:
@@ -29,7 +30,9 @@ nothing runs twice) and runs its actions in order. A prompt goes to its chat
 as a thread message with no sender, so it waits for a busy chat like any
 other, and Telegram passes the reply on for a main chat. A run step calls a
 function from the bot's Python files and is recorded as a ``BotJob``; if it
-fails, the steps after it don't run.
+fails, the steps after it don't run. With ``stop_if_empty``, a run step that
+returns nothing (``None``, an empty string, list or dict) ends the run there
+too, as a success: an alert check posts only when it found something.
 """
 
 from __future__ import annotations
@@ -174,6 +177,7 @@ class Action:
     path: str = ""  # run: a .py file in the bot folder
     function: str = ""  # run: the function in it
     args: dict = field(default_factory=dict)  # run: keyword arguments
+    stop_if_empty: bool = False  # run: an empty result ends the run, quietly
 
     def title_for(self, moment: datetime, run_number: int) -> str:
         """A new thread's title: ``{n}`` is the run number, ``{date:...}`` and
@@ -208,7 +212,7 @@ class Action:
         )
 
     @classmethod
-    def run(cls, name: str, spec: str, args) -> Action:
+    def run(cls, name: str, spec: str, args, *, stop_if_empty=False) -> Action:
         path, _, function = str(spec).partition(":")
         if (
             not path.endswith(".py")
@@ -221,7 +225,13 @@ class Action:
         if args is not None and not isinstance(args, dict):
             msg = f"schedule {name}: args must be a mapping"
             raise ScheduleError(msg)
-        return cls("run", path=path, function=function, args=dict(args or {}))
+        return cls(
+            "run",
+            path=path,
+            function=function,
+            args=dict(args or {}),
+            stop_if_empty=bool(stop_if_empty),
+        )
 
     @property
     def chats(self) -> set[str]:
@@ -280,7 +290,12 @@ class Schedule:
                 raise ScheduleError(msg)
             return Action.prompt(name, message, item.get("to"))
         if "run" in item:
-            return Action.run(name, item["run"], item.get("args"))
+            return Action.run(
+                name,
+                item["run"],
+                item.get("args"),
+                stop_if_empty=item.get("stop_if_empty", False),
+            )
         msg = f"schedule {name}: each action is {{prompt: ...}} or {{run: ...}}"
         raise ScheduleError(msg)
 
@@ -369,6 +384,9 @@ def run_actions(run_id: int, registry=None) -> None:
                 logger.warning("%s of %s failed: %s", label, bot.name, job.error)
                 return
             result = job.result
+            if action.stop_if_empty and result in (None, "", [], {}):
+                logger.info("%s of %s: nothing to report", label, bot.name)
+                return
         else:
             _send_prompt(bot, schedule, action, run, moment, result)
 
