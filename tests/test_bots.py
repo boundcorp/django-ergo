@@ -2007,3 +2007,29 @@ def test_default_skills_reach_every_folder_bot_unless_it_opts_out(tmp_path, sett
     )
     with pytest.raises(ValueError, match="skillbuilder needs bot_management"):
         Bot.load(clash)
+
+
+def test_files_note_lists_files_without_a_size():
+    from types import SimpleNamespace
+
+    from django_ergo.bots.messaging import files_note
+
+    files = [
+        {
+            "id": "a",
+            "filename": "plan.md",
+            "media_type": "text/markdown",
+            "size": 1200,
+            "session": "s",
+        },
+        {
+            "id": "b",
+            "filename": "PR #14",
+            "media_type": "text/uri-list",
+            "size": None,
+            "session": "s",
+        },
+    ]
+    note = files_note(SimpleNamespace(metadata={"attachments": files}))
+    assert "- plan.md (text/markdown, 1,200 bytes), id a" in note
+    assert "- PR #14 (text/uri-list), id b" in note

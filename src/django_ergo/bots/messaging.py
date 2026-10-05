@@ -141,10 +141,11 @@ def files_note(message: ThreadMessage) -> str:
     files = (message.metadata or {}).get("attachments") or []
     if not files:
         return ""
-    lines = [
-        f"- {f['filename']} ({f['media_type']}, {f['size']:,} bytes), id {f['id']}"
-        for f in files
-    ]
+    lines = []
+    for f in files:
+        # A link the bot saved (text/uri-list) has no stored size.
+        size = f", {f['size']:,} bytes" if f.get("size") is not None else ""
+        lines.append(f"- {f['filename']} ({f['media_type']}{size}), id {f['id']}")
     return (
         f"\n\n[Files shared with this message (they stay in thread {files[0]['session']}). "
         "Look at images and PDFs with ergo_attachments_look and read text with "
