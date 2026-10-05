@@ -111,8 +111,11 @@ downscaled to 1024px with Pillow when it's installed; older ones show as
 
 Large tool results get the same treatment: each model call carries the
 newest three (`tool_results_in_context` in bot.yaml, default
-`DJANGO_ERGO["TOOL_RESULTS_IN_CONTEXT"]`) in full, and older ones over 500
-characters go as a stub naming the tool and its size, so a long turn that
+`DJANGO_ERGO["TOOL_RESULTS_IN_CONTEXT"]`) in full, plus older ones while the
+kept results total at most 40,000 characters
+(`DJANGO_ERGO["TOOL_RESULTS_CHARS_IN_CONTEXT"]`), so a turn reading a handful
+of small files keeps them all. Older ones over 500 characters go as a stub
+naming the tool and its size, so a long turn that
 keeps reading a big dump doesn't re-send every earlier copy. History keeps
 every result; the bot calls the tool again if it needs an old one. See
 [structured-calls.md](structured-calls.md).
@@ -167,6 +170,7 @@ schedules:
     actions:
       - run: tools/analytics.py:pull_stats   # a function in a .py file in the bot folder
         args: {days: 7}                      # it may take ctx (a ToolContext) first
+        stop_if_empty: true                  # returns nothing: skip the rest, quietly
       - prompt: "Summarize last week: {result}"   # {result}: the last run step's value
         to: {thread: "Stats {date:%b %d}"}
     users: [lee]              # default: permissions.users, else everyone with a chat
@@ -380,6 +384,14 @@ reset), `orca_start_worker` makes new ones and tries once more. If a worker's ag
 terminal exits or vanishes without a `worker_done` (Orca keeps such a dispatch
 "dispatched"), the watcher fails the worker after five minutes and tells the
 chat why.
+  The watcher also scans its agent's session files on the worktree host every
+  `usage_minutes` (default 10) and once after settlement. Claude Code, Codex,
+  and omp tokens appear per worker under **Agent sessions** on Costs. Set
+  `files_host` to the SSH host that holds the worktrees, or `""` to scan files
+  locally. It is best effort: an unreadable session file preserves the last
+  recorded counts and does not fail the worker. Counts are attributed by
+  worktree and the worker time window, so overlapping workers in one worktree
+  can each include the same agent requests.
 
 ## Chats
 
@@ -739,8 +751,10 @@ For review screens the plugin also has `draft_diff()`, `pull_requests()`,
 
 ```yaml
 - name: orca
-  environment: devbox        # every call is pinned to this Orca environment
+  environment: devhost        # every call is pinned to this Orca environment
   executable: orca-ide       # default: orca-ide if installed, else orca
+  files_host: devhost        # SSH host holding worktrees; "" means local
+  usage_minutes: 10          # minimum minutes between agent session scans
   approve_changes: true
   root_only: true
 ```

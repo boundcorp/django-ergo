@@ -80,9 +80,11 @@ result = await run_structured_call(spec, "Plan it", session=session)
 - Rows never store engine config, so credentials are never written.
 - Each model call carries only the newest
   `DJANGO_ERGO["TOOL_RESULTS_IN_CONTEXT"]` large tool results (default 3,
-  "large" meaning over 500 characters) in full. Older ones are sent as a stub
-  such as `[penpot_tree result, 180 lines, 9,412 chars; superseded, call the
-  tool again if you need it]`. Errors and short results are sent as they
+  "large" meaning over 500 characters) in full, and older ones too while the
+  kept results total at most `DJANGO_ERGO["TOOL_RESULTS_CHARS_IN_CONTEXT"]`
+  characters (default 40,000; 0 keeps only the count). Older ones are sent
+  as a stub such as `[penpot_tree result, 180 lines, 9,412 chars; trimmed
+  from context to save space, call the tool again if you need it]`. Errors and short results are sent as they
   are. Only the request changes: the transcript and session rows keep every
   result, and tool call ids still pair up. Images in a stubbed result stay,
   and the image window (`IMAGES_IN_CONTEXT`) decides about them as before.

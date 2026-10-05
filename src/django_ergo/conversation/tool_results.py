@@ -5,11 +5,14 @@ results of every earlier step. A tool that returns a big dump (a design tree,
 a file listing, a page of rows) makes each later step pay for all the earlier
 dumps again.
 
-Each model call carries only the newest ``DJANGO_ERGO["TOOL_RESULTS_IN_CONTEXT"]``
-large tool results in full (default 3). Older large results become a short
-stub naming the tool and its size::
+Each model call carries the newest ``DJANGO_ERGO["TOOL_RESULTS_IN_CONTEXT"]``
+large tool results in full (default 3), and keeps more of the newest while
+all the results kept add up to at most ``DJANGO_ERGO["TOOL_RESULTS_CHARS_IN_CONTEXT"]``
+characters (default 40,000). A turn that reads ten small files keeps them
+all; a turn that pulls several big dumps keeps only the newest few. Older
+large results become a short stub naming the tool and its size::
 
-    [penpot_tree result, 180 lines, 9,412 chars; superseded, call the tool again if you need it]
+    [penpot_tree result, 180 lines, 9,412 chars; trimmed from context to save space, call the tool again if you need it]
 
 Only what is sent changes. Stored history keeps every result in full, so
 history tools and later readers still see them, and the model can run the
@@ -92,7 +95,7 @@ def stub_text(name: str, text: str) -> str:
     lines = text.count("\n") + 1 if text else 0
     return (
         f"[{name or 'tool'} result, {lines:,} lines, {len(text):,} chars; "
-        "superseded, call the tool again if you need it]"
+        "trimmed from context to save space, call the tool again if you need it]"
     )
 
 
@@ -108,29 +111,49 @@ def _stubbed_content(content, stub: str):
     return [{"type": "text", "text": stub}, *rest]
 
 
+def _count_kept(sizes: list[int], keep: int, max_chars: int) -> int:
+    """How many of the newest results stay: at least ``keep``, more while they fit."""
+    kept, total = 0, 0
+    for size in reversed(sizes):
+        if kept >= keep and total + size > max_chars:
+            break
+        kept += 1
+        total += size
+    return kept
+
+
 def trim_tool_results(
     messages: list[dict],
     *,
     keep: int | None = None,
+    max_chars: int | None = None,
     min_chars: int = STUB_MIN_CHARS,
 ) -> list[dict]:
-    """Stub all but the newest ``keep`` large tool results, for one model call.
+    """Stub older large tool results, for one model call.
+
+    The newest ``keep`` large results always stay. Older ones stay too while
+    the kept results add up to at most ``max_chars`` characters; from the
+    first that doesn't fit, it and everything older is stubbed.
 
     ``keep`` defaults to ``DJANGO_ERGO["TOOL_RESULTS_IN_CONTEXT"]``; when that
-    is ``None`` (or ``keep`` is negative) nothing changes. Works on Claude and
-    OpenAI messages alike. The input list and its messages are not changed.
+    is ``None`` (or ``keep`` is negative) nothing changes. ``max_chars``
+    defaults to ``DJANGO_ERGO["TOOL_RESULTS_CHARS_IN_CONTEXT"]``; 0 or
+    ``None`` keeps only ``keep``. Works on Claude and OpenAI messages alike.
+    The input list and its messages are not changed.
     """
     if keep is None:
         keep = api_settings.TOOL_RESULTS_IN_CONTEXT
     if keep is None or keep < 0:
         return messages
-    large = [
-        (i, j, result)
-        for i, j, result in _results(messages)
-        if not result.get("is_error")
-        and sum(len(t) for t in _text_parts(result.get("content"))) > min_chars
-    ]
-    old = large[: max(len(large) - keep, 0)]
+    if max_chars is None:
+        max_chars = api_settings.TOOL_RESULTS_CHARS_IN_CONTEXT or 0
+    large = []
+    for i, j, result in _results(messages):
+        size = sum(len(t) for t in _text_parts(result.get("content")))
+        if not result.get("is_error") and size > min_chars:
+            large.append((i, j, result, size))
+    kept = _count_kept([size for *_, size in large], keep, max_chars)
+    old = [(i, j, result) for i, j, result, _ in large[: len(large) - kept]]
     if not old:
         return messages
     names = _tool_names(messages)

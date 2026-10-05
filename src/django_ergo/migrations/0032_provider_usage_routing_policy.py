@@ -6,7 +6,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ("django_ergo", "0030_engine_neutral_messages"),
+        ("django_ergo", "0031_agent_usage"),
     ]
 
     operations = [

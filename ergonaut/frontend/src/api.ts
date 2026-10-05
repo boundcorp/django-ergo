@@ -204,6 +204,10 @@ export type Costs = {
     }
     threads: UsageThread[]
   }
+  agents: {
+    headline: { sessions: number; tokens: number; cache_hit: number }
+    rows: AgentUsage[]
+  }
 }
 
 export type UsageThread = {
@@ -221,6 +225,25 @@ export type UsageThread = {
   cache_hit: number
   share: number
   cost: number
+}
+
+export type AgentUsage = {
+  worker_id: string
+  worker_title: string
+  agent: string
+  model: string
+  chat_id: string
+  chat_title: string
+  bot: string
+  worker_status: string
+  input_tokens: number
+  cache_write_tokens: number
+  cache_read_tokens: number
+  output_tokens: number
+  reasoning_tokens: number
+  tokens: number
+  cache_hit: number
+  requests: number
 }
 
 export type BotDetail = Bot & {
@@ -503,7 +526,12 @@ async function upload<T>(path: string, file: File): Promise<T> {
   return response.json() as Promise<T>
 }
 
+export type ApiKey = { id: string; name: string; hint: string; created_at: string; last_used_at: string | null }
+
 export const api = {
+  apiKeys: () => request<ApiKey[]>('GET', '/auth/keys'),
+  createApiKey: (name: string) => request<ApiKey & { key: string }>('POST', '/auth/keys', { name }),
+  revokeApiKey: (id: string) => request<{ ok: boolean }>('DELETE', `/auth/keys/${id}`),
   csrf: () => request<{ csrftoken: string }>('GET', '/auth/csrf'),
   me: () => request<User>('GET', '/auth/me'),
   login: (username: string, password: string) => request<User>('POST', '/auth/login', { username, password }),

@@ -240,6 +240,9 @@ export function Sidebar({
         <Link to="/routing" className="rounded-lg px-3 py-2 text-sm hover:bg-raised">
           Routing
         </Link>
+        <Link to="/api-keys" className="rounded-lg px-3 py-2 text-sm hover:bg-raised">
+          API keys
+        </Link>
         <VersionFooter />
       </div>
     </nav>

@@ -41,10 +41,12 @@ DEFAULTS = {
     "IMAGES_IN_CONTEXT": 2,
     "IMAGE_MAX_SIDE": 1024,
     # Large tool results (over 500 chars) each model call carries in full: the
-    # latest N; older ones become a short stub naming the tool, so a long turn
-    # doesn't re-send every earlier dump. Stored history keeps them all.
-    # None = send every result in full.
+    # latest N, plus older ones while the kept results total at most
+    # TOOL_RESULTS_CHARS_IN_CONTEXT chars; older ones become a short stub
+    # naming the tool, so a long turn doesn't re-send every earlier dump.
+    # Stored history keeps them all. None = send every result in full.
     "TOOL_RESULTS_IN_CONTEXT": 3,
+    "TOOL_RESULTS_CHARS_IN_CONTEXT": 40_000,
     # Extra bot plugins by short name: {"name": "dotted.path.PluginClass"}.
     "BOT_PLUGINS": {},
     # Skills from Ergo's skill library (bots/skill_library) that every bot

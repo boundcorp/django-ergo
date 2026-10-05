@@ -8,7 +8,7 @@ class Migration(migrations.Migration):
 
     dependencies = [
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
-        ("django_ergo", "0031_provider_usage_routing_policy"),
+        ("django_ergo", "0032_provider_usage_routing_policy"),
     ]
 
     operations = [

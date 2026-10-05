@@ -25,7 +25,11 @@ class Command(BaseCommand):
         )
         parser.add_argument("--timeout", type=float, default=30 * 60, help="seconds to wait for idle")
         parser.add_argument("--quiet-for", type=float, default=20)
-        parser.add_argument("--ignore-workers", action="store_true", help="wait for turns only")
+        parser.add_argument(
+            "--ignore-workers",
+            action="store_true",
+            help="wait for turns only (the default follows ERGONAUT_UPGRADE_WAIT_FOR_WORKERS)",
+        )
 
     def handle(self, *args, check, status, force, timeout, quiet_for, ignore_workers, **options):
         if status:
@@ -39,7 +43,7 @@ class Command(BaseCommand):
                 force=force,
                 wait_timeout=timeout,
                 quiet_for=quiet_for,
-                workers=not ignore_workers,
+                workers=False if ignore_workers else None,
                 log=self.stdout.write,
             )
         )

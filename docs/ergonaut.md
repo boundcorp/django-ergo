@@ -37,6 +37,8 @@ Telegram plugin. `people:` may also sit in a bot's own bot.yaml.
 | `ergonaut chat BOT [--user NAME]` | Chat with a bot's main chat in the terminal |
 | `ergonaut manage ...` | Any `manage.py` command, e.g. `ergo_bot_makemigrations`, `ergo_bot_preview` |
 | `ergonaut manage wait_idle` | Wait until no bot turn or worker is running, before a restart |
+| `ergonaut remote ...` | Use another Ergonaut server's bots over its API (the [`ergonaut-remote` client](agent-skills.md)) |
+| `ergonaut manage api_key create USER --name WHERE` | Make an API key (also `list`, `revoke ID`); see [API keys](#api-keys) |
 | `ergonaut upgrade [--check]` | Upgrade to the newest GitHub release once idle (see [Upgrading](#upgrading)) |
 
 Commands other than `up` find a running `ergonaut up` on the same machine
@@ -183,11 +185,33 @@ refuse logins until the window passes.
   the sortable per-thread table can be grouped by thread, bot, or model and
   links to each chat. Claude CLI subscription calls contribute tokens but
   show `sub` instead of dollars and are excluded from estimated API spend.
-  Below Usage, spend remains broken down by day, call kind (chat replies
-  split by bot), and model. Admins see everyone's calls; others see their own.
+  **Agent sessions** follows Usage and separately shows Claude Code, Codex,
+  and omp tokens that Orca workers record from the agents' session files.
+  Those subscription tokens are not dollar estimates and do not affect Usage
+  totals. Agent rows link to their chat and show the worker, agent, model,
+  cache hit, request count, and status. Below Usage, spend remains broken down
+  by day, call kind (chat replies split by bot), and model. Admins see
+  everyone's calls and agent sessions; others see their own.
 
 Django's admin is at `/mgmt/`. The API is at `/api/` with docs at
 `/api/docs`.
+
+## API keys
+
+Scripts and agents use the API with a key instead of a login:
+`Authorization: Bearer ergo_...`. A key acts as the user it belongs to, with
+the same access, and needs no CSRF token. Make one under **API keys** at the
+bottom of the sidebar (it is shown once), or on the server:
+
+```bash
+ergonaut manage api_key create lee@example.com --name rigel-claude   # prints the key
+ergonaut manage api_key list
+ergonaut manage api_key revoke <id>
+```
+
+Only a hash is stored. Keys are made and revoked from a signed-in session
+(`/api/auth/keys`), not with another key. Make one per place a key is used
+so each can be revoked alone. The [`ergonaut-remote` command](agent-skills.md) uses them.
 
 ## Reloading
 
@@ -212,6 +236,14 @@ a row), or fails after `--timeout` (30 minutes by default).
 `--ignore-workers` waits for turns only: a polling worker survives a
 restart (beat resumes it), but one in the middle of a step loses that step.
 Thread messages that were waiting are redelivered.
+
+With Celery a restart is gentler on workers than that suggests: each worker
+is a database row plus one short Celery step at a time, a step in flight
+finishes during Celery's warm shutdown, and beat's `resume_workers`
+reschedules any worker whose next step is over 3 minutes late. A worker whose
+real work runs outside Ergonaut (an Orca agent in another pod) isn't touched
+at all. Such a deployment can stop the automatic upgrade from waiting for
+workers with `ERGONAUT_UPGRADE_WAIT_FOR_WORKERS=0`.
 
 ## Upgrading
 
@@ -251,6 +283,7 @@ again next time; a release whose upgrade failed is retried after six hours
 | `ERGONAUT_AUTO_UPGRADE_SECONDS` | unset | check for a new release on this interval (needs beat) |
 | `ERGONAUT_UPGRADE_REPO` | `boundcorp/django-ergo` | where releases come from (a fork) |
 | `ERGONAUT_UPGRADE_CHANNEL` | `releases` | `releases`, or `branch:main` to follow a branch's head |
+| `ERGONAUT_UPGRADE_WAIT_FOR_WORKERS` | `1` | `0` makes the idle gate wait for bot turns only, not queued or running workers |
 | `GITHUB_TOKEN` or `GH_TOKEN` | the `gh` CLI's login | GitHub API token; without any, 60 requests an hour |
 
 ### systemd

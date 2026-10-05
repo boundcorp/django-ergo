@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from 'react'
+import { Component, useCallback, useEffect, useState } from 'react'
+import type { ReactNode } from 'react'
 import { BrowserRouter, Link, Navigate, Route, Routes, useLocation, useParams } from 'react-router-dom'
 import type { Bot, Session, SidebarPin, User } from './api'
 import { ApiError, api } from './api'
@@ -12,6 +13,7 @@ import { Memory } from './pages/Memory'
 import { CostsPage } from './pages/Costs'
 import { RoutingPage } from './pages/Routing'
 import { ThreadsPage } from './pages/ThreadsPage'
+import { ApiKeysPage } from './pages/ApiKeys'
 import { ThemeToggle } from './theme'
 import { ago } from './time'
 import { DirectoryContext } from './components/BotIcon'
@@ -191,21 +193,24 @@ function Shell({
           <ThemeToggle />
         </div>
         <div className="min-h-0 flex-1 overflow-hidden">
-          <Routes>
-            <Route path="/" element={<Home user={user} bots={bots} sessions={sessions} />} />
-            <Route
-              path="/threads"
-              element={<ThreadsPage user={user} bots={bots} sessions={sessions} onChange={refresh} />}
-            />
-            <Route path="/s/:id" element={<ChatRoute onChange={refresh} />} />
-            <Route path="/sessions" element={<Sessions bots={bots} />} />
-            <Route path="/costs" element={<CostsPage />} />
-            <Route path="/routing" element={<RoutingPage />} />
-            <Route path="/bots/:name" element={<BotPage />} />
-            <Route path="/bots/:name/new-thread" element={<NewThread onChange={refresh} />} />
-            <Route path="/bots/:name/kb" element={<Memory />} />
-            <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
+          <PageErrorBoundary key={pathname}>
+            <Routes>
+              <Route path="/" element={<Home user={user} bots={bots} sessions={sessions} />} />
+              <Route
+                path="/threads"
+                element={<ThreadsPage user={user} bots={bots} sessions={sessions} onChange={refresh} />}
+              />
+              <Route path="/s/:id" element={<ChatRoute onChange={refresh} />} />
+              <Route path="/sessions" element={<Sessions bots={bots} />} />
+              <Route path="/costs" element={<CostsPage />} />
+              <Route path="/routing" element={<RoutingPage />} />
+              <Route path="/api-keys" element={<ApiKeysPage />} />
+              <Route path="/bots/:name" element={<BotPage />} />
+              <Route path="/bots/:name/new-thread" element={<NewThread onChange={refresh} />} />
+              <Route path="/bots/:name/kb" element={<Memory />} />
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
+          </PageErrorBoundary>
         </div>
       </main>
     </div>
@@ -218,4 +223,37 @@ export default App
 function ChatRoute({ onChange }: { onChange: () => void }) {
   const { id = '' } = useParams()
   return <Chat key={id} onChange={onChange} />
+}
+
+// A page that throws while rendering shows its error here, and the rest of the app stays up,
+// instead of React unmounting everything and leaving a blank screen.
+class PageErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
+  state: { error: Error | null } = { error: null }
+
+  static getDerivedStateFromError(error: Error) {
+    return { error }
+  }
+
+  componentDidCatch(error: Error) {
+    console.error(error)
+  }
+
+  render() {
+    const { error } = this.state
+    if (!error) return this.props.children
+    return (
+      <div className="page-content h-full overflow-y-auto">
+        <h1 className="page-title">This page hit an error</h1>
+        <pre className="mt-4 whitespace-pre-wrap break-words rounded-card border border-danger/40 bg-red-tint p-3 text-sm text-danger">
+          {error.message || String(error)}
+        </pre>
+        <button
+          className="mt-4 rounded-control border border-stroke px-3 py-2 text-sm"
+          onClick={() => window.location.reload()}
+        >
+          Reload
+        </button>
+      </div>
+    )
+  }
 }

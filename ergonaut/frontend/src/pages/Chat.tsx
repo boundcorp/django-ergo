@@ -34,6 +34,18 @@ function merge(detail: SessionDetail, messages: Message[], calls: Call[]): Sessi
   }
 }
 
+/** Download the session as JSON. Built on click: a data: link of a long chat runs to megabytes,
+ * re-serialized on every render, and mobile Safari drops the page under that weight. */
+function exportJson(detail: SessionDetail) {
+  const blob = new Blob([JSON.stringify(detail, null, 2)], { type: 'application/json' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = `session-${detail.session.id}.json`
+  link.click()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
 /** Whether a user message with this text was stored after ``line``. */
 function stored(messages: Message[], text: string, line: number): boolean {
   const needle = JSON.stringify(text).slice(1, -1)
@@ -423,13 +435,9 @@ export function Chat({ onChange }: { onChange: () => void }) {
             >
               📎 Files
             </button>
-            <a
-              className="text-xs text-zinc-500 underline"
-              href={`data:application/json,${encodeURIComponent(JSON.stringify(detail, null, 2))}`}
-              download={`session-${detail.session.id}.json`}
-            >
+            <button className="text-xs text-zinc-500 underline" onClick={() => exportJson(detail)}>
               Export JSON
-            </a>
+            </button>
           </div>
         </header>
         <Requests requests={detail.requests ?? []} />

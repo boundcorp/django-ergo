@@ -24,8 +24,8 @@ from django_ergo.conversation.links import GITHUB_PR, pull_request_out, pull_req
 from django_ergo.conversation.models import ConversationAttachment, ConversationSession, StructuredCall, Worker
 from ninja import File, Router, Schema, UploadedFile
 from ninja.errors import HttpError
-from ninja.security import django_auth
 
+from ergonaut.api.auth import user_auth
 from ergonaut.apps.bots.tasks import (
     peek_inbox,
     queue_message,
@@ -35,7 +35,7 @@ from ergonaut.apps.bots.tasks import (
     unsend,
 )
 
-router = Router(tags=["bots"], auth=django_auth)
+router = Router(tags=["bots"], auth=user_auth)
 
 
 # -- schemas -----------------------------------------------------------------

@@ -78,6 +78,10 @@ schedules:
   first (`ctx.table(...)`, `ctx.secret(...)`). Each run is recorded as a
   `BotJob` with its status, result and any traceback, listed on the bot's
   page.
+- `stop_if_empty: true` on a `run` step ends the run there, as a success,
+  when the function returns nothing (`None`, `""`, `[]` or `{}`). An alert
+  check returns its findings, and the prompt after it only goes out when
+  there are some.
 - `prompt:` sends a message to `to` (default `main`). `{result}` is the
   value the last `run` step returned.
 - `message:` with `to:` at the top level is shorthand for one `prompt`.
