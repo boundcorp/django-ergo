@@ -765,8 +765,11 @@ and `icon` (an emoji) for the pin. Loading the skill loads
 
 Lets the bot maintain the git repository its folder lives in, so it can
 change its own instructions, config and tools, or add new bots.
-`ergo_config_repo_status`, `ergo_config_repo_list`, `ergo_config_repo_read`, `ergo_config_repo_diff` and `ergo_config_repo_write` look
-at and edit the files (paths can't leave the repo or touch `.git`), and
+`ergo_config_repo_status`, `ergo_config_repo_list`, `ergo_config_repo_read`,
+`ergo_config_repo_grep` and `ergo_config_repo_diff` inspect the files.
+Use `ergo_config_repo_edit` for an exact, targeted replacement in an existing
+file; `ergo_config_repo_write` creates or replaces a whole file. Ranged reads
+return numbered lines, and all paths can't leave the repo or touch `.git`.
 `ergo_config_repo_discard` throws unpublished edits away.
 
 In `merge_main` mode the bot edits the checkout it runs from, and

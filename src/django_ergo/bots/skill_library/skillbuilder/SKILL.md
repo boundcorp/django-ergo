@@ -11,16 +11,19 @@ pull request. Nothing you write runs until a person merges it.
 ## The workflow
 
 1. `ergo_config_repo_status` and `ergo_config_repo_prs` first: don't redo a
-   change that's already proposed. `ergo_config_repo_pull` if main moved.
+   change that's already proposed. `ergo_config_repo_pull` before editing so
+   the draft starts from current main.
 2. Read before you write: `ergo_config_repo_list` the bot folder, then
    `ergo_config_repo_read` its `bot.yaml`, `agents.md` and the tool files
-   closest to what you're adding. Copy their style. To see how an Ergo
-   API works, load `introspection` and read its source with
-   `ergo_self_read("ergo:bots/tools.py")` (or `ergo:bots/pages.py`,
-   `ergo:bots/workers.py`, ...).
-3. Write with `ergo_config_repo_write` (whole files) and
-   `ergo_config_repo_delete`. You're editing a draft worktree of main, so the
-   running bots don't change.
+   closest to what you're adding. For a large file, use
+   `ergo_config_repo_grep` to find the function, then read its line range.
+   Copy their style. To see how an Ergo API works, load `introspection` and
+   read its source with `ergo_self_read("ergo:bots/tools.py")` (or
+   `ergo:bots/pages.py`, `ergo:bots/workers.py`, ...).
+3. Use `ergo_config_repo_edit` for a targeted existing-file change.
+   `ergo_config_repo_write` is for new files or a full rewrite, and
+   `ergo_config_repo_delete` removes a file. You're editing a draft worktree
+   of main, so the running bots don't change.
 4. Check: `ergo_config_repo_diff` for the whole change, and
    `ergo_config_repo_preview(path)` for every `.jhtml` page you touched (it
    applies the draft's migrations and fills empty tables with sample rows).
