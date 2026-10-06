@@ -111,12 +111,29 @@ def test_page_design_pattern_examples_render():
         "decision-flow.jhtml": "Campaign approval flow",
         "timeline.jhtml": "Kyoto itinerary",
         "comparison-matrix.jhtml": "Channel comparison",
-        "project-map.jhtml": "Community-care project map",
+        "project-map.jhtml": "Hernandez house move",
     }
 
     for filename, title in expected_titles.items():
         html = render_page(bot, (patterns / filename).read_text())
         assert "<html" in html and title in html
+
+    source = (patterns / "project-map.jhtml").read_text()
+    html = render_page(bot, source)
+    assert "You are here" in html
+    assert "Waiting on the landlord&#39;s meter reading" in html
+    assert "No reply by Friday 10:00" in html
+    assert "Changed since last update" in html
+    assert "--pd-accent:#8167dc" in html
+
+    macro_only = source.split("{% set sample_counts", maxsplit=1)[0]
+    minimal_html = render_page(
+        bot,
+        macro_only + '\n{{ project_map("Brief move", "", "", accent="#0088cc") }}',
+    )
+    assert "Brief move" in minimal_html
+    assert "Milestones" not in minimal_html
+    assert "--pd-accent:#0088cc" in minimal_html
 
 
 def test_client_tools_need_a_server(tmp_path):
