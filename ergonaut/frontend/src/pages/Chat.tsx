@@ -55,6 +55,19 @@ function stored(messages: Message[], text: string, line: number): boolean {
   return messages.some(m => m.line > line && m.role === 'user' && JSON.stringify(m.blocks).includes(needle))
 }
 
+/** The selected pin replaces the transcript while keeping the composer available. */
+export function PinnedDashboard({
+  pin,
+  refreshKey,
+  onClose,
+}: {
+  pin: Pin | null
+  refreshKey: unknown
+  onClose: () => void
+}) {
+  return pin ? <PageViewer pin={pin} refreshKey={refreshKey} onClose={onClose} /> : null
+}
+
 export function Chat({ onChange }: { onChange: () => void }) {
   const { id = '' } = useParams()
   const [detail, setDetail] = useState<SessionDetail | null>(null)
@@ -613,6 +626,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
             onCount={onPinCount}
           />
         </MobileSessionBar>
+        <PinnedDashboard pin={openPin} refreshKey={detail.messages.length} onClose={() => setOpenPin(null)} />
         <div
           ref={transcript}
           onScroll={onTranscriptScroll}

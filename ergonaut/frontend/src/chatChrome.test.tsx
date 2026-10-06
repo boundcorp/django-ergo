@@ -6,6 +6,7 @@ import { MemoryRouter } from 'react-router-dom'
 import type { Message } from './api'
 import { Transcript } from './components/Transcript'
 import { modelLabel } from './components/ModelPicker'
+import { PinnedDashboard } from './pages/Chat'
 
 describe('MobileSessionBar', () => {
   test('renders the truncated title and live counts with aria-expanded', () => {
@@ -48,6 +49,31 @@ describe('SuggestionChips', () => {
     expect(html).toContain('No changes for now')
     expect(html).toContain('aria-label="Suggested replies"')
     expect(html.match(/<button/g)?.length).toBe(2)
+  })
+})
+
+describe('PinnedDashboard', () => {
+  test('shows the selected dashboard instead of the transcript panel', () => {
+    const originalDocument = Object.getOwnPropertyDescriptor(globalThis, 'document')
+    Object.defineProperty(globalThis, 'document', {
+      configurable: true,
+      value: { documentElement: { classList: { contains: () => false } } },
+    })
+    try {
+      const html = renderToStaticMarkup(
+        createElement(PinnedDashboard, {
+          pin: { kind: 'bot_file', name: 'Account limits', url: '/api/bots/devbox/files/pages/limits.jhtml' },
+          refreshKey: 3,
+          onClose: () => undefined,
+        }),
+      )
+      expect(html).toContain('title="Account limits"')
+      expect(html).toContain('src="/api/bots/devbox/files/pages/limits.jhtml?theme=light"')
+      expect(html).toContain('Back to chat')
+    } finally {
+      if (originalDocument) Object.defineProperty(globalThis, 'document', originalDocument)
+      else Reflect.deleteProperty(globalThis, 'document')
+    }
   })
 })
 
