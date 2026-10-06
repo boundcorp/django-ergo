@@ -416,7 +416,8 @@ Both images include an agent toolchain for bots that shell out: `git`,
 CLI (`orca`). Orca is a pinned Linux AppImage (`ORCA_VERSION`,
 `ORCA_LINUX_APPIMAGE_SHA256` build args), checksum-verified, extracted to
 `/opt/orca`. Pushes to `main` publish the `release` image to
-`ghcr.io/boundcorp/ergonaut` (tags `main` and `sha-<commit>`).
+`ghcr.io/boundcorp/ergonaut` as `sha-<commit>`, and move the `main` tag to it
+once the `aio` smoke test passes.
 
 The `aio` image runs `ergonaut up` as an unprivileged user with data in the
 `/data` volume and bots at `/bot`:

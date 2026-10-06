@@ -31,6 +31,17 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && rm -rf /var/lib/apt/lists/*
 
 #
+# Frontend Stage: depends only on ergonaut/frontend, so its layers stay cached
+# while the Python code changes.
+FROM base AS frontend
+
+WORKDIR /app/frontend
+COPY ergonaut/frontend/package.json ergonaut/frontend/package-lock.json* /app/frontend/
+RUN npm ci
+COPY ergonaut/frontend/ /app/frontend/
+RUN npm run build
+
+#
 # Builder Stage
 FROM base AS builder
 
@@ -54,11 +65,8 @@ COPY pyproject.toml setup.py README.md HISTORY.md /ergo/
 COPY src/ /ergo/src/
 RUN uv pip install --no-cache-dir "/ergo[legacy,bots]"
 
-# Build frontend
-COPY ergonaut/frontend/package.json ergonaut/frontend/package-lock.json* /app/frontend/
-RUN cd /app/frontend && npm ci
-COPY ergonaut/frontend/ /app/frontend/
-RUN cd /app/frontend && npm run build
+# Frontend, built in its own stage so a change under src/ doesn't redo it
+COPY --from=frontend /app/frontend /app/frontend
 
 COPY ergonaut/ergonaut/ /app/ergonaut
 COPY ergonaut/infra/ /app/infra

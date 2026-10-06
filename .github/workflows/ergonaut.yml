@@ -5,21 +5,31 @@ on:
     branches: [main, master, develop]
   pull_request:
     branches: [main, master, develop]
+  # Nightly full run on main catches PRs that passed alone but break together.
+  schedule:
+    - cron: "0 9 * * *"
+  workflow_dispatch:
 
 permissions:
   contents: read
 
-# A newer push to the same branch or PR cancels the older run, so the
-# runners work on the latest commit instead of a backlog.
+# Pull requests: a newer push cancels the older run. Branch pushes (main):
+# a running build is never cancelled; GitHub keeps at most one run waiting
+# and replaces it with the newest push, so a burst of merges builds the
+# running commit and then only the latest one.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # runs-on: pushes and PRs from branches of this repo run on our self-hosted
   # runners; PRs from forks run on GitHub-hosted runners. Setting the
   # repository variable CI_GITHUB_HOSTED=true sends every job to GitHub-hosted.
+  #
+  # Tests run on pull requests (and by hand). A merge to main doesn't rerun
+  # them: the PR already passed, and the image job below is what main needs.
   test:
+    if: github.event_name != 'push'
     runs-on: ${{ (vars.CI_GITHUB_HOSTED != 'true' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","boundcorp"]') || 'ubuntu-24.04' }}
     timeout-minutes: 20
     defaults:
@@ -45,26 +55,42 @@ jobs:
       - name: Check migrations
         run: env -u DATABASE_URL .venv/bin/python manage.py makemigrations --check --dry-run
 
-  # Pushes only: PRs run the tests, and the image is built when main publishes
-  # (the publish job needs this smoke test).
+  # Pushes only. Builds the release image once, smoke-tests the aio image
+  # built on top of it, and on main pushes the release image as sha-<commit>
+  # and then moves the `main` tag to it. The `main` tag only ever points at a
+  # commit whose smoke test passed; octo's auto-upgrader follows it.
   image:
     if: github.event_name == 'push'
     runs-on: ${{ (vars.CI_GITHUB_HOSTED != 'true' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","boundcorp"]') || 'ubuntu-24.04' }}
     timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    env:
+      PUBLISH: ${{ github.ref == 'refs/heads/main' }}
+      IMAGE: ghcr.io/boundcorp/ergonaut
     steps:
       - uses: actions/checkout@v4
-      # Layers are cached in the GitHub Actions cache (scope "ergonaut"), shared
-      # with the publish job, so a fresh runner reuses earlier builds.
+      # Layers are cached in the GitHub Actions cache (scope "ergonaut"), so a
+      # fresh runner reuses earlier builds.
       - uses: docker/setup-buildx-action@v3
-      - name: Build the release image
+      - uses: docker/login-action@v3
+        if: env.PUBLISH == 'true'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build the release image (and push it as sha-<commit> on main)
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ergonaut/Dockerfile
           target: release
+          build-args: ERGONAUT_VERSION=${{ github.sha }}
           # Not loaded into Docker: the smoke test runs the aio image, which
-          # reuses these layers from the same builder. Loading both doubled the
-          # export time on the self-hosted runners.
+          # reuses these layers from the same builder.
+          push: ${{ env.PUBLISH == 'true' }}
+          tags: ${{ env.IMAGE }}:sha-${{ github.sha }}
           cache-from: type=gha,scope=ergonaut
           cache-to: type=gha,scope=ergonaut,mode=max
       - name: Build the all-in-one image
@@ -73,6 +99,7 @@ jobs:
           context: .
           file: ergonaut/Dockerfile
           target: aio
+          build-args: ERGONAUT_VERSION=${{ github.sha }}
           load: true
           tags: ergonaut:aio
           cache-from: type=gha,scope=ergonaut
@@ -99,38 +126,6 @@ jobs:
         run: |
           docker logs aio 2>&1 | tail -200 || true
           docker rm -f aio || true
-
-  # Publishes the release image. Runs only for pushes to main (never PRs), after
-  # tests and the image smoke job pass; the concurrency group serialises
-  # publishes so a push never races an older one.
-  publish:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [test, image]
-    runs-on: ${{ (vars.CI_GITHUB_HOSTED != 'true' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","boundcorp"]') || 'ubuntu-24.04' }}
-    timeout-minutes: 30
-    permissions:
-      contents: read
-      packages: write
-    concurrency:
-      group: ergonaut-publish
-      cancel-in-progress: false
-    steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build and push the release image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: ergonaut/Dockerfile
-          target: release
-          build-args: ERGONAUT_VERSION=${{ github.sha }}
-          push: true
-          tags: |
-            ghcr.io/boundcorp/ergonaut:main
-            ghcr.io/boundcorp/ergonaut:sha-${{ github.sha }}
-          cache-from: type=gha,scope=ergonaut
+      - name: Publish (move the main tag to this commit)
+        if: env.PUBLISH == 'true'
+        run: docker buildx imagetools create -t "$IMAGE:main" "$IMAGE:sha-${{ github.sha }}"
