@@ -146,6 +146,8 @@ class SessionMessage(TimeStampedMixin):
     cache_creation_input_tokens = models.IntegerField(null=True, blank=True)
     cache_read_input_tokens = models.IntegerField(null=True, blank=True)
     sequence = models.IntegerField()
+    author = models.JSONField(default=dict, blank=True)
+    provenance = models.JSONField(default=dict, blank=True)
 
     class Meta:
         ordering = ["sequence"]

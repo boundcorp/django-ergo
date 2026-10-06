@@ -144,6 +144,8 @@ class MessageOut(Schema):
     role: str
     blocks: list[dict]
     timestamp: datetime | None
+    author: dict
+    provenance: dict
 
 
 class CallOut(Schema):
@@ -1028,8 +1030,15 @@ def session_detail(request, session_id: str, before: int | None = None, limit: i
         raise HttpError(404, "No such session")
     first_line = page_start(session, before, max(1, min(limit, 500)))
     messages = [
-        {"line": m.line, "role": m.role, "blocks": m.blocks, "timestamp": m.timestamp}
-        for m in SessionSource(session, first_line=first_line, before_line=before).messages()
+        {
+            "line": m.line,
+            "role": m.role,
+            "blocks": m.blocks,
+            "timestamp": m.timestamp,
+            "author": m.author,
+            "provenance": m.provenance,
+        }
+        for m in SessionSource(session, first_line=first_line, before_line=before, include_attribution=False).messages()
     ]
     calls = [call_out(c) for c in calls_in(session, first_line, before)]
     if session.user_id == request.auth.pk:

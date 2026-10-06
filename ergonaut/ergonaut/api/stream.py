@@ -48,8 +48,15 @@ def _snapshot(session_id, after: int, seen: dict):
     if count != seen.get("count"):
         seen["count"] = count
         messages = [
-            {"line": m.line, "role": m.role, "blocks": m.blocks, "timestamp": m.timestamp}
-            for m in SessionSource(session, first_line=max(after, 0)).messages()
+            {
+                "line": m.line,
+                "role": m.role,
+                "blocks": m.blocks,
+                "timestamp": m.timestamp,
+                "author": m.author,
+                "provenance": m.provenance,
+            }
+            for m in SessionSource(session, first_line=max(after, 0), include_attribution=False).messages()
         ]
     requests = requests_out(session)
     key = [(r["id"], r["status"]) for r in requests]

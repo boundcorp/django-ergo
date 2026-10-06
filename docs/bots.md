@@ -502,6 +502,38 @@ queues a Celery task) or a background thread. Set `orchestration: false` for
 a bot that never delegates; it has no `orchestration` skill (it still
 answers messages sent to it, and can message upward, below).
 
+### Message identity
+
+Forwarded and cross-chat messages store the words separately from their
+identity. `SessionMessage.role` remains the provider role (`user` for incoming
+messages, including bot messages); it is not the person's identity.
+`author` is an extensible JSON snapshot with `kind` (`django_user`, `bot`,
+`telegram_user` or `system`), a string `ref` scoped by that kind, and
+`display_name`. `provenance` records the message kind (`forwarded`, `message`,
+`report` or `reply`), an `origin` snapshot (session id/label and timestamp,
+plus original message id, sequence and structured-call id when available),
+and, for a forward, `forwarded_by` (the sending bot's identity and chat).
+Optional notes and shared files stay separate from the author's words.
+Re-forwarding preserves the original author, origin and files; only the
+latest forwarding chat and its note change.
+
+Claude, OpenAI and history context generate attribution and routing
+instructions from those fields at read time. The HTTP and SSE APIs instead
+return the unprefixed body alongside `author` and `provenance`; the web app
+shows the original author, forwarding bot, linked origin chat, original
+time, note and files. `Bot.ask(..., author={...})` lets a trusted channel
+identify its actual sender. Identity is attribution, not authorization:
+session ownership and tool permissions are unchanged.
+
+Migration `0034_sessionmessage_identity` adds two JSON fields with empty
+defaults; it does not rewrite history or guess identities from old textual
+preambles. Existing rows keep their prior rendering, while queued legacy
+forwards use their existing structured `ThreadMessage` metadata when
+delivered. This is groundwork, not shared-chat membership: participant
+rosters, access control, invitations, identity linking and avatars are
+not implemented.
+
+
 Every turn of a chat with the `orchestration` skill loaded also gets a
 **Bots and threads** context block (`django_ergo.bots.overview`), so it can
 answer "what's going on?" without asking anyone:
@@ -905,3 +937,7 @@ arrive as one turn. Photos, voice notes, audio
 and documents become attachments. A turn that stops for approval replies
 with Approve and Deny buttons that resume it. `plugin.notify(user, text)`
 sends a message from other code.
+
+The incoming message's `author` records the actual Telegram sender id and
+name when Telegram provides them, independently of the Django account used
+to route the chat. Forwarding preserves this `telegram_user` identity.

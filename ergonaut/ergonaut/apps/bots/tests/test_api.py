@@ -1153,3 +1153,32 @@ def test_a_turn_refused_at_its_limit_offers_a_retry_on_another_model(client, coo
     failed.refresh_from_db()
     assert failed.metadata["resumed"] is True
     assert client.get(f"/api/sessions/{root['id']}").json()["retry_model"] == ""
+
+
+@pytest.mark.django_db(transaction=True)
+def test_session_messages_expose_identity_without_model_attribution(client, cook):
+    from django_ergo.conversation.models import ConversationSession
+
+    session = ConversationSession.objects.create(user=cook, bot_name="kitchen", engine_type="claude")
+    author = {"kind": "telegram_user", "ref": "123", "display_name": "Actual author"}
+    provenance = {
+        "kind": "forwarded",
+        "forwarded_by": {"kind": "django_user", "ref": str(cook.pk), "display_name": "cook"},
+        "origin": {"session_id": "source-chat", "label": "Source chat", "timestamp": "2026-10-05T10:30:00Z"},
+        "note": "Separate forwarding note",
+        "attachments": [{"id": "shared-file", "filename": "report.pdf", "media_type": "application/pdf"}],
+    }
+    message = session.messages.create(role="user", sequence=0, author=author, provenance=provenance)
+    message.content_blocks.create(block_type="text", text="**Original body**", sequence=0)
+    legacy = session.messages.create(role="user", sequence=1)
+    legacy.content_blocks.create(block_type="text", text="Legacy body", sequence=0)
+
+    response = client.get(f"/api/sessions/{session.id}")
+    assert response.status_code == 200
+    forwarded, ordinary = response.json()["messages"]
+    assert forwarded["author"] == author
+    assert forwarded["provenance"] == provenance
+    assert forwarded["blocks"] == [{"type": "text", "text": "**Original body**"}]
+    assert ordinary["author"] == {}
+    assert ordinary["provenance"] == {}
+    assert ordinary["blocks"] == [{"type": "text", "text": "Legacy body"}]

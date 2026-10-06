@@ -574,7 +574,12 @@ async def test_telegram_group_chat_speaks_as_each_sender(tmp_path):
     group = -500
 
     await plugin.handle_update(
-        update(1, chat_id=group, text="hi", **{"from": {"id": 111}})
+        update(
+            1,
+            chat_id=group,
+            text="hi",
+            **{"from": {"id": 111, "first_name": "Telegram Cook"}},
+        )
     )
     await plugin.handle_update(
         update(2, chat_id=group, text="yo", **{"from": {"id": 222}})
@@ -588,6 +593,14 @@ async def test_telegram_group_chat_speaks_as_each_sender(tmp_path):
     owners = [s.user_id async for s in bot.sessions().order_by("created_at")]
     assert owners[0] == cook.id
     assert len(owners) == 2
+    root = await bot.root_session(cook)
+    incoming = await root.messages.filter(role="user").afirst()
+    assert incoming.author == {
+        "kind": "telegram_user",
+        "ref": "111",
+        "display_name": "Telegram Cook",
+    }
+    assert await incoming.content_blocks.filter(text="hi").aexists()
 
 
 @pytest.mark.django_db(transaction=True)

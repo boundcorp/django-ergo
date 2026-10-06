@@ -38,6 +38,11 @@ from django.db.models import Q
 from django.utils import timezone
 
 from django_ergo.bots import archival
+from django_ergo.conversation.identity import attributed_text
+from django_ergo.conversation.identity import bot_identity
+from django_ergo.conversation.identity import session_label
+from django_ergo.conversation.identity import session_origin
+from django_ergo.conversation.identity import thread_message_identity
 from django_ergo.conversation.models import ConversationSession
 from django_ergo.conversation.models import StructuredCallStatus
 from django_ergo.conversation.models import ThreadMessage
@@ -61,10 +66,7 @@ SNIPPET = 120
 
 
 def label(session: ConversationSession) -> str:
-    meta = session.metadata or {}
-    role = meta.get("bot_role")
-    title = meta.get("title") or ("Main" if role in ("root", "main") else "Thread")
-    return f"{session.bot_name} · {title}"
+    return session_label(session)
 
 
 def snippet(text: str) -> str:
@@ -74,6 +76,9 @@ def snippet(text: str) -> str:
 
 def turn_text(message: ThreadMessage) -> str:
     """What the recipient sees: who it's from, and what to do with it."""
+    author, provenance = thread_message_identity(message)
+    if provenance:
+        return attributed_text(message.text, author, provenance)
     sender = message.sender_session
     if message.in_reply_to_id is not None:
         original = message.in_reply_to.text if message.in_reply_to else ""
@@ -181,6 +186,28 @@ def send(  # noqa: PLR0913
     if depth > MAX_DEPTH:
         msg = f"Too many hops of delegation ({depth}); answer with what you have."
         raise ValueError(msg)
+    metadata = dict(metadata or {})
+    if sender is not None and not (
+        metadata.get("message_provenance") or metadata.get("forwarded")
+    ):
+        kind = (
+            "reply"
+            if in_reply_to
+            else "report"
+            if metadata.get("report")
+            else "message"
+        )
+        provenance = {
+            "kind": kind,
+            "origin": session_origin(sender, timezone.now()),
+        }
+        if in_reply_to:
+            provenance["reply_to"] = str(in_reply_to.id)
+        for key in ("note", "attachments"):
+            if metadata.get(key):
+                provenance[key] = metadata[key]
+        metadata.setdefault("message_author", bot_identity(sender))
+        metadata["message_provenance"] = provenance
     message = ThreadMessage.objects.create(
         sender_session=sender,
         recipient_session=recipient,
