@@ -512,6 +512,17 @@ class _SessionTranscript:
     async def append_user(self, text: str, attachments=None) -> None:
         await self.engine.append_user_message(self.session, text, attachments)
 
+    async def append_initial_user(self, text: str, attachments=None) -> None:
+        metadata = self.call.metadata or {}
+        identity = {
+            key: metadata[f"message_{key}"]
+            for key in ("author", "provenance")
+            if f"message_{key}" in metadata
+        }
+        await self.engine.append_user_message(
+            self.session, text, attachments, **identity
+        )
+
     async def append_tool_exchange(self, calls: list[SeededToolCall]) -> None:
         await self.engine.append_tool_exchange(self.session, calls)
 
@@ -965,7 +976,10 @@ async def run_structured_call(  # noqa: PLR0913
 
     run = _Run(active, transcript, call, spec, user, workflow, allow_approvals, control)
     await _record_tools(call, spec)
-    await transcript.append_user(message, attachments)
+    if session is not None:
+        await transcript.append_initial_user(message, attachments)
+    else:
+        await transcript.append_user(message, attachments)
     if seed and pre_seeds:
         await transcript.append_tool_exchange(await _run_pre_seeds(pre_seeds))
     return await _loop(run)

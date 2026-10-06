@@ -518,6 +518,14 @@ async def test_a_bot_delegates_to_a_new_thread_and_gets_the_reply(
     assert asked.endswith("Plan Tuesday")
     request = await ThreadMessage.objects.aget(recipient_session=thread)
     assert (request.status, request.reply_text) == ("answered", "Tacos on Tuesday.")
+    stored = await thread.messages.aget(sequence=0)
+    assert stored.author == {"kind": "bot", "ref": "kitchen", "display_name": "kitchen"}
+    assert stored.provenance["kind"] == "message"
+    assert stored.provenance["origin"]["session_id"] == str(root.id)
+    assert (
+        await stored.content_blocks.values_list("text", flat=True).aget()
+        == "Plan Tuesday"
+    )
 
     # ...and the reply comes back to the root as a new turn, answered there.
     await thread_messages()
@@ -528,6 +536,10 @@ async def test_a_bot_delegates_to_a_new_thread_and_gets_the_reply(
     )
     assert back.startswith("[Reply from kitchen · Meal plan")
     assert back.endswith("Tacos on Tuesday.")
+    reply_row = await root.messages.filter(provenance__kind="reply").afirst()
+    assert reply_row.author["kind"] == "bot"
+    assert reply_row.provenance["origin"]["session_id"] == str(thread.id)
+    assert reply_row.provenance["reply_to"] == str(request.id)
     reply = await ThreadMessage.objects.aget(recipient_session=root)
     assert reply.in_reply_to_id == request.id
     assert reply.status == "answered"
@@ -1628,7 +1640,6 @@ async def test_files_shared_with_a_thread_message_are_listed_for_the_recipient(
     ]
     text = await sync_to_async(turn_text)(request)
     assert f"- mock.png (image/png, {png.size:,} bytes), id {png.id}" in text
-    assert f"they stay in thread {root.id}" in text
     # An unknown file fails the send, naming what the chat has.
     failed = engine._client.calls[2]["messages"][-1]["content"][0]
     assert (
@@ -1790,10 +1801,15 @@ async def test_a_report_upward_gets_no_reply_unless_it_asks(tmp_path, thread_mes
 
 
 @pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize(
+    "author",
+    [None, {"kind": "telegram_user", "ref": "67890", "display_name": "Sam External"}],
+)
 async def test_forward_hands_the_users_own_message_to_a_thread(
-    tmp_path, thread_messages
+    tmp_path, thread_messages, author
 ):
     from django_ergo.conversation.attachments import Attachment
+    from django_ergo.conversation.identity import django_user_identity
     from django_ergo.conversation.models import ThreadMessage
 
     user = await User.objects.acreate(username="forwarder", first_name="Lee")
@@ -1813,6 +1829,7 @@ async def test_forward_hands_the_users_own_message_to_a_thread(
         root,
         words,
         attachments=[Attachment("text/plain", data=b"log", filename="log.txt")],
+        author=author,
     )
     sent = json.loads(_tool_results(engine)[-1]["content"])
     assert sent["forwarded_to"] == "kitchen · Deploy"
@@ -1821,8 +1838,17 @@ async def test_forward_hands_the_users_own_message_to_a_thread(
     forwarded = await ThreadMessage.objects.aget(recipient_session=thread)
     assert forwarded.text == words  # verbatim, not retold
     meta = forwarded.metadata
-    assert meta["forwarded"]["author"] == "Lee" and meta["report"] is True
-    assert meta["note"] == "Deploy owns octo."
+    expected_author = author or django_user_identity(user)
+    assert meta["message_author"] == expected_author and meta["report"] is True
+    assert meta["message_provenance"]["note"] == "Deploy owns octo."
+    original = await root.messages.aget(sequence=0)
+    origin = meta["message_provenance"]["origin"]
+    assert original.author == expected_author
+    assert origin["message_id"] == str(original.id)
+    assert origin["sequence"] == original.sequence
+    assert origin["timestamp"] == original.created_at.isoformat()
+    assert origin["session_id"] == str(root.id)
+    assert meta["message_provenance"]["forwarded_by"]["kind"] == "bot"
 
     engine._client.responses = [say("Merging now.")]
     await thread_messages()
@@ -1830,12 +1856,132 @@ async def test_forward_hands_the_users_own_message_to_a_thread(
     assert text.startswith("[Forwarded by kitchen · Main")
     assert words in text and "[Note from kitchen · Main: Deploy owns octo.]" in text
     assert "log.txt" in text
+    assert expected_author["display_name"] in text
+    incoming = await thread.messages.aget(sequence=0)
+    assert incoming.author == expected_author
+    assert incoming.provenance == meta["message_provenance"]
+    assert await incoming.content_blocks.values_list("text", flat=True).aget() == words
     assert SENT == []  # the thread answers the user there; nothing comes back
 
     # A turn that answers another chat has no user message to forward.
     from django_ergo.bots import orchestrator
 
     assert await sync_to_async(orchestrator.user_message)(root) is None
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_forwarding_again_preserves_original_external_author_and_origin(
+    tmp_path, thread_messages
+):
+    from django_ergo.conversation.models import ThreadMessage
+
+    user = await User.objects.acreate(username="relay-owner")
+    author = {"kind": "telegram_user", "ref": "456", "display_name": "Outside Author"}
+    bot, engine = make_bot(tmp_path, say("ok"))
+    root = await bot.root_session(user)
+    first = await bot.create_session(user, parent=root, title="First")
+    second = await bot.create_session(user, parent=root, title="Second")
+    engine._client.responses = [
+        claude_tool(
+            "ergo_thread_forward", {"thread": str(first.id)}, tool_id="forward-1"
+        ),
+        say("Sent to First."),
+        claude_tool(
+            "ergo_thread_forward", {"thread": str(second.id)}, tool_id="forward-2"
+        ),
+        say("Sent to Second."),
+        say("Done."),
+    ]
+    words = "  Original request.\nKeep the whitespace.  "
+    await bot.ask(root, words, author=author)
+    source = await root.messages.aget(sequence=0)
+    await thread_messages()
+    relayed = await ThreadMessage.objects.aget(recipient_session=second)
+    provenance = relayed.metadata["message_provenance"]
+    assert relayed.text == words
+    assert relayed.metadata["message_author"] == author
+    assert provenance["origin"]["session_id"] == str(root.id)
+    assert provenance["origin"]["message_id"] == str(source.id)
+    assert provenance["origin"]["timestamp"] == source.created_at.isoformat()
+    assert provenance["forwarded_by"]["session_id"] == str(first.id)
+    await thread_messages()
+    incoming = await second.messages.aget(sequence=0)
+    assert incoming.author == author and incoming.provenance == provenance
+    assert await incoming.content_blocks.values_list("text", flat=True).aget() == words
+    assert SENT == []
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_queued_legacy_forward_delivers_raw_text_and_structured_identity(
+    tmp_path, thread_messages
+):
+    from django_ergo.conversation.models import ThreadMessage
+
+    user = await User.objects.acreate(username="legacy-owner")
+    bot, engine = make_bot(tmp_path, say("Handled."))
+    root = await bot.root_session(user)
+    thread = await bot.create_session(user, parent=root, title="Legacy")
+    message = await ThreadMessage.objects.acreate(
+        sender_session=root,
+        recipient_session=thread,
+        text="Unprefixed original.",
+        metadata={
+            "forwarded": {
+                "author": "Original User",
+                "user_id": 987,
+                "sent_at": "2026-10-05T11:00:00+00:00",
+                "source_call": "old-call",
+            },
+            "report": True,
+        },
+    )
+    SENT.append(str(message.id))
+    await thread_messages()
+    incoming = await thread.messages.aget(sequence=0)
+    assert incoming.author == {
+        "kind": "django_user",
+        "ref": "987",
+        "display_name": "Original User",
+    }
+    assert incoming.provenance["kind"] == "forwarded"
+    assert incoming.provenance["origin"]["source_call"] == "old-call"
+    assert (
+        await incoming.content_blocks.values_list("text", flat=True).aget()
+        == message.text
+    )
+    assert engine._client.calls[0]["messages"][0]["content"][0]["text"].startswith(
+        "[Forwarded by kitchen · Main"
+    )
+    assert SENT == []
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize(
+    ("metadata", "display_name"),
+    [
+        ({"worker": "worker-1"}, "Worker"),
+        ({"schedule": "weekly-plan"}, "Scheduled message"),
+    ],
+)
+async def test_senderless_system_thread_messages_are_not_human_authored(
+    tmp_path, thread_messages, metadata, display_name
+):
+    from django_ergo.bots import messaging
+    from django_ergo.conversation.models import ThreadMessage
+
+    user = await User.objects.acreate(username="system-owner")
+    bot, engine = make_bot(tmp_path, say("Noted."))
+    root = await bot.root_session(user)
+    message = await ThreadMessage.objects.acreate(
+        recipient_session=root, text="System result.", metadata=metadata
+    )
+    expected = await sync_to_async(messaging.turn_text)(message)
+    SENT.append(str(message.id))
+    await thread_messages()
+    incoming = await root.messages.aget(sequence=0)
+    assert incoming.author["kind"] == "system"
+    assert incoming.author["display_name"] == display_name
+    assert engine._client.calls[0]["messages"][0]["content"][0]["text"] == expected
 
 
 @pytest.mark.django_db(transaction=True)

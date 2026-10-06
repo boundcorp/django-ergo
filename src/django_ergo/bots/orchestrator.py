@@ -58,6 +58,9 @@ from django_ergo.bots.tools import BotTool
 from django_ergo.bots.tools import FunctionToolkit
 from django_ergo.bots.tools import bot_tool
 from django_ergo.conversation.attachments import find_session_file
+from django_ergo.conversation.identity import bot_identity
+from django_ergo.conversation.identity import django_user_identity
+from django_ergo.conversation.identity import session_origin
 from django_ergo.conversation.models import ConversationAttachment
 from django_ergo.conversation.models import ConversationSession
 from django_ergo.conversation.models import StructuredCallStatus
@@ -379,22 +382,47 @@ def user_message(session: ConversationSession) -> dict | None:
         .order_by("-created_at")
         .first()
     )
-    if call is None or (call.metadata or {}).get("thread_message"):
+    if call is None:
         return None
-    files = ConversationAttachment.objects.filter(
-        session=session, message_sequence__gte=call.first_sequence or 0
+    row = (
+        session.messages.filter(sequence=call.first_sequence, role="user")
+        .prefetch_related("content_blocks")
+        .first()
     )
-    if call.last_sequence is not None:
-        files = files.filter(message_sequence__lte=call.last_sequence)
-    user = session.user
-    return {
-        "text": call.request,
-        "author": (user.get_full_name() or user.get_username()) if user else "",
-        "user_id": session.user_id,
-        "sent_at": call.created_at.isoformat(timespec="seconds"),
-        "source_call": str(call.id),
-        "attachments": [messaging.shared_file(f) for f in files],
-    }
+    author = (
+        row.author
+        if row and row.author
+        else (call.metadata or {}).get("message_author")
+    )
+    if not author:
+        if (call.metadata or {}).get("thread_message"):
+            return None
+        author = django_user_identity(session.user)
+    if author.get("kind") not in ("django_user", "telegram_user"):
+        return None
+    sequence = row.sequence if row else call.first_sequence
+    files = ConversationAttachment.objects.filter(
+        session=session, message_sequence=sequence
+    )
+    blocks = list(row.content_blocks.all()) if row else []
+    if row and not any(b.block_type == "text" for b in blocks):
+        return None
+    text = (
+        "\n".join(b.text or "" for b in blocks if b.block_type == "text")
+        if row
+        else call.request
+    )
+    origin = session_origin(
+        session, row.created_at if row else call.created_at, source_call=str(call.id)
+    )
+    if row:
+        origin.update(message_id=str(row.id), sequence=row.sequence)
+        if row.provenance.get("kind") == "forwarded":
+            origin = row.provenance.get("origin") or origin
+    shared = [messaging.shared_file(f) for f in files]
+    if row and row.provenance.get("attachments"):
+        shared = [*row.provenance["attachments"], *shared]
+    return {"text": text, "author": author, "origin": origin, "attachments": shared}
 
 
 @bot_tool(
@@ -451,7 +479,18 @@ def ergo_thread_forward(
     )
     files = original.pop("attachments")
     metadata = {
-        "forwarded": {**original, "from_label": messaging.label(ctx.session)},
+        "message_author": original["author"],
+        "message_provenance": {
+            "kind": "forwarded",
+            "forwarded_by": {
+                **bot_identity(ctx.session),
+                "session_id": str(ctx.session.id),
+                "label": messaging.label(ctx.session),
+            },
+            "origin": original["origin"],
+            **({"note": note.strip()} if note.strip() else {}),
+            **({"attachments": files} if files else {}),
+        },
         # The recipient answers the user where it is: no reply comes back here.
         "report": True,
         **({"note": note.strip()} if note.strip() else {}),

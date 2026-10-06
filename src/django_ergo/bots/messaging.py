@@ -34,6 +34,11 @@ from django.db.models import Q
 from django.utils import timezone
 
 from django_ergo.bots import archival
+from django_ergo.conversation.identity import attributed_text
+from django_ergo.conversation.identity import bot_identity
+from django_ergo.conversation.identity import session_label
+from django_ergo.conversation.identity import session_origin
+from django_ergo.conversation.identity import thread_message_identity
 from django_ergo.conversation.models import ConversationSession
 from django_ergo.conversation.models import StructuredCallStatus
 from django_ergo.conversation.models import ThreadMessage
@@ -57,10 +62,7 @@ SNIPPET = 120
 
 
 def label(session: ConversationSession) -> str:
-    meta = session.metadata or {}
-    role = meta.get("bot_role")
-    title = meta.get("title") or ("Main" if role in ("root", "main") else "Thread")
-    return f"{session.bot_name} · {title}"
+    return session_label(session)
 
 
 def snippet(text: str) -> str:
@@ -70,43 +72,10 @@ def snippet(text: str) -> str:
 
 def turn_text(message: ThreadMessage) -> str:
     """What the recipient sees: who it's from, and what to do with it."""
-    sender = message.sender_session
-    if message.in_reply_to_id is not None:
-        original = message.in_reply_to.text if message.in_reply_to else ""
-        header = (
-            f"[Reply from {label(sender)} (thread {sender.id}) to your message: "
-            f"“{snippet(original)}”. Use it or pass it on to the user. Message another "
-            "chat only with new work it hasn't been given; never send thanks, "
-            "acknowledgements or 'keep going' nudges, since each message starts a "
-            "full turn there.]"
-        )
-    elif sender is not None and (
-        forwarded := (message.metadata or {}).get("forwarded")
-    ):
-        note = (message.metadata or {}).get("note")
-        header = (
-            f"[Forwarded by {label(sender)} (thread {sender.id}): a message from the "
-            f"user{' ' + forwarded['author'] if forwarded.get('author') else ''}, sent "
-            f"{forwarded.get('sent_at', '')} in that chat, copied word for word below. "
-            "Treat it as the user speaking to you here, with their intent and any "
-            "approval it gives. Answer here: no reply goes back to that chat.]"
-        )
-        text = message.text
-        if note:
-            text += f"\n\n[Note from {label(sender)}: {note}]"
-        return f"{header}\n\n{text}{files_note(message)}"
-    elif sender is not None and (message.metadata or {}).get("report"):
-        header = (
-            f"[Report from {label(sender)} (thread {sender.id}). No reply goes back "
-            "to it: act on it if it needs action, and tell the user what matters.]"
-        )
-    elif sender is not None:
-        header = (
-            f"[Message from {label(sender)} (thread {sender.id}). Your final reply "
-            "goes back to that thread automatically; it is not shown to the user "
-            "unless they open this chat.]"
-        )
-    elif (message.metadata or {}).get("worker") and (message.metadata or {}).get(
+    author, provenance = thread_message_identity(message)
+    if provenance:
+        return attributed_text(message.text, author, provenance)
+    if (message.metadata or {}).get("worker") and (message.metadata or {}).get(
         "update"
     ):
         header = (
@@ -177,6 +146,28 @@ def send(  # noqa: PLR0913
     if depth > MAX_DEPTH:
         msg = f"Too many hops of delegation ({depth}); answer with what you have."
         raise ValueError(msg)
+    metadata = dict(metadata or {})
+    if sender is not None and not (
+        metadata.get("message_provenance") or metadata.get("forwarded")
+    ):
+        kind = (
+            "reply"
+            if in_reply_to
+            else "report"
+            if metadata.get("report")
+            else "message"
+        )
+        provenance = {
+            "kind": kind,
+            "origin": session_origin(sender, timezone.now()),
+        }
+        if in_reply_to:
+            provenance["reply_to"] = str(in_reply_to.id)
+        for key in ("note", "attachments"):
+            if metadata.get(key):
+                provenance[key] = metadata[key]
+        metadata.setdefault("message_author", bot_identity(sender))
+        metadata["message_provenance"] = provenance
     message = ThreadMessage.objects.create(
         sender_session=sender,
         recipient_session=recipient,

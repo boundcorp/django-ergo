@@ -145,6 +145,12 @@ refuse logins until the window passes.
   messages only while you're at the bottom; scrolled up, it stays put and a
   "Jump to bottom" button (or "New messages") takes you back. Sending a
   message always scrolls to the bottom.
+- **Forwarded messages**: a distinct incoming card names the actual author
+  (including a Telegram or bot marker), the forwarding bot, and the linked
+  source chat and original time. Forwarding notes and shared files are
+  separate from the author's verbatim words; attribution wraps on phones.
+  Ordinary bot-to-bot messages, reports and replies name the bot rather than
+  the chat owner. Old messages retain their existing presentation.
 - **Tool calls**: each call is one header line: status (read aloud as
   running, ok, error or needs approval), the tool name (an `mcp__server__`
   prefix is shown muted; hover for the full name), a short preview of the

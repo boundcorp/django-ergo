@@ -64,6 +64,7 @@ from django_ergo.conversation.context import MessageContextSource
 from django_ergo.conversation.context import TextContextSource
 from django_ergo.conversation.history import SessionSource
 from django_ergo.conversation.history_search_toolkit import MessageHistoryToolkit
+from django_ergo.conversation.identity import thread_message_identity
 from django_ergo.conversation.models import CompactionMode
 from django_ergo.conversation.models import ConversationSession
 from django_ergo.conversation.models import StructuredCall
@@ -991,13 +992,14 @@ class Bot:
         spec.pre_seed_each_turn = session is not None and self.is_window(session)
         return spec
 
-    async def ask(
+    async def ask(  # noqa: PLR0913
         self,
         session: ConversationSession,
         message: str,
         *,
         attachments: list[Attachment] | None = None,
         thread_message: ThreadMessage | None = None,
+        author: dict | None = None,
         control: TurnControl | None = None,
     ) -> TurnResult:
         """Answer one message with a ChatReply. Plugins see before/after hooks.
@@ -1006,7 +1008,35 @@ class Bot:
         ``django_ergo.bots.messaging``) the reply is routed back to its sender.
         ``control`` steers or stops the turn between steps (see
         ``conversation.structured``).
+        ``author`` identifies the actual external sender; otherwise ordinary
+        human text belongs to the session's Django user. Delegated messages
+        carry their original author and origin separately from their raw body.
         """
+        metadata = {}
+        if thread_message is not None:
+            metadata["thread_message"] = str(thread_message.id)
+            author, provenance = await sync_to_async(
+                thread_message_identity, thread_sensitive=True
+            )(thread_message)
+            if provenance:
+                message = thread_message.text
+                metadata["message_provenance"] = provenance
+            elif (thread_message.metadata or {}).get("worker") or (
+                thread_message.metadata or {}
+            ).get("schedule"):
+                meta = thread_message.metadata or {}
+                author = {
+                    "kind": "system",
+                    "ref": str(meta.get("worker") or meta.get("schedule") or ""),
+                    "display_name": "Worker"
+                    if meta.get("worker")
+                    else "Scheduled message",
+                }
+            else:
+                message = thread_message.text
+                author = author or None
+        if author is not None:
+            metadata["message_author"] = author
         for plugin in self.plugins:
             await _maybe_await(plugin.before_turn(session, message))
         toolkits, builder = await self._prepare(session, message)
@@ -1020,9 +1050,7 @@ class Bot:
             context_builder=builder,
             allow_approvals=True,
             control=control,
-            metadata={"thread_message": str(thread_message.id)}
-            if thread_message
-            else None,
+            metadata=metadata,
         )
         result = TurnResult.from_call(session, outcome)
         for plugin in self.plugins:

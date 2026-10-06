@@ -80,3 +80,24 @@ async def test_stream_needs_login_and_visibility(async_client, fast):
     assert (await async_client.get(f"/api/sessions/{theirs.id}/events")).status_code == 401
     await login(async_client, "cook")
     assert (await async_client.get(f"/api/sessions/{theirs.id}/events")).status_code == 404
+
+
+@pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
+async def test_stream_exposes_identity_and_verbatim_forwarded_body(async_client, fast):
+    user = await login(async_client, "owner")
+    session = await ConversationSession.objects.acreate(user=user, bot_name="kitchen", engine_type="claude")
+    author = {"kind": "bot", "ref": "research", "display_name": "Research bot"}
+    provenance = {
+        "kind": "report",
+        "origin": {"session_id": "origin", "label": "Research chat", "timestamp": "2026-10-05T10:30:00Z"},
+        "note": "Attribution must not be prepended",
+    }
+    message = await session.messages.acreate(role="user", sequence=0, author=author, provenance=provenance)
+    await message.content_blocks.acreate(block_type="text", text="Verbatim report", sequence=0)
+    response = await async_client.get(f"/api/sessions/{session.id}/events")
+    events = await asyncio.wait_for(read_events(response, lambda events: any(e["messages"] for e in events)), timeout=5)
+    forwarded = next(m for e in events for m in e["messages"])
+    assert forwarded["author"] == author
+    assert forwarded["provenance"] == provenance
+    assert forwarded["blocks"] == [{"type": "text", "text": "Verbatim report"}]
