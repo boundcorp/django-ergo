@@ -268,6 +268,80 @@ def test_bot_proposes_pr_and_returns_to_main(bot_repo, monkeypatch):
         plugin.write(".git/hooks/pre-commit", "evil")
 
 
+def test_bot_management_reads_edits_and_greps_files(bot_repo, monkeypatch):
+    _, work = bot_repo
+    _, _, plugin = management_bot(work, "propose_pr")
+    git(work, "add", "-A")
+    git(work, "commit", "-m", "add bot")
+    git(work, "push")
+    plugin.write("notes.txt", "one\ntwo\none\n")
+
+    assert plugin.read("notes.txt", start_line=2, end_line=2) == (
+        "notes.txt lines 2-2 of 3\n2: two"
+    )
+    assert plugin.grep("two", "notes.txt") == "notes.txt:2:two"
+    assert plugin.edit("README.md", "bots", "configured bots") == (
+        "Edited README.md (1 replacement)"
+    )
+    assert (work / "README.md").read_text() == "bots\n"
+    with pytest.raises(ValueError, match="wasn't found"):
+        plugin.edit("notes.txt", "three", "THREE")
+    with pytest.raises(ValueError, match="matches 2 times"):
+        plugin.edit("notes.txt", "one", "ONE")
+    assert plugin.edit("notes.txt", "two", "TWO") == "Edited notes.txt (1 replacement)"
+    assert plugin.edit("notes.txt", "one", "ONE", replace_all=True) == (
+        "Edited notes.txt (2 replacements)"
+    )
+    assert plugin.read("notes.txt") == "ONE\nTWO\nONE\n"
+    with pytest.raises(ValueError, match="outside"):
+        plugin.edit("../remote.git/config", "x", "y")
+
+    monkeypatch.setattr("django_ergo.plugins.bot_management.MAX_READ_CHARS", 8)
+    truncated = plugin.read("notes.txt")
+    assert "3 total lines" in truncated
+    assert "start_line=3" in truncated
+
+
+def test_bot_management_pull_ignores_multiple_tracking_branches(bot_repo, tmp_path):
+    remote, work = bot_repo
+    _, _, plugin = management_bot(work, "merge_main")
+    git(work, "add", "-A")
+    git(work, "commit", "-m", "add bot")
+    git(work, "push")
+    git(work, "branch", "other")
+    git(work, "push", "origin", "other")
+    git(work, "config", "--add", "branch.main.merge", "refs/heads/other")
+
+    old_pull = subprocess.run(
+        ["git", "pull", "--rebase"],
+        cwd=work,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert old_pull.returncode
+    assert "Cannot rebase onto multiple branches" in old_pull.stderr
+
+    _merge_on_remote(tmp_path, remote, "pulled.txt", "from main", "remote update")
+    assert "Fast-forward" in plugin.pull()
+    assert (work / "pulled.txt").read_text() == "from main"
+
+
+def test_bot_management_pull_names_diverged_main(bot_repo, tmp_path):
+    remote, work = bot_repo
+    _, _, plugin = management_bot(work, "merge_main")
+    git(work, "add", "-A")
+    git(work, "commit", "-m", "add bot")
+    git(work, "push")
+    _merge_on_remote(tmp_path, remote, "remote.txt", "remote", "remote update")
+    (work / "local.txt").write_text("local")
+    git(work, "add", "local.txt")
+    git(work, "commit", "-m", "local update")
+
+    with pytest.raises(ValueError, match="has diverged from origin/main"):
+        plugin.pull()
+
+
 @pytest.mark.django_db
 def test_bot_discards_a_draft(bot_repo):
     _, work = bot_repo
@@ -1645,6 +1719,7 @@ def test_merge_main_discard_stashes_and_writes_need_approval(bot_repo):
     git(work, "commit", "-m", "add bot")
     tools = {t.name: t for t in plugin._tools()}
     assert tools["ergo_config_repo_write"].requires_approval
+    assert tools["ergo_config_repo_edit"].requires_approval
     assert tools["ergo_config_repo_discard"].requires_approval
     (work / "notes.txt").write_text("a person's work in progress")
     assert plugin.discard() == "Set the unpublished changes aside (git stash)."
