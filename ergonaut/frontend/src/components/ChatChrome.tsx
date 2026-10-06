@@ -190,7 +190,7 @@ export function ModelLink({ label, onOpen }: { label: string; onOpen: () => void
   return (
     <button
       type="button"
-      className="chat-model-link min-w-0 truncate rounded-control text-left text-xs text-muted underline decoration-dotted underline-offset-2 hover:text-ink"
+      className="chat-model-link min-w-0 truncate rounded-control text-left text-[11px] text-muted underline decoration-dotted underline-offset-2 hover:text-ink"
       title="Change the model in the thread options"
       aria-haspopup="true"
       onClick={onOpen}

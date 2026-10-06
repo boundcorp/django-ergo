@@ -248,14 +248,9 @@ export function Chat({ onChange }: { onChange: () => void }) {
   useLayoutEffect(() => {
     const el = composer.current
     if (!el) return
-    const mobile = window.matchMedia('(max-width: 640px)').matches
-    el.rows = mobile ? 1 : 2
-    if (!mobile) {
-      el.style.height = ''
-      return
-    }
+    const max = window.matchMedia('(max-width: 640px)').matches ? 128 : 200
     el.style.height = 'auto'
-    el.style.height = `${Math.min(el.scrollHeight, 128)}px`
+    el.style.height = `${Math.min(el.scrollHeight, max)}px`
   }, [text, detail])
 
   // ?pin=<url>&name=<name> (from the sidebar) opens that pin. Declared after the effect above,
@@ -836,94 +831,108 @@ export function Chat({ onChange }: { onChange: () => void }) {
           </div>
         )}
         <form
-          className="chat-composer mx-4 mb-2 rounded-panel border border-stroke bg-surface p-4"
+          className="chat-composer mx-4 mb-2 rounded-panel border border-stroke bg-surface px-2 pt-1.5 pb-1 focus-within:border-accent/60"
           onSubmit={e => {
             e.preventDefault()
             send(text)
           }}
         >
           <input ref={picker} type="file" multiple hidden onChange={e => attach(e.target.files)} />
-          <textarea
-            ref={composer}
-            onPaste={e => {
-              const files = Array.from(e.clipboardData.files)
-              if (files.length) {
-                e.preventDefault()
-                attach(files)
-              }
-            }}
-            value={text}
-            disabled={closed || !!waiting.length}
-            onChange={e => setText(e.target.value)}
-            onKeyDown={e => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault()
-                send(text)
-              }
-            }}
-            rows={2}
-            aria-label="Message"
-            placeholder={
-              closed
-                ? 'This session is closed'
-                : waiting.length
-                  ? 'Answer the approval first'
-                  : archived
-                    ? 'Resolved: sending a message reopens it'
-                    : running
-                      ? 'Steer the bot: your message joins this turn'
-                      : 'Message the bot'
-            }
-            className="block w-full resize-none rounded-card border border-stroke bg-raised px-3 py-2 focus:outline-none"
-          />
-          <div className="chat-composer-actions mt-3 flex flex-wrap items-center gap-2 border-t border-stroke pt-3">
+          <div className="chat-composer-row flex items-end gap-1">
             <button
               type="button"
               disabled={closed || !!waiting.length || uploading}
-              title="Attach images, PDFs or other files"
+              title={uploading ? 'Attaching…' : 'Attach images, PDFs or other files'}
               aria-label="Attach images, PDFs or other files"
-              className="chat-attach rounded-control px-2 py-2 text-sm font-semibold text-mint hover:bg-raised disabled:opacity-50"
+              className="chat-attach flex h-8 w-8 shrink-0 items-center justify-center rounded-control text-xl leading-none text-mint hover:bg-raised disabled:opacity-50"
               onClick={() => picker.current?.click()}
             >
-              <span className="chat-attach-label">{uploading ? 'Attaching…' : '+ Attach'}</span>
+              {uploading ? '…' : '+'}
             </button>
-            {models && <ModelLink label={modelLabel(models, detail.session.model ?? '')} onOpen={openOptions} />}
-            <div className="chat-composer-send ml-auto flex items-center gap-2">
-              {running && (
-                <>
+            <textarea
+              ref={composer}
+              onPaste={e => {
+                const files = Array.from(e.clipboardData.files)
+                if (files.length) {
+                  e.preventDefault()
+                  attach(files)
+                }
+              }}
+              value={text}
+              disabled={closed || !!waiting.length}
+              onChange={e => setText(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault()
+                  send(text)
+                }
+              }}
+              rows={1}
+              aria-label="Message"
+              placeholder={
+                closed
+                  ? 'This session is closed'
+                  : waiting.length
+                    ? 'Answer the approval first'
+                    : archived
+                      ? 'Resolved: sending a message reopens it'
+                      : running
+                        ? 'Steer the bot: your message joins this turn'
+                        : 'Message the bot'
+              }
+              className="min-w-0 flex-1 resize-none overflow-y-auto bg-transparent px-1 py-1.5 leading-snug focus:outline-none"
+            />
+            {running && (
+              <>
+                <button
+                  type="button"
+                  disabled={stopping}
+                  title="Stop the bot after the step it's on"
+                  className="chat-stop h-8 shrink-0 rounded-control border border-stroke bg-raised px-2 text-xs disabled:opacity-50"
+                  onClick={stop}
+                >
+                  Stop
+                </button>
+                {(!!text.trim() || !!outgoing.length) && (
                   <button
                     type="button"
-                    disabled={stopping}
-                    title="Stop the bot after the step it's on"
-                    className="rounded-control border border-stroke bg-raised px-3 py-2 text-sm disabled:opacity-50"
-                    onClick={stop}
+                    disabled={busy || uploading || stopping}
+                    title="Stop the bot and answer this message instead"
+                    className="chat-stop h-8 shrink-0 rounded-control bg-accent px-2 text-xs font-semibold text-canvas disabled:opacity-50"
+                    onClick={() => send(text, 'interrupt')}
                   >
-                    Stop
+                    Stop &amp; send
                   </button>
-                  {(!!text.trim() || !!outgoing.length) && (
-                    <button
-                      type="button"
-                      disabled={busy || uploading || stopping}
-                      title="Stop the bot and answer this message instead"
-                      className="rounded-control bg-accent px-3 py-2 text-sm font-semibold text-canvas disabled:opacity-50"
-                      onClick={() => send(text, 'interrupt')}
-                    >
-                      Stop &amp; send
-                    </button>
-                  )}
-                </>
-              )}
-              <button
-                type="submit"
-                disabled={busy || uploading || (!text.trim() && !outgoing.length)}
-                title={running ? 'Send now; the bot sees it after the step it is on' : 'Send'}
-                aria-label="Send"
-                className="chat-send rounded-control bg-accent px-5 py-2.5 font-semibold text-canvas disabled:opacity-50"
+                )}
+              </>
+            )}
+            <button
+              type="submit"
+              disabled={busy || uploading || (!text.trim() && !outgoing.length)}
+              title={running ? 'Send now; the bot sees it after the step it is on' : 'Send'}
+              aria-label="Send"
+              className="chat-send flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent text-canvas disabled:opacity-40"
+            >
+              <svg
+                viewBox="0 0 16 16"
+                width="16"
+                height="16"
+                aria-hidden="true"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
               >
-                Send
-              </button>
-            </div>
+                <path d="M8 13V3M3.5 7.5 8 3l4.5 4.5" />
+              </svg>
+            </button>
           </div>
+          {models && (
+            <div className="chat-composer-meta flex px-1 leading-tight">
+              <ModelLink label={modelLabel(models, detail.session.model ?? '')} onOpen={openOptions} />
+            </div>
+          )}
         </form>
       </div>
       {showFiles && (
