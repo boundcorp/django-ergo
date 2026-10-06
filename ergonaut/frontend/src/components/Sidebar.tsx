@@ -1,5 +1,5 @@
 import { Link, NavLink, useMatch, useNavigate } from 'react-router-dom'
-import type { Bot, Session, SidebarPin } from '../api'
+import type { Bot, Session, SidebarPin, User } from '../api'
 import { api } from '../api'
 import BotIcon from './BotIcon'
 import { pinIcon } from './Pins'
@@ -92,12 +92,14 @@ function PinLinks({ session, pins, nested }: { session: Session; pins?: SidebarP
 }
 
 export function Sidebar({
+  user,
   bots,
   sessions,
   pins,
   botErrors = [],
   onChange,
 }: {
+  user: User
   bots: Bot[]
   sessions: Session[]
   pins: Record<string, SidebarPin[]>
@@ -231,6 +233,17 @@ export function Sidebar({
       })}
       {!bots.length && <p className="px-2 text-sm text-zinc-500">No bots are loaded. Set ERGONAUT_BOTS and restart.</p>}
       <div className="mt-auto flex flex-col gap-1 border-t border-stroke pt-4">
+        <div className="sidebar-account px-3 py-2">
+          <div className="truncate text-sm font-semibold text-ink">{user.first_name || user.username}</div>
+          {!!user.email && user.email !== (user.first_name || user.username) && (
+            <div className="truncate text-xs text-muted" title={user.email}>
+              {user.email}
+            </div>
+          )}
+          {!!user.email && user.email === (user.first_name || user.username) && (
+            <div className="sr-only">{user.email}</div>
+          )}
+        </div>
         <Link to="/sessions" className="rounded-lg px-3 py-2 text-sm hover:bg-raised">
           History
         </Link>

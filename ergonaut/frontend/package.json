@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "test": "node --test \"src/**/*.test.ts\""
+    "test": "node --test src/toolFormat.test.ts && bun test src/chatLayout.test.ts src/chatChrome.test.tsx"
   },
   "dependencies": {
     "@fontsource/inter": "^5.3.0",

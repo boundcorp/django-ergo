@@ -14,11 +14,13 @@ import type {
 } from '../api'
 import { api } from '../api'
 import { useDraft } from '../draft'
+import { suggestionsFromMessages, statusSummary } from '../chatLayout'
 import Files from '../components/Files'
 import Markdown from '../components/Markdown'
 import ModelPicker from '../components/ModelPicker'
 import { PageViewer, Pins } from '../components/Pins'
 import { AttachmentView, replySuggestions, Transcript } from '../components/Transcript'
+import { MobileSessionBar, SuggestionChips } from '../components/ChatChrome'
 import { WorkerActivityView, WorkerPulse } from '../components/WorkerActivity'
 import { agoLong } from '../time'
 
@@ -95,7 +97,10 @@ export function Chat({ onChange }: { onChange: () => void }) {
   const [openPin, setOpenPin] = useState<Pin | null>(null)
   // Bumped when the Files panel pins or unpins, so the strip reloads.
   const [pinsKey, setPinsKey] = useState(0)
+  const [pinCount, setPinCount] = useState(0)
+  const onPinCount = useCallback((count: number) => setPinCount(count), [])
   const bottom = useRef<HTMLDivElement>(null)
+  const composer = useRef<HTMLTextAreaElement>(null)
   const latest = useRef<SessionDetail | null>(null)
   latest.current = detail
 
@@ -126,6 +131,10 @@ export function Chat({ onChange }: { onChange: () => void }) {
     atBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80
     setScrolledUp(!atBottom.current)
     if (atBottom.current) setUnseen(false)
+    if (window.matchMedia('(max-width: 640px)').matches) {
+      const next = el.scrollTop > 32 ? '1' : ''
+      if (document.documentElement.dataset.chatScrolled !== next) document.documentElement.dataset.chatScrolled = next
+    }
   }
   function toBottom(behavior: ScrollBehavior = 'auto') {
     atBottom.current = true
@@ -195,7 +204,26 @@ export function Chat({ onChange }: { onChange: () => void }) {
   }, [title, onChange])
   useEffect(() => {
     firstTitle.current = undefined
+    setPinCount(0)
+    delete document.documentElement.dataset.chatScrolled
   }, [id])
+  useEffect(() => {
+    return () => {
+      delete document.documentElement.dataset.chatScrolled
+    }
+  }, [])
+  useLayoutEffect(() => {
+    const el = composer.current
+    if (!el) return
+    const mobile = window.matchMedia('(max-width: 640px)').matches
+    el.rows = mobile ? 1 : 2
+    if (!mobile) {
+      el.style.height = ''
+      return
+    }
+    el.style.height = 'auto'
+    el.style.height = `${Math.min(el.scrollHeight, 128)}px`
+  }, [text, detail])
 
   // ?pin=<url>&name=<name> (from the sidebar) opens that pin. Declared after the effect above,
   // which resets the viewer when the chat changes, so it runs second.
@@ -375,7 +403,11 @@ export function Chat({ onChange }: { onChange: () => void }) {
 
   const lastCall = detail.calls[detail.calls.length - 1]
   const waiting = lastCall?.status === 'awaiting_approval' ? lastCall.pending_approvals : []
-  const suggestions = !waiting.length ? replySuggestions(last?.suggestions ?? lastCall?.response?.suggestions) : []
+  const turnSuggestions = !waiting.length ? replySuggestions(last?.suggestions ?? lastCall?.response?.suggestions) : []
+  const mobileSuggestions = turnSuggestions.length
+    ? turnSuggestions
+    : replySuggestions(suggestionsFromMessages(detail.messages))
+  const summary = statusSummary(detail.requests ?? [], detail.workers ?? [], pinCount)
   const archived = detail.session.status === 'completed' && detail.session.role === 'thread'
   // A turn doesn't touch the session row, so its updated_at stays at creation.
   const lastActivity = [detail.session.updated_at, detail.messages[detail.messages.length - 1]?.timestamp]
@@ -396,10 +428,71 @@ export function Chat({ onChange }: { onChange: () => void }) {
   return (
     <div className="chat-session flex h-full">
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="chat-header flex flex-wrap items-center gap-3 px-4 py-4 sm:px-6">
-          <div className="min-w-0">
-            <h1 className="font-display text-2xl font-bold">{detail.session.title}</h1>
-            <div className="mt-1 text-sm text-muted">
+        <div className="chat-desktop-chrome">
+          <header className="chat-header flex flex-wrap items-center gap-3 px-4 py-4 sm:px-6">
+            <div className="min-w-0">
+              <h1 className="font-display text-2xl font-bold">{detail.session.title}</h1>
+              <div className="mt-1 text-sm text-muted">
+                {detail.session.bot} · {detail.session.role || 'session'} ·{' '}
+                {(detail.message_count ?? detail.messages.length).toLocaleString()} messages · Updated{' '}
+                {agoLong(lastActivity)} · Session {archived ? 'archived' : closed ? 'closed' : 'active'}
+                {detail.session.started_by && detail.session.started_by_id && (
+                  <>
+                    {' · started by '}
+                    <Link className="underline" to={`/s/${detail.session.started_by_id}`}>
+                      {detail.session.started_by}
+                    </Link>
+                  </>
+                )}
+              </div>
+              {archived && detail.session.resolved_summary && (
+                <div className="mt-1 text-sm text-success">
+                  ✓ Resolved{detail.session.resolved_by ? ` by ${detail.session.resolved_by}` : ''}:{' '}
+                  <span className="text-ink">{detail.session.resolved_summary}</span>
+                </div>
+              )}
+            </div>
+            <div className="ml-auto flex flex-wrap items-center gap-3">
+              {detail.session.role === 'thread' && (
+                <button
+                  className="rounded-md border border-zinc-300 px-2 py-0.5 text-xs text-zinc-600 disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-400"
+                  disabled={archived || busy}
+                  title={archived ? 'Resolved; a new message reopens it' : 'Mark this thread resolved'}
+                  onClick={async () => {
+                    await api.close(id).catch(e => setError(String(e.message ?? e)))
+                    await load()
+                    onChange()
+                  }}
+                >
+                  {archived ? 'Resolved' : 'Resolve'}
+                </button>
+              )}
+              <button
+                className={`rounded-md border px-2 py-0.5 text-xs ${showFiles ? 'border-indigo-400 text-indigo-700 dark:text-indigo-300' : 'border-zinc-300 text-zinc-600 dark:border-zinc-700 dark:text-zinc-400'}`}
+                onClick={() => toggleFiles(!showFiles)}
+              >
+                📎 Files
+              </button>
+              <button className="text-xs text-zinc-500 underline" onClick={() => exportJson(detail)}>
+                Export JSON
+              </button>
+            </div>
+          </header>
+          <Requests requests={detail.requests ?? []} />
+          <Workers workers={detail.workers ?? []} />
+          <Pins
+            sessionId={id}
+            refreshKey={`${detail.messages.length}:${pinsKey}`}
+            open={openPin}
+            onOpen={setOpenPin}
+            onCount={onPinCount}
+          />
+        </div>
+        <MobileSessionBar
+          title={detail.session.title}
+          summary={summary}
+          meta={
+            <>
               {detail.session.bot} · {detail.session.role || 'session'} ·{' '}
               {(detail.message_count ?? detail.messages.length).toLocaleString()} messages · Updated{' '}
               {agoLong(lastActivity)} · Session {archived ? 'archived' : closed ? 'closed' : 'active'}
@@ -411,44 +504,68 @@ export function Chat({ onChange }: { onChange: () => void }) {
                   </Link>
                 </>
               )}
-            </div>
-            {archived && detail.session.resolved_summary && (
-              <div className="mt-1 text-sm text-success">
+            </>
+          }
+          resolved={
+            archived && detail.session.resolved_summary ? (
+              <div className="mb-2 text-sm text-success">
                 ✓ Resolved{detail.session.resolved_by ? ` by ${detail.session.resolved_by}` : ''}:{' '}
                 <span className="text-ink">{detail.session.resolved_summary}</span>
               </div>
-            )}
-          </div>
-          <div className="ml-auto flex flex-wrap items-center gap-3">
-            {detail.session.role === 'thread' && (
+            ) : null
+          }
+          actions={
+            <>
+              {detail.session.role === 'thread' && (
+                <button
+                  type="button"
+                  disabled={archived || busy}
+                  title={archived ? 'Resolved; a new message reopens it' : 'Mark this thread resolved'}
+                  onClick={async () => {
+                    await api.close(id).catch(e => setError(String(e.message ?? e)))
+                    document.querySelector<HTMLDialogElement>('#chat-session-sheet')?.close()
+                    await load()
+                    onChange()
+                  }}
+                >
+                  {archived ? 'Resolved' : 'Resolve'}
+                </button>
+              )}
               <button
-                className="rounded-md border border-zinc-300 px-2 py-0.5 text-xs text-zinc-600 disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-400"
-                disabled={archived || busy}
-                title={archived ? 'Resolved; a new message reopens it' : 'Mark this thread resolved'}
-                onClick={async () => {
-                  await api.close(id).catch(e => setError(String(e.message ?? e)))
-                  await load()
-                  onChange()
+                type="button"
+                aria-pressed={showFiles}
+                onClick={() => {
+                  toggleFiles(!showFiles)
+                  document.querySelector<HTMLDialogElement>('#chat-session-sheet')?.close()
                 }}
               >
-                {archived ? 'Resolved' : 'Resolve'}
+                Files
               </button>
-            )}
-            <button
-              className={`rounded-md border px-2 py-0.5 text-xs ${showFiles ? 'border-indigo-400 text-indigo-700 dark:text-indigo-300' : 'border-zinc-300 text-zinc-600 dark:border-zinc-700 dark:text-zinc-400'}`}
-              onClick={() => toggleFiles(!showFiles)}
-            >
-              📎 Files
-            </button>
-            <button className="text-xs text-zinc-500 underline" onClick={() => exportJson(detail)}>
-              Export JSON
-            </button>
-          </div>
-        </header>
-        <Requests requests={detail.requests ?? []} />
-        <Workers workers={detail.workers ?? []} />
-        <Pins sessionId={id} refreshKey={`${detail.messages.length}:${pinsKey}`} open={openPin} onOpen={setOpenPin} />
-        {openPin && <PageViewer pin={openPin} refreshKey={detail.messages.length} onClose={() => setOpenPin(null)} />}
+              <button
+                type="button"
+                onClick={() => {
+                  exportJson(detail)
+                  document.querySelector<HTMLDialogElement>('#chat-session-sheet')?.close()
+                }}
+              >
+                Export JSON
+              </button>
+            </>
+          }
+        >
+          <Requests requests={detail.requests ?? []} />
+          <Workers workers={detail.workers ?? []} />
+          <Pins
+            sessionId={id}
+            refreshKey={`${detail.messages.length}:${pinsKey}`}
+            open={openPin}
+            onOpen={pin => {
+              setOpenPin(pin)
+              if (pin) document.querySelector<HTMLDialogElement>('#chat-session-sheet')?.close()
+            }}
+            onCount={onPinCount}
+          />
+        </MobileSessionBar>
         <div
           ref={transcript}
           onScroll={onTranscriptScroll}
@@ -615,11 +732,12 @@ export function Chat({ onChange }: { onChange: () => void }) {
             )}
           </div>
         )}
-        {!!suggestions.length && (
-          <div className="mx-4 mb-2 flex flex-wrap gap-2 sm:mx-6">
-            {suggestions.map(s => (
+        {!!turnSuggestions.length && (
+          <div className="suggestion-desktop mx-4 mb-2 flex flex-wrap gap-2 sm:mx-6">
+            {turnSuggestions.map(s => (
               <button
                 key={s}
+                type="button"
                 disabled={busy}
                 className="rounded-full border border-indigo-300 px-3 py-1 text-sm text-indigo-700 hover:bg-indigo-50 disabled:opacity-50 dark:border-indigo-700 dark:text-indigo-300 dark:hover:bg-indigo-950"
                 onClick={() => send(s)}
@@ -629,6 +747,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
             ))}
           </div>
         )}
+        <SuggestionChips suggestions={mobileSuggestions} disabled={busy} onPick={send} />
         {!!outgoing.length && (
           <div className="mx-4 flex flex-wrap gap-2 pt-2">
             {outgoing.map(file => (
@@ -659,6 +778,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
         >
           <input ref={picker} type="file" multiple hidden onChange={e => attach(e.target.files)} />
           <textarea
+            ref={composer}
             onPaste={e => {
               const files = Array.from(e.clipboardData.files)
               if (files.length) {
@@ -690,15 +810,16 @@ export function Chat({ onChange }: { onChange: () => void }) {
             }
             className="block w-full resize-none rounded-card border border-stroke bg-raised px-3 py-2 focus:outline-none"
           />
-          <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-stroke pt-3">
+          <div className="chat-composer-actions mt-3 flex flex-wrap items-center gap-2 border-t border-stroke pt-3">
             <button
               type="button"
               disabled={closed || !!waiting.length || uploading}
               title="Attach images, PDFs or other files"
-              className="rounded-control px-2 py-2 text-sm font-semibold text-mint hover:bg-raised disabled:opacity-50"
+              aria-label="Attach images, PDFs or other files"
+              className="chat-attach rounded-control px-2 py-2 text-sm font-semibold text-mint hover:bg-raised disabled:opacity-50"
               onClick={() => picker.current?.click()}
             >
-              {uploading ? 'Attaching…' : '+ Attach'}
+              <span className="chat-attach-label">{uploading ? 'Attaching…' : '+ Attach'}</span>
             </button>
             <ModelPicker
               bot={detail.session.bot}
@@ -708,7 +829,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
                 await load()
               }}
             />
-            <div className="ml-auto flex items-center gap-2">
+            <div className="chat-composer-send ml-auto flex items-center gap-2">
               {running && (
                 <>
                   <button
@@ -734,9 +855,11 @@ export function Chat({ onChange }: { onChange: () => void }) {
                 </>
               )}
               <button
+                type="submit"
                 disabled={busy || uploading || (!text.trim() && !outgoing.length)}
-                title={running ? 'Send now; the bot sees it after the step it is on' : undefined}
-                className="rounded-control bg-accent px-5 py-2.5 font-semibold text-canvas disabled:opacity-50"
+                title={running ? 'Send now; the bot sees it after the step it is on' : 'Send'}
+                aria-label="Send"
+                className="chat-send rounded-control bg-accent px-5 py-2.5 font-semibold text-canvas disabled:opacity-50"
               >
                 Send
               </button>

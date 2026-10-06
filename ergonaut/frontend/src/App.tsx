@@ -15,6 +15,7 @@ import { RoutingPage } from './pages/Routing'
 import { ThreadsPage } from './pages/ThreadsPage'
 import { ApiKeysPage } from './pages/ApiKeys'
 import { ThemeToggle } from './theme'
+import './chat-mobile.css'
 import { ago } from './time'
 import { DirectoryContext } from './components/BotIcon'
 
@@ -170,7 +171,7 @@ function Shell({
   return (
     <div className="app-shell flex h-dvh">
       <aside id="app-sidebar" className="app-sidebar shrink-0" data-open={navOpen}>
-        <Sidebar bots={bots} sessions={sessions} pins={pins} botErrors={botErrors} onChange={refresh} />
+        <Sidebar user={user} bots={bots} sessions={sessions} pins={pins} botErrors={botErrors} onChange={refresh} />
       </aside>
       <main className="app-main min-w-0 flex-1">
         <div className="app-topbar flex items-center gap-4">
@@ -189,7 +190,9 @@ function Shell({
           <span className="topbar-crumb hidden sm:inline">Workspace</span>
           <span className="topbar-crumb hidden sm:inline">/</span>
           <span className="topbar-crumb hidden sm:inline">Your journey</span>
-          <span className="ml-auto text-sm font-semibold text-ink">{user.first_name || user.username}</span>
+          <span className="topbar-identity ml-auto text-sm font-semibold text-ink">
+            {user.first_name || user.username}
+          </span>
           <ThemeToggle />
         </div>
         <div className="min-h-0 flex-1 overflow-hidden">
