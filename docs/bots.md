@@ -35,7 +35,7 @@ root:                                # window settings for main and named chats
 orchestration: true                  # may the bot delegate at all (false: never)
 timezone: America/Los_Angeles        # default for users without a timezone
 current_time: true                   # current date and time in every turn
-tool_results_in_context: 3           # large tool results each model call keeps in full
+tool_results_in_context: 6           # large tool results each model call keeps in full
 chats:
   main:                              # every user's main chat (always there)
     skills: [orchestration, tandoor] # loaded from the start (default: [orchestration])
@@ -110,7 +110,7 @@ downscaled to 1024px with Pillow when it's installed; older ones show as
 `[image omitted: name (id=...)]`. See [attachments.md](attachments.md).
 
 Large tool results get the same treatment: each model call carries the
-newest three (`tool_results_in_context` in bot.yaml, default
+newest six (`tool_results_in_context` in bot.yaml, default
 `DJANGO_ERGO["TOOL_RESULTS_IN_CONTEXT"]`) in full, plus older ones while the
 kept results total at most 40,000 characters
 (`DJANGO_ERGO["TOOL_RESULTS_CHARS_IN_CONTEXT"]`), so a turn reading a handful

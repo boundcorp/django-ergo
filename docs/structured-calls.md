@@ -79,7 +79,7 @@ result = await run_structured_call(spec, "Plan it", session=session)
   `turn_limited` (no valid output within `max_turns`).
 - Rows never store engine config, so credentials are never written.
 - Each model call carries only the newest
-  `DJANGO_ERGO["TOOL_RESULTS_IN_CONTEXT"]` large tool results (default 3,
+  `DJANGO_ERGO["TOOL_RESULTS_IN_CONTEXT"]` large tool results (default 6,
   "large" meaning over 500 characters) in full, and older ones too while the
   kept results total at most `DJANGO_ERGO["TOOL_RESULTS_CHARS_IN_CONTEXT"]`
   characters (default 40,000; 0 keeps only the count). Older ones are sent

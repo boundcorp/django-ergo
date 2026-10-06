@@ -16,6 +16,7 @@ from django_ergo.conversation.structured import StructuredCallSpec
 from django_ergo.conversation.structured import run_structured_call
 from django_ergo.conversation.tool_results import trim_tool_results
 from django_ergo.conversation.toolkit import Toolkit
+from django_ergo.settings import api_settings
 from tests.test_conversation_structured import VALID_PLAN
 from tests.test_conversation_structured import FakeOpenAIClient
 from tests.test_conversation_structured import Plan
@@ -158,8 +159,12 @@ def test_images_in_a_stubbed_result_are_left_to_the_image_window():
 
 
 def test_setting_controls_the_default_and_none_turns_it_off(settings):
-    messages = [*claude_exchange("t0", BIG), *claude_exchange("t1", BIG)]
-    assert _results(trim_tool_results(messages))[0] == BIG  # default keeps 3
+    messages = [m for i in range(7) for m in claude_exchange(f"t{i}", BIG)]
+
+    assert api_settings.TOOL_RESULTS_IN_CONTEXT == 6
+    sent = _results(trim_tool_results(messages))
+    assert sent[0].startswith("[tree result")
+    assert sent[1:] == [BIG] * 6
 
     settings.DJANGO_ERGO = {
         "TOOL_RESULTS_IN_CONTEXT": 1,
@@ -172,7 +177,7 @@ def test_setting_controls_the_default_and_none_turns_it_off(settings):
 
 
 def test_size_budget_keeps_more_small_results(settings):
-    settings.DJANGO_ERGO = {}  # defaults: keep 3, 40,000 chars
+    settings.DJANGO_ERGO = {}  # defaults: keep 6, 40,000 chars
     small = [m for i in range(10) for m in claude_exchange(f"f{i}", BIG)]
     assert _results(trim_tool_results(small)) == [BIG] * 10
 
@@ -184,7 +189,7 @@ def test_size_budget_keeps_more_small_results(settings):
         *claude_exchange("h2", huge),
         *claude_exchange("new", BIG),
     ]
-    sent = _results(trim_tool_results(messages))
+    sent = _results(trim_tool_results(messages, keep=3))
     # The newest three always stay; h0 would go over the budget, so it and
     # everything older is stubbed.
     assert sent[2:] == [huge, huge, BIG]
@@ -253,7 +258,7 @@ async def test_session_call_sends_stubs_but_stores_full_results(user):
 
     assert result.ok
     sent = _results(engine._client.calls[-1]["messages"])
-    assert [s.startswith("[tree result") for s in sent] == [True] * 2 + [False] * 3
+    assert [s.startswith("[tree result") for s in sent] == [False] * 5
     stored = await sync_to_async(engine.history_rows)(session)
     full = _results([message for _, message in stored])
     assert len(full) == 6  # five trees and the submit_output result

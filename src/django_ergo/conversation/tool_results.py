@@ -6,7 +6,7 @@ a file listing, a page of rows) makes each later step pay for all the earlier
 dumps again.
 
 Each model call carries the newest ``DJANGO_ERGO["TOOL_RESULTS_IN_CONTEXT"]``
-large tool results in full (default 3), and keeps more of the newest while
+large tool results in full (default 6), and keeps more of the newest while
 all the results kept add up to at most ``DJANGO_ERGO["TOOL_RESULTS_CHARS_IN_CONTEXT"]``
 characters (default 40,000). A turn that reads ten small files keeps them
 all; a turn that pulls several big dumps keeps only the newest few. Older
