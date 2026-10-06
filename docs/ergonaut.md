@@ -141,11 +141,20 @@ refuse logins until the window passes.
   messages only while you're at the bottom; scrolled up, it stays put and a
   "Jump to bottom" button (or "New messages") takes you back. Sending a
   message always scrolls to the bottom.
-- **Tool calls**: a run of calls shows its last three in full (name,
-  arguments and result, streaming in as they run); the earlier ones fold into
-  a "+N more" row naming the tools, which unfolds them in place as one-line
-  rows that open on click. Calls that need approval or failed, and thread
-  cards, always show.
+- **Tool calls**: each call is one header line: status (read aloud as
+  running, ok, error or needs approval), the tool name (an `mcp__server__`
+  prefix is shown muted; hover for the full name), a short preview of the
+  arguments and the time it took. A run of calls shows its last three open,
+  with the arguments as a key/value list (paths, ids and code in monospace;
+  long or multiline strings clamped behind "Show more"; short scalar arrays as
+  chips; nested values as indented JSON; input that is not a JSON object as
+  raw text). "Raw JSON" shows the full arguments, and "Copy" copies the
+  arguments or the result. The result is folded behind a one-line summary
+  (size and first line) and opens on click, capped in height with its own
+  scroll; a failed call's error starts open. A call you opened stays open as
+  the chat streams. The earlier calls of a run fold into a "+N more" row
+  naming the tools, which unfolds them in place as one-line rows that open on
+  click. Calls that need approval or failed, and thread cards, always show.
 - **Thread cards**: work a chat sends to another chat (`ergo_thread_send`,
   `ergo_message_up`) shows as a card instead of a tool call: the chat it went
   to, with the bot's icon, a live status (queued, working, waiting on you,

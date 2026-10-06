@@ -4,7 +4,8 @@ import { api } from '../api'
 import { DirectoryContext } from './BotIcon'
 import Markdown from './Markdown'
 import { PrChip, ThreadCard, ThreadLink, WorkerCard, linkThreads } from './Threads'
-import { ToolCard, pretty, resultText } from './ToolCard'
+import { ToolCard } from './ToolCard'
+import { pretty, resultText } from '../toolFormat'
 import { clock } from '../time'
 
 // Tools that send work to another chat or start a worker; their calls show as cards.
@@ -430,7 +431,8 @@ function MessageView({
               return <ReplyBubble key={i} reply={block.input as Reply} />
             }
             return (
-              <Fragment key={i}>
+              // Keyed by call id, not position, so an open call stays open as the chat streams and folds shift.
+              <Fragment key={block.id || i}>
                 {rows.has(block.id) && (
                   <div className="w-full max-w-[85%]">
                     <FoldToggle row={rows.get(block.id)!} />
