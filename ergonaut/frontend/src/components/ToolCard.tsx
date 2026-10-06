@@ -197,8 +197,9 @@ function ResultView({ result }: { result: ToolResult }) {
 }
 
 /** A tool call: a one-line header (status, name, args preview, time) that opens to the full
- *  arguments and a folded result. ``compact`` (calls folded into "+N more") starts closed.
- *  Open state is the reader's choice and sticks across re-renders while a chat streams. */
+ *  arguments and a folded result. Every call starts folded; ``compact`` (calls inside a
+ *  "+N more" fold) only sets the smaller size. Open state is the reader's choice and sticks
+ *  across re-renders while a chat streams. */
 export function ToolCard({
   use,
   result,
@@ -212,8 +213,7 @@ export function ToolCard({
   duration?: number | null // ms from the call to its result
   compact?: boolean
 }) {
-  const [opened, setOpened] = useState<boolean | null>(null)
-  const open = opened ?? !compact
+  const [open, setOpen] = useState(false)
   const bodyId = useId()
   const [icon, state, tone] = pending
     ? ['⏸', 'needs approval', 'border-warning/50 bg-amber-tint']
@@ -228,7 +228,7 @@ export function ToolCard({
       <button
         type="button"
         className={`flex min-h-10 w-full items-center gap-2 px-2.5 text-left sm:min-h-0 ${compact ? 'sm:py-1' : 'sm:py-1.5'}`}
-        onClick={() => setOpened(!open)}
+        onClick={() => setOpen(!open)}
         aria-expanded={open}
         aria-controls={bodyId}
         title={use.name}

@@ -134,6 +134,15 @@ body {
 }
 
 .app-shell {
+  /* The shell is the viewport and never scrolls; pages and the chat list scroll inside it.
+     position: relative makes it (and the scrollers below) the containing block for absolutely
+     positioned content such as sr-only text, so that content can't spill out of a scroller and
+     make the whole page scrollable. */
+  position: relative;
+  overflow: hidden;
+  overscroll-behavior: none;
+  height: var(--app-height, 100dvh);
+  translate: 0 var(--app-top, 0px);
   gap: 24px;
   padding: 16px;
   background: var(--color-canvas);
@@ -158,6 +167,7 @@ body {
   background: var(--color-surface);
 }
 .page-content {
+  position: relative;
   width: min(100%, 1120px);
   margin: 0 auto;
   padding: 8px 32px 48px;

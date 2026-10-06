@@ -2,35 +2,48 @@ import { useEffect, useState } from 'react'
 import type { BotModels } from '../api'
 import { api } from '../api'
 
-// Pick the model a chat uses, from providers.yaml. Picking a model on another engine converts
-// the chat's history to that engine, so any available model works in any chat.
-export default function ModelPicker({
-  bot,
-  value,
-  onPick,
-  large,
-}: {
-  bot: string
-  value: string
-  onPick: (model: string) => void
-  large?: boolean
-}) {
+/** A bot's model choices from providers.yaml; null until they load, or when it has none. An empty bot waits. */
+export function useBotModels(bot: string): BotModels | null {
   const [models, setModels] = useState<BotModels | null>(null)
-
   useEffect(() => {
+    if (!bot) return
     let current = true
     api
       .models(bot)
-      .then(m => current && setModels(m))
+      .then(m => current && setModels(m.models.length ? m : null))
       .catch(() => current && setModels(null))
     return () => {
       current = false
     }
   }, [bot])
+  return models
+}
 
-  if (!models?.models.length) return null
-  const defaultLabel =
-    models.models.find(m => m.id === models.default || m.name === models.default)?.label ?? models.default
+function defaultLabel(models: BotModels): string {
+  return models.models.find(m => m.id === models.default || m.name === models.default)?.label ?? models.default
+}
+
+/** The chat's model in words: "Sonnet 5.5", or the bot's default when the chat has none picked. */
+export function modelLabel(models: BotModels, value: string): string {
+  if (!value) return `${defaultLabel(models)} (default)`
+  return models.models.find(m => m.id === value)?.label ?? value
+}
+
+// Pick the model a chat uses, from providers.yaml. Picking a model on another engine converts
+// the chat's history to that engine, so any available model works in any chat.
+export default function ModelPicker({
+  models,
+  value,
+  onPick,
+  large,
+}: {
+  models: BotModels | null
+  value: string
+  onPick: (model: string) => void
+  large?: boolean
+}) {
+  if (!models) return null
+  const fallback = defaultLabel(models)
   const select = (
     <select
       value={value}
@@ -43,7 +56,7 @@ export default function ModelPicker({
       }
       onChange={e => onPick(e.target.value)}
     >
-      <option value="">Default{defaultLabel ? ` (${defaultLabel})` : ''}</option>
+      <option value="">Default{fallback ? ` (${fallback})` : ''}</option>
       {models.models.map(m => (
         <option key={m.id} value={m.id} disabled={!m.available}>
           {m.provider} · {m.label}
