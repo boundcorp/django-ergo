@@ -44,9 +44,8 @@ they're installed.
   and proxies `/api` and `/mgmt` to Django on :8000.
 - `infra/`: Docker Compose for `make dev`, and start scripts for production
   workloads.
-- `Dockerfile`: builds from the repo root (`docker build -f
-  ergonaut/Dockerfile --target aio .`); `release` is the app alone, `aio`
-  adds Redis and Garage and runs `ergonaut up`.
+- `Dockerfile`: builds the `release` image (the app alone) from the repo
+  root: `docker build -f ergonaut/Dockerfile --target release .`.
 
 ## Docker Compose
 

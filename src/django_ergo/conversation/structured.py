@@ -71,6 +71,8 @@ from dataclasses import field
 from typing import TYPE_CHECKING
 from typing import Any
 from typing import Protocol
+from typing import get_args
+from typing import get_origin
 
 from asgiref.sync import sync_to_async
 from pydantic import BaseModel
@@ -245,6 +247,42 @@ class StructuredCallResult:
         return self.call.error
 
 
+def _wants_container(annotation: Any) -> bool:
+    """True when a field takes a list, dict or model and never a plain str."""
+    args = get_args(annotation)
+    if args and str not in args and get_origin(annotation) not in (list, dict):
+        # Optional[...] and other unions: look through to the members.
+        return any(_wants_container(a) for a in args if a is not type(None))
+    origin = get_origin(annotation) or annotation
+    return origin in (list, dict) or (
+        isinstance(origin, type) and issubclass(origin, BaseModel)
+    )
+
+
+def _decode_json_fields(response_model: type[BaseModel], arguments: dict) -> dict:
+    """Unwrap list, dict and model fields the model sent as JSON strings.
+
+    Models sometimes pass ``"[\\"a\\", \\"b\\"]"`` where the schema asks for a
+    list. Decoding it here saves a validation round trip that would resend
+    the whole output.
+    """
+    if not isinstance(arguments, dict):
+        return arguments
+    fixed = dict(arguments)
+    for name, info in response_model.model_fields.items():
+        key = info.alias or name
+        value = fixed.get(key)
+        if not isinstance(value, str) or not _wants_container(info.annotation):
+            continue
+        try:
+            decoded = json.loads(value)
+        except ValueError:
+            continue
+        if isinstance(decoded, list | dict):
+            fixed[key] = decoded
+    return fixed
+
+
 class StructuredOutputToolkit(Toolkit):
     """Exposes one tool whose input schema is a Pydantic model.
 
@@ -286,6 +324,7 @@ class StructuredOutputToolkit(Toolkit):
         ]
 
     def execute_tool(self, tool_name: str, arguments: dict) -> str:
+        arguments = _decode_json_fields(self.response_model, arguments)
         try:
             self.accepted = self.response_model.model_validate(arguments)
         except ValidationError as e:
@@ -472,6 +511,17 @@ class _SessionTranscript:
 
     async def append_user(self, text: str, attachments=None) -> None:
         await self.engine.append_user_message(self.session, text, attachments)
+
+    async def append_initial_user(self, text: str, attachments=None) -> None:
+        metadata = self.call.metadata or {}
+        identity = {
+            key: metadata[f"message_{key}"]
+            for key in ("author", "provenance")
+            if f"message_{key}" in metadata
+        }
+        await self.engine.append_user_message(
+            self.session, text, attachments, **identity
+        )
 
     async def append_tool_exchange(self, calls: list[SeededToolCall]) -> None:
         await self.engine.append_tool_exchange(self.session, calls)
@@ -926,7 +976,10 @@ async def run_structured_call(  # noqa: PLR0913
 
     run = _Run(active, transcript, call, spec, user, workflow, allow_approvals, control)
     await _record_tools(call, spec)
-    await transcript.append_user(message, attachments)
+    if session is not None:
+        await transcript.append_initial_user(message, attachments)
+    else:
+        await transcript.append_user(message, attachments)
     if seed and pre_seeds:
         await transcript.append_tool_exchange(await _run_pre_seeds(pre_seeds))
     return await _loop(run)

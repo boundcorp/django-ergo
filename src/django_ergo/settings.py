@@ -45,7 +45,7 @@ DEFAULTS = {
     # TOOL_RESULTS_CHARS_IN_CONTEXT chars; older ones become a short stub
     # naming the tool, so a long turn doesn't re-send every earlier dump.
     # Stored history keeps them all. None = send every result in full.
-    "TOOL_RESULTS_IN_CONTEXT": 3,
+    "TOOL_RESULTS_IN_CONTEXT": 6,
     "TOOL_RESULTS_CHARS_IN_CONTEXT": 40_000,
     # Extra bot plugins by short name: {"name": "dotted.path.PluginClass"}.
     "BOT_PLUGINS": {},

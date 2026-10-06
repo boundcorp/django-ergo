@@ -256,6 +256,15 @@ skill: `ergo_bot_list`, `ergo_thread_list`, `ergo_thread_send` and
 at once; the recipient answers in a turn of its own, and its reply comes
 back to the sender as a new message.
 
+Use `ergo_thread_forward` to hand over the user's actual message rather than
+retelling it with `ergo_thread_send`. The destination shows who wrote the
+words separately from the bot that forwarded them and the source chat/time;
+notes and shared files are separate from the original body. A forwarded
+Telegram message keeps its Telegram author. The recipient answers there,
+with nothing routed back; ordinary bot sends identify the sending bot and
+still route replies back. See [message identity](bots.md#message-identity)
+for the storage and compatibility details.
+
 A bot may message:
 
 - its sub-bots (bot folders nested inside its folder),

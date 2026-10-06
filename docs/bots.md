@@ -35,7 +35,7 @@ root:                                # window settings for main and named chats
 orchestration: true                  # may the bot delegate at all (false: never)
 timezone: America/Los_Angeles        # default for users without a timezone
 current_time: true                   # current date and time in every turn
-tool_results_in_context: 3           # large tool results each model call keeps in full
+tool_results_in_context: 6           # large tool results each model call keeps in full
 chats:
   main:                              # every user's main chat (always there)
     skills: [orchestration, tandoor] # loaded from the start (default: [orchestration])
@@ -106,19 +106,21 @@ def sales_chart(days: int = 7) -> ToolResult:
 The image bytes are saved as a file in the chat (`ToolImage.from_attachment(row)`
 points at a file the chat already has) and history keeps a reference. Only the
 latest two images go to the model on each call (`DJANGO_ERGO["IMAGES_IN_CONTEXT"]`),
-downscaled to 1024px with Pillow when it's installed; older ones show as
+plus every image in the newest round of tool results (up to 8), so looking at
+four files at once shows all four; images are downscaled to 1024px with Pillow
+when it's installed; older ones show as
 `[image omitted: name (id=...)]`. See [attachments.md](attachments.md).
 
 Large tool results get the same treatment: each model call carries the
-newest three (`tool_results_in_context` in bot.yaml, default
+newest six (`tool_results_in_context` in bot.yaml, default
 `DJANGO_ERGO["TOOL_RESULTS_IN_CONTEXT"]`) in full, plus older ones while the
 kept results total at most 40,000 characters
 (`DJANGO_ERGO["TOOL_RESULTS_CHARS_IN_CONTEXT"]`), so a turn reading a handful
 of small files keeps them all. Older ones over 500 characters go as a stub
-naming the tool and its size, so a long turn that
-keeps reading a big dump doesn't re-send every earlier copy. History keeps
-every result; the bot calls the tool again if it needs an old one. See
-[structured-calls.md](structured-calls.md).
+naming the tool and its size, so a long turn that keeps reading a big dump
+doesn't re-send every earlier copy. The bot should note the detail it needs
+when it first reads a result, and call the tool again only if it still needs
+the detail. See [structured-calls.md](structured-calls.md).
 
 A tool module can also define
 `toolkits(ctx) -> list[Toolkit]` for class-based toolkits.
@@ -225,15 +227,16 @@ plugins: {bot_management: {mode: propose_pr}}   # plugins it needs, with setting
 1. Review the last 60 days of the meal plan with view_meal_plan.
 ```
 
-Every chat starts with an `ergo_skills_list` result already in its history:
-each skill, whether it's loaded, how many tools it has, and a hint for some
-unloaded plugins ("3 files in this chat"). `ergo_skill_load(name)` returns
-the skill's instructions and context and offers its tools from the next
-model call on (the same turn); using a skill's tool keeps it loaded, and one
-unused for `skills.unload_after_turns` turns (default 30, counting every turn
-in the chat) is dropped again. `ergo_skill_unload` drops one sooner. Loaded
-skills are kept per chat. `history` and the skills a chat lists under
-`chats.<name>.skills` (or `threads.skills`) are always loaded there.
+Every turn's context has a compact `Skills` section: each skill, whether it
+is loaded, and its one-line description. `ergo_skills_list` remains available
+when the model needs the fuller listing, including tool counts and hints.
+`ergo_skill_load(name)` returns the skill's instructions and context and
+offers its tools from the next model call on (the same turn); using a skill's
+tool keeps it loaded, and one unused for `skills.unload_after_turns` turns
+(default 30, counting every turn in the chat) is dropped again.
+`ergo_skill_unload` drops one sooner. Loaded skills are kept per chat.
+`history` and the skills a chat lists under `chats.<name>.skills` (or
+`threads.skills`) are always loaded there.
 
 A plugin's `context_sources` are part of its skill (in context while it's
 loaded); `always_context_sources` stay on regardless (the KB's root article
@@ -299,7 +302,10 @@ Pages run in Jinja's sandbox and can only read: `table(name)` is a view with
 markdown, metric, table, chart, html) render common pieces; `now`, `today`,
 `days_ago(n)`, `user`, `bot` and the `money`, `number`, `percent` and
 `markdown` filters are there too, and `{% include %}` loads other files from
-the bot folder. A page without an `<html>` tag gets a layout with Chart.js.
+the bot folder. Rows give dates as ISO strings, so for date math use
+`as_datetime` (back to a datetime), `seconds_until` (seconds from now,
+negative once past) and `duration` (seconds as `2h 15m`):
+`{{ row.resets_at | seconds_until | duration }}`. A page without an `<html>` tag gets a layout with Chart.js.
 
 Pages come from two places:
 
@@ -531,7 +537,7 @@ user. The `orchestration` skill (loaded in main by default) has:
 | --- | --- |
 | `ergo_bot_list` | The bots it can message, with their `description`s (also in the context block below) |
 | `ergo_thread_list` | A bot's main chat, named chats and threads with the user (default: this bot) |
-| `ergo_thread_send` | Message a bot's `main` chat, a named chat, a thread id, or a `new` thread; returns at once |
+| `ergo_thread_send` | Message a bot's `main` chat, a named chat, a thread id, or a `new` thread; returns at once. A busy thread queues the message (in order, as its next turn) instead of refusing it; optional `interrupt` replaces this chat's own running request there |
 | `ergo_thread_forward` | Hand the user's own message (the one this turn answers) to a chat or thread, word for word with its author, time and files, plus an optional `note`. The recipient treats it as the user speaking and answers there; nothing comes back. Refused when the turn isn't answering the user |
 | `ergo_thread_stop` | Stop the running turn of a thread this bot started (or one of its own) and cancel what it queued there |
 | `ergo_thread_resolve` | Resolve a finished thread (this one, one of this bot's, or another bot's it started), with a one-line `summary`; refused while workers run, a request is open, an approval is pending, or its last reply asks the user something. History stays readable; a new message reopens it. `ergo_thread_archive` is a deprecated alias |
@@ -550,6 +556,38 @@ Delivery goes through `DJANGO_ERGO["THREAD_MESSAGE_RUNNER"]` (Ergonaut
 queues a Celery task) or a background thread. Set `orchestration: false` for
 a bot that never delegates; it has no `orchestration` skill (it still
 answers messages sent to it, and can message upward, below).
+
+### Message identity
+
+Forwarded and cross-chat messages store the words separately from their
+identity. `SessionMessage.role` remains the provider role (`user` for incoming
+messages, including bot messages); it is not the person's identity.
+`author` is an extensible JSON snapshot with `kind` (`django_user`, `bot`,
+`telegram_user` or `system`), a string `ref` scoped by that kind, and
+`display_name`. `provenance` records the message kind (`forwarded`, `message`,
+`report` or `reply`), an `origin` snapshot (session id/label and timestamp,
+plus original message id, sequence and structured-call id when available),
+and, for a forward, `forwarded_by` (the sending bot's identity and chat).
+Optional notes and shared files stay separate from the author's words.
+Re-forwarding preserves the original author, origin and files; only the
+latest forwarding chat and its note change.
+
+Claude, OpenAI and history context generate attribution and routing
+instructions from those fields at read time. The HTTP and SSE APIs instead
+return the unprefixed body alongside `author` and `provenance`; the web app
+shows the original author, forwarding bot, linked origin chat, original
+time, note and files. `Bot.ask(..., author={...})` lets a trusted channel
+identify its actual sender. Identity is attribution, not authorization:
+session ownership and tool permissions are unchanged.
+
+Migration `0034_sessionmessage_identity` adds two JSON fields with empty
+defaults; it does not rewrite history or guess identities from old textual
+preambles. Existing rows keep their prior rendering, while queued legacy
+forwards use their existing structured `ThreadMessage` metadata when
+delivered. This is groundwork, not shared-chat membership: participant
+rosters, access control, invitations, identity linking and avatars are
+not implemented.
+
 
 Every turn of a chat with the `orchestration` skill loaded also gets a
 **Bots and threads** context block (`django_ergo.bots.overview`), so it can
@@ -598,21 +636,49 @@ Who may message whom:
 - **Resolving.** The orchestration skill's instructions tell every
   orchestrator when to resolve: when the work is finished (PR merged or
   closed, answer delivered, the user wrapped it up), never while it waits on
-  the user, a worker, a reply or an approval, or has an open PR. The Bots and
-  threads block marks quiet threads with nothing open as "ready to resolve",
-  and a thread resolves itself after its final report. A resolved thread keeps
-  `resolved_by` and `resolved_summary` in its metadata until it reopens.
+  the user, a worker, a reply or an approval, or has an open PR. A bot may
+  resolve (or stop) its own threads and threads a chat of its own started on
+  another bot (`orchestrator.can_resolve`); a parent can't close a sub-bot's
+  self-started thread, since that could end work the sub-bot still tracks.
+  The Bots and threads block marks quiet threads with nothing open as "ready
+  to resolve" only where the viewing bot may resolve them; on other bots'
+  threads it says "looks finished (devbox resolves it)". A refused call names
+  who can resolve the thread. A thread resolves itself after its final report.
+  A resolved thread keeps `resolved_by` and `resolved_summary` in its metadata
+  until it reopens.
 - **Reports upward get no reply.** A thread's message to its own main chat,
   or a main chat's to its parent's, is a one-way report: the recipient's turn
   starts with `[Report from …]` and its reply isn't sent back, so a status
   update doesn't cost the sender another turn for an acknowledgement. Pass
   `ask: true` (to `ergo_thread_send` or `ergo_message_up`) when an answer is
   needed.
-- **No nudges.** A chat can't send a second request to a chat while its
-  earlier one there is still open, and in the turn that handles a chat's
-  reply it can't send that chat a short follow-up ("please continue"):
-  under 400 characters is refused unless the reply asked a question. A
-  complete new request still goes through.
+- **Follow-ups are fine; status pings aren't.** A chat may send a thread
+  several messages while its earlier request there is still open: they queue
+  in order (see below), each is its own turn there, and each reply comes back
+  separately, so `waiting_on` counts every open request. Nothing is refused
+  because an earlier request is open. The one short-message rule left: in the
+  turn that handles a chat's reply, a bot can't send that chat a short
+  follow-up ("please continue", thanks): under 400 characters is refused
+  unless the reply asked a question. A complete new request still goes
+  through. The tool description, the reply header and the orchestration
+  instructions tell bots to send follow-ups with something new in them, never
+  a status ping.
+- **A busy thread queues, never refuses.** A message to a thread that is
+  mid-turn, waiting for approval or has earlier messages waiting is stored
+  and goes out as its next turn, after the current one and in the order it
+  was sent (one turn per message, so each keeps its own reply routing). The
+  tool returns `status: "queued"` and the `queue_position` (1 = next); an
+  idle thread returns `status: "sent"`. A queued message stays `queued` (so
+  `ergo_thread_stop` cancels it) until its turn starts, and queues are sent
+  on whenever the thread's turn ends, whether it completed, failed or was
+  stopped. `ergo_thread_send` never interrupts the thread's turn unless
+  `interrupt: true`, and that only replaces a request *this chat* sent that
+  the thread is working on right now: a turn that answers the user (their
+  message, a forward of it, a schedule or a worker) or another chat is never
+  stopped by a bot, and the message queues behind it (the result says
+  `interrupted: false` and why). It also needs `TURN_STOPPER`. Messages the
+  user types in Ergonaut keep their own path: they steer a running turn, or
+  `interrupt` it, whoever started it.
 - **Managing what it started.** `ergo_thread_stop` and `ergo_thread_resolve`
   (with `bot`) work on threads of other bots that a chat of this bot
   started. Stopping a running turn goes through
@@ -641,8 +707,9 @@ A toolkit's `pre_seeds()` names tool calls that run before a session's first
 model call; their results are written into the history as if the model had
 made the calls (each turn for window chats, whose model calls carry only
 the current turn). `FunctionToolkit(tools, ctx, seed=["tool_name"])` seeds
-zero-argument tools. Skills seed `list_skills`; the bots a chat can reach
-are in the "Bots and threads" context block instead.
+zero-argument tools. Skills are listed in the per-turn `Skills` context
+section; the bots a chat can reach are in the "Bots and threads" context
+block instead.
 
 ```
 boundcorp/
@@ -782,7 +849,7 @@ and `icon` (an emoji) for the pin. Loading the skill loads
   mode: propose_pr      # or merge_main
   main_branch: main
   approve_publish: true
-  root_only: true
+  root_only: false     # true: top-level chats only, not threads
 ```
 
 Lets the bot maintain the git repository its folder lives in, so it can
@@ -897,7 +964,8 @@ An image comes back in the tool result, so the bot looks at it itself. A PDF
 or other file goes to the bot's own model as an attachment in a separate call
 (kind `attachment_look`) that answers the question. Files sent with a
 message (Ergonaut's 📎 button or a pasted image) reach the model natively.
-Only the latest two images stay in what's sent to the model; older ones
+Only the latest two images stay in what's sent to the model (plus those the
+bot's newest round of tool calls just returned); older ones
 become `[image omitted: name (id=...)]`, and the bot can look again by id.
 `ergo_attachments_archive` clears old files out of the bot's working set
 (by id, or `all_files` with optional `older_than_days` / `keep_latest`);
@@ -929,3 +997,7 @@ arrive as one turn. Photos, voice notes, audio
 and documents become attachments. A turn that stops for approval replies
 with Approve and Deny buttons that resume it. `plugin.notify(user, text)`
 sends a message from other code.
+
+The incoming message's `author` records the actual Telegram sender id and
+name when Telegram provides them, independently of the Django account used
+to route the chat. Forwarding preserves this `telegram_user` identity.

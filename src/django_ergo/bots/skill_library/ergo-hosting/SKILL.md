@@ -21,8 +21,8 @@ The simplest setup is Ergonaut as a system service on one Linux VPS that
 doubles as a dev box. Give it a home directory for checkouts and the agent
 CLIs: `git`, `gh`, `claude` (Claude Code), `codex`, and `orca` for coding
 workers. Bots that shell out or start coding agents then work as they
-would on your own machine. Docker images (`ergonaut/Dockerfile`, with the
-`release` and `aio` targets) and Kubernetes are supported too. See
+would on your own machine. A Docker image (`ergonaut/Dockerfile`, the
+`release` target) and Kubernetes are supported too. See
 "Containers" and "Production" in `docs/ergonaut.md`.
 
 Choosing a VPS:

@@ -164,6 +164,15 @@ class Receipt(BotTable):
 - Schema changes need migrations; publishing runs `ergo_bot_makemigrations`
   for you, so the PR carries them. Don't hand-write migration files unless
   it's a data migration.
+- Before adding a table, think about its lifecycle: how many rows it will
+  hold, how fast it grows, and what it costs to store and query.
+- Don't mirror a large remote source (analytics, event streams, other
+  high-volume data) into a local table, and avoid deep joins or advanced
+  queries over big tables; they degrade performance. Do it only if Lee
+  knowingly opts into running a multi-GB database.
+- Prefer a small, purpose-specific denormalized summary or projection of a
+  large source. Mirroring it directly is fine when its size and growth are
+  manageable.
 - Code uses `ctx.table("Receipt").objects...`; the bot itself gets the
   `tables` skill (`ergo_table_query`, `ergo_table_add`, ...).
 - To keep a table fresh without spending model calls, pull data in a

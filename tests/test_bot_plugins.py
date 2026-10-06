@@ -168,14 +168,14 @@ def bot_repo(tmp_path, monkeypatch):
     return remote, work
 
 
-def management_bot(work, mode, *responses):
+def management_bot(work, mode, *responses, root_only=False):
     yaml_text = f"""
         name: manager
         chats: {{main: {{skills: [config_repo]}}}}
-        plugins: [{{name: bot_management, mode: {mode}}}]
+        plugins: [{{name: bot_management, mode: {mode}, root_only: {str(root_only).lower()}}}]
     """
     folder = work / "bots"
-    folder.mkdir()
+    folder.mkdir(exist_ok=True)
     bot, engine = make_bot(folder, *responses, yaml_text=yaml_text, name="manager")
     return bot, engine, bot.plugin("bot_management")
 
@@ -309,18 +309,24 @@ def test_bot_moves_a_file_by_writing_then_deleting(bot_repo):
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_bot_management_tools_are_root_only(bot_repo):
+async def test_bot_management_tools_reach_threads_unless_root_only(bot_repo):
     _, work = bot_repo
-    bot, engine, _ = management_bot(work, "merge_main", say("a"), say("b"))
-    user = await User.objects.acreate(username="root-only")
+    load = claude_tool("ergo_skill_load", {"name": "config_repo"})
+    bot, engine, plugin = management_bot(
+        work, "merge_main", load, say("a"), load, say("b")
+    )
+    user = await User.objects.acreate(username="threads")
     root = await bot.root_session(user)
-    thread = await bot.create_session(user, parent=root)
-    await bot.ask(root, "hi")
-    await bot.ask(thread, "hi")
-    root_tools = {t["name"] for t in engine._client.calls[0]["tools"]}
-    thread_tools = {t["name"] for t in engine._client.calls[1]["tools"]}
-    assert "ergo_config_repo_publish" in root_tools
-    assert "ergo_config_repo_publish" not in thread_tools
+
+    async def thread_tools():
+        await bot.ask(await bot.create_session(user, parent=root), "hi")
+        return {t["name"] for t in engine._client.calls[-1]["tools"]}
+
+    # By default a task thread can change its own folder.
+    assert "ergo_config_repo_publish" in await thread_tools()
+    # root_only: true keeps the tools to top-level chats.
+    plugin.root_only = True
+    assert "ergo_config_repo_publish" not in await thread_tools()
 
 
 # ---------------------------------------------------------------------------
@@ -568,7 +574,12 @@ async def test_telegram_group_chat_speaks_as_each_sender(tmp_path):
     group = -500
 
     await plugin.handle_update(
-        update(1, chat_id=group, text="hi", **{"from": {"id": 111}})
+        update(
+            1,
+            chat_id=group,
+            text="hi",
+            **{"from": {"id": 111, "first_name": "Telegram Cook"}},
+        )
     )
     await plugin.handle_update(
         update(2, chat_id=group, text="yo", **{"from": {"id": 222}})
@@ -582,6 +593,14 @@ async def test_telegram_group_chat_speaks_as_each_sender(tmp_path):
     owners = [s.user_id async for s in bot.sessions().order_by("created_at")]
     assert owners[0] == cook.id
     assert len(owners) == 2
+    root = await bot.root_session(cook)
+    incoming = await root.messages.filter(role="user").afirst()
+    assert incoming.author == {
+        "kind": "telegram_user",
+        "ref": "111",
+        "display_name": "Telegram Cook",
+    }
+    assert await incoming.content_blocks.filter(text="hi").aexists()
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1361,6 +1380,79 @@ async def test_bot_looks_at_an_uploaded_image(tmp_path, settings):
     )
     assert block.tool_result_content[1]["attachment_id"] == str(photo.id)
     assert "data" not in block.tool_result_content[1]
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_bot_sees_every_image_it_looks_at_in_one_round(tmp_path, settings):
+    """Four looks at once (two sent with a message, two a tool saved as bot files)
+    all come back as images, not as ``[image omitted]``."""
+    import io
+    from types import SimpleNamespace
+
+    from asgiref.sync import sync_to_async
+    from PIL import Image
+
+    from django_ergo.conversation.attachments import Attachment
+    from django_ergo.conversation.attachments import save_session_file
+    from tests.test_conversation_structured import _usage
+
+    def png(size, mode):
+        out = io.BytesIO()
+        Image.new(mode, size, (10, 20, 30, 255)[: len(mode)]).save(out, "PNG")
+        return out.getvalue()
+
+    settings.MEDIA_ROOT = str(tmp_path / "media")
+    bot, engine, _ = files_bot(tmp_path, config="max_bytes: 100")
+    user = await User.objects.acreate(username="batch-looker")
+    root = await bot.root_session(user)
+    engine._client.responses = [say("Got them.")]
+    await bot.ask(
+        root,
+        "Here are two screenshots",
+        attachments=[
+            Attachment(
+                media_type="image/png", data=png((64, 48), "RGB"), filename="a.png"
+            ),
+            Attachment(
+                media_type="image/png", data=png((64, 48), "RGB"), filename="b.png"
+            ),
+        ],
+    )
+    sent_with_message = [r async for r in root.attachments.order_by("position")]
+    renders = [
+        await sync_to_async(save_session_file)(
+            root, name, png(size, "RGBA"), source="bot", metadata={"penpot": {}}
+        )
+        for name, size in (("Home.png", (1500, 2000)), ("Menu.png", (400, 300)))
+    ]
+    rows = [*renders, *sent_with_message]
+    engine._client.responses = [
+        SimpleNamespace(
+            content=[
+                SimpleNamespace(
+                    type="tool_use",
+                    id=f"toolu_{i}",
+                    name="ergo_attachments_look",
+                    input={"attachment_id": str(row.id)},
+                )
+                for i, row in enumerate(rows)
+            ],
+            stop_reason="tool_use",
+            usage=_usage(),
+        ),
+        say("All four look right."),
+    ]
+
+    result = await bot.ask(root, "Compare all four")
+
+    assert result.text == "All four look right."
+    results = engine._client.calls[-1]["messages"][-1]["content"]
+    assert [b["tool_use_id"] for b in results] == [f"toolu_{i}" for i in range(4)]
+    for block, row in zip(results, rows, strict=True):
+        text, image = block["content"]
+        assert row.filename in text["text"]
+        assert image["type"] == "image", image
+        assert image["source"]["media_type"] == "image/png"
 
 
 @pytest.mark.django_db(transaction=True)

@@ -6,6 +6,7 @@ sessions). A turn runs inside the request and returns the bot's ChatReply.
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import datetime
 from typing import Any, Literal
@@ -34,6 +35,8 @@ from ergonaut.apps.bots.tasks import (
     request_stop,
     unsend,
 )
+
+logger = logging.getLogger(__name__)
 
 router = Router(tags=["bots"], auth=user_auth)
 
@@ -141,6 +144,8 @@ class MessageOut(Schema):
     role: str
     blocks: list[dict]
     timestamp: datetime | None
+    author: dict
+    provenance: dict
 
 
 class CallOut(Schema):
@@ -1025,8 +1030,15 @@ def session_detail(request, session_id: str, before: int | None = None, limit: i
         raise HttpError(404, "No such session")
     first_line = page_start(session, before, max(1, min(limit, 500)))
     messages = [
-        {"line": m.line, "role": m.role, "blocks": m.blocks, "timestamp": m.timestamp}
-        for m in SessionSource(session, first_line=first_line, before_line=before).messages()
+        {
+            "line": m.line,
+            "role": m.role,
+            "blocks": m.blocks,
+            "timestamp": m.timestamp,
+            "author": m.author,
+            "provenance": m.provenance,
+        }
+        for m in SessionSource(session, first_line=first_line, before_line=before, include_attribution=False).messages()
     ]
     calls = [call_out(c) for c in calls_in(session, first_line, before)]
     if session.user_id == request.auth.pk:
@@ -1565,6 +1577,10 @@ def download_attachment(request, attachment_id: str, inline: bool = False):
     row = visible_attachment(request.auth, attachment_id)
     if not row.file:
         raise HttpError(404, "This file has no stored copy")
+    if not row.file.storage.exists(row.file.name):
+        # The row outlived its file: MEDIA_ROOT isn't on persistent storage, say.
+        logger.warning("Attachment %s: stored file %s is missing", row.id, row.file.name)
+        raise HttpError(404, "This file's stored copy is missing")
     if inline and row.filename.endswith(".jhtml"):
         # A live page: rendered now, over the bot's tables.
         from django_ergo.conversation.attachments import read_text

@@ -104,6 +104,12 @@ else:
     _pg = pgserver.get_server(
         str(DATA_DIR / "pgdata"), cleanup_mode="delete" if ISOLATED_TESTS else None
     )
+    if ISOLATED_TESTS:
+        # A throwaway server: skip durable writes, which dominate on CI disks.
+        _pg.psql(
+            "ALTER SYSTEM SET fsync = off; ALTER SYSTEM SET synchronous_commit = off;"
+            " ALTER SYSTEM SET full_page_writes = off; SELECT pg_reload_conf();"
+        )
     _parsed = urlparse(_pg.get_uri())
     _qs = parse_qs(_parsed.query)
     DATABASES = {

@@ -49,7 +49,8 @@ and reads other chats only when they belong to the same person.
 ### Images and the context window
 
 Images are expensive, so each model call carries only the latest two
-(`IMAGES_IN_CONTEXT`), whether they came from people or tools; older ones
+(`IMAGES_IN_CONTEXT`), whether they came from people or tools, plus the images
+the newest round of tool calls just returned (up to 8); older ones
 become `[image omitted: name (id=...)]` and the bot can look again by id.
 Install the `images` extra (Pillow) so images are downscaled to 1024px
 first. Details are in [How many images a call carries](#how-many-images-a-call-carries).
@@ -152,7 +153,9 @@ structured calls keep a note instead of the bytes in their transcript.
 
 Images sent with user messages and images from tool results share one
 window: each model call carries the latest `DJANGO_ERGO["IMAGES_IN_CONTEXT"]`
-images (default 2). Older ones are replaced by `[image omitted: name
+images (default 2), plus the images in the newest round of tool results (up to
+8, `ROUND_IMAGES_MAX`), so a bot that looks at four files at once sees all four.
+Older ones are replaced by `[image omitted: name
 (id=...)]`. With Pillow installed (`django-ergo[images]`), images are downscaled to
 `DJANGO_ERGO["IMAGE_MAX_SIDE"]` pixels (default 1024) on the long side
 before sending; without it they are sent as they are when they're JPEG, PNG,
@@ -182,3 +185,9 @@ where the image window above already limits what's sent. The bot archives
 only files in its own session. Archiving is reversible, so neither tool asks
 for approval. Ergonaut's Files panel hides archived files behind a "Show N
 archived" toggle.
+
+A tool that replaces its own earlier files (say, a fresh render of the same
+board) should archive the old ones rather than delete them. Tool results in
+history point at an image by file id (`image_ref`), so a deleted file leaves a
+broken image in the transcript and an `[image unavailable: ...]` placeholder
+for the model.

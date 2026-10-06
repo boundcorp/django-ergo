@@ -19,9 +19,17 @@ Who may message whom:
   this bot or one it can message. It returns at once; the recipient's reply
   arrives later as a new message in this session (see
   ``django_ergo.bots.messaging``). Starting a thread needs the target bot's
-  ``threads.allow_create: true``; a thread of another bot records who started it. A chat can't send another request to a chat
-  while its earlier one there is still open (no nudges or acknowledgements: each
-  message starts a turn there).
+  ``threads.allow_create: true``; a thread of another bot records who started it.
+  A busy recipient never makes a send fail: the message is queued
+  (``status: "queued"``, with its ``queue_position``) and goes out in order as the
+  recipient's next turn, one turn per message, without interrupting the current
+  one. A chat's earlier request to the thread still being open never refuses a
+  send: follow-ups queue behind it in order, each its own turn whose reply goes
+  back to this chat. A pure status ping ("any news?") is still discouraged (the
+  tool description, the reply header), not blocked.
+  ``interrupt=true`` replaces a request of this chat that the recipient is working
+  on right now (it stops that turn, and the message goes out next in the queue);
+  it never stops a turn answering the user or another chat, and then just queues.
   Files from this chat can go with it (``attachments``): the recipient sees them
   listed, with ids, and opens them with the attachments tools.
 - ``ergo_thread_forward``: hand the user's own message (the one this turn is
@@ -58,6 +66,9 @@ from django_ergo.bots.tools import BotTool
 from django_ergo.bots.tools import FunctionToolkit
 from django_ergo.bots.tools import bot_tool
 from django_ergo.conversation.attachments import find_session_file
+from django_ergo.conversation.identity import bot_identity
+from django_ergo.conversation.identity import django_user_identity
+from django_ergo.conversation.identity import session_origin
 from django_ergo.conversation.models import ConversationAttachment
 from django_ergo.conversation.models import ConversationSession
 from django_ergo.conversation.models import StructuredCallStatus
@@ -128,7 +139,12 @@ already owns (or should own), hand it over with ergo_thread_forward instead of
 retelling it with ergo_thread_send. Forwarding copies the user's own words, so
 their intent and any approval reach the thread unchanged; add a note only for
 context the thread lacks. Then reply here in one line saying where it went.
-Use ergo_thread_send for your own requests and questions.
+Use ergo_thread_send for your own requests and questions. You may send a thread
+several messages in a row, even while an earlier one is unanswered: a busy thread
+queues them and handles them one after another, in order, each with its own
+reply. Send a follow-up when you have something new for it (more context, a
+correction, the next step); don't send status pings ("any news?", "please
+continue", thanks), since each message costs the thread a full turn.
 
 Resolving threads: keep the thread list to work that is still going on.
 - Resolve a thread (ergo_thread_resolve, with a one-line summary) when its work is
@@ -139,7 +155,8 @@ Resolving threads: keep the thread list to work that is still going on.
   on a worker, on a reply, or for an approval, or that has an open PR. The tool
   refuses the first ones; open PRs are up to you.
 - Each turn, check the Bots and threads block: threads marked "ready to resolve"
-  look finished. Resolve the ones you started that are, and leave the rest.
+  look finished, and you may resolve them. A finished thread of another bot that
+  is not marked that way is its owner's to close: leave it.
 - Resolving keeps the history readable, and a new message reopens the thread."""
 
 
@@ -240,13 +257,41 @@ def _upward_only(ctx: ToolContext, target: Bot) -> bool:
     )
 
 
-def _started_here(ctx: ToolContext, session: ConversationSession) -> bool:
-    """A chat of this bot (with this user) started ``session``."""
+def can_resolve(bot: Bot, user_id, session: ConversationSession) -> bool:
+    """Whether ``bot`` may stop or resolve ``session`` (of a chat with ``user_id``):
+    the thread belongs to ``bot``, or a chat of ``bot`` with this user started it.
+    One bot closing another's thread could end work its owner still tracks, so a
+    thread a bot didn't start stays with the bot it belongs to (or its starter).
+    The tools check this and the "Bots and threads" block marks only the threads
+    that pass."""
+    if session.bot_name == bot.name:
+        return True
     started_by = (session.metadata or {}).get("started_by")
-    if not started_by:
-        return session.bot_name == ctx.bot.name
+    return bool(
+        started_by and bot.sessions().filter(user_id=user_id, id=started_by).exists()
+    )
+
+
+def _refusal(session: ConversationSession, action: str) -> str:
+    """Why this bot can't ``action`` the thread, and who can."""
+    meta = session.metadata or {}
+    owner = session.bot_name
+    starter = meta.get("started_by_bot")
+    if starter and starter != owner:
+        who = f"{owner} (its bot) or {starter} (which started it)"
+        why = f"belongs to {owner} and was started by {meta.get('started_by_label') or starter}"
+    else:
+        who = owner
+        why = f"was started by {owner}"
+    tail = (
+        "It resolves itself when its work is done"
+        if action == "resolve"
+        else "If it has gone wrong"
+    )
     return (
-        ctx.bot.sessions().filter(user_id=ctx.session.user_id, id=started_by).exists()
+        f"{messaging.label(session)} {why}, not by this bot, so only {who} can "
+        f"{action} it. {tail}; if it needs attention, message {owner} with "
+        "ergo_thread_send."
     )
 
 
@@ -350,6 +395,16 @@ def ergo_thread_list(
                 "can open them; they stay in this chat."
             ),
         },
+        "interrupt": {
+            "type": "boolean",
+            "description": (
+                "Only to replace a request of yours that the thread is working on right "
+                "now: stops that turn, and this message goes out next in the thread's "
+                "queue. It never stops a turn that answers the user (their message, or "
+                "one you forwarded) or another chat; then the message just queues, and "
+                "the result says so. Default false: it waits for the current turn."
+            ),
+        },
     },
     required=["message"],
 )
@@ -361,13 +416,27 @@ def ergo_thread_send(  # noqa: PLR0913
     title: str = "",
     attachments: list[str] | None = None,
     ask: bool = False,
+    interrupt: bool = False,
 ) -> dict:
     """Send a message to a bot's main chat, a named chat, a thread, or a new thread.
 
     Returns at once. The reply arrives later as a new message in this chat, except
-    for a report upward (see ``ask``).
+    for a report upward (see ``ask``). A busy thread doesn't refuse it: it is
+    queued (``status: "queued"``, with its ``queue_position``) and goes out in
+    order as the thread's next turn. Follow-ups to a thread that hasn't answered
+    yet are fine: they queue behind the earlier ones, and each reply comes back
+    separately. Don't send pure status pings ("any news?", "continue", thanks).
     """
-    return _send(ctx, _target(ctx, bot), message, thread, title, attachments, ask=ask)
+    return _send(
+        ctx,
+        _target(ctx, bot),
+        message,
+        thread,
+        title,
+        attachments,
+        ask=ask,
+        interrupt=interrupt,
+    )
 
 
 def user_message(session: ConversationSession) -> dict | None:
@@ -379,22 +448,47 @@ def user_message(session: ConversationSession) -> dict | None:
         .order_by("-created_at")
         .first()
     )
-    if call is None or (call.metadata or {}).get("thread_message"):
+    if call is None:
         return None
-    files = ConversationAttachment.objects.filter(
-        session=session, message_sequence__gte=call.first_sequence or 0
+    row = (
+        session.messages.filter(sequence=call.first_sequence, role="user")
+        .prefetch_related("content_blocks")
+        .first()
     )
-    if call.last_sequence is not None:
-        files = files.filter(message_sequence__lte=call.last_sequence)
-    user = session.user
-    return {
-        "text": call.request,
-        "author": (user.get_full_name() or user.get_username()) if user else "",
-        "user_id": session.user_id,
-        "sent_at": call.created_at.isoformat(timespec="seconds"),
-        "source_call": str(call.id),
-        "attachments": [messaging.shared_file(f) for f in files],
-    }
+    author = (
+        row.author
+        if row and row.author
+        else (call.metadata or {}).get("message_author")
+    )
+    if not author:
+        if (call.metadata or {}).get("thread_message"):
+            return None
+        author = django_user_identity(session.user)
+    if author.get("kind") not in ("django_user", "telegram_user"):
+        return None
+    sequence = row.sequence if row else call.first_sequence
+    files = ConversationAttachment.objects.filter(
+        session=session, message_sequence=sequence
+    )
+    blocks = list(row.content_blocks.all()) if row else []
+    if row and not any(b.block_type == "text" for b in blocks):
+        return None
+    text = (
+        "\n".join(b.text or "" for b in blocks if b.block_type == "text")
+        if row
+        else call.request
+    )
+    origin = session_origin(
+        session, row.created_at if row else call.created_at, source_call=str(call.id)
+    )
+    if row:
+        origin.update(message_id=str(row.id), sequence=row.sequence)
+        if row.provenance.get("kind") == "forwarded":
+            origin = row.provenance.get("origin") or origin
+    shared = [messaging.shared_file(f) for f in files]
+    if row and row.provenance.get("attachments"):
+        shared = [*row.provenance["attachments"], *shared]
+    return {"text": text, "author": author, "origin": origin, "attachments": shared}
 
 
 @bot_tool(
@@ -451,7 +545,19 @@ def ergo_thread_forward(
     )
     files = original.pop("attachments")
     metadata = {
-        "forwarded": {**original, "from_label": messaging.label(ctx.session)},
+        "forwarded": True,
+        "message_author": original["author"],
+        "message_provenance": {
+            "kind": "forwarded",
+            "forwarded_by": {
+                **bot_identity(ctx.session),
+                "session_id": str(ctx.session.id),
+                "label": messaging.label(ctx.session),
+            },
+            "origin": original["origin"],
+            **({"note": note.strip()} if note.strip() else {}),
+            **({"attachments": files} if files else {}),
+        },
         # The recipient answers the user where it is: no reply comes back here.
         "report": True,
         **({"note": note.strip()} if note.strip() else {}),
@@ -469,6 +575,7 @@ def ergo_thread_forward(
         "forwarded_to": where,
         "thread_id": str(recipient.id),
         "message_id": str(sent.id),
+        **_delivery(recipient, sent),
         "note": (
             f"Forwarded verbatim; {where} answers the user there and nothing comes "
             f"back here. Tell the user in one line: sent to {where}."
@@ -523,6 +630,7 @@ def _send(  # noqa: PLR0913
     attachments: list[str] | None = None,
     *,
     ask: bool = False,
+    interrupt: bool = False,
 ) -> dict:
     thread = (thread or "main").strip()
     if _upward_only(ctx, target) and (
@@ -541,23 +649,9 @@ def _send(  # noqa: PLR0913
         ctx, target, thread, title or messaging.snippet(message)[:60]
     )
     _refuse_nudge_after_reply(ctx, recipient, message)
-    if open_request := (
-        ctx.session.sent_thread_messages.filter(
-            recipient_session=recipient,
-            in_reply_to__isnull=True,
-            status__in=OPEN_STATUSES,
-        )
-        .order_by("-created_at")
-        .first()
-    ):
-        # Nudges and "thanks, keep going" messages each start a full turn there.
-        msg = (
-            f"Your request to {messaging.label(recipient)} from "
-            f"{open_request.created_at:%H:%M} UTC (“{messaging.snippet(open_request.text)}”) "
-            "is still open; its reply will arrive here. Don't nudge or add to it: wait "
-            "for the reply, then send new work if there is any."
-        )
-        raise ValueError(msg)
+    interrupting, not_interrupted = (
+        _interruptible(ctx, recipient) if interrupt else (None, "")
+    )
     # Upward (a thread to its main chat, a main chat to its parent's) is a report
     # unless it asks: no reply goes back, so a status update doesn't cost a turn
     # here for the recipient's acknowledgement.
@@ -568,6 +662,11 @@ def _send(  # noqa: PLR0913
     metadata = {"attachments": shared} if shared else {}
     if report:
         metadata["report"] = True
+    interrupted = False
+    if interrupting:
+        # Before storing the message: a stop that landed after it could hit the turn
+        # that answers it, and the message is queued whenever that turn ends.
+        interrupted = bool(api_settings.TURN_STOPPER(str(recipient.id)))
     sent = messaging.send(
         ctx.session,
         recipient,
@@ -575,17 +674,85 @@ def _send(  # noqa: PLR0913
         registry=ctx.bot.registry,
         metadata=metadata or None,
     )
+    delivery = _delivery(recipient, sent)
+    note = (
+        "Sent as a report: no reply comes back (ask=true when you need one)."
+        if report
+        else "The reply will arrive as a new message in this chat."
+    )
+    if interrupt:
+        note += " " + _interrupt_outcome(interrupting, interrupted, not_interrupted)
+    if delivery["status"] == "queued":
+        note += (
+            f" Queued (position {delivery['queue_position']}): it goes out in order, "
+            "as a turn of its own, after what the thread is doing and has waiting."
+        )
     return {
         "sent_to": messaging.label(recipient),
         "thread_id": str(recipient.id),
         "message_id": str(sent.id),
-        "note": (
-            "Sent as a report: no reply comes back (ask=true when you need one)."
-            if report
-            else "The reply will arrive as a new message in this chat."
-        ),
+        **delivery,
+        **({"interrupted": interrupted} if interrupt else {}),
+        "note": note,
         **({"shared_files": [f["filename"] for f in shared]} if shared else {}),
     }
+
+
+def _interrupt_outcome(
+    interrupting: ThreadMessage | None, interrupted: bool, not_interrupted: str
+) -> str:
+    if interrupted:
+        return "Its running turn was stopped; this goes out in its place."
+    if interrupting:
+        return "Its running turn had already ended; nothing was stopped."
+    return f"Not interrupted: {not_interrupted}."
+
+
+def _delivery(recipient: ConversationSession, sent: ThreadMessage) -> dict:
+    """Whether a message just sent waits its turn, and where in line: a busy
+    recipient (or earlier messages for it) queues it, in order."""
+    status = (
+        ThreadMessage.objects.filter(id=sent.id)
+        .values_list("status", flat=True)
+        .first()
+    )
+    if status == ThreadMessageStatus.QUEUED:
+        ahead = ThreadMessage.objects.filter(
+            recipient_session=recipient,
+            status=ThreadMessageStatus.QUEUED,
+            created_at__lt=sent.created_at,
+        ).count()
+        if ahead or messaging.busy(recipient):
+            return {"status": "queued", "queue_position": ahead + 1}
+    return {"status": "sent"}
+
+
+def _interruptible(
+    ctx: ToolContext, recipient: ConversationSession
+) -> tuple[ThreadMessage | None, str]:
+    """The request of this chat whose running turn an ``interrupt`` may stop, or why
+    none can be.
+
+    Only a turn this chat started by messaging the thread qualifies. A turn that
+    answers the user (their message, a forward of it, a schedule or a worker) or
+    another chat is never stopped from here: the new message queues behind it.
+    """
+    if not messaging.busy(recipient):
+        return None, "nothing is running there"
+    running = messaging.current_thread_message(recipient)
+    if running is not None and "forwarded" in (running.metadata or {}):
+        return None, (
+            "its running turn answers a message of the user's that you forwarded, "
+            "and a bot never cancels the user's request"
+        )
+    if running is None or running.sender_session_id != ctx.session.id:
+        return None, (
+            "its running turn isn't answering a request of yours (only your own "
+            "request can be interrupted, never the user's)"
+        )
+    if api_settings.TURN_STOPPER is None:
+        return None, "this app can't stop a running turn"
+    return running, ""
 
 
 def _refuse_nudge_after_reply(
@@ -615,17 +782,17 @@ def _refuse_nudge_after_reply(
     raise ValueError(msg)
 
 
-def _managed_thread(ctx: ToolContext, bot: str, thread_id: str) -> ConversationSession:
-    """A thread this bot may stop or archive: one of its own, or another bot's
-    thread that a chat of this bot started."""
+def _managed_thread(
+    ctx: ToolContext, bot: str, thread_id: str, action: str
+) -> ConversationSession:
+    """A thread this bot may stop or resolve (``can_resolve``)."""
     target = _target(ctx, bot)
     thread = _session(target, ctx, thread_id)
     if (thread.metadata or {}).get("bot_role") in TOP_ROLES:
-        msg = "Main and named chats can't be stopped or archived from another chat."
+        msg = "Main and named chats can't be stopped or resolved from another chat."
         raise ValueError(msg)
-    if target is not ctx.bot and not _started_here(ctx, thread):
-        msg = f"{messaging.label(thread)} wasn't started by this bot."
-        raise ValueError(msg)
+    if not can_resolve(ctx.bot, ctx.session.user_id, thread):
+        raise ValueError(_refusal(thread, action))
     return thread
 
 
@@ -634,7 +801,7 @@ def ergo_thread_stop(ctx: ToolContext, thread_id: str, bot: str = "") -> dict:
     """Stop the running turn of a thread this bot started (default bot: this one)
     and cancel the messages this bot queued for it. Use it for work that is no
     longer wanted or has gone wrong."""
-    thread = _managed_thread(ctx, bot, thread_id)
+    thread = _managed_thread(ctx, bot, thread_id, "stop")
     own = ctx.bot.sessions().filter(user_id=ctx.session.user_id)
     cancelled = ThreadMessage.objects.filter(
         recipient_session=thread,
@@ -664,7 +831,7 @@ def resolve(
             raise ValueError(msg)
         thread, own_turn = current, True
     else:
-        thread, own_turn = _managed_thread(ctx, bot, thread_id), False
+        thread, own_turn = _managed_thread(ctx, bot, thread_id, "resolve"), False
     status = thread_status(thread)
     if not own_turn and status["state"] == "working":
         msg = f"{messaging.label(thread)} is working; stop it with ergo_thread_stop first."
@@ -704,10 +871,12 @@ def ergo_thread_resolve(
     ctx: ToolContext, thread_id: str = "", bot: str = "", summary: str = ""
 ) -> str:
     """Resolve a finished thread: this one (empty thread_id), one of this bot's, or
-    another bot's thread this bot started. Resolve when the work is finished (PR
-    merged or closed, the answer delivered, the user wrapped it up); never while it
-    waits on the user, a worker or a reply, or has an open PR. Its history stays
-    readable, and a new message reopens it."""
+    another bot's thread this bot started (the Bots and threads block marks the
+    ones you may resolve as "ready to resolve"; any other bot's thread is its
+    owner's to close). Resolve when the work is finished (PR merged or closed, the
+    answer delivered, the user wrapped it up); never while it waits on the user, a
+    worker or a reply, or has an open PR. Its history stays readable, and a new
+    message reopens it."""
     return resolve(ctx, thread_id, bot, summary)
 
 

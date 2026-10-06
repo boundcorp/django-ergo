@@ -235,6 +235,7 @@ def test_browse_a_bots_knowledge_base(client, cook, bot_folder, use_bots):
 
 @pytest.mark.django_db(transaction=True)
 def test_upload_list_download_and_delete_session_files(client, cook, use_bots, settings, tmp_path):
+    from django.core.files.base import ContentFile
     from django.core.files.uploadedfile import SimpleUploadedFile
     from django_ergo.conversation.models import ConversationSession
 
@@ -263,6 +264,16 @@ def test_upload_list_download_and_delete_session_files(client, cook, use_bots, s
     assert listed[0]["archived_at"]
     download = client.get(f"/api/attachments/{file['id']}/download")
     assert b"".join(download.streaming_content) == b"item,count\neggs,4\n"
+
+    # A row whose file is gone (wiped media) is a 404 that says so, not a 500.
+    row = ConversationSession.objects.get(id=root["id"]).attachments.get()
+    content = row.file.read()
+    row.file.close()
+    row.file.storage.delete(row.file.name)
+    missing = client.get(f"/api/attachments/{file['id']}/download?inline=true")
+    assert missing.status_code == 404
+    assert "missing" in missing.json()["detail"]
+    row.file.storage.save(row.file.name, ContentFile(content))
 
     # Someone else can't see it.
     other = get_user_model().objects.create_user("other", "o@example.com", "pw")
@@ -1142,3 +1153,32 @@ def test_a_turn_refused_at_its_limit_offers_a_retry_on_another_model(client, coo
     failed.refresh_from_db()
     assert failed.metadata["resumed"] is True
     assert client.get(f"/api/sessions/{root['id']}").json()["retry_model"] == ""
+
+
+@pytest.mark.django_db(transaction=True)
+def test_session_messages_expose_identity_without_model_attribution(client, cook):
+    from django_ergo.conversation.models import ConversationSession
+
+    session = ConversationSession.objects.create(user=cook, bot_name="kitchen", engine_type="claude")
+    author = {"kind": "telegram_user", "ref": "123", "display_name": "Actual author"}
+    provenance = {
+        "kind": "forwarded",
+        "forwarded_by": {"kind": "django_user", "ref": str(cook.pk), "display_name": "cook"},
+        "origin": {"session_id": "source-chat", "label": "Source chat", "timestamp": "2026-10-05T10:30:00Z"},
+        "note": "Separate forwarding note",
+        "attachments": [{"id": "shared-file", "filename": "report.pdf", "media_type": "application/pdf"}],
+    }
+    message = session.messages.create(role="user", sequence=0, author=author, provenance=provenance)
+    message.content_blocks.create(block_type="text", text="**Original body**", sequence=0)
+    legacy = session.messages.create(role="user", sequence=1)
+    legacy.content_blocks.create(block_type="text", text="Legacy body", sequence=0)
+
+    response = client.get(f"/api/sessions/{session.id}")
+    assert response.status_code == 200
+    forwarded, ordinary = response.json()["messages"]
+    assert forwarded["author"] == author
+    assert forwarded["provenance"] == provenance
+    assert forwarded["blocks"] == [{"type": "text", "text": "**Original body**"}]
+    assert ordinary["author"] == {}
+    assert ordinary["provenance"] == {}
+    assert ordinary["blocks"] == [{"type": "text", "text": "Legacy body"}]

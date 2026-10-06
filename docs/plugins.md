@@ -46,8 +46,9 @@ it. A plugin without tools (like `telegram`) is always active.
 | `bash` | `bash` | shell commands on the host, each approved by default |
 | `kubectl` | `kubectl` | configured-cluster Kubernetes inspection and individually approved changes with redacted previews |
 
-`bash`, `orca`, `kubectl` and `bot_management` default to `root_only: true`
-(top-level chats only, never threads) and ask for approval before changing
+`bash`, `orca` and `kubectl` default to `root_only: true` (top-level chats
+only, never threads); `bot_management` defaults to `root_only: false`, so a
+thread can change its own bot folder. All of them ask for approval before changing
 anything. `kubectl` always requires individual approval and shows a bounded,
 redacted server-side preview for supported changes. In Ergonaut only admins
 can approve their tools. Every option is in the
