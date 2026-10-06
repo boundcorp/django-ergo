@@ -1370,6 +1370,79 @@ async def test_bot_looks_at_an_uploaded_image(tmp_path, settings):
 
 
 @pytest.mark.django_db(transaction=True)
+async def test_bot_sees_every_image_it_looks_at_in_one_round(tmp_path, settings):
+    """Four looks at once (two sent with a message, two a tool saved as bot files)
+    all come back as images, not as ``[image omitted]``."""
+    import io
+    from types import SimpleNamespace
+
+    from asgiref.sync import sync_to_async
+    from PIL import Image
+
+    from django_ergo.conversation.attachments import Attachment
+    from django_ergo.conversation.attachments import save_session_file
+    from tests.test_conversation_structured import _usage
+
+    def png(size, mode):
+        out = io.BytesIO()
+        Image.new(mode, size, (10, 20, 30, 255)[: len(mode)]).save(out, "PNG")
+        return out.getvalue()
+
+    settings.MEDIA_ROOT = str(tmp_path / "media")
+    bot, engine, _ = files_bot(tmp_path, config="max_bytes: 100")
+    user = await User.objects.acreate(username="batch-looker")
+    root = await bot.root_session(user)
+    engine._client.responses = [say("Got them.")]
+    await bot.ask(
+        root,
+        "Here are two screenshots",
+        attachments=[
+            Attachment(
+                media_type="image/png", data=png((64, 48), "RGB"), filename="a.png"
+            ),
+            Attachment(
+                media_type="image/png", data=png((64, 48), "RGB"), filename="b.png"
+            ),
+        ],
+    )
+    sent_with_message = [r async for r in root.attachments.order_by("position")]
+    renders = [
+        await sync_to_async(save_session_file)(
+            root, name, png(size, "RGBA"), source="bot", metadata={"penpot": {}}
+        )
+        for name, size in (("Home.png", (1500, 2000)), ("Menu.png", (400, 300)))
+    ]
+    rows = [*renders, *sent_with_message]
+    engine._client.responses = [
+        SimpleNamespace(
+            content=[
+                SimpleNamespace(
+                    type="tool_use",
+                    id=f"toolu_{i}",
+                    name="ergo_attachments_look",
+                    input={"attachment_id": str(row.id)},
+                )
+                for i, row in enumerate(rows)
+            ],
+            stop_reason="tool_use",
+            usage=_usage(),
+        ),
+        say("All four look right."),
+    ]
+
+    result = await bot.ask(root, "Compare all four")
+
+    assert result.text == "All four look right."
+    results = engine._client.calls[-1]["messages"][-1]["content"]
+    assert [b["tool_use_id"] for b in results] == [f"toolu_{i}" for i in range(4)]
+    for block, row in zip(results, rows, strict=True):
+        text, image = block["content"]
+        assert row.filename in text["text"]
+        assert image["type"] == "image", image
+        assert image["source"]["media_type"] == "image/png"
+
+
+@pytest.mark.django_db(transaction=True)
 async def test_bot_looks_at_a_pdf_in_a_side_call(tmp_path, settings):
     from asgiref.sync import sync_to_async
 

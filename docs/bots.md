@@ -106,7 +106,9 @@ def sales_chart(days: int = 7) -> ToolResult:
 The image bytes are saved as a file in the chat (`ToolImage.from_attachment(row)`
 points at a file the chat already has) and history keeps a reference. Only the
 latest two images go to the model on each call (`DJANGO_ERGO["IMAGES_IN_CONTEXT"]`),
-downscaled to 1024px with Pillow when it's installed; older ones show as
+plus every image in the newest round of tool results (up to 8), so looking at
+four files at once shows all four; images are downscaled to 1024px with Pillow
+when it's installed; older ones show as
 `[image omitted: name (id=...)]`. See [attachments.md](attachments.md).
 
 Large tool results get the same treatment: each model call carries the
@@ -842,7 +844,8 @@ An image comes back in the tool result, so the bot looks at it itself. A PDF
 or other file goes to the bot's own model as an attachment in a separate call
 (kind `attachment_look`) that answers the question. Files sent with a
 message (Ergonaut's 📎 button or a pasted image) reach the model natively.
-Only the latest two images stay in what's sent to the model; older ones
+Only the latest two images stay in what's sent to the model (plus those the
+bot's newest round of tool calls just returned); older ones
 become `[image omitted: name (id=...)]`, and the bot can look again by id.
 `ergo_attachments_archive` clears old files out of the bot's working set
 (by id, or `all_files` with optional `older_than_days` / `keep_latest`);
