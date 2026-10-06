@@ -47,9 +47,10 @@ jobs:
         run: |
           python -m pip install --upgrade pip uv
           uv venv -p 3.12 .venv
-          uv pip install -e "..[legacy,bots]" -e .
+          uv pip install -e "..[legacy,bots]" -e . pytest-xdist
+      # -n auto: one pytest-xdist worker per CPU, each with its own test database.
       - name: Run tests on embedded PostgreSQL
-        run: env -u DATABASE_URL .venv/bin/python -m pytest -q --durations=25
+        run: env -u DATABASE_URL .venv/bin/python -m pytest -q -n auto --durations=25
       - name: Check migrations
         run: env -u DATABASE_URL .venv/bin/python manage.py makemigrations --check --dry-run
 
