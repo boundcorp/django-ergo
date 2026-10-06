@@ -47,11 +47,13 @@ hook passes on main; don't commit with hooks skipped.
 
 ## CI
 
-- `.github/workflows/test.yml`: Ergo's tests on pgserver, a migration drift
-  check, and an installed-wheel check.
-- `.github/workflows/ergonaut.yml`: Ergonaut's tests, then builds the
-  `release` and `aio` images and starts the `aio` image with
-  `examples/hello` as a smoke test.
+- `.github/workflows/test.yml`: Ergo's tests on pgserver and a migration
+  drift check. On pushes (not pull requests) it also runs an installed-wheel
+  check.
+- `.github/workflows/ergonaut.yml`: Ergonaut's tests. On pushes (not pull
+  requests) it also builds the `release` and `aio` images and starts the
+  `aio` image with `examples/hello` as a smoke test; pushes to main then
+  publish the release image.
 
 Pushes and pull requests from branches in this repository run on
 self-hosted runners; pull requests from forks run on GitHub-hosted runners
