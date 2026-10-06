@@ -51,10 +51,9 @@ hook passes on main; don't commit with hooks skipped.
   drift check, on pull requests. On pushes it runs only an installed-wheel
   check.
 - `.github/workflows/ergonaut.yml`: Ergonaut's tests, on pull requests. On
-  pushes it builds the `release` and `aio` images and starts the `aio` image
-  with `examples/hello` as a smoke test. On main it pushes the release image
-  as `sha-<commit>` and, once the smoke test passes, moves the `main` tag to
-  it.
+  pushes (and by hand) it builds the `release` image and starts it with
+  `examples/hello` as a smoke test. On main, once the smoke test passes, it
+  pushes the image as `sha-<commit>` and moves the `main` tag to it.
 
 Both suites run in parallel with pytest-xdist (`-n auto`, one worker per
 CPU); locally, `pytest -n auto` does the same. With `ERGO_TEST_ISOLATED=1`
