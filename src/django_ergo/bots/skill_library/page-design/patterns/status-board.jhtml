@@ -1,0 +1,22 @@
+{# Copy this source into a page, then replace the columns and cards lists. #}
+{% macro status_board(cards, columns, title) -%}
+<style>
+:root { --pd-bg:#fff; --pd-fg:#18212b; --pd-muted:#5d6b78; --pd-line:#cbd5df; --pd-card:#f6f8fa; --pd-accent:#6d28d9; }
+@media (prefers-color-scheme:dark) { :root { --pd-bg:#141b23; --pd-fg:#edf3f8; --pd-muted:#b3c0cc; --pd-line:#465568; --pd-card:#1d2834; --pd-accent:#c4b5fd; } }
+.pd-board { color:var(--pd-fg); background:var(--pd-bg); } .pd-board-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:12px; }
+.pd-column { border:1px solid var(--pd-line); border-radius:8px; padding:10px; background:var(--pd-card); } .pd-column h2 { font-size:1rem; margin:0 0 8px; }
+.pd-card { background:var(--pd-bg); border-left:4px solid var(--pd-accent); border-radius:5px; margin:8px 0; padding:9px; } .pd-card p { color:var(--pd-muted); font-size:.9rem; margin:4px 0 0; }
+</style>
+<section class="pd-board" aria-labelledby="board-title"><h1 id="board-title">{{ title }}</h1><div class="pd-board-grid">
+{% for column in columns %}<section class="pd-column" aria-labelledby="column-{{ loop.index }}"><h2 id="column-{{ loop.index }}">{{ column }}</h2>
+  {% for card in cards if card["status"] == column %}<article class="pd-card"><strong>{{ card["title"] }}</strong><p>{{ card["owner"] }} · {{ card["detail"] }}</p></article>{% endfor %}
+</section>{% endfor %}
+</div></section>
+{%- endmacro %}
+{% set columns = ["To do", "Doing", "Done"] %}
+{% set sample = [
+  {"title":"Book dentist", "owner":"Sam", "detail":"Call two nearby practices", "status":"To do"},
+  {"title":"Pack kitchen", "owner":"Jo", "detail":"Label pantry boxes", "status":"Doing"},
+  {"title":"Forward mail", "owner":"Sam", "detail":"Confirmation saved", "status":"Done"}
+] %}
+{{ status_board(sample, columns, "Moving-week status board") }}

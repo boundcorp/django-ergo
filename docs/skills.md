@@ -88,19 +88,26 @@ folder with the same name replaces the library's.
 | Skill | For |
 | --- | --- |
 | `skillbuilder` | Writing the bot's own skills, tool files, workers, tables, schedules and `.jhtml` dashboards, proposed as pull requests. Requires `config_repo` and `introspection`, and brings `bot_management` in `propose_pr` mode. |
+| `page-design` | Choosing and presenting plans, boards, dependencies, flows, timelines, comparisons and maps as live pages or static attachments. Brings the `pages` and `attachments` plugins. |
 | `ergo-client` | Using another Ergonaut server's bots through its API: `ergo_client_*` tools to list bots, start and follow threads, and answer approvals. Needs the `ERGONAUT_URL` and `ERGONAUT_API_KEY` secrets. |
 | `ergo-hosting` | Setting up, upgrading and looking after an Ergonaut server. |
 | `ergo-bot-development` | Writing bot folders from a checkout and testing them. A bot changing itself uses `skillbuilder` instead. |
 | `ergo-developer` | Developing Ergo by delegating work to its bots, then improving the bot, library or Ergonaut layer that fell short. |
 
-The last four are also skills for Claude Code and Codex: their front matter
+The last five are also skills for Claude Code and Codex: their front matter
 says `install: [claude, codex]`, and `skill_library/install.py` links them
-into those agents. See [Agent skills](agent-skills.md).
+into those agents. `page-design` is installable because an external agent can
+also create reviewed `.jhtml` files or portable HTML snapshots. See [Agent
+skills](agent-skills.md).
 
 ```yaml
 skills:
-  include: [skillbuilder]
+  include: [page-design]
 ```
+
+A planner loads it with `ergo_skill_load("page-design")`, then uses
+`ergo_page_write` and `ergo_page_preview` for a live, pinnable page or
+`ergo_attachments_create` for a static HTML or Markdown snapshot.
 
 ### Default skills
 
