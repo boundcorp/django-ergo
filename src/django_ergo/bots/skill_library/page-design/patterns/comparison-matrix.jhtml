@@ -1,0 +1,24 @@
+{# Copy this source into a page, then replace criteria and options. Scores may be words or numbers. #}
+{% macro comparison_matrix(criteria, options, title) -%}
+<style>
+:root { --pd-bg:#fff; --pd-fg:#18212b; --pd-muted:#5d6b78; --pd-line:#cbd5df; --pd-head:#f5f3ff; }
+@media (prefers-color-scheme:dark) { :root { --pd-bg:#141b23; --pd-fg:#edf3f8; --pd-muted:#b3c0cc; --pd-line:#465568; --pd-head:#2d2444; } }
+.pd-matrix { color:var(--pd-fg); background:var(--pd-bg); } .pd-matrix .scroll { overflow-x:auto; } .pd-matrix table { border-collapse:collapse; min-width:620px; width:100%; }
+.pd-matrix th, .pd-matrix td { border:1px solid var(--pd-line); padding:9px; text-align:left; vertical-align:top; } .pd-matrix thead th { background:var(--pd-head); } .pd-matrix small { color:var(--pd-muted); display:block; margin-top:3px; }
+</style>
+<section class="pd-matrix" aria-labelledby="matrix-title"><h1 id="matrix-title">{{ title }}</h1><div class="scroll"><table><thead><tr><th scope="col">Criterion</th>
+{% for option in options %}<th scope="col">{{ option["name"] }}</th>{% endfor %}</tr></thead><tbody>
+{% for criterion in criteria %}<tr><th scope="row">{{ criterion["label"] }}<small>{{ criterion["why"] }}</small></th>{% for option in options %}<td>{{ option["scores"][criterion["key"]] }}</td>{% endfor %}</tr>{% endfor %}
+</tbody></table></div></section>
+{%- endmacro %}
+{% set criteria = [
+  {"key":"reach", "label":"Reach", "why":"Audience size in the target region"},
+  {"key":"effort", "label":"Effort", "why":"Time to produce and approve"},
+  {"key":"fit", "label":"Brand fit", "why":"Match to the campaign voice"}
+] %}
+{% set options = [
+  {"name":"Short video", "scores":{"reach":"High", "effort":"Medium", "fit":"High"}},
+  {"name":"Newsletter", "scores":{"reach":"Medium", "effort":"Low", "fit":"High"}},
+  {"name":"Print flyer", "scores":{"reach":"Low", "effort":"Medium", "fit":"Medium"}}
+] %}
+{{ comparison_matrix(criteria, options, "Channel comparison") }}

@@ -1,5 +1,4 @@
-"""The agent skills in Ergo's skill library: ergo-client, ergo-hosting,
-ergo-bot-development and ergo-developer, for bots and for Claude Code / Codex."""
+"""The agent skills in Ergo's skill library, including page-design presentation recipes."""
 
 import importlib.util
 import textwrap
@@ -10,7 +9,13 @@ import pytest
 from django_ergo.bots.runtime import Bot
 from django_ergo.bots.skills import library_dir
 
-AGENT_SKILLS = ["ergo-bot-development", "ergo-client", "ergo-developer", "ergo-hosting"]
+AGENT_SKILLS = [
+    "ergo-bot-development",
+    "ergo-client",
+    "ergo-developer",
+    "ergo-hosting",
+    "page-design",
+]
 
 
 def load_installer():
@@ -50,6 +55,85 @@ def test_bots_can_include_the_agent_skills(tmp_path):
         "ergo_client_send",
         "ergo_client_approve",
     }
+
+
+def test_page_design_skill_loads_pages_and_attachment_tools(tmp_path):
+    from django_ergo.bots.skillset import SkillSet
+    from django_ergo.bots.tools import ToolContext
+
+    folder = tmp_path / "planner"
+    folder.mkdir()
+    (folder / "agents.md").write_text("You plan clearly.")
+    (folder / "bot.yaml").write_text(
+        "name: planner\nskills: {include: [page-design]}\n"
+    )
+    bot = Bot.load(folder)
+    skills = {skill.name: skill for skill in bot.skill_defs}
+
+    page_design = skills["page-design"]
+    assert page_design.source == "ergo:skill_library/page-design"
+    assert page_design.requires == ["pages", "attachments"]
+    assert bot.plugin("pages") is not None and bot.plugin("attachments") is not None
+
+    class EmptyAttachments:
+        def filter(self, **_):
+            return self
+
+        def order_by(self, *_):
+            return self
+
+        def __getitem__(self, _):
+            return []
+
+        def count(self):
+            return 0
+
+    ctx = ToolContext(bot=bot, session=SimpleNamespace(attachments=EmptyAttachments()))
+    loaded = SkillSet(ctx, bot.skill_defs).load_result("page-design")
+    assert "Pattern catalog" in loaded
+    assert "ergo_page_write" in loaded
+    assert "ergo_attachments_create" in loaded
+
+
+def test_page_design_pattern_examples_render():
+    from django_ergo.bots.pages import render_page
+
+    bot = SimpleNamespace(
+        name="patterns",
+        definition=SimpleNamespace(root_dir=None, description=""),
+        tables=[],
+    )
+    patterns = library_dir() / "page-design" / "patterns"
+    expected_titles = {
+        "roadmap.jhtml": "Summer campaign roadmap",
+        "status-board.jhtml": "Moving-week status board",
+        "dependency-table.jhtml": "Weekend trip dependencies",
+        "decision-flow.jhtml": "Campaign approval flow",
+        "timeline.jhtml": "Kyoto itinerary",
+        "comparison-matrix.jhtml": "Channel comparison",
+        "project-map.jhtml": "Hernandez house move",
+    }
+
+    for filename, title in expected_titles.items():
+        html = render_page(bot, (patterns / filename).read_text())
+        assert "<html" in html and title in html
+
+    source = (patterns / "project-map.jhtml").read_text()
+    html = render_page(bot, source)
+    assert "You are here" in html
+    assert "Waiting on the landlord&#39;s meter reading" in html
+    assert "No reply by Friday 10:00" in html
+    assert "Changed since last update" in html
+    assert "--pd-accent:#8167dc" in html
+
+    macro_only = source.split("{% set sample_counts", maxsplit=1)[0]
+    minimal_html = render_page(
+        bot,
+        macro_only + '\n{{ project_map("Brief move", "", "", accent="#0088cc") }}',
+    )
+    assert "Brief move" in minimal_html
+    assert "Milestones" not in minimal_html
+    assert "--pd-accent:#0088cc" in minimal_html
 
 
 def test_client_tools_need_a_server(tmp_path):

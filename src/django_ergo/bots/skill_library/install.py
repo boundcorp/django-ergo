@@ -2,7 +2,8 @@
 """Install Ergo's agent skills for Claude Code and Codex.
 
 The skills in this folder whose front matter says ``install: [claude, codex]``
-(ergo-client, ergo-hosting, ergo-bot-development, ergo-developer) are
+(``ergo-client``, ``ergo-hosting``, ``ergo-bot-development``, ``ergo-developer``
+and ``page-design``) are
 symlinked into ``~/.claude/skills`` (``$CLAUDE_CONFIG_DIR/skills``) and
 ``~/.codex/skills`` (``$CODEX_HOME/skills``), so ``git pull`` keeps them
 current. Standard library only; run it from a django-ergo checkout::

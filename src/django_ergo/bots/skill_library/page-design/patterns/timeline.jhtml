@@ -1,0 +1,19 @@
+{# Copy this source into a page, then replace the events list. #}
+{% macro timeline(events, title) -%}
+<style>
+:root { --pd-bg:#fff; --pd-fg:#18212b; --pd-muted:#5d6b78; --pd-line:#cbd5df; --pd-accent:#0f766e; }
+@media (prefers-color-scheme:dark) { :root { --pd-bg:#141b23; --pd-fg:#edf3f8; --pd-muted:#b3c0cc; --pd-line:#465568; --pd-accent:#5eead4; } }
+.pd-timeline { color:var(--pd-fg); background:var(--pd-bg); } .pd-timeline ol { border-left:3px solid var(--pd-accent); list-style:none; margin:0 0 0 8px; padding:0 0 0 22px; }
+.pd-timeline li { margin:0; padding:0 0 20px; position:relative; } .pd-timeline li::before { background:var(--pd-bg); border:3px solid var(--pd-accent); border-radius:50%; content:""; height:10px; left:-30px; position:absolute; top:4px; width:10px; }
+.pd-timeline h2, .pd-timeline p { margin:0; } .pd-timeline time, .pd-timeline p { color:var(--pd-muted); } .pd-timeline h2 { font-size:1rem; margin-top:3px; }
+</style>
+<section class="pd-timeline" aria-labelledby="timeline-title"><h1 id="timeline-title">{{ title }}</h1><ol>
+{% for event in events %}<li><time datetime="{{ event["date"] }}">{{ event["date"] }}</time><h2>{{ event["title"] }}</h2><p>{{ event["detail"] }} · {{ event["owner"] }}</p></li>{% endfor %}
+</ol></section>
+{%- endmacro %}
+{% set sample = [
+  {"date":"2026-06-12", "title":"Arrive in Kyoto", "detail":"Check in and collect transit pass", "owner":"Inez"},
+  {"date":"2026-06-13", "title":"Market tour", "detail":"Meet at Nishiki entrance", "owner":"Group"},
+  {"date":"2026-06-15", "title":"Leave for Osaka", "detail":"Pack before breakfast", "owner":"Everyone"}
+] %}
+{{ timeline(sample, "Kyoto itinerary") }}

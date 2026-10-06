@@ -1,0 +1,17 @@
+{# Copy this source into a page, then replace the decisions list. #}
+{% macro decision_flow(decisions, title) -%}
+<style>
+:root { --pd-bg:#fff; --pd-fg:#18212b; --pd-muted:#5d6b78; --pd-line:#cbd5df; --pd-card:#f6f8fa; --pd-yes:#166534; --pd-no:#9f1239; }
+@media (prefers-color-scheme:dark) { :root { --pd-bg:#141b23; --pd-fg:#edf3f8; --pd-muted:#b3c0cc; --pd-line:#465568; --pd-card:#1d2834; --pd-yes:#86efac; --pd-no:#fda4af; } }
+.pd-flow { color:var(--pd-fg); background:var(--pd-bg); } .pd-flow ol { padding:0; list-style:none; counter-reset:step; display:grid; gap:12px; } .pd-flow li { counter-increment:step; border:1px solid var(--pd-line); border-radius:8px; background:var(--pd-card); padding:12px; }
+.pd-flow h2 { font-size:1rem; margin:0; } .pd-flow h2::before { content:counter(step) ". "; color:var(--pd-muted); } .pd-flow p { margin:7px 0 0; } .pd-flow .yes { color:var(--pd-yes); } .pd-flow .no { color:var(--pd-no); }
+</style>
+<section class="pd-flow" aria-labelledby="flow-title"><h1 id="flow-title">{{ title }}</h1><ol>
+{% for decision in decisions %}<li><h2>{{ decision["question"] }}</h2><p class="yes"><strong>Yes:</strong> {{ decision["yes"] }}</p><p class="no"><strong>No:</strong> {{ decision["no"] }}</p></li>{% endfor %}
+</ol></section>
+{%- endmacro %}
+{% set sample = [
+  {"question":"Is the product claim supported by evidence?", "yes":"Use the approved claim and record the source.", "no":"Choose a factual alternative or request review."},
+  {"question":"Does the channel allow the asset format?", "yes":"Resize and schedule the asset.", "no":"Use the channel's supported variant."}
+] %}
+{{ decision_flow(sample, "Campaign approval flow") }}
