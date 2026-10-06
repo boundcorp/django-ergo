@@ -120,7 +120,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Agent toolchain: bots shell out to git/ssh/gh, kubectl, the Claude Code and omp
-# CLIs, and the Orca CLI. Installed here so both `release` and `aio` have it.
+# CLIs, and the Orca CLI.
 ARG ORCA_VERSION=1.4.180
 ARG ORCA_LINUX_APPIMAGE_SHA256=af3b6e6a67fcc3cd034ca469ff8ee1d224b1a6e2df6215fd8452afd0fd8e92ab
 
@@ -194,27 +194,3 @@ RUN python manage.py collectstatic --noinput
 # it with the newest release. CI passes the pushed commit.
 ARG ERGONAUT_VERSION=""
 ENV ERGONAUT_VERSION=${ERGONAUT_VERSION}
-
-#
-# All-in-one Stage: `ergonaut up` runs Postgres (pgserver), Redis and Garage
-# inside the container unless DATABASE_URL, CELERY_BROKER_URL or
-# S3_ENDPOINT_URL point elsewhere.
-#   docker run -v "$PWD:/bot" -v ergonaut-data:/data -p 8000:8000 ghcr.io/boundcorp/ergonaut
-FROM release AS aio
-
-RUN apt-get update && apt-get install -y --no-install-recommends redis-server \
-    && rm -rf /var/lib/apt/lists/*
-COPY --from=dxflrs/garage:v1.1.0 /garage /usr/local/bin/garage
-
-# Postgres refuses to run as root.
-RUN useradd --create-home --uid 10001 ergonaut \
-    && mkdir -p /data /bot \
-    && chown ergonaut:ergonaut /data /bot
-USER ergonaut
-
-ENV DATA_DIR=/data \
-    ERGONAUT_BOTS=/bot \
-    PORT=8000
-VOLUME ["/data"]
-EXPOSE 8000
-CMD ["ergonaut", "up"]

@@ -407,24 +407,20 @@ Garage, worker, beat, Vite and Caddy; app at http://localhost:2228).
 The Dockerfile builds from the repo root:
 
 ```bash
-docker build -f ergonaut/Dockerfile --target release -t ergonaut .   # app only
-docker build -f ergonaut/Dockerfile --target aio -t ergonaut-aio .   # plus Redis and Garage
+docker build -f ergonaut/Dockerfile --target release -t ergonaut .
 ```
 
-Both images include an agent toolchain for bots that shell out: `git`,
-`openssh-client`, `gh`, Claude Code (`claude`), `omp` (with Bun) and the Orca
+The image is the app alone: run it next to Postgres, Redis and S3 storage
+(set `DATABASE_URL`, `CELERY_BROKER_URL` and `S3_ENDPOINT_URL`), one
+container per role, as in Production below. It includes an agent toolchain
+for bots that shell out: `git`, `openssh-client`, `gh`, Claude Code (`claude`), `omp` (with Bun) and the Orca
 CLI (`orca`). Orca is a pinned Linux AppImage (`ORCA_VERSION`,
 `ORCA_LINUX_APPIMAGE_SHA256` build args), checksum-verified, extracted to
 `/opt/orca`. Pushes to `main` publish the `release` image to
-`ghcr.io/boundcorp/ergonaut` as `sha-<commit>`, and move the `main` tag to it
-once the `aio` smoke test passes.
-
-The `aio` image runs `ergonaut up` as an unprivileged user with data in the
-`/data` volume and bots at `/bot`:
-
-```bash
-docker run -v "$PWD:/bot" -v ergonaut-data:/data -p 8000:8000 --env-file .env ergonaut-aio
-```
+`ghcr.io/boundcorp/ergonaut` as `sha-<commit>` and move the `main` tag to it,
+once a smoke test (`ergonaut up` with `examples/hello`) passes. The
+all-in-one `aio` image, which bundled Redis and Garage, is gone; run
+`ergonaut up` on a host instead.
 
 ## Production
 

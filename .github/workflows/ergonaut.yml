@@ -53,79 +53,71 @@ jobs:
       - name: Check migrations
         run: env -u DATABASE_URL .venv/bin/python manage.py makemigrations --check --dry-run
 
-  # Pushes only. Builds the release image once, smoke-tests the aio image
-  # built on top of it, and on main pushes the release image as sha-<commit>
-  # and then moves the `main` tag to it. The `main` tag only ever points at a
-  # commit whose smoke test passed; octo's auto-upgrader follows it.
-  # runs-on: pushes run on our self-hosted runners. Setting the repository
-  # variable CI_GITHUB_HOSTED=true sends the image job to GitHub-hosted.
+  # Pushes (and by hand). Builds the release image, starts it with the hello
+  # bot as a smoke test, and on main pushes it as sha-<commit> and then moves
+  # the `main` tag to it, so `main` only ever points at an image that started.
+  # Octo's auto-upgrader follows `main`.
+  # runs-on: our self-hosted runners. Setting the repository variable
+  # CI_GITHUB_HOSTED=true sends the image job to GitHub-hosted.
   image:
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ${{ (vars.CI_GITHUB_HOSTED != 'true' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","boundcorp"]') || 'ubuntu-24.04' }}
     timeout-minutes: 30
     permissions:
       contents: read
       packages: write
     env:
-      PUBLISH: ${{ github.ref == 'refs/heads/main' }}
+      PUBLISH: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
       IMAGE: ghcr.io/boundcorp/ergonaut
     steps:
       - uses: actions/checkout@v4
       # Layers are cached in the GitHub Actions cache (scope "ergonaut"), so a
       # fresh runner reuses earlier builds.
       - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
-        if: env.PUBLISH == 'true'
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build the release image (and push it as sha-<commit> on main)
+      - name: Build the release image
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ergonaut/Dockerfile
           target: release
           build-args: ERGONAUT_VERSION=${{ github.sha }}
-          # Not loaded into Docker: the smoke test runs the aio image, which
-          # reuses these layers from the same builder.
-          push: ${{ env.PUBLISH == 'true' }}
+          load: true
           tags: ${{ env.IMAGE }}:sha-${{ github.sha }}
           cache-from: type=gha,scope=ergonaut
           cache-to: type=gha,scope=ergonaut,mode=max
-      - name: Build the all-in-one image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: ergonaut/Dockerfile
-          target: aio
-          build-args: ERGONAUT_VERSION=${{ github.sha }}
-          load: true
-          tags: ergonaut:aio
-          cache-from: type=gha,scope=ergonaut
-      - name: Start the all-in-one image with the hello bot
+      # `ergonaut up` with embedded Postgres, no broker (tasks run inline) and
+      # local file storage, as a non-root user like the octo pods (uid 1000).
+      - name: Start the release image with the hello bot
         run: |
-          docker run -d --name aio -p 8000:8000 -v "$PWD/examples/hello:/bot:ro" ergonaut:aio
+          docker run -d --name smoke --user 1000:1000 -p 8000:8000 \
+            -e HOME=/tmp -e DATA_DIR=/tmp/data -e ERGONAUT_BOTS=/bot \
+            -v "$PWD/examples/hello:/bot:ro" "$IMAGE:sha-${{ github.sha }}" ergonaut up
           for i in $(seq 1 90); do
             curl -sf localhost:8000/api/healthz && break
             sleep 2
           done
           curl -sf localhost:8000/api/healthz
           for i in $(seq 1 30); do
-            docker logs aio 2>&1 | grep -q "celery@.* ready" && docker logs aio 2>&1 | grep -q "Serving bots: hello" && break
+            docker logs smoke 2>&1 | grep -q "Serving bots: hello" && break
             sleep 2
           done
-          docker logs aio 2>&1 | grep "Serving bots: hello"
-          docker logs aio 2>&1 | grep "embedded Garage"
-          docker logs aio 2>&1 | grep "celery@.* ready"
-          docker exec aio ergonaut check
+          docker logs smoke 2>&1 | grep "Serving bots: hello"
+          docker exec smoke ergonaut check
           # Non-Python package files ship in the image (package-data in pyproject.toml).
-          docker exec aio python -c "import django_ergo, pathlib; p = pathlib.Path(django_ergo.__file__).parent; missing = [f for f in ['bots/skill_library/skillbuilder/SKILL.md', 'templates/admin/django_ergo/chat_history.html'] if not (p / f).exists()]; assert not missing, missing"
+          docker exec smoke python -c "import django_ergo, pathlib; p = pathlib.Path(django_ergo.__file__).parent; missing = [f for f in ['bots/skill_library/skillbuilder/SKILL.md', 'templates/admin/django_ergo/chat_history.html'] if not (p / f).exists()]; assert not missing, missing"
       - name: Container logs
         if: always()
         run: |
-          docker logs aio 2>&1 | tail -200 || true
-          docker rm -f aio || true
-      - name: Publish (move the main tag to this commit)
+          docker logs smoke 2>&1 | tail -200 || true
+          docker rm -f smoke || true
+      - uses: docker/login-action@v3
         if: env.PUBLISH == 'true'
-        run: docker buildx imagetools create -t "$IMAGE:main" "$IMAGE:sha-${{ github.sha }}"
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish (push sha-<commit>, then move the main tag to it)
+        if: env.PUBLISH == 'true'
+        run: |
+          docker push "$IMAGE:sha-${{ github.sha }}"
+          docker buildx imagetools create -t "$IMAGE:main" "$IMAGE:sha-${{ github.sha }}"

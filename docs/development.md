@@ -51,10 +51,9 @@ hook passes on main; don't commit with hooks skipped.
   drift check, on pull requests. On pushes it runs only an installed-wheel
   check.
 - `.github/workflows/ergonaut.yml`: Ergonaut's tests, on pull requests. On
-  pushes it builds the `release` and `aio` images and starts the `aio` image
-  with `examples/hello` as a smoke test. On main it pushes the release image
-  as `sha-<commit>` and, once the smoke test passes, moves the `main` tag to
-  it.
+  pushes (and by hand) it builds the `release` image and starts it with
+  `examples/hello` as a smoke test. On main, once the smoke test passes, it
+  pushes the image as `sha-<commit>` and moves the `main` tag to it.
 
 A merge to main doesn't rerun the test suites: the pull request already ran
 them, and agents test before they push. Both workflows also run nightly on
