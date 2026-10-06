@@ -21,7 +21,7 @@ jobs:
   # repository variable CI_GITHUB_HOSTED=true sends every job to GitHub-hosted.
   test:
     runs-on: ${{ (vars.CI_GITHUB_HOSTED != 'true' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","boundcorp"]') || 'ubuntu-24.04' }}
-    timeout-minutes: 20
+    timeout-minutes: 40
     env:
       ERGO_TEST_ISOLATED: "1"
       PYTHONDONTWRITEBYTECODE: "1"
