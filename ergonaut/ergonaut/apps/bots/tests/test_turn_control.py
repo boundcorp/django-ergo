@@ -146,7 +146,12 @@ def test_the_user_can_steer_and_stop_a_turn_another_chat_started(session, use_bo
     messaging.deliver(str(delegated(session).id), registry=webhooks.get_registry())
 
     second = client.calls[1]["messages"]
-    assert texts(second[-1:]) == [f"{tasks.InboxControl.DELEGATED_NOTE}\n\nAnd milk?"]
+    assert "And milk?" in texts(second[-1:])[0]
+    assert "[Message from" not in texts(second[-1:])[0]
+    steering = session.messages.get(content_blocks__text__contains="And milk?")
+    assert steering.author["kind"] == "django_user"
+    assert steering.author["ref"] == str(session.user_id)
+    assert steering.provenance == {}
     assert not tasks.inbox_waiting(session.id)  # taken by this turn, not left for the next
 
     client = use_bots(tool_call("pantry_count", {"item": "eggs"}), say("never sent"))

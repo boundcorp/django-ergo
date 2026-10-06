@@ -76,9 +76,10 @@ repository variable `CI_GITHUB_HOSTED` to `true` and it runs on
 GitHub-hosted runners until the variable is removed. Pull requests from
 forks need a maintainer's approval to start.
 
-Image builds keep their Docker layers in the GitHub Actions cache (scope
-`ergonaut`), and Python installs
-use the pip and uv caches, so a fresh runner doesn't start from scratch.
+Image builds keep their Docker layers in the registry, as
+`ghcr.io/boundcorp/ergonaut:buildcache` (written by main, read by every
+build), and Python installs use the pip and uv caches, so a fresh runner
+doesn't start from scratch.
 
 ## Conventions
 

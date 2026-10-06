@@ -159,7 +159,7 @@ tiers:                # bot chats: candidates in order of preference
   low:    [claude/claude-sonnet-5-5, chatgpt/gpt-6-luna]
   medium: [claude/claude-opus-5-5, chatgpt/gpt-6-sol]
   high:   [claude/claude-opus-5-5, chatgpt/gpt-6-sol, openai/gpt-6-sol]
-agents:               # coding agents (orca_start_worker tier=...), subscriptions only
+agents:               # coding agents (ergo_agent_start tier=...), subscriptions only
   medium:
     - {agent: claude, model: claude-opus-5-5, provider: claude}
     - {agent: codex, model: gpt-6-sol, effort: medium, provider: chatgpt}
@@ -255,6 +255,15 @@ skill: `ergo_bot_list`, `ergo_thread_list`, `ergo_thread_send` and
 `ergo_thread_archive`. Messages are asynchronous. `ergo_thread_send` returns
 at once; the recipient answers in a turn of its own, and its reply comes
 back to the sender as a new message.
+
+Use `ergo_thread_forward` to hand over the user's actual message rather than
+retelling it with `ergo_thread_send`. The destination shows who wrote the
+words separately from the bot that forwarded them and the source chat/time;
+notes and shared files are separate from the original body. A forwarded
+Telegram message keeps its Telegram author. The recipient answers there,
+with nothing routed back; ordinary bot sends identify the sending bot and
+still route replies back. See [message identity](bots.md#message-identity)
+for the storage and compatibility details.
 
 A bot may message:
 

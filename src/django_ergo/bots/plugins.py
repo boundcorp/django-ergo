@@ -14,6 +14,7 @@ A plugin is a class with any of these hooks::
         async def on_session_closed(self, session): ...
         async def serve(self): ...                     # long-running, e.g. a channel
         def webhooks(self): return {"update": handler} # see django_ergo.bots.webhooks
+        def agent_managers(self): return {"name": m}   # see django_ergo.bots.agents
 
 ``bot.yaml`` names plugins by short name (official plugins in
 ``django_ergo.plugins``, listed below, or
@@ -31,6 +32,7 @@ from django.utils.module_loading import import_string
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from django_ergo.bots.agents import AgentManager
     from django_ergo.bots.runtime import Bot
     from django_ergo.bots.runtime import TurnResult
     from django_ergo.bots.tools import ToolContext
@@ -86,6 +88,11 @@ class BotPlugin:
 
     def worker_functions(self) -> dict[str, Callable]:
         """Functions this plugin's tools start as workers, by name ("<plugin>:<name>")."""
+        return {}
+
+    def agent_managers(self) -> dict[str, AgentManager]:
+        """Agent managers this plugin adds (where coding agents run), by name.
+        Return the same instances on every call."""
         return {}
 
     def worker_log(self, worker) -> dict | None:

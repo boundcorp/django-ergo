@@ -118,7 +118,7 @@ const WORKER_STATUS: Record<Worker['status'], { label: string; tone: string }> =
   cancelled: { label: 'Cancelled', tone: 'text-muted' },
 }
 
-/** A worker this chat started (orca_start_worker, ergo_workers_start): status, progress, what its
+/** A worker this chat started (ergo_agent_start, orca_start_worker, ergo_worker_start): status, progress, what its
  * agent did last (with a stalled flag and its full log) and PRs. */
 export function WorkerCard({ worker }: { worker: Worker }) {
   const status = WORKER_STATUS[worker.status] ?? WORKER_STATUS.queued

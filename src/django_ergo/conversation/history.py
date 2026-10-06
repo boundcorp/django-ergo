@@ -76,6 +76,8 @@ class HistoryMessage:
     role: str
     blocks: list[dict]
     timestamp: datetime | None = None
+    author: dict = field(default_factory=dict)
+    provenance: dict = field(default_factory=dict)
 
     def text(self) -> str:
         return "\n".join(b["text"] for b in self.blocks if b["type"] == "text")
@@ -351,6 +353,8 @@ class SessionSource(MessageSource):
 
     ``first_line`` and ``before_line`` read only the messages in that range
     of sequences, for paging a long session.
+    Set ``include_attribution=False`` for API/UI content: author and provenance
+    are still available on each HistoryMessage, without generated instructions.
     """
 
     kind = "session"
@@ -362,12 +366,14 @@ class SessionSource(MessageSource):
         first_line: int | None = None,
         before_line: int | None = None,
         last_rows: int | None = None,
+        include_attribution: bool = True,
     ):
         super().__init__()
         self.session = session
         self.first_line = first_line
         self.before_line = before_line
         self.last_rows = last_rows  # read only the latest rows (cheap previews)
+        self.include_attribution = include_attribution
 
     def _window(self, rows):
         if self.first_line is not None:
@@ -420,8 +426,15 @@ class SessionSource(MessageSource):
                 source_id=self.source_id,
                 line=row.sequence,
                 role=row.role,
-                blocks=_claude_blocks(claude_message_dict(row)["content"], row.role),
+                blocks=_claude_blocks(
+                    claude_message_dict(
+                        row, include_attribution=self.include_attribution
+                    )["content"],
+                    row.role,
+                ),
                 timestamp=as_aware(row.created_at),
+                author=row.author,
+                provenance=row.provenance,
             )
             for row in rows
         ]

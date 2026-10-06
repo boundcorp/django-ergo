@@ -130,7 +130,34 @@ export type Block =
   | { type: 'tool_use'; id: string; name: string; input: unknown }
   | { type: 'tool_result'; tool_use_id: string; name?: string; content: unknown; is_error?: boolean }
 
-export type Message = { line: number; role: string; blocks: Block[]; timestamp: string | null }
+export type MessageIdentity = {
+  kind: 'django_user' | 'bot' | 'telegram_user' | 'system'
+  ref: string
+  display_name: string
+}
+export type MessageProvenance = {
+  kind: 'forwarded' | 'message' | 'report' | 'reply'
+  forwarded_by?: MessageIdentity & { session_id?: string; label?: string }
+  origin: {
+    session_id: string
+    label: string
+    message_id?: string
+    sequence?: number
+    timestamp: string
+    source_call?: string
+  }
+  note?: string
+  attachments?: { id: string; filename: string; media_type: string; size?: number | null; session?: string }[]
+  reply_to?: string
+}
+export type Message = {
+  line: number
+  role: string
+  blocks: Block[]
+  timestamp: string | null
+  author?: MessageIdentity | Record<string, never>
+  provenance?: MessageProvenance | Record<string, never>
+}
 
 export type Approval = { id: string; name: string; input: unknown; preview?: string; preview_error?: boolean }
 
