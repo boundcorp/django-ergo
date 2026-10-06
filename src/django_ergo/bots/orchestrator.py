@@ -19,9 +19,16 @@ Who may message whom:
   this bot or one it can message. It returns at once; the recipient's reply
   arrives later as a new message in this session (see
   ``django_ergo.bots.messaging``). Starting a thread needs the target bot's
-  ``threads.allow_create: true``; a thread of another bot records who started it. A chat can't send another request to a chat
-  while its earlier one there is still open (no nudges or acknowledgements: each
-  message starts a turn there).
+  ``threads.allow_create: true``; a thread of another bot records who started it.
+  A busy recipient never makes a send fail: the message is queued
+  (``status: "queued"``, with its ``queue_position``) and goes out in order as the
+  recipient's next turn, one turn per message, without interrupting the current
+  one. The one refusal is the no-nudge rule: a chat can't send another message to
+  a chat while its earlier *request* there (one whose reply comes back) is still
+  open. A report or a forward gets no reply, so it never blocks a later send.
+  ``interrupt=true`` replaces a request of this chat that the recipient is working
+  on right now (it stops that turn, and the message goes out next in the queue);
+  it never stops a turn answering the user or another chat, and then just queues.
   Files from this chat can go with it (``attachments``): the recipient sees them
   listed, with ids, and opens them with the attachments tools.
 - ``ergo_thread_forward``: hand the user's own message (the one this turn is
@@ -379,6 +386,16 @@ def ergo_thread_list(
                 "can open them; they stay in this chat."
             ),
         },
+        "interrupt": {
+            "type": "boolean",
+            "description": (
+                "Only to replace a request of yours that the thread is working on right "
+                "now: stops that turn, and this message goes out next in the thread's "
+                "queue. It never stops a turn that answers the user (their message, or "
+                "one you forwarded) or another chat; then the message just queues, and "
+                "the result says so. Default false: it waits for the current turn."
+            ),
+        },
     },
     required=["message"],
 )
@@ -390,13 +407,24 @@ def ergo_thread_send(  # noqa: PLR0913
     title: str = "",
     attachments: list[str] | None = None,
     ask: bool = False,
+    interrupt: bool = False,
 ) -> dict:
     """Send a message to a bot's main chat, a named chat, a thread, or a new thread.
 
     Returns at once. The reply arrives later as a new message in this chat, except
-    for a report upward (see ``ask``).
+    for a report upward (see ``ask``). A busy thread doesn't refuse it: it is
+    queued (``status: "queued"``) and goes out in order as the thread's next turn.
     """
-    return _send(ctx, _target(ctx, bot), message, thread, title, attachments, ask=ask)
+    return _send(
+        ctx,
+        _target(ctx, bot),
+        message,
+        thread,
+        title,
+        attachments,
+        ask=ask,
+        interrupt=interrupt,
+    )
 
 
 def user_message(session: ConversationSession) -> dict | None:
@@ -498,6 +526,7 @@ def ergo_thread_forward(
         "forwarded_to": where,
         "thread_id": str(recipient.id),
         "message_id": str(sent.id),
+        **_delivery(recipient, sent),
         "note": (
             f"Forwarded verbatim; {where} answers the user there and nothing comes "
             f"back here. Tell the user in one line: sent to {where}."
@@ -552,6 +581,7 @@ def _send(  # noqa: PLR0913
     attachments: list[str] | None = None,
     *,
     ask: bool = False,
+    interrupt: bool = False,
 ) -> dict:
     thread = (thread or "main").strip()
     if _upward_only(ctx, target) and (
@@ -570,23 +600,15 @@ def _send(  # noqa: PLR0913
         ctx, target, thread, title or messaging.snippet(message)[:60]
     )
     _refuse_nudge_after_reply(ctx, recipient, message)
-    if open_request := (
-        ctx.session.sent_thread_messages.filter(
-            recipient_session=recipient,
-            in_reply_to__isnull=True,
-            status__in=OPEN_STATUSES,
-        )
-        .order_by("-created_at")
-        .first()
-    ):
-        # Nudges and "thanks, keep going" messages each start a full turn there.
-        msg = (
-            f"Your request to {messaging.label(recipient)} from "
-            f"{open_request.created_at:%H:%M} UTC (“{messaging.snippet(open_request.text)}”) "
-            "is still open; its reply will arrive here. Don't nudge or add to it: wait "
-            "for the reply, then send new work if there is any."
-        )
-        raise ValueError(msg)
+    interrupting, not_interrupted = (
+        _interruptible(ctx, recipient) if interrupt else (None, "")
+    )
+    _refuse_while_request_open(
+        ctx,
+        recipient,
+        replacing=interrupting,
+        interrupt_note=not_interrupted if interrupt else "",
+    )
     # Upward (a thread to its main chat, a main chat to its parent's) is a report
     # unless it asks: no reply goes back, so a status update doesn't cost a turn
     # here for the recipient's acknowledgement.
@@ -597,6 +619,11 @@ def _send(  # noqa: PLR0913
     metadata = {"attachments": shared} if shared else {}
     if report:
         metadata["report"] = True
+    interrupted = False
+    if interrupting:
+        # Before storing the message: a stop that landed after it could hit the turn
+        # that answers it, and the message is queued whenever that turn ends.
+        interrupted = bool(api_settings.TURN_STOPPER(str(recipient.id)))
     sent = messaging.send(
         ctx.session,
         recipient,
@@ -604,17 +631,126 @@ def _send(  # noqa: PLR0913
         registry=ctx.bot.registry,
         metadata=metadata or None,
     )
+    delivery = _delivery(recipient, sent)
+    note = (
+        "Sent as a report: no reply comes back (ask=true when you need one)."
+        if report
+        else "The reply will arrive as a new message in this chat."
+    )
+    if interrupt:
+        note += " " + _interrupt_outcome(interrupting, interrupted, not_interrupted)
+    if delivery["status"] == "queued":
+        note += (
+            f" Queued (position {delivery['queue_position']}): it goes out in order, "
+            "as a turn of its own, after what the thread is doing and has waiting."
+        )
     return {
         "sent_to": messaging.label(recipient),
         "thread_id": str(recipient.id),
         "message_id": str(sent.id),
-        "note": (
-            "Sent as a report: no reply comes back (ask=true when you need one)."
-            if report
-            else "The reply will arrive as a new message in this chat."
-        ),
+        **delivery,
+        **({"interrupted": interrupted} if interrupt else {}),
+        "note": note,
         **({"shared_files": [f["filename"] for f in shared]} if shared else {}),
     }
+
+
+def _interrupt_outcome(
+    interrupting: ThreadMessage | None, interrupted: bool, not_interrupted: str
+) -> str:
+    if interrupted:
+        return "Its running turn was stopped; this goes out in its place."
+    if interrupting:
+        return "Its running turn had already ended; nothing was stopped."
+    return f"Not interrupted: {not_interrupted}."
+
+
+def _refuse_while_request_open(
+    ctx: ToolContext,
+    recipient: ConversationSession,
+    *,
+    replacing: ThreadMessage | None,
+    interrupt_note: str,
+) -> None:
+    """The no-nudge rule: refuse a message to a chat while this chat's earlier request
+    there is still open (its reply is coming; each message starts a full turn there).
+
+    A report or a forward gets no reply, so it isn't a request to wait on, and the
+    request an ``interrupt`` is replacing (``replacing``) is already being ended.
+    """
+    open_requests = ctx.session.sent_thread_messages.filter(
+        recipient_session=recipient,
+        in_reply_to__isnull=True,
+        status__in=OPEN_STATUSES,
+    )
+    if replacing:
+        open_requests = open_requests.exclude(id=replacing.id)
+    open_request = next(
+        (
+            m
+            for m in open_requests.order_by("-created_at")
+            if not (m.metadata or {}).get("report")
+        ),
+        None,
+    )
+    if open_request is None:
+        return
+    msg = (
+        f"Your request to {messaging.label(recipient)} from "
+        f"{open_request.created_at:%H:%M} UTC (“{messaging.snippet(open_request.text)}”) "
+        "is still open; its reply will arrive here. Don't nudge or add to it: wait "
+        "for the reply, then send new work if there is any."
+    )
+    if interrupt_note:
+        msg += f" (interrupt didn't apply: {interrupt_note}.)"
+    raise ValueError(msg)
+
+
+def _delivery(recipient: ConversationSession, sent: ThreadMessage) -> dict:
+    """Whether a message just sent waits its turn, and where in line: a busy
+    recipient (or earlier messages for it) queues it, in order."""
+    status = (
+        ThreadMessage.objects.filter(id=sent.id)
+        .values_list("status", flat=True)
+        .first()
+    )
+    if status == ThreadMessageStatus.QUEUED:
+        ahead = ThreadMessage.objects.filter(
+            recipient_session=recipient,
+            status=ThreadMessageStatus.QUEUED,
+            created_at__lt=sent.created_at,
+        ).count()
+        if ahead or messaging.busy(recipient):
+            return {"status": "queued", "queue_position": ahead + 1}
+    return {"status": "sent"}
+
+
+def _interruptible(
+    ctx: ToolContext, recipient: ConversationSession
+) -> tuple[ThreadMessage | None, str]:
+    """The request of this chat whose running turn an ``interrupt`` may stop, or why
+    none can be.
+
+    Only a turn this chat started by messaging the thread qualifies. A turn that
+    answers the user (their message, a forward of it, a schedule or a worker) or
+    another chat is never stopped from here: the new message queues behind it.
+    """
+    if not messaging.busy(recipient):
+        return None, "nothing is running there"
+    running = messaging.current_thread_message(recipient)
+    if running is not None and "forwarded" in (running.metadata or {}):
+        return None, (
+            "its running turn answers a message of the user's that you forwarded, "
+            "and a bot never cancels the user's request"
+        )
+    if running is None or running.sender_session_id != ctx.session.id:
+        return None, (
+            "its running turn isn't answering a request of yours (only your own "
+            "request can be interrupted, never the user's)"
+        )
+    if api_settings.TURN_STOPPER is None:
+        return None, "this app can't stop a running turn"
+    return running, ""
 
 
 def _refuse_nudge_after_reply(
