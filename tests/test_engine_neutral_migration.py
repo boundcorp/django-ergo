@@ -71,6 +71,7 @@ def test_openai_chats_move_into_session_messages():
         executor = MigrationExecutor(connection)
         executor.migrate(AFTER)
         # Current engine code needs the current schema, not the historical one.
+        executor = MigrationExecutor(connection)
         executor.migrate(executor.loader.graph.leaf_nodes())
 
         from django_ergo.conversation.engines.claude_api import ClaudeAPIEngine
