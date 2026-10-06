@@ -128,8 +128,17 @@ def delegated(session):
     return ThreadMessage.objects.create(sender_session=sender, recipient_session=session, text="Count the eggs")
 
 
+@pytest.fixture
+def held_messages(settings):
+    """Thread messages are recorded, not delivered: a test runs only the turns it starts
+    (a delivered reply would start a turn of the sender's, on the test's scripted model)."""
+    held = []
+    settings.DJANGO_ERGO = {**settings.DJANGO_ERGO, "THREAD_MESSAGE_RUNNER": held.append}
+    return held
+
+
 @pytest.mark.django_db(transaction=True)
-def test_the_user_can_steer_and_stop_a_turn_another_chat_started(session, use_bots):  # noqa: F811
+def test_the_user_can_steer_and_stop_a_turn_another_chat_started(session, use_bots, held_messages):  # noqa: F811
     from django_ergo.bots import messaging, webhooks
 
     client = use_bots(tool_call("pantry_count", {"item": "eggs"}), say("Four eggs, no milk."))
@@ -145,6 +154,49 @@ def test_the_user_can_steer_and_stop_a_turn_another_chat_started(session, use_bo
     messaging.deliver(str(delegated(session).id), registry=webhooks.get_registry())
     assert session.structured_calls.latest("created_at").status == "stopped"
     assert len(client.calls) == 1
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_stop_meant_for_one_delegated_turn_does_not_hit_the_next(session, use_bots, held_messages):  # noqa: F811
+    from django_ergo.bots import messaging, webhooks
+
+    client = use_bots(tool_call("pantry_count", {"item": "eggs"}), say("never sent"))
+    during_first_call(client, lambda: tasks.request_stop(session.id))
+    messaging.deliver(str(delegated(session).id), registry=webhooks.get_registry())
+    assert session.structured_calls.get().status == "stopped"
+    assert tasks.stop_requested(session.id)  # left over: the stopped turn never reached its end of loop
+
+    # The next queued message runs to its end under the session lock, as a worker runs it.
+    client = use_bots(tool_call("pantry_count", {"item": "eggs"}), say("Four eggs."))
+    next_message = delegated(session)
+    assert tasks.deliver_locked(str(next_message.id)) == session.id
+    assert session.structured_calls.latest("created_at").status == "completed"
+    assert len(client.calls) == 2
+    assert not tasks.stop_requested(session.id)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_thread_message_queued_during_a_turn_is_dispatched_once_the_lock_is_free(
+    session,  # noqa: F811
+    use_bots,  # noqa: F811
+    settings,
+):
+    use_bots(say("Four eggs."))
+    # Each dispatch records whether the session's turn lock was still held.
+    dispatched = []
+    settings.DJANGO_ERGO = {
+        **settings.DJANGO_ERGO,
+        "THREAD_MESSAGE_RUNNER": lambda message_id: dispatched.append(tasks.turn_running(session.id)),
+    }
+    queued = delegated(session)  # waiting for the user's turn below
+    tasks.push_message(session.id, "How many eggs?")
+    tasks.run_turn(str(session.id))
+
+    queued.refresh_from_db()
+    assert queued.status == "queued"
+    # The turn's own end dispatches it too early (the lock is held until run_turn returns).
+    # Only a dispatch after the release reaches a worker that can take the lock.
+    assert dispatched[-1] is False
 
 
 @pytest.mark.django_db(transaction=True)

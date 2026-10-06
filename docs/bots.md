@@ -480,7 +480,7 @@ user. The `orchestration` skill (loaded in main by default) has:
 | --- | --- |
 | `ergo_bot_list` | The bots it can message, with their `description`s (also in the context block below) |
 | `ergo_thread_list` | A bot's main chat, named chats and threads with the user (default: this bot) |
-| `ergo_thread_send` | Message a bot's `main` chat, a named chat, a thread id, or a `new` thread; returns at once |
+| `ergo_thread_send` | Message a bot's `main` chat, a named chat, a thread id, or a `new` thread; returns at once. A busy thread queues the message (in order, as its next turn) instead of refusing it; optional `interrupt` replaces this chat's own running request there |
 | `ergo_thread_forward` | Hand the user's own message (the one this turn answers) to a chat or thread, word for word with its author, time and files, plus an optional `note`. The recipient treats it as the user speaking and answers there; nothing comes back. Refused when the turn isn't answering the user |
 | `ergo_thread_stop` | Stop the running turn of a thread this bot started (or one of its own) and cancel what it queued there |
 | `ergo_thread_resolve` | Resolve a finished thread (this one, one of this bot's, or another bot's it started), with a one-line `summary`; refused while workers run, a request is open, an approval is pending, or its last reply asks the user something. History stays readable; a new message reopens it. `ergo_thread_archive` is a deprecated alias |
@@ -557,11 +557,30 @@ Who may message whom:
   update doesn't cost the sender another turn for an acknowledgement. Pass
   `ask: true` (to `ergo_thread_send` or `ergo_message_up`) when an answer is
   needed.
-- **No nudges.** A chat can't send a second request to a chat while its
-  earlier one there is still open, and in the turn that handles a chat's
-  reply it can't send that chat a short follow-up ("please continue"):
-  under 400 characters is refused unless the reply asked a question. A
-  complete new request still goes through.
+- **No nudges.** A chat can't send another message to a chat while its
+  earlier *request* there (one whose reply comes back) is still open, and in
+  the turn that handles a chat's reply it can't send that chat a short
+  follow-up ("please continue"): under 400 characters is refused unless the
+  reply asked a question. A complete new request still goes through. A
+  report or a forward gets no reply, so it never counts as an open request:
+  a bot can forward the user's message to a thread and then send it its own
+  context or follow-up.
+- **A busy thread queues, never refuses.** A message to a thread that is
+  mid-turn, waiting for approval or has earlier messages waiting is stored
+  and goes out as its next turn, after the current one and in the order it
+  was sent (one turn per message, so each keeps its own reply routing). The
+  tool returns `status: "queued"` and the `queue_position` (1 = next); an
+  idle thread returns `status: "sent"`. A queued message stays `queued` (so
+  `ergo_thread_stop` cancels it) until its turn starts, and queues are sent
+  on whenever the thread's turn ends, whether it completed, failed or was
+  stopped. `ergo_thread_send` never interrupts the thread's turn unless
+  `interrupt: true`, and that only replaces a request *this chat* sent that
+  the thread is working on right now: a turn that answers the user (their
+  message, a forward of it, a schedule or a worker) or another chat is never
+  stopped by a bot, and the message queues behind it (the result says
+  `interrupted: false` and why). It also needs `TURN_STOPPER`. Messages the
+  user types in Ergonaut keep their own path: they steer a running turn, or
+  `interrupt` it, whoever started it.
 - **Managing what it started.** `ergo_thread_stop` and `ergo_thread_resolve`
   (with `bot`) work on threads of other bots that a chat of this bot
   started. Stopping a running turn goes through
