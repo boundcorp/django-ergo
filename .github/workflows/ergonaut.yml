@@ -45,7 +45,10 @@ jobs:
       - name: Check migrations
         run: env -u DATABASE_URL .venv/bin/python manage.py makemigrations --check --dry-run
 
+  # Pushes only: PRs run the tests, and the image is built when main publishes
+  # (the publish job needs this smoke test).
   image:
+    if: github.event_name == 'push'
     runs-on: ${{ (vars.CI_GITHUB_HOSTED != 'true' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","boundcorp"]') || 'ubuntu-24.04' }}
     timeout-minutes: 30
     steps:
