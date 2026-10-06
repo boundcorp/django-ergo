@@ -139,7 +139,8 @@ Resolving threads: keep the thread list to work that is still going on.
   on a worker, on a reply, or for an approval, or that has an open PR. The tool
   refuses the first ones; open PRs are up to you.
 - Each turn, check the Bots and threads block: threads marked "ready to resolve"
-  look finished. Resolve the ones you started that are, and leave the rest.
+  look finished, and you may resolve them. A finished thread of another bot that
+  is not marked that way is its owner's to close: leave it.
 - Resolving keeps the history readable, and a new message reopens the thread."""
 
 
@@ -240,13 +241,41 @@ def _upward_only(ctx: ToolContext, target: Bot) -> bool:
     )
 
 
-def _started_here(ctx: ToolContext, session: ConversationSession) -> bool:
-    """A chat of this bot (with this user) started ``session``."""
+def can_resolve(bot: Bot, user_id, session: ConversationSession) -> bool:
+    """Whether ``bot`` may stop or resolve ``session`` (of a chat with ``user_id``):
+    the thread belongs to ``bot``, or a chat of ``bot`` with this user started it.
+    One bot closing another's thread could end work its owner still tracks, so a
+    thread a bot didn't start stays with the bot it belongs to (or its starter).
+    The tools check this and the "Bots and threads" block marks only the threads
+    that pass."""
+    if session.bot_name == bot.name:
+        return True
     started_by = (session.metadata or {}).get("started_by")
-    if not started_by:
-        return session.bot_name == ctx.bot.name
+    return bool(
+        started_by and bot.sessions().filter(user_id=user_id, id=started_by).exists()
+    )
+
+
+def _refusal(session: ConversationSession, action: str) -> str:
+    """Why this bot can't ``action`` the thread, and who can."""
+    meta = session.metadata or {}
+    owner = session.bot_name
+    starter = meta.get("started_by_bot")
+    if starter and starter != owner:
+        who = f"{owner} (its bot) or {starter} (which started it)"
+        why = f"belongs to {owner} and was started by {meta.get('started_by_label') or starter}"
+    else:
+        who = owner
+        why = f"was started by {owner}"
+    tail = (
+        "It resolves itself when its work is done"
+        if action == "resolve"
+        else "If it has gone wrong"
+    )
     return (
-        ctx.bot.sessions().filter(user_id=ctx.session.user_id, id=started_by).exists()
+        f"{messaging.label(session)} {why}, not by this bot, so only {who} can "
+        f"{action} it. {tail}; if it needs attention, message {owner} with "
+        "ergo_thread_send."
     )
 
 
@@ -615,17 +644,17 @@ def _refuse_nudge_after_reply(
     raise ValueError(msg)
 
 
-def _managed_thread(ctx: ToolContext, bot: str, thread_id: str) -> ConversationSession:
-    """A thread this bot may stop or archive: one of its own, or another bot's
-    thread that a chat of this bot started."""
+def _managed_thread(
+    ctx: ToolContext, bot: str, thread_id: str, action: str
+) -> ConversationSession:
+    """A thread this bot may stop or resolve (``can_resolve``)."""
     target = _target(ctx, bot)
     thread = _session(target, ctx, thread_id)
     if (thread.metadata or {}).get("bot_role") in TOP_ROLES:
-        msg = "Main and named chats can't be stopped or archived from another chat."
+        msg = "Main and named chats can't be stopped or resolved from another chat."
         raise ValueError(msg)
-    if target is not ctx.bot and not _started_here(ctx, thread):
-        msg = f"{messaging.label(thread)} wasn't started by this bot."
-        raise ValueError(msg)
+    if not can_resolve(ctx.bot, ctx.session.user_id, thread):
+        raise ValueError(_refusal(thread, action))
     return thread
 
 
@@ -634,7 +663,7 @@ def ergo_thread_stop(ctx: ToolContext, thread_id: str, bot: str = "") -> dict:
     """Stop the running turn of a thread this bot started (default bot: this one)
     and cancel the messages this bot queued for it. Use it for work that is no
     longer wanted or has gone wrong."""
-    thread = _managed_thread(ctx, bot, thread_id)
+    thread = _managed_thread(ctx, bot, thread_id, "stop")
     own = ctx.bot.sessions().filter(user_id=ctx.session.user_id)
     cancelled = ThreadMessage.objects.filter(
         recipient_session=thread,
@@ -664,7 +693,7 @@ def resolve(
             raise ValueError(msg)
         thread, own_turn = current, True
     else:
-        thread, own_turn = _managed_thread(ctx, bot, thread_id), False
+        thread, own_turn = _managed_thread(ctx, bot, thread_id, "resolve"), False
     status = thread_status(thread)
     if not own_turn and status["state"] == "working":
         msg = f"{messaging.label(thread)} is working; stop it with ergo_thread_stop first."
@@ -704,10 +733,12 @@ def ergo_thread_resolve(
     ctx: ToolContext, thread_id: str = "", bot: str = "", summary: str = ""
 ) -> str:
     """Resolve a finished thread: this one (empty thread_id), one of this bot's, or
-    another bot's thread this bot started. Resolve when the work is finished (PR
-    merged or closed, the answer delivered, the user wrapped it up); never while it
-    waits on the user, a worker or a reply, or has an open PR. Its history stays
-    readable, and a new message reopens it."""
+    another bot's thread this bot started (the Bots and threads block marks the
+    ones you may resolve as "ready to resolve"; any other bot's thread is its
+    owner's to close). Resolve when the work is finished (PR merged or closed, the
+    answer delivered, the user wrapped it up); never while it waits on the user, a
+    worker or a reply, or has an open PR. Its history stays readable, and a new
+    message reopens it."""
     return resolve(ctx, thread_id, bot, summary)
 
 

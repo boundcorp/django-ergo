@@ -1249,10 +1249,119 @@ async def test_the_target_decides_whether_it_takes_new_threads(
         "stopped_running_turn": True,
     }
     assert stopped == [str(thread.id)]
-    assert not_ours["is_error"] and "wasn't started by this bot" in not_ours["content"]
+    assert not_ours["is_error"] and "only design can resolve it" in not_ours["content"]
     assert archived["content"].startswith("Resolved design · Logo")
     await thread.arefresh_from_db()
     assert thread.status == "completed"
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_ready_to_resolve_is_marked_only_where_the_viewer_may_resolve(
+    tmp_path, thread_messages
+):
+    from datetime import timedelta
+
+    from django.utils import timezone
+
+    from django_ergo.bots import orchestrator
+    from django_ergo.bots import overview
+    from django_ergo.bots.tools import ToolContext
+
+    user = await User.objects.acreate(username="ownership")
+    engine = claude_engine()
+    registry, boundcorp, design = _family(
+        tmp_path,
+        engine,
+        "name: boundcorp\n",
+        "name: design\nthreads: {allow_create: true}\n",
+    )
+    root = await boundcorp.root_session(user)
+    design_main = await design.root_session(user)
+    own = await boundcorp.create_session(user, title="Own")
+    started = await design.create_session(
+        user,
+        title="Started by boundcorp",
+        metadata={
+            "started_by": str(root.id),
+            "started_by_bot": "boundcorp",
+            "started_by_label": "boundcorp · Main",
+        },
+    )
+    theirs = await design.create_session(
+        user,
+        title="Started by design",
+        metadata={
+            "started_by": str(design_main.id),
+            "started_by_bot": "design",
+            "started_by_label": "design · Main",
+        },
+    )
+    threads = [own, started, theirs]
+    quiet = timezone.now() - timedelta(hours=1)
+    await ConversationSession.objects.filter(id__in=[t.id for t in threads]).aupdate(
+        updated_at=quiet
+    )
+
+    ctx = ToolContext(bot=boundcorp, session=root, user=user)
+    lines = (await sync_to_async(overview.overview)(ctx)).splitlines()
+
+    def line_of(title):
+        return next(line for line in lines if line.startswith(f"- {title} (thread"))
+
+    assert "looks finished: ready to resolve" in line_of("Own")
+    assert "looks finished: ready to resolve" in line_of("Started by boundcorp")
+    # Another bot's own thread: shown as its owner's to close, not as a task.
+    theirs_line = line_of("Started by design")
+    assert "ready to resolve" not in theirs_line
+    assert "looks finished (design resolves it)" in theirs_line
+
+    # The block and the tool use one rule: marked iff can_resolve.
+    for thread in threads:
+        allowed = await sync_to_async(orchestrator.can_resolve)(
+            boundcorp, user.id, thread
+        )
+        marked = "ready to resolve" in line_of(thread.metadata.get("title", ""))
+        assert allowed is marked
+
+    engine._client.responses = [
+        claude_tool(
+            "ergo_thread_resolve",
+            {"bot": "design", "thread_id": str(theirs.id), "summary": "done"},
+            tool_id="r1",
+        ),
+        claude_tool(
+            "ergo_thread_resolve",
+            {"bot": "design", "thread_id": str(started.id), "summary": "done"},
+            tool_id="r2",
+        ),
+        claude_tool(
+            "ergo_thread_resolve",
+            {"thread_id": str(own.id), "summary": "done"},
+            tool_id="r3",
+        ),
+        say("Tidied."),
+    ]
+    await boundcorp.ask(root, "Tidy up")
+    refused, resolved_started, resolved_own = _tool_results(engine)[-3:]
+    assert refused["is_error"]
+    assert (
+        "design · Started by design was started by design, not by this bot"
+        in (refused["content"])
+    )
+    assert "only design can resolve it" in refused["content"]
+    assert resolved_started["content"].startswith("Resolved design · Started by")
+    assert resolved_own["content"].startswith("Resolved boundcorp · Own")
+    await theirs.arefresh_from_db()
+    assert theirs.status != "completed"
+
+    # A thread started by a third bot names both bots that may resolve it.
+    third = await design.create_session(
+        user,
+        title="Third",
+        metadata={"started_by": str(design_main.id), "started_by_bot": "other"},
+    )
+    msg = orchestrator._refusal(third, "resolve")
+    assert "design (its bot) or other (which started it)" in msg
 
 
 @pytest.mark.django_db(transaction=True)
