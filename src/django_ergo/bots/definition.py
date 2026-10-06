@@ -28,7 +28,7 @@ bot.yaml::
     timezone: America/Los_Angeles      # for the current time in context
     current_time: true                 # put the current date and time in context
     max_turns: 50                      # model calls one reply may use, tool calls included
-    tool_results_in_context: 3         # large tool results each model call keeps in full
+    tool_results_in_context: 6         # large tool results each model call keeps in full
     chats:
       main:                            # every user's main chat (always there)
         skills: [orchestration, tandoor]   # loaded from the start (default: orchestration)

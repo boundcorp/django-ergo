@@ -35,7 +35,7 @@ root:                                # window settings for main and named chats
 orchestration: true                  # may the bot delegate at all (false: never)
 timezone: America/Los_Angeles        # default for users without a timezone
 current_time: true                   # current date and time in every turn
-tool_results_in_context: 3           # large tool results each model call keeps in full
+tool_results_in_context: 6           # large tool results each model call keeps in full
 chats:
   main:                              # every user's main chat (always there)
     skills: [orchestration, tandoor] # loaded from the start (default: [orchestration])
@@ -110,15 +110,15 @@ downscaled to 1024px with Pillow when it's installed; older ones show as
 `[image omitted: name (id=...)]`. See [attachments.md](attachments.md).
 
 Large tool results get the same treatment: each model call carries the
-newest three (`tool_results_in_context` in bot.yaml, default
+newest six (`tool_results_in_context` in bot.yaml, default
 `DJANGO_ERGO["TOOL_RESULTS_IN_CONTEXT"]`) in full, plus older ones while the
 kept results total at most 40,000 characters
 (`DJANGO_ERGO["TOOL_RESULTS_CHARS_IN_CONTEXT"]`), so a turn reading a handful
 of small files keeps them all. Older ones over 500 characters go as a stub
-naming the tool and its size, so a long turn that
-keeps reading a big dump doesn't re-send every earlier copy. History keeps
-every result; the bot calls the tool again if it needs an old one. See
-[structured-calls.md](structured-calls.md).
+naming the tool and its size, so a long turn that keeps reading a big dump
+doesn't re-send every earlier copy. The bot should note the detail it needs
+when it first reads a result, and call the tool again only if it still needs
+the detail. See [structured-calls.md](structured-calls.md).
 
 A tool module can also define
 `toolkits(ctx) -> list[Toolkit]` for class-based toolkits.
@@ -225,15 +225,16 @@ plugins: {bot_management: {mode: propose_pr}}   # plugins it needs, with setting
 1. Review the last 60 days of the meal plan with view_meal_plan.
 ```
 
-Every chat starts with an `ergo_skills_list` result already in its history:
-each skill, whether it's loaded, how many tools it has, and a hint for some
-unloaded plugins ("3 files in this chat"). `ergo_skill_load(name)` returns
-the skill's instructions and context and offers its tools from the next
-model call on (the same turn); using a skill's tool keeps it loaded, and one
-unused for `skills.unload_after_turns` turns (default 30, counting every turn
-in the chat) is dropped again. `ergo_skill_unload` drops one sooner. Loaded
-skills are kept per chat. `history` and the skills a chat lists under
-`chats.<name>.skills` (or `threads.skills`) are always loaded there.
+Every turn's context has a compact `Skills` section: each skill, whether it
+is loaded, and its one-line description. `ergo_skills_list` remains available
+when the model needs the fuller listing, including tool counts and hints.
+`ergo_skill_load(name)` returns the skill's instructions and context and
+offers its tools from the next model call on (the same turn); using a skill's
+tool keeps it loaded, and one unused for `skills.unload_after_turns` turns
+(default 30, counting every turn in the chat) is dropped again.
+`ergo_skill_unload` drops one sooner. Loaded skills are kept per chat.
+`history` and the skills a chat lists under `chats.<name>.skills` (or
+`threads.skills`) are always loaded there.
 
 A plugin's `context_sources` are part of its skill (in context while it's
 loaded); `always_context_sources` stay on regardless (the KB's root article
@@ -589,8 +590,9 @@ A toolkit's `pre_seeds()` names tool calls that run before a session's first
 model call; their results are written into the history as if the model had
 made the calls (each turn for window chats, whose model calls carry only
 the current turn). `FunctionToolkit(tools, ctx, seed=["tool_name"])` seeds
-zero-argument tools. Skills seed `list_skills`; the bots a chat can reach
-are in the "Bots and threads" context block instead.
+zero-argument tools. Skills are listed in the per-turn `Skills` context
+section; the bots a chat can reach are in the "Bots and threads" context
+block instead.
 
 ```
 boundcorp/

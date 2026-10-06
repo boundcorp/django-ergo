@@ -41,7 +41,9 @@ are obvious next things the user might say.
 you can go on. Ask one question and give 2 to 4 short suggested answers.
 - status: one short line for the thread list, in plain words: what you need \
 from the user ("Approve the migration run"), or what you are doing now \
-("Running the full test suite"). Leave it empty when there's nothing to add."""
+("Running the full test suite"). Leave it empty when there's nothing to add.
+- When you read a large tool result, note the detail you need; call the tool \
+again only if you still need it."""
 
 
 class ChatReply(BaseModel):

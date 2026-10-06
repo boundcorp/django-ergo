@@ -23,6 +23,7 @@ from django_ergo.conversation.adapters import ClaudeToolAdapter
 from django_ergo.conversation.adapters import OpenAIToolAdapter
 from django_ergo.conversation.context import TextContextSource
 from django_ergo.conversation.models import ConversationSession
+from django_ergo.conversation.models import MessageBlock
 from tests.test_conversation_structured import claude_engine
 from tests.test_conversation_structured import claude_text
 from tests.test_conversation_structured import claude_tool
@@ -853,7 +854,7 @@ def test_explicit_parameters_respect_an_empty_required_list():
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_skills_are_listed_up_front_and_loaded_on_demand(tmp_path):
+async def test_skills_are_in_per_turn_context_and_load_on_demand(tmp_path):
     user = await User.objects.acreate(username="planner")
     bot, engine = make_bot(
         tmp_path,
@@ -878,40 +879,48 @@ async def test_skills_are_listed_up_front_and_loaded_on_demand(tmp_path):
 
     first = engine._client.calls[0]
     assert {"ergo_skills_list", "ergo_skill_load", "pantry_count"} <= _tool_names(first)
-    seeded = [
-        block
-        for message in first["messages"]
-        for block in (
-            message["content"] if isinstance(message["content"], list) else []
-        )
-        if block.get("type") == "tool_result"
-    ]
-    assert len(seeded) == 1
-    listing = str(seeded[0]["content"])
-    assert "- meal-planning [not loaded]: Plan a week of dinners" in listing
-    assert "- shopping [not loaded]: Shop by aisle" in listing
-    assert "- pantry [loaded]: Tools from pantry.py (2 tools)" in listing
-    assert "history" not in listing  # always there, so not listed
-    assert "send_reply" not in listing
+    assert "## Skills" in first["system"]
+    assert "- meal-planning (not loaded): Plan a week of dinners" in first["system"]
+    assert "- shopping (not loaded): Shop by aisle" in first["system"]
+    assert "- pantry (loaded): Tools from pantry.py" in first["system"]
+    assert _seeded(first) == []
+    assert "seeded" not in turn.call.metadata
+    assert not await MessageBlock.objects.filter(
+        message__session=root,
+        tool_name="ergo_skills_list",
+        tool_use_id__startswith="preseed_",
+    ).aexists()
 
     loaded = engine._client.calls[1]["messages"][-1]["content"][0]["content"]
     assert "Check the last 60 days" in str(loaded)
     assert "ergo_skill_load" in turn.call.metadata["tools"]
-    assert turn.call.metadata["seeded"] is True
 
-    # The root only sends the current turn natively, so it is seeded each turn.
     again = await bot.ask(root, "Thanks")
-    assert again.call.metadata["seeded"] is True
-    results = [
-        block
-        for message in engine._client.calls[2]["messages"]
-        for block in (
-            message["content"] if isinstance(message["content"], list) else []
-        )
-        if block.get("type") == "tool_result"
-        and "Skills (ergo_skill_load" in str(block["content"])
+    assert "seeded" not in again.call.metadata
+    assert _seeded(engine._client.calls[2]) == []
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_user_defined_seeded_tool_still_seeds_each_window_turn(tmp_path):
+    tools = TOOLS + textwrap.dedent(
+        """
+        @bot_tool(seed=True)
+        def account_limits() -> str:
+            '''Current account limits.'''
+            return "10 left"
+        """
+    )
+    user = await User.objects.acreate(username="planner")
+    bot, engine = make_bot(tmp_path, say("First."), say("Second."), tools=tools)
+    root = await bot.root_session(user)
+
+    await bot.ask(root, "First")
+    await bot.ask(root, "Second")
+
+    assert [_seeded(call) for call in engine._client.calls] == [
+        ["10 left"],
+        ["10 left"],
     ]
-    assert len(results) == 1
 
 
 def test_bots_without_a_skills_folder_have_no_skill_tools(tmp_path):
@@ -1266,7 +1275,7 @@ async def test_a_kb_folder_is_the_bots_knowledge_base(tmp_path):
     assert "chocolate Soylent shake" in first["system"]
     # What it knows is always in context; the kb tools load when needed.
     assert "ergo_kb_search" not in _tool_names(first)
-    assert any("- kb [not loaded]" in text for text in _seeded(first))
+    assert "- kb (not loaded):" in first["system"]
 
 
 @pytest.mark.django_db(transaction=True)
