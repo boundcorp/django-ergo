@@ -80,9 +80,9 @@ def turn_text(message: ThreadMessage) -> str:
         header = (
             f"[Reply from {label(sender)} (thread {sender.id}) to your message: "
             f"“{snippet(original)}”. Use it or pass it on to the user. Message another "
-            "chat only with new work it hasn't been given; never send thanks, "
-            "acknowledgements or 'keep going' nudges, since each message starts a "
-            "full turn there.]"
+            "chat only with new work it hasn't been given (a follow-up is fine); never "
+            "send thanks, acknowledgements, status pings or 'keep going' nudges, since "
+            "each message starts a full turn there.]"
         )
     elif sender is not None and (
         forwarded := (message.metadata or {}).get("forwarded")

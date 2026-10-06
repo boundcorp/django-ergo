@@ -565,14 +565,17 @@ Who may message whom:
   update doesn't cost the sender another turn for an acknowledgement. Pass
   `ask: true` (to `ergo_thread_send` or `ergo_message_up`) when an answer is
   needed.
-- **No nudges.** A chat can't send another message to a chat while its
-  earlier *request* there (one whose reply comes back) is still open, and in
-  the turn that handles a chat's reply it can't send that chat a short
-  follow-up ("please continue"): under 400 characters is refused unless the
-  reply asked a question. A complete new request still goes through. A
-  report or a forward gets no reply, so it never counts as an open request:
-  a bot can forward the user's message to a thread and then send it its own
-  context or follow-up.
+- **Follow-ups are fine; status pings aren't.** A chat may send a thread
+  several messages while its earlier request there is still open: they queue
+  in order (see below), each is its own turn there, and each reply comes back
+  separately, so `waiting_on` counts every open request. Nothing is refused
+  because an earlier request is open. The one short-message rule left: in the
+  turn that handles a chat's reply, a bot can't send that chat a short
+  follow-up ("please continue", thanks): under 400 characters is refused
+  unless the reply asked a question. A complete new request still goes
+  through. The tool description, the reply header and the orchestration
+  instructions tell bots to send follow-ups with something new in them, never
+  a status ping.
 - **A busy thread queues, never refuses.** A message to a thread that is
   mid-turn, waiting for approval or has earlier messages waiting is stored
   and goes out as its next turn, after the current one and in the order it
