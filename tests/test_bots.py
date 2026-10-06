@@ -1746,47 +1746,6 @@ async def test_files_shared_with_a_thread_message_are_listed_for_the_recipient(
     )
 
 
-@pytest.mark.django_db(transaction=True)
-async def test_a_chat_waits_for_its_open_request_instead_of_nudging(
-    tmp_path, thread_messages
-):
-    from django_ergo.conversation.models import ThreadMessage
-
-    user = await User.objects.acreate(username="nudger")
-    bot, engine = make_bot(tmp_path, say("ok"))
-    root = await bot.root_session(user)
-    thread = await bot.create_session(user, parent=root, title="Mockups")
-    engine._client.responses = [
-        claude_tool(
-            "ergo_thread_send", {"thread": str(thread.id), "message": "Draw it"}
-        ),
-        claude_tool(
-            "ergo_thread_send",
-            {"thread": str(thread.id), "message": "Still waiting, please send it"},
-            tool_id="nudge",
-        ),
-        say("Asked."),
-    ]
-    await bot.ask(root, "Get the mockups drawn")
-    nudge = engine._client.calls[2]["messages"][-1]["content"][0]
-    assert nudge["is_error"]
-    assert "is still open; its reply will arrive here. Don't nudge" in nudge["content"]
-    assert await ThreadMessage.objects.acount() == 1
-
-    # Once it's answered, new work can go out.
-    await ThreadMessage.objects.aupdate(status="answered")
-    engine._client.responses = [
-        claude_tool(
-            "ergo_thread_send",
-            {"thread": str(thread.id), "message": "Now the dark variant"},
-            tool_id="next",
-        ),
-        say("Asked again."),
-    ]
-    await bot.ask(root, "And dark mode")
-    assert await ThreadMessage.objects.acount() == 2
-
-
 PING_TOOLS = (
     TOOLS
     + '''
@@ -1900,6 +1859,145 @@ async def test_two_reports_in_a_row_are_not_nudges(tmp_path, thread_messages):
 
 
 @pytest.mark.django_db(transaction=True)
+async def test_follow_ups_to_an_idle_thread_are_all_accepted_and_each_reply_comes_back(
+    tmp_path, thread_messages
+):
+    from django_ergo.bots import orchestrator
+    from django_ergo.conversation.models import ThreadMessage
+
+    user = await User.objects.acreate(username="followuper")
+    bot, engine = make_bot(tmp_path, say("ok"))
+    root = await bot.root_session(user)
+    thread = await bot.create_session(user, parent=root, title="Mockups")
+    send = lambda text, tool_id: claude_tool(  # noqa: E731
+        "ergo_thread_send", {"thread": str(thread.id), "message": text}, tool_id=tool_id
+    )
+    engine._client.responses = [
+        send("Draw the header", "s1"),
+        send("Make it blue", "s2"),
+        send("And add a logo", "s3"),
+        say("Asked three times."),
+    ]
+    await bot.ask(root, "Get the mockups drawn")
+    sent = [json.loads(r["content"]) for r in _tool_results(engine)[-3:]]
+    assert [(s["status"], s.get("queue_position")) for s in sent] == [
+        ("sent", None),
+        ("queued", 2),
+        ("queued", 3),
+    ]
+    assert not any(r.get("is_error") for r in _tool_results(engine)[-3:])
+    status = await sync_to_async(orchestrator.thread_status)(root)
+    assert status["waiting_on"] == 3
+    assert (await sync_to_async(orchestrator.thread_status)(thread))["working_for"] == 3
+
+    # The thread takes them one turn each, oldest first, and each is answered.
+    engine._client.responses = [
+        say("Header drawn."),
+        say("Blue now."),
+        say("Logo added."),
+        say("Noted: header."),  # then the root takes each reply as a turn
+        say("Noted: blue."),
+        say("Noted: logo."),
+    ]
+    while SENT:
+        await thread_messages()
+    rows = [m async for m in ThreadMessage.objects.order_by("created_at")]
+    requests = [m for m in rows if m.in_reply_to_id is None]
+    assert [(m.text, m.status, m.reply_text) for m in requests] == [
+        ("Draw the header", "answered", "Header drawn."),
+        ("Make it blue", "answered", "Blue now."),
+        ("And add a logo", "answered", "Logo added."),
+    ]
+    replies = [m for m in rows if m.in_reply_to_id is not None]
+    assert sorted(m.in_reply_to_id for m in replies) == sorted(m.id for m in requests)
+    assert all(m.status == "answered" for m in replies)  # each reached the root's turn
+    asked = [
+        m
+        for call in engine._client.calls
+        for m in _heard(call)
+        if m.startswith("[Message from")
+    ]
+    assert [text.rsplit("\n\n", 1)[-1] for text in dict.fromkeys(asked)] == [
+        "Draw the header",
+        "Make it blue",
+        "And add a logo",
+    ]
+    assert (await sync_to_async(orchestrator.thread_status)(root))["waiting_on"] == 0
+    assert (await sync_to_async(orchestrator.thread_status)(thread))["working_for"] == 0
+
+    # Once idle again, another follow-up is simply delivered.
+    engine._client.responses = [send("One more thing", "s4"), say("Asked again.")]
+    await bot.ask(root, "And one more")
+    again = json.loads(_tool_results(engine)[-1]["content"])
+    assert again["status"] == "sent" and "queue_position" not in again
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_follow_ups_to_a_busy_thread_queue_in_order_and_each_reply_closes_its_request(
+    tmp_path, thread_messages
+):
+    from django_ergo.bots import orchestrator
+    from django_ergo.conversation.models import ThreadMessage
+
+    user = await User.objects.acreate(username="busyfollower")
+    bot, engine = make_bot(tmp_path, say("ok"), tools=PING_TOOLS)
+    root = await bot.root_session(user)
+    thread = await bot.create_session(user, parent=root, title="Deploy")
+    engine._client.responses = [
+        claude_tool(
+            "ergo_thread_send",
+            {"thread": str(thread.id), "message": "Deploy staging"},
+            tool_id="a",
+        ),
+        say("Asked."),
+    ]
+    await bot.ask(root, "Ship it")
+    first = await ThreadMessage.objects.aget(in_reply_to__isnull=True)
+
+    # While the thread works on that request (still open), root follows up twice.
+    engine._client.responses = [
+        claude_tool("parent_sends", {"message": "Use the blue cluster"}, tool_id="b"),
+        claude_tool(
+            "parent_sends", {"message": "Then run the smoke test"}, tool_id="c"
+        ),
+        say("Staging deployed."),
+    ]
+    await thread_messages()  # the thread starts on it
+    queued = [json.loads(r["content"]) for r in _tool_results(engine)[-2:]]
+    assert [(q["status"], q["queue_position"], q["status_now"]) for q in queued] == [
+        ("queued", 1, "queued"),
+        ("queued", 2, "queued"),
+    ]
+    await first.arefresh_from_db()
+    assert (first.status, first.reply_text) == ("answered", "Staging deployed.")
+    status = await sync_to_async(orchestrator.thread_status)(root)
+    assert status["waiting_on"] == 2  # the two follow-ups are still open
+
+    # The turn's end sends them on: one turn each, in the order they were sent.
+    engine._client.responses = [
+        say("On the blue cluster."),
+        say("Smoke test passed."),
+        say("Noted: staging."),  # then the root takes each reply as a turn
+        say("Noted: blue."),
+        say("Noted: smoke."),
+    ]
+    while SENT:
+        await thread_messages()
+    rows = [m async for m in ThreadMessage.objects.order_by("created_at")]
+    requests = [m for m in rows if m.in_reply_to_id is None]
+    assert [(m.text, m.status, m.reply_text) for m in requests] == [
+        ("Deploy staging", "answered", "Staging deployed."),
+        ("Use the blue cluster", "answered", "On the blue cluster."),
+        ("Then run the smoke test", "answered", "Smoke test passed."),
+    ]
+    replies = [m for m in rows if m.in_reply_to_id is not None]
+    assert sorted(m.in_reply_to_id for m in replies) == sorted(m.id for m in requests)
+    assert all(m.status == "answered" for m in replies)
+    assert (await sync_to_async(orchestrator.thread_status)(root))["waiting_on"] == 0
+    assert (await sync_to_async(orchestrator.thread_status)(thread))["working_for"] == 0
+
+
+@pytest.mark.django_db(transaction=True)
 async def test_a_send_to_a_thread_busy_with_the_users_turn_queues_without_interrupting(
     tmp_path, turn_stopper, thread_messages
 ):
@@ -2005,11 +2103,12 @@ async def test_interrupt_only_stops_a_turn_answering_this_chats_own_request(
     assert turn_stopper == [str(thread.id)]
     assert "Its running turn was stopped" in own["note"]
 
-    # Without a TURN_STOPPER nothing can be stopped. The request is still open, so
-    # the no-nudge rule refuses the message, and says why the interrupt didn't apply.
+    # Without a TURN_STOPPER nothing can be stopped: the message still goes out, queued
+    # behind the request that is still open, and says why the interrupt didn't apply.
     settings.DJANGO_ERGO = {**settings.DJANGO_ERGO, "TURN_STOPPER": None}
-    with pytest.raises(ValueError, match="can't stop a running turn"):
-        await interrupt({"sender_session": root, "text": "Draw it"})
+    unstoppable = await interrupt({"sender_session": root, "text": "Draw it"})
+    assert (unstoppable["status"], unstoppable["interrupted"]) == ("queued", False)
+    assert "can't stop a running turn" in unstoppable["note"]
 
 
 @pytest.mark.django_db(transaction=True)

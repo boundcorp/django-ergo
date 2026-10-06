@@ -23,9 +23,10 @@ Who may message whom:
   A busy recipient never makes a send fail: the message is queued
   (``status: "queued"``, with its ``queue_position``) and goes out in order as the
   recipient's next turn, one turn per message, without interrupting the current
-  one. The one refusal is the no-nudge rule: a chat can't send another message to
-  a chat while its earlier *request* there (one whose reply comes back) is still
-  open. A report or a forward gets no reply, so it never blocks a later send.
+  one. A chat's earlier request to the thread still being open never refuses a
+  send: follow-ups queue behind it in order, each its own turn whose reply goes
+  back to this chat. A pure status ping ("any news?") is still discouraged (the
+  tool description, the reply header), not blocked.
   ``interrupt=true`` replaces a request of this chat that the recipient is working
   on right now (it stops that turn, and the message goes out next in the queue);
   it never stops a turn answering the user or another chat, and then just queues.
@@ -135,7 +136,12 @@ already owns (or should own), hand it over with ergo_thread_forward instead of
 retelling it with ergo_thread_send. Forwarding copies the user's own words, so
 their intent and any approval reach the thread unchanged; add a note only for
 context the thread lacks. Then reply here in one line saying where it went.
-Use ergo_thread_send for your own requests and questions.
+Use ergo_thread_send for your own requests and questions. You may send a thread
+several messages in a row, even while an earlier one is unanswered: a busy thread
+queues them and handles them one after another, in order, each with its own
+reply. Send a follow-up when you have something new for it (more context, a
+correction, the next step); don't send status pings ("any news?", "please
+continue", thanks), since each message costs the thread a full turn.
 
 Resolving threads: keep the thread list to work that is still going on.
 - Resolve a thread (ergo_thread_resolve, with a one-line summary) when its work is
@@ -413,7 +419,10 @@ def ergo_thread_send(  # noqa: PLR0913
 
     Returns at once. The reply arrives later as a new message in this chat, except
     for a report upward (see ``ask``). A busy thread doesn't refuse it: it is
-    queued (``status: "queued"``) and goes out in order as the thread's next turn.
+    queued (``status: "queued"``, with its ``queue_position``) and goes out in
+    order as the thread's next turn. Follow-ups to a thread that hasn't answered
+    yet are fine: they queue behind the earlier ones, and each reply comes back
+    separately. Don't send pure status pings ("any news?", "continue", thanks).
     """
     return _send(
         ctx,
@@ -603,12 +612,6 @@ def _send(  # noqa: PLR0913
     interrupting, not_interrupted = (
         _interruptible(ctx, recipient) if interrupt else (None, "")
     )
-    _refuse_while_request_open(
-        ctx,
-        recipient,
-        replacing=interrupting,
-        interrupt_note=not_interrupted if interrupt else "",
-    )
     # Upward (a thread to its main chat, a main chat to its parent's) is a report
     # unless it asks: no reply goes back, so a status update doesn't cost a turn
     # here for the recipient's acknowledgement.
@@ -663,47 +666,6 @@ def _interrupt_outcome(
     if interrupting:
         return "Its running turn had already ended; nothing was stopped."
     return f"Not interrupted: {not_interrupted}."
-
-
-def _refuse_while_request_open(
-    ctx: ToolContext,
-    recipient: ConversationSession,
-    *,
-    replacing: ThreadMessage | None,
-    interrupt_note: str,
-) -> None:
-    """The no-nudge rule: refuse a message to a chat while this chat's earlier request
-    there is still open (its reply is coming; each message starts a full turn there).
-
-    A report or a forward gets no reply, so it isn't a request to wait on, and the
-    request an ``interrupt`` is replacing (``replacing``) is already being ended.
-    """
-    open_requests = ctx.session.sent_thread_messages.filter(
-        recipient_session=recipient,
-        in_reply_to__isnull=True,
-        status__in=OPEN_STATUSES,
-    )
-    if replacing:
-        open_requests = open_requests.exclude(id=replacing.id)
-    open_request = next(
-        (
-            m
-            for m in open_requests.order_by("-created_at")
-            if not (m.metadata or {}).get("report")
-        ),
-        None,
-    )
-    if open_request is None:
-        return
-    msg = (
-        f"Your request to {messaging.label(recipient)} from "
-        f"{open_request.created_at:%H:%M} UTC (“{messaging.snippet(open_request.text)}”) "
-        "is still open; its reply will arrive here. Don't nudge or add to it: wait "
-        "for the reply, then send new work if there is any."
-    )
-    if interrupt_note:
-        msg += f" (interrupt didn't apply: {interrupt_note}.)"
-    raise ValueError(msg)
 
 
 def _delivery(recipient: ConversationSession, sent: ThreadMessage) -> dict:
