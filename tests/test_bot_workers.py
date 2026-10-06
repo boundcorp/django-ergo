@@ -231,6 +231,7 @@ def test_orca_start_worker_watches_the_dispatch_and_reports_back(  # noqa: PLR09
         ("orchestration", "worker-start"): {"dispatchId": "ctx_1", "taskId": "task_1"},
         ("terminal", "send"): {"send": {"accepted": True}},
         ("terminal", "show"): {"terminal": {"connected": True, "paneRuntimeId": 7}},
+        ("orchestration", "reply"): {"sent": True},
     }
 
     def respond(args):
@@ -363,6 +364,21 @@ def test_orca_start_worker_watches_the_dispatch_and_reports_back(  # noqa: PLR09
     from django_ergo.bots.messaging import turn_text
 
     assert turn_text(question).startswith("[News from the worker")
+    assert "ergo_agent_reply" in question.text
+    from django_ergo.bots.agents import agent_toolkit
+
+    agent_toolkit(bot, ctx).execute_tool(
+        "ergo_agent_reply",
+        {"worker_id": worker_id, "question_id": "msg_q", "answer": "Blue"},
+    )
+    assert calls[-1][1:7] == [
+        "orchestration",
+        "reply",
+        "--id",
+        "msg_q",
+        "--body",
+        "Blue",
+    ]
 
     state["status"] = "completed"
     state["inbox"].append(
@@ -432,7 +448,13 @@ def test_orca_start_worker_skips_usage_without_a_worktree_path(
 
     assert dispatched == [expected_worktree]
     worker = Worker.objects.get(pk=started["id"])
-    assert worker.state == {"task": "task_1", "seen": [], "agent": "codex"}
+    assert worker.state == {
+        "seen": [],
+        "agent": "codex",
+        "model": "",
+        "effort": "",
+        "manager": "orca",
+    }
     plugin.scan_usage(WorkerContext(bot, worker), settled=True)
 
 
@@ -468,12 +490,8 @@ def test_orca_start_worker_uses_path_encoded_in_id_selector(
 
     assert dispatched == [selector]
     worker = Worker.objects.get(pk=started["id"])
-    assert worker.state == {
-        "task": "task_1",
-        "seen": [],
-        "agent": "codex",
-        "worktree": "/home/dev/orca/workspaces/repo/task",
-    }
+    assert worker.function == "agent:orca"
+    assert worker.args["handle"]["path"] == "/home/dev/orca/workspaces/repo/task"
 
 
 @pytest.mark.django_db(transaction=True)
@@ -518,7 +536,13 @@ def test_orca_start_worker_skips_usage_for_id_selector_without_path(
 
     assert dispatched == [selector]
     worker = Worker.objects.get(pk=started["id"])
-    assert worker.state == {"task": "task_1", "seen": [], "agent": "codex"}
+    assert worker.state == {
+        "seen": [],
+        "agent": "codex",
+        "model": "",
+        "effort": "",
+        "manager": "orca",
+    }
     plugin.scan_usage(WorkerContext(bot, worker), settled=True)
 
 

@@ -296,6 +296,22 @@ class Bot:
                 source="built-in",
             )
         )
+        from django_ergo.bots.agents import AGENTS_INSTRUCTIONS
+        from django_ergo.bots.agents import agent_toolkit
+        from django_ergo.bots.agents import managers
+
+        if managers(self):
+            defs.append(
+                SkillDef(
+                    "agents",
+                    "Start coding agents (Codex, Claude Code, omp) on tasks, answer "
+                    "their questions and stop them",
+                    instructions=AGENTS_INSTRUCTIONS,
+                    toolkits=lambda ctx: [agent_toolkit(self, ctx)],
+                    requires=requires.get("agents", []),
+                    source="built-in",
+                )
+            )
         if self.definition.root_dir is not None:
             from django_ergo.bots.introspection import introspection_toolkit
 

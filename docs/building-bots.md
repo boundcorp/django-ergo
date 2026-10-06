@@ -159,7 +159,7 @@ tiers:                # bot chats: candidates in order of preference
   low:    [claude/claude-sonnet-5-5, chatgpt/gpt-6-luna]
   medium: [claude/claude-opus-5-5, chatgpt/gpt-6-sol]
   high:   [claude/claude-opus-5-5, chatgpt/gpt-6-sol, openai/gpt-6-sol]
-agents:               # coding agents (orca_start_worker tier=...), subscriptions only
+agents:               # coding agents (ergo_agent_start tier=...), subscriptions only
   medium:
     - {agent: claude, model: claude-opus-5-5, provider: claude}
     - {agent: codex, model: gpt-6-sol, effort: medium, provider: chatgpt}

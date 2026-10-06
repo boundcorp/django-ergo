@@ -10,7 +10,8 @@
         files_host: devbox         # ssh host holding the worktrees (default: the environment;
                                    # "" reads them on this host)
         max_attach_bytes: 20000000
-        worker_poll_seconds: 120   # how often orca_start_worker's watcher checks the agent
+        agents: [codex, claude, omp]  # the agents ergo_agent_start may start here
+        worker_poll_seconds: 120   # how often an agent's watcher checks it
         usage_minutes: 10          # minimum minutes between agent-session usage scans
         stall_minutes: 10          # a running worker with no new output this long shows as stalled
 
@@ -32,15 +33,17 @@ The bot runs the CLI on the host Ergonaut runs on, as that user. Tools:
   by ``session_id``) into a folder of an Orca worktree, so a worker can use
   them (design mockups, specs). Same approval as ``orca_run``; the folder must
   stay inside the worktree, and secret-looking names are refused.
-- ``orca_start_worker``: start a supervised coding agent on a task (approval),
-  watched by a thread Worker (``orca:watch``, see bots.workers) that polls the
-  dispatch, passes the agent's questions to the chat and brings its
-  ``worker_done`` report back as a message. Each chat gets its own Orca Run
+- An agent manager named ``orca`` (see bots.agents): ``ergo_agent_start``
+  starts a supervised coding agent on a task as an Orca worker (approval),
+  watched by a thread Worker (``agent:orca``) that polls the dispatch, passes
+  the agent's questions to the chat (``ergo_agent_reply`` answers them with
+  ``orchestration reply``) and brings its ``worker_done`` report back as a
+  message. ``orca_start_worker`` does the same with Orca's parameter names. Each chat gets its own Orca Run
   and mailbox terminal, made on first use. Each check also reads the agent's
   latest output (``worker-read``: its transcript, or its terminal) into the
   worker's activity, which Ergonaut's worker cards show with the time since it
   last did something; ``worker_log`` reads the whole recent log on demand.
-- ``orca:watch`` also reads the coding agent's own session files from
+- The watcher also reads the coding agent's own session files from
   ``files_host`` (or this host) every ``usage_minutes`` and when it settles.
   It records Claude Code, Codex, and omp token counts per worker for Costs;
   scanning is best effort and never changes the worker outcome.
@@ -69,6 +72,10 @@ from datetime import timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from django_ergo.bots.agents import AgentCheck
+from django_ergo.bots.agents import AgentManager
+from django_ergo.bots.agents import AgentQuestion
+from django_ergo.bots.agents import AgentSpec
 from django_ergo.bots.plugins import BotPlugin
 from django_ergo.bots.tools import BotTool
 from django_ergo.bots.tools import FunctionToolkit
@@ -360,6 +367,7 @@ class OrcaPlugin(BotPlugin):
         self.max_attach_bytes = int(self.config.get("max_attach_bytes", 20_000_000))
         self.poll_seconds = float(self.config.get("worker_poll_seconds", POLL_SECONDS))
         self.stall_minutes = float(self.config.get("stall_minutes", STALL_MINUTES))
+        self.manager = OrcaAgents(self)
 
     def argv(self, args: list[str]) -> list[str]:
         args = [str(a) for a in args]
@@ -790,74 +798,52 @@ class OrcaPlugin(BotPlugin):
         effort: str = "",
         tier: str = "",
     ) -> dict:
-        """Start a supervised Orca worker, and a thread Worker that watches it.
-
-        With ``tier`` (low, medium, high), the agent, model and effort come
-        from providers.yaml's ``agents`` tiers, on whichever subscription has
-        room (``bots.routing.pick_agent``)."""
+        """``orca_start_worker``: ``bots.agents.start`` on this plugin's manager."""
+        from django_ergo.bots import agents
         from django_ergo.bots.workers import describe
 
-        if ctx.session is None:
-            msg = "Workers belong to a chat"
-            raise ValueError(msg)
-        if tier:
-            from django_ergo.bots.routing import pick_agent
+        worker = agents.start(
+            ctx,
+            AgentSpec(spec, worktree, agent, model, effort, title, tier),
+            self.manager.name,
+        )
+        handle = worker.args["handle"]
+        return {
+            **describe(worker),
+            "orca": {
+                key: handle[key] for key in ("run", "task", "dispatch", "worktree")
+            },
+        }
 
-            choice = pick_agent(ctx.bot.providers, tier)
-            agent, model, effort = choice.agent, choice.model, choice.effort
-        worktree, worktree_path = self.resolved_worktree(worktree)
-        title = (title or spec.strip().splitlines()[0])[:120]
-        if tier:
-            from django_ergo.bots.routing import record_agent_pick
-
-            record_agent_pick(
-                ctx.bot.providers, tier, choice, f"Orca worker · {title}", ctx.session
-            )
+    def start_agent(self, ctx: ToolContext, spec: AgentSpec) -> dict:
+        """Create the Orca task and worker for ``spec``; the manager's handle."""
+        worktree, worktree_path = self.resolved_worktree(spec.workspace)
+        args = (spec.brief, worktree, spec.agent, spec.title, spec.model, spec.effort)
         try:
-            task_id, run_id, receipt = self.dispatch(
-                ctx, spec, worktree, agent, title, model, effort
-            )
+            task_id, run_id, receipt = self.dispatch(ctx, *args)
         except ValueError as exc:
             # The chat's saved mailbox terminal or Run is gone (its worktree was
             # removed, Orca restarted): make new ones and try once more.
             if "selector_not_found" not in str(exc) or not self.forget_mailbox(ctx):
                 raise
-            task_id, run_id, receipt = self.dispatch(
-                ctx, spec, worktree, agent, title, model, effort
-            )
+            task_id, run_id, receipt = self.dispatch(ctx, *args)
         dispatch_id = _first_key(receipt, ("dispatchId", "dispatch_id"))
         if not dispatch_id:
             msg = f"worker-start gave no dispatch id: {json.dumps(receipt)[:400]}"
             raise ValueError(msg)
-        state = {
-            "task": task_id,
-            "seen": [],
-            "agent": agent,
-        }
-        if worktree_path:
-            state["worktree"] = worktree_path
-        worker = ctx.workers.start(
-            "orca:watch",
-            title=f"{agent}: {title}",
-            state=state,
-            dispatch=dispatch_id,
-            run=run_id,
-        )
         return {
-            **describe(worker),
-            "orca": {
-                "run": run_id,
-                "task": task_id,
-                "dispatch": dispatch_id,
-                "worktree": worktree,
-            },
+            "dispatch": dispatch_id,
+            "run": run_id,
+            "task": task_id,
+            "worktree": worktree,
+            "path": worktree_path or "",
         }
 
     def scan_usage(self, ctx, *, settled: bool = False) -> None:
         """Best-effort usage scan; failure leaves the last stored snapshot intact."""
-        if not (agent := ctx.state.get("agent")) or not (
-            worktree := ctx.state.get("worktree")
-        ):
+        handle = (ctx.worker.args or {}).get("handle") or {}
+        worktree = ctx.state.get("worktree") or handle.get("path")
+        if not (agent := ctx.state.get("agent")) or not worktree:
             return
         now = time.time()
         previous = float(ctx.state.get("usage_scanned_at") or 0)
@@ -952,54 +938,69 @@ class OrcaPlugin(BotPlugin):
             )
 
     def watch(self, ctx, dispatch: str, run: str):
-        """Worker function ``orca:watch``: poll the dispatch until it settles, pass the
-        agent's questions and escalations to the chat, then return its report."""
+        """Worker function ``orca:watch``, for workers started before ``agent:orca``."""
+        from django_ergo.bots.agents import watch
+
+        task = ctx.state.get("task", "")
+        return watch(
+            ctx, self.manager, {"dispatch": dispatch, "run": run, "task": task}
+        )
+
+    def check(self, ctx, handle: dict) -> AgentCheck:
+        """One look at an Orca worker: its status, new messages, latest output and
+        usage. Fails it when its agent terminal is gone (``fail_if_terminal_gone``)."""
+        dispatch, run = handle["dispatch"], handle["run"]
         shown = self.cli_json(["orchestration", "worker-show", "--dispatch", dispatch])
         status = str((shown.get("dispatch") or {}).get("status") or "")
         state = str((shown.get("worker") or {}).get("state") or "")
         liveness = str((shown.get("observation") or {}).get("status") or "")
-        seen = set(ctx.state.get("seen") or [])
         report = None
-        for message in self.run_messages(run, dispatch, ctx.state.get("task", "")):
-            if message["id"] in seen:
-                continue
-            seen.add(message["id"])
+        questions = []
+        for message in self.run_messages(run, dispatch, handle.get("task", "")):
             kind = message.get("type")
             if kind == "worker_done":
                 report = message
             elif kind in ("question", "escalation"):
-                ctx.tell(
-                    f"The Orca worker sent a {kind}: {message.get('subject') or ''}\n\n"
-                    f"{message.get('body') or ''}\n\nAnswer it with orca_run "
-                    f'["orchestration", "reply", "--id", "{message["id"]}", "--body", "<answer>"].'
+                questions.append(
+                    AgentQuestion(
+                        id=message["id"],
+                        body=message.get("body") or "",
+                        subject=message.get("subject") or "",
+                        kind=kind,
+                    )
                 )
-        ctx.state["seen"] = sorted(seen)
         self.record_activity(ctx, dispatch, shown)
         self.scan_usage(ctx, settled=report is not None or status in SETTLED)
-        if ctx.stopping:
-            return None
         if report is not None or status in SETTLED:
             body = (report or {}).get("body") or ""
             if status == "failed" and not body:
                 failure = (shown.get("dispatch") or {}).get(
                     "last_failure"
                 ) or "no report"
-                msg = f"The Orca worker failed: {failure}"
-                raise RuntimeError(msg)
-            return {
-                "status": status or "completed",
-                "subject": (report or {}).get("subject") or "",
-                "report": body,
-                "dispatch": dispatch,
-            }
-        self.fail_if_terminal_gone(ctx, shown)
-        self.submit_brief_once(ctx, shown, status)
+                return AgentCheck(
+                    "failed",
+                    questions=questions,
+                    error=f"The Orca worker failed: {failure}",
+                )
+            return AgentCheck(
+                "done",
+                questions=questions,
+                report={
+                    "status": status or "completed",
+                    "subject": (report or {}).get("subject") or "",
+                    "report": body,
+                    "dispatch": dispatch,
+                },
+            )
+        if not ctx.stopping:
+            self.fail_if_terminal_gone(ctx, shown)
+            self.submit_brief_once(ctx, shown, status)
         progress = state or status or "starting"
         if liveness:
             progress += f" · {liveness}"
         if ctx.state.get("terminal_gone_since"):
             progress += f" · agent terminal {ctx.state.get('terminal')}; failing it if it stays that way"
-        return ctx.again(self.poll_seconds, progress=progress)
+        return AgentCheck("running", progress=progress, questions=questions)
 
     def agent_terminal(self, shown: dict) -> tuple[str, str]:
         """The agent's terminal: ("live" | "exited" | "gone" | "unknown", last output)."""
@@ -1041,7 +1042,7 @@ class OrcaPlugin(BotPlugin):
         last = f" Its last output: {preview.strip()[:300]}" if preview.strip() else ""
         msg = (
             f"The Orca worker's agent terminal {state} without reporting done.{last} "
-            "Start it again with orca_start_worker if the task still needs doing."
+            "Start it again with ergo_agent_start if the task still needs doing."
         )
         raise RuntimeError(msg)
 
@@ -1093,9 +1094,10 @@ class OrcaPlugin(BotPlugin):
         )
 
     def worker_log(self, worker) -> dict | None:
-        """The whole recent output of an ``orca:watch`` worker, read now."""
-        dispatch = (worker.args or {}).get("dispatch")
-        if worker.function != "orca:watch" or not dispatch:
+        """The whole recent output of an Orca agent's worker, read now."""
+        handle = self.manager.worker_handle(worker) or (worker.args or {}).get("handle")
+        dispatch = (handle or {}).get("dispatch")
+        if not dispatch:
             return None
         # Orca clamps the limit: 50 transcript messages, or this many screen lines.
         read = self.cli_json(
@@ -1151,6 +1153,13 @@ class OrcaPlugin(BotPlugin):
     def worker_functions(self) -> dict:
         return {"watch": self.watch}
 
+    def agent_managers(self) -> dict[str, AgentManager]:
+        return {self.manager.name: self.manager}
+
+    @property
+    def skill_requires(self) -> list[str]:
+        return ["agents"]
+
     # -- plugin hooks ------------------------------------------------------
 
     def toolkits(self, ctx: ToolContext) -> list[Toolkit]:
@@ -1175,8 +1184,9 @@ class OrcaPlugin(BotPlugin):
                 f"You manage Orca on {where} with the {self.executable} CLI. "
                 f"Use orca_read for inventory; {approval}. Output is compact JSON; long "
                 'output keeps only its start and end, so pass fields (e.g. ["id", "path", "branch"]) '
-                "to list commands. Start coding agents only with orca_start_worker: it makes a "
-                "supervised Orca worker that reports back to this chat. Never start one by "
+                "to list commands. Start coding agents only with ergo_agent_start (or "
+                "orca_start_worker): it makes a supervised Orca worker that reports back to "
+                "this chat. Never start one by "
                 "creating a terminal with --command and sending it text; that agent is "
                 "unsupervised and invisible to Orca's worker list. Before stopping workers or "
                 'anything else unusual, read the CLI\'s guides with orca_read ["skills", '
@@ -1379,3 +1389,54 @@ class OrcaPlugin(BotPlugin):
             screenshot.__bot_tool__,
             start_worker.__bot_tool__,
         ]
+
+
+class OrcaAgents(AgentManager):
+    """Coding agents as supervised Orca workers, each in an Orca worktree."""
+
+    name = "orca"
+
+    def __init__(self, plugin: OrcaPlugin):
+        self.plugin = plugin
+        self.agents = tuple(plugin.config.get("agents") or ("codex", "claude", "omp"))
+        self.requires_approval = plugin.approve_changes
+        self.poll_seconds = plugin.poll_seconds
+        place = plugin.environment or "this host"
+        self.where = f"Orca worktrees on {place}"
+
+    def available(self, ctx) -> bool:
+        return not (
+            self.plugin.root_only and ctx.bot and not ctx.bot.is_root(ctx.session)
+        )
+
+    def start(self, ctx, spec: AgentSpec) -> dict:
+        return self.plugin.start_agent(ctx, spec)
+
+    def check(self, ctx, handle: dict) -> AgentCheck:
+        return self.plugin.check(ctx, handle)
+
+    def reply(self, ctx, handle: dict, question_id: str, text: str) -> str:
+        self.plugin.cli_json(
+            ["orchestration", "reply", "--id", question_id, "--body", text]
+        )
+        return f"Sent the answer to {question_id}."
+
+    def stop(self, handle: dict) -> str:
+        return (
+            f"The Orca worker (dispatch {handle.get('dispatch')}) may keep running; "
+            "stop it with orca_run as the CLI's orchestration guide says (orca_read "
+            '["skills", "get", "orchestration"])'
+        )
+
+    def log(self, worker, handle: dict) -> dict | None:
+        return self.plugin.worker_log(worker)
+
+    def worker_handle(self, worker) -> dict | None:
+        if worker.function != "orca:watch":
+            return None
+        args = worker.args or {}
+        return {
+            "dispatch": args.get("dispatch", ""),
+            "run": args.get("run", ""),
+            "task": (worker.state or {}).get("task", ""),
+        }

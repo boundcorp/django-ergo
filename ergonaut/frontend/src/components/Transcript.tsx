@@ -10,7 +10,7 @@ import { clock } from '../time'
 
 // Tools that send work to another chat or start a worker; their calls show as cards.
 const THREAD_TOOLS = new Set(['ergo_thread_send', 'ergo_message_up'])
-const WORKER_TOOLS = new Set(['orca_start_worker', 'ergo_worker_start'])
+const WORKER_TOOLS = new Set(['ergo_agent_start', 'orca_start_worker', 'ergo_worker_start'])
 
 // What the transcript knows about the chat's delegated work (from the session API).
 type Delegated = {
