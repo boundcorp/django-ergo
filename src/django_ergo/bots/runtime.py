@@ -899,10 +899,12 @@ class Bot:
     ) -> ContextBuilder | None:
         """The turn's context. ``incoming`` is False when resuming a stored turn."""
         ctx = self.tool_context(session)
+        skills = skillset or self.skillset(session)
         builder = ContextBuilder(budget_tokens=self.definition.budget_tokens)
         from django_ergo.bots.orchestrator import chat_identity
 
         builder.add(TextContextSource("This chat", chat_identity(session), weight=3))
+        builder.add(TextContextSource("Skills", skills.context_summary, weight=1))
         empty = False
         if self.definition.current_time:
             builder.add(
@@ -947,7 +949,7 @@ class Bot:
                 for source in plugin.context_sources(ctx, message) or []:
                     builder.add(source)
                     empty = False
-        for source in (skillset or self.skillset(session)).context_sources(message):
+        for source in skills.context_sources(message):
             builder.add(source)
             empty = False
         return None if empty else builder
@@ -984,8 +986,8 @@ class Bot:
         self, toolkits: list[Toolkit], session: ConversationSession | None = None
     ):
         spec = chat_reply_spec(toolkits, max_turns=self.definition.max_turns)
-        # Toolkits pre-seed what every session should start knowing (its
-        # skills, the bots it can message); a window session needs it each turn.
+        # Toolkits pre-seed what every session should start knowing; window
+        # sessions need user-defined seeds again on each turn.
         spec.pre_seed_each_turn = session is not None and self.is_window(session)
         return spec
 

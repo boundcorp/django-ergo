@@ -121,9 +121,9 @@ warning; a skill the bot names itself fails the load instead. Set
 
 ## Loading and unloading
 
-Every chat begins with an `ergo_skills_list` result already in its history:
-each skill, whether it's loaded, how many tools it has, and short hints for
-some unloaded plugins ("3 files in this chat").
+Every turn's context has a compact `Skills` section: each skill, whether it
+is loaded, and its one-line description. `ergo_skills_list` remains available
+when the model needs the fuller listing, including tool counts and hints.
 
 - `ergo_skill_load(name)` returns the skill's instructions (and its plugin
   context, if any) and adds its tools from the next model call, in the same

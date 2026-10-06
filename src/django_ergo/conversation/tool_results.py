@@ -12,7 +12,7 @@ characters (default 40,000). A turn that reads ten small files keeps them
 all; a turn that pulls several big dumps keeps only the newest few. Older
 large results become a short stub naming the tool and its size::
 
-    [penpot_tree result, 180 lines, 9,412 chars; trimmed from context to save space, call the tool again if you need it]
+    [penpot_tree result, 180 lines, 9,412 chars; trimmed from context to save space. Note what you need; call the tool again only if you still need detail.]
 
 Only what is sent changes. Stored history keeps every result in full, so
 history tools and later readers still see them, and the model can run the
@@ -95,7 +95,8 @@ def stub_text(name: str, text: str) -> str:
     lines = text.count("\n") + 1 if text else 0
     return (
         f"[{name or 'tool'} result, {lines:,} lines, {len(text):,} chars; "
-        "trimmed from context to save space, call the tool again if you need it]"
+        "trimmed from context to save space. Note what you need; call the tool "
+        "again only if you still need detail.]"
     )
 
 

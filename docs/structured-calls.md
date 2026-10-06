@@ -84,8 +84,9 @@ result = await run_structured_call(spec, "Plan it", session=session)
   kept results total at most `DJANGO_ERGO["TOOL_RESULTS_CHARS_IN_CONTEXT"]`
   characters (default 40,000; 0 keeps only the count). Older ones are sent
   as a stub such as `[penpot_tree result, 180 lines, 9,412 chars; trimmed
-  from context to save space, call the tool again if you need it]`. Errors and short results are sent as they
-  are. Only the request changes: the transcript and session rows keep every
+  from context to save space. Note what you need; call the tool again only if
+  you still need detail.]`. Errors and short results are sent as they are.
+  Only the request changes: the transcript and session rows keep every
   result, and tool call ids still pair up. Images in a stubbed result stay,
   and the image window (`IMAGES_IN_CONTEXT`) decides about them as before.
   An engine's `tool_results_in_context` attribute overrides the setting;

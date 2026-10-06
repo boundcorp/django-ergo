@@ -100,7 +100,10 @@ def test_claude_keeps_newest_large_results_and_stubs_older_ones():
     assert results[2:] == [BIG, BIG, BIG]
     assert results[0] == results[1]
     assert results[0].startswith("[tree result, 60 lines, ")
-    assert "trimmed from context to save space, call the tool again" in results[0]
+    assert (
+        "Note what you need; call the tool again only if you still need detail."
+        in (results[0])
+    )
     assert messages == before  # stored history is untouched
     # Pairing stays valid: every tool_use still has its tool_result.
     uses = [b["id"] for m in sent if m["role"] == "assistant" for b in m["content"]]
