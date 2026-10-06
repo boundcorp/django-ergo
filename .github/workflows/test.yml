@@ -20,16 +20,15 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # runs-on: pushes and PRs from branches of this repo run on our self-hosted
-  # runners; PRs from forks run on GitHub-hosted runners. Setting the
-  # repository variable CI_GITHUB_HOSTED=true sends every job to GitHub-hosted.
+  # GitHub-hosted runners: free for this public repo, and the suite runs in a
+  # few minutes there against 20+ on the self-hosted runners.
   #
   # Tests run on pull requests, nightly and by hand. A merge to main doesn't
   # rerun them: the PR already passed.
   test:
     if: github.event_name != 'push'
-    runs-on: ${{ (vars.CI_GITHUB_HOSTED != 'true' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","boundcorp"]') || 'ubuntu-24.04' }}
-    timeout-minutes: 40
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     env:
       ERGO_TEST_ISOLATED: "1"
       PYTHONDONTWRITEBYTECODE: "1"
@@ -46,7 +45,9 @@ jobs:
           cache-dependency-path: pyproject.toml
 
       - name: Install test dependencies
-        run: python -m pip install -e '.[dev]'
+        run: |
+          python -m pip install uv
+          uv pip install --system -e '.[dev]'
 
       - name: Run isolated PostgreSQL tests
         run: >-
@@ -75,7 +76,7 @@ jobs:
   # Packaging check: pushes only, so PRs don't queue another job on the runner.
   minimal-wheel:
     if: github.event_name == 'push'
-    runs-on: ${{ (vars.CI_GITHUB_HOSTED != 'true' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","boundcorp"]') || 'ubuntu-24.04' }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4

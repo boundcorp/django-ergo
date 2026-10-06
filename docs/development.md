@@ -59,18 +59,19 @@ hook passes on main; don't commit with hooks skipped.
 A merge to main doesn't rerun the test suites: the pull request already ran
 them, and agents test before they push. Both workflows also run nightly on
 main (and by hand), which catches pull requests that passed alone but break
-together; those runs use GitHub-hosted runners.
+together.
 
 On a pull request, a newer push cancels the older run. On main a running
 build is never cancelled: GitHub keeps at most one run waiting and replaces
 it with the newest push, so a burst of merges builds the commit already
 running and then only the latest one.
 
-Pushes and pull requests from branches in this repository run on
-self-hosted runners; pull requests from forks run on GitHub-hosted runners
-and need a maintainer's approval to start. If the self-hosted runners are
-down, set the repository variable `CI_GITHUB_HOSTED` to `true` and every job
-runs on GitHub-hosted runners until it is removed.
+Tests and the wheel check run on GitHub-hosted runners, which are free for
+this public repository and several times faster than our self-hosted ones.
+The image job runs on the self-hosted runners; if they are down, set the
+repository variable `CI_GITHUB_HOSTED` to `true` and it runs on
+GitHub-hosted runners until the variable is removed. Pull requests from
+forks need a maintainer's approval to start.
 
 Image builds keep their Docker layers in the GitHub Actions cache (scope
 `ergonaut`), and Python installs
