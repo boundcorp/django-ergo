@@ -62,6 +62,7 @@ dev = [
     "pytest",
     "pytest-mock",
     "pytest-xdist",
+    "Pillow",  # the images extra, for the image tests
     "ruff",
     "coverage",
     "djlint",
