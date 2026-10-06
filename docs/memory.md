@@ -25,8 +25,8 @@ the `history` skill, which every chat has loaded:
 | `ergo_chat_history_around` | messages around a line |
 | `ergo_chat_history_by_date` | messages in a date range |
 
-In a main or named chat these cover every session the bot has had with
-that person, threads included; in a thread, only that thread. Each tool
+In any chat or thread these cover every session the bot has had with
+that person, threads included. Each tool
 takes a granularity: `conversation` (what was said), `reasoning` (plus
 thinking and short tool calls) or `full`. See
 [message history](message-history.md).
