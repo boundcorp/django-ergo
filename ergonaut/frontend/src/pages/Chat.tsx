@@ -17,10 +17,10 @@ import { useDraft } from '../draft'
 import { suggestionsFromMessages, statusSummary } from '../chatLayout'
 import Files from '../components/Files'
 import Markdown from '../components/Markdown'
-import ModelPicker from '../components/ModelPicker'
+import ModelPicker, { modelLabel, useBotModels } from '../components/ModelPicker'
 import { PageViewer, Pins } from '../components/Pins'
 import { AttachmentView, replySuggestions, Transcript } from '../components/Transcript'
-import { MobileSessionBar, SuggestionChips } from '../components/ChatChrome'
+import { ModelLink, MobileSessionBar, SuggestionChips, ThreadOptions } from '../components/ChatChrome'
 import { WorkerActivityView, WorkerPulse } from '../components/WorkerActivity'
 import { agoLong } from '../time'
 
@@ -99,7 +99,20 @@ export function Chat({ onChange }: { onChange: () => void }) {
   const [pinsKey, setPinsKey] = useState(0)
   const [pinCount, setPinCount] = useState(0)
   const onPinCount = useCallback((count: number) => setPinCount(count), [])
-  const bottom = useRef<HTMLDivElement>(null)
+  // The thread options: a sheet on a phone, a dropdown in the header otherwise. The composer's
+  // model link opens whichever one this screen has.
+  const [sheetOpen, setSheetOpen] = useState(false)
+  const [menuOpen, setMenuOpen] = useState(false)
+  const models = useBotModels(detail?.session.bot ?? '')
+  function openOptions() {
+    if (window.matchMedia('(max-width: 640px)').matches) setSheetOpen(true)
+    else setMenuOpen(true)
+  }
+  // Same call whichever picker (header dropdown or phone sheet) chose the model.
+  async function pickModel(model: string) {
+    await api.setModel(id, model).catch(e => setError(String(e.message ?? e)))
+    await load()
+  }
   const composer = useRef<HTMLTextAreaElement>(null)
   const latest = useRef<SessionDetail | null>(null)
   latest.current = detail
@@ -136,11 +149,17 @@ export function Chat({ onChange }: { onChange: () => void }) {
       if (document.documentElement.dataset.chatScrolled !== next) document.documentElement.dataset.chatScrolled = next
     }
   }
+  // Scrolls the message list itself. scrollIntoView would also scroll every ancestor, including the
+  // page, which is how the composer used to end up at the top of the screen with the chat above it.
+  function pinToBottom(behavior: ScrollBehavior = 'auto') {
+    const el = transcript.current
+    if (el) el.scrollTo({ top: el.scrollHeight, behavior })
+  }
   function toBottom(behavior: ScrollBehavior = 'auto') {
     atBottom.current = true
     setScrolledUp(false)
     setUnseen(false)
-    bottom.current?.scrollIntoView({ behavior })
+    pinToBottom(behavior)
   }
   const [loadingOlder, setLoadingOlder] = useState(false)
   async function loadOlder() {
@@ -280,10 +299,22 @@ export function Chat({ onChange }: { onChange: () => void }) {
       skipScroll.current = false
       return
     }
-    if (atBottom.current) bottom.current?.scrollIntoView()
+    if (atBottom.current) pinToBottom()
     else if ((detail?.messages.length ?? 0) > seenCount.current) setUnseen(true)
     seenCount.current = detail?.messages.length ?? 0
   }, [detail, busy])
+
+  // The list keeps its place at the bottom when its own height changes (the phone keyboard opening,
+  // the composer growing, the options sheet closing), but only if the reader was already there.
+  useEffect(() => {
+    const el = transcript.current
+    if (!el) return
+    const observer = new ResizeObserver(() => {
+      if (atBottom.current) el.scrollTop = el.scrollHeight
+    })
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [loaded])
 
   // A queued turn is done once its call has finished: a new call for a
   // message (or the running call, once it took the message to steer it),
@@ -431,11 +462,16 @@ export function Chat({ onChange }: { onChange: () => void }) {
         <div className="chat-desktop-chrome">
           <header className="chat-header flex flex-wrap items-center gap-3 px-4 py-4 sm:px-6">
             <div className="min-w-0">
-              <h1 className="font-display text-2xl font-bold">{detail.session.title}</h1>
+              <div className="chat-title-bot truncate text-xs font-semibold uppercase tracking-wide text-muted">
+                {detail.session.bot}
+              </div>
+              <h1 className="chat-title font-display text-2xl font-bold [overflow-wrap:anywhere]">
+                {detail.session.title}
+              </h1>
               <div className="mt-1 text-sm text-muted">
-                {detail.session.bot} · {detail.session.role || 'session'} ·{' '}
-                {(detail.message_count ?? detail.messages.length).toLocaleString()} messages · Updated{' '}
-                {agoLong(lastActivity)} · Session {archived ? 'archived' : closed ? 'closed' : 'active'}
+                {detail.session.role || 'session'} · {(detail.message_count ?? detail.messages.length).toLocaleString()}{' '}
+                messages · Updated {agoLong(lastActivity)} · Session{' '}
+                {archived ? 'archived' : closed ? 'closed' : 'active'}
                 {detail.session.started_by && detail.session.started_by_id && (
                   <>
                     {' · started by '}
@@ -453,6 +489,11 @@ export function Chat({ onChange }: { onChange: () => void }) {
               )}
             </div>
             <div className="ml-auto flex flex-wrap items-center gap-3">
+              {models && (
+                <ThreadOptions open={menuOpen} onOpenChange={setMenuOpen}>
+                  <ModelPicker models={models} value={detail.session.model ?? ''} onPick={pickModel} large />
+                </ThreadOptions>
+              )}
               {detail.session.role === 'thread' && (
                 <button
                   className="rounded-md border border-zinc-300 px-2 py-0.5 text-xs text-zinc-600 disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-400"
@@ -489,13 +530,19 @@ export function Chat({ onChange }: { onChange: () => void }) {
           />
         </div>
         <MobileSessionBar
+          bot={detail.session.bot}
           title={detail.session.title}
+          open={sheetOpen}
+          onOpenChange={setSheetOpen}
+          options={
+            models && <ModelPicker models={models} value={detail.session.model ?? ''} onPick={pickModel} large />
+          }
           summary={summary}
           meta={
             <>
-              {detail.session.bot} · {detail.session.role || 'session'} ·{' '}
-              {(detail.message_count ?? detail.messages.length).toLocaleString()} messages · Updated{' '}
-              {agoLong(lastActivity)} · Session {archived ? 'archived' : closed ? 'closed' : 'active'}
+              {detail.session.role || 'session'} · {(detail.message_count ?? detail.messages.length).toLocaleString()}{' '}
+              messages · Updated {agoLong(lastActivity)} · Session{' '}
+              {archived ? 'archived' : closed ? 'closed' : 'active'}
               {detail.session.started_by && detail.session.started_by_id && (
                 <>
                   {' · started by '}
@@ -569,7 +616,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
         <div
           ref={transcript}
           onScroll={onTranscriptScroll}
-          className={`chat-transcript min-h-24 flex-1 overflow-y-auto px-4 py-5 sm:px-6 ${openPin ? 'hidden' : ''}`}
+          className={`chat-transcript relative min-h-24 flex-1 overflow-y-auto px-4 py-5 sm:px-6 ${openPin ? 'hidden' : ''}`}
         >
           {detail.has_more && (
             <div className="mb-4 flex justify-center">
@@ -629,7 +676,6 @@ export function Chat({ onChange }: { onChange: () => void }) {
               {stopping ? 'Stopping…' : pending && !lastCall?.status?.startsWith('in_') ? 'Queued…' : 'Thinking…'}
             </div>
           )}
-          <div ref={bottom} />
           {scrolledUp && (
             <div className="pointer-events-none sticky bottom-2 flex h-0 justify-center">
               <button
@@ -821,14 +867,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
             >
               <span className="chat-attach-label">{uploading ? 'Attaching…' : '+ Attach'}</span>
             </button>
-            <ModelPicker
-              bot={detail.session.bot}
-              value={detail.session.model ?? ''}
-              onPick={async model => {
-                await api.setModel(id, model).catch(e => setError(String(e.message ?? e)))
-                await load()
-              }}
-            />
+            {models && <ModelLink label={modelLabel(models, detail.session.model ?? '')} onOpen={openOptions} />}
             <div className="chat-composer-send ml-auto flex items-center gap-2">
               {running && (
                 <>

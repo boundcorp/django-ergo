@@ -130,12 +130,18 @@ refuse logins until the window passes.
 - **Threads** (top of the sidebar, or ⤢ next to a bot): the same groups for
   every bot on one page, with "N threads are waiting on you", bot filters,
   pull request and worker chips, and a star to pin a thread to the top.
-- **Chat**: on a phone (640px and under) the site header hides the account
+- **Chat**: the header shows the bot's name above the thread title (both
+  truncate). On a phone (640px and under) the site header hides the account
   address (it stays in the menu) and the session title, meta, actions, waiting
   list, workers and pins collapse into one bar. Opening that bar shows them in
-  a sheet. The composer is a one-line box, with attach, model and send on one
-  row. Wider screens keep the full header. A model picker in the header (with a `providers.yaml`), the
-  transcript (Markdown rendered) with tool calls you can open, images a
+  a sheet. The composer is a one-line box, with attach, the model line and
+  send on one row. Wider screens keep the full header. The model (with a
+  `providers.yaml`) shows in the composer as "Model: Sonnet 5.5"; it opens the
+  thread options, where the picker is: an Options dropdown in the header, or
+  the top of the phone sheet. The page itself never scrolls: the transcript
+  (Markdown rendered) scrolls inside it, opening at the latest message, and
+  the composer stays docked at the bottom, above the phone keyboard. The
+  transcript shows tool calls you can open, images a
   tool returned under its call, files the bot made where it made them,
   approvals with
   Approve and Deny, suggested replies as buttons, file uploads and pasted
@@ -148,17 +154,17 @@ refuse logins until the window passes.
 - **Tool calls**: each call is one header line: status (read aloud as
   running, ok, error or needs approval), the tool name (an `mcp__server__`
   prefix is shown muted; hover for the full name), a short preview of the
-  arguments and the time it took. A run of calls shows its last three open,
-  with the arguments as a key/value list (paths, ids and code in monospace;
+  arguments and the time it took. Every call starts folded to that line and
+  opens on click or tap, with the arguments as a key/value list (paths, ids and code in monospace;
   long or multiline strings clamped behind "Show more"; short scalar arrays as
   chips; nested values as indented JSON; input that is not a JSON object as
   raw text). "Raw JSON" shows the full arguments, and "Copy" copies the
   arguments or the result. The result is folded behind a one-line summary
   (size and first line) and opens on click, capped in height with its own
-  scroll; a failed call's error starts open. A call you opened stays open as
-  the chat streams. The earlier calls of a run fold into a "+N more" row
-  naming the tools, which unfolds them in place as one-line rows that open on
-  click. Calls that need approval or failed, and thread cards, always show.
+  scroll; a failed call's error starts open once the call is. A call you opened
+  stays open as the chat streams. The earlier calls of a long run fold into a
+  "+N more" row naming the tools, which unfolds them in place. Calls that need
+  approval or failed, and thread cards, always show.
 - **Thread cards**: work a chat sends to another chat (`ergo_thread_send`,
   `ergo_message_up`) shows as a card instead of a tool call: the chat it went
   to, with the bot's icon, a live status (queued, working, waiting on you,
