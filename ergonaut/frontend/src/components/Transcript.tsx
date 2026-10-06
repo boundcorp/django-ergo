@@ -449,7 +449,7 @@ function MessageView({
                   className="max-w-[85%] self-start rounded-card border border-teal/40 bg-teal-tint px-4 py-3"
                 >
                   <div className="mb-1 text-xs font-medium text-teal-700 dark:text-teal-300">
-                    ✉ message from {from.who}
+                    {from.kind === 'report' ? 'Report from' : '✉ message from'} {from.who}
                     {from.about && <span className="font-normal text-teal-600/80"> · re “{from.about}”</span>}
                   </div>
                   <BotMarkdown text={from.body} />
@@ -534,15 +534,17 @@ function ToolImages({ result }: { result?: ToolResult }) {
   )
 }
 
-// A message from another bot thread starts with a bracketed header
-// (see django_ergo.bots.messaging); show it as coming from that thread.
+// Before structured author/provenance fields existed, messages from another
+// chat were stored with this model-context header. Keep those rows visibly
+// inbound rather than mistaking their user role for the session owner.
 const THREAD_HEADER =
-  /^\[(Message|Reply) from (.+?) \(thread [0-9a-f-]+\)(?:\. [^\]]*| to your message: “([^”]*)”)\]\n\n([\s\S]*)$/
+  /^\[(Message|Reply|Report) from (.+?) \(thread [0-9a-f-]+\)(?:\. [^\]]*| to your message: “([^”]*)”)\]\n\n([\s\S]*)$/
 
 function fromThread(text: string) {
   const match = THREAD_HEADER.exec(text)
   if (!match) return null
-  return { kind: match[1] === 'Reply' ? 'reply' : 'message', who: match[2], about: match[3] ?? '', body: match[4] }
+  const kind = match[1].toLowerCase() as 'message' | 'reply' | 'report'
+  return { kind, who: match[2], about: match[3] ?? '', body: match[4] }
 }
 
 function CallHeader({ call }: { call: Call }) {

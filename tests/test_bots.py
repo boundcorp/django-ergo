@@ -1061,6 +1061,22 @@ async def test_a_bot_without_orchestration_can_always_message_upward(
     sent = await ThreadMessage.objects.select_related("recipient_session").aget()
     assert sent.recipient_session.bot_name == "boundcorp"
     assert sent.recipient_session.metadata["bot_role"] == "main"
+    assert sent.metadata["message_author"] == {
+        "kind": "bot",
+        "ref": "design",
+        "display_name": "design",
+    }
+    assert sent.metadata["message_provenance"]["kind"] == "report"
+
+    engine._client.responses = [say("Noted.")]
+    await thread_messages(registry)
+    incoming = await sent.recipient_session.messages.aget(sequence=0)
+    assert incoming.author == sent.metadata["message_author"]
+    assert incoming.provenance == sent.metadata["message_provenance"]
+    assert (
+        await incoming.content_blocks.values_list("text", flat=True).aget()
+        == "Need a dev"
+    )
 
     # A design thread may message design's main chat, not the parent.
     thread = await design.create_session(user, parent=design_main, title="Logo")

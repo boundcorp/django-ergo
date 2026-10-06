@@ -138,6 +138,27 @@ describe('structured message attribution', () => {
     expect(html).toContain('message from Research')
     expect(html).toContain('Legacy body')
   })
+
+  test('shows a legacy cross-bot report as inbound rather than the session owner', () => {
+    const html = transcript({
+      line: 0,
+      role: 'user',
+      timestamp: '2026-10-06T12:43:00Z',
+      author: {},
+      provenance: {},
+      blocks: [
+        {
+          type: 'text',
+          text: '[Report from devbox · Main (thread 00000000-0000-0000-0000-000000000001). No reply goes back to it: act on it if it needs action, and tell the user what matters.]\n\nI’ve started a worker on the suggestion-click bug.',
+        },
+      ],
+    })
+    expect(html).toContain('Report from devbox · Main')
+    expect(html).toContain('I’ve started a worker on the suggestion-click bug.')
+    expect(html).toContain('self-start')
+    expect(html).toContain('bg-teal-tint')
+    expect(html).not.toContain('>You')
+  })
 })
 
 describe('ThreadOptions', () => {
