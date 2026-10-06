@@ -56,6 +56,10 @@ hook passes on main; don't commit with hooks skipped.
   as `sha-<commit>` and, once the smoke test passes, moves the `main` tag to
   it.
 
+Both suites run in parallel with pytest-xdist (`-n auto`, one worker per
+CPU); locally, `pytest -n auto` does the same. With `ERGO_TEST_ISOLATED=1`
+each Ergo worker starts its own embedded PostgreSQL.
+
 A merge to main doesn't rerun the test suites: the pull request already ran
 them, and agents test before they push. Both workflows also run nightly on
 main (and by hand), which catches pull requests that passed alone but break

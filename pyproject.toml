@@ -61,6 +61,7 @@ dev = [
     "pip-freezer",
     "pytest",
     "pytest-mock",
+    "pytest-xdist",
     "ruff",
     "coverage",
     "djlint",

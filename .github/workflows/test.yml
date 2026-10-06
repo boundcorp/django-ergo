@@ -49,11 +49,13 @@ jobs:
           python -m pip install uv
           uv pip install --system -e '.[dev]'
 
+      # -n auto: one pytest-xdist worker per CPU (4 on ubuntu-24.04). Each
+      # worker starts its own embedded PostgreSQL in a temp dir (ERGO_TEST_ISOLATED).
       - name: Run isolated PostgreSQL tests
         run: >-
           env -u DATABASE_URL -u OPENAI_API_KEY -u ANTHROPIC_API_KEY -u TEST_OPENAI
           python -m pytest tests -q --tb=short -o addopts='' --reuse-db
-          --ds=tests.example_app.settings --durations=25
+          --ds=tests.example_app.settings -n auto --durations=25
           --junitxml=test-results.xml
 
       - name: Check additive migration drift
