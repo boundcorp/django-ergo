@@ -14,6 +14,7 @@ import type {
 } from '../api'
 import { api } from '../api'
 import { useDraft } from '../draft'
+import { prepareChatSend, type ChatSendSource } from '../chatSend'
 import { suggestionsFromMessages, statusSummary } from '../chatLayout'
 import Files from '../components/Files'
 import Markdown from '../components/Markdown'
@@ -369,15 +370,20 @@ export function Chat({ onChange }: { onChange: () => void }) {
   }
 
   // While a turn runs, a message steers it ("send") or stops it and starts the next one ("interrupt").
-  function send(message: string, mode: 'send' | 'interrupt' = 'send') {
-    if ((!message.trim() && !outgoing.length) || busy || uploading) return
-    const ids = outgoing.map(f => f.id)
-    setText('')
-    setSentFiles(outgoing)
-    setOutgoing([])
+  function send(message: string, mode: 'send' | 'interrupt' = 'send', source: ChatSendSource = 'composer') {
+    const plan = prepareChatSend(source, message, text, outgoing)
+    if ((!plan.message.trim() && !plan.attachmentIds.length) || busy || uploading) return
+    if (plan.composer === 'clear') {
+      setText(plan.draft)
+      setSentFiles(plan.sentFiles)
+      setOutgoing(plan.outgoing)
+    }
     if (mode === 'interrupt') setStopping(true)
     toBottom()
-    run(() => api.send(id, message, ids, mode), message || outgoing.map(f => f.filename).join(', '))
+    run(
+      () => api.send(id, plan.message, plan.attachmentIds, mode),
+      plan.message || plan.sentFiles.map(f => f.filename).join(', '),
+    )
   }
 
   // Take back a message the running turn hasn't given the model yet; its text returns to the box.
@@ -786,14 +792,14 @@ export function Chat({ onChange }: { onChange: () => void }) {
                 type="button"
                 disabled={busy}
                 className="rounded-full border border-indigo-300 px-3 py-1 text-sm text-indigo-700 hover:bg-indigo-50 disabled:opacity-50 dark:border-indigo-700 dark:text-indigo-300 dark:hover:bg-indigo-950"
-                onClick={() => send(s)}
+                onClick={() => send(s, 'send', 'suggestion')}
               >
                 {s}
               </button>
             ))}
           </div>
         )}
-        <SuggestionChips suggestions={mobileSuggestions} disabled={busy} onPick={send} />
+        <SuggestionChips suggestions={mobileSuggestions} disabled={busy} onPick={s => send(s, 'send', 'suggestion')} />
         {!!outgoing.length && (
           <div className="mx-4 flex flex-wrap gap-2 pt-2">
             {outgoing.map(file => (
