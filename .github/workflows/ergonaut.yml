@@ -22,15 +22,13 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # runs-on: pushes and PRs from branches of this repo run on our self-hosted
-  # runners; PRs from forks run on GitHub-hosted runners. Setting the
-  # repository variable CI_GITHUB_HOSTED=true sends every job to GitHub-hosted.
-  #
-  # Tests run on pull requests (and by hand). A merge to main doesn't rerun
-  # them: the PR already passed, and the image job below is what main needs.
+  # Tests run on GitHub-hosted runners (free for this public repo, and several
+  # times faster than the self-hosted ones), on pull requests, nightly and by
+  # hand. A merge to main doesn't rerun them: the PR already passed, and the
+  # image job below is what main needs.
   test:
     if: github.event_name != 'push'
-    runs-on: ${{ (vars.CI_GITHUB_HOSTED != 'true' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","boundcorp"]') || 'ubuntu-24.04' }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     defaults:
       run:
@@ -59,6 +57,8 @@ jobs:
   # built on top of it, and on main pushes the release image as sha-<commit>
   # and then moves the `main` tag to it. The `main` tag only ever points at a
   # commit whose smoke test passed; octo's auto-upgrader follows it.
+  # runs-on: pushes run on our self-hosted runners. Setting the repository
+  # variable CI_GITHUB_HOSTED=true sends the image job to GitHub-hosted.
   image:
     if: github.event_name == 'push'
     runs-on: ${{ (vars.CI_GITHUB_HOSTED != 'true' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","boundcorp"]') || 'ubuntu-24.04' }}
