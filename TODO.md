@@ -51,6 +51,7 @@ Live on rigel from `~/p/boundcorp/django-ergo`, bots from `boundcorp/ergo-bots`.
 - [ ] Ergonaut image: install the Claude Code CLI and keep its login (`CLAUDE_CONFIG_DIR` volume or `CLAUDE_CODE_OAUTH_TOKEN`); show subscription usage as such on Costs instead of list prices.
 - [ ] `ergonaut manage resume_failed --kind credits` (resume every chat a credit outage failed): written in bda8305 on the closed #74 branch, never merged.
 - [x] `ergo_thread_resolve` (was archive): finished threads are resolved by their orchestrator or themselves, refused while anything is open; the block marks "ready to resolve".
+- [x] The block marks "ready to resolve" only on threads the viewing bot may resolve (`orchestrator.can_resolve`, shared with the tools); a parent no longer sees an actionable hint on a sub-bot's self-started thread, and the refusal names who can resolve it.
 - [x] Each chat is told which chat it is ("This chat" block), and upward messages are one-way reports unless they `ask` (no acknowledgement turns).
 - [x] "Bots and threads" context block for orchestrating chats: every reachable bot, its chats with their status, latest-message snippets and open PRs, capped near 3k tokens (`bots/overview.py`, `orchestrator.thread_status`, `pull_requests:`, `OPEN_PRS`).
 - [x] Design to devbox handoff run live 2026-10-03: Design sent the History handoff itself, devbox picked Sonnet 5.5 from ModelsAvailable, an omp worker built it (#87 fixed omp model pinning), draft PR #88.

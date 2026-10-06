@@ -547,10 +547,16 @@ Who may message whom:
 - **Resolving.** The orchestration skill's instructions tell every
   orchestrator when to resolve: when the work is finished (PR merged or
   closed, answer delivered, the user wrapped it up), never while it waits on
-  the user, a worker, a reply or an approval, or has an open PR. The Bots and
-  threads block marks quiet threads with nothing open as "ready to resolve",
-  and a thread resolves itself after its final report. A resolved thread keeps
-  `resolved_by` and `resolved_summary` in its metadata until it reopens.
+  the user, a worker, a reply or an approval, or has an open PR. A bot may
+  resolve (or stop) its own threads and threads a chat of its own started on
+  another bot (`orchestrator.can_resolve`); a parent can't close a sub-bot's
+  self-started thread, since that could end work the sub-bot still tracks.
+  The Bots and threads block marks quiet threads with nothing open as "ready
+  to resolve" only where the viewing bot may resolve them; on other bots'
+  threads it says "looks finished (devbox resolves it)". A refused call names
+  who can resolve the thread. A thread resolves itself after its final report.
+  A resolved thread keeps `resolved_by` and `resolved_summary` in its metadata
+  until it reopens.
 - **Reports upward get no reply.** A thread's message to its own main chat,
   or a main chat's to its parent's, is a one-way report: the recipient's turn
   starts with `[Report from …]` and its reply isn't sent back, so a status
