@@ -545,6 +545,7 @@ def ergo_thread_forward(
     )
     files = original.pop("attachments")
     metadata = {
+        "forwarded": True,
         "message_author": original["author"],
         "message_provenance": {
             "kind": "forwarded",
