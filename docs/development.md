@@ -48,12 +48,23 @@ hook passes on main; don't commit with hooks skipped.
 ## CI
 
 - `.github/workflows/test.yml`: Ergo's tests on pgserver and a migration
-  drift check. On pushes (not pull requests) it also runs an installed-wheel
+  drift check, on pull requests. On pushes it runs only an installed-wheel
   check.
-- `.github/workflows/ergonaut.yml`: Ergonaut's tests. On pushes (not pull
-  requests) it also builds the `release` and `aio` images and starts the
-  `aio` image with `examples/hello` as a smoke test; pushes to main then
-  publish the release image.
+- `.github/workflows/ergonaut.yml`: Ergonaut's tests, on pull requests. On
+  pushes it builds the `release` and `aio` images and starts the `aio` image
+  with `examples/hello` as a smoke test. On main it pushes the release image
+  as `sha-<commit>` and, once the smoke test passes, moves the `main` tag to
+  it.
+
+A merge to main doesn't rerun the test suites: the pull request already ran
+them, and agents test before they push. Both workflows also run nightly on
+main (and by hand), which catches pull requests that passed alone but break
+together; those runs use GitHub-hosted runners.
+
+On a pull request, a newer push cancels the older run. On main a running
+build is never cancelled: GitHub keeps at most one run waiting and replaces
+it with the newest push, so a burst of merges builds the commit already
+running and then only the latest one.
 
 Pushes and pull requests from branches in this repository run on
 self-hosted runners; pull requests from forks run on GitHub-hosted runners
@@ -62,7 +73,7 @@ down, set the repository variable `CI_GITHUB_HOSTED` to `true` and every job
 runs on GitHub-hosted runners until it is removed.
 
 Image builds keep their Docker layers in the GitHub Actions cache (scope
-`ergonaut`), shared by the `image` and `publish` jobs, and Python installs
+`ergonaut`), and Python installs
 use the pip and uv caches, so a fresh runner doesn't start from scratch.
 
 ## Conventions

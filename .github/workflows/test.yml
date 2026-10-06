@@ -5,21 +5,29 @@ on:
     branches: [main, master, develop]
   pull_request:
     branches: [main, master, develop]
+  # Nightly full run on main catches PRs that passed alone but break together.
+  schedule:
+    - cron: "0 9 * * *"
+  workflow_dispatch:
 
 permissions:
   contents: read
 
-# A newer push to the same branch or PR cancels the older run, so the
-# runners work on the latest commit instead of a backlog.
+# A newer push to a PR cancels the older run. Branch pushes are never
+# cancelled; GitHub keeps at most one waiting and replaces it with the newest.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # runs-on: pushes and PRs from branches of this repo run on our self-hosted
   # runners; PRs from forks run on GitHub-hosted runners. Setting the
   # repository variable CI_GITHUB_HOSTED=true sends every job to GitHub-hosted.
+  #
+  # Tests run on pull requests, nightly and by hand. A merge to main doesn't
+  # rerun them: the PR already passed.
   test:
+    if: github.event_name != 'push'
     runs-on: ${{ (vars.CI_GITHUB_HOSTED != 'true' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","boundcorp"]') || 'ubuntu-24.04' }}
     timeout-minutes: 40
     env:
