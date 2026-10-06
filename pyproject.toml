@@ -62,7 +62,7 @@ dev = [
     "pytest",
     "pytest-mock",
     "pytest-xdist",
-    "Pillow",  # the images extra, for the image tests
+    "Pillow",  # the images extra, so CI runs the image-downscaling tests
     "ruff",
     "coverage",
     "djlint",
