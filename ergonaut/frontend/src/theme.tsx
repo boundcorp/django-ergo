@@ -40,11 +40,13 @@ export function ThemeToggle() {
   const next = theme === 'dark' ? 'light' : 'dark'
   return (
     <button
-      className="rounded-md border border-zinc-300 px-2 py-0.5 text-xs text-zinc-600 hover:text-zinc-900 dark:border-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-100"
+      className="theme-toggle rounded-md border border-zinc-300 px-2 py-0.5 text-xs text-zinc-600 hover:text-zinc-900 dark:border-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-100"
       title={`Switch to ${next} mode`}
+      aria-label={`Switch to ${next} mode`}
       onClick={() => setTheme(next)}
     >
-      {theme === 'dark' ? '☀ Light' : '☾ Dark'}
+      <span aria-hidden="true">{theme === 'dark' ? '☀' : '☾'}</span>
+      <span className="theme-toggle-label">{theme === 'dark' ? ' Light' : ' Dark'}</span>
     </button>
   )
 }

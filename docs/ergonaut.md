@@ -130,7 +130,11 @@ refuse logins until the window passes.
 - **Threads** (top of the sidebar, or ⤢ next to a bot): the same groups for
   every bot on one page, with "N threads are waiting on you", bot filters,
   pull request and worker chips, and a star to pin a thread to the top.
-- **Chat**: a model picker in the header (with a `providers.yaml`), the
+- **Chat**: on a phone (640px and under) the site header hides the account
+  address (it stays in the menu) and the session title, meta, actions, waiting
+  list, workers and pins collapse into one bar. Opening that bar shows them in
+  a sheet. The composer is a one-line box, with attach, model and send on one
+  row. Wider screens keep the full header. A model picker in the header (with a `providers.yaml`), the
   transcript (Markdown rendered) with tool calls you can open, images a
   tool returned under its call, files the bot made where it made them,
   approvals with

@@ -25,20 +25,34 @@ export function Pins({
   refreshKey,
   open,
   onOpen,
+  onCount,
 }: {
   sessionId: string
   refreshKey: unknown
   open: Pin | null
   onOpen: (pin: Pin | null) => void
+  onCount?: (count: number) => void
 }) {
   const [pins, setPins] = useState<Pin[]>([])
 
   useEffect(() => {
+    let current = true
     api
       .pins(sessionId)
-      .then(setPins)
-      .catch(() => setPins([]))
-  }, [sessionId, refreshKey])
+      .then(list => {
+        if (!current) return
+        setPins(list)
+        onCount?.(list.length)
+      })
+      .catch(() => {
+        if (!current) return
+        setPins([])
+        onCount?.(0)
+      })
+    return () => {
+      current = false
+    }
+  }, [sessionId, refreshKey, onCount])
 
   if (!pins.length) return null
   return (

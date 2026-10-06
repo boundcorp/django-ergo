@@ -34,8 +34,8 @@ export default function ModelPicker({
   const select = (
     <select
       value={value}
-      title="Model for this chat"
-      aria-label={large ? 'Model' : undefined}
+      title="Model and effort for this chat"
+      aria-label="Model and effort"
       className={
         large
           ? 'min-w-0 max-w-full rounded-control border-0 bg-transparent py-0.5 text-sm font-semibold'

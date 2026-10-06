@@ -299,7 +299,9 @@ function ReplyBubble({ reply }: { reply: Reply }) {
       <RoleLabel who="Assistant" timestamp={null} />
       {reply.type === 'question' && <div className="mb-1 text-xs font-medium text-amber-600">Question</div>}
       <BotMarkdown text={reply.text ?? ''} />
-      {!!suggestions.length && <div className="mt-1 text-xs text-zinc-500">Suggested: {suggestions.join(' · ')}</div>}
+      {!!suggestions.length && (
+        <div className="reply-suggestions mt-1 text-xs text-zinc-500">Suggested: {suggestions.join(' · ')}</div>
+      )}
     </div>
   )
 }
