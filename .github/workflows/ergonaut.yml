@@ -41,7 +41,7 @@ jobs:
           uv venv -p 3.12 .venv
           uv pip install -e "..[legacy,bots]" -e .
       - name: Run tests on embedded PostgreSQL
-        run: env -u DATABASE_URL .venv/bin/python -m pytest -q
+        run: env -u DATABASE_URL .venv/bin/python -m pytest -q --durations=25
       - name: Check migrations
         run: env -u DATABASE_URL .venv/bin/python manage.py makemigrations --check --dry-run
 

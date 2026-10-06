@@ -38,14 +38,14 @@ jobs:
           cache-dependency-path: pyproject.toml
 
       - name: Install test dependencies
-        run: python -m pip install -e '.[dev]' pytest-cov
+        run: python -m pip install -e '.[dev]'
 
       - name: Run isolated PostgreSQL tests
         run: >-
           env -u DATABASE_URL -u OPENAI_API_KEY -u ANTHROPIC_API_KEY -u TEST_OPENAI
           python -m pytest tests -q --tb=short -o addopts='' --reuse-db
-          --ds=tests.example_app.settings --cov=src/django_ergo
-          --cov-report=html --junitxml=test-results.xml
+          --ds=tests.example_app.settings --durations=25
+          --junitxml=test-results.xml
 
       - name: Check additive migration drift
         run: >-
@@ -56,25 +56,17 @@ jobs:
         run: |
           python -m pytest tests/test_knowledge_corpus.py tests/test_knowledge_writes.py tests/test_knowledge_features.py tests/test_knowledge_boundary.py tests/test_knowledge_wiki_import.py tests/test_knowledge_paths.py --ds=tests.knowledge_settings -o addopts='' -q --tb=short
 
-      - name: Upload coverage reports
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: coverage-report
-          path: htmlcov/
-          retention-days: 30
-
       - name: Upload test results
         uses: actions/upload-artifact@v4
         if: always()
         with:
           name: test-results
-          path: |
-            test-results.xml
-            htmlcov/
+          path: test-results.xml
           retention-days: 30
 
+  # Packaging check: pushes only, so PRs don't queue another job on the runner.
   minimal-wheel:
+    if: github.event_name == 'push'
     runs-on: ${{ (vars.CI_GITHUB_HOSTED != 'true' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","boundcorp"]') || 'ubuntu-24.04' }}
     timeout-minutes: 10
     steps:
