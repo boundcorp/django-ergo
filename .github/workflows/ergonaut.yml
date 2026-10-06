@@ -59,8 +59,9 @@ jobs:
           context: .
           file: ergonaut/Dockerfile
           target: release
-          load: true
-          tags: ergonaut:ci
+          # Not loaded into Docker: the smoke test runs the aio image, which
+          # reuses these layers from the same builder. Loading both doubled the
+          # export time on the self-hosted runners.
           cache-from: type=gha,scope=ergonaut
           cache-to: type=gha,scope=ergonaut,mode=max
       - name: Build the all-in-one image
