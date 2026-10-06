@@ -42,8 +42,10 @@ COPY ergonaut/frontend/ /app/frontend/
 RUN npm run build
 
 #
-# Builder Stage
-FROM base AS builder
+# Dependencies Stage: the virtualenv with Ergonaut's pinned requirements. It
+# changes only when requirements.freeze.txt does, so its layer stays cached
+# while the code changes. Compilers live here, not in the release image.
+FROM base AS deps
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
@@ -57,22 +59,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 COPY ergonaut/requirements.freeze.txt /app/
-RUN uv venv /app/.venv
-RUN uv pip install --no-cache-dir -r requirements.freeze.txt
-
-# Ergo, from this repo
-COPY pyproject.toml setup.py README.md HISTORY.md /ergo/
-COPY src/ /ergo/src/
-RUN uv pip install --no-cache-dir "/ergo[legacy,bots]"
-
-# Frontend, built in its own stage so a change under src/ doesn't redo it
-COPY --from=frontend /app/frontend /app/frontend
-
-COPY ergonaut/ergonaut/ /app/ergonaut
-COPY ergonaut/infra/ /app/infra
-COPY ergonaut/manage.py /app/
-COPY ergonaut/pyproject.toml ergonaut/README.md /app/
-RUN uv pip install --no-deps -e .
+RUN uv venv /app/.venv \
+    && uv pip install --no-cache-dir -r requirements.freeze.txt
 
 #
 # Developer Stage
@@ -182,13 +170,26 @@ RUN curl -fsSL \
     && rm -f /tmp/orca.AppImage \
     && ln -s /opt/orca/resources/bin/orca-ide /usr/local/bin/orca
 
-COPY --from=builder /app /app
+# Everything below changes with the code, from least to most often, so a
+# typical commit rebuilds only the last few small layers. Nothing here copies
+# the virtualenv or the frontend's node_modules again.
 WORKDIR /app
-
 RUN mkdir -p /app/static/uploads && chmod 777 /app/static/uploads
-ENV PATH=/app/.venv/bin:$PATH
 
-RUN python manage.py collectstatic --noinput
+COPY --from=deps /app/.venv /app/.venv
+COPY --from=frontend /app/frontend/dist /app/frontend/dist
+
+# Ergo, from this repo. Its dependencies are already in the virtualenv except
+# the few Ergonaut doesn't pin, which this pulls in (pure Python wheels).
+COPY pyproject.toml setup.py README.md HISTORY.md /ergo/
+COPY src/ /ergo/src/
+RUN uv pip install --no-cache-dir "/ergo[legacy,bots]" && rm -rf /ergo
+
+COPY ergonaut/pyproject.toml ergonaut/README.md ergonaut/manage.py /app/
+COPY ergonaut/infra/ /app/infra
+COPY ergonaut/ergonaut/ /app/ergonaut
+RUN uv pip install --no-cache-dir --no-deps -e . \
+    && python manage.py collectstatic --noinput
 
 # The django-ergo commit this image was built from; `ergonaut upgrade` compares
 # it with the newest release. CI passes the pushed commit.
