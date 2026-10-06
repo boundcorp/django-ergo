@@ -61,6 +61,8 @@ dev = [
     "pip-freezer",
     "pytest",
     "pytest-mock",
+    "pytest-xdist",
+    "Pillow",  # the images extra, so CI runs the image-downscaling tests
     "ruff",
     "coverage",
     "djlint",

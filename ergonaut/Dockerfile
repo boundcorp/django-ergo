@@ -31,8 +31,21 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && rm -rf /var/lib/apt/lists/*
 
 #
-# Builder Stage
-FROM base AS builder
+# Frontend Stage: depends only on ergonaut/frontend, so its layers stay cached
+# while the Python code changes.
+FROM base AS frontend
+
+WORKDIR /app/frontend
+COPY ergonaut/frontend/package.json ergonaut/frontend/package-lock.json* /app/frontend/
+RUN npm ci
+COPY ergonaut/frontend/ /app/frontend/
+RUN npm run build
+
+#
+# Dependencies Stage: the virtualenv with Ergonaut's pinned requirements. It
+# changes only when requirements.freeze.txt does, so its layer stays cached
+# while the code changes. Compilers live here, not in the release image.
+FROM base AS deps
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
@@ -46,25 +59,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 COPY ergonaut/requirements.freeze.txt /app/
-RUN uv venv /app/.venv
-RUN uv pip install --no-cache-dir -r requirements.freeze.txt
-
-# Ergo, from this repo
-COPY pyproject.toml setup.py README.md HISTORY.md /ergo/
-COPY src/ /ergo/src/
-RUN uv pip install --no-cache-dir "/ergo[legacy,bots]"
-
-# Build frontend
-COPY ergonaut/frontend/package.json ergonaut/frontend/package-lock.json* /app/frontend/
-RUN cd /app/frontend && npm ci
-COPY ergonaut/frontend/ /app/frontend/
-RUN cd /app/frontend && npm run build
-
-COPY ergonaut/ergonaut/ /app/ergonaut
-COPY ergonaut/infra/ /app/infra
-COPY ergonaut/manage.py /app/
-COPY ergonaut/pyproject.toml ergonaut/README.md /app/
-RUN uv pip install --no-deps -e .
+RUN uv venv /app/.venv \
+    && uv pip install --no-cache-dir -r requirements.freeze.txt
 
 #
 # Developer Stage
@@ -112,7 +108,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Agent toolchain: bots shell out to git/ssh/gh, kubectl, the Claude Code and omp
-# CLIs, and the Orca CLI. Installed here so both `release` and `aio` have it.
+# CLIs, and the Orca CLI.
 ARG ORCA_VERSION=1.4.180
 ARG ORCA_LINUX_APPIMAGE_SHA256=af3b6e6a67fcc3cd034ca469ff8ee1d224b1a6e2df6215fd8452afd0fd8e92ab
 
@@ -174,39 +170,28 @@ RUN curl -fsSL \
     && rm -f /tmp/orca.AppImage \
     && ln -s /opt/orca/resources/bin/orca-ide /usr/local/bin/orca
 
-COPY --from=builder /app /app
+# Everything below changes with the code, from least to most often, so a
+# typical commit rebuilds only the last few small layers. Nothing here copies
+# the virtualenv or the frontend's node_modules again.
 WORKDIR /app
-
 RUN mkdir -p /app/static/uploads && chmod 777 /app/static/uploads
-ENV PATH=/app/.venv/bin:$PATH
 
-RUN python manage.py collectstatic --noinput
+COPY --from=deps /app/.venv /app/.venv
+COPY --from=frontend /app/frontend/dist /app/frontend/dist
+
+# Ergo, from this repo. Its dependencies are already in the virtualenv except
+# the few Ergonaut doesn't pin, which this pulls in (pure Python wheels).
+COPY pyproject.toml setup.py README.md HISTORY.md /ergo/
+COPY src/ /ergo/src/
+RUN uv pip install --no-cache-dir "/ergo[legacy,bots]" && rm -rf /ergo
+
+COPY ergonaut/pyproject.toml ergonaut/README.md ergonaut/manage.py /app/
+COPY ergonaut/infra/ /app/infra
+COPY ergonaut/ergonaut/ /app/ergonaut
+RUN uv pip install --no-cache-dir --no-deps -e . \
+    && python manage.py collectstatic --noinput
 
 # The django-ergo commit this image was built from; `ergonaut upgrade` compares
 # it with the newest release. CI passes the pushed commit.
 ARG ERGONAUT_VERSION=""
 ENV ERGONAUT_VERSION=${ERGONAUT_VERSION}
-
-#
-# All-in-one Stage: `ergonaut up` runs Postgres (pgserver), Redis and Garage
-# inside the container unless DATABASE_URL, CELERY_BROKER_URL or
-# S3_ENDPOINT_URL point elsewhere.
-#   docker run -v "$PWD:/bot" -v ergonaut-data:/data -p 8000:8000 ghcr.io/boundcorp/ergonaut
-FROM release AS aio
-
-RUN apt-get update && apt-get install -y --no-install-recommends redis-server \
-    && rm -rf /var/lib/apt/lists/*
-COPY --from=dxflrs/garage:v1.1.0 /garage /usr/local/bin/garage
-
-# Postgres refuses to run as root.
-RUN useradd --create-home --uid 10001 ergonaut \
-    && mkdir -p /data /bot \
-    && chown ergonaut:ergonaut /data /bot
-USER ergonaut
-
-ENV DATA_DIR=/data \
-    ERGONAUT_BOTS=/bot \
-    PORT=8000
-VOLUME ["/data"]
-EXPOSE 8000
-CMD ["ergonaut", "up"]

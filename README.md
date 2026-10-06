@@ -34,16 +34,6 @@ ergonaut up                         # web, worker, beat and bots; http://localho
 ergonaut manage createsuperuser     # in a second terminal, once up has migrated
 ```
 
-Or in one container (Postgres, Redis and S3 storage included). Build the
-image from the repo root, then run it from any folder holding a `bot.yaml`:
-
-```bash
-docker build -f ergonaut/Dockerfile --target aio -t ergonaut .
-docker run -v "$PWD:/bot" -v ergonaut-data:/data -p 8000:8000 \
-  -e OPENAI_API_KEY --name ergonaut ergonaut
-docker exec -it ergonaut ergonaut manage createsuperuser
-```
-
 [Getting started](docs/getting-started.md) walks through it, including your
 first tool.
 

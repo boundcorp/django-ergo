@@ -11,7 +11,11 @@ thread-to-thread delegation.
   (``metadata["report"]``, see ``bots.orchestrator``) gets no reply at all; ``depth``
   caps chains of delegation (A asks B, which asks C...) at ``MAX_DEPTH``.
 - A recipient that is mid-turn or waiting for approval keeps the message
-  queued until it is free.
+  queued until it is free. A busy recipient never makes a send fail: the queue
+  goes out in the order it was sent, one turn per message, so a later message
+  never overtakes an earlier one. Queued messages stay ``queued`` (and
+  cancellable) until their turn starts, and are dispatched again whenever the
+  recipient's turn ends, however it ends.
 - A turn that stops for approval leaves the message ``waiting``; the reply
   goes back once the user decides and the turn finishes.
 
@@ -75,7 +79,43 @@ def turn_text(message: ThreadMessage) -> str:
     author, provenance = thread_message_identity(message)
     if provenance:
         return attributed_text(message.text, author, provenance)
-    if (message.metadata or {}).get("worker") and (message.metadata or {}).get(
+    sender = message.sender_session
+    if message.in_reply_to_id is not None:
+        original = message.in_reply_to.text if message.in_reply_to else ""
+        header = (
+            f"[Reply from {label(sender)} (thread {sender.id}) to your message: "
+            f"“{snippet(original)}”. Use it or pass it on to the user. Message another "
+            "chat only with new work it hasn't been given (a follow-up is fine); never "
+            "send thanks, acknowledgements, status pings or 'keep going' nudges, since "
+            "each message starts a full turn there.]"
+        )
+    elif sender is not None and (
+        forwarded := (message.metadata or {}).get("forwarded")
+    ):
+        note = (message.metadata or {}).get("note")
+        header = (
+            f"[Forwarded by {label(sender)} (thread {sender.id}): a message from the "
+            f"user{' ' + forwarded['author'] if forwarded.get('author') else ''}, sent "
+            f"{forwarded.get('sent_at', '')} in that chat, copied word for word below. "
+            "Treat it as the user speaking to you here, with their intent and any "
+            "approval it gives. Answer here: no reply goes back to that chat.]"
+        )
+        text = message.text
+        if note:
+            text += f"\n\n[Note from {label(sender)}: {note}]"
+        return f"{header}\n\n{text}{files_note(message)}"
+    elif sender is not None and (message.metadata or {}).get("report"):
+        header = (
+            f"[Report from {label(sender)} (thread {sender.id}). No reply goes back "
+            "to it: act on it if it needs action, and tell the user what matters.]"
+        )
+    elif sender is not None:
+        header = (
+            f"[Message from {label(sender)} (thread {sender.id}). Your final reply "
+            "goes back to that thread automatically; it is not shown to the user "
+            "unless they open this chat.]"
+        )
+    elif (message.metadata or {}).get("worker") and (message.metadata or {}).get(
         "update"
     ):
         header = (
@@ -220,35 +260,88 @@ def busy(session: ConversationSession) -> bool:
     ).exists()
 
 
-def deliver(message_id: str, registry: BotRegistry | None = None) -> None:
-    """Run the recipient's turn for a queued message (in a worker or thread).
+def deliver(
+    message_id: str, registry: BotRegistry | None = None, *, locked: bool = False
+) -> None:
+    """Run the recipient's turn for its oldest queued message (in a worker or thread).
 
-    A busy recipient keeps the message queued; it goes out when the
-    recipient's current turn ends (``finish_turn``) or on the next sweep
-    (``redispatch_waiting``).
+    Messages go out one turn each, oldest first. ``message_id`` only names the
+    recipient to serve: two dispatches that race (a forward and the follow-up sent
+    right after it) still run in the order the messages were sent, and a message
+    that already went out (a duplicate dispatch) is a no-op.
+
+    A recipient that is mid-turn or waiting for approval is left alone, with its
+    messages still queued (so ``ergo_thread_stop`` can cancel them and none is
+    half-claimed). The queue goes out when that turn ends (``finish_turn``), after
+    each delivery, or on the next sweep (``redispatch_waiting``).
+
+    ``locked``: the caller already holds the recipient's turn lock (Ergonaut takes
+    its Redis lock around delivery), so the in-process lock is skipped.
     """
     from django_ergo.bots import webhooks
 
-    # Claim it, so a duplicate dispatch can't run the recipient's turn twice.
-    if not ThreadMessage.objects.filter(
-        id=message_id, status=ThreadMessageStatus.QUEUED
-    ).update(status=ThreadMessageStatus.DELIVERED):
+    recipient_id = (
+        ThreadMessage.objects.filter(id=message_id, status=ThreadMessageStatus.QUEUED)
+        .values_list("recipient_session_id", flat=True)
+        .first()
+    )
+    if recipient_id is None:
         return
-    message = ThreadMessage.objects.select_related(
+    lock = (
+        None
+        if locked
+        else _session_locks.setdefault(str(recipient_id), threading.Lock())
+    )
+    if lock is not None and not lock.acquire(blocking=False):
+        return  # mid-turn here: whoever holds the lock sends on the queue after it
+    try:
+        message = _claim_next(recipient_id)
+        if message is None:
+            return
+        registry = registry or webhooks.get_registry()
+        _run_turn(message, registry)
+    finally:
+        if lock is not None:
+            lock.release()
+    redispatch_waiting(
+        recipient_id, registry=registry
+    )  # anything that queued meanwhile
+
+
+def _claim_next(recipient_id) -> ThreadMessage | None:
+    """Take the recipient's oldest queued message for delivery, unless it is busy.
+
+    The claim is a conditional UPDATE, so a message is never delivered twice.
+    """
+    recipient = ConversationSession.objects.filter(id=recipient_id).first()
+    if recipient is None or busy(recipient):
+        return None
+    head = (
+        ThreadMessage.objects.filter(
+            recipient_session_id=recipient_id, status=ThreadMessageStatus.QUEUED
+        )
+        .order_by("created_at", "id")
+        .values_list("id", flat=True)
+        .first()
+    )
+    if head is None or not ThreadMessage.objects.filter(
+        id=head, status=ThreadMessageStatus.QUEUED
+    ).update(status=ThreadMessageStatus.DELIVERED):
+        return None
+    return ThreadMessage.objects.select_related(
         "recipient_session__user", "sender_session", "in_reply_to"
-    ).get(id=message_id)
+    ).get(id=head)
+
+
+def _run_turn(message: ThreadMessage, registry: BotRegistry | None) -> None:
+    """The recipient's turn for a claimed message; a failure fails the message."""
     recipient = message.recipient_session
-    registry = registry or webhooks.get_registry()
     if registry is not None and recipient.bot_name in registry:
         bot = registry.get(recipient.bot_name)
     else:
         bot = KNOWN_BOTS.get(recipient.bot_name)
     if bot is None:
         fail(message, f"Bot {recipient.bot_name!r} is not loaded")
-        return
-    lock = _session_locks.setdefault(str(recipient.id), threading.Lock())
-    if busy(recipient) or not lock.acquire(blocking=False):
-        requeue(message)
         return
     factory = api_settings.TURN_CONTROL
     control = factory(recipient, delegated=True) if factory else None
@@ -258,37 +351,40 @@ def deliver(message_id: str, registry: BotRegistry | None = None) -> None:
             recipient, turn_text(message), thread_message=message, control=control
         )
     except Exception as exc:
-        logger.exception("Delivering thread message %s failed", message_id)
+        logger.exception("Delivering thread message %s failed", message.id)
         fail(message, str(exc))
     finally:
-        lock.release()
         if callable(getattr(control, "finish", None)):
             control.finish()
-    redispatch_waiting(recipient, registry=registry)  # anything that queued meanwhile
-
-
-def requeue(message: ThreadMessage) -> None:
-    message.status = ThreadMessageStatus.QUEUED
-    message.save(update_fields=["status", "updated_at"])
 
 
 def redispatch_waiting(
-    session: ConversationSession | None = None,
+    session: ConversationSession | str | None = None,
     *,
     older_than: float = 0,
     registry: BotRegistry | None = None,
 ) -> int:
-    """Dispatch queued messages again: one session's (after its turn), or any
-    queued longer than ``older_than`` seconds (a periodic sweep)."""
+    """Dispatch queued messages again: one session's next one (after its turn;
+    nothing while it is busy, since its turn's end does this), or any queued longer
+    than ``older_than`` seconds (a periodic sweep). Returns how many were dispatched."""
     queued = ThreadMessage.objects.filter(status=ThreadMessageStatus.QUEUED)
+    limit = 50
     if session is not None:
+        if not isinstance(session, ConversationSession):
+            session = ConversationSession.objects.filter(id=session).first()
+        if session is None or busy(session):
+            return 0
         queued = queued.filter(recipient_session=session)
+        limit = 1  # delivery always serves the oldest, and each delivery dispatches the next
     if older_than:
         queued = queued.filter(
             updated_at__lt=timezone.now() - timedelta(seconds=older_than)
         )
     ids = [
-        str(i) for i in queued.order_by("created_at").values_list("id", flat=True)[:50]
+        str(i)
+        for i in queued.order_by("created_at", "id").values_list("id", flat=True)[
+            :limit
+        ]
     ]
     for message_id in ids:
         transaction.on_commit(

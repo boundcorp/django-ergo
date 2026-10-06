@@ -5,22 +5,30 @@ on:
     branches: [main, master, develop]
   pull_request:
     branches: [main, master, develop]
+  # Nightly full run on main catches PRs that passed alone but break together.
+  schedule:
+    - cron: "0 9 * * *"
+  workflow_dispatch:
 
 permissions:
   contents: read
 
-# A newer push to the same branch or PR cancels the older run, so the
-# runners work on the latest commit instead of a backlog.
+# Pull requests: a newer push cancels the older run. Branch pushes (main):
+# a running build is never cancelled; GitHub keeps at most one run waiting
+# and replaces it with the newest push, so a burst of merges builds the
+# running commit and then only the latest one.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # runs-on: pushes and PRs from branches of this repo run on our self-hosted
-  # runners; PRs from forks run on GitHub-hosted runners. Setting the
-  # repository variable CI_GITHUB_HOSTED=true sends every job to GitHub-hosted.
+  # Tests run on GitHub-hosted runners (free for this public repo, and several
+  # times faster than the self-hosted ones), on pull requests, nightly and by
+  # hand. A merge to main doesn't rerun them: the PR already passed, and the
+  # image job below is what main needs.
   test:
-    runs-on: ${{ (vars.CI_GITHUB_HOSTED != 'true' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","boundcorp"]') || 'ubuntu-24.04' }}
+    if: github.event_name != 'push'
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     defaults:
       run:
@@ -39,19 +47,33 @@ jobs:
         run: |
           python -m pip install --upgrade pip uv
           uv venv -p 3.12 .venv
-          uv pip install -e "..[legacy,bots]" -e .
+          uv pip install -e "..[legacy,bots]" -e . pytest-xdist
+      # -n auto: one pytest-xdist worker per CPU, each with its own test database.
       - name: Run tests on embedded PostgreSQL
-        run: env -u DATABASE_URL .venv/bin/python -m pytest -q
+        run: env -u DATABASE_URL .venv/bin/python -m pytest -q -n auto --durations=25
       - name: Check migrations
         run: env -u DATABASE_URL .venv/bin/python manage.py makemigrations --check --dry-run
 
+  # Pushes (and by hand). Builds the release image, starts it with the hello
+  # bot as a smoke test, and on main pushes it as sha-<commit> and then moves
+  # the `main` tag to it, so `main` only ever points at an image that started.
+  # Octo's auto-upgrader follows `main`.
+  # runs-on: our self-hosted runners. Setting the repository variable
+  # CI_GITHUB_HOSTED=true sends the image job to GitHub-hosted.
   image:
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ${{ (vars.CI_GITHUB_HOSTED != 'true' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","boundcorp"]') || 'ubuntu-24.04' }}
     timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    env:
+      PUBLISH: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+      IMAGE: ghcr.io/boundcorp/ergonaut
     steps:
       - uses: actions/checkout@v4
-      # Layers are cached in the GitHub Actions cache (scope "ergonaut"), shared
-      # with the publish job, so a fresh runner reuses earlier builds.
+      # Layers are cached in the GitHub Actions cache (scope "ergonaut"), so a
+      # fresh runner reuses earlier builds.
       - uses: docker/setup-buildx-action@v3
       - name: Build the release image
         uses: docker/build-push-action@v6
@@ -59,75 +81,44 @@ jobs:
           context: .
           file: ergonaut/Dockerfile
           target: release
-          # Not loaded into Docker: the smoke test runs the aio image, which
-          # reuses these layers from the same builder. Loading both doubled the
-          # export time on the self-hosted runners.
+          build-args: ERGONAUT_VERSION=${{ github.sha }}
+          load: true
+          tags: ${{ env.IMAGE }}:sha-${{ github.sha }}
           cache-from: type=gha,scope=ergonaut
           cache-to: type=gha,scope=ergonaut,mode=max
-      - name: Build the all-in-one image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: ergonaut/Dockerfile
-          target: aio
-          load: true
-          tags: ergonaut:aio
-          cache-from: type=gha,scope=ergonaut
-      - name: Start the all-in-one image with the hello bot
+      # `ergonaut up` with embedded Postgres, no broker (tasks run inline) and
+      # local file storage, as a non-root user like the octo pods (uid 1000).
+      - name: Start the release image with the hello bot
         run: |
-          docker run -d --name aio -p 8000:8000 -v "$PWD/examples/hello:/bot:ro" ergonaut:aio
+          docker run -d --name smoke --user 1000:1000 -p 8000:8000 \
+            -e HOME=/tmp -e DATA_DIR=/tmp/data -e ERGONAUT_BOTS=/bot \
+            -v "$PWD/examples/hello:/bot:ro" "$IMAGE:sha-${{ github.sha }}" ergonaut up
           for i in $(seq 1 90); do
             curl -sf localhost:8000/api/healthz && break
             sleep 2
           done
           curl -sf localhost:8000/api/healthz
           for i in $(seq 1 30); do
-            docker logs aio 2>&1 | grep -q "celery@.* ready" && docker logs aio 2>&1 | grep -q "Serving bots: hello" && break
+            docker logs smoke 2>&1 | grep -q "Serving bots: hello" && break
             sleep 2
           done
-          docker logs aio 2>&1 | grep "Serving bots: hello"
-          docker logs aio 2>&1 | grep "embedded Garage"
-          docker logs aio 2>&1 | grep "celery@.* ready"
-          docker exec aio ergonaut check
+          docker logs smoke 2>&1 | grep "Serving bots: hello"
+          docker exec smoke ergonaut check
           # Non-Python package files ship in the image (package-data in pyproject.toml).
-          docker exec aio python -c "import django_ergo, pathlib; p = pathlib.Path(django_ergo.__file__).parent; missing = [f for f in ['bots/skill_library/skillbuilder/SKILL.md', 'templates/admin/django_ergo/chat_history.html'] if not (p / f).exists()]; assert not missing, missing"
+          docker exec smoke python -c "import django_ergo, pathlib; p = pathlib.Path(django_ergo.__file__).parent; missing = [f for f in ['bots/skill_library/skillbuilder/SKILL.md', 'templates/admin/django_ergo/chat_history.html'] if not (p / f).exists()]; assert not missing, missing"
       - name: Container logs
         if: always()
         run: |
-          docker logs aio 2>&1 | tail -200 || true
-          docker rm -f aio || true
-
-  # Publishes the release image. Runs only for pushes to main (never PRs), after
-  # tests and the image smoke job pass; the concurrency group serialises
-  # publishes so a push never races an older one.
-  publish:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [test, image]
-    runs-on: ${{ (vars.CI_GITHUB_HOSTED != 'true' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","boundcorp"]') || 'ubuntu-24.04' }}
-    timeout-minutes: 30
-    permissions:
-      contents: read
-      packages: write
-    concurrency:
-      group: ergonaut-publish
-      cancel-in-progress: false
-    steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
+          docker logs smoke 2>&1 | tail -200 || true
+          docker rm -f smoke || true
       - uses: docker/login-action@v3
+        if: env.PUBLISH == 'true'
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build and push the release image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: ergonaut/Dockerfile
-          target: release
-          build-args: ERGONAUT_VERSION=${{ github.sha }}
-          push: true
-          tags: |
-            ghcr.io/boundcorp/ergonaut:main
-            ghcr.io/boundcorp/ergonaut:sha-${{ github.sha }}
-          cache-from: type=gha,scope=ergonaut
+      - name: Publish (push sha-<commit>, then move the main tag to it)
+        if: env.PUBLISH == 'true'
+        run: |
+          docker push "$IMAGE:sha-${{ github.sha }}"
+          docker buildx imagetools create -t "$IMAGE:main" "$IMAGE:sha-${{ github.sha }}"

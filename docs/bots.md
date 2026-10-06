@@ -106,7 +106,9 @@ def sales_chart(days: int = 7) -> ToolResult:
 The image bytes are saved as a file in the chat (`ToolImage.from_attachment(row)`
 points at a file the chat already has) and history keeps a reference. Only the
 latest two images go to the model on each call (`DJANGO_ERGO["IMAGES_IN_CONTEXT"]`),
-downscaled to 1024px with Pillow when it's installed; older ones show as
+plus every image in the newest round of tool results (up to 8), so looking at
+four files at once shows all four; images are downscaled to 1024px with Pillow
+when it's installed; older ones show as
 `[image omitted: name (id=...)]`. See [attachments.md](attachments.md).
 
 Large tool results get the same treatment: each model call carries the
@@ -480,7 +482,7 @@ user. The `orchestration` skill (loaded in main by default) has:
 | --- | --- |
 | `ergo_bot_list` | The bots it can message, with their `description`s (also in the context block below) |
 | `ergo_thread_list` | A bot's main chat, named chats and threads with the user (default: this bot) |
-| `ergo_thread_send` | Message a bot's `main` chat, a named chat, a thread id, or a `new` thread; returns at once |
+| `ergo_thread_send` | Message a bot's `main` chat, a named chat, a thread id, or a `new` thread; returns at once. A busy thread queues the message (in order, as its next turn) instead of refusing it; optional `interrupt` replaces this chat's own running request there |
 | `ergo_thread_forward` | Hand the user's own message (the one this turn answers) to a chat or thread, word for word with its author, time and files, plus an optional `note`. The recipient treats it as the user speaking and answers there; nothing comes back. Refused when the turn isn't answering the user |
 | `ergo_thread_stop` | Stop the running turn of a thread this bot started (or one of its own) and cancel what it queued there |
 | `ergo_thread_resolve` | Resolve a finished thread (this one, one of this bot's, or another bot's it started), with a one-line `summary`; refused while workers run, a request is open, an approval is pending, or its last reply asks the user something. History stays readable; a new message reopens it. `ergo_thread_archive` is a deprecated alias |
@@ -579,21 +581,49 @@ Who may message whom:
 - **Resolving.** The orchestration skill's instructions tell every
   orchestrator when to resolve: when the work is finished (PR merged or
   closed, answer delivered, the user wrapped it up), never while it waits on
-  the user, a worker, a reply or an approval, or has an open PR. The Bots and
-  threads block marks quiet threads with nothing open as "ready to resolve",
-  and a thread resolves itself after its final report. A resolved thread keeps
-  `resolved_by` and `resolved_summary` in its metadata until it reopens.
+  the user, a worker, a reply or an approval, or has an open PR. A bot may
+  resolve (or stop) its own threads and threads a chat of its own started on
+  another bot (`orchestrator.can_resolve`); a parent can't close a sub-bot's
+  self-started thread, since that could end work the sub-bot still tracks.
+  The Bots and threads block marks quiet threads with nothing open as "ready
+  to resolve" only where the viewing bot may resolve them; on other bots'
+  threads it says "looks finished (devbox resolves it)". A refused call names
+  who can resolve the thread. A thread resolves itself after its final report.
+  A resolved thread keeps `resolved_by` and `resolved_summary` in its metadata
+  until it reopens.
 - **Reports upward get no reply.** A thread's message to its own main chat,
   or a main chat's to its parent's, is a one-way report: the recipient's turn
   starts with `[Report from …]` and its reply isn't sent back, so a status
   update doesn't cost the sender another turn for an acknowledgement. Pass
   `ask: true` (to `ergo_thread_send` or `ergo_message_up`) when an answer is
   needed.
-- **No nudges.** A chat can't send a second request to a chat while its
-  earlier one there is still open, and in the turn that handles a chat's
-  reply it can't send that chat a short follow-up ("please continue"):
-  under 400 characters is refused unless the reply asked a question. A
-  complete new request still goes through.
+- **Follow-ups are fine; status pings aren't.** A chat may send a thread
+  several messages while its earlier request there is still open: they queue
+  in order (see below), each is its own turn there, and each reply comes back
+  separately, so `waiting_on` counts every open request. Nothing is refused
+  because an earlier request is open. The one short-message rule left: in the
+  turn that handles a chat's reply, a bot can't send that chat a short
+  follow-up ("please continue", thanks): under 400 characters is refused
+  unless the reply asked a question. A complete new request still goes
+  through. The tool description, the reply header and the orchestration
+  instructions tell bots to send follow-ups with something new in them, never
+  a status ping.
+- **A busy thread queues, never refuses.** A message to a thread that is
+  mid-turn, waiting for approval or has earlier messages waiting is stored
+  and goes out as its next turn, after the current one and in the order it
+  was sent (one turn per message, so each keeps its own reply routing). The
+  tool returns `status: "queued"` and the `queue_position` (1 = next); an
+  idle thread returns `status: "sent"`. A queued message stays `queued` (so
+  `ergo_thread_stop` cancels it) until its turn starts, and queues are sent
+  on whenever the thread's turn ends, whether it completed, failed or was
+  stopped. `ergo_thread_send` never interrupts the thread's turn unless
+  `interrupt: true`, and that only replaces a request *this chat* sent that
+  the thread is working on right now: a turn that answers the user (their
+  message, a forward of it, a schedule or a worker) or another chat is never
+  stopped by a bot, and the message queues behind it (the result says
+  `interrupted: false` and why). It also needs `TURN_STOPPER`. Messages the
+  user types in Ergonaut keep their own path: they steer a running turn, or
+  `interrupt` it, whoever started it.
 - **Managing what it started.** `ergo_thread_stop` and `ergo_thread_resolve`
   (with `bot`) work on threads of other bots that a chat of this bot
   started. Stopping a running turn goes through
@@ -874,7 +904,8 @@ An image comes back in the tool result, so the bot looks at it itself. A PDF
 or other file goes to the bot's own model as an attachment in a separate call
 (kind `attachment_look`) that answers the question. Files sent with a
 message (Ergonaut's 📎 button or a pasted image) reach the model natively.
-Only the latest two images stay in what's sent to the model; older ones
+Only the latest two images stay in what's sent to the model (plus those the
+bot's newest round of tool calls just returned); older ones
 become `[image omitted: name (id=...)]`, and the bot can look again by id.
 `ergo_attachments_archive` clears old files out of the bot's working set
 (by id, or `all_files` with optional `older_than_days` / `keep_latest`);

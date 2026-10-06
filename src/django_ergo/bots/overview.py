@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING
 from django.db.models import Q
 from django.utils import timezone
 
+from django_ergo.bots.orchestrator import can_resolve
 from django_ergo.bots.orchestrator import thread_status
 from django_ergo.conversation.context import ContextSection
 from django_ergo.conversation.context import ContextSource
@@ -70,9 +71,15 @@ STATE_WORDS = {"waiting_for_approval": "waiting for approval", "working": "worki
 
 
 def facts(
-    session: ConversationSession, current: ConversationSession, status: dict
+    session: ConversationSession,
+    current: ConversationSession,
+    status: dict,
+    *,
+    resolvable: bool = True,
 ) -> list[str]:
-    """What a chat is doing, for its one-line summary (from ``thread_status``)."""
+    """What a chat is doing, for its one-line summary (from ``thread_status``).
+    Only a thread the viewing bot may resolve (``resolvable``) is marked "ready
+    to resolve"; another bot's finished thread is its owner's to close."""
     out = [
         STATE_WORDS.get(status["state"], "idle"),
         f"last {ago(status['last_activity'])}",
@@ -88,7 +95,11 @@ def facts(
     if status["last_asks"]:
         out.append("asked the user something")
     if status["ready_to_resolve"]:
-        out.append("looks finished: ready to resolve")
+        out.append(
+            "looks finished: ready to resolve"
+            if resolvable
+            else f"looks finished ({session.bot_name} resolves it)"
+        )
     if session.id == current.id:
         out.append("you are here")
     return out
@@ -187,15 +198,18 @@ def gh_open_prs(repos: list[str]) -> list[str]:
 
 def collect(bots: list[Bot], current: ConversationSession) -> list[tuple]:
     """(bot index, session, one-line summary, last activity) for each bot's chats
-    with the user, most recently active first."""
+    with the user, most recently active first. ``bots[0]`` is the viewing bot."""
     chats = []
     for index, each in enumerate(bots):
         qs = each.sessions().filter(user_id=current.user_id)
         qs = qs.filter(~Q(status="completed") | Q(metadata__bot_role__in=TOP_ROLES))
         for session in qs.order_by("-updated_at")[:30]:
             status = thread_status(session)
+            resolvable = not status["ready_to_resolve"] or can_resolve(
+                bots[0], current.user_id, session
+            )
             line = f"- {chat_name(session)}: " + ", ".join(
-                facts(session, current, status)
+                facts(session, current, status, resolvable=resolvable)
             )
             chats.append((index, session, line, status["last_activity"]))
     return sorted(chats, key=lambda c: c[3], reverse=True)
