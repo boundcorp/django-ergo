@@ -45,7 +45,7 @@ it. A plugin without tools (like `telegram`) is always active.
 | `orca` | `orca` | the Orca CLI: worktrees, terminals and supervised coding workers |
 | `bash` | `bash` | shell commands on the host, each approved by default |
 | `kubectl` | `kubectl` | configured-cluster Kubernetes inspection and individually approved changes with redacted previews |
-| `decisions` | | experimental: an OpenAI Decisions API call picks each turn's model for `auto/<tier>` chats |
+| `decisions` | | experimental: an OpenAI Decisions API call picks each turn's tier (low, medium, high) for `auto/<tier>` chats |
 
 `bash`, `orca` and `kubectl` default to `root_only: true` (top-level chats
 only, never threads); `bot_management` defaults to `root_only: false`, so a
@@ -142,7 +142,7 @@ Override any of these; each may be sync or async.
 | `always_context_sources(ctx, message)` | each turn, loaded or not (the KB's root article) |
 | `on_session_created(session)` | a chat or thread was created |
 | `before_turn(session, message)` | before a turn |
-| `route_turn(session, message, request)` | before a turn of an `auto/<tier>` chat: return one of `request.candidates` (or a `RoutePick` with a reason), or None to leave it to the routing rules |
+| `route_turn(session, message, request)` | before a turn of an `auto/<tier>` chat: return a model from any tier in `request.tiers` (`request.pick(tier)` applies the limit rules), or a `RoutePick` with a tier and reason, or None to leave it to the routing rules |
 | `after_turn(session, message, result)` | after a turn; `result.reply`, `result.text`, `result.approvals` |
 | `on_session_closed(session)` | a session was closed |
 | `serve()` | long-running work; see below |

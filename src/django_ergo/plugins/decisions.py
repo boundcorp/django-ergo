@@ -5,25 +5,31 @@ a bot replies.
       - name: decisions
         api_key_env: OPENAI_API_KEY   # the default
         model: gpt-6-luna             # the only Decisions model so far
-        min_confidence: 0.4           # below this, the routing rules decide
-        enforce_limits: false         # true: never offer a model over its limit
+        min_confidence: 0.3           # below this, the chat's own tier is used
+        enforce_limits: false         # true: never offer a tier whose pick is over a limit
+        context_chars: 1500           # how much of the bot's previous reply to include
+        tiers:                        # optional: the tiers to offer, with what each is for
+          low: Quick or routine messages, acknowledgements and status checks
+          high: Hard reasoning, design and large code changes
         instructions: |               # optional, added to the router's instructions
-          Anything about menus or recipes is easy; use the cheapest model.
+          Anything about menus or recipes is easy.
 
 The Decisions API (``POST /v1/decisions``) answers typed questions about an
 input (a predicate, a choice from a list, or a score) about ten times faster
 than a model reply, and bills input tokens only.
 
-The first decision is a model router. For a chat on ``auto/<tier>`` it asks,
-before each turn, which of the tier's models should answer the user's
-message, given each subscription's usage and limits and the deployment's
-routing priorities (routing.md, or the text saved on Ergonaut's Routing
-page). Its pick replaces the rule-based one (``bots.routing``); a switch is
-logged on the Routing page like any other, and the turn's structured call
-keeps the decision under ``metadata["routing_pick"]``. Chats on a fixed
-model are left alone. When the API can't be reached, refuses, or isn't
-confident enough, the routing rules pick as usual, so the plugin never fails
-a turn.
+The first decision is a tier router. For a chat on ``auto/<tier>`` it asks,
+before each turn, which tier (low, medium or high in providers.yaml) the
+message needs, given the bot's previous reply, each tier's models, each
+subscription's usage and limits and the deployment's routing priorities
+(routing.md, or the text saved on Ergonaut's Routing page). The routing
+rules then pick the model within that tier as usual (``bots.routing``).
+The chat's own tier is the default: it's used when the router isn't
+confident, and the router is told it's the usual one. A switch is logged on
+the Routing page like any other, and the turn's structured call keeps the
+decision under ``metadata["routing_pick"]``. Chats on a fixed model are left
+alone. When the API can't be reached or refuses, the routing rules pick as
+usual, so the plugin never fails a turn.
 
 Other code can ask its own questions with ``plugin.decide(input, questions)``.
 """
@@ -53,18 +59,28 @@ DEFAULT_MODEL = "gpt-6-luna"
 DEFAULT_TIMEOUT = 10.0
 MAX_INPUT_CHARS = 8000
 
-ROUTER_INSTRUCTIONS = """\
-Pick the model that should answer the user's message, in a chat on the
-"{tier}" tier. The choices are listed in order of preference.
+TIER_PURPOSES = {
+    "low": "quick or routine messages: acknowledgements, short questions, "
+    "status checks, relaying a message, a simple go-ahead",
+    "medium": "everyday work: multi-step tasks with tools, writing, code "
+    "review and ordinary code changes",
+    "high": "the hardest work: deep reasoning, design decisions, tricky or "
+    "large code changes, long autonomous runs",
+}
 
-- Match the model to what the message needs: a quick or simple ask can go
-  to a cheaper, faster model; hard reasoning, code or long work to a
-  stronger one.
-- Follow the deployment's routing priorities and keep each subscription
-  under its limits; use a model that is over a limit only when every
-  choice is.
-- Staying on the chat's current model keeps its prompt cache, so switch
-  only for a reason.
+ROUTER_INSTRUCTIONS = """\
+Pick the tier of model that should answer the newest message in this chat.
+Higher tiers are more capable but cost more and use up the subscriptions
+faster, so pick the lowest tier that will answer it well. The chat's usual
+tier is "{tier}". Judge a short follow-up ("go ahead", "continue") by the
+work it asks for, using the bot's previous reply when it's given; a message
+in [brackets] is from the system or another bot, so judge it by the work it
+asks for too.
+
+Switching models drops the chat's prompt cache, so stay on the tier of the
+chat's current model unless the message needs more or less. Follow the
+deployment's routing priorities and keep each subscription under its
+limits: a tier whose models are all over a limit is a last resort.
 
 Routing priorities:
 {priorities}
@@ -94,8 +110,15 @@ class DecisionsPlugin(BotPlugin):
         self.model = str(self.config.get("model") or DEFAULT_MODEL)
         self.base_url = self.config.get("base_url") or None
         self.timeout = float(self.config.get("timeout") or DEFAULT_TIMEOUT)
-        self.min_confidence = float(self.config.get("min_confidence", 0.4))
+        self.min_confidence = float(self.config.get("min_confidence", 0.3))
         self.enforce_limits = bool(self.config.get("enforce_limits", False))
+        self.context_chars = int(self.config.get("context_chars", 1500))
+        given = self.config.get("tiers") or TIER_PURPOSES
+        if isinstance(given, list):
+            given = {t: TIER_PURPOSES.get(t, t) for t in given}
+        self.tiers = {
+            str(t): str(p or TIER_PURPOSES.get(t, t)) for t, p in given.items()
+        }
         self.instructions = str(self.config.get("instructions") or "").strip()
         self._client = None
 
@@ -146,73 +169,103 @@ class DecisionsPlugin(BotPlugin):
             return None
         question = {
             "type": "choice",
-            "name": "model",
+            "name": "tier",
             "instructions": self.router_instructions(request),
             "choices": choices,
         }
         started = time.monotonic()
         try:
-            decided = await self.decide(message[:MAX_INPUT_CHARS], [question])
+            text = await self.router_input(session, message)
+            decided = await self.decide(text, [question])
         except Exception:  # noqa: BLE001 - the routing rules take over
             logger.warning(
-                "%s: model router decision failed", self.bot.name, exc_info=True
+                "%s: tier router decision failed", self.bot.name, exc_info=True
             )
             return None
         latency_ms = round((time.monotonic() - started) * 1000)
-        answer = decided.answers.get("model")
+        answer = decided.answers.get("tier")
         if not answer or answer.get("type") != "choice":
-            logger.info("%s: model router gave no choice: %r", self.bot.name, answer)
+            logger.info("%s: tier router gave no choice: %r", self.bot.name, answer)
             return None
-        model = answer.get("choice")
         confidence = float(answer.get("confidence") or 0)
-        values = [c["value"] for c in choices]
-        if model not in values or confidence < self.min_confidence:
-            logger.info(
-                "%s: model router picked %r at %.2f; using the routing rules",
-                self.bot.name,
-                model,
-                confidence,
-            )
+        tier = answer.get("choice")
+        offered = [c["value"] for c in choices]
+        if tier not in offered:
             return None
+        details = {
+            "source": "decisions",
+            "picked_tier": tier,
+            "confidence": confidence,
+            "probabilities": answer.get("probabilities") or [],
+            "tiers": offered,
+            "latency_ms": latency_ms,
+            "input_tokens": decided.input_tokens,
+            "decision_model": self.model,
+        }
+        if confidence < self.min_confidence:
+            if request.tier not in request.tiers:
+                return None
+            tier = request.tier
+            reason = (
+                f"Decisions router unsure ({confidence:.0%}); the chat's {tier} tier"
+            )
+        else:
+            reason = (
+                f"Decisions router picked the {tier} tier ({confidence:.0%} confident)"
+            )
         return RoutePick(
-            model=model,
-            reason=f"Decisions router picked it ({confidence:.0%} confident)",
-            details={
-                "source": "decisions",
-                "confidence": confidence,
-                "probabilities": answer.get("probabilities") or [],
-                "candidates": values,
-                "latency_ms": latency_ms,
-                "input_tokens": decided.input_tokens,
-                "decision_model": self.model,
-            },
+            model=request.pick(tier), tier=tier, reason=reason, details=details
         )
+
+    async def router_input(self, session: ConversationSession, message: str) -> str:
+        """The message, after the bot's previous reply when there is one."""
+        message = message[:MAX_INPUT_CHARS]
+        if self.context_chars <= 0:
+            return message
+        previous = await self._previous_reply(session)
+        if not previous:
+            return message
+        if len(previous) > self.context_chars:
+            previous = "…" + previous[-self.context_chars :]
+        return f"The bot's previous reply:\n{previous}\n\nNew message:\n{message}"
+
+    async def _previous_reply(self, session: ConversationSession) -> str:
+        from django_ergo.conversation.chat_reply import CHAT_REPLY_KIND
+        from django_ergo.conversation.models import StructuredCall
+
+        call = (
+            await StructuredCall.objects.filter(
+                session=session, kind=CHAT_REPLY_KIND, response__isnull=False
+            )
+            .order_by("-created_at")
+            .afirst()
+        )
+        response = call.response if call is not None else None
+        return str(response.get("text") or "") if isinstance(response, dict) else ""
 
     def router_choices(self, request: RouteRequest) -> list[dict]:
-        """The tier's models as Decisions choices, each with its provider's
-        usage and whether it's over a limit."""
-        candidates = list(request.candidates)
+        """The tiers as Decisions choices: what each is for, its models, and
+        the model the rules would use in it."""
+        tiers = [t for t in request.tiers if t in self.tiers]
         if self.enforce_limits:
-            under = [ref for ref in candidates if not request.why_over(ref)]
-            candidates = under or candidates
+            under = [t for t in tiers if not request.why_over(request.pick(t))]
+            tiers = under or tiers
         return [
-            {"value": ref, "description": self._describe(ref, request)}
-            for ref in candidates
+            {"value": tier, "description": self._describe(tier, request)}
+            for tier in tiers
         ]
 
-    def _describe(self, ref: str, request: RouteRequest) -> str:
-        found = request.providers.find(ref)
-        provider = found[0] if found else None
-        billing = (
-            "on a subscription"
-            if provider is not None and provider.transport == "cli"
-            else "on an API key, billed per token"
-        )
-        parts = [f"{request.label(ref)} ({ref.partition('/')[0]}, {billing})."]
-        if ref == request.current:
-            parts.append("The chat's current model.")
-        if why := request.why_over(ref):
+    def _describe(self, tier: str, request: RouteRequest) -> str:
+        pick = request.pick(tier)
+        models = ", ".join(request.label(ref) for ref in request.tiers[tier])
+        parts = [f"For {self.tiers[tier]}.", f"Models: {models}."]
+        parts.append(f"Would use {request.label(pick)} now.")
+        if why := request.why_over(pick):
             parts.append(f"Over its limit: {why}.")
+        if tier == request.tier:
+            parts.append("The chat's usual tier.")
+        if request.current in request.tiers[tier]:
+            parts.append("The chat's current model is in this tier.")
         return " ".join(parts)
 
     def router_instructions(self, request: RouteRequest) -> str:

@@ -557,7 +557,8 @@ class Bot:
             lambda: self.make_engine(model=self.resolve_ref("auto/low", None)),
         )
         if pick is not None:
-            self._set_routed(session, tier_of(ref), pick.model, pick.reason)
+            tier = pick.tier or tier_of(ref)
+            self._set_routed(session, tier, pick.model, pick.reason)
             return pick.model
         before = (session.metadata or {}).get("routed_model", "")
         picked = route_model(self.providers, tier_of(ref), before)
@@ -577,7 +578,7 @@ class Bot:
         self, session: ConversationSession, message: str
     ) -> RoutePick | None:
         """The first pick a plugin's ``route_turn`` makes for this turn that
-        is one of the tier's candidates. A plugin that fails is logged and
+        is a model in one of the tiers. A plugin that fails is logged and
         skipped, so routing falls back to the rules."""
         hooked = [
             p for p in self.plugins if type(p).route_turn is not BotPlugin.route_turn
@@ -606,11 +607,10 @@ class Bot:
                 continue
             if pick.model not in request.candidates:
                 logger.warning(
-                    "%s: plugin %s picked %r, not in the %s tier",
+                    "%s: plugin %s picked %r, not in any tier",
                     self.name,
                     plugin.name,
                     pick.model,
-                    request.tier,
                 )
                 continue
             return pick
@@ -660,9 +660,11 @@ class Bot:
         else the tier's first available one. No ORM."""
         if not is_auto(ref):
             return ref
-        tier = self.providers.routing.tiers.get(tier_of(ref), [])
+        tiers = self.providers.routing.tiers
+        tier = tiers.get(tier_of(ref), [])
         routed = ((session.metadata or {}) if session else {}).get("routed_model")
-        if routed in tier:
+        # A route_turn plugin may have moved the chat to another tier's model.
+        if routed and any(routed in refs for refs in tiers.values()):
             return routed
         for candidate in tier:
             found = self.providers.find(candidate)
@@ -1138,6 +1140,7 @@ class Bot:
         if pick is not None:
             metadata["routing_pick"] = {
                 "model": pick.model,
+                "tier": pick.tier,
                 "reason": pick.reason,
                 **pick.details,
             }

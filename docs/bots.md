@@ -1128,25 +1128,35 @@ Experimental, and off unless a bot lists it.
 - name: decisions
   api_key_env: OPENAI_API_KEY   # an OpenAI API key; Decisions has no subscription route
   model: gpt-6-luna             # the only Decisions model so far
-  min_confidence: 0.4           # below this, the routing rules pick
-  enforce_limits: false         # true: only offer models under their limits
+  min_confidence: 0.3           # below this, the chat's own tier is used
+  enforce_limits: false         # true: never offer a tier whose model is over a limit
+  context_chars: 1500           # how much of the bot's previous reply to include (0: none)
+  tiers:                        # optional: the tiers to offer and what each is for
+    low: Quick or routine messages, acknowledgements and status checks
+    medium: Everyday work with tools and ordinary code changes
+    high: Hard reasoning, design and large code changes
   instructions: |               # optional, added to the router's instructions
-    Questions about menus are easy; use the cheapest model.
+    Questions about menus are easy.
 ```
 
 Runs quick [OpenAI Decisions API](https://developers.openai.com/api/docs/guides/decisions)
-calls before the bot replies. The first one is a model router: on a chat set
-to `auto/<tier>` it asks which of the tier's models should answer the
-message, telling it each subscription's usage against its limits, the
-deployment's routing priorities (`routing.md` or the Routing page) and the
-chat's current model. Its pick replaces the rule-based one for that turn, a
-switch is logged on the Routing page ("Decisions router picked it (82%
-confident)"), and the turn's structured call keeps the decision in
+calls before the bot replies. The first one is a tier router: on a chat set
+to `auto/<tier>` it asks which tier (`low`, `medium` or `high` in
+providers.yaml) the new message needs, given the bot's previous reply, each
+tier's models, each subscription's usage against its limits and the
+deployment's routing priorities (`routing.md` or the Routing page). The
+routing rules then pick the model within that tier as usual. The chat's own
+tier is the default: the router is told it's the usual one, and it's used
+whenever the router is less confident than `min_confidence` (confidence is
+the gap between the top two choices' probabilities). A switch is logged on
+the Routing page ("Decisions router picked the low tier (82% confident)"),
+and the turn's structured call keeps the decision in
 `metadata["routing_pick"]`. Chats on a fixed model aren't routed. When the
-call fails, is refused or isn't confident enough, the routing rules pick as
-usual. Each turn costs one Decisions call (input tokens only) and its
-latency. Needs `openai` 3.26 or later. Other code can ask its own questions
-with `await plugin.decide(input, questions)`.
+call fails or is refused, the routing rules pick as usual. Each turn costs
+one Decisions call (input tokens only) and its latency, about a quarter of a
+second. Tiers only help when they differ: a tier with the same models as
+another adds nothing. Needs `openai` 3.26 or later. Other code can ask its
+own questions with `await plugin.decide(input, questions)`.
 
 ### telegram
 
