@@ -86,7 +86,7 @@ async def test_the_router_picks_a_tier_and_the_rules_pick_its_model(
     assert call["input"] == "thanks, merge it"  # no earlier reply yet
     (question,) = call["questions"]
     assert question["type"] == "choice"
-    assert 'usual\ntier is "medium"' in question["instructions"]
+    assert 'The chat\'s usual tier is "medium"' in question["instructions"]
     assert "claude: 5-hour window 90% used (limit 85%)" in question["instructions"]
     assert "Recipes are easy." in question["instructions"]
     low, medium = question["choices"]
@@ -139,6 +139,9 @@ async def test_an_unsure_router_keeps_the_chats_tier(django_user_model):
     assert (pick.tier, pick.model) == ("medium", "claude/claude-opus-5-5")
     assert pick.details["picked_tier"] == "low"
     assert "unsure (20%)" in pick.reason
+    answering(plugin, "low", confidence=0.6)  # a step down needs 0.8
+    pick = await bot.plugin_route(session, "hi")
+    assert pick.tier == "medium"
     answering(plugin, "huge")  # not a tier on offer
     assert await bot.plugin_route(session, "hi") is None
     answering(plugin, httpx2.ConnectError("down"))
@@ -223,7 +226,7 @@ async def test_a_turn_keeps_the_routers_pick_on_its_record(django_user_model):
     from asgiref.sync import sync_to_async
 
     bot = decisions_bot(engine=claude_engine(say("On it.")))
-    answering(bot.plugin("decisions"), "low", 0.75)
+    answering(bot.plugin("decisions"), "low", 0.9)
     user = await django_user_model.objects.acreate(username="lee")
     session = await sync_to_async(chat)(user)
 

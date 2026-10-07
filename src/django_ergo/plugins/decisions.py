@@ -6,6 +6,7 @@ a bot replies.
         api_key_env: OPENAI_API_KEY   # the default
         model: gpt-6-luna             # the only Decisions model so far
         min_confidence: 0.3           # below this, the chat's own tier is used
+        step_down_confidence: 0.8     # a tier below the chat's needs this much
         enforce_limits: false         # true: never offer a tier whose pick is over a limit
         context_chars: 1500           # how much of the bot's previous reply to include
         tiers:                        # optional: the tiers to offer, with what each is for
@@ -24,8 +25,9 @@ message needs, given the bot's previous reply, each tier's models, each
 subscription's usage and limits and the deployment's routing priorities
 (routing.md, or the text saved on Ergonaut's Routing page). The routing
 rules then pick the model within that tier as usual (``bots.routing``).
-The chat's own tier is the default: it's used when the router isn't
-confident, and the router is told it's the usual one. A switch is logged on
+The chat's own tier is the default: the router is told it's the usual
+one, and it's kept unless the router is confident, more so for a step down
+(``step_down_confidence``) than up (``min_confidence``). A switch is logged on
 the Routing page like any other, and the turn's structured call keeps the
 decision under ``metadata["routing_pick"]``. Chats on a fixed model are left
 alone. When the API can't be reached or refuses, the routing rules pick as
@@ -70,12 +72,17 @@ TIER_PURPOSES = {
 
 ROUTER_INSTRUCTIONS = """\
 Pick the tier of model that should answer the newest message in this chat.
-Higher tiers are more capable but cost more and use up the subscriptions
-faster, so pick the lowest tier that will answer it well. The chat's usual
-tier is "{tier}". Judge a short follow-up ("go ahead", "continue") by the
-work it asks for, using the bot's previous reply when it's given; a message
-in [brackets] is from the system or another bot, so judge it by the work it
-asks for too.
+{bot}The chat's usual tier is "{tier}"; pick another only when the message
+clearly needs more or less. Higher tiers are more capable but cost more and
+use up the subscriptions faster.
+
+Judge a message by the work its answer takes, not by its length: "merge
+it", "continue" or "go ahead" can start a long turn of tool calls and code
+changes, so read them with the bot's previous reply when it's given. Pick a
+lower tier only for a message whose answer is short and needs no tools or
+code: an acknowledgement, a quick fact, a status the bot already knows. A
+message in [brackets] is from the system or another bot; judge it by the
+work it asks for too.
 
 Switching models drops the chat's prompt cache, so stay on the tier of the
 chat's current model unless the message needs more or less. Follow the
@@ -111,6 +118,7 @@ class DecisionsPlugin(BotPlugin):
         self.base_url = self.config.get("base_url") or None
         self.timeout = float(self.config.get("timeout") or DEFAULT_TIMEOUT)
         self.min_confidence = float(self.config.get("min_confidence", 0.3))
+        self.step_down_confidence = float(self.config.get("step_down_confidence", 0.8))
         self.enforce_limits = bool(self.config.get("enforce_limits", False))
         self.context_chars = int(self.config.get("context_chars", 1500))
         given = self.config.get("tiers") or TIER_PURPOSES
@@ -202,7 +210,10 @@ class DecisionsPlugin(BotPlugin):
             "input_tokens": decided.input_tokens,
             "decision_model": self.model,
         }
-        if confidence < self.min_confidence:
+        order = list(request.tiers)
+        lower = request.tier in order and order.index(tier) < order.index(request.tier)
+        needed = self.step_down_confidence if lower else self.min_confidence
+        if confidence < needed:
             if request.tier not in request.tiers:
                 return None
             tier = request.tier
@@ -269,7 +280,9 @@ class DecisionsPlugin(BotPlugin):
         return " ".join(parts)
 
     def router_instructions(self, request: RouteRequest) -> str:
+        about = self.bot.definition.description
         text = ROUTER_INSTRUCTIONS.format(
+            bot=f"The bot is {self.bot.name}: {about}.\n" if about else "",
             tier=request.tier,
             priorities=request.text or "(none written)",
             usage=self._usage(request),
