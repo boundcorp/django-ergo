@@ -26,7 +26,7 @@ engine:
   type: openai                       # or claude (optional); default is the settings engine (openai)
   config: {model: gpt-6-luna}
   api_key_env: KITCHEN_OPENAI_KEY    # read at runtime, never stored
-  # with a providers.yaml: config: {model: openai/gpt-6-sol}
+  # with a providers.yaml: config: {model: openai/gpt-6.1-sol}
   # transport: cli                   # the logged-in Claude Code or Codex CLI, no key
 root:                                # window settings for main and named chats
   recent: 15                         # latest messages always in context
@@ -532,9 +532,10 @@ demand (Orca: up to 50 transcript messages or 400 screen lines). `model` and `ef
 `--model`/`--effort`, except for `agent: omp`, which Orca can't give a model
 at launch: the plugin writes the worktree's `.omp/config.yml`
 (`modelRoles.default: <model>:<effort>`, git-ignored by its own folder) and omp
-picks it up. With `tier: low|medium|high` instead, the agent, model and effort
-come from the `agents` tiers in providers.yaml, on whichever subscription has
-room (see [Routing by tier](building-bots.md#routing-by-tier)). Each chat keeps one Orca mailbox terminal and Run for its
+picks it up. With `tier: <name>` instead (low, medium, high, or a custom
+name), the agent, model and effort come from the `agents` tiers in
+providers.yaml, on whichever subscription has room (see
+[Routing by tier](building-bots.md#routing-by-tier)). Each chat keeps one Orca mailbox terminal and Run for its
 workers; if Orca no longer knows them (their worktree was removed, Orca was
 reset), starting an agent makes new ones and tries once more. If a worker's agent
 terminal exits or vanishes without a `worker_done` (Orca keeps such a dispatch
@@ -586,9 +587,14 @@ A bot with a manager has the `agents` skill:
 - `ergo_agent_start(brief, workspace, title, tier | agent/model/effort,
   manager)` asks the manager to start the agent and starts a polling Worker,
   `agent:<manager>`, with the handle as its argument. With `tier`, the agent,
-  model and effort come from providers.yaml's `agents` tiers (see
-  [Routing by tier](building-bots.md#routing-by-tier)); the manager must run
-  the picked agent. `manager` is needed only when the chat has more than one.
+  model and effort come from providers.yaml's `agents` tiers. Built-in
+  low/medium/high lists are derived from listed subscription catalog models
+  even without YAML tier declarations; `agents.<name>` replaces that
+  name's list, and custom names are supported. Chat `tiers.<name>` overrides
+  are independent. Restart Ergonaut and its bot workers after editing
+  providers.yaml (see [Routing by tier](building-bots.md#routing-by-tier)).
+  The manager must run the picked agent. `manager` is needed only when the
+  chat has more than one.
 - Each check (`AgentManager.check`) passes new questions to the chat once,
   as a message naming the worker and question; `ergo_agent_reply(worker_id,
   question_id, answer)` answers. `done` finishes the worker with the report

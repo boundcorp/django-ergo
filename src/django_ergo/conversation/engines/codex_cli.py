@@ -22,8 +22,8 @@ One model call is one ``codex app-server`` process:
 
 The login must be a ChatGPT account (``require_chatgpt``, on by default), so
 these calls never bill an API key. Each response also carries Codex's rate
-limit snapshot (``usage_windows``: used percent and reset time of the
-5-hour and weekly windows), which a router can use to pick a provider.
+limit snapshot (``usage_windows``: the provider-reported windows, used percent
+and reset times), which a router can use to pick a provider.
 
 Checked against Codex CLI 0.160.0. ``thread/inject_items``, dynamic tools
 and raw events are experimental app-server features.
@@ -595,7 +595,11 @@ class CodexCLIEngine(OpenAIAPIEngine):
                     from django_ergo.bots.routing import arecord_usage_windows
                     from django_ergo.bots.routing import codex_windows
 
-                    await arecord_usage_windows(provider, codex_windows(rate_limits))
+                    await arecord_usage_windows(
+                        provider,
+                        codex_windows(rate_limits),
+                        full_snapshot=True,
+                    )
 
                 self._client.on_rate_limit = record
         return self._client

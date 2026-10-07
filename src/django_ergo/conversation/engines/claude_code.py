@@ -461,7 +461,11 @@ class ClaudeCodeEngine(ClaudeAPIEngine):
                     from django_ergo.bots.routing import arecord_usage_windows
                     from django_ergo.bots.routing import claude_windows
 
-                    await arecord_usage_windows(provider, claude_windows(info))
+                    await arecord_usage_windows(
+                        provider,
+                        claude_windows(info),
+                        full_snapshot="unifiedWindows" in info,
+                    )
 
                 self._client.on_rate_limit = record
         return self._client

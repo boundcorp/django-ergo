@@ -47,7 +47,15 @@ export type Session = {
 }
 
 // The Routing page (GET /api/routing): what auto/<tier> chats and Orca tiers pick now.
-export type RoutingWindow = { used: number | null; resets_at: number | null; limit: number }
+export type RoutingWindow = {
+  label?: string
+  used: number | null
+  remaining?: number | null
+  resets_at: number | null
+  status?: string | null
+  model?: string | null
+  limit: number
+}
 
 export type RoutingProvider = {
   name: string
@@ -57,8 +65,9 @@ export type RoutingProvider = {
   api_key_env: string
   status: 'in_use' | 'standby' | 'skipped' | 'api_key' | 'unavailable'
   reason: string
-  windows: { five_hour: RoutingWindow; weekly: RoutingWindow }
+  windows: Record<string, RoutingWindow>
   reported_at: string | null
+  stale?: boolean
 }
 
 export type RoutingCandidate = {

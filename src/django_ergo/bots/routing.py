@@ -1,5 +1,4 @@
-"""Model routing: pick a model by tier (low, medium, high) from what's left
-on each subscription.
+"""Model routing: built-in and custom tiers from each subscription's headroom.
 
 ``providers.yaml`` lists each tier's candidates in order of preference, for
 bot chats (``tiers``) and for coding agents started through Orca
@@ -7,12 +6,13 @@ bot chats (``tiers``) and for coding agents started through Orca
 
     tiers:
       low:    [subscription/claude-sonnet-5-5, chatgpt/gpt-6-luna]
-      medium: [subscription/claude-opus-5-5, chatgpt/gpt-6-sol]
-      high:   [subscription/claude-opus-5-5, chatgpt/gpt-6-sol, openai/gpt-6-sol]
+      medium: [subscription/claude-opus-5-5, chatgpt/gpt-6.1-sol]
+      high:   [subscription/claude-fable-5-1, chatgpt/gpt-6-astra,
+               subscription/claude-opus-5-5, chatgpt/gpt-6.1-sol]
     agents:                      # subscriptions only: a candidate names its provider
       medium:
         - {agent: claude, model: claude-opus-5-5, provider: subscription}
-        - {agent: codex, model: gpt-6-sol, effort: medium, provider: chatgpt}
+        - {agent: codex, model: gpt-6.1-sol, effort: medium, provider: chatgpt}
     routing:                     # optional rules; routing.md can say it in words
       limits:
         - {provider: subscription, window: five_hour, max_used: 85}
@@ -25,10 +25,10 @@ model still qualifies, so a prompt cache isn't thrown away for nothing.
 When every candidate is over a limit, the one whose subscription has the
 most room wins. Agent candidates must be CLI subscriptions, never API keys.
 
-Limits read :class:`ProviderUsage`: the latest 5-hour and weekly windows
-each CLI engine reports (Claude Code's ``rate_limit_event``, Codex's
-``account/rateLimits``). A provider that refused a call for its limit counts
-as fully used until the window resets.
+Limits read :class:`ProviderUsage`: only the windows each CLI reports
+(Claude Code's ``rate_limit_event``, Codex's ``account/rateLimits``), including
+Claude's separate Fable weekly window, applied only to Fable models.
+A provider that refused a call counts that window as fully used until reset.
 
 ``routing.md`` next to ``providers.yaml`` states the priorities in plain
 words (Ergonaut's Routing page can replace it per deployment, see
@@ -62,14 +62,20 @@ logger = logging.getLogger(__name__)
 
 TIERS = ("low", "medium", "high")
 AUTO = "auto/"
-WINDOWS = ("five_hour", "weekly")
 DEFAULT_MAX_USED = 98.0
-WINDOW_NAMES = {"five_hour": "5-hour window", "weekly": "weekly window"}
+USAGE_STALE_SECONDS = 10 * 60
+WINDOW_NAMES = {
+    "five_hour": "5-hour window",
+    "weekly": "weekly window",
+    "weekly_fable": "7-day Fable window",
+}
 
 
 class Limit(BaseModel):
     provider: str = Field(description="Provider name from providers.yaml, or * for all")
-    window: str = Field(description="five_hour or weekly")
+    window: str = Field(
+        description="Reported window ID, e.g. five_hour, weekly, weekly_fable"
+    )
     max_used: float = Field(
         description="Skip the provider once this window is at least this % used"
     )
@@ -111,7 +117,8 @@ class Routing:
 
 
 def text_sha(text: str) -> str:
-    return hashlib.sha256(text.encode()).hexdigest() if text else ""
+    # Recompile pre-window-aware policies rather than retaining engine-name rules.
+    return hashlib.sha256(f"routing-v2:{text}".encode()).hexdigest() if text else ""
 
 
 def routing_text(routing: Routing) -> str:
@@ -134,39 +141,77 @@ def tier_of(ref: str) -> str:
 # -- usage windows ------------------------------------------------------------
 
 
+def _window(name: str, used, resets, **metadata) -> dict:
+    return {
+        "label": metadata.get("label")
+        or WINDOW_NAMES.get(name, name.replace("_", " ")).removesuffix(" window"),
+        "used": used,
+        "remaining": 100 - used if used is not None else None,
+        "resets_at": resets,
+        "status": metadata.get("status", ""),
+        "model": metadata.get("model", ""),
+    }
+
+
 def codex_windows(rate_limits: dict | None) -> dict:
-    """Codex's rate-limit snapshot as {"five_hour"|"weekly": {used, resets_at}}."""
+    """Only windows in Codex's snapshot; primary need not be a 5-hour limit."""
     out = {}
-    for window in ((rate_limits or {}).get(k) for k in ("primary", "secondary")):
+    for key in ("primary", "secondary"):
+        window = (rate_limits or {}).get(key)
         if not window:
             continue
-        minutes = window.get("windowDurationMins") or 0
-        name = "five_hour" if minutes and minutes <= 24 * 60 else "weekly"
-        out[name] = {
-            "used": float(window.get("usedPercent") or 0),
-            "resets_at": window.get("resetsAt"),
-        }
+        minutes = window.get("windowDurationMins")
+        name = {300: "five_hour", 10080: "weekly"}.get(minutes)
+        name = name or (f"minutes_{minutes}" if minutes else key)
+        label = window.get("label") or (
+            f"{minutes} minutes" if minutes and name.startswith("minutes_") else ""
+        )
+        used = window.get("usedPercent")
+        out[name] = _window(
+            name,
+            float(used) if used is not None else None,
+            window.get("resetsAt"),
+            label=label,
+            status=window.get("status") or "",
+        )
     return out
 
 
 def claude_windows(info: dict | None) -> dict:
-    """Claude Code's ``rate_limit_info`` as {"five_hour"|"weekly": {used, resets_at}}."""
+    """Preserve every reported Claude window, including model-specific limits."""
     info = info or {}
-    names = {"five_hour": "five_hour", "seven_day": "weekly"}
+    names = {"seven_day": "weekly"}
     out = {}
     for key, window in (info.get("unifiedWindows") or {}).items():
-        if key in names and window:
-            out[names[key]] = {
-                "used": _percent(window.get("utilization")),
-                "resets_at": window.get("resetsAt"),
-            }
-    name = names.get(info.get("rateLimitType") or "")
-    if name:
+        if not window:
+            continue
+        name = names.get(key, key.replace("seven_day_", "weekly_", 1))
+        model = key.removeprefix("seven_day_") if key.startswith("seven_day_") else ""
+        out[name] = _window(
+            name,
+            _percent(window.get("utilization")),
+            window.get("resetsAt"),
+            label=window.get("label") or "",
+            status=window.get("status") or "",
+            model=model,
+        )
+    key = info.get("rateLimitType") or ""
+    if key:
+        name = names.get(key, key.replace("seven_day_", "weekly_", 1))
         used = _percent(info.get("utilization"))
         if info.get("status") == "rejected":
             used = 100.0
         if used is not None:
-            out[name] = {"used": used, "resets_at": info.get("resetsAt")}
+            model = (
+                key.removeprefix("seven_day_") if key.startswith("seven_day_") else ""
+            )
+            out[name] = _window(
+                name,
+                used,
+                info.get("resetsAt"),
+                status=info.get("status") or "",
+                model=model,
+            )
     return out
 
 
@@ -177,25 +222,29 @@ def _percent(value) -> float | None:
     return value * 100 if value <= 1 else value
 
 
-def record_usage_windows(provider: str, windows: dict) -> None:
-    """Save the latest windows a provider's engine reported (runs the ORM)."""
-    if not provider or not windows:
+def record_usage_windows(
+    provider: str, windows: dict, *, full_snapshot: bool = False
+) -> None:
+    """Replace authoritative snapshots; merge partial per-call rate-limit events."""
+    if not provider or (not windows and not full_snapshot):
         return
     from django_ergo.conversation.models import ProviderUsage
 
     row, _ = ProviderUsage.objects.get_or_create(provider=provider)
-    row.windows = {**(row.windows or {}), **windows}
+    row.windows = windows if full_snapshot else {**(row.windows or {}), **windows}
     row.save(update_fields=["windows", "updated_at"])
 
 
-async def arecord_usage_windows(provider: str, windows: dict) -> None:
-    if not provider or not windows:
+async def arecord_usage_windows(
+    provider: str, windows: dict, *, full_snapshot: bool = False
+) -> None:
+    if not provider or (not windows and not full_snapshot):
         return
     from asgiref.sync import sync_to_async
 
     try:
         await sync_to_async(record_usage_windows, thread_sensitive=True)(
-            provider, windows
+            provider, windows, full_snapshot=full_snapshot
         )
     except Exception:  # noqa: BLE001 - usage tracking never fails a turn
         logger.warning("Couldn't record usage windows for %s", provider, exc_info=True)
@@ -212,7 +261,8 @@ def current_usage(now: float | None = None) -> dict[str, dict]:
             resets = window.get("resets_at")
             if resets and resets <= now:
                 continue
-            usage.setdefault(row.provider, {})[name] = float(window.get("used") or 0)
+            if window.get("used") is not None:
+                usage.setdefault(row.provider, {})[name] = float(window["used"])
     return usage
 
 
@@ -244,30 +294,45 @@ def limit_of(provider: str, window: str, rules: RoutingRules) -> float:
     return min(caps, default=DEFAULT_MAX_USED)
 
 
-def why_over(provider: str, usage: dict, rules: RoutingRules) -> str:
-    """Why a provider is skipped ("claude 5-hour window at 87% (limit 85%)"),
-    or "" while it's under every limit."""
-    used = usage.get(provider) or {}
-    for window in WINDOWS:
+def applicable_usage(provider: str, usage: dict, model: str = "") -> dict:
+    """Model-specific weekly limits never disqualify unrelated models."""
+    return {
+        name: used
+        for name, used in (usage.get(provider) or {}).items()
+        if not name.startswith("weekly_")
+        or (model and name.removeprefix("weekly_") in model.lower())
+    }
+
+
+def why_over(provider: str, usage: dict, rules: RoutingRules, model: str = "") -> str:
+    """Why this candidate is skipped, or "" while under its applicable limits."""
+    for window, used in applicable_usage(provider, usage, model).items():
         cap = limit_of(provider, window, rules)
-        if used.get(window, 0) >= cap:
+        if used >= cap:
             return (
-                f"{provider} {WINDOW_NAMES[window]} at {used[window]:.0f}% "
-                f"(limit {cap:g}%)"
+                f"{provider} {WINDOW_NAMES.get(window, window.replace('_', ' '))} "
+                f"at {used:.0f}% (limit {cap:g}%)"
             )
     return ""
 
 
-def over_limit(provider: str, usage: dict, rules: RoutingRules) -> bool:
-    return bool(why_over(provider, usage, rules))
+def over_limit(
+    provider: str, usage: dict, rules: RoutingRules, model: str = ""
+) -> bool:
+    return bool(why_over(provider, usage, rules, model))
 
 
-def headroom(provider: str, usage: dict) -> float:
-    return 100 - max((usage.get(provider) or {}).values(), default=0)
+def headroom(provider: str, usage: dict, model: str = "") -> float:
+    return 100 - max(applicable_usage(provider, usage, model).values(), default=0)
 
 
-def choose(
-    candidates: list, provider_of, usage: dict, rules: RoutingRules, current=None
+def choose(  # noqa: PLR0913 - preserve custom-router/current contract, add candidate model scope
+    candidates: list,
+    provider_of,
+    usage: dict,
+    rules: RoutingRules,
+    current=None,
+    model_of=lambda c: "",
 ):
     """The candidate to use: ``current`` while it qualifies, else the first
     one under its limits, else the one with the most room."""
@@ -281,12 +346,16 @@ def choose(
     if custom:
         router = import_string(custom) if isinstance(custom, str) else custom
         return router(candidates, usage, rules, current)
-    ok = [c for c in candidates if not over_limit(provider_of(c), usage, rules)]
+    ok = [
+        c
+        for c in candidates
+        if not over_limit(provider_of(c), usage, rules, model_of(c))
+    ]
     if current is not None and current in ok:
         return current
     if ok:
         return ok[0]
-    return max(candidates, key=lambda c: headroom(provider_of(c), usage))
+    return max(candidates, key=lambda c: headroom(provider_of(c), usage, model_of(c)))
 
 
 def pick_model(providers: Providers, tier: str, current: str = "") -> str:
@@ -310,6 +379,7 @@ def pick_model(providers: Providers, tier: str, current: str = "") -> str:
         current_usage(),
         active_rules(routing),
         current if current in candidates else None,
+        model_of=lambda ref: ref.partition("/")[2],
     )
 
 
@@ -330,7 +400,11 @@ def pick_agent(providers: Providers, tier: str) -> AgentChoice:
         msg = f"No subscription provider in the {tier!r} agents tier"
         raise ValueError(msg)
     return choose(
-        candidates, lambda c: c.provider, current_usage(), active_rules(routing)
+        candidates,
+        lambda c: c.provider,
+        current_usage(),
+        active_rules(routing),
+        model_of=lambda c: c.model,
     )
 
 
@@ -341,7 +415,10 @@ You turn a deployment's model routing priorities, written in plain words, into
 usage limits. Providers (name: type, transport, models):
 {providers}
 
-Windows: five_hour (the subscription's rolling 5-hour limit) and weekly.
+Windows are provider-reported IDs: five_hour (5 hours), weekly (7 days),
+weekly_fable (7 days for Fable models only), or another reported window ID.
+Use the configured provider NAME exactly, not its engine type. GPT, ChatGPT
+and Codex mean the OpenAI CLI subscription, NOT an OpenAI API-key provider.
 Each limit says: stop routing to this provider once this window is at least
 max_used percent used, so the next candidate in the tier is used instead.
 Candidates are tried in the order their tier lists them, so preferences like
@@ -352,7 +429,14 @@ for a limit on every provider. Write no limits the text doesn't ask for.
 
 def providers_summary(providers: Providers) -> str:
     return "\n".join(
-        f"- {p.name}: {p.type}, {p.transport}, {', '.join(p.models)}"
+        f"- {p.name}: {p.type}, {p.transport}, {', '.join(p.models)}; "
+        + (
+            "ChatGPT/Codex/GPT subscription"
+            if p.type == "openai" and p.transport == "cli"
+            else "Claude subscription"
+            if p.transport == "cli"
+            else "pay-per-token API, NOT a subscription"
+        )
         for p in providers.providers.values()
     )
 
@@ -386,6 +470,10 @@ async def compile_routing(
         msg = f"Couldn't compile routing.md: {result.call.error or 'no rules returned'}"
         raise ValueError(msg)
     rules = result.parsed
+    for rule in rules.limits:
+        if rule.provider != "*" and rule.provider not in providers.providers:
+            msg = f"Unknown routing provider {rule.provider!r}; use a configured provider name"
+            raise ValueError(msg)
     await sync_to_async(RoutingPolicy.objects.update_or_create)(
         source_sha=text_sha(text),
         defaults={"source": text, "rules": rules.model_dump()},
@@ -438,7 +526,7 @@ def switch_reason(
     found = providers.find(before)
     if found is None or not found[0].available:
         return f"{before} isn't available"
-    if why := why_over(old, usage, rules):
+    if why := why_over(old, usage, rules, before.partition("/")[2]):
         return why
     return f"{after.partition('/')[0]} is back under its limits"
 
@@ -484,21 +572,30 @@ def is_limit_error(error: str) -> bool:
 
 
 def retry_model(providers: Providers, tier: str, failed: str, error: str) -> str:
-    """Another model in ``tier`` to offer for a turn that ``failed``'s
-    provider refused at its limit: the first one on another provider that's
-    available and under its limits, or "". Nothing retries on its own; the
-    chat offers it (runs the ORM)."""
+    """Offer an under-limit alternative, including the same subscription when
+    only a model-specific limit was reached. Nothing retries automatically."""
     routing = providers.routing
     usage, rules = current_usage(), active_rules(routing)
     failed_provider = failed.partition("/")[0]
-    if not (is_limit_error(error) or over_limit(failed_provider, usage, rules)):
+    if not (
+        is_limit_error(error)
+        or over_limit(failed_provider, usage, rules, failed.partition("/")[2])
+    ):
         return ""
+    scoped_limit = over_limit(
+        failed_provider, usage, rules, failed.partition("/")[2]
+    ) and not over_limit(failed_provider, usage, rules)
     for ref in routing.tiers.get(tier, []):
         name = ref.partition("/")[0]
         found = providers.find(ref)
-        if name == failed_provider or found is None or not found[0].available:
+        if (
+            ref == failed
+            or (name == failed_provider and not scoped_limit)
+            or found is None
+            or not found[0].available
+        ):
             continue
-        if not over_limit(name, usage, rules):
+        if not over_limit(name, usage, rules, ref.partition("/")[2]):
             return ref
     return ""
 
@@ -522,7 +619,10 @@ def record_agent_pick(
     if provider is None or provider.transport != "cli":
         reason = f"{first.provider} isn't a subscription"
     else:
-        reason = why_over(first.provider, usage, rules) or "picked by MODEL_ROUTER"
+        reason = (
+            why_over(first.provider, usage, rules, first.model)
+            or "picked by MODEL_ROUTER"
+        )
     RoutingSwitch.objects.create(
         session=session,
         label=label[:300],
@@ -548,13 +648,15 @@ class _Now:
     usage: dict
     rules: RoutingRules
 
-    def state(self, name: str, *, is_pick: bool = False) -> tuple[str, str]:
+    def state(
+        self, name: str, *, model: str = "", is_pick: bool = False
+    ) -> tuple[str, str]:
         provider = self.providers.providers.get(name)
         if provider is None:
             return "unavailable", f"{name} isn't in providers.yaml"
         if not provider.available:
             return "unavailable", _unavailable(provider)
-        why = why_over(name, self.usage, self.rules)
+        why = why_over(name, self.usage, self.rules, model)
         if is_pick:
             return "pick", why
         return ("skip", why) if why else ("ok", "")
@@ -565,6 +667,8 @@ def _tier_rows(now: _Now) -> list[dict]:
 
     out = []
     for tier, refs in now.providers.routing.tiers.items():
+        if not refs:
+            continue
         try:
             picked = pick_model(now.providers, tier)
         except ValueError:
@@ -572,7 +676,9 @@ def _tier_rows(now: _Now) -> list[dict]:
         rows = []
         for ref in refs:
             name = ref.partition("/")[0]
-            state, reason = now.state(name, is_pick=ref == picked)
+            state, reason = now.state(
+                name, model=ref.partition("/")[2], is_pick=ref == picked
+            )
             found = now.providers.find(ref)
             label = (found[1].label or found[1].name) if found else ref
             rows.append(
@@ -592,13 +698,17 @@ def _tier_rows(now: _Now) -> list[dict]:
 def _agent_rows(now: _Now) -> list[dict]:
     out = []
     for tier, choices in now.providers.routing.agents.items():
+        if not choices:
+            continue
         try:
             picked = pick_agent(now.providers, tier)
         except ValueError:
             picked = None
         rows = []
         for choice in choices:
-            state, reason = now.state(choice.provider, is_pick=choice == picked)
+            state, reason = now.state(
+                choice.provider, model=choice.model, is_pick=choice == picked
+            )
             rows.append(
                 {
                     **vars(choice),
@@ -620,13 +730,20 @@ def _provider_rows(now: _Now, in_use: set[str]) -> list[dict]:
     for name, provider in now.providers.providers.items():
         row = reported.get(name)
         windows = {}
-        for window in WINDOWS:
-            seen = ((row.windows or {}) if row else {}).get(window) or {}
+        for window, seen in ((row.windows or {}) if row else {}).items():
             resets = seen.get("resets_at")
-            fresh = bool(seen) and not (resets and resets <= clock)
+            expired = bool(resets and resets <= clock)
+            used = seen.get("used") if not expired else None
             windows[window] = {
-                "used": float(seen.get("used") or 0) if fresh else None,
-                "resets_at": resets if fresh else None,
+                **seen,
+                "label": seen.get("label")
+                or WINDOW_NAMES.get(window, window.replace("_", " ")).removesuffix(
+                    " window"
+                ),
+                "used": used,
+                "remaining": 100 - used if used is not None else None,
+                "resets_at": resets,
+                "status": "reset" if expired else seen.get("status", ""),
                 "limit": limit_of(name, window, now.rules),
             }
         state, reason = now.state(name)
@@ -648,6 +765,9 @@ def _provider_rows(now: _Now, in_use: set[str]) -> list[dict]:
                 "reason": reason,
                 "windows": windows,
                 "reported_at": row.updated_at.isoformat() if row else None,
+                "stale": bool(
+                    row and clock - row.updated_at.timestamp() > USAGE_STALE_SECONDS
+                ),
             }
         )
     return out

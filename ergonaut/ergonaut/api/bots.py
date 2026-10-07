@@ -1256,7 +1256,8 @@ def models_out(bot: Bot) -> dict:
                 "engine_type": "auto",
                 "available": True,
             }
-            for tier in bot.providers.routing.tiers
+            for tier, refs in bot.providers.routing.tiers.items()
+            if refs
         ],
     }
 

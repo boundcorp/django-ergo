@@ -4,6 +4,16 @@ This document tracks the major milestones and evolution of the Django Ergo proje
 
 ## Development Timeline
 
+### Provider-driven routing (October 2026)
+
+- Routing uses only reported subscription windows, preserving unknown utilization,
+  reset times and status; Claude's Fable weekly allowance only gates Fable models.
+- The Routing page separates pay-per-token providers from subscriptions and shows
+  usage freshness instead of inventing 5-hour/weekly counters.
+- Built-in low/medium/high tiers use configured current-catalog subscription
+  models, with Fable/Astra high-capability defaults and medium-model fallbacks.
+  `providers.yaml` supports custom names and independent per-tier overrides.
+
 ### Initial Setup (December 2024)
 
 - **8283455** - Initial commit
