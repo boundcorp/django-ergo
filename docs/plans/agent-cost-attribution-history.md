@@ -1,6 +1,6 @@
 # Plan: agent cost, project attribution and session history
 
-Status: proposal, not an implementation. Follow-on to [django-ergo #137](https://github.com/boundcorp/django-ergo/pull/137). Evidence checked 2026-10-06 against main `b600381` and #137 head `61b1027`; deployment paths, account identities and transcript content are intentionally excluded from this public document.
+Status: slice 1 implementation in progress. Prerequisite [django-ergo #137](https://github.com/boundcorp/django-ergo/pull/137) merged as `19f66f59b80bde6ff745044d27ce0f6bb60d43c6`; this plan was reconciled against rebased main on 2026-10-07. Deployment paths, account identities and transcript content are intentionally excluded from this public document.
 
 ## Recommendation
 
@@ -8,9 +8,9 @@ Reuse #137's agent managers and existing `Worker` supervision. Add durable nativ
 
 Do not equate list-price estimates with money actually billed. Preserve reported tokens and reported costs separately from estimated API-equivalent USD; unknown usage/cost remains unknown, not zero. Do not attribute concurrent agents by cwd plus a time window once stable native session identities are available.
 
-## 1. Reconciliation with the in-flight PR
+## 1. Reconciliation with merged #137
 
-The relevant PR is **#137, `claude/project-thread-qd6la9`, "Coding agents as a framework concept, with pluggable agent managers"**. At inspection it was OPEN, non-draft, MERGEABLE/CLEAN, with both test checks SUCCESS; image and minimal-wheel checks were SKIPPED. No formal review decision was recorded. This is a viable architectural prerequisite, not approval to merge or proof of production completeness. The open PRs #167 and #168 concern config editing and composer styling, not the agent abstraction; PRs #151–#166 were also checked. `boundcorp/ergo-bots` had no open PR at inspection.
+PR **#137, `claude/project-thread-qd6la9`, "Coding agents as a framework concept, with pluggable agent managers"** is merged. Its `AgentManager` contract, `agent:<manager>` workers, `Worker.args["handle"]`, and the `OrcaAgents` compatibility path are present on main as described below. It does **not** include a capture descriptor or native-history persistence; slice 1 adds collection behind the Orca manager without changing legacy `orca:watch` handle interpretation.
 
 What #137 actually adds:
 
@@ -198,4 +198,4 @@ Use sanitized deterministic native CLI fixtures in existing scanner/history test
 | Follow-on sequencing | #137 merge, then Orca end-to-end PR #1, Bash/SSH parity PR #2, bounded historical rollout PR #3 | Smaller reviewable cutover; whole goal is complete only after all transport/archive paths land. |
 | Historical sessions without thread provenance | Owner-scoped unlinked archive; link only on verified launch/session evidence | Preserves history without leaking it into the wrong thread. |
 
-No implementation or deployment changes are made by this planning PR. Readiness and CLI observations are snapshots, not guarantees about later branch revisions or deployed versions.
+Slice 1 now implements the listed schema, local Orca/omp capture seam, private storage fallback and admin registration. Bash/SSH managers, historical backfill, reporting UI and invoice reconciliation remain deliberately deferred; readiness and CLI observations are snapshots, not deployment guarantees.

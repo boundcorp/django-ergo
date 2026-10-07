@@ -85,6 +85,9 @@ DEFAULTS = {
     "BOT_WEBHOOK_BASE_URL": None,
     # Extra or overriding model prices, USD per million tokens (see pricing.py)
     "MODEL_PRICES": {},
+    # Django storage alias for private native coding-agent history. Configure an
+    # S3/Garage-backed alias in deployment; default_storage is local in tests.
+    "AGENT_HISTORY_STORAGE": "default",
     # Telemetry Configuration
     "TELEMETRY_ENABLED": False,
     "TELEMETRY_SERVICE_NAME": "django-ergo",

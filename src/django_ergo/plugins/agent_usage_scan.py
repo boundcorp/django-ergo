@@ -7,6 +7,7 @@ unchanged to the machine holding the worktree, where it runs as ``python3 -``.
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 from datetime import UTC
 from datetime import datetime
@@ -164,9 +165,12 @@ def _codex(root: Path, cwd: str, since: datetime, until: datetime) -> dict[str, 
 
 def _omp(root: Path, cwd: str, since: datetime, until: datetime) -> dict[str, dict]:
     models: dict[str, dict] = {}
-    for path in (root / ".omp" / "agent" / "sessions").glob("*/*.jsonl"):
+    for path in (root / ".omp" / "agent" / "sessions").glob("**/*.jsonl"):
         rows = list(_rows(path))
-        if not rows or rows[0].get("type") != "session" or rows[0].get("cwd") != cwd:
+        # omp writes a mutable title record before the session header.  The
+        # header remains authoritative wherever it appears in the file.
+        header = next((row for row in rows if row.get("type") == "session"), {})
+        if not header or header.get("cwd") != cwd:
             continue
         for row in rows:
             message = row.get("message") or {}
@@ -195,10 +199,32 @@ def _omp(root: Path, cwd: str, since: datetime, until: datetime) -> dict[str, di
     return models
 
 
-def scan(
-    agent: str, cwd: str, since: datetime, until: datetime, *, home: Path | None = None
-) -> dict[str, dict]:
-    """Return usage for one agent/worktree in the inclusive UTC time window."""
+def omp_history(root: Path, cwd: str) -> list[dict[str, str]]:
+    """Return exact omp files for one cwd, including an optional title slot."""
+    files = []
+    for path in (root / ".omp" / "agent" / "sessions").glob("**/*.jsonl"):
+        rows = list(_rows(path))
+        header = next((row for row in rows if row.get("type") == "session"), {})
+        if header.get("cwd") == cwd:
+            files.append(
+                {
+                    "name": path.name,
+                    "content": base64.b64encode(path.read_bytes()).decode("ascii"),
+                }
+            )
+    return files
+
+
+def scan(  # noqa: PLR0913
+    agent: str,
+    cwd: str,
+    since: datetime,
+    until: datetime,
+    *,
+    home: Path | None = None,
+    include_history: bool = False,
+) -> dict:
+    """Return usage and, for supported formats, native bytes for one worktree."""
     root = home or Path.home()
     if agent == "claude":
         models = _claude(root, cwd, since, until)
@@ -208,7 +234,10 @@ def scan(
         models = _omp(root, cwd, since, until)
     else:
         models = {}
-    return {"models": models}
+    result = {"models": models}
+    if include_history and agent == "omp":
+        result["history"] = omp_history(root, cwd)
+    return result
 
 
 def main() -> None:
@@ -217,11 +246,17 @@ def main() -> None:
     parser.add_argument("cwd")
     parser.add_argument("since")
     parser.add_argument("until")
+    parser.add_argument("--history", action="store_true")
     args = parser.parse_args()
     print(  # noqa: T201
         json.dumps(
-            scan(args.agent, args.cwd, _at(args.since), _at(args.until)),
-            separators=(",", ":"),
+            scan(
+                args.agent,
+                args.cwd,
+                _at(args.since),
+                _at(args.until),
+                include_history=args.history,
+            ),
         )
     )
 
