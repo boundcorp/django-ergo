@@ -758,7 +758,16 @@ async def test_bot_turn_is_a_chat_reply_structured_call(tmp_path):
     assert answer.text == "Tacos it is."
     # A plain-text answer was sent back for a proper reply.
     correction = engine._client.calls[2]["messages"][-1]["content"][0]["text"]
-    assert "must call the send_reply tool" in correction
+    assert "Call the send_reply tool now" in correction
+    assert "Plain text is not allowed" in correction
+    # The nudge is stored as Ergo's, not as the user's message.
+    nudges = [
+        m.author
+        async for m in root.messages.filter(
+            content_blocks__text__contains="Call the send_reply tool now"
+        )
+    ]
+    assert [a.get("kind") for a in nudges] == ["system"]
     # History keeps each reply as readable text, suggestions included.
     window = engine._client.calls[1]["system"]
     assert "Tacos or soup?" in window

@@ -19,6 +19,11 @@ def session_label(session) -> str:
     return f"{session.bot_name} · {title}"
 
 
+def system_identity() -> dict:
+    """The author of messages Ergo itself adds to a chat (nudges, not the user)."""
+    return {"kind": "system", "ref": "ergo", "display_name": "Ergo"}
+
+
 def bot_identity(session) -> dict:
     return {
         "kind": "bot",

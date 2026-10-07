@@ -257,7 +257,7 @@ async def test_plain_text_answer_gets_correction(user):
 
     assert result.ok
     second_call_messages = engine._client.calls[1]["messages"]
-    assert "must call the submit_output tool" in json.dumps(second_call_messages[-1])
+    assert "Call the submit_output tool now" in json.dumps(second_call_messages[-1])
 
 
 async def test_revise_replays_standalone_transcript(user):
@@ -477,6 +477,37 @@ async def test_max_tokens_stop_fails(user):
 
     assert result.status == StructuredCallStatus.FAILED
     assert "max_tokens" in result.error
+
+
+async def test_truncated_tool_call_is_not_run(user):
+    # A reply cut off at max_tokens can carry a tool call with partial ({})
+    # arguments; it must come back as an error, not run.
+    truncated = claude_tool("lookup", {})
+    truncated.stop_reason = "max_tokens"
+    toolkit = LookupToolkit()
+    engine = claude_engine(truncated, claude_tool("submit_output", VALID_PLAN))
+    spec = StructuredCallSpec(kind="planner", response_model=Plan, toolkits=[toolkit])
+
+    result = await run_structured_call(spec, "Plan", user=user, engine=engine)
+
+    assert result.ok
+    assert toolkit.calls == []
+    sent = json.dumps(engine._client.calls[1]["messages"][-1])
+    assert "output token limit" in sent
+
+
+async def test_plain_text_nudge_quotes_the_answer(user):
+    engine = claude_engine(
+        claude_text("Draft ae62abde is created and quoted."),
+        claude_tool("submit_output", VALID_PLAN),
+    )
+    spec = StructuredCallSpec(kind="planner", response_model=Plan)
+
+    await run_structured_call(spec, "Plan", user=user, engine=engine)
+
+    nudge = json.dumps(engine._client.calls[1]["messages"][-1])
+    assert "latest message" in nudge
+    assert "Draft ae62abde is created and quoted." in nudge
 
 
 class APIConnectionError(Exception):
