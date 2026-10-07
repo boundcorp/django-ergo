@@ -1357,10 +1357,10 @@ class OrcaPlugin(BotPlugin):
                 },
                 "tier": {
                     "type": "string",
-                    "enum": ["low", "medium", "high"],
                     "description": (
-                        "Pick agent, model and effort for this tier from the subscription "
-                        "with the most room (replaces agent, model and effort)"
+                        "Pick agent, model and effort for a configured agents tier in "
+                        "providers.yaml (including custom names) from a subscription "
+                        "with room (replaces agent, model and effort)"
                     ),
                 },
             },

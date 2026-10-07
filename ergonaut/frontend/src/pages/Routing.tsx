@@ -4,10 +4,15 @@ import type { Routing, RoutingCandidate, RoutingProvider, RoutingWindow } from '
 import { api } from '../api'
 import { ago, agoLong, clock } from '../time'
 
-const WINDOWS = [
-  ['five_hour', '5-hour'],
-  ['weekly', 'Weekly'],
-] as const
+function windowLabel(key: string, window?: RoutingWindow) {
+  if (window?.label) return window.label
+  const labels: Record<string, string> = {
+    five_hour: '5-hour',
+    weekly: 'Weekly',
+    weekly_fable: 'Weekly · Fable',
+  }
+  return labels[key] ?? key.replace(/[_-]+/g, ' ').replace(/^./, c => c.toUpperCase())
+}
 
 const STATUS: Record<RoutingProvider['status'], [string, string]> = {
   in_use: ['In use', 'bg-teal-tint text-teal'],
@@ -32,37 +37,54 @@ function resets(at: number | null) {
 }
 
 function Meter({ label, w }: { label: string; w: RoutingWindow }) {
-  const used = w.used ?? 0
-  const over = w.used != null && used >= w.limit
-  const fill = over ? 'bg-danger' : used >= w.limit - 15 ? 'bg-warning' : 'bg-mint'
+  const used = w.used ?? (w.remaining != null ? 100 - w.remaining : null)
+  const remaining = w.remaining ?? (used != null ? Math.max(0, 100 - used) : null)
+  const over = used != null && used >= w.limit
+  const fill = over ? 'bg-danger' : used != null && used >= w.limit - 15 ? 'bg-warning' : 'bg-mint'
   return (
     <div>
       <div className="flex flex-wrap justify-between gap-x-3 text-sm">
         <span className="whitespace-nowrap text-muted">{label}</span>
         <span className="font-mono tabular-nums">
-          {w.used == null ? <span className="text-muted">not reported</span> : `${Math.round(used)}%`}
-          {w.resets_at && <span className="text-muted"> · {resets(w.resets_at)}</span>}
+          {remaining == null ? (
+            <span className="text-muted">usage not reported</span>
+          ) : (
+            `${Math.round(remaining)}% remaining`
+          )}
+          {w.status && <span className="text-muted"> · {w.status}</span>}
+          {w.resets_at && (
+            <span className="text-muted" title={new Date(w.resets_at * 1000).toLocaleString()}>
+              {' '}
+              · {resets(w.resets_at)}
+            </span>
+          )}
         </span>
       </div>
-      <div
-        className="relative mt-1.5 h-2.5 rounded-full bg-raised"
-        role="meter"
-        aria-label={label}
-        aria-valuemin={0}
-        aria-valuemax={100}
-        aria-valuenow={Math.round(used)}
-      >
+      {used != null && (
         <div
-          className={`absolute inset-y-0 left-0 rounded-full ${fill}`}
-          style={{ width: `${Math.min(100, used)}%` }}
-        />
-        <div
-          className="absolute -inset-y-1 w-0.5 rounded bg-ink"
-          style={{ left: `${Math.min(99.5, w.limit)}%` }}
-          title={`Skip at ${w.limit}%`}
-        />
+          className="relative mt-1.5 h-2.5 rounded-full bg-raised"
+          role="meter"
+          aria-label={`${label} usage`}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={Math.round(used)}
+          aria-valuetext={`${Math.round(used)}% used, ${Math.round(remaining!)}% remaining`}
+        >
+          <div
+            className={`absolute inset-y-0 left-0 rounded-full ${fill}`}
+            style={{ width: `${Math.max(0, Math.min(100, used))}%` }}
+          />
+          <div
+            className="absolute -inset-y-1 w-0.5 rounded bg-ink"
+            style={{ left: `${Math.min(99.5, w.limit)}%` }}
+            title={`Skip at ${w.limit}% used`}
+          />
+        </div>
+      )}
+      <div className="mt-1 text-xs text-muted">
+        {used != null && `${Math.round(used)}% used · `}Skip at {w.limit}% used
+        {w.model && ` · ${w.model} only`}
       </div>
-      <div className="mt-1 text-xs text-muted">Skip at {w.limit}%</div>
     </div>
   )
 }
@@ -80,24 +102,69 @@ function ProviderCard({ p }: { p: RoutingProvider }) {
       </div>
       {p.subscription ? (
         <div className="flex flex-col gap-3.5">
-          {WINDOWS.map(([key, name]) => (
-            <Meter key={key} label={name} w={p.windows[key]} />
+          {Object.entries(p.windows).map(([key, window]) => (
+            <Meter key={key} label={windowLabel(key, window)} w={window} />
           ))}
+          {!Object.keys(p.windows).length && (
+            <p className="text-sm text-muted">No usage reported yet. It shows up after the first call.</p>
+          )}
         </div>
       ) : (
         <p className="text-sm text-muted">
-          Billed per token. Bot chats fall back here only when their tier lists it; coding agents never do.
+          Billed per token. Bot chats use this only when their tier lists it; coding agents never do.
         </p>
       )}
-      <p className="mt-auto border-t border-stroke pt-3 text-xs text-muted">
-        {p.reason ||
-          (p.subscription
-            ? p.reported_at
-              ? `Last reported ${agoLong(p.reported_at)}.`
-              : 'No usage reported yet. It shows up after the first call.'
-            : 'Not metered by the router.')}
-      </p>
+      <div className="mt-auto space-y-1 border-t border-stroke pt-3 text-xs text-muted">
+        {p.reason && <p>{p.reason}</p>}
+        {p.reported_at && (
+          <p>
+            Last reported{' '}
+            <time dateTime={p.reported_at} title={new Date(p.reported_at).toLocaleString()}>
+              {agoLong(p.reported_at)}
+            </time>
+            {p.stale && <span className="text-warning"> · Stale usage snapshot</span>}
+          </p>
+        )}
+        {!p.subscription && <p>Not metered by the router.</p>}
+      </div>
     </article>
+  )
+}
+
+export function Providers({ providers }: { providers: RoutingProvider[] }) {
+  const subscriptions = providers.filter(p => p.subscription)
+  const apiKeys = providers.filter(p => !p.subscription)
+  return (
+    <>
+      <section aria-labelledby="routing-subs">
+        <h2 id="routing-subs" className="font-display text-2xl font-semibold">
+          Subscriptions
+        </h2>
+        {subscriptions.length ? (
+          <div className="mt-4 grid gap-4 [grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr))]">
+            {subscriptions.map(p => (
+              <ProviderCard key={p.name} p={p} />
+            ))}
+          </div>
+        ) : (
+          <p className="mt-4 text-sm text-muted">
+            {providers.length ? 'No subscription providers configured.' : 'No providers.yaml is loaded.'}
+          </p>
+        )}
+      </section>
+      {apiKeys.length > 0 && (
+        <section aria-labelledby="routing-api-keys">
+          <h2 id="routing-api-keys" className="font-display text-2xl font-semibold">
+            Pay-per-token providers
+          </h2>
+          <div className="mt-4 grid gap-4 [grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr))]">
+            {apiKeys.map(p => (
+              <ProviderCard key={p.name} p={p} />
+            ))}
+          </div>
+        </section>
+      )}
+    </>
   )
 }
 
@@ -142,7 +209,7 @@ function Candidates({ list }: { list: RoutingCandidate[] }) {
   )
 }
 
-function Tiers({ data }: { data: Routing }) {
+export function Tiers({ data }: { data: Routing }) {
   const names = [...new Set([...data.tiers.map(t => t.name), ...data.agents.map(a => a.name)])]
   if (!names.length)
     return (
@@ -196,7 +263,7 @@ function Tiers({ data }: { data: Routing }) {
   )
 }
 
-function Priorities({ data, onSaved }: { data: Routing; onSaved: (r: Routing) => void }) {
+export function Priorities({ data, onSaved }: { data: Routing; onSaved: (r: Routing) => void }) {
   const [draft, setDraft] = useState(data.text)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -297,8 +364,8 @@ function Priorities({ data, onSaved }: { data: Routing; onSaved: (r: Routing) =>
           {limits.map((l, i) => (
             <li key={i} className="flex justify-between gap-3 rounded-control bg-raised px-3.5 py-3 text-sm">
               <span>
-                {l.provider === '*' ? 'Every provider' : l.provider} · {l.window === 'five_hour' ? '5-hour' : 'weekly'}{' '}
-                window
+                {l.provider === '*' ? 'Every provider' : l.provider} ·{' '}
+                {windowLabel(l.window, data.providers.find(p => p.name === l.provider)?.windows[l.window])} window
               </span>
               <span className="font-mono text-warning">skip at {l.max_used}%</span>
             </li>
@@ -345,8 +412,8 @@ export function RoutingPage() {
       <p className="eyebrow">Settings</p>
       <h1 className="page-title mt-3">Routing</h1>
       <p className="page-lede mt-3 max-w-2xl">
-        Chats set to an Auto model and Orca workers started with a tier get a model from that tier, on whichever
-        subscription has room.
+        Chats set to an Auto model try their tier's models in order, using subscriptions with room or configured
+        pay-per-token providers. Orca workers started with a tier use subscriptions only.
       </p>
       {error && (
         <p role="alert" className="mt-6 text-sm text-danger">
@@ -357,20 +424,7 @@ export function RoutingPage() {
         !error && <p className="mt-8 text-sm text-muted">Loading…</p>
       ) : (
         <div className="mt-8 flex flex-col gap-8">
-          <section aria-labelledby="routing-subs">
-            <h2 id="routing-subs" className="font-display text-2xl font-semibold">
-              Subscriptions
-            </h2>
-            {data.providers.length ? (
-              <div className="mt-4 grid gap-4 [grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr))]">
-                {data.providers.map(p => (
-                  <ProviderCard key={p.name} p={p} />
-                ))}
-              </div>
-            ) : (
-              <p className="mt-4 text-sm text-muted">No providers.yaml is loaded.</p>
-            )}
-          </section>
+          <Providers providers={data.providers} />
 
           <section aria-labelledby="routing-tiers">
             <div className="flex flex-wrap items-baseline justify-between gap-2">

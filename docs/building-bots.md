@@ -62,7 +62,7 @@ providers:
     config: {reasoning_effort: medium}   # shared by its models
     models:
       - gpt-6-luna
-      - {name: gpt-6-sol, label: Sol, config: {reasoning_effort: high}}
+      - {name: gpt-6.1-sol, label: Sol, config: {reasoning_effort: high}}
   anthropic:                   # optional: only if you have an Anthropic key
     type: claude
     api_key_env: ANTHROPIC_API_KEY
@@ -73,7 +73,7 @@ OpenAI is the default engine; Anthropic (Claude) is optional and only
 needed if you list it here or set `engine.type: claude`.
 
 Models are named `provider/model`. A bot picks one with
-`engine: {config: {model: openai/gpt-6-sol}}`; a bot with no `engine` uses
+`engine: {config: {model: openai/gpt-6.1-sol}}`; a bot with no `engine` uses
 `default`. In Ergonaut, the chat header and the New thread page have a
 model picker listing every model whose provider's key is set. Any chat can
 switch to any of them, and the pick (stored on the chat as
@@ -125,7 +125,7 @@ providers:
     type: openai
     transport: cli
     config: {effort: medium}   # optional: command, codex_home, effort, timeout
-    models: [gpt-6-sol, gpt-6-luna]
+    models: [gpt-6.1-sol, gpt-6-astra, gpt-6-luna, gpt-5.6-terra]
 ```
 
 Install the CLI (`npm install -g @openai/codex`) where turns run and log it
@@ -149,29 +149,82 @@ bots only you use.
 
 Instead of a fixed model, a chat (the model picker's `auto` entries) or a
 bot (`engine: {model: auto/medium}`, or `default: auto/medium` in
-providers.yaml) can ask for a tier: `auto/low`, `auto/medium` or
-`auto/high`. Each turn then takes the first model in that tier whose
-subscription still has room. A chat keeps the model it had while that model
-qualifies, so its prompt cache isn't thrown away.
+providers.yaml) can ask for `auto/<tier>`. Each turn takes the first model
+in that tier whose subscription still has room. A chat keeps the model it
+had while that model qualifies, so its prompt cache isn't thrown away.
+
+`low`, `medium` and `high` work without declaring `tiers` or `agents`.
+Ergo builds their defaults only from models actually listed on your
+configured `transport: cli` providers; it never adds a provider or model
+and never includes an API-key provider in a default tier. Provider names
+are yours to choose; defaults match their engine type and exact model name:
+
+| Tier | Candidate order (unlisted models are skipped) |
+| --- | --- |
+| `low` | Claude Sonnet 5.5, GPT-6 Luna, Claude Haiku 4.5 |
+| `medium` | Claude Opus 5.5, GPT-6.1 Sol, Claude Sonnet 5.5, GPT-5.6 Terra |
+| `high` | Claude Fable 5.1, GPT-6 Astra, then the `medium` catalog order |
+
+If several subscriptions list the same model, they are tried in provider
+declaration order. A tier with no matching candidates cannot be used.
+Built-in agent choices use `claude` or `codex`, with effort `low`, `medium`
+or `high` to match the tier (including high's fallback models). Chat tiers
+select models only: their engine settings still come from the provider,
+model and bot config.
+
+Previously tier names were restricted to low/medium/high. You can now use
+any non-empty name without `/`, for both chats and agents. These defaults
+are editable in `providers.yaml`: each declared `tiers.<name>` or
+`agents.<name>` **replaces that name's entire default list**, independently;
+other defaults stay in place. Existing explicit lists remain authoritative,
+including an older `high` that uses the same models as `medium`. An empty
+list disables that tier. For example:
 
 ```yaml
-tiers:                # bot chats: candidates in order of preference
-  low:    [claude/claude-sonnet-5-5, chatgpt/gpt-6-luna]
-  medium: [claude/claude-opus-5-5, chatgpt/gpt-6-sol]
-  high:   [claude/claude-opus-5-5, chatgpt/gpt-6-sol, openai/gpt-6-sol]
+default: auto/medium
+providers:
+  anthropic:
+    type: claude
+    transport: cli
+    models: [claude-sonnet-5-5, claude-opus-5-5, claude-fable-5-1, claude-haiku-4-5]
+  openai-codex:
+    type: openai
+    transport: cli
+    models: [gpt-6.1-sol, gpt-6-astra, gpt-6-luna, gpt-5.6-terra]
+tiers:                # chat candidates, in preference order
+  low: [openai-codex/gpt-6-luna, anthropic/claude-sonnet-5-5]  # override a built-in
+  research: [anthropic/claude-fable-5-1, openai-codex/gpt-6-astra]  # custom
 agents:               # coding agents (ergo_agent_start tier=...), subscriptions only
-  medium:
-    - {agent: claude, model: claude-opus-5-5, provider: claude}
-    - {agent: codex, model: gpt-6-sol, effort: medium, provider: chatgpt}
+  high:               # explicit override; not extended or silently rewritten
+    - {agent: codex, model: gpt-6.1-sol, effort: high, provider: openai-codex}
+  research:
+    - {agent: claude, model: claude-fable-5-1, effort: high, provider: anthropic}
 routing:
   limits:             # skip a provider once a window is this % used
-    - {provider: claude, window: five_hour, max_used: 85}
-    - {provider: chatgpt, window: weekly, max_used: 80}
+    - {provider: anthropic, window: five_hour, max_used: 85}
+    - {provider: openai-codex, window: weekly, max_used: 80}
+    - {provider: anthropic, window: weekly_fable, max_used: 80}
 ```
 
-The windows come from the CLIs themselves: every Claude Code and Codex call
-records its subscription's 5-hour and weekly usage (`ProviderUsage`), and a
-call refused for its limit counts that window as used up until it resets.
+Use `engine: {model: auto/research}` in bot.yaml (or choose `auto/research`
+in the chat picker), and `tier: research` when starting an agent. Edit the
+deployment's providers.yaml to change defaults or add tiers, then restart
+Ergonaut and its bot workers so both reload the configuration.
+
+The CLIs supply the windows (`ProviderUsage`); Ergo does not assume that a
+subscription has a 5-hour/weekly pair. Codex currently reports only a
+7-day window (`weekly`). Claude can report 5-hour (`five_hour`), 7-day
+(`weekly`) and 7-day Fable (`weekly_fable`); the Fable window only applies
+to Fable candidates, so an exhausted Fable allowance can fall back to Opus
+on the same subscription. Other reported windows retain their own IDs and
+labels. Missing utilization is unknown, not zero.
+
+Full snapshots replace earlier windows (removing an obsolete Codex 5-hour
+window); partial Claude rate-limit events update only what they report.
+The Routing page shows remaining/used percentages, reset times and status,
+and marks reports older than 10 minutes stale. Windows past their reset
+time are not used to disqualify a model. A call refused for a limit counts
+that reported window as used up until it resets.
 A turn refused that way is never retried on its own: the chat's error offers
 **Retry on** the tier's next model with room (`POST
 /api/sessions/<id>/resume?model=...`), next to Resume, which waits for the
@@ -179,9 +232,9 @@ same model. The chat then stays on the model it moved to while that model
 qualifies.
 Without limits, a provider is skipped only at 98% used. When every candidate
 is over a limit, the one with the most room is used. Agent candidates must
-name a `transport: cli` provider, so agents never run on an API key. Note
-that a chat routed onto an API-key provider (like `openai/gpt-6-sol` above)
-bills that key.
+name a `transport: cli` provider, so agents never run on an API key.
+Explicit chat tier lists may still include a listed API-key model, but
+selecting it bills that key; built-in defaults never do.
 
 The same priorities can be written in words, in a `routing.md` next to
 providers.yaml:
@@ -190,6 +243,11 @@ providers.yaml:
 Lean on Claude: use it until its 5-hour window is 85% used.
 Keep Codex's weekly window under 80%, since it runs out first.
 ```
+
+Use configured provider **names**, not engine types, in YAML limits: for the
+example above, Codex/GPT priorities target `openai-codex`, not a separate
+`openai` API-key provider. The priorities compiler is given this distinction;
+older compiled policies are recompiled under the window-aware compiler.
 
 The first turn after the file changes compiles it into limits with one
 structured call, in the background; the `routing:` limits apply until it's

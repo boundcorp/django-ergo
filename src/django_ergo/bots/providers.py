@@ -8,7 +8,7 @@ A ``providers.yaml`` at the top of a bot path lists them::
         type: openai                   # engine type: openai or claude
         api_key_env: OPENAI_API_KEY    # read at runtime, never stored
         config: {reasoning_effort: medium}   # engine config shared by its models
-        models: [gpt-6-luna, gpt-6-sol]
+        models: [gpt-6-luna, gpt-6.1-sol]
       anthropic:
         type: claude
         api_key_env: ANTHROPIC_API_KEY
@@ -23,14 +23,15 @@ A ``providers.yaml`` at the top of a bot path lists them::
         type: openai
         transport: cli                 # the Codex CLI logged in with ChatGPT
         config: {effort: medium}
-        models: [gpt-6-sol, gpt-6-luna]
+        models: [gpt-6.1-sol, gpt-6-astra, gpt-6-luna, gpt-5.6-terra]
 
 A model is named ``provider/model``. A bot can use one with
-``engine: {model: openai/gpt-6-sol}``, and a chat can switch to any enabled
+``engine: {model: openai/gpt-6.1-sol}``, and a chat can switch to any enabled
 model whose provider's key is set (the chat model picker). ``tiers``,
 ``agents`` and ``routing`` (plus an optional ``routing.md``) let a chat or
-bot ask for ``auto/low``, ``auto/medium`` or ``auto/high`` instead, picked
-per turn from what's left on each subscription (``bots.routing``).
+bot ask for ``auto/<tier>`` instead, picked per turn from what's left on
+each subscription (``bots.routing``). Low, medium and high have defaults
+from the listed subscription models; YAML can replace them or add tiers.
 
 ``transport: cli`` runs models on the subscription a CLI on this machine is
 logged in with: Claude models through the Claude Code CLI
@@ -48,7 +49,6 @@ from pathlib import Path
 
 import yaml
 
-from django_ergo.bots.routing import TIERS
 from django_ergo.bots.routing import AgentChoice
 from django_ergo.bots.routing import Routing
 from django_ergo.bots.routing import RoutingRules
@@ -59,6 +59,30 @@ PROVIDERS_FILE = "providers.yaml"
 ROUTING_FILE = "routing.md"
 ENGINE_TYPES = ("openai", "claude")
 TRANSPORTS = {"openai": ("api", "cli"), "claude": ("api", "cli")}
+
+# Preference order is by model family, then providers.yaml's provider order.
+# Only exact catalog models on configured CLI subscriptions become candidates.
+DEFAULT_TIER_MODELS = {
+    "low": (
+        ("claude", "claude-sonnet-5-5"),
+        ("openai", "gpt-6-luna"),
+        ("claude", "claude-haiku-4-5"),
+    ),
+    "medium": (
+        ("claude", "claude-opus-5-5"),
+        ("openai", "gpt-6.1-sol"),
+        ("claude", "claude-sonnet-5-5"),
+        ("openai", "gpt-5.6-terra"),
+    ),
+    "high": (
+        ("claude", "claude-fable-5-1"),
+        ("openai", "gpt-6-astra"),
+        ("claude", "claude-opus-5-5"),
+        ("openai", "gpt-6.1-sol"),
+        ("claude", "claude-sonnet-5-5"),
+        ("openai", "gpt-5.6-terra"),
+    ),
+}
 
 
 class ProvidersError(ValueError):
@@ -171,8 +195,34 @@ class Providers:
             raise ProvidersError(msg)
         return result
 
+    def _default_routing(self) -> Routing:
+        """Defaults never add a provider, model or API-billed candidate."""
+        routing = Routing()
+        for tier, catalog in DEFAULT_TIER_MODELS.items():
+            routing.tiers[tier] = []
+            routing.agents[tier] = []
+            for kind, name in catalog:
+                for provider in self.providers.values():
+                    if (
+                        provider.transport != "cli"
+                        or provider.type != kind
+                        or name not in provider.models
+                    ):
+                        continue
+                    routing.tiers[tier].append(provider.models[name].id)
+                    routing.agents[tier].append(
+                        AgentChoice(
+                            agent="claude" if kind == "claude" else "codex",
+                            model=name,
+                            provider=provider.name,
+                            effort=tier,
+                        )
+                    )
+        return routing
+
     def _routing(self, data: dict) -> Routing:
-        tiers = {}
+        defaults = self._default_routing()
+        tiers = defaults.tiers
         for tier, refs in (data.get("tiers") or {}).items():
             self._check_tier(tier)
             tiers[tier] = [str(r) for r in refs or []]
@@ -180,7 +230,7 @@ class Providers:
                 if self.find(ref) is None:
                     msg = f"tiers.{tier}: {ref!r} isn't one of the listed models"
                     raise ProvidersError(msg)
-        agents = {}
+        agents = defaults.agents
         for tier, listed in (data.get("agents") or {}).items():
             self._check_tier(tier)
             try:
@@ -205,14 +255,14 @@ class Providers:
 
     @staticmethod
     def _check_tier(tier) -> None:
-        if tier not in TIERS:
-            msg = f"Tier {tier!r} must be one of {', '.join(TIERS)}"
+        if not isinstance(tier, str) or not tier.strip() or "/" in tier:
+            msg = f"Tier {tier!r} must be a non-empty single path segment"
             raise ProvidersError(msg)
 
     def knows(self, ref: str) -> bool:
         """A listed model, or ``auto/<tier>`` for a tier that's set up."""
         if is_auto(ref):
-            return tier_of(ref) in self.routing.tiers
+            return bool(self.routing.tiers.get(tier_of(ref)))
         return self.find(ref) is not None
 
 

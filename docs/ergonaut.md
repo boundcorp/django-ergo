@@ -211,14 +211,27 @@ refuse logins until the window passes.
   by day, call kind (chat replies split by bot), and model. Admins see
   everyone's calls and agent sessions; others see their own.
 - **Routing**: for chats on an Auto model and Orca workers started with a
-  tier: each subscription's 5-hour and weekly windows against the limits, the
-  model each tier picks now (skipped candidates struck through, with the
-  reason), the priorities in plain words with the rules compiled from them,
-  and recent switches. Admins can edit the priorities; the text is saved in
-  the database and replaces the bot repo's `routing.md` until **Use
-  routing.md**. The data is `GET /api/routing` (`PUT` and `DELETE` to save or
-  reset the text). A turn a provider refused at its limit offers **Retry on**
-  the tier's next model in the chat, never on its own.
+  tier. **Subscriptions** shows only the usage windows each provider has
+  actually reported, with its label, percentage remaining, status when
+  available, reset time, and routing skip limit (percentage used). For
+  example, a Codex report with only a 7-day window shows one row, while
+  Claude can report 5-hour, weekly, and Fable-only weekly windows
+  (`weekly_fable`); the Fable-only limit applies only to Fable candidates.
+  No snapshot yet is shown as **No usage reported yet**, not zero usage.
+  Each snapshot shows when it was last reported and a stale indicator when
+  the backend marks it stale. **Pay-per-token providers** lists API-key
+  providers separately: chats can use them when their tier lists them,
+  but coding agents use subscriptions only. **Tiers** shows every configured
+  tier (including custom names, not just `low`, `medium`, and `high`) and the
+  model each tier picks now; skipped candidates are struck through with the
+  reason. Tier names are non-empty single path segments, selected in chats
+  as `auto/<tier>`. The priorities in plain words, the compiled rules with
+  each window's label, and recent switches are shown below. Admins can edit
+  the priorities; the text is saved in the database and replaces the bot
+  repo's `routing.md` until **Use routing.md**. The data is
+  `GET /api/routing` (`PUT` and `DELETE` to save or reset the text). A turn a
+  provider refused at its limit offers **Retry on** the tier's next model
+  in the chat, never on its own.
 
 Django's admin is at `/mgmt/`. The API is at `/api/` with docs at
 `/api/docs`.
