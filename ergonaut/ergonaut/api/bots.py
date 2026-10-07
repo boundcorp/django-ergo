@@ -1555,7 +1555,9 @@ def upload_attachment(request, session_id: str, file: UploadedFile = File(...)):
 
 
 # Bot-written pages run scripts, so they get their own opaque origin: no cookies, no app API.
-SANDBOXED = "sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox allow-downloads"
+# allow-modals: blocks.button(confirm=...) asks with window.confirm, which the sandbox
+# otherwise answers "no" without showing anything.
+SANDBOXED = "sandbox allow-scripts allow-modals allow-popups allow-popups-to-escape-sandbox allow-downloads"
 
 
 def page_response(html: str, *, sandboxed: bool) -> HttpResponse:
