@@ -155,6 +155,41 @@ def test_blocks_render_metrics_tables_and_charts(realty_bot):
 
 
 @pytest.mark.django_db(transaction=True)
+def test_blocks_render_forms_row_controls_buttons_and_respect_page_writes(realty_bot):
+    from django_ergo.bots.pages import PageError
+    from django_ergo.bots.pages import render_page
+
+    bot, user = realty_bot
+    source = """
+    {{ blocks.form(table="House", title="Add a house") }}
+    {{ blocks.table(table="House", columns=["address", "price"], edit=True, delete=True) }}
+    {{ blocks.button(label="Ask about listings", ask="Summarize the listings", args={"chat": "main"}) }}
+    """
+    html = render_page(bot, source, user=user)
+    assert 'name="address"' in html and 'type="number" name="price"' in html
+    assert '<select name="status"' in html and 'type="checkbox" name="listed"' in html
+    assert '<textarea name="notes"' in html
+    assert 'data-ergo-action="update"' in html and "data-ergo-delete" in html
+    assert (
+        'ergo.call("ergo.ask"' in html
+        and "ask: function" in html
+        and "Summarize the listings" in html
+    )
+
+    house = bot.table("House")
+    house.page_writes = False
+    try:
+        readonly = render_page(
+            bot, '{{ blocks.table(table="House", edit=True, delete=True) }}', user=user
+        )
+        assert "data-ergo-action" not in readonly and "data-ergo-delete" not in readonly
+        with pytest.raises(PageError, match="does not allow page writes"):
+            render_page(bot, '{{ blocks.form(table="House") }}', user=user)
+    finally:
+        del house.page_writes
+
+
+@pytest.mark.django_db(transaction=True)
 def test_pages_plugin_writes_previews_and_pins(realty_bot):
     from django_ergo.bots.pages import bot_file
     from django_ergo.bots.pages import session_pins

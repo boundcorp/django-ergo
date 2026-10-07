@@ -129,6 +129,20 @@ someone opens it:
 
 More in [Pages and pins](bots.md#pages-and-pins).
 
+### Editable page blocks
+
+Use `blocks.form(table="House")` to add a validated row, or
+`blocks.table(table="House", edit=true, delete=true)` for inline editing and
+approved deletes. Inputs follow the model field type; choices are selects and
+booleans are checkboxes. The controls call the built-in `ergo.table.*` page
+actions, so they use the same `clean` and `full_clean` checks as the table
+tools. A model can opt out of both with:
+
+```python
+class ImportLog(BotTable):
+    page_writes = False
+```
+
 ## Live refresh
 
 A page that reads a table re-renders when that table changes, so nobody

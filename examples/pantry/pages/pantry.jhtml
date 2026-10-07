@@ -1,5 +1,7 @@
 <h1>Pantry</h1>
 <p id="status" role="status"></p>
+{{ blocks.form(table="Pantry", fields=["name", "quantity", "on_order"], submit="Add item", title="Add to the pantry") }}
+{{ blocks.button(label="Ask for a shopping plan", ask="What should I buy next?", args={"chat": "main"}) }}
 <table>
   <caption>On the shelf</caption>
   <thead><tr><th>Item</th><th>In stock</th><th>On order</th><th></th></tr></thead>

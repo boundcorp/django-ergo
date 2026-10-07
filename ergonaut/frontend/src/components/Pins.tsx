@@ -78,7 +78,7 @@ export function Pins({
   )
 }
 
-type Toast = { id: number; text: string; kind: ToastKind }
+type Toast = { id: number; text: string; kind: ToastKind; href?: string }
 type ConfirmRequest = { preview: string; resolve: (yes: boolean) => void }
 
 // A pinned page or file, live: reloads when the chat changes (new rows may have landed), calls the
@@ -121,9 +121,9 @@ function PageFrame({
   // What a page action is called with: the pin's path (bot folder) or the attachment id (chat file).
   const page = pin.path ?? pin.id ?? ''
 
-  const notify = useCallback((text: string, kind: ToastKind) => {
+  const notify = useCallback((text: string, kind: ToastKind, href?: string) => {
     const id = (toastId.current += 1)
-    setToasts(list => [...list, { id, text, kind }])
+    setToasts(list => [...list, { id, text, kind, href }])
     window.setTimeout(() => setToasts(list => list.filter(t => t.id !== id)), 5000)
   }, [])
 
@@ -238,6 +238,14 @@ function PageFrame({
               className={`rounded-md px-3 py-2 text-sm shadow-lg ${t.kind === 'error' ? 'bg-red-600 text-white' : 'bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900'}`}
             >
               {t.text}
+              {t.href && (
+                <>
+                  {' '}
+                  <a className="pointer-events-auto underline" href={t.href}>
+                    Open
+                  </a>
+                </>
+              )}
             </div>
           ))}
         </div>

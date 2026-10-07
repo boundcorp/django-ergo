@@ -86,6 +86,63 @@ class PageActionOutcome:
     approved: bool = False  # the action required approval and the viewer gave it
 
 
+def _table_add(ctx, table: str, values: dict) -> dict:
+    from django_ergo.bots.tables import page_add
+
+    return page_add(ctx.bot, table, values)
+
+
+def _table_update(ctx, table: str, id: int, values: dict) -> dict:  # noqa: A002
+    from django_ergo.bots.tables import page_update
+
+    return page_update(ctx.bot, table, id, values)
+
+
+def _table_delete(ctx, table: str, id: int) -> dict:  # noqa: A002
+    from django_ergo.bots.tables import page_delete
+
+    return page_delete(ctx.bot, table, id)
+
+
+def _table_delete_preview(ctx, table: str, id: int) -> str:  # noqa: A002
+    from django_ergo.bots.tables import page_delete_preview
+
+    return page_delete_preview(ctx.bot, table, id)
+
+
+def built_in_action(name: str) -> PageAction | None:
+    """One of the table actions every page may use, independent of bot tool files."""
+    from django_ergo.bots.tools import PageAction
+
+    actions = {
+        "ergo.table.add": PageAction(
+            name="ergo.table.add",
+            function=_table_add,
+            parameters={"table": {"type": "string"}, "values": {"type": "object"}},
+            required=["table", "values"],
+        ),
+        "ergo.table.update": PageAction(
+            name="ergo.table.update",
+            function=_table_update,
+            parameters={
+                "table": {"type": "string"},
+                "id": {"type": "integer"},
+                "values": {"type": "object"},
+            },
+            required=["table", "id", "values"],
+        ),
+        "ergo.table.delete": PageAction(
+            name="ergo.table.delete",
+            function=_table_delete,
+            parameters={"table": {"type": "string"}, "id": {"type": "integer"}},
+            required=["table", "id"],
+            requires_approval=True,
+            approval_preview=_table_delete_preview,
+        ),
+    }
+    return actions.get(name)
+
+
 def validate_args(action: PageAction, args: Any) -> dict:
     """``args`` against the action's schema: missing required, unknown, or wrong JSON type."""
     if args is None:
@@ -196,7 +253,7 @@ def call_page_action(  # noqa: PLR0913
 
     from django_ergo.bots.tools import ToolContext
 
-    action = bot.page_actions.get(name)
+    action = built_in_action(name) or bot.page_actions.get(name)
     if action is None:
         msg = f"No page action {name!r}"
         raise PageActionError(404, msg)
@@ -226,7 +283,11 @@ def call_page_action(  # noqa: PLR0913
         exc.ran = True
         raise
     except ValidationError as exc:
-        raise PageActionError(400, "; ".join(exc.messages), ran=True) from exc
+        errors = getattr(exc, "message_dict", None)
+        message = (
+            json.dumps({"field_errors": errors}) if errors else "; ".join(exc.messages)
+        )
+        raise PageActionError(400, message, ran=True) from exc
     except ValueError as exc:
         raise PageActionError(400, str(exc), ran=True) from exc
     except Exception:

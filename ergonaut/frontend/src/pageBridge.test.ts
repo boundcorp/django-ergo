@@ -54,6 +54,7 @@ function setup(
   const calls: Calls[] = []
   const confirms: string[] = []
   const toasts: [string, string][] = []
+  const links: (string | undefined)[] = []
   const opened: string[] = []
   const streams: string[][] = []
   let reloads = 0
@@ -74,7 +75,10 @@ function setup(
       confirms.push(preview)
       return options.approve ?? true
     },
-    notify: (text, kind) => toasts.push([text, kind]),
+    notify: (text, kind, href) => {
+      toasts.push([text, kind])
+      links.push(href)
+    },
     openUrl: url => opened.push(url),
     reloadFrame: () => {
       reloads++
@@ -90,6 +94,7 @@ function setup(
     confirms,
     toasts,
     opened,
+    links,
     streams,
     reloads: () => reloads,
     send: (data: unknown, source: unknown = FRAME) => bridge.handleMessage(source, data),
@@ -164,6 +169,15 @@ describe('page actions', () => {
     expect(t.toasts).toEqual([['Added', 'info']])
   })
 
+  test('an ergo.ask result toasts with a chat link', async () => {
+    const t = setup({ respond: () => ({ result: { session_id: 'session-2', chat: 'planning' } }) })
+    await t.send({ type: 'ergo:call', id: 'ask', name: 'ergo.ask', args: { text: 'Plan dinner', chat: 'planning' } })
+    expect(t.toasts).toEqual([['Sent to planning', 'info']])
+    expect(t.links).toEqual(['/s/session-2'])
+    expect(t.posted).toEqual([
+      { type: 'ergo:result', id: 'ask', ok: true, result: { session_id: 'session-2', chat: 'planning' } },
+    ])
+  })
   test('the page cannot choose the bot, page or session', async () => {
     const t = setup()
     await t.send({
