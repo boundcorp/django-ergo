@@ -42,7 +42,7 @@ export type BridgeDeps = {
   callAction: (bot: string, name: string, body: PageActionBody) => Promise<PageActionResponse>
   /** Ask the user to approve an action; resolves true for Yes. */
   confirm: (preview: string) => Promise<boolean>
-  notify: (text: string, kind: ToastKind) => void
+  notify: (text: string, kind: ToastKind, href?: string) => void
   openUrl: (url: string) => void
   /** Re-render the page (the iframe is reloaded; the new page posts ergo:ready). */
   reloadFrame: () => void
@@ -166,7 +166,13 @@ export class PageBridge {
   }
 
   private applyResult(result: Record<string, unknown>) {
-    if (typeof result.message === 'string' && result.message) this.deps.notify(result.message, 'info')
+    const sessionId = typeof result.session_id === 'string' ? result.session_id : ''
+    const chat = typeof result.chat === 'string' ? result.chat : ''
+    if (sessionId && chat) {
+      this.deps.notify(`Sent to ${chat}`, 'info', `/s/${encodeURIComponent(sessionId)}`)
+    } else if (typeof result.message === 'string' && result.message) {
+      this.deps.notify(result.message, 'info')
+    }
     const url = safeOpenUrl(result.open)
     if (url) this.deps.openUrl(url)
     if (result.reload === true) this.reloadNow()

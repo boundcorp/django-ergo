@@ -69,7 +69,7 @@ Live on rigel from `~/p/boundcorp/django-ergo`, bots from `boundcorp/ergo-bots`.
 - [ ] Install the agent skills on the dev box, make an API key on the production server, and start delegating django-ergo and ergo-bots work through `ergonaut-remote`; feed what the runs show back into the skills.
 - [x] **Bot data and pages** (decided 2026-10-02): pinned files (repo files and bot-written attachments), blocks-based page toolkit, live .jhtml Jinja pages served straight from the file/attachment endpoints, templates from bots or PRs. All users share rows; pages are sandboxed (see page actions below).
 - [x] **Page actions and live refresh**: `@page_action` functions a `.jhtml` page calls as the viewer with `ergo.call` (approval round trip, `PageActionCall` record, "Page actions since your last reply" context), pages re-render when a table they read changes (`table_changed`, `touch()`, SSE stream), folder pages served sandboxed with signed asset URLs. Spec: `docs/specs/page-actions.md`; example `examples/pantry/`.
-- [ ] Page forms, row-edit and button blocks (`ergo.table.*`) and `ergo.ask` (parts 3 and 4 of the spec).
+- [x] Page forms, row-edit and button blocks (`ergo.table.*`) and `ergo.ask` (parts 3 and 4 of the spec).
 
 - [x] Upgrade path: `wait_idle` also waits for queued or running workers; `ergonaut upgrade` and `ERGONAUT_AUTO_UPGRADE_SECONDS` upgrade to a new GitHub release once idle through a pluggable `ERGONAUT_UPGRADER` (`systemd`, `command`, or a class in the bot repo); images record `ERGONAUT_VERSION`.
 - [ ] Start publishing GitHub releases of django-ergo (auto-upgrades follow `releases` by default; `ERGONAUT_UPGRADE_CHANNEL=branch:main` follows main).

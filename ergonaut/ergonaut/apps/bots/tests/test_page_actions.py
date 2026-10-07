@@ -1,3 +1,4 @@
+import json
 import time
 
 import pytest
@@ -14,6 +15,7 @@ BOT = """
     engine: {type: claude}
     orchestration: false
     tools: [tools/pantry.py]
+    chats: {main: {}, planning: {description: Planning}}
     tables: [tables.py]
     permissions: {users: [cook, lee]}
 """
@@ -155,6 +157,63 @@ def test_an_action_that_needs_approval_takes_a_signed_round_trip(client, kitchen
     assert recorded.result["message"] == "Ordered 2 flour"
     assert recorded.error == "" and recorded.ok
     assert recorded.duration_ms >= 0
+
+
+@pytest.mark.django_db(transaction=True)
+def test_built_in_table_actions_share_table_validation_and_honor_page_writes(client, kitchen, cook):
+    added = call(client, "ergo.table.add", {"table": "Pantry", "values": {"name": "rice", "on_order": "3"}})
+    assert added.status_code == 200
+    row = added.json()["result"]
+    assert (row["name"], row["on_order"]) == ("rice", 3)
+
+    invalid = call(client, "ergo.table.update", {"table": "Pantry", "id": row["id"], "values": {"name": ""}})
+    assert invalid.status_code == 400
+    assert json.loads(invalid.json()["detail"])["field_errors"]["name"] == ["This field cannot be blank."]
+
+    first = call(client, "ergo.table.delete", {"table": "Pantry", "id": row["id"]}).json()
+    assert first["needs_approval"] is True and "rice" in first["preview"]
+    deleted = call(client, "ergo.table.delete", {"table": "Pantry", "id": row["id"]}, approval=first["approval"])
+    assert deleted.json()["result"]["message"] == f"Deleted Pantry {row['id']}"
+
+    Pantry = kitchen.table("Pantry")
+    Pantry.page_writes = False
+    try:
+        refused = call(client, "ergo.table.add", {"table": "Pantry", "values": {"name": "oats"}})
+        assert (refused.status_code, refused.json()["detail"]) == (400, "Pantry does not allow page writes")
+    finally:
+        del Pantry.page_writes
+
+
+@pytest.mark.django_db(transaction=True)
+def test_ergo_ask_posts_through_the_chat_queue(client, kitchen, cook, monkeypatch):
+    queued = []
+    monkeypatch.setattr("ergonaut.api.bots.queue_message", lambda *args: queued.append(args) or False)
+
+    def ask(text, chat):
+        return call(
+            client,
+            "ergo.ask",
+            {"text": text, "chat": chat},
+            page="pages/pantry.jhtml",
+        )
+
+    main = ask("Need flour", "main").json()["result"]
+    named = ask("Plan dinner", "planning").json()["result"]
+    thread = ask("Plan brunch", "new").json()["result"]
+    sessions = {str(row.id): row for row in ConversationSession.objects.filter(bot_name="kitchen")}
+
+    assert main["chat"] == "main" and sessions[main["session_id"]].parent_id is None
+    assert named["chat"] == "planning" and sessions[named["session_id"]].metadata["chat"] == "planning"
+    assert (
+        thread["chat"] == "Plan brunch" and sessions[thread["session_id"]].parent_id == sessions[main["session_id"]].id
+    )
+    assert [entry[1] for entry in queued] == [
+        "From the Pantry page: Need flour",
+        "From the Pantry page: Plan dinner",
+        "From the Pantry page: Plan brunch",
+    ]
+    invalid = ask("", "main")
+    assert (invalid.status_code, invalid.json()["detail"]) == (400, "ergo.ask: text must be a non-empty string")
 
 
 @pytest.mark.django_db(transaction=True)

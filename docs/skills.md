@@ -93,7 +93,7 @@ folder with the same name replaces the library's.
 | Skill | For |
 | --- | --- |
 | `skillbuilder` | Writing the bot's own skills, tool files, workers, tables, schedules and `.jhtml` dashboards, proposed as pull requests. Requires `config_repo` and `introspection`, and brings `bot_management` in `propose_pr` mode. |
-| `page-design` | Choosing and presenting plans, boards, dependencies, flows, timelines, comparisons and maps as live pages or static attachments, including a living project-map recipe for progress, blockers and next decisions. Brings the `pages` and `attachments` plugins. |
+| `page-design` | Choosing and presenting plans, boards, dependencies, flows, timelines, comparisons and maps as live pages or static attachments; its page guidance covers actions, table forms and `ergo.ask`. Brings the `pages` and `attachments` plugins. |
 | `ergo-client` | Using another Ergonaut server's bots through its API: `ergo_client_*` tools to list bots, start and follow threads, and answer approvals. Needs the `ERGONAUT_URL` and `ERGONAUT_API_KEY` secrets. |
 | `ergo-hosting` | Setting up, upgrading and looking after an Ergonaut server. |
 | `ergo-bot-development` | Writing bot folders from a checkout and testing them. A bot changing itself uses `skillbuilder` instead. |

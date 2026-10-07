@@ -311,10 +311,10 @@ tables each time it's opened (`django_ergo.bots.pages`).
 
 Pages run in Jinja's sandbox and can only read: `table(name)` is a view with
 `filter`, `exclude`, `order_by`, `limit`, `count`, `sum`, `avg`, `min`,
-`max`, `group(...)`, `first` and `rows`, never a queryset. `blocks.*` (heading,
-markdown, metric, table, chart, html) render common pieces; `now`, `today`,
-`days_ago(n)`, `user`, `bot` and the `money`, `number`, `percent` and
-`markdown` filters are there too, and `{% include %}` loads other files from
+max`, `group(...)`, `first` and `rows`, never a queryset. `blocks.*` (heading,
+markdown, metric, form, table, button, chart, html) render common pieces;
+`now`, `today`, `days_ago(n)`, `user`, `bot` and the `money`, `number`,
+`percent` and `markdown` filters are there too, and `{% include %}` loads other files from
 the bot folder. Rows give dates as ISO strings, so for date math use
 `as_datetime` (back to a datetime), `seconds_until` (seconds from now,
 negative once past) and `duration` (seconds as `2h 15m`):
@@ -427,6 +427,29 @@ error, approved, duration; in Django admin). When the call came from a chat,
 the bot sees the last 20 on its next turn in the context section "Page
 actions since your last reply". Without Ergonaut the host runs
 `call_page_action(bot, name, args, ...)` in `django_ergo.bots.page_actions`.
+
+### Page forms and asks
+
+Pages can write a table without declaring Python actions. `blocks.form` adds a
+validated add form; `blocks.table(edit=true, delete=true)` adds per-row edit
+and approved delete controls; and `blocks.button` invokes a page action:
+
+```html
+{{ blocks.form(table="Pantry", fields=["name", "quantity"], submit="Add item") }}
+{{ blocks.table(table="Pantry", columns=["name", "quantity"], edit=true, delete=true) }}
+{{ blocks.button(label="Review the list", ask="What should I buy next?", args={"chat": "main"}) }}
+```
+
+The built-in actions are `ergo.table.add`, `ergo.table.update` and
+`ergo.table.delete`. They use the same `full_clean` validation as the table
+tools, show field errors next to a form input, and delete only after the
+viewer's approval. Set `page_writes = False` on a `BotTable` model to hide
+row controls and reject page writes.
+
+`ergo.ask(text, {chat})` sends `From the <page> page: <text>` through the
+normal chat message path. `chat` is `"main"` (the default), a named chat, or
+`"new"` for a new thread under main. The viewer toasts the destination with an
+Open link; its reply and approvals remain in that chat.
 
 ### Live refresh
 

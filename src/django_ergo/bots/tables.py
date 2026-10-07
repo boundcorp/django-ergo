@@ -253,7 +253,112 @@ def _row(obj: models.Model) -> dict:
     }
 
 
-def table_tools(tables: list[type[BotTable]]) -> list[BotTool]:  # noqa: C901
+WRITE_EXCLUDED_FIELDS = frozenset({"id", "created_at", "updated_at"})
+
+
+def writable_fields(model: type[BotTable]) -> list[models.Field]:
+    """Concrete fields a page or table tool may assign."""
+    return [
+        field
+        for field in model._meta.concrete_fields
+        if field.name not in WRITE_EXCLUDED_FIELDS
+    ]
+
+
+def clean_values(model: type[BotTable], values: dict) -> dict:
+    """Reject values outside the writable model fields before model validation."""
+    if not isinstance(values, dict):
+        msg = "values must be an object"
+        raise ValueError(msg)  # noqa: TRY004 — page actions turn ValueError into a 400
+    allowed = {field.name for field in writable_fields(model)}
+    unknown = set(values) - allowed
+    if unknown:
+        msg = f"{model.__name__} has no field(s) {', '.join(sorted(unknown))}"
+        raise ValueError(msg)
+    return values
+
+
+def add_row(model: type[BotTable], values: dict) -> dict:
+    """Create one row with the same validation used by table tools and page forms."""
+    obj = model(**clean_values(model, values))
+    obj.full_clean(exclude=["created_at", "updated_at"])
+    obj.save()
+    return _row(obj)
+
+
+def update_row(model: type[BotTable], id: int, values: dict) -> dict:  # noqa: A002
+    """Update one row with the same validation used by table tools and page forms."""
+    try:
+        obj = model.objects.get(pk=id)
+    except model.DoesNotExist:
+        msg = f"No {model.__name__} {id}"
+        raise ValueError(msg) from None
+    for key, value in clean_values(model, values).items():
+        setattr(obj, key, value)
+    obj.full_clean(exclude=["created_at", "updated_at"])
+    obj.save()
+    return _row(obj)
+
+
+def delete_row(model: type[BotTable], id: int) -> str:  # noqa: A002
+    """Delete one row, reporting a clear missing-row error to a page or tool."""
+    try:
+        obj = model.objects.get(pk=id)
+    except model.DoesNotExist:
+        msg = f"No {model.__name__} {id}"
+        raise ValueError(msg) from None
+    obj.delete()
+    return f"Deleted {model.__name__} {id}"
+
+
+def page_model(bot, table: str) -> type[BotTable]:
+    """A page-writable table of ``bot``; models may opt out with ``page_writes = False``."""
+    try:
+        model = bot.table(table)
+    except LookupError as exc:
+        raise ValueError(str(exc)) from None
+    if not getattr(model, "page_writes", True):
+        msg = f"{model.__name__} does not allow page writes"
+        raise ValueError(msg)
+    return model
+
+
+def page_add(bot, table: str, values: dict) -> dict:
+    return add_row(page_model(bot, table), values)
+
+
+def page_update(bot, table: str, id: int, values: dict) -> dict:  # noqa: A002
+    return update_row(page_model(bot, table), id, values)
+
+
+def page_delete(bot, table: str, id: int) -> dict:  # noqa: A002
+    return {"message": delete_row(page_model(bot, table), id)}
+
+
+def page_delete_preview(bot, table: str, id: int) -> str:  # noqa: A002
+    model = page_model(bot, table)
+    try:
+        row = model.objects.get(pk=id)
+    except model.DoesNotExist:
+        msg = f"No {model.__name__} {id}"
+        raise ValueError(msg) from None
+    name_field = next(
+        (
+            field.name
+            for field in writable_fields(model)
+            if field.name in ("name", "title")
+        ),
+        "",
+    )
+    label = getattr(row, name_field, "") if name_field else ""
+    return (
+        f"Delete {model.__name__} {label!r}"
+        if label
+        else f"Delete {model.__name__} {id}"
+    )
+
+
+def table_tools(tables: list[type[BotTable]]) -> list[BotTool]:
     """Query, add, update and delete tools over ``tables``."""
     from django_ergo.bots.tools import bot_tool
 
@@ -266,18 +371,6 @@ def table_tools(tables: list[type[BotTable]]) -> list[BotTool]:  # noqa: C901
             msg = f"No table {name!r}. Tables: {names}"
             raise ValueError(msg)
         return found
-
-    def clean(model: type[BotTable], values: dict) -> dict:
-        allowed = {f.name for f in model._meta.concrete_fields} - {
-            "id",
-            "created_at",
-            "updated_at",
-        }
-        unknown = set(values) - allowed
-        if unknown:
-            msg = f"{model.__name__} has no field(s) {', '.join(sorted(unknown))}"
-            raise ValueError(msg)
-        return values
 
     @bot_tool(
         name="ergo_table_query",
@@ -325,11 +418,7 @@ def table_tools(tables: list[type[BotTable]]) -> list[BotTool]:  # noqa: C901
         required=["table", "values"],
     )
     def add(table: str, values: dict) -> dict:
-        model = lookup(table)
-        obj = model(**clean(model, values))
-        obj.full_clean(exclude=["created_at", "updated_at"])
-        obj.save()
-        return _row(obj)
+        return add_row(lookup(table), values)
 
     @bot_tool(
         name="ergo_table_update",
@@ -342,13 +431,7 @@ def table_tools(tables: list[type[BotTable]]) -> list[BotTool]:  # noqa: C901
         required=["table", "id", "values"],
     )
     def update(table: str, id: int, values: dict) -> dict:  # noqa: A002
-        model = lookup(table)
-        obj = model.objects.get(pk=id)
-        for key, value in clean(model, values).items():
-            setattr(obj, key, value)
-        obj.full_clean(exclude=["created_at", "updated_at"])
-        obj.save()
-        return _row(obj)
+        return update_row(lookup(table), id, values)
 
     @bot_tool(
         name="ergo_table_delete",
@@ -358,8 +441,6 @@ def table_tools(tables: list[type[BotTable]]) -> list[BotTool]:  # noqa: C901
         requires_approval=True,
     )
     def delete(table: str, id: int) -> str:  # noqa: A002
-        model = lookup(table)
-        model.objects.filter(pk=id).delete()
-        return f"Deleted {model.__name__} {id}"
+        return delete_row(lookup(table), id)
 
     return [fn.__bot_tool__ for fn in (query, add, update, delete)]

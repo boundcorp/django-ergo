@@ -230,6 +230,13 @@ opened. Pages are read-only and sandboxed.
 - Pages can call `@page_action` functions with `await ergo.call(name, args)`
   and update themselves when a table changes: no polling. See the
   `page-design` skill.
+- For table writes on a page, use `blocks.form(table="Receipt")` and
+  `blocks.table(table="Receipt", edit=true, delete=true)`: inputs and errors
+  match the Django model and delete asks the viewer to approve. Set
+  `page_writes = False` on an import-only table.
+- Use `blocks.button(label="Review", ask="Review these receipts")` or
+  `ergo.ask(text, {chat})` to hand a request to the bot; the reply belongs in
+  that chat, not the page.
 
 ## Before you publish
 

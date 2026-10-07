@@ -13,7 +13,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Literal
 
-from asgiref.sync import sync_to_async
+from asgiref.sync import async_to_sync, sync_to_async
 from django.db.models import Count, Q
 from django.http import FileResponse, HttpResponse
 from django.shortcuts import aget_object_or_404
@@ -1597,6 +1597,50 @@ def record_page_action(bot_name: str, name: str, data: PageActionIn, user, sessi
     )
 
 
+def page_title(page: str) -> str:
+    """A readable page label for a message handed to a bot."""
+    from pathlib import PurePosixPath
+
+    name = PurePosixPath(page).stem if page.endswith(".jhtml") else ""
+    return name.replace("_", " ").replace("-", " ").title() or "this"
+
+
+def ask_page_action(bot: Bot, args: Any, user, page: str) -> dict:
+    """Send a page request through the same queue as a user chat message."""
+    from django_ergo.bots.page_actions import PageActionError
+
+    if not isinstance(args, dict):
+        raise PageActionError(400, "args must be an object")
+    text = args.get("text")
+    chat = args.get("chat", "main")
+    if not isinstance(text, str) or not text.strip():
+        raise PageActionError(400, "ergo.ask: text must be a non-empty string")
+    if not isinstance(chat, str):
+        raise PageActionError(400, "ergo.ask: chat must be string")
+    unknown = set(args) - {"text", "chat"}
+    if unknown:
+        raise PageActionError(400, f"ergo.ask: unknown argument(s) {', '.join(sorted(unknown))}")
+    text = f"From the {page_title(page)} page: {text.strip()}"
+    if chat == "new":
+        parent = async_to_sync(bot.main_session)(user)
+        target = async_to_sync(bot.create_session)(user, parent=parent, title=provisional_title(args["text"]))
+        chat_label = target.metadata.get("title") or "new thread"
+    elif chat == "main":
+        target = async_to_sync(bot.main_session)(user)
+        chat_label = "main"
+    else:
+        if chat not in bot.definition.chats:
+            raise PageActionError(400, f"{bot.name} has no chat named {chat!r}")
+        target = async_to_sync(bot.chat_session)(user, chat)
+        chat_label = chat
+    queue_message(target.id, text, [])
+    return {
+        "session_id": str(target.id),
+        "chat": chat_label,
+        "message": f"Sent to {chat_label}",
+    }
+
+
 def run_page_action(bot: Bot, name: str, data: PageActionIn, user, session) -> dict:
     """Run one page action call (in a worker thread: it may take a while) and record it."""
     from django.db import connections
@@ -1605,8 +1649,18 @@ def run_page_action(bot: Bot, name: str, data: PageActionIn, user, session) -> d
     started = time.monotonic()
     try:
         try:
+            if name == "ergo.ask":
+                result = ask_page_action(bot, data.args, user, data.page[:500])
+                record_page_action(bot.name, name, data, user, session, started, result=result)
+                return {"result": result}
             outcome = call_page_action(
-                bot, name, data.args, user=user, session=session, page=data.page[:500] or None, approval=data.approval
+                bot,
+                name,
+                data.args,
+                user=user,
+                session=session,
+                page=data.page[:500] or None,
+                approval=data.approval,
             )
         except PageActionError as exc:
             if exc.ran:

@@ -196,7 +196,9 @@ BLOCK_TYPES = {
     "heading": "text, level (1-3)",
     "markdown": "text (Markdown)",
     "metric": "label, table, aggregate (count|sum|avg|min|max), field, filters, format (number|money|percent)",
-    "table": "table, columns (list), filters, order_by (list), limit, title",
+    "form": "table, fields, values, submit, title",
+    "table": "table, columns (list), filters, order_by (list), limit, title, edit, delete",
+    "button": "label, action, args, confirm, ask",
     "chart": "table, x, y, kind (line|bar), group (a field: one series per value), aggregate (sum|avg|count), "
     "filters, title",
     "html": "source (raw Jinja/HTML)",
@@ -268,6 +270,61 @@ def number(value) -> str:
         return str(value)
 
 
+TABLE_FORM_SCRIPT = r"""<script>
+(function () {
+  if (window.__ergoTableBlocks) return;
+  window.__ergoTableBlocks = true;
+  function errors(form, error) {
+    form.querySelectorAll("[data-ergo-error]").forEach(function (node) { node.textContent = ""; });
+    var fields = {};
+    try { fields = (JSON.parse(error.message).field_errors || {}); } catch (_) {}
+    Object.keys(fields).forEach(function (name) {
+      var node = form.querySelector('[data-ergo-error="' + CSS.escape(name) + '"]');
+      if (node) node.textContent = fields[name].join(" ");
+    });
+    var status = form.querySelector("[data-ergo-status]");
+    if (status) status.textContent = Object.keys(fields).length ? "Please correct the highlighted fields." : error.message;
+  }
+  function values(form) {
+    var data = {};
+    new FormData(form).forEach(function (value, name) { data[name] = value; });
+    form.querySelectorAll('input[type="checkbox"][name]').forEach(function (input) {
+      data[input.name] = input.checked;
+    });
+    return data;
+  }
+  document.addEventListener("submit", async function (event) {
+    var form = event.target.closest("form[data-ergo-action]");
+    if (!form) return;
+    event.preventDefault();
+    var submit = form.querySelector('[type="submit"]');
+    if (submit) submit.disabled = true;
+    try {
+      var args = {table: form.dataset.ergoTable, values: values(form)};
+      if (form.dataset.ergoAction === "update") args.id = Number(form.dataset.ergoId);
+      await ergo.call("ergo.table." + form.dataset.ergoAction, args);
+    } catch (error) {
+      errors(form, error);
+    } finally {
+      if (submit) submit.disabled = false;
+    }
+  });
+  document.addEventListener("click", async function (event) {
+    var button = event.target.closest("[data-ergo-delete]");
+    if (!button) return;
+    button.disabled = true;
+    try {
+      await ergo.call("ergo.table.delete", {table: button.dataset.ergoTable, id: Number(button.dataset.ergoId)});
+    } catch (_) {
+      // The bridge presents an action error as a toast; a delete has no field errors.
+    } finally {
+      button.disabled = false;
+    }
+  });
+})();
+</script>"""
+
+
 class Blocks:
     """The block macros: ``{{ blocks.metric(...) }}`` and friends. Each returns HTML."""
 
@@ -310,6 +367,115 @@ class Blocks:
             f'<div class="ergo-metric-label">{escape(label)}</div></div>'
         )
 
+    def _form_script(self) -> str:
+        if self._page.form_script_added:
+            return ""
+        self._page.form_script_added = True
+        return TABLE_FORM_SCRIPT
+
+    def _editable_fields(self, table: str, fields=None):
+        from django_ergo.bots.tables import writable_fields
+
+        model = self._view(table)._model  # noqa: SLF001 — the view keeps the model private from templates
+        if not getattr(model, "page_writes", True):
+            msg = f"{model.__name__} does not allow page writes"
+            raise PageError(msg)
+        available = {field.name: field for field in writable_fields(model)}
+        names = list(fields) if fields is not None else list(available)
+        unknown = set(names) - set(available)
+        if unknown:
+            msg = f"{model.__name__} has no writable field(s) {', '.join(sorted(unknown))}"
+            raise PageError(msg)
+        return model, [available[name] for name in names]
+
+    @staticmethod
+    def _input(field, value) -> str:
+        from markupsafe import escape
+
+        name = escape(field.name)
+        label = escape(field.verbose_name)
+        required = " required" if not field.blank and not field.null else ""
+        value = _plain(value)
+        if field.choices:
+            options = [
+                f'<option value="{escape(key)}"{" selected" if str(key) == str(value) else ""}>{escape(text)}</option>'
+                for key, text in field.flatchoices
+            ]
+            return f'<label>{label}<select name="{name}"{required}>{"".join(options)}</select></label>'
+        kind = field.get_internal_type()
+        if kind == "BooleanField":
+            return (
+                f'<label><input type="checkbox" name="{name}"{" checked" if value else ""}> '
+                f"{label}</label>"
+            )
+        input_type = {
+            "DateField": "date",
+            "DateTimeField": "datetime-local",
+            "TimeField": "time",
+            "EmailField": "email",
+            "URLField": "url",
+            "IntegerField": "number",
+            "BigIntegerField": "number",
+            "FloatField": "number",
+            "DecimalField": "number",
+        }.get(kind, "text")
+        step = ' step="1"' if input_type == "number" and "Integer" in kind else ""
+        if input_type == "number" and not step:
+            step = ' step="any"'
+        if kind == "TextField":
+            return f'<label>{label}<textarea name="{name}"{required}>{escape(value or "")}</textarea></label>'
+        return f'<label>{label}<input type="{input_type}" name="{name}" value="{escape(value or "")}"{step}{required}></label>'
+
+    def _form(  # noqa: PLR0913
+        self,
+        table: str,
+        fields,
+        values: dict,
+        submit: str,
+        *,
+        action: str,
+        row_id: int | None = None,
+    ) -> str:
+        from markupsafe import escape
+
+        controls = "".join(
+            self._input(
+                field,
+                values.get(
+                    field.name, field.get_default() if field.has_default() else ""
+                ),
+            )
+            + f'<span class="ergo-field-error" data-ergo-error="{escape(field.name)}"></span>'
+            for field in fields
+        )
+        id_attr = f' data-ergo-id="{row_id}"' if row_id is not None else ""
+        return (
+            f'<form class="ergo-form" data-ergo-action="{action}" data-ergo-table="{escape(table)}"{id_attr}>'
+            f'{controls}<p class="ergo-form-error" role="alert" data-ergo-status></p>'
+            f'<button type="submit">{escape(submit)}</button></form>'
+        )
+
+    def form(
+        self,
+        table: str = "",
+        fields=None,
+        values=None,
+        submit: str = "Add",
+        title: str = "",
+        **_,
+    ):
+        from markupsafe import Markup
+        from markupsafe import escape
+
+        if values is not None and not isinstance(values, dict):
+            msg = "form values must be an object"
+            raise PageError(msg)
+        _, editable = self._editable_fields(table, fields)
+        caption = f"<h3>{escape(title)}</h3>" if title else ""
+        return Markup(  # noqa: S704 — form labels and values are escaped
+            f"{caption}{self._form_script()}{self._form(table, editable, values or {}, submit, action='add')}"
+        )
+
     def table(  # noqa: PLR0913
         self,
         table: str = "",
@@ -318,6 +484,8 @@ class Blocks:
         order_by=None,
         limit: int = 50,
         title: str = "",
+        edit: bool = False,
+        delete: bool = False,
         **_,
     ):
         from markupsafe import Markup
@@ -329,18 +497,81 @@ class Blocks:
         rows = view.limit(limit or 50).rows()
         cols = list(
             columns
-            or [f for f in view.fields() if f not in ("created_at", "updated_at")]
+            or [
+                field
+                for field in view.fields()
+                if field not in ("created_at", "updated_at")
+            ]
         )
-        head = "".join(f"<th>{escape(c)}</th>" for c in cols)
-        body = "".join(
-            "<tr>"
-            + "".join(f"<td>{escape(_cell(r.get(c)))}</td>" for c in cols)
-            + "</tr>"
-            for r in rows
-        )
+        can_write = (edit or delete) and getattr(view._model, "page_writes", True)  # noqa: SLF001
+        editable = self._editable_fields(table)[1] if can_write and edit else []
+        head = "".join(f"<th>{escape(column)}</th>" for column in cols)
+        if can_write:
+            head += "<th>Actions</th>"
+        body = ""
+        for row in rows:
+            cells = "".join(
+                f"<td>{escape(_cell(row.get(column)))}</td>" for column in cols
+            )
+            if can_write:
+                actions = ""
+                if edit:
+                    actions += (
+                        "<details><summary>Edit</summary>"
+                        + self._form(
+                            table,
+                            editable,
+                            row,
+                            "Save",
+                            action="update",
+                            row_id=row["id"],
+                        )
+                        + "</details>"
+                    )
+                if delete:
+                    actions += (
+                        f'<button type="button" data-ergo-delete data-ergo-table="{escape(table)}" '
+                        f'data-ergo-id="{row["id"]}">Delete</button>'
+                    )
+                cells += f"<td>{actions}</td>"
+            body += f"<tr>{cells}</tr>"
         caption = f"<h3>{escape(title)}</h3>" if title else ""
+        script = self._form_script() if can_write else ""
         return Markup(  # noqa: S704 — every value is escaped
-            f'{caption}<div class="ergo-table"><table><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table></div>'
+            f'{caption}{script}<div class="ergo-table"><table><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table></div>'
+        )
+
+    def button(
+        self,
+        label: str = "",
+        action: str = "",
+        args=None,
+        confirm: str = "",
+        ask: str = "",
+        **_,
+    ):
+        from markupsafe import Markup
+        from markupsafe import escape
+
+        if ask:
+            action = "ergo.ask"
+            args = {**(args or {}), "text": ask}
+        if not action:
+            msg = "button needs an action or ask"
+            raise PageError(msg)
+        if args is not None and not isinstance(args, dict):
+            msg = "button args must be an object"
+            raise PageError(msg)
+        self._page.controls += 1
+        button_id = f"ergo-button-{self._page.controls}"
+        payload = json.dumps(args or {}).replace("</", "<\\/")
+        confirmation = json.dumps(str(confirm)).replace("</", "<\\/")
+        return Markup(  # noqa: S704 — text is escaped, arguments are JSON
+            f'<button type="button" id="{button_id}">{escape(label)}</button>'
+            f"<script>(function(){{var button=document.getElementById({json.dumps(button_id)});"
+            f"button.addEventListener('click',async function(){{if({confirmation}&&!window.confirm({confirmation}))return;"
+            "button.disabled=true;try{await ergo.call("
+            f"{json.dumps(str(action))},{payload});}}catch(_){{}}finally{{button.disabled=false;}}}});}})();</script>"
         )
 
     def chart(  # noqa: PLR0913
@@ -462,6 +693,13 @@ table {{ border-collapse:collapse; width:100%; font-size:14px; }}
 th, td {{ text-align:left; padding:6px 10px; border-bottom:1px solid var(--line); white-space:nowrap; }}
 th {{ color:var(--muted); font-weight:500; }}
 .ergo-chart {{ position:relative; height:300px; margin-bottom:16px; }}
+.ergo-form {{ display:grid; gap:8px; max-width:480px; margin:0 0 16px; }}
+.ergo-form label {{ display:grid; gap:3px; font-size:13px; color:var(--muted); }}
+.ergo-form input, .ergo-form select, .ergo-form textarea {{ box-sizing:border-box; width:100%; padding:6px 8px; color:var(--fg); background:var(--bg); border:1px solid var(--line); border-radius:5px; font:inherit; }}
+.ergo-form input[type=checkbox] {{ width:auto; }}
+.ergo-form button, .ergo-table button, main > button {{ width:max-content; padding:6px 10px; color:var(--fg); background:var(--card); border:1px solid var(--line); border-radius:5px; font:inherit; cursor:pointer; }}
+.ergo-field-error, .ergo-form-error {{ color:#c2410c; font-size:13px; }}
+details .ergo-form {{ margin-top:8px; }}
 </style></head>
 <body><main>
 {body}
@@ -476,8 +714,10 @@ class PageContext:
         self.bot = bot
         self.user = user
         self.charts = 0
-        # Every table the page read, in order (live refresh watches these).
+        self.controls = 0
+        self.form_script_added = False
         self.tables_read: dict[str, None] = {}
+        # Every table the page read, in order (live refresh watches these).
         self.env = make_environment(bot)
         self.tables = {t.__name__.lower(): t for t in getattr(bot, "tables", [])}
 
@@ -624,6 +864,10 @@ BRIDGE = r"""(function () {
         pending[id] = {resolve: resolve, reject: reject};
         post({type: "ergo:call", id: id, name: String(name), args: args || {}});
       });
+    },
+    ask: function (text, options) {
+      options = options || {};
+      return ergo.call("ergo.ask", {text: String(text), chat: options.chat || "main"});
     },
     on: function (event, handler) {
       var key = String(event).indexOf("table:") === 0 ? "table:" + canonical(String(event).slice(6)) : String(event);

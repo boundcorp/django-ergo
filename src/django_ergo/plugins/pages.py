@@ -6,11 +6,11 @@
 A page is a ``.jhtml`` file (see django_ergo.bots.pages): Jinja over the
 bot's tables, rendered whenever someone opens it. The bot writes pages into
 the chat with ``ergo_page_write``, from a list of blocks (heading, markdown,
-metric, table, chart, html) or as Jinja source, and pins them so they show
-in the chat's pinned files. Pages that belong in the bot repo
+metric, form, table, button, chart, html) or as Jinja source, and pins them so
+they show in the chat's pinned files. Pages that belong in the bot repo
 (``pages/dashboard.jhtml``, pinned with ``chats.<name>.pins``) are proposed
-like any other file; ``ergo_page_preview`` renders either kind so the bot
-can check its work.
+like any other file; ``ergo_page_preview`` renders either kind so the bot can
+check its work.
 
 Tools:
 
@@ -63,8 +63,10 @@ Or write Jinja source (sandboxed, read-only). Available in a page:
   .count(), .sum("f"), .avg("f"), .min("f"), .max("f"), .first(), .rows(), and
   .group("campaign", spend="sum", clicks="sum", n="count") for one row per value. Loop over a view
   to get rows (row.field).
-- blocks.metric(...), blocks.chart(...), blocks.table(...), blocks.markdown(text=...) take the
-  block fields as arguments.
+- blocks.metric(...), blocks.form(...), blocks.chart(...), blocks.table(...), blocks.button(...),
+  blocks.markdown(text=...) take the block fields as arguments. Forms and editable
+  tables write a table; buttons invoke a page action or use ``ask=`` to send a chat
+  message through ``ergo.ask``.
 - now, today, days_ago(n), user.username, bot.name; filters money, number, percent, markdown, tojson.
 - {{% include "pages/part.jhtml" %}} loads a file from the bot folder.
 A page without an <html> tag gets a layout with styles and Chart.js; write a full document to
