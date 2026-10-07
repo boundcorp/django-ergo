@@ -838,6 +838,10 @@ class ChatMessageAdmin(admin.ModelAdmin):
 # ---------------------------------------------------------------------------
 
 try:
+    from django_ergo.conversation.models import AgentSession
+    from django_ergo.conversation.models import AgentSessionThreadLink
+    from django_ergo.conversation.models import AgentTranscriptArtifact
+    from django_ergo.conversation.models import AgentUsageEvent
     from django_ergo.conversation.models import ConversationSession
     from django_ergo.conversation.models import MessageBlock
     from django_ergo.conversation.models import SessionMessage
@@ -1075,6 +1079,72 @@ try:
             if obj.input_tokens or obj.output_tokens:
                 return f"in:{obj.input_tokens or 0} out:{obj.output_tokens or 0}"
             return "—"
+
+    @admin.register(AgentSession)
+    class AgentSessionAdmin(admin.ModelAdmin):
+        list_display = [
+            "native_session_id",
+            "cli",
+            "host_namespace",
+            "state",
+            "usage_completeness",
+            "transcript_completeness",
+            "last_observed_at",
+        ]
+        list_filter = ["cli", "state", "usage_completeness", "transcript_completeness"]
+        search_fields = ["native_session_id", "host_namespace", "initial_cwd"]
+        readonly_fields = [field.name for field in AgentSession._meta.fields]  # noqa: SLF001
+
+        def has_add_permission(self, request):
+            return False
+
+    @admin.register(AgentUsageEvent)
+    class AgentUsageEventAdmin(admin.ModelAdmin):
+        list_display = [
+            "session",
+            "model",
+            "occurred_at",
+            "billing_mode",
+            "reported_usd",
+            "estimated_usd",
+            "cost_status",
+        ]
+        list_filter = ["billing_mode", "cost_status"]
+        readonly_fields = [field.name for field in AgentUsageEvent._meta.fields]  # noqa: SLF001
+
+        def has_add_permission(self, request):
+            return False
+
+    @admin.register(AgentTranscriptArtifact)
+    class AgentTranscriptArtifactAdmin(admin.ModelAdmin):
+        list_display = [
+            "session",
+            "classification",
+            "format",
+            "byte_count",
+            "upload_state",
+            "created_at",
+        ]
+        list_filter = ["classification", "upload_state"]
+        readonly_fields = [field.name for field in AgentTranscriptArtifact._meta.fields]  # noqa: SLF001
+
+        def has_add_permission(self, request):
+            return False
+
+    @admin.register(AgentSessionThreadLink)
+    class AgentSessionThreadLinkAdmin(admin.ModelAdmin):
+        list_display = [
+            "session",
+            "conversation",
+            "worker",
+            "owner",
+            "status",
+            "created_at",
+        ]
+        readonly_fields = [field.name for field in AgentSessionThreadLink._meta.fields]  # noqa: SLF001
+
+        def has_add_permission(self, request):
+            return False
 
 except ImportError:
     # Conversation models not available (e.g., migrations not run yet)

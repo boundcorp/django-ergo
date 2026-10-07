@@ -1,3 +1,4 @@
+import base64
 import json
 import shutil
 from datetime import UTC
@@ -75,6 +76,10 @@ def test_scan_omp_matches_cwd_and_time_window(tmp_path):
         "first_at": "2026-10-04T12:00:00Z",
         "last_at": "2026-10-04T12:00:00Z",
     }
+    history = scan("omp", "/work/project", *WINDOW, home=tmp_path, include_history=True)
+    assert base64.b64decode(history["history"][0]["content"]).startswith(
+        b'{"type":"title"'
+    )
 
 
 @pytest.mark.django_db
