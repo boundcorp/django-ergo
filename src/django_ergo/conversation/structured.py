@@ -82,6 +82,7 @@ from django_ergo.conversation.adapters import ClaudeToolAdapter
 from django_ergo.conversation.adapters import OpenAIToolAdapter
 from django_ergo.conversation.compaction import maybe_compact
 from django_ergo.conversation.engine import SeededToolCall
+from django_ergo.conversation.identity import system_identity
 from django_ergo.conversation.images import is_ref
 from django_ergo.conversation.images import prepare_messages
 from django_ergo.conversation.images import storable_ref
@@ -144,6 +145,31 @@ _ERROR_CATEGORIES = {
     "UnprocessableEntityError": "model",
 }
 _MAX_TOKENS_STOPS = {"max_tokens", "length"}
+
+_TRUNCATED_TOOL_CALL = (
+    "Not run: your reply hit the output token limit before this tool call's "
+    "arguments were complete. Nothing happened. Retry with smaller arguments, "
+    "for example by splitting a large file or text across several calls."
+)
+
+
+def _submit_nudge(tool_name: str, events) -> str:
+    """Ask for the output tool after a plain-text answer, keeping that answer.
+
+    Without the text, models often resubmit an earlier turn's answer.
+    """
+    text = "".join(e.text for e in events if e.event_type == "text" and e.text)
+    text = text.strip()
+    if not text:
+        return (
+            f"You must call the {tool_name} tool with your final answer to the "
+            "latest message. Do not answer in plain text."
+        )
+    return (
+        f"Your last message was plain text, which isn't delivered. Call the "
+        f"{tool_name} tool now with that answer to the latest message (not an "
+        f"earlier one). Your plain text was:\n\n{text[:4000]}"
+    )
 
 
 class StructuredCallError(RuntimeError):
@@ -456,7 +482,7 @@ class _MemoryTranscript:
         self.call = call
         self.messages = list(history)
 
-    async def append_user(self, text: str, attachments=None) -> None:
+    async def append_user(self, text: str, attachments=None, *, system=False) -> None:
         self.messages.append(self.engine.user_message(text, attachments))
 
     async def append_tool_exchange(self, calls: list[SeededToolCall]) -> None:
@@ -509,8 +535,12 @@ class _SessionTranscript:
     def _rows(self):
         return self.session.messages
 
-    async def append_user(self, text: str, attachments=None) -> None:
-        await self.engine.append_user_message(self.session, text, attachments)
+    async def append_user(self, text: str, attachments=None, *, system=False) -> None:
+        # Ergo's own nudges are stored as authored by Ergo, not the chat's user.
+        identity = {"author": system_identity()} if system else {}
+        await self.engine.append_user_message(
+            self.session, text, attachments, **identity
+        )
 
     async def append_initial_user(self, text: str, attachments=None) -> None:
         metadata = self.call.metadata or {}
@@ -754,12 +784,25 @@ async def _run_loop(run: _Run) -> StructuredCallResult:  # noqa: C901, PLR0912, 
             finished = True
             break
 
+        stop = next(
+            (
+                e.raw.get("stop_reason") or e.raw.get("finish_reason")
+                for e in events
+                if e.event_type == "done"
+            ),
+            None,
+        )
         tool_events = [e for e in events if e.event_type == "tool_use"]
         if tool_events:
             results = []
             for event in tool_events:
                 name, args = run.adapter.parse_tool_call(event.tool_use)
                 tool_id = event.tool_use["id"]
+                if stop in _MAX_TOKENS_STOPS:
+                    # The reply was cut off, so this call's arguments may be
+                    # incomplete (often {}): never run or ask approval for it.
+                    results.append((tool_id, _TRUNCATED_TOOL_CALL, True))
+                    continue
                 if run.needs_approval(name):
                     if run.allow_approvals:
                         preview = await run.approval_preview(name, args)
@@ -812,14 +855,6 @@ async def _run_loop(run: _Run) -> StructuredCallResult:  # noqa: C901, PLR0912, 
                 break
             continue
 
-        stop = next(
-            (
-                e.raw.get("stop_reason") or e.raw.get("finish_reason")
-                for e in events
-                if e.event_type == "done"
-            ),
-            None,
-        )
         if stop in _MAX_TOKENS_STOPS:
             _fail(
                 call,
@@ -832,8 +867,7 @@ async def _run_loop(run: _Run) -> StructuredCallResult:  # noqa: C901, PLR0912, 
 
         if run.submit is not None:
             await transcript.append_user(
-                f"You must call the {spec.output_tool_name} tool with your final "
-                "answer. Do not answer in plain text."
+                _submit_nudge(spec.output_tool_name, events), system=True
             )
             continue
 
@@ -843,7 +877,8 @@ async def _run_loop(run: _Run) -> StructuredCallResult:  # noqa: C901, PLR0912, 
         except Exception as e:  # noqa: BLE001 — fed back to the model
             await transcript.append_user(
                 f"Your response failed validation: {e}. "
-                "Please correct your output and try again."
+                "Please correct your output and try again.",
+                system=True,
             )
             continue
         call.response = parsed
