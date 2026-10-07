@@ -391,6 +391,23 @@ export type Pin = {
   exists?: boolean
 }
 
+// POST /api/bots/{bot}/actions/{name}: what a page's ergo.call sends, and the two answers.
+export type PageActionBody = {
+  args: Record<string, unknown>
+  page: string // the pin's path (bot folder) or the attachment id (chat file)
+  session_id: string | null
+  approval?: string // the token from a needs_approval answer
+}
+// `result` may carry message (a toast), reload (re-render now) and open (an http(s) URL).
+export type PageActionDone = { result: Record<string, unknown> }
+export type PageActionApproval = { needs_approval: true; preview: string; approval: string }
+export type PageActionResponse = PageActionDone | PageActionApproval
+
+/** The live table stream (EventSource) for the tables a page reads. */
+export function tableEventsUrl(bot: string, tables: string[]): string {
+  return `/api/bots/${encodeURIComponent(bot)}/tables/events?tables=${tables.map(encodeURIComponent).join(',')}`
+}
+
 export type PullRequest = {
   number: number
   title: string
@@ -662,4 +679,6 @@ export const api = {
   allPins: () => request<Record<string, SidebarPin[]>>('GET', '/pins'),
   pins: (id: string) => request<Pin[]>('GET', `/sessions/${id}/pins`),
   pin: (id: string, pinned: boolean) => request<AttachmentFile>('POST', `/attachments/${id}/pin`, { pinned }),
+  pageAction: (bot: string, name: string, body: PageActionBody) =>
+    request<PageActionResponse>('POST', `/bots/${encodeURIComponent(bot)}/actions/${encodeURIComponent(name)}`, body),
 }

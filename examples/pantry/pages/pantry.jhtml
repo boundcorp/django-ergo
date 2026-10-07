@@ -1,0 +1,38 @@
+<h1>Pantry</h1>
+<p id="status" role="status"></p>
+<table>
+  <caption>On the shelf</caption>
+  <thead><tr><th>Item</th><th>In stock</th><th>On order</th><th></th></tr></thead>
+  <tbody>
+  {% for row in table("Pantry").order_by("name").rows() %}
+    <tr>
+      <td>{{ row.name }}</td>
+      <td>{{ row.quantity }}</td>
+      <td>{{ row.on_order }}</td>
+      <td><button data-item="{{ row.name }}">Restock 2</button></td>
+    </tr>
+  {% else %}
+    <tr><td colspan="4">Nothing yet. Ask the bot to add some items.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+<script>
+  const status = document.getElementById("status");
+  document.querySelectorAll("button[data-item]").forEach(button => {
+    button.addEventListener("click", async () => {
+      button.disabled = true;
+      try {
+        await ergo.call("restock", {item: button.dataset.item, qty: 2});  // asks to confirm
+      } catch (error) {
+        status.textContent = error.message;
+      } finally {
+        button.disabled = false;
+      }
+    });
+  });
+  // The page re-renders itself when Pantry changes. Handling the event is
+  // optional: here it reloads, as the default would.
+  ergo.on("table:Pantry", event => {
+    ergo.reload();
+  });
+</script>

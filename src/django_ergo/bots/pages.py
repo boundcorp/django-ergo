@@ -27,17 +27,30 @@ Rows give dates as ISO strings; the ``as_datetime``, ``seconds_until`` and
 
 ``blocks`` (see ``BLOCK_TYPES``) are the building blocks the pages plugin
 writes pages from; hand-written pages can use them too.
+
+Every rendered page also gets a small inline bridge script that defines
+``window.ergo`` (see ``BRIDGE``). The page can't call the API itself: it runs
+in a sandbox with no login. ``ergo.call(name, args)`` asks the app that shows
+the page (Ergonaut's page viewer) to run one of the bot's page actions as the
+viewer (see ``django_ergo.bots.page_actions``). The bridge also reports which
+tables the page read, so the viewer re-renders the page when one changes:
+
+    <button onclick="ergo.call('restock', {item: 'flour', qty: 2})">Restock</button>
+    <script>ergo.on("table:Pantry", ev => ergo.reload())</script>
 """
 
 from __future__ import annotations
 
 import datetime as dt
 import json
+import re
 from decimal import Decimal
 from typing import TYPE_CHECKING
 from typing import Any
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from django_ergo.bots.runtime import Bot
 
 MAX_ROWS = 1000
@@ -463,6 +476,8 @@ class PageContext:
         self.bot = bot
         self.user = user
         self.charts = 0
+        # Every table the page read, in order (live refresh watches these).
+        self.tables_read: dict[str, None] = {}
         self.env = make_environment(bot)
         self.tables = {t.__name__.lower(): t for t in getattr(bot, "tables", [])}
 
@@ -472,6 +487,7 @@ class PageContext:
             known = ", ".join(t.__name__ for t in self.tables.values()) or "none"
             msg = f"No table {name!r} (tables: {known})"
             raise PageError(msg)
+        self.tables_read[model.__name__] = None
         return TableView(model)
 
     def globals(self) -> dict:
@@ -522,8 +538,24 @@ def make_environment(bot: Bot):
     return env
 
 
-def render_page(bot: Bot, source: str, *, user=None, title: str = "") -> str:
-    """Render ``.jhtml`` source to a full HTML page. Raises PageError with the reason."""
+def render_page(  # noqa: PLR0913
+    bot: Bot,
+    source: str,
+    *,
+    user=None,
+    title: str = "",
+    page_path: str = "",
+    asset_url: Callable[[str], str] | None = None,
+) -> str:
+    """Render ``.jhtml`` source to a full HTML page. Raises PageError with the reason.
+
+    The page gets the ``window.ergo`` bridge (see ``BRIDGE``) with the tables it read.
+    A page served from a sandbox can't send its login with asset requests, so for a
+    bot-folder page (``page_path``, relative to the bot folder) ``asset_url`` maps a
+    bot-relative path to the URL to load it from, and the page's relative ``src`` and
+    ``href`` references to folder files (scripts, styles, images, ``url()`` in styles)
+    are rewritten with it.
+    """
     from jinja2 import TemplateError
 
     page = PageContext(bot, user)
@@ -538,11 +570,196 @@ def render_page(bot: Bot, source: str, *, user=None, title: str = "") -> str:
     except Exception as exc:
         msg = f"{type(exc).__name__}: {exc}"
         raise PageError(msg) from exc
-    if "<html" in body[:500].lower():
-        return body
-    from markupsafe import escape
+    if "<html" not in body[:500].lower():
+        from markupsafe import escape
 
-    return LAYOUT.format(title=escape(title or bot.name), chart_js=CHART_JS, body=body)
+        body = LAYOUT.format(
+            title=escape(title or bot.name), chart_js=CHART_JS, body=body
+        )
+    if asset_url is not None:
+        body = sign_assets(bot, body, page_path, asset_url)
+    return inject_bridge(body, list(page.tables_read))
+
+
+# -- the bridge ---------------------------------------------------------------------------
+
+# Defines window.ergo in every rendered page. It never makes a request: the page runs
+# sandboxed (no login, no app API), so it talks to the app that shows it by postMessage.
+#   page -> viewer: ergo:call {id, name, args}, ergo:ready {tables, listening}, ergo:reload,
+#                   ergo:focus {focused}, ergo:scroll {y}
+#   viewer -> page: ergo:result {id, ok, result | error}, ergo:changed {table},
+#                   ergo:getscroll, ergo:restore {y}
+BRIDGE = r"""(function () {
+  var tables = __TABLES__;
+  var parent = window.parent !== window ? window.parent : null;
+  var pending = {};
+  var handlers = {};
+  var count = 0;
+  var readyTimer = 0;
+  var restoreY = null;
+  function post(message) { if (parent) parent.postMessage(message, "*"); }
+  function canonical(name) {
+    var wanted = String(name).toLowerCase();
+    for (var i = 0; i < tables.length; i++) if (tables[i].toLowerCase() === wanted) return tables[i];
+    return String(name);
+  }
+  function listening() {
+    return Object.keys(handlers)
+      .filter(function (key) { return key.indexOf("table:") === 0 && handlers[key].length; })
+      .map(function (key) { return key.slice(6); });
+  }
+  function ready() {
+    readyTimer = 0;
+    post({type: "ergo:ready", tables: tables, listening: listening()});
+  }
+  function field(el) {
+    return !!el && (/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName) || el.isContentEditable);
+  }
+  var ergo = {
+    tables: tables,
+    call: function (name, args) {
+      return new Promise(function (resolve, reject) {
+        if (!parent) { reject(new Error("Open this page in Ergonaut to use its buttons")); return; }
+        var id = "c" + (++count);
+        pending[id] = {resolve: resolve, reject: reject};
+        post({type: "ergo:call", id: id, name: String(name), args: args || {}});
+      });
+    },
+    on: function (event, handler) {
+      var key = String(event).indexOf("table:") === 0 ? "table:" + canonical(String(event).slice(6)) : String(event);
+      (handlers[key] = handlers[key] || []).push(handler);
+      if (key.indexOf("table:") === 0 && !readyTimer) readyTimer = setTimeout(ready, 0);
+      return function off() {
+        handlers[key] = (handlers[key] || []).filter(function (h) { return h !== handler; });
+        if (key.indexOf("table:") === 0 && !readyTimer) readyTimer = setTimeout(ready, 0);
+      };
+    },
+    reload: function () { post({type: "ergo:reload"}); }
+  };
+  window.ergo = ergo;
+  window.addEventListener("message", function (event) {
+    var data = event.data;
+    if (!parent || event.source !== parent || !data || typeof data.type !== "string") return;
+    if (data.type === "ergo:result") {
+      var waiting = pending[data.id];
+      delete pending[data.id];
+      if (!waiting) return;
+      if (data.ok) waiting.resolve(data.result); else waiting.reject(new Error(data.error || "The action failed"));
+    } else if (data.type === "ergo:changed") {
+      (handlers["table:" + canonical(data.table)] || []).slice().forEach(function (handler) {
+        try { handler({type: "changed", table: data.table}); } catch (error) { console.error(error); }
+      });
+    } else if (data.type === "ergo:getscroll") {
+      post({type: "ergo:scroll", y: window.scrollY});
+    } else if (data.type === "ergo:restore") {
+      restoreY = Number(data.y) || 0;
+      window.scrollTo(0, restoreY);
+    }
+  });
+  window.addEventListener("load", function () { if (restoreY !== null) window.scrollTo(0, restoreY); });
+  document.addEventListener("focusin", function (event) { if (field(event.target)) post({type: "ergo:focus", focused: true}); });
+  document.addEventListener("focusout", function (event) { if (field(event.target)) post({type: "ergo:focus", focused: false}); });
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", ready); else ready();
+})();"""
+
+
+def bridge_script(tables: list[str]) -> str:
+    """The ``<script>`` that defines ``window.ergo``, told which tables the page read."""
+    data = json.dumps(tables).replace("</", "<\\/").replace("<!--", "<\\!--")
+    return f"<script>{BRIDGE.replace('__TABLES__', data)}</script>"
+
+
+def inject_bridge(html: str, tables: list[str]) -> str:
+    """Put the bridge first in the page's head (so page scripts can use ``ergo``), whether
+    or not the page has its own ``<head>`` or ``<html>``."""
+    import re
+
+    script = bridge_script(tables)
+    for pattern in (r"<head\b[^>]*>", r"<html\b[^>]*>"):
+        found = re.search(pattern, html, flags=re.IGNORECASE)
+        if found:
+            return html[: found.end()] + script + html[found.end() :]
+    return script + html
+
+
+# -- assets of a sandboxed page -----------------------------------------------------------
+
+ASSET_TAGS = re.compile(
+    r"<(?:script|link|img|source|video|audio)\b[^>]*>", re.IGNORECASE
+)
+ASSET_ATTR = re.compile(
+    r"""(?P<head>\b(?:src|href|poster)\s*=\s*)(?P<quote>["'])(?P<url>[^"']*)(?P=quote)""",
+    re.IGNORECASE,
+)
+STYLE_BLOCK = re.compile(
+    r"(?P<open><style\b[^>]*>)(?P<css>.*?)(?P<close></style>)",
+    re.IGNORECASE | re.DOTALL,
+)
+STYLE_ATTR = re.compile(
+    r"""(?P<head>\bstyle\s*=\s*)(?P<quote>["'])(?P<css>.*?)(?P=quote)""",
+    re.IGNORECASE | re.DOTALL,
+)
+CSS_URL = re.compile(r"""url\(\s*(?P<quote>["']?)(?P<url>[^"')]*)(?P=quote)\s*\)""")
+
+
+def folder_asset(bot: Bot, page_path: str, reference: str) -> str | None:
+    """The bot-relative path a page's relative reference points at, if it's a file
+    ``bot_file`` serves (and not a page: pages render with data, so they're never linked
+    with a token)."""
+    import posixpath
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(reference.strip())
+    if parts.scheme or parts.netloc or not parts.path or parts.path.startswith("/"):
+        return None
+    if parts.query:
+        return None
+    relative = posixpath.normpath(
+        posixpath.join(posixpath.dirname(page_path), parts.path)
+    )
+    if relative.startswith("..") or bot_file(bot, relative) is None:
+        return None
+    if relative.lower().endswith(PAGE_SUFFIXES):
+        return None
+    return relative
+
+
+def sign_assets(
+    bot: Bot, html: str, page_path: str, asset_url: Callable[[str], str]
+) -> str:
+    """Point the page's relative asset references (``src`` and ``href`` of scripts, links,
+    images and media; ``url()`` in style blocks and ``style`` attributes) at
+    ``asset_url(path)``. Links (``<a href>``), other hosts and missing files are left alone."""
+    from urllib.parse import urlsplit
+
+    def target(reference: str) -> str | None:
+        relative = folder_asset(bot, page_path, reference)
+        if relative is None:
+            return None
+        fragment = urlsplit(reference.strip()).fragment
+        return asset_url(relative) + (f"#{fragment}" if fragment else "")
+
+    def attribute(found: re.Match) -> str:
+        new = target(found["url"])
+        return (
+            found[0]
+            if new is None
+            else f"{found['head']}{found['quote']}{new}{found['quote']}"
+        )
+
+    def css(text: str) -> str:
+        return CSS_URL.sub(
+            lambda found: found[0]
+            if (new := target(found["url"])) is None
+            else f"url({found['quote']}{new}{found['quote']})",
+            text,
+        )
+
+    html = ASSET_TAGS.sub(lambda tag: ASSET_ATTR.sub(attribute, tag[0]), html)
+    html = STYLE_BLOCK.sub(lambda m: m["open"] + css(m["css"]) + m["close"], html)
+    return STYLE_ATTR.sub(
+        lambda m: f"{m['head']}{m['quote']}{css(m['css'])}{m['quote']}", html
+    )
 
 
 def error_page(message: str, title: str = "") -> str:

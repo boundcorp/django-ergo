@@ -63,6 +63,8 @@ describe('PinnedDashboard', () => {
       const html = renderToStaticMarkup(
         createElement(PinnedDashboard, {
           pin: { kind: 'bot_file', name: 'Account limits', url: '/api/bots/devbox/files/pages/limits.jhtml' },
+          bot: 'devbox',
+          sessionId: 'session-1',
           refreshKey: 3,
           onClose: () => undefined,
         }),

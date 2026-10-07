@@ -524,10 +524,11 @@ def test_pins_bot_files_and_live_pages(client, cook, bot_folder, use_bots, setti
         ("Board", "📋", "board.jhtml"),
     ]
 
-    # A bot-folder page renders in the app's origin; assets come as files; code and config don't.
+    # A bot-folder page renders sandboxed, like a chat's; assets come as files; code and config don't.
     home = client.get("/api/bots/kitchen/files/pages/home.jhtml")
     assert b"Hello cook from kitchen" in home.content
-    assert "Content-Security-Policy" not in home and home["X-Frame-Options"] == "SAMEORIGIN"
+    assert home["Content-Security-Policy"].startswith("sandbox allow-scripts")
+    assert home["X-Frame-Options"] == "SAMEORIGIN"
     assert client.get("/api/bots/kitchen/files/pages/app.mjs")["Content-Type"] == "text/javascript"
     for blocked in ("bot.yaml", "tools/pantry.py", "../kitchen/bot.yaml", "pages/nope.jhtml"):
         assert client.get(f"/api/bots/kitchen/files/{blocked}").status_code == 404

@@ -50,6 +50,11 @@ skills/
 `tools.py` is imported when the bot loads (see [Tools](tools.md)), but its
 tools only reach the model while the skill is loaded.
 
+A `tools.py` can also declare `@page_action` functions. Pages call those
+whether or not the skill is loaded in a chat, and `Bot.page_actions` collects
+them from tool files and skill folders alike; two actions with the same name
+fail the load. See [Page actions](bots.md#page-actions).
+
 A tool file listed under `tools:` is a skill too, with no instructions: its
 module docstring's first line is the description, so write one.
 

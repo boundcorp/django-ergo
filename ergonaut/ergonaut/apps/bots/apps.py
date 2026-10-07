@@ -47,3 +47,20 @@ class BotsConfig(AppConfig):
             ergo_models.ThreadMessage,
         ):
             post_save.connect(changed, sender=model, dispatch_uid=f"ergonaut-live-{model.__name__}")
+
+        # What people do on bot pages: kept, and shown to the bot on its next turn.
+        from django_ergo.bots import page_actions
+
+        from ergonaut.apps.bots.pageactions import DjangoCallLog
+
+        page_actions.set_call_log(DjangoCallLog())
+
+        # Pages re-render when a table they read changes: tell the open streams.
+        from django_ergo.bots.tables import table_changed
+
+        def publish_table(sender, bot_name, table, **kwargs):
+            from ergonaut.apps.bots.tasks import notify_table
+
+            notify_table(bot_name, table)
+
+        table_changed.connect(publish_table, dispatch_uid="ergonaut-live-tables")

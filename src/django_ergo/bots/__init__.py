@@ -1,6 +1,6 @@
 """Ergo bots: a bot is a folder with agents.md, bot.yaml and tool modules.
 
-Tool modules only need ``bot_tool`` (and ``bot_task``) from here, so importing this package
+Tool modules only need ``bot_tool`` (and ``bot_task``, ``page_action``) from here, so importing this package
 stays light. The runtime lives in ``django_ergo.bots.runtime``.
 """
 
@@ -8,6 +8,7 @@ from django_ergo.bots.tools import ToolContext
 from django_ergo.bots.tools import bot_context
 from django_ergo.bots.tools import bot_task
 from django_ergo.bots.tools import bot_tool
+from django_ergo.bots.tools import page_action
 from django_ergo.conversation.images import ToolImage
 from django_ergo.conversation.images import ToolResult
 
@@ -19,6 +20,7 @@ __all__ = [
     "bot_context",
     "bot_task",
     "bot_tool",
+    "page_action",
 ]
 
 

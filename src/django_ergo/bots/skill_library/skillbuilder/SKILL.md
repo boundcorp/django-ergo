@@ -86,6 +86,18 @@ def file_receipt(ctx, receipt_id: str, category: str) -> str:
 - Secrets come from the environment through `ctx.secret("NAME")` (a
   per-user `NAME__<USERNAME>` wins). Never put a key in bot.yaml, a file or a
   prompt. Name new secrets in the PR body so someone sets them.
+- Pages call functions you mark `@page_action` (from `django_ergo.bots`), in
+  the same tool file. Parameters come from type hints and the first one is
+  `ctx`, whose `user` is the person viewing the page. Set
+  `requires_approval=True` (with `approval_preview=lambda ctx, **args: "..."`)
+  for writes with side effects; the viewer confirms first. Return a dict:
+  `{"message": "..."}` shows a toast, `{"reload": True}` re-renders. Raise
+  `ValueError("clear message")` for bad input; the page shows it. Actions have
+  30 seconds; start longer work with `ctx.tasks`. Don't make an action only
+  to hand text to the model; plain tools aren't callable from pages.
+- After a bulk write (`.update()`, `bulk_create`, a queryset `.delete()`, raw
+  SQL) call `ctx.table("X").touch()`, or pages showing the table won't
+  refresh. Saving or deleting a single row needs nothing.
 - `ctx` (with `takes_context=True`) has `bot`, `session`, `user`,
   `is_root`, `now()`, `timezone`, `table(name)`, `tasks` and `workers`.
 - Tools are plain synchronous functions; the Django ORM and blocking HTTP
@@ -215,6 +227,9 @@ opened. Pages are read-only and sandboxed.
   `chats: {main: {pins: [{path: pages/receipts.jhtml, title: Receipts, icon: "🧾"}]}}`.
 - Always `ergo_config_repo_preview` a page before publishing and fix what it
   reports.
+- Pages can call `@page_action` functions with `await ergo.call(name, args)`
+  and update themselves when a table changes: no polling. See the
+  `page-design` skill.
 
 ## Before you publish
 

@@ -6,7 +6,9 @@ sessions). A turn runs inside the request and returns the bot's ChatReply.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 import uuid
 from datetime import datetime
 from typing import Any, Literal
@@ -27,6 +29,7 @@ from ninja import File, Router, Schema, UploadedFile
 from ninja.errors import HttpError
 
 from ergonaut.api.auth import user_auth
+from ergonaut.api.page_assets import asset_urls, user_for_token
 from ergonaut.apps.bots.tasks import (
     peek_inbox,
     queue_message,
@@ -1563,13 +1566,84 @@ def page_response(html: str, *, sandboxed: bool) -> HttpResponse:
     return response
 
 
-def render_or_error(bot: Bot, source: str, user, title: str) -> str:
+def render_or_error(bot: Bot, source: str, user, title: str, **page) -> str:
     from django_ergo.bots.pages import PageError, error_page, render_page
 
     try:
-        return render_page(bot, source, user=user, title=title)
+        return render_page(bot, source, user=user, title=title, **page)
     except PageError as exc:
         return error_page(str(exc), title)
+
+
+class PageActionIn(Schema):
+    args: Any = None  # the action's arguments (an object)
+    page: str = ""  # the page it was called from: a bot-folder path, or a chat file's id
+    session_id: str | None = None  # the chat the page was opened from
+    approval: str = ""  # the token from an earlier needs_approval answer for these arguments
+
+
+def record_page_action(bot_name: str, name: str, data: PageActionIn, user, session, started: float, **outcome) -> None:
+    from ergonaut.apps.bots.models import PageActionCall
+
+    PageActionCall.objects.create(
+        bot=bot_name,
+        action=name,
+        user=user,
+        session=session,
+        page=data.page[:500],
+        args=data.args if isinstance(data.args, dict) else {},
+        duration_ms=int((time.monotonic() - started) * 1000),
+        **outcome,
+    )
+
+
+def run_page_action(bot: Bot, name: str, data: PageActionIn, user, session) -> dict:
+    """Run one page action call (in a worker thread: it may take a while) and record it."""
+    from django.db import connections
+    from django_ergo.bots.page_actions import PageActionError, call_page_action
+
+    started = time.monotonic()
+    try:
+        try:
+            outcome = call_page_action(
+                bot, name, data.args, user=user, session=session, page=data.page[:500] or None, approval=data.approval
+            )
+        except PageActionError as exc:
+            if exc.ran:
+                record_page_action(bot.name, name, data, user, session, started, error=exc.message)
+            raise HttpError(exc.status, exc.message) from exc
+        if outcome.needs_approval:
+            return {"needs_approval": True, "preview": outcome.preview, "approval": outcome.approval}
+        record_page_action(
+            bot.name, name, data, user, session, started, result=outcome.result, approved=outcome.approved
+        )
+        return {"result": outcome.result}
+    finally:
+        connections.close_all()  # this worker thread's own connection
+
+
+@router.post("/bots/{bot}/actions/{name}")
+async def page_action_call(request, bot: str, name: str, data: PageActionIn):
+    """Run one of the bot's page actions (``@page_action``) as the signed-in user, for a page
+    shown in the web app. Answers ``{"result": {...}}``, or ``{"needs_approval": true, "preview",
+    "approval"}`` for an action that wants the viewer's confirmation first: repeat the call with
+    that ``approval`` token. Runs in the request, for at most ``page_actions.TIMEOUT_SECONDS``."""
+    from django_ergo.bots import page_actions
+
+    found = get_bot(bot, request.auth)
+    session = None
+    if data.session_id:
+        session = await visible_sessions(request.auth).filter(id=uuid_or_404(data.session_id), bot_name=bot).afirst()
+        if session is None:
+            raise HttpError(404, "No such session")
+    work = sync_to_async(run_page_action, thread_sensitive=False)(found, name, data, request.auth, session)
+    try:
+        return await asyncio.wait_for(work, page_actions.TIMEOUT_SECONDS)
+    except TimeoutError:
+        # The thread can't be stopped: it records the call when it finishes.
+        raise HttpError(
+            504, f"{name} took longer than {page_actions.TIMEOUT_SECONDS} s; start a task with ctx.tasks instead"
+        ) from None
 
 
 @router.get("/attachments/{attachment_id}/download")
@@ -1705,7 +1779,11 @@ def all_pins(request):
 
 @router.get("/bots/{bot_name}/files/{path:path}")
 def bot_file(request, bot_name: str, path: str):
-    """A page or asset from the bot folder (reviewed in the bot repo, so it runs in the app's origin)."""
+    """A page or asset from the bot folder. A page runs sandboxed, like a chat's pages (reviewed in
+    the bot repo, but still no cookies and no app API); its relative asset references are
+    rewritten to ``bot_asset`` URLs, since a sandboxed page can't send its login."""
+    import posixpath
+
     from django_ergo.bots.pages import SERVED_SUFFIXES
     from django_ergo.bots.pages import bot_file as find
 
@@ -1714,10 +1792,42 @@ def bot_file(request, bot_name: str, path: str):
     if found is None:
         raise HttpError(404, "No such file")
     if found.suffix == ".jhtml":
-        return page_response(render_or_error(bot, found.read_text(), request.auth, found.stem), sandboxed=False)
+        html = render_or_error(
+            bot,
+            found.read_text(),
+            request.auth,
+            found.stem,
+            page_path=posixpath.normpath(path),
+            asset_url=asset_urls(request.auth, bot_name),
+        )
+        return page_response(html, sandboxed=True)
     response = FileResponse(found.open("rb"), content_type=SERVED_SUFFIXES[found.suffix.lower()])
     response["Cache-Control"] = "no-cache"
     response["X-Frame-Options"] = "SAMEORIGIN"
+    return response
+
+
+@router.get("/bots/{bot_name}/assets/{token}/{path:path}", auth=None)
+def bot_asset(request, bot_name: str, token: str, path: str):
+    """An asset of a sandboxed bot-folder page (see ``page_assets``): the token in the URL stands
+    in for the login the sandboxed page can't send. Never a page, which renders with data."""
+    from django_ergo.bots.pages import SERVED_SUFFIXES
+    from django_ergo.bots.pages import bot_file as find
+
+    user = user_for_token(token, bot_name)
+    if user is None:
+        raise HttpError(401, "This link has expired; reload the page")
+    bot = get_bot(bot_name, user)
+    found = find(bot, path)
+    if found is None or found.suffix == ".jhtml":
+        raise HttpError(404, "No such file")
+    response = FileResponse(found.open("rb"), content_type=SERVED_SUFFIXES[found.suffix.lower()])
+    response["Cache-Control"] = "no-cache"
+    response["X-Frame-Options"] = "SAMEORIGIN"
+    # The page's origin is opaque, so its module scripts and fonts are cross-origin requests.
+    response["Access-Control-Allow-Origin"] = "*"
+    if found.suffix.lower() in (".html", ".htm", ".svg"):
+        response["Content-Security-Policy"] = SANDBOXED  # a document opened from here stays sandboxed
     return response
 
 

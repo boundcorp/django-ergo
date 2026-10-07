@@ -8,6 +8,7 @@ import { Chat } from './pages/Chat'
 import { Login } from './pages/Login'
 import { Sessions } from './pages/Sessions'
 import { BotPage } from './pages/BotPage'
+import { PageView } from './pages/PageView'
 import { NewThread } from './pages/NewThread'
 import { Memory } from './pages/Memory'
 import { CostsPage } from './pages/Costs'
@@ -143,7 +144,16 @@ function App() {
   return (
     <BrowserRouter>
       <DirectoryContext.Provider value={{ bots, sessions }}>
-        <Shell user={user} bots={bots} sessions={sessions} pins={pins} botErrors={botErrors} refresh={refresh} />
+        <Routes>
+          {/* The full-screen page viewer has no sidebar or top bar. */}
+          <Route path="/pages/view" element={<PageView />} />
+          <Route
+            path="*"
+            element={
+              <Shell user={user} bots={bots} sessions={sessions} pins={pins} botErrors={botErrors} refresh={refresh} />
+            }
+          />
+        </Routes>
       </DirectoryContext.Provider>
     </BrowserRouter>
   )
