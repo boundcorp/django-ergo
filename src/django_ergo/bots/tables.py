@@ -28,6 +28,12 @@ migrations have a place to live.
 
 Every table gets tools through the ``tables`` skill: query, add, update and
 delete (delete waits for approval). A model's docstring describes it.
+
+Pages that read a table re-render when it changes (live refresh). Saving or
+deleting a row announces that through the ``table_changed`` signal once its
+transaction commits. Bulk writes (``.update()``, ``bulk_create``, ``.delete()``
+on a queryset, raw SQL) skip the model signals, so call ``touch()`` after
+them: ``ctx.table("House").touch()``.
 """
 
 from __future__ import annotations
@@ -42,7 +48,11 @@ from typing import Any
 from django.apps import AppConfig
 from django.apps import apps as global_apps
 from django.db import models
+from django.db import transaction
 from django.db.models.base import ModelBase
+from django.db.models.signals import post_delete
+from django.db.models.signals import post_save
+from django.dispatch import Signal
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -55,6 +65,13 @@ _LOADING: contextvars.ContextVar[str] = contextvars.ContextVar(
 MAX_ROWS = 200
 # Each table file's module, so a bot's other code can use it without importing it again.
 MODULES: dict[Path, types.ModuleType] = {}
+# A bot's app label -> its name (the label is lossy: it lowercases and replaces odd characters).
+BOT_NAMES: dict[str, str] = {}
+
+# A table of a bot changed and its transaction committed. Receivers get ``bot_name`` and
+# ``table`` (the model's class name); the sender is the model. Ergonaut publishes it so
+# open pages re-render.
+table_changed = Signal()
 
 
 def app_label_for(bot_name: str) -> str:
@@ -88,6 +105,57 @@ class BotTable(models.Model, metaclass=BotTableBase):
 
     class Meta:
         abstract = True
+
+    @classmethod
+    def touch(cls) -> None:
+        """Announce that this table changed: call it after bulk writes (``.update()``,
+        ``bulk_create``, a queryset's ``.delete()``, raw SQL), which skip the model signals,
+        so pages showing the table re-render. Sent when the open transaction commits."""
+        announce(cls)
+
+
+def bot_name_of(model: type[models.Model]) -> str:
+    label = model._meta.app_label
+    return BOT_NAMES.get(label) or label.removeprefix("ergo_bot_")
+
+
+class _Pending:
+    """The tables changed in one transaction, announced together when it commits."""
+
+    def __init__(self):
+        self.models: dict[type[models.Model], None] = {}
+
+    def flush(self) -> None:
+        models_, self.models = list(self.models), {}
+        for model in models_:
+            table_changed.send(
+                sender=model, bot_name=bot_name_of(model), table=model.__name__
+            )
+
+
+def announce(model: type[models.Model], using: str | None = None) -> None:
+    """Send ``table_changed`` for ``model`` once the current transaction commits (at
+    once outside one). A transaction that changes many rows announces the table once."""
+    connection = transaction.get_connection(using)
+    pending = getattr(connection, "_ergo_table_pending", None)
+    queued = pending is not None and any(
+        callback == pending.flush for _, callback, *_ in connection.run_on_commit
+    )
+    if queued:
+        pending.models[model] = None
+        return
+    pending = connection._ergo_table_pending = _Pending()
+    pending.models[model] = None
+    transaction.on_commit(pending.flush, using=using, robust=True)
+
+
+def _row_changed(sender, using=None, **_kwargs) -> None:
+    if issubclass(sender, BotTable) and not sender._meta.abstract:
+        announce(sender, using)
+
+
+post_save.connect(_row_changed, dispatch_uid="ergo_bot_table_saved")
+post_delete.connect(_row_changed, dispatch_uid="ergo_bot_table_deleted")
 
 
 class BotAppConfig(AppConfig):
@@ -132,6 +200,7 @@ def load_tables(
         return []
     register_app(bot_name, root_dir)
     label = app_label_for(bot_name)
+    BOT_NAMES[label] = bot_name
     # Loading again (the bot's files changed) replaces its models rather than piling up.
     global_apps.all_models[label].clear()
     token = _LOADING.set(label)

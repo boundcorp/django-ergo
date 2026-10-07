@@ -59,14 +59,18 @@ function stored(messages: Message[], text: string, line: number): boolean {
 /** The selected pin replaces the transcript while keeping the composer available. */
 export function PinnedDashboard({
   pin,
+  bot,
+  sessionId,
   refreshKey,
   onClose,
 }: {
   pin: Pin | null
+  bot: string
+  sessionId: string
   refreshKey: unknown
   onClose: () => void
 }) {
-  return pin ? <PageViewer pin={pin} refreshKey={refreshKey} onClose={onClose} /> : null
+  return pin ? <PageViewer pin={pin} bot={bot} sessionId={sessionId} refreshKey={refreshKey} onClose={onClose} /> : null
 }
 
 export function Chat({ onChange }: { onChange: () => void }) {
@@ -627,7 +631,13 @@ export function Chat({ onChange }: { onChange: () => void }) {
             onCount={onPinCount}
           />
         </MobileSessionBar>
-        <PinnedDashboard pin={openPin} refreshKey={detail.messages.length} onClose={() => setOpenPin(null)} />
+        <PinnedDashboard
+          pin={openPin}
+          bot={detail.session.bot}
+          sessionId={id}
+          refreshKey={detail.messages.length}
+          onClose={() => setOpenPin(null)}
+        />
         <div
           ref={transcript}
           onScroll={onTranscriptScroll}

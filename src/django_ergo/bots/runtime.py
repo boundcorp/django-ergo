@@ -36,6 +36,7 @@ from asgiref.sync import sync_to_async
 from django.utils.module_loading import import_string
 
 from django_ergo.bots import messaging
+from django_ergo.bots import page_actions
 from django_ergo.bots.definition import MAIN
 from django_ergo.bots.definition import BotDefinition
 from django_ergo.bots.definition import PluginSpec
@@ -83,6 +84,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from django_ergo.bots.registry import BotRegistry
+    from django_ergo.bots.tools import PageAction
     from django_ergo.bots.tools import ToolModule
     from django_ergo.conversation.attachments import Attachment
     from django_ergo.conversation.engine import Engine
@@ -204,6 +206,13 @@ class Bot:
         }
         for module in self.skill_tool_modules.values():
             self.tasks.update(module.tasks)
+        # @page_action functions pages may call as the viewer, by name (see bots.page_actions).
+        self.page_actions: dict[str, PageAction] = {}
+        for module in [*self.tool_modules, *self.skill_tool_modules.values()]:
+            for action_name, action in module.page_actions.items():
+                if self.page_actions.setdefault(action_name, action) is not action:
+                    msg = f"{definition.name}: two page actions named {action_name!r}"
+                    raise ValueError(msg)
         self.skill_defs: list[SkillDef] = self._skill_defs()
 
     def _named_skills(self) -> set[str]:
@@ -903,6 +912,23 @@ class Bot:
             state=(session.metadata or {}).get(STATE_KEY),
         )
 
+    def _function_context_sources(
+        self, ctx: ToolContext, session: ConversationSession, message: str
+    ) -> list[TextContextSource]:
+        """@bot_context functions of the tool files, and the page actions people ran since the last reply."""
+        sources = [
+            TextContextSource(
+                item.title,
+                lambda item=item: item.render(ctx, message),
+                weight=item.weight,
+            )
+            for module in self.tool_modules
+            for item in module.contexts
+        ]
+        if text := page_actions.context_text(session):
+            sources.append(TextContextSource(page_actions.CONTEXT_TITLE, text))
+        return sources
+
     def toolkits(self, session: ConversationSession) -> list[Toolkit]:
         return [self.skillset(session)]
 
@@ -932,16 +958,9 @@ class Bot:
                 )
             )
             empty = False
-        for module in self.tool_modules:
-            for item in module.contexts:
-                builder.add(
-                    TextContextSource(
-                        item.title,
-                        lambda item=item: item.render(ctx, message),
-                        weight=item.weight,
-                    )
-                )
-                empty = False
+        for source in self._function_context_sources(ctx, session, message):
+            builder.add(source)
+            empty = False
         if self.is_window(session):
             builder.add(
                 MessageContextSource(

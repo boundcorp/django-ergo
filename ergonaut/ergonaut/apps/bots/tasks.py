@@ -41,6 +41,8 @@ from celery import shared_task
 logger = logging.getLogger(__name__)
 
 CHANNEL = "ergonaut:sessions"
+# "<bot>:<Table>" when a bot table changed (see django_ergo.bots.tables.table_changed).
+TABLES_CHANNEL = "ergonaut:tables"
 # The longest a turn waits for the session's lock.
 LOCK_SECONDS = 2 * 60 * 60
 # A held Redis lock lives this long and is renewed every LOCK_RENEW_SECONDS while
@@ -305,6 +307,17 @@ def notify(session_id) -> None:
         client.publish(CHANNEL, str(session_id))
     except Exception:  # noqa: BLE001 — live updates are best-effort
         logger.debug("Could not publish a session change", exc_info=True)
+
+
+def notify_table(bot_name: str, table: str) -> None:
+    """Tell open pages that a bot table changed. Never raises."""
+    client = redis_client()
+    if client is None:
+        return
+    try:
+        client.publish(TABLES_CHANNEL, f"{bot_name}:{table}")
+    except Exception:  # noqa: BLE001 — live updates are best-effort
+        logger.debug("Could not publish a table change", exc_info=True)
 
 
 def take_uploads(session, attachment_ids: list[str]) -> tuple[list, list]:

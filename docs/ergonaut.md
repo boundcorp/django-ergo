@@ -223,6 +223,34 @@ refuse logins until the window passes.
 Django's admin is at `/mgmt/`. The API is at `/api/` with docs at
 `/api/docs`.
 
+### Pages
+
+Pages in the viewer (pins, chat files, `/pages/view?session=<id>&pin=<path or id>`
+for "Open in a new tab") use two routes:
+
+- `POST /api/bots/<bot>/actions/<name>` runs a [page action](bots.md#page-actions)
+  as the logged-in user (or API key). The body is
+  `{args, page, session_id, approval}`; the answer is `{"result": {...}}`, or
+  `{"needs_approval": true, "preview": "...", "approval": "<token>"}` for an
+  action that needs a confirm. Every call is stored as a `PageActionCall`,
+  listed in Django admin.
+- `GET /api/bots/<bot>/tables/events?tables=A,B[&since=<fingerprints>]` is a
+  server-sent event stream of table changes for [live refresh](bots.md#live-refresh).
+  Each event is `{"changed": [...], "fingerprints": {...}}`; the first is a
+  baseline, or a catch-up when `since` is given. A fingerprint is a table's row
+  count, latest `updated_at` and highest id. With `REDIS_URL` set, the stream
+  wakes on notices published on the `ergonaut:tables` channel (payload
+  `<bot>:<Table>`); without Redis it checks every second. Without Redis, a
+  table changed only by `.update()` plus `touch()` shows up when something
+  else moves its fingerprint.
+
+Bot-folder `.jhtml` pages are served sandboxed, like chat pages (opaque
+origin, no cookies, no direct API calls). Their relative asset references are
+rewritten to `/api/bots/<bot>/assets/<token>/<path>`, where the token is a signed
+path segment valid for an hour for that user and bot folder. It never serves
+`.jhtml` files, and allows cross-origin loading so module scripts and CSS
+`url()` work from the opaque origin.
+
 ## API keys
 
 Scripts and agents use the API with a key instead of a login:

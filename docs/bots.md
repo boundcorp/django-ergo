@@ -125,6 +125,19 @@ the detail. See [structured-calls.md](structured-calls.md).
 A tool module can also define
 `toolkits(ctx) -> list[Toolkit]` for class-based toolkits.
 
+A tool module can also declare [page actions](#page-actions), functions a
+`.jhtml` page calls as the viewer:
+
+```python
+from django_ergo.bots import page_action
+
+@page_action(requires_approval=True)
+def restock(ctx, item: str, qty: int = 1) -> dict:
+    """Order more of an item."""
+    ...
+    return {"message": f"Ordered {qty} {item}"}
+```
+
 Tool code reads credentials with `ctx.secret("TANDOOR_API_KEY")`. It
 returns the environment variable `TANDOOR_API_KEY__<USERNAME>` (the user's
 name upper-cased, other characters as `_`) when set, else
@@ -315,8 +328,10 @@ Pages come from two places:
   Without them a pin shows its file name and an icon for its file type, in the
   chat's pin bar and under the chat in the sidebar. Ergonaut serves bot-folder
   pages and assets (`.html`, `.mjs`, `.js`, `.css`, images, JSON, CSV, never
-  Python, YAML or dotfiles) at `/api/bots/<bot>/files/<path>`, in the app's
-  origin, so a page can load its own scripts.
+  Python, YAML or dotfiles) at `/api/bots/<bot>/files/<path>`. Pages are
+  sandboxed like chat pages (below); their relative `src`, `href`, `poster`
+  and CSS `url()` references are rewritten to signed asset URLs, so a page
+  loads its own scripts and styles.
   A bot proposing a page through `bot_management` can check it first with
   `ergo_config_repo_preview(path)`: it renders the draft's page in a separate
   process, inside a transaction that's rolled back, after applying the
@@ -326,10 +341,117 @@ Pages come from two places:
 - **Files the bot writes** into a chat with the `pages` plugin. They're
   served from the file's own URL and sandboxed (`Content-Security-Policy:
   sandbox`): scripts run, but without the app's cookies or API.
+  A page the bot writes can call page actions too, if its bot declares them.
 
 Any chat file can be pinned (`metadata.pinned`, from the Files panel or
 `ergo_page_pin`). Pinned files show as tabs at the top of the chat and open in
 place of the transcript.
+
+Both kinds are sandboxed: scripts run with an opaque origin, without the
+app's cookies, and can't call the API. A folder page's relative asset
+references (`script`, `link`, `img`, `source`, `video`, `audio`, `poster`, and
+`url()` in `<style>` blocks and `style` attributes) are rewritten when the
+page renders to `/api/bots/<bot>/assets/<token>/<path>`. The token is a signed
+path segment, valid for an hour for that user and bot folder; it never serves
+`.jhtml` files. Imports inside an asset (`import "./util.mjs"`, `url(font.woff)`)
+resolve under the same token. What a script builds at run time, like
+`fetch("data.json")`, isn't rewritten: read data from tables, not files.
+
+### The `ergo` bridge
+
+Every page gets a small script defining `window.ergo`:
+
+- `ergo.call(name, args)` calls a [page action](#page-actions) and returns a
+  Promise of its result object; it rejects with an `Error` carrying the
+  message when the action fails or the viewer says no.
+- `ergo.on("table:Pantry", handler)` handles changes to a table yourself (see
+  [Live refresh](#live-refresh)).
+- `ergo.reload()` re-renders the page.
+- `ergo.tables` lists the tables the page read.
+
+The page never makes the request: it posts to the viewer, which calls the API
+as the logged-in user for the bot and chat the page was opened from. A page
+opened outside Ergonaut's viewer gets an `ergo.call` that rejects with "Open
+this page in Ergonaut to use its buttons".
+
+### Page actions
+
+A page action is a function a page may call as the viewer. Declare it next to
+the bot's tools:
+
+```python
+from django_ergo.bots import page_action
+
+@page_action(requires_approval=True, approval_preview=lambda ctx, item, qty: f"Order {qty} × {item}")
+def restock(ctx, item: str, qty: int = 1) -> dict:
+    """Order more of an item."""
+    ctx.table("Pantry").objects.filter(name=item).update(on_order=qty)
+    ctx.table("Pantry").touch()
+    return {"message": f"Ordered {qty} {item}"}
+```
+
+```html
+<button onclick="ergo.call('restock', {item: 'flour', qty: 2}).catch(e => alert(e.message))">Restock</button>
+```
+
+- The first parameter is the `ToolContext`: `ctx.user` is the viewer,
+  `ctx.session` the chat the page was opened from (or `None`), `ctx.page` the
+  page (a bot-folder path or a chat file's id). Other parameters come from
+  type hints like `@bot_tool`'s, or pass `parameters=` and `required=`. `name=`
+  and `description=` override the function's.
+- A function may carry both `@bot_tool` and `@page_action`; they're independent,
+  and plain tools are never callable from pages. Action names are unique per
+  bot, including those in skill folders' `tools.py`.
+- Arguments are checked first: a missing required one, an unknown one or the
+  wrong JSON type answers 400 with the reason.
+- Return a JSON-serializable dict. `message` shows as a toast, `reload: true`
+  re-renders the page at once, `open` is a URL for the viewer to open; the
+  rest goes to the page as the result. Other return values arrive as
+  `{"value": ...}`.
+- `requires_approval=True` makes the viewer show a confirm dialog first, with
+  `approval_preview(ctx, **args)` (or a default) as its text. The server
+  answers the first call with `needs_approval`, a preview and a token signed
+  over the user, bot, action and a hash of the arguments, valid 5 minutes; the
+  viewer repeats the call with it on Yes. The token never reaches the page, and
+  doesn't work for other arguments. Use it for anything that spends money,
+  messages people or is hard to undo.
+- A `ValueError` or Django `ValidationError` answers 400 with its text, which
+  the page sees as the rejection's message. Any other exception answers 500
+  with "The action failed" and is logged.
+- An action has 30 seconds (`page_actions.TIMEOUT_SECONDS`, 504 after). Start
+  longer work with `ctx.tasks` and return at once; the task writes rows as it
+  goes and [live refresh](#live-refresh) shows them.
+
+Ergonaut records each call (`PageActionCall`: who, action, args, result or
+error, approved, duration; in Django admin). When the call came from a chat,
+the bot sees the last 20 on its next turn in the context section "Page
+actions since your last reply". Without Ergonaut the host runs
+`call_page_action(bot, name, args, ...)` in `django_ergo.bots.page_actions`.
+
+### Live refresh
+
+A page re-renders when a table it reads changes (`ergo.tables` lists them,
+including tables read through `blocks`). Row saves and deletes announce
+themselves; after bulk writes call `ctx.table("X").touch()` (see
+[tables](tables.md#live-refresh)).
+
+Ergonaut's page viewer opens one stream per page,
+`GET /api/bots/<bot>/tables/events?tables=A,B`, shows a green "Live" dot while
+it's connected, and on a change:
+
+- re-renders the page 1 second after the last change, waiting while a form
+  field has focus so typing isn't lost; scroll position is kept;
+- for tables the page handles itself with `ergo.on("table:Name", fn)`, calls
+  `fn({type: "changed", table})` instead and doesn't re-render. The event has
+  no rows (the page has no API access): call `ergo.reload()` or update the DOM
+  yourself;
+- re-renders at once after an action returns `reload: true`.
+
+A viewer that was disconnected catches up with one event when it reconnects.
+So pages don't need to poll or reload on a timer.
+
+Pins open in a new tab from the viewer at `/pages/view`, which hosts the same
+viewer, so the bridge works there too.
 
 ## Workers
 

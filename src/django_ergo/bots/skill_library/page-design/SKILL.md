@@ -41,6 +41,16 @@ The page plugin limits a chat page to its configured `max_bytes` (500,000 bytes 
 - Use CSS variables with both light and dark values, sufficient contrast, visible borders and modest type sizes. Do not fetch fonts, images, scripts or styles from external CDNs. The standard Ergo layout already supplies Chart.js for `blocks.chart`.
 - Escape or render through Jinja normally; do not construct raw HTML from untrusted labels. The supplied recipes rely on Jinja autoescape.
 
+## Interactive pages
+
+A page can have buttons that act, through the `ergo` object Ergo adds to every page. Pages run sandboxed: they can't call the API or read the login, so never use `fetch` to reach Ergo. `fetch("data.json")` on a bot-folder file is not rewritten to a signed URL either; read data from tables in Jinja.
+
+- `await ergo.call("restock", {item: "flour", qty: 2})` runs a `@page_action` the bot declared, as the viewer, and resolves to its result object. Only declared actions exist; if the one you need doesn't, say so rather than faking a button. A write that needs approval makes the viewer show a confirm dialog first, so do not add your own.
+- The call rejects with an `Error` when the action fails or the viewer says no. Always handle it: `.catch(e => show(e.message))`. Show the message next to the button, in text. An action's `message` result already shows as a toast, and `reload: true` re-renders the page.
+- Disable the button while the call is pending to prevent double submits.
+- The page updates itself when a table it reads changes, so do not poll or add a refresh button. After a call, the changed rows appear without any code. Use `ergo.on("table:Name", e => ...)` only to handle a change yourself, for example to update a counter without losing a half-typed form; the handler gets `{type: "changed", table}` and no rows, so call `ergo.reload()` or re-read the DOM from what is already on the page.
+- Outside Ergonaut's viewer `ergo.call` rejects ("Open this page in Ergonaut to use its buttons"), so keep the page readable without it.
+
 ## Pattern catalog
 
 Each file is a copy-paste source recipe. It defines a macro that accepts generic data and then calls it with a small, domain-varied example. Keep the macro and replace the example call with your data.
