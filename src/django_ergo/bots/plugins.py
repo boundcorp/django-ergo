@@ -10,6 +10,7 @@ A plugin is a class with any of these hooks::
         def context_sources(self, ctx, message): ...   # context for a turn
         async def on_session_created(self, session): ...
         async def before_turn(self, session, message): ...
+        async def route_turn(self, session, message, request): ...  # auto/<tier> model
         async def after_turn(self, session, message, result): ...
         async def on_session_closed(self, session): ...
         async def serve(self): ...                     # long-running, e.g. a channel
@@ -33,6 +34,8 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from django_ergo.bots.agents import AgentManager
+    from django_ergo.bots.routing import RoutePick
+    from django_ergo.bots.routing import RouteRequest
     from django_ergo.bots.runtime import Bot
     from django_ergo.bots.runtime import TurnResult
     from django_ergo.bots.tools import ToolContext
@@ -49,6 +52,7 @@ OFFICIAL_PLUGINS = {
     "kubectl": "django_ergo.plugins.kubectl.KubectlPlugin",
     "attachments": "django_ergo.plugins.attachments.AttachmentsPlugin",
     "pages": "django_ergo.plugins.pages.PagesPlugin",
+    "decisions": "django_ergo.plugins.decisions.DecisionsPlugin",
 }
 
 
@@ -115,6 +119,14 @@ class BotPlugin:
 
     async def before_turn(self, session: ConversationSession, message: str) -> None:
         pass
+
+    async def route_turn(
+        self, session: ConversationSession, message: str, request: RouteRequest
+    ) -> RoutePick | str | None:
+        """For a chat on ``auto/<tier>``: this turn's model, one of
+        ``request.candidates``, or None to leave it to the routing rules.
+        Runs after ``before_turn``; the first plugin to pick wins."""
+        return None
 
     async def after_turn(
         self, session: ConversationSession, message: str, result: TurnResult

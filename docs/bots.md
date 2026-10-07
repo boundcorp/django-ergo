@@ -1120,6 +1120,34 @@ become `[image omitted: name (id=...)]`, and the bot can look again by id.
 `ergo_attachments_unarchive` brings them back. See
 [attachments.md](attachments.md#archiving-session-files).
 
+### decisions
+
+Experimental, and off unless a bot lists it.
+
+```yaml
+- name: decisions
+  api_key_env: OPENAI_API_KEY   # an OpenAI API key; Decisions has no subscription route
+  model: gpt-6-luna             # the only Decisions model so far
+  min_confidence: 0.4           # below this, the routing rules pick
+  enforce_limits: false         # true: only offer models under their limits
+  instructions: |               # optional, added to the router's instructions
+    Questions about menus are easy; use the cheapest model.
+```
+
+Runs quick [OpenAI Decisions API](https://developers.openai.com/api/docs/guides/decisions)
+calls before the bot replies. The first one is a model router: on a chat set
+to `auto/<tier>` it asks which of the tier's models should answer the
+message, telling it each subscription's usage against its limits, the
+deployment's routing priorities (`routing.md` or the Routing page) and the
+chat's current model. Its pick replaces the rule-based one for that turn, a
+switch is logged on the Routing page ("Decisions router picked it (82%
+confident)"), and the turn's structured call keeps the decision in
+`metadata["routing_pick"]`. Chats on a fixed model aren't routed. When the
+call fails, is refused or isn't confident enough, the routing rules pick as
+usual. Each turn costs one Decisions call (input tokens only) and its
+latency. Needs `openai` 3.26 or later. Other code can ask its own questions
+with `await plugin.decide(input, questions)`.
+
 ### telegram
 
 ```yaml

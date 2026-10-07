@@ -38,7 +38,10 @@ weekly window under 80%"). :func:`compile_routing` turns it into the same
 :class:`RoutingPolicy`; until then the YAML ``routing`` rules apply. Without
 any rules, a provider is skipped only at 98% used. A deployment can replace
 the policy entirely with ``DJANGO_ERGO["MODEL_ROUTER"]``, a dotted path to a
-callable ``(candidates, usage, rules, current) -> candidate``.
+callable ``(candidates, usage, rules, current) -> candidate``. A bot plugin's
+``route_turn`` hook can pick per turn instead, seeing the message: it gets a
+:class:`RouteRequest` and returns one of its candidates or a :class:`RoutePick`
+(see ``plugins.decisions``).
 """
 
 from __future__ import annotations
@@ -289,10 +292,9 @@ def choose(
     return max(candidates, key=lambda c: headroom(provider_of(c), usage))
 
 
-def pick_model(providers: Providers, tier: str, current: str = "") -> str:
-    """A ``provider/model`` for a bot chat at ``tier`` (runs the ORM)."""
-    routing = providers.routing
-    listed = routing.tiers.get(tier)
+def tier_candidates(providers: Providers, tier: str) -> list[str]:
+    """The available ``provider/model``s in ``tier``, in order of preference."""
+    listed = providers.routing.tiers.get(tier)
     if not listed:
         msg = f"providers.yaml has no {tier!r} tier"
         raise ValueError(msg)
@@ -304,12 +306,65 @@ def pick_model(providers: Providers, tier: str, current: str = "") -> str:
     if not candidates:
         msg = f"No provider in the {tier!r} tier is available"
         raise ValueError(msg)
+    return candidates
+
+
+def pick_model(providers: Providers, tier: str, current: str = "") -> str:
+    """A ``provider/model`` for a bot chat at ``tier`` (runs the ORM)."""
+    candidates = tier_candidates(providers, tier)
     return choose(
         candidates,
         lambda ref: ref.partition("/")[0],
         current_usage(),
-        active_rules(routing),
+        active_rules(providers.routing),
         current if current in candidates else None,
+    )
+
+
+@dataclass
+class RouteRequest:
+    """What a plugin's ``route_turn`` hook picks from for one turn of an
+    ``auto/<tier>`` chat: the tier's available models, the model the chat is
+    on, each subscription's usage, the limits in force and the priorities
+    text (routing.md or the Routing page)."""
+
+    providers: Providers
+    tier: str
+    candidates: list[str]
+    current: str
+    usage: dict
+    rules: RoutingRules
+    text: str
+
+    def why_over(self, ref: str) -> str:
+        return why_over(ref.partition("/")[0], self.usage, self.rules)
+
+    def label(self, ref: str) -> str:
+        found = self.providers.find(ref)
+        return (found[1].label if found else "") or ref
+
+
+@dataclass
+class RoutePick:
+    """A plugin's pick for a turn: one of the request's candidates, why
+    (logged on a switch), and anything worth keeping on the turn's record."""
+
+    model: str
+    reason: str = ""
+    details: dict = field(default_factory=dict)
+
+
+def route_request(providers: Providers, tier: str, current: str = "") -> RouteRequest:
+    """The :class:`RouteRequest` for a turn at ``tier`` (runs the ORM)."""
+    candidates = tier_candidates(providers, tier)
+    return RouteRequest(
+        providers=providers,
+        tier=tier,
+        candidates=candidates,
+        current=current if current in candidates else "",
+        usage=current_usage(),
+        rules=active_rules(providers.routing),
+        text=routing_text(providers.routing),
     )
 
 

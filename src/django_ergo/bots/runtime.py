@@ -43,11 +43,14 @@ from django_ergo.bots.definition import PluginSpec
 from django_ergo.bots.plugins import BotPlugin
 from django_ergo.bots.plugins import resolve_plugin_class
 from django_ergo.bots.providers import Providers
+from django_ergo.bots.routing import RoutePick
+from django_ergo.bots.routing import RouteRequest
 from django_ergo.bots.routing import ensure_compiled
 from django_ergo.bots.routing import is_auto
 from django_ergo.bots.routing import pick_model as route_model
 from django_ergo.bots.routing import record_switch
 from django_ergo.bots.routing import retry_model as routing_retry_model
+from django_ergo.bots.routing import route_request as build_route_request
 from django_ergo.bots.routing import tier_of
 from django_ergo.bots.skills import Skill
 from django_ergo.bots.skills import library_skills
@@ -541,10 +544,11 @@ class Bot:
         picked = str(picked or "")
         return picked if picked and self.providers.knows(picked) else ""
 
-    def route(self, session: ConversationSession) -> str:
+    def route(self, session: ConversationSession, pick: RoutePick | None = None) -> str:
         """For a chat on ``auto/<tier>``, pick this turn's model from what's
         left on each subscription and remember it (``bots.routing``). Returns
-        the model, or "" for a chat with a fixed model. Runs the ORM."""
+        the model, or "" for a chat with a fixed model. ``pick`` (from a
+        plugin's ``route_turn``) replaces the rule-based choice. Runs the ORM."""
         ref = self.session_model(session) or self.model_ref()
         if not is_auto(ref):
             return ""
@@ -552,10 +556,65 @@ class Bot:
             self.providers,
             lambda: self.make_engine(model=self.resolve_ref("auto/low", None)),
         )
+        if pick is not None:
+            self._set_routed(session, tier_of(ref), pick.model, pick.reason)
+            return pick.model
         before = (session.metadata or {}).get("routed_model", "")
         picked = route_model(self.providers, tier_of(ref), before)
         self._set_routed(session, tier_of(ref), picked)
         return picked
+
+    def route_request(self, session: ConversationSession) -> RouteRequest | None:
+        """What plugins' ``route_turn`` picks from this turn, or None for a
+        chat with a fixed model. Runs the ORM."""
+        ref = self.session_model(session) or self.model_ref()
+        if not is_auto(ref):
+            return None
+        before = (session.metadata or {}).get("routed_model", "")
+        return build_route_request(self.providers, tier_of(ref), before)
+
+    async def plugin_route(
+        self, session: ConversationSession, message: str
+    ) -> RoutePick | None:
+        """The first pick a plugin's ``route_turn`` makes for this turn that
+        is one of the tier's candidates. A plugin that fails is logged and
+        skipped, so routing falls back to the rules."""
+        hooked = [
+            p for p in self.plugins if type(p).route_turn is not BotPlugin.route_turn
+        ]
+        if not hooked:
+            return None
+        try:
+            request = await sync_to_async(self.route_request, thread_sensitive=True)(
+                session
+            )
+        except ValueError:  # e.g. no model in the tier; route() reports it
+            return None
+        if request is None:
+            return None
+        for plugin in hooked:
+            try:
+                pick = await _maybe_await(plugin.route_turn(session, message, request))
+            except Exception:
+                logger.exception(
+                    "%s: plugin %s route_turn failed", self.name, plugin.name
+                )
+                continue
+            if isinstance(pick, str):
+                pick = RoutePick(pick)
+            if pick is None:
+                continue
+            if pick.model not in request.candidates:
+                logger.warning(
+                    "%s: plugin %s picked %r, not in the %s tier",
+                    self.name,
+                    plugin.name,
+                    pick.model,
+                    request.tier,
+                )
+                continue
+            return pick
+        return None
 
     def _set_routed(
         self, session: ConversationSession, tier: str, picked: str, reason: str = ""
@@ -1075,7 +1134,14 @@ class Bot:
         for plugin in self.plugins:
             await _maybe_await(plugin.before_turn(session, message))
         toolkits, builder = await self._prepare(session, message)
-        await sync_to_async(self.route, thread_sensitive=True)(session)
+        pick = await self.plugin_route(session, message)
+        if pick is not None:
+            metadata["routing_pick"] = {
+                "model": pick.model,
+                "reason": pick.reason,
+                **pick.details,
+            }
+        await sync_to_async(self.route, thread_sensitive=True)(session, pick)
         outcome = await run_structured_call(
             self.reply_spec(toolkits, session),
             message,
