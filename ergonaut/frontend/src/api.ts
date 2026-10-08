@@ -91,8 +91,45 @@ export type RoutingSwitch = {
   reason: string
 }
 
+// One window of a subscription account, as the sync last stored it (see django_ergo.bots.usage_sync).
+export type CapacityWindow = {
+  key: string
+  label: string
+  period: string // '5h', '7d', or '' for any other length
+  used: number | null // null = unavailable, never 0
+  remaining: number | null
+  resets_at: number | null
+  status: string
+  model: string
+  observed_at: number | null
+  stale: boolean
+  limit: number | null // the router skips the provider at this % used; null where it doesn't route
+}
+
+export type CapacityAccount = {
+  id: string
+  name: string
+  providers: string[]
+  status: 'ok' | 'stale' | 'error' | 'unavailable'
+  error: string
+  fetched_at: string | null
+  windows: CapacityWindow[]
+}
+
+export type CapacitySync = {
+  state: 'empty' | 'healthy' | 'stale' | 'partial' | 'failed'
+  running: boolean
+  attempted_at: string | null
+  succeeded_at: string | null
+  error: string
+  stale_after: number
+}
+
+export type Capacity = { sync: CapacitySync; accounts: CapacityAccount[] }
+
 export type Routing = {
   providers: RoutingProvider[]
+  capacity: Capacity
   tiers: { name: string; picked: string; chats: number; candidates: RoutingCandidate[] }[]
   agents: { name: string; candidates: RoutingCandidate[] }[]
   text: string
@@ -620,6 +657,7 @@ export const api = {
     request<Costs>('GET', `/costs?days=${days}${bot ? `&bot=${encodeURIComponent(bot)}` : ''}`),
   version: () => request<Version>('GET', '/version'),
   routing: () => request<Routing>('GET', '/routing'),
+  refreshRouting: () => request<Routing>('POST', '/routing/refresh'),
   saveRouting: (text: string) => request<Routing>('PUT', '/routing', { text }),
   resetRouting: () => request<Routing>('DELETE', '/routing'),
   kbs: (bot: string) => request<KB[]>('GET', `/bots/${bot}/kbs`),

@@ -928,6 +928,23 @@ class ProviderUsage(models.Model):
         return self.provider
 
 
+class UsageSync(models.Model):
+    """State of the last fetch of the subscription limits (``omp usage``): one
+    row (pk 1). The windows themselves live in :class:`ProviderUsage`; this says
+    when they were last fetched, whether that worked and why not (see
+    bots.usage_sync). Times are epoch seconds, like the windows' own."""
+
+    attempted_at = models.FloatField(null=True, blank=True)
+    succeeded_at = models.FloatField(null=True, blank=True)
+    running_since = models.FloatField(null=True, blank=True)
+    error = models.TextField(blank=True, default="")
+    # {omp provider: {"error": str, "fetched_at": epoch | None, "targets": [ProviderUsage.provider]}}
+    accounts = models.JSONField(default=dict, blank=True)
+
+    def __str__(self):
+        return f"usage sync {self.succeeded_at or 'never'}"
+
+
 class RoutingPolicy(models.Model):
     """routing.md compiled into routing rules, keyed by the text's hash."""
 

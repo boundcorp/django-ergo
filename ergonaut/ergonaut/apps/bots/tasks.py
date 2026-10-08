@@ -570,6 +570,22 @@ def refresh_pull_requests(max_age_seconds: int = 120) -> int:
     return refreshed
 
 
+@shared_task(name="ergonaut.sync_provider_usage", ignore_result=True)
+def sync_provider_usage() -> str:
+    """Fetch every subscription's usage windows for the router and the Routing
+    page (beat runs this every ``ERGONAUT_USAGE_SYNC_SECONDS``)."""
+    from django_ergo.bots import usage_sync, webhooks
+
+    registry = webhooks.get_registry()
+    providers = registry.providers if registry is not None else None
+    if providers is None:
+        return "no bots loaded"
+    state = usage_sync.sync_usage(providers)
+    if state.error:
+        logger.warning("Usage sync failed: %s", state.error)
+    return state.error or "ok"
+
+
 @shared_task(name="ergonaut.run_bot_task", queue="bot_tasks")
 def run_bot_task(bot_name: str, task_name: str, args: list, kwargs: dict):
     """Run a bot's @bot_task on a worker (see django_ergo.bots.background)."""

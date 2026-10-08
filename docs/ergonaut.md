@@ -220,16 +220,19 @@ refuse logins until the window passes.
   cache hit, request count, and status. Below Usage, spend remains broken down
   by day, call kind (chat replies split by bot), and model. Admins see
   everyone's calls and agent sessions; others see their own.
-- **Routing**: for chats on an Auto model and Orca workers started with a
-  tier. **Subscriptions** shows only the usage windows each provider has
-  actually reported, with its label, percentage remaining, status when
-  available, reset time, and routing skip limit (percentage used). For
-  example, a Codex report with only a 7-day window shows one row, while
-  Claude can report 5-hour, weekly, and Fable-only weekly windows
-  (`weekly_fable`); the Fable-only limit applies only to Fable candidates.
-  No snapshot yet is shown as **No usage reported yet**, not zero usage.
-  Each snapshot shows when it was last reported and a stale indicator when
-  the backend marks it stale. **Pay-per-token providers** lists API-key
+- **Routing & capacity**: for chats on an Auto model and Orca workers started
+  with a tier. The top bar is the **source sync** health (healthy, stale,
+  partial, failed or no data yet), the last successful sync time, and
+  **Refresh limits**, which runs `omp usage --redact --json` now. A Celery
+  beat task runs the same sync every 5 minutes
+  (`ERGONAUT_USAGE_SYNC_SECONDS`, `0` turns it off). **Provider windows**
+  has a card per account (Claude, Codex, Grok) with its 5-hour and 7-day
+  windows: percent used, reset countdown and a meter, plus any scoped window
+  the account reports (Claude's Fable weekly, Grok Build). A window the
+  provider does not report, or that has not synced, is **Unavailable**, never
+  0%. Values older than 15 minutes keep their number but show a **Stale**
+  badge with the time they were observed; a provider whose sync failed shows
+  the error. **Pay-per-token providers** lists API-key
   providers separately: chats can use them when their tier lists them,
   but coding agents use subscriptions only. **Tiers** shows every configured
   tier (including custom names, not just `low`, `medium`, and `high`) and the
@@ -239,7 +242,8 @@ refuse logins until the window passes.
   each window's label, and recent switches are shown below. Admins can edit
   the priorities; the text is saved in the database and replaces the bot
   repo's `routing.md` until **Use routing.md**. The data is
-  `GET /api/routing` (`PUT` and `DELETE` to save or reset the text). A turn a
+  `GET /api/routing` (`PUT` and `DELETE` to save or reset the text;
+  `POST /api/routing/refresh` runs the usage sync and returns the page). A turn a
   provider refused at its limit offers **Retry on** the tier's next model
   in the chat, never on its own.
 
