@@ -36,13 +36,11 @@ from typing import TYPE_CHECKING
 
 from django_ergo.bots.routing import USAGE_STALE_SECONDS
 from django_ergo.bots.routing import _window
-from django_ergo.bots.routing import limit_of
 from django_ergo.bots.routing import record_usage_windows
 from django_ergo.bots.routing import window_view
 
 if TYPE_CHECKING:
     from django_ergo.bots.providers import Providers
-    from django_ergo.bots.routing import RoutingRules
 
 logger = logging.getLogger(__name__)
 
@@ -310,9 +308,7 @@ def _iso(epoch) -> str | None:
     return datetime.fromtimestamp(epoch, tz=UTC).isoformat() if epoch else None
 
 
-def capacity_report(
-    providers: Providers, rules: RoutingRules, clock: float | None = None
-) -> dict:
+def capacity_report(providers: Providers, clock: float | None = None) -> dict:
     """What the Routing page's capacity section shows: the sync's health and,
     per account, every stored window with its own freshness. ``sync.state`` is
     one of empty, healthy, stale, partial, failed."""
@@ -332,11 +328,7 @@ def capacity_report(
         target = (info.get("targets") or configured or [name])[0]
         row = rows.get(target)
         windows = [
-            {
-                "key": key,
-                **window_view(key, seen, clock),
-                "limit": limit_of(target, key, rules) if configured else None,
-            }
+            {"key": key, **window_view(key, seen, clock)}
             for key, seen in ((row.windows or {}) if row else {}).items()
         ]
         windows.sort(

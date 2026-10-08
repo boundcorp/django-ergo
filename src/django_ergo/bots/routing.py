@@ -845,7 +845,7 @@ def routing_report(providers: Providers) -> dict:
     source = "page" if saved is not None else ("file" if routing.text else "")
     return {
         "providers": _provider_rows(now, in_use),
-        "capacity": capacity_report(providers, now.rules),
+        "capacity": capacity_report(providers),
         "tiers": tiers,
         "agents": agents,
         "text": text,

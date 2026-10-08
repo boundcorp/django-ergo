@@ -3,6 +3,8 @@ import { Link } from 'react-router-dom'
 import type { Routing, RoutingProvider, RoutingWindow } from '../api'
 import { api } from '../api'
 import { agoLong } from '../time'
+import { pace } from '../usagePace'
+export { pace, windowSeconds } from '../usagePace'
 import { useDismissablePopover } from './ShellControls'
 
 // The top bar's subscription usage: one ring per reported limit window, each with
@@ -12,23 +14,6 @@ import { useDismissablePopover } from './ShellControls'
 const HOUR = 3600
 const DAY = 24 * HOUR
 const POLL_MS = 60_000
-
-// How long a window lasts, for the pace marker; null when the window ID doesn't say.
-export function windowSeconds(key: string): number | null {
-  if (key === 'five_hour') return 5 * HOUR
-  if (key === 'weekly' || key.startsWith('weekly_')) return 7 * DAY
-  const minutes = /^minutes_(\d+)$/.exec(key)
-  return minutes ? Number(minutes[1]) * 60 : null
-}
-
-// Percent of the window already gone (0-100), or null without a reset time or known length.
-export function pace(key: string, w: RoutingWindow, now = Date.now() / 1000): number | null {
-  const length = windowSeconds(key)
-  if (!length || !w.resets_at) return null
-  const left = w.resets_at - now
-  if (left <= 0) return null
-  return Math.max(0, Math.min(100, ((length - left) / length) * 100))
-}
 
 // The short tag shown under a ring: 5h, wk, Fable, 30m.
 export function shortTag(key: string, w?: RoutingWindow): string {
