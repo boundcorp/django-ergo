@@ -244,7 +244,7 @@ function Shell({
       const items = focusable()
       if (!items.length) return
       const first = items[0]
-      const last = items.at(-1)!
+      const last = items[items.length - 1]
       if (event.shiftKey && document.activeElement === first) {
         event.preventDefault()
         last.focus()
