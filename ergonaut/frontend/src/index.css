@@ -251,10 +251,24 @@ body {
   font-size: 12px;
   font-weight: 600;
 }
+.topbar-path {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 8px;
+}
 .topbar-crumb {
+  flex-shrink: 0;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--color-muted);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 11px;
+}
+.topbar-crumb a:hover {
+  color: var(--color-ink);
 }
 .topbar-title {
   min-width: 0;
@@ -710,6 +724,9 @@ body {
   .topbar-brand,
   .topbar-crumb {
     display: none;
+  }
+  .topbar-path {
+    flex: 1;
   }
   .topbar-title {
     flex: 1;

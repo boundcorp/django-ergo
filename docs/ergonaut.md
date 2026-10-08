@@ -131,7 +131,9 @@ refuse logins until the window passes.
   live in the account menu in the top bar, together with theme and sign-out
   actions. The account menu is keyboard accessible; Arrow keys, Home and End
   move between menu items, and Escape closes it.
-- **Top bar**: shows the current workspace context. When queued or running
+- **Top bar**: shows where you are: a chat shows its bot and parent thread
+  as links, then its title; bot pages show the bot name; the home page shows
+  Workspace. When queued or running
   workers exist, its Work control names the active count and opens their
   status (queued or running) and reported progress. When subscription
   providers (Claude Code or Codex CLIs) are configured, a usage control shows

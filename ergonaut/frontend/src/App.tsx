@@ -18,6 +18,7 @@ import { ApiKeysPage } from './pages/ApiKeys'
 import { AccountMenu, WorkerStatus } from './components/ShellControls'
 import { UsageStatus } from './components/UsageStatus'
 import { useVisualViewport } from './viewport'
+import { topbarLocation } from './topbar'
 import './chat-mobile.css'
 import { ago } from './time'
 import { DirectoryContext } from './components/BotIcon'
@@ -178,20 +179,6 @@ function App() {
   )
 }
 
-function pageTitle(pathname: string): string {
-  if (pathname === '/') return 'Workspace'
-  if (pathname === '/threads') return 'Threads'
-  if (pathname === '/sessions') return 'History'
-  if (pathname === '/costs') return 'Costs & usage'
-  if (pathname === '/routing') return 'Routing'
-  if (pathname === '/api-keys') return 'API keys'
-  if (pathname.includes('/new-thread')) return 'New thread'
-  if (pathname.endsWith('/kb')) return 'Memory'
-  if (pathname.startsWith('/bots/')) return 'Bot'
-  if (pathname.startsWith('/s/')) return 'Conversation'
-  return 'Workspace'
-}
-
 // Below 640px the sidebar is a modal drawer opened from the top bar.
 function Shell({
   user,
@@ -218,7 +205,7 @@ function Shell({
   const trigger = useRef<HTMLButtonElement>(null)
   const drawer = useRef<HTMLElement>(null)
   const { pathname } = useLocation()
-  const title = pageTitle(pathname)
+  const { crumbs, title } = topbarLocation(pathname, sessions)
   useVisualViewport()
 
   const closeDrawer = useCallback((restoreFocus = false) => {
@@ -300,11 +287,17 @@ function Shell({
           <Link to="/" className="topbar-brand">
             ERGONAUT_
           </Link>
-          <span className="topbar-crumb">Workspace</span>
-          <span className="topbar-crumb" aria-hidden="true">
-            /
-          </span>
-          <span className="topbar-title">{title}</span>
+          <nav className="topbar-path" aria-label="Breadcrumb">
+            {crumbs.map(crumb => (
+              <span key={crumb.label} className="topbar-crumb">
+                {crumb.to ? <Link to={crumb.to}>{crumb.label}</Link> : crumb.label}
+                <span aria-hidden="true"> /</span>
+              </span>
+            ))}
+            <span className="topbar-title" aria-current="page">
+              {title}
+            </span>
+          </nav>
           <div className="ml-auto flex items-center gap-2">
             <UsageStatus />
             <WorkerStatus data={{ state: workerState, workers }} onRetry={() => refresh().catch(() => {})} />
