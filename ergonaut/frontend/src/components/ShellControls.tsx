@@ -14,7 +14,7 @@ export function nextMenuIndex(key: string, current: number, count: number): numb
   return null
 }
 
-function useDismissablePopover(
+export function useDismissablePopover(
   open: boolean,
   onClose: (restoreFocus: boolean) => void,
   trigger: RefObject<HTMLButtonElement | null>,

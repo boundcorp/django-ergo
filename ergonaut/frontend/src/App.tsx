@@ -16,6 +16,7 @@ import { RoutingPage } from './pages/Routing'
 import { ThreadsPage } from './pages/ThreadsPage'
 import { ApiKeysPage } from './pages/ApiKeys'
 import { AccountMenu, WorkerStatus } from './components/ShellControls'
+import { UsageStatus } from './components/UsageStatus'
 import { useVisualViewport } from './viewport'
 import './chat-mobile.css'
 import { ago } from './time'
@@ -305,6 +306,7 @@ function Shell({
           </span>
           <span className="topbar-title">{title}</span>
           <div className="ml-auto flex items-center gap-2">
+            <UsageStatus />
             <WorkerStatus data={{ state: workerState, workers }} onRetry={() => refresh().catch(() => {})} />
             <AccountMenu user={user} onSignOut={onSignOut} />
           </div>
