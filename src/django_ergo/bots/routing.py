@@ -5,18 +5,23 @@ bot chats (``tiers``) and for coding agents started through Orca
 (``agents``)::
 
     tiers:
-      low:    [subscription/claude-sonnet-5-5, chatgpt/gpt-6-luna]
-      medium: [subscription/claude-opus-5-5, chatgpt/gpt-6.1-sol]
-      high:   [subscription/claude-fable-5-1, chatgpt/gpt-6-astra,
-               subscription/claude-opus-5-5, chatgpt/gpt-6.1-sol]
+      small:  [subscription/claude-haiku-5-5, chatgpt/gpt-6-luna]
+      medium: [subscription/claude-sonnet-5-5, chatgpt/gpt-6.1-sol]
+      large:  [subscription/claude-opus-5-5, chatgpt/gpt-6-sol]
+      xlarge: [subscription/claude-fable-5-1, chatgpt/gpt-6-astra,
+               subscription/claude-opus-5-5, chatgpt/gpt-6-sol]
     agents:                      # subscriptions only: a candidate names its provider
       medium:
-        - {agent: claude, model: claude-opus-5-5, provider: subscription}
+        - {agent: claude, model: claude-sonnet-5-5, provider: subscription}
         - {agent: codex, model: gpt-6.1-sol, effort: medium, provider: chatgpt}
     routing:                     # optional rules; routing.md can say it in words
       limits:
         - {provider: subscription, window: five_hour, max_used: 85}
         - {provider: chatgpt, window: weekly, max_used: 80}
+
+The built-in tiers are small, medium, large and xlarge. The old names ``low``
+and ``high`` still work as aliases of small and large (:func:`tier_of`), in
+``auto/<tier>`` refs and as providers.yaml keys.
 
 A chat (or a bot's ``engine.model``) set to ``auto/<tier>`` gets a model per
 turn from :func:`pick_model`: the first candidate whose provider is
@@ -60,7 +65,13 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-TIERS = ("low", "medium", "high")
+TIERS = ("small", "medium", "large", "xlarge")
+# Names the tiers had before small/large; existing auto/low chats keep working.
+TIER_ALIASES = {"low": "small", "high": "large"}
+# Reasoning effort is chosen apart from the tier: a chat's effort setting
+# (Bot.pick_effort), else medium, on every engine that takes one.
+EFFORTS = ("low", "medium", "high", "xhigh")
+DEFAULT_EFFORT = "medium"
 AUTO = "auto/"
 DEFAULT_MAX_USED = 98.0
 USAGE_STALE_SECONDS = 15 * 60  # three missed 5-minute syncs
@@ -135,7 +146,9 @@ def is_auto(ref: str) -> bool:
 
 
 def tier_of(ref: str) -> str:
-    return str(ref).removeprefix(AUTO)
+    """The tier named by ``auto/<tier>`` (or a bare tier), aliases resolved."""
+    tier = str(ref).removeprefix(AUTO)
+    return TIER_ALIASES.get(tier, tier)
 
 
 # -- usage windows ------------------------------------------------------------
@@ -379,6 +392,7 @@ def choose(  # noqa: PLR0913 - preserve custom-router/current contract, add cand
 
 def pick_model(providers: Providers, tier: str, current: str = "") -> str:
     """A ``provider/model`` for a bot chat at ``tier`` (runs the ORM)."""
+    tier = tier_of(tier)
     routing = providers.routing
     listed = routing.tiers.get(tier)
     if not listed:
@@ -404,6 +418,7 @@ def pick_model(providers: Providers, tier: str, current: str = "") -> str:
 
 def pick_agent(providers: Providers, tier: str) -> AgentChoice:
     """A coding agent, model and effort for ``tier``, on a subscription only."""
+    tier = tier_of(tier)
     routing = providers.routing
     listed = routing.agents.get(tier)
     if not listed:
@@ -593,6 +608,7 @@ def is_limit_error(error: str) -> bool:
 def retry_model(providers: Providers, tier: str, failed: str, error: str) -> str:
     """Offer an under-limit alternative, including the same subscription when
     only a model-specific limit was reached. Nothing retries automatically."""
+    tier = tier_of(tier)
     routing = providers.routing
     usage, rules = current_usage(), active_rules(routing)
     failed_provider = failed.partition("/")[0]
@@ -630,6 +646,7 @@ def record_agent_pick(
     choice (runs the ORM)."""
     from django_ergo.conversation.models import RoutingSwitch
 
+    tier = tier_of(tier)
     first = (providers.routing.agents.get(tier) or [None])[0]
     if first is None or first == choice:
         return

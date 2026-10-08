@@ -153,7 +153,9 @@ providers.yaml) can ask for `auto/<tier>`. Each turn takes the first model
 in that tier whose subscription still has room. A chat keeps the model it
 had while that model qualifies, so its prompt cache isn't thrown away.
 
-`low`, `medium` and `high` work without declaring `tiers` or `agents`.
+`small`, `medium`, `large` and `xlarge` work without declaring `tiers` or
+`agents`. The older names `low` and `high` still work as aliases of `small`
+and `large`, in `auto/<tier>` and as `tiers`/`agents` keys.
 Ergo builds their defaults only from models actually listed on your
 configured `transport: cli` providers; it never adds a provider or model
 and never includes an API-key provider in a default tier. Provider names
@@ -161,23 +163,29 @@ are yours to choose; defaults match their engine type and exact model name:
 
 | Tier | Candidate order (unlisted models are skipped) |
 | --- | --- |
-| `low` | Claude Sonnet 5.5, GPT-6 Luna, Claude Haiku 4.5 |
-| `medium` | Claude Opus 5.5, GPT-6.1 Sol, Claude Sonnet 5.5, GPT-5.6 Terra |
-| `high` | Claude Fable 5.1, GPT-6 Astra, then the `medium` catalog order |
+| `small` | Claude Haiku 5.5, GPT-6 Luna, Claude Haiku 4.5 |
+| `medium` | Claude Sonnet 5.5, GPT-6.1 Sol, then the `small` pair |
+| `large` | Claude Opus 5.5, GPT-6 Sol, then the `medium` pair |
+| `xlarge` | Claude Fable 5.1, GPT-6 Astra, then the `large` pair |
 
 If several subscriptions list the same model, they are tried in provider
 declaration order. A tier with no matching candidates cannot be used.
-Built-in agent choices use `claude` or `codex`, with effort `low`, `medium`
-or `high` to match the tier (including high's fallback models). Chat tiers
-select models only: their engine settings still come from the provider,
-model and bot config.
+Built-in agent choices use `claude` or `codex` at effort `medium`, whatever
+the tier. Chat tiers select models only: their engine settings still come
+from the provider, model and bot config.
 
-Previously tier names were restricted to low/medium/high. You can now use
+Effort is set apart from the model. Subscription models (Claude Code and
+Codex) run at the chat's effort, else the provider's or bot's `effort`
+config, else `medium`. A chat picks its effort (`low`, `medium`, `high` or
+`xhigh`) with the slider in its thread options; on the OpenAI API it is sent
+as `reasoning_effort`, and the Claude API engine ignores it.
+
+Tier names aren't limited to the built-in ones. You can use
 any non-empty name without `/`, for both chats and agents. These defaults
 are editable in `providers.yaml`: each declared `tiers.<name>` or
 `agents.<name>` **replaces that name's entire default list**, independently;
 other defaults stay in place. Existing explicit lists remain authoritative,
-including an older `high` that uses the same models as `medium`. An empty
+including an older `high` (now `large`) that uses the same models as `medium`. An empty
 list disables that tier. For example:
 
 ```yaml
@@ -186,16 +194,16 @@ providers:
   anthropic:
     type: claude
     transport: cli
-    models: [claude-sonnet-5-5, claude-opus-5-5, claude-fable-5-1, claude-haiku-4-5]
+    models: [claude-haiku-5-5, claude-sonnet-5-5, claude-opus-5-5, claude-fable-5-1]
   openai-codex:
     type: openai
     transport: cli
-    models: [gpt-6.1-sol, gpt-6-astra, gpt-6-luna, gpt-5.6-terra]
+    models: [gpt-6-luna, gpt-6.1-sol, gpt-6-sol, gpt-6-astra]
 tiers:                # chat candidates, in preference order
-  low: [openai-codex/gpt-6-luna, anthropic/claude-sonnet-5-5]  # override a built-in
+  small: [openai-codex/gpt-6-luna, anthropic/claude-haiku-5-5]  # override a built-in
   research: [anthropic/claude-fable-5-1, openai-codex/gpt-6-astra]  # custom
 agents:               # coding agents (ergo_agent_start tier=...), subscriptions only
-  high:               # explicit override; not extended or silently rewritten
+  large:              # explicit override; not extended or silently rewritten
     - {agent: codex, model: gpt-6.1-sol, effort: high, provider: openai-codex}
   research:
     - {agent: claude, model: claude-fable-5-1, effort: high, provider: anthropic}

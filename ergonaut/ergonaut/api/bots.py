@@ -115,6 +115,7 @@ class SessionOut(Schema):
     attention: bool = False  # the latest turn waits on the user (approval, question, failure)
     engine_type: str = ""  # openai or claude: the engine its latest turn ran on
     model: str = ""  # the provider/model picked for this chat ("" = the bot's default)
+    effort: str = ""  # reasoning effort picked for this chat ("" = the default, medium)
     # Set when a bot resolved the thread (ergo_thread_resolve): who, and a one-line summary.
     resolved_by: str = ""
     resolved_summary: str = ""
@@ -349,6 +350,10 @@ class NewThreadIn(Schema):
 
 class ModelIn(Schema):
     model: str = ""  # "" goes back to the bot's default
+
+
+class EffortIn(Schema):
+    effort: str = ""  # low, medium, high or xhigh; "" goes back to the default (medium)
 
 
 class MessageIn(Schema):
@@ -593,6 +598,7 @@ def session_out(session: ConversationSession) -> dict:
         "attention": needs_attention(session),
         "engine_type": session.engine_type,
         "model": session.model,
+        "effort": meta.get("effort") or "",
         **resolution(session),
         **threads_by_status(session),
     }
@@ -1377,7 +1383,7 @@ def compile_routing_text(retry: bool = False) -> None:
         return
     ensure_compiled(
         bots.providers,
-        lambda: bot.make_engine(model=bot.resolve_ref("auto/low", None)),
+        lambda: bot.make_engine(model=bot.resolve_ref("auto/small", None)),
         retry=retry,
     )
 
@@ -1441,6 +1447,19 @@ async def set_session_model(request, session_id: str, data: ModelIn):
     if model:
         check_model(found, model)
     await sync_to_async(found.pick_model)(session, model)
+    return await sync_to_async(session_out)(session)
+
+
+@router.post("/sessions/{session_id}/effort", response=SessionOut)
+async def set_session_effort(request, session_id: str, data: EffortIn):
+    """Pick the reasoning effort this chat's next turns use, on whichever model
+    it is on. Engines without an effort setting ignore it."""
+    session = await get_session(request, session_id)
+    found = get_bot(session.bot_name, request.auth)
+    try:
+        await sync_to_async(found.pick_effort)(session, data.effort.strip())
+    except ValueError as exc:
+        raise HttpError(400, str(exc)) from exc
     return await sync_to_async(session_out)(session)
 
 

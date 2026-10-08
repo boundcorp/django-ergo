@@ -268,7 +268,7 @@ AGENTS_INSTRUCTIONS = """\
 Coding agents (Codex, Claude Code, omp) run on a subscription for minutes to
 hours. ergo_agent_start starts one on a self-contained brief: the target, the
 change, constraints, who owns what, and how to prove it's done. Pass a configured
-tier (low, medium, high, or a custom name from providers.yaml) to let routing
+tier (small, medium, large, xlarge, or a custom name from providers.yaml) to let routing
 pick the agent and model from a subscription with room. The chat shows it as a
 worker; its questions and its final report arrive here as messages, so don't
 wait or poll. Answer a question with ergo_agent_reply; ergo_agent_stop stops one.

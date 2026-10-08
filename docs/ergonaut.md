@@ -157,7 +157,9 @@ refuse logins until the window passes.
   send on one row. Wider screens keep the full header. The model (with a
   `providers.yaml`) shows in the composer as "Model: Sonnet 5.5"; it opens the
   thread options, where the picker is: an Options dropdown in the header, or
-  the top of the phone sheet. The page itself never scrolls: the transcript
+  the top of the phone sheet. Below the picker, an effort slider sets the
+  chat's reasoning effort (low, medium, high, xhigh; medium by default) on
+  whichever model it is on. The page itself never scrolls: the transcript
   (Markdown rendered) scrolls inside it, opening at the latest message, and
   the composer stays docked at the bottom, above the phone keyboard. The
   transcript shows tool calls you can open, images a
@@ -244,7 +246,7 @@ refuse logins until the window passes.
   the error. **Pay-per-token providers** lists API-key
   providers separately: chats can use them when their tier lists them,
   but coding agents use subscriptions only. **Tiers** shows every configured
-  tier (including custom names, not just `low`, `medium`, and `high`) and the
+  tier (including custom names, not just `small`, `medium`, `large` and `xlarge`) and the
   model each tier picks now; skipped candidates are struck through with the
   reason. Tier names are non-empty single path segments, selected in chats
   as `auto/<tier>`. The priorities in plain words, the compiled rules with

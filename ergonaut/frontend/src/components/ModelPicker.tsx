@@ -74,3 +74,44 @@ export default function ModelPicker({
     select
   )
 }
+
+/** Reasoning effort levels, lowest first (django_ergo.bots.routing.EFFORTS). '' means the default, medium. */
+export const EFFORTS = ['low', 'medium', 'high', 'xhigh'] as const
+export const DEFAULT_EFFORT = 'medium'
+
+// How hard the chat's model thinks, whichever model or tier it is on. Engines without an
+// effort setting ignore it.
+export function EffortSlider({ value, onPick }: { value: string; onPick: (effort: string) => void }) {
+  const current = (EFFORTS as readonly string[]).includes(value) ? value : DEFAULT_EFFORT
+  const index = EFFORTS.indexOf(current as (typeof EFFORTS)[number])
+  return (
+    <label className="flex flex-col gap-1 rounded-card border border-stroke bg-surface px-4 py-3 text-sm font-semibold">
+      <span className="flex items-center justify-between">
+        <span>Effort</span>
+        <span className="text-xs font-normal text-muted">
+          {current}
+          {value ? '' : ' (default)'}
+        </span>
+      </span>
+      <input
+        type="range"
+        min={0}
+        max={EFFORTS.length - 1}
+        step={1}
+        value={index}
+        aria-label="Reasoning effort"
+        aria-valuetext={current}
+        className="w-full accent-indigo-600"
+        onChange={e => {
+          const picked = EFFORTS[Number(e.target.value)]
+          onPick(picked === DEFAULT_EFFORT ? '' : picked)
+        }}
+      />
+      <span className="flex justify-between text-[11px] font-normal text-muted" aria-hidden="true">
+        {EFFORTS.map(e => (
+          <span key={e}>{e}</span>
+        ))}
+      </span>
+    </label>
+  )
+}

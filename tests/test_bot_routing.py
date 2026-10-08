@@ -39,10 +39,10 @@ providers:
     type: openai
     models: [gpt-6-sol]
 tiers:
-  low: [claude/claude-sonnet-5-5, chatgpt/gpt-6-luna]
+  small: [claude/claude-sonnet-5-5, chatgpt/gpt-6-luna]
   medium: [claude/claude-opus-5-5, chatgpt/gpt-6-sol, openai/gpt-6-sol]
 agents:
-  high:
+  large:
     - {{agent: claude, model: claude-opus-5-5, effort: high, provider: claude}}
     - {{agent: codex, model: gpt-6-sol, effort: high, provider: chatgpt}}
 routing:
@@ -67,11 +67,11 @@ def soon(hours=1.0) -> float:
 
 def test_tiers_agents_and_rules_parse():
     providers = found()
-    assert providers.knows("auto/medium") and providers.knows("auto/high")
-    assert providers.routing.agents["high"][1].agent == "codex"
+    assert providers.knows("auto/medium") and providers.knows("auto/large")
+    assert providers.routing.agents["large"][1].agent == "codex"
     assert providers.routing.rules.limits[0].max_used == 85
     data = yaml.safe_load(PROVIDERS)
-    data["agents"]["high"][0]["provider"] = "openai"  # an API key: not for agents
+    data["agents"]["large"][0]["provider"] = "openai"  # an API key: not for agents
     with pytest.raises(ProvidersError, match="subscription"):
         Providers.from_dict(data)
     data = yaml.safe_load(PROVIDERS)
@@ -144,8 +144,8 @@ def test_fable_window_only_blocks_fable_models_for_chats_and_agents():
 
     data = yaml.safe_load(PROVIDERS)
     data["providers"]["claude"]["models"].append("claude-fable-5-1")
-    data["tiers"]["high"] = ["claude/claude-fable-5-1", "claude/claude-opus-5-5"]
-    data["agents"]["high"] = [
+    data["tiers"]["large"] = ["claude/claude-fable-5-1", "claude/claude-opus-5-5"]
+    data["agents"]["large"] = [
         {"agent": "omp", "provider": "claude", "model": f"anthropic/{model}"}
         for model in ("claude-fable-5-1", "claude-opus-5-5")
     ]
@@ -167,14 +167,14 @@ def test_fable_window_only_blocks_fable_models_for_chats_and_agents():
         full_snapshot=True,
     )
     assert (
-        pick_model(providers, "high", current="claude/claude-fable-5-1")
+        pick_model(providers, "large", current="claude/claude-fable-5-1")
         == "claude/claude-opus-5-5"
     )
-    assert pick_agent(providers, "high") == AgentChoice(
+    assert pick_agent(providers, "large") == AgentChoice(
         agent="omp", model="anthropic/claude-opus-5-5", provider="claude"
     )
     report = routing.routing_report(providers)
-    high = next(t for t in report["tiers"] if t["name"] == "high")
+    high = next(t for t in report["tiers"] if t["name"] == "large")
     assert [c["state"] for c in high["candidates"]] == ["skip", "pick"]
     assert (
         routing.retry_model(
@@ -185,7 +185,7 @@ def test_fable_window_only_blocks_fable_models_for_chats_and_agents():
     record_usage_windows(
         "claude", {"weekly_fable": {"used": 99, "resets_at": time.time() - 1}}
     )
-    assert pick_model(providers, "high") == "claude/claude-fable-5-1"
+    assert pick_model(providers, "large") == "claude/claude-fable-5-1"
     record_usage_windows("claude", {"weekly": {"used": 99, "resets_at": soon()}})
     assert pick_model(providers, "medium") == "chatgpt/gpt-6-sol"
 
@@ -200,7 +200,7 @@ def test_claude_first_until_its_five_hour_window_runs_low():
     record_usage_windows("chatgpt", {"weekly": {"used": 80, "resets_at": soon(48)}})
     assert pick_model(providers, "medium") == "openai/gpt-6-sol"
     # Every candidate over a limit: the subscription with the most room.
-    assert pick_model(providers, "low") == "chatgpt/gpt-6-luna"  # 20% left vs 14%
+    assert pick_model(providers, "small") == "chatgpt/gpt-6-luna"  # 20% left vs 14%
     # Back to Claude once its window resets.
     record_usage_windows(
         "claude", {"five_hour": {"used": 99, "resets_at": time.time() - 1}}
@@ -227,9 +227,9 @@ def test_a_chat_keeps_its_model_while_it_qualifies():
 def test_agents_use_subscriptions_only():
     providers = found()
     record_usage_windows("claude", {"five_hour": {"used": 92, "resets_at": soon()}})
-    choice = pick_agent(providers, "high")
+    choice = pick_agent(providers, "large")
     assert (choice.agent, choice.model, choice.effort) == ("codex", "gpt-6-sol", "high")
-    assert pick_agent(providers, "low").provider == "chatgpt"
+    assert pick_agent(providers, "small").provider == "chatgpt"
 
 
 @pytest.mark.django_db
@@ -351,14 +351,14 @@ def test_text_saved_on_the_page_replaces_routing_md(tmp_path):
     record_usage_windows("chatgpt", {"weekly": {"used": 70, "resets_at": soon(48)}})
     record_usage_windows("claude", {"five_hour": {"used": 90, "resets_at": soon()}})
     # Not compiled yet: the YAML limits (chatgpt weekly 80) apply.
-    assert pick_model(providers, "low") == "chatgpt/gpt-6-luna"
+    assert pick_model(providers, "small") == "chatgpt/gpt-6-luna"
     RoutingPolicy.objects.create(
         source_sha=routing.text_sha(text),
         rules={"limits": [{"provider": "chatgpt", "window": "weekly", "max_used": 60}]},
     )
     # The compiled rules replace the YAML limits: Claude at 90% is under the
     # default 98%, and Codex is over its 60%.
-    assert pick_model(providers, "low") == "claude/claude-sonnet-5-5"
+    assert pick_model(providers, "small") == "claude/claude-sonnet-5-5"
     assert routing.why_over(
         "chatgpt", routing.current_usage(), routing.active_rules(providers.routing)
     ) == ("chatgpt weekly window at 70% (limit 60%)")
@@ -383,7 +383,7 @@ def test_routing_report_explains_each_tier():
     assert (
         medium["candidates"][0]["reason"] == "claude 5-hour window at 90% (limit 85%)"
     )
-    high = next(t for t in report["agents"] if t["name"] == "high")
+    high = next(t for t in report["agents"] if t["name"] == "large")
     assert [(c["label"], c["state"]) for c in high["candidates"]] == [
         ("claude · claude-opus-5-5 · high", "skip"),
         ("codex · gpt-6-sol · high", "pick"),
@@ -413,12 +413,12 @@ def test_agent_fallbacks_are_logged(django_user_model):
     from django_ergo.conversation.models import RoutingSwitch
 
     providers = found()
-    choice = pick_agent(providers, "high")
-    routing.record_agent_pick(providers, "high", choice, "Orca worker · fix tests")
+    choice = pick_agent(providers, "large")
+    routing.record_agent_pick(providers, "large", choice, "Orca worker · fix tests")
     assert not RoutingSwitch.objects.exists()  # the first choice
     record_usage_windows("claude", {"five_hour": {"used": 92, "resets_at": soon()}})
-    choice = pick_agent(providers, "high")
-    routing.record_agent_pick(providers, "high", choice, "Orca worker · fix tests")
+    choice = pick_agent(providers, "large")
+    routing.record_agent_pick(providers, "large", choice, "Orca worker · fix tests")
     switch = RoutingSwitch.objects.get()
     assert (switch.from_model, switch.to_model) == (
         "claude · claude-opus-5-5 · high",

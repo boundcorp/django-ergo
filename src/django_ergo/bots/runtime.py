@@ -41,6 +41,8 @@ from django_ergo.bots.definition import PluginSpec
 from django_ergo.bots.plugins import BotPlugin
 from django_ergo.bots.plugins import resolve_plugin_class
 from django_ergo.bots.providers import Providers
+from django_ergo.bots.routing import DEFAULT_EFFORT
+from django_ergo.bots.routing import EFFORTS
 from django_ergo.bots.routing import ensure_compiled
 from django_ergo.bots.routing import is_auto
 from django_ergo.bots.routing import pick_model as route_model
@@ -137,6 +139,22 @@ async def _maybe_await(value):
     if inspect.isawaitable(value):
         return await value
     return value
+
+
+def with_effort(config: dict, engine_type: str, transport: str, picked: str) -> None:
+    """Put a chat's reasoning effort in an engine config. Subscription CLIs
+    (Claude Code, Codex) run at ``picked``, else the configured effort, else
+    medium. The OpenAI API takes ``picked`` as ``reasoning_effort``; other
+    engines have no effort setting."""
+    if transport == "cli":
+        config["effort"] = (
+            picked
+            or config.get("effort")
+            or config.get("reasoning_effort")
+            or DEFAULT_EFFORT
+        )
+    elif engine_type == "openai" and picked:
+        config["reasoning_effort"] = picked
 
 
 class Bot:
@@ -534,6 +552,25 @@ class Bot:
             fields += ["engine_type", "transport_type", "session_id"]
         session.save(update_fields=fields)
 
+    def session_effort(self, session: ConversationSession | None) -> str:
+        """The reasoning effort picked for this chat ("" = the default)."""
+        effort = (getattr(session, "metadata", None) or {}).get("effort", "")
+        return effort if effort in EFFORTS else ""
+
+    def pick_effort(self, session: ConversationSession, effort: str) -> None:
+        """Set the reasoning effort a chat's next turns use ("" = the default,
+        medium). It applies on whichever model the chat is on. Runs the ORM."""
+        if effort and effort not in EFFORTS:
+            msg = f"Effort must be one of {', '.join(EFFORTS)}"
+            raise ValueError(msg)
+        meta = dict(session.metadata or {})
+        if effort:
+            meta["effort"] = effort
+        else:
+            meta.pop("effort", None)
+        session.metadata = meta
+        session.save(update_fields=["metadata", "updated_at"])
+
     def session_model_ref(self, picked) -> str:
         picked = str(picked or "")
         return picked if picked and self.providers.knows(picked) else ""
@@ -547,7 +584,7 @@ class Bot:
             return ""
         ensure_compiled(
             self.providers,
-            lambda: self.make_engine(model=self.resolve_ref("auto/low", None)),
+            lambda: self.make_engine(model=self.resolve_ref("auto/small", None)),
         )
         before = (session.metadata or {}).get("routed_model", "")
         picked = route_model(self.providers, tier_of(ref), before)
@@ -634,6 +671,7 @@ class Bot:
             config.update(self.definition.engine_config)
             key_env = self.definition.api_key_env
             transport = self.definition.engine_transport or transport
+        with_effort(config, engine_type, transport, self.session_effort(session))
         if key_env:
             key = os.environ.get(key_env)
             if not key:

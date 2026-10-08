@@ -30,8 +30,10 @@ A model is named ``provider/model``. A bot can use one with
 model whose provider's key is set (the chat model picker). ``tiers``,
 ``agents`` and ``routing`` (plus an optional ``routing.md``) let a chat or
 bot ask for ``auto/<tier>`` instead, picked per turn from what's left on
-each subscription (``bots.routing``). Low, medium and high have defaults
-from the listed subscription models; YAML can replace them or add tiers.
+each subscription (``bots.routing``). Small, medium, large and xlarge have
+defaults from the listed subscription models (``DEFAULT_TIER_MODELS``); YAML
+can replace them or add tiers. ``low`` and ``high`` are aliases of small and
+large.
 
 ``transport: cli`` runs models on the subscription a CLI on this machine is
 logged in with: Claude models through the Claude Code CLI
@@ -49,6 +51,7 @@ from pathlib import Path
 
 import yaml
 
+from django_ergo.bots.routing import DEFAULT_EFFORT
 from django_ergo.bots.routing import AgentChoice
 from django_ergo.bots.routing import Routing
 from django_ergo.bots.routing import RoutingRules
@@ -63,24 +66,28 @@ TRANSPORTS = {"openai": ("api", "cli"), "claude": ("api", "cli")}
 # Preference order is by model family, then providers.yaml's provider order.
 # Only exact catalog models on configured CLI subscriptions become candidates.
 DEFAULT_TIER_MODELS = {
-    "low": (
-        ("claude", "claude-sonnet-5-5"),
+    "small": (
+        ("claude", "claude-haiku-5-5"),
         ("openai", "gpt-6-luna"),
         ("claude", "claude-haiku-4-5"),
     ),
     "medium": (
-        ("claude", "claude-opus-5-5"),
-        ("openai", "gpt-6.1-sol"),
         ("claude", "claude-sonnet-5-5"),
-        ("openai", "gpt-5.6-terra"),
+        ("openai", "gpt-6.1-sol"),
+        ("claude", "claude-haiku-5-5"),
+        ("openai", "gpt-6-luna"),
     ),
-    "high": (
+    "large": (
+        ("claude", "claude-opus-5-5"),
+        ("openai", "gpt-6-sol"),
+        ("claude", "claude-sonnet-5-5"),
+        ("openai", "gpt-6.1-sol"),
+    ),
+    "xlarge": (
         ("claude", "claude-fable-5-1"),
         ("openai", "gpt-6-astra"),
         ("claude", "claude-opus-5-5"),
-        ("openai", "gpt-6.1-sol"),
-        ("claude", "claude-sonnet-5-5"),
-        ("openai", "gpt-5.6-terra"),
+        ("openai", "gpt-6-sol"),
     ),
 }
 
@@ -222,7 +229,7 @@ class Providers:
                             agent="claude" if kind == "claude" else "codex",
                             model=name,
                             provider=provider.name,
-                            effort=tier,
+                            effort=DEFAULT_EFFORT,
                         )
                     )
         return routing
@@ -230,16 +237,18 @@ class Providers:
     def _routing(self, data: dict) -> Routing:
         defaults = self._default_routing()
         tiers = defaults.tiers
-        for tier, refs in (data.get("tiers") or {}).items():
-            self._check_tier(tier)
+        for name, refs in (data.get("tiers") or {}).items():
+            self._check_tier(name)
+            tier = tier_of(name)
             tiers[tier] = [str(r) for r in refs or []]
             for ref in tiers[tier]:
                 if self.find(ref) is None:
                     msg = f"tiers.{tier}: {ref!r} isn't one of the listed models"
                     raise ProvidersError(msg)
         agents = defaults.agents
-        for tier, listed in (data.get("agents") or {}).items():
-            self._check_tier(tier)
+        for name, listed in (data.get("agents") or {}).items():
+            self._check_tier(name)
+            tier = tier_of(name)
             try:
                 agents[tier] = [AgentChoice.from_dict(c) for c in listed or []]
             except (KeyError, TypeError) as exc:
