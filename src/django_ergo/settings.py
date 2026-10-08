@@ -59,6 +59,10 @@ DEFAULTS = {
     # Dotted path to a callable (candidates, usage, rules, current) -> candidate
     # that replaces the built-in tier routing policy (django_ergo.bots.routing).
     "MODEL_ROUTER": None,
+    # The command that prints every subscription's usage windows as JSON
+    # (bots.usage_sync), run by the Routing page's Refresh and the periodic sync.
+    "USAGE_COMMAND": "omp usage --redact --json",
+    "USAGE_TIMEOUT": 90,
     # Callable(message_id) that delivers a bot-to-bot thread message, e.g. by
     # queueing a Celery task. None = deliver in a background thread.
     "THREAD_MESSAGE_RUNNER": None,

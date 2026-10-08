@@ -1200,6 +1200,44 @@ def test_routing_page_shows_tiers_and_admins_set_the_priorities(client, cook, us
 
 
 @pytest.mark.django_db(transaction=True)
+def test_routing_refresh_fetches_limits_and_the_page_reports_them_or_the_failure(client, cook, use_bots, monkeypatch):
+    from django_ergo.bots.providers import Providers
+
+    use_bots(say("hi"))
+    webhooks.get_registry().providers = Providers.from_dict(
+        {
+            "providers": {"claude": {"type": "claude", "transport": "cli", "models": ["claude-opus-5-5"]}},
+            "tiers": {"medium": ["claude/claude-opus-5-5"]},
+        }
+    )
+    assert client.get("/api/routing").json()["capacity"]["sync"]["state"] == "empty"
+
+    resets = 1791506400
+    window = {"id": "5h", "resetsAt": resets * 1000}
+    limits = [
+        {"id": "anthropic:5h", "label": "Claude 5 Hour", "window": window, "amount": {"unit": "percent", "used": 7}}
+    ]
+    monkeypatch.setattr(
+        "django_ergo.bots.usage_sync.fetch_report",
+        lambda: {"reports": [{"provider": "anthropic", "limits": limits}]},
+    )
+    capacity = client.post("/api/routing/refresh").json()["capacity"]
+    assert capacity["sync"]["state"] == "healthy" and capacity["sync"]["succeeded_at"]
+    claude = capacity["accounts"][0]
+    assert (claude["id"], claude["providers"]) == ("anthropic", ["claude"])
+    assert [(w["key"], w["used"], w["resets_at"]) for w in claude["windows"]] == [("five_hour", 7, resets)]
+
+    def fail():
+        raise RuntimeError("omp is down")
+
+    monkeypatch.setattr("django_ergo.bots.usage_sync.fetch_report", fail)
+    page = client.post("/api/routing/refresh").json()
+    assert page["capacity"]["sync"]["state"] == "failed"
+    assert "omp is down" in page["capacity"]["sync"]["error"]
+    assert page["capacity"]["accounts"][0]["windows"][0]["used"] == 7  # the last known value stays, as stale data
+
+
+@pytest.mark.django_db(transaction=True)
 def test_a_turn_refused_at_its_limit_offers_a_retry_on_another_model(client, cook, use_bots, monkeypatch):
     from django_ergo.bots.providers import Providers
     from django_ergo.conversation.models import ConversationSession, StructuredCall

@@ -4,6 +4,17 @@ This document tracks the major milestones and evolution of the Django Ergo proje
 
 ## Development Timeline
 
+### Routing & capacity limits that stay current (October 2026)
+
+- Subscription limits were only recorded as a side effect of a Claude or Codex
+  CLI turn, and a partial event refreshed the row's timestamp while leaving
+  old windows in place, so idle providers showed stale 7-day values and no
+  Claude 5-hour window. `bots/usage_sync.py` now runs `omp usage --redact
+  --json` every 5 minutes (and on **Refresh limits**), stores each window with
+  its own `observed_at`, and records the sync's health in `UsageSync`.
+- The Routing page is redesigned as Routing & capacity: sync health, a card per
+  account with 5-hour and 7-day windows, explicit Unavailable/Stale states.
+
 ### Provider-driven routing (October 2026)
 
 - Routing uses only reported subscription windows, preserving unknown utilization,

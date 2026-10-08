@@ -2,7 +2,8 @@ import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import type { Routing, RoutingCandidate, RoutingProvider, RoutingWindow } from '../api'
 import { api } from '../api'
-import { ago, agoLong, clock } from '../time'
+import { ago, agoLong } from '../time'
+import { CapacityLoading, CapacitySection } from './Capacity'
 
 function windowLabel(key: string, window?: RoutingWindow) {
   if (window?.label) return window.label
@@ -22,149 +23,40 @@ const STATUS: Record<RoutingProvider['status'], [string, string]> = {
   unavailable: ['Unavailable', 'bg-raised text-muted'],
 }
 
-function kind(p: RoutingProvider) {
-  if (p.subscription)
-    return p.type === 'openai' ? 'ChatGPT subscription · Codex CLI' : 'Claude subscription · Claude Code CLI'
-  return p.api_key_env ? `API key · ${p.api_key_env}` : `${p.type} API`
-}
-
-// "resets 14:20" within a day, else "resets Thu".
-function resets(at: number | null) {
-  if (!at) return ''
-  const when = new Date(at * 1000)
-  const soon = at * 1000 - Date.now() < 24 * 3600 * 1000
-  return `resets ${soon ? clock(when.toISOString()) : when.toLocaleDateString([], { weekday: 'short' })}`
-}
-
-function Meter({ label, w }: { label: string; w: RoutingWindow }) {
-  const used = w.used ?? (w.remaining != null ? 100 - w.remaining : null)
-  const remaining = w.remaining ?? (used != null ? Math.max(0, 100 - used) : null)
-  const over = used != null && used >= w.limit
-  const fill = over ? 'bg-danger' : used != null && used >= w.limit - 15 ? 'bg-warning' : 'bg-mint'
-  return (
-    <div>
-      <div className="flex flex-wrap justify-between gap-x-3 text-sm">
-        <span className="whitespace-nowrap text-muted">{label}</span>
-        <span className="font-mono tabular-nums">
-          {remaining == null ? (
-            <span className="text-muted">usage not reported</span>
-          ) : (
-            `${Math.round(remaining)}% remaining`
-          )}
-          {w.status && <span className="text-muted"> · {w.status}</span>}
-          {w.resets_at && (
-            <span className="text-muted" title={new Date(w.resets_at * 1000).toLocaleString()}>
-              {' '}
-              · {resets(w.resets_at)}
-            </span>
-          )}
-        </span>
-      </div>
-      {used != null && (
-        <div
-          className="relative mt-1.5 h-2.5 rounded-full bg-raised"
-          role="meter"
-          aria-label={`${label} usage`}
-          aria-valuemin={0}
-          aria-valuemax={100}
-          aria-valuenow={Math.round(used)}
-          aria-valuetext={`${Math.round(used)}% used, ${Math.round(remaining!)}% remaining`}
-        >
-          <div
-            className={`absolute inset-y-0 left-0 rounded-full ${fill}`}
-            style={{ width: `${Math.max(0, Math.min(100, used))}%` }}
-          />
-          <div
-            className="absolute -inset-y-1 w-0.5 rounded bg-ink"
-            style={{ left: `${Math.min(99.5, w.limit)}%` }}
-            title={`Skip at ${w.limit}% used`}
-          />
-        </div>
-      )}
-      <div className="mt-1 text-xs text-muted">
-        {used != null && `${Math.round(used)}% used · `}Skip at {w.limit}% used
-        {w.model && ` · ${w.model} only`}
-      </div>
-    </div>
-  )
-}
-
-function ProviderCard({ p }: { p: RoutingProvider }) {
-  const [label, tone] = STATUS[p.status]
-  return (
-    <article className="surface-card flex flex-col gap-4 p-5">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h3 className="font-display text-lg font-semibold">{p.name}</h3>
-          <p className="text-sm text-muted">{kind(p)}</p>
-        </div>
-        <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold ${tone}`}>{label}</span>
-      </div>
-      {p.subscription ? (
-        <div className="flex flex-col gap-3.5">
-          {Object.entries(p.windows).map(([key, window]) => (
-            <Meter key={key} label={windowLabel(key, window)} w={window} />
-          ))}
-          {!Object.keys(p.windows).length && (
-            <p className="text-sm text-muted">No usage reported yet. It shows up after the first call.</p>
-          )}
-        </div>
-      ) : (
-        <p className="text-sm text-muted">
-          Billed per token. Bot chats use this only when their tier lists it; coding agents never do.
-        </p>
-      )}
-      <div className="mt-auto space-y-1 border-t border-stroke pt-3 text-xs text-muted">
-        {p.reason && <p>{p.reason}</p>}
-        {p.reported_at && (
-          <p>
-            Last reported{' '}
-            <time dateTime={p.reported_at} title={new Date(p.reported_at).toLocaleString()}>
-              {agoLong(p.reported_at)}
-            </time>
-            {p.stale && <span className="text-warning"> · Stale usage snapshot</span>}
-          </p>
-        )}
-        {!p.subscription && <p>Not metered by the router.</p>}
-      </div>
-    </article>
-  )
-}
-
+// Subscription accounts and their limits are the capacity section (Capacity.tsx); this lists the
+// providers billed per token, which the router doesn't meter.
 export function Providers({ providers }: { providers: RoutingProvider[] }) {
-  const subscriptions = providers.filter(p => p.subscription)
   const apiKeys = providers.filter(p => !p.subscription)
+  if (!apiKeys.length) return null
   return (
-    <>
-      <section aria-labelledby="routing-subs">
-        <h2 id="routing-subs" className="font-display text-2xl font-semibold">
-          Subscriptions
-        </h2>
-        {subscriptions.length ? (
-          <div className="mt-4 grid gap-4 [grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr))]">
-            {subscriptions.map(p => (
-              <ProviderCard key={p.name} p={p} />
-            ))}
-          </div>
-        ) : (
-          <p className="mt-4 text-sm text-muted">
-            {providers.length ? 'No subscription providers configured.' : 'No providers.yaml is loaded.'}
-          </p>
-        )}
-      </section>
-      {apiKeys.length > 0 && (
-        <section aria-labelledby="routing-api-keys">
-          <h2 id="routing-api-keys" className="font-display text-2xl font-semibold">
-            Pay-per-token providers
-          </h2>
-          <div className="mt-4 grid gap-4 [grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr))]">
-            {apiKeys.map(p => (
-              <ProviderCard key={p.name} p={p} />
-            ))}
-          </div>
-        </section>
-      )}
-    </>
+    <section aria-labelledby="routing-api-keys">
+      <h2 id="routing-api-keys" className="font-display text-2xl font-semibold">
+        Pay-per-token providers
+      </h2>
+      <div className="mt-4 grid gap-4 [grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr))]">
+        {apiKeys.map(p => {
+          const [label, tone] = STATUS[p.status]
+          return (
+            <article key={p.name} className="surface-card flex flex-col gap-3 p-5">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <h3 className="font-display text-lg font-semibold">{p.name}</h3>
+                  <p className="text-sm text-muted">{p.api_key_env ? `API key · ${p.api_key_env}` : `${p.type} API`}</p>
+                </div>
+                <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold ${tone}`}>{label}</span>
+              </div>
+              <p className="text-sm text-muted">
+                Billed per token. Bot chats use this only when their tier lists it; coding agents never do.
+              </p>
+              <div className="mt-auto space-y-1 border-t border-stroke pt-3 text-xs text-muted">
+                {p.reason && <p>{p.reason}</p>}
+                <p>Not metered by the router.</p>
+              </div>
+            </article>
+          )
+        })}
+      </div>
+    </section>
   )
 }
 
@@ -386,44 +278,88 @@ export function Priorities({ data, onSaved }: { data: Routing; onSaved: (r: Rout
 export function RoutingPage() {
   const [data, setData] = useState<Routing | null>(null)
   const [error, setError] = useState('')
+  const [loadedAt, setLoadedAt] = useState(Date.now())
+  const [refreshing, setRefreshing] = useState(false)
+  const [refreshError, setRefreshError] = useState('')
   const load = useCallback(
     () =>
       api
         .routing()
         .then(r => {
           setData(r)
+          setLoadedAt(Date.now())
           setError('')
         })
         .catch(e => setError(e instanceof Error ? e.message : String(e))),
     [],
   )
+  const refresh = useCallback(async () => {
+    setRefreshing(true)
+    setRefreshError('')
+    try {
+      setData(await api.refreshRouting())
+      setLoadedAt(Date.now())
+      setError('')
+    } catch (e) {
+      setRefreshError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setRefreshing(false)
+    }
+  }, [])
   useEffect(() => {
     load()
   }, [load])
-  // Follow a compile, then keep usage current.
-  const compiling = !!data?.compiling
+  // Follow a compile or a running sync, then keep usage current.
+  const busy = !!data?.compiling || !!data?.capacity.sync.running
   useEffect(() => {
-    const timer = setInterval(load, compiling ? 2000 : 30000)
+    const timer = setInterval(load, busy ? 2000 : 30000)
     return () => clearInterval(timer)
-  }, [load, compiling])
+  }, [load, busy])
 
   return (
     <div className="page-content h-full overflow-y-auto">
       <p className="eyebrow">Settings</p>
-      <h1 className="page-title mt-3">Routing</h1>
+      <h1 className="page-title mt-3">Routing &amp; capacity</h1>
       <p className="page-lede mt-3 max-w-2xl">
+        Provider limits and reset windows used for model routing. Values reflect the latest successful source sync.
         Chats set to an Auto model try their tier's models in order, using subscriptions with room or configured
-        pay-per-token providers. Orca workers started with a tier use subscriptions only.
+        pay-per-token providers; Orca workers started with a tier use subscriptions only.
       </p>
-      {error && (
+      {error && data && (
         <p role="alert" className="mt-6 text-sm text-danger">
-          {error}
+          Couldn't reach Ergonaut: {error}. Showing what loaded{' '}
+          <time dateTime={new Date(loadedAt).toISOString()}>{agoLong(new Date(loadedAt).toISOString())}</time>; limits
+          below may be out of date.
         </p>
       )}
+      {error && !data && (
+        <div role="alert" className="surface-card mt-8 flex flex-wrap items-center justify-between gap-3 p-5">
+          <p className="text-sm text-danger">
+            <span aria-hidden="true">✕ </span>Couldn't load routing and limits: {error}
+          </p>
+          <button
+            type="button"
+            onClick={load}
+            className="min-h-11 rounded-control border border-stroke px-4 text-sm font-medium hover:bg-raised"
+          >
+            Try again
+          </button>
+        </div>
+      )}
       {!data ? (
-        !error && <p className="mt-8 text-sm text-muted">Loading…</p>
+        !error && (
+          <div className="mt-8">
+            <CapacityLoading />
+          </div>
+        )
       ) : (
         <div className="mt-8 flex flex-col gap-8">
+          <CapacitySection
+            capacity={data.capacity}
+            refreshing={refreshing}
+            refreshError={refreshError}
+            onRefresh={refresh}
+          />
           <Providers providers={data.providers} />
 
           <section aria-labelledby="routing-tiers">

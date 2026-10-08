@@ -211,20 +211,30 @@ in the chat picker), and `tier: research` when starting an agent. Edit the
 deployment's providers.yaml to change defaults or add tiers, then restart
 Ergonaut and its bot workers so both reload the configuration.
 
-The CLIs supply the windows (`ProviderUsage`); Ergo does not assume that a
-subscription has a 5-hour/weekly pair. Codex currently reports only a
-7-day window (`weekly`). Claude can report 5-hour (`five_hour`), 7-day
-(`weekly`) and 7-day Fable (`weekly_fable`); the Fable window only applies
-to Fable candidates, so an exhausted Fable allowance can fall back to Opus
-on the same subscription. Other reported windows retain their own IDs and
-labels. Missing utilization is unknown, not zero.
+Windows come from two places, both stored in `ProviderUsage`. A periodic
+sync runs `omp usage --redact --json` (`DJANGO_ERGO["USAGE_COMMAND"]`; the
+Ergonaut worker runs it every 5 minutes, `ERGONAUT_USAGE_SYNC_SECONDS`, `0`
+turns it off) and maps each account's limits: `anthropic` feeds the CLI
+providers of type `claude` (`five_hour`, `weekly`, and scoped windows such as
+`weekly_fable`), `openai-codex` those of type `openai` (Codex reports only
+`weekly` on some plans), and accounts with no provider here (Grok:
+`weekly_credits`, `weekly_grokbuild`) are stored under their own name and only
+shown. Ergo does not assume that a subscription has a 5-hour/weekly pair. The
+CLIs also report the windows of the call they just made (Claude's
+`rate_limit_event`, Codex's `account/rateLimits`); those are merged in between
+syncs. The Fable window only applies to Fable candidates, so an exhausted
+Fable allowance can fall back to Opus on the same subscription. Missing
+utilization is unknown (`used: null`), not zero.
 
-Full snapshots replace earlier windows (removing an obsolete Codex 5-hour
-window); partial Claude rate-limit events update only what they report.
-The Routing page shows remaining/used percentages, reset times and status,
-and marks reports older than 10 minutes stale. Windows past their reset
-time are not used to disqualify a model. A call refused for a limit counts
-that reported window as used up until it resets.
+Every stored window carries `observed_at`. Syncs and full snapshots replace
+earlier windows (removing an obsolete Codex 5-hour window); a partial Claude
+event updates only the windows it reports, so the others keep their own age.
+A window is stale once its own observation is older than 15 minutes. A failed
+fetch, or one account that errors, keeps the last values (aging, never
+refreshed) and records why in `UsageSync`. The Routing page shows
+used/remaining percentages, reset countdowns, status and each window's age.
+Windows past their reset time are not used to disqualify a model. A call
+refused for a limit counts that reported window as used up until it resets.
 A turn refused that way is never retried on its own: the chat's error offers
 **Retry on** the tier's next model with room (`POST
 /api/sessions/<id>/resume?model=...`), next to Resume, which waits for the
