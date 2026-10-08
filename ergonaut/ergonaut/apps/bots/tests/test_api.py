@@ -770,6 +770,35 @@ def test_running_workers_show_in_the_chat_and_keep_it_busy(client, cook, use_bot
 
 
 @pytest.mark.django_db(transaction=True)
+def test_shell_workers_returns_only_active_workers_visible_to_the_user(client, cook, use_bots):
+    from django_ergo.conversation.models import Worker
+
+    use_bots(say("hi"))
+    root = post(client, "/api/bots/kitchen/root").json()
+    Worker.objects.create(
+        session_id=root["id"],
+        bot_name="kitchen",
+        title="Queued shell job",
+        function="orca:watch",
+        status="queued",
+    )
+    Worker.objects.create(
+        session_id=root["id"],
+        bot_name="kitchen",
+        title="Finished shell job",
+        function="orca:watch",
+        status="completed",
+    )
+
+    response = client.get("/api/workers")
+
+    assert response.status_code == 200
+    assert [(row["title"], row["status"], row["session_id"]) for row in response.json()] == [
+        ("Queued shell job", "queued", root["id"])
+    ]
+
+
+@pytest.mark.django_db(transaction=True)
 def test_browse_a_bot_tables_rows(client, cook, use_bots, monkeypatch):
     from django_ergo.bots.runtime import Bot
     from django_ergo.conversation.models import BotJob

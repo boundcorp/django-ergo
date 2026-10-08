@@ -629,6 +629,7 @@ export const api = {
     const query = new URLSearchParams(Object.entries(params).filter(([, v]) => v) as [string, string][])
     return request<Session[]>('GET', `/sessions?${query}`)
   },
+  activeWorkers: () => request<Worker[]>('GET', '/workers'),
   openRoot: (bot: string) => request<Session>('POST', `/bots/${bot}/root`),
   openChat: (bot: string, name: string) => request<Session>('POST', `/bots/${bot}/chats/${name}`),
   newThread: (bot: string, title: string, message = '', model = '') =>

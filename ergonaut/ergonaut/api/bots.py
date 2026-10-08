@@ -917,6 +917,19 @@ def list_sessions(request, bot: str = "", q: str = "", status: str = ""):
     return [session_out(s) for s in rows]
 
 
+@router.get("/workers")
+def list_active_workers(request):
+    """Every queued or running worker visible to this user, for the shell status control."""
+    from django_ergo.bots.workers import describe
+
+    rows = (
+        Worker.objects.filter(session__in=visible_sessions(request.auth), status__in=["queued", "running"])
+        .select_related("session")
+        .order_by("created_at")
+    )
+    return [{**describe(worker), "session_id": str(worker.session_id)} for worker in rows]
+
+
 @router.post("/bots/{bot}/root", response=SessionOut)
 async def open_root(request, bot: str):
     """The user's main chat (the endpoint keeps its old name)."""
