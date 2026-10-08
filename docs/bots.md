@@ -535,8 +535,8 @@ demand (Orca: up to 50 transcript messages or 400 screen lines). `model` and `ef
 `--model`/`--effort`, except for `agent: omp`, which Orca can't give a model
 at launch: the plugin writes the worktree's `.omp/config.yml`
 (`modelRoles.default: <model>:<effort>`, git-ignored by its own folder) and omp
-picks it up. With `tier: <name>` instead (low, medium, high, or a custom
-name), the agent, model and effort come from the `agents` tiers in
+picks it up. With `tier: <name>` instead (small, medium, large, xlarge, or a
+custom name), the agent, model and effort come from the `agents` tiers in
 providers.yaml, on whichever subscription has room (see
 [Routing by tier](building-bots.md#routing-by-tier)). Each chat keeps one Orca mailbox terminal and Run for its
 workers; if Orca no longer knows them (their worktree was removed, Orca was
@@ -591,7 +591,7 @@ A bot with a manager has the `agents` skill:
   manager)` asks the manager to start the agent and starts a polling Worker,
   `agent:<manager>`, with the handle as its argument. With `tier`, the agent,
   model and effort come from providers.yaml's `agents` tiers. Built-in
-  low/medium/high lists are derived from listed subscription catalog models
+  small/medium/large/xlarge lists are derived from listed subscription catalog models
   even without YAML tier declarations; `agents.<name>` replaces that
   name's list, and custom names are supported. Chat `tiers.<name>` overrides
   are independent. Restart Ergonaut and its bot workers after editing

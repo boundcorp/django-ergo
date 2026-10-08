@@ -122,6 +122,13 @@ DEFAULT_PRICES: dict[str, dict[str, float]] = {
         "cache_write": 3.75,
         "cache_read": 0.3,
     },
+    "claude-haiku-5-5": {
+        "long_context": {"threshold": 100_000, "input": 5, "output": 5},
+        "input": 0.10,
+        "output": 0.50,
+        "cache_write": 0.125,
+        "cache_read": 0.01,
+    },
     "claude-haiku-4-5": {
         "input": 1,
         "output": 5,

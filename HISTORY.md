@@ -4,6 +4,15 @@ This document tracks the major milestones and evolution of the Django Ergo proje
 
 ## Development Timeline
 
+### Small, medium, large and xlarge tiers (October 2026)
+
+- The built-in routing tiers are now `small` (Haiku 5.5, GPT-6 Luna),
+  `medium` (Sonnet 5.5, GPT-6.1 Sol), `large` (Opus 5.5, GPT-6 Sol) and the
+  new `xlarge` (Fable 5.1, GPT-6 Astra), each falling back to the pair below
+  it. Default agent efforts are low, medium, high and xhigh. `low` and `high`
+  stay as aliases of `small` and `large`, so existing `auto/low` chats and
+  providers.yaml keys keep working. Haiku 5.5 pricing is added.
+
 ### Routing & capacity limits that stay current (October 2026)
 
 - Subscription limits were only recorded as a side effect of a Claude or Codex

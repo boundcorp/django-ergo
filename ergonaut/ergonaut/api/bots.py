@@ -1377,7 +1377,7 @@ def compile_routing_text(retry: bool = False) -> None:
         return
     ensure_compiled(
         bots.providers,
-        lambda: bot.make_engine(model=bot.resolve_ref("auto/low", None)),
+        lambda: bot.make_engine(model=bot.resolve_ref("auto/small", None)),
         retry=retry,
     )
 

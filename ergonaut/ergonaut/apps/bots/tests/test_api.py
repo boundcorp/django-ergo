@@ -1168,7 +1168,7 @@ def test_routing_page_shows_tiers_and_admins_set_the_priorities(client, cook, us
             "providers": {
                 "openai": {"type": "openai", "models": ["gpt-6-sol", "gpt-6-luna"]},
             },
-            "tiers": {"low": ["openai/gpt-6-luna"], "medium": ["openai/gpt-6-sol"]},
+            "tiers": {"small": ["openai/gpt-6-luna"], "medium": ["openai/gpt-6-sol"]},
         }
     )
     compiles = []
@@ -1178,7 +1178,7 @@ def test_routing_page_shows_tiers_and_admins_set_the_priorities(client, cook, us
 
     page = client.get("/api/routing").json()
     assert [(t["name"], t["picked"]) for t in page["tiers"]] == [
-        ("low", "openai/gpt-6-luna"),
+        ("small", "openai/gpt-6-luna"),
         ("medium", "openai/gpt-6-sol"),
     ]
     assert page["providers"][0]["status"] == "in_use"

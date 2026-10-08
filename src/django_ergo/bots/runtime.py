@@ -547,7 +547,7 @@ class Bot:
             return ""
         ensure_compiled(
             self.providers,
-            lambda: self.make_engine(model=self.resolve_ref("auto/low", None)),
+            lambda: self.make_engine(model=self.resolve_ref("auto/small", None)),
         )
         before = (session.metadata or {}).get("routed_model", "")
         picked = route_model(self.providers, tier_of(ref), before)

@@ -235,7 +235,7 @@ refuse logins until the window passes.
   the error. **Pay-per-token providers** lists API-key
   providers separately: chats can use them when their tier lists them,
   but coding agents use subscriptions only. **Tiers** shows every configured
-  tier (including custom names, not just `low`, `medium`, and `high`) and the
+  tier (including custom names, not just `small`, `medium`, `large` and `xlarge`) and the
   model each tier picks now; skipped candidates are struck through with the
   reason. Tier names are non-empty single path segments, selected in chats
   as `auto/<tier>`. The priorities in plain words, the compiled rules with
