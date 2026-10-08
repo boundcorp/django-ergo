@@ -5,7 +5,7 @@ import { ModelLink, MobileSessionBar, SuggestionChips, ThreadOptions } from './c
 import { MemoryRouter } from 'react-router-dom'
 import type { Message } from './api'
 import { Transcript } from './components/Transcript'
-import { modelLabel } from './components/ModelPicker'
+import { EffortSlider, modelLabel } from './components/ModelPicker'
 import { PinnedDashboard } from './pages/Chat'
 
 describe('MobileSessionBar', () => {
@@ -241,5 +241,20 @@ describe('modelLabel', () => {
   test('uses the picked model label, or the raw id when it is not listed', () => {
     expect(modelLabel(models, 'openai/gpt-6')).toBe('GPT-6')
     expect(modelLabel(models, 'auto/medium')).toBe('auto/medium')
+  })
+})
+
+describe('EffortSlider', () => {
+  test('shows medium as the default when the chat has none picked', () => {
+    const html = renderToStaticMarkup(createElement(EffortSlider, { value: '', onPick: () => undefined }))
+    expect(html).toContain('aria-label="Reasoning effort"')
+    expect(html).toContain('aria-valuetext="medium"')
+    expect(html).toContain('medium (default)')
+  })
+
+  test('places a picked effort on its step', () => {
+    const html = renderToStaticMarkup(createElement(EffortSlider, { value: 'xhigh', onPick: () => undefined }))
+    expect(html).toContain('value="3"')
+    expect(html).not.toContain('(default)')
   })
 })

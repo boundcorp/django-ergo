@@ -68,8 +68,10 @@ logger = logging.getLogger(__name__)
 TIERS = ("small", "medium", "large", "xlarge")
 # Names the tiers had before small/large; existing auto/low chats keep working.
 TIER_ALIASES = {"low": "small", "high": "large"}
-# Reasoning effort a default agent candidate runs at, per built-in tier.
-TIER_EFFORT = {"small": "low", "medium": "medium", "large": "high", "xlarge": "xhigh"}
+# Reasoning effort is chosen apart from the tier: a chat's effort setting
+# (Bot.pick_effort), else medium, on every engine that takes one.
+EFFORTS = ("low", "medium", "high", "xhigh")
+DEFAULT_EFFORT = "medium"
 AUTO = "auto/"
 DEFAULT_MAX_USED = 98.0
 USAGE_STALE_SECONDS = 15 * 60  # three missed 5-minute syncs

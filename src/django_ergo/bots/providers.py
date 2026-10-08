@@ -51,7 +51,7 @@ from pathlib import Path
 
 import yaml
 
-from django_ergo.bots.routing import TIER_EFFORT
+from django_ergo.bots.routing import DEFAULT_EFFORT
 from django_ergo.bots.routing import AgentChoice
 from django_ergo.bots.routing import Routing
 from django_ergo.bots.routing import RoutingRules
@@ -229,7 +229,7 @@ class Providers:
                             agent="claude" if kind == "claude" else "codex",
                             model=name,
                             provider=provider.name,
-                            effort=TIER_EFFORT[tier],
+                            effort=DEFAULT_EFFORT,
                         )
                     )
         return routing

@@ -33,6 +33,7 @@ export type Session = {
   attention?: boolean // the latest turn waits on the user: an approval, a question, or a failure
   engine_type?: string // openai or claude: the engine its latest turn ran on
   model?: string // the provider/model picked for this chat ('' = the bot's default)
+  effort?: string // reasoning effort picked for this chat ('' = the default, medium)
   resolved_by?: string // the bot that resolved this thread (ergo_thread_resolve)
   resolved_summary?: string // its one-line summary of how the thread ended
   // Threads by status (components/ThreadList): the group, why it waits, the bot's status line.
@@ -674,6 +675,7 @@ export const api = {
     request<Session>('POST', `/bots/${bot}/threads`, { title, message, model }),
   models: (bot: string) => request<BotModels>('GET', `/bots/${bot}/models`),
   setModel: (id: string, model: string) => request<Session>('POST', `/sessions/${id}/model`, { model }),
+  setEffort: (id: string, effort: string) => request<Session>('POST', `/sessions/${id}/effort`, { effort }),
   // The newest page of messages, or the page before line `before`.
   session: (id: string, before?: number) =>
     request<SessionDetail>('GET', `/sessions/${id}${before == null ? '' : `?before=${before}`}`),

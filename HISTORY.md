@@ -9,7 +9,9 @@ This document tracks the major milestones and evolution of the Django Ergo proje
 - The built-in routing tiers are now `small` (Haiku 5.5, GPT-6 Luna),
   `medium` (Sonnet 5.5, GPT-6.1 Sol), `large` (Opus 5.5, GPT-6 Sol) and the
   new `xlarge` (Fable 5.1, GPT-6 Astra), each falling back to the pair below
-  it. Default agent efforts are low, medium, high and xhigh. `low` and `high`
+  it. Effort is no longer tied to the tier: everything runs at medium unless
+  a chat picks another level with the effort slider in its thread options
+  (`POST /api/sessions/<id>/effort`). `low` and `high`
   stay as aliases of `small` and `large`, so existing `auto/low` chats and
   providers.yaml keys keep working. Haiku 5.5 pricing is added.
 

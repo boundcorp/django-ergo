@@ -18,7 +18,7 @@ import { prepareChatSend, type ChatSendSource } from '../chatSend'
 import { suggestionsFromMessages, statusSummary } from '../chatLayout'
 import Files from '../components/Files'
 import Markdown from '../components/Markdown'
-import ModelPicker, { modelLabel, useBotModels } from '../components/ModelPicker'
+import ModelPicker, { EffortSlider, modelLabel, useBotModels } from '../components/ModelPicker'
 import { PageViewer, Pins } from '../components/Pins'
 import { AttachmentView, replySuggestions, Transcript } from '../components/Transcript'
 import { ModelLink, MobileSessionBar, SuggestionChips, ThreadOptions } from '../components/ChatChrome'
@@ -129,6 +129,10 @@ export function Chat({ onChange }: { onChange: () => void }) {
   // Same call whichever picker (header dropdown or phone sheet) chose the model.
   async function pickModel(model: string) {
     await api.setModel(id, model).catch(e => setError(String(e.message ?? e)))
+    await load()
+  }
+  async function pickEffort(effort: string) {
+    await api.setEffort(id, effort).catch(e => setError(String(e.message ?? e)))
     await load()
   }
   const composer = useRef<HTMLTextAreaElement>(null)
@@ -509,7 +513,10 @@ export function Chat({ onChange }: { onChange: () => void }) {
             <div className="ml-auto flex flex-wrap items-center gap-3">
               {models && (
                 <ThreadOptions open={menuOpen} onOpenChange={setMenuOpen}>
-                  <ModelPicker models={models} value={detail.session.model ?? ''} onPick={pickModel} large />
+                  <div className="flex flex-col gap-2">
+                    <ModelPicker models={models} value={detail.session.model ?? ''} onPick={pickModel} large />
+                    <EffortSlider value={detail.session.effort ?? ''} onPick={pickEffort} />
+                  </div>
                 </ThreadOptions>
               )}
               {detail.session.role === 'thread' && (
@@ -553,7 +560,12 @@ export function Chat({ onChange }: { onChange: () => void }) {
           open={sheetOpen}
           onOpenChange={setSheetOpen}
           options={
-            models && <ModelPicker models={models} value={detail.session.model ?? ''} onPick={pickModel} large />
+            models && (
+              <div className="flex flex-col gap-2">
+                <ModelPicker models={models} value={detail.session.model ?? ''} onPick={pickModel} large />
+                <EffortSlider value={detail.session.effort ?? ''} onPick={pickEffort} />
+              </div>
+            )
           }
           summary={summary}
           meta={

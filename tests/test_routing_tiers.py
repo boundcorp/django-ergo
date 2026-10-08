@@ -59,12 +59,11 @@ def test_defaults_use_configured_subscription_catalog(catalog):
         "large": [*large, *medium],
         "xlarge": ["anthropic/claude-fable-5-1", "openai-codex/gpt-6-astra", *large],
     }
-    efforts = {"small": "low", "medium": "medium", "large": "high", "xlarge": "xhigh"}
     for tier, refs in providers.routing.tiers.items():
         assert providers.knows(f"auto/{tier}")
         choices = providers.routing.agents[tier]
         assert [f"{c.provider}/{c.model}" for c in choices] == refs
-        assert all(c.effort == efforts[tier] for c in choices)
+        assert all(c.effort == "medium" for c in choices)
         assert all(
             c.agent == ("claude" if c.provider == "anthropic" else "codex")
             for c in choices
@@ -79,7 +78,7 @@ def test_builtin_tiers_route_in_size_order(catalog):
     assert pick_model(providers, "large") == "anthropic/claude-opus-5-5"
     assert pick_model(providers, "xlarge") == "anthropic/claude-fable-5-1"
     assert pick_agent(providers, "xlarge") == AgentChoice(
-        "claude", "claude-fable-5-1", "anthropic", "xhigh"
+        "claude", "claude-fable-5-1", "anthropic", "medium"
     )
 
 
@@ -110,7 +109,7 @@ def test_defaults_do_not_add_api_providers_or_unlisted_models(catalog):
     assert not providers.knows("auto/small")
     assert providers.routing.agents["small"] == []
     assert providers.routing.agents["large"] == [
-        AgentChoice("codex", "gpt-6.1-sol", "openai-codex", "high")
+        AgentChoice("codex", "gpt-6.1-sol", "openai-codex", "medium")
     ]
     assert set(providers.providers) == {"anthropic", "openai-codex"}
     assert providers.find("openai-codex/gpt-6-astra") is None
@@ -254,3 +253,29 @@ def test_custom_tier_can_start_agent_through_toolkit(
         "high",
         "deep-research",
     )
+
+
+def test_effort_defaults_to_medium_and_a_chat_can_change_it(catalog):
+    from types import SimpleNamespace
+
+    catalog["providers"]["api"] = {"type": "openai", "models": ["gpt-6-sol"]}
+    providers = Providers.from_dict(catalog)
+    assert {c.effort for tier in BUILTIN for c in providers.routing.agents[tier]} == {
+        "medium"
+    }
+    bot = Bot(BotDefinition.from_dict({"name": "effort"}))
+    registry = BotRegistry()
+    registry.providers = providers
+    registry.add(bot)
+
+    def config(model, effort=""):
+        chat = SimpleNamespace(model="", metadata={"effort": effort} if effort else {})
+        return bot.engine_spec(chat, model=model).config
+
+    assert config("anthropic/claude-opus-5-5")["effort"] == "medium"
+    assert config("openai-codex/gpt-6-sol")["effort"] == "medium"
+    assert config("anthropic/claude-opus-5-5", "xhigh")["effort"] == "xhigh"
+    assert config("openai-codex/gpt-6-sol", "low")["effort"] == "low"
+    assert "reasoning_effort" not in config("api/gpt-6-sol")
+    assert config("api/gpt-6-sol", "high")["reasoning_effort"] == "high"
+    assert config("anthropic/claude-opus-5-5", "bogus")["effort"] == "medium"

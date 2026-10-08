@@ -958,6 +958,30 @@ def test_chats_pick_a_model_from_providers(client, cook, use_bots, monkeypatch):
 
 
 @pytest.mark.django_db(transaction=True)
+def test_chats_pick_an_effort_that_reaches_the_engine(client, cook, use_bots):
+    from django_ergo.bots.providers import Providers
+    from django_ergo.conversation.models import ConversationSession
+
+    use_bots(say("hi"))
+    registry = webhooks.get_registry()
+    registry.providers = Providers.from_dict({"providers": {"openai": {"type": "openai", "models": ["gpt-6-sol"]}}})
+    root = post(client, "/api/bots/kitchen/root").json()
+    assert root["effort"] == ""
+    post(client, f"/api/sessions/{root['id']}/model", {"model": "openai/gpt-6-sol"})
+
+    picked = post(client, f"/api/sessions/{root['id']}/effort", {"effort": "xhigh"})
+    assert picked.json()["effort"] == "xhigh"
+    session = ConversationSession.objects.get(id=root["id"])
+    assert registry.bots["kitchen"].engine_spec(session).config["reasoning_effort"] == "xhigh"
+    assert post(client, f"/api/sessions/{root['id']}/effort", {"effort": "ludicrous"}).status_code == 400
+
+    back = post(client, f"/api/sessions/{root['id']}/effort", {"effort": ""}).json()
+    assert back["effort"] == ""
+    session.refresh_from_db()
+    assert "reasoning_effort" not in registry.bots["kitchen"].engine_spec(session).config
+
+
+@pytest.mark.django_db(transaction=True)
 def test_a_failed_turn_explains_itself_and_can_be_resumed_or_dismissed(client, cook, use_bots):
     from django_ergo.conversation.models import StructuredCall
 

@@ -170,11 +170,15 @@ are yours to choose; defaults match their engine type and exact model name:
 
 If several subscriptions list the same model, they are tried in provider
 declaration order. A tier with no matching candidates cannot be used.
-Built-in agent choices use `claude` or `codex`, with effort `low`, `medium`,
-`high` or `xhigh` for `small`, `medium`, `large` and `xlarge` (fallback
-models included). Chat tiers
-select models only: their engine settings still come from the provider,
-model and bot config.
+Built-in agent choices use `claude` or `codex` at effort `medium`, whatever
+the tier. Chat tiers select models only: their engine settings still come
+from the provider, model and bot config.
+
+Effort is set apart from the model. Subscription models (Claude Code and
+Codex) run at the chat's effort, else the provider's or bot's `effort`
+config, else `medium`. A chat picks its effort (`low`, `medium`, `high` or
+`xhigh`) with the slider in its thread options; on the OpenAI API it is sent
+as `reasoning_effort`, and the Claude API engine ignores it.
 
 Tier names aren't limited to the built-in ones. You can use
 any non-empty name without `/`, for both chats and agents. These defaults
