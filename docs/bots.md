@@ -611,7 +611,9 @@ Every user has a **main** chat with each bot (formerly the root session),
 plus one chat for each named chat in `chats:`, created when first opened.
 Main and named chats are window chats with history tools over every session
 the bot has with the user. A named chat adds its own `instructions` to
-agents.md and loads its own skills. Threads are child sessions of any chat.
+agents.md and loads its own skills. Threads are child sessions of any chat;
+their history tools reach the same sessions, so a thread can read the
+person's other chats with the bot.
 Instructions are rebuilt every turn, so edits to agents.md and bot.yaml reach
 existing chats. `bot.main_session(user)` and `bot.chat_session(user, name)`
 open them (`root_session` still works).

@@ -869,9 +869,7 @@ class Bot:
 
     def history_sources(self, session: ConversationSession) -> list[SessionSource]:
         """Sessions the history tools can read: all of this user's sessions
-        with the bot for the root, otherwise just the session itself."""
-        if not self.is_root(session):
-            return [SessionSource(session)]
+        with the bot, from any chat or thread."""
         return [
             SessionSource(s)
             for s in self.sessions()

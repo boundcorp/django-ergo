@@ -380,6 +380,16 @@ async def test_threads_use_default_compaction_and_root_reads_them(tmp_path):
     assert f"session:{thread.id}" in listing
     assert f"session:{root.id}" in listing
 
+    # A thread reads the person's other chats with the bot too.
+    engine._client.responses = [
+        claude_tool("ergo_chat_history_sources", {}),
+        say("Found it."),
+    ]
+    await bot.ask(thread, "What did we say in main?")
+    listing = engine._client.calls[-1]["messages"][-1]["content"][0]["content"]
+    assert f"session:{root.id}" in listing
+    assert f"session:{other.id}" in listing
+
     await bot.close_session(thread)
     assert ("closed", "thread") in plugin.events
     assert (await ConversationSession.objects.aget(id=thread.id)).status == "completed"
@@ -2374,6 +2384,10 @@ def test_introspection_reads_the_bot_folder_and_ergo_but_nothing_hidden(tmp_path
     for bad in (".env", "../other", "/etc/passwd", "ergo:../../x"):
         with pytest.raises(ValueError, match="outside|hidden|exist"):
             tools["ergo_self_read"](bad)
+    # A path that starts with the folder's own name gets a suggestion.
+    with pytest.raises(ValueError, match=r"relative to your bot folder") as err:
+        tools["ergo_self_read"](f"{folder.name}/tools/big.py")
+    assert "did you mean 'tools/big.py'?" in str(err.value)
 
 
 @pytest.mark.django_db(transaction=True)
