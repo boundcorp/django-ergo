@@ -126,18 +126,20 @@ their own sessions. Only admins can approve tools of bots with the `bash`,
 username (or 50 from one address) in 15 minutes, the web app and `/mgmt/`
 refuse logins until the window passes.
 
-- **Sidebar**: each bot with its icon and color from bot.yaml; the bot's
-  name opens your main chat (its pins sit under it), then named chats, then
-  its threads grouped by status: Pinned, Ready for review (quiet, with an
-  open pull request), Waiting on you, Working, Idle and Resolved. Idle and
-  Resolved show a few rows, then "Show more"; Resolved starts folded and its
-  rows are a dimmed title (a message reopens a resolved thread). Each thread shows the bot's one-line status from its latest reply
-  (`ChatReply.status`), led by Approval, Question or Failed when it waits on
-  you. A spinner means a turn or worker is running; a blue dot, unread
-  replies; a yellow dot, a chat waiting on you.
-- **Threads** (top of the sidebar, or ⤢ next to a bot): the same groups for
-  every bot on one page, with "N threads are waiting on you", bot filters,
-  pull request and worker chips, and a star to pin a thread to the top.
+- **Sidebar and account menu**: the sidebar keeps primary navigation: Bots,
+  their chats and threads, and Threads. History, Costs, Routing, and API keys
+  live in the account menu in the top bar, together with theme and sign-out
+  actions. The account menu is keyboard accessible; Arrow keys, Home and End
+  move between menu items, and Escape closes it.
+- **Top bar**: shows the current workspace context. When queued or running
+  workers exist, its Work control names the active count and opens their
+  status (queued or running) and reported progress. Ergonaut does not show a
+  subscription capacity summary there: provider reports currently contain
+  utilization percentages, while their `limit` is the routing skip threshold,
+  not a plan capacity.
+- **Narrow screens**: the sidebar becomes a modal navigation drawer. Opening
+  it moves focus into the drawer; Tab stays inside it and Escape or its
+  backdrop closes it and returns focus to Menu.
 - **Chat**: the header shows the bot's name above the thread title (both
   truncate). On a phone (640px and under) the site header hides the account
   address (it stays in the menu) and the session title, meta, actions, waiting
@@ -276,8 +278,8 @@ path segment valid for an hour for that user and bot folder. It never serves
 
 Scripts and agents use the API with a key instead of a login:
 `Authorization: Bearer ergo_...`. A key acts as the user it belongs to, with
-the same access, and needs no CSRF token. Make one under **API keys** at the
-bottom of the sidebar (it is shown once), or on the server:
+the same access, and needs no CSRF token. Make one under **API keys** in the
+account menu (it is shown once), or on the server:
 
 ```bash
 ergonaut manage api_key create lee@example.com --name rigel-claude   # prints the key
