@@ -1,5 +1,5 @@
 import { Fragment, createContext, useContext, useMemo, useState } from 'react'
-import type { AttachmentFile, Block, Call, Message, SentCard, Worker } from '../api'
+import type { AttachmentFile, Block, Call, Compaction, Message, SentCard, Worker } from '../api'
 import { api } from '../api'
 import { DirectoryContext } from './BotIcon'
 import Markdown from './Markdown'
@@ -7,6 +7,7 @@ import { PrChip, ThreadCard, ThreadLink, WorkerCard, linkThreads } from './Threa
 import { ToolCard } from './ToolCard'
 import { pretty, resultText } from '../toolFormat'
 import { clock } from '../time'
+import { ContextPanel, CompactionDivider } from './ContextPanel'
 
 // Tools that send work to another chat or start a worker; their calls show as cards.
 const THREAD_TOOLS = new Set(['ergo_thread_send', 'ergo_message_up'])
@@ -568,7 +569,7 @@ function CallHeader({ call }: { call: Call }) {
         <span className="font-mono">{call.kind}</span>
         <span className={tone}>{call.status.replace('_', ' ')}</span>
         <span>{tokens.toLocaleString()} tokens</span>
-        {call.model_name && <span>{call.model_name}</span>}
+        {call.model_name && <span>{call.model_name.replace(/\[1m\]$/, '')}</span>}
         <span className="h-px flex-1 bg-zinc-200 dark:bg-zinc-800" />
       </button>
       {call.error && (
@@ -629,9 +630,13 @@ export function Transcript({
   complete = true,
   sent = [],
   workers = [],
+  compactions = [],
+  sessionId = '',
 }: {
   messages: Message[]
   calls: Call[]
+  compactions?: Compaction[]
+  sessionId?: string
   files?: AttachmentFile[]
   complete?: boolean // every message is loaded (no older page)
   sent?: SentCard[] // requests this chat sent (thread cards)
@@ -697,6 +702,31 @@ export function Transcript({
                 </div>
               )}
               {made.has(message.line) && <BotFiles files={made.get(message.line)!} />}
+              {message.role === 'assistant' &&
+                (() => {
+                  const call = calls.find(
+                    c =>
+                      c.first_sequence != null &&
+                      c.first_sequence <= message.line &&
+                      (c.last_sequence ?? Infinity) >= message.line,
+                  )
+                  const last =
+                    call &&
+                    messages
+                      .filter(
+                        m =>
+                          m.role === 'assistant' &&
+                          m.line >= call.first_sequence! &&
+                          m.line <= (call.last_sequence ?? Infinity),
+                      )
+                      .slice(-1)[0]
+                  return call && last?.line === message.line ? <ContextPanel call={call} /> : null
+                })()}
+              {compactions
+                .filter(c => c.upto_sequence === message.line)
+                .map(c => (
+                  <CompactionDivider key={c.id} compaction={c} sessionId={sessionId} />
+                ))}
             </div>
           ))}
         </div>

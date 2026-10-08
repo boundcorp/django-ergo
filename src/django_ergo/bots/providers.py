@@ -184,7 +184,14 @@ class Providers:
                     provider=provider.name,
                     name=str(entry["name"]),
                     label=str(entry.get("label") or ""),
-                    config=dict(entry.get("config") or {}),
+                    config={
+                        **dict(entry.get("config") or {}),
+                        **(
+                            {"context_window": int(entry["context_window"])}
+                            if entry.get("context_window") is not None
+                            else {}
+                        ),
+                    },
                 )
                 provider.models[model.name] = model
             providers[provider.name] = provider

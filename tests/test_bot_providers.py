@@ -122,3 +122,29 @@ def test_chats_follow_the_bot_to_another_engine(tmp_path, monkeypatch):
     assert (spec.engine_type, spec.config["model"]) == ("claude", "claude-opus-5-5")
     picked = SimpleNamespace(engine_type="claude", model="openai/gpt-6-sol")
     assert bot.engine_spec(picked).config["model"] == "gpt-6-sol"
+
+
+def test_model_context_window_suffix_and_override(tmp_path):
+    providers = Providers.from_dict(
+        {
+            "providers": {
+                "subscription": {
+                    "type": "claude",
+                    "transport": "cli",
+                    "models": [
+                        "claude-opus-5-5[1m]",
+                        {"name": "small", "context_window": 64000},
+                    ],
+                }
+            }
+        }
+    )
+    first = bot_with(
+        providers, {"config": {"model": "subscription/claude-opus-5-5[1m]"}}
+    )
+    engine = first.make_engine()
+    assert engine.context_window == 1000000
+    assert engine.model == "claude-opus-5-5[1m]"
+    engine = first.make_engine(model="subscription/small")
+    assert engine.context_window == 64000
+    assert engine.model == "small"

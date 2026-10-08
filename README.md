@@ -81,9 +81,9 @@ def add_to_shopping_list(ctx, item: str) -> str:
 What a bot gets:
 
 - **Chats.** Every person has a *main* chat with each bot, plus any named
-  chats the bot declares. Main chats are window chats: each turn sees a
-  fixed-size window of recent messages and searches the rest with history
-  tools, so they can run forever. Threads are child sessions for focused work.
+  chats the bot declares. Main chats keep native history and compact it by
+  tokens, summarizing older messages once the context nears the model's
+  window, and search the rest with history tools, so they can run forever. Threads are child sessions for focused work.
 - **Skills.** Tool files, Markdown skills and plugins are all skills. A chat
   sees a list of them and loads what it needs, so each model call carries a
   short tool list.

@@ -98,6 +98,7 @@ from django_ergo.conversation.runner import _tool_requires_approval
 from django_ergo.conversation.runtime import EngineSpec
 from django_ergo.conversation.runtime import build_engine
 from django_ergo.conversation.runtime import get_default_engine_spec
+from django_ergo.conversation.tool_results import budget_chars
 from django_ergo.conversation.tool_results import trim_tool_results
 from django_ergo.conversation.toolkit import ApprovalPreview
 from django_ergo.conversation.toolkit import Toolkit
@@ -499,7 +500,9 @@ class _MemoryTranscript:
         # Older large tool results become stubs and image references become
         # image parts (only the latest few of each); self.messages keeps all.
         messages = trim_tool_results(
-            self.messages, keep=getattr(self.engine, "tool_results_in_context", None)
+            self.messages,
+            keep=getattr(self.engine, "tool_results_in_context", None),
+            max_chars=budget_chars(self.engine),
         )
         messages = await sync_to_async(prepare_messages, thread_sensitive=True)(
             messages, getattr(self.engine, "engine_type", "")
@@ -526,11 +529,13 @@ class _MemoryTranscript:
 class _SessionTranscript:
     """An in-session call: messages go into the session's tables."""
 
-    def __init__(self, engine: Engine, call: StructuredCall, extra_system: str):
+    def __init__(
+        self, engine: Engine, call: StructuredCall, extra_system: tuple[str, list[dict]]
+    ):
         self.engine = engine
         self.call = call
         self.session = call.session
-        self.extra_system = extra_system
+        self.extra_system, self.sections = extra_system
 
     def _rows(self):
         return self.session.messages
@@ -567,13 +572,19 @@ class _SessionTranscript:
         self.engine.ephemeral_context = "\n\n".join(
             p for p in (self.extra_system, note) if p
         )
+        self.engine.context_sections = self.sections
+        self.engine.last_request_info = None
         before = await anext_sequence(self.session)
         try:
             return [
                 event async for event in self.engine.respond(self.session, tool_schemas)
             ]
         finally:
+            info = self.engine.last_request_info
+            if info is not None and "context" not in (self.call.metadata or {}):
+                self.call.metadata = {**(self.call.metadata or {}), "context": info}
             self.engine.ephemeral_context = ""
+            self.engine.context_sections = []
             # Count this request now, so a long turn's usage shows as it goes and a
             # turn that crashes or pauses for approval keeps what it used.
             await self._add_usage(since=before)
@@ -923,13 +934,25 @@ async def _session_engine(
     return engine
 
 
-async def _extra_system(spec: StructuredCallSpec, context_builder) -> str:
+async def _extra_system(
+    spec: StructuredCallSpec, context_builder
+) -> tuple[str, list[dict]]:
     parts = []
+    sections = []
     if context_builder is not None:
         built = await sync_to_async(context_builder.build, thread_sensitive=True)()
         parts.append(built.text)
+        sections = [
+            {
+                "title": section.title,
+                "tokens": section.tokens,
+                "complete": section.complete,
+                "text": section.body[:20_000],
+            }
+            for section in built.sections
+        ]
     parts.append(spec.system_prompt)
-    return "\n\n".join(p for p in parts if p)
+    return "\n\n".join(p for p in parts if p), sections
 
 
 async def _session_people(session: ConversationSession):
@@ -968,15 +991,17 @@ async def run_structured_call(  # noqa: PLR0913
     pre_seeds = await sync_to_async(spec.all_pre_seeds, thread_sensitive=True)()
     if session is not None:
         active = await _session_engine(spec, session, engine)
-        # Pre-seeds go in once per session, the first time a turn has them.
+        await maybe_compact(session, active)
+        from django_ergo.conversation.compaction import latest_compaction
+
+        current = await sync_to_async(latest_compaction)(session)
+        seeded = session.structured_calls.filter(kind=spec.kind, metadata__seeded=True)
+        if current:
+            seeded = seeded.filter(first_sequence__gt=current.upto_sequence)
         seed = bool(pre_seeds) and (
-            spec.pre_seed_each_turn
-            or not await session.structured_calls.filter(
-                kind=spec.kind, metadata__seeded=True
-            ).aexists()
+            spec.pre_seed_each_turn or not await seeded.aexists()
         )
         metadata = {**(metadata or {}), **({"seeded": True} if seed else {})}
-        await maybe_compact(session, active)
         call = await StructuredCall.objects.acreate(
             kind=spec.kind,
             user_id=session.user_id,

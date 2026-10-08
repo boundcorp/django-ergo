@@ -3,12 +3,14 @@
 Detail levels:
 - headline: slug + last_prompt (if available) + first user message (1000 chars)
 - skeleton: user messages + assistant text, tool calls summarized, thinking omitted
+- digest: skeleton with bounded tool arguments (300 chars) and results (1500 chars)
 - full: everything verbatim
 - custom: async callable for LLM-powered rendering
 """
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -39,7 +41,7 @@ class ConversationRenderer:
         """Render from reconstructed message dicts."""
         if self.detail == "headline":
             return self._render_headline(messages, metadata or {})
-        if self.detail == "skeleton":
+        if self.detail in ("skeleton", "digest"):
             return self._render_skeleton(messages)
         if self.detail == "full":
             return self._render_full(messages)
@@ -129,26 +131,64 @@ class ConversationRenderer:
         )
 
     def _render_skeleton(self, messages: list[dict]) -> str:
-        lines = []
+        return "\n".join(self._skeleton_lines(messages))
+
+    def render_chunks(self, messages: list[dict], max_chars: int):
+        """Digest/skeleton transcripts split on message boundaries.
+
+        One individually oversized message occupies its own chunk. Tool
+        numbering stays consistent across chunks, including paired results.
+        """
+        chunk = []
+        size = 0
+        for line in self._skeleton_lines(messages):
+            extra = len(line) + bool(chunk)
+            if chunk and size + extra > max_chars:
+                yield "\n".join(chunk)
+                chunk, size = [], 0
+            if line:
+                size += len(line) + bool(chunk)
+                chunk.append(line)
+        if chunk:
+            yield "\n".join(chunk)
+
+    def _skeleton_lines(self, messages: list[dict]):
         tool_call_counter = 0
         tool_id_to_number: dict[str, int] = {}
 
         for msg_num, msg in enumerate(messages):
             role = msg["role"].upper()
             content = msg.get("content")
+            if self.detail == "digest" and msg.get("role") == "tool":
+                content = [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": msg.get("tool_call_id", ""),
+                        "content": content,
+                        "is_error": msg.get("is_error", False),
+                    }
+                ]
+            elif self.detail == "digest" and msg.get("tool_calls"):
+                content = ([{"type": "text", "text": content}] if content else []) + [
+                    {
+                        "type": "tool_use",
+                        "id": c["id"],
+                        "name": c["function"]["name"],
+                        "input": c["function"].get("arguments", ""),
+                    }
+                    for c in msg["tool_calls"]
+                ]
 
             if isinstance(content, str):
-                lines.append(f"[msg #{msg_num} {role}]: {content}")
+                yield f"[msg #{msg_num} {role}]: {content}"
             elif isinstance(content, list):
                 msg_parts, tool_call_counter = self._skeleton_blocks(
                     content, tool_call_counter, tool_id_to_number
                 )
                 if msg_parts:
-                    lines.append(f"[msg #{msg_num} {role}]: {' '.join(msg_parts)}")
+                    yield f"[msg #{msg_num} {role}]: {' '.join(msg_parts)}"
             elif content is not None:
-                lines.append(f"[msg #{msg_num} {role}]: {content}")
-
-        return "\n".join(lines)
+                yield f"[msg #{msg_num} {role}]: {content}"
 
     def _skeleton_blocks(
         self,
@@ -164,7 +204,12 @@ class ConversationRenderer:
             elif block_type == "tool_use":
                 tool_call_counter += 1
                 tool_id_to_number[block.get("id", "")] = tool_call_counter
-                key_args = self._summarize_args(block.get("input", {}))
+                if self.detail == "digest":
+                    key_args = self._truncate(
+                        json.dumps(block.get("input", {}), ensure_ascii=False), 300
+                    )
+                else:
+                    key_args = self._summarize_args(block.get("input", {}))
                 msg_parts.append(
                     f"[tool_call #{tool_call_counter}: {block['name']}({key_args})]"
                 )
@@ -178,9 +223,16 @@ class ConversationRenderer:
                     else 1
                 )
                 error_tag = " ERROR" if block.get("is_error") else ""
-                msg_parts.append(
-                    f"[tool_result #{tc_num}{error_tag}: ({line_count} lines)]"
-                )
+                detail = f"({line_count} lines)"
+                if self.detail == "digest":
+                    if isinstance(result_content, list):
+                        result_content = "\n".join(
+                            str(b.get("text", ""))
+                            for b in result_content
+                            if isinstance(b, dict) and b.get("type") == "text"
+                        )
+                    detail = self._truncate(str(result_content), 1500)
+                msg_parts.append(f"[tool_result #{tc_num}{error_tag}: {detail}]")
             elif block_type in ("image", "document", "image_ref"):
                 msg_parts.append(f"[{block_type.removesuffix('_ref')} attachment]")
             # thinking blocks are omitted in skeleton
@@ -241,6 +293,12 @@ class ConversationRenderer:
                     if block.get("type") == "text":
                         return block["text"]
         return None
+
+    @staticmethod
+    def _truncate(text: str, limit: int) -> str:
+        if len(text) <= limit:
+            return text
+        return f"{text[:limit]}… [{len(text) - limit} more chars]"
 
     def _summarize_args(self, args: dict) -> str:
         if not args:

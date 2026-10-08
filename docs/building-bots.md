@@ -268,10 +268,11 @@ only load when needed, and facts in `kb/`.
 
 ## Chats and threads
 
-Every person gets a **main** chat with each bot. It is a window chat: each
-turn the model sees a fixed window of recent messages (`root.recent`, 15 by
-default) in a context block, plus the current turn, and reads further back
-with history tools. A main chat never needs resetting.
+Every person gets a **main** chat with each bot. It keeps its history as
+real messages, tool calls and results included, and once the context reaches
+75% of the model's window, older messages are summarized and the newest 25%
+kept verbatim (see [compaction.md](compaction.md)). The model reads further
+back with history tools. A main chat never needs resetting.
 
 Named chats are more of the same, one per person, each with its own
 instructions and skills:

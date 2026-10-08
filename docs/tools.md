@@ -41,8 +41,9 @@ def add_to_shopping_list(ctx, item: str, amount: str = "") -> str:
   exception to report an error to the model.
 - Big results cost tokens on every later model call in the turn, so each
   call sends the newest six large results (over 500 characters) in full,
-  plus older ones up to 40,000 characters in all, and stubs the rest; set
-  `tool_results_in_context` in bot.yaml to change the six. Return what the bot needs, not everything the API gave you.
+  plus older ones up to 20% of the model's context window in all, and stubs
+  the rest; set `tool_results_in_context` (the six) or `tool_results_tokens`
+  (the budget) in bot.yaml to change them. Return what the bot needs, not everything the API gave you.
 - Tools are plain synchronous functions, run off the event loop, so the
   Django ORM and blocking HTTP clients are fine.
 

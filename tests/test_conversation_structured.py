@@ -360,7 +360,8 @@ async def test_session_mixes_chat_and_structured_turns(user):
     assert call.transcript == []
     assert (call.first_sequence, call.last_sequence) == (2, 5)
     structured_request = engine._client.calls[1]
-    assert structured_request["system"] == "You are helpful.\n\nReturn a plan."
+    assert structured_request["system"] == "You are helpful."
+    assert "Return a plan." in structured_request["messages"][2]["content"][0]["text"]
     assert structured_request["messages"][0]["content"][0]["text"] == "Let's plan"
     # The next chat turn sees the response as the structured turn's last reply.
     after = engine._client.calls[2]

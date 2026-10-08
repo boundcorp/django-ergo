@@ -428,7 +428,14 @@ def _openai_messages(messages: list[dict], shown: set[int]) -> list[dict]:
                 }
             )
     flush()
-    return out
+    # Error markers protect results during trimming/digest rendering, but are
+    # not OpenAI request fields. Keep the original transcript unchanged.
+    return [
+        {key: value for key, value in message.items() if key != "is_error"}
+        if message.get("role") == "tool" and "is_error" in message
+        else message
+        for message in out
+    ]
 
 
 # -- loading and downscaling -------------------------------------------------------
@@ -452,7 +459,7 @@ def load_image(ref: dict) -> tuple[str, str, str] | None:
             return "", "", ref["url"]
         else:
             return None
-    except Exception:  # a missing image never breaks the call
+    except Exception:
         log.warning("could not load image %s", _label(ref), exc_info=True)
         return None
     if prepared is None:
@@ -495,7 +502,7 @@ def prepare_image(
     if Image is not None:
         try:
             return _resize(Image, data, media_type, max_side)
-        except Exception:  # not an image Pillow can read
+        except Exception:
             log.debug("Pillow could not read a %s image", media_type, exc_info=True)
     if media_type not in SENDABLE_TYPES or len(data) > MAX_RAW_BYTES:
         return None

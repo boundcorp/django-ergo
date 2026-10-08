@@ -71,14 +71,14 @@ async def test_kb_prefetch_on_new_session_only(tmp_path):
 
     await bot.ask(thread, "dinner ideas")
     first = engine._client.calls[0]
-    assert "## Knowledge base results for this message" in first["system"]
-    assert "Article 1A: Tacos (for 'dinner ideas')" in first["system"]
+    assert "## Knowledge base results for this message" in _turn_context(first)
+    assert "Article 1A: Tacos (for 'dinner ideas')" in _turn_context(first)
     # Prefetch works whether or not the kb skill is loaded; its tools wait.
     assert "kb_search" not in {t["name"] for t in first["tools"]}
     assert FakeKB.searches == [{"query": "dinner ideas", "top_k": 3}]
 
     await bot.ask(thread, "and lunch?")
-    assert "Knowledge base results" not in engine._client.calls[1]["system"]
+    assert "Knowledge base results" not in _turn_context(engine._client.calls[1])
     assert len(FakeKB.searches) == 1
 
 
@@ -95,8 +95,8 @@ async def test_kb_prefetch_every_turn_survives_errors(tmp_path):
     root = await bot.root_session(user)
     await bot.ask(root, "first")
     await bot.ask(root, "boom")
-    assert "for 'first'" in engine._client.calls[0]["system"]
-    assert "prefetch failed: index offline" in engine._client.calls[1]["system"]
+    assert "for 'first'" in _turn_context(engine._client.calls[0])
+    assert "prefetch failed: index offline" in _turn_context(engine._client.calls[1])
 
 
 @pytest.mark.django_db
@@ -490,7 +490,9 @@ async def test_telegram_photo_becomes_attachment(tmp_path):
     )
 
     content = engine._client.calls[0]["messages"][0]["content"]
-    assert content[0]["type"] == "image"
+    assert content[0]["type"] == "text"
+    assert content[0]["text"].startswith("<turn-context>")
+    assert content[1]["type"] == "image"
     assert content[-1] == {"type": "text", "text": "what is this?"}
     attachment = await ConversationAttachment.objects.aget()
     assert attachment.metadata == {"telegram_file_id": "big"}
@@ -590,15 +592,15 @@ async def test_folder_kb_tools_and_prefetch(tmp_path):
     assert {"ergo_kb_search", "ergo_kb_read", "ergo_kb_list"} <= {
         t["name"] for t in first["tools"]
     }
-    assert "## Knowledge base results for this message" in first["system"]
-    assert "### Diet (preferences/diet.md)" in first["system"]
+    assert "## Knowledge base results for this message" in _turn_context(first)
+    assert "### Diet (preferences/diet.md)" in _turn_context(first)
     read = engine._client.calls[1]["messages"][-1]["content"][0]["content"]
     assert read.startswith("# preferences/diet.md")
     assert "No cilantro, ever." in read
 
     # Nothing relevant: no KB section at all.
     await bot.ask(root, "hello")
-    assert "Knowledge base results" not in engine._client.calls[2]["system"]
+    assert "Knowledge base results" not in _turn_context(engine._client.calls[2])
 
 
 def test_folder_kb_reads_only_markdown_inside(tmp_path):
@@ -698,7 +700,7 @@ async def test_telegram_album_is_one_turn(tmp_path):
 
     assert len(engine._client.calls) == 1
     content = engine._client.calls[0]["messages"][0]["content"]
-    assert [part["type"] for part in content] == ["image", "image", "text"]
+    assert [part["type"] for part in content] == ["text", "image", "image", "text"]
     assert content[-1]["text"] == "add these to the pantry"
     assert plugin.api.sent()[-1]["text"] == "Two receipts."
 
@@ -839,7 +841,7 @@ async def test_orca_run_waits_for_approval(tmp_path, orca_calls):
     paused = await bot.ask(root, "Stop worker d1")
     assert [a.tool_name for a in paused.approvals] == ["orca_run"]
     assert [c[1:3] for c in orca_calls] == [["orchestration", "worker-list"]]
-    assert "Orca" in engine._client.calls[0]["system"]
+    assert "Orca" in _turn_context(engine._client.calls[0])
 
     done = await bot.resume(root, {"w1": True})
     assert done.text == "Stopped."
@@ -1159,7 +1161,7 @@ def test_kubectl_run_waits_for_each_approval_and_shows_preview(tmp_path, kubectl
     assert kubectl_calls[-1][1:4] == ["delete", "pod", "example"]
     assert "--dry-run=server" in kubectl_calls[-1]
     assert kubectl_calls[-2][1:3] == ["get", "pods"]
-    assert "Kubernetes" in engine._client.calls[0]["system"]
+    assert "Kubernetes" in _turn_context(engine._client.calls[0])
 
     done = async_to_sync(bot.resume)(root, {"w1": True})
     assert done.text == "Deleted."
@@ -1207,7 +1209,7 @@ async def test_bash_waits_for_approval(tmp_path):
     paused = await bot.ask(root, "Touch the marker")
     assert [a.tool_name for a in paused.approvals] == ["ergo_bash_run"]
     assert not marker.exists()
-    assert "ergo_bash_run runs bash commands" in engine._client.calls[0]["system"]
+    assert "ergo_bash_run runs bash commands" in _turn_context(engine._client.calls[0])
     done = await bot.resume(root, {"b1": True})
     assert done.text == "Done."
     assert marker.exists()
@@ -1255,8 +1257,8 @@ async def test_bot_writes_and_reads_files_in_its_session(tmp_path, settings):
         ("notes.txt", "upload", None),
         ("plan.md", "bot", None),
     ]
-    assert "Files in this chat" in engine._client.calls[0]["system"]
-    assert "notes.txt (text/plain" in engine._client.calls[0]["system"]
+    assert "Files in this chat" in _turn_context(engine._client.calls[0])
+    assert "notes.txt (text/plain" in _turn_context(engine._client.calls[0])
 
     await bot.ask(root, "What files are there?")
     listed = engine._client.calls[-1]["messages"][-1]["content"][0]["content"]
@@ -1398,13 +1400,13 @@ async def test_bot_archives_its_files(tmp_path, settings):
     await sync_to_async(save_session_file)(root, "notes.txt", b"bring napkins")
 
     await bot.ask(root, "Clear out the old files")
-    assert "notes.txt (text/plain" in engine._client.calls[0]["system"]
+    assert "notes.txt (text/plain" in _turn_context(engine._client.calls[0])
     row = await root.attachments.aget()
     assert row.archived_at is not None
     assert row.file  # still stored
 
     await bot.ask(root, "Any files?")
-    system = engine._client.calls[-1]["system"]
+    system = _turn_context(engine._client.calls[-1])
     assert "notes.txt (text/plain" not in system
     assert "1 archived file not listed" in system
 
@@ -1987,4 +1989,15 @@ def test_orca_screenshot_attaches_the_image(tmp_path, monkeypatch, settings):
         is_read_only(["tab", "list"])
         and is_read_only(["snapshot"])
         and not is_read_only(["click"])
+    )
+
+
+def _turn_context(call):
+    return "\n".join(
+        block.get("text", "")
+        for message in call["messages"]
+        if isinstance(message.get("content"), list)
+        for block in message["content"]
+        if block.get("type") == "text"
+        and block.get("text", "").startswith("<turn-context>")
     )

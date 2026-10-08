@@ -1,16 +1,17 @@
 """How many large tool results each model call carries in full.
 
-A long turn calls tools step after step, and every model call re-sends the
-results of every earlier step. A tool that returns a big dump (a design tree,
-a file listing, a page of rows) makes each later step pay for all the earlier
-dumps again.
+A long turn calls tools step after step, and with native history every model
+call re-sends every earlier result too. A tool that returns a big dump (a
+design tree, a file listing, a page of rows) makes each later call pay for
+all the earlier dumps again.
 
 Each model call carries the newest ``DJANGO_ERGO["TOOL_RESULTS_IN_CONTEXT"]``
 large tool results in full (default 6), and keeps more of the newest while
-all the results kept add up to at most ``DJANGO_ERGO["TOOL_RESULTS_CHARS_IN_CONTEXT"]``
-characters (default 40,000). A turn that reads ten small files keeps them
-all; a turn that pulls several big dumps keeps only the newest few. Older
-large results become a short stub naming the tool and its size::
+all the results kept fit a token budget: an engine's ``tool_results_tokens``
+(bot.yaml ``tool_results_tokens``), else ``DJANGO_ERGO["TOOL_RESULTS_TOKENS"]``,
+else ``DJANGO_ERGO["TOOL_RESULTS_CHARS_IN_CONTEXT"]`` characters when set,
+else 20% of the engine's context window. Older large results become a short
+stub naming the tool and its size::
 
     [penpot_tree result, 180 lines, 9,412 chars; trimmed from context to save space. Note what you need; call the tool again only if you still need detail.]
 
@@ -24,8 +25,8 @@ message (OpenAI). Images inside a stubbed result stay, so the image window
 in ``conversation.images`` decides about them as before.
 
 An engine's ``tool_results_in_context`` (set per bot with
-``tool_results_in_context`` in bot.yaml) overrides the setting. ``None``
-in the setting turns trimming off.
+``tool_results_in_context`` in bot.yaml) overrides the count setting.
+``None`` in the setting turns trimming off.
 """
 
 from __future__ import annotations
@@ -123,31 +124,46 @@ def _count_kept(sizes: list[int], keep: int, max_chars: int) -> int:
     return kept
 
 
-def trim_tool_results(
+def budget_chars(engine=None) -> int:
+    """The character budget for kept tool results on ``engine``'s calls."""
+    tokens = getattr(engine, "tool_results_tokens", None)
+    if tokens is None:
+        tokens = api_settings.TOOL_RESULTS_TOKENS
+    if tokens is not None:
+        return tokens * 4
+    if api_settings.TOOL_RESULTS_CHARS_IN_CONTEXT is not None:
+        return api_settings.TOOL_RESULTS_CHARS_IN_CONTEXT
+    return int(getattr(engine, "context_window", 200_000) * 0.2) * 4
+
+
+def trim_tool_results(  # noqa: C901
     messages: list[dict],
     *,
     keep: int | None = None,
     max_chars: int | None = None,
     min_chars: int = STUB_MIN_CHARS,
+    stats: dict | None = None,
 ) -> list[dict]:
     """Stub older large tool results, for one model call.
 
     The newest ``keep`` large results always stay. Older ones stay too while
-    the kept results add up to at most ``max_chars`` characters; from the
-    first that doesn't fit, it and everything older is stubbed.
+    the kept results add up to at most ``max_chars`` characters (4 a token);
+    from the first that doesn't fit, it and everything older is stubbed.
 
     ``keep`` defaults to ``DJANGO_ERGO["TOOL_RESULTS_IN_CONTEXT"]``; when that
-    is ``None`` (or ``keep`` is negative) nothing changes. ``max_chars``
-    defaults to ``DJANGO_ERGO["TOOL_RESULTS_CHARS_IN_CONTEXT"]``; 0 or
-    ``None`` keeps only ``keep``. Works on Claude and OpenAI messages alike.
-    The input list and its messages are not changed.
+    is ``None`` (or ``keep`` is negative) nothing changes. The budget defaults
+    to ``budget_chars()``. Works on Claude and OpenAI messages alike. The
+    input list and its messages are not changed. ``stats``, when given, gets
+    ``stubbed_results``: how many were stubbed.
     """
+    if stats is not None:
+        stats["stubbed_results"] = 0
     if keep is None:
         keep = api_settings.TOOL_RESULTS_IN_CONTEXT
     if keep is None or keep < 0:
         return messages
     if max_chars is None:
-        max_chars = api_settings.TOOL_RESULTS_CHARS_IN_CONTEXT or 0
+        max_chars = budget_chars()
     large = []
     for i, j, result in _results(messages):
         size = sum(len(t) for t in _text_parts(result.get("content")))
@@ -155,6 +171,8 @@ def trim_tool_results(
             large.append((i, j, result, size))
     kept = _count_kept([size for *_, size in large], keep, max_chars)
     old = [(i, j, result) for i, j, result, _ in large[: len(large) - kept]]
+    if stats is not None:
+        stats["stubbed_results"] = len(old)
     if not old:
         return messages
     names = _tool_names(messages)

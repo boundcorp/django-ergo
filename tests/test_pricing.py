@@ -109,3 +109,7 @@ def test_requests_are_priced_one_by_one_with_the_long_context_surcharge():
     assert c.cost_usd is None
     # Summed totals (older calls) never get the surcharge.
     assert call_cost(call("gpt-6-sol", 500_000)) == pytest.approx(1.0)
+
+
+def test_million_context_suffix_uses_base_model_price():
+    assert price_for("claude-opus-5-5[1m]") == price_for("claude-opus-5-5")

@@ -10,11 +10,9 @@ Every turn is a chat reply: a structured call against the session (see
 ``ChatReply``.
 
 Each (bot, user) pair has a main chat, plus one chat per named chat in
-bot.yaml (``chats:``). These are window chats (see ``conversation.window``):
-they send only the current turn natively, get their latest messages through
-a context block, and can read the history of every session this bot has with
-the user. Threads are child sessions that use the bot's default compaction
-mode and keep full native history. A chat's tools come from its skills (see
+bot.yaml (``chats:``). All keep native history with token-based compaction.
+Main and named chats can read every session this bot has with the user.
+Threads are child sessions using the bot's default compaction policy. A chat's tools come from its skills (see
 ``bots.skillset``), loaded when needed.
 
 Engines are built per turn from the definition. The API key is read from
@@ -77,7 +75,6 @@ from django_ergo.conversation.runtime import get_default_engine_spec
 from django_ergo.conversation.structured import StructuredCallError
 from django_ergo.conversation.structured import resume_structured_call
 from django_ergo.conversation.structured import run_structured_call
-from django_ergo.conversation.window import WINDOW_CONFIG
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -698,6 +695,14 @@ class Bot:
             engine = build_engine(self.engine_spec(session, model))
         if self.definition.tool_results_in_context is not None:
             engine.tool_results_in_context = self.definition.tool_results_in_context
+        config = self.engine_spec(session, model).config
+        name = str(config.get("model") or getattr(engine, "model", ""))
+        engine.context_window = int(
+            config.get("context_window")
+            or (1_000_000 if name.endswith("[1m]") else 200_000)
+        )
+        if self.definition.tool_results_tokens is not None:
+            engine.tool_results_tokens = self.definition.tool_results_tokens
         return engine
 
     # -- sessions ----------------------------------------------------------
@@ -746,8 +751,8 @@ class Bot:
             user=user,
             parent=None,
             role=role,
-            compaction_mode=CompactionMode.NONE,
-            compaction_config=dict(WINDOW_CONFIG),
+            compaction_mode=CompactionMode.CONTEXT_SIZE,
+            compaction_config={},
             metadata=metadata,
             system_prompt=self.instructions_for(name),
         )

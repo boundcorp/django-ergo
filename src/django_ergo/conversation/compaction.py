@@ -1,35 +1,18 @@
-"""Conversation compaction: replace older messages in model context with a summary.
+"""Token-based native-history compaction, preserving complete turns and tool findings.
 
-A session's ``compaction_mode`` decides when to compact:
+``context_size`` compacts at 75% of the engine window and keeps the newest
+25% verbatim. Legacy ``rolling``/``stream`` policies use the same rule;
+``max_context_tokens`` still overrides the threshold. ``time`` and ``none``
+retain their behavior. Messages are never deleted: summaries replace only
+model context, and history tools can still read all stored messages.
 
-- ``time``: the session sat idle longer than ``idle_seconds`` before a new
-  message. Everything so far is folded (``keep_recent`` defaults to 0).
-- ``context_size``: the last model call's prompt plus output exceeded
-  ``max_context_tokens``. Older messages are folded, keeping ``keep_recent``.
-- ``rolling``: summaries roll up in batches. Once more than
-  ``keep_recent + batch`` messages sit past the last summary and the last
-  model call's prompt reached ``min_tokens``, everything but the latest
-  ``keep_recent`` is folded into a new summary. (Formerly named ``stream``;
-  that value is still accepted and read as ``rolling``.)
-
-Every compaction rewrites the start of the prompt, so the next call pays for
-a fresh prompt-cache write instead of cheap cached reads. ``min_tokens`` keeps
-rolling compaction from firing on small contexts, where that costs more than
-it saves (tool-heavy turns add many messages but few tokens).
-
-Compaction never deletes messages. ``ConversationCompaction`` records the
-summary and the sequence it covers, and engines substitute it when they
-rebuild context. History tools still see every message.
-
-Each summary is a structured call (kind ``compaction``) that returns a
-``CompactionSummary``. The compaction row links to that call, so token use,
-failures and retries are on record. Each summary folds in the previous one,
-so only the newest compaction is used. The cut always falls before a user message that starts a turn, so tool
-calls are never separated from their results.
+Summaries use digest tool output and run in bounded chunks, carrying the
+previous summary forward. Each request is a recorded structured call.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass
 from datetime import timedelta
@@ -60,10 +43,15 @@ log = logging.getLogger(__name__)
 
 DEFAULT_CONFIG = {
     "time": {"idle_seconds": 3600, "keep_recent": 0},
-    "context_size": {"max_context_tokens": 100_000, "keep_recent": 6},
-    "rolling": {"keep_recent": 15, "batch": 10, "min_tokens": 80_000},
+    "context_size": {},
 }
-DEFAULT_CONFIG["stream"] = DEFAULT_CONFIG["rolling"]  # deprecated alias
+
+
+def estimate_message_tokens(message: dict) -> int:
+    """Estimate tokens from JSON content, including tool calls and thinking."""
+    content = {k: v for k, v in message.items() if k != "role"}
+    return (len(json.dumps(content, ensure_ascii=False, default=str)) + 3) // 4
+
 
 SUMMARY_SYSTEM = """\
 You maintain a running summary of a conversation so it can continue without \
@@ -73,7 +61,8 @@ newer messages, write an updated summary that keeps:
 - facts, names, numbers, file paths and identifiers that may be needed later
 - what was done (including what tools found) and what is still open
 
-Drop pleasantries, repetition and tool output detail. Write plain prose or \
+Tool results are shown truncated. Preserve their findings: paths, ids, numbers, \
+errors and conclusions. Drop pleasantries and repetition. Write plain prose or \
 short lists. Do not address the user."""
 
 
@@ -100,17 +89,27 @@ class CompactionSummary(BaseModel):
 @dataclass(frozen=True)
 class CompactionDecision:
     reason: str
-    keep_recent: int
+    keep_recent: int = 0
+    keep_tokens: int | None = None
 
 
-def compaction_config(session: ConversationSession) -> dict:
+def compaction_config(
+    session: ConversationSession, context_window: int = 200_000
+) -> dict:
     """Return the session's compaction parameters merged over the mode defaults."""
     from django_ergo.conversation.models import normalize_compaction_mode
 
     defaults = DEFAULT_CONFIG.get(
         normalize_compaction_mode(session.compaction_mode), {}
     )
-    return {**defaults, **(session.compaction_config or {})}
+    config = {**defaults, **(session.compaction_config or {})}
+    if normalize_compaction_mode(session.compaction_mode) == "context_size":
+        config.setdefault(
+            "compact_at_tokens",
+            config.get("max_context_tokens", int(context_window * 0.75)),
+        )
+        config.setdefault("keep_tokens", int(context_window * 0.25))
+    return config
 
 
 def latest_compaction(session) -> ConversationCompaction | None:
@@ -222,17 +221,17 @@ def _prompt_tokens(row) -> int:
         getattr(row, name, None) or 0
         for name in (
             "input_tokens",
-            "output_tokens",
             "cache_creation_input_tokens",
             "cache_read_input_tokens",
         )
     )
 
 
-async def decide_compaction(  # noqa: C901, PLR0911
+async def decide_compaction(
     session: ConversationSession,
     *,
     now: datetime | None = None,
+    context_window: int = 200_000,
 ) -> CompactionDecision | None:
     """Decide whether the session should be compacted before its next message."""
     from django_ergo.conversation.models import CompactionMode
@@ -241,7 +240,7 @@ async def decide_compaction(  # noqa: C901, PLR0911
     mode = normalize_compaction_mode(session.compaction_mode)
     if mode == CompactionMode.NONE:
         return None
-    config = compaction_config(session)
+    config = compaction_config(session, context_window)
     current = await sync_to_async(latest_compaction)(session)
     rows = _message_rows(session).all()
     if current:
@@ -260,32 +259,26 @@ async def decide_compaction(  # noqa: C901, PLR0911
         return None
 
     if mode == CompactionMode.CONTEXT_SIZE:
+        from django_ergo.conversation.engines.claude_api import claude_message_dict
+
         last = await rows.filter(role="assistant").order_by("-sequence").afirst()
-        if last is None:
-            return None
-        size = _prompt_tokens(last)
-        if size > config["max_context_tokens"]:
+
+        def estimate_history():
+            return sum(
+                estimate_message_tokens(claude_message_dict(row))
+                for row in rows.prefetch_related("content_blocks").iterator(
+                    chunk_size=500
+                )
+            )
+
+        estimated = await sync_to_async(estimate_history)()
+        size = max(_prompt_tokens(last) if last else 0, estimated)
+        if size >= config["compact_at_tokens"]:
             return CompactionDecision(
                 reason=f"context reached {size} tokens",
-                keep_recent=config["keep_recent"],
+                keep_tokens=config["keep_tokens"],
             )
         return None
-
-    if mode == CompactionMode.ROLLING:
-        count = await rows.acount()
-        if count <= config["keep_recent"] + config["batch"]:
-            return None
-        size = 0
-        if config["min_tokens"]:
-            last = await rows.filter(role="assistant").order_by("-sequence").afirst()
-            size = _prompt_tokens(last) if last else 0
-            if size < config["min_tokens"]:
-                return None
-        return CompactionDecision(
-            reason=f"{count} messages past the last summary"
-            + (f", context {size} tokens" if size else ""),
-            keep_recent=config["keep_recent"],
-        )
 
     msg = f"Unknown compaction mode: {mode}"
     raise ValueError(msg)
@@ -319,15 +312,18 @@ def structured_summarizer(engine: Engine, session: ConversationSession) -> Summa
     return summarize
 
 
-async def compact_session(
+async def compact_session(  # noqa: PLR0913
     session: ConversationSession,
     engine: Engine,
     *,
-    keep_recent: int,
+    keep_recent: int = 0,
+    keep_tokens: int | None = None,
     reason: str = "manual",
     summarizer: Summarizer | None = None,
 ) -> ConversationCompaction | None:
-    """Fold all but the latest ``keep_recent`` messages into a new summary.
+    """Fold older messages, retaining ``keep_tokens`` and complete turns.
+
+    Explicit ``keep_recent`` remains available for manual library callers.
 
     Returns None when there is nothing to fold.
     """
@@ -340,6 +336,12 @@ async def compact_session(
     rows = [(row, message) for row, message in rows if message["role"] != "system"]
 
     target = max(len(rows) - keep_recent, 0)
+    if keep_tokens is not None:
+        target = len(rows)
+        tokens = 0
+        while target > 0 and tokens < keep_tokens:
+            target -= 1
+            tokens += estimate_message_tokens(rows[target][1])
     # Move the cut back to the nearest turn start so the kept tail opens on
     # a user message and no tool result is cut off from its call.
     boundary = target
@@ -349,26 +351,30 @@ async def compact_session(
         return None
 
     folded = rows[:boundary]
-    transcript = ConversationRenderer(detail="skeleton").render_messages(
-        [message for _, message in folded]
-    )
+    renderer = ConversationRenderer(detail="digest")
+    limit = max(1, min(100_000, int(engine.context_window * 0.4))) * 4
+    chunks = renderer.render_chunks([message for _, message in folded], limit)
     summarize = summarizer or structured_summarizer(engine, session)
-    outcome = await summarize(current.summary if current else "", transcript)
+    summary = current.summary if current else ""
     call = None
-    if isinstance(outcome, str):
-        summary = outcome.strip()
-    else:
-        call = outcome.call
-        if not outcome.ok:
+    for chunk in chunks:
+        outcome = await summarize(summary, chunk)
+        if isinstance(outcome, str):
+            summary = outcome.strip()
+        else:
+            call = outcome.call
+            if not outcome.ok:
+                log.warning(
+                    "compaction of session %s failed: %s", session.pk, outcome.error
+                )
+                return None
+            parsed = outcome.parsed
+            summary = parsed.render() if hasattr(parsed, "render") else str(parsed)
+        if not summary:
             log.warning(
-                "compaction of session %s failed: %s", session.pk, outcome.error
+                "compaction of session %s produced an empty summary", session.pk
             )
             return None
-        parsed = outcome.parsed
-        summary = parsed.render() if hasattr(parsed, "render") else str(parsed)
-    if not summary:
-        log.warning("compaction of session %s produced an empty summary", session.pk)
-        return None
 
     return await ConversationCompaction.objects.acreate(
         session=session,
@@ -399,13 +405,16 @@ async def maybe_compact(
     if not isinstance(session, ConversationSession):
         return None
     try:
-        decision = await decide_compaction(session, now=now)
+        decision = await decide_compaction(
+            session, now=now, context_window=engine.context_window
+        )
         if decision is None:
             return None
         return await compact_session(
             session,
             engine,
             keep_recent=decision.keep_recent,
+            keep_tokens=decision.keep_tokens,
             reason=decision.reason,
             summarizer=summarizer,
         )

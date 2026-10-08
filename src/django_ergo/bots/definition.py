@@ -20,7 +20,7 @@ bot.yaml::
       # transport: cli                 # the logged-in Claude Code (claude) or Codex (openai) CLI
       # or, with a providers.yaml (django_ergo.bots.providers):
       # config: {model: anthropic/claude-sonnet-5-5}
-    root:                              # window settings for main and named chats
+    root:                              # context budget for main and named chats
       recent: 15
       budget_tokens: 8000
       granularity: conversation
@@ -29,6 +29,7 @@ bot.yaml::
     current_time: true                 # put the current date and time in context
     max_turns: 50                      # model calls one reply may use, tool calls included
     tool_results_in_context: 6         # large tool results each model call keeps in full
+    tool_results_tokens: 40000         # optional budget for older ones; default 20% of window
     chats:
       main:                            # every user's main chat (always there)
         skills: [orchestration, tandoor]   # loaded from the start (default: orchestration)
@@ -42,7 +43,7 @@ bot.yaml::
       skills: []
       allow_create: true               # may chats (any bot's) start threads of this bot?
       archive_after_days: 7            # archive threads idle this long (0 = never)
-      default_compaction: {mode: rolling, config: {keep_recent: 15}}  # "stream" still works
+      default_compaction: {mode: context_size, config: {}} # rolling/stream aliases
     skills:                            # see django_ergo.bots.skillset
       folder: skills                   # default
       unload_after_turns: 30           # drop a lazily loaded skill unused this long
@@ -160,7 +161,7 @@ class BotDefinition:
     current_time: bool = True
     allow_create_sessions: bool = False
     archive_after_days: int = 7
-    default_compaction_mode: str = CompactionMode.ROLLING
+    default_compaction_mode: str = CompactionMode.CONTEXT_SIZE
     default_compaction_config: dict = field(default_factory=dict)
     tool_files: list[Path] = field(default_factory=list)
     table_files: list[Path] = field(default_factory=list)
@@ -178,6 +179,7 @@ class BotDefinition:
     # Large tool results each model call carries in full (None: the
     # DJANGO_ERGO["TOOL_RESULTS_IN_CONTEXT"] setting); see conversation.tool_results.
     tool_results_in_context: int | None = None
+    tool_results_tokens: int | None = None
     skill_requires: dict[str, list[str]] = field(default_factory=dict)
     skill_includes: list[str] = field(default_factory=list)
     skill_excludes: list[str] = field(default_factory=list)
@@ -206,8 +208,10 @@ class BotDefinition:
             skills_config = {"folder": skills_config} if skills_config else {}
         orchestration = bool(data.get("orchestration", True))
         compaction = sessions.get("default_compaction") or {}
-        # "stream" is the old name for rolling compaction.
-        mode = normalize_compaction_mode(compaction.get("mode", CompactionMode.ROLLING))
+        # Legacy rolling/stream values use token-based compaction.
+        mode = normalize_compaction_mode(
+            compaction.get("mode", CompactionMode.CONTEXT_SIZE)
+        )
         if mode not in CompactionMode.values:
             msg = f"Unknown compaction mode {mode!r}"
             raise BotDefinitionError(msg)
@@ -265,6 +269,7 @@ class BotDefinition:
             schedules=schedules,
             max_turns=max(1, int(data.get("max_turns", 50) or 50)),
             tool_results_in_context=_optional_int(data, "tool_results_in_context"),
+            tool_results_tokens=_optional_int(data, "tool_results_tokens"),
             raw=data,
         )
 
