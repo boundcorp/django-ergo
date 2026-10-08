@@ -236,6 +236,86 @@ def test_only_the_latest_images_are_sent():
     assert none[1]["content"][0]["content"][2]["text"] == "[image omitted: c.png]"
 
 
+def tool_round(*refs, first_id=1):
+    return {
+        "role": "user",
+        "content": [
+            {"type": "tool_result", "tool_use_id": f"t{first_id + i}", "content": [ref]}
+            for i, ref in enumerate(refs)
+        ],
+    }
+
+
+def test_a_batch_of_looks_is_seen_whole_and_older_images_still_drop_out():
+    old = image_ref(name="old.png", media_type="image/png", data=PNG)
+    batch = [
+        image_ref(name=f"{n}.png", media_type="image/png", data=PNG) for n in "abcd"
+    ]
+    messages = [
+        {"role": "user", "content": [old]},
+        tool_round(*batch),
+    ]
+
+    sent = prepare_messages(messages, "claude", keep=2)
+
+    assert sent[0]["content"][0]["text"] == "[image omitted: old.png]"
+    shown = [b["content"][0]["type"] for b in sent[1]["content"]]
+    assert shown == ["image"] * 4
+
+    # Once the model has moved on, the batch is ordinary history again.
+    later = [*messages, {"role": "assistant", "content": "ok"}]
+    later.append({"role": "user", "content": "more"})
+    sent = prepare_messages(later, "claude", keep=2)
+    assert [b["content"][0]["type"] for b in sent[1]["content"]] == [
+        "text",
+        "text",
+        "image",
+        "image",
+    ]
+
+    assert prepare_messages(messages, "claude", keep=0)[1]["content"][3]["content"][0][
+        "text"
+    ] == ("[image omitted: d.png]")
+
+
+def test_openai_batch_of_looks_is_seen_whole():
+    batch = [
+        image_ref(name=f"{n}.png", media_type="image/png", data=PNG) for n in "abc"
+    ]
+    messages = [
+        {"role": "assistant", "content": None, "tool_calls": []},
+        *(
+            {"role": "tool", "tool_call_id": f"c{i}", "content": [ref]}
+            for i, ref in enumerate(batch)
+        ),
+    ]
+
+    sent = prepare_messages(messages, "openai", keep=1)
+
+    images = [p for p in sent[-1]["content"] if p["type"] == "image_url"]
+    assert len(images) == 3
+    assert not any("omitted" in str(m["content"]) for m in sent[1:-1])
+
+
+def test_a_round_never_sends_more_than_the_cap(monkeypatch):
+    from django_ergo.conversation import images as images_module
+
+    monkeypatch.setattr(images_module, "ROUND_IMAGES_MAX", 3)
+    refs = [
+        image_ref(name=f"{i}.png", media_type="image/png", data=PNG) for i in range(5)
+    ]
+
+    sent = prepare_messages([tool_round(*refs)], "claude", keep=1)
+
+    assert [b["content"][0]["type"] for b in sent[0]["content"]] == [
+        "text",
+        "text",
+        "image",
+        "image",
+        "image",
+    ]
+
+
 async def test_user_photos_share_the_window_and_name_their_id(user, settings):
     settings.DJANGO_ERGO = {"IMAGES_IN_CONTEXT": 1}
     session = await sync_to_async(make_session)(user, "openai")

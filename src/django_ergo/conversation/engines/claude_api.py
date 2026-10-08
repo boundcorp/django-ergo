@@ -16,6 +16,7 @@ from django_ergo.conversation.engine import Engine
 from django_ergo.conversation.engine import EngineResponse
 from django_ergo.conversation.engine import SeededToolCall
 from django_ergo.conversation.engine import session_system_prompt
+from django_ergo.conversation.identity import attributed_text
 from django_ergo.conversation.images import attachment_ref
 from django_ergo.conversation.images import memory_result
 from django_ergo.conversation.images import prepare_messages
@@ -52,7 +53,7 @@ def without_unsigned_thinking(messages: list[dict]) -> list[dict]:
     ]
 
 
-def claude_message_dict(msg) -> dict:
+def claude_message_dict(msg, *, include_attribution: bool = True) -> dict:
     """Convert a SessionMessage row (with content_blocks) to an API message dict."""
     content = []
     for block in msg.content_blocks.all():
@@ -78,6 +79,15 @@ def claude_message_dict(msg) -> dict:
                     "is_error": block.is_error,
                 }
             )
+    if include_attribution and msg.role == "user":
+        for block in content:
+            if block["type"] == "text":
+                block["text"] = attributed_text(
+                    block["text"],
+                    getattr(msg, "author", {}),
+                    getattr(msg, "provenance", {}),
+                )
+                break
     return {"role": msg.role, "content": content}
 
 

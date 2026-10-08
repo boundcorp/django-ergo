@@ -17,7 +17,7 @@ bot.yaml::
       type: claude                     # or openai
       config: {model: claude-sonnet-4-5}
       api_key_env: KITCHEN_ANTHROPIC_KEY   # read at runtime, never stored
-      # transport: cli                 # claude only: the logged-in Claude Code CLI, no key
+      # transport: cli                 # the logged-in Claude Code (claude) or Codex (openai) CLI
       # or, with a providers.yaml (django_ergo.bots.providers):
       # config: {model: anthropic/claude-sonnet-5-5}
     root:                              # context budget for main and named chats
@@ -28,8 +28,8 @@ bot.yaml::
     timezone: America/Los_Angeles      # for the current time in context
     current_time: true                 # put the current date and time in context
     max_turns: 50                      # model calls one reply may use, tool calls included
-    tool_results_tokens: 40000         # optional; defaults to 20% of window
-    tool_results_in_context: null     # optional legacy count overrides the budget
+    tool_results_in_context: 6         # large tool results each model call keeps in full
+    tool_results_tokens: 40000         # optional budget for older ones; default 20% of window
     chats:
       main:                            # every user's main chat (always there)
         skills: [orchestration, tandoor]   # loaded from the start (default: orchestration)
@@ -151,7 +151,7 @@ class BotDefinition:
     instructions: str = ""
     engine_type: str = ""
     engine_config: dict = field(default_factory=dict)
-    engine_transport: str = ""  # "cli": Claude Code on a subscription login
+    engine_transport: str = ""  # "cli": Claude Code or Codex on a subscription login
     api_key_env: str = ""
     recent: int = 15
     budget_tokens: int = 8000

@@ -1,0 +1,4 @@
+{"type":"title","title":"Count tokens"}
+{"type":"session","cwd":"/work/project"}
+{"type":"message","timestamp":"2026-10-04T12:00:00Z","message":{"role":"assistant","model":"claude-opus","usage":{"input":10,"cacheWrite":2,"cacheRead":3,"output":4}}}
+{"type":"message","timestamp":"2026-10-04T11:58:00Z","message":{"role":"assistant","model":"claude-opus","usage":{"input":99,"output":99}}}

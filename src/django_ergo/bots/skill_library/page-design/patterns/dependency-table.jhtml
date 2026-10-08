@@ -1,0 +1,19 @@
+{# Copy this source into a page, then replace the items list. #}
+{% macro dependency_table(items, title) -%}
+<style>
+:root { --pd-bg:#fff; --pd-fg:#18212b; --pd-muted:#5d6b78; --pd-line:#cbd5df; --pd-head:#e8f3fb; }
+@media (prefers-color-scheme:dark) { :root { --pd-bg:#141b23; --pd-fg:#edf3f8; --pd-muted:#b3c0cc; --pd-line:#465568; --pd-head:#19354a; } }
+.pd-deps { color:var(--pd-fg); background:var(--pd-bg); } .pd-deps .scroll { overflow-x:auto; } .pd-deps table { border-collapse:collapse; min-width:620px; width:100%; }
+.pd-deps th, .pd-deps td { border:1px solid var(--pd-line); padding:8px; text-align:left; vertical-align:top; } .pd-deps th { background:var(--pd-head); } .pd-deps caption { color:var(--pd-muted); padding:6px; text-align:left; }
+</style>
+<section class="pd-deps" aria-labelledby="dependencies-title"><h1 id="dependencies-title">{{ title }}</h1><div class="scroll"><table>
+<caption>Items, prerequisites and current state</caption><thead><tr><th scope="col">Item</th><th scope="col">Depends on</th><th scope="col">Owner</th><th scope="col">State</th></tr></thead><tbody>
+{% for item in items %}<tr><th scope="row">{{ item["item"] }}</th><td>{{ item["depends_on"] }}</td><td>{{ item["owner"] }}</td><td>{{ item["state"] }}</td></tr>{% endfor %}
+</tbody></table></div></section>
+{%- endmacro %}
+{% set sample = [
+  {"item":"Choose dates", "depends_on":"—", "owner":"Rae", "state":"Complete"},
+  {"item":"Book rail tickets", "depends_on":"Choose dates", "owner":"Rae", "state":"Ready"},
+  {"item":"Reserve hotel", "depends_on":"Choose dates; budget", "owner":"Tomas", "state":"Blocked"}
+] %}
+{{ dependency_table(sample, "Weekend trip dependencies") }}

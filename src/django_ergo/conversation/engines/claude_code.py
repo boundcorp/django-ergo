@@ -247,6 +247,9 @@ class ClaudeCodeClient:
         self.effort = effort
         self.env = env or {}
         self.messages = self
+        # Called with each request's rate_limit_info (bots.routing reads it).
+        self.on_rate_limit = None
+        self._rate_limit: dict | None = None
 
     async def create(  # noqa: PLR0913
         self,
@@ -327,6 +330,7 @@ class ClaudeCodeClient:
         stderr = asyncio.create_task(process.stderr.read())
         stream = _Stream()
         errors: list[str] = []
+        self._rate_limit = None
         try:
             for frame in frames:
                 try:
@@ -357,6 +361,8 @@ class ClaudeCodeClient:
         finally:
             await self._stop(process)
             stderr.cancel()
+            if self._rate_limit and self.on_rate_limit:
+                await self.on_rate_limit(self._rate_limit)
 
     async def _next_event(self, process) -> dict | None:
         try:
@@ -381,10 +387,11 @@ class ClaudeCodeClient:
             self._note(event, _Stream(), errors)
         return None
 
-    @staticmethod
-    def _note(event: dict, stream: _Stream, errors: list[str]) -> None:
+    def _note(self, event: dict, stream: _Stream, errors: list[str]) -> None:
         kind = event.get("type")
-        if kind == "stream_event":
+        if kind == "rate_limit_event":
+            self._rate_limit = event.get("rate_limit_info") or None
+        elif kind == "stream_event":
             stream.feed(event.get("event") or {})
         elif kind == "assistant" and event.get("error"):
             text = " ".join(
@@ -438,6 +445,7 @@ class ClaudeCodeEngine(ClaudeAPIEngine):
         self.config_dir = config.get("config_dir", "")
         self.effort = config.get("effort", "")
         self.timeout = float(config.get("timeout", 300))
+        self.provider = config.get("provider", "")
 
     def _get_client(self):
         if self._client is None:
@@ -447,4 +455,17 @@ class ClaudeCodeEngine(ClaudeAPIEngine):
                 timeout=self.timeout,
                 effort=self.effort,
             )
+            if provider := self.provider:
+
+                async def record(info, provider=provider):
+                    from django_ergo.bots.routing import arecord_usage_windows
+                    from django_ergo.bots.routing import claude_windows
+
+                    await arecord_usage_windows(
+                        provider,
+                        claude_windows(info),
+                        full_snapshot="unifiedWindows" in info,
+                    )
+
+                self._client.on_rate_limit = record
         return self._client

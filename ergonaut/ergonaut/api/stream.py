@@ -2,6 +2,8 @@
 
     GET /api/sessions/<id>/events?after=<line>
 
+It takes the web app's session or an API key (``Authorization: Bearer ergo_...``).
+
 Each event is JSON: ``{"messages": [...], "calls": [...]}`` with the
 messages from line ``after`` on and every structured call that changed
 (among those that reach line ``after``, so a long session's old calls aren't
@@ -27,6 +29,7 @@ from django.http import HttpResponse, StreamingHttpResponse
 from django_ergo.conversation.history import SessionSource
 from django_ergo.conversation.models import ConversationSession, MessageBlock
 
+from ergonaut.api.auth import ApiKeyAuth
 from ergonaut.api.bots import call_out, requests_out, sent_out, session_prs, visible_sessions, workers_out
 
 POLL_SECONDS = 0.5
@@ -45,8 +48,15 @@ def _snapshot(session_id, after: int, seen: dict):
     if count != seen.get("count"):
         seen["count"] = count
         messages = [
-            {"line": m.line, "role": m.role, "blocks": m.blocks, "timestamp": m.timestamp}
-            for m in SessionSource(session, first_line=max(after, 0)).messages()
+            {
+                "line": m.line,
+                "role": m.role,
+                "blocks": m.blocks,
+                "timestamp": m.timestamp,
+                "author": m.author,
+                "provenance": m.provenance,
+            }
+            for m in SessionSource(session, first_line=max(after, 0), include_attribution=False).messages()
         ]
     requests = requests_out(session)
     key = [(r["id"], r["status"]) for r in requests]
@@ -98,7 +108,7 @@ def _event(payload) -> str:
 
 
 async def session_events(request, session_id):
-    user = await request.auser()
+    user = await sync_to_async(ApiKeyAuth())(request) or await request.auser()
     if not user.is_authenticated:
         return HttpResponse(status=401)
     allowed = await visible_sessions(user).filter(id=session_id).aexists()

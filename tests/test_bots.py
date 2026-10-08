@@ -23,6 +23,7 @@ from django_ergo.conversation.adapters import ClaudeToolAdapter
 from django_ergo.conversation.adapters import OpenAIToolAdapter
 from django_ergo.conversation.context import TextContextSource
 from django_ergo.conversation.models import ConversationSession
+from django_ergo.conversation.models import MessageBlock
 from tests.test_conversation_structured import claude_engine
 from tests.test_conversation_structured import claude_text
 from tests.test_conversation_structured import claude_tool
@@ -380,6 +381,16 @@ async def test_threads_use_default_compaction_and_root_reads_them(tmp_path):
     assert f"session:{thread.id}" in listing
     assert f"session:{root.id}" in listing
 
+    # A thread reads the person's other chats with the bot too.
+    engine._client.responses = [
+        claude_tool("ergo_chat_history_sources", {}),
+        say("Found it."),
+    ]
+    await bot.ask(thread, "What did we say in main?")
+    listing = engine._client.calls[-1]["messages"][-1]["content"][0]["content"]
+    assert f"session:{root.id}" in listing
+    assert f"session:{other.id}" in listing
+
     await bot.close_session(thread)
     assert ("closed", "thread") in plugin.events
     assert (await ConversationSession.objects.aget(id=thread.id)).status == "completed"
@@ -518,6 +529,14 @@ async def test_a_bot_delegates_to_a_new_thread_and_gets_the_reply(
     assert asked.endswith("Plan Tuesday")
     request = await ThreadMessage.objects.aget(recipient_session=thread)
     assert (request.status, request.reply_text) == ("answered", "Tacos on Tuesday.")
+    stored = await thread.messages.aget(sequence=0)
+    assert stored.author == {"kind": "bot", "ref": "kitchen", "display_name": "kitchen"}
+    assert stored.provenance["kind"] == "message"
+    assert stored.provenance["origin"]["session_id"] == str(root.id)
+    assert (
+        await stored.content_blocks.values_list("text", flat=True).aget()
+        == "Plan Tuesday"
+    )
 
     # ...and the reply comes back to the root as a new turn, answered there.
     await thread_messages()
@@ -528,6 +547,10 @@ async def test_a_bot_delegates_to_a_new_thread_and_gets_the_reply(
     )
     assert back.startswith("[Reply from kitchen · Meal plan")
     assert back.endswith("Tacos on Tuesday.")
+    reply_row = await root.messages.filter(provenance__kind="reply").afirst()
+    assert reply_row.author["kind"] == "bot"
+    assert reply_row.provenance["origin"]["session_id"] == str(thread.id)
+    assert reply_row.provenance["reply_to"] == str(request.id)
     reply = await ThreadMessage.objects.aget(recipient_session=root)
     assert reply.in_reply_to_id == request.id
     assert reply.status == "answered"
@@ -746,8 +769,18 @@ async def test_bot_turn_is_a_chat_reply_structured_call(tmp_path):
     answer = await bot.ask(root, "Tacos")
     assert answer.text == "Tacos it is."
     # A plain-text answer was sent back for a proper reply.
+    # The turn context goes first in the newest user message, here the nudge.
     correction = engine._client.calls[2]["messages"][-1]["content"][1]["text"]
-    assert "must call the send_reply tool" in correction
+    assert "Call the send_reply tool now" in correction
+    assert "Plain text is not allowed" in correction
+    # The nudge is stored as Ergo's, not as the user's message.
+    nudges = [
+        m.author
+        async for m in root.messages.filter(
+            content_blocks__text__contains="Call the send_reply tool now"
+        )
+    ]
+    assert [a.get("kind") for a in nudges] == ["system"]
     # History keeps each reply as readable text, suggestions included.
     window = str(engine._client.calls[1]["messages"])
     assert "Tacos or soup?" in window
@@ -855,7 +888,7 @@ def test_explicit_parameters_respect_an_empty_required_list():
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_skills_are_listed_up_front_and_loaded_on_demand(tmp_path):
+async def test_skills_are_in_per_turn_context_and_load_on_demand(tmp_path):
     user = await User.objects.acreate(username="planner")
     bot, engine = make_bot(
         tmp_path,
@@ -880,40 +913,57 @@ async def test_skills_are_listed_up_front_and_loaded_on_demand(tmp_path):
 
     first = engine._client.calls[0]
     assert {"ergo_skills_list", "ergo_skill_load", "pantry_count"} <= _tool_names(first)
-    seeded = [
-        block
-        for message in first["messages"]
-        for block in (
-            message["content"] if isinstance(message["content"], list) else []
-        )
-        if block.get("type") == "tool_result"
-    ]
-    assert len(seeded) == 1
-    listing = str(seeded[0]["content"])
-    assert "- meal-planning [not loaded]: Plan a week of dinners" in listing
-    assert "- shopping [not loaded]: Shop by aisle" in listing
-    assert "- pantry [loaded]: Tools from pantry.py (2 tools)" in listing
-    assert "history" not in listing  # always there, so not listed
-    assert "send_reply" not in listing
+    context = _turn_context(first)
+    assert "## Skills" in context
+    assert "- meal-planning (not loaded): Plan a week of dinners" in context
+    assert "- shopping (not loaded): Shop by aisle" in context
+    assert "- pantry (loaded): Tools from pantry.py" in context
+    assert _seeded(first) == []
+    assert "seeded" not in turn.call.metadata
+    assert not await MessageBlock.objects.filter(
+        message__session=root,
+        tool_name="ergo_skills_list",
+        tool_use_id__startswith="preseed_",
+    ).aexists()
 
     loaded = engine._client.calls[1]["messages"][-1]["content"][0]["content"]
     assert "Check the last 60 days" in str(loaded)
     assert "ergo_skill_load" in turn.call.metadata["tools"]
-    assert turn.call.metadata["seeded"] is True
 
-    # Native history retains the initial seed until compaction.
     again = await bot.ask(root, "Thanks")
     assert "seeded" not in again.call.metadata
-    results = [
-        block
+    # Native history keeps the loaded skill, but nothing was pre-seeded.
+    assert not any(
+        part.get("tool_use_id", "").startswith("preseed_")
         for message in engine._client.calls[2]["messages"]
-        for block in (
-            message["content"] if isinstance(message["content"], list) else []
-        )
-        if block.get("type") == "tool_result"
-        and "Skills (ergo_skill_load" in str(block["content"])
-    ]
-    assert len(results) == 1
+        if isinstance(message["content"], list)
+        for part in message["content"]
+    )
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_user_defined_seeded_tool_seeds_once_and_stays_in_history(tmp_path):
+    tools = TOOLS + textwrap.dedent(
+        """
+        @bot_tool(seed=True)
+        def account_limits() -> str:
+            '''Current account limits.'''
+            return "10 left"
+        """
+    )
+    user = await User.objects.acreate(username="planner")
+    bot, engine = make_bot(tmp_path, say("First."), say("Second."), tools=tools)
+    root = await bot.root_session(user)
+
+    first = await bot.ask(root, "First")
+    second = await bot.ask(root, "Second")
+
+    # Main chats keep native history, so the first seed is still there.
+    assert first.call.metadata["seeded"]
+    assert "seeded" not in second.call.metadata
+    assert [
+        [r for r in _seeded(call) if r == "10 left"] for call in engine._client.calls
+    ] == [["10 left"], ["10 left"]]
 
 
 def test_bots_without_a_skills_folder_have_no_skill_tools(tmp_path):
@@ -1042,6 +1092,22 @@ async def test_a_bot_without_orchestration_can_always_message_upward(
     sent = await ThreadMessage.objects.select_related("recipient_session").aget()
     assert sent.recipient_session.bot_name == "boundcorp"
     assert sent.recipient_session.metadata["bot_role"] == "main"
+    assert sent.metadata["message_author"] == {
+        "kind": "bot",
+        "ref": "design",
+        "display_name": "design",
+    }
+    assert sent.metadata["message_provenance"]["kind"] == "report"
+
+    engine._client.responses = [say("Noted.")]
+    await thread_messages(registry)
+    incoming = await sent.recipient_session.messages.aget(sequence=0)
+    assert incoming.author == sent.metadata["message_author"]
+    assert incoming.provenance == sent.metadata["message_provenance"]
+    assert (
+        await incoming.content_blocks.values_list("text", flat=True).aget()
+        == "Need a dev"
+    )
 
     # A design thread may message design's main chat, not the parent.
     thread = await design.create_session(user, parent=design_main, title="Logo")
@@ -1242,10 +1308,119 @@ async def test_the_target_decides_whether_it_takes_new_threads(
         "stopped_running_turn": True,
     }
     assert stopped == [str(thread.id)]
-    assert not_ours["is_error"] and "wasn't started by this bot" in not_ours["content"]
+    assert not_ours["is_error"] and "only design can resolve it" in not_ours["content"]
     assert archived["content"].startswith("Resolved design · Logo")
     await thread.arefresh_from_db()
     assert thread.status == "completed"
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_ready_to_resolve_is_marked_only_where_the_viewer_may_resolve(
+    tmp_path, thread_messages
+):
+    from datetime import timedelta
+
+    from django.utils import timezone
+
+    from django_ergo.bots import orchestrator
+    from django_ergo.bots import overview
+    from django_ergo.bots.tools import ToolContext
+
+    user = await User.objects.acreate(username="ownership")
+    engine = claude_engine()
+    registry, boundcorp, design = _family(
+        tmp_path,
+        engine,
+        "name: boundcorp\n",
+        "name: design\nthreads: {allow_create: true}\n",
+    )
+    root = await boundcorp.root_session(user)
+    design_main = await design.root_session(user)
+    own = await boundcorp.create_session(user, title="Own")
+    started = await design.create_session(
+        user,
+        title="Started by boundcorp",
+        metadata={
+            "started_by": str(root.id),
+            "started_by_bot": "boundcorp",
+            "started_by_label": "boundcorp · Main",
+        },
+    )
+    theirs = await design.create_session(
+        user,
+        title="Started by design",
+        metadata={
+            "started_by": str(design_main.id),
+            "started_by_bot": "design",
+            "started_by_label": "design · Main",
+        },
+    )
+    threads = [own, started, theirs]
+    quiet = timezone.now() - timedelta(hours=1)
+    await ConversationSession.objects.filter(id__in=[t.id for t in threads]).aupdate(
+        updated_at=quiet
+    )
+
+    ctx = ToolContext(bot=boundcorp, session=root, user=user)
+    lines = (await sync_to_async(overview.overview)(ctx)).splitlines()
+
+    def line_of(title):
+        return next(line for line in lines if line.startswith(f"- {title} (thread"))
+
+    assert "looks finished: ready to resolve" in line_of("Own")
+    assert "looks finished: ready to resolve" in line_of("Started by boundcorp")
+    # Another bot's own thread: shown as its owner's to close, not as a task.
+    theirs_line = line_of("Started by design")
+    assert "ready to resolve" not in theirs_line
+    assert "looks finished (design resolves it)" in theirs_line
+
+    # The block and the tool use one rule: marked iff can_resolve.
+    for thread in threads:
+        allowed = await sync_to_async(orchestrator.can_resolve)(
+            boundcorp, user.id, thread
+        )
+        marked = "ready to resolve" in line_of(thread.metadata.get("title", ""))
+        assert allowed is marked
+
+    engine._client.responses = [
+        claude_tool(
+            "ergo_thread_resolve",
+            {"bot": "design", "thread_id": str(theirs.id), "summary": "done"},
+            tool_id="r1",
+        ),
+        claude_tool(
+            "ergo_thread_resolve",
+            {"bot": "design", "thread_id": str(started.id), "summary": "done"},
+            tool_id="r2",
+        ),
+        claude_tool(
+            "ergo_thread_resolve",
+            {"thread_id": str(own.id), "summary": "done"},
+            tool_id="r3",
+        ),
+        say("Tidied."),
+    ]
+    await boundcorp.ask(root, "Tidy up")
+    refused, resolved_started, resolved_own = _tool_results(engine)[-3:]
+    assert refused["is_error"]
+    assert (
+        "design · Started by design was started by design, not by this bot"
+        in (refused["content"])
+    )
+    assert "only design can resolve it" in refused["content"]
+    assert resolved_started["content"].startswith("Resolved design · Started by")
+    assert resolved_own["content"].startswith("Resolved boundcorp · Own")
+    await theirs.arefresh_from_db()
+    assert theirs.status != "completed"
+
+    # A thread started by a third bot names both bots that may resolve it.
+    third = await design.create_session(
+        user,
+        title="Third",
+        metadata={"started_by": str(design_main.id), "started_by_bot": "other"},
+    )
+    msg = orchestrator._refusal(third, "resolve")
+    assert "design (its bot) or other (which started it)" in msg
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1268,7 +1443,7 @@ async def test_a_kb_folder_is_the_bots_knowledge_base(tmp_path):
     assert "chocolate Soylent shake" in _turn_context(first)
     # What it knows is always in context; the kb tools load when needed.
     assert "ergo_kb_search" not in _tool_names(first)
-    assert any("- kb [not loaded]" in text for text in _seeded(first))
+    assert "- kb (not loaded):" in _turn_context(first)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1621,7 +1796,6 @@ async def test_files_shared_with_a_thread_message_are_listed_for_the_recipient(
     ]
     text = await sync_to_async(turn_text)(request)
     assert f"- mock.png (image/png, {png.size:,} bytes), id {png.id}" in text
-    assert f"they stay in thread {root.id}" in text
     # An unknown file fails the send, naming what the chat has.
     failed = engine._client.calls[2]["messages"][-1]["content"][0]
     assert (
@@ -1630,45 +1804,542 @@ async def test_files_shared_with_a_thread_message_are_listed_for_the_recipient(
     )
 
 
-@pytest.mark.django_db(transaction=True)
-async def test_a_chat_waits_for_its_open_request_instead_of_nudging(
-    tmp_path, thread_messages
-):
+PING_TOOLS = (
+    TOOLS
+    + '''
+@bot_tool(takes_context=True)
+def parent_sends(ctx, message: str, interrupt: bool = False) -> dict:
+    """Another chat's send to this thread, arriving while this turn runs."""
+    from django_ergo.bots import messaging, orchestrator
+    from django_ergo.bots.tools import ToolContext
     from django_ergo.conversation.models import ThreadMessage
 
-    user = await User.objects.acreate(username="nudger")
+    parent = ToolContext(bot=ctx.bot, session=ctx.session.parent, user=ctx.user)
+    sent = orchestrator.ergo_thread_send(
+        parent, message=message, thread=str(ctx.session.id), interrupt=interrupt
+    )
+    messaging.deliver(sent["message_id"])  # a worker picks it up mid-turn
+    sent["status_now"] = ThreadMessage.objects.get(id=sent["message_id"]).status
+    return sent
+'''
+)
+
+
+@pytest.fixture
+def turn_stopper(settings, thread_messages):
+    """A TURN_STOPPER that records which sessions it was asked to stop."""
+    stopped = []
+    settings.DJANGO_ERGO = {
+        **settings.DJANGO_ERGO,
+        "TURN_STOPPER": lambda session_id: stopped.append(session_id) or True,
+    }
+    return stopped
+
+
+def _heard(call):
+    """The thread messages (and the user's "Hello") the model was shown in a call."""
+    return [
+        text
+        for text in _texts(call)
+        if text == "Hello"
+        or text.startswith(("[Forwarded by", "[Message from", "[Report from"))
+    ]
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_a_send_right_after_a_forward_to_the_same_thread_is_queued_in_order(
+    tmp_path, thread_messages
+):
+    from django_ergo.bots import messaging
+    from django_ergo.conversation.models import ThreadMessage
+
+    user = await User.objects.acreate(username="forwarder")
+    bot, engine = make_bot(tmp_path, say("ok"))
+    root = await bot.root_session(user)
+    thread = await bot.create_session(user, parent=root, title="Deploy")
+    engine._client.responses = [
+        claude_tool("ergo_thread_forward", {"thread": str(thread.id)}, tool_id="fwd"),
+        claude_tool(
+            "ergo_thread_send",
+            {"thread": str(thread.id), "message": "It is the octo cluster."},
+            tool_id="ctx",
+        ),
+        say("Sent to kitchen · Deploy."),
+    ]
+    await bot.ask(root, "Merge the octo fix")
+    forwarded, follow_up = _tool_results(engine)[-2:]
+    assert not forwarded.get("is_error")
+    assert not follow_up.get("is_error"), follow_up["content"]
+    queued = json.loads(follow_up["content"])
+    assert (queued["status"], queued["queue_position"]) == ("queued", 2)
+    first, second = [m async for m in ThreadMessage.objects.order_by("created_at")]
+    assert first.metadata["forwarded"] and second.text == "It is the octo cluster."
+    assert len(SENT) == 2
+
+    # Whichever delivery a worker runs first, the thread sees the forward first.
+    engine._client.responses = [say("Merging."), say("Noted: octo.")]
+    await sync_to_async(messaging.deliver)(str(second.id))
+    await thread_messages()
+    await thread_messages()
+    seen_first, seen_last = (_heard(call) for call in engine._client.calls[-2:])
+    assert len(seen_first) == 1 and seen_first[0].startswith("[Forwarded by")
+    assert len(seen_last) == 2 and seen_last[1].endswith("It is the octo cluster.")
+    statuses = [m.status async for m in ThreadMessage.objects.order_by("created_at")]
+    assert statuses[:2] == ["answered", "answered"]
+    assert len(engine._client.calls) == 5  # the root's 3 model calls and 2 thread turns
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_two_reports_in_a_row_are_not_nudges(tmp_path, thread_messages):
+    from django_ergo.conversation.models import ThreadMessage
+
+    user = await User.objects.acreate(username="reporter2")
+    bot, engine = make_bot(tmp_path, say("ok"))
+    root = await bot.root_session(user)
+    thread = await bot.create_session(user, parent=root, title="Status")
+    engine._client.responses = [
+        claude_tool(
+            "ergo_thread_send",
+            {"thread": "main", "message": "Halfway there"},
+            tool_id="r1",
+        ),
+        claude_tool(
+            "ergo_thread_send",
+            {"thread": "main", "message": "Done: PR #7"},
+            tool_id="r2",
+        ),
+        say("Reported twice."),
+    ]
+    await bot.ask(thread, "Report as you go")  # a thread's messages to main are reports
+    first, second = _tool_results(engine)[-2:]
+    assert not first.get("is_error") and not second.get("is_error"), second["content"]
+    assert await ThreadMessage.objects.filter(metadata__report=True).acount() == 2
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_follow_ups_to_an_idle_thread_are_all_accepted_and_each_reply_comes_back(
+    tmp_path, thread_messages
+):
+    from django_ergo.bots import orchestrator
+    from django_ergo.conversation.models import ThreadMessage
+
+    user = await User.objects.acreate(username="followuper")
     bot, engine = make_bot(tmp_path, say("ok"))
     root = await bot.root_session(user)
     thread = await bot.create_session(user, parent=root, title="Mockups")
+    send = lambda text, tool_id: claude_tool(  # noqa: E731
+        "ergo_thread_send", {"thread": str(thread.id), "message": text}, tool_id=tool_id
+    )
+    engine._client.responses = [
+        send("Draw the header", "s1"),
+        send("Make it blue", "s2"),
+        send("And add a logo", "s3"),
+        say("Asked three times."),
+    ]
+    await bot.ask(root, "Get the mockups drawn")
+    sent = [json.loads(r["content"]) for r in _tool_results(engine)[-3:]]
+    assert [(s["status"], s.get("queue_position")) for s in sent] == [
+        ("sent", None),
+        ("queued", 2),
+        ("queued", 3),
+    ]
+    assert not any(r.get("is_error") for r in _tool_results(engine)[-3:])
+    status = await sync_to_async(orchestrator.thread_status)(root)
+    assert status["waiting_on"] == 3
+    assert (await sync_to_async(orchestrator.thread_status)(thread))["working_for"] == 3
+
+    # The thread takes them one turn each, oldest first, and each is answered.
+    engine._client.responses = [
+        say("Header drawn."),
+        say("Blue now."),
+        say("Logo added."),
+        say("Noted: header."),  # then the root takes each reply as a turn
+        say("Noted: blue."),
+        say("Noted: logo."),
+    ]
+    while SENT:
+        await thread_messages()
+    rows = [m async for m in ThreadMessage.objects.order_by("created_at")]
+    requests = [m for m in rows if m.in_reply_to_id is None]
+    assert [(m.text, m.status, m.reply_text) for m in requests] == [
+        ("Draw the header", "answered", "Header drawn."),
+        ("Make it blue", "answered", "Blue now."),
+        ("And add a logo", "answered", "Logo added."),
+    ]
+    replies = [m for m in rows if m.in_reply_to_id is not None]
+    assert sorted(m.in_reply_to_id for m in replies) == sorted(m.id for m in requests)
+    assert all(m.status == "answered" for m in replies)  # each reached the root's turn
+    asked = [
+        m
+        for call in engine._client.calls
+        for m in _heard(call)
+        if m.startswith("[Message from")
+    ]
+    assert [text.rsplit("\n\n", 1)[-1] for text in dict.fromkeys(asked)] == [
+        "Draw the header",
+        "Make it blue",
+        "And add a logo",
+    ]
+    assert (await sync_to_async(orchestrator.thread_status)(root))["waiting_on"] == 0
+    assert (await sync_to_async(orchestrator.thread_status)(thread))["working_for"] == 0
+
+    # Once idle again, another follow-up is simply delivered.
+    engine._client.responses = [send("One more thing", "s4"), say("Asked again.")]
+    await bot.ask(root, "And one more")
+    again = json.loads(_tool_results(engine)[-1]["content"])
+    assert again["status"] == "sent" and "queue_position" not in again
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_follow_ups_to_a_busy_thread_queue_in_order_and_each_reply_closes_its_request(
+    tmp_path, thread_messages
+):
+    from django_ergo.bots import orchestrator
+    from django_ergo.conversation.models import ThreadMessage
+
+    user = await User.objects.acreate(username="busyfollower")
+    bot, engine = make_bot(tmp_path, say("ok"), tools=PING_TOOLS)
+    root = await bot.root_session(user)
+    thread = await bot.create_session(user, parent=root, title="Deploy")
     engine._client.responses = [
         claude_tool(
-            "ergo_thread_send", {"thread": str(thread.id), "message": "Draw it"}
-        ),
-        claude_tool(
             "ergo_thread_send",
-            {"thread": str(thread.id), "message": "Still waiting, please send it"},
-            tool_id="nudge",
+            {"thread": str(thread.id), "message": "Deploy staging"},
+            tool_id="a",
         ),
         say("Asked."),
     ]
-    await bot.ask(root, "Get the mockups drawn")
-    nudge = engine._client.calls[2]["messages"][-1]["content"][0]
-    assert nudge["is_error"]
-    assert "is still open; its reply will arrive here. Don't nudge" in nudge["content"]
-    assert await ThreadMessage.objects.acount() == 1
+    await bot.ask(root, "Ship it")
+    first = await ThreadMessage.objects.aget(in_reply_to__isnull=True)
 
-    # Once it's answered, new work can go out.
-    await ThreadMessage.objects.aupdate(status="answered")
+    # While the thread works on that request (still open), root follows up twice.
+    engine._client.responses = [
+        claude_tool("parent_sends", {"message": "Use the blue cluster"}, tool_id="b"),
+        claude_tool(
+            "parent_sends", {"message": "Then run the smoke test"}, tool_id="c"
+        ),
+        say("Staging deployed."),
+    ]
+    await thread_messages()  # the thread starts on it
+    queued = [json.loads(r["content"]) for r in _tool_results(engine)[-2:]]
+    assert [(q["status"], q["queue_position"], q["status_now"]) for q in queued] == [
+        ("queued", 1, "queued"),
+        ("queued", 2, "queued"),
+    ]
+    await first.arefresh_from_db()
+    assert (first.status, first.reply_text) == ("answered", "Staging deployed.")
+    status = await sync_to_async(orchestrator.thread_status)(root)
+    assert status["waiting_on"] == 2  # the two follow-ups are still open
+
+    # The turn's end sends them on: one turn each, in the order they were sent.
+    engine._client.responses = [
+        say("On the blue cluster."),
+        say("Smoke test passed."),
+        say("Noted: staging."),  # then the root takes each reply as a turn
+        say("Noted: blue."),
+        say("Noted: smoke."),
+    ]
+    while SENT:
+        await thread_messages()
+    rows = [m async for m in ThreadMessage.objects.order_by("created_at")]
+    requests = [m for m in rows if m.in_reply_to_id is None]
+    assert [(m.text, m.status, m.reply_text) for m in requests] == [
+        ("Deploy staging", "answered", "Staging deployed."),
+        ("Use the blue cluster", "answered", "On the blue cluster."),
+        ("Then run the smoke test", "answered", "Smoke test passed."),
+    ]
+    replies = [m for m in rows if m.in_reply_to_id is not None]
+    assert sorted(m.in_reply_to_id for m in replies) == sorted(m.id for m in requests)
+    assert all(m.status == "answered" for m in replies)
+    assert (await sync_to_async(orchestrator.thread_status)(root))["waiting_on"] == 0
+    assert (await sync_to_async(orchestrator.thread_status)(thread))["working_for"] == 0
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_a_send_to_a_thread_busy_with_the_users_turn_queues_without_interrupting(
+    tmp_path, turn_stopper, thread_messages
+):
+    from django_ergo.conversation.models import ThreadMessage
+
+    user = await User.objects.acreate(username="humanbusy")
+    bot, engine = make_bot(tmp_path, say("ok"), tools=PING_TOOLS)
+    root = await bot.root_session(user)
+    thread = await bot.create_session(user, parent=root, title="Plan")
     engine._client.responses = [
         claude_tool(
-            "ergo_thread_send",
-            {"thread": str(thread.id), "message": "Now the dark variant"},
-            tool_id="next",
+            "parent_sends",
+            {"message": "Also check the eggs", "interrupt": True},
+            tool_id="p1",
         ),
-        say("Asked again."),
+        say("Hello, Lee."),  # the user's turn, to its end
+        say("Eggs checked."),  # the queued message's turn
     ]
-    await bot.ask(root, "And dark mode")
-    assert await ThreadMessage.objects.acount() == 2
+    result = await bot.ask(thread, "Hello")
+    assert result.text == "Hello, Lee."  # the user's request was never cancelled
+    sent = json.loads(_tool_results(engine)[-1]["content"])
+    assert (sent["status"], sent["queue_position"]) == ("queued", 1)
+    assert sent["interrupted"] is False and "never the user's" in sent["note"]
+    assert sent["status_now"] == "queued"  # a worker found the thread busy: left alone
+    assert turn_stopper == []
+    assert await thread.structured_calls.filter(status="completed").acount() == 1
+
+    # The turn's end sends it on, as the next turn.
+    await thread_messages()
+    message = await ThreadMessage.objects.aget(id=sent["message_id"])
+    assert (message.status, message.reply_text) == ("answered", "Eggs checked.")
+    heard = _heard(engine._client.calls[-1])
+    assert heard[0] == "Hello" and heard[1].endswith("Also check the eggs")
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_interrupt_only_stops_a_turn_answering_this_chats_own_request(
+    tmp_path, turn_stopper, thread_messages, settings
+):
+    from django_ergo.bots import orchestrator
+    from django_ergo.bots.tools import ToolContext
+    from django_ergo.conversation.models import StructuredCall
+    from django_ergo.conversation.models import ThreadMessage
+
+    user = await User.objects.acreate(username="interrupter")
+    bot, _ = make_bot(tmp_path, say("ok"))
+    root = await bot.root_session(user)
+    other = await bot.create_session(user, parent=root, title="Other")
+    thread = await bot.create_session(user, parent=root, title="Work")
+    ctx = ToolContext(bot=bot, session=root, user=user)
+
+    async def interrupt(running_for=None, *, idle=False):
+        """Root sends "Never mind" with interrupt while the thread is idle, or runs a
+        turn answering ``running_for`` (kwargs of a ThreadMessage; None: the user)."""
+        await StructuredCall.objects.all().adelete()
+        await ThreadMessage.objects.all().adelete()
+        turn = None
+        if running_for is not None:
+            turn = await ThreadMessage.objects.acreate(
+                recipient_session=thread, status="delivered", **running_for
+            )
+        if not idle:
+            await StructuredCall.objects.acreate(
+                kind="chat_reply",
+                session=thread,
+                user=user,
+                request="x",
+                metadata={"thread_message": str(turn.id)} if turn else {},
+            )
+        turn_stopper.clear()
+        return await sync_to_async(orchestrator.ergo_thread_send)(
+            ctx, message="Never mind", thread=str(thread.id), interrupt=True
+        )
+
+    # Idle: nothing to interrupt, the message just goes.
+    idle = await interrupt(idle=True)
+    assert (idle["status"], idle["interrupted"]) == ("sent", False)
+    assert "nothing is running there" in idle["note"] and turn_stopper == []
+
+    # The user's own turn, a message of theirs that this chat forwarded, and another
+    # chat's request are never stopped; the message queues behind them.
+    users_turn = await interrupt()
+    forwarded = await interrupt(
+        {
+            "sender_session": root,
+            "text": "Yes, merge it",
+            "metadata": {"forwarded": {"author": "Lee"}, "report": True},
+        }
+    )
+    others = await interrupt({"sender_session": other, "text": "Plan Monday"})
+    for refused, why in (
+        (users_turn, "never the user's"),
+        (forwarded, "a bot never cancels the user's request"),
+        (others, "only your own request can be interrupted"),
+    ):
+        assert (refused["status"], refused["interrupted"]) == ("queued", False)
+        assert why in refused["note"]
+    assert turn_stopper == []
+
+    # Its own running request is replaced: the turn is stopped, this goes out next.
+    own = await interrupt({"sender_session": root, "text": "Draw it"})
+    assert (own["status"], own["interrupted"]) == ("queued", True)
+    assert turn_stopper == [str(thread.id)]
+    assert "Its running turn was stopped" in own["note"]
+
+    # Without a TURN_STOPPER nothing can be stopped: the message still goes out, queued
+    # behind the request that is still open, and says why the interrupt didn't apply.
+    settings.DJANGO_ERGO = {**settings.DJANGO_ERGO, "TURN_STOPPER": None}
+    unstoppable = await interrupt({"sender_session": root, "text": "Draw it"})
+    assert (unstoppable["status"], unstoppable["interrupted"]) == ("queued", False)
+    assert "can't stop a running turn" in unstoppable["note"]
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_queued_messages_go_out_after_a_turn_that_fails(
+    tmp_path, thread_messages, monkeypatch
+):
+    from django_ergo.bots import messaging
+
+    user = await User.objects.acreate(username="crasher")
+    bot, engine = make_bot(tmp_path, say("Second done."))
+    root = await bot.root_session(user)
+    thread = await bot.create_session(user, parent=root, title="Crashy")
+    first = await sync_to_async(messaging.send)(root, thread, "First")
+    second = await sync_to_async(messaging.send)(root, thread, "Second")
+
+    real_ask = bot.ask
+    asked = []
+
+    async def flaky(session, message, **kwargs):
+        asked.append(message)
+        if len(asked) == 1:
+            msg = "the worker crashed"
+            raise RuntimeError(msg)
+        return await real_ask(session, message, **kwargs)
+
+    monkeypatch.setattr(bot, "ask", flaky)
+    SENT.clear()
+    await sync_to_async(messaging.deliver)(str(second.id))  # serves the oldest
+    await first.arefresh_from_db()
+    assert (first.status, first.error) == ("failed", "the worker crashed")
+    assert str(second.id) in SENT  # the failure sent the queue on
+
+    await sync_to_async(messaging.deliver)(str(second.id))
+    await second.arefresh_from_db()
+    assert (second.status, second.reply_text) == ("answered", "Second done.")
+    assert asked[0].endswith("First") and asked[1].endswith("Second")
+    assert await thread.thread_messages.filter(status="queued").acount() == 0
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_queued_messages_go_out_after_a_stopped_turn(
+    tmp_path, thread_messages, settings
+):
+    from django_ergo.bots import messaging
+    from django_ergo.conversation.structured import TurnSignal
+
+    class StopFirst:
+        def __init__(self):
+            self.checks = 0
+
+        async def check(self):
+            self.checks += 1
+            return TurnSignal(stop=True)
+
+    controls = [StopFirst()]  # only the first delivered turn is stopped
+    settings.DJANGO_ERGO = {
+        **settings.DJANGO_ERGO,
+        "TURN_CONTROL": lambda session, delegated: controls.pop() if controls else None,
+    }
+    user = await User.objects.acreate(username="stopper")
+    bot, engine = make_bot(tmp_path, say("Second done."))
+    root = await bot.root_session(user)
+    thread = await bot.create_session(user, parent=root, title="Stopped")
+    first = await sync_to_async(messaging.send)(root, thread, "First")
+    second = await sync_to_async(messaging.send)(root, thread, "Second")
+
+    SENT.clear()
+    await sync_to_async(messaging.deliver)(str(first.id))
+    await first.arefresh_from_db()
+    assert first.status == "answered" and first.reply_text.startswith("(no reply:")
+    assert len(engine._client.calls) == 0  # stopped before the model was called
+    assert str(second.id) in SENT  # the stop sent the queue on
+
+    await sync_to_async(messaging.deliver)(str(second.id))
+    await second.arefresh_from_db()
+    assert (second.status, second.reply_text) == ("answered", "Second done.")
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_stopping_a_thread_cancels_everything_this_bot_queued_for_it(
+    tmp_path, turn_stopper, thread_messages
+):
+    from django_ergo.conversation.models import ThreadMessage
+
+    user = await User.objects.acreate(username="canceller")
+    bot, engine = make_bot(tmp_path, say("ok"))
+    root = await bot.root_session(user)
+    thread = await bot.create_session(user, parent=root, title="Deploy")
+    engine._client.responses = [
+        claude_tool("ergo_thread_forward", {"thread": str(thread.id)}, tool_id="fwd"),
+        claude_tool(
+            "ergo_thread_send",
+            {"thread": str(thread.id), "message": "Use the octo cluster"},
+            tool_id="ctx",
+        ),
+        say("Sent."),
+        claude_tool("ergo_thread_stop", {"thread_id": str(thread.id)}, tool_id="stop"),
+        say("Stopped."),
+    ]
+    await bot.ask(root, "Deploy octo")
+    assert [m.status async for m in ThreadMessage.objects.all()] == ["queued"] * 2
+    await bot.ask(root, "Never mind")
+    stopped = json.loads(_tool_results(engine)[-1]["content"])
+    assert stopped["cancelled_messages"] == 2
+    assert turn_stopper == [str(thread.id)]
+
+    calls = len(engine._client.calls)
+    for _ in range(len(SENT)):
+        await thread_messages()  # the dispatches that were already on their way
+    assert len(engine._client.calls) == calls  # nothing ran in the thread
+    rows = [m async for m in ThreadMessage.objects.order_by("created_at")]
+    assert [(m.status, m.error) for m in rows] == [
+        ("failed", "cancelled by the sender")
+    ] * 2
+
+
+@pytest.mark.django_db(transaction=True)
+def test_concurrent_sends_and_deliveries_lose_nothing_and_keep_order(
+    tmp_path, thread_messages
+):
+    import threading
+
+    from asgiref.sync import async_to_sync
+    from django.db import connections
+
+    from django_ergo.bots import messaging
+    from django_ergo.conversation.models import ThreadMessage
+
+    count = 6
+    user = User.objects.create(username="rush")
+    bot, engine = make_bot(tmp_path, *[say(f"done {i}") for i in range(count)])
+    root = async_to_sync(bot.root_session)(user)
+    thread = async_to_sync(bot.create_session)(user, parent=root, title="Rush")
+    errors = []
+
+    def together(work, arguments):
+        """Run ``work(argument)`` for every argument at once, on threads of their own."""
+        start = threading.Barrier(len(arguments))
+
+        def run(argument):
+            try:
+                start.wait()
+                work(argument)
+            except Exception as exc:  # noqa: BLE001 - reported below
+                errors.append(exc)
+            finally:
+                connections.close_all()
+
+        threads = [threading.Thread(target=run, args=(a,)) for a in arguments]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+    together(lambda i: messaging.send(root, thread, f"task {i}"), range(count))
+    queue = ThreadMessage.objects.filter(recipient_session=thread)
+    texts = list(queue.order_by("created_at").values_list("text", flat=True))
+    assert sorted(texts) == sorted(f"task {i}" for i in range(count))  # none lost
+
+    ids = [str(i) for i in queue.order_by("created_at").values_list("id", flat=True)]
+    together(messaging.deliver, ids)  # every worker at once
+    for _ in range(count):  # what the workers left queued goes out in turn
+        waiting = queue.filter(status="queued").order_by("created_at").first()
+        if waiting is None:
+            break
+        messaging.deliver(str(waiting.id))
+    assert errors == []
+
+    answered = queue.order_by("created_at")
+    assert [m.status for m in answered] == ["answered"] * count
+    # Each ran exactly once, in the order sent: the nth turn gave the nth answer.
+    assert [m.reply_text for m in answered] == [f"done {i}" for i in range(count)]
+    assert len(engine._client.calls) == count
 
 
 def test_open_prs_come_from_the_open_prs_setting(tmp_path, settings):
@@ -1725,6 +2396,10 @@ def test_introspection_reads_the_bot_folder_and_ergo_but_nothing_hidden(tmp_path
     for bad in (".env", "../other", "/etc/passwd", "ergo:../../x"):
         with pytest.raises(ValueError, match="outside|hidden|exist"):
             tools["ergo_self_read"](bad)
+    # A path that starts with the folder's own name gets a suggestion.
+    with pytest.raises(ValueError, match=r"relative to your bot folder") as err:
+        tools["ergo_self_read"](f"{folder.name}/tools/big.py")
+    assert "did you mean 'tools/big.py'?" in str(err.value)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1780,6 +2455,190 @@ async def test_a_report_upward_gets_no_reply_unless_it_asks(tmp_path, thread_mes
     assert len(SENT) == 1  # the answer is on its way back to the thread
     main_system = _turn_context(engine._client.calls[-1])
     assert "## This chat\nYou are kitchen · Main, the main chat." in main_system
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize(
+    "author",
+    [None, {"kind": "telegram_user", "ref": "67890", "display_name": "Sam External"}],
+)
+async def test_forward_hands_the_users_own_message_to_a_thread(
+    tmp_path, thread_messages, author
+):
+    from django_ergo.conversation.attachments import Attachment
+    from django_ergo.conversation.identity import django_user_identity
+    from django_ergo.conversation.models import ThreadMessage
+
+    user = await User.objects.acreate(username="forwarder", first_name="Lee")
+    bot, engine = make_bot(tmp_path, say("ok"))
+    root = await bot.root_session(user)
+    thread = await bot.create_session(user, parent=root, title="Deploy")
+    engine._client.responses = [
+        claude_tool(
+            "ergo_thread_forward",
+            {"thread": str(thread.id), "note": "Deploy owns octo."},
+            tool_id="fwd",
+        ),
+        say("Sent to kitchen · Deploy."),
+    ]
+    words = "Yes, go ahead and merge the octo fix."
+    await bot.ask(
+        root,
+        words,
+        attachments=[Attachment("text/plain", data=b"log", filename="log.txt")],
+        author=author,
+    )
+    sent = json.loads(_tool_results(engine)[-1]["content"])
+    assert sent["forwarded_to"] == "kitchen · Deploy"
+    assert sent["shared_files"] == ["log.txt"]
+
+    forwarded = await ThreadMessage.objects.aget(recipient_session=thread)
+    assert forwarded.text == words  # verbatim, not retold
+    meta = forwarded.metadata
+    expected_author = author or django_user_identity(user)
+    assert meta["message_author"] == expected_author and meta["report"] is True
+    assert meta["message_provenance"]["note"] == "Deploy owns octo."
+    original = await root.messages.aget(sequence=0)
+    origin = meta["message_provenance"]["origin"]
+    assert original.author == expected_author
+    assert origin["message_id"] == str(original.id)
+    assert origin["sequence"] == original.sequence
+    assert origin["timestamp"] == original.created_at.isoformat()
+    assert origin["session_id"] == str(root.id)
+    assert meta["message_provenance"]["forwarded_by"]["kind"] == "bot"
+
+    engine._client.responses = [say("Merging now.")]
+    await thread_messages()
+    text = engine._client.calls[-1]["messages"][0]["content"][1]["text"]
+    assert text.startswith("[Forwarded by kitchen · Main")
+    assert words in text and "[Note from kitchen · Main: Deploy owns octo.]" in text
+    assert "log.txt" in text
+    assert expected_author["display_name"] in text
+    incoming = await thread.messages.aget(sequence=0)
+    assert incoming.author == expected_author
+    assert incoming.provenance == meta["message_provenance"]
+    assert await incoming.content_blocks.values_list("text", flat=True).aget() == words
+    assert SENT == []  # the thread answers the user there; nothing comes back
+
+    # A turn that answers another chat has no user message to forward.
+    from django_ergo.bots import orchestrator
+
+    assert await sync_to_async(orchestrator.user_message)(root) is None
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_forwarding_again_preserves_original_external_author_and_origin(
+    tmp_path, thread_messages
+):
+    from django_ergo.conversation.models import ThreadMessage
+
+    user = await User.objects.acreate(username="relay-owner")
+    author = {"kind": "telegram_user", "ref": "456", "display_name": "Outside Author"}
+    bot, engine = make_bot(tmp_path, say("ok"))
+    root = await bot.root_session(user)
+    first = await bot.create_session(user, parent=root, title="First")
+    second = await bot.create_session(user, parent=root, title="Second")
+    engine._client.responses = [
+        claude_tool(
+            "ergo_thread_forward", {"thread": str(first.id)}, tool_id="forward-1"
+        ),
+        say("Sent to First."),
+        claude_tool(
+            "ergo_thread_forward", {"thread": str(second.id)}, tool_id="forward-2"
+        ),
+        say("Sent to Second."),
+        say("Done."),
+    ]
+    words = "  Original request.\nKeep the whitespace.  "
+    await bot.ask(root, words, author=author)
+    source = await root.messages.aget(sequence=0)
+    await thread_messages()
+    relayed = await ThreadMessage.objects.aget(recipient_session=second)
+    provenance = relayed.metadata["message_provenance"]
+    assert relayed.text == words
+    assert relayed.metadata["message_author"] == author
+    assert provenance["origin"]["session_id"] == str(root.id)
+    assert provenance["origin"]["message_id"] == str(source.id)
+    assert provenance["origin"]["timestamp"] == source.created_at.isoformat()
+    assert provenance["forwarded_by"]["session_id"] == str(first.id)
+    await thread_messages()
+    incoming = await second.messages.aget(sequence=0)
+    assert incoming.author == author and incoming.provenance == provenance
+    assert await incoming.content_blocks.values_list("text", flat=True).aget() == words
+    assert SENT == []
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_queued_legacy_forward_delivers_raw_text_and_structured_identity(
+    tmp_path, thread_messages
+):
+    from django_ergo.conversation.models import ThreadMessage
+
+    user = await User.objects.acreate(username="legacy-owner")
+    bot, engine = make_bot(tmp_path, say("Handled."))
+    root = await bot.root_session(user)
+    thread = await bot.create_session(user, parent=root, title="Legacy")
+    message = await ThreadMessage.objects.acreate(
+        sender_session=root,
+        recipient_session=thread,
+        text="Unprefixed original.",
+        metadata={
+            "forwarded": {
+                "author": "Original User",
+                "user_id": 987,
+                "sent_at": "2026-10-05T11:00:00+00:00",
+                "source_call": "old-call",
+            },
+            "report": True,
+        },
+    )
+    SENT.append(str(message.id))
+    await thread_messages()
+    incoming = await thread.messages.aget(sequence=0)
+    assert incoming.author == {
+        "kind": "django_user",
+        "ref": "987",
+        "display_name": "Original User",
+    }
+    assert incoming.provenance["kind"] == "forwarded"
+    assert incoming.provenance["origin"]["source_call"] == "old-call"
+    assert (
+        await incoming.content_blocks.values_list("text", flat=True).aget()
+        == message.text
+    )
+    assert engine._client.calls[0]["messages"][0]["content"][1]["text"].startswith(
+        "[Forwarded by kitchen · Main"
+    )
+    assert SENT == []
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize(
+    ("metadata", "display_name"),
+    [
+        ({"worker": "worker-1"}, "Worker"),
+        ({"schedule": "weekly-plan"}, "Scheduled message"),
+    ],
+)
+async def test_senderless_system_thread_messages_are_not_human_authored(
+    tmp_path, thread_messages, metadata, display_name
+):
+    from django_ergo.bots import messaging
+    from django_ergo.conversation.models import ThreadMessage
+
+    user = await User.objects.acreate(username="system-owner")
+    bot, engine = make_bot(tmp_path, say("Noted."))
+    root = await bot.root_session(user)
+    message = await ThreadMessage.objects.acreate(
+        recipient_session=root, text="System result.", metadata=metadata
+    )
+    expected = await sync_to_async(messaging.turn_text)(message)
+    SENT.append(str(message.id))
+    await thread_messages()
+    incoming = await root.messages.aget(sequence=0)
+    assert incoming.author["kind"] == "system"
+    assert incoming.author["display_name"] == display_name
+    assert engine._client.calls[0]["messages"][0]["content"][1]["text"] == expected
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1967,8 +2826,18 @@ async def test_main_context_metadata_and_seeds_return_after_compaction(tmp_path)
     from django_ergo.conversation.compaction import compact_session
     from tests.test_conversation_compaction import RecordingSummarizer
 
+    tools = TOOLS + textwrap.dedent(
+        """
+        @bot_tool(seed=True)
+        def account_limits() -> str:
+            '''Current account limits.'''
+            return "10 left"
+        """
+    )
     user = await User.objects.acreate(username="context-seeds")
-    bot, engine = make_bot(tmp_path, say("first"), say("second"), say("third"))
+    bot, engine = make_bot(
+        tmp_path, say("first"), say("second"), say("third"), tools=tools
+    )
     session = await bot.main_session(user)
     first = await bot.ask(session, "one")
     context = first.call.metadata["context"]
@@ -2002,3 +2871,29 @@ def _turn_context(call):
         if block.get("type") == "text"
         and block.get("text", "").startswith("<turn-context>")
     )
+
+
+def test_files_note_lists_files_without_a_size():
+    from types import SimpleNamespace
+
+    from django_ergo.bots.messaging import files_note
+
+    files = [
+        {
+            "id": "a",
+            "filename": "plan.md",
+            "media_type": "text/markdown",
+            "size": 1200,
+            "session": "s",
+        },
+        {
+            "id": "b",
+            "filename": "PR #14",
+            "media_type": "text/uri-list",
+            "size": None,
+            "session": "s",
+        },
+    ]
+    note = files_note(SimpleNamespace(metadata={"attachments": files}))
+    assert "- plan.md (text/markdown, 1,200 bytes), id a" in note
+    assert "- PR #14 (text/uri-list), id b" in note

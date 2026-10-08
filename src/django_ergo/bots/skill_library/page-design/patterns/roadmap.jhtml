@@ -1,0 +1,24 @@
+{# Copy this source into a page, then replace the example roadmap list. #}
+{% macro roadmap(items, title) -%}
+<style>
+:root { --pd-bg:#fff; --pd-fg:#18212b; --pd-muted:#5d6b78; --pd-line:#cbd5df; --pd-card:#f6f8fa; --pd-accent:#075985; }
+@media (prefers-color-scheme:dark) { :root { --pd-bg:#141b23; --pd-fg:#edf3f8; --pd-muted:#b3c0cc; --pd-line:#465568; --pd-card:#1d2834; --pd-accent:#7dd3fc; } }
+.pd-roadmap { color:var(--pd-fg); background:var(--pd-bg); } .pd-roadmap ol { list-style:none; padding:0; margin:0; display:grid; gap:12px; }
+.pd-roadmap li { border:1px solid var(--pd-line); border-left:5px solid var(--pd-accent); border-radius:8px; background:var(--pd-card); padding:12px; }
+.pd-roadmap h2, .pd-roadmap h3, .pd-roadmap p { margin:0; } .pd-roadmap p { color:var(--pd-muted); margin-top:4px; } .pd-roadmap .meta { font-size:.9rem; }
+</style>
+<section class="pd-roadmap" aria-labelledby="roadmap-title">
+  <h1 id="roadmap-title">{{ title }}</h1>
+  <ol>
+  {% for item in items %}
+    <li><h2>{{ item["phase"] }} · {{ item["state"] }}</h2><h3>{{ item["step"] }}</h3><p>{{ item["owner"] }} · {{ item["when"] }}</p></li>
+  {% endfor %}
+  </ol>
+</section>
+{%- endmacro %}
+{% set sample = [
+  {"phase":"Prepare", "step":"Confirm audience and offer", "owner":"Morgan", "state":"Complete", "when":"6–10 May"},
+  {"phase":"Create", "step":"Draft three campaign concepts", "owner":"Ari", "state":"In progress", "when":"13–17 May"},
+  {"phase":"Launch", "step":"Schedule approved assets", "owner":"Nia", "state":"Planned", "when":"20 May"}
+] %}
+{{ roadmap(sample, "Summer campaign roadmap") }}

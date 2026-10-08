@@ -34,16 +34,6 @@ ergonaut up                         # web, worker, beat and bots; http://localho
 ergonaut manage createsuperuser     # in a second terminal, once up has migrated
 ```
 
-Or in one container (Postgres, Redis and S3 storage included). Build the
-image from the repo root, then run it from any folder holding a `bot.yaml`:
-
-```bash
-docker build -f ergonaut/Dockerfile --target aio -t ergonaut .
-docker run -v "$PWD:/bot" -v ergonaut-data:/data -p 8000:8000 \
-  -e OPENAI_API_KEY --name ergonaut ergonaut
-docker exec -it ergonaut ergonaut manage createsuperuser
-```
-
 [Getting started](docs/getting-started.md) walks through it, including your
 first tool.
 
@@ -91,9 +81,9 @@ def add_to_shopping_list(ctx, item: str) -> str:
 What a bot gets:
 
 - **Chats.** Every person has a *main* chat with each bot, plus any named
-  chats the bot declares. Main chats are window chats: each turn sees a
-  fixed-size window of recent messages and searches the rest with history
-  tools, so they can run forever. Threads are child sessions for focused work.
+  chats the bot declares. Main chats keep native history and compact it by
+  tokens, summarizing older messages once the context nears the model's
+  window, and search the rest with history tools, so they can run forever. Threads are child sessions for focused work.
 - **Skills.** Tool files, Markdown skills and plugins are all skills. A chat
   sees a list of them and loads what it needs, so each model call carries a
   short tool list.

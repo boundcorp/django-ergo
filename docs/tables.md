@@ -123,8 +123,45 @@ someone opens it:
   rest.
 - Pin a page in a chat with `chats.<name>.pins: [pages/houses.jhtml]`, or
   let the bot write its own with the `pages` plugin.
+- A page updates itself when a table it reads changes; see
+  [Live refresh](#live-refresh). Buttons call the bot's
+  [page actions](bots.md#page-actions).
 
 More in [Pages and pins](bots.md#pages-and-pins).
+
+### Editable page blocks
+
+Use `blocks.form(table="House")` to add a validated row, or
+`blocks.table(table="House", edit=true, delete=true)` for inline editing and
+approved deletes. Inputs follow the model field type; choices are selects and
+booleans are checkboxes. The controls call the built-in `ergo.table.*` page
+actions, so they use the same `clean` and `full_clean` checks as the table
+tools. A model can opt out of both with:
+
+```python
+class ImportLog(BotTable):
+    page_writes = False
+```
+
+## Live refresh
+
+A page that reads a table re-renders when that table changes, so nobody
+reloads it by hand. Saving or deleting a row of any `BotTable` sends the
+`table_changed` signal (`django_ergo.bots.tables`) once the transaction
+commits, once per table however many rows it touched.
+
+Bulk writes skip Django's model signals: `.update()`, `bulk_create`, a
+queryset's `.delete()` and raw SQL. After one, call `touch()` so open pages
+notice:
+
+```python
+ctx.table("Pantry").objects.filter(name=item).update(on_order=qty)
+ctx.table("Pantry").touch()
+```
+
+`touch()` also waits for the open transaction to commit. Ergonaut turns the
+signal into a stream the page viewer listens to; see
+[Live refresh](bots.md#live-refresh).
 
 ## In Ergonaut
 

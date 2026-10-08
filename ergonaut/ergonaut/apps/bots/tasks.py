@@ -41,6 +41,8 @@ from celery import shared_task
 logger = logging.getLogger(__name__)
 
 CHANNEL = "ergonaut:sessions"
+# "<bot>:<Table>" when a bot table changed (see django_ergo.bots.tables.table_changed).
+TABLES_CHANNEL = "ergonaut:tables"
 # The longest a turn waits for the session's lock.
 LOCK_SECONDS = 2 * 60 * 60
 # A held Redis lock lives this long and is renewed every LOCK_RENEW_SECONDS while
@@ -307,6 +309,17 @@ def notify(session_id) -> None:
         logger.debug("Could not publish a session change", exc_info=True)
 
 
+def notify_table(bot_name: str, table: str) -> None:
+    """Tell open pages that a bot table changed. Never raises."""
+    client = redis_client()
+    if client is None:
+        return
+    try:
+        client.publish(TABLES_CHANNEL, f"{bot_name}:{table}")
+    except Exception:  # noqa: BLE001 — live updates are best-effort
+        logger.debug("Could not publish a table change", exc_info=True)
+
+
 def take_uploads(session, attachment_ids: list[str]) -> tuple[list, list]:
     """Session files to send with a message, as Attachments; the uploads are removed
     once the message carries copies of them."""
@@ -418,9 +431,13 @@ def answer_inbox(session) -> None:
 
 def queue_waiting(session_id) -> None:
     """After releasing a session's lock: a message that arrived as the holder finished
-    gets a turn of its own."""
+    gets a turn of its own, and so does a bot-to-bot message that queued while the turn ran
+    (the turn's own dispatch can reach a worker before the lock is released)."""
+    from django_ergo.bots import messaging
+
     if inbox_waiting(session_id):
         run_turn.delay(str(session_id))
+    messaging.redispatch_waiting(session_id)
 
 
 def record_failure(session, message: str | None, exc: Exception) -> None:
@@ -466,23 +483,31 @@ def queue_message(session_id, text: str, attachment_ids: list[str] | None = None
     return queue_turn(session_id)
 
 
-@shared_task(name="ergonaut.deliver_thread_message", ignore_result=True)
-def deliver_thread_message(message_id: str) -> None:
-    """Run the recipient's turn for a bot-to-bot message (see django_ergo.bots.messaging)."""
+def deliver_locked(message_id: str):
+    """Deliver a bot-to-bot message under its recipient's turn lock; returns the recipient's id.
+
+    The recipient's oldest queued message goes out (see ``messaging.deliver``), so
+    messages run in the order they were sent. While a turn holds the lock the message
+    stays queued: that turn's end sends it on (``queue_waiting``)."""
     from django_ergo.bots import messaging
     from django_ergo.conversation.models import ThreadMessage
 
     recipient_id = ThreadMessage.objects.filter(id=message_id).values_list("recipient_session_id", flat=True).first()
     if recipient_id is None:
-        return
+        return None
     with session_lock(str(recipient_id), wait=False) as locked:
         if locked:
-            messaging.deliver(message_id)
-        # else the recipient is mid-turn: the message stays queued and goes out
-        # when that turn ends, or on the next sweep.
+            clear_stop(recipient_id)  # a stop meant for an earlier turn
+            messaging.deliver(message_id, locked=True)
     if locked:
         queue_waiting(recipient_id)
-    notify(recipient_id)
+    return recipient_id
+
+
+@shared_task(name="ergonaut.deliver_thread_message", ignore_result=True)
+def deliver_thread_message(message_id: str) -> None:
+    """Run the recipient's turn for a bot-to-bot message (see django_ergo.bots.messaging)."""
+    notify(deliver_locked(message_id))
 
 
 def queue_thread_message(message_id: str) -> None:
@@ -494,20 +519,10 @@ def queue_thread_message(message_id: str) -> None:
         import threading
 
         from django.db import close_old_connections
-        from django_ergo.bots import messaging
 
         def run():
             try:
-                recipient_id = (
-                    messaging.ThreadMessage.objects.filter(id=message_id)
-                    .values_list("recipient_session_id", flat=True)
-                    .first()
-                )
-                with session_lock(str(recipient_id), wait=False) as locked:
-                    if locked:
-                        messaging.deliver(message_id)
-                if locked:
-                    queue_waiting(recipient_id)
+                deliver_locked(message_id)
             finally:
                 close_old_connections()
 
@@ -601,10 +616,15 @@ def pull_bot_repos() -> dict[str, str]:
 def auto_upgrade() -> str:
     """Upgrade to a newer GitHub release if there is one and nothing is running
     (beat runs this every ``ERGONAUT_AUTO_UPGRADE_SECONDS``; see ergonaut/upgrades).
-    A busy instance is checked again next time instead of holding the worker."""
+    A busy instance is checked again next time instead of holding the worker: each
+    check waits ``ERGONAUT_AUTO_UPGRADE_WAIT_SECONDS`` (default 60) for a 20-second
+    gap with no turn running."""
+    import os
+
     from ergonaut import upgrades
 
-    result = upgrades.run(wait_timeout=60, quiet_for=20)
+    wait = float(os.environ.get("ERGONAUT_AUTO_UPGRADE_WAIT_SECONDS") or 60)
+    result = upgrades.run(wait_timeout=wait, quiet_for=20)
     logger.info("auto upgrade: %s", result)
     return result
 

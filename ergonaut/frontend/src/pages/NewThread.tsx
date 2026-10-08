@@ -1,18 +1,21 @@
 import { useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { api } from '../api'
-import ModelPicker from '../components/ModelPicker'
+import { clearDraft, useDraft } from '../draft'
+import ModelPicker, { useBotModels } from '../components/ModelPicker'
 
 // Start a thread by writing its first message (with files). The thread gets a title from the
 // message right away, and a generated one (new_thread_metadata) a moment later.
 export function NewThread({ onChange }: { onChange: () => void }) {
   const { name = '' } = useParams()
   const navigate = useNavigate()
-  const [text, setText] = useState('')
+  const draftKey = `new-thread.${name}`
+  const [text, setText] = useDraft(draftKey)
   const [files, setFiles] = useState<File[]>([])
   const [busy, setBusy] = useState(false)
   const [model, setModel] = useState('')
   const [error, setError] = useState('')
+  const models = useBotModels(name)
   const picker = useRef<HTMLInputElement>(null)
 
   function add(list: FileList | File[] | null) {
@@ -30,6 +33,7 @@ export function NewThread({ onChange }: { onChange: () => void }) {
       const ids = []
       for (const file of files) ids.push((await api.uploadAttachment(thread.id, file)).id)
       await api.send(thread.id, text, ids)
+      clearDraft(draftKey)
       onChange()
       navigate(`/s/${thread.id}`)
       // The generated title lands a moment later; refresh the sidebar for it.
@@ -46,7 +50,7 @@ export function NewThread({ onChange }: { onChange: () => void }) {
       <h1 className="page-title mt-3">New thread / {name}</h1>
       <p className="page-lede mt-3">Set the model, write your first prompt, and add context files before starting.</p>
       <div className="mt-8 flex flex-wrap items-center gap-3">
-        <ModelPicker bot={name} value={model} onPick={setModel} large />
+        <ModelPicker models={models} value={model} onPick={setModel} large />
       </div>
       {!!files.length && (
         <div className="mb-2 flex flex-wrap gap-2">

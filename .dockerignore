@@ -1,0 +1,12 @@
+# The Ergonaut image copies only what ergonaut/Dockerfile names; keep the
+# build context small so it uploads fast and unrelated files never bust it.
+.git
+**/node_modules
+**/.venv
+**/__pycache__
+**/*.pyc
+ergonaut/frontend/dist
+examples/proprietary
+docs
+tests
+.github

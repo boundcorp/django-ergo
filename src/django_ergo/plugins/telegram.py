@@ -317,7 +317,22 @@ class TelegramPlugin(BotPlugin):
         if await self.bot.pending_call(session) is not None:
             # A new message instead of Approve/Deny: decline what was waiting.
             await self.bot.resume(session, decisions=False)
-        result = await self.bot.ask(session, text, attachments=attachments or None)
+        sender = first.get("from") or {}
+        author = None
+        if sender.get("id") is not None:
+            name = " ".join(
+                str(sender[key])
+                for key in ("first_name", "last_name")
+                if sender.get(key)
+            )
+            author = {
+                "kind": "telegram_user",
+                "ref": str(sender["id"]),
+                "display_name": name or sender.get("username") or str(sender["id"]),
+            }
+        result = await self.bot.ask(
+            session, text, attachments=attachments or None, author=author
+        )
         await self.send_result(chat_id, result)
 
     async def handle_callback(self, query: dict) -> None:

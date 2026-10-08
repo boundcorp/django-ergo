@@ -21,7 +21,9 @@ references a file the session already has. Images sent with user messages
 are referenced the same way.
 
 Each model call carries only the latest ``DJANGO_ERGO["IMAGES_IN_CONTEXT"]``
-images (default 2). Older ones become ``[image omitted: name (id=...)]``, so
+images (default 2), plus the images in the newest round of tool results (up
+to ``ROUND_IMAGES_MAX``): a bot that looks at four files at once sees all
+four. Older ones become ``[image omitted: name (id=...)]``, so
 the model can look again if it needs to. Images are downscaled to
 ``DJANGO_ERGO["IMAGE_MAX_SIDE"]`` pixels (default 1024) on the long side when
 Pillow is installed; without Pillow they are sent as they are, up to 5 MB.
@@ -53,6 +55,8 @@ IMAGE_REF = "image_ref"
 SENDABLE_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
 # Without Pillow, larger images are left out rather than sent whole.
 MAX_RAW_BYTES = 5_000_000
+# Images from the newest round of tool results always go out, up to this many.
+ROUND_IMAGES_MAX = 8
 JPEG_QUALITY = 85
 _CACHE_SIZE = 32
 _prepared_cache: OrderedDict[tuple, tuple[bytes, str] | None] = OrderedDict()
@@ -263,20 +267,46 @@ def _iter_refs(messages: list[dict]) -> Iterator[dict]:
                 yield from (b for b in block["content"] if is_ref(b))
 
 
+def _is_tool_round(message: dict) -> bool:
+    """A message made only of tool results (Claude: user blocks; OpenAI: a tool message)."""
+    if message.get("role") == "tool":
+        return True
+    content = message.get("content")
+    return (
+        message.get("role") == "user"
+        and isinstance(content, list)
+        and bool(content)
+        and all(isinstance(b, dict) and b.get("type") == "tool_result" for b in content)
+    )
+
+
+def _round_refs(messages: list[dict]) -> list[dict]:
+    """Images in the tool results the model is about to read: the trailing run of tool-result messages."""
+    start = len(messages)
+    while start and _is_tool_round(messages[start - 1]):
+        start -= 1
+    return list(_iter_refs(messages[start:]))
+
+
 def prepare_messages(
     messages: list[dict], engine_type: str, *, keep: int | None = None
 ) -> list[dict]:
     """Turn image references into engine image parts for one model call.
 
     Only the latest ``keep`` images are sent; older ones become a short text
-    placeholder. Loads stored files, so call it from sync code. The input
-    list is not changed.
+    placeholder. The images in the newest round of tool results (up to
+    ``ROUND_IMAGES_MAX``) are always sent too: the model has just asked for
+    them, so a batch of looks must not push its own answers out of the window.
+    Loads stored files, so call it from sync code. The input list is not
+    changed.
     """
     refs = list(_iter_refs(messages))
     if not refs and engine_type != "openai":
         return messages
     keep = api_settings.IMAGES_IN_CONTEXT if keep is None else keep
     shown = {id(ref) for ref in refs[-keep:]} if keep > 0 else set()
+    if keep > 0:
+        shown |= {id(ref) for ref in _round_refs(messages)[-ROUND_IMAGES_MAX:]}
     if engine_type == "openai":
         return _openai_messages(messages, shown)
     return _claude_messages(messages, shown)
@@ -429,7 +459,7 @@ def load_image(ref: dict) -> tuple[str, str, str] | None:
             return "", "", ref["url"]
         else:
             return None
-    except Exception:  # noqa: BLE001 — a missing image never breaks the call
+    except Exception:
         log.warning("could not load image %s", _label(ref), exc_info=True)
         return None
     if prepared is None:
@@ -472,7 +502,7 @@ def prepare_image(
     if Image is not None:
         try:
             return _resize(Image, data, media_type, max_side)
-        except Exception:  # noqa: BLE001 — not an image Pillow can read
+        except Exception:
             log.debug("Pillow could not read a %s image", media_type, exc_info=True)
     if media_type not in SENDABLE_TYPES or len(data) > MAX_RAW_BYTES:
         return None

@@ -16,6 +16,7 @@ Live on rigel from `~/p/boundcorp/django-ergo`, bots from `boundcorp/ergo-bots`.
 - [x] **Toolkit pre-seeding**: toolkits declare tool calls run and written into the chat before the first completion; orchestration pre-seeds `ergo_bot_list` (names + YAML descriptions); skills use the same path; boundcorp's instructions stop listing bots.
 - [x] **Turns as Celery tasks**: web messages and approvals queue a turn task (inline without a broker); Redis pub/sub wakes the SSE stream; rigel runs `up web worker beat`.
 - [x] **Thread-to-thread messaging**: messages record a sender; replies go back to the sender's thread; `ergo_thread_list(bot)` and async `ergo_thread_send(bot, root|<id>|new, message)`; hop limit; replaces sync `threads_*` and `ergo_bot_call`.
+- [x] **Forwarded-message identity**: message author and provenance snapshots separate the actual Django/Telegram author from the forwarding bot and original chat/time; unprefixed API/UI content, generated model attribution, and distinct mobile-safe cards. Shared-chat membership and permissions remain future work.
 - [x] **Thread inactivity and archival**: beat archives threads idle `sessions.archive_after_days` (default 7); archived threads collapse in the sidebar; messaging one reopens it.
 - [x] **`@bot_task` for custom tools**: run a bot-folder function on a worker and wait for or await its result.
 
@@ -47,17 +48,29 @@ Live on rigel from `~/p/boundcorp/django-ergo`, bots from `boundcorp/ergo-bots`.
 - [x] Thread cards (status, reply, PRs) for work sent to other chats and workers; collapsed replies; "Sent to" notes; thread links; PRs recorded from replies and worker results with live state from `gh`.
 - [x] Ergonaut's `DJANGO_ERGO["OPEN_PRS"]` reads the recorded PRs, and thread cards use `orchestrator.thread_status`.
 - [x] Claude on a subscription: `transport: cli` providers run Claude through the logged-in Claude Code CLI (`conversation/engines/claude_code.py`).
+- [x] Routing by built-in and custom tier: `auto/<tier>` chats and bots, independent `tiers`/`agents` overrides in providers.yaml, subscription-only catalog defaults (distinct Fable/Astra high with medium fallback). Limits use only provider-reported windows, including Claude's model-scoped Fable weekly allowance and Codex's 7-day-only snapshot; full snapshots remove obsolete counters. Ergonaut's Routing page separates API keys, shows usage freshness, picks and switches, and edits priorities. Limit refusals offer a manual Retry on an eligible alternative (never automatic).
+- [ ] OpenAI on a ChatGPT subscription: `transport: cli` on `openai` providers runs Codex `app-server` (`conversation/engines/codex_cli.py`); try it on a logged-in machine (`examples/codex_subscription_demo.py`), then install Codex in the Ergonaut image. (Tested on rigel 2026-10-05: works on gpt-6-sol and gpt-6-luna.)
 - [ ] Ergonaut image: install the Claude Code CLI and keep its login (`CLAUDE_CONFIG_DIR` volume or `CLAUDE_CODE_OAUTH_TOKEN`); show subscription usage as such on Costs instead of list prices.
 - [ ] `ergonaut manage resume_failed --kind credits` (resume every chat a credit outage failed): written in bda8305 on the closed #74 branch, never merged.
 - [x] `ergo_thread_resolve` (was archive): finished threads are resolved by their orchestrator or themselves, refused while anything is open; the block marks "ready to resolve".
+- [x] The block marks "ready to resolve" only on threads the viewing bot may resolve (`orchestrator.can_resolve`, shared with the tools); a parent no longer sees an actionable hint on a sub-bot's self-started thread, and the refusal names who can resolve it.
 - [x] Each chat is told which chat it is ("This chat" block), and upward messages are one-way reports unless they `ask` (no acknowledgement turns).
 - [x] "Bots and threads" context block for orchestrating chats: every reachable bot, its chats with their status, latest-message snippets and open PRs, capped near 3k tokens (`bots/overview.py`, `orchestrator.thread_status`, `pull_requests:`, `OPEN_PRS`).
 - [x] Design to devbox handoff run live 2026-10-03: Design sent the History handoff itself, devbox picked Sonnet 5.5 from ModelsAvailable, an omp worker built it (#87 fixed omp model pinning), draft PR #88.
 - [x] `introspection` built-in skill for every bot loaded from a folder: read-only `ergo_self_overview`, `ergo_self_files`, `ergo_self_read` (bot folder, and Ergo's source via `ergo:` paths).
+- [x] A bot's send right after a forward (or a report) to the same thread no longer fails, and the no-nudge refusal of a second request while an earlier one is open is gone: a chat may send any number of follow-ups, a busy thread queues them in order, one turn each (each reply routed back on its own), and sends them on whenever its turn ends (also after a failed or stopped one, and promptly under Celery); `ergo_thread_send` results say `queued` and the position; optional `interrupt` replaces the chat's own running request, never the user's. Bots are told follow-ups are fine and status pings aren't.
 - [x] Live Orca worker activity: worker cards show the agent's latest tool calls and output, time since its last activity with a stalled flag (`stall_minutes`), and its full recent log (`/api/sessions/<id>/workers/<id>/log`).
-- [ ] Try `orca_start_worker` live on devbox (after the Orca display restart).
+- [x] Agent session usage: Orca worker session files record Claude Code, Codex, and omp tokens per worker; Costs shows them separately from bot turns.
+- [x] Agents as a framework concept: `AgentManager` (`bots/agents.py`) from `BotPlugin.agent_managers()`, the `agents` skill (`ergo_agent_start`, `ergo_agent_reply`, `ergo_agent_stop`), `agent:<manager>` watcher workers. Orca is the first manager; `orca_start_worker` stays as an alias.
+- [ ] Agent managers for ssh (agent CLIs on a host) and local bash. Local needs a design for Celery workers on different pods: a detached process on one pod can't be polled from another.
+- [ ] Switch ergo-bots instructions from `orca_start_worker` to `ergo_agent_start`, then drop the alias.
+- [ ] Try `ergo_agent_start` live on devbox (after the Orca display restart).
 - [ ] A visual blocks editor in the UI. Campaign names are Ad Manager's internal `AM:<uuid>:campaign` labels; friendly names would need Ad Manager's mapping.
-- [x] **Bot data and pages** (decided 2026-10-02): pinned files (repo files and bot-written attachments), blocks-based page toolkit, live .jhtml Jinja pages served straight from the file/attachment endpoints, templates from bots or PRs. No sandbox origin; all users share rows.
+- [x] **Agent skills**: `ergo-client` (with the `ergonaut-remote` command and `ergo_client_*` bot tools), `ergo-hosting`, `ergo-bot-development` and `ergo-developer` in the skill library, installable for Claude Code and Codex (`skill_library/install.py`); Ergonaut API keys (`Authorization: Bearer ergo_...`, API keys page, `ergonaut manage api_key`).
+- [ ] Install the agent skills on the dev box, make an API key on the production server, and start delegating django-ergo and ergo-bots work through `ergonaut-remote`; feed what the runs show back into the skills.
+- [x] **Bot data and pages** (decided 2026-10-02): pinned files (repo files and bot-written attachments), blocks-based page toolkit, live .jhtml Jinja pages served straight from the file/attachment endpoints, templates from bots or PRs. All users share rows; pages are sandboxed (see page actions below).
+- [x] **Page actions and live refresh**: `@page_action` functions a `.jhtml` page calls as the viewer with `ergo.call` (approval round trip, `PageActionCall` record, "Page actions since your last reply" context), pages re-render when a table they read changes (`table_changed`, `touch()`, SSE stream), folder pages served sandboxed with signed asset URLs. Spec: `docs/specs/page-actions.md`; example `examples/pantry/`.
+- [x] Page forms, row-edit and button blocks (`ergo.table.*`) and `ergo.ask` (parts 3 and 4 of the spec).
 
 - [x] Upgrade path: `wait_idle` also waits for queued or running workers; `ergonaut upgrade` and `ERGONAUT_AUTO_UPGRADE_SECONDS` upgrade to a new GitHub release once idle through a pluggable `ERGONAUT_UPGRADER` (`systemd`, `command`, or a class in the bot repo); images record `ERGONAUT_VERSION`.
 - [ ] Start publishing GitHub releases of django-ergo (auto-upgrades follow `releases` by default; `ERGONAUT_UPGRADE_CHANNEL=branch:main` follows main).
@@ -84,6 +97,8 @@ Live on rigel from `~/p/boundcorp/django-ergo`, bots from `boundcorp/ergo-bots`.
 - [x] Bots see images and PDFs: 📎/paste attaches files to a message (native image/document parts), `ergo_attachments_look` for files already in a session, image thumbnails in the transcript.
 
 - [x] Bots see images directly: tools can return `ToolResult`/`ToolImage` (Claude: image blocks in the tool result; OpenAI: a user message after the tool messages), `ergo_attachments_look` returns the image itself, images are downscaled to 1024px (Pillow) and only the latest two are sent, older ones become `[image omitted: ...]`.
+
+- [x] A bot's round of tool calls shows all its images: the latest-two window no longer drops images the bot just asked for (a batch of four `ergo_attachments_look` calls came back as two images and two `[image omitted]` placeholders); up to 8 images from the newest round are sent, older ones still drop out.
 
 - [x] Kitchen bot on Ergonaut (Tandoor tools, meal-planning skill, KB), boundcorp root bot, nested bots, `ergo_bot_call`.
 - [x] Official plugins in `django_ergo/plugins`: ergo_kb, bot_management (draft worktree + PR), telegram, orca, bash, kubectl, attachments.

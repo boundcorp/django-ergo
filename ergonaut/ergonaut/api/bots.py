@@ -6,11 +6,14 @@ sessions). A turn runs inside the request and returns the bot's ChatReply.
 
 from __future__ import annotations
 
+import asyncio
+import logging
+import time
 import uuid
 from datetime import datetime
 from typing import Any, Literal
 
-from asgiref.sync import sync_to_async
+from asgiref.sync import async_to_sync, sync_to_async
 from django.db.models import Count, Q
 from django.http import FileResponse, HttpResponse
 from django.shortcuts import aget_object_or_404
@@ -24,8 +27,9 @@ from django_ergo.conversation.links import GITHUB_PR, pull_request_out, pull_req
 from django_ergo.conversation.models import ConversationAttachment, ConversationSession, StructuredCall, Worker
 from ninja import File, Router, Schema, UploadedFile
 from ninja.errors import HttpError
-from ninja.security import django_auth
 
+from ergonaut.api.auth import user_auth
+from ergonaut.api.page_assets import asset_urls, user_for_token
 from ergonaut.apps.bots.tasks import (
     peek_inbox,
     queue_message,
@@ -35,7 +39,9 @@ from ergonaut.apps.bots.tasks import (
     unsend,
 )
 
-router = Router(tags=["bots"], auth=django_auth)
+logger = logging.getLogger(__name__)
+
+router = Router(tags=["bots"], auth=user_auth)
 
 
 # -- schemas -----------------------------------------------------------------
@@ -141,6 +147,8 @@ class MessageOut(Schema):
     role: str
     blocks: list[dict]
     timestamp: datetime | None
+    author: dict
+    provenance: dict
 
 
 class CallOut(Schema):
@@ -189,6 +197,9 @@ class SessionDetailOut(Schema):
     sent: list[dict] = []
     # Pull requests reported in this chat (django_ergo.conversation.links).
     prs: list[dict] = []
+    # For an Auto chat whose last turn a provider refused at its limit: another
+    # model in its tier to retry on (Resume with ?model=). Never used on its own.
+    retry_model: str = ""
 
 
 PAGE_MESSAGES = 50
@@ -1040,8 +1051,15 @@ def session_detail(request, session_id: str, before: int | None = None, limit: i
         raise HttpError(404, "No such session")
     first_line = page_start(session, before, max(1, min(limit, 500)))
     messages = [
-        {"line": m.line, "role": m.role, "blocks": m.blocks, "timestamp": m.timestamp}
-        for m in SessionSource(session, first_line=first_line, before_line=before).messages()
+        {
+            "line": m.line,
+            "role": m.role,
+            "blocks": m.blocks,
+            "timestamp": m.timestamp,
+            "author": m.author,
+            "provenance": m.provenance,
+        }
+        for m in SessionSource(session, first_line=first_line, before_line=before, include_attribution=False).messages()
     ]
     calls = [call_out(c) for c in calls_in(session, first_line, before)]
     if session.user_id == request.auth.pk:
@@ -1072,6 +1090,7 @@ def session_detail(request, session_id: str, before: int | None = None, limit: i
         "has_more": first_line is not None,
         "message_count": session.messages.count(),
         "sent": sent_out(session),
+        "retry_model": retry_model_for(session, request.auth),
         "prs": session_prs(session),
     }
 
@@ -1202,14 +1221,33 @@ async def unsend_message(request, session_id: str, item_id: str):
     return {"text": item.get("text", ""), "attachment_ids": item.get("attachment_ids") or []}
 
 
+def retry_model_for(session: ConversationSession, user) -> str:
+    """The model to offer a retry on when the chat's last turn was refused at a limit."""
+    last = session.structured_calls.filter(kind="chat_reply").order_by("-created_at").first()
+    if last is None or last.status != "failed" or (last.metadata or {}).get("dismissed"):
+        return ""
+    try:
+        return get_bot(session.bot_name, user).retry_model(session, last.error)
+    except HttpError:
+        return ""
+
+
 @router.post("/sessions/{session_id}/resume", response=TurnOut)
-async def resume_session(request, session_id: str):
-    """Continue a chat whose last turn failed or hit its step limit, as a new turn."""
+async def resume_session(request, session_id: str, model: str = ""):
+    """Continue a chat whose last turn failed or hit its step limit, as a new turn.
+    With ``model`` (an Auto chat's other tier candidate), the chat moves to it
+    first: the user's choice after a provider refused the turn at its limit."""
     session = await get_session(request, session_id)
     last = await session.structured_calls.filter(kind="chat_reply").order_by("-created_at").afirst()
     if last is None or last.status not in RESUMABLE:
         raise HttpError(409, "The last turn didn't fail; there's nothing to resume")
     why = error_out(last)["error_summary"].rstrip(".") or "it failed"
+    if model:
+        bot = get_bot(session.bot_name, request.auth)
+        try:
+            await sync_to_async(bot.reroute)(session, model, f"retried by hand after: {why}")
+        except ValueError as e:
+            raise HttpError(400, str(e)) from e
     last.metadata = {**(last.metadata or {}), "dismissed": True, "resumed": True}
     await last.asave(update_fields=["metadata", "updated_at"])
     queued = await sync_to_async(queue_message)(session.id, RESUME_NOTE.format(why=why))
@@ -1266,11 +1304,25 @@ def models_out(bot: Bot) -> dict:
                 "available": bot.providers.providers[m.provider].available,
             }
             for m in bot.providers.models()
+        ]
+        + [
+            {
+                "id": f"auto/{tier}",
+                "name": f"auto/{tier}",
+                "label": tier,
+                "provider": "auto",
+                "engine_type": "auto",
+                "available": True,
+            }
+            for tier, refs in bot.providers.routing.tiers.items()
+            if refs
         ],
     }
 
 
 def check_model(bot: Bot, model: str) -> None:
+    if model.startswith("auto/") and bot.providers.knows(model):
+        return
     found = bot.providers.find(model)
     if found is None:
         raise HttpError(400, f"{model!r} isn't a model in providers.yaml")
@@ -1282,6 +1334,77 @@ def check_model(bot: Bot, model: str) -> None:
 @router.get("/bots/{bot}/models")
 def bot_models(request, bot: str):
     return models_out(get_bot(bot, request.auth))
+
+
+@router.get("/bots/{bot}/routing")
+def bot_routing(request, bot: str):
+    """The auto/<tier> routing a bot's chats get: tiers, rules, subscription usage."""
+    from django_ergo.bots.routing import routing_report
+
+    return routing_report(get_bot(bot, request.auth).providers)
+
+
+class RoutingIn(Schema):
+    text: str
+
+
+def routing_out(request) -> dict:
+    from django_ergo.bots.routing import routing_report
+
+    return {**routing_report(registry().providers), "editable": request.auth.is_superuser}
+
+
+def compile_routing_text(retry: bool = False) -> None:
+    """Compile the routing text in the background on a loaded bot's default engine."""
+    from django_ergo.bots.routing import ensure_compiled
+
+    bots = registry()
+    bot = next(iter(bots), None)
+    if bot is None:
+        return
+    ensure_compiled(
+        bots.providers,
+        lambda: bot.make_engine(model=bot.resolve_ref("auto/low", None)),
+        retry=retry,
+    )
+
+
+@router.get("/routing")
+def routing(request):
+    """The Routing page: subscriptions against their limits, what each tier
+    picks now, the routing text and recent switches (shared by every bot)."""
+    return routing_out(request)
+
+
+@router.put("/routing")
+def save_routing(request, data: RoutingIn):
+    """Save this deployment's routing priorities in plain words (replacing
+    routing.md) and compile them."""
+    from django_ergo.conversation.models import RoutingText
+
+    if not request.auth.is_superuser:
+        raise HttpError(403, "Only an admin can change routing")
+    text = data.text.strip()
+    if len(text) > 4000:
+        raise HttpError(400, "Keep the routing text under 4000 characters")
+    saved = RoutingText.objects.first() or RoutingText()
+    saved.text, saved.updated_by = text, request.auth
+    saved.save()
+    RoutingText.objects.exclude(pk=saved.pk).delete()
+    compile_routing_text(retry=True)
+    return routing_out(request)
+
+
+@router.delete("/routing")
+def reset_routing(request):
+    """Go back to the bot repo's routing.md."""
+    from django_ergo.conversation.models import RoutingText
+
+    if not request.auth.is_superuser:
+        raise HttpError(403, "Only an admin can change routing")
+    RoutingText.objects.all().delete()
+    compile_routing_text(retry=True)
+    return routing_out(request)
 
 
 @router.post("/sessions/{session_id}/model", response=SessionOut)
@@ -1490,7 +1613,9 @@ def upload_attachment(request, session_id: str, file: UploadedFile = File(...)):
 
 
 # Bot-written pages run scripts, so they get their own opaque origin: no cookies, no app API.
-SANDBOXED = "sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox allow-downloads"
+# allow-modals: blocks.button(confirm=...) asks with window.confirm, which the sandbox
+# otherwise answers "no" without showing anything.
+SANDBOXED = "sandbox allow-scripts allow-modals allow-popups allow-popups-to-escape-sandbox allow-downloads"
 
 
 def page_response(html: str, *, sandboxed: bool) -> HttpResponse:
@@ -1502,13 +1627,138 @@ def page_response(html: str, *, sandboxed: bool) -> HttpResponse:
     return response
 
 
-def render_or_error(bot: Bot, source: str, user, title: str) -> str:
+def render_or_error(bot: Bot, source: str, user, title: str, **page) -> str:
     from django_ergo.bots.pages import PageError, error_page, render_page
 
     try:
-        return render_page(bot, source, user=user, title=title)
+        return render_page(bot, source, user=user, title=title, **page)
     except PageError as exc:
         return error_page(str(exc), title)
+
+
+class PageActionIn(Schema):
+    args: Any = None  # the action's arguments (an object)
+    page: str = ""  # the page it was called from: a bot-folder path, or a chat file's id
+    session_id: str | None = None  # the chat the page was opened from
+    approval: str = ""  # the token from an earlier needs_approval answer for these arguments
+
+
+def record_page_action(bot_name: str, name: str, data: PageActionIn, user, session, started: float, **outcome) -> None:
+    from ergonaut.apps.bots.models import PageActionCall
+
+    PageActionCall.objects.create(
+        bot=bot_name,
+        action=name,
+        user=user,
+        session=session,
+        page=data.page[:500],
+        args=data.args if isinstance(data.args, dict) else {},
+        duration_ms=int((time.monotonic() - started) * 1000),
+        **outcome,
+    )
+
+
+def page_title(page: str) -> str:
+    """A readable page label for a message handed to a bot."""
+    from pathlib import PurePosixPath
+
+    name = PurePosixPath(page).stem if page.endswith(".jhtml") else ""
+    return name.replace("_", " ").replace("-", " ").title() or "this"
+
+
+def ask_page_action(bot: Bot, args: Any, user, page: str) -> dict:
+    """Send a page request through the same queue as a user chat message."""
+    from django_ergo.bots.page_actions import PageActionError
+
+    if not isinstance(args, dict):
+        raise PageActionError(400, "args must be an object")
+    text = args.get("text")
+    chat = args.get("chat", "main")
+    if not isinstance(text, str) or not text.strip():
+        raise PageActionError(400, "ergo.ask: text must be a non-empty string")
+    if not isinstance(chat, str):
+        raise PageActionError(400, "ergo.ask: chat must be string")
+    unknown = set(args) - {"text", "chat"}
+    if unknown:
+        raise PageActionError(400, f"ergo.ask: unknown argument(s) {', '.join(sorted(unknown))}")
+    text = f"From the {page_title(page)} page: {text.strip()}"
+    if chat == "new":
+        parent = async_to_sync(bot.main_session)(user)
+        target = async_to_sync(bot.create_session)(user, parent=parent, title=provisional_title(args["text"]))
+        chat_label = target.metadata.get("title") or "new thread"
+    elif chat == "main":
+        target = async_to_sync(bot.main_session)(user)
+        chat_label = "main"
+    else:
+        if chat not in bot.definition.chats:
+            raise PageActionError(400, f"{bot.name} has no chat named {chat!r}")
+        target = async_to_sync(bot.chat_session)(user, chat)
+        chat_label = chat
+    queue_message(target.id, text, [])
+    return {
+        "session_id": str(target.id),
+        "chat": chat_label,
+        "message": f"Sent to {chat_label}",
+    }
+
+
+def run_page_action(bot: Bot, name: str, data: PageActionIn, user, session) -> dict:
+    """Run one page action call (in a worker thread: it may take a while) and record it."""
+    from django.db import connections
+    from django_ergo.bots.page_actions import PageActionError, call_page_action
+
+    started = time.monotonic()
+    try:
+        try:
+            if name == "ergo.ask":
+                result = ask_page_action(bot, data.args, user, data.page[:500])
+                record_page_action(bot.name, name, data, user, session, started, result=result)
+                return {"result": result}
+            outcome = call_page_action(
+                bot,
+                name,
+                data.args,
+                user=user,
+                session=session,
+                page=data.page[:500] or None,
+                approval=data.approval,
+            )
+        except PageActionError as exc:
+            if exc.ran:
+                record_page_action(bot.name, name, data, user, session, started, error=exc.message)
+            raise HttpError(exc.status, exc.message) from exc
+        if outcome.needs_approval:
+            return {"needs_approval": True, "preview": outcome.preview, "approval": outcome.approval}
+        record_page_action(
+            bot.name, name, data, user, session, started, result=outcome.result, approved=outcome.approved
+        )
+        return {"result": outcome.result}
+    finally:
+        connections.close_all()  # this worker thread's own connection
+
+
+@router.post("/bots/{bot}/actions/{name}")
+async def page_action_call(request, bot: str, name: str, data: PageActionIn):
+    """Run one of the bot's page actions (``@page_action``) as the signed-in user, for a page
+    shown in the web app. Answers ``{"result": {...}}``, or ``{"needs_approval": true, "preview",
+    "approval"}`` for an action that wants the viewer's confirmation first: repeat the call with
+    that ``approval`` token. Runs in the request, for at most ``page_actions.TIMEOUT_SECONDS``."""
+    from django_ergo.bots import page_actions
+
+    found = get_bot(bot, request.auth)
+    session = None
+    if data.session_id:
+        session = await visible_sessions(request.auth).filter(id=uuid_or_404(data.session_id), bot_name=bot).afirst()
+        if session is None:
+            raise HttpError(404, "No such session")
+    work = sync_to_async(run_page_action, thread_sensitive=False)(found, name, data, request.auth, session)
+    try:
+        return await asyncio.wait_for(work, page_actions.TIMEOUT_SECONDS)
+    except TimeoutError:
+        # The thread can't be stopped: it records the call when it finishes.
+        raise HttpError(
+            504, f"{name} took longer than {page_actions.TIMEOUT_SECONDS} s; start a task with ctx.tasks instead"
+        ) from None
 
 
 @router.get("/attachments/{attachment_id}/download")
@@ -1516,6 +1766,10 @@ def download_attachment(request, attachment_id: str, inline: bool = False):
     row = visible_attachment(request.auth, attachment_id)
     if not row.file:
         raise HttpError(404, "This file has no stored copy")
+    if not row.file.storage.exists(row.file.name):
+        # The row outlived its file: MEDIA_ROOT isn't on persistent storage, say.
+        logger.warning("Attachment %s: stored file %s is missing", row.id, row.file.name)
+        raise HttpError(404, "This file's stored copy is missing")
     if inline and row.filename.endswith(".jhtml"):
         # A live page: rendered now, over the bot's tables.
         from django_ergo.conversation.attachments import read_text
@@ -1640,7 +1894,11 @@ def all_pins(request):
 
 @router.get("/bots/{bot_name}/files/{path:path}")
 def bot_file(request, bot_name: str, path: str):
-    """A page or asset from the bot folder (reviewed in the bot repo, so it runs in the app's origin)."""
+    """A page or asset from the bot folder. A page runs sandboxed, like a chat's pages (reviewed in
+    the bot repo, but still no cookies and no app API); its relative asset references are
+    rewritten to ``bot_asset`` URLs, since a sandboxed page can't send its login."""
+    import posixpath
+
     from django_ergo.bots.pages import SERVED_SUFFIXES
     from django_ergo.bots.pages import bot_file as find
 
@@ -1649,10 +1907,42 @@ def bot_file(request, bot_name: str, path: str):
     if found is None:
         raise HttpError(404, "No such file")
     if found.suffix == ".jhtml":
-        return page_response(render_or_error(bot, found.read_text(), request.auth, found.stem), sandboxed=False)
+        html = render_or_error(
+            bot,
+            found.read_text(),
+            request.auth,
+            found.stem,
+            page_path=posixpath.normpath(path),
+            asset_url=asset_urls(request.auth, bot_name),
+        )
+        return page_response(html, sandboxed=True)
     response = FileResponse(found.open("rb"), content_type=SERVED_SUFFIXES[found.suffix.lower()])
     response["Cache-Control"] = "no-cache"
     response["X-Frame-Options"] = "SAMEORIGIN"
+    return response
+
+
+@router.get("/bots/{bot_name}/assets/{token}/{path:path}", auth=None)
+def bot_asset(request, bot_name: str, token: str, path: str):
+    """An asset of a sandboxed bot-folder page (see ``page_assets``): the token in the URL stands
+    in for the login the sandboxed page can't send. Never a page, which renders with data."""
+    from django_ergo.bots.pages import SERVED_SUFFIXES
+    from django_ergo.bots.pages import bot_file as find
+
+    user = user_for_token(token, bot_name)
+    if user is None:
+        raise HttpError(401, "This link has expired; reload the page")
+    bot = get_bot(bot_name, user)
+    found = find(bot, path)
+    if found is None or found.suffix == ".jhtml":
+        raise HttpError(404, "No such file")
+    response = FileResponse(found.open("rb"), content_type=SERVED_SUFFIXES[found.suffix.lower()])
+    response["Cache-Control"] = "no-cache"
+    response["X-Frame-Options"] = "SAMEORIGIN"
+    # The page's origin is opaque, so its module scripts and fonts are cross-origin requests.
+    response["Access-Control-Allow-Origin"] = "*"
+    if found.suffix.lower() in (".html", ".htm", ".svg"):
+        response["Content-Security-Policy"] = SANDBOXED  # a document opened from here stays sandboxed
     return response
 
 

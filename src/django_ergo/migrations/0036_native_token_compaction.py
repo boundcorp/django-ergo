@@ -8,7 +8,7 @@ No messages, tool results, summaries or call records are changed.
 
 from django.db import migrations
 
-BACKUP = "_ergo_0031_compaction_policy"
+BACKUP = "_ergo_0036_compaction_policy"
 
 
 def forward(apps, schema_editor):
@@ -82,5 +82,5 @@ def reverse(apps, schema_editor):
 
 
 class Migration(migrations.Migration):
-    dependencies = [("django_ergo", "0030_engine_neutral_messages")]
+    dependencies = [("django_ergo", "0035_agentrunsession_agentsession_and_more")]
     operations = [migrations.RunPython(forward, reverse)]

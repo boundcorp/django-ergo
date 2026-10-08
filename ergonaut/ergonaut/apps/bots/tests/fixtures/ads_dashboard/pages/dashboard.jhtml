@@ -1,0 +1,35 @@
+{{ blocks.markdown(text="# Meta ads, last 7 days") }}
+{{ blocks.markdown(text="Includes today so far (synced from Ad Manager every 15 minutes; Ad Manager pulls Meta hourly).") }}
+
+{{ blocks.metric(label="Spend", table="AdDailyStat", aggregate="sum", field="spend", format="money", filters={"date__gte": days_ago(7)}) }}
+{{ blocks.metric(label="Link clicks", table="AdDailyStat", aggregate="sum", field="link_clicks", format="number", filters={"date__gte": days_ago(7)}) }}
+{{ blocks.metric(label="Landing page views", table="AdDailyStat", aggregate="sum", field="landing_page_views", format="number", filters={"date__gte": days_ago(7)}) }}
+{{ blocks.metric(label="Installs", table="AdDailyStat", aggregate="sum", field="installs", format="number", filters={"date__gte": days_ago(7)}) }}
+{% for total in table("AdTotal") %}
+{{ blocks.metric(label="CPC (link click)", table="AdTotal", aggregate="sum", field="cpc", format="money", filters={"currency": total.currency}) }}
+{{ blocks.metric(label="CPI", table="AdTotal", aggregate="sum", field="cpi", format="money", filters={"currency": total.currency}) }}
+{% endfor %}
+
+{{ blocks.chart(table="AdDailyStat", x="date", y="spend", group="campaign_name", kind="line", title="Daily spend by campaign", filters={"date__gte": days_ago(7)}) }}
+
+<h2>Per-campaign results</h2>
+
+<table>
+  <thead><tr><th>Campaign</th><th>Spend</th><th>Link clicks</th><th>Landing page views</th><th>Installs</th><th>CPC (link click)</th><th>CPI</th></tr></thead>
+  <tbody>
+  {% for row in table("AdCampaignSummary").order_by("campaign_name") %}
+    <tr><td>{{ row.campaign_name }}</td><td>{{ row.spend|money if row.spend is not none else "—" }}</td><td>{{ row.link_clicks if row.link_clicks is not none else "—" }}</td><td>{{ row.landing_page_views if row.landing_page_views is not none else "—" }}</td><td>{{ row.installs if row.installs is not none else "—" }}</td><td>{{ row.cpc|money if row.cpc is not none else "—" }}</td><td>{{ row.cpi|money if row.cpi is not none else "—" }}</td></tr>
+  {% else %}
+    <tr><td colspan="7">No campaign data for this range.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+{{ blocks.markdown(text="CPC and CPI come from Ad Manager: spend divided by link clicks, and by Meta-reported installs, over the whole window. A dash means no clicks or installs yet.") }}
+
+<h2>30 most recent rows</h2>
+
+{{ blocks.table(table="AdDailyStat", columns=["date", "campaign_name", "spend", "impressions", "link_clicks", "landing_page_views", "installs", "cpc", "cpi", "partial"], order_by=["-date", "campaign_name"], limit=30) }}
+
+{% set last_pull = table("AdDailyStat").max("pulled_at") %}
+{{ blocks.markdown(text="Data last pulled: " ~ (last_pull|string if last_pull else "—")) }}

@@ -7,8 +7,8 @@ from django.conf import settings
 from django.db import connection
 from django.db.migrations.executor import MigrationExecutor
 
-BEFORE = [("django_ergo", "0030_engine_neutral_messages")]
-AFTER = [("django_ergo", "0031_native_token_compaction")]
+BEFORE = [("django_ergo", "0035_agentrunsession_agentsession_and_more")]
+AFTER = [("django_ergo", "0036_native_token_compaction")]
 
 
 @pytest.mark.django_db(transaction=True)
@@ -124,7 +124,7 @@ def test_native_policy_forward_reverse_and_rerun():
             )
         migrated = list(session_model.objects.order_by("pk").values())
         module = importlib.import_module(
-            "django_ergo.migrations.0031_native_token_compaction"
+            "django_ergo.migrations.0036_native_token_compaction"
         )
         with connection.schema_editor() as editor:
             module.forward(apps, editor)
@@ -156,7 +156,7 @@ def test_native_policy_forward_reverse_and_rerun():
 @pytest.mark.django_db(transaction=True)
 def test_reverse_preserves_later_policy_edits_and_non_dict_metadata():
     module = importlib.import_module(
-        "django_ergo.migrations.0031_native_token_compaction"
+        "django_ergo.migrations.0036_native_token_compaction"
     )
     executor = MigrationExecutor(connection)
     executor.migrate(BEFORE)

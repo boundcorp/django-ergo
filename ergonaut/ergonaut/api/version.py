@@ -1,9 +1,10 @@
 """The running Ergonaut version and whether a newer one is out (sidebar footer)."""
 
 from ninja import Router
-from ninja.security import django_auth
 
-router = Router(tags=["version"], auth=django_auth)
+from ergonaut.api.auth import user_auth
+
+router = Router(tags=["version"], auth=user_auth)
 
 
 @router.get("/version")

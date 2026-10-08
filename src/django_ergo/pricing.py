@@ -235,6 +235,8 @@ def call_cost_parts(call) -> dict[str, float] | None:
     """A StructuredCall's cost by part (input, cache_write, cache_read, output): what was
     recorded request by request, else (older calls) priced from its totals. None if
     unpriced."""
+    if getattr(getattr(call, "session", None), "transport_type", None) == "cli":
+        return dict.fromkeys(("input", "cache_write", "cache_read", "output"), 0.0)
     recorded = (getattr(call, "metadata", None) or {}).get("cost_parts")
     if recorded and getattr(call, "cost_usd", None) is not None:
         return {k: float(v) for k, v in recorded.items()}
@@ -261,6 +263,9 @@ def add_request_cost(call, model: str, usage) -> None:
     ``metadata["cost_parts"]``). ``usage`` has Ergo's token fields (a Completion or a
     message row). Once a request is unpriced, the call stays unpriced."""
     from decimal import Decimal
+
+    if getattr(getattr(call, "session", None), "transport_type", None) == "cli":
+        return
 
     fields = (
         "input_tokens",

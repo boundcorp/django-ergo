@@ -235,6 +235,7 @@ def test_browse_a_bots_knowledge_base(client, cook, bot_folder, use_bots):
 
 @pytest.mark.django_db(transaction=True)
 def test_upload_list_download_and_delete_session_files(client, cook, use_bots, settings, tmp_path):
+    from django.core.files.base import ContentFile
     from django.core.files.uploadedfile import SimpleUploadedFile
     from django_ergo.conversation.models import ConversationSession
 
@@ -263,6 +264,16 @@ def test_upload_list_download_and_delete_session_files(client, cook, use_bots, s
     assert listed[0]["archived_at"]
     download = client.get(f"/api/attachments/{file['id']}/download")
     assert b"".join(download.streaming_content) == b"item,count\neggs,4\n"
+
+    # A row whose file is gone (wiped media) is a 404 that says so, not a 500.
+    row = ConversationSession.objects.get(id=root["id"]).attachments.get()
+    content = row.file.read()
+    row.file.close()
+    row.file.storage.delete(row.file.name)
+    missing = client.get(f"/api/attachments/{file['id']}/download?inline=true")
+    assert missing.status_code == 404
+    assert "missing" in missing.json()["detail"]
+    row.file.storage.save(row.file.name, ContentFile(content))
 
     # Someone else can't see it.
     other = get_user_model().objects.create_user("other", "o@example.com", "pw")
@@ -513,10 +524,11 @@ def test_pins_bot_files_and_live_pages(client, cook, bot_folder, use_bots, setti
         ("Board", "📋", "board.jhtml"),
     ]
 
-    # A bot-folder page renders in the app's origin; assets come as files; code and config don't.
+    # A bot-folder page renders sandboxed, like a chat's; assets come as files; code and config don't.
     home = client.get("/api/bots/kitchen/files/pages/home.jhtml")
     assert b"Hello cook from kitchen" in home.content
-    assert "Content-Security-Policy" not in home and home["X-Frame-Options"] == "SAMEORIGIN"
+    assert home["Content-Security-Policy"].startswith("sandbox allow-scripts")
+    assert home["X-Frame-Options"] == "SAMEORIGIN"
     assert client.get("/api/bots/kitchen/files/pages/app.mjs")["Content-Type"] == "text/javascript"
     for blocked in ("bot.yaml", "tools/pantry.py", "../kitchen/bot.yaml", "pages/nope.jhtml"):
         assert client.get(f"/api/bots/kitchen/files/{blocked}").status_code == 404
@@ -1114,3 +1126,118 @@ def test_context_snapshot_compactions_and_visibility(client, cook, use_bots):
     other.is_superuser = True
     other.save()
     assert client.get(f"/api/calls/{second['call_id']}/context").status_code == 200
+
+
+@pytest.mark.django_db(transaction=True)
+def test_routing_page_shows_tiers_and_admins_set_the_priorities(client, cook, use_bots, monkeypatch):
+    from django_ergo.bots.providers import Providers
+    from django_ergo.conversation.models import RoutingText
+
+    use_bots(say("hi"))
+    webhooks.get_registry().providers = Providers.from_dict(
+        {
+            "providers": {
+                "openai": {"type": "openai", "models": ["gpt-6-sol", "gpt-6-luna"]},
+            },
+            "tiers": {"low": ["openai/gpt-6-luna"], "medium": ["openai/gpt-6-sol"]},
+        }
+    )
+    compiles = []
+    monkeypatch.setattr(
+        "django_ergo.bots.routing.ensure_compiled", lambda providers, make_engine, retry=False: compiles.append(retry)
+    )
+
+    page = client.get("/api/routing").json()
+    assert [(t["name"], t["picked"]) for t in page["tiers"]] == [
+        ("low", "openai/gpt-6-luna"),
+        ("medium", "openai/gpt-6-sol"),
+    ]
+    assert page["providers"][0]["status"] == "in_use"
+    assert (page["text"], page["editable"]) == ("", False)
+
+    text = {"text": "Lean on Claude until its 5-hour window is 85% used."}
+    assert client.put("/api/routing", json.dumps(text), content_type="application/json").status_code == 403
+
+    cook.is_superuser = True
+    cook.save()
+    saved = client.put("/api/routing", json.dumps(text), content_type="application/json").json()
+    assert (saved["text"], saved["text_source"], saved["editable"]) == (text["text"], "page", True)
+    assert RoutingText.objects.get().updated_by == cook
+    assert compiles == [True]
+
+    reset = client.delete("/api/routing").json()
+    assert (reset["text"], reset["text_source"]) == ("", "")
+    assert not RoutingText.objects.exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_turn_refused_at_its_limit_offers_a_retry_on_another_model(client, cook, use_bots, monkeypatch):
+    from django_ergo.bots.providers import Providers
+    from django_ergo.conversation.models import ConversationSession, StructuredCall
+
+    use_bots(say("Back on it."))
+    webhooks.get_registry().providers = Providers.from_dict(
+        {
+            "providers": {
+                "anthropic": {"type": "claude", "models": ["claude-opus-5-5"]},
+                "openai": {"type": "openai", "models": ["gpt-6-sol"]},
+            },
+            "tiers": {"medium": ["anthropic/claude-opus-5-5", "openai/gpt-6-sol"]},
+        }
+    )
+    root = post(client, "/api/bots/kitchen/root").json()
+    assert post(client, f"/api/sessions/{root['id']}/model", {"model": "auto/medium"}).status_code == 200
+    session = ConversationSession.objects.get(id=root["id"])
+    session.metadata = {**session.metadata, "routed_model": "anthropic/claude-opus-5-5"}
+    session.save()
+    failed = StructuredCall.objects.create(
+        kind="chat_reply",
+        session_id=root["id"],
+        user=cook,
+        request="Plan dinner",
+        status="failed",
+        error="Claude Code failed: Claude AI usage limit reached|1791200000",
+    )
+
+    detail = client.get(f"/api/sessions/{root['id']}").json()
+    assert detail["retry_model"] == "openai/gpt-6-sol"
+    session.refresh_from_db()
+    assert session.metadata["routed_model"] == "anthropic/claude-opus-5-5"  # nothing moved on its own
+
+    assert post(client, f"/api/sessions/{root['id']}/resume?model=nope/x").status_code == 400
+    turn = post(client, f"/api/sessions/{root['id']}/resume?model=openai/gpt-6-sol").json()
+    assert turn["text"] == "Back on it."
+    session.refresh_from_db()
+    assert session.metadata["routed_model"] == "openai/gpt-6-sol"
+    failed.refresh_from_db()
+    assert failed.metadata["resumed"] is True
+    assert client.get(f"/api/sessions/{root['id']}").json()["retry_model"] == ""
+
+
+@pytest.mark.django_db(transaction=True)
+def test_session_messages_expose_identity_without_model_attribution(client, cook):
+    from django_ergo.conversation.models import ConversationSession
+
+    session = ConversationSession.objects.create(user=cook, bot_name="kitchen", engine_type="claude")
+    author = {"kind": "telegram_user", "ref": "123", "display_name": "Actual author"}
+    provenance = {
+        "kind": "forwarded",
+        "forwarded_by": {"kind": "django_user", "ref": str(cook.pk), "display_name": "cook"},
+        "origin": {"session_id": "source-chat", "label": "Source chat", "timestamp": "2026-10-05T10:30:00Z"},
+        "note": "Separate forwarding note",
+        "attachments": [{"id": "shared-file", "filename": "report.pdf", "media_type": "application/pdf"}],
+    }
+    message = session.messages.create(role="user", sequence=0, author=author, provenance=provenance)
+    message.content_blocks.create(block_type="text", text="**Original body**", sequence=0)
+    legacy = session.messages.create(role="user", sequence=1)
+    legacy.content_blocks.create(block_type="text", text="Legacy body", sequence=0)
+
+    response = client.get(f"/api/sessions/{session.id}")
+    assert response.status_code == 200
+    forwarded, ordinary = response.json()["messages"]
+    assert forwarded["author"] == author
+    assert forwarded["provenance"] == provenance
+    assert forwarded["blocks"] == [{"type": "text", "text": "**Original body**"}]
+    assert ordinary["author"] == {}
+    assert ordinary["provenance"] == {}
+    assert ordinary["blocks"] == [{"type": "text", "text": "Legacy body"}]

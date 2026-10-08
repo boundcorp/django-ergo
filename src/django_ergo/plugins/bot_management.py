@@ -6,12 +6,14 @@
         main_branch: main
         remote: origin
         approve_publish: true   # ergo_config_repo_publish waits for the user's approval
-        root_only: true         # only the root session gets these tools
+        root_only: false        # true: only top-level chats get these tools, not threads
 
 The repository is the git checkout that contains the bot folder. Tools:
 
-- ``ergo_config_repo_status``, ``ergo_config_repo_list``, ``ergo_config_repo_read``, ``ergo_config_repo_diff``: look around.
-- ``ergo_config_repo_write``: change a file (nothing is published).
+- ``ergo_config_repo_status``, ``ergo_config_repo_list``, ``ergo_config_repo_read``,
+  ``ergo_config_repo_grep`` and ``ergo_config_repo_diff``: look around.
+- ``ergo_config_repo_write`` replaces a file; ``ergo_config_repo_edit`` replaces exact
+  text in one.
 - ``ergo_config_repo_delete``: delete a file (to move one, write it anew, then delete).
 - ``ergo_config_repo_preview``: render a ``.jhtml`` page from the changes, with
   the draft's tables and sample rows, all rolled back (``ergo_bot_preview``).
@@ -20,12 +22,14 @@ The repository is the git checkout that contains the bot folder. Tools:
   branch and opens a pull request with the GitHub CLI (``gh``).
 - ``ergo_config_repo_discard``: throw away unpublished changes.
 - ``ergo_config_repo_pull``: fast-forward the main branch from the remote.
-- ``ergo_config_repo_prs``: list open pull requests (``gh``).
 
 In ``merge_main`` mode the bot edits the checkout it runs from. In
 ``propose_pr`` mode it edits a draft: a separate git worktree of the main
 branch (inside ``.git``), so the running bots never see a change until its
-pull request is merged and the checkout is pulled. Changes to bot.yaml,
+pull request is merged and the checkout is pulled. A draft with no changes
+follows the remote main branch, so work after a merge starts from it; a
+draft with changes is rebased onto it when published, and ``status`` says
+when main has moved on. Changes to bot.yaml,
 agents.md or tool files take effect when the bot is loaded again.
 """
 
@@ -34,6 +38,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+import time
 from datetime import UTC
 from datetime import datetime
 from pathlib import Path
@@ -61,6 +66,7 @@ def _pr_number(version: str) -> int:
 
 
 MAX_READ_CHARS = 50_000
+MAX_GREP_MATCHES = 200
 
 
 class BotManagementPlugin(BotPlugin):
@@ -82,7 +88,7 @@ class BotManagementPlugin(BotPlugin):
         self.main_branch = self.config.get("main_branch", "main")
         self.remote = self.config.get("remote", "origin")
         self.approve_publish = bool(self.config.get("approve_publish", True))
-        self.root_only = bool(self.config.get("root_only", True))
+        self.root_only = bool(self.config.get("root_only", False))
         self._repo: Path | None = None
 
     # -- commands ----------------------------------------------------------
@@ -104,8 +110,10 @@ class BotManagementPlugin(BotPlugin):
         if self.mode == "merge_main":
             return self.repo
         draft = self.draft_dir
-        if not draft.is_dir():
-            self.git("fetch", self.remote, self.main_branch)
+        if draft.is_dir():
+            self._follow_main(draft)
+        else:
+            self._fetch_main(force=True)
             self.git(
                 "worktree",
                 "add",
@@ -116,6 +124,37 @@ class BotManagementPlugin(BotPlugin):
                 f"{self.remote}/{self.main_branch}",
             )
         return draft
+
+    @property
+    def remote_main(self) -> str:
+        return f"{self.remote}/{self.main_branch}"
+
+    def _fetch_main(self, *, force: bool = False) -> None:
+        """Fetch the remote main branch, at most every PR_FETCH_SECONDS."""
+        last = self.__dict__.get("_main_fetched", -1e9)
+        if force or time.monotonic() - last > PR_FETCH_SECONDS:
+            self.git("fetch", self.remote, self.main_branch)
+            self._main_fetched = time.monotonic()
+
+    def _follow_main(self, draft: Path) -> None:
+        """Move a draft with no changes up to the remote main branch.
+
+        Without this, a draft made before a PR merged keeps the old main,
+        and the next change re-proposes (and conflicts with) what merged.
+        """
+        try:
+            self._fetch_main()
+        except ValueError:
+            return  # offline: keep working on the draft as it is
+        if self.git("status", "--porcelain", cwd=draft).strip():
+            return
+        if self._behind(draft):
+            self.git("reset", "--hard", self.remote_main, cwd=draft)
+
+    def _behind(self, work: Path) -> int:
+        """How many commits the remote main has that ``work`` doesn't."""
+        count = self.git("rev-list", "--count", f"HEAD..{self.remote_main}", cwd=work)
+        return int(count.strip() or 0)
 
     @property
     def draft_dir(self) -> Path:
@@ -167,9 +206,15 @@ class BotManagementPlugin(BotPlugin):
         changes = self.git("status", "--short", cwd=work).strip() or "(clean)"
         log = self.git("log", "--oneline", "-5", cwd=work).strip()
         where = "draft of " if work != self.repo else ""
+        behind = ""
+        if work != self.repo and (count := self._behind(work)):
+            behind = (
+                f"\n\n{self.remote_main} has {count} commit(s) this draft doesn't; "
+                "publishing rebases the changes onto it."
+            )
         return (
             f"Repository: {where}{self.repo}\nBranch: {branch}\nMode: {self.mode}\n\n"
-            f"Changes:\n{changes}\n\nRecent commits:\n{log}"
+            f"Changes:\n{changes}\n\nRecent commits:\n{log}{behind}"
         )
 
     def list_files(self, path: str = ".") -> str:
@@ -181,11 +226,111 @@ class BotManagementPlugin(BotPlugin):
         prefix = "" if base == work else f"{base.relative_to(work)}/"
         return "\n".join(f for f in files.splitlines() if f.startswith(prefix))
 
-    def read(self, path: str) -> str:
+    def read(
+        self, path: str, start_line: int | None = None, end_line: int | None = None
+    ) -> str:
         text = self.path(path).read_text()
-        if len(text) > MAX_READ_CHARS:
-            return text[:MAX_READ_CHARS] + "\n[truncated]"
-        return text
+        lines = text.splitlines()
+        total = len(lines)
+        if start_line is None and end_line is None:
+            if len(text) <= MAX_READ_CHARS:
+                return text
+            next_line = text[:MAX_READ_CHARS].count("\n") + 1
+            return (
+                f"{text[:MAX_READ_CHARS]}\n[truncated: {total} total lines; "
+                f"read on with start_line={next_line}]"
+            )
+
+        start = 1 if start_line is None else int(start_line)
+        end = total if end_line is None else int(end_line)
+        if start < 1:
+            msg = "start_line must be at least 1"
+            raise ValueError(msg)
+        if end < start:
+            msg = "end_line must not be before start_line"
+            raise ValueError(msg)
+        if start > total:
+            return f"{path} has {total} lines; no lines at or after {start}."
+        end = min(end, total)
+
+        rendered: list[str] = []
+        size = 0
+        next_line = start
+        for number in range(start, end + 1):
+            line = f"{number}: {lines[number - 1]}"
+            if rendered and size + len(line) + 1 > MAX_READ_CHARS:
+                break
+            rendered.append(line)
+            size += len(line) + 1
+            next_line = number + 1
+        result = f"{path} lines {start}-{next_line - 1} of {total}\n" + "\n".join(
+            rendered
+        )
+        if next_line <= end:
+            result += f"\n[truncated: {total} total lines; read on with start_line={next_line}]"
+        return result
+
+    def grep(self, pattern: str, path: str = ".") -> str:
+        """Find regex-matching lines in tracked or untracked repository files."""
+        try:
+            matcher = re.compile(pattern)
+        except re.error as error:
+            msg = f"Invalid pattern {pattern!r}: {error}"
+            raise ValueError(msg) from None
+        base = self.path(path)
+        work = self.workdir
+        if base.is_file():
+            targets = [base]
+        else:
+            prefix = "" if base == work else f"{base.relative_to(work)}/"
+            names = self.git(
+                "ls-files", "--cached", "--others", "--exclude-standard", cwd=work
+            ).splitlines()
+            targets = [self.path(name) for name in names if name.startswith(prefix)]
+
+        matches = []
+        for target in targets:
+            if not target.is_file():
+                continue
+            relative = target.relative_to(work)
+            for number, line in enumerate(target.read_text().splitlines(), 1):
+                if matcher.search(line):
+                    matches.append(f"{relative}:{number}:{line}")
+                    if len(matches) == MAX_GREP_MATCHES:
+                        return (
+                            "\n".join(matches)
+                            + f"\n[truncated at {MAX_GREP_MATCHES} matches]"
+                        )
+        return "\n".join(matches) or "No matches."
+
+    def edit(
+        self, path: str, old_text: str, new_text: str, replace_all: bool = False
+    ) -> str:
+        target = self.path(path)
+        if not target.is_file():
+            msg = f"{path} doesn't exist or isn't a file"
+            raise ValueError(msg)
+        if not old_text:
+            msg = "old_text must not be empty"
+            raise ValueError(msg)
+        text = target.read_text()
+        count = text.count(old_text)
+        if not count:
+            msg = f"old_text wasn't found in {path}"
+            raise ValueError(msg)
+        if count > 1 and not replace_all:
+            msg = (
+                f"old_text matches {count} times in {path}; "
+                "set replace_all=true to replace each"
+            )
+            raise ValueError(msg)
+        replacements = count if replace_all else 1
+        target.write_text(text.replace(old_text, new_text, -1 if replace_all else 1))
+        plural = "" if replacements == 1 else "s"
+        return (
+            f"Edited {target.relative_to(self.workdir)} "
+            f"({replacements} replacement{plural})"
+        )
 
     def write(self, path: str, content: str) -> str:
         target = self.path(path)
@@ -319,7 +464,23 @@ class BotManagementPlugin(BotPlugin):
         if branch != self.main_branch:
             msg = f"The checkout is on {branch}, not {self.main_branch}; not switching it."
             raise ValueError(msg)
-        return self.git("pull", "--ff-only", self.remote, self.main_branch).strip()
+        self._fetch_main(force=True)
+        try:
+            return self.git("merge", "--ff-only", self.remote_main).strip()
+        except ValueError:
+            ahead = int(
+                self.git("rev-list", "--count", f"{self.remote_main}..HEAD").strip()
+                or 0
+            )
+            behind = self._behind(self.repo)
+            if ahead and behind:
+                msg = (
+                    f"The checkout has diverged from {self.remote_main}; "
+                    "it can't fast-forward. Commit or discard the local changes "
+                    "before pulling."
+                )
+                raise ValueError(msg) from None
+            raise
 
     def publish(self, message: str, title: str = "", body: str = "") -> str:
         work = self.workdir
@@ -330,7 +491,8 @@ class BotManagementPlugin(BotPlugin):
         if self.mode == "merge_main":
             self.git("add", "--all")
             self.git("commit", "-m", message)
-            self.git("pull", "--rebase", self.remote, self.main_branch)
+            self._fetch_main(force=True)
+            self.git("rebase", self.remote_main)
             self.git("push", self.remote, f"HEAD:{self.main_branch}")
             sha = self.git("rev-parse", "--short", "HEAD").strip()
             return f"Pushed {sha} to {self.main_branch}."
@@ -342,6 +504,7 @@ class BotManagementPlugin(BotPlugin):
         self.git("add", "--all", cwd=work)
         self.git("commit", "-m", message, cwd=work)
         try:
+            self._rebase_on_main(work)
             self.git("push", "-u", self.remote, branch, cwd=work)
             url = self._open_pr(branch, message, title, body, work)
         except ValueError:
@@ -352,6 +515,25 @@ class BotManagementPlugin(BotPlugin):
         self.git("worktree", "remove", "--force", str(work))
         self.git("branch", "-D", self.draft_branch)
         return f"Opened {url} from {branch}; it goes live once merged."
+
+    def _rebase_on_main(self, work: Path) -> None:
+        """Put the commit on the latest remote main, so the PR holds only this change."""
+        self._fetch_main(force=True)
+        if not self._behind(work):
+            return
+        try:
+            self.git("rebase", self.remote_main, cwd=work)
+        except ValueError:
+            conflicts = self.git(
+                "diff", "--name-only", "--diff-filter=U", cwd=work
+            ).split()
+            self.git("rebase", "--abort", cwd=work)
+            msg = (
+                f"The changes conflict with {self.remote_main} in "
+                f"{', '.join(conflicts) or 'some files'}: discard the draft, "
+                "or read those files from main and write the changes again."
+            )
+            raise ValueError(msg) from None
 
     def _open_pr(self, branch: str, message: str, title: str, body: str, work) -> str:
         return self.run(
@@ -401,8 +583,6 @@ class BotManagementPlugin(BotPlugin):
 
     def _pr_ref(self, number: int) -> str:
         """Fetch a pull request's head into a local ref (at most every 30 seconds)."""
-        import time
-
         ref = f"refs/ergo/pr/{int(number)}"
         fetched = self.__dict__.setdefault("_pr_fetched", {})
         if time.monotonic() - fetched.get(ref, -1e9) > PR_FETCH_SECONDS:
@@ -522,10 +702,25 @@ class BotManagementPlugin(BotPlugin):
             """List files in the bot repository, optionally under a folder."""
             return plugin.list_files(path)
 
-        @bot_tool(name="ergo_config_repo_read")
-        def read(path: str) -> str:
-            """Read a file from the bot repository."""
-            return plugin.read(path)
+        @bot_tool(
+            name="ergo_config_repo_read",
+            parameters={
+                "path": {"type": "string"},
+                "start_line": {"type": "integer"},
+                "end_line": {"type": "integer"},
+            },
+            required=["path"],
+        )
+        def read(
+            path: str, start_line: int | None = None, end_line: int | None = None
+        ) -> str:
+            """Read a file; pass line bounds for numbered output."""
+            return plugin.read(path, start_line, end_line)
+
+        @bot_tool(name="ergo_config_repo_grep")
+        def grep(pattern: str, path: str = ".") -> str:
+            """Find regex matches as path:line:text."""
+            return plugin.grep(pattern, path)
 
         @bot_tool(
             name="ergo_config_repo_write",
@@ -535,6 +730,16 @@ class BotManagementPlugin(BotPlugin):
         def write(path: str, content: str) -> str:
             """Create or replace a file in the bot repository (unpublished until ergo_config_repo_publish)."""
             return plugin.write(path, content)
+
+        @bot_tool(
+            name="ergo_config_repo_edit",
+            requires_approval=self.mode == "merge_main" and self.approve_publish,
+        )
+        def edit(
+            path: str, old_text: str, new_text: str, replace_all: bool = False
+        ) -> str:
+            """Replace exact text in a file (unpublished until ergo_config_repo_publish)."""
+            return plugin.edit(path, old_text, new_text, replace_all)
 
         @bot_tool(
             name="ergo_config_repo_delete",
@@ -588,7 +793,9 @@ class BotManagementPlugin(BotPlugin):
             status,
             list_files,
             read,
+            grep,
             write,
+            edit,
             delete,
             diff,
             preview,

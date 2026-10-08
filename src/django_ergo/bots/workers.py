@@ -21,8 +21,10 @@ Worker) carrying what it learned. Polling suits watching something slow
 elsewhere, such as an Orca coding agent: nothing waits in a process, so a
 restart loses nothing. ``ctx.stopping`` is true once someone cancelled it.
 
-Functions come from the bot's ``@bot_task`` functions (``task:<name>``) and
-from plugins (``<plugin>:<name>``, see ``BotPlugin.worker_functions``).
+Functions come from the bot's ``@bot_task`` functions (``task:<name>``),
+from plugins (``<plugin>:<name>``, see ``BotPlugin.worker_functions``), and
+from agent managers (``agent:<manager>``, which watch a coding agent; see
+``bots.agents``).
 ``DJANGO_ERGO["WORKER_RUNNER"]`` runs them (Ergonaut: Celery); by default a
 thread in this process.
 """
@@ -196,6 +198,15 @@ def resolve(bot: Bot, function: str):
             msg = f"{bot.name} has no task {name!r} (tasks: {known})"
             raise LookupError(msg)
         return found
+    if kind == "agent":
+        from django_ergo.bots.agents import managers
+        from django_ergo.bots.agents import watcher
+
+        manager = managers(bot).get(name)
+        if manager is None:
+            msg = f"{bot.name} has no agent manager {name!r}"
+            raise LookupError(msg)
+        return watcher(manager)
     plugin = bot.plugin(kind)
     found = plugin.worker_functions().get(name) if plugin is not None else None
     if found is None:
@@ -330,7 +341,9 @@ def run(worker_id: str, registry=None) -> str:
     return worker.status
 
 
-def cancel(worker: Worker) -> str:
+def cancel(worker: Worker, bot: Bot | None = None) -> str:
+    """Cancel a worker. With ``bot``, a coding agent it watches is stopped too
+    (``bots.agents``); otherwise the work stops at its next check."""
     from django_ergo.conversation.models import Worker
 
     if not worker.active:
@@ -339,7 +352,19 @@ def cancel(worker: Worker) -> str:
         status="cancelled"
     )
     _notify(worker)
-    return f"Cancelling {worker.title}; it stops at its next check."
+    found = None
+    if bot is not None:
+        from django_ergo.bots.agents import worker_of
+
+        found = worker_of(bot, worker)
+    if found is None:
+        return f"Cancelling {worker.title}; it stops at its next check."
+    manager, handle = found
+    try:
+        stopped = manager.stop(handle)
+    except Exception as exc:  # noqa: BLE001 — the worker is cancelled either way
+        stopped = f"Couldn't stop the agent: {type(exc).__name__}: {exc}"
+    return f"Cancelled {worker.title}. {stopped}"
 
 
 def _record_outputs(worker: Worker, result: Any) -> None:
@@ -433,12 +458,19 @@ def activity(worker: Worker) -> dict | None:
 def log(bot: Bot, worker: Worker) -> dict:
     """A worker's recent output, read now from its plugin (``BotPlugin.worker_log``) when
     the plugin can, else the activity kept at its last check (``live`` says which)."""
+    from django_ergo.bots.agents import worker_of
+
     kind, _, _ = worker.function.partition(":")
-    plugin = bot.plugin(kind) if kind != "task" else None
+    plugin = bot.plugin(kind) if kind not in ("task", "agent") else None
+    agent = worker_of(bot, worker) if kind == "agent" else None
     error = ""
-    if plugin is not None:
+    if plugin is not None or agent is not None:
         try:
-            found = plugin.worker_log(worker)
+            found = (
+                agent[0].log(worker, agent[1])
+                if agent is not None
+                else plugin.worker_log(worker)
+            )
         except Exception as exc:  # noqa: BLE001 — fall back to what was kept
             found, error = None, f"{type(exc).__name__}: {exc}"[:600]
         if found is not None:
@@ -487,7 +519,7 @@ def worker_toolkit(bot: Bot, ctx):
         if found is None:
             msg = f"No worker {worker_id} in this chat"
             raise ValueError(msg)
-        return cancel(found)
+        return cancel(found, bot)
 
     tools = [list_workers, cancel_worker]
     # Tasks that need approval start only through the bot's own (approved) tools.

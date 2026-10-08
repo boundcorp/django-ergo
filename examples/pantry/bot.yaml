@@ -1,0 +1,9 @@
+name: pantry
+description: A pantry list with a live page and a Restock button
+engine: {type: openai, config: {model: gpt-6-luna}}
+orchestration: false
+tables: [tables.py]
+tools: [tools/pantry.py]
+chats:
+  main:
+    pins: [{path: pages/pantry.jhtml, title: Pantry, icon: "🥫"}]

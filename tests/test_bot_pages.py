@@ -76,6 +76,43 @@ def test_jhtml_renders_over_tables_read_only(realty_bot):
 
 
 @pytest.mark.django_db(transaction=True)
+def test_date_filters_do_math_on_row_dates(realty_bot):
+    import datetime as dt
+
+    from django_ergo.bots.pages import as_datetime
+    from django_ergo.bots.pages import duration
+    from django_ergo.bots.pages import seconds_until
+
+    assert as_datetime("2026-10-05T20:00:00Z") == dt.datetime(
+        2026, 10, 5, 20, tzinfo=dt.UTC
+    )
+    assert as_datetime("2026-10-05") == dt.datetime(2026, 10, 5)  # noqa: DTZ001
+    assert as_datetime(None) is None and seconds_until("") is None
+    soon = (
+        dt.datetime.now(tz=dt.UTC) + dt.timedelta(hours=2, minutes=15, seconds=30)
+    ).isoformat()
+    assert 2 * 3600 + 15 * 60 < seconds_until(soon) <= 2 * 3600 + 15 * 60 + 30
+    assert duration(2 * 3600 + 15 * 60 + 30) == "2h 15m"
+    assert duration(3 * 86400 + 4 * 3600) == "3d 4h"
+    assert duration(45) == "45s"
+    assert duration(0) == "0s"
+    assert duration(-90) == "-1m 30s"
+    assert duration(None) == "—"
+
+    # In a page (the sandbox allows datetime arithmetic and these filters).
+    from django_ergo.bots.pages import page_text
+    from django_ergo.bots.pages import render_page
+
+    bot, user = realty_bot
+    source = (
+        "{% set left = when | seconds_until %}{{ left | duration }}|"
+        "{{ (100 * (18000 - left) / 18000) | round | int }}%|"
+        "{{ ((when | as_datetime) - (when | as_datetime)).total_seconds() | int }}"
+    ).replace("when", repr(soon))
+    assert "2h 15m|55%|0" in page_text(render_page(bot, source, user=user))
+
+
+@pytest.mark.django_db(transaction=True)
 def test_blocks_render_metrics_tables_and_charts(realty_bot):
     from django_ergo.bots.pages import blocks_source
     from django_ergo.bots.pages import page_text
@@ -115,6 +152,41 @@ def test_blocks_render_metrics_tables_and_charts(realty_bot):
     assert "new Chart(" in html and '"type": "bar"' in html
     assert "<strong>bold</strong>" in html and "<script>x</script>" not in html
     assert "Houses" in page_text(html)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_blocks_render_forms_row_controls_buttons_and_respect_page_writes(realty_bot):
+    from django_ergo.bots.pages import PageError
+    from django_ergo.bots.pages import render_page
+
+    bot, user = realty_bot
+    source = """
+    {{ blocks.form(table="House", title="Add a house") }}
+    {{ blocks.table(table="House", columns=["address", "price"], edit=True, delete=True) }}
+    {{ blocks.button(label="Ask about listings", ask="Summarize the listings", args={"chat": "main"}) }}
+    """
+    html = render_page(bot, source, user=user)
+    assert 'name="address"' in html and 'type="number" name="price"' in html
+    assert '<select name="status"' in html and 'type="checkbox" name="listed"' in html
+    assert '<textarea name="notes"' in html
+    assert 'data-ergo-action="update"' in html and "data-ergo-delete" in html
+    assert (
+        'ergo.call("ergo.ask"' in html
+        and "ask: function" in html
+        and "Summarize the listings" in html
+    )
+
+    house = bot.table("House")
+    house.page_writes = False
+    try:
+        readonly = render_page(
+            bot, '{{ blocks.table(table="House", edit=True, delete=True) }}', user=user
+        )
+        assert "data-ergo-action" not in readonly and "data-ergo-delete" not in readonly
+        with pytest.raises(PageError, match="does not allow page writes"):
+            render_page(bot, '{{ blocks.form(table="House") }}', user=user)
+    finally:
+        del house.page_writes
 
 
 @pytest.mark.django_db(transaction=True)
@@ -247,3 +319,18 @@ def test_preview_renders_a_draft_page_with_samples_and_saves_nothing(realty):  #
     assert not bad["ok"] and "NoneType" in bad["error"]
     assert not preview("../outside.jhtml")["ok"]
     assert "ergo_bot_realty_house" not in connection.introspection.table_names()
+
+
+def test_preview_samples_keep_short_unique_fields_distinct():
+    from django.db import models
+
+    from django_ergo.management.commands.ergo_bot_preview import sample_value
+
+    currency = models.CharField(max_length=3, unique=True, default="usd")
+    currency.name = "currency"
+    values = [sample_value(currency, i, empty=False) for i in range(4)]
+    assert len(set(values)) == 4 and all(len(v) <= 3 for v in values)
+
+    plain = models.CharField(max_length=3, default="usd")
+    plain.name = "currency"
+    assert sample_value(plain, 2, empty=False) == "usd"

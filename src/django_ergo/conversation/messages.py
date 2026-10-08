@@ -10,8 +10,11 @@ from __future__ import annotations
 
 from typing import Any
 
+from asgiref.sync import sync_to_async
 from django.db.models import Max
 
+from django_ergo.conversation.identity import bot_identity
+from django_ergo.conversation.identity import django_user_identity
 from django_ergo.conversation.images import result_content
 from django_ergo.conversation.images import stored_result
 
@@ -38,6 +41,12 @@ async def add_message(session, role: str, blocks: list[dict], **fields):
     from django_ergo.conversation.models import MessageBlock
     from django_ergo.conversation.models import SessionMessage
 
+    if (
+        role == "assistant"
+        and session.bot_name
+        and any(block["block_type"] == "text" for block in blocks)
+    ):
+        fields.setdefault("author", bot_identity(session))
     message = await SessionMessage.objects.acreate(
         session=session, role=role, sequence=await anext_sequence(session), **fields
     )
@@ -47,8 +56,18 @@ async def add_message(session, role: str, blocks: list[dict], **fields):
     return message
 
 
-async def add_user_text(session, text: str):
-    return await add_message(session, "user", [{"block_type": "text", "text": text}])
+async def add_user_text(session, text: str, *, author=None, provenance=None):
+    if author is None:
+        author = await sync_to_async(
+            lambda: django_user_identity(session.user), thread_sensitive=True
+        )()
+    return await add_message(
+        session,
+        "user",
+        [{"block_type": "text", "text": text}],
+        author=author,
+        provenance=provenance or {},
+    )
 
 
 async def add_tool_results(session, results: list[tuple[str, Any, bool]]):
@@ -105,10 +124,14 @@ class StoredMessagesMixin:
     def _call(self, session, additional_tools=None):
         raise NotImplementedError
 
-    async def append_user_message(self, session, message: str, attachments=None):
+    async def append_user_message(
+        self, session, message: str, attachments=None, *, author=None, provenance=None
+    ):
         from django_ergo.conversation.attachments import save_attachments
 
-        row = await add_user_text(session, message)
+        row = await add_user_text(
+            session, message, author=author, provenance=provenance
+        )
         if attachments:
             await save_attachments(session, row.sequence, attachments)
 

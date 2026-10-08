@@ -83,6 +83,7 @@ def test_bots_and_chats_pick_models_from_providers(tmp_path, monkeypatch):
         "reasoning_effort": "medium",
         "model": "gpt-6-sol",
         "max_tokens": 900,
+        "provider": "openai",
         "api_key": "sk-test",
     }
 

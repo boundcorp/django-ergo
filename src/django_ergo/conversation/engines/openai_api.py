@@ -17,6 +17,7 @@ from django_ergo.conversation.engine import Engine
 from django_ergo.conversation.engine import EngineResponse
 from django_ergo.conversation.engine import SeededToolCall
 from django_ergo.conversation.engine import session_system_prompt
+from django_ergo.conversation.identity import attributed_text
 from django_ergo.conversation.images import attachment_ref
 from django_ergo.conversation.images import memory_result
 from django_ergo.conversation.images import prepare_messages
@@ -144,6 +145,9 @@ def openai_message_dicts(msg, attachments=(), *, audio_input: bool = False) -> l
     ]
     if texts or attachments:
         text = "\n\n".join(texts)
+        text = attributed_text(
+            text, getattr(msg, "author", {}), getattr(msg, "provenance", {})
+        )
         content = text
         if attachments:
             content = [

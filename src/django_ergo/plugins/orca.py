@@ -10,7 +10,9 @@
         files_host: devbox         # ssh host holding the worktrees (default: the environment;
                                    # "" reads them on this host)
         max_attach_bytes: 20000000
-        worker_poll_seconds: 120   # how often orca_start_worker's watcher checks the agent
+        agents: [codex, claude, omp]  # the agents ergo_agent_start may start here
+        worker_poll_seconds: 120   # how often an agent's watcher checks it
+        usage_minutes: 10          # minimum minutes between agent-session usage scans
         stall_minutes: 10          # a running worker with no new output this long shows as stalled
 
 The bot runs the CLI on the host Ergonaut runs on, as that user. Tools:
@@ -31,14 +33,20 @@ The bot runs the CLI on the host Ergonaut runs on, as that user. Tools:
   by ``session_id``) into a folder of an Orca worktree, so a worker can use
   them (design mockups, specs). Same approval as ``orca_run``; the folder must
   stay inside the worktree, and secret-looking names are refused.
-- ``orca_start_worker``: start a supervised coding agent on a task (approval),
-  watched by a thread Worker (``orca:watch``, see bots.workers) that polls the
-  dispatch, passes the agent's questions to the chat and brings its
-  ``worker_done`` report back as a message. Each chat gets its own Orca Run
+- An agent manager named ``orca`` (see bots.agents): ``ergo_agent_start``
+  starts a supervised coding agent on a task as an Orca worker (approval),
+  watched by a thread Worker (``agent:orca``) that polls the dispatch, passes
+  the agent's questions to the chat (``ergo_agent_reply`` answers them with
+  ``orchestration reply``) and brings its ``worker_done`` report back as a
+  message. ``orca_start_worker`` does the same with Orca's parameter names. Each chat gets its own Orca Run
   and mailbox terminal, made on first use. Each check also reads the agent's
   latest output (``worker-read``: its transcript, or its terminal) into the
   worker's activity, which Ergonaut's worker cards show with the time since it
   last did something; ``worker_log`` reads the whole recent log on demand.
+- The watcher also reads the coding agent's own session files from
+  ``files_host`` (or this host) every ``usage_minutes`` and when it settles.
+  It records Claude Code, Codex, and omp token counts per worker for Costs;
+  scanning is best effort and never changes the worker outcome.
 - ``orca_run``: every other command (creating worktrees, starting and
   stopping workers, sending to terminals...). Each call needs approval unless
   ``approve_changes: false``.
@@ -50,16 +58,25 @@ call anywhere else.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
+import logging
 import re
+import shlex
 import shutil
 import subprocess
 import time
 from datetime import UTC
 from datetime import datetime
+from datetime import timedelta
+from pathlib import Path
 from typing import TYPE_CHECKING
 
+from django_ergo.bots.agents import AgentCheck
+from django_ergo.bots.agents import AgentManager
+from django_ergo.bots.agents import AgentQuestion
+from django_ergo.bots.agents import AgentSpec
 from django_ergo.bots.plugins import BotPlugin
 from django_ergo.bots.tools import BotTool
 from django_ergo.bots.tools import FunctionToolkit
@@ -189,6 +206,8 @@ ACTIVITY_ENTRIES = 8  # entries kept on the worker for its card
 ACTIVITY_CHARS = 300  # per entry on the card
 LOG_CHARS = 4000  # per entry in the full log
 # The full log's screen lines (a transcript stops at Orca's 50 messages).
+USAGE_MINUTES = 10  # session-file scan interval (usage_minutes)
+log = logging.getLogger(__name__)
 LOG_LINES = 400
 ANSI = re.compile(
     r"\x1b(?:\[[0-9;?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[()#][0-9A-Za-z]|[@-Z\\-_])"
@@ -345,9 +364,11 @@ class OrcaPlugin(BotPlugin):
         self.root_only = bool(self.config.get("root_only", True))
         self.timeout = int(self.config.get("timeout", 120))
         self.files_host = str(self.config.get("files_host", self.environment) or "")
+        self.usage_minutes = float(self.config.get("usage_minutes", USAGE_MINUTES))
         self.max_attach_bytes = int(self.config.get("max_attach_bytes", 20_000_000))
         self.poll_seconds = float(self.config.get("worker_poll_seconds", POLL_SECONDS))
         self.stall_minutes = float(self.config.get("stall_minutes", STALL_MINUTES))
+        self.manager = OrcaAgents(self)
 
     def argv(self, args: list[str]) -> list[str]:
         args = [str(a) for a in args]
@@ -671,16 +692,23 @@ class OrcaPlugin(BotPlugin):
         session.metadata = meta
         return handle, run_id
 
-    def exact_worktree(self, selector: str) -> str:
-        """Orca's exact id:<repo>::<path> selector (remote calls want it)."""
+    def resolved_worktree(self, selector: str) -> tuple[str, str | None]:
+        """Resolve the stable Orca selector and, when encoded, its host path."""
         if selector.startswith("id:"):
-            return selector
-        shown = self.cli_json(["worktree", "show", "--worktree", selector])
-        found = _first_key(shown, ("id",))
-        if not found:
+            _, separator, path = selector.partition("::")
+            return selector, path if separator and path.startswith("/") else None
+        try:
+            shown = self.cli_json(["worktree", "show", "--worktree", selector])
+        except (OSError, subprocess.TimeoutExpired, ValueError):
+            log.warning(
+                "Couldn't resolve worktree path for usage capture", exc_info=True
+            )
+            return selector, None
+        worktree_id = _first_key(shown, ("id",))
+        if not worktree_id:
             msg = f"No worktree {selector!r}"
             raise ValueError(msg)
-        return f"id:{found}"
+        return f"id:{worktree_id}", _first_path(shown)
 
     def pin_omp_model(self, worktree: str, model: str, effort: str = "") -> None:
         """Make omp in this worktree use ``model`` (at ``effort``): a project
@@ -769,96 +797,252 @@ class OrcaPlugin(BotPlugin):
         title: str = "",
         model: str = "",
         effort: str = "",
+        tier: str = "",
     ) -> dict:
-        """Start a supervised Orca worker, and a thread Worker that watches it."""
+        """``orca_start_worker``: ``bots.agents.start`` on this plugin's manager."""
+        from django_ergo.bots import agents
         from django_ergo.bots.workers import describe
 
-        if ctx.session is None:
-            msg = "Workers belong to a chat"
-            raise ValueError(msg)
-        worktree = self.exact_worktree(worktree)
-        title = (title or spec.strip().splitlines()[0])[:120]
+        worker = agents.start(
+            ctx,
+            AgentSpec(spec, worktree, agent, model, effort, title, tier),
+            self.manager.name,
+        )
+        handle = worker.args["handle"]
+        return {
+            **describe(worker),
+            "orca": {
+                key: handle[key] for key in ("run", "task", "dispatch", "worktree")
+            },
+        }
+
+    def start_agent(self, ctx: ToolContext, spec: AgentSpec) -> dict:
+        """Create the Orca task and worker for ``spec``; the manager's handle."""
+        worktree, worktree_path = self.resolved_worktree(spec.workspace)
+        args = (spec.brief, worktree, spec.agent, spec.title, spec.model, spec.effort)
         try:
-            task_id, run_id, receipt = self.dispatch(
-                ctx, spec, worktree, agent, title, model, effort
-            )
+            task_id, run_id, receipt = self.dispatch(ctx, *args)
         except ValueError as exc:
             # The chat's saved mailbox terminal or Run is gone (its worktree was
             # removed, Orca restarted): make new ones and try once more.
             if "selector_not_found" not in str(exc) or not self.forget_mailbox(ctx):
                 raise
-            task_id, run_id, receipt = self.dispatch(
-                ctx, spec, worktree, agent, title, model, effort
-            )
+            task_id, run_id, receipt = self.dispatch(ctx, *args)
         dispatch_id = _first_key(receipt, ("dispatchId", "dispatch_id"))
         if not dispatch_id:
             msg = f"worker-start gave no dispatch id: {json.dumps(receipt)[:400]}"
             raise ValueError(msg)
-        worker = ctx.workers.start(
-            "orca:watch",
-            title=f"{agent}: {title}",
-            state={"task": task_id, "seen": []},
-            dispatch=dispatch_id,
-            run=run_id,
-        )
         return {
-            **describe(worker),
-            "orca": {
-                "run": run_id,
-                "task": task_id,
-                "dispatch": dispatch_id,
-                "worktree": worktree,
-            },
+            "dispatch": dispatch_id,
+            "run": run_id,
+            "task": task_id,
+            "worktree": worktree,
+            "path": worktree_path or "",
         }
 
+    def capture_native_history(
+        self, ctx, agent: str, worktree: str, history=None
+    ) -> None:
+        """Ingest exact omp session bytes returned by the execution host."""
+        if agent != "omp":
+            return
+        from django_ergo.conversation.agent_history import ingest_omp_content
+        from django_ergo.conversation.agent_history import omp_session_rows
+
+        if isinstance(history, list):
+            for item in history:
+                if not isinstance(item, dict):
+                    continue
+                try:
+                    content = base64.b64decode(str(item.get("content") or ""))
+                except ValueError:
+                    continue
+                ingest_omp_content(
+                    content,
+                    source_name=str(item.get("name") or "omp.jsonl"),
+                    worker=ctx.worker,
+                    host_namespace=self.files_host or "local",
+                )
+            return
+        if self.files_host:
+            return
+        root = Path.home() / ".omp" / "agent" / "sessions"
+        for path in root.glob("**/*.jsonl"):
+            header, _ = omp_session_rows(path.read_bytes())
+            if header.get("cwd") == worktree:
+                ingest_omp_content(
+                    path.read_bytes(), source_name=path.name, worker=ctx.worker
+                )
+
+    def scan_usage(self, ctx, *, settled: bool = False) -> None:
+        """Best-effort usage scan; failure leaves the last stored snapshot intact."""
+        handle = (ctx.worker.args or {}).get("handle") or {}
+        worktree = ctx.state.get("worktree") or handle.get("path")
+        if not (agent := ctx.state.get("agent")) or not worktree:
+            return
+        now = time.time()
+        previous = float(ctx.state.get("usage_scanned_at") or 0)
+        if not settled and now - previous < self.usage_minutes * 60:
+            return
+        from django.utils import timezone
+
+        from django_ergo.conversation.models import AgentUsage
+
+        since = ctx.worker.created_at - timedelta(minutes=1)
+        until = ctx.worker.completed_at or timezone.now()
+        script = (
+            Path(__file__).with_name("agent_usage_scan.py").read_text(encoding="utf-8")
+        )
+        args = [
+            str(agent),
+            str(worktree),
+            since.isoformat(),
+            until.isoformat(),
+            "--history",
+        ]
+        argv = (
+            [
+                "ssh",
+                "-o",
+                "BatchMode=yes",
+                self.files_host,
+                f"python3 - {shlex.join(args)}",
+            ]
+            if self.files_host
+            else ["python3", "-", *args]
+        )
+        try:
+            proc = subprocess.run(  # noqa: S603 — fixed interpreter and scanner source
+                argv,
+                input=script,
+                capture_output=True,
+                text=True,
+                timeout=self.timeout,
+                check=False,
+            )
+            if proc.returncode:
+                log.warning(
+                    "Couldn't scan %s usage for worker %s: %s",
+                    agent,
+                    ctx.worker.pk,
+                    (proc.stderr or proc.stdout).strip()[:300],
+                )
+                return
+            data = json.loads(proc.stdout)
+            models = data.get("models") if isinstance(data, dict) else None
+            if not isinstance(models, dict):
+                log.warning(
+                    "Usage scanner returned no models for worker %s", ctx.worker.pk
+                )
+                return
+
+            def parse_at(value):
+                return (
+                    datetime.fromisoformat(value.replace("Z", "+00:00"))
+                    if isinstance(value, str)
+                    else None
+                )
+
+            seen = []
+            for model, usage in models.items():
+                if not isinstance(model, str) or not isinstance(usage, dict):
+                    continue
+                seen.append(model)
+                AgentUsage.objects.update_or_create(
+                    worker=ctx.worker,
+                    model=model,
+                    defaults={
+                        "session": ctx.session,
+                        "bot_name": ctx.worker.bot_name,
+                        "source": "orca",
+                        "agent": agent,
+                        "input_tokens": int(usage.get("input", 0)),
+                        "cache_write_tokens": int(usage.get("cache_write", 0)),
+                        "cache_read_tokens": int(usage.get("cache_read", 0)),
+                        "output_tokens": int(usage.get("output", 0)),
+                        "reasoning_tokens": int(usage.get("reasoning", 0)),
+                        "requests": int(usage.get("requests", 0)),
+                        "first_at": parse_at(usage.get("first_at")),
+                        "last_at": parse_at(usage.get("last_at")),
+                    },
+                )
+            AgentUsage.objects.filter(worker=ctx.worker).exclude(
+                model__in=seen
+            ).delete()
+            ctx.state["usage_scanned_at"] = now
+            self.capture_native_history(ctx, agent, str(worktree), data.get("history"))
+        except Exception:  # noqa: BLE001 — agent session files are best effort
+            log.warning(
+                "Couldn't scan %s usage for worker %s",
+                agent,
+                ctx.worker.pk,
+                exc_info=True,
+            )
+
     def watch(self, ctx, dispatch: str, run: str):
-        """Worker function ``orca:watch``: poll the dispatch until it settles, pass the
-        agent's questions and escalations to the chat, then return its report."""
+        """Worker function ``orca:watch``, for workers started before ``agent:orca``."""
+        from django_ergo.bots.agents import watch
+
+        task = ctx.state.get("task", "")
+        return watch(
+            ctx, self.manager, {"dispatch": dispatch, "run": run, "task": task}
+        )
+
+    def check(self, ctx, handle: dict) -> AgentCheck:
+        """One look at an Orca worker: its status, new messages, latest output and
+        usage. Fails it when its agent terminal is gone (``fail_if_terminal_gone``)."""
+        dispatch, run = handle["dispatch"], handle["run"]
         shown = self.cli_json(["orchestration", "worker-show", "--dispatch", dispatch])
         status = str((shown.get("dispatch") or {}).get("status") or "")
         state = str((shown.get("worker") or {}).get("state") or "")
         liveness = str((shown.get("observation") or {}).get("status") or "")
-        seen = set(ctx.state.get("seen") or [])
         report = None
-        for message in self.run_messages(run, dispatch, ctx.state.get("task", "")):
-            if message["id"] in seen:
-                continue
-            seen.add(message["id"])
+        questions = []
+        for message in self.run_messages(run, dispatch, handle.get("task", "")):
             kind = message.get("type")
             if kind == "worker_done":
                 report = message
             elif kind in ("question", "escalation"):
-                ctx.tell(
-                    f"The Orca worker sent a {kind}: {message.get('subject') or ''}\n\n"
-                    f"{message.get('body') or ''}\n\nAnswer it with orca_run "
-                    f'["orchestration", "reply", "--id", "{message["id"]}", "--body", "<answer>"].'
+                questions.append(
+                    AgentQuestion(
+                        id=message["id"],
+                        body=message.get("body") or "",
+                        subject=message.get("subject") or "",
+                        kind=kind,
+                    )
                 )
-        ctx.state["seen"] = sorted(seen)
         self.record_activity(ctx, dispatch, shown)
-        if ctx.stopping:
-            return None
+        self.scan_usage(ctx, settled=report is not None or status in SETTLED)
         if report is not None or status in SETTLED:
             body = (report or {}).get("body") or ""
             if status == "failed" and not body:
                 failure = (shown.get("dispatch") or {}).get(
                     "last_failure"
                 ) or "no report"
-                msg = f"The Orca worker failed: {failure}"
-                raise RuntimeError(msg)
-            return {
-                "status": status or "completed",
-                "subject": (report or {}).get("subject") or "",
-                "report": body,
-                "dispatch": dispatch,
-            }
-        self.fail_if_terminal_gone(ctx, shown)
-        self.submit_brief_once(ctx, shown, status)
+                return AgentCheck(
+                    "failed",
+                    questions=questions,
+                    error=f"The Orca worker failed: {failure}",
+                )
+            return AgentCheck(
+                "done",
+                questions=questions,
+                report={
+                    "status": status or "completed",
+                    "subject": (report or {}).get("subject") or "",
+                    "report": body,
+                    "dispatch": dispatch,
+                },
+            )
+        if not ctx.stopping:
+            self.fail_if_terminal_gone(ctx, shown)
+            self.submit_brief_once(ctx, shown, status)
         progress = state or status or "starting"
         if liveness:
             progress += f" · {liveness}"
         if ctx.state.get("terminal_gone_since"):
             progress += f" · agent terminal {ctx.state.get('terminal')}; failing it if it stays that way"
-        return ctx.again(self.poll_seconds, progress=progress)
+        return AgentCheck("running", progress=progress, questions=questions)
 
     def agent_terminal(self, shown: dict) -> tuple[str, str]:
         """The agent's terminal: ("live" | "exited" | "gone" | "unknown", last output)."""
@@ -900,7 +1084,7 @@ class OrcaPlugin(BotPlugin):
         last = f" Its last output: {preview.strip()[:300]}" if preview.strip() else ""
         msg = (
             f"The Orca worker's agent terminal {state} without reporting done.{last} "
-            "Start it again with orca_start_worker if the task still needs doing."
+            "Start it again with ergo_agent_start if the task still needs doing."
         )
         raise RuntimeError(msg)
 
@@ -952,9 +1136,10 @@ class OrcaPlugin(BotPlugin):
         )
 
     def worker_log(self, worker) -> dict | None:
-        """The whole recent output of an ``orca:watch`` worker, read now."""
-        dispatch = (worker.args or {}).get("dispatch")
-        if worker.function != "orca:watch" or not dispatch:
+        """The whole recent output of an Orca agent's worker, read now."""
+        handle = self.manager.worker_handle(worker) or (worker.args or {}).get("handle")
+        dispatch = (handle or {}).get("dispatch")
+        if not dispatch:
             return None
         # Orca clamps the limit: 50 transcript messages, or this many screen lines.
         read = self.cli_json(
@@ -1010,6 +1195,13 @@ class OrcaPlugin(BotPlugin):
     def worker_functions(self) -> dict:
         return {"watch": self.watch}
 
+    def agent_managers(self) -> dict[str, AgentManager]:
+        return {self.manager.name: self.manager}
+
+    @property
+    def skill_requires(self) -> list[str]:
+        return ["agents"]
+
     # -- plugin hooks ------------------------------------------------------
 
     def toolkits(self, ctx: ToolContext) -> list[Toolkit]:
@@ -1034,8 +1226,9 @@ class OrcaPlugin(BotPlugin):
                 f"You manage Orca on {where} with the {self.executable} CLI. "
                 f"Use orca_read for inventory; {approval}. Output is compact JSON; long "
                 'output keeps only its start and end, so pass fields (e.g. ["id", "path", "branch"]) '
-                "to list commands. Start coding agents only with orca_start_worker: it makes a "
-                "supervised Orca worker that reports back to this chat. Never start one by "
+                "to list commands. Start coding agents only with ergo_agent_start (or "
+                "orca_start_worker): it makes a supervised Orca worker that reports back to "
+                "this chat. Never start one by "
                 "creating a terminal with --command and sending it text; that agent is "
                 "unsupervised and invisible to Orca's worker list. Before stopping workers or "
                 'anything else unusual, read the CLI\'s guides with orca_read ["skills", '
@@ -1204,6 +1397,14 @@ class OrcaPlugin(BotPlugin):
                     "type": "string",
                     "description": "Reasoning effort (needs model)",
                 },
+                "tier": {
+                    "type": "string",
+                    "description": (
+                        "Pick agent, model and effort for a configured agents tier in "
+                        "providers.yaml (including custom names) from a subscription "
+                        "with room (replaces agent, model and effort)"
+                    ),
+                },
             },
             required=["spec", "worktree"],
             requires_approval=self.approve_changes,
@@ -1216,8 +1417,11 @@ class OrcaPlugin(BotPlugin):
             title: str = "",
             model: str = "",
             effort: str = "",
+            tier: str = "",
         ) -> dict:
-            return plugin.start_worker(ctx, spec, worktree, agent, title, model, effort)
+            return plugin.start_worker(
+                ctx, spec, worktree, agent, title, model, effort, tier
+            )
 
         return [
             read.__bot_tool__,
@@ -1227,3 +1431,54 @@ class OrcaPlugin(BotPlugin):
             screenshot.__bot_tool__,
             start_worker.__bot_tool__,
         ]
+
+
+class OrcaAgents(AgentManager):
+    """Coding agents as supervised Orca workers, each in an Orca worktree."""
+
+    name = "orca"
+
+    def __init__(self, plugin: OrcaPlugin):
+        self.plugin = plugin
+        self.agents = tuple(plugin.config.get("agents") or ("codex", "claude", "omp"))
+        self.requires_approval = plugin.approve_changes
+        self.poll_seconds = plugin.poll_seconds
+        place = plugin.environment or "this host"
+        self.where = f"Orca worktrees on {place}"
+
+    def available(self, ctx) -> bool:
+        return not (
+            self.plugin.root_only and ctx.bot and not ctx.bot.is_root(ctx.session)
+        )
+
+    def start(self, ctx, spec: AgentSpec) -> dict:
+        return self.plugin.start_agent(ctx, spec)
+
+    def check(self, ctx, handle: dict) -> AgentCheck:
+        return self.plugin.check(ctx, handle)
+
+    def reply(self, ctx, handle: dict, question_id: str, text: str) -> str:
+        self.plugin.cli_json(
+            ["orchestration", "reply", "--id", question_id, "--body", text]
+        )
+        return f"Sent the answer to {question_id}."
+
+    def stop(self, handle: dict) -> str:
+        return (
+            f"The Orca worker (dispatch {handle.get('dispatch')}) may keep running; "
+            "stop it with orca_run as the CLI's orchestration guide says (orca_read "
+            '["skills", "get", "orchestration"])'
+        )
+
+    def log(self, worker, handle: dict) -> dict | None:
+        return self.plugin.worker_log(worker)
+
+    def worker_handle(self, worker) -> dict | None:
+        if worker.function != "orca:watch":
+            return None
+        args = worker.args or {}
+        return {
+            "dispatch": args.get("dispatch", ""),
+            "run": args.get("run", ""),
+            "task": (worker.state or {}).get("task", ""),
+        }

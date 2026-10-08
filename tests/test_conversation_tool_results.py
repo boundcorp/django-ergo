@@ -16,6 +16,7 @@ from django_ergo.conversation.structured import StructuredCallSpec
 from django_ergo.conversation.structured import run_structured_call
 from django_ergo.conversation.tool_results import trim_tool_results
 from django_ergo.conversation.toolkit import Toolkit
+from django_ergo.settings import api_settings
 from tests.test_conversation_structured import VALID_PLAN
 from tests.test_conversation_structured import FakeOpenAIClient
 from tests.test_conversation_structured import Plan
@@ -26,6 +27,12 @@ from tests.test_conversation_structured import openai_tool
 User = get_user_model()
 
 BIG = "\n".join(f"node {i}: rect" for i in range(60))  # 60 lines, > 500 chars
+
+
+@pytest.fixture(autouse=True)
+def count_only(settings):
+    """Most tests here check the count; the size budget would keep every BIG."""
+    settings.DJANGO_ERGO = {"TOOL_RESULTS_CHARS_IN_CONTEXT": 0}
 
 
 def claude_exchange(tool_id, result, *, name="tree", is_error=False):
@@ -94,7 +101,10 @@ def test_claude_keeps_newest_large_results_and_stubs_older_ones():
     assert results[2:] == [BIG, BIG, BIG]
     assert results[0] == results[1]
     assert results[0].startswith("[tree result, 60 lines, ")
-    assert "superseded, call the tool again if you need it]" in results[0]
+    assert (
+        "Note what you need; call the tool again only if you still need detail."
+        in (results[0])
+    )
     assert messages == before  # stored history is untouched
     # Pairing stays valid: every tool_use still has its tool_result.
     uses = [b["id"] for m in sent if m["role"] == "assistant" for b in m["content"]]
@@ -149,14 +159,43 @@ def test_images_in_a_stubbed_result_are_left_to_the_image_window():
 
 
 def test_setting_controls_the_default_and_none_turns_it_off(settings):
-    messages = [*claude_exchange("t0", BIG), *claude_exchange("t1", BIG)]
-    assert _results(trim_tool_results(messages))[0] == BIG  # default keeps 3
+    messages = [m for i in range(7) for m in claude_exchange(f"t{i}", BIG)]
 
-    settings.DJANGO_ERGO = {"TOOL_RESULTS_IN_CONTEXT": 1}
+    assert api_settings.TOOL_RESULTS_IN_CONTEXT == 6
+    sent = _results(trim_tool_results(messages))
+    assert sent[0].startswith("[tree result")
+    assert sent[1:] == [BIG] * 6
+
+    settings.DJANGO_ERGO = {
+        "TOOL_RESULTS_IN_CONTEXT": 1,
+        "TOOL_RESULTS_CHARS_IN_CONTEXT": 0,
+    }
     assert _results(trim_tool_results(messages))[0].startswith("[tree result")
 
     settings.DJANGO_ERGO = {"TOOL_RESULTS_IN_CONTEXT": None}
     assert trim_tool_results(messages) is messages
+
+
+def test_size_budget_keeps_more_small_results(settings):
+    settings.DJANGO_ERGO = {}  # defaults: keep 6, 20% of a 200k window
+    small = [m for i in range(10) for m in claude_exchange(f"f{i}", BIG)]
+    assert _results(trim_tool_results(small)) == [BIG] * 10
+
+    settings.DJANGO_ERGO = {"TOOL_RESULTS_CHARS_IN_CONTEXT": 40_000}
+
+    huge = "x" * 15_000
+    messages = [
+        *claude_exchange("old", BIG),
+        *claude_exchange("h0", huge),
+        *claude_exchange("h1", huge),
+        *claude_exchange("h2", huge),
+        *claude_exchange("new", BIG),
+    ]
+    sent = _results(trim_tool_results(messages, keep=3))
+    # The newest three always stay; h0 would go over the budget, so it and
+    # everything older is stubbed.
+    assert sent[2:] == [huge, huge, BIG]
+    assert sent[0].startswith("[tree result") and sent[1].startswith("[tree result")
 
 
 # ---------------------------------------------------------------------------
@@ -213,6 +252,7 @@ async def test_session_call_sends_stubs_but_stores_full_results(user):
         user=user, engine_type="claude", transport_type="api", status="active"
     )
     engine = claude_engine(*_tree_calls(5), claude_tool("submit_output", VALID_PLAN))
+    engine.tool_results_in_context = 3
     engine.tool_results_tokens = 1
     spec = StructuredCallSpec(
         kind="designer", response_model=Plan, toolkits=[TreeToolkit()]
@@ -258,32 +298,55 @@ async def test_openai_session_call_stubs_older_results(user):
 
 
 @pytest.mark.parametrize("exchange", [claude_exchange, openai_exchange])
-def test_token_budget_protects_latest_counts_and_keeps_request_copy(exchange):
+def test_budget_keeps_the_newest_counts_and_keeps_request_copy(exchange):
     messages = [m for i in range(8) for m in exchange(f"t{i}", "x" * 1000)]
     before = copy.deepcopy(messages)
     stats = {}
-    sent = trim_tool_results(messages, budget_tokens=500, protect_latest=3, stats=stats)
+    sent = trim_tool_results(messages, keep=3, max_chars=2000, stats=stats)
     assert stats["stubbed_results"] == 5
     assert _results(sent)[-3:] == ["x" * 1000] * 3
-    assert all("superseded" in r for r in _results(sent)[:-3])
+    assert all("trimmed from context" in r for r in _results(sent)[:-3])
     assert messages == before
-    assert trim_tool_results(messages, budget_tokens=3000) is messages
+    assert trim_tool_results(messages, keep=3, max_chars=8000) is messages
 
 
-def test_budget_setting_and_legacy_count_take_precedence(settings):
+def _stubbed(messages):
+    return sum(
+        "trimmed from context" in r for r in _results(trim_tool_results(messages))
+    )
+
+
+def test_token_budget_comes_from_bot_then_settings_then_window(settings):
+    from types import SimpleNamespace
+
+    from django_ergo.conversation.tool_results import budget_chars
+
     messages = [m for i in range(6) for m in claude_exchange(f"t{i}", BIG)]
-    settings.DJANGO_ERGO = {"TOOL_RESULTS_TOKENS": 1}
-    assert sum("superseded" in r for r in _results(trim_tool_results(messages))) == 3
+    settings.DJANGO_ERGO = {"TOOL_RESULTS_TOKENS": 1, "TOOL_RESULTS_IN_CONTEXT": 3}
+    assert _stubbed(messages) == 3
     settings.DJANGO_ERGO = {"TOOL_RESULTS_TOKENS": 1, "TOOL_RESULTS_IN_CONTEXT": 5}
-    assert sum("superseded" in r for r in _results(trim_tool_results(messages))) == 1
+    assert _stubbed(messages) == 1
+    # A token budget beats the character setting.
+    settings.DJANGO_ERGO = {
+        "TOOL_RESULTS_TOKENS": 10_000,
+        "TOOL_RESULTS_CHARS_IN_CONTEXT": 0,
+        "TOOL_RESULTS_IN_CONTEXT": 3,
+    }
+    assert _stubbed(messages) == 0
+    # Neither set: 20% of the window, which keeps them all.
+    settings.DJANGO_ERGO = {"TOOL_RESULTS_IN_CONTEXT": 3}
+    assert _stubbed(messages) == 0
+    assert budget_chars(SimpleNamespace(context_window=1_000_000)) == 800_000
+    engine = SimpleNamespace(context_window=1_000_000, tool_results_tokens=100)
+    assert budget_chars(engine) == 400
     assert trim_tool_results(messages, keep=-1) is messages
 
 
-def test_result_crossing_budget_is_kept_and_older_results_stubbed():
+def test_a_result_that_does_not_fit_is_stubbed_with_everything_older():
     messages = [m for i in range(4) for m in claude_exchange(f"t{i}", "x" * 1000)]
-    sent = trim_tool_results(messages, budget_tokens=500, protect_latest=0)
-    assert _results(sent)[1:] == ["x" * 1000] * 3
-    assert "superseded" in _results(sent)[0]
+    sent = trim_tool_results(messages, keep=0, max_chars=2500)
+    assert _results(sent)[2:] == ["x" * 1000] * 2
+    assert all("trimmed from context" in r for r in _results(sent)[:2])
 
 
 @pytest.mark.django_db(transaction=True)

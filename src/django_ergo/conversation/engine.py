@@ -152,7 +152,13 @@ class Engine(ABC):
         """
 
     async def append_user_message(
-        self, session, message: str, attachments: list | None = None
+        self,
+        session,
+        message: str,
+        attachments: list | None = None,
+        *,
+        author: dict | None = None,
+        provenance: dict | None = None,
     ) -> None:
         """Persist a user message (and any attachments) without calling the model."""
         msg = f"{type(self).__name__} does not support append_user_message"

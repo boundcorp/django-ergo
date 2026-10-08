@@ -231,6 +231,7 @@ def test_orca_start_worker_watches_the_dispatch_and_reports_back(  # noqa: PLR09
         ("orchestration", "worker-start"): {"dispatchId": "ctx_1", "taskId": "task_1"},
         ("terminal", "send"): {"send": {"accepted": True}},
         ("terminal", "show"): {"terminal": {"connected": True, "paneRuntimeId": 7}},
+        ("orchestration", "reply"): {"sent": True},
     }
 
     def respond(args):
@@ -363,6 +364,21 @@ def test_orca_start_worker_watches_the_dispatch_and_reports_back(  # noqa: PLR09
     from django_ergo.bots.messaging import turn_text
 
     assert turn_text(question).startswith("[News from the worker")
+    assert "ergo_agent_reply" in question.text
+    from django_ergo.bots.agents import agent_toolkit
+
+    agent_toolkit(bot, ctx).execute_tool(
+        "ergo_agent_reply",
+        {"worker_id": worker_id, "question_id": "msg_q", "answer": "Blue"},
+    )
+    assert calls[-1][1:7] == [
+        "orchestration",
+        "reply",
+        "--id",
+        "msg_q",
+        "--body",
+        "Blue",
+    ]
 
     state["status"] = "completed"
     state["inbox"].append(
@@ -383,6 +399,151 @@ def test_orca_start_worker_watches_the_dispatch_and_reports_back(  # noqa: PLR09
     assert (
         len([c for c in calls if c[1:3] == ["terminal", "send"]]) == 1
     )  # Enter was pressed only once
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize(
+    ("shown", "expected_worktree"),
+    [
+        (
+            {"worktree": {"id": "repo::/home/dev/p/site"}},
+            "id:repo::/home/dev/p/site",
+        ),
+        (ValueError("worktree show unavailable"), "path:/home/dev/p/site"),
+    ],
+    ids=["missing-path", "show-error"],
+)
+def test_orca_start_worker_skips_usage_without_a_worktree_path(
+    tmp_path, workers, monkeypatch, shown, expected_worktree
+):
+    from django_ergo.bots.tools import ToolContext
+    from django_ergo.bots.workers import WorkerContext
+    from django_ergo.conversation.models import Worker
+    from tests.test_bot_plugins import orca_bot
+
+    bot, _, plugin = orca_bot(tmp_path)
+    user = get_user_model().objects.create(username="no-usage-path")
+    session = async_to_sync(bot.main_session)(user)
+    ctx = ToolContext(bot=bot, session=session, user=user)
+    dispatched = []
+
+    def cli_json(args):
+        if isinstance(shown, Exception):
+            raise shown
+        return shown
+
+    def dispatch(*args):
+        dispatched.append(args[2])
+        return "task_1", "run_1", {"dispatchId": "ctx_1"}
+
+    def reject_scan(*args, **kwargs):
+        msg = "usage scan must not run without a worktree path"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(plugin, "cli_json", cli_json)
+    monkeypatch.setattr(plugin, "dispatch", dispatch)
+    monkeypatch.setattr("django_ergo.plugins.orca.subprocess.run", reject_scan)
+
+    started = plugin.start_worker(ctx, "Count tokens", "path:/home/dev/p/site")
+
+    assert dispatched == [expected_worktree]
+    worker = Worker.objects.get(pk=started["id"])
+    assert worker.state == {
+        "seen": [],
+        "agent": "codex",
+        "model": "",
+        "effort": "",
+        "manager": "orca",
+    }
+    plugin.scan_usage(WorkerContext(bot, worker), settled=True)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_orca_start_worker_uses_path_encoded_in_id_selector(
+    tmp_path, workers, monkeypatch
+):
+    from unittest.mock import Mock
+
+    from django_ergo.bots.tools import ToolContext
+    from django_ergo.conversation.models import Worker
+    from tests.test_bot_plugins import orca_bot
+
+    bot, _, plugin = orca_bot(tmp_path)
+    user = get_user_model().objects.create(username="id-worktree")
+    session = async_to_sync(bot.main_session)(user)
+    ctx = ToolContext(bot=bot, session=session, user=user)
+    selector = (
+        "id:00000000-0000-0000-0000-000000000000::/home/dev/orca/workspaces/repo/task"
+    )
+    dispatched = []
+    cli_json = Mock()
+
+    def dispatch(*args):
+        dispatched.append(args[2])
+        return "task_1", "run_1", {"dispatchId": "ctx_1"}
+
+    monkeypatch.setattr(plugin, "cli_json", cli_json)
+    monkeypatch.setattr(plugin, "dispatch", dispatch)
+
+    started = plugin.start_worker(ctx, "Count tokens", selector)
+    cli_json.assert_not_called()
+
+    assert dispatched == [selector]
+    worker = Worker.objects.get(pk=started["id"])
+    assert worker.function == "agent:orca"
+    assert worker.args["handle"]["path"] == "/home/dev/orca/workspaces/repo/task"
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize(
+    "selector",
+    [
+        "id:00000000-0000-0000-0000-000000000000",
+        "id:00000000-0000-0000-0000-000000000000::",
+    ],
+)
+def test_orca_start_worker_skips_usage_for_id_selector_without_path(
+    tmp_path, workers, monkeypatch, selector
+):
+    from unittest.mock import Mock
+
+    from django_ergo.bots.tools import ToolContext
+    from django_ergo.bots.workers import WorkerContext
+    from django_ergo.conversation.models import Worker
+    from tests.test_bot_plugins import orca_bot
+
+    bot, _, plugin = orca_bot(tmp_path)
+    user = get_user_model().objects.create(username="id-without-path")
+    session = async_to_sync(bot.main_session)(user)
+    ctx = ToolContext(bot=bot, session=session, user=user)
+    dispatched = []
+    cli_json = Mock()
+
+    def dispatch(*args):
+        dispatched.append(args[2])
+        return "task_1", "run_1", {"dispatchId": "ctx_1"}
+
+    def reject_scan(*args, **kwargs):
+        msg = "usage scan must not run without a worktree path"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(plugin, "cli_json", cli_json)
+    monkeypatch.setattr(plugin, "dispatch", dispatch)
+    monkeypatch.setattr("django_ergo.plugins.orca.subprocess.run", reject_scan)
+
+    started = plugin.start_worker(ctx, "Count tokens", selector)
+    cli_json.assert_not_called()
+
+    assert dispatched == [selector]
+    worker = Worker.objects.get(pk=started["id"])
+    assert worker.state == {
+        "seen": [],
+        "agent": "codex",
+        "model": "",
+        "effort": "",
+        "manager": "orca",
+    }
+    plugin.scan_usage(WorkerContext(bot, worker), settled=True)
 
 
 @pytest.mark.django_db(transaction=True)

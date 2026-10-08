@@ -8,8 +8,8 @@ Everything a bot can do beyond answering is a skill:
 - built-ins: ``history`` (reading past conversations) and ``orchestration``
   (messaging threads and other bots).
 
-A chat starts with a listing of the bot's skills (pre-seeded, so the model
-sees it before answering). ``ergo_skill_load`` returns a skill's
+A chat's per-turn context lists its skills before answering.
+``ergo_skill_load`` returns a skill's
 instructions and offers its tools from the next model call on, in the same
 turn. A skill whose tools go ``unload_after_turns`` turns unused (default 30,
 counting every turn in the chat) is dropped again; ``ergo_skill_unload``
@@ -50,6 +50,7 @@ LOAD_TOOL = "ergo_skill_load"
 UNLOAD_TOOL = "ergo_skill_unload"
 STATE_KEY = "skills"
 ALWAYS = "history"
+SKILL_DESCRIPTION_CHARS = 120
 
 
 @dataclass
@@ -179,19 +180,31 @@ class SkillSet(Toolkit):
             for schema in kit.get_tools_schema(adapter)
         ]
 
-    # -- the loader tools ------------------------------------------------------
+    def _listable_skills(self):
+        """Yield the skills shown by the list tool and per-turn context."""
+        for name, skill in self.skills.items():
+            if name == ALWAYS or (not self.tool_names(name) and not skill.instructions):
+                continue
+            yield name, skill
+
+    def context_summary(self) -> str:
+        """A compact per-turn listing of skills and their current loaded state."""
+        lines = []
+        for name, skill in self._listable_skills():
+            description = " ".join((skill.description or "no description").split())
+            if len(description) > SKILL_DESCRIPTION_CHARS:
+                description = f"{description[: SKILL_DESCRIPTION_CHARS - 3]}..."
+            state = "loaded" if self.is_loaded(name) else "not loaded"
+            lines.append(f"- {name} ({state}): {description}")
+        return "\n".join(lines)
 
     def listing(self) -> str:
         lines = [
             "Skills (ergo_skill_load gives you a skill's instructions and tools; "
             "load one before doing that kind of task):"
         ]
-        for name, skill in self.skills.items():
-            if name == ALWAYS:
-                continue
+        for name, skill in self._listable_skills():
             tools = self.tool_names(name)
-            if not tools and not skill.instructions:
-                continue
             state = "loaded" if self.is_loaded(name) else "not loaded"
             line = f"- {name} [{state}]: {skill.description or 'no description'}"
             if tools:
@@ -318,13 +331,12 @@ class SkillSet(Toolkit):
         return ""
 
     def pre_seeds(self) -> list[PreSeedCall]:
-        from django_ergo.conversation.structured import PreSeedCall
-
-        seeds = [PreSeedCall(LIST_TOOL, {}, lambda _arguments: self.listing())]
-        for name in self.active:
-            for toolkit in self.toolkits_of(name):
-                seeds.extend(toolkit.pre_seeds())
-        return seeds
+        return [
+            seed
+            for name in self.active
+            for toolkit in self.toolkits_of(name)
+            for seed in toolkit.pre_seeds()
+        ]
 
     def get_bound_knowledgebases(self) -> list[tuple]:
         return [

@@ -1,8 +1,32 @@
-"""Budget large tool-result text, preserving ids, images, errors and short results.
+"""How many large tool results each model call carries in full.
 
-The default budget is 20% of the engine context window. The latest three
-large results always survive. An explicitly configured legacy count takes
-precedence. Only request copies change; stored history remains complete.
+A long turn calls tools step after step, and with native history every model
+call re-sends every earlier result too. A tool that returns a big dump (a
+design tree, a file listing, a page of rows) makes each later call pay for
+all the earlier dumps again.
+
+Each model call carries the newest ``DJANGO_ERGO["TOOL_RESULTS_IN_CONTEXT"]``
+large tool results in full (default 6), and keeps more of the newest while
+all the results kept fit a token budget: an engine's ``tool_results_tokens``
+(bot.yaml ``tool_results_tokens``), else ``DJANGO_ERGO["TOOL_RESULTS_TOKENS"]``,
+else ``DJANGO_ERGO["TOOL_RESULTS_CHARS_IN_CONTEXT"]`` characters when set,
+else 20% of the engine's context window. Older large results become a short
+stub naming the tool and its size::
+
+    [penpot_tree result, 180 lines, 9,412 chars; trimmed from context to save space. Note what you need; call the tool again only if you still need detail.]
+
+Only what is sent changes. Stored history keeps every result in full, so
+history tools and later readers still see them, and the model can run the
+tool again. A result counts as large when its text is longer than
+``STUB_MIN_CHARS``; shorter results and errors always stay as they are, and
+don't count toward the limit. Tool call ids are untouched, so every
+tool_use still has its tool_result (Claude) and every tool call its tool
+message (OpenAI). Images inside a stubbed result stay, so the image window
+in ``conversation.images`` decides about them as before.
+
+An engine's ``tool_results_in_context`` (set per bot with
+``tool_results_in_context`` in bot.yaml) overrides the count setting.
+``None`` in the setting turns trimming off.
 """
 
 from __future__ import annotations
@@ -72,7 +96,8 @@ def stub_text(name: str, text: str) -> str:
     lines = text.count("\n") + 1 if text else 0
     return (
         f"[{name or 'tool'} result, {lines:,} lines, {len(text):,} chars; "
-        "superseded, call the tool again if you need it]"
+        "trimmed from context to save space. Note what you need; call the tool "
+        "again only if you still need detail.]"
     )
 
 
@@ -88,47 +113,64 @@ def _stubbed_content(content, stub: str):
     return [{"type": "text", "text": stub}, *rest]
 
 
-def trim_tool_results(  # noqa: C901, PLR0913, PLR0912
+def _count_kept(sizes: list[int], keep: int, max_chars: int) -> int:
+    """How many of the newest results stay: at least ``keep``, more while they fit."""
+    kept, total = 0, 0
+    for size in reversed(sizes):
+        if kept >= keep and total + size > max_chars:
+            break
+        kept += 1
+        total += size
+    return kept
+
+
+def budget_chars(engine=None) -> int:
+    """The character budget for kept tool results on ``engine``'s calls."""
+    tokens = getattr(engine, "tool_results_tokens", None)
+    if tokens is None:
+        tokens = api_settings.TOOL_RESULTS_TOKENS
+    if tokens is not None:
+        return tokens * 4
+    if api_settings.TOOL_RESULTS_CHARS_IN_CONTEXT is not None:
+        return api_settings.TOOL_RESULTS_CHARS_IN_CONTEXT
+    return int(getattr(engine, "context_window", 200_000) * 0.2) * 4
+
+
+def trim_tool_results(  # noqa: C901
     messages: list[dict],
     *,
     keep: int | None = None,
+    max_chars: int | None = None,
     min_chars: int = STUB_MIN_CHARS,
-    budget_tokens: int | None = None,
-    protect_latest: int = 3,
     stats: dict | None = None,
 ) -> list[dict]:
-    """Return a request copy, recording the stub count in ``stats`` if supplied.
+    """Stub older large tool results, for one model call.
 
-    ``keep`` or the legacy setting applies the count rule when non-None.
-    Otherwise use ``budget_tokens`` (40k by default); protected results count
-    toward the budget even when they exceed it.
+    The newest ``keep`` large results always stay. Older ones stay too while
+    the kept results add up to at most ``max_chars`` characters (4 a token);
+    from the first that doesn't fit, it and everything older is stubbed.
+
+    ``keep`` defaults to ``DJANGO_ERGO["TOOL_RESULTS_IN_CONTEXT"]``; when that
+    is ``None`` (or ``keep`` is negative) nothing changes. The budget defaults
+    to ``budget_chars()``. Works on Claude and OpenAI messages alike. The
+    input list and its messages are not changed. ``stats``, when given, gets
+    ``stubbed_results``: how many were stubbed.
     """
     if stats is not None:
         stats["stubbed_results"] = 0
     if keep is None:
         keep = api_settings.TOOL_RESULTS_IN_CONTEXT
-    if keep is not None and keep < 0:
+    if keep is None or keep < 0:
         return messages
-    if budget_tokens is None:
-        budget_tokens = api_settings.TOOL_RESULTS_TOKENS
-    if budget_tokens is None:
-        budget_tokens = 40_000
-    large = [
-        (i, j, result)
-        for i, j, result in _results(messages)
-        if not result.get("is_error")
-        and sum(len(t) for t in _text_parts(result.get("content"))) > min_chars
-    ]
-    if keep is not None:
-        old = large[: max(len(large) - keep, 0)]
-    else:
-        old = []
-        used = 0
-        for index, item in enumerate(reversed(large)):
-            size = (sum(len(t) for t in _text_parts(item[2].get("content"))) + 3) // 4
-            if index >= protect_latest and used > budget_tokens:
-                old.append(item)
-            used += size
+    if max_chars is None:
+        max_chars = budget_chars()
+    large = []
+    for i, j, result in _results(messages):
+        size = sum(len(t) for t in _text_parts(result.get("content")))
+        if not result.get("is_error") and size > min_chars:
+            large.append((i, j, result, size))
+    kept = _count_kept([size for *_, size in large], keep, max_chars)
+    old = [(i, j, result) for i, j, result, _ in large[: len(large) - kept]]
     if stats is not None:
         stats["stubbed_results"] = len(old)
     if not old:

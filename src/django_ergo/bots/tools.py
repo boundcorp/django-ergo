@@ -17,6 +17,15 @@ Parameters come from the signature (str, int, float, bool, list, dict),
 or pass ``parameters=`` as a JSON Schema ``properties`` mapping. A module
 may also define ``toolkits(ctx) -> list[Toolkit]``.
 
+``@page_action`` marks a function a ``.jhtml`` page may call as the viewer
+(``ergo.call("restock", {...})`` in the page); see ``django_ergo.bots.page_actions``::
+
+    @page_action(requires_approval=True, approval_preview=lambda ctx, item, qty: f"Order {qty} x {item}")
+    def restock(ctx, item: str, qty: int = 1) -> dict:
+        ctx.table("Pantry").objects.filter(name=item).update(on_order=qty)
+        ctx.table("Pantry").touch()
+        return {"message": f"Ordered {qty} {item}"}
+
 ``@bot_context`` marks a function whose text goes into the model's context
 on every turn, such as live data the bot should always see::
 
@@ -78,6 +87,8 @@ class ToolContext:
     bot: Bot | None = None
     session: ConversationSession | None = None
     user: Any = None
+    # The page a page action was called from: a bot-folder path or a chat file's id.
+    page: str | None = None
 
     @property
     def tasks(self):
@@ -94,7 +105,12 @@ class ToolContext:
         return WorkerStarter(self.bot, self.session)
 
     def table(self, name: str):
-        """One of the bot's tables (a Django model), e.g. ``ctx.table("AdStat").objects.update_or_create(...)``."""
+        """One of the bot's tables (a Django model), e.g. ``ctx.table("AdStat").objects.update_or_create(...)``.
+
+        Saving or deleting a row refreshes pages that show the table; after a bulk write
+        (``.update()``, ``bulk_create``, a queryset's ``.delete()``, raw SQL) call
+        ``ctx.table("AdStat").touch()``.
+        """
         return self.bot.table(name)
 
     @property
@@ -147,6 +163,26 @@ class BotTool:
     approval_preview: Callable | None = None
     takes_context: bool = False
     seed: bool = False  # run before the chat's first model call (see FunctionToolkit)
+
+    def json_schema(self) -> dict:
+        return {
+            "type": "object",
+            "properties": self.parameters,
+            "required": self.required,
+        }
+
+
+@dataclass
+class PageAction:
+    """A function a page may call as the viewer (see ``page_action``)."""
+
+    name: str
+    function: Callable
+    parameters: dict
+    required: list[str]
+    description: str = ""
+    requires_approval: bool = False
+    approval_preview: Callable | None = None
 
     def json_schema(self) -> dict:
         return {
@@ -217,6 +253,47 @@ def bot_tool(  # noqa: PLR0913
             approval_preview=approval_preview,
             takes_context=takes_context,
             seed=seed,
+        )
+        return fn
+
+    return decorate(func) if func is not None else decorate
+
+
+def page_action(  # noqa: PLR0913
+    func: Callable | None = None,
+    *,
+    name: str | None = None,
+    description: str | None = None,
+    parameters: dict | None = None,
+    required: list[str] | None = None,
+    requires_approval: bool = False,
+    approval_preview: Callable | None = None,
+):
+    """Mark ``fn(ctx, ...)`` as an action pages of this bot may call as the viewer.
+
+    The first parameter is always the ``ToolContext`` (``ctx.user`` is the
+    viewer, ``ctx.session`` the chat the page was opened from, ``ctx.page`` the
+    page). The rest are inferred like ``bot_tool``'s. The return value must be
+    JSON-serializable; ``message`` (a toast), ``reload`` (re-render now) and
+    ``open`` (a URL for the viewer to open) are acted on, the rest goes to the
+    page. ``requires_approval`` makes the viewer confirm first, showing
+    ``approval_preview(ctx, **args)``. Plain tools are never callable from pages.
+    """
+
+    def decorate(fn: Callable) -> Callable:
+        if parameters is not None:
+            props = parameters
+            req = list(parameters.keys()) if required is None else list(required)
+        else:
+            props, req = _infer_parameters(fn, skip_first=True)
+        fn.__page_action__ = PageAction(
+            name=name or fn.__name__,
+            function=fn,
+            parameters=props,
+            required=req,
+            description=description or (inspect.getdoc(fn) or fn.__name__),
+            requires_approval=requires_approval,
+            approval_preview=approval_preview,
         )
         return fn
 
@@ -385,6 +462,7 @@ class ToolModule:
     toolkit_factory: Callable | None = None
     contexts: list[BotContext] = field(default_factory=list)
     tasks: dict[str, Callable] = field(default_factory=dict)
+    page_actions: dict[str, PageAction] = field(default_factory=dict)
     module: Any = None  # the imported module (its docstring describes the skill)
 
 
@@ -414,6 +492,14 @@ def load_tool_module(path: Path, bot_name: str) -> ToolModule:
         for value in vars(module).values()
         if callable(value) and hasattr(value, "__bot_task__")
     }
+    page_actions = {}
+    for value in vars(module).values():
+        if callable(value) and hasattr(value, "__page_action__"):
+            action = value.__page_action__
+            if page_actions.get(action.name, action) is not action:
+                msg = f"{path.name}: two page actions named {action.name!r}"
+                raise ValueError(msg)
+            page_actions[action.name] = action
     factory = getattr(module, "toolkits", None)
     return ToolModule(
         path=path,
@@ -421,5 +507,6 @@ def load_tool_module(path: Path, bot_name: str) -> ToolModule:
         toolkit_factory=factory,
         contexts=contexts,
         tasks=tasks,
+        page_actions=page_actions,
         module=module,
     )

@@ -142,6 +142,15 @@ def current_version() -> str | None:
     return None
 
 
+def wait_for_workers() -> bool:
+    """Whether the idle gate also waits for queued or running workers
+    (``ERGONAUT_UPGRADE_WAIT_FOR_WORKERS``, on unless set to 0/false/no). A
+    deployment whose workers poll in short Celery steps and whose external
+    agents live outside the Ergonaut pods can turn it off: a restart only
+    delays their next step, and beat resumes them."""
+    return os.environ.get("ERGONAUT_UPGRADE_WAIT_FOR_WORKERS", "1").strip().lower() not in ("0", "false", "no")
+
+
 def settings() -> dict:
     return {
         "repo": os.environ.get("ERGONAUT_UPGRADE_REPO", DEFAULT_REPO).strip() or DEFAULT_REPO,
@@ -262,11 +271,13 @@ def _run(
     wait_timeout: float = 30 * 60,
     quiet_for: float = 20,
     poll: float = 5,
-    workers: bool = True,
+    workers: bool | None = None,
     log=logger.info,
 ) -> str:
     from ergonaut.apps.bots.management.commands.wait_idle import wait_until_idle
 
+    if workers is None:
+        workers = wait_for_workers()
     upgrader = load_upgrader()
     if upgrader is None:
         return "no upgrader (set ERGONAUT_UPGRADER)"
@@ -288,7 +299,7 @@ def _run(
         if not got:
             return "another upgrade is running"
         if not wait_until_idle(timeout=wait_timeout, quiet_for=quiet_for, poll=poll, workers=workers, log=log):
-            return f"{release.tag} is waiting: turns or workers are still running"
+            return f"{release.tag} is waiting: {'turns or workers are' if workers else 'turns are'} still running"
         save_state(status="upgrading", at=time.time(), error="", release=asdict(release), sha=release.sha)
         try:
             message = upgrader.upgrade(release)

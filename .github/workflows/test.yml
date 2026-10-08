@@ -5,12 +5,28 @@ on:
     branches: [main, master, develop]
   pull_request:
     branches: [main, master, develop]
+  # Nightly full run on main catches PRs that passed alone but break together.
+  schedule:
+    - cron: "0 9 * * *"
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+# A newer push to a PR cancels the older run. Branch pushes are never
+# cancelled; GitHub keeps at most one waiting and replaces it with the newest.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  # GitHub-hosted runners: free for this public repo, and the suite runs in a
+  # few minutes there against 20+ on the self-hosted runners.
+  #
+  # Tests run on pull requests, nightly and by hand. A merge to main doesn't
+  # rerun them: the PR already passed.
   test:
+    if: github.event_name != 'push'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
@@ -25,16 +41,22 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
 
       - name: Install test dependencies
-        run: python -m pip install -e '.[dev]' pytest-cov
+        run: |
+          python -m pip install uv
+          uv pip install --system -e '.[dev]'
 
+      # -n auto: one pytest-xdist worker per CPU (4 on ubuntu-24.04). Each
+      # worker starts its own embedded PostgreSQL in a temp dir (ERGO_TEST_ISOLATED).
       - name: Run isolated PostgreSQL tests
         run: >-
           env -u DATABASE_URL -u OPENAI_API_KEY -u ANTHROPIC_API_KEY -u TEST_OPENAI
           python -m pytest tests -q --tb=short -o addopts='' --reuse-db
-          --ds=tests.example_app.settings --cov=src/django_ergo
-          --cov-report=html --junitxml=test-results.xml
+          --ds=tests.example_app.settings -n auto --durations=25
+          --junitxml=test-results.xml
 
       - name: Check additive migration drift
         run: >-
@@ -45,25 +67,17 @@ jobs:
         run: |
           python -m pytest tests/test_knowledge_corpus.py tests/test_knowledge_writes.py tests/test_knowledge_features.py tests/test_knowledge_boundary.py tests/test_knowledge_wiki_import.py tests/test_knowledge_paths.py --ds=tests.knowledge_settings -o addopts='' -q --tb=short
 
-      - name: Upload coverage reports
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: coverage-report
-          path: htmlcov/
-          retention-days: 30
-
       - name: Upload test results
         uses: actions/upload-artifact@v4
         if: always()
         with:
           name: test-results
-          path: |
-            test-results.xml
-            htmlcov/
+          path: test-results.xml
           retention-days: 30
 
+  # Packaging check: pushes only, so PRs don't queue another job on the runner.
   minimal-wheel:
+    if: github.event_name == 'push'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:

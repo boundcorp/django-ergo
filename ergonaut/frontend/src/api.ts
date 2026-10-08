@@ -46,6 +46,68 @@ export type Session = {
   prs?: PrLink[] // pull requests it reported, newest first
 }
 
+// The Routing page (GET /api/routing): what auto/<tier> chats and Orca tiers pick now.
+export type RoutingWindow = {
+  label?: string
+  used: number | null
+  remaining?: number | null
+  resets_at: number | null
+  status?: string | null
+  model?: string | null
+  limit: number
+}
+
+export type RoutingProvider = {
+  name: string
+  type: string
+  transport: string
+  subscription: boolean // a CLI on a subscription, not an API key
+  api_key_env: string
+  status: 'in_use' | 'standby' | 'skipped' | 'api_key' | 'unavailable'
+  reason: string
+  windows: Record<string, RoutingWindow>
+  reported_at: string | null
+  stale?: boolean
+}
+
+export type RoutingCandidate = {
+  provider: string
+  label: string
+  ref?: string
+  agent?: string
+  model?: string
+  effort?: string
+  state: 'pick' | 'ok' | 'skip' | 'unavailable'
+  reason: string
+}
+
+export type RoutingSwitch = {
+  at: string
+  session_id: string | null
+  label: string
+  tier: string
+  from: string
+  to: string
+  reason: string
+}
+
+export type Routing = {
+  providers: RoutingProvider[]
+  tiers: { name: string; picked: string; chats: number; candidates: RoutingCandidate[] }[]
+  agents: { name: string; candidates: RoutingCandidate[] }[]
+  text: string
+  text_source: 'page' | 'file' | ''
+  file_text: string
+  updated_at: string | null
+  compiled: boolean
+  compiling: boolean
+  compile_error: string
+  rules: { limits: { provider: string; window: string; max_used: number }[] }
+  default_max_used: number
+  switches: RoutingSwitch[]
+  editable: boolean
+}
+
 export type ModelChoice = {
   id: string // provider/model
   name: string
@@ -77,7 +139,34 @@ export type Block =
   | { type: 'tool_use'; id: string; name: string; input: unknown }
   | { type: 'tool_result'; tool_use_id: string; name?: string; content: unknown; is_error?: boolean }
 
-export type Message = { line: number; role: string; blocks: Block[]; timestamp: string | null }
+export type MessageIdentity = {
+  kind: 'django_user' | 'bot' | 'telegram_user' | 'system'
+  ref: string
+  display_name: string
+}
+export type MessageProvenance = {
+  kind: 'forwarded' | 'message' | 'report' | 'reply'
+  forwarded_by?: MessageIdentity & { session_id?: string; label?: string }
+  origin: {
+    session_id: string
+    label: string
+    message_id?: string
+    sequence?: number
+    timestamp: string
+    source_call?: string
+  }
+  note?: string
+  attachments?: { id: string; filename: string; media_type: string; size?: number | null; session?: string }[]
+  reply_to?: string
+}
+export type Message = {
+  line: number
+  role: string
+  blocks: Block[]
+  timestamp: string | null
+  author?: MessageIdentity | Record<string, never>
+  provenance?: MessageProvenance | Record<string, never>
+}
 
 export type Approval = { id: string; name: string; input: unknown; preview?: string; preview_error?: boolean }
 
@@ -150,6 +239,7 @@ export type CostBucket = {
   output_cost: number
   cost: number
   unpriced_calls: number
+  subscription_calls: number
 }
 
 export type Costs = {
@@ -160,6 +250,58 @@ export type Costs = {
   by_model: CostBucket[]
   by_day: { date: string; cost: number; calls: number }[]
   unpriced_models: string[]
+  usage: {
+    headline: {
+      threads: number
+      tokens: number
+      cache_hit: number
+      main_chats: number
+      subscription: number
+      api_spend: number
+      compaction: number
+    }
+    threads: UsageThread[]
+  }
+  agents: {
+    headline: { sessions: number; tokens: number; cache_hit: number }
+    rows: AgentUsage[]
+  }
+}
+
+export type UsageThread = {
+  id: string
+  title: string
+  bot: string
+  model: string
+  role: string
+  subscription: boolean
+  input_tokens: number
+  output_tokens: number
+  cache_write_tokens: number
+  cache_read_tokens: number
+  tokens: number
+  cache_hit: number
+  share: number
+  cost: number
+}
+
+export type AgentUsage = {
+  worker_id: string
+  worker_title: string
+  agent: string
+  model: string
+  chat_id: string
+  chat_title: string
+  bot: string
+  worker_status: string
+  input_tokens: number
+  cache_write_tokens: number
+  cache_read_tokens: number
+  output_tokens: number
+  reasoning_tokens: number
+  tokens: number
+  cache_hit: number
+  requests: number
 }
 
 export type BotDetail = Bot & {
@@ -280,6 +422,23 @@ export type Pin = {
   exists?: boolean
 }
 
+// POST /api/bots/{bot}/actions/{name}: what a page's ergo.call sends, and the two answers.
+export type PageActionBody = {
+  args: Record<string, unknown>
+  page: string // the pin's path (bot folder) or the attachment id (chat file)
+  session_id: string | null
+  approval?: string // the token from a needs_approval answer
+}
+// `result` may carry message (a toast), reload (re-render now) and open (an http(s) URL).
+export type PageActionDone = { result: Record<string, unknown> }
+export type PageActionApproval = { needs_approval: true; preview: string; approval: string }
+export type PageActionResponse = PageActionDone | PageActionApproval
+
+/** The live table stream (EventSource) for the tables a page reads. */
+export function tableEventsUrl(bot: string, tables: string[]): string {
+  return `/api/bots/${encodeURIComponent(bot)}/tables/events?tables=${tables.map(encodeURIComponent).join(',')}`
+}
+
 export type PullRequest = {
   number: number
   title: string
@@ -359,6 +518,7 @@ export type SessionDetail = {
   message_count?: number // in the whole session
   sent?: SentCard[] // requests this chat sent, newest first
   prs?: PrLink[] // pull requests reported in this chat
+  retry_model?: string // an Auto chat's last turn hit a limit: another model in its tier to retry on
 }
 
 export type Turn = {
@@ -444,15 +604,24 @@ async function upload<T>(path: string, file: File): Promise<T> {
   return response.json() as Promise<T>
 }
 
+export type ApiKey = { id: string; name: string; hint: string; created_at: string; last_used_at: string | null }
+
 export const api = {
+  apiKeys: () => request<ApiKey[]>('GET', '/auth/keys'),
+  createApiKey: (name: string) => request<ApiKey & { key: string }>('POST', '/auth/keys', { name }),
+  revokeApiKey: (id: string) => request<{ ok: boolean }>('DELETE', `/auth/keys/${id}`),
   csrf: () => request<{ csrftoken: string }>('GET', '/auth/csrf'),
   me: () => request<User>('GET', '/auth/me'),
   login: (username: string, password: string) => request<User>('POST', '/auth/login', { username, password }),
   logout: () => request<{ ok: boolean }>('POST', '/auth/logout'),
   bots: () => request<Bot[]>('GET', '/bots'),
   bot: (name: string) => request<BotDetail>('GET', `/bots/${name}`),
-  costs: (days: number) => request<Costs>('GET', `/costs?days=${days}`),
+  costs: (days: number, bot = '') =>
+    request<Costs>('GET', `/costs?days=${days}${bot ? `&bot=${encodeURIComponent(bot)}` : ''}`),
   version: () => request<Version>('GET', '/version'),
+  routing: () => request<Routing>('GET', '/routing'),
+  saveRouting: (text: string) => request<Routing>('PUT', '/routing', { text }),
+  resetRouting: () => request<Routing>('DELETE', '/routing'),
   kbs: (bot: string) => request<KB[]>('GET', `/bots/${bot}/kbs`),
   kbArticle: (bot: string, kb: string, path: string) =>
     request<KBArticle>('GET', `/bots/${bot}/kbs/${kb}/article?path=${encodeURIComponent(path)}`),
@@ -480,7 +649,8 @@ export const api = {
   send: (id: string, text: string, attachmentIds: string[] = [], mode: 'send' | 'interrupt' = 'send') =>
     request<Turn>('POST', `/sessions/${id}/messages`, { text, attachment_ids: attachmentIds, mode }),
   stop: (id: string) => request<Turn>('POST', `/sessions/${id}/stop`),
-  resume: (id: string) => request<Turn>('POST', `/sessions/${id}/resume`),
+  resume: (id: string, model = '') =>
+    request<Turn>('POST', `/sessions/${id}/resume${model ? `?model=${encodeURIComponent(model)}` : ''}`),
   dismissCall: (callId: string) => request<Call>('POST', `/calls/${callId}/dismiss`),
   unsend: (id: string, itemId: string) =>
     request<{ text: string; attachment_ids: string[] }>('DELETE', `/sessions/${id}/inbox/${itemId}`),
@@ -545,4 +715,6 @@ export const api = {
   allPins: () => request<Record<string, SidebarPin[]>>('GET', '/pins'),
   pins: (id: string) => request<Pin[]>('GET', `/sessions/${id}/pins`),
   pin: (id: string, pinned: boolean) => request<AttachmentFile>('POST', `/attachments/${id}/pin`, { pinned }),
+  pageAction: (bot: string, name: string, body: PageActionBody) =>
+    request<PageActionResponse>('POST', `/bots/${encodeURIComponent(bot)}/actions/${encodeURIComponent(name)}`, body),
 }

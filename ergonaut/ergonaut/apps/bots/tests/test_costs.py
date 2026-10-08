@@ -2,13 +2,18 @@ import json
 
 import pytest
 from django.contrib.auth import get_user_model
-from django_ergo.conversation.models import ConversationSession, StructuredCall
+from django.utils import timezone
+from django_ergo.conversation.models import AgentUsage, ConversationSession, StructuredCall, Worker
 
 
 @pytest.fixture
 def lee(client):
     user = get_user_model().objects.create_superuser("lee", "lee@example.com", "pw")
-    client.post("/api/auth/login", json.dumps({"username": "lee", "password": "pw"}), content_type="application/json")
+    client.post(
+        "/api/auth/login",
+        json.dumps({"username": "lee", "password": "pw"}),
+        content_type="application/json",
+    )
     return user
 
 
@@ -30,7 +35,12 @@ def test_costs_by_kind_with_chat_replies_by_bot(client, lee):
             input_tokens=tokens[0],
             output_tokens=tokens[1],
         )
-    StructuredCall.objects.create(kind="compaction", user=lee, model_name="claude-haiku-4-5", output_tokens=million)
+    StructuredCall.objects.create(
+        kind="compaction",
+        user=lee,
+        model_name="claude-haiku-4-5",
+        output_tokens=million,
+    )
     StructuredCall.objects.create(kind="title", user=lee, model_name="mystery", input_tokens=10)
 
     data = client.get("/api/costs?days=7").json()
@@ -42,7 +52,10 @@ def test_costs_by_kind_with_chat_replies_by_bot(client, lee):
     assert kinds == pytest.approx({"chat_reply": 12.8, "compaction": 5, "title": 0})
     assert [b["name"] for b in data["by_kind"]] == ["chat_reply", "compaction", "title"]
     bots = {b["name"]: (b["calls"], b["cost"]) for b in data["chat_reply_by_bot"]}
-    assert bots == {"boundcorp": (1, pytest.approx(12)), "kitchen": (2, pytest.approx(0.8))}
+    assert bots == {
+        "boundcorp": (1, pytest.approx(12)),
+        "kitchen": (2, pytest.approx(0.8)),
+    }
     assert len(data["by_day"]) == 7
     assert data["by_day"][-1]["calls"] == 5
 
@@ -52,7 +65,11 @@ def test_people_only_see_their_own_costs(client):
     other = get_user_model().objects.create_user("other", "o@example.com", "pw")
     StructuredCall.objects.create(kind="chat_reply", user=other, model_name="gpt-6-luna", input_tokens=5)
     get_user_model().objects.create_user("cook", "c@example.com", "pw")
-    client.post("/api/auth/login", json.dumps({"username": "cook", "password": "pw"}), content_type="application/json")
+    client.post(
+        "/api/auth/login",
+        json.dumps({"username": "cook", "password": "pw"}),
+        content_type="application/json",
+    )
     assert client.get("/api/costs").json()["total"]["calls"] == 0
 
 
@@ -71,7 +88,11 @@ def test_cache_writes_and_reads_are_billed_at_their_own_rates(client, lee):
     )
 
     total = client.get("/api/costs?days=7").json()["total"]
-    assert (total["input_tokens"], total["cache_write_tokens"], total["cache_read_tokens"]) == (
+    assert (
+        total["input_tokens"],
+        total["cache_write_tokens"],
+        total["cache_read_tokens"],
+    ) == (
         million,
         million,
         10 * million,
@@ -95,9 +116,190 @@ def test_costs_use_the_cost_recorded_per_request_and_count_reasoning(client, lee
         output_tokens=1_000_000,
         reasoning_tokens=300_000,
         cost_usd=Decimal("17"),  # recorded with a long-context surcharge
-        metadata={"cost_parts": {"input": 4.0, "cache_write": 0.0, "cache_read": 0.0, "output": 13.0}},
+        metadata={
+            "cost_parts": {
+                "input": 4.0,
+                "cache_write": 0.0,
+                "cache_read": 0.0,
+                "output": 13.0,
+            }
+        },
     )
     total = client.get("/api/costs").json()["total"]
     assert total["cost"] == pytest.approx(17)
-    assert (total["input_cost"], total["output_cost"]) == (pytest.approx(4), pytest.approx(13))
+    assert (total["input_cost"], total["output_cost"]) == (
+        pytest.approx(4),
+        pytest.approx(13),
+    )
     assert total["reasoning_tokens"] == 300_000
+
+
+@pytest.mark.django_db
+def test_usage_groups_sessions_and_calculates_token_shares(client, lee):
+    main = ConversationSession.objects.create(
+        user=lee,
+        bot_name="kitchen",
+        engine_type="openai",
+        transport_type="api",
+        metadata={"bot_role": "root", "title": "Dinner"},
+    )
+    thread = ConversationSession.objects.create(
+        user=lee,
+        bot_name="kitchen",
+        engine_type="openai",
+        transport_type="api",
+        metadata={"bot_role": "thread", "title": "Recipe"},
+    )
+    for session, kind, input_count, read_count, output_count in [
+        (main, "chat_reply", 100, 300, 100),
+        (main, "compaction", 0, 100, 0),
+        (thread, "chat_reply", 100, 0, 100),
+    ]:
+        StructuredCall.objects.create(
+            user=lee,
+            session=session,
+            kind=kind,
+            model_name="gpt-6-luna",
+            input_tokens=input_count,
+            cache_read_input_tokens=read_count,
+            output_tokens=output_count,
+        )
+
+    usage = client.get("/api/costs?days=7").json()["usage"]
+    assert usage["headline"]["threads"] == 2
+    assert usage["headline"]["tokens"] == 800
+    assert usage["headline"]["cache_hit"] == pytest.approx(400 / 600)
+    assert usage["headline"]["main_chats"] == pytest.approx(600 / 800)
+    assert usage["headline"]["compaction"] == pytest.approx(100 / 800)
+    assert [row["title"] for row in usage["threads"]] == ["Dinner", "Recipe"]
+    assert usage["threads"][0]["cache_hit"] == pytest.approx(400 / 500)
+    assert usage["threads"][0]["share"] == pytest.approx(600 / 800)
+
+
+@pytest.mark.django_db
+def test_subscription_tokens_count_without_api_spend(client, lee):
+    cli = ConversationSession.objects.create(user=lee, bot_name="helper", engine_type="claude", transport_type="cli")
+    api_session = ConversationSession.objects.create(
+        user=lee, bot_name="helper", engine_type="claude", transport_type="api"
+    )
+    StructuredCall.objects.create(
+        user=lee,
+        session=cli,
+        kind="chat_reply",
+        model_name="mystery",
+        input_tokens=400,
+        output_tokens=100,
+        cost_usd="99",
+        metadata={"cost_parts": {"input": 99}},
+    )
+    StructuredCall.objects.create(
+        user=lee,
+        session=api_session,
+        kind="chat_reply",
+        model_name="claude-sonnet-5-5",
+        input_tokens=1_000_000,
+    )
+    data = client.get("/api/costs").json()
+    assert data["total"]["input_tokens"] == 1_000_400
+    assert data["total"]["cost"] == pytest.approx(2)
+    assert data["total"]["subscription_calls"] == 1
+    assert data["total"]["unpriced_calls"] == 0
+    assert data["unpriced_models"] == []
+    assert data["usage"]["headline"]["subscription"] == pytest.approx(500 / 1_000_500)
+    cli_row = next(row for row in data["usage"]["threads"] if row["subscription"])
+    assert cli_row["tokens"] == 500
+    assert cli_row["cost"] == 0
+    assert cli_row["title"] == "helper main"
+
+
+@pytest.mark.django_db
+def test_usage_respects_user_scope_and_bot_filter(client):
+    users = get_user_model().objects
+    cook = users.create_user("cook", "c@example.com", "pw")
+    other = users.create_user("other", "o@example.com", "pw")
+    for user, bot in [(cook, "kitchen"), (cook, "helper"), (other, "kitchen")]:
+        session = ConversationSession.objects.create(
+            user=user, bot_name=bot, engine_type="openai", transport_type="api"
+        )
+        StructuredCall.objects.create(
+            user=user,
+            session=session,
+            kind="chat_reply",
+            model_name="gpt-6-luna",
+            input_tokens=10,
+        )
+    client.post(
+        "/api/auth/login",
+        json.dumps({"username": "cook", "password": "pw"}),
+        content_type="application/json",
+    )
+    usage = client.get("/api/costs?bot=kitchen").json()["usage"]
+    assert usage["headline"]["threads"] == 1
+    assert usage["headline"]["tokens"] == 10
+    assert [row["bot"] for row in usage["threads"]] == ["kitchen"]
+
+
+@pytest.mark.django_db
+def test_agent_usage_has_its_own_scoped_and_filtered_costs_block(client):
+    cook = get_user_model().objects.create_user("cook", "cook@example.com", "pw")
+    other = get_user_model().objects.create_user("other", "other@example.com", "pw")
+    kitchen = ConversationSession.objects.create(user=cook, bot_name="kitchen", engine_type="openai")
+    helper = ConversationSession.objects.create(user=cook, bot_name="helper", engine_type="openai")
+    hidden = ConversationSession.objects.create(user=other, bot_name="kitchen", engine_type="openai")
+    rows = [
+        (kitchen, "kitchen", "Fix recipe", "claude-sonnet", 10, 20),
+        (helper, "helper", "Fix helper", "gpt-6-codex", 5, 5),
+        (hidden, "kitchen", "Private work", "claude-opus", 99, 99),
+    ]
+    for session, bot, title, model, input_tokens, output_tokens in rows:
+        worker = Worker.objects.create(
+            session=session, bot_name=bot, title=title, function="orca:watch", status="completed"
+        )
+        AgentUsage.objects.create(
+            worker=worker,
+            session=session,
+            bot_name=bot,
+            agent="codex",
+            model=model,
+            input_tokens=input_tokens,
+            cache_read_tokens=5,
+            output_tokens=output_tokens,
+            requests=2,
+            last_at=timezone.now(),
+        )
+    client.post(
+        "/api/auth/login",
+        json.dumps({"username": "cook", "password": "pw"}),
+        content_type="application/json",
+    )
+
+    agents = client.get("/api/costs?bot=kitchen").json()["agents"]
+
+    assert agents["headline"] == {
+        "sessions": 1,
+        "tokens": 35,
+        "cache_hit": pytest.approx(5 / 15),
+    }
+    assert agents["rows"] == [
+        {
+            "worker_id": str(Worker.objects.get(title="Fix recipe").id),
+            "worker_title": "Fix recipe",
+            "agent": "codex",
+            "model": "claude-sonnet",
+            "chat_id": str(kitchen.id),
+            "chat_title": "kitchen main",
+            "bot": "kitchen",
+            "worker_status": "completed",
+            "input_tokens": 10,
+            "cache_write_tokens": 0,
+            "cache_read_tokens": 5,
+            "output_tokens": 20,
+            "reasoning_tokens": 0,
+            "tokens": 35,
+            "cache_hit": pytest.approx(5 / 15),
+            "requests": 2,
+        }
+    ]
+
+    AgentUsage.objects.filter(session=kitchen).update(last_at=timezone.now() - timezone.timedelta(days=31))
+    assert client.get("/api/costs?bot=kitchen").json()["agents"]["rows"] == []

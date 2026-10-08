@@ -11,16 +11,19 @@ pull request. Nothing you write runs until a person merges it.
 ## The workflow
 
 1. `ergo_config_repo_status` and `ergo_config_repo_prs` first: don't redo a
-   change that's already proposed. `ergo_config_repo_pull` if main moved.
+   change that's already proposed. `ergo_config_repo_pull` before editing so
+   the draft starts from current main.
 2. Read before you write: `ergo_config_repo_list` the bot folder, then
    `ergo_config_repo_read` its `bot.yaml`, `agents.md` and the tool files
-   closest to what you're adding. Copy their style. To see how an Ergo
-   API works, load `introspection` and read its source with
-   `ergo_self_read("ergo:bots/tools.py")` (or `ergo:bots/pages.py`,
-   `ergo:bots/workers.py`, ...).
-3. Write with `ergo_config_repo_write` (whole files) and
-   `ergo_config_repo_delete`. You're editing a draft worktree of main, so the
-   running bots don't change.
+   closest to what you're adding. For a large file, use
+   `ergo_config_repo_grep` to find the function, then read its line range.
+   Copy their style. To see how an Ergo API works, load `introspection` and
+   read its source with `ergo_self_read("ergo:bots/tools.py")` (or
+   `ergo:bots/pages.py`, `ergo:bots/workers.py`, ...).
+3. Use `ergo_config_repo_edit` for a targeted existing-file change.
+   `ergo_config_repo_write` is for new files or a full rewrite, and
+   `ergo_config_repo_delete` removes a file. You're editing a draft worktree
+   of main, so the running bots don't change.
 4. Check: `ergo_config_repo_diff` for the whole change, and
    `ergo_config_repo_preview(path)` for every `.jhtml` page you touched (it
    applies the draft's migrations and fills empty tables with sample rows).
@@ -83,6 +86,18 @@ def file_receipt(ctx, receipt_id: str, category: str) -> str:
 - Secrets come from the environment through `ctx.secret("NAME")` (a
   per-user `NAME__<USERNAME>` wins). Never put a key in bot.yaml, a file or a
   prompt. Name new secrets in the PR body so someone sets them.
+- Pages call functions you mark `@page_action` (from `django_ergo.bots`), in
+  the same tool file. Parameters come from type hints and the first one is
+  `ctx`, whose `user` is the person viewing the page. Set
+  `requires_approval=True` (with `approval_preview=lambda ctx, **args: "..."`)
+  for writes with side effects; the viewer confirms first. Return a dict:
+  `{"message": "..."}` shows a toast, `{"reload": True}` re-renders. Raise
+  `ValueError("clear message")` for bad input; the page shows it. Actions have
+  30 seconds; start longer work with `ctx.tasks`. Don't make an action only
+  to hand text to the model; plain tools aren't callable from pages.
+- After a bulk write (`.update()`, `bulk_create`, a queryset `.delete()`, raw
+  SQL) call `ctx.table("X").touch()`, or pages showing the table won't
+  refresh. Saving or deleting a single row needs nothing.
 - `ctx` (with `takes_context=True`) has `bot`, `session`, `user`,
   `is_root`, `now()`, `timezone`, `table(name)`, `tasks` and `workers`.
 - Tools are plain synchronous functions; the Django ORM and blocking HTTP
@@ -164,6 +179,15 @@ class Receipt(BotTable):
 - Schema changes need migrations; publishing runs `ergo_bot_makemigrations`
   for you, so the PR carries them. Don't hand-write migration files unless
   it's a data migration.
+- Before adding a table, think about its lifecycle: how many rows it will
+  hold, how fast it grows, and what it costs to store and query.
+- Don't mirror a large remote source (analytics, event streams, other
+  high-volume data) into a local table, and avoid deep joins or advanced
+  queries over big tables; they degrade performance. Do it only if Lee
+  knowingly opts into running a multi-GB database.
+- Prefer a small, purpose-specific denormalized summary or projection of a
+  large source. Mirroring it directly is fine when its size and growth are
+  manageable.
 - Code uses `ctx.table("Receipt").objects...`; the bot itself gets the
   `tables` skill (`ergo_table_query`, `ergo_table_add`, ...).
 - To keep a table fresh without spending model calls, pull data in a
@@ -203,6 +227,16 @@ opened. Pages are read-only and sandboxed.
   `chats: {main: {pins: [{path: pages/receipts.jhtml, title: Receipts, icon: "🧾"}]}}`.
 - Always `ergo_config_repo_preview` a page before publishing and fix what it
   reports.
+- Pages can call `@page_action` functions with `await ergo.call(name, args)`
+  and update themselves when a table changes: no polling. See the
+  `page-design` skill.
+- For table writes on a page, use `blocks.form(table="Receipt")` and
+  `blocks.table(table="Receipt", edit=true, delete=true)`: inputs and errors
+  match the Django model and delete asks the viewer to approve. Set
+  `page_writes = False` on an import-only table.
+- Use `blocks.button(label="Review", ask="Review these receipts")` or
+  `ergo.ask(text, {chat})` to hand a request to the bot; the reply belongs in
+  that chat, not the page.
 
 ## Before you publish
 

@@ -34,12 +34,19 @@ from asgiref.sync import sync_to_async
 from django.utils.module_loading import import_string
 
 from django_ergo.bots import messaging
+from django_ergo.bots import page_actions
 from django_ergo.bots.definition import MAIN
 from django_ergo.bots.definition import BotDefinition
 from django_ergo.bots.definition import PluginSpec
 from django_ergo.bots.plugins import BotPlugin
 from django_ergo.bots.plugins import resolve_plugin_class
 from django_ergo.bots.providers import Providers
+from django_ergo.bots.routing import ensure_compiled
+from django_ergo.bots.routing import is_auto
+from django_ergo.bots.routing import pick_model as route_model
+from django_ergo.bots.routing import record_switch
+from django_ergo.bots.routing import retry_model as routing_retry_model
+from django_ergo.bots.routing import tier_of
 from django_ergo.bots.skills import Skill
 from django_ergo.bots.skills import library_skills
 from django_ergo.bots.skills import load_skills
@@ -56,6 +63,7 @@ from django_ergo.conversation.context import MessageContextSource
 from django_ergo.conversation.context import TextContextSource
 from django_ergo.conversation.history import SessionSource
 from django_ergo.conversation.history_search_toolkit import MessageHistoryToolkit
+from django_ergo.conversation.identity import thread_message_identity
 from django_ergo.conversation.models import CompactionMode
 from django_ergo.conversation.models import ConversationSession
 from django_ergo.conversation.models import StructuredCall
@@ -73,6 +81,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from django_ergo.bots.registry import BotRegistry
+    from django_ergo.bots.tools import PageAction
     from django_ergo.bots.tools import ToolModule
     from django_ergo.conversation.attachments import Attachment
     from django_ergo.conversation.engine import Engine
@@ -194,6 +203,13 @@ class Bot:
         }
         for module in self.skill_tool_modules.values():
             self.tasks.update(module.tasks)
+        # @page_action functions pages may call as the viewer, by name (see bots.page_actions).
+        self.page_actions: dict[str, PageAction] = {}
+        for module in [*self.tool_modules, *self.skill_tool_modules.values()]:
+            for action_name, action in module.page_actions.items():
+                if self.page_actions.setdefault(action_name, action) is not action:
+                    msg = f"{definition.name}: two page actions named {action_name!r}"
+                    raise ValueError(msg)
         self.skill_defs: list[SkillDef] = self._skill_defs()
 
     def _named_skills(self) -> set[str]:
@@ -286,6 +302,22 @@ class Bot:
                 source="built-in",
             )
         )
+        from django_ergo.bots.agents import AGENTS_INSTRUCTIONS
+        from django_ergo.bots.agents import agent_toolkit
+        from django_ergo.bots.agents import managers
+
+        if managers(self):
+            defs.append(
+                SkillDef(
+                    "agents",
+                    "Start coding agents (Codex, Claude Code, omp) on tasks, answer "
+                    "their questions and stop them",
+                    instructions=AGENTS_INSTRUCTIONS,
+                    toolkits=lambda ctx: [agent_toolkit(self, ctx)],
+                    requires=requires.get("agents", []),
+                    source="built-in",
+                )
+            )
         if self.definition.root_dir is not None:
             from django_ergo.bots.introspection import introspection_toolkit
 
@@ -471,7 +503,7 @@ class Bot:
     def model_ref(self) -> str:
         """The ``provider/model`` this bot uses by default, when providers.yaml names it."""
         model = str(self.definition.engine_config.get("model") or "")
-        if "/" in model and self.providers.find(model):
+        if "/" in model and self.providers.knows(model):
             return model
         if not self.definition.engine_type and self.providers.default:
             return self.providers.default
@@ -504,7 +536,77 @@ class Bot:
 
     def session_model_ref(self, picked) -> str:
         picked = str(picked or "")
-        return picked if picked and self.providers.find(picked) else ""
+        return picked if picked and self.providers.knows(picked) else ""
+
+    def route(self, session: ConversationSession) -> str:
+        """For a chat on ``auto/<tier>``, pick this turn's model from what's
+        left on each subscription and remember it (``bots.routing``). Returns
+        the model, or "" for a chat with a fixed model. Runs the ORM."""
+        ref = self.session_model(session) or self.model_ref()
+        if not is_auto(ref):
+            return ""
+        ensure_compiled(
+            self.providers,
+            lambda: self.make_engine(model=self.resolve_ref("auto/low", None)),
+        )
+        before = (session.metadata or {}).get("routed_model", "")
+        picked = route_model(self.providers, tier_of(ref), before)
+        self._set_routed(session, tier_of(ref), picked)
+        return picked
+
+    def _set_routed(
+        self, session: ConversationSession, tier: str, picked: str, reason: str = ""
+    ) -> None:
+        meta = session.metadata or {}
+        before = meta.get("routed_model", "")
+        if picked == before:
+            return
+        if before:
+            record_switch(self.providers, session, tier, before, picked, reason)
+        session.metadata = {**meta, "routed_model": picked}
+        spec = self.engine_spec(session)
+        session.engine_type = spec.engine_type
+        session.transport_type = spec.transport_type
+        session.save(
+            update_fields=["metadata", "engine_type", "transport_type", "updated_at"]
+        )
+
+    def retry_model(self, session: ConversationSession, error: str) -> str:
+        """For an ``auto/<tier>`` chat whose turn failed with ``error``: the
+        model to offer a retry on when its provider refused for a limit, or
+        "". Never applied on its own (see :meth:`reroute`). Runs the ORM."""
+        ref = self.session_model(session) or self.model_ref()
+        if not is_auto(ref):
+            return ""
+        failed = self.resolve_ref(ref, session)
+        return routing_retry_model(self.providers, tier_of(ref), failed, error)
+
+    def reroute(self, session: ConversationSession, model: str, reason: str) -> None:
+        """Move an ``auto/<tier>`` chat to ``model``, one of its tier's
+        candidates, for its next turns (it stays while that model qualifies).
+        Runs the ORM."""
+        ref = self.session_model(session) or self.model_ref()
+        if not is_auto(ref) or model not in self.providers.routing.tiers.get(
+            tier_of(ref), []
+        ):
+            msg = f"{model!r} isn't a model in this chat's tier"
+            raise ValueError(msg)
+        self._set_routed(session, tier_of(ref), model, reason)
+
+    def resolve_ref(self, ref: str, session: ConversationSession | None) -> str:
+        """``auto/<tier>`` as a concrete model: the one routed for this chat,
+        else the tier's first available one. No ORM."""
+        if not is_auto(ref):
+            return ref
+        tier = self.providers.routing.tiers.get(tier_of(ref), [])
+        routed = ((session.metadata or {}) if session else {}).get("routed_model")
+        if routed in tier:
+            return routed
+        for candidate in tier:
+            found = self.providers.find(candidate)
+            if found and found[0].available:
+                return candidate
+        return tier[0] if tier else ""
 
     def engine_spec(
         self, session: ConversationSession | None = None, model: str = ""
@@ -512,10 +614,14 @@ class Bot:
         """The engine for a chat: the model picked for it (or ``model``), else the bot's."""
         default = get_default_engine_spec()
         ref = model or self.session_model(session) or self.model_ref()
+        ref = self.resolve_ref(ref, session)
         transport = default.transport_type
         if ref:
             engine_type, config, key_env = self.providers.engine(ref)
             transport = self.providers.find(ref)[0].transport
+            config["provider"] = ref.partition("/")[
+                0
+            ]  # usage windows are kept by provider
             extra = {
                 k: v for k, v in self.definition.engine_config.items() if k != "model"
             }
@@ -768,9 +874,7 @@ class Bot:
 
     def history_sources(self, session: ConversationSession) -> list[SessionSource]:
         """Sessions the history tools can read: all of this user's sessions
-        with the bot for the root, otherwise just the session itself."""
-        if not self.is_root(session):
-            return [SessionSource(session)]
+        with the bot, from any chat or thread."""
         return [
             SessionSource(s)
             for s in self.sessions()
@@ -811,6 +915,23 @@ class Bot:
             state=(session.metadata or {}).get(STATE_KEY),
         )
 
+    def _function_context_sources(
+        self, ctx: ToolContext, session: ConversationSession, message: str
+    ) -> list[TextContextSource]:
+        """@bot_context functions of the tool files, and the page actions people ran since the last reply."""
+        sources = [
+            TextContextSource(
+                item.title,
+                lambda item=item: item.render(ctx, message),
+                weight=item.weight,
+            )
+            for module in self.tool_modules
+            for item in module.contexts
+        ]
+        if text := page_actions.context_text(session):
+            sources.append(TextContextSource(page_actions.CONTEXT_TITLE, text))
+        return sources
+
     def toolkits(self, session: ConversationSession) -> list[Toolkit]:
         return [self.skillset(session)]
 
@@ -824,10 +945,12 @@ class Bot:
     ) -> ContextBuilder | None:
         """The turn's context. ``incoming`` is False when resuming a stored turn."""
         ctx = self.tool_context(session)
+        skills = skillset or self.skillset(session)
         builder = ContextBuilder(budget_tokens=self.definition.budget_tokens)
         from django_ergo.bots.orchestrator import chat_identity
 
         builder.add(TextContextSource("This chat", chat_identity(session), weight=3))
+        builder.add(TextContextSource("Skills", skills.context_summary, weight=1))
         empty = False
         if self.definition.current_time:
             builder.add(
@@ -838,16 +961,9 @@ class Bot:
                 )
             )
             empty = False
-        for module in self.tool_modules:
-            for item in module.contexts:
-                builder.add(
-                    TextContextSource(
-                        item.title,
-                        lambda item=item: item.render(ctx, message),
-                        weight=item.weight,
-                    )
-                )
-                empty = False
+        for source in self._function_context_sources(ctx, session, message):
+            builder.add(source)
+            empty = False
         if self.is_window(session):
             builder.add(
                 MessageContextSource(
@@ -872,7 +988,7 @@ class Bot:
                 for source in plugin.context_sources(ctx, message) or []:
                     builder.add(source)
                     empty = False
-        for source in (skillset or self.skillset(session)).context_sources(message):
+        for source in skills.context_sources(message):
             builder.add(source)
             empty = False
         return None if empty else builder
@@ -909,18 +1025,19 @@ class Bot:
         self, toolkits: list[Toolkit], session: ConversationSession | None = None
     ):
         spec = chat_reply_spec(toolkits, max_turns=self.definition.max_turns)
-        # Toolkits pre-seed what every session should start knowing (its
-        # skills, the bots it can message); a window session needs it each turn.
+        # Toolkits pre-seed what every session should start knowing; window
+        # sessions need user-defined seeds again on each turn.
         spec.pre_seed_each_turn = session is not None and self.is_window(session)
         return spec
 
-    async def ask(
+    async def ask(  # noqa: PLR0913
         self,
         session: ConversationSession,
         message: str,
         *,
         attachments: list[Attachment] | None = None,
         thread_message: ThreadMessage | None = None,
+        author: dict | None = None,
         control: TurnControl | None = None,
     ) -> TurnResult:
         """Answer one message with a ChatReply. Plugins see before/after hooks.
@@ -929,10 +1046,39 @@ class Bot:
         ``django_ergo.bots.messaging``) the reply is routed back to its sender.
         ``control`` steers or stops the turn between steps (see
         ``conversation.structured``).
+        ``author`` identifies the actual external sender; otherwise ordinary
+        human text belongs to the session's Django user. Delegated messages
+        carry their original author and origin separately from their raw body.
         """
+        metadata = {}
+        if thread_message is not None:
+            metadata["thread_message"] = str(thread_message.id)
+            author, provenance = await sync_to_async(
+                thread_message_identity, thread_sensitive=True
+            )(thread_message)
+            if provenance:
+                message = thread_message.text
+                metadata["message_provenance"] = provenance
+            elif (thread_message.metadata or {}).get("worker") or (
+                thread_message.metadata or {}
+            ).get("schedule"):
+                meta = thread_message.metadata or {}
+                author = {
+                    "kind": "system",
+                    "ref": str(meta.get("worker") or meta.get("schedule") or ""),
+                    "display_name": "Worker"
+                    if meta.get("worker")
+                    else "Scheduled message",
+                }
+            else:
+                message = thread_message.text
+                author = author or None
+        if author is not None:
+            metadata["message_author"] = author
         for plugin in self.plugins:
             await _maybe_await(plugin.before_turn(session, message))
         toolkits, builder = await self._prepare(session, message)
+        await sync_to_async(self.route, thread_sensitive=True)(session)
         outcome = await run_structured_call(
             self.reply_spec(toolkits, session),
             message,
@@ -942,9 +1088,7 @@ class Bot:
             context_builder=builder,
             allow_approvals=True,
             control=control,
-            metadata={"thread_message": str(thread_message.id)}
-            if thread_message
-            else None,
+            metadata=metadata,
         )
         result = TurnResult.from_call(session, outcome)
         for plugin in self.plugins:
@@ -983,6 +1127,7 @@ class Bot:
             pending = (call.metadata or {}).get("pending_approvals", [])
             decisions = {item["id"]: decisions for item in pending}
         toolkits, builder = await self._prepare(session, "", incoming=False)
+        await sync_to_async(self.route, thread_sensitive=True)(session)
         try:
             outcome = await resume_structured_call(
                 self.reply_spec(toolkits),

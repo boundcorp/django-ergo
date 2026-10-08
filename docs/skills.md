@@ -50,6 +50,11 @@ skills/
 `tools.py` is imported when the bot loads (see [Tools](tools.md)), but its
 tools only reach the model while the skill is loaded.
 
+A `tools.py` can also declare `@page_action` functions. Pages call those
+whether or not the skill is loaded in a chat, and `Bot.page_actions` collects
+them from tool files and skill folders alike; two actions with the same name
+fail the load. See [Page actions](bots.md#page-actions).
+
 A tool file listed under `tools:` is a skill too, with no instructions: its
 module docstring's first line is the description, so write one.
 
@@ -88,11 +93,26 @@ folder with the same name replaces the library's.
 | Skill | For |
 | --- | --- |
 | `skillbuilder` | Writing the bot's own skills, tool files, workers, tables, schedules and `.jhtml` dashboards, proposed as pull requests. Requires `config_repo` and `introspection`, and brings `bot_management` in `propose_pr` mode. |
+| `page-design` | Choosing and presenting plans, boards, dependencies, flows, timelines, comparisons and maps as live pages or static attachments; its page guidance covers actions, table forms and `ergo.ask`. Brings the `pages` and `attachments` plugins. |
+| `ergo-client` | Using another Ergonaut server's bots through its API: `ergo_client_*` tools to list bots, start and follow threads, and answer approvals. Needs the `ERGONAUT_URL` and `ERGONAUT_API_KEY` secrets. |
+| `ergo-hosting` | Setting up, upgrading and looking after an Ergonaut server. |
+| `ergo-bot-development` | Writing bot folders from a checkout and testing them. A bot changing itself uses `skillbuilder` instead. |
+| `ergo-developer` | Developing Ergo by delegating work to its bots, then improving the bot, library or Ergonaut layer that fell short. |
+
+The last five are also skills for Claude Code and Codex: their front matter
+says `install: [claude, codex]`, and `skill_library/install.py` links them
+into those agents. `page-design` is installable because an external agent can
+also create reviewed `.jhtml` files or portable HTML snapshots. See [Agent
+skills](agent-skills.md).
 
 ```yaml
 skills:
-  include: [skillbuilder]
+  include: [page-design]
 ```
+
+A planner loads it with `ergo_skill_load("page-design")`, then uses
+`ergo_page_write` and `ergo_page_preview` for a live, pinnable page or
+`ergo_attachments_create` for a static HTML or Markdown snapshot.
 
 ### Default skills
 
@@ -113,9 +133,9 @@ warning; a skill the bot names itself fails the load instead. Set
 
 ## Loading and unloading
 
-Every chat begins with an `ergo_skills_list` result already in its history:
-each skill, whether it's loaded, how many tools it has, and short hints for
-some unloaded plugins ("3 files in this chat").
+Every turn's context has a compact `Skills` section: each skill, whether it
+is loaded, and its one-line description. `ergo_skills_list` remains available
+when the model needs the fuller listing, including tool counts and hints.
 
 - `ergo_skill_load(name)` returns the skill's instructions (and its plugin
   context, if any) and adds its tools from the next model call, in the same

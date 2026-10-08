@@ -71,6 +71,8 @@ from dataclasses import field
 from typing import TYPE_CHECKING
 from typing import Any
 from typing import Protocol
+from typing import get_args
+from typing import get_origin
 
 from asgiref.sync import sync_to_async
 from pydantic import BaseModel
@@ -80,6 +82,7 @@ from django_ergo.conversation.adapters import ClaudeToolAdapter
 from django_ergo.conversation.adapters import OpenAIToolAdapter
 from django_ergo.conversation.compaction import maybe_compact
 from django_ergo.conversation.engine import SeededToolCall
+from django_ergo.conversation.identity import system_identity
 from django_ergo.conversation.images import is_ref
 from django_ergo.conversation.images import prepare_messages
 from django_ergo.conversation.images import storable_ref
@@ -95,11 +98,11 @@ from django_ergo.conversation.runner import _tool_requires_approval
 from django_ergo.conversation.runtime import EngineSpec
 from django_ergo.conversation.runtime import build_engine
 from django_ergo.conversation.runtime import get_default_engine_spec
+from django_ergo.conversation.tool_results import budget_chars
 from django_ergo.conversation.tool_results import trim_tool_results
 from django_ergo.conversation.toolkit import ApprovalPreview
 from django_ergo.conversation.toolkit import Toolkit
 from django_ergo.pricing import add_request_cost
-from django_ergo.settings import api_settings
 from django_ergo.tools import tool_registry
 
 if TYPE_CHECKING:
@@ -143,6 +146,31 @@ _ERROR_CATEGORIES = {
     "UnprocessableEntityError": "model",
 }
 _MAX_TOKENS_STOPS = {"max_tokens", "length"}
+
+_TRUNCATED_TOOL_CALL = (
+    "Not run: your reply hit the output token limit before this tool call's "
+    "arguments were complete. Nothing happened. Retry with smaller arguments, "
+    "for example by splitting a large file or text across several calls."
+)
+
+
+def _submit_nudge(tool_name: str, events) -> str:
+    """Ask for the output tool after a plain-text answer, keeping that answer.
+
+    Without the text, models often resubmit an earlier turn's answer.
+    """
+    text = "".join(e.text for e in events if e.event_type == "text" and e.text)
+    text = text.strip()
+    if not text:
+        return (
+            f"You must call the {tool_name} tool with your final answer to the "
+            "latest message. Do not answer in plain text."
+        )
+    return (
+        f"Your last message was plain text, which isn't delivered. Call the "
+        f"{tool_name} tool now with that answer to the latest message (not an "
+        f"earlier one). Your plain text was:\n\n{text[:4000]}"
+    )
 
 
 class StructuredCallError(RuntimeError):
@@ -246,6 +274,42 @@ class StructuredCallResult:
         return self.call.error
 
 
+def _wants_container(annotation: Any) -> bool:
+    """True when a field takes a list, dict or model and never a plain str."""
+    args = get_args(annotation)
+    if args and str not in args and get_origin(annotation) not in (list, dict):
+        # Optional[...] and other unions: look through to the members.
+        return any(_wants_container(a) for a in args if a is not type(None))
+    origin = get_origin(annotation) or annotation
+    return origin in (list, dict) or (
+        isinstance(origin, type) and issubclass(origin, BaseModel)
+    )
+
+
+def _decode_json_fields(response_model: type[BaseModel], arguments: dict) -> dict:
+    """Unwrap list, dict and model fields the model sent as JSON strings.
+
+    Models sometimes pass ``"[\\"a\\", \\"b\\"]"`` where the schema asks for a
+    list. Decoding it here saves a validation round trip that would resend
+    the whole output.
+    """
+    if not isinstance(arguments, dict):
+        return arguments
+    fixed = dict(arguments)
+    for name, info in response_model.model_fields.items():
+        key = info.alias or name
+        value = fixed.get(key)
+        if not isinstance(value, str) or not _wants_container(info.annotation):
+            continue
+        try:
+            decoded = json.loads(value)
+        except ValueError:
+            continue
+        if isinstance(decoded, list | dict):
+            fixed[key] = decoded
+    return fixed
+
+
 class StructuredOutputToolkit(Toolkit):
     """Exposes one tool whose input schema is a Pydantic model.
 
@@ -287,6 +351,7 @@ class StructuredOutputToolkit(Toolkit):
         ]
 
     def execute_tool(self, tool_name: str, arguments: dict) -> str:
+        arguments = _decode_json_fields(self.response_model, arguments)
         try:
             self.accepted = self.response_model.model_validate(arguments)
         except ValidationError as e:
@@ -418,7 +483,7 @@ class _MemoryTranscript:
         self.call = call
         self.messages = list(history)
 
-    async def append_user(self, text: str, attachments=None) -> None:
+    async def append_user(self, text: str, attachments=None, *, system=False) -> None:
         self.messages.append(self.engine.user_message(text, attachments))
 
     async def append_tool_exchange(self, calls: list[SeededToolCall]) -> None:
@@ -436,14 +501,8 @@ class _MemoryTranscript:
         # image parts (only the latest few of each); self.messages keeps all.
         messages = trim_tool_results(
             self.messages,
-            keep=self.engine.tool_results_in_context,
-            budget_tokens=self.engine.tool_results_tokens
-            if self.engine.tool_results_tokens is not None
-            else (
-                api_settings.TOOL_RESULTS_TOKENS
-                if api_settings.TOOL_RESULTS_TOKENS is not None
-                else int(self.engine.context_window * 0.2)
-            ),
+            keep=getattr(self.engine, "tool_results_in_context", None),
+            max_chars=budget_chars(self.engine),
         )
         messages = await sync_to_async(prepare_messages, thread_sensitive=True)(
             messages, getattr(self.engine, "engine_type", "")
@@ -481,8 +540,23 @@ class _SessionTranscript:
     def _rows(self):
         return self.session.messages
 
-    async def append_user(self, text: str, attachments=None) -> None:
-        await self.engine.append_user_message(self.session, text, attachments)
+    async def append_user(self, text: str, attachments=None, *, system=False) -> None:
+        # Ergo's own nudges are stored as authored by Ergo, not the chat's user.
+        identity = {"author": system_identity()} if system else {}
+        await self.engine.append_user_message(
+            self.session, text, attachments, **identity
+        )
+
+    async def append_initial_user(self, text: str, attachments=None) -> None:
+        metadata = self.call.metadata or {}
+        identity = {
+            key: metadata[f"message_{key}"]
+            for key in ("author", "provenance")
+            if f"message_{key}" in metadata
+        }
+        await self.engine.append_user_message(
+            self.session, text, attachments, **identity
+        )
 
     async def append_tool_exchange(self, calls: list[SeededToolCall]) -> None:
         await self.engine.append_tool_exchange(self.session, calls)
@@ -721,12 +795,25 @@ async def _run_loop(run: _Run) -> StructuredCallResult:  # noqa: C901, PLR0912, 
             finished = True
             break
 
+        stop = next(
+            (
+                e.raw.get("stop_reason") or e.raw.get("finish_reason")
+                for e in events
+                if e.event_type == "done"
+            ),
+            None,
+        )
         tool_events = [e for e in events if e.event_type == "tool_use"]
         if tool_events:
             results = []
             for event in tool_events:
                 name, args = run.adapter.parse_tool_call(event.tool_use)
                 tool_id = event.tool_use["id"]
+                if stop in _MAX_TOKENS_STOPS:
+                    # The reply was cut off, so this call's arguments may be
+                    # incomplete (often {}): never run or ask approval for it.
+                    results.append((tool_id, _TRUNCATED_TOOL_CALL, True))
+                    continue
                 if run.needs_approval(name):
                     if run.allow_approvals:
                         preview = await run.approval_preview(name, args)
@@ -779,14 +866,6 @@ async def _run_loop(run: _Run) -> StructuredCallResult:  # noqa: C901, PLR0912, 
                 break
             continue
 
-        stop = next(
-            (
-                e.raw.get("stop_reason") or e.raw.get("finish_reason")
-                for e in events
-                if e.event_type == "done"
-            ),
-            None,
-        )
         if stop in _MAX_TOKENS_STOPS:
             _fail(
                 call,
@@ -799,8 +878,7 @@ async def _run_loop(run: _Run) -> StructuredCallResult:  # noqa: C901, PLR0912, 
 
         if run.submit is not None:
             await transcript.append_user(
-                f"You must call the {spec.output_tool_name} tool with your final "
-                "answer. Do not answer in plain text."
+                _submit_nudge(spec.output_tool_name, events), system=True
             )
             continue
 
@@ -810,7 +888,8 @@ async def _run_loop(run: _Run) -> StructuredCallResult:  # noqa: C901, PLR0912, 
         except Exception as e:  # noqa: BLE001 — fed back to the model
             await transcript.append_user(
                 f"Your response failed validation: {e}. "
-                "Please correct your output and try again."
+                "Please correct your output and try again.",
+                system=True,
             )
             continue
         call.response = parsed
@@ -957,7 +1036,10 @@ async def run_structured_call(  # noqa: PLR0913
 
     run = _Run(active, transcript, call, spec, user, workflow, allow_approvals, control)
     await _record_tools(call, spec)
-    await transcript.append_user(message, attachments)
+    if session is not None:
+        await transcript.append_initial_user(message, attachments)
+    else:
+        await transcript.append_user(message, attachments)
     if seed and pre_seeds:
         await transcript.append_tool_exchange(await _run_pre_seeds(pre_seeds))
     return await _loop(run)

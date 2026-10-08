@@ -4,13 +4,14 @@ import { api } from '../api'
 import { DirectoryContext } from './BotIcon'
 import Markdown from './Markdown'
 import { PrChip, ThreadCard, ThreadLink, WorkerCard, linkThreads } from './Threads'
-import { ToolCard, pretty, resultText } from './ToolCard'
+import { ToolCard } from './ToolCard'
+import { pretty, resultText } from '../toolFormat'
 import { clock } from '../time'
 import { ContextPanel, CompactionDivider } from './ContextPanel'
 
 // Tools that send work to another chat or start a worker; their calls show as cards.
 const THREAD_TOOLS = new Set(['ergo_thread_send', 'ergo_message_up'])
-const WORKER_TOOLS = new Set(['orca_start_worker', 'ergo_worker_start'])
+const WORKER_TOOLS = new Set(['ergo_agent_start', 'orca_start_worker', 'ergo_worker_start'])
 
 // What the transcript knows about the chat's delegated work (from the session API).
 type Delegated = {
@@ -279,14 +280,28 @@ function BotFiles({ files }: { files: AttachmentFile[] }) {
 
 type Reply = { type?: string; text?: string; suggestions?: string[] }
 
+// The input is what the model sent, which may not match the schema
+// (suggestions as a JSON string, say), so don't trust its shape.
+export function replySuggestions(value: unknown): string[] {
+  if (typeof value === 'string') {
+    try {
+      value = JSON.parse(value)
+    } catch {
+      return []
+    }
+  }
+  return Array.isArray(value) ? value.map(String) : []
+}
+
 function ReplyBubble({ reply }: { reply: Reply }) {
+  const suggestions = replySuggestions(reply.suggestions)
   return (
     <div className="max-w-[85%] rounded-card border border-stroke bg-surface px-4 py-3">
       <RoleLabel who="Assistant" timestamp={null} />
       {reply.type === 'question' && <div className="mb-1 text-xs font-medium text-amber-600">Question</div>}
       <BotMarkdown text={reply.text ?? ''} />
-      {!!reply.suggestions?.length && (
-        <div className="mt-1 text-xs text-zinc-500">Suggested: {reply.suggestions.join(' · ')}</div>
+      {!!suggestions.length && (
+        <div className="reply-suggestions mt-1 text-xs text-zinc-500">Suggested: {suggestions.join(' · ')}</div>
       )}
     </div>
   )
@@ -308,6 +323,71 @@ function RoleLabel({ who, timestamp }: { who: string; timestamp: string | null }
   )
 }
 
+function authorLabel(message: Message): string {
+  const author = message.author
+  if (!author?.kind) return message.role === 'user' ? 'You' : 'Assistant'
+  const marker = author.kind === 'telegram_user' ? ' · Telegram' : author.kind === 'bot' ? ' · Bot' : ''
+  return `${author.display_name || author.ref}${marker}`
+}
+
+/** Structured attribution is presentation data, never part of the verbatim message body. */
+function AttributedMessage({ message }: { message: Message }) {
+  const provenance = message.provenance!
+  const origin = provenance.origin
+  const forwarder = provenance.forwarded_by
+  return (
+    <div className="min-w-0 max-w-[85%] self-start rounded-card border border-teal/40 bg-teal-tint px-4 py-3 text-sm text-ink">
+      <div className="mb-2 min-w-0 whitespace-normal break-words text-xs text-teal-700 dark:text-teal-300 [&_a]:min-w-0 [&_a]:max-w-full [&_a]:break-all">
+        <div className="font-semibold">{authorLabel(message)}</div>
+        <div>
+          {provenance.kind === 'forwarded' ? 'Forwarded from ' : `${provenance.kind} from `}
+          <ThreadLink id={origin.session_id}>{origin.label}</ThreadLink>
+        </div>
+        {forwarder && (
+          <div>
+            Forwarded by {forwarder.display_name || forwarder.ref}
+            {forwarder.session_id && (
+              <>
+                {' '}
+                · <ThreadLink id={forwarder.session_id}>{forwarder.label || forwarder.display_name}</ThreadLink>
+              </>
+            )}
+          </div>
+        )}
+        {origin.timestamp && (
+          <time dateTime={origin.timestamp} title={origin.timestamp}>
+            Original time · {clock(origin.timestamp)}
+          </time>
+        )}
+      </div>
+      {provenance.note && (
+        <div className="mb-3 whitespace-pre-wrap break-words border-b border-teal/20 pb-2">
+          <span className="text-xs font-medium text-teal-700 dark:text-teal-300">Forwarding note</span>
+          <div>{provenance.note}</div>
+        </div>
+      )}
+      <div className="min-w-0 break-words">
+        {message.blocks.map((block, i) =>
+          block.type === 'text' ? (
+            <Markdown key={i} text={block.text} />
+          ) : block.type === 'attachment' ? (
+            <AttachmentView key={i} id={block.id} label={block.label} image={block.kind === 'image'} />
+          ) : null,
+        )}
+      </div>
+      {!!provenance.attachments?.length && (
+        <div className="mt-3 flex min-w-0 flex-wrap gap-2 break-all">
+          {provenance.attachments
+            .filter(file => !message.blocks.some(block => block.type === 'attachment' && block.id === file.id))
+            .map(file => (
+              <AttachmentView key={file.id} id={file.id} label={file.filename} />
+            ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function MessageView({
   message,
   results,
@@ -321,6 +401,7 @@ function MessageView({
 }) {
   const [showContext, setShowContext] = useState(false)
   const { hidden, rows } = useContext(FoldContext)
+  if (message.provenance?.kind && message.provenance.origin) return <AttributedMessage message={message} />
   const user = message.role === 'user'
   const parts = message.blocks.filter(
     b =>
@@ -334,7 +415,7 @@ function MessageView({
       {parts.map((block, i) => {
         switch (block.type) {
           case 'text': {
-            const from = user ? fromThread(block.text) : null
+            const from = user && !message.author?.kind ? fromThread(block.text) : null
             // Resume's note to the model (see api/bots.py RESUME_NOTE) reads as a divider, not a message.
             const resumed = user
               ? /^\[Resume\] Your last turn stopped before it finished \((.*?)\)\./.exec(block.text)
@@ -369,7 +450,7 @@ function MessageView({
                   className="max-w-[85%] self-start rounded-card border border-teal/40 bg-teal-tint px-4 py-3"
                 >
                   <div className="mb-1 text-xs font-medium text-teal-700 dark:text-teal-300">
-                    ✉ message from {from.who}
+                    {from.kind === 'report' ? 'Report from' : '✉ message from'} {from.who}
                     {from.about && <span className="font-normal text-teal-600/80"> · re “{from.about}”</span>}
                   </div>
                   <BotMarkdown text={from.body} />
@@ -380,7 +461,7 @@ function MessageView({
                 key={i}
                 className="max-w-[85%] rounded-card border border-accent/20 bg-indigo-tint px-4 py-3 text-ink"
               >
-                <RoleLabel who="You" timestamp={message.timestamp} />
+                <RoleLabel who={authorLabel(message)} timestamp={message.timestamp} />
                 <Markdown text={block.text} />
               </div>
             ) : (
@@ -388,7 +469,7 @@ function MessageView({
                 key={i}
                 className="max-w-[85%] rounded-card border border-stroke bg-surface px-4 py-3 text-sm text-ink"
               >
-                <RoleLabel who="Assistant" timestamp={message.timestamp} />
+                <RoleLabel who={authorLabel(message)} timestamp={message.timestamp} />
                 <BotMarkdown text={block.text} />
               </div>
             )
@@ -413,9 +494,14 @@ function MessageView({
               </button>
             )
           case 'tool_use':
-            if (block.name === REPLY_TOOL) return <ReplyBubble key={i} reply={block.input as Reply} />
+            if (block.name === REPLY_TOOL) {
+              // A rejected reply was retried; the accepted one follows.
+              if (results.get(block.id)?.is_error) return null
+              return <ReplyBubble key={i} reply={block.input as Reply} />
+            }
             return (
-              <Fragment key={i}>
+              // Keyed by call id, not position, so an open call stays open as the chat streams and folds shift.
+              <Fragment key={block.id || i}>
                 {rows.has(block.id) && (
                   <div className="w-full max-w-[85%]">
                     <FoldToggle row={rows.get(block.id)!} />
@@ -449,15 +535,17 @@ function ToolImages({ result }: { result?: ToolResult }) {
   )
 }
 
-// A message from another bot thread starts with a bracketed header
-// (see django_ergo.bots.messaging); show it as coming from that thread.
+// Before structured author/provenance fields existed, messages from another
+// chat were stored with this model-context header. Keep those rows visibly
+// inbound rather than mistaking their user role for the session owner.
 const THREAD_HEADER =
-  /^\[(Message|Reply) from (.+?) \(thread [0-9a-f-]+\)(?:\. [^\]]*| to your message: “([^”]*)”)\]\n\n([\s\S]*)$/
+  /^\[(Message|Reply|Report) from (.+?) \(thread [0-9a-f-]+\)(?:\. [^\]]*| to your message: “([^”]*)”)\]\n\n([\s\S]*)$/
 
 function fromThread(text: string) {
   const match = THREAD_HEADER.exec(text)
   if (!match) return null
-  return { kind: match[1] === 'Reply' ? 'reply' : 'message', who: match[2], about: match[3] ?? '', body: match[4] }
+  const kind = match[1].toLowerCase() as 'message' | 'reply' | 'report'
+  return { kind, who: match[2], about: match[3] ?? '', body: match[4] }
 }
 
 function CallHeader({ call }: { call: Call }) {

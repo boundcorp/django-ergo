@@ -168,14 +168,14 @@ def bot_repo(tmp_path, monkeypatch):
     return remote, work
 
 
-def management_bot(work, mode, *responses):
+def management_bot(work, mode, *responses, root_only=False):
     yaml_text = f"""
         name: manager
         chats: {{main: {{skills: [config_repo]}}}}
-        plugins: [{{name: bot_management, mode: {mode}}}]
+        plugins: [{{name: bot_management, mode: {mode}, root_only: {str(root_only).lower()}}}]
     """
     folder = work / "bots"
-    folder.mkdir()
+    folder.mkdir(exist_ok=True)
     bot, engine = make_bot(folder, *responses, yaml_text=yaml_text, name="manager")
     return bot, engine, bot.plugin("bot_management")
 
@@ -268,6 +268,80 @@ def test_bot_proposes_pr_and_returns_to_main(bot_repo, monkeypatch):
         plugin.write(".git/hooks/pre-commit", "evil")
 
 
+def test_bot_management_reads_edits_and_greps_files(bot_repo, monkeypatch):
+    _, work = bot_repo
+    _, _, plugin = management_bot(work, "propose_pr")
+    git(work, "add", "-A")
+    git(work, "commit", "-m", "add bot")
+    git(work, "push")
+    plugin.write("notes.txt", "one\ntwo\none\n")
+
+    assert plugin.read("notes.txt", start_line=2, end_line=2) == (
+        "notes.txt lines 2-2 of 3\n2: two"
+    )
+    assert plugin.grep("two", "notes.txt") == "notes.txt:2:two"
+    assert plugin.edit("README.md", "bots", "configured bots") == (
+        "Edited README.md (1 replacement)"
+    )
+    assert (work / "README.md").read_text() == "bots\n"
+    with pytest.raises(ValueError, match="wasn't found"):
+        plugin.edit("notes.txt", "three", "THREE")
+    with pytest.raises(ValueError, match="matches 2 times"):
+        plugin.edit("notes.txt", "one", "ONE")
+    assert plugin.edit("notes.txt", "two", "TWO") == "Edited notes.txt (1 replacement)"
+    assert plugin.edit("notes.txt", "one", "ONE", replace_all=True) == (
+        "Edited notes.txt (2 replacements)"
+    )
+    assert plugin.read("notes.txt") == "ONE\nTWO\nONE\n"
+    with pytest.raises(ValueError, match="outside"):
+        plugin.edit("../remote.git/config", "x", "y")
+
+    monkeypatch.setattr("django_ergo.plugins.bot_management.MAX_READ_CHARS", 8)
+    truncated = plugin.read("notes.txt")
+    assert "3 total lines" in truncated
+    assert "start_line=3" in truncated
+
+
+def test_bot_management_pull_ignores_multiple_tracking_branches(bot_repo, tmp_path):
+    remote, work = bot_repo
+    _, _, plugin = management_bot(work, "merge_main")
+    git(work, "add", "-A")
+    git(work, "commit", "-m", "add bot")
+    git(work, "push")
+    git(work, "branch", "other")
+    git(work, "push", "origin", "other")
+    git(work, "config", "--add", "branch.main.merge", "refs/heads/other")
+
+    old_pull = subprocess.run(
+        ["git", "pull", "--rebase"],
+        cwd=work,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert old_pull.returncode
+    assert "Cannot rebase onto multiple branches" in old_pull.stderr
+
+    _merge_on_remote(tmp_path, remote, "pulled.txt", "from main", "remote update")
+    assert "Fast-forward" in plugin.pull()
+    assert (work / "pulled.txt").read_text() == "from main"
+
+
+def test_bot_management_pull_names_diverged_main(bot_repo, tmp_path):
+    remote, work = bot_repo
+    _, _, plugin = management_bot(work, "merge_main")
+    git(work, "add", "-A")
+    git(work, "commit", "-m", "add bot")
+    git(work, "push")
+    _merge_on_remote(tmp_path, remote, "remote.txt", "remote", "remote update")
+    (work / "local.txt").write_text("local")
+    git(work, "add", "local.txt")
+    git(work, "commit", "-m", "local update")
+
+    with pytest.raises(ValueError, match="has diverged from origin/main"):
+        plugin.pull()
+
+
 @pytest.mark.django_db
 def test_bot_discards_a_draft(bot_repo):
     _, work = bot_repo
@@ -309,18 +383,24 @@ def test_bot_moves_a_file_by_writing_then_deleting(bot_repo):
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_bot_management_tools_are_root_only(bot_repo):
+async def test_bot_management_tools_reach_threads_unless_root_only(bot_repo):
     _, work = bot_repo
-    bot, engine, _ = management_bot(work, "merge_main", say("a"), say("b"))
-    user = await User.objects.acreate(username="root-only")
+    load = claude_tool("ergo_skill_load", {"name": "config_repo"})
+    bot, engine, plugin = management_bot(
+        work, "merge_main", load, say("a"), load, say("b")
+    )
+    user = await User.objects.acreate(username="threads")
     root = await bot.root_session(user)
-    thread = await bot.create_session(user, parent=root)
-    await bot.ask(root, "hi")
-    await bot.ask(thread, "hi")
-    root_tools = {t["name"] for t in engine._client.calls[0]["tools"]}
-    thread_tools = {t["name"] for t in engine._client.calls[1]["tools"]}
-    assert "ergo_config_repo_publish" in root_tools
-    assert "ergo_config_repo_publish" not in thread_tools
+
+    async def thread_tools():
+        await bot.ask(await bot.create_session(user, parent=root), "hi")
+        return {t["name"] for t in engine._client.calls[-1]["tools"]}
+
+    # By default a task thread can change its own folder.
+    assert "ergo_config_repo_publish" in await thread_tools()
+    # root_only: true keeps the tools to top-level chats.
+    plugin.root_only = True
+    assert "ergo_config_repo_publish" not in await thread_tools()
 
 
 # ---------------------------------------------------------------------------
@@ -570,7 +650,12 @@ async def test_telegram_group_chat_speaks_as_each_sender(tmp_path):
     group = -500
 
     await plugin.handle_update(
-        update(1, chat_id=group, text="hi", **{"from": {"id": 111}})
+        update(
+            1,
+            chat_id=group,
+            text="hi",
+            **{"from": {"id": 111, "first_name": "Telegram Cook"}},
+        )
     )
     await plugin.handle_update(
         update(2, chat_id=group, text="yo", **{"from": {"id": 222}})
@@ -584,6 +669,14 @@ async def test_telegram_group_chat_speaks_as_each_sender(tmp_path):
     owners = [s.user_id async for s in bot.sessions().order_by("created_at")]
     assert owners[0] == cook.id
     assert len(owners) == 2
+    root = await bot.root_session(cook)
+    incoming = await root.messages.filter(role="user").afirst()
+    assert incoming.author == {
+        "kind": "telegram_user",
+        "ref": "111",
+        "display_name": "Telegram Cook",
+    }
+    assert await incoming.content_blocks.filter(text="hi").aexists()
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1366,6 +1459,79 @@ async def test_bot_looks_at_an_uploaded_image(tmp_path, settings):
 
 
 @pytest.mark.django_db(transaction=True)
+async def test_bot_sees_every_image_it_looks_at_in_one_round(tmp_path, settings):
+    """Four looks at once (two sent with a message, two a tool saved as bot files)
+    all come back as images, not as ``[image omitted]``."""
+    import io
+    from types import SimpleNamespace
+
+    from asgiref.sync import sync_to_async
+    from PIL import Image
+
+    from django_ergo.conversation.attachments import Attachment
+    from django_ergo.conversation.attachments import save_session_file
+    from tests.test_conversation_structured import _usage
+
+    def png(size, mode):
+        out = io.BytesIO()
+        Image.new(mode, size, (10, 20, 30, 255)[: len(mode)]).save(out, "PNG")
+        return out.getvalue()
+
+    settings.MEDIA_ROOT = str(tmp_path / "media")
+    bot, engine, _ = files_bot(tmp_path, config="max_bytes: 100")
+    user = await User.objects.acreate(username="batch-looker")
+    root = await bot.root_session(user)
+    engine._client.responses = [say("Got them.")]
+    await bot.ask(
+        root,
+        "Here are two screenshots",
+        attachments=[
+            Attachment(
+                media_type="image/png", data=png((64, 48), "RGB"), filename="a.png"
+            ),
+            Attachment(
+                media_type="image/png", data=png((64, 48), "RGB"), filename="b.png"
+            ),
+        ],
+    )
+    sent_with_message = [r async for r in root.attachments.order_by("position")]
+    renders = [
+        await sync_to_async(save_session_file)(
+            root, name, png(size, "RGBA"), source="bot", metadata={"penpot": {}}
+        )
+        for name, size in (("Home.png", (1500, 2000)), ("Menu.png", (400, 300)))
+    ]
+    rows = [*renders, *sent_with_message]
+    engine._client.responses = [
+        SimpleNamespace(
+            content=[
+                SimpleNamespace(
+                    type="tool_use",
+                    id=f"toolu_{i}",
+                    name="ergo_attachments_look",
+                    input={"attachment_id": str(row.id)},
+                )
+                for i, row in enumerate(rows)
+            ],
+            stop_reason="tool_use",
+            usage=_usage(),
+        ),
+        say("All four look right."),
+    ]
+
+    result = await bot.ask(root, "Compare all four")
+
+    assert result.text == "All four look right."
+    results = engine._client.calls[-1]["messages"][-1]["content"]
+    assert [b["tool_use_id"] for b in results] == [f"toolu_{i}" for i in range(4)]
+    for block, row in zip(results, rows, strict=True):
+        text, image = block["content"]
+        assert row.filename in text["text"]
+        assert image["type"] == "image", image
+        assert image["source"]["media_type"] == "image/png"
+
+
+@pytest.mark.django_db(transaction=True)
 async def test_bot_looks_at_a_pdf_in_a_side_call(tmp_path, settings):
     from asgiref.sync import sync_to_async
 
@@ -1555,11 +1721,93 @@ def test_merge_main_discard_stashes_and_writes_need_approval(bot_repo):
     git(work, "commit", "-m", "add bot")
     tools = {t.name: t for t in plugin._tools()}
     assert tools["ergo_config_repo_write"].requires_approval
+    assert tools["ergo_config_repo_edit"].requires_approval
     assert tools["ergo_config_repo_discard"].requires_approval
     (work / "notes.txt").write_text("a person's work in progress")
     assert plugin.discard() == "Set the unpublished changes aside (git stash)."
     assert "discarded by manager" in git(work, "stash", "list")
     assert plugin.discard() == "Nothing to discard."
+
+
+def _merge_on_remote(tmp_path, remote, path, text, message):
+    """Someone else's change lands on the remote main (a PR merged)."""
+    other = tmp_path / "other"
+    if not other.exists():
+        git(tmp_path, "clone", "-b", "main", str(remote), str(other))
+    git(other, "pull", "origin", "main")
+    (other / path).parent.mkdir(parents=True, exist_ok=True)
+    (other / path).write_text(text)
+    git(other, "add", "-A")
+    git(other, "commit", "-m", message)
+    git(other, "push", "origin", "main")
+
+
+@pytest.mark.django_db
+def test_a_clean_draft_follows_main_after_a_merge(bot_repo, tmp_path, monkeypatch):
+    remote, work = bot_repo
+    _, _, plugin = management_bot(work, "propose_pr")
+    git(work, "add", "-A")
+    git(work, "commit", "-m", "add bot")
+    git(work, "push")
+    monkeypatch.setattr("django_ergo.plugins.bot_management.PR_FETCH_SECONDS", 0)
+    assert "(clean)" in plugin.status()  # the draft exists, made from main
+
+    _merge_on_remote(tmp_path, remote, "bots/manager/skills/new.md", "hi", "merged PR")
+
+    assert plugin.read("bots/manager/skills/new.md") == "hi"
+    assert "merged PR" in plugin.status()
+    assert plugin.diff() == "(no changes)"
+
+
+@pytest.mark.django_db
+def test_publish_rebases_a_draft_that_main_moved_past(bot_repo, tmp_path, monkeypatch):
+    remote, work = bot_repo
+    _, _, plugin = management_bot(work, "propose_pr")
+    git(work, "add", "-A")
+    git(work, "commit", "-m", "add bot")
+    git(work, "push")
+    real_run = plugin.run
+    monkeypatch.setattr(
+        plugin,
+        "run",
+        lambda args, cwd=None: (
+            "https://github.com/acme/bots/pull/8\n"
+            if args[0] == "gh"
+            else real_run(args, cwd)
+        ),
+    )
+    monkeypatch.setattr("django_ergo.plugins.bot_management.PR_FETCH_SECONDS", 0)
+    plugin.write("bots/manager/agents.md", "Be kind.")
+    _merge_on_remote(tmp_path, remote, "bots/manager/skills/new.md", "hi", "merged PR")
+
+    assert "has 1 commit(s) this draft doesn't" in plugin.status()
+    assert "Be kind." in plugin.diff()  # changes are never moved under the bot
+
+    branch = plugin.publish("Kinder", title="Kinder").split(" from ")[1].split(";")[0]
+    log = git(remote, "log", "--format=%s", branch).splitlines()
+    assert log[:2] == ["Kinder", "merged PR"]
+    files = git(remote, "diff", "--name-only", f"main...{branch}").split()
+    assert files == ["bots/manager/agents.md"]
+
+
+@pytest.mark.django_db
+def test_publish_refuses_a_draft_that_conflicts_with_main(
+    bot_repo, tmp_path, monkeypatch
+):
+    remote, work = bot_repo
+    _, _, plugin = management_bot(work, "propose_pr")
+    git(work, "add", "-A")
+    git(work, "commit", "-m", "add bot")
+    git(work, "push")
+    plugin.write("bots/manager/agents.md", "Be kind.")
+    _merge_on_remote(tmp_path, remote, "bots/manager/agents.md", "Be terse.", "x")
+
+    with pytest.raises(
+        ValueError, match="conflict with origin/main in bots/manager/agents.md"
+    ):
+        plugin.publish("Kinder", title="Kinder")
+    assert "Be kind." in plugin.diff()  # kept, uncommitted, on the draft
+    assert "bot/manager/draft" in git(work, "branch")
 
 
 @pytest.mark.django_db
