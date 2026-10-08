@@ -131,12 +131,21 @@ refuse logins until the window passes.
   live in the account menu in the top bar, together with theme and sign-out
   actions. The account menu is keyboard accessible; Arrow keys, Home and End
   move between menu items, and Escape closes it.
-- **Top bar**: shows the current workspace context. When queued or running
-  workers exist, its Work control names the active count and opens their
-  status (queued or running) and reported progress. Ergonaut does not show a
-  subscription capacity summary there: provider reports currently contain
-  utilization percentages, while their `limit` is the routing skip threshold,
-  not a plan capacity.
+- **Top bar**: shows where you are: a chat shows its bot and parent thread
+  as links, then its title; bot pages show the bot name; the home page shows
+  Workspace. When queued or running workers exist, its Work control names
+  the active count and opens their status (queued or running) and reported progress. When subscription
+  providers (Claude Code or Codex CLIs) are configured, a usage control shows
+  one ring per limit window the provider reported (5-hour, weekly, a model's
+  weekly limit): the ring fills with the percentage used and turns amber
+  within 15 points of the routing skip threshold and red past it, and a tick
+  marks how much of the window has passed, so a fill ahead of the tick is
+  burning faster than the window allows. Clicking it opens the detail: the
+  tightest limit, each window's bar, reset countdown and pace, when it was
+  last reported, and links to Routing and Costs. Providers only report
+  utilization percentages, so there are no token or message counts left,
+  and a window shows "not reported" from its reset until the next usage
+  report.
 - **Narrow screens**: the sidebar becomes a modal navigation drawer. Opening
   it moves focus into the drawer; Tab stays inside it and Escape or its
   backdrop closes it and returns focus to Menu.
