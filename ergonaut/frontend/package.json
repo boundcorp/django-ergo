@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "test": "node --test src/toolFormat.test.ts && bun test src/chatLayout.test.ts src/chatChrome.test.tsx src/chatSend.test.ts src/toolCard.test.tsx src/pageBridge.test.ts src/pages/Routing.test.tsx src/components/ShellControls.test.tsx src/components/UsageStatus.test.tsx src/topbar.test.ts"
+    "test": "node --test src/toolFormat.test.ts && bun test src/chatLayout.test.ts src/chatChrome.test.tsx src/chatSend.test.ts src/toolCard.test.tsx src/pageBridge.test.ts src/pages/Routing.test.tsx src/components/ShellControls.test.tsx src/pages/Capacity.test.tsx src/components/UsageStatus.test.tsx src/topbar.test.ts"
   },
   "dependencies": {
     "@fontsource/inter": "^5.3.0",

@@ -29,6 +29,10 @@ function provider(overrides: Partial<RoutingProvider> = {}): RoutingProvider {
 function routing(overrides: Partial<Routing> = {}): Routing {
   return {
     providers: [],
+    capacity: {
+      sync: { state: 'empty', running: false, attempted_at: null, succeeded_at: null, error: '', stale_after: 900 },
+      accounts: [],
+    },
     tiers: [],
     agents: [],
     text: '',
@@ -48,72 +52,8 @@ function routing(overrides: Partial<Routing> = {}): Routing {
 
 const renderProviders = (providers: RoutingProvider[]) => renderToStaticMarkup(createElement(Providers, { providers }))
 
-describe('Routing provider windows', () => {
-  test('renders only the reported Codex 7-day window with its remaining, status, reset and limit', () => {
-    const html = renderProviders([provider({ windows: { weekly: window({ label: '7-day', status: 'allowed' }) } })])
-    expect(html.match(/role="meter"/g)?.length).toBe(1)
-    expect(html).toContain('7-day')
-    expect(html).toContain('80% remaining')
-    expect(html).toContain('allowed')
-    expect(html).toContain('resets ')
-    expect(html).toContain('Skip at 90% used')
-    expect(html).not.toContain('5-hour')
-  })
-
-  test('renders all three Claude windows including the model-scoped weekly window', () => {
-    const html = renderProviders([
-      provider({
-        name: 'claude',
-        type: 'anthropic',
-        windows: {
-          five_hour: window({ label: '5-hour' }),
-          weekly: window({ label: 'Weekly' }),
-          weekly_fable: window({ label: 'Weekly · Fable', model: 'fable', remaining: 42, used: 58 }),
-        },
-      }),
-    ])
-    expect(html.match(/role="meter"/g)?.length).toBe(3)
-    expect(html).toContain('Weekly · Fable')
-    expect(html).toContain('42% remaining')
-    expect(html).toContain('fable only')
-  })
-
-  test('renders arbitrary reported windows and supports optional metadata', () => {
-    const html = renderProviders([provider({ windows: { daily_requests: { used: 12, resets_at: null, limit: 80 } } })])
-    expect(html).toContain('Daily requests')
-    expect(html).toContain('88% remaining')
-    expect(html).toContain('Skip at 80% used')
-    expect(html.match(/role="meter"/g)?.length).toBe(1)
-  })
-
-  test('does not invent usage rows for a provider without a snapshot', () => {
-    const html = renderProviders([provider({ windows: {}, reported_at: null })])
-    expect(html).toContain('No usage reported yet')
-    expect(html).not.toContain('role="meter"')
-    expect(html).not.toContain('5-hour')
-    expect(html).not.toContain('Weekly')
-    expect(html).not.toContain('Last reported')
-  })
-
-  test('does not present unreported percentages as zero usage', () => {
-    const html = renderProviders([
-      provider({ windows: { weekly: window({ used: null, remaining: null, status: 'unknown' }) } }),
-    ])
-    expect(html).toContain('usage not reported')
-    expect(html).toContain('unknown')
-    expect(html).not.toContain('role="meter"')
-  })
-
-  test('keeps the report timestamp and stale indicator visible alongside provider reasons', () => {
-    const html = renderProviders([provider({ reason: 'Weekly limit reached', stale: true, status: 'skipped' })])
-    expect(html).toContain('Weekly limit reached')
-    expect(html).toContain('Last reported')
-    expect(html).toMatch(new RegExp(`datetime="${reportedAt}"`, 'i'))
-    expect(html).toContain('Stale usage snapshot')
-    expect(renderProviders([provider()])).not.toContain('Stale usage snapshot')
-  })
-
-  test('puts API keys in their own pay-per-token section, not under subscriptions', () => {
+describe('Routing pay-per-token providers', () => {
+  test('lists only API-key providers, unmetered; subscriptions belong to the capacity section', () => {
     const html = renderProviders([
       provider({ name: 'subscription-provider' }),
       provider({
@@ -122,18 +62,20 @@ describe('Routing provider windows', () => {
         transport: 'api',
         api_key_env: 'OPENAI_API_KEY',
         status: 'api_key',
+        reason: "OPENAI_API_KEY isn't set",
         reported_at: null,
       }),
     ])
-    const [subscriptionSection, apiSection] = html.split('<section aria-labelledby="routing-api-keys">')
-    expect(subscriptionSection).toContain('subscription-provider')
-    expect(subscriptionSection).not.toContain('api-provider')
-    expect(apiSection).toContain('Pay-per-token providers')
-    expect(apiSection).toContain('api-provider')
-    expect(apiSection).toContain('OPENAI_API_KEY')
-    expect(apiSection).toContain('Not metered by the router')
-    expect(apiSection).not.toContain('No usage reported yet')
-    expect(apiSection).not.toContain('role="meter"')
+    expect(html).toContain('Pay-per-token providers')
+    expect(html).toContain('api-provider')
+    expect(html).toContain('OPENAI_API_KEY')
+    expect(html).toContain('Not metered by the router')
+    expect(html).not.toContain('subscription-provider')
+    expect(html).not.toContain('role="meter"')
+  })
+
+  test('renders nothing without API-key providers', () => {
+    expect(renderProviders([provider()])).toBe('')
   })
 })
 

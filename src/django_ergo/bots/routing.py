@@ -63,7 +63,7 @@ logger = logging.getLogger(__name__)
 TIERS = ("low", "medium", "high")
 AUTO = "auto/"
 DEFAULT_MAX_USED = 98.0
-USAGE_STALE_SECONDS = 10 * 60
+USAGE_STALE_SECONDS = 15 * 60  # three missed 5-minute syncs
 WINDOW_NAMES = {
     "five_hour": "5-hour window",
     "weekly": "weekly window",
@@ -141,6 +141,15 @@ def tier_of(ref: str) -> str:
 # -- usage windows ------------------------------------------------------------
 
 
+def window_period(name: str) -> str:
+    """The length a window name stands for: ``5h``, ``7d``, or "" when unknown."""
+    if name == "five_hour":
+        return "5h"
+    if name == "weekly" or name.startswith("weekly_"):
+        return "7d"
+    return ""
+
+
 def _window(name: str, used, resets, **metadata) -> dict:
     return {
         "label": metadata.get("label")
@@ -150,6 +159,8 @@ def _window(name: str, used, resets, **metadata) -> dict:
         "resets_at": resets,
         "status": metadata.get("status", ""),
         "model": metadata.get("model", ""),
+        "period": metadata.get("period") or window_period(name),
+        "observed_at": metadata.get("observed_at"),
     }
 
 
@@ -225,11 +236,19 @@ def _percent(value) -> float | None:
 def record_usage_windows(
     provider: str, windows: dict, *, full_snapshot: bool = False
 ) -> None:
-    """Replace authoritative snapshots; merge partial per-call rate-limit events."""
+    """Replace authoritative snapshots; merge partial per-call rate-limit events.
+
+    Every window carries the time it was observed, so a partial event that
+    refreshes one window never makes the others it leaves alone look current."""
     if not provider or (not windows and not full_snapshot):
         return
     from django_ergo.conversation.models import ProviderUsage
 
+    seen = time.time()
+    windows = {
+        name: {**window, "observed_at": window.get("observed_at") or seen}
+        for name, window in windows.items()
+    }
     row, _ = ProviderUsage.objects.get_or_create(provider=provider)
     row.windows = windows if full_snapshot else {**(row.windows or {}), **windows}
     row.save(update_fields=["windows", "updated_at"])
@@ -721,6 +740,28 @@ def _agent_rows(now: _Now) -> list[dict]:
     return out
 
 
+def window_view(name: str, seen: dict, clock: float) -> dict:
+    """A stored window as the Routing page shows it: a window past its reset
+    has no usage until the next report, and a window is stale once its own
+    observation (not the row's last write) is old."""
+    resets = seen.get("resets_at")
+    expired = bool(resets and resets <= clock)
+    used = seen.get("used") if not expired else None
+    observed = seen.get("observed_at")
+    return {
+        **seen,
+        "label": seen.get("label")
+        or WINDOW_NAMES.get(name, name.replace("_", " ")).removesuffix(" window"),
+        "used": used,
+        "remaining": 100 - used if used is not None else None,
+        "resets_at": resets,
+        "status": "reset" if expired else seen.get("status", ""),
+        "period": seen.get("period") or window_period(name),
+        "observed_at": observed,
+        "stale": observed is None or clock - observed > USAGE_STALE_SECONDS,
+    }
+
+
 def _provider_rows(now: _Now, in_use: set[str]) -> list[dict]:
     from django_ergo.conversation.models import ProviderUsage
 
@@ -729,23 +770,13 @@ def _provider_rows(now: _Now, in_use: set[str]) -> list[dict]:
     out = []
     for name, provider in now.providers.providers.items():
         row = reported.get(name)
-        windows = {}
-        for window, seen in ((row.windows or {}) if row else {}).items():
-            resets = seen.get("resets_at")
-            expired = bool(resets and resets <= clock)
-            used = seen.get("used") if not expired else None
-            windows[window] = {
-                **seen,
-                "label": seen.get("label")
-                or WINDOW_NAMES.get(window, window.replace("_", " ")).removesuffix(
-                    " window"
-                ),
-                "used": used,
-                "remaining": 100 - used if used is not None else None,
-                "resets_at": resets,
-                "status": "reset" if expired else seen.get("status", ""),
+        windows = {
+            window: {
+                **window_view(window, seen, clock),
                 "limit": limit_of(name, window, now.rules),
             }
+            for window, seen in ((row.windows or {}) if row else {}).items()
+        }
         state, reason = now.state(name)
         status = {"unavailable": "unavailable", "skip": "skipped"}.get(state)
         if status is None:
@@ -765,8 +796,8 @@ def _provider_rows(now: _Now, in_use: set[str]) -> list[dict]:
                 "reason": reason,
                 "windows": windows,
                 "reported_at": row.updated_at.isoformat() if row else None,
-                "stale": bool(
-                    row and clock - row.updated_at.timestamp() > USAGE_STALE_SECONDS
+                "stale": any(
+                    w["stale"] for w in windows.values() if w["status"] != "reset"
                 ),
             }
         )
@@ -777,6 +808,7 @@ def routing_report(providers: Providers) -> dict:
     """What the router sees and would pick now, for Ergonaut's Routing page:
     each provider's windows against its limits, every tier's candidates, the
     routing text and whether it's compiled, and recent switches."""
+    from django_ergo.bots.usage_sync import capacity_report
     from django_ergo.conversation.models import RoutingPolicy
     from django_ergo.conversation.models import RoutingSwitch
     from django_ergo.conversation.models import RoutingText
@@ -796,6 +828,7 @@ def routing_report(providers: Providers) -> dict:
     source = "page" if saved is not None else ("file" if routing.text else "")
     return {
         "providers": _provider_rows(now, in_use),
+        "capacity": capacity_report(providers, now.rules),
         "tiers": tiers,
         "agents": agents,
         "text": text,

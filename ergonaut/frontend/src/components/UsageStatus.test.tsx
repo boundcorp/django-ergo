@@ -30,6 +30,10 @@ function provider(overrides: Partial<RoutingProvider> = {}): RoutingProvider {
 function routing(providers: RoutingProvider[]): Routing {
   return {
     providers,
+    capacity: {
+      sync: { state: 'empty', running: false, attempted_at: null, succeeded_at: null, error: '', stale_after: 900 },
+      accounts: [],
+    },
     tiers: [],
     agents: [],
     text: '',

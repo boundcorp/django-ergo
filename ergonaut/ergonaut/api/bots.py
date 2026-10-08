@@ -1389,6 +1389,17 @@ def routing(request):
     return routing_out(request)
 
 
+@router.post("/routing/refresh")
+def refresh_routing(request):
+    """Fetch every subscription's limits now (the Refresh button) and return the
+    Routing page. A fetch that is already running isn't started twice; a failed
+    one is reported in ``capacity.sync``, not as an error here."""
+    from django_ergo.bots.usage_sync import sync_usage
+
+    sync_usage(registry().providers)
+    return routing_out(request)
+
+
 @router.put("/routing")
 def save_routing(request, data: RoutingIn):
     """Save this deployment's routing priorities in plain words (replacing
