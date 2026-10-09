@@ -1010,6 +1010,12 @@ and `icon` (an emoji) for the pin. Loading the skill loads
   main_branch: main
   approve_publish: true
   root_only: false     # true: top-level chats only, not threads
+  run:                 # optional: ergo_config_repo_run
+    approve: true      # each run waits for approval (default)
+    timeout: 300
+    commands:
+      toolkit-test: {argv: [npm, test], cwd: ficsit/toolkit}
+      node: {argv: [node], cwd: ficsit/toolkit, args: true}
 ```
 
 Lets the bot maintain the git repository its folder lives in, so it can
@@ -1036,6 +1042,15 @@ its own, and with `ERGONAUT_BOTS_PULL_SECONDS` pulls merged changes too).
 For review screens the plugin also has `draft_diff()`, `pull_requests()`,
 `pull_request_diff(n)`, `merge_pull_request(n)` (squash-merge, then pull) and
 `close_pull_request(n)`; Ergonaut's bot page uses them for its Changes section.
+
+With `run.commands`, `ergo_config_repo_run(command, args)` runs one of those
+commands in the draft, so the bot can test code it wrote before publishing
+it. Commands are argv lists (no shell) with a `cwd` in the repo; only one with
+`args: true` takes the bot's arguments. They come from the live bot.yaml, not
+the draft. A run gets a bare environment (`PATH`, `HOME`, `LANG`, `CI=1`, none
+of the server's secrets), stdin closed, the timeout and trimmed output with the
+exit code. It still runs draft code as the user Ergonaut runs as, so each run
+waits for approval unless `approve: false`.
 
 ### orca
 
