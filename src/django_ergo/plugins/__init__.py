@@ -7,6 +7,7 @@ One module per plugin:
 - ``telegram`` (telegram.py): a Telegram channel for a bot.
 - ``orca`` (orca.py): manage Orca worktrees, terminals and workers with the Orca CLI.
 - ``bash`` (bash.py): run shell commands on the host, with approval.
+- ``browser`` (browser.py): drive a running Chrome over the DevTools protocol.
 - ``kubectl`` (kubectl.py): inspect configured Kubernetes clusters and run approved changes.
 - ``attachments`` (attachments.py): read and write files in chat sessions.
 

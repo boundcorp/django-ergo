@@ -1261,6 +1261,157 @@ async def test_bash_waits_for_approval(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# browser
+# ---------------------------------------------------------------------------
+
+BROWSER_PAGE = (
+    'data:text/html,<title>Search</title><form onsubmit="document.title='
+    "'sent '%2Bq.value;return false\"><label>Query <input id=q></label>"
+    "<button>Go</button></form>"
+)
+
+
+def browser_bot(tmp_path, *responses, config=""):
+    yaml_text = f"""
+        name: surfer
+        chats: {{main: {{skills: [browser]}}}}
+        plugins: [{{name: browser, {config}}}]
+    """
+    bot, engine = make_bot(tmp_path, *responses, yaml_text=yaml_text, name="surfer")
+    return bot, engine, bot.plugin("browser")
+
+
+def _chrome_binary():
+    import os
+    import shutil
+    from pathlib import Path
+
+    if os.environ.get("CHROME_BIN"):
+        return os.environ["CHROME_BIN"]
+    for name in ("google-chrome", "chromium", "chromium-browser"):
+        if found := shutil.which(name):
+            return found
+    try:
+        from playwright.sync_api import sync_playwright
+
+        with sync_playwright() as p:
+            path = p.chromium.executable_path
+    except Exception:  # noqa: BLE001 — no Playwright or no bundled browser
+        return None
+    return path if Path(path).exists() else None
+
+
+@pytest.fixture
+def chrome(tmp_path):
+    """A headless Chrome with remote debugging, like the one a person runs."""
+    import socket
+    import time
+    import urllib.request
+
+    pytest.importorskip("playwright")
+    binary = _chrome_binary()
+    if not binary:
+        pytest.skip("no Chrome to drive")
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    proc = subprocess.Popen(
+        [
+            binary,
+            "--headless=new",
+            "--no-sandbox",
+            "--no-first-run",
+            f"--remote-debugging-port={port}",
+            f"--user-data-dir={tmp_path / 'chrome-profile'}",
+            "about:blank",
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    url = f"http://127.0.0.1:{port}"
+    for _ in range(100):
+        try:
+            urllib.request.urlopen(f"{url}/json/version", timeout=1)
+            break
+        except OSError:
+            time.sleep(0.1)
+    else:
+        proc.kill()
+        pytest.skip("Chrome did not start")
+    yield url
+    proc.kill()
+    proc.wait()
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_browser_actions_wait_for_approval(tmp_path):
+    bot, engine, _ = browser_bot(
+        tmp_path,
+        claude_tool("ergo_browser_click", {"target": "e3"}, tool_id="c1"),
+        say("Skipped."),
+        config="takeover: the Chrome window on the desk",
+    )
+    user = await User.objects.acreate(username="surfer-user")
+    root = await bot.root_session(user)
+    paused = await bot.ask(root, "Click it")
+    assert [a.tool_name for a in paused.approvals] == ["ergo_browser_click"]
+    context = _turn_context(engine._client.calls[0])
+    assert "the Chrome window on the desk" in context
+    assert "wait for the user's approval" in context
+
+
+@pytest.mark.django_db
+def test_browser_reports_an_unreachable_chrome(tmp_path):
+    pytest.importorskip("playwright")
+    _, _, plugin = browser_bot(
+        tmp_path, config="cdp_url: http://127.0.0.1:9, timeout: 2"
+    )
+    with pytest.raises(RuntimeError, match="Can't reach the browser"):
+        plugin.tabs(type("Ctx", (), {"session": None})())
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_browser_opens_types_and_screenshots(tmp_path, settings, chrome):
+    settings.MEDIA_ROOT = str(tmp_path / "media")
+    bot, engine, plugin = browser_bot(
+        tmp_path,
+        claude_tool("ergo_browser_open", {"url": BROWSER_PAGE}, tool_id="o1"),
+        claude_tool(
+            "ergo_browser_type",
+            {"target": "e4", "text": "tacos", "submit": True},
+            tool_id="t1",
+        ),
+        claude_tool("ergo_browser_screenshot", {}, tool_id="s1"),
+        claude_tool("ergo_browser_tabs", {}, tool_id="l1"),
+        say("Searched."),
+        config=f"cdp_url: {chrome}, approve_actions: false",
+    )
+    user = await User.objects.acreate(username="surfer-user")
+    root = await bot.root_session(user)
+    done = await bot.ask(root, "Search for tacos")
+    assert done.text == "Searched."
+
+    results = [
+        json.loads(block["content"])
+        for message in engine._client.calls[-1]["messages"]
+        if isinstance(message.get("content"), list)
+        for block in message["content"]
+        if block.get("type") == "tool_result"
+    ]
+    opened = results[0]
+    assert opened["title"] == "Search"
+    assert 'textbox "Query" [ref=e4]' in opened["snapshot"]
+    # A new connection resolves the ref against a fresh snapshot.
+    assert results[1]["title"] == "sent tacos"
+    assert results[2]["filename"].startswith("browser-")
+    current = [tab for tab in results[3] if tab.get("current")]
+    assert [tab["tab"] for tab in current] == [opened["tab"]]
+    shot = await ConversationAttachment.objects.aget(id=results[2]["id"])
+    assert shot.session_id == root.id
+    assert plugin._current[str(root.pk)] == opened["tab"]
+
+
+# ---------------------------------------------------------------------------
 # attachments
 # ---------------------------------------------------------------------------
 
