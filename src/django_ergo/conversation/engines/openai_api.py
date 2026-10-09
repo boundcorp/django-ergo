@@ -23,6 +23,7 @@ from django_ergo.conversation.images import memory_result
 from django_ergo.conversation.images import prepare_messages
 from django_ergo.conversation.messages import StoredMessagesMixin
 from django_ergo.conversation.messages import add_message
+from django_ergo.conversation.messages import model_rows
 from django_ergo.conversation.messages import tool_use_block
 from django_ergo.conversation.request_context import prepare_turn_context
 from django_ergo.conversation.telemetry import record_usage
@@ -223,7 +224,7 @@ class OpenAIAPIEngine(StoredMessagesMixin, Engine):
         attachments = attachments_by_sequence(session)
         return [
             (msg, message)
-            for msg in rows
+            for msg in model_rows(rows)
             for message in openai_message_dicts(
                 msg, attachments.get(msg.sequence, ()), audio_input=self.audio_input
             )

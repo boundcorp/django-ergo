@@ -781,10 +781,18 @@ async def test_bot_turn_is_a_chat_reply_structured_call(tmp_path):
         )
     ]
     assert [a.get("kind") for a in nudges] == ["system"]
-    # History keeps each reply as readable text, suggestions included.
-    window = str(engine._client.calls[1]["messages"])
-    assert "Tacos or soup?" in window
-    assert "Suggested replies: Tacos / Soup" in window
+    # The model sees its earlier reply as the send_reply call, suggestions
+    # included, and not as a plain-text copy: a history of turns that end in
+    # plain text teaches it to answer in plain text.
+    sent = engine._client.calls[1]["messages"]
+    assert '"Tacos", "Soup"' in json.dumps(sent)
+    assert "Suggested replies: Tacos / Soup" not in str(sent)
+    assert [m["role"] for m in sent[-3:]] == ["assistant", "user", "user"]
+    # The copy is still stored for chat views and history tools.
+    assert await root.messages.filter(
+        role="assistant",
+        content_blocks__text="Tacos or soup?\n\nSuggested replies: Tacos / Soup",
+    ).aexists()
 
 
 @pytest.mark.django_db(transaction=True)

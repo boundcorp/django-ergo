@@ -86,6 +86,7 @@ from django_ergo.conversation.identity import system_identity
 from django_ergo.conversation.images import is_ref
 from django_ergo.conversation.images import prepare_messages
 from django_ergo.conversation.images import storable_ref
+from django_ergo.conversation.messages import OUTPUT_ACCEPTED
 from django_ergo.conversation.messages import anext_sequence
 from django_ergo.conversation.models import ConversationSession
 from django_ergo.conversation.models import StructuredCall
@@ -157,14 +158,18 @@ _TRUNCATED_TOOL_CALL = (
 def _submit_nudge(tool_name: str, events) -> str:
     """Ask for the output tool after a plain-text answer, keeping that answer.
 
-    Without the text, models often resubmit an earlier turn's answer.
+    Without the text, models often resubmit an earlier turn's answer. An
+    empty response isn't an answer: asking for a "final answer" there makes
+    the model give up on work it was in the middle of, so it is asked to
+    carry on instead.
     """
     text = "".join(e.text for e in events if e.event_type == "text" and e.text)
     text = text.strip()
     if not text:
         return (
-            f"You must call the {tool_name} tool with your final answer to the "
-            "latest message. Do not answer in plain text."
+            "Your last response was empty. Carry on with the latest message: "
+            f"use your tools for any work that's left, then call {tool_name} "
+            "when you're done."
         )
     return (
         f"Your last message was plain text, which isn't delivered. Call the "
@@ -360,7 +365,7 @@ class StructuredOutputToolkit(Toolkit):
                 f"Fix the errors and call {self.tool_name} again."
             )
             raise ValueError(msg) from e
-        return "Output accepted."
+        return OUTPUT_ACCEPTED
 
     def render_overview(self) -> str:
         return ""

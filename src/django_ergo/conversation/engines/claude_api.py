@@ -22,6 +22,7 @@ from django_ergo.conversation.images import memory_result
 from django_ergo.conversation.images import prepare_messages
 from django_ergo.conversation.messages import StoredMessagesMixin
 from django_ergo.conversation.messages import add_message
+from django_ergo.conversation.messages import model_rows
 from django_ergo.conversation.messages import tool_result_content  # noqa: F401
 from django_ergo.conversation.messages import tool_use_block
 from django_ergo.conversation.request_context import prepare_turn_context
@@ -132,7 +133,7 @@ class ClaudeAPIEngine(StoredMessagesMixin, Engine):
             rows = rows.filter(sequence__gt=after_sequence)
         attachments = attachments_by_sequence(session)
         result = []
-        for msg in rows:
+        for msg in model_rows(rows):
             message = claude_message_dict(msg)
             if msg.sequence in attachments:
                 # Attachments go before the text, as Anthropic recommends.

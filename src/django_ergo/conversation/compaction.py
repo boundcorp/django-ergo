@@ -23,6 +23,7 @@ from django.utils import timezone
 from pydantic import BaseModel
 from pydantic import Field
 
+from django_ergo.conversation.messages import OUTPUT_ACCEPTED
 from django_ergo.conversation.renderer import ConversationRenderer
 
 if TYPE_CHECKING:
@@ -179,13 +180,38 @@ def native_turn_start(messages: list[dict], *, incoming: bool = False) -> int | 
         if _is_turn_start(message):
             previous = rest[k - 1][1] if k else None
             continuing = previous is not None and (
-                _is_tool_results(previous) or continuing
+                (_is_tool_results(previous) and not _answered(rest[:k])) or continuing
             )
             if not continuing:
                 starts.append(i)
         elif message.get("role") != "user":
             continuing = False
     return starts[-1] if starts else None
+
+
+def _answered(before: list[tuple[int, dict]]) -> bool:
+    """True when the tool results just before a message include an accepted answer.
+
+    The turn ended there: the answer's plain-text copy, which would otherwise
+    sit between the results and the next message, isn't sent to the model.
+    """
+    for _, message in reversed(before):
+        if not _is_tool_results(message):
+            return False
+        if message.get("role") == "tool":
+            if message.get("content") == OUTPUT_ACCEPTED and not message.get(
+                "is_error"
+            ):
+                return True
+            continue
+        if any(
+            block.get("type") == "tool_result"
+            and not block.get("is_error")
+            and block.get("content") == OUTPUT_ACCEPTED
+            for block in message.get("content") or []
+        ):
+            return True
+    return False
 
 
 def _is_tool_results(message: dict) -> bool:

@@ -18,6 +18,40 @@ from django_ergo.conversation.identity import django_user_identity
 from django_ergo.conversation.images import result_content
 from django_ergo.conversation.images import stored_result
 
+# What the output tool of a structured call returns when it takes the answer.
+OUTPUT_ACCEPTED = "Output accepted."
+
+
+def is_response_copy(message, previous) -> bool:
+    """True for the plain-text copy of an accepted answer that closes a turn.
+
+    The copy is stored so chat views and history tools see the answer, but it
+    isn't sent back to the model: a history where every turn ends with the
+    answer in plain text teaches the model to answer in plain text instead of
+    calling the output tool.
+    """
+    if previous is None or message.role != "assistant" or previous.role != "user":
+        return False
+    blocks = list(message.content_blocks.all())
+    if not blocks or any(b.block_type != "text" for b in blocks):
+        return False
+    return any(
+        b.block_type == "tool_result"
+        and not b.is_error
+        and b.tool_result_content == OUTPUT_ACCEPTED
+        for b in previous.content_blocks.all()
+    )
+
+
+def model_rows(rows) -> list:
+    """The stored messages that go to the model: all but answer copies."""
+    kept, previous = [], None
+    for row in rows:
+        if not is_response_copy(row, previous):
+            kept.append(row)
+        previous = row
+    return kept
+
 
 def next_sequence(session) -> int:
     """The sequence number the session's next message gets."""
