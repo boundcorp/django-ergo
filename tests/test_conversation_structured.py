@@ -529,6 +529,40 @@ async def test_empty_response_is_asked_to_carry_on_not_to_wrap_up(user):
     assert "final answer" not in nudge
 
 
+async def test_a_refusal_fails_the_call_instead_of_nudging(user):
+    # Nudging after a refusal re-sent nearly the same request: it was refused
+    # again, or the model obeyed "final answer" and dropped its task.
+    refused = SimpleNamespace(
+        content=[],
+        stop_reason="refusal",
+        stop_details=SimpleNamespace(category="cyber"),
+        usage=_usage(),
+    )
+    toolkit = LookupToolkit()
+    engine = claude_engine(refused, claude_tool("submit_output", VALID_PLAN))
+    spec = StructuredCallSpec(kind="planner", response_model=Plan, toolkits=[toolkit])
+
+    result = await run_structured_call(spec, "Plan", user=user, engine=engine)
+
+    assert result.status == StructuredCallStatus.FAILED
+    assert result.call.error_category == "refusal"
+    assert "(refusal: cyber)" in result.error
+    assert len(engine._client.calls) == 1
+
+
+async def test_a_mid_stream_refusal_runs_none_of_its_tool_calls(user):
+    partial = claude_tool("lookup", {"q": "x"})
+    partial.stop_reason = "refusal"
+    toolkit = LookupToolkit()
+    engine = claude_engine(partial)
+    spec = StructuredCallSpec(kind="planner", response_model=Plan, toolkits=[toolkit])
+
+    result = await run_structured_call(spec, "Plan", user=user, engine=engine)
+
+    assert result.call.error_category == "refusal"
+    assert toolkit.calls == []
+
+
 def test_a_message_after_an_accepted_answer_starts_a_turn():
     # The answer's plain-text copy isn't sent to the model, so the next message
     # follows the output tool's result directly; it still starts a new turn.

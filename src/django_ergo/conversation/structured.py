@@ -147,6 +147,10 @@ _ERROR_CATEGORIES = {
     "UnprocessableEntityError": "model",
 }
 _MAX_TOKENS_STOPS = {"max_tokens", "length"}
+# A provider's safety system declined the request (Claude's ``refusal``,
+# OpenAI's ``content_filter``). Asking again gets the same answer.
+_REFUSAL_STOPS = {"refusal", "content_filter"}
+REFUSAL_ERROR = "The model declined to continue (refusal"
 
 _TRUNCATED_TOOL_CALL = (
     "Not run: your reply hit the output token limit before this tool call's "
@@ -808,6 +812,24 @@ async def _run_loop(run: _Run) -> StructuredCallResult:  # noqa: C901, PLR0912, 
             ),
             None,
         )
+        if stop in _REFUSAL_STOPS:
+            # Nothing in the response is usable (a refusal can come mid-stream,
+            # after partial output), and nudging only repeats the refusal or
+            # makes the model give up on its task. Fail so the chat can offer
+            # the turn on another model.
+            category = next(
+                (
+                    e.raw.get("refusal_category")
+                    for e in events
+                    if e.event_type == "done"
+                ),
+                None,
+            )
+            detail = f": {category}" if category else ""
+            _fail(call, f"{REFUSAL_ERROR}{detail}). Try another model.", "refusal")
+            finished = True
+            break
+
         tool_events = [e for e in events if e.event_type == "tool_use"]
         if tool_events:
             results = []

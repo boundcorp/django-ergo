@@ -443,6 +443,9 @@ def test_a_turn_refused_at_its_limit_offers_a_retry_but_never_takes_it(
     assert bot.retry_model(chat, "Claude Code failed: boom") == ""  # not a limit
     refused = "Claude AI usage limit reached|1791200000"
     assert bot.retry_model(chat, refused) == "chatgpt/gpt-6-sol"
+    # A turn the model's safety system declined is offered elsewhere too.
+    declined = "The model declined to continue (refusal: cyber). Try another model."
+    assert bot.retry_model(chat, declined) == "chatgpt/gpt-6-sol"
     chat.refresh_from_db()
     assert chat.metadata["routed_model"] == "claude/claude-opus-5-5"  # only offered
 

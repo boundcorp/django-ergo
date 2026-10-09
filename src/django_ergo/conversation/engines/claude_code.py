@@ -158,6 +158,7 @@ class _Stream:
         self.partial_json: dict[int, str] = {}
         self.usage: dict = {}
         self.stop_reason = None
+        self.stop_details = None
         self.model = ""
 
     def feed(self, event: dict) -> None:
@@ -177,7 +178,9 @@ class _Stream:
                     self.partial_json.pop(index) or "{}"
                 )
         elif kind == "message_delta":
-            self.stop_reason = (event.get("delta") or {}).get("stop_reason")
+            delta = event.get("delta") or {}
+            self.stop_reason = delta.get("stop_reason")
+            self.stop_details = delta.get("stop_details")
             self.usage.update(
                 {k: v for k, v in (event.get("usage") or {}).items() if v is not None}
             )
@@ -219,6 +222,7 @@ class _Stream:
         return SimpleNamespace(
             content=content,
             stop_reason=self.stop_reason,
+            stop_details=self.stop_details,
             model=self.model or model,
             usage=SimpleNamespace(
                 input_tokens=usage.get("input_tokens") or 0,

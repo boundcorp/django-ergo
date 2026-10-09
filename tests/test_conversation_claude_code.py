@@ -407,3 +407,22 @@ def test_the_api_engine_drops_unsigned_thinking():
         }
     ]
     assert without_unsigned_thinking(signed) == signed
+
+
+def test_a_refusal_keeps_its_category():
+    from django_ergo.conversation.engines.claude_api import done_raw
+    from django_ergo.conversation.engines.claude_code import _Stream
+
+    stream = _Stream()
+    stream.feed({"type": "message_start", "message": {"usage": {}}})
+    stream.feed(
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "refusal", "stop_details": {"category": "cyber"}},
+            "usage": {"output_tokens": 0},
+        }
+    )
+    stream.feed({"type": "message_stop"})
+    response = stream.response("claude-opus-5-5")
+    assert response.content == []
+    assert done_raw(response) == {"stop_reason": "refusal", "refusal_category": "cyber"}

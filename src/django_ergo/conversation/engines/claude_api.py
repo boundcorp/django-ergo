@@ -54,6 +54,20 @@ def without_unsigned_thinking(messages: list[dict]) -> list[dict]:
     ]
 
 
+def done_raw(response) -> dict:
+    """The done event's data: the stop reason, and a refusal's category."""
+    raw = {"stop_reason": response.stop_reason}
+    details = getattr(response, "stop_details", None)
+    category = (
+        details.get("category")
+        if isinstance(details, dict)
+        else getattr(details, "category", None)
+    )
+    if category:
+        raw["refusal_category"] = category
+    return raw
+
+
 def claude_message_dict(msg, *, include_attribution: bool = True) -> dict:
     """Convert a SessionMessage row (with content_blocks) to an API message dict."""
     content = []
@@ -298,9 +312,7 @@ class ClaudeAPIEngine(StoredMessagesMixin, Engine):
             for event in events:
                 yield event
 
-            yield EngineResponse(
-                event_type="done", raw={"stop_reason": response.stop_reason}
-            )
+            yield EngineResponse(event_type="done", raw=done_raw(response))
 
     # -- Sessionless calls ------------------------------------------------
 
@@ -364,9 +376,7 @@ class ClaudeAPIEngine(StoredMessagesMixin, Engine):
                         thinking=block.thinking,
                     )
                 )
-        events.append(
-            EngineResponse(event_type="done", raw={"stop_reason": response.stop_reason})
-        )
+        events.append(EngineResponse(event_type="done", raw=done_raw(response)))
         return Completion(
             message={"role": "assistant", "content": content},
             events=events,
