@@ -1236,7 +1236,7 @@ def test_routing_refresh_fetches_limits_and_the_page_reports_them_or_the_failure
     )
     assert client.get("/api/routing").json()["capacity"]["sync"]["state"] == "empty"
 
-    resets = 1791506400
+    resets = int(timezone.now().timestamp()) + 3 * 3600
     window = {"id": "5h", "resetsAt": resets * 1000}
     limits = [
         {"id": "anthropic:5h", "label": "Claude 5 Hour", "window": window, "amount": {"unit": "percent", "used": 7}}
