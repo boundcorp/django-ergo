@@ -318,7 +318,7 @@ function echoesReply(text: string, replies: string[]): boolean {
   return replies.some(r => text === r || text.startsWith(`${r}\n\nSuggested replies:`))
 }
 
-// "YOU · 10:42": who wrote a message, and when. The time links to the message.
+// "YOU · 10:42 🔗": who wrote a message, when, and a link to it.
 function RoleLabel({ who, timestamp, line }: { who: string; timestamp: string | null; line?: number }) {
   return (
     <div className="mb-1 font-mono text-[11px] font-semibold tracking-wide text-mint uppercase">
@@ -328,21 +328,23 @@ function RoleLabel({ who, timestamp, line }: { who: string; timestamp: string | 
   )
 }
 
-/** " · 10:42", linking to its message: a click copies the link (/s/<id>#m-<line>) and jumps there. */
+/** " · 10:42 🔗": the time, then a link icon that copies the message's link (/s/<id>#m-<line>) and jumps there. */
 function MessageLink({ line, timestamp }: { line: number; timestamp: string | null }) {
   const sessionId = useContext(SessionContext)
   const navigate = useNavigate()
   const [copied, setCopied] = useState(false)
   const timer = useRef<number | undefined>(undefined)
-  if (!sessionId) return timestamp ? <> · {clock(timestamp)}</> : null
+  const time = timestamp ? ` · ${clock(timestamp)}` : ''
+  if (!sessionId) return time
   const anchor = messageAnchor(line)
   return (
     <>
-      {' · '}
+      {time}
       <a
         href={`#${anchor}`}
-        className="message-link hover:underline"
+        className="message-link ml-1.5 inline-flex align-[-2px] text-muted opacity-60 hover:text-ink hover:opacity-100 focus-visible:opacity-100"
         title="Copy a link to this message"
+        aria-label="Copy a link to this message"
         onClick={async e => {
           e.preventDefault()
           navigate({ hash: anchor }, { replace: true })
@@ -352,10 +354,29 @@ function MessageLink({ line, timestamp }: { line: number; timestamp: string | nu
           timer.current = window.setTimeout(() => setCopied(false), 1500)
         }}
       >
-        {timestamp ? clock(timestamp) : 'link'}
+        <LinkIcon />
       </a>
       {copied && <span className="ml-1.5 normal-case text-muted">Link copied</span>}
     </>
+  )
+}
+
+function LinkIcon() {
+  return (
+    <svg
+      width="12"
+      height="12"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.25"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+      <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+    </svg>
   )
 }
 
