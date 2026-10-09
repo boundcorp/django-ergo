@@ -146,6 +146,26 @@ describe('structured message attribution', () => {
     expect(html).not.toContain('Forwarding note')
   })
 
+  test("shows Ergo's plain-text nudge as a divider, not a user message", () => {
+    const html = transcript({
+      line: 0,
+      role: 'user',
+      timestamp: '2026-10-09T12:00:00Z',
+      author: { kind: 'system', ref: 'ergo', display_name: 'Ergo' },
+      provenance: {},
+      blocks: [
+        {
+          type: 'text',
+          text: "Your last message was plain text, which isn't delivered. Call the send_reply tool now. Your plain text was:\n\nHi",
+        },
+      ],
+    })
+    expect(html).toContain('Asked the bot to send its answer as a reply')
+    expect(html).toContain('<details')
+    expect(html).not.toContain('bg-indigo-tint')
+    expect(html).not.toContain('>Ergo')
+  })
+
   test('keeps ordinary and legacy messages unchanged', () => {
     expect(transcript({ line: 0, role: 'user', timestamp: null, blocks: [{ type: 'text', text: 'Hello' }] })).toContain(
       'You',

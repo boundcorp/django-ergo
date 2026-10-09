@@ -330,6 +330,13 @@ function authorLabel(message: Message): string {
   return `${author.display_name || author.ref}${marker}`
 }
 
+function systemNoteLabel(text: string): string {
+  if (text.startsWith('Your last message was plain text') || text.startsWith('You must call the '))
+    return 'Asked the bot to send its answer as a reply'
+  if (text.startsWith('Your response failed validation')) return 'Asked the bot to fix its output'
+  return 'Note from Ergo to the bot'
+}
+
 /** Structured attribution is presentation data, never part of the verbatim message body. */
 function AttributedMessage({ message }: { message: Message }) {
   const provenance = message.provenance!
@@ -425,6 +432,14 @@ function MessageView({
                 <div key={i} className="self-center text-xs text-zinc-500" title={block.text}>
                   ↻ Resumed after: {resumed[1]}
                 </div>
+              )
+            if (user && message.author?.kind === 'system')
+              // Ergo's own notes to the model (e.g. asking for a plain-text answer as a reply): a divider, not a message.
+              return (
+                <details key={i} className="max-w-[85%] self-center text-xs text-zinc-500">
+                  <summary className="cursor-pointer list-none text-center">↻ {systemNoteLabel(block.text)}</summary>
+                  <div className="mt-1 whitespace-pre-wrap">{block.text}</div>
+                </details>
               )
             if (from?.kind === 'reply')
               // A reply to work this chat sent: one row to open; the card above has its status.
