@@ -391,6 +391,19 @@ async def test_threads_use_default_compaction_and_root_reads_them(tmp_path):
     assert f"session:{root.id}" in listing
     assert f"session:{other.id}" in listing
 
+    # A pasted link opens any of the person's chats, with this bot or another; not someone else's.
+    elsewhere = await ConversationSession.objects.acreate(
+        user=user, bot_name="other-bot", engine_type="claude", transport_type="api"
+    )
+    stranger = await User.objects.acreate(username="stranger")
+    theirs = await ConversationSession.objects.acreate(
+        user=stranger, bot_name="kitchen", engine_type="claude", transport_type="api"
+    )
+    assert (
+        await sync_to_async(bot.linked_source)(thread, str(elsewhere.id))
+    ).session == elsewhere
+    assert await sync_to_async(bot.linked_source)(thread, str(theirs.id)) is None
+
     await bot.close_session(thread)
     assert ("closed", "thread") in plugin.events
     assert (await ConversationSession.objects.aget(id=thread.id)).status == "completed"

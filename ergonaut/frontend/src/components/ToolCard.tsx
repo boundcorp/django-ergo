@@ -20,7 +20,7 @@ function seconds(ms: number): string {
 }
 
 /** Copies text; falls back to a hidden textarea where the clipboard API needs https. */
-async function copyText(text: string): Promise<void> {
+export async function copyText(text: string): Promise<void> {
   try {
     await navigator.clipboard.writeText(text)
   } catch {

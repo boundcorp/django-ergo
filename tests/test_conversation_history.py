@@ -17,6 +17,7 @@ from django_ergo.conversation.history import SessionSource
 from django_ergo.conversation.history import render_messages
 from django_ergo.conversation.history import sources_from_paths
 from django_ergo.conversation.history_search_toolkit import MessageHistoryToolkit
+from django_ergo.conversation.history_search_toolkit import parse_link
 from django_ergo.conversation.importers import ImportService
 from django_ergo.conversation.models import ConversationAttachment
 from django_ergo.conversation.models import ConversationSession
@@ -382,6 +383,7 @@ def test_tool_schemas():
         "ergo_chat_history_read",
         "ergo_chat_history_tail",
         "ergo_chat_history_around",
+        "ergo_chat_history_open_link",
         "ergo_chat_history_by_date",
         "ergo_chat_history_search",
     ]
@@ -403,6 +405,74 @@ def test_live_session_source_refreshes():
         message=message, block_type="text", sequence=0, text="new message"
     )
     assert "new message" in toolkit.execute_tool("ergo_chat_history_tail", {})
+
+
+def test_parse_link():
+    sid = "0b6c3a1e-5f7d-4c2b-9a8e-1d2f3a4b5c6d"
+    assert parse_link(f"https://ergo.example.com/s/{sid}#m-12") == (sid, 12)
+    assert parse_link(f"see https://ergo.example.com/s/{sid.upper()}") == (sid, None)
+    assert parse_link(f"session:{sid}") == (sid, None)
+    assert parse_link(sid) == (sid, None)
+    with pytest.raises(ValueError, match="Not a chat link"):
+        parse_link("https://ergo.example.com/threads")
+
+
+def _say(session, sequence, role, text):
+    message = SessionMessage.objects.create(
+        session=session, role=role, sequence=sequence
+    )
+    MessageBlock.objects.create(
+        message=message, block_type="text", sequence=0, text=text
+    )
+
+
+@pytest.mark.django_db
+def test_open_link_shows_the_linked_message_and_resolves_other_chats():
+    user = User.objects.create_user(username="linker", password="x")
+    here = ConversationSession.objects.create(
+        user=user, engine_type="claude", transport_type="api", status="active"
+    )
+    there = ConversationSession.objects.create(
+        user=user,
+        engine_type="claude",
+        transport_type="api",
+        status="active",
+        metadata={"title": "Shopping"},
+    )
+    for line in range(10):
+        _say(there, line, "user" if line % 2 == 0 else "assistant", f"message {line}")
+    asked = []
+
+    def loader(session_id):
+        asked.append(session_id)
+        return SessionSource(there) if session_id == str(there.pk) else None
+
+    toolkit = MessageHistoryToolkit([SessionSource(here)], link_loader=loader)
+    text = toolkit.execute_tool(
+        "ergo_chat_history_open_link",
+        {"link": f"https://ergo.example.com/s/{there.pk}#m-4", "after": 1},
+    )
+    assert text.startswith(f"Shopping (session:{there.pk}), linked message L4:")
+    assert "[L2 " in text and "[L5 " in text
+    assert "message 1" not in text and "message 6" not in text
+    # Once loaded, the chat is a source: the other tools can page it.
+    assert f"session:{there.pk}" in toolkit.execute_tool(
+        "ergo_chat_history_sources", {}
+    )
+    toolkit.execute_tool("ergo_chat_history_open_link", {"link": str(there.pk)})
+    assert asked == [str(there.pk)]
+
+    latest = toolkit.execute_tool(
+        "ergo_chat_history_open_link", {"link": str(there.pk)}
+    )
+    assert "latest messages" in latest and "message 9" in latest
+    with pytest.raises(ValueError, match="no message at line 40"):
+        toolkit.execute_tool(
+            "ergo_chat_history_open_link", {"link": f"/s/{there.pk}#m-40"}
+        )
+    stranger = "0b6c3a1e-5f7d-4c2b-9a8e-1d2f3a4b5c6d"
+    with pytest.raises(ValueError, match="isn't one you can read"):
+        toolkit.execute_tool("ergo_chat_history_open_link", {"link": f"/s/{stranger}"})
 
 
 # ---------------------------------------------------------------------------

@@ -23,10 +23,12 @@ the `history` skill, which every chat has loaded:
 | `ergo_chat_history_search` | search messages by text |
 | `ergo_chat_history_tail`, `ergo_chat_history_read` | page backwards and forwards by line |
 | `ergo_chat_history_around` | messages around a line |
+| `ergo_chat_history_open_link` | a message someone linked (`/s/<chat id>#m-<line>`) |
 | `ergo_chat_history_by_date` | messages in a date range |
 
 In any chat or thread these cover every session the bot has had with
-that person, threads included. Each tool
+that person, threads included; a pasted link can also open the person's
+chats with other bots. Each tool
 takes a granularity: `conversation` (what was said), `reasoning` (plus
 thinking and short tool calls) or `full`. See
 [message history](message-history.md).

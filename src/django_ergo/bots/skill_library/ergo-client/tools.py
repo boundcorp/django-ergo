@@ -71,7 +71,8 @@ def ergo_client_threads(
 
 @bot_tool(takes_context=True)
 def ergo_client_show(ctx, session: str, limit: int = 20) -> str:
-    """A remote chat's recent transcript, workers, PRs and pending approvals. session: an id, or BOT / BOT:CHAT."""
+    """A remote chat's recent transcript, workers, PRs and pending approvals. session: an id, BOT / BOT:CHAT,
+    or a chat link (https://host/s/<id>#m-<line>), which shows that message with the ones around it."""
     return run(ctx, "show", session, "--limit", str(limit))
 
 
