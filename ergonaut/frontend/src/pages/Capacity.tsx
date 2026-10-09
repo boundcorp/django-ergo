@@ -1,4 +1,5 @@
 import type { Capacity, CapacityAccount, CapacitySync, CapacityWindow } from '../api'
+import { pace } from '../usagePace'
 import { agoLong } from '../time'
 
 // Provider limits for the Routing page: how healthy the last sync was, then each account's 5-hour and
@@ -113,19 +114,13 @@ export function SyncBar({
   )
 }
 
-function tone(w: CapacityWindow, used: number) {
-  if (w.limit != null && used >= w.limit) return { fill: 'bg-danger', note: 'Over the router limit' }
-  if (w.limit != null && used >= w.limit - 15) return { fill: 'bg-warning', note: 'Near the router limit' }
-  return { fill: w.period === '7d' ? 'bg-accent' : 'bg-mint', note: '' }
-}
-
 function WindowRow({ row, now }: { row: Row; now: number }) {
   const w = row.window
   const used = w?.used ?? null
   const reset = w?.status === 'reset'
   const unavailable = used == null
   const note = reset ? 'Window reset, waiting for a fresh sync' : row.note
-  const level = used != null && w ? tone(w, used) : null
+  const passed = w ? pace(w.key, w, now / 1000) : null
   const resets = w?.resets_at
     ? `Resets in ${countdown(w.resets_at, now)}`
     : w && !unavailable
@@ -189,26 +184,21 @@ function WindowRow({ row, now }: { row: Row; now: number }) {
           aria-valuemin={0}
           aria-valuemax={100}
           aria-valuenow={Math.round(used)}
-          aria-valuetext={`${Math.round(used)}% used, ${Math.round(100 - used)}% left${resets ? `, ${resets.toLowerCase()}` : ''}${w!.stale ? ', stale' : ''}`}
+          aria-valuetext={`${Math.round(used)}% used, ${Math.round(100 - used)}% left${resets ? `, ${resets.toLowerCase()}` : ''}${passed != null ? `, ${Math.round(passed)}% of the window elapsed` : ''}${w!.stale ? ', stale' : ''}`}
         >
           <div
-            className={`absolute inset-y-0 left-0 rounded-full ${level!.fill}`}
+            className={`absolute inset-y-0 left-0 rounded-full ${w!.period === '7d' ? 'bg-accent' : 'bg-mint'}`}
             style={{ width: `${Math.max(0, Math.min(100, used))}%` }}
           />
-          {w!.limit != null && (
+          {passed != null && (
             <div
-              className="absolute -inset-y-1 w-0.5 rounded bg-ink"
-              style={{ left: `${Math.min(99.5, w!.limit)}%` }}
-              title={`Router skips this provider at ${w!.limit}% used`}
+              aria-hidden="true"
+              className="capacity-pace absolute -inset-y-1 w-0.5 rounded bg-ink"
+              style={{ left: `${Math.min(99.5, passed)}%` }}
+              title={`Pace: ${Math.round(passed)}% of this window has elapsed`}
             />
           )}
         </div>
-      )}
-      {(level?.note || (w?.limit != null && !unavailable)) && (
-        <p className="mt-1 text-xs text-muted">
-          {level?.note && <span className="font-semibold text-warning">{level.note} · </span>}
-          {w?.limit != null && `Router skips at ${w.limit}% used`}
-        </p>
       )}
     </li>
   )
@@ -307,10 +297,10 @@ export function CapacitySection({
           How to read this
         </h2>
         <p className="mt-2 text-sm text-muted">
-          Usage percentages are provider-reported. A window that is missing or failed to sync shows as Unavailable. A
-          value older than {minutes(sync.stale_after)} keeps its last known number, flagged Stale with the time it was
-          observed, and is never carried forward as current. Limits sync every few minutes; Refresh limits fetches them
-          now.
+          Usage percentages are provider-reported. The dark tick marks how much of a window has elapsed; fill past it is
+          faster than an even rate. A window that is missing or failed to sync shows as Unavailable. A value older than{' '}
+          {minutes(sync.stale_after)} keeps its last known number, flagged Stale with the time it was observed, and is
+          never carried forward as current. Limits sync every few minutes; Refresh limits fetches them now.
         </p>
       </section>
     </div>

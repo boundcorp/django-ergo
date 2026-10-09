@@ -238,12 +238,13 @@ refuse logins until the window passes.
   beat task runs the same sync every 5 minutes
   (`ERGONAUT_USAGE_SYNC_SECONDS`, `0` turns it off). **Provider windows**
   has a card per account (Claude, Codex, Grok) with its 5-hour and 7-day
-  windows: percent used, reset countdown and a meter, plus any scoped window
-  the account reports (Claude's Fable weekly, Grok Build). A window the
-  provider does not report, or that has not synced, is **Unavailable**, never
-  0%. Values older than 15 minutes keep their number but show a **Stale**
-  badge with the time they were observed; a provider whose sync failed shows
-  the error. **Pay-per-token providers** lists API-key
+  windows: percent used, reset countdown, and a meter whose dark tick marks
+  the elapsed share of the window (fill past the tick is faster than an even
+  rate), plus any scoped window the account reports (Claude's Fable weekly,
+  Grok Build). A window the provider does not report, or that has not synced,
+  is **Unavailable**, never 0%. Values older than 15 minutes keep their number
+  but show a **Stale** badge with the time they were observed; a provider whose
+  sync failed shows the error. **Pay-per-token providers** lists API-key
   providers separately: chats can use them when their tier lists them,
   but coding agents use subscriptions only. **Tiers** shows every configured
   tier (including custom names, not just `small`, `medium`, `large` and `xlarge`) and the

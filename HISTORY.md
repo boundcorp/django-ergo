@@ -24,7 +24,8 @@ This document tracks the major milestones and evolution of the Django Ergo proje
   --json` every 5 minutes (and on **Refresh limits**), stores each window with
   its own `observed_at`, and records the sync's health in `UsageSync`.
 - The Routing page is redesigned as Routing & capacity: sync health, a card per
-  account with 5-hour and 7-day windows, explicit Unavailable/Stale states.
+  account with 5-hour and 7-day windows, rate ticks showing the elapsed share
+  of each window, and explicit Unavailable/Stale states.
 
 ### Provider-driven routing (October 2026)
 

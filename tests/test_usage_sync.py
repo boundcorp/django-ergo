@@ -124,9 +124,7 @@ def account(page: dict, id_: str) -> dict:
 
 def capacity(clock=None):
     found = providers()
-    return capacity_report(
-        found, found.routing.rules, NOW.timestamp() if clock is None else clock
-    )
+    return capacity_report(found, NOW.timestamp() if clock is None else clock)
 
 
 # -- parsing -----------------------------------------------------------------
@@ -290,12 +288,10 @@ def test_sync_feeds_the_router_and_shows_every_account():
         "weekly",
         "weekly_fable",
     ]
-    assert (
-        claude["windows"][0]["limit"] == 85
-    )  # routing.limits for claude's 5-hour window
-    assert (
-        account(page, "xai-oauth")["providers"] == []
-        and account(page, "xai-oauth")["windows"][0]["limit"] is None
+    assert all(
+        "limit" not in window
+        for account in page["accounts"]
+        for window in account["windows"]
     )
 
 
@@ -342,7 +338,7 @@ def test_a_partial_event_does_not_refresh_the_windows_it_leaves_alone():
     )  # a Claude turn reports only its 5-hour window, stamped now
     weekly = windows_of("claude")["weekly"]
     assert weekly["observed_at"] == (NOW - timedelta(hours=3)).timestamp()
-    page = capacity_report(providers(), routing.RoutingRules(), clock=NOW.timestamp())
+    page = capacity_report(providers(), clock=NOW.timestamp())
     claude = account(page, "anthropic")
     assert claude["status"] == "stale"
     stale = {w["key"]: w["stale"] for w in claude["windows"]}

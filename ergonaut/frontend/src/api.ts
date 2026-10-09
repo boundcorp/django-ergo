@@ -104,7 +104,6 @@ export type CapacityWindow = {
   model: string
   observed_at: number | null
   stale: boolean
-  limit: number | null // the router skips the provider at this % used; null where it doesn't route
 }
 
 export type CapacityAccount = {

@@ -19,7 +19,6 @@ function win(overrides: Partial<CapacityWindow> = {}): CapacityWindow {
     model: '',
     observed_at: NOW / 1000,
     stale: false,
-    limit: null,
     ...overrides,
   }
 }
@@ -166,17 +165,19 @@ describe('window rows', () => {
     expect(render({ accounts: [grok] })).toContain('Shown for reference, not used for routing')
   })
 
-  test('marks windows near or over the router limit in words and shows where the router skips', () => {
+  test('marks the even-use pace and never renders routing skip guidance', () => {
     const html = render({
       accounts: [
         account({
-          windows: [win({ used: 90, remaining: 10, limit: 85 }), weekly({ used: 72, remaining: 28, limit: 85 })],
+          windows: [win({ resets_at: NOW / 1000 + 60 * 60 }), weekly({ resets_at: NOW / 1000 + 7 * 24 * 60 * 60 })],
         }),
       ],
     })
-    expect(html).toContain('Over the router limit')
-    expect(html).toContain('Near the router limit')
-    expect(html).toContain('Router skips at 85% used')
+    expect(html.match(/capacity-pace/g)?.length).toBe(2)
+    expect(html).toContain('left:80%')
+    expect(html).toContain('Pace: 80% of this window has elapsed')
+    expect(html).not.toContain('Router skips')
+    expect(html).not.toContain('router limit')
   })
 })
 
