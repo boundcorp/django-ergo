@@ -995,3 +995,19 @@ body {
 .app-sidebar:hover::-webkit-scrollbar-thumb {
   background-color: var(--color-stroke);
 }
+
+/* The message a link (/s/<id>#m-<line>) points at: a flash, then a quiet outline. */
+.message-target {
+  border-radius: var(--radius-card, 12px);
+  outline: 2px solid color-mix(in srgb, var(--color-accent) 45%, transparent);
+  outline-offset: 6px;
+  animation: message-target-flash 2.4s ease-out;
+}
+@keyframes message-target-flash {
+  from {
+    background-color: color-mix(in srgb, var(--color-accent) 18%, transparent);
+  }
+  to {
+    background-color: transparent;
+  }
+}

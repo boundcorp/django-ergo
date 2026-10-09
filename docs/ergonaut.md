@@ -172,6 +172,12 @@ refuse logins until the window passes.
   messages only while you're at the bottom; scrolled up, it stays put and a
   "Jump to bottom" button (or "New messages") takes you back. Sending a
   message always scrolls to the bottom.
+- **Message links**: the time on a message is its link
+  (`/s/<chat id>#m-<line>`). Clicking it copies the full URL and outlines
+  the message. Opening a link loads older messages back to that line,
+  scrolls to it and highlights it. Paste one to a bot and it reads the
+  message with `ergo_chat_history_open_link` (any of your chats, with any
+  bot). Outside agents read it with `ergonaut-remote show <link>`.
 - **Forwarded messages**: a distinct incoming card names the actual author
   (including a Telegram or bot marker), the forwarding bot, and the linked
   source chat and original time. Forwarding notes and shared files are

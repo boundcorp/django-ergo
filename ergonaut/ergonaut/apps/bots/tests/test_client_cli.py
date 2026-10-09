@@ -89,6 +89,12 @@ def test_ergo_client_runs_a_thread_end_to_end(ergo, kitchen, capsys):
     out = capsys.readouterr().out
     assert "→ order(" in out and "Ordered the eggs." in out
 
+    # A message link from the web app shows the messages around its line, marking the linked one.
+    url = ergo.load_config()["servers"]["test"]["url"]
+    assert ergo.main(["show", f"{url}/s/{thread}#m-0"]) == 0
+    out = capsys.readouterr().out
+    assert "[0] user:  <- linked message" in out and "Say hello" in out
+
     assert ergo.main(["threads", "--bot", "kitchen", "--json"]) == 0
     assert thread in capsys.readouterr().out
     assert ergo.main(["close", thread]) == 0

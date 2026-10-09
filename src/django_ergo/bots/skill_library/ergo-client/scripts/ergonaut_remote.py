@@ -12,6 +12,7 @@ ERGONAUT_URL and ERGONAUT_API_KEY override the saved server.
     ergonaut-remote new devbox "Fix the flaky upload test" --wait  # start a thread, wait for the reply
     ergonaut-remote threads --bucket waiting                       # threads waiting on you
     ergonaut-remote show <session>                                 # transcript, workers, approvals
+    ergonaut-remote show https://ergo.example.com/s/<id>#m-12      # a linked message, with the ones around it
     ergonaut-remote send <session> "Yes, go ahead" --wait
     ergonaut-remote approve <session>                              # or --deny
 
@@ -27,6 +28,7 @@ import contextlib
 import contextvars
 import json
 import os
+import re
 import sys
 import time
 import urllib.error
@@ -89,8 +91,9 @@ def save_config(config: dict) -> None:
     CONFIG.chmod(0o600)
 
 
-def server(name: str = "") -> tuple[str, str]:
-    """The (url, key) to use: ERGONAUT_URL/ERGONAUT_API_KEY, else the named or default saved server."""
+def server(name: str = "", link: str = "") -> tuple[str, str]:
+    """The (url, key) to use: ERGONAUT_URL/ERGONAUT_API_KEY, else the named server, else the
+    saved server a link (https://host/s/...) points at, else the default one."""
     if (
         os.environ.get("ERGONAUT_URL")
         and os.environ.get("ERGONAUT_API_KEY")
@@ -98,6 +101,11 @@ def server(name: str = "") -> tuple[str, str]:
     ):
         return os.environ["ERGONAUT_URL"].rstrip("/"), os.environ["ERGONAUT_API_KEY"]
     config = load_config()
+    host = urllib.parse.urlsplit(link).netloc if "://" in link else ""
+    if host and not name and not os.environ.get("ERGONAUT_SERVER"):
+        for found in config.get("servers", {}).values():
+            if urllib.parse.urlsplit(found["url"]).netloc == host:
+                return found["url"].rstrip("/"), found["key"]
     name = name or os.environ.get("ERGONAUT_SERVER") or config.get("default", "")
     found = config.get("servers", {}).get(name)
     if not found:
@@ -241,9 +249,24 @@ def send_and_maybe_wait(client: Client, session_id: str, text: str, args) -> int
     return 0
 
 
+LINK = re.compile(
+    r"/s/([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})[^#\s]*(?:#m-(\d+))?"
+)
+
+
+def parse_link(ref: str) -> tuple[str, int | None] | None:
+    """(session id, line or None) from a chat link the web app copies: https://host/s/<id>#m-<line>."""
+    match = LINK.search(ref)
+    if match is None:
+        return None
+    return match.group(1).lower(), int(match.group(2)) if match.group(2) else None
+
+
 def resolve_session(client: Client, ref: str) -> str:
-    """A session id from an id, an id prefix (6+ characters), or ``BOT`` / ``BOT:CHAT``
-    for that bot's main or named chat."""
+    """A session id from an id, an id prefix (6+ characters), a chat link
+    (https://host/s/<id>#m-<line>), or ``BOT`` / ``BOT:CHAT`` for that bot's main or named chat."""
+    if link := parse_link(ref):
+        return link[0]
     if len(ref) == 36 and ref.count("-") == 4:
         return ref
     if (
@@ -403,7 +426,12 @@ def block_text(block: dict, full: bool) -> str:
 
 def cmd_show(client, args) -> int:
     session_id = resolve_session(client, args.session)
-    detail = client.get(f"/sessions/{session_id}", limit=args.limit)
+    line = (
+        args.line
+        if args.line is not None
+        else (parse_link(args.session) or ("", None))[1]
+    )
+    detail = client.get(f"/sessions/{session_id}", limit=args.limit, around=line)
     if args.json:
         echo(json.dumps(detail, indent=2))
         return 0
@@ -416,11 +444,14 @@ def cmd_show(client, args) -> int:
     if detail.get("has_more"):
         echo(
             f"(older messages: ergonaut-remote show {s['id']} --limit {args.limit * 2})"
+            if line is None
+            else f"(older messages: ergonaut-remote show {s['id']} --line {detail['first_line']})"
         )
     for message in detail["messages"]:
         lines = [t for t in (block_text(b, args.full) for b in message["blocks"]) if t]
         if lines:
-            echo(f"\n[{message['line']}] {message['role']}:")
+            mark = "  <- linked message" if message["line"] == line else ""
+            echo(f"\n[{message['line']}] {message['role']}:{mark}")
             echo("\n".join(lines))
     for w in detail.get("workers", []):
         echo(
@@ -606,9 +637,15 @@ def parser() -> argparse.ArgumentParser:
     )
     c.add_argument(
         "session",
-        help="session id (or prefix), or BOT / BOT:CHAT for a main or named chat",
+        help="session id (or prefix), a chat link (https://host/s/<id>#m-<line>), or BOT / BOT:CHAT",
     )
     c.add_argument("--limit", type=int, default=30, help="messages (default 30)")
+    c.add_argument(
+        "--line",
+        type=int,
+        default=None,
+        help="show the messages around this line (a link's #m-<line> does the same)",
+    )
     c.add_argument(
         "--full", action="store_true", help="don't clip long blocks; include thinking"
     )
@@ -686,7 +723,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if not args.needs_client:
             return args.func(args)
-        url, key = server(args.server)
+        url, key = server(args.server, link=getattr(args, "session", "") or "")
         return args.func(Client(url, key), args)
     except ApiError as e:
         echo(f"ergo: {e}", file=sys.stderr)

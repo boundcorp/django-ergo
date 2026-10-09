@@ -1051,6 +1051,13 @@ def test_a_long_chat_comes_a_page_at_a_time(client, cook, use_bots):
     assert (oldest["first_line"], oldest["has_more"]) == (0, False)
     assert {c["id"] for c in oldest["calls"]} == {str(old.id)}
 
+    # A message link (#m-30) asks for the page around its line; near the end that's the newest page.
+    around = client.get(f"/api/sessions/{session.id}?around=30&limit=10").json()
+    assert [m["line"] for m in around["messages"]] == list(range(26, 36))
+    assert (around["first_line"], around["has_more"]) == (26, True)
+    newest = client.get(f"/api/sessions/{session.id}?around=115&limit=10").json()
+    assert [m["line"] for m in newest["messages"]] == list(range(110, 120))
+
 
 @pytest.mark.django_db(transaction=True)
 def test_thread_cards_and_pull_requests(client, cook, use_bots):

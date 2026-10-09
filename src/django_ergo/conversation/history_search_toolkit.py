@@ -13,10 +13,15 @@ it many sources to search across them::
 Every read takes a ``granularity`` (conversation, reasoning, full) and prints
 each message with its source id, line number and timestamp, which are the
 keys the other tools take for paging.
+
+``ergo_chat_history_open_link`` opens a link to one message of a chat
+(``https://<host>/s/<session id>#m-<line>``, as the Ergonaut web app copies
+it). Pass ``link_loader`` to resolve chats that aren't among the sources.
 """
 
 from __future__ import annotations
 
+import re
 from datetime import UTC
 from datetime import datetime
 from typing import TYPE_CHECKING
@@ -99,6 +104,21 @@ TOOLS = [
         },
     },
     {
+        "name": "ergo_chat_history_open_link",
+        "description": (
+            "Open a link to a chat message that someone pasted "
+            "(https://<host>/s/<chat id>#m-<line>, or just the chat id): shows "
+            "that message with a few around it. Without #m-<line>, the chat's "
+            "latest messages."
+        ),
+        "parameters": {
+            "link": {"type": "string", "required": True},
+            "before": {"type": "integer", "required": False},
+            "after": {"type": "integer", "required": False},
+            "granularity": _GRANULARITY,
+        },
+    },
+    {
         "name": "ergo_chat_history_by_date",
         "description": (
             "Read messages in a date range, oldest first, across all sources or "
@@ -129,6 +149,24 @@ TOOLS = [
 ]
 TOOL_NAMES = {tool["name"] for tool in TOOLS}
 
+_UUID = r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+LINK = re.compile(
+    rf"(?:/s/|session:|^)({_UUID})(?:[/?][^#\s]*)?(?:#m-(\d+))?", re.ASCII
+)
+
+
+def parse_link(link: str) -> tuple[str, int | None]:
+    """(session id, line or None) from ``https://host/s/<id>#m-<line>``,
+    ``session:<id>`` or a bare id."""
+    match = LINK.search(link.strip())
+    if match is None:
+        msg = (
+            f"Not a chat link: {link!r} (expected https://<host>/s/<chat id>#m-<line>)"
+        )
+        raise ValueError(msg)
+    line = match.group(2)
+    return match.group(1).lower(), int(line) if line is not None else None
+
 
 def _parse_date(value: str | None, *, end: bool = False) -> datetime | None:
     if not value:
@@ -157,6 +195,7 @@ class MessageHistoryToolkit(Toolkit):
         *,
         default_granularity: Granularity | str = Granularity.CONVERSATION,
         source_loader: Callable[[], list[MessageSource]] | None = None,
+        link_loader: Callable[[str], MessageSource | None] | None = None,
     ):
         self.sources: dict[str, MessageSource] = {}
         for source in sources:
@@ -165,6 +204,8 @@ class MessageHistoryToolkit(Toolkit):
         # Called before each tool call to pick up sources created since,
         # e.g. new threads of a bot.
         self.source_loader = source_loader
+        # Resolves a linked session id that isn't a source yet (None: not readable).
+        self.link_loader = link_loader
 
     def _load_sources(self) -> None:
         if self.source_loader is None:
@@ -201,7 +242,9 @@ class MessageHistoryToolkit(Toolkit):
         return (
             "You can read and search earlier messages with the history_* tools. "
             "Messages are shown as [source L<line> <timestamp> ROLE]; pass those "
-            "line numbers and timestamps back to page further.\n" + self._sources({})
+            "line numbers and timestamps back to page further. When someone pastes "
+            "a chat link (.../s/<chat id>#m-<line>), open it with "
+            "ergo_chat_history_open_link.\n" + self._sources({})
         )
 
     def execute_tool(self, tool_name: str, arguments: dict) -> str:
@@ -337,6 +380,46 @@ class MessageHistoryToolkit(Toolkit):
             raise ValueError(msg)
         page = visible[max(index - before, 0) : index + after + 1]
         return self._render(page, granularity, include_source=len(self.sources) > 1)
+
+    def _open_link(self, arguments: dict) -> str:
+        session_id, line = parse_link(str(arguments.get("link") or ""))
+        source_id = f"session:{session_id}"
+        if source_id not in self.sources and self.link_loader is not None:
+            source = self.link_loader(session_id)
+            if source is not None:
+                self.add_source(source)
+        if source_id not in self.sources:
+            msg = f"Chat {session_id} isn't one you can read"
+            raise ValueError(msg)
+        source = self._source({"source_id": source_id})
+        granularity = self._granularity(arguments)
+        visible = [
+            m for m in source.messages() if is_visible(m, granularity) or m.line == line
+        ]
+        header = f"{source.title} ({source_id})"
+        if line is None:
+            page = visible[-15:]
+            return f"{header}, latest messages:\n" + self._render(
+                page, granularity, include_source=False
+            )
+        before = int(2 if arguments.get("before") is None else arguments["before"])
+        after = int(5 if arguments.get("after") is None else arguments["after"])
+        index = next((i for i, m in enumerate(visible) if m.line >= line), None)
+        if index is None:
+            msg = f"{header} has no message at line {line}"
+            raise ValueError(msg)
+        page = visible[max(index - before, 0) : index + after + 1]
+        found = visible[index].line
+        note = (
+            f"linked message L{line}"
+            if found == line
+            else f"no message at L{line}; the next one is L{found}"
+        )
+        body = self._render(page, granularity, include_source=False)
+        return (
+            f"{header}, {note}:\n{body}\n"
+            f"More: ergo_chat_history_read source_id={source_id} start_line=..."
+        )
 
     def _by_date(self, arguments: dict) -> str:
         granularity = self._granularity(arguments)

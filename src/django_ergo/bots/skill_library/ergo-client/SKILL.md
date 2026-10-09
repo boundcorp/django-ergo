@@ -45,11 +45,17 @@ ergonaut-remote threads --bucket waiting        # chats waiting on you (approval
 ergonaut-remote threads --bot devbox --limit 10 # newest first, each with its status line, workers and PRs
 ergonaut-remote show <session>                  # transcript (tool calls clipped), workers, requests, PRs, approvals
 ergonaut-remote show <session> --full --limit 100
+ergonaut-remote show 'https://ergo.example.com/s/<id>#m-12'   # a linked message and the ones around it
 ```
 
 Wherever a command takes a session, you can give a full id, a unique id
-prefix of 6 or more characters, `BOT` for your main chat with it, or
-`BOT:CHAT` for a named chat.
+prefix of 6 or more characters, a chat link, `BOT` for your main chat with
+it, or `BOT:CHAT` for a named chat.
+
+When someone pastes a link to a chat message (`https://<host>/s/<chat id>#m-<line>`,
+from the time on a message in the web app), open it with `ergonaut-remote show <link>`:
+it prints the messages around that line and marks the linked one. The link's
+host picks the saved server with that URL.
 
 Thread buckets mean the same as in the sidebar:
 

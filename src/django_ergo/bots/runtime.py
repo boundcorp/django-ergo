@@ -303,6 +303,9 @@ class Bot:
                     MessageHistoryToolkit(
                         [SessionSource(ctx.session)],
                         source_loader=lambda: self.history_sources(ctx.session),
+                        link_loader=lambda session_id: self.linked_source(
+                            ctx.session, session_id
+                        ),
                     )
                 ],
                 always=True,
@@ -919,6 +922,20 @@ class Bot:
             .filter(user_id=session.user_id)
             .order_by("created_at")
         ]
+
+    def linked_source(
+        self, session: ConversationSession, session_id: str
+    ) -> SessionSource | None:
+        """A chat someone linked to (ergo_chat_history_open_link): any bot's chat
+        of the same person, which is what they can open in the web app."""
+        if session.user_id is None:
+            return None
+        linked = (
+            ConversationSession.objects.filter(pk=session_id, user_id=session.user_id)
+            .exclude(bot_name="")
+            .first()
+        )
+        return SessionSource(linked) if linked is not None else None
 
     def skillset(self, session: ConversationSession) -> SkillSet:
         """The chat's skills for this turn (see bots.skillset)."""

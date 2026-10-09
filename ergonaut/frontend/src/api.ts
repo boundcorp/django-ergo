@@ -675,9 +675,14 @@ export const api = {
   models: (bot: string) => request<BotModels>('GET', `/bots/${bot}/models`),
   setModel: (id: string, model: string) => request<Session>('POST', `/sessions/${id}/model`, { model }),
   setEffort: (id: string, effort: string) => request<Session>('POST', `/sessions/${id}/effort`, { effort }),
-  // The newest page of messages, or the page before line `before`.
-  session: (id: string, before?: number) =>
-    request<SessionDetail>('GET', `/sessions/${id}${before == null ? '' : `?before=${before}`}`),
+  // The newest page of messages, or the page before line `before` (`limit` messages, default 50).
+  session: (id: string, before?: number, limit?: number) => {
+    const query = new URLSearchParams()
+    if (before != null) query.set('before', String(before))
+    if (limit != null) query.set('limit', String(limit))
+    const qs = query.toString()
+    return request<SessionDetail>('GET', `/sessions/${id}${qs ? `?${qs}` : ''}`)
+  },
   workerLog: (sessionId: string, workerId: string) =>
     request<WorkerLog>('GET', `/sessions/${sessionId}/workers/${workerId}/log`),
   callContext: (id: string) => request<TurnContext | null>('GET', `/calls/${id}/context`),

@@ -216,6 +216,15 @@ def page_start(session: ConversationSession, before: int | None, limit: int) -> 
     return found[0] if len(found) > 1 else None
 
 
+def page_end_around(session: ConversationSession, line: int, limit: int) -> int | None:
+    """The ``before`` for a page of ``limit`` messages with ``line`` in its middle (None: the newest page)."""
+    half = limit // 2
+    later = list(
+        session.messages.filter(sequence__gt=line).order_by("sequence").values_list("sequence", flat=True)[: half + 1]
+    )
+    return later[half] if len(later) > half else None
+
+
 def calls_in(session: ConversationSession, first_line: int | None, before: int | None):
     """The session's calls that touch lines [first_line, before); calls with no lines go with the newest page."""
     calls = session.structured_calls.order_by("created_at")
@@ -1063,12 +1072,18 @@ def provisional_title(message: str) -> str:
 
 
 @router.get("/sessions/{session_id}", response=SessionDetailOut)
-def session_detail(request, session_id: str, before: int | None = None, limit: int = PAGE_MESSAGES):
-    """The session with its newest ``limit`` messages, or the ``limit`` before line ``before``."""
+def session_detail(
+    request, session_id: str, before: int | None = None, limit: int = PAGE_MESSAGES, around: int | None = None
+):
+    """The session with its newest ``limit`` messages, or the ``limit`` before line ``before``,
+    or the ``limit`` around line ``around`` (a message link, /s/<id>#m-<line>)."""
     session = visible_sessions(request.auth).filter(id=uuid_or_404(session_id)).first()
     if session is None:
         raise HttpError(404, "No such session")
-    first_line = page_start(session, before, max(1, min(limit, 500)))
+    limit = max(1, min(limit, 500))
+    if around is not None and before is None:
+        before = page_end_around(session, around, limit)
+    first_line = page_start(session, before, limit)
     messages = [
         {
             "line": m.line,

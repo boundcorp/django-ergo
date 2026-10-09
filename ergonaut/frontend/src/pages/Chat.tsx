@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { Link, useParams, useSearchParams } from 'react-router-dom'
+import { Link, useLocation, useParams, useSearchParams } from 'react-router-dom'
 import type {
   AttachmentFile,
   Call,
@@ -24,6 +24,7 @@ import { AttachmentView, replySuggestions, Transcript } from '../components/Tran
 import { ModelLink, MobileSessionBar, SuggestionChips, ThreadOptions } from '../components/ChatChrome'
 import { WorkerActivityView, WorkerPulse } from '../components/WorkerActivity'
 import { agoLong } from '../time'
+import { linkedLine, messageAnchor } from '../messageLink'
 
 /** Fold a live update into the transcript: messages replace by line, calls by id. */
 function merge(detail: SessionDetail, messages: Message[], calls: Call[]): SessionDetail {
@@ -159,7 +160,8 @@ export function Chat({ onChange }: { onChange: () => void }) {
   const atBottom = useRef(true)
   const [scrolledUp, setScrolledUp] = useState(false)
   const [unseen, setUnseen] = useState(false)
-  const seenCount = useRef(0)
+  // The newest line the reader has had in view; older pages loading in don't count as new.
+  const seenLine = useRef(-1)
   function onTranscriptScroll() {
     const el = transcript.current
     if (!el) return
@@ -311,14 +313,60 @@ export function Chat({ onChange }: { onChange: () => void }) {
     return () => events.close()
   }, [id, loaded])
 
+  // A link to one message (/s/<id>#m-<line>): load older pages back to it, then bring it into view.
+  // The transcript stays there (not following new messages) until the reader scrolls down.
+  const target = linkedLine(useLocation().hash)
+  const [reveal, setReveal] = useState<number | null>(null)
+  useEffect(() => {
+    if (target == null || !loaded) return
+    atBottom.current = false
+    let cancelled = false
+    ;(async () => {
+      let d = latest.current
+      while (d && d.has_more && d.first_line != null && d.first_line > target) {
+        const page = await api.session(id, d.first_line, 200)
+        if (cancelled) return
+        const add = (prev: SessionDetail) => ({
+          ...merge(prev, page.messages, page.calls),
+          first_line: page.first_line,
+          has_more: page.has_more,
+        })
+        d = add(d)
+        setDetail(prev => (prev ? add(prev) : prev))
+      }
+      if (!cancelled) setReveal(target)
+    })().catch(e => setError(e instanceof Error ? e.message : String(e)))
+    return () => {
+      cancelled = true
+    }
+  }, [id, loaded, target])
+  useLayoutEffect(() => {
+    const box = transcript.current
+    if (reveal == null || !box || !detail) return
+    setReveal(null)
+    // The linked message, or the first one shown after it (a folded or hidden line has no box).
+    const el = detail.messages
+      .filter(m => m.line >= reveal)
+      .map(m => document.getElementById(messageAnchor(m.line)))
+      .find(node => node && node.offsetHeight > 0)
+    if (!el) return
+    const at = el.getBoundingClientRect()
+    const view = box.getBoundingClientRect()
+    if (at.top >= view.top && at.bottom <= view.bottom) return
+    box.scrollTop += at.top - view.top - 24
+    atBottom.current = false
+    setScrolledUp(true)
+  }, [reveal, detail])
+
   useEffect(() => {
     if (skipScroll.current) {
       skipScroll.current = false
       return
     }
     if (atBottom.current) pinToBottom()
-    else if ((detail?.messages.length ?? 0) > seenCount.current) setUnseen(true)
-    seenCount.current = detail?.messages.length ?? 0
+    const newest = detail?.messages[detail.messages.length - 1]?.line ?? -1
+    if (!atBottom.current && newest > seenLine.current && seenLine.current >= 0) setUnseen(true)
+    seenLine.current = newest
   }, [detail, busy])
 
   // The list keeps its place at the bottom when its own height changes (the phone keyboard opening,
@@ -675,6 +723,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
             complete={!detail.has_more}
             sent={detail.sent}
             workers={detail.workers}
+            highlight={target}
           />
           {(detail.inbox ?? []).map(item => (
             <div key={item.id} className="mt-3 flex flex-col items-end">

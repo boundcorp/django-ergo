@@ -1,12 +1,14 @@
-import { Fragment, createContext, useContext, useMemo, useState } from 'react'
+import { Fragment, createContext, useContext, useMemo, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import type { AttachmentFile, Block, Call, Compaction, Message, SentCard, Worker } from '../api'
 import { api } from '../api'
 import { DirectoryContext } from './BotIcon'
 import Markdown from './Markdown'
 import { PrChip, ThreadCard, ThreadLink, WorkerCard, linkThreads } from './Threads'
-import { ToolCard } from './ToolCard'
+import { ToolCard, copyText } from './ToolCard'
 import { pretty, resultText } from '../toolFormat'
 import { clock } from '../time'
+import { messageAnchor, messageLink } from '../messageLink'
 import { ContextPanel, CompactionDivider } from './ContextPanel'
 
 // Tools that send work to another chat or start a worker; their calls show as cards.
@@ -20,6 +22,9 @@ type Delegated = {
   known: Map<string, string> // chat id -> title, for links in the text
 }
 const DelegatedContext = createContext<Delegated>({ cards: new Map(), workers: new Map(), known: new Map() })
+
+// The chat being shown, so each message's label can link to it.
+const SessionContext = createContext('')
 
 // Long runs of tool calls show their last few; the rest fold into a "+N more" row.
 const VISIBLE_CALLS = 3
@@ -293,11 +298,11 @@ export function replySuggestions(value: unknown): string[] {
   return Array.isArray(value) ? value.map(String) : []
 }
 
-function ReplyBubble({ reply }: { reply: Reply }) {
+function ReplyBubble({ reply, message }: { reply: Reply; message: Message }) {
   const suggestions = replySuggestions(reply.suggestions)
   return (
     <div className="max-w-[85%] rounded-card border border-stroke bg-surface px-4 py-3">
-      <RoleLabel who="Assistant" timestamp={null} />
+      <RoleLabel who="Assistant" timestamp={message.timestamp} line={message.line} />
       {reply.type === 'question' && <div className="mb-1 text-xs font-medium text-amber-600">Question</div>}
       <BotMarkdown text={reply.text ?? ''} />
       {!!suggestions.length && (
@@ -313,13 +318,44 @@ function echoesReply(text: string, replies: string[]): boolean {
   return replies.some(r => text === r || text.startsWith(`${r}\n\nSuggested replies:`))
 }
 
-// "YOU · 10:42": who wrote a message, and when.
-function RoleLabel({ who, timestamp }: { who: string; timestamp: string | null }) {
+// "YOU · 10:42": who wrote a message, and when. The time links to the message.
+function RoleLabel({ who, timestamp, line }: { who: string; timestamp: string | null; line?: number }) {
   return (
     <div className="mb-1 font-mono text-[11px] font-semibold tracking-wide text-mint uppercase">
       {who}
-      {timestamp && ` · ${clock(timestamp)}`}
+      {line == null ? timestamp && ` · ${clock(timestamp)}` : <MessageLink line={line} timestamp={timestamp} />}
     </div>
+  )
+}
+
+/** " · 10:42", linking to its message: a click copies the link (/s/<id>#m-<line>) and jumps there. */
+function MessageLink({ line, timestamp }: { line: number; timestamp: string | null }) {
+  const sessionId = useContext(SessionContext)
+  const navigate = useNavigate()
+  const [copied, setCopied] = useState(false)
+  const timer = useRef<number | undefined>(undefined)
+  if (!sessionId) return timestamp ? <> · {clock(timestamp)}</> : null
+  const anchor = messageAnchor(line)
+  return (
+    <>
+      {' · '}
+      <a
+        href={`#${anchor}`}
+        className="message-link hover:underline"
+        title="Copy a link to this message"
+        onClick={async e => {
+          e.preventDefault()
+          navigate({ hash: anchor }, { replace: true })
+          await copyText(messageLink(sessionId, line))
+          setCopied(true)
+          window.clearTimeout(timer.current)
+          timer.current = window.setTimeout(() => setCopied(false), 1500)
+        }}
+      >
+        {timestamp ? clock(timestamp) : 'link'}
+      </a>
+      {copied && <span className="ml-1.5 normal-case text-muted">Link copied</span>}
+    </>
   )
 }
 
@@ -338,7 +374,10 @@ function AttributedMessage({ message }: { message: Message }) {
   return (
     <div className="min-w-0 max-w-[85%] self-start rounded-card border border-teal/40 bg-teal-tint px-4 py-3 text-sm text-ink">
       <div className="mb-2 min-w-0 whitespace-normal break-words text-xs text-teal-700 dark:text-teal-300 [&_a]:min-w-0 [&_a]:max-w-full [&_a]:break-all">
-        <div className="font-semibold">{authorLabel(message)}</div>
+        <div className="font-semibold">
+          {authorLabel(message)}
+          <MessageLink line={message.line} timestamp={message.timestamp} />
+        </div>
         <div>
           {provenance.kind === 'forwarded' ? 'Forwarded from ' : `${provenance.kind} from `}
           <ThreadLink id={origin.session_id}>{origin.label}</ThreadLink>
@@ -461,7 +500,7 @@ function MessageView({
                 key={i}
                 className="max-w-[85%] rounded-card border border-accent/20 bg-indigo-tint px-4 py-3 text-ink"
               >
-                <RoleLabel who={authorLabel(message)} timestamp={message.timestamp} />
+                <RoleLabel who={authorLabel(message)} timestamp={message.timestamp} line={message.line} />
                 <Markdown text={block.text} />
               </div>
             ) : (
@@ -469,7 +508,7 @@ function MessageView({
                 key={i}
                 className="max-w-[85%] rounded-card border border-stroke bg-surface px-4 py-3 text-sm text-ink"
               >
-                <RoleLabel who={authorLabel(message)} timestamp={message.timestamp} />
+                <RoleLabel who={authorLabel(message)} timestamp={message.timestamp} line={message.line} />
                 <BotMarkdown text={block.text} />
               </div>
             )
@@ -497,7 +536,7 @@ function MessageView({
             if (block.name === REPLY_TOOL) {
               // A rejected reply was retried; the accepted one follows.
               if (results.get(block.id)?.is_error) return null
-              return <ReplyBubble key={i} reply={block.input as Reply} />
+              return <ReplyBubble key={i} reply={block.input as Reply} message={message} />
             }
             return (
               // Keyed by call id, not position, so an open call stays open as the chat streams and folds shift.
@@ -632,6 +671,7 @@ export function Transcript({
   workers = [],
   compactions = [],
   sessionId = '',
+  highlight = null,
 }: {
   messages: Message[]
   calls: Call[]
@@ -641,6 +681,7 @@ export function Transcript({
   complete?: boolean // every message is loaded (no older page)
   sent?: SentCard[] // requests this chat sent (thread cards)
   workers?: Worker[]
+  highlight?: number | null // the line a link points at (#m-<line>)
 }) {
   const { sessions } = useContext(DirectoryContext)
   const messages = useMemo(() => uniqueToolIds(rawMessages), [rawMessages])
@@ -680,58 +721,61 @@ export function Transcript({
       }),
   }
   return (
-    <DelegatedContext.Provider value={delegated}>
-      <FoldContext.Provider value={folds}>
-        <div className="flex flex-col">
-          {made.has(-1) && <BotFiles files={made.get(-1)!} />}
-          {messages.map(message => (
-            <div
-              key={message.line}
-              className={`empty:hidden ${toolsOnly(message) && !starts.has(message.line) ? 'mt-1.5' : 'mt-6'}`}
-            >
-              {starts.has(message.line) && <CallHeader call={starts.get(message.line)!} />}
-              <MessageView message={message} results={results} pending={pending} replies={replies} />
-              {sentFrom.has(message.line) && (
-                <div className="mt-1 flex flex-wrap items-center justify-end gap-1.5 text-xs text-muted">
-                  ↪ Sent to
-                  {sentFrom.get(message.line)!.map(card => (
-                    <ThreadLink key={card.message_id} id={card.thread.id}>
-                      {card.thread.title}
-                    </ThreadLink>
+    <SessionContext.Provider value={sessionId}>
+      <DelegatedContext.Provider value={delegated}>
+        <FoldContext.Provider value={folds}>
+          <div className="flex flex-col">
+            {made.has(-1) && <BotFiles files={made.get(-1)!} />}
+            {messages.map(message => (
+              <div
+                key={message.line}
+                id={messageAnchor(message.line)}
+                className={`empty:hidden ${toolsOnly(message) && !starts.has(message.line) ? 'mt-1.5' : 'mt-6'} ${highlight === message.line ? 'message-target' : ''}`}
+              >
+                {starts.has(message.line) && <CallHeader call={starts.get(message.line)!} />}
+                <MessageView message={message} results={results} pending={pending} replies={replies} />
+                {sentFrom.has(message.line) && (
+                  <div className="mt-1 flex flex-wrap items-center justify-end gap-1.5 text-xs text-muted">
+                    ↪ Sent to
+                    {sentFrom.get(message.line)!.map(card => (
+                      <ThreadLink key={card.message_id} id={card.thread.id}>
+                        {card.thread.title}
+                      </ThreadLink>
+                    ))}
+                  </div>
+                )}
+                {made.has(message.line) && <BotFiles files={made.get(message.line)!} />}
+                {message.role === 'assistant' &&
+                  (() => {
+                    const call = calls.find(
+                      c =>
+                        c.first_sequence != null &&
+                        c.first_sequence <= message.line &&
+                        (c.last_sequence ?? Infinity) >= message.line,
+                    )
+                    const last =
+                      call &&
+                      messages
+                        .filter(
+                          m =>
+                            m.role === 'assistant' &&
+                            m.line >= call.first_sequence! &&
+                            m.line <= (call.last_sequence ?? Infinity),
+                        )
+                        .slice(-1)[0]
+                    return call && last?.line === message.line ? <ContextPanel call={call} /> : null
+                  })()}
+                {compactions
+                  .filter(c => c.upto_sequence === message.line)
+                  .map(c => (
+                    <CompactionDivider key={c.id} compaction={c} sessionId={sessionId} />
                   ))}
-                </div>
-              )}
-              {made.has(message.line) && <BotFiles files={made.get(message.line)!} />}
-              {message.role === 'assistant' &&
-                (() => {
-                  const call = calls.find(
-                    c =>
-                      c.first_sequence != null &&
-                      c.first_sequence <= message.line &&
-                      (c.last_sequence ?? Infinity) >= message.line,
-                  )
-                  const last =
-                    call &&
-                    messages
-                      .filter(
-                        m =>
-                          m.role === 'assistant' &&
-                          m.line >= call.first_sequence! &&
-                          m.line <= (call.last_sequence ?? Infinity),
-                      )
-                      .slice(-1)[0]
-                  return call && last?.line === message.line ? <ContextPanel call={call} /> : null
-                })()}
-              {compactions
-                .filter(c => c.upto_sequence === message.line)
-                .map(c => (
-                  <CompactionDivider key={c.id} compaction={c} sessionId={sessionId} />
-                ))}
-            </div>
-          ))}
-        </div>
-      </FoldContext.Provider>
-    </DelegatedContext.Provider>
+              </div>
+            ))}
+          </div>
+        </FoldContext.Provider>
+      </DelegatedContext.Provider>
+    </SessionContext.Provider>
   )
 }
 
