@@ -131,8 +131,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # omp runs on Bun. Codex runs OpenAI models on a ChatGPT login (transport: cli).
-RUN npm install -g bun @anthropic-ai/claude-code @openai/codex @oh-my-pi/pi-coding-agent \
-    && npm cache clean --force
+# Codex is pinned: its native binary ships as an optional dependency
+# (@openai/codex-linux-x64) published minutes after the main package, and npm
+# silently skips an optional dependency it can't resolve. A build in that gap
+# baked a Codex that fails at startup, and the Docker cache kept it. Pinning
+# keeps this layer reproducible; `codex --version` fails the build if the
+# binary is missing. Bump CODEX_VERSION to upgrade.
+ARG CODEX_VERSION=0.162.1
+RUN npm install -g bun @anthropic-ai/claude-code "@openai/codex@${CODEX_VERSION}" \
+        @oh-my-pi/pi-coding-agent \
+    && npm cache clean --force \
+    && codex --version
 
 # Orca: pinned Linux AppImage, checksum verified before extraction. Extracted
 # (no FUSE needed) and exposed through its bundled CLI. Libraries are the
