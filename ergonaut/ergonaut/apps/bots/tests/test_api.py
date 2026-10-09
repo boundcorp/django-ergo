@@ -1,5 +1,6 @@
 import json
 import textwrap
+import time
 
 import pytest
 from django.contrib.auth import get_user_model
@@ -1236,7 +1237,7 @@ def test_routing_refresh_fetches_limits_and_the_page_reports_them_or_the_failure
     )
     assert client.get("/api/routing").json()["capacity"]["sync"]["state"] == "empty"
 
-    resets = 1791506400
+    resets = (int(time.time()) // 3600 + 4) * 3600  # a window that hasn't reset
     window = {"id": "5h", "resetsAt": resets * 1000}
     limits = [
         {"id": "anthropic:5h", "label": "Claude 5 Hour", "window": window, "amount": {"unit": "percent", "used": 7}}

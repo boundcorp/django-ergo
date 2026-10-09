@@ -274,7 +274,10 @@ its limits, what every tier picks now and why, and the chats and workers
 recently moved off their first choice. An admin can rewrite the priorities
 there; the saved text replaces `routing.md` for that deployment until they
 switch back. `DJANGO_ERGO["MODEL_ROUTER"]` replaces the policy with your own
-callable `(candidates, usage, rules, current)`.
+callable `(candidates, usage, rules, current)`. A plugin's `route_turn` hook
+can pick per turn instead, with the user's message in hand, and may move a
+turn to another tier; the experimental [`decisions`](bots.md#decisions)
+plugin picks the tier with an OpenAI Decisions API call.
 
 ## agents.md
 

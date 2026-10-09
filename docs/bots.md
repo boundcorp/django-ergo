@@ -1135,6 +1135,48 @@ become `[image omitted: name (id=...)]`, and the bot can look again by id.
 `ergo_attachments_unarchive` brings them back. See
 [attachments.md](attachments.md#archiving-session-files).
 
+### decisions
+
+Experimental, and off unless a bot lists it.
+
+```yaml
+- name: decisions
+  api_key_env: OPENAI_API_KEY   # an OpenAI API key; Decisions has no subscription route
+  model: gpt-6-luna             # the only Decisions model so far
+  min_confidence: 0.4           # below this, the chat's own tier is used
+  step_down_confidence: 0.8     # a tier below the chat's own needs this much
+  enforce_limits: false         # true: never offer a tier whose model is over a limit
+  context_chars: 1500           # how much of the bot's previous reply to include (0: none)
+  tiers:                        # optional: the tiers to offer and what each is for
+    small: Quick or routine messages, acknowledgements and status checks
+    medium: Everyday work with tools and ordinary code changes
+    large: Hard reasoning, design and large code changes
+  instructions: |               # optional, added to the router's instructions
+    Questions about menus are easy.
+```
+
+Runs quick [OpenAI Decisions API](https://developers.openai.com/api/docs/guides/decisions)
+calls before the bot replies. The first one is a tier router: on a chat set
+to `auto/<tier>` it asks which tier (`small`, `medium`, `large`, `xlarge` or a
+custom one in providers.yaml) the new message needs, given the bot's previous reply, each
+tier's models, each subscription's usage against its limits and the
+deployment's routing priorities (`routing.md` or the Routing page). The
+routing rules then pick the model within that tier as usual. The chat's own
+tier is the default: the router is told it's the usual one, and it's kept
+unless the router is at least `min_confidence` sure of another tier, or
+`step_down_confidence` sure of a lower one (confidence is the gap between
+the top two choices' probabilities). The router is told to judge a message
+by the work its answer takes, not its length, since "merge it" can start a
+long turn; the bot's `description` is included too. A switch is logged on
+the Routing page ("Decisions router picked the small tier (82% confident)"),
+and the turn's structured call keeps the decision in
+`metadata["routing_pick"]`. Chats on a fixed model aren't routed. When the
+call fails or is refused, the routing rules pick as usual. Each turn costs
+one Decisions call (input tokens only) and its latency, about a quarter of a
+second. Tiers only help when they differ: a tier with the same models as
+another adds nothing. Needs `openai` 3.26 or later. Other code can ask its
+own questions with `await plugin.decide(input, questions)`.
+
 ### telegram
 
 ```yaml
