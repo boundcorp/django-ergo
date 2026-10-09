@@ -319,3 +319,18 @@ def test_preview_renders_a_draft_page_with_samples_and_saves_nothing(realty):  #
     assert not bad["ok"] and "NoneType" in bad["error"]
     assert not preview("../outside.jhtml")["ok"]
     assert "ergo_bot_realty_house" not in connection.introspection.table_names()
+
+
+def test_preview_samples_keep_short_unique_fields_distinct():
+    from django.db import models
+
+    from django_ergo.management.commands.ergo_bot_preview import sample_value
+
+    currency = models.CharField(max_length=3, unique=True, default="usd")
+    currency.name = "currency"
+    values = [sample_value(currency, i, empty=False) for i in range(4)]
+    assert len(set(values)) == 4 and all(len(v) <= 3 for v in values)
+
+    plain = models.CharField(max_length=3, default="usd")
+    plain.name = "currency"
+    assert sample_value(plain, 2, empty=False) == "usd"

@@ -171,7 +171,9 @@ class MessageContextSource(ContextSource):
         lines.reverse()
         visible_total = self._visible(messages, granularity)
         first_line = lines[0][0]
-        complete = len(lines) >= visible_total
+        complete = len(lines) >= visible_total and not any(
+            "… [truncated" in text for _, text in lines
+        )
         body_lines = [text for _, text in lines]
         if not complete:
             body_lines.append(
@@ -217,6 +219,15 @@ class MessageContextSource(ContextSource):
             text = render_message(message, granularity, include_source=False)
             cost = estimate_tokens(text) + 1
             if used + cost > budget_tokens:
+                if not selected and budget_tokens > 0:
+                    suffix = "… [truncated, read it with ergo_chat_history_read]"
+                    size = max(0, budget_tokens * CHARS_PER_TOKEN - len(suffix))
+                    selected.append(
+                        (
+                            message.line,
+                            (text[:size] + suffix)[: budget_tokens * CHARS_PER_TOKEN],
+                        )
+                    )
                 break
             selected.append((message.line, text))
             used += cost

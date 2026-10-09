@@ -6,6 +6,14 @@ Celery beat for schedules and housekeeping, and each bot's long-running
 plugins such as Telegram. It lives in this repo so Ergo changes and the
 Ergonaut code that uses them land together.
 
+Each assistant reply has a **Context** button showing its first request's
+context sections, native message count, stubbed tool results, active summary,
+and the model window. Prompt tokens are the turn total from the call's usage
+fields. Sections and the active summary expand to their recorded text;
+click an “Earlier messages summarized” divider to read an older summary.
+Older replies made before context recording have no Context button. See
+[Session compaction](compaction.md) for policy keys and migration rollout.
+
 ## Which bots it runs
 
 `ERGONAUT_BOTS` (default `/bot`) is a path, or several joined with `:`.
@@ -118,18 +126,29 @@ their own sessions. Only admins can approve tools of bots with the `bash`,
 username (or 50 from one address) in 15 minutes, the web app and `/mgmt/`
 refuse logins until the window passes.
 
-- **Sidebar**: each bot with its icon and color from bot.yaml; the bot's
-  name opens your main chat (its pins sit under it), then named chats, then
-  its threads grouped by status: Pinned, Ready for review (quiet, with an
-  open pull request), Waiting on you, Working, Idle and Resolved. Idle and
-  Resolved show a few rows, then "Show more"; Resolved starts folded and its
-  rows are a dimmed title (a message reopens a resolved thread). Each thread shows the bot's one-line status from its latest reply
-  (`ChatReply.status`), led by Approval, Question or Failed when it waits on
-  you. A spinner means a turn or worker is running; a blue dot, unread
-  replies; a yellow dot, a chat waiting on you.
-- **Threads** (top of the sidebar, or ⤢ next to a bot): the same groups for
-  every bot on one page, with "N threads are waiting on you", bot filters,
-  pull request and worker chips, and a star to pin a thread to the top.
+- **Sidebar and account menu**: the sidebar keeps primary navigation: Bots,
+  their chats and threads, and Threads. History, Costs, Routing, and API keys
+  live in the account menu in the top bar, together with theme and sign-out
+  actions. The account menu is keyboard accessible; Arrow keys, Home and End
+  move between menu items, and Escape closes it.
+- **Top bar**: shows where you are: a chat shows its bot and parent thread
+  as links, then its title; bot pages show the bot name; the home page shows
+  Workspace. When queued or running workers exist, its Work control names
+  the active count and opens their status (queued or running) and reported progress. When subscription
+  providers (Claude Code or Codex CLIs) are configured, a usage control shows
+  one ring per limit window the provider reported (5-hour, weekly, a model's
+  weekly limit): the ring fills with the percentage used and turns amber
+  within 15 points of the routing skip threshold and red past it, and a tick
+  marks how much of the window has passed, so a fill ahead of the tick is
+  burning faster than the window allows. Clicking it opens the detail: the
+  tightest limit, each window's bar, reset countdown and pace, when it was
+  last reported, and links to Routing and Costs. Providers only report
+  utilization percentages, so there are no token or message counts left,
+  and a window shows "not reported" from its reset until the next usage
+  report.
+- **Narrow screens**: the sidebar becomes a modal navigation drawer. Opening
+  it moves focus into the drawer; Tab stays inside it and Escape or its
+  backdrop closes it and returns focus to Menu.
 - **Chat**: the header shows the bot's name above the thread title (both
   truncate). On a phone (640px and under) the site header hides the account
   address (it stays in the menu) and the session title, meta, actions, waiting
@@ -138,7 +157,9 @@ refuse logins until the window passes.
   send on one row. Wider screens keep the full header. The model (with a
   `providers.yaml`) shows in the composer as "Model: Sonnet 5.5"; it opens the
   thread options, where the picker is: an Options dropdown in the header, or
-  the top of the phone sheet. The page itself never scrolls: the transcript
+  the top of the phone sheet. Below the picker, an effort slider sets the
+  chat's reasoning effort (low, medium, high, xhigh; medium by default) on
+  whichever model it is on. The page itself never scrolls: the transcript
   (Markdown rendered) scrolls inside it, opening at the latest message, and
   the composer stays docked at the bottom, above the phone keyboard. The
   transcript shows tool calls you can open, images a
@@ -210,15 +231,33 @@ refuse logins until the window passes.
   cache hit, request count, and status. Below Usage, spend remains broken down
   by day, call kind (chat replies split by bot), and model. Admins see
   everyone's calls and agent sessions; others see their own.
-- **Routing**: for chats on an Auto model and Orca workers started with a
-  tier: each subscription's 5-hour and weekly windows against the limits, the
-  model each tier picks now (skipped candidates struck through, with the
-  reason), the priorities in plain words with the rules compiled from them,
-  and recent switches. Admins can edit the priorities; the text is saved in
-  the database and replaces the bot repo's `routing.md` until **Use
-  routing.md**. The data is `GET /api/routing` (`PUT` and `DELETE` to save or
-  reset the text). A turn a provider refused at its limit offers **Retry on**
-  the tier's next model in the chat, never on its own.
+- **Routing & capacity**: for chats on an Auto model and Orca workers started
+  with a tier. The top bar is the **source sync** health (healthy, stale,
+  partial, failed or no data yet), the last successful sync time, and
+  **Refresh limits**, which runs `omp usage --redact --json` now. A Celery
+  beat task runs the same sync every 5 minutes
+  (`ERGONAUT_USAGE_SYNC_SECONDS`, `0` turns it off). **Provider windows**
+  has a card per account (Claude, Codex, Grok) with its 5-hour and 7-day
+  windows: percent used, reset countdown, and a meter whose dark tick marks
+  the elapsed share of the window (fill past the tick is faster than an even
+  rate), plus any scoped window the account reports (Claude's Fable weekly,
+  Grok Build). A window the provider does not report, or that has not synced,
+  is **Unavailable**, never 0%. Values older than 15 minutes keep their number
+  but show a **Stale** badge with the time they were observed; a provider whose
+  sync failed shows the error. **Pay-per-token providers** lists API-key
+  providers separately: chats can use them when their tier lists them,
+  but coding agents use subscriptions only. **Tiers** shows every configured
+  tier (including custom names, not just `small`, `medium`, `large` and `xlarge`) and the
+  model each tier picks now; skipped candidates are struck through with the
+  reason. Tier names are non-empty single path segments, selected in chats
+  as `auto/<tier>`. The priorities in plain words, the compiled rules with
+  each window's label, and recent switches are shown below. Admins can edit
+  the priorities; the text is saved in the database and replaces the bot
+  repo's `routing.md` until **Use routing.md**. The data is
+  `GET /api/routing` (`PUT` and `DELETE` to save or reset the text;
+  `POST /api/routing/refresh` runs the usage sync and returns the page). A turn a
+  provider refused at its limit offers **Retry on** the tier's next model
+  in the chat, never on its own.
 
 Django's admin is at `/mgmt/`. The API is at `/api/` with docs at
 `/api/docs`.
@@ -255,8 +294,8 @@ path segment valid for an hour for that user and bot folder. It never serves
 
 Scripts and agents use the API with a key instead of a login:
 `Authorization: Bearer ergo_...`. A key acts as the user it belongs to, with
-the same access, and needs no CSRF token. Make one under **API keys** at the
-bottom of the sidebar (it is shown once), or on the server:
+the same access, and needs no CSRF token. Make one under **API keys** in the
+account menu (it is shown once), or on the server:
 
 ```bash
 ergonaut manage api_key create lee@example.com --name rigel-claude   # prints the key

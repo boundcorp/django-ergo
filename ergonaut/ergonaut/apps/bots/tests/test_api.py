@@ -770,6 +770,35 @@ def test_running_workers_show_in_the_chat_and_keep_it_busy(client, cook, use_bot
 
 
 @pytest.mark.django_db(transaction=True)
+def test_shell_workers_returns_only_active_workers_visible_to_the_user(client, cook, use_bots):
+    from django_ergo.conversation.models import Worker
+
+    use_bots(say("hi"))
+    root = post(client, "/api/bots/kitchen/root").json()
+    Worker.objects.create(
+        session_id=root["id"],
+        bot_name="kitchen",
+        title="Queued shell job",
+        function="orca:watch",
+        status="queued",
+    )
+    Worker.objects.create(
+        session_id=root["id"],
+        bot_name="kitchen",
+        title="Finished shell job",
+        function="orca:watch",
+        status="completed",
+    )
+
+    response = client.get("/api/workers")
+
+    assert response.status_code == 200
+    assert [(row["title"], row["status"], row["session_id"]) for row in response.json()] == [
+        ("Queued shell job", "queued", root["id"])
+    ]
+
+
+@pytest.mark.django_db(transaction=True)
 def test_browse_a_bot_tables_rows(client, cook, use_bots, monkeypatch):
     from django_ergo.bots.runtime import Bot
     from django_ergo.conversation.models import BotJob
@@ -929,6 +958,30 @@ def test_chats_pick_a_model_from_providers(client, cook, use_bots, monkeypatch):
 
 
 @pytest.mark.django_db(transaction=True)
+def test_chats_pick_an_effort_that_reaches_the_engine(client, cook, use_bots):
+    from django_ergo.bots.providers import Providers
+    from django_ergo.conversation.models import ConversationSession
+
+    use_bots(say("hi"))
+    registry = webhooks.get_registry()
+    registry.providers = Providers.from_dict({"providers": {"openai": {"type": "openai", "models": ["gpt-6-sol"]}}})
+    root = post(client, "/api/bots/kitchen/root").json()
+    assert root["effort"] == ""
+    post(client, f"/api/sessions/{root['id']}/model", {"model": "openai/gpt-6-sol"})
+
+    picked = post(client, f"/api/sessions/{root['id']}/effort", {"effort": "xhigh"})
+    assert picked.json()["effort"] == "xhigh"
+    session = ConversationSession.objects.get(id=root["id"])
+    assert registry.bots["kitchen"].engine_spec(session).config["reasoning_effort"] == "xhigh"
+    assert post(client, f"/api/sessions/{root['id']}/effort", {"effort": "ludicrous"}).status_code == 400
+
+    back = post(client, f"/api/sessions/{root['id']}/effort", {"effort": ""}).json()
+    assert back["effort"] == ""
+    session.refresh_from_db()
+    assert "reasoning_effort" not in registry.bots["kitchen"].engine_spec(session).config
+
+
+@pytest.mark.django_db(transaction=True)
 def test_a_failed_turn_explains_itself_and_can_be_resumed_or_dismissed(client, cook, use_bots):
     from django_ergo.conversation.models import StructuredCall
 
@@ -1071,6 +1124,64 @@ def test_a_resolved_thread_shows_who_resolved_it_and_why(client, cook, use_bots)
 
 
 @pytest.mark.django_db(transaction=True)
+def test_context_snapshot_compactions_and_visibility(client, cook, use_bots):
+    from django_ergo.conversation.models import ConversationCompaction, ConversationSession, StructuredCall
+
+    use_bots(say("first"), say("second"))
+    session_id = post(client, "/api/bots/kitchen/root").json()["id"]
+    first = post(client, f"/api/sessions/{session_id}/messages", {"text": "hello"}).json()
+    assert first["context"]["context_window"] == 200000
+    assert all("text" not in section for section in first["context"]["sections"])
+    context = client.get(f"/api/calls/{first['call_id']}/context").json()
+    assert context["context_window"] == 200000
+    assert context["compact_at_tokens"] == 150000
+    assert context["compaction"] is None
+    assert context["native_messages"]["first_sequence"] == 0
+    assert context["sections"][0]["title"] == "This chat"
+    assert context["sections"][0]["text"]
+    session = ConversationSession.objects.get(pk=session_id)
+    compaction = ConversationCompaction.objects.create(
+        session=session,
+        mode="context_size",
+        from_sequence=0,
+        upto_sequence=session.messages.latest("sequence").sequence,
+        message_count=session.messages.count(),
+        reason="test",
+        summary="User said hello; first reply sent",
+    )
+    second = post(client, f"/api/sessions/{session_id}/messages", {"text": "continue"}).json()
+    context = client.get(f"/api/calls/{second['call_id']}/context").json()
+    assert context["compaction"]["summary"] == compaction.summary
+    assert context["compaction"]["id"] == str(compaction.pk)
+    payload = client.get(f"/api/sessions/{session_id}").json()
+    assert payload["compactions"] == [
+        {
+            "id": str(compaction.pk),
+            "upto_sequence": compaction.upto_sequence,
+            "from_sequence": 0,
+            "message_count": compaction.message_count,
+            "reason": "test",
+            "created_at": compaction.created_at.isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+        }
+    ]
+    latest = next(c for c in payload["calls"] if c["id"] == second["call_id"])
+    assert all("text" not in s for s in latest["context"]["sections"])
+    assert latest["context"]["section_tokens"] > 0
+    assert client.get(f"/api/sessions/{session_id}/compactions/{compaction.pk}").json() == {
+        "summary": compaction.summary
+    }
+    old = StructuredCall.objects.create(user=cook, kind="old", session=session)
+    assert client.get(f"/api/calls/{old.pk}/context").json() is None
+    other = get_user_model().objects.create_user("other-context", password="pw")
+    client.force_login(other)
+    assert client.get(f"/api/calls/{second['call_id']}/context").status_code == 404
+    assert client.get(f"/api/sessions/{session_id}/compactions/{compaction.pk}").status_code == 404
+    other.is_superuser = True
+    other.save()
+    assert client.get(f"/api/calls/{second['call_id']}/context").status_code == 200
+
+
+@pytest.mark.django_db(transaction=True)
 def test_routing_page_shows_tiers_and_admins_set_the_priorities(client, cook, use_bots, monkeypatch):
     from django_ergo.bots.providers import Providers
     from django_ergo.conversation.models import RoutingText
@@ -1081,7 +1192,7 @@ def test_routing_page_shows_tiers_and_admins_set_the_priorities(client, cook, us
             "providers": {
                 "openai": {"type": "openai", "models": ["gpt-6-sol", "gpt-6-luna"]},
             },
-            "tiers": {"low": ["openai/gpt-6-luna"], "medium": ["openai/gpt-6-sol"]},
+            "tiers": {"small": ["openai/gpt-6-luna"], "medium": ["openai/gpt-6-sol"]},
         }
     )
     compiles = []
@@ -1091,7 +1202,7 @@ def test_routing_page_shows_tiers_and_admins_set_the_priorities(client, cook, us
 
     page = client.get("/api/routing").json()
     assert [(t["name"], t["picked"]) for t in page["tiers"]] == [
-        ("low", "openai/gpt-6-luna"),
+        ("small", "openai/gpt-6-luna"),
         ("medium", "openai/gpt-6-sol"),
     ]
     assert page["providers"][0]["status"] == "in_use"
@@ -1110,6 +1221,44 @@ def test_routing_page_shows_tiers_and_admins_set_the_priorities(client, cook, us
     reset = client.delete("/api/routing").json()
     assert (reset["text"], reset["text_source"]) == ("", "")
     assert not RoutingText.objects.exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_routing_refresh_fetches_limits_and_the_page_reports_them_or_the_failure(client, cook, use_bots, monkeypatch):
+    from django_ergo.bots.providers import Providers
+
+    use_bots(say("hi"))
+    webhooks.get_registry().providers = Providers.from_dict(
+        {
+            "providers": {"claude": {"type": "claude", "transport": "cli", "models": ["claude-opus-5-5"]}},
+            "tiers": {"medium": ["claude/claude-opus-5-5"]},
+        }
+    )
+    assert client.get("/api/routing").json()["capacity"]["sync"]["state"] == "empty"
+
+    resets = 1791506400
+    window = {"id": "5h", "resetsAt": resets * 1000}
+    limits = [
+        {"id": "anthropic:5h", "label": "Claude 5 Hour", "window": window, "amount": {"unit": "percent", "used": 7}}
+    ]
+    monkeypatch.setattr(
+        "django_ergo.bots.usage_sync.fetch_report",
+        lambda: {"reports": [{"provider": "anthropic", "limits": limits}]},
+    )
+    capacity = client.post("/api/routing/refresh").json()["capacity"]
+    assert capacity["sync"]["state"] == "healthy" and capacity["sync"]["succeeded_at"]
+    claude = capacity["accounts"][0]
+    assert (claude["id"], claude["providers"]) == ("anthropic", ["claude"])
+    assert [(w["key"], w["used"], w["resets_at"]) for w in claude["windows"]] == [("five_hour", 7, resets)]
+
+    def fail():
+        raise RuntimeError("omp is down")
+
+    monkeypatch.setattr("django_ergo.bots.usage_sync.fetch_report", fail)
+    page = client.post("/api/routing/refresh").json()
+    assert page["capacity"]["sync"]["state"] == "failed"
+    assert "omp is down" in page["capacity"]["sync"]["error"]
+    assert page["capacity"]["accounts"][0]["windows"][0]["used"] == 7  # the last known value stays, as stale data
 
 
 @pytest.mark.django_db(transaction=True)

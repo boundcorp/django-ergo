@@ -45,7 +45,7 @@ it. A plugin without tools (like `telegram`) is always active.
 | `orca` | `orca` | the Orca CLI: worktrees, terminals and supervised coding workers |
 | `bash` | `bash` | shell commands on the host, each approved by default |
 | `kubectl` | `kubectl` | configured-cluster Kubernetes inspection and individually approved changes with redacted previews |
-| `decisions` | | experimental: an OpenAI Decisions API call picks each turn's tier (low, medium, high) for `auto/<tier>` chats |
+| `decisions` | | experimental: an OpenAI Decisions API call picks each turn's tier (small to xlarge) for `auto/<tier>` chats |
 
 `bash`, `orca` and `kubectl` default to `root_only: true` (top-level chats
 only, never threads); `bot_management` defaults to `root_only: false`, so a

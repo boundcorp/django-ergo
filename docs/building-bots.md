@@ -62,7 +62,7 @@ providers:
     config: {reasoning_effort: medium}   # shared by its models
     models:
       - gpt-6-luna
-      - {name: gpt-6-sol, label: Sol, config: {reasoning_effort: high}}
+      - {name: gpt-6.1-sol, label: Sol, config: {reasoning_effort: high}}
   anthropic:                   # optional: only if you have an Anthropic key
     type: claude
     api_key_env: ANTHROPIC_API_KEY
@@ -73,7 +73,7 @@ OpenAI is the default engine; Anthropic (Claude) is optional and only
 needed if you list it here or set `engine.type: claude`.
 
 Models are named `provider/model`. A bot picks one with
-`engine: {config: {model: openai/gpt-6-sol}}`; a bot with no `engine` uses
+`engine: {config: {model: openai/gpt-6.1-sol}}`; a bot with no `engine` uses
 `default`. In Ergonaut, the chat header and the New thread page have a
 model picker listing every model whose provider's key is set. Any chat can
 switch to any of them, and the pick (stored on the chat as
@@ -125,7 +125,7 @@ providers:
     type: openai
     transport: cli
     config: {effort: medium}   # optional: command, codex_home, effort, timeout
-    models: [gpt-6-sol, gpt-6-luna]
+    models: [gpt-6.1-sol, gpt-6-astra, gpt-6-luna, gpt-5.6-terra]
 ```
 
 Install the CLI (`npm install -g @openai/codex`) where turns run and log it
@@ -149,29 +149,100 @@ bots only you use.
 
 Instead of a fixed model, a chat (the model picker's `auto` entries) or a
 bot (`engine: {model: auto/medium}`, or `default: auto/medium` in
-providers.yaml) can ask for a tier: `auto/low`, `auto/medium` or
-`auto/high`. Each turn then takes the first model in that tier whose
-subscription still has room. A chat keeps the model it had while that model
-qualifies, so its prompt cache isn't thrown away.
+providers.yaml) can ask for `auto/<tier>`. Each turn takes the first model
+in that tier whose subscription still has room. A chat keeps the model it
+had while that model qualifies, so its prompt cache isn't thrown away.
+
+`small`, `medium`, `large` and `xlarge` work without declaring `tiers` or
+`agents`. The older names `low` and `high` still work as aliases of `small`
+and `large`, in `auto/<tier>` and as `tiers`/`agents` keys.
+Ergo builds their defaults only from models actually listed on your
+configured `transport: cli` providers; it never adds a provider or model
+and never includes an API-key provider in a default tier. Provider names
+are yours to choose; defaults match their engine type and exact model name:
+
+| Tier | Candidate order (unlisted models are skipped) |
+| --- | --- |
+| `small` | Claude Haiku 5.5, GPT-6 Luna, Claude Haiku 4.5 |
+| `medium` | Claude Sonnet 5.5, GPT-6.1 Sol, then the `small` pair |
+| `large` | Claude Opus 5.5, GPT-6 Sol, then the `medium` pair |
+| `xlarge` | Claude Fable 5.1, GPT-6 Astra, then the `large` pair |
+
+If several subscriptions list the same model, they are tried in provider
+declaration order. A tier with no matching candidates cannot be used.
+Built-in agent choices use `claude` or `codex` at effort `medium`, whatever
+the tier. Chat tiers select models only: their engine settings still come
+from the provider, model and bot config.
+
+Effort is set apart from the model. Subscription models (Claude Code and
+Codex) run at the chat's effort, else the provider's or bot's `effort`
+config, else `medium`. A chat picks its effort (`low`, `medium`, `high` or
+`xhigh`) with the slider in its thread options; on the OpenAI API it is sent
+as `reasoning_effort`, and the Claude API engine ignores it.
+
+Tier names aren't limited to the built-in ones. You can use
+any non-empty name without `/`, for both chats and agents. These defaults
+are editable in `providers.yaml`: each declared `tiers.<name>` or
+`agents.<name>` **replaces that name's entire default list**, independently;
+other defaults stay in place. Existing explicit lists remain authoritative,
+including an older `high` (now `large`) that uses the same models as `medium`. An empty
+list disables that tier. For example:
 
 ```yaml
-tiers:                # bot chats: candidates in order of preference
-  low:    [claude/claude-sonnet-5-5, chatgpt/gpt-6-luna]
-  medium: [claude/claude-opus-5-5, chatgpt/gpt-6-sol]
-  high:   [claude/claude-opus-5-5, chatgpt/gpt-6-sol, openai/gpt-6-sol]
+default: auto/medium
+providers:
+  anthropic:
+    type: claude
+    transport: cli
+    models: [claude-haiku-5-5, claude-sonnet-5-5, claude-opus-5-5, claude-fable-5-1]
+  openai-codex:
+    type: openai
+    transport: cli
+    models: [gpt-6-luna, gpt-6.1-sol, gpt-6-sol, gpt-6-astra]
+tiers:                # chat candidates, in preference order
+  small: [openai-codex/gpt-6-luna, anthropic/claude-haiku-5-5]  # override a built-in
+  research: [anthropic/claude-fable-5-1, openai-codex/gpt-6-astra]  # custom
 agents:               # coding agents (ergo_agent_start tier=...), subscriptions only
-  medium:
-    - {agent: claude, model: claude-opus-5-5, provider: claude}
-    - {agent: codex, model: gpt-6-sol, effort: medium, provider: chatgpt}
+  large:              # explicit override; not extended or silently rewritten
+    - {agent: codex, model: gpt-6.1-sol, effort: high, provider: openai-codex}
+  research:
+    - {agent: claude, model: claude-fable-5-1, effort: high, provider: anthropic}
 routing:
   limits:             # skip a provider once a window is this % used
-    - {provider: claude, window: five_hour, max_used: 85}
-    - {provider: chatgpt, window: weekly, max_used: 80}
+    - {provider: anthropic, window: five_hour, max_used: 85}
+    - {provider: openai-codex, window: weekly, max_used: 80}
+    - {provider: anthropic, window: weekly_fable, max_used: 80}
 ```
 
-The windows come from the CLIs themselves: every Claude Code and Codex call
-records its subscription's 5-hour and weekly usage (`ProviderUsage`), and a
-call refused for its limit counts that window as used up until it resets.
+Use `engine: {model: auto/research}` in bot.yaml (or choose `auto/research`
+in the chat picker), and `tier: research` when starting an agent. Edit the
+deployment's providers.yaml to change defaults or add tiers, then restart
+Ergonaut and its bot workers so both reload the configuration.
+
+Windows come from two places, both stored in `ProviderUsage`. A periodic
+sync runs `omp usage --redact --json` (`DJANGO_ERGO["USAGE_COMMAND"]`; the
+Ergonaut worker runs it every 5 minutes, `ERGONAUT_USAGE_SYNC_SECONDS`, `0`
+turns it off) and maps each account's limits: `anthropic` feeds the CLI
+providers of type `claude` (`five_hour`, `weekly`, and scoped windows such as
+`weekly_fable`), `openai-codex` those of type `openai` (Codex reports only
+`weekly` on some plans), and accounts with no provider here (Grok:
+`weekly_credits`, `weekly_grokbuild`) are stored under their own name and only
+shown. Ergo does not assume that a subscription has a 5-hour/weekly pair. The
+CLIs also report the windows of the call they just made (Claude's
+`rate_limit_event`, Codex's `account/rateLimits`); those are merged in between
+syncs. The Fable window only applies to Fable candidates, so an exhausted
+Fable allowance can fall back to Opus on the same subscription. Missing
+utilization is unknown (`used: null`), not zero.
+
+Every stored window carries `observed_at`. Syncs and full snapshots replace
+earlier windows (removing an obsolete Codex 5-hour window); a partial Claude
+event updates only the windows it reports, so the others keep their own age.
+A window is stale once its own observation is older than 15 minutes. A failed
+fetch, or one account that errors, keeps the last values (aging, never
+refreshed) and records why in `UsageSync`. The Routing page shows
+used/remaining percentages, reset countdowns, status and each window's age.
+Windows past their reset time are not used to disqualify a model. A call
+refused for a limit counts that reported window as used up until it resets.
 A turn refused that way is never retried on its own: the chat's error offers
 **Retry on** the tier's next model with room (`POST
 /api/sessions/<id>/resume?model=...`), next to Resume, which waits for the
@@ -179,9 +250,9 @@ same model. The chat then stays on the model it moved to while that model
 qualifies.
 Without limits, a provider is skipped only at 98% used. When every candidate
 is over a limit, the one with the most room is used. Agent candidates must
-name a `transport: cli` provider, so agents never run on an API key. Note
-that a chat routed onto an API-key provider (like `openai/gpt-6-sol` above)
-bills that key.
+name a `transport: cli` provider, so agents never run on an API key.
+Explicit chat tier lists may still include a listed API-key model, but
+selecting it bills that key; built-in defaults never do.
 
 The same priorities can be written in words, in a `routing.md` next to
 providers.yaml:
@@ -190,6 +261,11 @@ providers.yaml:
 Lean on Claude: use it until its 5-hour window is 85% used.
 Keep Codex's weekly window under 80%, since it runs out first.
 ```
+
+Use configured provider **names**, not engine types, in YAML limits: for the
+example above, Codex/GPT priorities target `openai-codex`, not a separate
+`openai` API-key provider. The priorities compiler is given this distinction;
+older compiled policies are recompiled under the window-aware compiler.
 
 The first turn after the file changes compiles it into limits with one
 structured call, in the background; the `routing:` limits apply until it's
@@ -213,10 +289,11 @@ only load when needed, and facts in `kb/`.
 
 ## Chats and threads
 
-Every person gets a **main** chat with each bot. It is a window chat: each
-turn the model sees a fixed window of recent messages (`root.recent`, 15 by
-default) in a context block, plus the current turn, and reads further back
-with history tools. A main chat never needs resetting.
+Every person gets a **main** chat with each bot. It keeps its history as
+real messages, tool calls and results included, and once the context reaches
+75% of the model's window, older messages are summarized and the newest 25%
+kept verbatim (see [compaction.md](compaction.md)). The model reads further
+back with history tools. A main chat never needs resetting.
 
 Named chats are more of the same, one per person, each with its own
 instructions and skills:

@@ -5,13 +5,13 @@ a bot replies.
       - name: decisions
         api_key_env: OPENAI_API_KEY   # the default
         model: gpt-6-luna             # the only Decisions model so far
-        min_confidence: 0.3           # below this, the chat's own tier is used
+        min_confidence: 0.4           # below this, the chat's own tier is used
         step_down_confidence: 0.8     # a tier below the chat's needs this much
         enforce_limits: false         # true: never offer a tier whose pick is over a limit
         context_chars: 1500           # how much of the bot's previous reply to include
         tiers:                        # optional: the tiers to offer, with what each is for
-          low: Quick or routine messages, acknowledgements and status checks
-          high: Hard reasoning, design and large code changes
+          small: Quick or routine messages, acknowledgements and status checks
+          large: Hard reasoning, design and large code changes
         instructions: |               # optional, added to the router's instructions
           Anything about menus or recipes is easy.
 
@@ -20,7 +20,8 @@ input (a predicate, a choice from a list, or a score) about ten times faster
 than a model reply, and bills input tokens only.
 
 The first decision is a tier router. For a chat on ``auto/<tier>`` it asks,
-before each turn, which tier (low, medium or high in providers.yaml) the
+before each turn, which tier (small, medium, large, xlarge or a custom one
+in providers.yaml) the
 message needs, given the bot's previous reply, each tier's models, each
 subscription's usage and limits and the deployment's routing priorities
 (routing.md, or the text saved on Ergonaut's Routing page). The routing
@@ -47,7 +48,6 @@ from typing import Any
 
 from django_ergo.bots.plugins import BotPlugin
 from django_ergo.bots.routing import WINDOW_NAMES
-from django_ergo.bots.routing import WINDOWS
 from django_ergo.bots.routing import RoutePick
 from django_ergo.bots.routing import limit_of
 
@@ -62,12 +62,14 @@ DEFAULT_TIMEOUT = 10.0
 MAX_INPUT_CHARS = 8000
 
 TIER_PURPOSES = {
-    "low": "quick or routine messages: acknowledgements, short questions, "
-    "status checks, relaying a message, a simple go-ahead",
+    "small": "quick or routine messages: acknowledgements, short questions, "
+    "status checks, relaying a message",
     "medium": "everyday work: multi-step tasks with tools, writing, code "
     "review and ordinary code changes",
-    "high": "the hardest work: deep reasoning, design decisions, tricky or "
-    "large code changes, long autonomous runs",
+    "large": "hard work: deep reasoning, design decisions, tricky or large "
+    "code changes",
+    "xlarge": "the hardest and longest work: long autonomous runs and the "
+    "most difficult problems",
 }
 
 ROUTER_INSTRUCTIONS = """\
@@ -117,16 +119,14 @@ class DecisionsPlugin(BotPlugin):
         self.model = str(self.config.get("model") or DEFAULT_MODEL)
         self.base_url = self.config.get("base_url") or None
         self.timeout = float(self.config.get("timeout") or DEFAULT_TIMEOUT)
-        self.min_confidence = float(self.config.get("min_confidence", 0.3))
+        self.min_confidence = float(self.config.get("min_confidence", 0.4))
         self.step_down_confidence = float(self.config.get("step_down_confidence", 0.8))
         self.enforce_limits = bool(self.config.get("enforce_limits", False))
         self.context_chars = int(self.config.get("context_chars", 1500))
-        given = self.config.get("tiers") or TIER_PURPOSES
+        given = self.config.get("tiers") or {}  # empty: every tier
         if isinstance(given, list):
-            given = {t: TIER_PURPOSES.get(t, t) for t in given}
-        self.tiers = {
-            str(t): str(p or TIER_PURPOSES.get(t, t)) for t, p in given.items()
-        }
+            given = dict.fromkeys(given, "")
+        self.tiers = {str(t): str(p or "") for t, p in given.items()}
         self.instructions = str(self.config.get("instructions") or "").strip()
         self._client = None
 
@@ -257,7 +257,7 @@ class DecisionsPlugin(BotPlugin):
     def router_choices(self, request: RouteRequest) -> list[dict]:
         """The tiers as Decisions choices: what each is for, its models, and
         the model the rules would use in it."""
-        tiers = [t for t in request.tiers if t in self.tiers]
+        tiers = [t for t in request.tiers if not self.tiers or t in self.tiers]
         if self.enforce_limits:
             under = [t for t in tiers if not request.why_over(request.pick(t))]
             tiers = under or tiers
@@ -269,7 +269,9 @@ class DecisionsPlugin(BotPlugin):
     def _describe(self, tier: str, request: RouteRequest) -> str:
         pick = request.pick(tier)
         models = ", ".join(request.label(ref) for ref in request.tiers[tier])
-        parts = [f"For {self.tiers[tier]}.", f"Models: {models}."]
+        purpose = self.tiers.get(tier) or TIER_PURPOSES.get(tier, "")
+        parts = [f"For {purpose}." if purpose else f"The {tier} tier."]
+        parts.append(f"Models: {models}.")
         parts.append(f"Would use {request.label(pick)} now.")
         if why := request.why_over(pick):
             parts.append(f"Over its limit: {why}.")
@@ -296,10 +298,9 @@ class DecisionsPlugin(BotPlugin):
         for name in dict.fromkeys(ref.partition("/")[0] for ref in request.candidates):
             used = request.usage.get(name) or {}
             windows = [
-                f"{WINDOW_NAMES[w]} {used[w]:.0f}% used "
+                f"{WINDOW_NAMES.get(w, w.replace('_', ' '))} {pct:.0f}% used "
                 f"(limit {limit_of(name, w, request.rules):g}%)"
-                for w in WINDOWS
-                if w in used
+                for w, pct in used.items()
             ]
             lines.append(f"- {name}: {', '.join(windows) or 'no usage reported'}")
         return "\n".join(lines)

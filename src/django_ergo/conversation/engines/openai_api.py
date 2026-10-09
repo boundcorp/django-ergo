@@ -24,9 +24,9 @@ from django_ergo.conversation.images import prepare_messages
 from django_ergo.conversation.messages import StoredMessagesMixin
 from django_ergo.conversation.messages import add_message
 from django_ergo.conversation.messages import tool_use_block
+from django_ergo.conversation.request_context import prepare_turn_context
 from django_ergo.conversation.telemetry import record_usage
 from django_ergo.conversation.telemetry import trace_engine_call
-from django_ergo.conversation.tool_results import trim_tool_results
 from django_ergo.openai_options import DEFAULT_OPENAI_MODEL
 from django_ergo.openai_options import chat_options
 from django_ergo.tools import tool_registry
@@ -138,6 +138,7 @@ def openai_message_dicts(msg, attachments=(), *, audio_input: bool = False) -> l
             "role": "tool",
             "tool_call_id": b.tool_result_for,
             "content": b.tool_result_content or "",
+            **({"is_error": True} if b.is_error else {}),
         }
         for b in blocks
         if b.block_type == "tool_result"
@@ -164,6 +165,10 @@ class OpenAIAPIEngine(StoredMessagesMixin, Engine):
 
     def __init__(self, config: dict):
         self.config = config
+        self.context_window = int(
+            config.get("context_window")
+            or (1_000_000 if str(config.get("model", "")).endswith("[1m]") else 200_000)
+        )
         self.model = config.get("model", DEFAULT_OPENAI_MODEL)
         self.api_key = config.get("api_key")
         self.base_url = config.get("base_url")
@@ -232,15 +237,16 @@ class OpenAIAPIEngine(StoredMessagesMixin, Engine):
         """
         compaction = latest_compaction(session)
         after = compaction.upto_sequence if compaction else None
-        messages = [message for _, message in self.history_rows(session, after)]
+        rows = self.history_rows(session, after)
+        messages = [message for _, message in rows]
         if compaction:
             messages.insert(
                 0, {"role": "user", "content": render_summary_message(compaction)}
             )
         if system := session_system_prompt(session):
             messages.insert(0, {"role": "system", "content": system})
-        messages = trim_tool_results(
-            apply_native_window(session, messages), keep=self.tool_results_in_context
+        messages = prepare_turn_context(
+            self, session, apply_native_window(session, messages), rows, compaction
         )
         return prepare_messages(messages, "openai")
 
@@ -276,9 +282,6 @@ class OpenAIAPIEngine(StoredMessagesMixin, Engine):
             messages = await sync_to_async(
                 self.reconstruct_messages, thread_sensitive=True
             )(session)
-            if extra := getattr(self, "ephemeral_context", ""):
-                position = sum(1 for m in messages if m["role"] == "system")
-                messages.insert(position, {"role": "system", "content": extra})
             tools = (
                 self.get_tools_schema(session.workflow) if session.workflow else None
             )
@@ -453,8 +456,9 @@ class OpenAIAPIEngine(StoredMessagesMixin, Engine):
                 "role": "tool",
                 "tool_call_id": tool_use_id,
                 "content": memory_result(result),
+                **({"is_error": True} if is_error else {}),
             }
-            for tool_use_id, result, _is_error in results
+            for tool_use_id, result, is_error in results
         ]
 
     async def generate(

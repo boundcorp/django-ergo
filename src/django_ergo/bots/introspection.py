@@ -38,7 +38,8 @@ def ergo_root() -> Path:
 def resolve(bot: Bot, path: str) -> tuple[Path, Path]:
     """(root, file) for a path in the bot folder or, with ``ergo:``, in Ergo."""
     path = str(path or ".").strip()
-    if path.startswith(ERGO_PREFIX):
+    in_ergo = path.startswith(ERGO_PREFIX)
+    if in_ergo:
         root = ergo_root()
         path = path[len(ERGO_PREFIX) :] or "."
     else:
@@ -54,9 +55,23 @@ def resolve(bot: Bot, path: str) -> tuple[Path, Path]:
         msg = f"{path} is hidden"
         raise ValueError(msg)
     if not target.exists():
-        msg = f"{path} doesn't exist"
-        raise ValueError(msg)
+        raise ValueError(missing(root, path, in_ergo=in_ergo))
     return root, target
+
+
+def missing(root: Path, path: str, *, in_ergo: bool) -> str:
+    """Say where paths start, and suggest the path without the folder's own
+    name (a bot often writes "design/tools/x.py" for its "tools/x.py")."""
+    if in_ergo:
+        return f"ergo:{path} doesn't exist; list Ergo's source with ergo_self_files('ergo:')"
+    msg = (
+        f"{path} doesn't exist. Paths are relative to your bot folder "
+        f"({root.name}/), e.g. 'tools/x.py'"
+    )
+    first, _, rest = path.strip("/").partition("/")
+    if first == root.name and rest and (root / rest).exists():
+        msg += f"; did you mean '{rest}'?"
+    return msg
 
 
 def list_files(bot: Bot, path: str = ".") -> str:

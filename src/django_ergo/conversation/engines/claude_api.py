@@ -24,9 +24,9 @@ from django_ergo.conversation.messages import StoredMessagesMixin
 from django_ergo.conversation.messages import add_message
 from django_ergo.conversation.messages import tool_result_content  # noqa: F401
 from django_ergo.conversation.messages import tool_use_block
+from django_ergo.conversation.request_context import prepare_turn_context
 from django_ergo.conversation.telemetry import record_usage
 from django_ergo.conversation.telemetry import trace_engine_call
-from django_ergo.conversation.tool_results import trim_tool_results
 from django_ergo.tools import tool_registry
 
 if TYPE_CHECKING:
@@ -98,6 +98,10 @@ class ClaudeAPIEngine(StoredMessagesMixin, Engine):
     transport_type = "api"
 
     def __init__(self, config: dict):
+        self.context_window = int(
+            config.get("context_window")
+            or (1_000_000 if str(config.get("model", "")).endswith("[1m]") else 200_000)
+        )
         self.model = config.get("model", "claude-3-5-sonnet-20241022")
         self.api_key = config.get("api_key")
         self.base_url = config.get("base_url")
@@ -153,7 +157,8 @@ class ClaudeAPIEngine(StoredMessagesMixin, Engine):
         """
         compaction = latest_compaction(session)
         after = compaction.upto_sequence if compaction else None
-        messages = [message for _, message in self.history_rows(session, after)]
+        rows = self.history_rows(session, after)
+        messages = [message for _, message in rows]
         if compaction:
             messages.insert(
                 0,
@@ -164,8 +169,8 @@ class ClaudeAPIEngine(StoredMessagesMixin, Engine):
                     ],
                 },
             )
-        messages = trim_tool_results(
-            apply_native_window(session, messages), keep=self.tool_results_in_context
+        messages = prepare_turn_context(
+            self, session, apply_native_window(session, messages), rows, compaction
         )
         return prepare_messages(messages, "claude")
 
@@ -221,14 +226,7 @@ class ClaudeAPIEngine(StoredMessagesMixin, Engine):
                 "max_tokens": self.max_tokens,
                 "messages": without_unsigned_thinking(messages),
             }
-            system = "\n\n".join(
-                part
-                for part in (
-                    session_system_prompt(session),
-                    getattr(self, "ephemeral_context", ""),
-                )
-                if part
-            )
+            system = session_system_prompt(session)
             if system:
                 kwargs["system"] = system
             if tools:

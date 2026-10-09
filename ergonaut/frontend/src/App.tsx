@@ -1,7 +1,7 @@
-import { Component, useCallback, useEffect, useState } from 'react'
+import { Component, useCallback, useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { BrowserRouter, Link, Navigate, Route, Routes, useLocation, useParams } from 'react-router-dom'
-import type { Bot, Session, SidebarPin, User } from './api'
+import type { Bot, Session, SidebarPin, User, Worker } from './api'
 import { ApiError, api } from './api'
 import { Sidebar } from './components/Sidebar'
 import { Chat } from './pages/Chat'
@@ -15,8 +15,10 @@ import { CostsPage } from './pages/Costs'
 import { RoutingPage } from './pages/Routing'
 import { ThreadsPage } from './pages/ThreadsPage'
 import { ApiKeysPage } from './pages/ApiKeys'
-import { ThemeToggle } from './theme'
+import { AccountMenu, WorkerStatus } from './components/ShellControls'
+import { UsageStatus } from './components/UsageStatus'
 import { useVisualViewport } from './viewport'
+import { topbarLocation } from './topbar'
 import './chat-mobile.css'
 import { ago } from './time'
 import { DirectoryContext } from './components/BotIcon'
@@ -104,6 +106,8 @@ function App() {
   const [sessions, setSessions] = useState<Session[]>([])
   const [pins, setPins] = useState<Record<string, SidebarPin[]>>({})
   const [botErrors, setBotErrors] = useState<{ folder: string; name: string; error: string }[]>([])
+  const [workers, setWorkers] = useState<Worker[]>([])
+  const [workerState, setWorkerState] = useState<'loading' | 'ready' | 'error'>('loading')
 
   useEffect(() => {
     api
@@ -114,16 +118,22 @@ function App() {
   }, [])
 
   const refresh = useCallback(async () => {
-    const [b, s, p, e] = await Promise.all([
+    const [b, s, p, e, workerResult] = await Promise.all([
       api.bots(),
       api.sessions(),
       api.allPins().catch(() => ({})),
       api.botErrors().catch(() => []),
+      api.activeWorkers().then(
+        value => ({ value, error: false }),
+        () => ({ value: [] as Worker[], error: true }),
+      ),
     ])
     setBots(b)
     setSessions(s)
     setPins(p)
     setBotErrors(e)
+    setWorkers(workerResult.value)
+    setWorkerState(workerResult.error ? 'error' : 'ready')
   }, [])
 
   useEffect(() => {
@@ -150,7 +160,17 @@ function App() {
           <Route
             path="*"
             element={
-              <Shell user={user} bots={bots} sessions={sessions} pins={pins} botErrors={botErrors} refresh={refresh} />
+              <Shell
+                user={user}
+                bots={bots}
+                sessions={sessions}
+                pins={pins}
+                botErrors={botErrors}
+                workers={workers}
+                workerState={workerState}
+                refresh={refresh}
+                onSignOut={() => api.logout().finally(() => setUser(null))}
+              />
             }
           />
         </Routes>
@@ -159,39 +179,107 @@ function App() {
   )
 }
 
-// Below 640px the sidebar is a menu opened from the top bar, so pages keep the whole screen.
+// Below 640px the sidebar is a modal drawer opened from the top bar.
 function Shell({
   user,
   bots,
   sessions,
   pins,
   botErrors,
+  workers,
+  workerState,
   refresh,
+  onSignOut,
 }: {
   user: User
   bots: Bot[]
   sessions: Session[]
   pins: Record<string, SidebarPin[]>
   botErrors: { folder: string; name: string; error: string }[]
+  workers: Worker[]
+  workerState: 'loading' | 'ready' | 'error'
   refresh: () => Promise<void>
+  onSignOut: () => void
 }) {
   const [navOpen, setNavOpen] = useState(false)
+  const trigger = useRef<HTMLButtonElement>(null)
+  const drawer = useRef<HTMLElement>(null)
   const { pathname } = useLocation()
+  const { crumbs, title } = topbarLocation(pathname, sessions)
   useVisualViewport()
-  useEffect(() => setNavOpen(false), [pathname])
+
+  const closeDrawer = useCallback((restoreFocus = false) => {
+    setNavOpen(false)
+    if (restoreFocus) requestAnimationFrame(() => trigger.current?.focus())
+  }, [])
+
+  useEffect(() => closeDrawer(), [pathname, closeDrawer])
+  useEffect(() => {
+    if (!navOpen) return
+    const focusable = () => [
+      ...(drawer.current?.querySelectorAll<HTMLElement>(
+        'a, button, input, select, textarea, [tabindex]:not([tabindex="-1"])',
+      ) ?? []),
+    ]
+    focusable()[0]?.focus()
+    const keydown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        closeDrawer(true)
+        return
+      }
+      if (event.key !== 'Tab') return
+      const items = focusable()
+      if (!items.length) return
+      const first = items[0]
+      const last = items[items.length - 1]
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault()
+        first.focus()
+      }
+    }
+    document.addEventListener('keydown', keydown)
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => {
+      document.removeEventListener('keydown', keydown)
+      document.body.style.overflow = previousOverflow
+    }
+  }, [navOpen, closeDrawer])
 
   return (
     <div className="app-shell flex">
-      <aside id="app-sidebar" className="app-sidebar shrink-0" data-open={navOpen}>
-        <Sidebar user={user} bots={bots} sessions={sessions} pins={pins} botErrors={botErrors} onChange={refresh} />
+      {navOpen && (
+        <button
+          type="button"
+          className="drawer-backdrop"
+          aria-label="Close navigation menu"
+          onClick={() => closeDrawer(true)}
+        />
+      )}
+      <aside
+        ref={drawer}
+        id="app-sidebar"
+        className="app-sidebar shrink-0"
+        data-open={navOpen}
+        role={navOpen ? 'dialog' : undefined}
+        aria-modal={navOpen || undefined}
+        aria-label={navOpen ? 'Navigation menu' : undefined}
+      >
+        <Sidebar bots={bots} sessions={sessions} pins={pins} botErrors={botErrors} onChange={refresh} />
       </aside>
       <main className="app-main min-w-0 flex-1">
         <div className="app-topbar flex items-center gap-4">
           <button
+            ref={trigger}
             type="button"
             className="nav-toggle"
             aria-controls="app-sidebar"
             aria-expanded={navOpen}
+            aria-label={navOpen ? 'Close navigation menu' : 'Open navigation menu'}
             onClick={() => setNavOpen(open => !open)}
           >
             {navOpen ? 'Close' : 'Menu'}
@@ -199,13 +287,22 @@ function Shell({
           <Link to="/" className="topbar-brand">
             ERGONAUT_
           </Link>
-          <span className="topbar-crumb hidden sm:inline">Workspace</span>
-          <span className="topbar-crumb hidden sm:inline">/</span>
-          <span className="topbar-crumb hidden sm:inline">Your journey</span>
-          <span className="topbar-identity ml-auto text-sm font-semibold text-ink">
-            {user.first_name || user.username}
-          </span>
-          <ThemeToggle />
+          <nav className="topbar-path" aria-label="Breadcrumb">
+            {crumbs.map(crumb => (
+              <span key={crumb.label} className="topbar-crumb">
+                {crumb.to ? <Link to={crumb.to}>{crumb.label}</Link> : crumb.label}
+                <span aria-hidden="true"> /</span>
+              </span>
+            ))}
+            <span className="topbar-title" aria-current="page">
+              {title}
+            </span>
+          </nav>
+          <div className="ml-auto flex items-center gap-2">
+            <UsageStatus />
+            <WorkerStatus data={{ state: workerState, workers }} onRetry={() => refresh().catch(() => {})} />
+            <AccountMenu user={user} onSignOut={onSignOut} />
+          </div>
         </div>
         <div className="min-h-0 flex-1 overflow-hidden">
           <PageErrorBoundary key={pathname}>

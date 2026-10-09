@@ -26,16 +26,17 @@ engine:
   type: openai                       # or claude (optional); default is the settings engine (openai)
   config: {model: gpt-6-luna}
   api_key_env: KITCHEN_OPENAI_KEY    # read at runtime, never stored
-  # with a providers.yaml: config: {model: openai/gpt-6-sol}
+  # with a providers.yaml: config: {model: openai/gpt-6.1-sol}
   # transport: cli                   # the logged-in Claude Code or Codex CLI, no key
-root:                                # window settings for main and named chats
-  recent: 15                         # latest messages always in context
+root:                                # context budget for main and named chats
+  recent: 15                         # legacy; ignored by bots
   budget_tokens: 8000
-  granularity: conversation          # or reasoning / full
+  granularity: conversation          # legacy; ignored by bots
 orchestration: true                  # may the bot delegate at all (false: never)
 timezone: America/Los_Angeles        # default for users without a timezone
 current_time: true                   # current date and time in every turn
 tool_results_in_context: 6           # large tool results each model call keeps in full
+tool_results_tokens: 40000           # optional budget for older ones; default 20% of model window
 chats:
   main:                              # every user's main chat (always there)
     skills: [orchestration, tandoor] # loaded from the start (default: [orchestration])
@@ -47,7 +48,7 @@ threads:                             # child threads (`sessions:` also works)
   skills: []
   allow_create: true                 # may chats (this bot's or other bots') start threads of it?
   archive_after_days: 7              # archive threads idle this long (0 = never)
-  default_compaction: {mode: rolling, config: {keep_recent: 15}}   # the default; `stream` also works
+  default_compaction: {mode: context_size, config: {compact_at_tokens: 150000, keep_tokens: 50000}} # optional; window-relative defaults
 skills:
   folder: skills                     # default
   unload_after_turns: 30             # drop a loaded skill unused this many turns
@@ -114,13 +115,15 @@ when it's installed; older ones show as
 Large tool results get the same treatment: each model call carries the
 newest six (`tool_results_in_context` in bot.yaml, default
 `DJANGO_ERGO["TOOL_RESULTS_IN_CONTEXT"]`) in full, plus older ones while the
-kept results total at most 40,000 characters
-(`DJANGO_ERGO["TOOL_RESULTS_CHARS_IN_CONTEXT"]`), so a turn reading a handful
-of small files keeps them all. Older ones over 500 characters go as a stub
-naming the tool and its size, so a long turn that keeps reading a big dump
-doesn't re-send every earlier copy. The bot should note the detail it needs
-when it first reads a result, and call the tool again only if it still needs
-the detail. See [structured-calls.md](structured-calls.md).
+kept results fit a token budget: `tool_results_tokens` in bot.yaml or
+`DJANGO_ERGO["TOOL_RESULTS_TOKENS"]`, defaulting to 20% of the engine's
+context window (`DJANGO_ERGO["TOOL_RESULTS_CHARS_IN_CONTEXT"]`, when set,
+gives the budget in characters instead). Older ones over 500 characters go
+as a stub naming the tool and its size, so a long turn that keeps reading a
+big dump doesn't re-send every earlier copy; errors and images stay. The bot
+should note the detail it needs when it first reads a result, and call the
+tool again only if it still needs the detail. History keeps every result.
+See [structured-calls.md](structured-calls.md).
 
 A tool module can also define
 `toolkits(ctx) -> list[Toolkit]` for class-based toolkits.
@@ -532,9 +535,10 @@ demand (Orca: up to 50 transcript messages or 400 screen lines). `model` and `ef
 `--model`/`--effort`, except for `agent: omp`, which Orca can't give a model
 at launch: the plugin writes the worktree's `.omp/config.yml`
 (`modelRoles.default: <model>:<effort>`, git-ignored by its own folder) and omp
-picks it up. With `tier: low|medium|high` instead, the agent, model and effort
-come from the `agents` tiers in providers.yaml, on whichever subscription has
-room (see [Routing by tier](building-bots.md#routing-by-tier)). Each chat keeps one Orca mailbox terminal and Run for its
+picks it up. With `tier: <name>` instead (small, medium, large, xlarge, or a
+custom name), the agent, model and effort come from the `agents` tiers in
+providers.yaml, on whichever subscription has room (see
+[Routing by tier](building-bots.md#routing-by-tier)). Each chat keeps one Orca mailbox terminal and Run for its
 workers; if Orca no longer knows them (their worktree was removed, Orca was
 reset), starting an agent makes new ones and tries once more. If a worker's agent
 terminal exits or vanishes without a `worker_done` (Orca keeps such a dispatch
@@ -586,9 +590,14 @@ A bot with a manager has the `agents` skill:
 - `ergo_agent_start(brief, workspace, title, tier | agent/model/effort,
   manager)` asks the manager to start the agent and starts a polling Worker,
   `agent:<manager>`, with the handle as its argument. With `tier`, the agent,
-  model and effort come from providers.yaml's `agents` tiers (see
-  [Routing by tier](building-bots.md#routing-by-tier)); the manager must run
-  the picked agent. `manager` is needed only when the chat has more than one.
+  model and effort come from providers.yaml's `agents` tiers. Built-in
+  small/medium/large/xlarge lists are derived from listed subscription catalog models
+  even without YAML tier declarations; `agents.<name>` replaces that
+  name's list, and custom names are supported. Chat `tiers.<name>` overrides
+  are independent. Restart Ergonaut and its bot workers after editing
+  providers.yaml (see [Routing by tier](building-bots.md#routing-by-tier)).
+  The manager must run the picked agent. `manager` is needed only when the
+  chat has more than one.
 - Each check (`AgentManager.check`) passes new questions to the chat once,
   as a message naming the worker and question; `ergo_agent_reply(worker_id,
   question_id, answer)` answers. `done` finishes the worker with the report
@@ -603,9 +612,11 @@ A bot with a manager has the `agents` skill:
 
 Every user has a **main** chat with each bot (formerly the root session),
 plus one chat for each named chat in `chats:`, created when first opened.
-Main and named chats are window chats with history tools over every session
+Main and named chats keep native history with token compaction and history tools over every session
 the bot has with the user. A named chat adds its own `instructions` to
-agents.md and loads its own skills. Threads are child sessions of any chat.
+agents.md and loads its own skills. Threads are child sessions of any chat;
+their history tools reach the same sessions, so a thread can read the
+person's other chats with the bot.
 Instructions are rebuilt every turn, so edits to agents.md and bot.yaml reach
 existing chats. `bot.main_session(user)` and `bot.chat_session(user, name)`
 open them (`root_session` still works).
@@ -672,11 +683,13 @@ marked `requires_approval` pauses the turn (`result.approvals`), and
 `chat_reply_spec` live in `django_ergo.conversation.chat_reply` and work for
 any chat session, not only bots.
 
-The **main chat** (and each named chat) is a window chat (see
-[context-builder.md](context-builder.md)): each turn it sees the latest
-`recent` messages through a context block, sends only the current turn
-natively, and has history tools over every session this bot has with the
-user. The `orchestration` skill (loaded in main by default) has:
+The **main chat** and each named chat keep full native history, compacted
+by tokens (see [compaction.md](compaction.md)), and have history tools over
+every session this bot has with the user. `root.recent` and
+`root.granularity` still parse but do nothing for bots;
+`root.budget_tokens` sizes the per-turn context block. That block is
+prepended to the current turn's user message, preserving a stable system
+prompt for caching. The `orchestration` skill (loaded in main by default) has:
 
 | Tool | What it does |
 | --- | --- |
@@ -744,7 +757,7 @@ answer "what's going on?" without asking anyone:
   requests open in and out, and running workers
   (`orchestrator.thread_status(session)`, which UIs can use too);
 - the latest five messages of each chat as short snippets (the newest gets
-  more room; the current chat's are already in its window);
+  more room; the current chat's are in its native history);
 - open pull requests of the repos in bot.yaml's `pull_requests`, from the gh
   CLI (cached five minutes), or from `DJANGO_ERGO["OPEN_PRS"]`
   (`callable(bot) -> [{repo, number, title, draft}]`) when an app keeps its
@@ -850,8 +863,10 @@ message the parent's main chat. Each session starts with an
 
 A toolkit's `pre_seeds()` names tool calls that run before a session's first
 model call; their results are written into the history as if the model had
-made the calls (each turn for window chats, whose model calls carry only
-the current turn). `FunctionToolkit(tools, ctx, seed=["tool_name"])` seeds
+made the calls. They are seeded once per session, and again on the first
+turn after compaction folds the prior seeded call (window chats from
+`conversation.window`, whose model calls carry only the current turn, seed
+every turn). `FunctionToolkit(tools, ctx, seed=["tool_name"])` seeds
 zero-argument tools. Skills are listed in the per-turn `Skills` context
 section; the bots a chat can reach are in the "Bots and threads" context
 block instead.
@@ -1128,22 +1143,22 @@ Experimental, and off unless a bot lists it.
 - name: decisions
   api_key_env: OPENAI_API_KEY   # an OpenAI API key; Decisions has no subscription route
   model: gpt-6-luna             # the only Decisions model so far
-  min_confidence: 0.3           # below this, the chat's own tier is used
+  min_confidence: 0.4           # below this, the chat's own tier is used
   step_down_confidence: 0.8     # a tier below the chat's own needs this much
   enforce_limits: false         # true: never offer a tier whose model is over a limit
   context_chars: 1500           # how much of the bot's previous reply to include (0: none)
   tiers:                        # optional: the tiers to offer and what each is for
-    low: Quick or routine messages, acknowledgements and status checks
+    small: Quick or routine messages, acknowledgements and status checks
     medium: Everyday work with tools and ordinary code changes
-    high: Hard reasoning, design and large code changes
+    large: Hard reasoning, design and large code changes
   instructions: |               # optional, added to the router's instructions
     Questions about menus are easy.
 ```
 
 Runs quick [OpenAI Decisions API](https://developers.openai.com/api/docs/guides/decisions)
 calls before the bot replies. The first one is a tier router: on a chat set
-to `auto/<tier>` it asks which tier (`low`, `medium` or `high` in
-providers.yaml) the new message needs, given the bot's previous reply, each
+to `auto/<tier>` it asks which tier (`small`, `medium`, `large`, `xlarge` or a
+custom one in providers.yaml) the new message needs, given the bot's previous reply, each
 tier's models, each subscription's usage against its limits and the
 deployment's routing priorities (`routing.md` or the Routing page). The
 routing rules then pick the model within that tier as usual. The chat's own
@@ -1153,7 +1168,7 @@ unless the router is at least `min_confidence` sure of another tier, or
 the top two choices' probabilities). The router is told to judge a message
 by the work its answer takes, not its length, since "merge it" can start a
 long turn; the bot's `description` is included too. A switch is logged on
-the Routing page ("Decisions router picked the low tier (82% confident)"),
+the Routing page ("Decisions router picked the small tier (82% confident)"),
 and the turn's structured call keeps the decision in
 `metadata["routing_pick"]`. Chats on a fixed model aren't routed. When the
 call fails or is refused, the routing rules pick as usual. Each turn costs
@@ -1191,3 +1206,24 @@ sends a message from other code.
 The incoming message's `author` records the actual Telegram sender id and
 name when Telegram provides them, independently of the Django account used
 to route the chat. Forwarding preserves this `telegram_user` identity.
+
+### Model context windows
+
+In `providers.yaml`, a model may set `context_window` directly or inside
+`config`. For example:
+
+```yaml
+providers:
+  subscription:
+    type: claude
+    transport: cli
+    models:
+      - name: claude-opus-5-5[1m]
+        context_window: 1000000
+```
+
+When unset, `[1m]` names use 1,000,000 tokens and all other names use 200,000.
+The CLI receives the model name unchanged; display labels and price lookup
+strip the suffix. Native compaction defaults to 75% of that window and
+keeps 25% verbatim. `max_context_tokens` remains a threshold alias;
+`rolling`/`stream` map to `context_size` and ignore message-count keys.

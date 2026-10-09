@@ -159,7 +159,7 @@ def test_definition_defaults_and_inline_instructions():
     assert definition.instructions == "Hi"
     assert definition.recent == 15
     assert definition.allow_create_sessions is False
-    assert definition.default_compaction_mode == "rolling"
+    assert definition.default_compaction_mode == "context_size"
     assert definition.tool_results_in_context is None
     with pytest.raises(BotDefinitionError, match="needs a name"):
         BotDefinition.from_dict({})
@@ -203,7 +203,7 @@ def test_old_stream_compaction_mode_loads_as_rolling(tmp_path):
         "name: x\nthreads: {default_compaction: {mode: stream, config: {batch: 4}}}\n",
     )
     definition = BotDefinition.load(folder)
-    assert definition.default_compaction_mode == "rolling"
+    assert definition.default_compaction_mode == "context_size"
     assert definition.default_compaction_config == {"batch": 4}
     from django_ergo.conversation.models import CompactionMode
 
@@ -300,15 +300,16 @@ async def test_root_session_turn_uses_window_context_tools_and_hooks(tmp_path):
     root = await bot.root_session(user)
     assert await bot.root_session(user) == root  # one root per user
     assert root.bot_name == "kitchen"
-    assert root.compaction_config == {"native_history": "turn"}
+    assert root.compaction_config == {}
+    assert root.compaction_mode == "context_size"
     assert root.system_prompt == "You run the kitchen."
 
     result = await bot.ask(root, "How many eggs?")
 
     assert result.text == "You have 4 eggs."
     first, second = engine._client.calls
-    assert first["system"].startswith("You run the kitchen.\n\n<context>")
-    assert "## Plugin note\nhello" in first["system"]
+    assert first["system"] == "You run the kitchen."
+    assert "## Plugin note\nhello" in first["messages"][0]["content"][0]["text"]
     tools = [t["name"] for t in first["tools"]]
     assert {"pantry_count", "add_to_list", "ergo_chat_history_read"} <= set(tools)
     assert "helper" not in tools
@@ -342,7 +343,7 @@ async def test_approval_tool_pauses_then_resumes_with_context(tmp_path):
     assert tool_result["content"] == "shopper added 2 milk"
     # The resumed turn goes natively, not in the recent-messages block too.
     resumed = engine._client.calls[-1]
-    assert resumed["messages"][0]["content"][0]["text"] == "We need milk"
+    assert resumed["messages"][0]["content"][1]["text"] == "We need milk"
     assert "We need milk" not in resumed["system"]
 
 
@@ -361,14 +362,14 @@ async def test_threads_use_default_compaction_and_root_reads_them(tmp_path):
     other = await bot.create_session(user, compaction_mode="time")
     assert other.compaction_config == {}
     legacy = await bot.create_session(user, compaction_mode="stream")
-    assert legacy.compaction_mode == "rolling"
+    assert legacy.compaction_mode == "context_size"
     with pytest.raises(ValueError, match="compaction"):
         await bot.create_session(user, compaction_mode="weekly")
 
     engine._client.responses = [say("Tacos.")]
     await bot.ask(thread, "Plan Tuesday")
     # A thread keeps full native history and has no recent-window context.
-    assert "<context>" in engine._client.calls[-1]["system"]  # plugin note only
+    assert "<context>" in engine._client.calls[-1]["messages"][0]["content"][0]["text"]
     assert "Recent messages" not in engine._client.calls[-1]["system"]
 
     engine._client.responses = [
@@ -379,6 +380,16 @@ async def test_threads_use_default_compaction_and_root_reads_them(tmp_path):
     listing = engine._client.calls[-1]["messages"][-1]["content"][0]["content"]
     assert f"session:{thread.id}" in listing
     assert f"session:{root.id}" in listing
+
+    # A thread reads the person's other chats with the bot too.
+    engine._client.responses = [
+        claude_tool("ergo_chat_history_sources", {}),
+        say("Found it."),
+    ]
+    await bot.ask(thread, "What did we say in main?")
+    listing = engine._client.calls[-1]["messages"][-1]["content"][0]["content"]
+    assert f"session:{root.id}" in listing
+    assert f"session:{other.id}" in listing
 
     await bot.close_session(thread)
     assert ("closed", "thread") in plugin.events
@@ -513,7 +524,7 @@ async def test_a_bot_delegates_to_a_new_thread_and_gets_the_reply(
 
     # The thread answers in a turn of its own...
     await thread_messages()
-    asked = engine._client.calls[2]["messages"][0]["content"][0]["text"]
+    asked = engine._client.calls[2]["messages"][0]["content"][1]["text"]
     assert asked.startswith("[Message from kitchen · Main")
     assert asked.endswith("Plan Tuesday")
     request = await ThreadMessage.objects.aget(recipient_session=thread)
@@ -695,7 +706,7 @@ async def test_messages_reach_permitted_bots_only(tmp_path, thread_messages):
     root = await chief.root_session(user)
     await chief.ask(root, "How is the server?")
     first = engine._client.calls[0]
-    assert "### sysadmin: Keeps servers up" in first["system"]
+    assert "### sysadmin: Keeps servers up" in _turn_context(first)
     refused = engine._client.calls[2]["messages"][-1]["content"][0]
     assert refused["is_error"] and "may not message 'kitchen'" in refused["content"]
 
@@ -751,13 +762,15 @@ async def test_bot_turn_is_a_chat_reply_structured_call(tmp_path):
     first = engine._client.calls[0]
     assert "send_reply" in {t["name"] for t in first["tools"]}
     assert (
-        "Every reply to the user goes through the send_reply tool" in (first["system"])
+        "Every reply to the user goes through the send_reply tool"
+        in first["messages"][0]["content"][0]["text"]
     )
 
     answer = await bot.ask(root, "Tacos")
     assert answer.text == "Tacos it is."
     # A plain-text answer was sent back for a proper reply.
-    correction = engine._client.calls[2]["messages"][-1]["content"][0]["text"]
+    # The turn context goes first in the newest user message, here the nudge.
+    correction = engine._client.calls[2]["messages"][-1]["content"][1]["text"]
     assert "Call the send_reply tool now" in correction
     assert "Plain text is not allowed" in correction
     # The nudge is stored as Ergo's, not as the user's message.
@@ -769,7 +782,7 @@ async def test_bot_turn_is_a_chat_reply_structured_call(tmp_path):
     ]
     assert [a.get("kind") for a in nudges] == ["system"]
     # History keeps each reply as readable text, suggestions included.
-    window = engine._client.calls[1]["system"]
+    window = str(engine._client.calls[1]["messages"])
     assert "Tacos or soup?" in window
     assert "Suggested replies: Tacos / Soup" in window
 
@@ -830,7 +843,7 @@ async def test_bot_context_functions_secrets_and_current_time(tmp_path, monkeypa
 
     await bot.ask(root, "what do we need?")
 
-    system = engine._client.calls[0]["system"]
+    system = _turn_context(engine._client.calls[0])
     assert "## Shopping list" in system
     assert "- eggs (for ms-cook, re: what do we need?)" in system
     assert "## Current time" in system
@@ -900,10 +913,11 @@ async def test_skills_are_in_per_turn_context_and_load_on_demand(tmp_path):
 
     first = engine._client.calls[0]
     assert {"ergo_skills_list", "ergo_skill_load", "pantry_count"} <= _tool_names(first)
-    assert "## Skills" in first["system"]
-    assert "- meal-planning (not loaded): Plan a week of dinners" in first["system"]
-    assert "- shopping (not loaded): Shop by aisle" in first["system"]
-    assert "- pantry (loaded): Tools from pantry.py" in first["system"]
+    context = _turn_context(first)
+    assert "## Skills" in context
+    assert "- meal-planning (not loaded): Plan a week of dinners" in context
+    assert "- shopping (not loaded): Shop by aisle" in context
+    assert "- pantry (loaded): Tools from pantry.py" in context
     assert _seeded(first) == []
     assert "seeded" not in turn.call.metadata
     assert not await MessageBlock.objects.filter(
@@ -918,11 +932,17 @@ async def test_skills_are_in_per_turn_context_and_load_on_demand(tmp_path):
 
     again = await bot.ask(root, "Thanks")
     assert "seeded" not in again.call.metadata
-    assert _seeded(engine._client.calls[2]) == []
+    # Native history keeps the loaded skill, but nothing was pre-seeded.
+    assert not any(
+        part.get("tool_use_id", "").startswith("preseed_")
+        for message in engine._client.calls[2]["messages"]
+        if isinstance(message["content"], list)
+        for part in message["content"]
+    )
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_user_defined_seeded_tool_still_seeds_each_window_turn(tmp_path):
+async def test_user_defined_seeded_tool_seeds_once_and_stays_in_history(tmp_path):
     tools = TOOLS + textwrap.dedent(
         """
         @bot_tool(seed=True)
@@ -935,13 +955,15 @@ async def test_user_defined_seeded_tool_still_seeds_each_window_turn(tmp_path):
     bot, engine = make_bot(tmp_path, say("First."), say("Second."), tools=tools)
     root = await bot.root_session(user)
 
-    await bot.ask(root, "First")
-    await bot.ask(root, "Second")
+    first = await bot.ask(root, "First")
+    second = await bot.ask(root, "Second")
 
-    assert [_seeded(call) for call in engine._client.calls] == [
-        ["10 left"],
-        ["10 left"],
-    ]
+    # Main chats keep native history, so the first seed is still there.
+    assert first.call.metadata["seeded"]
+    assert "seeded" not in second.call.metadata
+    assert [
+        [r for r in _seeded(call) if r == "10 left"] for call in engine._client.calls
+    ] == [["10 left"], ["10 left"]]
 
 
 def test_bots_without_a_skills_folder_have_no_skill_tools(tmp_path):
@@ -1002,8 +1024,8 @@ async def test_nested_bot_folders_make_sub_bots_the_parent_can_message(
     first = engine._client.calls[0]
     assert "ergo_thread_send" in _tool_names(first)
     # The bots it can reach are in the "Bots and threads" context block.
-    assert "## Bots and threads\n### boundcorp (this bot)" in first["system"]
-    assert "### kitchen: Runs the kitchen" in first["system"]
+    assert "## Bots and threads\n### boundcorp (this bot)" in _turn_context(first)
+    assert "### kitchen: Runs the kitchen" in _turn_context(first)
     assert not _seeded(first) or not any(
         "Bots you can message" in t for t in _seeded(first)
     )
@@ -1133,7 +1155,7 @@ async def test_upward_reaches_only_the_parents_main_chat(tmp_path, thread_messag
     assert json.loads(sent["content"])["sent_to"] == "boundcorp · Main"
     assert (
         "### boundcorp (your parent bot: message its main chat only)"
-        in engine._client.calls[0]["system"]
+        in _turn_context(engine._client.calls[0])
     )
 
 
@@ -1200,7 +1222,7 @@ async def test_orchestrators_see_every_bots_chats_and_latest_messages(
     # The block is in an orchestrating main chat's context, not seeded.
     engine._client.responses = [say("ok")]
     await boundcorp.ask(root, "What's going on?")
-    system = engine._client.calls[-1]["system"]
+    system = _turn_context(engine._client.calls[-1])
     assert "## Bots and threads" in system
     assert "    reply: Hi from design main." in system
     assert "Resolving threads: keep the thread list" in system  # the built-in rule
@@ -1417,11 +1439,11 @@ async def test_a_kb_folder_is_the_bots_knowledge_base(tmp_path):
     root = await bot.root_session(user)
     await bot.ask(root, "What do I eat for breakfast?")
     first = engine._client.calls[0]
-    assert "Knowledge base: Kitchen" in first["system"]
-    assert "chocolate Soylent shake" in first["system"]
+    assert "Knowledge base: Kitchen" in _turn_context(first)
+    assert "chocolate Soylent shake" in _turn_context(first)
     # What it knows is always in context; the kb tools load when needed.
     assert "ergo_kb_search" not in _tool_names(first)
-    assert "- kb (not loaded):" in first["system"]
+    assert "- kb (not loaded):" in _turn_context(first)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -2374,6 +2396,10 @@ def test_introspection_reads_the_bot_folder_and_ergo_but_nothing_hidden(tmp_path
     for bad in (".env", "../other", "/etc/passwd", "ergo:../../x"):
         with pytest.raises(ValueError, match="outside|hidden|exist"):
             tools["ergo_self_read"](bad)
+    # A path that starts with the folder's own name gets a suggestion.
+    with pytest.raises(ValueError, match=r"relative to your bot folder") as err:
+        tools["ergo_self_read"](f"{folder.name}/tools/big.py")
+    assert "did you mean 'tools/big.py'?" in str(err.value)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -2397,7 +2423,7 @@ async def test_a_report_upward_gets_no_reply_unless_it_asks(tmp_path, thread_mes
     ]
     await bot.ask(thread, "Ship it")
     # The thread knows it's the thread, and who started it.
-    system = engine._client.calls[0]["system"]
+    system = _turn_context(engine._client.calls[0])
     assert (
         "## This chat\nYou are kitchen · Deploy, a thread started by kitchen · Main."
         in system
@@ -2409,7 +2435,7 @@ async def test_a_report_upward_gets_no_reply_unless_it_asks(tmp_path, thread_mes
     await thread_messages()  # main reads the report...
     report = await ThreadMessage.objects.aget(recipient_session=root)
     assert report.metadata["report"] is True and report.status == "answered"
-    assert engine._client.calls[-1]["messages"][0]["content"][0]["text"].startswith(
+    assert engine._client.calls[-1]["messages"][0]["content"][1]["text"].startswith(
         "[Report from kitchen · Deploy"
     )
     assert SENT == []  # ...and no acknowledgement starts a turn in the thread
@@ -2427,7 +2453,7 @@ async def test_a_report_upward_gets_no_reply_unless_it_asks(tmp_path, thread_mes
     await bot.ask(thread, "Next step")
     await thread_messages()
     assert len(SENT) == 1  # the answer is on its way back to the thread
-    main_system = engine._client.calls[-1]["system"]
+    main_system = _turn_context(engine._client.calls[-1])
     assert "## This chat\nYou are kitchen · Main, the main chat." in main_system
 
 
@@ -2483,7 +2509,7 @@ async def test_forward_hands_the_users_own_message_to_a_thread(
 
     engine._client.responses = [say("Merging now.")]
     await thread_messages()
-    text = engine._client.calls[-1]["messages"][0]["content"][0]["text"]
+    text = engine._client.calls[-1]["messages"][0]["content"][1]["text"]
     assert text.startswith("[Forwarded by kitchen · Main")
     assert words in text and "[Note from kitchen · Main: Deploy owns octo.]" in text
     assert "log.txt" in text
@@ -2580,7 +2606,7 @@ async def test_queued_legacy_forward_delivers_raw_text_and_structured_identity(
         await incoming.content_blocks.values_list("text", flat=True).aget()
         == message.text
     )
-    assert engine._client.calls[0]["messages"][0]["content"][0]["text"].startswith(
+    assert engine._client.calls[0]["messages"][0]["content"][1]["text"].startswith(
         "[Forwarded by kitchen · Main"
     )
     assert SENT == []
@@ -2612,7 +2638,7 @@ async def test_senderless_system_thread_messages_are_not_human_authored(
     incoming = await root.messages.aget(sequence=0)
     assert incoming.author["kind"] == "system"
     assert incoming.author["display_name"] == display_name
-    assert engine._client.calls[0]["messages"][0]["content"][0]["text"] == expected
+    assert engine._client.calls[0]["messages"][0]["content"][1]["text"] == expected
 
 
 @pytest.mark.django_db(transaction=True)
@@ -2793,6 +2819,58 @@ def test_default_skills_reach_every_folder_bot_unless_it_opts_out(tmp_path, sett
     )
     with pytest.raises(ValueError, match="skillbuilder needs bot_management"):
         Bot.load(clash)
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_main_context_metadata_and_seeds_return_after_compaction(tmp_path):
+    from django_ergo.conversation.compaction import compact_session
+    from tests.test_conversation_compaction import RecordingSummarizer
+
+    tools = TOOLS + textwrap.dedent(
+        """
+        @bot_tool(seed=True)
+        def account_limits() -> str:
+            '''Current account limits.'''
+            return "10 left"
+        """
+    )
+    user = await User.objects.acreate(username="context-seeds")
+    bot, engine = make_bot(
+        tmp_path, say("first"), say("second"), say("third"), tools=tools
+    )
+    session = await bot.main_session(user)
+    first = await bot.ask(session, "one")
+    context = first.call.metadata["context"]
+    assert context["context_window"] == 200000
+    assert context["compact_at_tokens"] == 150000
+    assert context["compaction"] is None
+    assert context["stubbed_results"] == 0
+    assert any(s["title"] == "This chat" for s in context["sections"])
+    assert "Recent messages in this conversation" not in str(context)
+    assert first.call.metadata["seeded"]
+    second = await bot.ask(session, "two")
+    assert "seeded" not in second.call.metadata
+    folded = await compact_session(
+        session, engine, keep_tokens=0, summarizer=RecordingSummarizer()
+    )
+    third = await bot.ask(session, "three")
+    assert third.call.metadata["seeded"]
+    assert third.call.metadata["context"]["compaction"]["id"] == str(folded.pk)
+    assert (
+        third.call.metadata["context"]["native_messages"]["first_sequence"]
+        > folded.upto_sequence
+    )
+
+
+def _turn_context(call):
+    return "\n".join(
+        block.get("text", "")
+        for message in call["messages"]
+        if isinstance(message.get("content"), list)
+        for block in message["content"]
+        if block.get("type") == "text"
+        and block.get("text", "").startswith("<turn-context>")
+    )
 
 
 def test_files_note_lists_files_without_a_size():

@@ -395,6 +395,14 @@ CELERY_BEAT_SCHEDULE = {
     # Pull requests bots and workers reported: their state for thread cards and chips.
     "refresh-pull-requests": {"task": "ergonaut.refresh_pull_requests", "schedule": 60},
 }
+# Subscription usage windows (omp usage): the Routing page and the router read
+# them. 0 turns the periodic sync off (the Routing page's Refresh still works).
+USAGE_SYNC_SECONDS = float(os.environ.get("ERGONAUT_USAGE_SYNC_SECONDS") or 300)
+if USAGE_SYNC_SECONDS > 0:
+    CELERY_BEAT_SCHEDULE["sync-provider-usage"] = {
+        "task": "ergonaut.sync_provider_usage",
+        "schedule": USAGE_SYNC_SECONDS,
+    }
 if float(os.environ.get("ERGONAUT_BOTS_PULL_SECONDS") or 0) > 0:
     # Merged changes to the bot repo go live without a restart.
     CELERY_BEAT_SCHEDULE["pull-bot-repos"] = {

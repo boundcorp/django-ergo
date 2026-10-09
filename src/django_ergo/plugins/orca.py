@@ -58,6 +58,7 @@ call anywhere else.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import logging
@@ -839,6 +840,40 @@ class OrcaPlugin(BotPlugin):
             "path": worktree_path or "",
         }
 
+    def capture_native_history(
+        self, ctx, agent: str, worktree: str, history=None
+    ) -> None:
+        """Ingest exact omp session bytes returned by the execution host."""
+        if agent != "omp":
+            return
+        from django_ergo.conversation.agent_history import ingest_omp_content
+        from django_ergo.conversation.agent_history import omp_session_rows
+
+        if isinstance(history, list):
+            for item in history:
+                if not isinstance(item, dict):
+                    continue
+                try:
+                    content = base64.b64decode(str(item.get("content") or ""))
+                except ValueError:
+                    continue
+                ingest_omp_content(
+                    content,
+                    source_name=str(item.get("name") or "omp.jsonl"),
+                    worker=ctx.worker,
+                    host_namespace=self.files_host or "local",
+                )
+            return
+        if self.files_host:
+            return
+        root = Path.home() / ".omp" / "agent" / "sessions"
+        for path in root.glob("**/*.jsonl"):
+            header, _ = omp_session_rows(path.read_bytes())
+            if header.get("cwd") == worktree:
+                ingest_omp_content(
+                    path.read_bytes(), source_name=path.name, worker=ctx.worker
+                )
+
     def scan_usage(self, ctx, *, settled: bool = False) -> None:
         """Best-effort usage scan; failure leaves the last stored snapshot intact."""
         handle = (ctx.worker.args or {}).get("handle") or {}
@@ -858,7 +893,13 @@ class OrcaPlugin(BotPlugin):
         script = (
             Path(__file__).with_name("agent_usage_scan.py").read_text(encoding="utf-8")
         )
-        args = [str(agent), str(worktree), since.isoformat(), until.isoformat()]
+        args = [
+            str(agent),
+            str(worktree),
+            since.isoformat(),
+            until.isoformat(),
+            "--history",
+        ]
         argv = (
             [
                 "ssh",
@@ -929,6 +970,7 @@ class OrcaPlugin(BotPlugin):
                 model__in=seen
             ).delete()
             ctx.state["usage_scanned_at"] = now
+            self.capture_native_history(ctx, agent, str(worktree), data.get("history"))
         except Exception:  # noqa: BLE001 — agent session files are best effort
             log.warning(
                 "Couldn't scan %s usage for worker %s",
@@ -1357,10 +1399,10 @@ class OrcaPlugin(BotPlugin):
                 },
                 "tier": {
                     "type": "string",
-                    "enum": ["low", "medium", "high"],
                     "description": (
-                        "Pick agent, model and effort for this tier from the subscription "
-                        "with the most room (replaces agent, model and effort)"
+                        "Pick agent, model and effort for a configured agents tier in "
+                        "providers.yaml (including custom names) from a subscription "
+                        "with room (replaces agent, model and effort)"
                     ),
                 },
             },

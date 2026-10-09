@@ -10,11 +10,9 @@ Every turn is a chat reply: a structured call against the session (see
 ``ChatReply``.
 
 Each (bot, user) pair has a main chat, plus one chat per named chat in
-bot.yaml (``chats:``). These are window chats (see ``conversation.window``):
-they send only the current turn natively, get their latest messages through
-a context block, and can read the history of every session this bot has with
-the user. Threads are child sessions that use the bot's default compaction
-mode and keep full native history. A chat's tools come from its skills (see
+bot.yaml (``chats:``). All keep native history with token-based compaction.
+Main and named chats can read every session this bot has with the user.
+Threads are child sessions using the bot's default compaction policy. A chat's tools come from its skills (see
 ``bots.skillset``), loaded when needed.
 
 Engines are built per turn from the definition. The API key is read from
@@ -43,6 +41,8 @@ from django_ergo.bots.definition import PluginSpec
 from django_ergo.bots.plugins import BotPlugin
 from django_ergo.bots.plugins import resolve_plugin_class
 from django_ergo.bots.providers import Providers
+from django_ergo.bots.routing import DEFAULT_EFFORT
+from django_ergo.bots.routing import EFFORTS
 from django_ergo.bots.routing import RoutePick
 from django_ergo.bots.routing import RouteRequest
 from django_ergo.bots.routing import ensure_compiled
@@ -80,7 +80,6 @@ from django_ergo.conversation.runtime import get_default_engine_spec
 from django_ergo.conversation.structured import StructuredCallError
 from django_ergo.conversation.structured import resume_structured_call
 from django_ergo.conversation.structured import run_structured_call
-from django_ergo.conversation.window import WINDOW_CONFIG
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -143,6 +142,22 @@ async def _maybe_await(value):
     if inspect.isawaitable(value):
         return await value
     return value
+
+
+def with_effort(config: dict, engine_type: str, transport: str, picked: str) -> None:
+    """Put a chat's reasoning effort in an engine config. Subscription CLIs
+    (Claude Code, Codex) run at ``picked``, else the configured effort, else
+    medium. The OpenAI API takes ``picked`` as ``reasoning_effort``; other
+    engines have no effort setting."""
+    if transport == "cli":
+        config["effort"] = (
+            picked
+            or config.get("effort")
+            or config.get("reasoning_effort")
+            or DEFAULT_EFFORT
+        )
+    elif engine_type == "openai" and picked:
+        config["reasoning_effort"] = picked
 
 
 class Bot:
@@ -540,6 +555,25 @@ class Bot:
             fields += ["engine_type", "transport_type", "session_id"]
         session.save(update_fields=fields)
 
+    def session_effort(self, session: ConversationSession | None) -> str:
+        """The reasoning effort picked for this chat ("" = the default)."""
+        effort = (getattr(session, "metadata", None) or {}).get("effort", "")
+        return effort if effort in EFFORTS else ""
+
+    def pick_effort(self, session: ConversationSession, effort: str) -> None:
+        """Set the reasoning effort a chat's next turns use ("" = the default,
+        medium). It applies on whichever model the chat is on. Runs the ORM."""
+        if effort and effort not in EFFORTS:
+            msg = f"Effort must be one of {', '.join(EFFORTS)}"
+            raise ValueError(msg)
+        meta = dict(session.metadata or {})
+        if effort:
+            meta["effort"] = effort
+        else:
+            meta.pop("effort", None)
+        session.metadata = meta
+        session.save(update_fields=["metadata", "updated_at"])
+
     def session_model_ref(self, picked) -> str:
         picked = str(picked or "")
         return picked if picked and self.providers.knows(picked) else ""
@@ -554,7 +588,7 @@ class Bot:
             return ""
         ensure_compiled(
             self.providers,
-            lambda: self.make_engine(model=self.resolve_ref("auto/low", None)),
+            lambda: self.make_engine(model=self.resolve_ref("auto/small", None)),
         )
         if pick is not None:
             tier = pick.tier or tier_of(ref)
@@ -698,6 +732,7 @@ class Bot:
             config.update(self.definition.engine_config)
             key_env = self.definition.api_key_env
             transport = self.definition.engine_transport or transport
+        with_effort(config, engine_type, transport, self.session_effort(session))
         if key_env:
             key = os.environ.get(key_env)
             if not key:
@@ -759,6 +794,14 @@ class Bot:
             engine = build_engine(self.engine_spec(session, model))
         if self.definition.tool_results_in_context is not None:
             engine.tool_results_in_context = self.definition.tool_results_in_context
+        config = self.engine_spec(session, model).config
+        name = str(config.get("model") or getattr(engine, "model", ""))
+        engine.context_window = int(
+            config.get("context_window")
+            or (1_000_000 if name.endswith("[1m]") else 200_000)
+        )
+        if self.definition.tool_results_tokens is not None:
+            engine.tool_results_tokens = self.definition.tool_results_tokens
         return engine
 
     # -- sessions ----------------------------------------------------------
@@ -807,8 +850,8 @@ class Bot:
             user=user,
             parent=None,
             role=role,
-            compaction_mode=CompactionMode.NONE,
-            compaction_config=dict(WINDOW_CONFIG),
+            compaction_mode=CompactionMode.CONTEXT_SIZE,
+            compaction_config={},
             metadata=metadata,
             system_prompt=self.instructions_for(name),
         )
@@ -930,9 +973,7 @@ class Bot:
 
     def history_sources(self, session: ConversationSession) -> list[SessionSource]:
         """Sessions the history tools can read: all of this user's sessions
-        with the bot for the root, otherwise just the session itself."""
-        if not self.is_root(session):
-            return [SessionSource(session)]
+        with the bot, from any chat or thread."""
         return [
             SessionSource(s)
             for s in self.sessions()

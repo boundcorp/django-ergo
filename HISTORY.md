@@ -4,6 +4,39 @@ This document tracks the major milestones and evolution of the Django Ergo proje
 
 ## Development Timeline
 
+### Small, medium, large and xlarge tiers (October 2026)
+
+- The built-in routing tiers are now `small` (Haiku 5.5, GPT-6 Luna),
+  `medium` (Sonnet 5.5, GPT-6.1 Sol), `large` (Opus 5.5, GPT-6 Sol) and the
+  new `xlarge` (Fable 5.1, GPT-6 Astra), each falling back to the pair below
+  it. Effort is no longer tied to the tier: everything runs at medium unless
+  a chat picks another level with the effort slider in its thread options
+  (`POST /api/sessions/<id>/effort`). `low` and `high`
+  stay as aliases of `small` and `large`, so existing `auto/low` chats and
+  providers.yaml keys keep working. Haiku 5.5 pricing is added.
+
+### Routing & capacity limits that stay current (October 2026)
+
+- Subscription limits were only recorded as a side effect of a Claude or Codex
+  CLI turn, and a partial event refreshed the row's timestamp while leaving
+  old windows in place, so idle providers showed stale 7-day values and no
+  Claude 5-hour window. `bots/usage_sync.py` now runs `omp usage --redact
+  --json` every 5 minutes (and on **Refresh limits**), stores each window with
+  its own `observed_at`, and records the sync's health in `UsageSync`.
+- The Routing page is redesigned as Routing & capacity: sync health, a card per
+  account with 5-hour and 7-day windows, rate ticks showing the elapsed share
+  of each window, and explicit Unavailable/Stale states.
+
+### Provider-driven routing (October 2026)
+
+- Routing uses only reported subscription windows, preserving unknown utilization,
+  reset times and status; Claude's Fable weekly allowance only gates Fable models.
+- The Routing page separates pay-per-token providers from subscriptions and shows
+  usage freshness instead of inventing 5-hour/weekly counters.
+- Built-in low/medium/high tiers use configured current-catalog subscription
+  models, with Fable/Astra high-capability defaults and medium-model fallbacks.
+  `providers.yaml` supports custom names and independent per-tier overrides.
+
 ### Initial Setup (December 2024)
 
 - **8283455** - Initial commit

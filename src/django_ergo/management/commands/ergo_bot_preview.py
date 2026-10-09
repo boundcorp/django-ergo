@@ -22,6 +22,7 @@ from types import SimpleNamespace
 
 from django.core.management import call_command
 from django.core.management.base import BaseCommand
+from django.db import IntegrityError
 from django.db import models
 from django.db import transaction
 
@@ -29,7 +30,8 @@ from django.db import transaction
 def sample_value(field: models.Field, index: int, *, empty: bool):
     if empty and field.null:
         return None
-    if field.has_default():
+    # A unique field needs a different value per row, so its default won't do.
+    if field.has_default() and not field.unique:
         default = field.get_default()
         if default is not None and not isinstance(
             field, models.DateField | models.DateTimeField
@@ -52,7 +54,10 @@ def sample_value(field: models.Field, index: int, *, empty: bool):
     for kind, value in kinds:
         if isinstance(field, kind):
             limit = getattr(field, "max_length", None)
-            return value[:limit] if isinstance(value, str) and limit else value
+            if isinstance(value, str) and limit and len(value) > limit:
+                # Short fields keep the row number, so unique ones stay distinct.
+                return f"{index + 1}{field.name}"[:limit]
+            return value
     if field.null:
         return None
     msg = f"no sample value for {field.name} ({field.get_internal_type()})"
@@ -69,11 +74,16 @@ def add_samples(table) -> int:
     ]
     optional = [f.name for f in fields if f.null]
     patterns = [set(), set(optional), set(optional[0::2]), set(optional[1::2])]
+    added = 0
     for index, empty in enumerate(patterns):
-        table.objects.create(
-            **{f.name: sample_value(f, index, empty=f.name in empty) for f in fields}
-        )
-    return len(patterns)
+        values = {f.name: sample_value(f, index, empty=f.name in empty) for f in fields}
+        try:
+            with transaction.atomic():
+                table.objects.create(**values)
+        except IntegrityError:
+            continue  # clashes with an earlier sample under a unique constraint
+        added += 1
+    return added
 
 
 class Command(BaseCommand):
@@ -138,9 +148,9 @@ class Command(BaseCommand):
                     )
                 for table in tables if samples else []:
                     if not table.objects.exists():
-                        add_samples(table)
+                        added = add_samples(table)
                         notes.append(
-                            f"{table.__name__} was empty, so it has 4 sample rows (some optional fields empty)"
+                            f"{table.__name__} was empty, so it has {added} sample rows (some optional fields empty)"
                         )
                 html = render_page(bot, path.read_text(), title=path.stem)
                 result = {"ok": True, "preview": page_text(html, 3000), "notes": notes}

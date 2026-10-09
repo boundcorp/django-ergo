@@ -62,6 +62,7 @@ def test_a_pinned_dashboard_renders_sandboxed_with_its_tables_and_widgets(client
     assert response.status_code == 200
     # The page can't use the viewer's login or call the API itself.
     assert response["Content-Security-Policy"].startswith("sandbox allow-scripts")
+    assert "allow-modals" in response["Content-Security-Policy"]  # blocks.button(confirm=...)
     assert "allow-same-origin" not in response["Content-Security-Policy"]
     html = response.content.decode()
     assert "Meta ads, last 7 days" in html

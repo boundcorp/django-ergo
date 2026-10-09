@@ -2,6 +2,7 @@ import uuid
 
 from django.contrib.auth import get_user_model
 from django.db import models
+from django.db.models import Q
 
 from django_ergo.mixins import TimeStampedMixin
 from django_ergo.models import Workflow
@@ -34,9 +35,12 @@ class CompactionMode(models.TextChoices):
 
 # Deprecated: rolling compaction used to be called "stream". The old member
 # name still resolves, and stored or configured "stream" values are read as
-# "rolling" (see normalize_compaction_mode).
+# "context_size" (see normalize_compaction_mode).
 CompactionMode.STREAM = CompactionMode.ROLLING
-LEGACY_COMPACTION_MODES = {"stream": CompactionMode.ROLLING}
+LEGACY_COMPACTION_MODES = {
+    "stream": CompactionMode.CONTEXT_SIZE,
+    "rolling": CompactionMode.CONTEXT_SIZE,
+}
 
 
 def normalize_compaction_mode(mode: str | None) -> str | None:
@@ -642,6 +646,248 @@ class AgentUsage(TimeStampedMixin):
         return f"{self.agent} {self.model} for {self.worker_id or self.session_id}"
 
 
+class AgentSession(TimeStampedMixin):
+    """A durable native CLI session, independent of the Worker that observed it."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    owner = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="agent_sessions",
+    )
+    cli = models.CharField(max_length=20)
+    host_namespace = models.CharField(max_length=200)
+    profile_namespace = models.CharField(max_length=200, default="default")
+    native_session_id = models.CharField(max_length=500)
+    parent_session = models.ForeignKey(
+        "self",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="child_sessions",
+    )
+    initial_cwd = models.TextField(blank=True, default="")
+    native_started_at = models.DateTimeField(null=True, blank=True)
+    native_ended_at = models.DateTimeField(null=True, blank=True)
+    first_observed_at = models.DateTimeField(null=True, blank=True)
+    last_observed_at = models.DateTimeField(null=True, blank=True)
+    state = models.CharField(max_length=20, default="unknown")
+    transcript_completeness = models.CharField(max_length=20, default="partial")
+    usage_completeness = models.CharField(max_length=20, default="partial")
+    parser_version = models.CharField(max_length=100, blank=True, default="")
+    source_manifest = models.JSONField(default=dict, blank=True)
+    collection_status = models.CharField(max_length=20, default="pending")
+    collection_error = models.TextField(blank=True, default="")
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=[
+                    "host_namespace",
+                    "cli",
+                    "profile_namespace",
+                    "native_session_id",
+                ],
+                name="agent_session_native_identity",
+            )
+        ]
+
+
+class AgentRunSession(TimeStampedMixin):
+    """A launch segment attached to a native session; sessions can be resumed."""
+
+    worker = models.ForeignKey(
+        Worker,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="agent_run_sessions",
+    )
+    session = models.ForeignKey(
+        AgentSession, on_delete=models.CASCADE, related_name="run_sessions"
+    )
+    launch_key = models.CharField(max_length=200)
+    segment_key = models.CharField(max_length=200)
+    attached_at = models.DateTimeField(null=True, blank=True)
+    detached_at = models.DateTimeField(null=True, blank=True)
+    relation = models.CharField(max_length=20, default="primary")
+    match_confidence = models.CharField(max_length=20, default="exact")
+    evidence = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["session", "launch_key", "segment_key"],
+                name="agent_run_session_segment",
+            )
+        ]
+
+
+class AgentWorkspaceObservation(TimeStampedMixin):
+    """An immutable cwd/git identity observation made while a session ran."""
+
+    session = models.ForeignKey(
+        AgentSession, on_delete=models.CASCADE, related_name="workspace_observations"
+    )
+    run_session = models.ForeignKey(
+        AgentRunSession,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="workspace_observations",
+    )
+    source_event_key = models.CharField(max_length=500)
+    observed_at = models.DateTimeField(null=True, blank=True)
+    observed_cwd = models.TextField()
+    evidence_kind = models.CharField(max_length=40)
+    host_namespace = models.CharField(max_length=200, default="local")
+    repo_root = models.TextField(blank=True, default="")
+    worktree_path = models.TextField(blank=True, default="")
+    common_git_dir = models.TextField(blank=True, default="")
+    canonical_remote = models.TextField(blank=True, default="")
+    remotes = models.JSONField(default=list, blank=True)
+    branch = models.CharField(max_length=500, blank=True, default="")
+    head = models.CharField(max_length=100, blank=True, default="")
+    project_key = models.CharField(max_length=100, db_index=True)
+    confidence = models.CharField(max_length=20, default="unknown")
+    resolution_error = models.TextField(blank=True, default="")
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["session", "source_event_key"],
+                name="agent_workspace_observation_source",
+            )
+        ]
+
+
+class AgentUsageEvent(TimeStampedMixin):
+    """One idempotent native request/delta contribution to the usage ledger."""
+
+    session = models.ForeignKey(
+        AgentSession, on_delete=models.CASCADE, related_name="usage_events"
+    )
+    run_session = models.ForeignKey(
+        AgentRunSession,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="usage_events",
+    )
+    workspace_observation = models.ForeignKey(
+        AgentWorkspaceObservation,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="usage_events",
+    )
+    source_event_key = models.CharField(max_length=500)
+    native_request_id = models.CharField(max_length=500, blank=True, default="")
+    occurred_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    observed_at = models.DateTimeField(auto_now_add=True)
+    provider = models.CharField(max_length=100, blank=True, default="")
+    model = models.CharField(max_length=200, blank=True, default="")
+    input_tokens = models.PositiveBigIntegerField(null=True, blank=True)
+    cache_write_tokens = models.PositiveBigIntegerField(null=True, blank=True)
+    cache_read_tokens = models.PositiveBigIntegerField(null=True, blank=True)
+    output_tokens = models.PositiveBigIntegerField(null=True, blank=True)
+    reasoning_tokens = models.PositiveBigIntegerField(null=True, blank=True)
+    requests = models.PositiveIntegerField(null=True, blank=True)
+    billing_mode = models.CharField(max_length=20, default="unknown")
+    reported_usd = models.DecimalField(
+        max_digits=16, decimal_places=8, null=True, blank=True
+    )
+    estimated_usd = models.DecimalField(
+        max_digits=16, decimal_places=8, null=True, blank=True
+    )
+    cost_status = models.CharField(max_length=20, default="missing")
+    price_snapshot = models.JSONField(default=dict, blank=True)
+    source_semantics = models.CharField(max_length=100, blank=True, default="")
+    parser_version = models.CharField(max_length=100, blank=True, default="")
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["session", "source_event_key"],
+                name="agent_usage_event_source",
+            ),
+            models.UniqueConstraint(
+                fields=["session", "native_request_id"],
+                condition=~Q(native_request_id=""),
+                name="agent_usage_event_native_request",
+            ),
+        ]
+        indexes = [models.Index(fields=["session", "occurred_at"])]
+
+
+class AgentTranscriptArtifact(TimeStampedMixin):
+    """Private immutable bytes and their verified object-storage metadata."""
+
+    session = models.ForeignKey(
+        AgentSession, on_delete=models.CASCADE, related_name="transcript_artifacts"
+    )
+    source_key = models.CharField(max_length=500)
+    storage_key = models.TextField()
+    format = models.CharField(max_length=40, default="native-jsonl")
+    classification = models.CharField(max_length=20)
+    redaction_version = models.CharField(max_length=40, blank=True, default="")
+    sha256 = models.CharField(max_length=64)
+    byte_count = models.PositiveBigIntegerField(default=0)
+    compression = models.CharField(max_length=20, blank=True, default="")
+    encryption_key_version = models.CharField(max_length=100, blank=True, default="")
+    upload_state = models.CharField(max_length=20, default="pending")
+    error = models.TextField(blank=True, default="")
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["session", "source_key", "classification"],
+                name="agent_transcript_artifact_source",
+            )
+        ]
+
+
+class AgentSessionThreadLink(TimeStampedMixin):
+    """A session-to-chat/worker link, deliberately not a ConversationAttachment."""
+
+    session = models.ForeignKey(
+        AgentSession, on_delete=models.CASCADE, related_name="thread_links"
+    )
+    conversation = models.ForeignKey(
+        ConversationSession,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="agent_session_links",
+    )
+    worker = models.ForeignKey(
+        Worker,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="agent_session_links",
+    )
+    owner = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="agent_session_links",
+    )
+    title = models.CharField(max_length=200, blank=True, default="")
+    summary = models.TextField(blank=True, default="")
+    status = models.CharField(max_length=20, default="active")
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["session", "conversation"], name="agent_session_thread_link"
+            )
+        ]
+
+
 class KBUsageMode(models.TextChoices):
     READ = "read", "Read"
     WRITE = "write", "Write"
@@ -680,6 +926,23 @@ class ProviderUsage(models.Model):
 
     def __str__(self):
         return self.provider
+
+
+class UsageSync(models.Model):
+    """State of the last fetch of the subscription limits (``omp usage``): one
+    row (pk 1). The windows themselves live in :class:`ProviderUsage`; this says
+    when they were last fetched, whether that worked and why not (see
+    bots.usage_sync). Times are epoch seconds, like the windows' own."""
+
+    attempted_at = models.FloatField(null=True, blank=True)
+    succeeded_at = models.FloatField(null=True, blank=True)
+    running_since = models.FloatField(null=True, blank=True)
+    error = models.TextField(blank=True, default="")
+    # {omp provider: {"error": str, "fetched_at": epoch | None, "targets": [ProviderUsage.provider]}}
+    accounts = models.JSONField(default=dict, blank=True)
+
+    def __str__(self):
+        return f"usage sync {self.succeeded_at or 'never'}"
 
 
 class RoutingPolicy(models.Model):

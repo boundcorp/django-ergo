@@ -115,6 +115,7 @@ class SessionOut(Schema):
     attention: bool = False  # the latest turn waits on the user (approval, question, failure)
     engine_type: str = ""  # openai or claude: the engine its latest turn ran on
     model: str = ""  # the provider/model picked for this chat ("" = the bot's default)
+    effort: str = ""  # reasoning effort picked for this chat ("" = the default, medium)
     # Set when a bot resolved the thread (ergo_thread_resolve): who, and a one-line summary.
     resolved_by: str = ""
     resolved_summary: str = ""
@@ -171,6 +172,7 @@ class CallOut(Schema):
     error_summary: str = ""
     error_hint: str = ""
     dismissed: bool = False  # the user dismissed this failure
+    context: dict | None = None
 
 
 class CallDetailOut(CallOut):
@@ -183,6 +185,7 @@ class SessionDetailOut(Schema):
     session: SessionOut
     messages: list[MessageOut]
     calls: list[CallOut]
+    compactions: list[dict] = []
     requests: list[RequestOut] = []
     workers: list[dict] = []
     # Messages sent while a turn runs that the model hasn't taken yet (they can be unsent).
@@ -349,6 +352,10 @@ class ModelIn(Schema):
     model: str = ""  # "" goes back to the bot's default
 
 
+class EffortIn(Schema):
+    effort: str = ""  # low, medium, high or xhigh; "" goes back to the default (medium)
+
+
 class MessageIn(Schema):
     text: str
     # Files already uploaded to the session, to send with this message so
@@ -366,6 +373,7 @@ class ApprovalIn(Schema):
 
 
 class TurnOut(Schema):
+    context: dict | None = None
     session_id: str
     call_id: str | None
     type: str | None
@@ -590,6 +598,7 @@ def session_out(session: ConversationSession) -> dict:
         "attention": needs_attention(session),
         "engine_type": session.engine_type,
         "model": session.model,
+        "effort": meta.get("effort") or "",
         **resolution(session),
         **threads_by_status(session),
     }
@@ -813,6 +822,20 @@ RESUME_NOTE = (
 )
 
 
+def context_out(call: StructuredCall) -> dict | None:
+    context = (call.metadata or {}).get("context")
+    if context is None:
+        return None
+    return {
+        **{key: value for key, value in context.items() if key != "sections"},
+        "sections": [
+            {key: value for key, value in section.items() if key != "text"} for section in context.get("sections", [])
+        ],
+        "section_tokens": sum(section.get("tokens", 0) for section in context.get("sections", [])),
+        "prompt_tokens": call.input_tokens + call.cache_creation_input_tokens + call.cache_read_input_tokens,
+    }
+
+
 def call_out(call: StructuredCall, detail: bool = False) -> dict:
     out = {
         "id": str(call.id),
@@ -827,6 +850,7 @@ def call_out(call: StructuredCall, detail: bool = False) -> dict:
         "input_tokens": call.input_tokens,
         "output_tokens": call.output_tokens,
         "turns_used": call.turns_used,
+        "context": context_out(call),
         "pending_approvals": (call.metadata or {}).get("pending_approvals", []),
         "tools": (call.metadata or {}).get("tools", []),
         "created_at": call.created_at,
@@ -897,6 +921,19 @@ def list_sessions(request, bot: str = "", q: str = "", status: str = ""):
         qs = qs.filter(Q(messages__content_blocks__text__icontains=q) | Q(metadata__title__icontains=q)).distinct()
     rows = attach_prs(list(with_open_counts(qs).order_by("-updated_at")[:200]))
     return [session_out(s) for s in rows]
+
+
+@router.get("/workers")
+def list_active_workers(request):
+    """Every queued or running worker visible to this user, for the shell status control."""
+    from django_ergo.bots.workers import describe
+
+    rows = (
+        Worker.objects.filter(session__in=visible_sessions(request.auth), status__in=["queued", "running"])
+        .select_related("session")
+        .order_by("created_at")
+    )
+    return [{**describe(worker), "session_id": str(worker.session_id)} for worker in rows]
 
 
 @router.post("/bots/{bot}/root", response=SessionOut)
@@ -1051,6 +1088,17 @@ def session_detail(request, session_id: str, before: int | None = None, limit: i
         "session": session_out(session),
         "messages": messages,
         "calls": calls,
+        "compactions": [
+            {
+                "id": str(c.pk),
+                "upto_sequence": c.upto_sequence,
+                "from_sequence": c.from_sequence,
+                "message_count": c.message_count,
+                "reason": c.reason,
+                "created_at": c.created_at,
+            }
+            for c in session.compactions.all()
+        ],
         "requests": requests_out(session),
         "workers": workers_out(session),
         "inbox": [
@@ -1092,6 +1140,34 @@ def call_detail(request, call_id: str):
     return call_out(call, detail=True)
 
 
+@router.get("/calls/{call_id}/context")
+def call_context(request, call_id: str):
+    detail = call_detail(request, call_id)
+    context = (detail["metadata"] or {}).get("context")
+    if context is None:
+        return None
+    context = {**context, "prompt_tokens": (detail["context"] or {}).get("prompt_tokens", 0)}
+    active = context.get("compaction")
+    if active:
+        call = StructuredCall.objects.get(pk=call_id)
+        compaction = (
+            call.session.compactions.filter(pk=uuid_or_404(active["id"], "compaction")).first()
+            if call.session
+            else None
+        )
+        context["compaction"] = {**active, "summary": compaction.summary if compaction else ""}
+    return context
+
+
+@router.get("/sessions/{session_id}/compactions/{compaction_id}")
+def compaction_detail(request, session_id: str, compaction_id: str):
+    session = visible_sessions(request.auth).filter(pk=uuid_or_404(session_id)).first()
+    compaction = session and session.compactions.filter(pk=uuid_or_404(compaction_id, "compaction")).first()
+    if compaction is None:
+        raise HttpError(404, "No such compaction")
+    return {"summary": compaction.summary}
+
+
 def latest_turn(session: ConversationSession, *, queued: bool) -> dict:
     """The session's newest chat reply as a TurnOut (empty while it's queued)."""
     call = None if queued else session.structured_calls.order_by("-created_at").first()
@@ -1099,6 +1175,7 @@ def latest_turn(session: ConversationSession, *, queued: bool) -> dict:
     return {
         "session_id": str(session.id),
         "call_id": str(call.id) if call else None,
+        "context": context_out(call) if call else None,
         "type": response.get("type") if isinstance(response, dict) else None,
         "text": response.get("text", "") if isinstance(response, dict) else "",
         "suggestions": response.get("suggestions", []) if isinstance(response, dict) else [],
@@ -1240,7 +1317,7 @@ def models_out(bot: Bot) -> dict:
             {
                 "id": m.id,
                 "name": m.name,
-                "label": m.label or m.name,
+                "label": (m.label or m.name).removesuffix("[1m]"),
                 "provider": m.provider,
                 "engine_type": bot.providers.providers[m.provider].type,
                 "available": bot.providers.providers[m.provider].available,
@@ -1256,7 +1333,8 @@ def models_out(bot: Bot) -> dict:
                 "engine_type": "auto",
                 "available": True,
             }
-            for tier in bot.providers.routing.tiers
+            for tier, refs in bot.providers.routing.tiers.items()
+            if refs
         ],
     }
 
@@ -1305,7 +1383,7 @@ def compile_routing_text(retry: bool = False) -> None:
         return
     ensure_compiled(
         bots.providers,
-        lambda: bot.make_engine(model=bot.resolve_ref("auto/low", None)),
+        lambda: bot.make_engine(model=bot.resolve_ref("auto/small", None)),
         retry=retry,
     )
 
@@ -1314,6 +1392,17 @@ def compile_routing_text(retry: bool = False) -> None:
 def routing(request):
     """The Routing page: subscriptions against their limits, what each tier
     picks now, the routing text and recent switches (shared by every bot)."""
+    return routing_out(request)
+
+
+@router.post("/routing/refresh")
+def refresh_routing(request):
+    """Fetch every subscription's limits now (the Refresh button) and return the
+    Routing page. A fetch that is already running isn't started twice; a failed
+    one is reported in ``capacity.sync``, not as an error here."""
+    from django_ergo.bots.usage_sync import sync_usage
+
+    sync_usage(registry().providers)
     return routing_out(request)
 
 
@@ -1358,6 +1447,19 @@ async def set_session_model(request, session_id: str, data: ModelIn):
     if model:
         check_model(found, model)
     await sync_to_async(found.pick_model)(session, model)
+    return await sync_to_async(session_out)(session)
+
+
+@router.post("/sessions/{session_id}/effort", response=SessionOut)
+async def set_session_effort(request, session_id: str, data: EffortIn):
+    """Pick the reasoning effort this chat's next turns use, on whichever model
+    it is on. Engines without an effort setting ignore it."""
+    session = await get_session(request, session_id)
+    found = get_bot(session.bot_name, request.auth)
+    try:
+        await sync_to_async(found.pick_effort)(session, data.effort.strip())
+    except ValueError as exc:
+        raise HttpError(400, str(exc)) from exc
     return await sync_to_async(session_out)(session)
 
 
@@ -1554,7 +1656,9 @@ def upload_attachment(request, session_id: str, file: UploadedFile = File(...)):
 
 
 # Bot-written pages run scripts, so they get their own opaque origin: no cookies, no app API.
-SANDBOXED = "sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox allow-downloads"
+# allow-modals: blocks.button(confirm=...) asks with window.confirm, which the sandbox
+# otherwise answers "no" without showing anything.
+SANDBOXED = "sandbox allow-scripts allow-modals allow-popups allow-popups-to-escape-sandbox allow-downloads"
 
 
 def page_response(html: str, *, sandboxed: bool) -> HttpResponse:

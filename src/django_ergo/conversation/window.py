@@ -12,6 +12,9 @@ sources), so it can page further back or ask for more detail when the
 recent window isn't enough. Context size stays flat however long the chat
 runs.
 
+Bots use native history with token compaction; this window policy remains
+available for library callers.
+
 (Formerly ``StreamChat`` in ``conversation.stream``; that import still works.)
 
     chat = await WindowChat.create(user=user, recent=15)

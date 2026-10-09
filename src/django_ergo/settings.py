@@ -41,12 +41,14 @@ DEFAULTS = {
     "IMAGES_IN_CONTEXT": 2,
     "IMAGE_MAX_SIDE": 1024,
     # Large tool results (over 500 chars) each model call carries in full: the
-    # latest N, plus older ones while the kept results total at most
-    # TOOL_RESULTS_CHARS_IN_CONTEXT chars; older ones become a short stub
-    # naming the tool, so a long turn doesn't re-send every earlier dump.
-    # Stored history keeps them all. None = send every result in full.
+    # latest N, plus older ones while the kept results fit the budget:
+    # TOOL_RESULTS_TOKENS, else TOOL_RESULTS_CHARS_IN_CONTEXT chars, else 20%
+    # of the engine's context window. Older ones become a short stub naming
+    # the tool, so a long turn doesn't re-send every earlier dump. Stored
+    # history keeps them all. None = send every result in full.
     "TOOL_RESULTS_IN_CONTEXT": 6,
-    "TOOL_RESULTS_CHARS_IN_CONTEXT": 40_000,
+    "TOOL_RESULTS_TOKENS": None,
+    "TOOL_RESULTS_CHARS_IN_CONTEXT": None,
     # Extra bot plugins by short name: {"name": "dotted.path.PluginClass"}.
     "BOT_PLUGINS": {},
     # Skills from Ergo's skill library (bots/skill_library) that every bot
@@ -57,6 +59,10 @@ DEFAULTS = {
     # Dotted path to a callable (candidates, usage, rules, current) -> candidate
     # that replaces the built-in tier routing policy (django_ergo.bots.routing).
     "MODEL_ROUTER": None,
+    # The command that prints every subscription's usage windows as JSON
+    # (bots.usage_sync), run by the Routing page's Refresh and the periodic sync.
+    "USAGE_COMMAND": "omp usage --redact --json",
+    "USAGE_TIMEOUT": 90,
     # Callable(message_id) that delivers a bot-to-bot thread message, e.g. by
     # queueing a Celery task. None = deliver in a background thread.
     "THREAD_MESSAGE_RUNNER": None,
@@ -85,6 +91,9 @@ DEFAULTS = {
     "BOT_WEBHOOK_BASE_URL": None,
     # Extra or overriding model prices, USD per million tokens (see pricing.py)
     "MODEL_PRICES": {},
+    # Django storage alias for private native coding-agent history. Configure an
+    # S3/Garage-backed alias in deployment; default_storage is local in tests.
+    "AGENT_HISTORY_STORAGE": "default",
     # Telemetry Configuration
     "TELEMETRY_ENABLED": False,
     "TELEMETRY_SERVICE_NAME": "django-ergo",

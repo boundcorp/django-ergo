@@ -33,6 +33,7 @@ export type Session = {
   attention?: boolean // the latest turn waits on the user: an approval, a question, or a failure
   engine_type?: string // openai or claude: the engine its latest turn ran on
   model?: string // the provider/model picked for this chat ('' = the bot's default)
+  effort?: string // reasoning effort picked for this chat ('' = the default, medium)
   resolved_by?: string // the bot that resolved this thread (ergo_thread_resolve)
   resolved_summary?: string // its one-line summary of how the thread ended
   // Threads by status (components/ThreadList): the group, why it waits, the bot's status line.
@@ -47,7 +48,15 @@ export type Session = {
 }
 
 // The Routing page (GET /api/routing): what auto/<tier> chats and Orca tiers pick now.
-export type RoutingWindow = { used: number | null; resets_at: number | null; limit: number }
+export type RoutingWindow = {
+  label?: string
+  used: number | null
+  remaining?: number | null
+  resets_at: number | null
+  status?: string | null
+  model?: string | null
+  limit: number
+}
 
 export type RoutingProvider = {
   name: string
@@ -57,8 +66,9 @@ export type RoutingProvider = {
   api_key_env: string
   status: 'in_use' | 'standby' | 'skipped' | 'api_key' | 'unavailable'
   reason: string
-  windows: { five_hour: RoutingWindow; weekly: RoutingWindow }
+  windows: Record<string, RoutingWindow>
   reported_at: string | null
+  stale?: boolean
 }
 
 export type RoutingCandidate = {
@@ -82,8 +92,44 @@ export type RoutingSwitch = {
   reason: string
 }
 
+// One window of a subscription account, as the sync last stored it (see django_ergo.bots.usage_sync).
+export type CapacityWindow = {
+  key: string
+  label: string
+  period: string // '5h', '7d', or '' for any other length
+  used: number | null // null = unavailable, never 0
+  remaining: number | null
+  resets_at: number | null
+  status: string
+  model: string
+  observed_at: number | null
+  stale: boolean
+}
+
+export type CapacityAccount = {
+  id: string
+  name: string
+  providers: string[]
+  status: 'ok' | 'stale' | 'error' | 'unavailable'
+  error: string
+  fetched_at: string | null
+  windows: CapacityWindow[]
+}
+
+export type CapacitySync = {
+  state: 'empty' | 'healthy' | 'stale' | 'partial' | 'failed'
+  running: boolean
+  attempted_at: string | null
+  succeeded_at: string | null
+  error: string
+  stale_after: number
+}
+
+export type Capacity = { sync: CapacitySync; accounts: CapacityAccount[] }
+
 export type Routing = {
   providers: RoutingProvider[]
+  capacity: Capacity
   tiers: { name: string; picked: string; chats: number; candidates: RoutingCandidate[] }[]
   agents: { name: string; candidates: RoutingCandidate[] }[]
   text: string
@@ -161,9 +207,31 @@ export type Message = {
 
 export type Approval = { id: string; name: string; input: unknown; preview?: string; preview_error?: boolean }
 
+export type Compaction = {
+  id: string
+  upto_sequence: number
+  from_sequence?: number
+  message_count: number
+  reason: string
+  created_at: string
+  summary?: string
+}
+
+export type TurnContext = {
+  sections: { title: string; tokens: number; complete: boolean; text?: string }[]
+  compaction: Compaction | null
+  native_messages: { count: number; first_sequence: number | null }
+  stubbed_results: number
+  estimated_tokens: number
+  context_window: number
+  compact_at_tokens: number | null
+  prompt_tokens: number
+}
+
 export type Call = {
   id: string
   kind: string
+  context?: TurnContext | null
   // in_progress, awaiting_approval, completed, failed, turn_limited or stopped
   status: string
   request: string
@@ -475,6 +543,7 @@ export type Worker = {
 }
 
 export type SessionDetail = {
+  compactions?: Compaction[]
   session: Session
   messages: Message[]
   calls: Call[]
@@ -490,6 +559,7 @@ export type SessionDetail = {
 }
 
 export type Turn = {
+  context?: TurnContext | null
   session_id: string
   call_id: string | null
   type: string | null
@@ -587,6 +657,7 @@ export const api = {
     request<Costs>('GET', `/costs?days=${days}${bot ? `&bot=${encodeURIComponent(bot)}` : ''}`),
   version: () => request<Version>('GET', '/version'),
   routing: () => request<Routing>('GET', '/routing'),
+  refreshRouting: () => request<Routing>('POST', '/routing/refresh'),
   saveRouting: (text: string) => request<Routing>('PUT', '/routing', { text }),
   resetRouting: () => request<Routing>('DELETE', '/routing'),
   kbs: (bot: string) => request<KB[]>('GET', `/bots/${bot}/kbs`),
@@ -596,17 +667,22 @@ export const api = {
     const query = new URLSearchParams(Object.entries(params).filter(([, v]) => v) as [string, string][])
     return request<Session[]>('GET', `/sessions?${query}`)
   },
+  activeWorkers: () => request<Worker[]>('GET', '/workers'),
   openRoot: (bot: string) => request<Session>('POST', `/bots/${bot}/root`),
   openChat: (bot: string, name: string) => request<Session>('POST', `/bots/${bot}/chats/${name}`),
   newThread: (bot: string, title: string, message = '', model = '') =>
     request<Session>('POST', `/bots/${bot}/threads`, { title, message, model }),
   models: (bot: string) => request<BotModels>('GET', `/bots/${bot}/models`),
   setModel: (id: string, model: string) => request<Session>('POST', `/sessions/${id}/model`, { model }),
+  setEffort: (id: string, effort: string) => request<Session>('POST', `/sessions/${id}/effort`, { effort }),
   // The newest page of messages, or the page before line `before`.
   session: (id: string, before?: number) =>
     request<SessionDetail>('GET', `/sessions/${id}${before == null ? '' : `?before=${before}`}`),
   workerLog: (sessionId: string, workerId: string) =>
     request<WorkerLog>('GET', `/sessions/${sessionId}/workers/${workerId}/log`),
+  callContext: (id: string) => request<TurnContext | null>('GET', `/calls/${id}/context`),
+  compaction: (sessionId: string, id: string) =>
+    request<{ summary: string }>('GET', `/sessions/${sessionId}/compactions/${id}`),
   call: (id: string) =>
     request<Call & { system_prompt: string; transcript: unknown[]; metadata: unknown }>('GET', `/calls/${id}`),
   // While a turn runs, "send" steers it and "interrupt" stops it and starts a new one.

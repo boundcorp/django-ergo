@@ -21,7 +21,7 @@ export function setTheme(theme: Theme) {
 }
 
 export function useTheme(): Theme {
-  const [theme, set] = useState(currentTheme)
+  const [theme, set] = useState<Theme>(() => (typeof document === 'undefined' ? 'dark' : currentTheme()))
   useEffect(() => {
     const update = () => set(currentTheme())
     window.addEventListener(EVENT, update)
@@ -35,13 +35,14 @@ export function themed(url: string, theme: Theme): string {
   return `${url}${url.includes('?') ? '&' : '?'}theme=${theme}`
 }
 
-export function ThemeToggle() {
+export function ThemeToggle({ menuItem = false }: { menuItem?: boolean }) {
   const theme = useTheme()
   const next = theme === 'dark' ? 'light' : 'dark'
   return (
     <button
       className="theme-toggle rounded-md border border-zinc-300 px-2 py-0.5 text-xs text-zinc-600 hover:text-zinc-900 dark:border-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-100"
       title={`Switch to ${next} mode`}
+      role={menuItem ? 'menuitem' : undefined}
       aria-label={`Switch to ${next} mode`}
       onClick={() => setTheme(next)}
     >
