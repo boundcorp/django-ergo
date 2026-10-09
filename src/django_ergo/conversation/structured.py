@@ -88,6 +88,7 @@ from django_ergo.conversation.images import prepare_messages
 from django_ergo.conversation.images import storable_ref
 from django_ergo.conversation.messages import OUTPUT_ACCEPTED
 from django_ergo.conversation.messages import anext_sequence
+from django_ergo.conversation.messages import text_to_tool_use
 from django_ergo.conversation.models import ConversationSession
 from django_ergo.conversation.models import StructuredCall
 from django_ergo.conversation.models import StructuredCallStatus
@@ -220,6 +221,10 @@ class StructuredCallSpec:
     wrap_up: bool = False
     max_tokens: int | None = None
     output_tool_name: str = DEFAULT_OUTPUT_TOOL
+    # Turns a plain-text answer into the output tool's arguments. With it, a
+    # response that ends in text instead of the output tool is taken as the
+    # answer (stored as that tool call) rather than nudged to call the tool.
+    text_output: Callable[[str], dict] | None = None
 
     def all_pre_seeds(self) -> list[PreSeedCall]:
         """The spec's own pre-seeds, then each toolkit's."""
@@ -504,6 +509,14 @@ class _MemoryTranscript:
     async def append_response_text(self, text: str) -> None:
         self.messages.append(self.engine.assistant_text_message(text))
 
+    async def answer_as_tool_call(self, call_id: str, name: str, arguments: dict):
+        self.messages.pop()
+        self.messages.extend(
+            self.engine.tool_exchange_messages(
+                [SeededToolCall(call_id, name, arguments, OUTPUT_ACCEPTED)]
+            )
+        )
+
     async def respond(self, tool_schemas, note: str = "") -> list[EngineResponse]:
         system = "\n\n".join(p for p in (self.call.system_prompt, note) if p)
         # Older large tool results become stubs and image references become
@@ -575,6 +588,10 @@ class _SessionTranscript:
 
     async def append_response_text(self, text: str) -> None:
         await self.engine.append_assistant_text(self.session, text)
+
+    async def answer_as_tool_call(self, call_id: str, name: str, arguments: dict):
+        await text_to_tool_use(self.session, call_id, name, arguments)
+        await self.append_tool_results([(call_id, OUTPUT_ACCEPTED, False)])
 
     async def respond(self, tool_schemas, note: str = "") -> list[EngineResponse]:
         # The spec's instructions (and any note) apply to this turn only.
@@ -881,14 +898,7 @@ async def _run_loop(run: _Run) -> StructuredCallResult:  # noqa: C901, PLR0912, 
                 finished = True
                 break
             if run.submit is not None and run.submit.accepted is not None:
-                parsed = run.submit.accepted
-                call.response = parsed.model_dump(mode="json")
-                call.status = StructuredCallStatus.COMPLETED
-                # Close the turn with the response as plain assistant text,
-                # so chat turns and history readers see the answer.
-                await transcript.append_response_text(
-                    _response_text(parsed, call.response)
-                )
+                parsed = await _accept(run)
                 finished = True
                 break
             continue
@@ -900,6 +910,11 @@ async def _run_loop(run: _Run) -> StructuredCallResult:  # noqa: C901, PLR0912, 
                 "raise StructuredCallSpec.max_tokens",
                 "model",
             )
+            finished = True
+            break
+
+        if run.submit is not None and await _take_text_answer(run, events):
+            parsed = await _accept(run)
             finished = True
             break
 
@@ -932,6 +947,40 @@ async def _run_loop(run: _Run) -> StructuredCallResult:  # noqa: C901, PLR0912, 
     call.error = call.error[:MAX_ERROR_CHARS]
     await call.asave()
     return StructuredCallResult(call=call, parsed=parsed, approvals=approvals)
+
+
+async def _accept(run: _Run) -> BaseModel:
+    """Complete the call with the output tool's accepted answer."""
+    call, parsed = run.call, run.submit.accepted
+    call.response = parsed.model_dump(mode="json")
+    call.status = StructuredCallStatus.COMPLETED
+    # Close the turn with the response as plain assistant text, so chat turns
+    # and history readers see the answer.
+    await run.transcript.append_response_text(_response_text(parsed, call.response))
+    return parsed
+
+
+async def _take_text_answer(run: _Run, events) -> bool:
+    """Take a plain-text answer as the output tool's call, if the spec allows it.
+
+    Models sometimes answer in plain text even when every turn in their
+    history ends with the output tool. Nudging them costs a second model call
+    for the same answer; storing the text as the tool call keeps the history
+    showing only answers given through the tool.
+    """
+    spec = run.spec
+    text = "".join(e.text for e in events if e.event_type == "text" and e.text)
+    if spec.text_output is None or not text.strip():
+        return False
+    arguments = spec.text_output(text.strip())
+    try:
+        run.submit.execute_tool(spec.output_tool_name, arguments)
+    except ValueError:
+        return False
+    call_id = f"ergo_text_{uuid.uuid4().hex[:16]}"
+    await run.transcript.answer_as_tool_call(call_id, spec.output_tool_name, arguments)
+    run.call.metadata = {**(run.call.metadata or {}), "text_answer": True}
+    return True
 
 
 def _engine(spec: StructuredCallSpec, engine_spec: EngineSpec | None) -> Engine:

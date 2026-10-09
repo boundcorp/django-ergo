@@ -130,6 +130,29 @@ def tool_use_block(call_id: str, name: str, arguments: dict) -> dict:
     }
 
 
+async def text_to_tool_use(session, call_id: str, name: str, arguments: dict):
+    """Turn the session's last assistant message from text into a call to ``name``.
+
+    For a plain-text answer taken as the output tool's arguments: stored as
+    the tool call, the model's history never shows an answer given in plain
+    text. Thinking blocks stay.
+    """
+    from django_ergo.conversation.models import MessageBlock
+
+    message = (
+        await session.messages.filter(role="assistant").order_by("-sequence").afirst()
+    )
+    await message.content_blocks.filter(block_type="text").adelete()
+    last = await message.content_blocks.order_by("-sequence").afirst()
+    await MessageBlock.objects.acreate(
+        message=message,
+        sequence=last.sequence + 1 if last else 0,
+        **tool_use_block(call_id, name, arguments),
+    )
+    message.stop_reason = "tool_use"
+    await message.asave(update_fields=["stop_reason"])
+
+
 async def add_tool_exchange(session, calls) -> None:
     """Store tool calls the model didn't make itself (SeededToolCall) and their results."""
     if not calls:

@@ -66,7 +66,12 @@ result = await run_structured_call(spec, "Plan it", session=session)
 - With `response_model`, the model gets a `submit_output` tool whose input
   schema is the Pydantic schema. Invalid input goes back as a tool error. A
   plain-text answer gets a correction asking for the tool that quotes the
-  text back; an empty response is asked to carry on with the task. In a
+  text back; an empty response is asked to carry on with the task. With
+  `text_output` (a function from the text to the tool's arguments), a
+  plain-text answer is taken as the output instead, with no second model
+  call: it is stored as that tool call and its result, and the row's
+  `metadata` gets `text_answer: true`. Chat replies use it, so a reply given
+  in plain text becomes a `message` with no suggestions or status. In a
   session, the accepted output is also stored as a plain-text assistant
   message for chat views and history tools. That copy is never sent back to
   the model, so its history doesn't teach it to answer in plain text.
