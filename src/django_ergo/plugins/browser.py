@@ -2,55 +2,71 @@
 
     plugins:
       - name: browser
-        cdp_url: http://127.0.0.1:9222   # Chrome's --remote-debugging-port
-        ssh_host: rigel            # optional: reach cdp_url through ``ssh -L`` to this host
+        cdp_url: http://127.0.0.1:9222   # Chrome's --remote-debugging-port, as ssh_host sees it
+        ssh_host: rigel            # optional: reach cdp_url through an ssh tunnel to this host
         takeover: the Chrome window on rigel  # where a person signs in for the bot
-        approve_actions: true      # clicks, typing and key presses wait for approval
+        sessions: true             # browser tools need a session opened with ergo_browser_start
+        idle_minutes: 30           # a session with no browser calls this long ends
+        launch_command: ""         # run (over ssh_host) at start when Chrome doesn't answer
+        approve_actions: false     # clicks, typing and key presses also wait for approval
         root_only: true            # only the root session gets the tools
         timeout: 30                # seconds per browser call
         max_snapshot_chars: 20000
 
 The bot attaches to a Chrome someone already started, with Playwright's
-``connect_over_cdp``; it never launches one. That Chrome is an ordinary
-headed browser with its own profile, so a person can sign in to sites for
-the bot (Google, say) in the same window, and the bot sees the signed-in
-tabs. Because Chrome isn't started by an automation driver, it doesn't
-carry the automation flags that make sign-in pages refuse it.
+``connect_over_cdp``. That Chrome is an ordinary headed browser with its own
+profile, so a person can sign in to sites for the bot (Google, say) in the
+same window, and the bot sees the signed-in tabs. Because Chrome isn't
+started by an automation driver, it doesn't carry the automation flags that
+make sign-in pages refuse it.
 
 Tools:
 
-- ``ergo_browser_tabs``: the open tabs (short id, title, URL).
-- ``ergo_browser_open``: go to a URL in the current tab or a new one.
-- ``ergo_browser_snapshot``: the page as an accessibility tree, where each
-  element the bot can act on has a ref (``[ref=e12]``).
-- ``ergo_browser_click``, ``ergo_browser_type``, ``ergo_browser_press``:
-  act on a ref (or any Playwright selector). They wait for approval unless
-  ``approve_actions: false``, since the browser holds real sign-ins.
-- ``ergo_browser_screenshot``: attach a screenshot of the tab to the chat.
+- ``ergo_browser_start`` (always approved by the user): open a browser
+  session for the bot. It shows in the chat as a Worker (``browser:session``)
+  that checks Chrome still answers and ends after ``idle_minutes`` without a
+  browser call. One session serves the whole bot, since there is one Chrome.
+- ``ergo_browser_stop``: end the session, close the tabs it opened and the
+  tunnel.
+- ``ergo_browser_tabs``, ``ergo_browser_open``, ``ergo_browser_snapshot``
+  (the page as an accessibility tree with refs like ``[ref=e12]``),
+  ``ergo_browser_click``, ``ergo_browser_type``, ``ergo_browser_press`` and
+  ``ergo_browser_screenshot``. With ``sessions: true`` they refuse to run
+  until a session is open.
 
-Each call connects, works and disconnects; Chrome and its tabs keep
-running. Refs belong to the snapshot that made them, so an action takes a
-fresh snapshot first and resolves the ref against it, and returns the
-page's new snapshot. The current tab is remembered per chat session.
+Each call connects, works and disconnects; Chrome and its tabs keep running.
+Refs belong to the snapshot that made them, so an action takes a fresh
+snapshot first and resolves the ref against it, and returns the page's new
+snapshot. Each chat's current tab is kept on the session.
+
+With ``ssh_host``, a call reaches ``cdp_url`` through an ssh ControlMaster
+that forwards a local port (``ssh -fN -M -L``, as the user Ergonaut runs as,
+with its ssh config and keys). The master lives in the process's host or pod
+and is reused by later calls there; a call in another pod opens its own.
+Masters close with ``ergo_browser_stop`` (this pod's), at the next browser
+call after the session ended, or after ``idle_minutes`` without use. Chrome
+stays bound to the browser machine's localhost.
 
 Playwright is the ``browser`` extra (``pip install django-ergo[browser]``);
 it needs no browser download, since it only connects. The DevTools port is
-full control of the browser with no authentication: bind it to localhost
-and reach it over an SSH tunnel or a private network, never the internet.
-With ``ssh_host``, each call opens ``ssh -N -L`` to that host (as the user
-Ergonaut runs as, with its SSH config and keys) and reaches ``cdp_url`` as
-that host sees it, so Chrome can stay bound to the browser machine's
-localhost.
+full control of the browser with no authentication: bind it to localhost and
+reach it over ssh or a private network, never the internet.
 """
 
 from __future__ import annotations
 
 import concurrent.futures
 import contextlib
+import fcntl
+import hashlib
 import socket
 import subprocess
+import tempfile
 import threading
 import time
+from dataclasses import dataclass
+from dataclasses import field
+from pathlib import Path
 from typing import TYPE_CHECKING
 from typing import Any
 from urllib.parse import urlsplit
@@ -67,10 +83,21 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
 
     from django_ergo.bots.tools import ToolContext
+    from django_ergo.bots.workers import WorkerContext
     from django_ergo.conversation.context import ContextSource
+    from django_ergo.conversation.models import Worker
     from django_ergo.conversation.toolkit import Toolkit
 
 TAB_ID_CHARS = 8
+SESSION_FUNCTION = "browser:session"
+
+
+@dataclass
+class Use:
+    """One call's view of a chat's tabs: its current tab, and tabs it opened."""
+
+    current: str = ""
+    opened: list[str] = field(default_factory=list)
 
 
 class BrowserPlugin(BotPlugin):
@@ -81,12 +108,22 @@ class BrowserPlugin(BotPlugin):
         self.cdp_url = str(self.config.get("cdp_url") or "http://127.0.0.1:9222")
         self.ssh_host = str(self.config.get("ssh_host") or "")
         self.takeover = str(self.config.get("takeover") or "the browser window")
-        self.approve_actions = bool(self.config.get("approve_actions", True))
+        self.sessions = bool(self.config.get("sessions", True))
+        self.idle_minutes = float(self.config.get("idle_minutes", 30))
+        self.poll_seconds = float(self.config.get("poll_seconds", 120))
+        self.launch_command = str(self.config.get("launch_command") or "")
+        self.approve_actions = bool(self.config.get("approve_actions", False))
         self.root_only = bool(self.config.get("root_only", True))
         self.timeout = float(self.config.get("timeout", 30))
         self.max_snapshot_chars = int(self.config.get("max_snapshot_chars", 20_000))
-        self._current: dict[str, str] = {}  # session key -> tab id
+        self._current: dict[str, str] = {}  # chat -> tab id, without sessions
         self._lock = threading.Lock()
+        key = hashlib.sha1(  # noqa: S324 — a file name, not security
+            f"{self.ssh_host}|{self.cdp_url}".encode()
+        ).hexdigest()[:12]
+        self._tunnel_dir = Path(tempfile.gettempdir()) / "ergo-browser"
+        self._control = self._tunnel_dir / f"{key}.sock"
+        self._port_file = self._tunnel_dir / f"{key}.port"
 
     # -- connection ---------------------------------------------------------
 
@@ -128,53 +165,77 @@ class BrowserPlugin(BotPlugin):
 
     @contextlib.contextmanager
     def _endpoint(self) -> Iterator[str]:
-        """``cdp_url``, or a local port forwarded to it with ``ssh -L``."""
+        """``cdp_url``, or a local port the ssh master forwards to it."""
         if not self.ssh_host:
             yield self.cdp_url
             return
-        target = urlsplit(self.cdp_url)
-        with socket.socket() as sock:
-            sock.bind(("127.0.0.1", 0))
-            port = sock.getsockname()[1]
-        forward = f"127.0.0.1:{port}:{target.hostname}:{target.port or 80}"
-        proc = subprocess.Popen(  # noqa: S603 — argv list, no shell
-            [  # noqa: S607
-                "ssh",
-                "-N",
-                "-o",
-                "BatchMode=yes",
+        scheme = urlsplit(self.cdp_url).scheme or "http"
+        yield f"{scheme}://127.0.0.1:{self._tunnel_port()}"
+
+    def _ssh(self, *args: str) -> subprocess.CompletedProcess:
+        # Output goes to a file, not a pipe: ``ssh -f`` keeps stderr open in the
+        # background master, so reading a pipe to its end would never finish.
+        with tempfile.TemporaryFile("w+") as out:
+            proc = subprocess.run(  # noqa: S603 — argv list, no shell
+                ["ssh", "-o", "BatchMode=yes", *args],  # noqa: S607
+                stdin=subprocess.DEVNULL,
+                stdout=out,
+                stderr=out,
+                timeout=self.timeout,
+                check=False,
+            )
+            out.seek(0)
+            return subprocess.CompletedProcess(
+                proc.args, proc.returncode, "", out.read()
+            )
+
+    def _master_alive(self) -> bool:
+        if not self._control.exists():
+            return False
+        check = self._ssh("-S", str(self._control), "-O", "check", self.ssh_host)
+        return check.returncode == 0
+
+    def _tunnel_port(self) -> int:
+        """The local port of this host's ssh master, started if it isn't running."""
+        self._tunnel_dir.mkdir(mode=0o700, exist_ok=True)
+        with (self._tunnel_dir / "lock").open("w") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            if self._master_alive():
+                with contextlib.suppress(ValueError, OSError):
+                    return int(self._port_file.read_text())
+                self.close_tunnel()
+            target = urlsplit(self.cdp_url)
+            with socket.socket() as sock:
+                sock.bind(("127.0.0.1", 0))
+                port = sock.getsockname()[1]
+            started = self._ssh(
+                "-fN",
                 "-o",
                 "ExitOnForwardFailure=yes",
+                "-o",
+                "ControlMaster=yes",
+                "-o",
+                f"ControlPersist={max(1, int(self.idle_minutes))}m",
+                "-S",
+                str(self._control),
                 "-L",
-                forward,
+                f"127.0.0.1:{port}:{target.hostname}:{target.port or 80}",
                 self.ssh_host,
-            ],
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-        try:
-            deadline = time.monotonic() + self.timeout
-            while True:
-                if proc.poll() is not None:
-                    error = (proc.stderr.read() if proc.stderr else "").strip()[:500]
-                    msg = f"ssh {self.ssh_host} failed: {error or f'exit {proc.returncode}'}"
-                    raise RuntimeError(msg)
-                with (
-                    contextlib.suppress(OSError),
-                    socket.create_connection(("127.0.0.1", port), timeout=1),
-                ):
-                    break
-                if time.monotonic() > deadline:
-                    msg = f"ssh {self.ssh_host} did not open the tunnel in {self.timeout:g}s"
-                    raise RuntimeError(msg)
-                time.sleep(0.1)
-            yield f"{target.scheme or 'http'}://127.0.0.1:{port}"
-        finally:
-            proc.terminate()
-            with contextlib.suppress(subprocess.TimeoutExpired):
-                proc.wait(timeout=5)
+            )
+            if started.returncode != 0:
+                error = started.stderr.strip()[:500]
+                msg = f"ssh {self.ssh_host} failed: {error or f'exit {started.returncode}'}"
+                raise RuntimeError(msg)
+            self._port_file.write_text(str(port))
+            return port
+
+    def close_tunnel(self) -> bool:
+        """Stop this host's ssh master, if one runs. True if one did."""
+        if not self.ssh_host or not self._control.exists():
+            return False
+        self._ssh("-S", str(self._control), "-O", "exit", self.ssh_host)
+        self._port_file.unlink(missing_ok=True)
+        return True
 
     @staticmethod
     def _tab_id(page: Any) -> str:
@@ -189,30 +250,31 @@ class BrowserPlugin(BotPlugin):
         return [(self._tab_id(page), page) for page in context.pages]
 
     def _page(
-        self, context: Any, key: str, tab: str = "", *, new: bool = False
+        self, context: Any, use: Use, tab: str = "", *, new: bool = False
     ) -> tuple[str, Any]:
         """The tab to work in: a named one, this chat's current one, or the first."""
         if new:
             page = context.new_page()
-            return self._remember(key, self._tab_id(page)), page
+            use.current = self._tab_id(page)
+            use.opened.append(use.current)
+            return use.current, page
         pages = self._pages(context)
-        wanted = (tab or self._current.get(key, "")).lower()
+        wanted = (tab or use.current).lower()
         if wanted:
             for tab_id, page in pages:
                 if tab_id.startswith(wanted) or wanted.startswith(tab_id):
-                    return self._remember(key, tab_id), page
+                    use.current = tab_id
+                    return tab_id, page
             if tab:
                 msg = f"No tab {tab}; ergo_browser_tabs lists them."
                 raise ValueError(msg)
         if pages:
-            return self._remember(key, pages[0][0]), pages[0][1]
+            use.current = pages[0][0]
+            return pages[0]
         page = context.new_page()
-        return self._remember(key, self._tab_id(page)), page
-
-    def _remember(self, key: str, tab_id: str) -> str:
-        with self._lock:
-            self._current[key] = tab_id
-        return tab_id
+        use.current = self._tab_id(page)
+        use.opened.append(use.current)
+        return use.current, page
 
     def _state(self, tab_id: str, page: Any) -> dict:
         page.wait_for_load_state()
@@ -237,24 +299,188 @@ class BrowserPlugin(BotPlugin):
     def _key(ctx: ToolContext) -> str:
         return str(ctx.session.pk) if ctx.session is not None else ""
 
+    # -- sessions -----------------------------------------------------------
+
+    def session(self) -> Worker | None:
+        """The bot's open browser session (a Worker), if any."""
+        from django_ergo.conversation.models import Worker
+
+        return (
+            Worker.objects.filter(
+                bot_name=self.bot.name,
+                function=SESSION_FUNCTION,
+                status__in=["queued", "running"],
+            )
+            .order_by("-created_at")
+            .first()
+        )
+
+    @contextlib.contextmanager
+    def _use(self, ctx: ToolContext) -> Iterator[Use]:
+        """This chat's tab bookkeeping for one call, saved on the session."""
+        key = self._key(ctx)
+        if not self.sessions:
+            use = Use(current=self._current.get(key, ""))
+            yield use
+            with self._lock:
+                self._current[key] = use.current
+            return
+        worker = self.session()
+        if worker is None:
+            self.close_tunnel()
+            msg = "No browser session is open; start one with ergo_browser_start."
+            raise RuntimeError(msg)
+        use = Use(current=(worker.state.get("current") or {}).get(key, ""))
+        try:
+            yield use
+        finally:
+            self._save(worker.pk, key, use)
+
+    @staticmethod
+    def _save(worker_id: Any, key: str, use: Use) -> None:
+        from django.db import transaction
+
+        from django_ergo.conversation.models import Worker
+
+        with transaction.atomic():
+            worker = Worker.objects.select_for_update().filter(pk=worker_id).first()
+            if worker is None:
+                return
+            state = dict(worker.state or {})
+            state["current"] = {**(state.get("current") or {}), key: use.current}
+            state["opened"] = [*(state.get("opened") or []), *use.opened]
+            state["used_at"] = time.time()
+            worker.state = state
+            worker.save(update_fields=["state", "updated_at"])
+
+    def start(self, ctx: ToolContext) -> str:
+        from django_ergo.bots import workers
+
+        if ctx.session is None:
+            msg = "A browser session belongs to a chat"
+            raise ValueError(msg)
+        where = self._where()
+        current = self.session()
+        if current is not None:
+            return f"A browser session is already open ({current.title})."
+        launched = ""
+        try:
+            count = self._run(lambda context: len(context.pages))
+        except RuntimeError:
+            if not self.launch_command:
+                raise
+            launched = self._launch()
+            count = self._run(lambda context: len(context.pages))
+        workers.start(
+            self.bot,
+            ctx.session,
+            SESSION_FUNCTION,
+            {},
+            title=f"Browser on {where}",
+            notify=False,
+            state={"used_at": time.time(), "current": {}, "opened": []},
+        )
+        return (
+            f"{launched}Browser session open on {where}, {count} tab(s). It ends after "
+            f"{self.idle_minutes:g} idle minutes or with ergo_browser_stop."
+        )
+
+    def _launch(self) -> str:
+        """Run ``launch_command`` (over ssh_host) and wait for Chrome to answer."""
+        if self.ssh_host:
+            proc = self._ssh(self.ssh_host, self.launch_command)
+        else:
+            proc = subprocess.run(  # noqa: S603 — the configured command
+                ["bash", "-lc", self.launch_command],  # noqa: S607
+                capture_output=True,
+                text=True,
+                stdin=subprocess.DEVNULL,
+                timeout=self.timeout,
+                check=False,
+            )
+        if proc.returncode != 0:
+            msg = f"launch_command failed: {(proc.stderr or proc.stdout or '').strip()[:500]}"
+            raise RuntimeError(msg)
+        deadline = time.monotonic() + self.timeout
+        while time.monotonic() < deadline:
+            with contextlib.suppress(RuntimeError):
+                self._run(lambda context: len(context.pages))
+                return "Started Chrome. "
+            time.sleep(1)
+        msg = "launch_command ran, but Chrome didn't answer"
+        raise RuntimeError(msg)
+
+    def stop(self, ctx: ToolContext, close_tabs: bool = True) -> str:
+        from django_ergo.bots import workers
+
+        worker = self.session()
+        if worker is None:
+            self.close_tunnel()
+            return "No browser session is open."
+        closed = self._close_tabs(worker.state.get("opened") or []) if close_tabs else 0
+        workers.cancel(worker)
+        self.close_tunnel()
+        return f"Browser session ended; closed {closed} tab(s) it opened."
+
+    def _close_tabs(self, tab_ids: list[str]) -> int:
+        def work(context: Any) -> int:
+            closed = 0
+            for tab_id, page in self._pages(context):
+                if tab_id in tab_ids:
+                    page.close()
+                    closed += 1
+            return closed
+
+        try:
+            return self._run(work)
+        except RuntimeError:
+            return 0
+
+    def watch(self, ctx: WorkerContext) -> Any:
+        """The session Worker: check Chrome answers, end the session when idle."""
+        from django_ergo.conversation.models import Worker
+
+        fresh = Worker.objects.filter(pk=ctx.worker.pk).values_list("state", flat=True)
+        ctx.state = dict(fresh.first() or ctx.state)
+        if ctx.stopping:
+            return None
+        idle = time.time() - float(ctx.state.get("used_at") or 0)
+        if idle > self.idle_minutes * 60:
+            closed = self._close_tabs(ctx.state.get("opened") or [])
+            self.close_tunnel()
+            return f"Browser session ended after {self.idle_minutes:g} idle minutes; closed {closed} tab(s)."
+        try:
+            count = self._run(lambda context: len(context.pages))
+            line = f"Chrome on {self._where()}: {count} tab(s)"
+        except RuntimeError as exc:
+            line = str(exc)[:300]
+        # The step saves ctx.state when it ends: take in what browser calls
+        # recorded while Chrome was being checked.
+        fresh = Worker.objects.filter(pk=ctx.worker.pk).values_list("state", flat=True)
+        ctx.state = dict(fresh.first() or ctx.state)
+        return ctx.again(self.poll_seconds, line)
+
+    def worker_functions(self) -> dict[str, Callable]:
+        return {"session": self.watch}
+
+    def _where(self) -> str:
+        return self.ssh_host or urlsplit(self.cdp_url).netloc
+
     # -- tool bodies --------------------------------------------------------
 
     def tabs(self, ctx: ToolContext) -> list[dict]:
-        key = self._key(ctx)
-
-        def work(context: Any) -> list[dict]:
-            current = self._current.get(key, "")
-            return [
-                {
-                    "tab": tab_id,
-                    "title": page.title(),
-                    "url": page.url,
-                    **({"current": True} if tab_id == current else {}),
-                }
-                for tab_id, page in self._pages(context)
-            ]
-
-        return self._run(work)
+        with self._use(ctx) as use:
+            return self._run(
+                lambda context: [
+                    {
+                        "tab": tab_id,
+                        "title": page.title(),
+                        "url": page.url,
+                        **({"current": True} if tab_id == use.current else {}),
+                    }
+                    for tab_id, page in self._pages(context)
+                ]
+            )
 
     def open(
         self, ctx: ToolContext, url: str, tab: str = "", new_tab: bool = False
@@ -264,29 +490,31 @@ class BrowserPlugin(BotPlugin):
             raise ValueError(msg)
         if "://" not in url and not url.startswith(("about:", "data:")):
             url = f"https://{url}"
-        key = self._key(ctx)
+        with self._use(ctx) as use:
 
-        def work(context: Any) -> dict:
-            tab_id, page = self._page(context, key, tab, new=new_tab)
-            page.goto(url)
-            page.bring_to_front()
-            return self._state(tab_id, page)
+            def work(context: Any) -> dict:
+                tab_id, page = self._page(context, use, tab, new=new_tab)
+                page.goto(url)
+                page.bring_to_front()
+                return self._state(tab_id, page)
 
-        return self._run(work)
+            return self._run(work)
 
     def snapshot(self, ctx: ToolContext, tab: str = "") -> dict:
-        key = self._key(ctx)
-        return self._run(lambda context: self._state(*self._page(context, key, tab)))
+        with self._use(ctx) as use:
+            return self._run(
+                lambda context: self._state(*self._page(context, use, tab))
+            )
 
     def act(self, ctx: ToolContext, tab: str, action: Callable[[Any], None]) -> dict:
-        key = self._key(ctx)
+        with self._use(ctx) as use:
 
-        def work(context: Any) -> dict:
-            tab_id, page = self._page(context, key, tab)
-            action(page)
-            return self._state(tab_id, page)
+            def work(context: Any) -> dict:
+                tab_id, page = self._page(context, use, tab)
+                action(page)
+                return self._state(tab_id, page)
 
-        return self._run(work)
+            return self._run(work)
 
     def click(self, ctx: ToolContext, target: str, tab: str = "") -> dict:
         return self.act(ctx, tab, lambda page: self._locator(page, target).click())
@@ -321,13 +549,13 @@ class BrowserPlugin(BotPlugin):
         if ctx.session is None:
             msg = "Screenshots go into a chat"
             raise ValueError(msg)
-        key = self._key(ctx)
+        with self._use(ctx) as use:
 
-        def work(context: Any) -> tuple[str, str, bytes]:
-            tab_id, page = self._page(context, key, tab)
-            return tab_id, page.url, page.screenshot(full_page=full_page)
+            def work(context: Any) -> tuple[str, str, bytes]:
+                tab_id, page = self._page(context, use, tab)
+                return tab_id, page.url, page.screenshot(full_page=full_page)
 
-        tab_id, url, data = self._run(work)
+            tab_id, url, data = self._run(work)
         stamp = datetime.now(tz=UTC).strftime("%Y%m%d-%H%M%S")
         row = save_session_file(
             ctx.session,
@@ -356,9 +584,16 @@ class BrowserPlugin(BotPlugin):
             if self.approve_actions
             else "Clicks, typing and key presses run without approval."
         )
+        session = (
+            "Open a session with ergo_browser_start first (the user approves it) and end "
+            "it with ergo_browser_stop when you're done. "
+            if self.sessions
+            else ""
+        )
         return [
             TextContextSource(
                 "Browser",
+                f"{session}"
                 "The ergo_browser_ tools drive a real Chrome that stays open between calls, "
                 "with the user's sign-ins. Read a page with ergo_browser_snapshot and act on "
                 f"the refs it shows (e12). {approval} When a page needs a person (sign-in, "
@@ -374,6 +609,33 @@ class BrowserPlugin(BotPlugin):
             "type": "string",
             "description": "Tab id from ergo_browser_tabs (default: this chat's current tab)",
         }
+
+        @bot_tool(
+            name="ergo_browser_start",
+            takes_context=True,
+            description=(
+                f"Open a browser session on {self._where()} (the user approves it). The "
+                "other browser tools work only while one is open."
+            ),
+            parameters={},
+            requires_approval=True,
+        )
+        def start(ctx: ToolContext) -> str:
+            return plugin.start(ctx)
+
+        @bot_tool(
+            name="ergo_browser_stop",
+            takes_context=True,
+            description="End the browser session: close the tabs it opened and the tunnel.",
+            parameters={
+                "close_tabs": {
+                    "type": "boolean",
+                    "description": "Close the tabs the session opened (default true)",
+                }
+            },
+        )
+        def stop(ctx: ToolContext, close_tabs: bool = True) -> str:
+            return plugin.stop(ctx, close_tabs)
 
         @bot_tool(
             name="ergo_browser_tabs",
@@ -493,7 +755,6 @@ class BrowserPlugin(BotPlugin):
         ) -> dict:
             return plugin.screenshot(ctx, tab, full_page)
 
-        return [
-            t.__bot_tool__
-            for t in (tabs, open_url, snapshot, click, type_text, press, screenshot)
-        ]
+        browsing = (tabs, open_url, snapshot, click, type_text, press, screenshot)
+        sessions = (start, stop) if self.sessions else ()
+        return [t.__bot_tool__ for t in (*sessions, *browsing)]

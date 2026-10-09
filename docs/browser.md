@@ -68,10 +68,17 @@ plugins:
     cdp_url: http://127.0.0.1:9222  # on rigel
 ```
 
-Each call opens `ssh -N -L` to that host for its own duration, so nothing
-has to keep a tunnel up and Chrome stays bound to localhost. Errors from
-ssh (an unknown host, a refused key) come back to the bot as the reason
-the call failed.
+The first browser call on a host (or pod) starts an ssh ControlMaster
+there that forwards a local port to `cdp_url` (`ssh -fN -M -L`), and later
+calls on that host reuse it. Ergonaut runs tool calls in several pods, so
+each pod opens its own; none of them has to be kept up by hand. A master
+closes when the session stops (that pod's), at the next browser call after
+the session ended, or after `idle_minutes` without use. Chrome stays bound
+to localhost. Errors from ssh (an unknown host, a refused key) come back
+to the bot as the reason the call failed.
+
+The pods need an ssh client, a key the browser machine accepts and a
+`known_hosts` entry for it, since ssh runs with `BatchMode=yes`.
 
 Without SSH from the Ergonaut host, bring the port over from the browser
 machine instead, with a reverse tunnel that it dials out for:
@@ -91,8 +98,23 @@ public address.
 
 ## How the bot uses it
 
+The bot opens a session with `ergo_browser_start`, which always waits for
+the user's approval, and ends it with `ergo_browser_stop`. A session
+belongs to the bot, since there is one Chrome. It shows in the chat that
+started it as a worker, "Browser on rigel", that checks Chrome answers
+every `poll_seconds` and ends the session after `idle_minutes` without a
+browser call, closing the tabs it opened. While no session is open the
+other browser tools refuse to run. With `launch_command` set, starting a
+session runs it (over `ssh_host`) when Chrome doesn't answer; it must
+detach, for example
+`DISPLAY=:1 setsid google-chrome --user-data-dir=$HOME/.config/ergo-chrome --remote-debugging-port=9222 >/dev/null 2>&1 &`.
+`sessions: false` drops the start and stop tools for a bot that should
+always have the browser.
+
 | Tool | Does | Approval |
 | --- | --- | --- |
+| `ergo_browser_start` | open a browser session | always |
+| `ergo_browser_stop` | end it, close the tabs it opened | no |
 | `ergo_browser_tabs` | list open tabs: id, title, URL | no |
 | `ergo_browser_open` | go to a URL (current tab or a new one) | no |
 | `ergo_browser_snapshot` | the page as an accessibility tree, with refs like `[ref=e12]` | no |
@@ -106,8 +128,8 @@ snapshot, so the bot sees what changed. Each call connects and disconnects;
 Chrome and its tabs stay as they are. Refs only resolve against a snapshot
 taken on the same connection, so an action takes a fresh snapshot and
 resolves the ref against it: if the page changed in between, the ref may
-point somewhere else, which is one more reason actions are approved by
-default. Each chat remembers its current tab.
+point somewhere else; set `approve_actions: true` to approve each action
+too. Each chat's current tab is kept on the session.
 
 When a page needs a person (a sign-in, a two-factor code, a captcha, a
 consent screen) the bot's context tells it to stop and ask the user to do
