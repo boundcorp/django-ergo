@@ -11,6 +11,7 @@ from django.contrib.auth import get_user_model
 from pydantic import BaseModel
 
 from django_ergo.conversation import structured
+from django_ergo.conversation.compaction import native_turn_start
 from django_ergo.conversation.engines.claude_api import ClaudeAPIEngine
 from django_ergo.conversation.engines.openai_api import OpenAIAPIEngine
 from django_ergo.conversation.models import ConversationSession
@@ -363,12 +364,15 @@ async def test_session_mixes_chat_and_structured_turns(user):
     assert structured_request["system"] == "You are helpful."
     assert "Return a plan." in structured_request["messages"][2]["content"][0]["text"]
     assert structured_request["messages"][0]["content"][0]["text"] == "Let's plan"
-    # The next chat turn sees the response as the structured turn's last reply.
+    # The next chat turn sees the response as the structured turn's output
+    # call; its stored plain-text copy isn't sent back to the model.
     after = engine._client.calls[2]
     assert after["system"] == "You are helpful."
     assert "submit_output" not in [t["name"] for t in after.get("tools", [])]
-    response_text = after["messages"][-2]["content"][0]["text"]
-    assert json.loads(response_text) == VALID_PLAN
+    output_call = after["messages"][-3]["content"][-1]
+    assert (output_call["name"], output_call["input"]) == ("submit_output", VALID_PLAN)
+    assert after["messages"][-2]["content"][0]["content"] == "Output accepted."
+    assert json.dumps(VALID_PLAN, indent=2) not in json.dumps(after["messages"])
     assert engine.ephemeral_context == ""
 
 
@@ -389,8 +393,8 @@ async def test_revise_in_session_adds_a_turn(user):
     calls = [c.kind async for c in session.structured_calls.all()]
     assert calls == ["planner", "planner"]
     history = await _history(engine, session)
-    assert history[-1]["role"] == "assistant"
-    assert history[-4]["content"][0]["text"] == "Shorter"
+    assert history[-1]["content"][0]["content"] == "Output accepted."
+    assert history[-3]["content"][0]["text"] == "Shorter"
 
 
 # ---------------------------------------------------------------------------
@@ -511,6 +515,86 @@ async def test_plain_text_nudge_quotes_the_answer(user):
     assert "Draft ae62abde is created and quoted." in nudge
 
 
+async def test_empty_response_is_asked_to_carry_on_not_to_wrap_up(user):
+    # Asking for a "final answer" after an empty response made the model drop
+    # work it was in the middle of.
+    empty = SimpleNamespace(content=[], stop_reason="end_turn", usage=_usage())
+    engine = claude_engine(empty, claude_tool("submit_output", VALID_PLAN))
+    spec = StructuredCallSpec(kind="planner", response_model=Plan)
+
+    await run_structured_call(spec, "Plan", user=user, engine=engine)
+
+    nudge = json.dumps(engine._client.calls[1]["messages"][-1])
+    assert "Carry on with the latest message" in nudge
+    assert "final answer" not in nudge
+
+
+async def test_a_refusal_fails_the_call_instead_of_nudging(user):
+    # Nudging after a refusal re-sent nearly the same request: it was refused
+    # again, or the model obeyed "final answer" and dropped its task.
+    refused = SimpleNamespace(
+        content=[],
+        stop_reason="refusal",
+        stop_details=SimpleNamespace(category="cyber"),
+        usage=_usage(),
+    )
+    toolkit = LookupToolkit()
+    engine = claude_engine(refused, claude_tool("submit_output", VALID_PLAN))
+    spec = StructuredCallSpec(kind="planner", response_model=Plan, toolkits=[toolkit])
+
+    result = await run_structured_call(spec, "Plan", user=user, engine=engine)
+
+    assert result.status == StructuredCallStatus.FAILED
+    assert result.call.error_category == "refusal"
+    assert "(refusal: cyber)" in result.error
+    assert len(engine._client.calls) == 1
+
+
+async def test_a_mid_stream_refusal_runs_none_of_its_tool_calls(user):
+    partial = claude_tool("lookup", {"q": "x"})
+    partial.stop_reason = "refusal"
+    toolkit = LookupToolkit()
+    engine = claude_engine(partial)
+    spec = StructuredCallSpec(kind="planner", response_model=Plan, toolkits=[toolkit])
+
+    result = await run_structured_call(spec, "Plan", user=user, engine=engine)
+
+    assert result.call.error_category == "refusal"
+    assert toolkit.calls == []
+
+
+def test_a_message_after_an_accepted_answer_starts_a_turn():
+    # The answer's plain-text copy isn't sent to the model, so the next message
+    # follows the output tool's result directly; it still starts a new turn.
+    claude = [
+        {"role": "user", "content": [{"type": "text", "text": "Plan"}]},
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "t1"}]},
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "t1",
+                    "content": "Output accepted.",
+                }
+            ],
+        },
+        {"role": "user", "content": [{"type": "text", "text": "Shorter"}]},
+    ]
+    assert native_turn_start(claude) == 3
+    openai = [
+        {"role": "user", "content": "Plan"},
+        {"role": "assistant", "tool_calls": [{"id": "t1"}, {"id": "t2"}]},
+        {"role": "tool", "tool_call_id": "t1", "content": "Output accepted."},
+        {"role": "tool", "tool_call_id": "t2", "content": "42"},
+        {"role": "user", "content": "Shorter"},
+    ]
+    assert native_turn_start(openai) == 4
+    # Results of ordinary tool work still continue the turn they belong to.
+    claude[2]["content"][0]["content"] = "42"
+    assert native_turn_start(claude) == 0
+
+
 class APIConnectionError(Exception):
     pass
 
@@ -545,7 +629,7 @@ async def test_transient_errors_are_retried_without_duplicating_history(
         "assistant",
     ]
     history = await _history(engine, session)
-    assert [m["role"] for m in history] == ["user", "assistant", "user", "assistant"]
+    assert [m["role"] for m in history] == ["user", "assistant", "user"]
 
 
 async def test_non_transient_error_is_recorded(user, monkeypatch):

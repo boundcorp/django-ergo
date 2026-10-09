@@ -22,6 +22,7 @@ from django_ergo.conversation.images import memory_result
 from django_ergo.conversation.images import prepare_messages
 from django_ergo.conversation.messages import StoredMessagesMixin
 from django_ergo.conversation.messages import add_message
+from django_ergo.conversation.messages import model_rows
 from django_ergo.conversation.messages import tool_result_content  # noqa: F401
 from django_ergo.conversation.messages import tool_use_block
 from django_ergo.conversation.request_context import prepare_turn_context
@@ -51,6 +52,20 @@ def without_unsigned_thinking(messages: list[dict]) -> list[dict]:
         else m
         for m in messages
     ]
+
+
+def done_raw(response) -> dict:
+    """The done event's data: the stop reason, and a refusal's category."""
+    raw = {"stop_reason": response.stop_reason}
+    details = getattr(response, "stop_details", None)
+    category = (
+        details.get("category")
+        if isinstance(details, dict)
+        else getattr(details, "category", None)
+    )
+    if category:
+        raw["refusal_category"] = category
+    return raw
 
 
 def claude_message_dict(msg, *, include_attribution: bool = True) -> dict:
@@ -132,7 +147,7 @@ class ClaudeAPIEngine(StoredMessagesMixin, Engine):
             rows = rows.filter(sequence__gt=after_sequence)
         attachments = attachments_by_sequence(session)
         result = []
-        for msg in rows:
+        for msg in model_rows(rows):
             message = claude_message_dict(msg)
             if msg.sequence in attachments:
                 # Attachments go before the text, as Anthropic recommends.
@@ -297,9 +312,7 @@ class ClaudeAPIEngine(StoredMessagesMixin, Engine):
             for event in events:
                 yield event
 
-            yield EngineResponse(
-                event_type="done", raw={"stop_reason": response.stop_reason}
-            )
+            yield EngineResponse(event_type="done", raw=done_raw(response))
 
     # -- Sessionless calls ------------------------------------------------
 
@@ -363,9 +376,7 @@ class ClaudeAPIEngine(StoredMessagesMixin, Engine):
                         thinking=block.thinking,
                     )
                 )
-        events.append(
-            EngineResponse(event_type="done", raw={"stop_reason": response.stop_reason})
-        )
+        events.append(EngineResponse(event_type="done", raw=done_raw(response)))
         return Completion(
             message={"role": "assistant", "content": content},
             events=events,

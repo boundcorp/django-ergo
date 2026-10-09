@@ -605,21 +605,31 @@ def is_limit_error(error: str) -> bool:
     return any(needle in error for needle in LIMIT_ERRORS)
 
 
+def is_refusal_error(error: str) -> bool:
+    """A turn the model's safety system declined (see structured.REFUSAL_ERROR)."""
+    return "(refusal" in (error or "")
+
+
 def retry_model(providers: Providers, tier: str, failed: str, error: str) -> str:
     """Offer an under-limit alternative, including the same subscription when
-    only a model-specific limit was reached. Nothing retries automatically."""
+    only a model-specific limit was reached or the model refused the turn.
+    Nothing retries automatically."""
     tier = tier_of(tier)
     routing = providers.routing
     usage, rules = current_usage(), active_rules(routing)
     failed_provider = failed.partition("/")[0]
+    refused = is_refusal_error(error)
     if not (
-        is_limit_error(error)
+        refused
+        or is_limit_error(error)
         or over_limit(failed_provider, usage, rules, failed.partition("/")[2])
     ):
         return ""
-    scoped_limit = over_limit(
-        failed_provider, usage, rules, failed.partition("/")[2]
-    ) and not over_limit(failed_provider, usage, rules)
+    # A refusal or a model-specific limit leaves the provider's other models.
+    scoped_limit = refused or (
+        over_limit(failed_provider, usage, rules, failed.partition("/")[2])
+        and not over_limit(failed_provider, usage, rules)
+    )
     for ref in routing.tiers.get(tier, []):
         name = ref.partition("/")[0]
         found = providers.find(ref)

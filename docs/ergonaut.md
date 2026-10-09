@@ -256,8 +256,9 @@ refuse logins until the window passes.
   repo's `routing.md` until **Use routing.md**. The data is
   `GET /api/routing` (`PUT` and `DELETE` to save or reset the text;
   `POST /api/routing/refresh` runs the usage sync and returns the page). A turn a
-  provider refused at its limit offers **Retry on** the tier's next model
-  in the chat, never on its own.
+  provider refused at its limit, or that the model declined (a safety
+  refusal), offers **Retry on** the tier's next model in the chat, never on
+  its own.
 
 Django's admin is at `/mgmt/`. The API is at `/api/` with docs at
 `/api/docs`.

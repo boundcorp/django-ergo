@@ -86,6 +86,7 @@ from django_ergo.conversation.identity import system_identity
 from django_ergo.conversation.images import is_ref
 from django_ergo.conversation.images import prepare_messages
 from django_ergo.conversation.images import storable_ref
+from django_ergo.conversation.messages import OUTPUT_ACCEPTED
 from django_ergo.conversation.messages import anext_sequence
 from django_ergo.conversation.models import ConversationSession
 from django_ergo.conversation.models import StructuredCall
@@ -146,6 +147,10 @@ _ERROR_CATEGORIES = {
     "UnprocessableEntityError": "model",
 }
 _MAX_TOKENS_STOPS = {"max_tokens", "length"}
+# A provider's safety system declined the request (Claude's ``refusal``,
+# OpenAI's ``content_filter``). Asking again gets the same answer.
+_REFUSAL_STOPS = {"refusal", "content_filter"}
+REFUSAL_ERROR = "The model declined to continue (refusal"
 
 _TRUNCATED_TOOL_CALL = (
     "Not run: your reply hit the output token limit before this tool call's "
@@ -157,14 +162,18 @@ _TRUNCATED_TOOL_CALL = (
 def _submit_nudge(tool_name: str, events) -> str:
     """Ask for the output tool after a plain-text answer, keeping that answer.
 
-    Without the text, models often resubmit an earlier turn's answer.
+    Without the text, models often resubmit an earlier turn's answer. An
+    empty response isn't an answer: asking for a "final answer" there makes
+    the model give up on work it was in the middle of, so it is asked to
+    carry on instead.
     """
     text = "".join(e.text for e in events if e.event_type == "text" and e.text)
     text = text.strip()
     if not text:
         return (
-            f"You must call the {tool_name} tool with your final answer to the "
-            "latest message. Do not answer in plain text."
+            "Your last response was empty. Carry on with the latest message: "
+            f"use your tools for any work that's left, then call {tool_name} "
+            "when you're done."
         )
     return (
         f"Your last message was plain text, which isn't delivered. Call the "
@@ -360,7 +369,7 @@ class StructuredOutputToolkit(Toolkit):
                 f"Fix the errors and call {self.tool_name} again."
             )
             raise ValueError(msg) from e
-        return "Output accepted."
+        return OUTPUT_ACCEPTED
 
     def render_overview(self) -> str:
         return ""
@@ -803,6 +812,24 @@ async def _run_loop(run: _Run) -> StructuredCallResult:  # noqa: C901, PLR0912, 
             ),
             None,
         )
+        if stop in _REFUSAL_STOPS:
+            # Nothing in the response is usable (a refusal can come mid-stream,
+            # after partial output), and nudging only repeats the refusal or
+            # makes the model give up on its task. Fail so the chat can offer
+            # the turn on another model.
+            category = next(
+                (
+                    e.raw.get("refusal_category")
+                    for e in events
+                    if e.event_type == "done"
+                ),
+                None,
+            )
+            detail = f": {category}" if category else ""
+            _fail(call, f"{REFUSAL_ERROR}{detail}). Try another model.", "refusal")
+            finished = True
+            break
+
         tool_events = [e for e in events if e.event_type == "tool_use"]
         if tool_events:
             results = []

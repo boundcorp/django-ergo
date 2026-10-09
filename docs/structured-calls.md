@@ -65,7 +65,11 @@ result = await run_structured_call(spec, "Plan it", session=session)
 
 - With `response_model`, the model gets a `submit_output` tool whose input
   schema is the Pydantic schema. Invalid input goes back as a tool error. A
-  plain-text answer gets a correction asking for the tool.
+  plain-text answer gets a correction asking for the tool that quotes the
+  text back; an empty response is asked to carry on with the task. In a
+  session, the accepted output is also stored as a plain-text assistant
+  message for chat views and history tools. That copy is never sent back to
+  the model, so its history doesn't teach it to answer in plain text.
 - Without it, the final text is parsed by `output_parser` (`json.loads` by
   default). A parse failure goes back as a correction message.
 - Tool failures and unknown tools go back to the model as error results.
@@ -75,7 +79,12 @@ result = await run_structured_call(spec, "Plan it", session=session)
   backoff. Nothing is written until a call succeeds, so retries never
   duplicate history. Other API errors are recorded on the row with an
   `error_category` (`auth`, `network`, `model`, `other`).
-- Statuses: `completed`, `failed` (API error or `max_tokens` stop), and
+- A refusal (Claude's `refusal` stop, OpenAI's `content_filter`) fails the
+  call with `error_category` `refusal` and the refusal category in the
+  error. Its tool calls never run, and it gets no correction: asking again
+  repeats the refusal. An Auto chat offers the turn on another model in its
+  tier, the same way as after a usage limit.
+- Statuses: `completed`, `failed` (API error, refusal or `max_tokens` stop), and
   `turn_limited` (no valid output within `max_turns`).
 - Rows never store engine config, so credentials are never written.
 - Each model call carries only the newest
