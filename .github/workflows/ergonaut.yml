@@ -114,6 +114,8 @@ jobs:
           done
           docker logs smoke 2>&1 | grep "Serving bots: hello"
           docker exec smoke ergonaut check
+          # The agent CLIs start (Codex needs its platform package).
+          docker exec smoke codex --version
           # Non-Python package files ship in the image (package-data in pyproject.toml).
           docker exec smoke python -c "import django_ergo, pathlib; p = pathlib.Path(django_ergo.__file__).parent; missing = [f for f in ['bots/skill_library/skillbuilder/SKILL.md', 'templates/admin/django_ergo/chat_history.html'] if not (p / f).exists()]; assert not missing, missing"
       - name: Container logs

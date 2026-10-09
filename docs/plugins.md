@@ -44,9 +44,10 @@ it. A plugin without tools (like `telegram`) is always active.
 | `telegram` | | a Telegram bot, by webhook or polling, with approval buttons |
 | `orca` | `orca` | the Orca CLI: worktrees, terminals and supervised coding workers |
 | `bash` | `bash` | shell commands on the host, each approved by default |
+| `browser` | `browser` | a running Chrome over CDP: open, read, click, type, screenshot ([Browser control](browser.md)) |
 | `kubectl` | `kubectl` | configured-cluster Kubernetes inspection and individually approved changes with redacted previews |
 
-`bash`, `orca` and `kubectl` default to `root_only: true` (top-level chats
+`bash`, `browser`, `orca` and `kubectl` default to `root_only: true` (top-level chats
 only, never threads); `bot_management` defaults to `root_only: false`, so a
 thread can change its own bot folder. All of them ask for approval before changing
 anything. `kubectl` always requires individual approval and shows a bounded,

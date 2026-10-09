@@ -63,6 +63,7 @@ Live on rigel from `~/p/boundcorp/django-ergo`, bots from `boundcorp/ergo-bots`.
 - [x] Live Orca worker activity: worker cards show the agent's latest tool calls and output, time since its last activity with a stalled flag (`stall_minutes`), and its full recent log (`/api/sessions/<id>/workers/<id>/log`).
 - [x] Agent session usage: Orca worker session files record Claude Code, Codex, and omp tokens per worker; Costs shows them separately from bot turns.
 - [x] Agents as a framework concept: `AgentManager` (`bots/agents.py`) from `BotPlugin.agent_managers()`, the `agents` skill (`ergo_agent_start`, `ergo_agent_reply`, `ergo_agent_stop`), `agent:<manager>` watcher workers. Orca is the first manager; `orca_start_worker` stays as an alias.
+- [ ] Browser control: the `browser` plugin drives a Chrome over CDP (`docs/browser.md`). Next: run the profile Chrome and its tunnel on rigel as systemd user units, sign it in, and turn the plugin on for a bot in ergo-bots.
 - [ ] Agent managers for ssh (agent CLIs on a host) and local bash. Local needs a design for Celery workers on different pods: a detached process on one pod can't be polled from another.
 - [ ] Switch ergo-bots instructions from `orca_start_worker` to `ergo_agent_start`, then drop the alias.
 - [ ] Try `ergo_agent_start` live on devbox (after the Orca display restart).

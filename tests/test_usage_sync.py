@@ -260,8 +260,13 @@ def test_fetch_report_missing_command_and_timeout():
 
 @pytest.mark.django_db
 def test_sync_feeds_the_router_and_shows_every_account(monkeypatch):
-    # pick_model reads the clock; pin it to NOW so the 5h window hasn't reset.
-    monkeypatch.setattr(routing.time, "time", NOW.timestamp)
+    # The router reads usage at NOW, not today, so the 5h window hasn't reset.
+    current_usage = routing.current_usage
+    monkeypatch.setattr(
+        routing,
+        "current_usage",
+        lambda now=None: current_usage(NOW.timestamp() if now is None else now),
+    )
     state = sync(report(anthropic(five=90), codex(), grok()))
     assert state.error == "" and state.succeeded_at == NOW.timestamp()
     assert set(windows_of("claude")) == {"five_hour", "weekly", "weekly_fable"}

@@ -7,6 +7,12 @@
         remote: origin
         approve_publish: true   # ergo_config_repo_publish waits for the user's approval
         root_only: false        # true: only top-level chats get these tools, not threads
+        run:                    # optional: commands ergo_config_repo_run may start in the draft
+          approve: true         # each run waits for the user's approval (default)
+          timeout: 300          # seconds per run
+          commands:
+            toolkit-test: {argv: [npm, test], cwd: ficsit/toolkit}
+            node: {argv: [node], cwd: ficsit/toolkit, args: true}   # the bot adds arguments
 
 The repository is the git checkout that contains the bot folder. Tools:
 
@@ -22,6 +28,13 @@ The repository is the git checkout that contains the bot folder. Tools:
   branch and opens a pull request with the GitHub CLI (``gh``).
 - ``ergo_config_repo_discard``: throw away unpublished changes.
 - ``ergo_config_repo_pull``: fast-forward the main branch from the remote.
+- ``ergo_config_repo_run``: run one of the ``run.commands`` in the draft, so a
+  bot can test code it wrote before it publishes it. Only named commands run,
+  as an argv (no shell), with a bare environment (``PATH``, ``HOME``, ``LANG``;
+  no secrets), a timeout and trimmed output. The commands come from the live
+  bot.yaml, not the draft, so a draft can't add its own. A command that takes
+  ``args`` runs draft code the bot wrote, with the permissions Ergonaut has:
+  keep ``approve: true`` unless the bot is trusted with the machine.
 
 In ``merge_main`` mode the bot edits the checkout it runs from. In
 ``propose_pr`` mode it edits a draft: a separate git worktree of the main
@@ -36,9 +49,11 @@ agents.md or tool files take effect when the bot is loaded again.
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import time
+from dataclasses import dataclass
 from datetime import UTC
 from datetime import datetime
 from pathlib import Path
@@ -48,6 +63,7 @@ from django_ergo.bots.plugins import BotPlugin
 from django_ergo.bots.tools import BotTool
 from django_ergo.bots.tools import FunctionToolkit
 from django_ergo.bots.tools import bot_tool
+from django_ergo.plugins.bash import trim
 
 if TYPE_CHECKING:
     from django_ergo.bots.tools import ToolContext
@@ -66,6 +82,32 @@ def _pr_number(version: str) -> int:
 
 
 MAX_READ_CHARS = 50_000
+RUN_TIMEOUT = 300
+RUN_ENV_KEYS = ("PATH", "HOME", "LANG", "LC_ALL", "TMPDIR")
+
+
+@dataclass
+class RunCommand:
+    argv: list[str]
+    cwd: str = "."
+    args: bool = False  # may the bot append arguments
+
+
+def _run_commands(config: dict) -> dict[str, RunCommand]:
+    commands = {}
+    for name, spec in (config.get("commands") or {}).items():
+        if isinstance(spec, list):
+            spec = {"argv": spec}  # noqa: PLW2901
+        argv = spec.get("argv") if isinstance(spec, dict) else None
+        if not argv or not all(isinstance(a, str) for a in argv):
+            msg = f"bot_management run.commands.{name} needs an argv list of strings"
+            raise ValueError(msg)
+        commands[str(name)] = RunCommand(
+            list(argv), str(spec.get("cwd") or "."), bool(spec.get("args", False))
+        )
+    return commands
+
+
 MAX_GREP_MATCHES = 200
 
 
@@ -89,6 +131,10 @@ class BotManagementPlugin(BotPlugin):
         self.remote = self.config.get("remote", "origin")
         self.approve_publish = bool(self.config.get("approve_publish", True))
         self.root_only = bool(self.config.get("root_only", False))
+        run = self.config.get("run") or {}
+        self.run_commands = _run_commands(run)
+        self.approve_run = bool(run.get("approve", True))
+        self.run_timeout = int(run.get("timeout", RUN_TIMEOUT))
         self._repo: Path | None = None
 
     # -- commands ----------------------------------------------------------
@@ -189,6 +235,38 @@ class BotManagementPlugin(BotPlugin):
 
     def git(self, *args: str, cwd: Path | None = None) -> str:
         return self.run(["git", *args], cwd=cwd)
+
+    def run_command(self, command: str, args: list[str] | None = None) -> str:
+        """Run a configured command in the draft and report its exit code and output."""
+        spec = self.run_commands.get(command)
+        if spec is None:
+            names = ", ".join(sorted(self.run_commands)) or "none"
+            msg = f"Unknown command {command!r}; configured: {names}"
+            raise ValueError(msg)
+        args = [str(a) for a in args or []]
+        if args and not spec.args:
+            msg = f"{command} takes no arguments"
+            raise ValueError(msg)
+        cwd = self.path(spec.cwd)
+        env = {k: os.environ[k] for k in RUN_ENV_KEYS if k in os.environ}
+        env["CI"] = "1"
+        try:
+            proc = subprocess.run(  # noqa: S603 — configured argv, no shell
+                [*spec.argv, *args],
+                cwd=cwd,
+                env=env,
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                timeout=self.run_timeout,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            return f"{command}: timed out after {self.run_timeout}s"
+        except OSError as exc:
+            return f"{command}: could not start: {exc}"
+        output = trim((proc.stdout or "") + (proc.stderr or "")).strip()
+        return f"{command}: exit {proc.returncode}\n{output}".strip()
 
     def path(self, relative: str) -> Path:
         root = self.workdir
@@ -789,6 +867,23 @@ class BotManagementPlugin(BotPlugin):
             """List open pull requests on the bot repository."""
             return plugin.prs()
 
+        names = ", ".join(
+            f"{n} (takes arguments)" if c.args else n
+            for n, c in sorted(self.run_commands.items())
+        )
+
+        @bot_tool(
+            name="ergo_config_repo_run",
+            description=(
+                "Run a configured command in the unpublished changes (tests, a script with "
+                f"--dry-run) and get its exit code and output. Commands: {names}. args is "
+                "an argument list (no shell), only for commands that take arguments."
+            ),
+            requires_approval=self.approve_run,
+        )
+        def run_command(command: str, args: list[str] | None = None) -> str:
+            return plugin.run_command(command, args)
+
         functions = [
             status,
             list_files,
@@ -804,4 +899,6 @@ class BotManagementPlugin(BotPlugin):
             publish,
             prs,
         ]
+        if self.run_commands:
+            functions.append(run_command)
         return [fn.__bot_tool__ for fn in functions]

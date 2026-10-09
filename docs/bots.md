@@ -216,7 +216,7 @@ loads the same way (`django_ergo.bots.skillset`):
   with `skills/<name>/tools.py`;
 - a tool file from `tools:` (`tools/tandoor.py` is the `tandoor` skill; its
   module docstring is the description);
-- a plugin that adds tools (`kb`, `config_repo`, `orca`, `bash`,
+- a plugin that adds tools (`kb`, `config_repo`, `orca`, `bash`, `browser`,
   `attachments`, ...) and each `toolkits:` factory;
 - built-ins: `history` (always loaded), `workers`, `orchestration`, and
   `introspection` for bots loaded from a folder;
@@ -1010,6 +1010,12 @@ and `icon` (an emoji) for the pin. Loading the skill loads
   main_branch: main
   approve_publish: true
   root_only: false     # true: top-level chats only, not threads
+  run:                 # optional: ergo_config_repo_run
+    approve: true      # each run waits for approval (default)
+    timeout: 300
+    commands:
+      toolkit-test: {argv: [npm, test], cwd: ficsit/toolkit}
+      node: {argv: [node], cwd: ficsit/toolkit, args: true}
 ```
 
 Lets the bot maintain the git repository its folder lives in, so it can
@@ -1036,6 +1042,15 @@ its own, and with `ERGONAUT_BOTS_PULL_SECONDS` pulls merged changes too).
 For review screens the plugin also has `draft_diff()`, `pull_requests()`,
 `pull_request_diff(n)`, `merge_pull_request(n)` (squash-merge, then pull) and
 `close_pull_request(n)`; Ergonaut's bot page uses them for its Changes section.
+
+With `run.commands`, `ergo_config_repo_run(command, args)` runs one of those
+commands in the draft, so the bot can test code it wrote before publishing
+it. Commands are argv lists (no shell) with a `cwd` in the repo; only one with
+`args: true` takes the bot's arguments. They come from the live bot.yaml, not
+the draft. A run gets a bare environment (`PATH`, `HOME`, `LANG`, `CI=1`, none
+of the server's secrets), stdin closed, the timeout and trimmed output with the
+exit code. It still runs draft code as the user Ergonaut runs as, so each run
+waits for approval unless `approve: false`.
 
 ### orca
 
@@ -1106,6 +1121,28 @@ Gives the bot `ergo_bash_run(command, cwd?)`, which runs `bash -lc` on the
 host as the user Ergonaut runs as. Output is stdout and stderr with the exit
 code, trimmed to its start and end when long. It is the whole machine, so
 keep `approve: true` unless you trust the bot with it.
+
+### browser
+
+```yaml
+- name: browser
+  cdp_url: http://127.0.0.1:9222   # Chrome's --remote-debugging-port, or a tunnel to it
+  takeover: the Chrome window on rigel  # where a person signs in for the bot
+  approve_actions: true      # clicks, typing and key presses wait for approval
+  root_only: true
+  timeout: 30                # seconds per browser call
+  max_snapshot_chars: 20000
+```
+
+Attaches to a running Chrome over CDP with Playwright (the `browser`
+extra) and gives the bot `ergo_browser_tabs`, `ergo_browser_open`,
+`ergo_browser_snapshot` and `ergo_browser_screenshot` with no approval, and
+`ergo_browser_click`, `ergo_browser_type` and `ergo_browser_press`, which
+wait for approval unless `approve_actions: false`. Snapshots are
+accessibility trees whose refs (`e12`) the actions take; a Playwright
+selector works too. The bot is told to hand sign-ins, two-factor codes and
+captchas to the user in `takeover`. Setting up Chrome and the tunnel:
+[Browser control](browser.md).
 
 ### attachments
 
