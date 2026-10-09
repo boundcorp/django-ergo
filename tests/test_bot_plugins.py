@@ -268,6 +268,51 @@ def test_bot_proposes_pr_and_returns_to_main(bot_repo, monkeypatch):
         plugin.write(".git/hooks/pre-commit", "evil")
 
 
+def test_bot_management_runs_configured_commands_in_the_draft(bot_repo, monkeypatch):
+    _, work = bot_repo
+    yaml_text = """
+        name: manager
+        chats: {main: {skills: [config_repo]}}
+        plugins:
+          - name: bot_management
+            mode: propose_pr
+            run:
+              approve: false
+              timeout: 5
+              commands:
+                check: {argv: [python3, check.py], cwd: tools}
+                py: {argv: [python3], cwd: tools, args: true}
+    """
+    folder = work / "bots"
+    folder.mkdir(exist_ok=True)
+    bot, _ = make_bot(folder, yaml_text=yaml_text, name="manager")
+    plugin = bot.plugin("bot_management")
+    git(work, "add", "-A")
+    git(work, "commit", "-m", "add bot")
+    git(work, "push")
+    monkeypatch.setenv("SECRET_TOKEN", "hunter2")
+    plugin.write(
+        "tools/check.py",
+        "import os, sys; print('ok', os.environ.get('SECRET_TOKEN')); sys.exit(3)\n",
+    )
+    plugin.write("tools/hello.py", "import sys; print('hi', sys.argv[1])\n")
+
+    # It runs the draft (not the checkout), without the server's secrets.
+    assert plugin.run_command("check") == "check: exit 3\nok None"
+    assert plugin.run_command("py", ["hello.py", "there"]) == "py: exit 0\nhi there"
+    with pytest.raises(ValueError, match="takes no arguments"):
+        plugin.run_command("check", ["x"])
+    with pytest.raises(ValueError, match="configured: check, py"):
+        plugin.run_command("rm")
+    tools = {t.name: t for t in plugin._tools()}
+    assert not tools["ergo_config_repo_run"].requires_approval
+    assert "py (takes arguments)" in tools["ergo_config_repo_run"].description
+
+    # Without run.commands there is no tool.
+    plugin.run_commands = {}
+    assert "ergo_config_repo_run" not in {t.name for t in plugin._tools()}
+
+
 def test_bot_management_reads_edits_and_greps_files(bot_repo, monkeypatch):
     _, work = bot_repo
     _, _, plugin = management_bot(work, "propose_pr")
