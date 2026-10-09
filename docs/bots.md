@@ -1126,7 +1126,8 @@ keep `approve: true` unless you trust the bot with it.
 
 ```yaml
 - name: browser
-  cdp_url: http://127.0.0.1:9222   # Chrome's --remote-debugging-port, or a tunnel to it
+  cdp_url: http://127.0.0.1:9222   # Chrome's --remote-debugging-port, as ssh_host sees it
+  ssh_host: rigel            # optional: reach cdp_url through ssh -L to this host
   takeover: the Chrome window on rigel  # where a person signs in for the bot
   approve_actions: true      # clicks, typing and key presses wait for approval
   root_only: true
@@ -1141,7 +1142,8 @@ extra) and gives the bot `ergo_browser_tabs`, `ergo_browser_open`,
 wait for approval unless `approve_actions: false`. Snapshots are
 accessibility trees whose refs (`e12`) the actions take; a Playwright
 selector works too. The bot is told to hand sign-ins, two-factor codes and
-captchas to the user in `takeover`. Setting up Chrome and the tunnel:
+captchas to the user in `takeover`. With `ssh_host`, each call opens
+`ssh -N -L` to that host for its duration. Setting up Chrome and SSH:
 [Browser control](browser.md).
 
 ### attachments

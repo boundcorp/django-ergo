@@ -1411,6 +1411,58 @@ async def test_browser_opens_types_and_screenshots(tmp_path, settings, chrome):
     assert plugin._current[str(root.pk)] == opened["tab"]
 
 
+FAKE_SSH = """#!/usr/bin/env python3
+# ssh -N ... -L 127.0.0.1:PORT:HOST:RPORT HOST: forward the port, like ssh does.
+import socket, sys, threading
+args = sys.argv[1:]
+if args[-1] == "nowhere":
+    sys.exit("ssh: Could not resolve hostname nowhere")
+_, port, host, rport = args[args.index("-L") + 1].split(":")
+server = socket.create_server(("127.0.0.1", int(port)))
+def pipe(a, b):
+    while data := a.recv(65536):
+        b.sendall(data)
+    b.close()
+while True:
+    client, _ = server.accept()
+    upstream = socket.create_connection((host, int(rport)))
+    threading.Thread(target=pipe, args=(client, upstream), daemon=True).start()
+    threading.Thread(target=pipe, args=(upstream, client), daemon=True).start()
+"""
+
+
+def fake_ssh(tmp_path, monkeypatch):
+    import os
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    ssh = bin_dir / "ssh"
+    ssh.write_text(FAKE_SSH)
+    ssh.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+
+
+@pytest.mark.django_db
+def test_browser_reaches_chrome_through_an_ssh_tunnel(tmp_path, monkeypatch, chrome):
+    fake_ssh(tmp_path, monkeypatch)
+    _, _, plugin = browser_bot(tmp_path, config=f"cdp_url: {chrome}, ssh_host: rigel")
+    ctx = type("Ctx", (), {"session": None})()
+    opened = plugin.open(ctx, BROWSER_PAGE)
+    assert opened["title"] == "Search"
+    assert [tab["tab"] for tab in plugin.tabs(ctx) if tab.get("current")] == [
+        opened["tab"]
+    ]
+
+
+@pytest.mark.django_db
+def test_browser_says_when_ssh_fails(tmp_path, monkeypatch):
+    pytest.importorskip("playwright")
+    fake_ssh(tmp_path, monkeypatch)
+    _, _, plugin = browser_bot(tmp_path, config="ssh_host: nowhere, timeout: 5")
+    with pytest.raises(RuntimeError, match="ssh nowhere failed: .*Could not resolve"):
+        plugin.tabs(type("Ctx", (), {"session": None})())
+
+
 # ---------------------------------------------------------------------------
 # attachments
 # ---------------------------------------------------------------------------

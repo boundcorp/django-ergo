@@ -2,7 +2,8 @@
 
     plugins:
       - name: browser
-        cdp_url: http://127.0.0.1:9222   # Chrome's --remote-debugging-port (or a tunnel to it)
+        cdp_url: http://127.0.0.1:9222   # Chrome's --remote-debugging-port
+        ssh_host: rigel            # optional: reach cdp_url through ``ssh -L`` to this host
         takeover: the Chrome window on rigel  # where a person signs in for the bot
         approve_actions: true      # clicks, typing and key presses wait for approval
         root_only: true            # only the root session gets the tools
@@ -36,14 +37,23 @@ Playwright is the ``browser`` extra (``pip install django-ergo[browser]``);
 it needs no browser download, since it only connects. The DevTools port is
 full control of the browser with no authentication: bind it to localhost
 and reach it over an SSH tunnel or a private network, never the internet.
+With ``ssh_host``, each call opens ``ssh -N -L`` to that host (as the user
+Ergonaut runs as, with its SSH config and keys) and reaches ``cdp_url`` as
+that host sees it, so Chrome can stay bound to the browser machine's
+localhost.
 """
 
 from __future__ import annotations
 
 import concurrent.futures
+import contextlib
+import socket
+import subprocess
 import threading
+import time
 from typing import TYPE_CHECKING
 from typing import Any
+from urllib.parse import urlsplit
 
 from django_ergo.bots.plugins import BotPlugin
 from django_ergo.bots.tools import BotTool
@@ -54,6 +64,7 @@ from django_ergo.plugins.bash import trim
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from collections.abc import Iterator
 
     from django_ergo.bots.tools import ToolContext
     from django_ergo.conversation.context import ContextSource
@@ -68,6 +79,7 @@ class BrowserPlugin(BotPlugin):
 
     def on_load(self) -> None:
         self.cdp_url = str(self.config.get("cdp_url") or "http://127.0.0.1:9222")
+        self.ssh_host = str(self.config.get("ssh_host") or "")
         self.takeover = str(self.config.get("takeover") or "the browser window")
         self.approve_actions = bool(self.config.get("approve_actions", True))
         self.root_only = bool(self.config.get("root_only", True))
@@ -91,15 +103,18 @@ class BrowserPlugin(BotPlugin):
             raise RuntimeError(msg) from exc
 
         def work() -> Any:
-            with sync_playwright() as p:
+            with self._endpoint() as url, sync_playwright() as p:
                 try:
                     browser = p.chromium.connect_over_cdp(
-                        self.cdp_url, timeout=self.timeout * 1000
+                        url, timeout=self.timeout * 1000
                     )
                 except Exception as exc:
+                    where = self.cdp_url + (
+                        f" on {self.ssh_host}" if self.ssh_host else ""
+                    )
                     msg = (
-                        f"Can't reach the browser at {self.cdp_url}: is Chrome running "
-                        f"with --remote-debugging-port, and is the tunnel up? ({exc})"
+                        f"Can't reach the browser at {where}: is Chrome running "
+                        f"with --remote-debugging-port? ({exc})"
                     )
                     raise RuntimeError(msg) from exc
                 context = (
@@ -110,6 +125,56 @@ class BrowserPlugin(BotPlugin):
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
             return pool.submit(work).result()
+
+    @contextlib.contextmanager
+    def _endpoint(self) -> Iterator[str]:
+        """``cdp_url``, or a local port forwarded to it with ``ssh -L``."""
+        if not self.ssh_host:
+            yield self.cdp_url
+            return
+        target = urlsplit(self.cdp_url)
+        with socket.socket() as sock:
+            sock.bind(("127.0.0.1", 0))
+            port = sock.getsockname()[1]
+        forward = f"127.0.0.1:{port}:{target.hostname}:{target.port or 80}"
+        proc = subprocess.Popen(  # noqa: S603 — argv list, no shell
+            [  # noqa: S607
+                "ssh",
+                "-N",
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                "ExitOnForwardFailure=yes",
+                "-L",
+                forward,
+                self.ssh_host,
+            ],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            deadline = time.monotonic() + self.timeout
+            while True:
+                if proc.poll() is not None:
+                    error = (proc.stderr.read() if proc.stderr else "").strip()[:500]
+                    msg = f"ssh {self.ssh_host} failed: {error or f'exit {proc.returncode}'}"
+                    raise RuntimeError(msg)
+                with (
+                    contextlib.suppress(OSError),
+                    socket.create_connection(("127.0.0.1", port), timeout=1),
+                ):
+                    break
+                if time.monotonic() > deadline:
+                    msg = f"ssh {self.ssh_host} did not open the tunnel in {self.timeout:g}s"
+                    raise RuntimeError(msg)
+                time.sleep(0.1)
+            yield f"{target.scheme or 'http'}://127.0.0.1:{port}"
+        finally:
+            proc.terminate()
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                proc.wait(timeout=5)
 
     @staticmethod
     def _tab_id(page: Any) -> str:

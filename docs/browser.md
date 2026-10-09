@@ -57,22 +57,37 @@ The profile keeps its cookies across restarts.
 
 ### When Ergonaut runs on another machine
 
-Bring the port to the Ergonaut host over SSH, from the machine running
-Chrome. With a reverse tunnel, the browser machine dials out, so it needs
-no open ports:
+If the Ergonaut host can SSH to the browser machine (as the user Ergonaut
+runs as, with keys and no prompts), set `ssh_host` and leave `cdp_url` as
+the browser machine sees it:
+
+```yaml
+plugins:
+  - name: browser
+    ssh_host: rigel                 # a name from ~/.ssh/config, or user@host
+    cdp_url: http://127.0.0.1:9222  # on rigel
+```
+
+Each call opens `ssh -N -L` to that host for its own duration, so nothing
+has to keep a tunnel up and Chrome stays bound to localhost. Errors from
+ssh (an unknown host, a refused key) come back to the bot as the reason
+the call failed.
+
+Without SSH from the Ergonaut host, bring the port over from the browser
+machine instead, with a reverse tunnel that it dials out for:
 
 ```bash
 ssh -N -o ServerAliveInterval=30 -o ExitOnForwardFailure=yes \
     -R 9222:127.0.0.1:9222 ergonaut-host
 ```
 
-`cdp_url` stays `http://127.0.0.1:9222` on the Ergonaut host. Use
-`autossh` or a systemd user unit (`Restart=always`) for both Chrome and
-the tunnel so they come back after a reboot or a dropped connection. A
-private network such as Tailscale works too; point `cdp_url` at the
-browser machine's private IP, not a hostname, because Chrome refuses
-DevTools requests whose `Host` header is a name other than `localhost`.
-Never forward the port to a public address.
+`cdp_url` is then `http://127.0.0.1:9222` on the Ergonaut host. Use
+`autossh` or a systemd user unit (`Restart=always`) to keep it up. A
+private network works too; point `cdp_url` at the browser machine's
+private IP, not a hostname, because Chrome refuses DevTools requests whose
+`Host` header is a name other than `localhost`. Chrome has to listen on
+that interface for this, so prefer `ssh_host`. Never expose the port on a
+public address.
 
 ## How the bot uses it
 
