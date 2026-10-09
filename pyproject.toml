@@ -43,6 +43,7 @@ legacy = ["psycopg[binary]", "pgvector", "openai"]
 openai = ["openai"]
 filesystem = ["pyyaml>=6.0"]
 bots = ["pyyaml>=6.0", "jinja2>=3.1", "markdown-it-py>=3.0"]
+browser = ["playwright>=1.55"]  # the browser plugin (connects to Chrome over CDP)
 images = ["Pillow"]  # downscale images before they go to the model
 telemetry = [
     "opentelemetry-api",
@@ -62,6 +63,7 @@ dev = [
     "pytest",
     "pytest-mock",
     "pytest-xdist",
+    "playwright>=1.55",  # the browser extra, so CI runs the browser plugin tests
     "Pillow",  # the images extra, so CI runs the image-downscaling tests
     "ruff",
     "coverage",

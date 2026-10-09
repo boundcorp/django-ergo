@@ -192,7 +192,7 @@ COPY --from=frontend /app/frontend/dist /app/frontend/dist
 # the few Ergonaut doesn't pin, which this pulls in (pure Python wheels).
 COPY pyproject.toml setup.py README.md HISTORY.md /ergo/
 COPY src/ /ergo/src/
-RUN uv pip install --no-cache-dir "/ergo[legacy,bots]" && rm -rf /ergo
+RUN uv pip install --no-cache-dir "/ergo[legacy,bots,browser]" && rm -rf /ergo
 
 COPY ergonaut/pyproject.toml ergonaut/README.md ergonaut/manage.py /app/
 COPY ergonaut/infra/ /app/infra

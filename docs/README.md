@@ -13,6 +13,7 @@
 | [Data tables](tables.md) | `BotTable` models, migrations, the `tables` skill, pages over tables |
 | [Attachments](attachments.md) | Files in chats, the attachments plugin, images and audio |
 | [Plugins](plugins.md) | Official plugins, writing your own, hooks, channels, webhooks, workers |
+| [Browser control](browser.md) | The `browser` plugin, a Chrome a person can sign in to, tunnels |
 | [Bot reference](bots.md) | Every bot.yaml key and official plugin option |
 | [Running Ergonaut](ergonaut.md) | Commands, settings, the web app, reloading, containers, production |
 | [Agent skills](agent-skills.md) | Ergo's skills for Claude Code and Codex, the `ergonaut-remote` command and API keys |

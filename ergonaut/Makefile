@@ -25,7 +25,7 @@ format:
 
 venv:
 	uv venv .venv
-	uv pip install -e "..[legacy,bots]" -e .
+	uv pip install -e "..[legacy,bots,browser]" -e .
 
 precommit:
 	make format
