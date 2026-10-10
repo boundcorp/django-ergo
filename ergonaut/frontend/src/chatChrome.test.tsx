@@ -37,7 +37,7 @@ describe('MobileSessionBar', () => {
 })
 
 describe('SuggestionChips', () => {
-  test('renders each suggestion as a button', () => {
+  test('renders each suggestion as a focusable hold-to-send button', () => {
     const html = renderToStaticMarkup(
       createElement(SuggestionChips, {
         suggestions: ['Do both as PRs', 'No changes for now'],
@@ -48,6 +48,9 @@ describe('SuggestionChips', () => {
     expect(html).toContain('Do both as PRs')
     expect(html).toContain('No changes for now')
     expect(html).toContain('aria-label="Suggested replies"')
+    expect(html).toContain('Hold for 0.7 seconds to send.')
+    expect(html).toContain('aria-describedby=')
+    expect(html).toContain('quick-reply-progress')
     expect(html.match(/<button/g)?.length).toBe(2)
   })
 })
