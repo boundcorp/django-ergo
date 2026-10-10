@@ -1126,23 +1126,34 @@ keep `approve: true` unless you trust the bot with it.
 
 ```yaml
 - name: browser
-  cdp_url: http://127.0.0.1:9222   # Chrome's --remote-debugging-port, or a tunnel to it
+  cdp_url: http://127.0.0.1:9222   # Chrome's --remote-debugging-port, as ssh_host sees it
+  ssh_host: rigel            # optional: reach cdp_url through an ssh master on this host
   takeover: the Chrome window on rigel  # where a person signs in for the bot
-  approve_actions: true      # clicks, typing and key presses wait for approval
+  sessions: true             # browser tools need an approved ergo_browser_start
+  idle_minutes: 30           # a session with no browser calls this long ends
+  poll_seconds: 120          # how often the session worker checks Chrome
+  launch_command: ""         # run over ssh_host at start when Chrome doesn't answer
+  approve_actions: false     # clicks, typing and key presses also wait for approval
   root_only: true
   timeout: 30                # seconds per browser call
   max_snapshot_chars: 20000
 ```
 
 Attaches to a running Chrome over CDP with Playwright (the `browser`
-extra) and gives the bot `ergo_browser_tabs`, `ergo_browser_open`,
-`ergo_browser_snapshot` and `ergo_browser_screenshot` with no approval, and
+extra). `ergo_browser_start` always waits for approval and opens one
+browser session for the bot, shown as a `browser:session` worker that
+checks Chrome and ends after `idle_minutes` without a browser call;
+`ergo_browser_stop` ends it and closes the tabs it opened. While a session
+is open the bot has `ergo_browser_tabs`, `ergo_browser_open`,
+`ergo_browser_snapshot`, `ergo_browser_screenshot`, and
 `ergo_browser_click`, `ergo_browser_type` and `ergo_browser_press`, which
-wait for approval unless `approve_actions: false`. Snapshots are
-accessibility trees whose refs (`e12`) the actions take; a Playwright
-selector works too. The bot is told to hand sign-ins, two-factor codes and
-captchas to the user in `takeover`. Setting up Chrome and the tunnel:
-[Browser control](browser.md).
+also wait for approval with `approve_actions: true`. With `sessions: false`
+there are no start and stop tools and the browser tools always work.
+Snapshots are accessibility trees whose refs (`e12`) the actions take; a
+Playwright selector works too. The bot is told to hand sign-ins, two-factor
+codes and captchas to the user in `takeover`. With `ssh_host`, calls go
+through an ssh ControlMaster forwarding a local port, one per host or pod.
+Setting up Chrome and SSH: [Browser control](browser.md).
 
 ### attachments
 

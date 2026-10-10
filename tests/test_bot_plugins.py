@@ -13,6 +13,7 @@ from django_ergo.bots.runtime import Bot
 from django_ergo.conversation.models import ConversationAttachment
 from django_ergo.conversation.models import ConversationSession
 from django_ergo.conversation.toolkit import Toolkit
+from tests.test_bot_workers import workers  # noqa: F401 — fixture
 from tests.test_bots import make_bot
 from tests.test_bots import say
 from tests.test_bots import write_bot
@@ -1343,13 +1344,26 @@ def chrome(tmp_path):
     proc.wait()
 
 
+def _tool_results(engine) -> list:
+    return [
+        json.loads(block["content"])
+        if block["content"][:1] in "[{"
+        else block["content"]
+        for message in engine._client.calls[-1]["messages"]
+        if isinstance(message.get("content"), list)
+        for block in message["content"]
+        if block.get("type") == "tool_result"
+    ]
+
+
 @pytest.mark.django_db(transaction=True)
-async def test_browser_actions_wait_for_approval(tmp_path):
+async def test_browser_actions_can_wait_for_approval(tmp_path):
     bot, engine, _ = browser_bot(
         tmp_path,
         claude_tool("ergo_browser_click", {"target": "e3"}, tool_id="c1"),
         say("Skipped."),
-        config="takeover: the Chrome window on the desk",
+        config="sessions: false, approve_actions: true, "
+        "takeover: the Chrome window on the desk",
     )
     user = await User.objects.acreate(username="surfer-user")
     root = await bot.root_session(user)
@@ -1358,24 +1372,44 @@ async def test_browser_actions_wait_for_approval(tmp_path):
     context = _turn_context(engine._client.calls[0])
     assert "the Chrome window on the desk" in context
     assert "wait for the user's approval" in context
+    assert "ergo_browser_start" not in context
 
 
 @pytest.mark.django_db
 def test_browser_reports_an_unreachable_chrome(tmp_path):
     pytest.importorskip("playwright")
     _, _, plugin = browser_bot(
-        tmp_path, config="cdp_url: http://127.0.0.1:9, timeout: 2"
+        tmp_path, config="cdp_url: http://127.0.0.1:9, timeout: 2, sessions: false"
     )
     with pytest.raises(RuntimeError, match="Can't reach the browser"):
         plugin.tabs(type("Ctx", (), {"session": None})())
 
 
+@pytest.mark.django_db
+def test_browser_tools_need_a_session(tmp_path):
+    _, _, plugin = browser_bot(tmp_path)
+    with pytest.raises(RuntimeError, match="start one with ergo_browser_start"):
+        plugin.tabs(type("Ctx", (), {"session": None})())
+    assert plugin.stop(None) == "No browser session is open."
+
+
+@pytest.mark.usefixtures("workers")
 @pytest.mark.django_db(transaction=True)
-async def test_browser_opens_types_and_screenshots(tmp_path, settings, chrome):
+async def test_a_browser_session_is_approved_used_and_stopped(
+    tmp_path, settings, chrome
+):
+    from asgiref.sync import sync_to_async
+
+    from django_ergo.bots import workers as w
+    from django_ergo.conversation.models import Worker
+
     settings.MEDIA_ROOT = str(tmp_path / "media")
     bot, engine, plugin = browser_bot(
         tmp_path,
-        claude_tool("ergo_browser_open", {"url": BROWSER_PAGE}, tool_id="o1"),
+        claude_tool("ergo_browser_start", {}, tool_id="go"),
+        claude_tool(
+            "ergo_browser_open", {"url": BROWSER_PAGE, "new_tab": True}, tool_id="o1"
+        ),
         claude_tool(
             "ergo_browser_type",
             {"target": "e4", "text": "tacos", "submit": True},
@@ -1384,31 +1418,153 @@ async def test_browser_opens_types_and_screenshots(tmp_path, settings, chrome):
         claude_tool("ergo_browser_screenshot", {}, tool_id="s1"),
         claude_tool("ergo_browser_tabs", {}, tool_id="l1"),
         say("Searched."),
-        config=f"cdp_url: {chrome}, approve_actions: false",
+        claude_tool("ergo_browser_stop", {}, tool_id="x1"),
+        say("Closed."),
+        config=f"cdp_url: {chrome}",
     )
     user = await User.objects.acreate(username="surfer-user")
     root = await bot.root_session(user)
-    done = await bot.ask(root, "Search for tacos")
+    paused = await bot.ask(root, "Search for tacos")
+    assert [a.tool_name for a in paused.approvals] == ["ergo_browser_start"]
+    done = await bot.resume(root, {"go": True})
     assert done.text == "Searched."
 
-    results = [
-        json.loads(block["content"])
-        for message in engine._client.calls[-1]["messages"]
-        if isinstance(message.get("content"), list)
-        for block in message["content"]
-        if block.get("type") == "tool_result"
-    ]
-    opened = results[0]
+    started, opened, typed, shot, tabs = _tool_results(engine)
+    assert started.startswith("Browser session open on 127.0.0.1:")
     assert opened["title"] == "Search"
     assert 'textbox "Query" [ref=e4]' in opened["snapshot"]
     # A new connection resolves the ref against a fresh snapshot.
-    assert results[1]["title"] == "sent tacos"
-    assert results[2]["filename"].startswith("browser-")
-    current = [tab for tab in results[3] if tab.get("current")]
-    assert [tab["tab"] for tab in current] == [opened["tab"]]
-    shot = await ConversationAttachment.objects.aget(id=results[2]["id"])
-    assert shot.session_id == root.id
-    assert plugin._current[str(root.pk)] == opened["tab"]
+    assert typed["title"] == "sent tacos"
+    assert shot["filename"].startswith("browser-")
+    assert [tab["tab"] for tab in tabs if tab.get("current")] == [opened["tab"]]
+
+    session = await Worker.objects.aget(function="browser:session")
+    assert session.state["current"] == {str(root.pk): opened["tab"]}
+    assert session.state["opened"] == [opened["tab"]]
+    # The session worker checks Chrome and polls again.
+    assert await sync_to_async(w.run)(str(session.pk), bot.registry) == "running"
+    await session.arefresh_from_db()
+    assert session.progress.startswith("Chrome on 127.0.0.1:")
+
+    done = await bot.ask(root, "Close the browser")
+    assert done.text == "Closed."
+    assert (
+        _tool_results(engine)[-1] == "Browser session ended; closed 1 tab(s) it opened."
+    )
+    await session.arefresh_from_db()
+    assert session.status == "cancelled"
+    left = await sync_to_async(
+        lambda: [
+            t["tab"]
+            for t in plugin._run(lambda c: [{"tab": i} for i, _ in plugin._pages(c)])
+        ]
+    )()
+    assert opened["tab"] not in left
+
+
+@pytest.mark.usefixtures("workers")
+@pytest.mark.django_db(transaction=True)
+def test_an_idle_browser_session_ends_itself(tmp_path, chrome):
+    import time
+
+    from asgiref.sync import async_to_sync
+
+    from django_ergo.bots import workers as w
+    from django_ergo.bots.tools import ToolContext
+
+    bot, _, plugin = browser_bot(tmp_path, config=f"cdp_url: {chrome}, idle_minutes: 1")
+    user = User.objects.create(username="idle-user")
+    session = async_to_sync(bot.root_session)(user)
+    plugin.start(ToolContext(bot=bot, session=session, user=user))
+    worker = plugin.session()
+    worker.state = {**worker.state, "used_at": time.time() - 120}
+    worker.save()
+    assert w.run(str(worker.pk), bot.registry) == "completed"
+    worker.refresh_from_db()
+    assert worker.result.startswith("Browser session ended after 1 idle minutes")
+    assert plugin.session() is None
+
+
+FAKE_SSH = """#!/usr/bin/env python3
+# Enough of ssh for the browser plugin: -fN -S sock -L (a forwarding master
+# in the background), -O check|exit, and a failing host.
+import os, signal, socket, sys, threading
+args = sys.argv[1:]
+if args[-1] == "nowhere":
+    sys.exit("ssh: Could not resolve hostname nowhere")
+control = args[args.index("-S") + 1] if "-S" in args else ""
+if "-O" in args:
+    op = args[args.index("-O") + 1]
+    try:
+        pid = int(open(control).read())
+        os.kill(pid, 0)
+    except (OSError, ValueError):
+        sys.exit(255)
+    if op == "exit":
+        os.kill(pid, signal.SIGTERM)
+        os.unlink(control)
+    sys.exit(0)
+_, port, host, rport = args[args.index("-L") + 1].split(":")
+server = socket.create_server(("127.0.0.1", int(port)))
+pid = os.fork()
+if pid:
+    open(control, "w").write(str(pid))
+    sys.exit(0)
+os.setsid()
+def pipe(a, b):
+    while data := a.recv(65536):
+        b.sendall(data)
+    b.close()
+while True:
+    client, _ = server.accept()
+    upstream = socket.create_connection((host, int(rport)))
+    threading.Thread(target=pipe, args=(client, upstream), daemon=True).start()
+    threading.Thread(target=pipe, args=(upstream, client), daemon=True).start()
+"""
+
+
+def fake_ssh(tmp_path, monkeypatch):
+    import os
+    import tempfile
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    ssh = bin_dir / "ssh"
+    ssh.write_text(FAKE_SSH)
+    ssh.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+
+
+@pytest.mark.django_db
+def test_browser_reaches_chrome_through_an_ssh_master(tmp_path, monkeypatch, chrome):
+    fake_ssh(tmp_path, monkeypatch)
+    _, _, plugin = browser_bot(
+        tmp_path, config=f"cdp_url: {chrome}, ssh_host: rigel, sessions: false"
+    )
+    ctx = type("Ctx", (), {"session": None})()
+    opened = plugin.open(ctx, BROWSER_PAGE)
+    assert opened["title"] == "Search"
+    port = plugin._port_file.read_text()
+    # The next call reuses the master and its port.
+    assert [tab["tab"] for tab in plugin.tabs(ctx) if tab.get("current")] == [
+        opened["tab"]
+    ]
+    assert plugin._port_file.read_text() == port
+    assert plugin.close_tunnel()
+    assert not plugin._control.exists()
+    assert not plugin.close_tunnel()
+
+
+@pytest.mark.django_db
+def test_browser_says_when_ssh_fails(tmp_path, monkeypatch):
+    pytest.importorskip("playwright")
+    fake_ssh(tmp_path, monkeypatch)
+    _, _, plugin = browser_bot(
+        tmp_path, config="ssh_host: nowhere, timeout: 5, sessions: false"
+    )
+    with pytest.raises(RuntimeError, match="ssh nowhere failed: .*Could not resolve"):
+        plugin.tabs(type("Ctx", (), {"session": None})())
 
 
 # ---------------------------------------------------------------------------
