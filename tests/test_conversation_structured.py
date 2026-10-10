@@ -515,6 +515,46 @@ async def test_plain_text_nudge_quotes_the_answer(user):
     assert "Draft ae62abde is created and quoted." in nudge
 
 
+def _plan_from_text(text):
+    return {"title": text, "steps": ["from text"]}
+
+
+async def test_text_output_takes_a_plain_text_answer(user):
+    engine = claude_engine(claude_text("Ship it"))
+    spec = StructuredCallSpec(
+        kind="planner", response_model=Plan, text_output=_plan_from_text
+    )
+
+    result = await run_structured_call(spec, "Plan", user=user, engine=engine)
+
+    assert result.ok
+    assert result.parsed == Plan(title="Ship it", steps=["from text"])
+    assert result.call.metadata["text_answer"]
+    assert len(engine._client.calls) == 1
+    # Stored as the output tool's call and its result, not as plain text.
+    call, accepted = result.call.transcript[-3:-1]
+    assert [b["type"] for b in call["content"]] == ["tool_use"]
+    assert call["content"][0]["name"] == "submit_output"
+    assert call["content"][0]["input"] == _plan_from_text("Ship it")
+    assert accepted["content"][0]["content"] == "Output accepted."
+
+
+async def test_text_output_that_fails_validation_is_nudged(user):
+    engine = claude_engine(
+        claude_text("Ship it"), claude_tool("submit_output", VALID_PLAN)
+    )
+    spec = StructuredCallSpec(
+        kind="planner", response_model=Plan, text_output=lambda text: {}
+    )
+
+    result = await run_structured_call(spec, "Plan", user=user, engine=engine)
+
+    assert result.parsed == Plan(**VALID_PLAN)
+    assert "text_answer" not in result.call.metadata
+    nudge = json.dumps(engine._client.calls[1]["messages"][-1])
+    assert "Your last message was plain text" in nudge
+
+
 async def test_empty_response_is_asked_to_carry_on_not_to_wrap_up(user):
     # Asking for a "final answer" after an empty response made the model drop
     # work it was in the middle of.

@@ -82,6 +82,11 @@ class ChatReply(BaseModel):
         return f"{self.text}\n\nSuggested replies: {options}"
 
 
+def text_reply(text: str) -> dict:
+    """The send_reply arguments for a reply the model gave in plain text."""
+    return {"type": "message", "text": text}
+
+
 def chat_reply_spec(
     toolkits: list[Toolkit] | None = None,
     *,
@@ -100,4 +105,5 @@ def chat_reply_spec(
         wrap_up=True,
         max_tokens=max_tokens,
         output_tool_name=CHAT_REPLY_TOOL,
+        text_output=text_reply,
     )

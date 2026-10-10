@@ -676,6 +676,11 @@ by calling `send_reply` with a `ChatReply`:
   the bot needs from the user or what it is doing now. Ergonaut shows it
   under the thread's title.
 
+If the model answers in plain text instead, that text is taken as a
+`message` reply (no suggestions or status) and stored as a `send_reply`
+call, so the user gets it without a second model call and later turns only
+see replies given through the tool.
+
 History stores each reply as readable text, with its suggestions, so later
 turns and the history tools see the conversation as the user did. A tool
 marked `requires_approval` pauses the turn (`result.approvals`), and

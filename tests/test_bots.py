@@ -762,8 +762,9 @@ async def test_bot_turn_is_a_chat_reply_structured_call(tmp_path):
     bot, engine = make_bot(
         tmp_path,
         say("Tacos or soup?", suggestions=["Tacos", "Soup"], kind="question"),
-        claude_text("Plain text is not allowed"),
-        say("Tacos it is."),
+        claude_text(""),
+        claude_text("Tacos it is."),
+        say("Enjoy."),
     )
     root = await bot.root_session(user)
 
@@ -780,20 +781,22 @@ async def test_bot_turn_is_a_chat_reply_structured_call(tmp_path):
     )
 
     answer = await bot.ask(root, "Tacos")
-    assert answer.text == "Tacos it is."
-    # A plain-text answer was sent back for a proper reply.
+    # An empty response is nudged to carry on.
     # The turn context goes first in the newest user message, here the nudge.
-    correction = engine._client.calls[2]["messages"][-1]["content"][1]["text"]
-    assert "Call the send_reply tool now" in correction
-    assert "Plain text is not allowed" in correction
+    nudge = engine._client.calls[2]["messages"][-1]["content"][1]["text"]
+    assert "Your last response was empty" in nudge
     # The nudge is stored as Ergo's, not as the user's message.
     nudges = [
         m.author
         async for m in root.messages.filter(
-            content_blocks__text__contains="Call the send_reply tool now"
+            content_blocks__text__contains="Your last response was empty"
         )
     ]
     assert [a.get("kind") for a in nudges] == ["system"]
+    # A plain-text answer is the reply, without another call to resend it.
+    assert answer.text == "Tacos it is."
+    assert answer.call.metadata["text_answer"]
+    assert len(engine._client.calls) == 3
     # The model sees its earlier reply as the send_reply call, suggestions
     # included, and not as a plain-text copy: a history of turns that end in
     # plain text teaches it to answer in plain text.
@@ -806,6 +809,26 @@ async def test_bot_turn_is_a_chat_reply_structured_call(tmp_path):
         role="assistant",
         content_blocks__text="Tacos or soup?\n\nSuggested replies: Tacos / Soup",
     ).aexists()
+
+    # The plain-text answer reaches the model as a send_reply call too.
+    await bot.ask(root, "Thanks")
+    sent = engine._client.calls[3]["messages"]
+    answered = [
+        block
+        for m in sent
+        if m["role"] == "assistant"
+        for block in m["content"]
+        if block.get("input", {}).get("text") == "Tacos it is."
+    ]
+    assert [b["name"] for b in answered] == ["send_reply"]
+    texts = [
+        block.get("text")
+        for m in sent
+        if m["role"] == "assistant"
+        for block in m["content"]
+        if block["type"] == "text"
+    ]
+    assert "Tacos it is." not in texts
 
 
 @pytest.mark.django_db(transaction=True)
