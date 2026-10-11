@@ -866,22 +866,17 @@ export function Chat({ onChange }: { onChange: () => void }) {
             )}
           </div>
         )}
-        {!!turnSuggestions.length && (
-          <div className="suggestion-desktop mx-4 mb-2 flex flex-wrap gap-2 sm:mx-6">
-            {turnSuggestions.map(s => (
-              <button
-                key={s}
-                type="button"
-                disabled={busy}
-                className="rounded-full border border-indigo-300 px-3 py-1 text-sm text-indigo-700 hover:bg-indigo-50 disabled:opacity-50 dark:border-indigo-700 dark:text-indigo-300 dark:hover:bg-indigo-950"
-                onClick={() => send(s, 'send', 'suggestion')}
-              >
-                {s}
-              </button>
-            ))}
-          </div>
-        )}
-        <SuggestionChips suggestions={mobileSuggestions} disabled={busy} onPick={s => send(s, 'send', 'suggestion')} />
+        <SuggestionChips
+          suggestions={turnSuggestions}
+          disabled={busy || !!pending || uploading}
+          onPick={s => send(s, 'send', 'suggestion')}
+          variant="desktop"
+        />
+        <SuggestionChips
+          suggestions={mobileSuggestions}
+          disabled={busy || !!pending || uploading}
+          onPick={s => send(s, 'send', 'suggestion')}
+        />
         {!!outgoing.length && (
           <div className="mx-4 flex flex-wrap gap-2 pt-2">
             {outgoing.map(file => (

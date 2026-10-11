@@ -1,27 +1,110 @@
-import { useEffect, useId, useRef, type ReactNode } from 'react'
+import {
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+} from 'react'
+import { QUICK_REPLY_HOLD_MS, QuickReplyHoldController } from '../quickReplyHold'
 
-/** Suggested replies as real buttons. Phone CSS raises them to a 44px target. */
-export function SuggestionChips({
-  suggestions,
-  disabled,
-  onPick,
-}: {
+type SuggestionChipsProps = {
   suggestions: string[]
   disabled?: boolean
   onPick: (text: string) => void
-}) {
+  variant?: 'desktop' | 'mobile'
+}
+
+/** Suggested replies require a deliberate hold before their text is sent. */
+export function SuggestionChips({ suggestions, disabled, onPick, variant = 'mobile' }: SuggestionChipsProps) {
+  const hintId = useId()
+  const onPickRef = useRef(onPick)
+  const wasDisabled = useRef(!!disabled)
+  const [holding, setHolding] = useState<string | null>(null)
+  const [sent, setSent] = useState(false)
+  const controller = useRef<QuickReplyHoldController | null>(null)
+  const suggestionKey = suggestions.join('\u0000')
+
+  onPickRef.current = onPick
+  if (!controller.current) {
+    controller.current = new QuickReplyHoldController(setHolding, text => {
+      setSent(true)
+      onPickRef.current(text)
+    })
+  }
+  const hold = controller.current
+
+  useEffect(() => {
+    hold.setDisabled(!!disabled)
+    if (wasDisabled.current && !disabled) {
+      hold.reset()
+      setSent(false)
+    }
+    wasDisabled.current = !!disabled
+  }, [disabled, hold])
+
+  useEffect(() => {
+    hold.reset()
+    setSent(false)
+  }, [hold, suggestionKey])
+
+  useEffect(() => () => hold.dispose(), [hold])
+
   if (!suggestions.length) return null
+  const chipClass =
+    variant === 'desktop'
+      ? 'suggestion-chip quick-reply-chip rounded-full border border-indigo-300 px-3 py-1 text-sm text-indigo-700 hover:bg-indigo-50 disabled:opacity-50 dark:border-indigo-700 dark:text-indigo-300 dark:hover:bg-indigo-950'
+      : 'suggestion-chip quick-reply-chip'
+  const rowClass =
+    variant === 'desktop'
+      ? 'suggestion-desktop mx-4 mb-2 flex flex-wrap gap-2 sm:mx-6'
+      : 'suggestion-mobile suggestion-row'
+  const progressStyle = { '--quick-reply-hold-duration': `${QUICK_REPLY_HOLD_MS}ms` } as CSSProperties
+
   return (
-    <div className="suggestion-mobile suggestion-row" role="group" aria-label="Suggested replies">
+    <div className={rowClass} role="group" aria-label="Suggested replies">
+      <span id={hintId} className="sr-only">
+        Hold Enter, Space, or press and hold for 0.7 seconds to send a suggested reply.
+      </span>
       {suggestions.map(suggestion => (
         <button
           key={suggestion}
           type="button"
-          className="suggestion-chip"
-          disabled={disabled}
-          onClick={() => onPick(suggestion)}
+          className={chipClass}
+          style={progressStyle}
+          disabled={disabled || sent}
+          aria-label={`${suggestion}. Hold for 0.7 seconds to send.`}
+          aria-describedby={hintId}
+          data-holding={holding === suggestion || undefined}
+          onClick={event => event.preventDefault()}
+          onContextMenu={event => event.preventDefault()}
+          onDragStart={event => event.preventDefault()}
+          onPointerDown={(event: ReactPointerEvent<HTMLButtonElement>) => {
+            if (event.button !== 0 || disabled || sent) return
+            hold.beginPointer(suggestion, event.pointerId, event.clientX, event.clientY)
+          }}
+          onPointerMove={(event: ReactPointerEvent<HTMLButtonElement>) =>
+            hold.movePointer(event.pointerId, event.clientX, event.clientY)
+          }
+          onPointerUp={(event: ReactPointerEvent<HTMLButtonElement>) => hold.cancelPointer(event.pointerId)}
+          onPointerCancel={(event: ReactPointerEvent<HTMLButtonElement>) => hold.cancelPointer(event.pointerId)}
+          onPointerLeave={() => hold.cancel()}
+          onBlur={() => hold.cancel()}
+          onKeyDown={(event: ReactKeyboardEvent<HTMLButtonElement>) => {
+            if (event.repeat || (event.key !== 'Enter' && event.key !== ' ')) return
+            event.preventDefault()
+            if (!disabled && !sent) hold.beginKeyboard(suggestion)
+          }}
+          onKeyUp={(event: ReactKeyboardEvent<HTMLButtonElement>) => {
+            if (event.key !== 'Enter' && event.key !== ' ') return
+            event.preventDefault()
+            hold.endKeyboard()
+          }}
         >
-          {suggestion}
+          <span className="quick-reply-progress" aria-hidden="true" />
+          <span className="quick-reply-label">{suggestion}</span>
         </button>
       ))}
     </div>

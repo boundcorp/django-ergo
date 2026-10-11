@@ -165,9 +165,11 @@ refuse logins until the window passes.
   transcript shows tool calls you can open, images a
   tool returned under its call, files the bot made where it made them,
   approvals with
-  Approve and Deny, suggested replies as buttons, file uploads and pasted
-  images. Send while the bot is working to steer the running turn; Stop
-  ends it, and Stop & send interrupts it with your message. Pinned files
+  Approve and Deny, suggested replies that need a 700ms press-and-hold to
+  send, file uploads and pasted images. A chip fills left to right while it is
+  held; hold Enter or Space for the same duration when it has keyboard focus.
+  Send while the bot is working to steer the running turn; Stop ends it, and
+  Stop & send interrupts it with your message. Pinned files
   and pages open as tabs above the transcript. The transcript follows new
   messages only while you're at the bottom; scrolled up, it stays put and a
   "Jump to bottom" button (or "New messages") takes you back. Sending a
