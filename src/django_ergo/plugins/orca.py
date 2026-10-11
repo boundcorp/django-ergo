@@ -47,9 +47,13 @@ The bot runs the CLI on the host Ergonaut runs on, as that user. Tools:
   ``files_host`` (or this host) every ``usage_minutes`` and when it settles.
   It records Claude Code, Codex, and omp token counts per worker for Costs;
   scanning is best effort and never changes the worker outcome.
-- ``orca_run``: every other command (creating worktrees, starting and
-  stopping workers, sending to terminals...). Each call needs approval unless
-  ``approve_changes: false``.
+- ``orca_run``: every other command (creating worktrees, stopping workers,
+  sending to terminals...). Each call needs approval unless
+  ``approve_changes: false``. It refuses ``orchestration worker-start``: a
+  worker started that way has no watcher, so the chat never sees its progress
+  or report. Workers start only through ``orca_start_worker`` /
+  ``ergo_agent_start``, which replace a stale mailbox (``selector_not_found``,
+  or ``stable_pane_required`` after Orca restarts) and retry once.
 
 Arguments are passed as a list, never through a shell. ``--json`` is added
 where the CLI accepts it, and with ``environment`` set the bot can't point a
@@ -117,6 +121,12 @@ READ_ONLY = {
     ("skills", "get"),
 }
 NO_JSON = {("skills", "get")}
+# Started only by orca_start_worker / ergo_agent_start, which watch the worker.
+TRACKED_ONLY = {("orchestration", "worker-start")}
+# Orca errors that mean the chat's saved mailbox terminal or Run can't be used
+# any more (its worktree was removed, or Orca restarted and the terminal lost
+# its pane), so a new mailbox fixes them.
+STALE_MAILBOX = {"selector_not_found", "stable_pane_required"}
 MAX_OUTPUT_CHARS = 40_000  # about 10k tokens; a 26-worktree list is ~28k compact
 TARGET_FLAGS = ("--environment", "--pairing-code")
 ARGS_SCHEMA = {
@@ -350,6 +360,14 @@ def _first_path(value):
     return None
 
 
+class OrcaError(ValueError):
+    """An Orca CLI command failed; ``code`` is Orca's error code, when it gave one."""
+
+    def __init__(self, message: str, code: str = ""):
+        super().__init__(message)
+        self.code = code
+
+
 class OrcaPlugin(BotPlugin):
     name = "orca"
     description = "Manage Orca worktrees, terminals and workers"
@@ -404,6 +422,17 @@ class OrcaPlugin(BotPlugin):
             trim(compact(proc.stdout.strip(), fields), MAX_OUTPUT_CHARS)
             or "(no output)"
         )
+
+    def change(self, args: list[str], fields: list[str] | None = None) -> str:
+        """``orca_run``: any command, except starting workers by hand."""
+        if command_of(args) in TRACKED_ONLY and not is_read_only(args):
+            return (
+                "Start workers with orca_start_worker (or ergo_agent_start), not "
+                "orca_run: only those make a worker this chat tracks, with its "
+                "progress, questions, usage and final report. If orca_start_worker "
+                "fails, tell the user its error instead of starting one by hand."
+            )
+        return self.run(args, fields)
 
     def read(self, args: list[str], fields: list[str] | None = None) -> str:
         if not is_read_only(args):
@@ -640,11 +669,10 @@ class OrcaPlugin(BotPlugin):
         except ValueError:
             payload = {}
         if proc.returncode or payload.get("ok") is False:
-            error = (payload.get("error") or {}).get("message") or (
-                proc.stderr or proc.stdout
-            ).strip()[:600]
+            details = payload.get("error") or {}
+            error = details.get("message") or (proc.stderr or proc.stdout).strip()[:600]
             msg = f"orca {' '.join(command_of(args))} failed: {error}"
-            raise ValueError(msg)
+            raise OrcaError(msg, str(details.get("code") or ""))
         return payload.get("result", payload)
 
     def mailbox(self, ctx: ToolContext, worktree: str) -> tuple[str, str]:
@@ -823,9 +851,11 @@ class OrcaPlugin(BotPlugin):
         try:
             task_id, run_id, receipt = self.dispatch(ctx, *args)
         except ValueError as exc:
-            # The chat's saved mailbox terminal or Run is gone (its worktree was
-            # removed, Orca restarted): make new ones and try once more.
-            if "selector_not_found" not in str(exc) or not self.forget_mailbox(ctx):
+            # The chat's saved mailbox terminal or Run is gone or unusable (its
+            # worktree was removed, Orca restarted): make new ones and try once more.
+            code = getattr(exc, "code", "")
+            stale = code in STALE_MAILBOX or "selector_not_found" in str(exc)
+            if not stale or not self.forget_mailbox(ctx):
                 raise
             task_id, run_id, receipt = self.dispatch(ctx, *args)
         dispatch_id = _first_key(receipt, ("dispatchId", "dispatch_id"))
@@ -1228,9 +1258,11 @@ class OrcaPlugin(BotPlugin):
                 'output keeps only its start and end, so pass fields (e.g. ["id", "path", "branch"]) '
                 "to list commands. Start coding agents only with ergo_agent_start (or "
                 "orca_start_worker): it makes a supervised Orca worker that reports back to "
-                "this chat. Never start one by "
-                "creating a terminal with --command and sending it text; that agent is "
-                "unsupervised and invisible to Orca's worker list. Before stopping workers or "
+                "this chat and tracks its progress. Never start one with orca_run "
+                "(orchestration worker-start, or a terminal with --command and sent "
+                "text): this chat can't follow that agent or get its report. If "
+                "orca_start_worker fails, tell the user its error rather than working "
+                "around it. Before stopping workers or "
                 'anything else unusual, read the CLI\'s guides with orca_read ["skills", '
                 '"get", "orca-cli"] and ["skills", "get", "orchestration"], and check '
                 "the run and worker lists so you don't duplicate work.",
@@ -1258,15 +1290,16 @@ class OrcaPlugin(BotPlugin):
             name="orca_run",
             description=(
                 "Run an Orca CLI command that changes state: create or remove "
-                "worktrees and terminals, send to a terminal, start, stop or "
-                "release workers, create runs and tasks."
+                "worktrees and terminals, send to a terminal, stop or release "
+                "workers. Not for starting workers: use orca_start_worker, which "
+                "tracks the worker's progress and brings its report back here."
             ),
             parameters=ARGS_SCHEMA,
             required=["args"],
             requires_approval=self.approve_changes,
         )
         def run(args: list[str], fields: list[str] | None = None) -> str:
-            return plugin.run(args, fields)
+            return plugin.change(args, fields)
 
         @bot_tool(
             name="orca_attach",
