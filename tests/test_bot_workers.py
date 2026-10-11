@@ -598,6 +598,32 @@ def test_orca_start_worker_replaces_a_mailbox_whose_terminal_is_gone(
         "run": "run_new",
     }
 
+    # After an Orca restart the saved terminal can exist but have lost its pane.
+    calls.clear()
+
+    def no_pane(argv, **kwargs):
+        if argv[1:3] == ["orchestration", "task-create"] and "term_new" in argv:
+            calls.append(argv)
+            body = {
+                "ok": False,
+                "error": {
+                    "code": "stable_pane_required",
+                    "message": "The coordinator terminal has no stable pane identity.",
+                },
+            }
+            return subprocess.CompletedProcess(
+                argv, 1, stdout=json.dumps(body), stderr=""
+            )
+        fixed[("terminal", "create")] = {"terminal": {"handle": "term_fresh"}}
+        return fake_run(argv, **kwargs)
+
+    monkeypatch.setattr("django_ergo.plugins.orca.subprocess.run", no_pane)
+    plugin.start_worker(ctx, "Again", "path:/home/dev/p/site")
+    tasks = [c for c in calls if c[1:3] == ["orchestration", "task-create"]]
+    assert [c[c.index("--from") + 1] for c in tasks] == ["term_new", "term_fresh"]
+    session.refresh_from_db()
+    assert session.metadata["orca"]["devbox"]["mailbox"] == "term_fresh"
+
     # Any other failure is reported as it is, without a retry.
     fixed[("orchestration", "worker-start")] = {}
     with pytest.raises(ValueError, match="no dispatch id"):

@@ -867,6 +867,20 @@ def test_orca_read_refuses_changes_and_other_environments(tmp_path, orca_calls):
     assert orca_calls == []
 
 
+@pytest.mark.django_db
+def test_orca_run_refuses_to_start_untracked_workers(tmp_path, orca_calls):
+    _, _, plugin = orca_bot(tmp_path)
+    refused = plugin.change(["orchestration", "worker-start", "--task", "t1"])
+    assert "orca_start_worker" in refused
+    assert orca_calls == []
+    plugin.change(["orchestration", "worker-start", "--help"])
+    plugin.change(["orchestration", "worker-stop", "--dispatch", "d1"])
+    assert [c[1:3] for c in orca_calls] == [
+        ["orchestration", "worker-start"],
+        ["orchestration", "worker-stop"],
+    ]
+
+
 @pytest.mark.django_db(transaction=True)
 async def test_orca_run_waits_for_approval(tmp_path, orca_calls):
     bot, engine, _ = orca_bot(

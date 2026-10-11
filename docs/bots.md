@@ -1075,7 +1075,11 @@ supervised workers. `orca_read` runs inventory commands with no approval
 list|show`, `orchestration run-list|worker-list|worker-read|worker-show`,
 `search`, `skills get`, anything with `--help`). `orca_run` runs everything
 else, such as `worktree create`, `terminal send` or `orchestration
-worker-start`, and waits for approval unless `approve_changes: false`.
+worker-stop`, and waits for approval unless `approve_changes: false`. It
+refuses `orchestration worker-start`: workers start only through
+`orca_start_worker` or `ergo_agent_start`, which watch them and bring their
+report back to the chat. When the chat's saved mailbox terminal is gone or
+lost its pane after an Orca restart, they make a new one and retry once.
 Arguments are an argv list, never a shell string, and `--json` is added for
 the bot. With `environment` set, the bot can't point a call elsewhere.
 It is also the `orca` agent manager (see [Agents](#agents)): `agents`
