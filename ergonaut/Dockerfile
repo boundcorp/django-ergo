@@ -197,8 +197,13 @@ RUN uv pip install --no-cache-dir "/ergo[legacy,bots,browser]" && rm -rf /ergo
 COPY ergonaut/pyproject.toml ergonaut/README.md ergonaut/manage.py /app/
 COPY ergonaut/infra/ /app/infra
 COPY ergonaut/ergonaut/ /app/ergonaut
+# The pods run as uid 1000 with HOME=/home/dev; name that user so ssh, git and
+# anything else that reads the home from /etc/passwd find /home/dev. A
+# placeholder DATABASE_URL keeps collectstatic from starting embedded Postgres,
+# which as root would add a `pgserver` user and take uid 1000.
+RUN useradd --uid 1000 --user-group --home-dir /home/dev --no-create-home --shell /bin/bash dev
 RUN uv pip install --no-cache-dir --no-deps -e . \
-    && python manage.py collectstatic --noinput
+    && DATABASE_URL=postgres://build@localhost/build python manage.py collectstatic --noinput
 
 # The django-ergo commit this image was built from; `ergonaut upgrade` compares
 # it with the newest release. CI passes the pushed commit.
