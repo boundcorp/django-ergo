@@ -58,7 +58,7 @@ fail the load. See [Page actions](bots.md#page-actions).
 A tool file listed under `tools:` is a skill too, with no instructions: its
 module docstring's first line is the description, so write one.
 
-Plugins without tools, like `telegram`, aren't skills.
+Plugins without tools aren't skills.
 
 ### Skills that use other skills
 

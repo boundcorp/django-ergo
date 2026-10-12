@@ -429,6 +429,30 @@ def answer_inbox(session) -> None:
             notify(session_id)
 
 
+async def run_channel_turn(session, run):
+    """CHANNEL_TURN_RUNNER: a turn a chat channel (Telegram) starts holds the session's turn
+    lock like the app's own turns, so they take turns; messages sent from the app while it
+    runs steer it, and the ones that arrive as it ends get a turn of their own."""
+    from asgiref.sync import sync_to_async
+
+    session_id = str(session.id)
+    lock = session_lock(session_id)
+    locked = await sync_to_async(lock.__enter__, thread_sensitive=False)()
+    if not locked:
+        await sync_to_async(lock.__exit__, thread_sensitive=False)(None, None, None)
+        msg = f"Session {session_id} is busy"
+        raise RuntimeError(msg)
+    control = InboxControl(session)
+    try:
+        await sync_to_async(clear_stop)(session_id)  # a stop meant for an earlier turn
+        return await run(control)
+    finally:
+        await sync_to_async(remove_uploads)(control.uploads)
+        await sync_to_async(lock.__exit__, thread_sensitive=False)(None, None, None)
+        await sync_to_async(notify)(session_id)
+        await sync_to_async(queue_waiting)(session_id)
+
+
 def queue_waiting(session_id) -> None:
     """After releasing a session's lock: a message that arrived as the holder finished
     gets a turn of its own, and so does a bot-to-bot message that queued while the turn ran

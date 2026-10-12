@@ -740,6 +740,8 @@ export const api = {
   deleteAttachment: (id: string) => request<{ ok: boolean }>('DELETE', `/attachments/${id}`),
   downloadUrl: (id: string) => `/api/attachments/${id}/download`,
   viewUrl: (id: string) => `/api/attachments/${id}/download?inline=true`,
+  avatarUrl: (author: MessageIdentity) =>
+    `/api/authors/${encodeURIComponent(author.kind)}/${encodeURIComponent(author.ref)}/avatar`,
   botTree: (bot: string, version = 'live') =>
     request<{ files: { path: string; size: number; status: string }[]; truncated: boolean }>(
       'GET',
