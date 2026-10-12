@@ -609,7 +609,7 @@ class Bot:
         return build_route_request(self.providers, tier_of(ref), before)
 
     async def plugin_route(
-        self, session: ConversationSession, message: str
+        self, session: ConversationSession, message: str, author: dict | None = None
     ) -> RoutePick | None:
         """The first pick a plugin's ``route_turn`` makes for this turn that
         is a model in one of the tiers. A plugin that fails is logged and
@@ -627,6 +627,7 @@ class Bot:
             return None
         if request is None:
             return None
+        request.author = dict(author or {})
         for plugin in hooked:
             try:
                 pick = await _maybe_await(plugin.route_turn(session, message, request))
@@ -1177,7 +1178,7 @@ class Bot:
         for plugin in self.plugins:
             await _maybe_await(plugin.before_turn(session, message))
         toolkits, builder = await self._prepare(session, message)
-        pick = await self.plugin_route(session, message)
+        pick = await self.plugin_route(session, message, metadata.get("message_author"))
         if pick is not None:
             metadata["routing_pick"] = {
                 "model": pick.model,

@@ -153,6 +153,28 @@ async def test_an_unsure_router_keeps_the_chats_tier(django_user_model):
     assert asked == []  # a chat on a fixed model isn't routed
 
 
+@pytest.mark.django_db(transaction=True)
+async def test_a_relayed_message_never_steps_down(django_user_model):
+    from asgiref.sync import sync_to_async
+
+    bot = decisions_bot()
+    plugin = bot.plugin("decisions")
+    user = await django_user_model.objects.acreate(username="lee")
+    session = await sync_to_async(chat)(user)
+
+    answering(plugin, "small", confidence=0.95)
+    relay = {"kind": "bot", "ref": "boundcorp", "display_name": "Boundcorp"}
+    pick = await bot.plugin_route(session, "[Message from boundcorp] FYI", relay)
+    assert pick.tier == "medium"
+    assert pick.details["picked_tier"] == "small"
+    assert "relayed message" in pick.reason
+    answering(plugin, "large", confidence=0.5)  # stepping up is still fine
+    pick = await bot.plugin_route(session, "[Worker finished]", {"kind": "system"})
+    assert pick.tier == "large"
+    answering(plugin, "small", confidence=0.95)
+    assert (await bot.plugin_route(session, "thanks")).tier == "small"
+
+
 @pytest.mark.django_db
 def test_offered_tiers_follow_the_config_and_limits():
     from django_ergo.bots.routing import route_request

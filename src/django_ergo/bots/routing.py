@@ -429,7 +429,9 @@ class RouteRequest:
     """What a plugin's ``route_turn`` hook picks from for one turn of an
     ``auto/<tier>`` chat: every tier's available models, the chat's own tier
     and the model it is on, each subscription's usage, the limits in force
-    and the priorities text (routing.md or the Routing page)."""
+    and the priorities text (routing.md or the Routing page). ``author`` is
+    who wrote the message when it isn't the chat's user (a bot, a worker or
+    the system), as stored in the turn's ``message_author``."""
 
     providers: Providers
     tier: str
@@ -438,6 +440,7 @@ class RouteRequest:
     usage: dict
     rules: RoutingRules
     text: str
+    author: dict = field(default_factory=dict)
 
     @property
     def candidates(self) -> list[str]:

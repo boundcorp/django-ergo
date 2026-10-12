@@ -28,7 +28,9 @@ subscription's usage and limits and the deployment's routing priorities
 rules then pick the model within that tier as usual (``bots.routing``).
 The chat's own tier is the default: the router is told it's the usual
 one, and it's kept unless the router is confident, more so for a step down
-(``step_down_confidence``) than up (``min_confidence``). A switch is logged on
+(``step_down_confidence``) than up (``min_confidence``). A message from
+another bot, a worker or the system never steps down: in a dry run a relay
+that read like a report ran 52 tools. A switch is logged on
 the Routing page like any other, and the turn's structured call keeps the
 decision under ``metadata["routing_pick"]``. Chats on a fixed model are left
 alone. When the API can't be reached or refuses, the routing rules pick as
@@ -60,6 +62,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_MODEL = "gpt-6-luna"
 DEFAULT_TIMEOUT = 10.0
 MAX_INPUT_CHARS = 8000
+RELAYED = {"bot", "system"}  # message authors that never step a chat down
 
 TIER_PURPOSES = {
     "small": "quick or routine messages: acknowledgements, short questions, "
@@ -213,13 +216,19 @@ class DecisionsPlugin(BotPlugin):
         order = list(request.tiers)
         lower = request.tier in order and order.index(tier) < order.index(request.tier)
         needed = self.step_down_confidence if lower else self.min_confidence
-        if confidence < needed:
+        relayed = (request.author or {}).get("kind") in RELAYED
+        if (lower and relayed) or confidence < needed:
             if request.tier not in request.tiers:
                 return None
             tier = request.tier
-            reason = (
-                f"Decisions router unsure ({confidence:.0%}); the chat's {tier} tier"
+            # A bot's or the system's message can read like a status report
+            # and still be a work order, so it never steps down.
+            why = (
+                "kept for a relayed message"
+                if lower and relayed
+                else f"unsure ({confidence:.0%})"
             )
+            reason = f"Decisions router {why}; the chat's {tier} tier"
         else:
             reason = (
                 f"Decisions router picked the {tier} tier ({confidence:.0%} confident)"

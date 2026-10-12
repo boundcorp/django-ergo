@@ -1165,7 +1165,9 @@ routing rules then pick the model within that tier as usual. The chat's own
 tier is the default: the router is told it's the usual one, and it's kept
 unless the router is at least `min_confidence` sure of another tier, or
 `step_down_confidence` sure of a lower one (confidence is the gap between
-the top two choices' probabilities). The router is told to judge a message
+the top two choices' probabilities). A message from another bot, a worker
+or the system never steps down, since a relay can read like a report and
+still start a long turn. The router is told to judge a message
 by the work its answer takes, not its length, since "merge it" can start a
 long turn; the bot's `description` is included too. A switch is logged on
 the Routing page ("Decisions router picked the small tier (82% confident)"),
