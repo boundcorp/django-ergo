@@ -546,7 +546,12 @@ terminal exits or vanishes without a `worker_done` (Orca keeps such a dispatch
 chat why.
   The watcher also scans its agent's session files on the worktree host every
   `usage_minutes` (default 10) and once after settlement. Claude Code, Codex,
-  and omp tokens appear per worker under **Agent sessions** on Costs. Set
+  and omp tokens appear per worker on Costs, grouped by project: the scan also
+  runs git in the worktree and saves the repository (name, canonical remote,
+  branch and the same `project_key` as agent history) in the worker's
+  `state["project"]`, so every worktree of one remote counts as one project.
+  `ergonaut manage agent_projects` looks it up for older workers (a worktree
+  that's gone is recorded as unresolved, named after its folder). Set
   `files_host` to the SSH host that holds the worktrees, or `""` to scan files
   locally. It is best effort: an unreadable session file preserves the last
   recorded counts and does not fail the worker. Counts are attributed by

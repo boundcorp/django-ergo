@@ -279,6 +279,8 @@ def test_agent_usage_has_its_own_scoped_and_filtered_costs_block(client):
         "sessions": 1,
         "tokens": 35,
         "cache_hit": pytest.approx(5 / 15),
+        "projects": 0,
+        "cost": 0.0,
     }
     assert agents["rows"] == [
         {
@@ -298,8 +300,63 @@ def test_agent_usage_has_its_own_scoped_and_filtered_costs_block(client):
             "tokens": 35,
             "cache_hit": pytest.approx(5 / 15),
             "requests": 2,
+            "project_key": "",
+            "project": "",
+            "project_remote": "",
+            "branch": "",
+            "cost": 0.0,
+            "priced": False,
         }
     ]
 
     AgentUsage.objects.filter(session=kitchen).update(last_at=timezone.now() - timezone.timedelta(days=31))
     assert client.get("/api/costs?bot=kitchen").json()["agents"]["rows"] == []
+
+
+@pytest.mark.django_db
+def test_agent_usage_by_project_with_list_price_estimates(client, lee):
+    session = ConversationSession.objects.create(user=lee, bot_name="devbox", engine_type="claude")
+    million = 1_000_000
+    holyword = {"key": "remote:aaa", "name": "holyword", "remote": "ssh://github.com/boundcorp/holyword"}
+    meditate = {"key": "remote:bbb", "name": "meditate", "remote": "ssh://github.com/boundcorp/meditate"}
+    rows = [
+        ("Fix verses", holyword, "claude", "claude-opus-5-5", million, million),  # $4 + $20
+        ("Add search", holyword, "codex", "gpt-6-sol", million, 0),  # $2
+        ("Timer", meditate, "omp", "gpt-6-sol", 0, million),  # $10
+        ("Old work", None, "codex", "mystery-model", 10, 10),
+    ]
+    for title, project, agent, model, input_tokens, output_tokens in rows:
+        worker = Worker.objects.create(
+            session=session,
+            bot_name="devbox",
+            title=title,
+            function="agent:orca",
+            status="completed",
+            state={"agent": agent, **({"project": {**project, "branch": "main"}} if project else {})},
+        )
+        AgentUsage.objects.create(
+            worker=worker,
+            session=session,
+            bot_name="devbox",
+            agent=agent,
+            model=model,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            requests=3,
+            last_at=timezone.now(),
+        )
+
+    agents = client.get("/api/costs").json()["agents"]
+
+    assert agents["headline"]["projects"] == 2
+    assert agents["headline"]["cost"] == pytest.approx(36)
+    by_project = {p["name"]: p for p in agents["by_project"]}
+    assert [p["name"] for p in agents["by_project"]] == ["holyword", "meditate", "(no project recorded)"]
+    assert by_project["holyword"]["workers"] == 2
+    assert by_project["holyword"]["agents"] == ["claude", "codex"]
+    assert by_project["holyword"]["cost"] == pytest.approx(26)
+    assert by_project["holyword"]["remote"] == "ssh://github.com/boundcorp/holyword"
+    assert by_project["meditate"]["tokens"] == million
+    assert by_project["(no project recorded)"]["unpriced_models"] == ["mystery-model"]
+    timer = next(row for row in agents["rows"] if row["worker_title"] == "Timer")
+    assert (timer["project"], timer["branch"], timer["priced"]) == ("meditate", "main", True)
