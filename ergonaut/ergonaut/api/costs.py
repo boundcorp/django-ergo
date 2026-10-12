@@ -3,7 +3,8 @@
     GET /api/costs?days=30
 
 Totals by kind, with chat replies (bot turns) split by bot, plus totals by
-model and by day. Tokens and cost are split into uncached input, cache writes,
+model and by day; coding agents' usage by worker, and agent work by project
+(the git repository each agent worked in, ``bots.agents.project_of``). Tokens and cost are split into uncached input, cache writes,
 cache reads and output, each priced at its own rate. Superusers see everyone's calls; others see their own.
 """
 
@@ -12,10 +13,12 @@ from __future__ import annotations
 from collections import defaultdict
 from datetime import timedelta
 
+from django.db.models import Q
 from django.utils import timezone
+from django_ergo.bots.agents import project_of
 from django_ergo.conversation.chat_reply import CHAT_REPLY_KIND
-from django_ergo.conversation.models import AgentUsage, StructuredCall
-from django_ergo.pricing import call_cost_parts
+from django_ergo.conversation.models import AgentUsage, StructuredCall, Worker
+from django_ergo.pricing import call_cost_parts, price_for
 from ninja import Router, Schema
 
 from ergonaut.api.auth import user_auth
@@ -83,6 +86,7 @@ class AgentHeadline(Schema):
     sessions: int
     tokens: int
     cache_hit: float
+    cost: float = 0.0  # what the tokens would cost at API list prices
 
 
 class AgentUsageRow(Schema):
@@ -102,6 +106,23 @@ class AgentUsageRow(Schema):
     tokens: int
     cache_hit: float
     requests: int
+    cost: float = 0.0
+    priced: bool = True
+    project: str = ""
+    project_key: str = ""
+
+
+class ProjectOut(Schema):
+    key: str
+    name: str
+    path: str
+    agents: int  # agent workers that worked on it in the period
+    by_agent: dict[str, int]  # workers per CLI (claude, codex, omp)
+    chats: int
+    running: int
+    tokens: int
+    cost: float
+    last_at: str | None
 
 
 class AgentsOut(Schema):
@@ -118,6 +139,7 @@ class CostsOut(Schema):
     by_day: list[DayOut]
     unpriced_models: list[str]
     agents: AgentsOut
+    projects: list[ProjectOut] = []
     usage: UsageOut
 
 
@@ -243,6 +265,69 @@ def _usage(
     }
 
 
+AGENT_FUNCTIONS = ("orca:watch",)
+UNKNOWN_PROJECT = {"key": "", "name": "(unknown)", "path": ""}
+
+
+def agent_cost(usage: AgentUsage) -> float | None:
+    """The usage at API list prices (agents run on subscriptions, so it's what
+    the work would have cost); None if the model has no price."""
+    price = price_for(usage.model.rsplit("/", 1)[-1])
+    if price is None:
+        return None
+    return (
+        usage.input_tokens * price.input
+        + usage.cache_write_tokens * price.cache_write
+        + usage.cache_read_tokens * price.cache_read
+        + usage.output_tokens * price.output
+    ) / 1_000_000
+
+
+def _projects(workers: list[Worker], rows: list[dict]) -> list[dict]:
+    by_key: dict[str, dict] = {}
+    worker_project = {}
+    for worker in workers:
+        project = project_of(worker) or UNKNOWN_PROJECT
+        worker_project[str(worker.pk)] = project["key"]
+        row = by_key.setdefault(
+            project["key"],
+            {
+                "key": project["key"],
+                "name": project["name"],
+                "path": project.get("path") or "",
+                "workers": set(),
+                "by_agent": defaultdict(int),
+                "chats": set(),
+                "running": 0,
+                "tokens": 0,
+                "cost": 0.0,
+                "last_at": None,
+            },
+        )
+        row["workers"].add(str(worker.pk))
+        row["by_agent"][(worker.state or {}).get("agent") or "agent"] += 1
+        row["chats"].add(worker.session_id)
+        row["running"] += worker.active
+        at = (worker.completed_at or worker.updated_at).isoformat(timespec="seconds")
+        row["last_at"] = max(row["last_at"] or at, at)
+    for usage in rows:
+        key = worker_project.get(usage["worker_id"])
+        if key is not None:
+            by_key[key]["tokens"] += usage["tokens"]
+            by_key[key]["cost"] += usage["cost"]
+    projects = [
+        {
+            **{k: v for k, v in row.items() if k not in ("workers", "chats")},
+            "agents": len(row["workers"]),
+            "by_agent": dict(row["by_agent"]),
+            "chats": len(row["chats"]),
+        }
+        for row in by_key.values()
+    ]
+    projects.sort(key=lambda p: (not p["key"], -p["agents"], -p["tokens"], p["name"]))
+    return projects
+
+
 def _agents(rows: list[AgentUsage]) -> dict:
     output = []
     total = {"input_tokens": 0, "cache_write_tokens": 0, "cache_read_tokens": 0}
@@ -252,6 +337,8 @@ def _agents(rows: list[AgentUsage]) -> dict:
         worker = usage.worker
         tokens = usage.input_tokens + usage.cache_write_tokens + usage.cache_read_tokens + usage.output_tokens
         workers.add(usage.worker_id)
+        cost = agent_cost(usage)
+        project = (project_of(worker) if worker else None) or UNKNOWN_PROJECT
         total["input_tokens"] += usage.input_tokens
         total["cache_write_tokens"] += usage.cache_write_tokens
         total["cache_read_tokens"] += usage.cache_read_tokens
@@ -277,6 +364,10 @@ def _agents(rows: list[AgentUsage]) -> dict:
                     else 0.0
                 ),
                 "requests": usage.requests,
+                "cost": cost or 0.0,
+                "priced": cost is not None,
+                "project": project["name"],
+                "project_key": project["key"],
             }
         )
     output.sort(key=lambda row: (-row["tokens"], row["worker_title"], row["model"]))
@@ -286,6 +377,7 @@ def _agents(rows: list[AgentUsage]) -> dict:
             "sessions": len(workers),
             "tokens": sum(row["tokens"] for row in output),
             "cache_hit": total["cache_read_tokens"] / denominator if denominator else 0.0,
+            "cost": sum(row["cost"] for row in output),
         },
         "rows": output,
     }
@@ -308,6 +400,16 @@ def costs(request, days: int = 30, bot: str = ""):
         agent_rows = agent_rows.filter(session__user=request.auth)
     if bot:
         agent_rows = agent_rows.filter(bot_name=bot)
+    agent_rows = list(agent_rows)
+    agent_workers = Worker.objects.filter(created_at__gte=since).filter(
+        Q(function__startswith="agent:") | Q(function__in=AGENT_FUNCTIONS)
+    )
+    if not request.auth.is_superuser:
+        agent_workers = agent_workers.filter(session__user=request.auth)
+    if bot:
+        agent_workers = agent_workers.filter(bot_name=bot)
+    used = {row.worker_id for row in agent_rows if row.worker_id}
+    agent_workers = list(agent_workers) + list(Worker.objects.filter(pk__in=used).exclude(created_at__gte=since))
 
     total = _empty("total")
     by_kind: dict[str, dict] = {}
@@ -351,6 +453,7 @@ def costs(request, days: int = 30, bot: str = ""):
         "by_model": _sorted(by_model),
         "by_day": series,
         "unpriced_models": sorted(unpriced),
-        "agents": _agents(list(agent_rows)),
+        "agents": (agents := _agents(agent_rows)),
+        "projects": _projects(agent_workers, agents["rows"]),
         "usage": _usage(total, by_session, main_tokens, subscription_tokens, compaction_tokens),
     }

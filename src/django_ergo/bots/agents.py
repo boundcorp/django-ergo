@@ -25,6 +25,8 @@ result. The ``agents`` skill holds the tools: ``ergo_agent_start``,
 
 from __future__ import annotations
 
+import hashlib
+import logging
 from dataclasses import dataclass
 from dataclasses import field
 from typing import TYPE_CHECKING
@@ -35,6 +37,8 @@ if TYPE_CHECKING:
     from django_ergo.bots.tools import ToolContext
     from django_ergo.bots.workers import WorkerContext
     from django_ergo.conversation.models import Worker
+
+logger = logging.getLogger(__name__)
 
 POLL_SECONDS = 120
 STATUSES = ("running", "done", "failed")
@@ -117,6 +121,83 @@ class AgentManager:
         (a plugin's own older workers); None if it isn't one."""
         return None
 
+    def project(self, handle: dict) -> dict | None:
+        """The repository the agent works in, as ``project_info(...)`` makes it;
+        None if it can't tell. Costs groups agents by it."""
+        return None
+
+
+def project_info(remote: str, root: str, branch: str = "", host: str = "local") -> dict:
+    """A project as the Costs page groups agents: keyed by the repository's
+    remote (every worktree and host of a repo is one project), else by its
+    folder on that host. The key matches ``agent_history.derive_project_identity``."""
+    from django_ergo.conversation.agent_history import canonical_remote
+
+    remote = canonical_remote(remote) if remote else ""
+    root = root.rstrip("/")
+    if remote:
+        key = f"remote:{hashlib.sha256(remote.encode()).hexdigest()[:24]}"
+        path = remote.split("://", 1)[-1].split("/", 1)[-1]
+    else:
+        key = f"local:{hashlib.sha256(f'{host}:{root}'.encode()).hexdigest()[:24]}"
+        path = root
+    return {
+        "key": key,
+        "name": path.rsplit("/", 1)[-1] or root or "(unknown)",
+        "path": path,
+        "remote": remote,
+        "branch": branch,
+    }
+
+
+def project_of(worker: Worker) -> dict | None:
+    """The project an agent worker recorded, if any."""
+    handle = (worker.args or {}).get("handle") or {}
+    found = handle.get("project") or (worker.state or {}).get("project")
+    return found if isinstance(found, dict) and found.get("key") else None
+
+
+def find_project(manager: AgentManager, handle: dict) -> dict | None:
+    """``manager.project``, best effort: an unknown project never stops an agent."""
+    try:
+        return manager.project(handle)
+    except Exception:  # noqa: BLE001 — the project is for reporting only
+        logger.warning("Couldn't tell %s agent's project", manager.name, exc_info=True)
+        return None
+
+
+def fill_projects(registry=None, limit: int = 500) -> int:
+    """Record the project of agent workers that have none yet (started before
+    projects were recorded); returns how many it filled."""
+    from django_ergo.bots.background import find_bot
+    from django_ergo.conversation.models import Worker
+
+    filled = 0
+    workers = Worker.objects.filter(
+        function__startswith="agent:"
+    ) | Worker.objects.filter(function="orca:watch")
+    for worker in workers.order_by("-created_at")[:limit]:
+        if project_of(worker) is not None:
+            continue
+        try:
+            found = worker_of(find_bot(worker.bot_name, registry), worker)
+        except LookupError:
+            continue
+        if found is None:
+            continue
+        manager, handle = found
+        handle = {
+            **handle,
+            "path": handle.get("path") or (worker.state or {}).get("worktree", ""),
+        }
+        project = find_project(manager, handle)
+        if project is None:
+            continue
+        state = {**(worker.state or {}), "project": project}
+        Worker.objects.filter(pk=worker.pk).update(state=state)
+        filled += 1
+    return filled
+
 
 def managers(bot: Bot) -> dict[str, AgentManager]:
     """The bot's agent managers, by name, from its plugins."""
@@ -196,6 +277,8 @@ def start(ctx: ToolContext, spec: AgentSpec, manager: str = "") -> Worker:
             ctx.session,
         )
     handle = found.start(ctx, spec)
+    if project := find_project(found, handle):
+        handle["project"] = project
     state = {
         "agent": spec.agent,
         "model": spec.model,
@@ -213,6 +296,11 @@ def start(ctx: ToolContext, spec: AgentSpec, manager: str = "") -> Worker:
 
 def watch(ctx: WorkerContext, manager: AgentManager, handle: dict):
     """One check of an agent: pass on new questions, finish with its report."""
+    if project_of(ctx.worker) is None and "project_checked" not in ctx.state:
+        # Started before projects were recorded: look it up once.
+        ctx.state["project_checked"] = True
+        if project := find_project(manager, handle):
+            ctx.state["project"] = project
     check = manager.check(ctx, handle)
     if check.status not in STATUSES:
         msg = f"{manager.name} reported an unknown status {check.status!r}"

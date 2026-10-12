@@ -870,6 +870,32 @@ class OrcaPlugin(BotPlugin):
             "path": worktree_path or "",
         }
 
+    def project(self, path: str) -> dict | None:
+        """The repository an agent's worktree belongs to: git run in ``path`` on
+        ``files_host`` (or this host), keyed by its origin remote."""
+        from django_ergo.bots.agents import project_info
+
+        if not path:
+            return None
+        quoted = shlex.quote(path)
+        command = (
+            f"git -C {quoted} rev-parse --show-toplevel --abbrev-ref HEAD && "
+            f"(git -C {quoted} remote get-url origin || true)"
+        )
+        argv = (
+            ["ssh", "-o", "BatchMode=yes", self.files_host, command]
+            if self.files_host
+            else ["sh", "-c", command]
+        )
+        proc = subprocess.run(  # noqa: S603 — fixed git commands, quoted path
+            argv, capture_output=True, text=True, timeout=self.timeout, check=False
+        )
+        root, branch, remote, *_ = [*proc.stdout.strip().splitlines(), "", "", ""]
+        if proc.returncode or not branch:
+            log.info("No git repo at %s: %s", path, proc.stderr.strip()[:200])
+            return None
+        return project_info(remote, root, branch, host=self.files_host or "local")
+
     def capture_native_history(
         self, ctx, agent: str, worktree: str, history=None
     ) -> None:
@@ -1514,4 +1540,8 @@ class OrcaAgents(AgentManager):
             "dispatch": args.get("dispatch", ""),
             "run": args.get("run", ""),
             "task": (worker.state or {}).get("task", ""),
+            "path": (worker.state or {}).get("worktree", ""),
         }
+
+    def project(self, handle: dict) -> dict | None:
+        return self.plugin.project(handle.get("path") or "")
