@@ -8,11 +8,15 @@ from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
 import json
+import re
+import subprocess
 from datetime import UTC
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 PARTS = ("input", "cache_write", "cache_read", "output", "reasoning", "requests")
 EPOCH_MS = 10_000_000_000
@@ -199,6 +203,90 @@ def _omp(root: Path, cwd: str, since: datetime, until: datetime) -> dict[str, di
     return models
 
 
+def canonical_remote(remote: str) -> str:
+    """Normalize a git remote without preserving credentials or a .git suffix."""
+    remote = remote.strip()
+    if re.match(r"^[^/@:]+@[^/:]+:.+", remote):
+        user_host, path = remote.split(":", 1)
+        return f"ssh://{user_host.split('@', 1)[1].lower()}/{path.rstrip('/').removesuffix('.git')}"
+    parsed = urlsplit(remote)
+    if not parsed.hostname:
+        return ""
+    host = parsed.hostname.lower()
+    if parsed.port:
+        host = f"{host}:{parsed.port}"
+    path = parsed.path.rstrip("/").removesuffix(".git")
+    return f"{parsed.scheme.lower()}://{host}{path}"
+
+
+def _git(cwd: str, *args: str) -> str:
+    try:
+        return subprocess.run(  # noqa: S603 — fixed executable, cwd is an argument.
+            ["git", "-C", cwd, *args],  # noqa: S607 — resolved from trusted PATH.
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=10,
+        ).stdout.strip()
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+
+
+def _digest(value: str) -> str:
+    return hashlib.sha256(value.encode()).hexdigest()[:24]
+
+
+def project(cwd: str, host_namespace: str = "local") -> dict[str, str]:
+    """The repository a worktree belongs to: every clone and worktree of one remote
+    shares ``key``; a repository without a remote gets a key local to this host."""
+    root = _git(cwd, "rev-parse", "--show-toplevel")
+    if not root:
+        local = str(Path(cwd).resolve())
+        return {
+            "key": f"local:{_digest(f'{host_namespace}:{local}')}",
+            "name": Path(local).name or local,
+            "remote": "",
+            "repo_root": local,
+            "worktree": local,
+            "branch": "",
+            "confidence": "unresolved",
+            "error": "not a git repository",
+        }
+    common = _git(cwd, "rev-parse", "--path-format=absolute", "--git-common-dir")
+    repo_root = str(Path(common or root).resolve())
+    remotes = _git(cwd, "remote").splitlines()
+    selected = (
+        "origin" if "origin" in remotes else (sorted(remotes)[0] if remotes else "")
+    )
+    remote = (
+        canonical_remote(_git(cwd, "remote", "get-url", selected)) if selected else ""
+    )
+    checkout = Path(repo_root)
+    if checkout.name == ".git":
+        checkout = checkout.parent
+    found = {
+        "remote": remote,
+        "repo_root": repo_root,
+        "worktree": root,
+        "branch": _git(cwd, "rev-parse", "--abbrev-ref", "HEAD"),
+        "error": "",
+    }
+    if remote:
+        name = remote.rstrip("/").rsplit("/", 1)[-1]
+        return {
+            "key": f"remote:{_digest(remote)}",
+            "name": name,
+            "confidence": "remote",
+            **found,
+        }
+    return {
+        "key": f"local:{_digest(f'{host_namespace}:{repo_root}')}",
+        "name": checkout.name,
+        "confidence": "local",
+        **found,
+    }
+
+
 def omp_history(root: Path, cwd: str) -> list[dict[str, str]]:
     """Return exact omp files for one cwd, including an optional title slot."""
     files = []
@@ -223,9 +311,14 @@ def scan(  # noqa: PLR0913
     *,
     home: Path | None = None,
     include_history: bool = False,
+    include_project: bool = False,
+    project_only: bool = False,
 ) -> dict:
-    """Return usage and, for supported formats, native bytes for one worktree."""
+    """Return usage and, for supported formats, native bytes for one worktree; with
+    ``include_project``, the repository it belongs to too (only that, ``project_only``)."""
     root = home or Path.home()
+    if project_only:
+        return {"project": project(cwd)}
     if agent == "claude":
         models = _claude(root, cwd, since, until)
     elif agent == "codex":
@@ -237,6 +330,8 @@ def scan(  # noqa: PLR0913
     result = {"models": models}
     if include_history and agent == "omp":
         result["history"] = omp_history(root, cwd)
+    if include_project:
+        result["project"] = project(cwd)
     return result
 
 
@@ -247,6 +342,8 @@ def main() -> None:
     parser.add_argument("since")
     parser.add_argument("until")
     parser.add_argument("--history", action="store_true")
+    parser.add_argument("--project", action="store_true")
+    parser.add_argument("--project-only", action="store_true")
     args = parser.parse_args()
     print(  # noqa: T201
         json.dumps(
@@ -256,6 +353,8 @@ def main() -> None:
                 _at(args.since),
                 _at(args.until),
                 include_history=args.history,
+                include_project=args.project,
+                project_only=args.project_only,
             ),
         )
     )

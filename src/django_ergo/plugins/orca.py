@@ -904,6 +904,50 @@ class OrcaPlugin(BotPlugin):
                     path.read_bytes(), source_name=path.name, worker=ctx.worker
                 )
 
+    def run_scanner(self, args: list[str]) -> subprocess.CompletedProcess:
+        """Run agent_usage_scan.py with ``args`` where the worktrees are (over ssh
+        with ``files_host``)."""
+        script = (
+            Path(__file__).with_name("agent_usage_scan.py").read_text(encoding="utf-8")
+        )
+        argv = (
+            [
+                "ssh",
+                "-o",
+                "BatchMode=yes",
+                self.files_host,
+                f"python3 - {shlex.join(args)}",
+            ]
+            if self.files_host
+            else ["python3", "-", *args]
+        )
+        return subprocess.run(  # noqa: S603 — fixed interpreter and scanner source
+            argv,
+            input=script,
+            capture_output=True,
+            text=True,
+            timeout=self.timeout,
+            check=False,
+        )
+
+    def resolve_project(self, worker) -> dict | None:
+        """The repository an agent worker's worktree belongs to, looked up now; for
+        workers that ran before projects were recorded. None when it can't be read."""
+        handle = (worker.args or {}).get("handle") or {}
+        state = worker.state or {}
+        worktree = state.get("worktree") or handle.get("path")
+        if not worktree:
+            return None
+        stamp = worker.created_at.isoformat()
+        args = [str(state.get("agent") or "codex"), str(worktree), stamp, stamp]
+        try:
+            proc = self.run_scanner([*args, "--project-only"])
+            data = json.loads(proc.stdout) if not proc.returncode else {}
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            return None
+        found = data.get("project") if isinstance(data, dict) else None
+        return found if isinstance(found, dict) else None
+
     def scan_usage(self, ctx, *, settled: bool = False) -> None:
         """Best-effort usage scan; failure leaves the last stored snapshot intact."""
         handle = (ctx.worker.args or {}).get("handle") or {}
@@ -920,36 +964,16 @@ class OrcaPlugin(BotPlugin):
 
         since = ctx.worker.created_at - timedelta(minutes=1)
         until = ctx.worker.completed_at or timezone.now()
-        script = (
-            Path(__file__).with_name("agent_usage_scan.py").read_text(encoding="utf-8")
-        )
         args = [
             str(agent),
             str(worktree),
             since.isoformat(),
             until.isoformat(),
             "--history",
+            "--project",
         ]
-        argv = (
-            [
-                "ssh",
-                "-o",
-                "BatchMode=yes",
-                self.files_host,
-                f"python3 - {shlex.join(args)}",
-            ]
-            if self.files_host
-            else ["python3", "-", *args]
-        )
         try:
-            proc = subprocess.run(  # noqa: S603 — fixed interpreter and scanner source
-                argv,
-                input=script,
-                capture_output=True,
-                text=True,
-                timeout=self.timeout,
-                check=False,
-            )
+            proc = self.run_scanner(args)
             if proc.returncode:
                 log.warning(
                     "Couldn't scan %s usage for worker %s: %s",
@@ -959,6 +983,8 @@ class OrcaPlugin(BotPlugin):
                 )
                 return
             data = json.loads(proc.stdout)
+            if isinstance(data, dict) and isinstance(data.get("project"), dict):
+                ctx.state["project"] = data["project"]
             models = data.get("models") if isinstance(data, dict) else None
             if not isinstance(models, dict):
                 log.warning(
@@ -1505,6 +1531,9 @@ class OrcaAgents(AgentManager):
 
     def log(self, worker, handle: dict) -> dict | None:
         return self.plugin.worker_log(worker)
+
+    def project(self, worker, handle: dict) -> dict | None:
+        return self.plugin.resolve_project(worker)
 
     def worker_handle(self, worker) -> dict | None:
         if worker.function != "orca:watch":

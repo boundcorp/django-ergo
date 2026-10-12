@@ -112,6 +112,11 @@ class AgentManager:
         """The agent's recent output, read now (``BotPlugin.worker_log``'s shape)."""
         return None
 
+    def project(self, worker: Worker, handle: dict) -> dict | None:
+        """The repository the agent worked in, looked up now (``agent_usage_scan.project``'s
+        shape), for workers that ran before it was recorded; None if unknown."""
+        return None
+
     def worker_handle(self, worker: Worker) -> dict | None:
         """The handle of a worker this manager started under another function name
         (a plugin's own older workers); None if it isn't one."""

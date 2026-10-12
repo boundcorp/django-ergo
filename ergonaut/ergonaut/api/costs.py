@@ -15,7 +15,7 @@ from datetime import timedelta
 from django.utils import timezone
 from django_ergo.conversation.chat_reply import CHAT_REPLY_KIND
 from django_ergo.conversation.models import AgentUsage, StructuredCall
-from django_ergo.pricing import call_cost_parts
+from django_ergo.pricing import call_cost_parts, price_for
 from ninja import Router, Schema
 
 from ergonaut.api.auth import user_auth
@@ -83,6 +83,8 @@ class AgentHeadline(Schema):
     sessions: int
     tokens: int
     cache_hit: float
+    projects: int = 0
+    cost: float = 0.0  # API-equivalent list price; agents run on subscriptions
 
 
 class AgentUsageRow(Schema):
@@ -102,11 +104,39 @@ class AgentUsageRow(Schema):
     tokens: int
     cache_hit: float
     requests: int
+    project_key: str = ""
+    project: str = ""
+    project_remote: str = ""
+    branch: str = ""
+    cost: float = 0.0
+    priced: bool = False
+
+
+class AgentProject(Schema):
+    """Agent work in one repository: every worktree and clone of one remote."""
+
+    key: str
+    name: str
+    remote: str
+    workers: int
+    agents: list[str]
+    models: list[str]
+    input_tokens: int
+    cache_write_tokens: int
+    cache_read_tokens: int
+    output_tokens: int
+    tokens: int
+    cache_hit: float
+    requests: int
+    cost: float
+    unpriced_models: list[str]
+    last_at: str | None
 
 
 class AgentsOut(Schema):
     headline: AgentHeadline
     rows: list[AgentUsageRow]
+    by_project: list[AgentProject] = []
 
 
 class CostsOut(Schema):
@@ -243,51 +273,108 @@ def _usage(
     }
 
 
+AGENT_PARTS = ("input", "cache_write", "cache_read", "output")
+
+
+def _agent_cost(usage: AgentUsage) -> float | None:
+    """What the agent's tokens would cost at the model's list price, or None if unpriced."""
+    price = price_for(usage.model)
+    if price is None:
+        return None
+    return sum(getattr(usage, f"{part}_tokens") * getattr(price, part) for part in AGENT_PARTS) / 1_000_000
+
+
+def _hit(row: dict) -> float:
+    denominator = row["input_tokens"] + row["cache_write_tokens"] + row["cache_read_tokens"]
+    return row["cache_read_tokens"] / denominator if denominator else 0.0
+
+
+def _project_of(worker) -> dict:
+    project = ((worker.state or {}).get("project") if worker else None) or {}
+    return project if isinstance(project, dict) else {}
+
+
 def _agents(rows: list[AgentUsage]) -> dict:
     output = []
-    total = {"input_tokens": 0, "cache_write_tokens": 0, "cache_read_tokens": 0}
-    workers = set()
+    projects: dict[str, dict] = {}
     for usage in rows:
         session = usage.session
         worker = usage.worker
-        tokens = usage.input_tokens + usage.cache_write_tokens + usage.cache_read_tokens + usage.output_tokens
-        workers.add(usage.worker_id)
-        total["input_tokens"] += usage.input_tokens
-        total["cache_write_tokens"] += usage.cache_write_tokens
-        total["cache_read_tokens"] += usage.cache_read_tokens
-        output.append(
+        project = _project_of(worker)
+        cost = _agent_cost(usage)
+        row = {
+            "worker_id": str(usage.worker_id or ""),
+            "worker_title": worker.title if worker else "(deleted worker)",
+            "agent": usage.agent,
+            "model": usage.model,
+            "chat_id": str(session.id),
+            "chat_title": (session.metadata or {}).get("title") or f"{session.bot_name or 'Bot'} main",
+            "bot": usage.bot_name,
+            "worker_status": worker.status if worker else "deleted",
+            **{f"{part}_tokens": getattr(usage, f"{part}_tokens") for part in AGENT_PARTS},
+            "reasoning_tokens": usage.reasoning_tokens,
+            "tokens": sum(getattr(usage, f"{part}_tokens") for part in AGENT_PARTS),
+            "requests": usage.requests,
+            "project_key": str(project.get("key") or ""),
+            "project": str(project.get("name") or ""),
+            "project_remote": str(project.get("remote") or ""),
+            "branch": str(project.get("branch") or ""),
+            "cost": cost or 0.0,
+            "priced": cost is not None,
+        }
+        row["cache_hit"] = _hit(row)
+        output.append(row)
+        key = row["project_key"]
+        group = projects.setdefault(
+            key,
             {
-                "worker_id": str(usage.worker_id or ""),
-                "worker_title": worker.title if worker else "(deleted worker)",
-                "agent": usage.agent,
-                "model": usage.model,
-                "chat_id": str(session.id),
-                "chat_title": (session.metadata or {}).get("title") or f"{session.bot_name or 'Bot'} main",
-                "bot": usage.bot_name,
-                "worker_status": worker.status if worker else "deleted",
-                "input_tokens": usage.input_tokens,
-                "cache_write_tokens": usage.cache_write_tokens,
-                "cache_read_tokens": usage.cache_read_tokens,
-                "output_tokens": usage.output_tokens,
-                "reasoning_tokens": usage.reasoning_tokens,
-                "tokens": tokens,
-                "cache_hit": (
-                    usage.cache_read_tokens / (usage.input_tokens + usage.cache_write_tokens + usage.cache_read_tokens)
-                    if usage.input_tokens + usage.cache_write_tokens + usage.cache_read_tokens
-                    else 0.0
-                ),
-                "requests": usage.requests,
-            }
+                "key": key,
+                "name": row["project"] or "(no project recorded)",
+                "remote": row["project_remote"],
+                "workers": set(),
+                "agents": set(),
+                "models": set(),
+                **{f"{part}_tokens": 0 for part in AGENT_PARTS},
+                "requests": 0,
+                "cost": 0.0,
+                "unpriced_models": set(),
+                "last_at": None,
+            },
         )
+        group["workers"].add(row["worker_id"] or f"deleted:{usage.pk}")
+        group["agents"].add(usage.agent)
+        group["models"].add(usage.model)
+        for part in AGENT_PARTS:
+            group[f"{part}_tokens"] += row[f"{part}_tokens"]
+        group["requests"] += usage.requests
+        group["cost"] += row["cost"]
+        if cost is None:
+            group["unpriced_models"].add(usage.model)
+        if usage.last_at and (group["last_at"] is None or usage.last_at > group["last_at"]):
+            group["last_at"] = usage.last_at
     output.sort(key=lambda row: (-row["tokens"], row["worker_title"], row["model"]))
-    denominator = total["input_tokens"] + total["cache_write_tokens"] + total["cache_read_tokens"]
+    by_project = []
+    for group in projects.values():
+        group["tokens"] = sum(group[f"{part}_tokens"] for part in AGENT_PARTS)
+        group["cache_hit"] = _hit(group)
+        group["workers"] = len(group["workers"])
+        for name in ("agents", "models", "unpriced_models"):
+            group[name] = sorted(group[name])
+        group["last_at"] = group["last_at"].isoformat() if group["last_at"] else None
+        by_project.append(group)
+    # Unattributed work last, whatever its size.
+    by_project.sort(key=lambda g: (not g["key"], -g["tokens"], g["name"]))
+    total = {f"{part}_tokens": sum(row[f"{part}_tokens"] for row in output) for part in AGENT_PARTS}
     return {
         "headline": {
-            "sessions": len(workers),
+            "sessions": len({row["worker_id"] for row in output}),
             "tokens": sum(row["tokens"] for row in output),
-            "cache_hit": total["cache_read_tokens"] / denominator if denominator else 0.0,
+            "cache_hit": _hit(total),
+            "projects": sum(1 for group in by_project if group["key"]),
+            "cost": sum(row["cost"] for row in output),
         },
         "rows": output,
+        "by_project": by_project,
     }
 
 

@@ -1,11 +1,11 @@
-import { Fragment, useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import type { CostBucket, Costs, UsageThread } from '../api'
+import type { AgentProject, AgentUsage, CostBucket, Costs, UsageThread } from '../api'
 import { api } from '../api'
 
 const RANGES = [7, 30, 90]
 
-function money(value: number) {
+export function money(value: number) {
   if (value === 0) return '$0'
   if (value < 0.0001) return '<$0.0001'
   // Cheap models cost fractions of a cent per call; keep two significant digits.
@@ -13,7 +13,7 @@ function money(value: number) {
   return value.toLocaleString(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 2 })
 }
 
-function tokens(value: number) {
+export function tokens(value: number) {
   return value >= 1_000_000
     ? `${(value / 1_000_000).toFixed(1)}M`
     : value >= 1000
@@ -21,45 +21,8 @@ function tokens(value: number) {
       : String(value)
 }
 
-function Tile({ label, value, note }: { label: string; value: string; note?: string }) {
-  return (
-    <div className="surface-card min-h-28 px-5 py-4">
-      <div className="text-xs font-semibold uppercase tracking-wide text-muted">{label}</div>
-      <div className="mt-1 text-2xl font-semibold tabular-nums">{value}</div>
-      {note && <div className="mt-0.5 text-xs text-zinc-500">{note}</div>}
-    </div>
-  )
-}
-
-// Daily spend alternates the two chart hues in the handoff and keeps exact values on hover.
-function Daily({ days }: { days: Costs['by_day'] }) {
-  const [hover, setHover] = useState<number | null>(null)
-  const max = Math.max(...days.map(d => d.cost), 0.0001)
-  const shown = hover != null ? days[hover] : null
-  return (
-    <div>
-      <div className={`mb-1 h-5 text-xs ${shown ? 'text-muted' : 'text-sm font-semibold text-ink'}`}>
-        {shown ? `${shown.date}: ${money(shown.cost)} · ${shown.calls} calls` : 'Daily estimated spend'}
-      </div>
-      <div
-        className="flex h-32 items-end gap-[2px] border-b border-zinc-200 dark:border-zinc-800"
-        onMouseLeave={() => setHover(null)}
-      >
-        {days.map((d, i) => (
-          <div key={d.date} className="flex h-full flex-1 items-end" onMouseEnter={() => setHover(i)}>
-            <div
-              className={`${i % 2 ? 'bg-mint' : 'bg-accent'} w-full rounded-t`}
-              style={{ height: d.cost ? `${Math.max(2, (d.cost / max) * 100)}%` : 0 }}
-            />
-          </div>
-        ))}
-      </div>
-      <div className="mt-1 flex justify-between text-[11px] text-zinc-500">
-        <span>{days[0]?.date}</span>
-        <span>{days[days.length - 1]?.date}</span>
-      </div>
-    </div>
-  )
+function percent(value: number) {
+  return `${Math.round(value * 100)}%`
 }
 
 const PARTS = [
@@ -71,313 +34,443 @@ const PARTS = [
 
 const PART_COLORS = ['bg-accent', 'bg-mint', 'bg-amber-500', 'bg-sky-500'] as const
 
-function percent(value: number) {
-  return `${Math.round(value * 100)}%`
+type Part = (typeof PARTS)[number][0]
+type Counts = Record<`${Part}_tokens`, number>
+
+/** One row of the breakdown: a project, agent, thread, bot, model or call type. */
+export type Item = {
+  id: string
+  name: string
+  sub?: string
+  href?: string
+  title?: string
+  parts: number[] // input, cache write, cache read, output tokens
+  partCosts?: number[]
+  cacheHit: number
+  cost: number
+  costLabel?: string // shown instead of the cost, e.g. "sub"
+  unpriced?: string // why the cost is incomplete
+  children?: Item[]
 }
 
-function Usage({ data }: { data: Costs }) {
-  const { headline, threads } = data.usage
-  const [group, setGroup] = useState<'Thread' | 'Bot' | 'Model'>('Thread')
-  const [sort, setSort] = useState<'share' | 'tokens' | 'cache_hit' | 'cost'>('share')
-  const sorted = [...threads].sort((a, b) => b[sort] - a[sort] || a.title.localeCompare(b.title))
-  const groups: { name: string; rows: UsageThread[] }[] = []
-  for (const row of sorted) {
-    const name = group === 'Bot' ? row.bot : group === 'Model' ? row.model : ''
-    let bucket = groups.find(item => item.name === name)
-    if (!bucket) {
-      bucket = { name, rows: [] }
-      groups.push(bucket)
-    }
-    bucket.rows.push(row)
+const partsOf = (counts: Counts) => PARTS.map(([part]) => counts[`${part}_tokens`])
+const sum = (values: number[]) => values.reduce((a, b) => a + b, 0)
+
+function bucketItem(bucket: CostBucket, extra: Partial<Item> = {}): Item {
+  const input = bucket.input_tokens + bucket.cache_write_tokens + bucket.cache_read_tokens
+  return {
+    id: bucket.name,
+    name: bucket.name,
+    sub: `${bucket.calls.toLocaleString()} call${bucket.calls === 1 ? '' : 's'}${bucket.subscription_calls ? ` · ${bucket.subscription_calls} on a subscription` : ''}`,
+    parts: partsOf(bucket),
+    partCosts: PARTS.map(([part]) => bucket[`${part}_cost`]),
+    cacheHit: input ? bucket.cache_read_tokens / input : 0,
+    cost: bucket.cost,
+    unpriced: bucket.unpriced_calls ? `${bucket.unpriced_calls} calls with no price count as $0` : undefined,
+    ...extra,
   }
-  const sortButton = (label: string, key: typeof sort) => (
-    <button onClick={() => setSort(key)} className="hover:text-ink" aria-label={`Sort by ${label}`}>
-      {label}
-      {sort === key ? ' ↓' : ''}
+}
+
+function threadItem(row: UsageThread): Item {
+  return {
+    id: row.id,
+    name: row.title,
+    sub: [row.bot, row.model, row.role === 'thread' ? 'thread' : 'main chat'].filter(Boolean).join(' · '),
+    href: `/s/${row.id}`,
+    parts: partsOf(row),
+    cacheHit: row.cache_hit,
+    cost: row.cost,
+    costLabel: row.subscription ? 'sub' : undefined,
+  }
+}
+
+function agentItem(row: AgentUsage, withProject = true): Item {
+  const where = withProject ? row.project || 'no project' : row.branch
+  return {
+    id: `${row.worker_id}-${row.model}`,
+    name: row.worker_title,
+    sub: [where, row.agent, row.model, row.worker_status].filter(Boolean).join(' · '),
+    href: `/s/${row.chat_id}`,
+    title: `${row.chat_title} · ${row.requests.toLocaleString()} requests`,
+    parts: partsOf(row),
+    cacheHit: row.cache_hit,
+    cost: row.cost,
+    unpriced: row.priced ? undefined : `No list price for ${row.model}`,
+  }
+}
+
+export function projectItems(data: Costs): Item[] {
+  return data.agents.by_project.map((project: AgentProject) => {
+    const owner = project.remote
+      .replace(/^\w+:\/\/[^/]+\//, '')
+      .split('/')
+      .slice(0, -1)
+      .join('/')
+    return {
+      id: project.key || 'none',
+      name: project.name,
+      title: project.remote || undefined,
+      sub: [`${project.workers} agent${project.workers === 1 ? '' : 's'}`, project.agents.join(', '), owner]
+        .filter(Boolean)
+        .join(' · '),
+      parts: partsOf(project),
+      cacheHit: project.cache_hit,
+      cost: project.cost,
+      unpriced: project.unpriced_models.length ? `No list price for ${project.unpriced_models.join(', ')}` : undefined,
+      children: data.agents.rows.filter(row => row.project_key === project.key).map(row => agentItem(row, false)),
+    }
+  })
+}
+
+function groupThreads(threads: UsageThread[], by: 'bot' | 'model'): Item[] {
+  const groups = new Map<string, UsageThread[]>()
+  for (const row of threads) groups.set(row[by], [...(groups.get(row[by]) ?? []), row])
+  return [...groups].map(([name, rows]) => {
+    const parts = PARTS.map(([part]) => sum(rows.map(row => row[`${part}_tokens`])))
+    const input = parts[0] + parts[1] + parts[2]
+    return {
+      id: name,
+      name,
+      sub: `${rows.length} thread${rows.length === 1 ? '' : 's'}`,
+      parts,
+      cacheHit: input ? parts[2] / input : 0,
+      cost: sum(rows.map(row => row.cost)),
+      costLabel: rows.every(row => row.subscription) ? 'sub' : undefined,
+      children: rows.map(threadItem),
+    }
+  })
+}
+
+export const VIEWS = ['Projects', 'Agents', 'Threads', 'Bots', 'Models', 'Call types'] as const
+export type View = (typeof VIEWS)[number]
+
+export function itemsFor(view: View, data: Costs): Item[] {
+  switch (view) {
+    case 'Projects':
+      return projectItems(data)
+    case 'Agents':
+      return data.agents.rows.map(row => agentItem(row))
+    case 'Threads':
+      return data.usage.threads.map(threadItem)
+    case 'Bots':
+      return groupThreads(data.usage.threads, 'bot')
+    case 'Models':
+      return data.by_model.map(bucket => bucketItem(bucket))
+    case 'Call types':
+      return data.by_kind.map(bucket =>
+        bucketItem(
+          bucket,
+          bucket.name === 'chat_reply'
+            ? { children: data.chat_reply_by_bot.map(bot => bucketItem(bot, { id: `bot-${bot.name}` })) }
+            : {},
+        ),
+      )
+  }
+}
+
+const EMPTY: Record<View, string> = {
+  Projects: 'No agent work in this period.',
+  Agents: 'No agent sessions in this period.',
+  Threads: 'No session calls in this period.',
+  Bots: 'No session calls in this period.',
+  Models: 'No calls in this period.',
+  'Call types': 'No calls in this period.',
+}
+
+const NOTES: Partial<Record<View, string>> = {
+  Projects:
+    'Agents run on subscriptions; cost is what their tokens would cost at list price. A project is every worktree of one git remote.',
+  Agents: 'Agents run on subscriptions; cost is what their tokens would cost at list price.',
+}
+
+function Stat({ label, value, note }: { label: string; value: string; note?: string }) {
+  return (
+    <div className="min-w-0 bg-surface px-4 py-3">
+      <div className="truncate text-xs font-medium text-muted">{label}</div>
+      <div className="mt-0.5 font-display text-xl font-semibold tabular-nums sm:text-2xl">{value}</div>
+      {note && <div className="truncate text-xs text-muted">{note}</div>}
+    </div>
+  )
+}
+
+// Daily spend; exact values on hover.
+function Daily({ days }: { days: Costs['by_day'] }) {
+  const [hover, setHover] = useState<number | null>(null)
+  const max = Math.max(...days.map(d => d.cost), 0.0001)
+  const shown = hover != null ? days[hover] : null
+  return (
+    <div className="min-w-0 flex-1">
+      <div className="flex items-baseline justify-between gap-2 text-xs text-muted">
+        <span className="font-semibold text-ink">Daily bot spend</span>
+        <span className="tabular-nums">
+          {shown ? `${shown.date} · ${money(shown.cost)} · ${shown.calls} calls` : `peak ${money(max)}`}
+        </span>
+      </div>
+      <div className="mt-2 flex h-16 items-end gap-[2px]" onMouseLeave={() => setHover(null)}>
+        {days.map((d, i) => (
+          <div key={d.date} className="flex h-full flex-1 items-end" onMouseEnter={() => setHover(i)}>
+            <div
+              className={`w-full rounded-t-sm ${hover === i ? 'bg-mint' : 'bg-accent'}`}
+              style={{ height: d.cost ? `${Math.max(3, (d.cost / max) * 100)}%` : 0 }}
+            />
+          </div>
+        ))}
+      </div>
+      <div className="mt-1 flex justify-between border-t border-stroke pt-1 text-[11px] text-muted">
+        <span>{days[0]?.date}</span>
+        <span>{days[days.length - 1]?.date}</span>
+      </div>
+    </div>
+  )
+}
+
+function Legend() {
+  return (
+    <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted" aria-hidden="true">
+      {PARTS.map(([part, label], i) => (
+        <span key={part} className="inline-flex items-center gap-1.5">
+          <span className={`h-2 w-2 rounded-sm ${PART_COLORS[i]}`} />
+          {label}
+        </span>
+      ))}
+    </div>
+  )
+}
+
+/** A thin bar: its length is the row's share of the largest row, its colors the token mix. */
+function MixBar({ item, max }: { item: Item; max: number }) {
+  const total = sum(item.parts)
+  const label = PARTS.map(
+    ([, name], i) =>
+      `${name} ${tokens(item.parts[i])}${item.partCosts && item.parts[i] ? ` (${money(item.partCosts[i])})` : ''}`,
+  ).join(' · ')
+  return (
+    <div className="mt-1.5 h-1.5 rounded-full bg-raised" title={label}>
+      <div className="flex h-full overflow-hidden rounded-full" style={{ width: `${max ? (100 * total) / max : 0}%` }}>
+        {item.parts.map(
+          (count, i) =>
+            count > 0 && <div key={i} className={PART_COLORS[i]} style={{ width: `${(100 * count) / total}%` }} />,
+        )}
+      </div>
+    </div>
+  )
+}
+
+function Cost({ item }: { item: Item }) {
+  if (item.costLabel) return <span className="text-muted">{item.costLabel}</span>
+  return (
+    <>
+      {money(item.cost)}
+      {item.unpriced && (
+        <span className="ml-0.5 text-warning" title={item.unpriced}>
+          *
+        </span>
+      )}
+    </>
+  )
+}
+
+function ItemRow({ item, max, depth = 0, nested }: { item: Item; max: number; depth?: number; nested: boolean }) {
+  const [open, setOpen] = useState(false)
+  const kids = item.children ?? []
+  const name = item.href ? (
+    <Link to={item.href} className="hover:text-accent hover:underline" title={item.title}>
+      {item.name}
+    </Link>
+  ) : (
+    <span title={item.title}>{item.name}</span>
+  )
+  return (
+    <>
+      <li
+        className={`grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-x-4 px-4 py-2.5 sm:grid-cols-[minmax(0,1fr)_5rem_4rem_5rem] ${depth ? 'bg-raised/40' : ''}`}
+      >
+        <div className="flex min-w-0 items-start gap-2" style={{ paddingLeft: depth * 20 }}>
+          {kids.length > 0 ? (
+            <button
+              type="button"
+              onClick={() => setOpen(!open)}
+              aria-expanded={open}
+              aria-label={`${open ? 'Hide' : 'Show'} ${item.name}'s ${kids.length} rows`}
+              className="mt-0.5 w-4 shrink-0 text-xs text-muted hover:text-ink"
+            >
+              {open ? '▾' : '▸'}
+            </button>
+          ) : (
+            nested && <span className="w-4 shrink-0" />
+          )}
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-sm font-medium">{name}</div>
+            {item.sub && <div className="truncate text-xs text-muted">{item.sub}</div>}
+            <MixBar item={item} max={max} />
+          </div>
+        </div>
+        <div className="text-right text-sm tabular-nums">{tokens(sum(item.parts))}</div>
+        <div className="hidden text-right text-sm tabular-nums text-muted sm:block">{percent(item.cacheHit)}</div>
+        <div className="text-right text-sm font-medium tabular-nums">
+          <Cost item={item} />
+        </div>
+      </li>
+      {open && kids.map(kid => <ItemRow key={kid.id} item={kid} max={max} depth={depth + 1} nested />)}
+    </>
+  )
+}
+
+const SORTS = { tokens: 'Tokens', cost: 'Cost', cacheHit: 'Cache hit' } as const
+type Sort = keyof typeof SORTS
+const SHOWN = 8
+
+export function Breakdown({ data, view, onView }: { data: Costs; view: View; onView: (view: View) => void }) {
+  const [sort, setSort] = useState<Sort>('tokens')
+  const [all, setAll] = useState(false)
+  const key = (item: Item) => (sort === 'tokens' ? sum(item.parts) : item[sort])
+  const items = itemsFor(view, data).sort((a, b) => key(b) - key(a) || a.name.localeCompare(b.name))
+  const max = Math.max(0, ...items.map(item => sum(item.parts)))
+  const shown = all ? items : items.slice(0, SHOWN)
+  const nested = items.some(item => item.children?.length)
+  const header = (sortKey: Sort, className = '') => (
+    <button
+      type="button"
+      onClick={() => setSort(sortKey)}
+      aria-pressed={sort === sortKey}
+      className={`text-right hover:text-ink ${sort === sortKey ? 'font-semibold text-ink' : ''} ${className}`}
+    >
+      {SORTS[sortKey]}
+      {sort === sortKey ? ' ↓' : ''}
     </button>
   )
-
   return (
-    <section className="mt-8">
-      <h2 className="font-display text-2xl font-semibold">Usage</h2>
-      <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">
-        <Tile label="Threads" value={headline.threads.toLocaleString()} />
-        <Tile label="Tokens" value={tokens(headline.tokens)} />
-        <Tile label="Cache hit" value={percent(headline.cache_hit)} />
-        <Tile label="Main chats" value={percent(headline.main_chats)} />
-        <Tile label="Subscription" value={percent(headline.subscription)} note="Share of tokens" />
-        <Tile label="API spend" value={money(headline.api_spend)} />
-        <Tile label="Compaction" value={percent(headline.compaction)} note="Share of tokens" />
-      </div>
-      <div className="surface-card mt-4 p-5">
-        <h3 className="text-sm font-semibold">Token mix</h3>
-        <div className="mt-3 flex h-5 overflow-hidden rounded-control bg-raised" role="img" aria-label="Token mix">
-          {PARTS.map(([part], i) => {
-            const count = data.total[`${part}_tokens`]
-            return (
-              count > 0 && (
-                <div key={part} className={PART_COLORS[i]} style={{ width: `${(100 * count) / headline.tokens}%` }} />
-              )
-            )
-          })}
-        </div>
-        <div className="mt-3 flex flex-wrap gap-x-6 gap-y-2 text-xs text-muted">
-          {PARTS.map(([part, label], i) => (
-            <div key={part} className="flex items-center gap-2">
-              <span className={`h-2.5 w-2.5 rounded-sm ${PART_COLORS[i]}`} />
-              <span>
-                {label}: {data.total[`${part}_tokens`].toLocaleString()}
-              </span>
-            </div>
-          ))}
-        </div>
-      </div>
-      <div className="mt-8 flex flex-wrap items-center justify-between gap-3">
-        <h3 className="text-xl font-semibold">By thread</h3>
-        <div className="flex gap-1 rounded-control border border-stroke bg-surface p-1" aria-label="Group threads by">
-          {(['Thread', 'Bot', 'Model'] as const).map(option => (
+    <section className="surface-card mt-4 overflow-hidden" aria-label="Breakdown">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-stroke px-4 pt-3">
+        <div
+          className="-mb-px flex gap-1 overflow-x-auto"
+          style={{ scrollbarWidth: 'none' }}
+          role="tablist"
+          aria-label="Break down by"
+        >
+          {VIEWS.map(option => (
             <button
               key={option}
-              onClick={() => setGroup(option)}
-              aria-pressed={group === option}
-              className={`rounded-control px-3 py-1 text-sm ${group === option ? 'bg-accent font-semibold text-canvas' : 'text-muted hover:bg-raised'}`}
+              type="button"
+              role="tab"
+              aria-selected={view === option}
+              onClick={() => {
+                onView(option)
+                setAll(false)
+              }}
+              className={`whitespace-nowrap border-b-2 px-3 pb-2.5 text-sm ${view === option ? 'border-accent font-semibold text-ink' : 'border-transparent text-muted hover:text-ink'}`}
             >
               {option}
             </button>
           ))}
         </div>
+        <div className="pb-2.5">
+          <Legend />
+        </div>
       </div>
-      <div className="mt-3 overflow-x-auto rounded-card border border-stroke">
-        <table className="w-full min-w-[850px] text-sm">
-          <thead className="border-b border-stroke text-xs text-muted">
-            <tr>
-              <th className="px-3 py-2 text-left font-normal">Thread</th>
-              <th className="px-3 py-2 text-left font-normal">Bot</th>
-              <th className="px-3 py-2 text-left font-normal">Model</th>
-              <th className="px-3 py-2 text-left font-normal">Share bar</th>
-              <th className="px-3 py-2 text-right font-normal">{sortButton('Tokens', 'tokens')}</th>
-              <th className="px-3 py-2 text-right font-normal">{sortButton('Cache hit', 'cache_hit')}</th>
-              <th className="px-3 py-2 text-right font-normal">{sortButton('Share', 'share')}</th>
-              <th className="px-3 py-2 text-right font-normal">{sortButton('Cost', 'cost')}</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-stroke">
-            {groups.map(bucket => (
-              <Fragment key={bucket.name}>
-                {bucket.name && (
-                  <tr className="bg-raised">
-                    <th colSpan={8} className="px-3 py-2 text-left font-semibold">
-                      {bucket.name}
-                    </th>
-                  </tr>
-                )}
-                {bucket.rows.map(row => (
-                  <tr key={row.id}>
-                    <td className="max-w-56 truncate px-3 py-2">
-                      <Link to={`/s/${row.id}`} className="text-accent hover:underline">
-                        {row.title}
-                      </Link>
-                    </td>
-                    <td className="px-3 py-2 text-muted">{row.bot}</td>
-                    <td className="px-3 py-2 text-muted">{row.model}</td>
-                    <td className="w-28 px-3 py-2">
-                      <div className="h-2 rounded-full bg-raised">
-                        <div className="h-full rounded-full bg-accent" style={{ width: `${100 * row.share}%` }} />
-                      </div>
-                    </td>
-                    <td className="px-3 py-2 text-right tabular-nums">{row.tokens.toLocaleString()}</td>
-                    <td className="px-3 py-2 text-right tabular-nums">{percent(row.cache_hit)}</td>
-                    <td className="px-3 py-2 text-right tabular-nums">{percent(row.share)}</td>
-                    <td className="px-3 py-2 text-right tabular-nums">{row.subscription ? 'sub' : money(row.cost)}</td>
-                  </tr>
-                ))}
-              </Fragment>
-            ))}
-            {!threads.length && (
-              <tr>
-                <td colSpan={8} className="px-3 py-4 text-muted">
-                  No session calls in this period.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
+      <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] gap-x-4 border-b border-stroke px-4 py-2 text-xs text-muted sm:grid-cols-[minmax(0,1fr)_5rem_4rem_5rem]">
+        <span className={nested ? 'pl-6' : ''}>
+          {items.length} {items.length === 1 ? 'row' : 'rows'}
+        </span>
+        {header('tokens')}
+        {header('cacheHit', 'hidden sm:block')}
+        {header('cost')}
       </div>
-    </section>
-  )
-}
-
-export function AgentSessions({ data }: { data: Costs }) {
-  const { headline, rows } = data.agents
-  const totals = PARTS.map(([part]) => ({
-    part,
-    tokens: rows.reduce((sum, row) => sum + row[`${part}_tokens`], 0),
-  }))
-  return (
-    <section className="mt-8">
-      <h2 className="font-display text-2xl font-semibold">Agent sessions</h2>
-      <div className="mt-4 grid gap-3 sm:grid-cols-3">
-        <Tile label="Agent sessions" value={headline.sessions.toLocaleString()} />
-        <Tile label="Tokens" value={tokens(headline.tokens)} />
-        <Tile label="Cache hit" value={percent(headline.cache_hit)} />
-      </div>
-      <div className="surface-card mt-4 p-5">
-        <h3 className="text-sm font-semibold">Token mix</h3>
-        <div
-          className="mt-3 flex h-5 overflow-hidden rounded-control bg-raised"
-          role="img"
-          aria-label="Agent token mix"
+      <ul className="divide-y divide-stroke">
+        {shown.map(item => (
+          <ItemRow key={`${view}-${item.id}`} item={item} max={max} nested={nested} />
+        ))}
+        {!items.length && <li className="px-4 py-6 text-sm text-muted">{EMPTY[view]}</li>}
+      </ul>
+      {items.length > SHOWN && (
+        <button
+          type="button"
+          onClick={() => setAll(!all)}
+          className="w-full border-t border-stroke px-4 py-2.5 text-sm text-accent hover:bg-raised"
         >
-          {totals.map(
-            ({ part, tokens: count }, index) =>
-              count > 0 && (
-                <div
-                  key={part}
-                  className={PART_COLORS[index]}
-                  style={{ width: `${(100 * count) / Math.max(1, headline.tokens)}%` }}
-                />
-              ),
-          )}
-        </div>
-        <div className="mt-3 flex flex-wrap gap-x-6 gap-y-2 text-xs text-muted">
-          {totals.map(({ part, tokens: count }, index) => (
-            <div key={part} className="flex items-center gap-2">
-              <span className={`h-2.5 w-2.5 rounded-sm ${PART_COLORS[index]}`} />
-              <span>
-                {PARTS[index][1]}: {count.toLocaleString()}
-              </span>
-            </div>
-          ))}
-        </div>
-      </div>
-      <div className="mt-4 overflow-x-auto rounded-card border border-stroke">
-        <table className="w-full min-w-[850px] text-sm">
-          <thead className="border-b border-stroke text-xs text-muted">
-            <tr>
-              <th className="px-3 py-2 text-left font-normal">Worker</th>
-              <th className="px-3 py-2 text-left font-normal">Agent</th>
-              <th className="px-3 py-2 text-left font-normal">Model</th>
-              <th className="px-3 py-2 text-right font-normal">Tokens</th>
-              <th className="px-3 py-2 text-right font-normal">Cache hit</th>
-              <th className="px-3 py-2 text-right font-normal">Requests</th>
-              <th className="px-3 py-2 text-left font-normal">Status</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-stroke">
-            {rows.map(row => (
-              <tr key={`${row.worker_id}-${row.model}`}>
-                <td className="max-w-56 truncate px-3 py-2">
-                  <Link to={`/s/${row.chat_id}`} className="text-accent hover:underline" title={row.chat_title}>
-                    {row.worker_title}
-                  </Link>
-                </td>
-                <td className="px-3 py-2 text-muted">{row.agent}</td>
-                <td className="px-3 py-2 text-muted">{row.model}</td>
-                <td className="px-3 py-2 text-right tabular-nums">{row.tokens.toLocaleString()}</td>
-                <td className="px-3 py-2 text-right tabular-nums">{percent(row.cache_hit)}</td>
-                <td className="px-3 py-2 text-right tabular-nums">{row.requests.toLocaleString()}</td>
-                <td className="px-3 py-2 text-muted">{row.worker_status}</td>
-              </tr>
-            ))}
-            {!rows.length && (
-              <tr>
-                <td colSpan={7} className="px-3 py-4 text-muted">
-                  No agent sessions in this period.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
+          {all ? 'Show fewer' : `Show all ${items.length}`}
+        </button>
+      )}
+      {NOTES[view] && <p className="border-t border-stroke px-4 py-2.5 text-xs text-muted">{NOTES[view]}</p>}
     </section>
   )
 }
 
-// Tokens, with what they cost at that part's rate on hover.
-function PartCell({ bucket, part }: { bucket: CostBucket; part: (typeof PARTS)[number][0] }) {
-  const count = bucket[`${part}_tokens`]
-  const reasoning =
-    part === 'output' && bucket.reasoning_tokens ? ` · ${tokens(bucket.reasoning_tokens)} of it reasoning` : ''
+export function Summary({ data }: { data: Costs }) {
+  const { total, usage, agents } = data
   return (
-    <td
-      className="py-1.5 text-right tabular-nums"
-      title={count ? `${money(bucket[`${part}_cost`])}${reasoning}` : undefined}
-    >
-      {count ? tokens(count) : <span className="text-zinc-400">–</span>}
-    </td>
+    <div className="mt-6 grid grid-cols-2 gap-px overflow-hidden rounded-card border border-stroke bg-stroke lg:grid-cols-5 max-lg:[&>*:last-child]:col-span-2">
+      <Stat
+        label="Bot spend"
+        value={money(total.cost)}
+        note={`${total.calls.toLocaleString()} calls · ${data.days} days`}
+      />
+      <Stat
+        label="Bot tokens"
+        value={tokens(usage.headline.tokens)}
+        note={`${percent(usage.headline.cache_hit)} from cache`}
+      />
+      <Stat label="On subscription" value={percent(usage.headline.subscription)} note="of bot tokens" />
+      <Stat
+        label="Agents"
+        value={agents.headline.sessions.toLocaleString()}
+        note={`${agents.headline.projects} project${agents.headline.projects === 1 ? '' : 's'} · ${tokens(agents.headline.tokens)} tokens`}
+      />
+      <Stat label="Agent list price" value={money(agents.headline.cost)} note="on subscriptions" />
+    </div>
   )
 }
 
-function Row({
-  bucket,
-  nested,
-  toggle,
-  open,
+export function CostsBody({
+  data,
+  view,
+  onView,
+  dim = false,
 }: {
-  bucket: CostBucket
-  nested?: boolean
-  toggle?: () => void
-  open?: boolean
+  data: Costs
+  view: View
+  onView: (view: View) => void
+  dim?: boolean
 }) {
   return (
-    <tr className={nested ? 'text-zinc-600 dark:text-zinc-400' : ''}>
-      <td className={`py-1.5 font-mono text-xs ${nested ? 'pl-6' : ''}`}>
-        {toggle ? (
-          <button onClick={toggle} className="hover:underline">
-            {open ? '▾' : '▸'} {bucket.name}
-          </button>
-        ) : (
-          bucket.name
-        )}
-      </td>
-      <td className="py-1.5 text-right tabular-nums">{bucket.calls}</td>
-      {PARTS.map(([part]) => (
-        <PartCell key={part} bucket={bucket} part={part} />
-      ))}
-      <td className="py-1.5 text-right font-medium tabular-nums">
-        {money(bucket.cost)}
-        {bucket.unpriced_calls > 0 && (
-          <span className="ml-1 text-amber-600" title={`${bucket.unpriced_calls} calls with no price`}>
-            *
-          </span>
-        )}
-      </td>
-    </tr>
+    <div className={dim ? 'opacity-60' : ''}>
+      <Summary data={data} />
+      <div className="surface-card mt-4 px-4 py-3">
+        <Daily days={data.by_day} />
+      </div>
+      <Breakdown data={data} view={view} onView={onView} />
+      {!!data.unpriced_models.length && (
+        <p className="mt-3 text-xs text-warning">
+          * No price for {data.unpriced_models.join(', ')}; those calls count as $0. Add prices under
+          DJANGO_ERGO["MODEL_PRICES"].
+        </p>
+      )}
+      <p className="mt-2 text-xs text-muted">
+        Costs are estimates from token counts and list prices, each part at the model's own rate. Hover a bar for its
+        token mix and what each part cost.
+      </p>
+    </div>
   )
 }
 
-function Table({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <section className="mt-8 data-scroll">
-      <h2 className="mb-3 text-xl font-semibold">{title}</h2>
-      <div className="max-w-4xl overflow-x-auto rounded-card border border-stroke">
-        <table className="w-full text-sm">
-          <thead className="text-xs text-zinc-500">
-            <tr className="border-b border-zinc-200 dark:border-zinc-800">
-              <th className="py-1 text-left font-normal">Name</th>
-              <th className="py-1 text-right font-normal">Calls</th>
-              {PARTS.map(([part, label]) => (
-                <th key={part} className="py-1 text-right font-normal">
-                  {label}
-                </th>
-              ))}
-              <th className="py-1 text-right font-normal">Cost</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-zinc-100 dark:divide-zinc-900">{children}</tbody>
-        </table>
-      </div>
-    </section>
-  )
+const VIEW_KEY = 'ergonaut.costs.view'
+
+function savedView(): View {
+  try {
+    const saved = localStorage.getItem(VIEW_KEY)
+    return (VIEWS as readonly string[]).includes(saved ?? '') ? (saved as View) : 'Projects'
+  } catch {
+    return 'Projects'
+  }
 }
 
 export function CostsPage() {
   const [days, setDays] = useState(7)
   const [data, setData] = useState<Costs | null>(null)
   const [error, setError] = useState('')
-  const [open, setOpen] = useState(true)
   const [bot, setBot] = useState('')
   const [bots, setBots] = useState<string[]>([])
+  const [view, setView] = useState<View>(savedView)
 
   useEffect(() => {
     api
@@ -388,7 +481,6 @@ export function CostsPage() {
 
   useEffect(() => {
     let active = true
-    setData(null)
     setError('')
     api
       .costs(days, bot)
@@ -403,23 +495,28 @@ export function CostsPage() {
     }
   }, [days, bot])
 
-  if (!data) return <div className="p-6 text-zinc-500">{error || 'Loading…'}</div>
+  const choose = (next: View) => {
+    setView(next)
+    try {
+      localStorage.setItem(VIEW_KEY, next)
+    } catch {
+      // A remembered tab is a convenience.
+    }
+  }
 
-  const { total } = data
   return (
     <div className="page-content h-full overflow-y-auto">
-      <div className="flex flex-wrap items-start gap-4">
+      <div className="flex flex-wrap items-end gap-4">
         <div>
           <p className="eyebrow">Usage</p>
           <h1 className="page-title mt-3">Costs &amp; usage</h1>
-          <p className="page-lede mt-3">Estimated usage across bots, models, and call types.</p>
         </div>
         <div className="ml-auto flex flex-wrap items-center gap-2">
           <select
             aria-label="Filter by bot"
             value={bot}
             onChange={e => setBot(e.target.value)}
-            className="rounded-control border border-stroke bg-surface px-3 py-2 text-sm"
+            className="rounded-control border border-stroke bg-surface px-3 py-1.5 text-sm"
           >
             <option value="">All bots</option>
             {bots.map(name => (
@@ -428,89 +525,27 @@ export function CostsPage() {
               </option>
             ))}
           </select>
-          <div className="flex gap-1 rounded-card border border-stroke bg-surface p-1">
+          <div className="flex gap-0.5 rounded-control border border-stroke bg-surface p-0.5" aria-label="Period">
             {RANGES.map(r => (
               <button
                 key={r}
+                type="button"
                 onClick={() => setDays(r)}
                 aria-pressed={r === days}
-                className={`rounded-control px-4 py-2 text-sm ${r === days ? 'bg-accent font-semibold text-canvas' : 'text-muted hover:bg-raised'}`}
+                className={`rounded-control px-3 py-1 text-sm ${r === days ? 'bg-accent font-semibold text-canvas' : 'text-muted hover:bg-raised'}`}
               >
-                {r} days
+                {r}d
               </button>
             ))}
           </div>
         </div>
       </div>
 
-      <Usage data={data} />
-      <AgentSessions data={data} />
-
-      <h2 className="mt-12 font-display text-2xl font-semibold">Costs</h2>
-      <div className="mt-6 grid max-w-4xl grid-cols-1 gap-4 sm:grid-cols-3">
-        <Tile label="Estimated spend" value={money(total.cost)} note={`Last ${data.days} days`} />
-        <Tile label="Calls" value={total.calls.toLocaleString()} />
-        <Tile
-          label="Prompt served from cache"
-          value={`${Math.round((100 * total.cache_read_tokens) / Math.max(1, total.input_tokens + total.cache_write_tokens + total.cache_read_tokens))}%`}
-          note={`${tokens(total.cache_read_tokens)} of ${tokens(total.input_tokens + total.cache_write_tokens + total.cache_read_tokens)} input tokens`}
-        />
-      </div>
-
-      <div className="mt-4 grid max-w-4xl grid-cols-2 gap-4 sm:grid-cols-4">
-        {PARTS.map(([part, label]) => (
-          <Tile
-            key={part}
-            label={label}
-            value={money(total[`${part}_cost`])}
-            note={`${tokens(total[`${part}_tokens`])} tokens`}
-          />
-        ))}
-      </div>
-
-      <div className="surface-card mt-8 max-w-4xl p-5">
-        <Daily days={data.by_day} />
-      </div>
-
-      <Table title="By kind">
-        {data.by_kind.map(bucket => (
-          <Fragment key={bucket.name}>
-            {bucket.name === 'chat_reply' ? (
-              <>
-                <Row bucket={bucket} toggle={() => setOpen(!open)} open={open} />
-                {open && data.chat_reply_by_bot.map(bot => <Row key={bot.name} bucket={bot} nested />)}
-              </>
-            ) : (
-              <Row bucket={bucket} />
-            )}
-          </Fragment>
-        ))}
-        {!data.by_kind.length && (
-          <tr>
-            <td colSpan={7} className="py-3 text-zinc-500">
-              No calls in this period.
-            </td>
-          </tr>
-        )}
-      </Table>
-
-      <Table title="By model">
-        {data.by_model.map(bucket => (
-          <Row key={bucket.name} bucket={bucket} />
-        ))}
-      </Table>
-
-      {!!data.unpriced_models.length && (
-        <p className="mt-4 max-w-3xl text-xs text-amber-700 dark:text-amber-400">
-          * No price for {data.unpriced_models.join(', ')}; those calls count as $0. Add prices under
-          DJANGO_ERGO["MODEL_PRICES"].
-        </p>
+      {!data ? (
+        <div className="mt-6 text-sm text-muted">{error || 'Loading…'}</div>
+      ) : (
+        <CostsBody data={data} view={view} onView={choose} dim={!!error} />
       )}
-      <p className="mt-2 max-w-3xl text-xs text-zinc-500">
-        Costs are worked out from token counts and list prices, so they are estimates. Input, cache writes, cache reads
-        and output are each billed at the model's own rate; hover a token count to see its cost. OpenAI calls made
-        before cached tokens were tracked count them as full-price input.
-      </p>
     </div>
   )
 }

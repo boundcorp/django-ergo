@@ -187,3 +187,94 @@ def test_orca_usage_scan_runs_locally_when_files_host_is_empty(tmp_path, monkeyp
     monkeypatch.setattr("django_ergo.plugins.orca.subprocess.run", scanned)
     plugin.scan_usage(WorkerContext(bot, worker), settled=True)
     assert calls[0][:2] == ["python3", "-"]
+
+
+def test_project_groups_worktrees_of_one_remote(tmp_path):
+    import subprocess
+
+    from django_ergo.plugins.agent_usage_scan import project
+
+    repo = tmp_path / "holyword"
+    repo.mkdir()
+
+    def git(*args, cwd=repo):
+        subprocess.run(["git", "-C", str(cwd), *args], check=True, capture_output=True)
+
+    git("init", "-b", "main")
+    git(
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@t",
+        "commit",
+        "--allow-empty",
+        "-m",
+        "start",
+    )
+    git("remote", "add", "origin", "git@github.com:boundcorp/holyword.git")
+    git("worktree", "add", "-b", "fix-verses", str(tmp_path / "wt"))
+
+    main, worktree = project(str(repo)), project(str(tmp_path / "wt"))
+
+    assert main["key"] == worktree["key"]
+    assert main["key"].startswith("remote:")
+    assert (worktree["name"], worktree["remote"], worktree["branch"]) == (
+        "holyword",
+        "ssh://github.com/boundcorp/holyword",
+        "fix-verses",
+    )
+    assert worktree["confidence"] == "remote"
+
+    git("remote", "remove", "origin")
+    local = project(str(tmp_path / "wt"))
+    assert (local["name"], local["confidence"], local["key"][:6]) == (
+        "holyword",
+        "local",
+        "local:",
+    )
+
+    gone = project(str(tmp_path / "removed"))
+    assert (gone["name"], gone["confidence"]) == ("removed", "unresolved")
+
+
+@pytest.mark.django_db
+def test_orca_usage_scan_records_the_project(tmp_path, monkeypatch):
+    import subprocess
+
+    from django_ergo.bots.agents import worker_of
+    from django_ergo.bots.workers import WorkerContext
+    from tests.test_bot_plugins import orca_bot
+
+    bot, _, plugin = orca_bot(
+        tmp_path, config="environment: '', files_host: '', executable: orca-test"
+    )
+    user = get_user_model().objects.create(username="project-usage")
+    session = async_to_sync(bot.main_session)(user)
+    worker = Worker.objects.create(
+        session=session,
+        bot_name=bot.name,
+        title="codex: Fix verses",
+        function="agent:orca",
+        args={"handle": {"dispatch": "d", "run": "r", "path": "/work/holyword"}},
+        state={"agent": "codex"},
+    )
+    found = {"key": "remote:abc", "name": "holyword", "branch": "fix-verses"}
+    calls = []
+
+    def scanned(argv, **kwargs):
+        calls.append(argv)
+        return subprocess.CompletedProcess(
+            argv, 0, stdout=json.dumps({"models": {}, "project": found}), stderr=""
+        )
+
+    monkeypatch.setattr("django_ergo.plugins.orca.subprocess.run", scanned)
+    ctx = WorkerContext(bot, worker)
+    plugin.scan_usage(ctx, settled=True)
+    assert "--project" in calls[-1]
+    assert ctx.state["project"] == found
+
+    # Workers from before projects were recorded: look it up on its own.
+    manager, handle = worker_of(bot, worker)
+    assert manager.project(worker, handle) == found
+    assert calls[-1][-1] == "--project-only"
+    assert "/work/holyword" in calls[-1]

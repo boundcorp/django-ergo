@@ -5,19 +5,22 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-import subprocess
 from dataclasses import dataclass
 from datetime import UTC
 from datetime import datetime
-from pathlib import Path
-from urllib.parse import urlsplit
+from typing import TYPE_CHECKING
 
 from django.core.files.base import ContentFile
 from django.core.files.storage import storages
 from django.db import transaction
 
+from django_ergo.plugins.agent_usage_scan import canonical_remote  # noqa: F401
+from django_ergo.plugins.agent_usage_scan import project
 from django_ergo.pricing import price_for
 from django_ergo.settings import api_settings
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 @dataclass(frozen=True)
@@ -30,59 +33,16 @@ class ProjectIdentity:
     error: str = ""
 
 
-def canonical_remote(remote: str) -> str:
-    """Normalize a git remote without preserving credentials or a .git suffix."""
-    remote = remote.strip()
-    if re.match(r"^[^/@:]+@[^/:]+:.+", remote):
-        user_host, path = remote.split(":", 1)
-        return f"ssh://{user_host.split('@', 1)[1].lower()}/{path.rstrip('/').removesuffix('.git')}"
-    parsed = urlsplit(remote)
-    if not parsed.hostname:
-        return ""
-    host = parsed.hostname.lower()
-    if parsed.port:
-        host = f"{host}:{parsed.port}"
-    path = parsed.path.rstrip("/").removesuffix(".git")
-    return f"{parsed.scheme.lower()}://{host}{path}"
-
-
-def _git(cwd: str, *args: str) -> str:
-    return subprocess.run(  # noqa: S603 — fixed executable, cwd is an argument.
-        ["git", "-C", cwd, *args],  # noqa: S607 — resolved from trusted PATH.
-        capture_output=True,
-        check=False,
-        text=True,
-    ).stdout.strip()
-
-
 def derive_project_identity(cwd: str, host_namespace: str = "local") -> ProjectIdentity:
     """Snapshot repository identity for a cwd without inventing a shared project row."""
-    root = _git(cwd, "rev-parse", "--show-toplevel")
-    common = _git(cwd, "rev-parse", "--path-format=absolute", "--git-common-dir")
-    if root:
-        remotes = _git(cwd, "remote").splitlines()
-        selected = (
-            "origin" if "origin" in remotes else (sorted(remotes)[0] if remotes else "")
-        )
-        remote = (
-            canonical_remote(_git(cwd, "remote", "get-url", selected))
-            if selected
-            else ""
-        )
-        repo_root = str(Path(common or root).resolve())
-        if remote:
-            digest = hashlib.sha256(remote.encode()).hexdigest()[:24]
-            return ProjectIdentity(
-                f"remote:{digest}", remote, repo_root, root, "remote"
-            )
-        digest = hashlib.sha256(f"{host_namespace}:{repo_root}".encode()).hexdigest()[
-            :24
-        ]
-        return ProjectIdentity(f"local:{digest}", "", repo_root, root, "local")
-    local = str(Path(cwd).resolve())
-    digest = hashlib.sha256(f"{host_namespace}:{local}".encode()).hexdigest()[:24]
+    found = project(cwd, host_namespace)
     return ProjectIdentity(
-        f"local:{digest}", "", local, local, "unresolved", "not a git repository"
+        found["key"],
+        found["remote"],
+        found["repo_root"],
+        found["worktree"],
+        found["confidence"],
+        found["error"],
     )
 
 

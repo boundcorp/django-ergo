@@ -225,19 +225,25 @@ refuse logins until the window passes.
 - **Memory**: the bot's knowledge base articles, rendered as Markdown.
 - **Sessions**: every session, searchable, including threads.
 - **Costs**: usage for the last 7, 30, or 90 days, optionally filtered by bot.
-  Headline figures show sessions with calls, total tokens, cache hit rate,
-  main-chat and subscription token shares, API spend, and compaction token
-  share. A token-mix bar splits input, output, cache writes, and cache reads;
-  the sortable per-thread table can be grouped by thread, bot, or model and
-  links to each chat. Claude CLI subscription calls contribute tokens but
-  show `sub` instead of dollars and are excluded from estimated API spend.
-  **Agent sessions** follows Usage and separately shows Claude Code, Codex,
-  and omp tokens that Orca workers record from the agents' session files.
-  Those subscription tokens are not dollar estimates and do not affect Usage
-  totals. Agent rows link to their chat and show the worker, agent, model,
-  cache hit, request count, and status. Below Usage, spend remains broken down
-  by day, call kind (chat replies split by bot), and model. Admins see
-  everyone's calls and agent sessions; others see their own.
+  One row of headline figures: estimated bot spend and calls, bot tokens and
+  cache hit rate, the share of bot tokens on a subscription, agent workers
+  with their project and token counts, and what the agents' tokens would cost
+  at list price. Below them are daily bot spend and one breakdown card with
+  tabs: **Projects**, **Agents**, **Threads**, **Bots**, **Models** and **Call
+  types** (the tab is remembered per browser). Each row shows a thin bar whose
+  length is its share of the largest row and whose colors are its token mix
+  (input, cache writes, cache reads, output; hover for the counts and what each
+  part cost), plus tokens, cache hit and cost. Rows with children expand:
+  a project lists its agent workers, a bot its threads, chat replies their
+  bots. The first eight rows show, with **Show all** for the rest.
+  A project is every worktree and clone of one git remote, recorded on each
+  Orca agent worker by its usage scan (see [Bots](bots.md#orca)); workers
+  from before that show under "(no project recorded)" until
+  `ergonaut manage agent_projects` looks theirs up. Agents run on
+  subscriptions, so their cost is a list-price equivalent, kept apart from bot
+  spend. Claude CLI subscription calls show `sub` instead of dollars and are
+  excluded from estimated bot spend. Admins see everyone's calls and agent
+  workers; others see their own.
 - **Routing & capacity**: for chats on an Auto model and Orca workers started
   with a tier. The top bar is the **source sync** health (healthy, stale,
   partial, failed or no data yet), the last successful sync time, and

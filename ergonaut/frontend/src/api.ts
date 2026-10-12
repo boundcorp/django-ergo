@@ -300,9 +300,30 @@ export type Costs = {
     threads: UsageThread[]
   }
   agents: {
-    headline: { sessions: number; tokens: number; cache_hit: number }
+    headline: { sessions: number; tokens: number; cache_hit: number; projects: number; cost: number }
     rows: AgentUsage[]
+    by_project: AgentProject[]
   }
+}
+
+// Agent work in one repository (every worktree and clone of one remote); key '' collects workers with none recorded.
+export type AgentProject = {
+  key: string
+  name: string
+  remote: string
+  workers: number
+  agents: string[]
+  models: string[]
+  input_tokens: number
+  cache_write_tokens: number
+  cache_read_tokens: number
+  output_tokens: number
+  tokens: number
+  cache_hit: number
+  requests: number
+  cost: number // API-equivalent list price
+  unpriced_models: string[]
+  last_at: string | null
 }
 
 export type UsageThread = {
@@ -339,6 +360,12 @@ export type AgentUsage = {
   tokens: number
   cache_hit: number
   requests: number
+  project_key: string
+  project: string
+  project_remote: string
+  branch: string
+  cost: number // API-equivalent list price
+  priced: boolean
 }
 
 export type BotDetail = Bot & {
