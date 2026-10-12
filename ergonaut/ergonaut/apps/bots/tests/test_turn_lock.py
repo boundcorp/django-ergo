@@ -46,3 +46,29 @@ def test_turn_lock_is_short_lived_and_renewed_while_held(monkeypatch):
         assert lock.renewed.wait(2)
 
     assert lock.released
+
+
+def test_channel_turn_holds_the_lock_and_steers_with_the_inbox(monkeypatch):
+    from types import SimpleNamespace
+
+    from asgiref.sync import async_to_sync
+
+    monkeypatch.setattr(tasks, "redis_client", lambda: None)
+    queued = []
+    monkeypatch.setattr(tasks, "queue_waiting", queued.append)
+    monkeypatch.setattr(tasks, "notify", lambda session_id: None)
+    session = SimpleNamespace(id="chan-1")
+    seen = {}
+
+    async def run(control):
+        seen["running"] = tasks.turn_running("chan-1")
+        seen["control"] = control
+        return "result"
+
+    assert async_to_sync(tasks.run_channel_turn)(session, run) == "result"
+
+    assert seen["running"] is True
+    assert isinstance(seen["control"], tasks.InboxControl)
+    assert tasks.turn_running("chan-1") is False
+    # A message the app sent as the turn ended gets a turn of its own.
+    assert queued == ["chan-1"]

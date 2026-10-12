@@ -944,6 +944,8 @@ class Bot:
         always = set(
             self.definition.chat(chat).skills if chat else self.definition.thread_skills
         )
+        # A session can name its own (a channel's thread, see plugins.telegram).
+        always |= set((session.metadata or {}).get("always_skills") or [])
         turn = (
             session.structured_calls.filter(kind="chat_reply").count()
             if session.pk is not None

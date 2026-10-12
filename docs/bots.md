@@ -1198,10 +1198,19 @@ become `[image omitted: name (id=...)]`, and the bot can look again by id.
 - name: telegram
   token_env: KITCHEN_TELEGRAM_TOKEN
   users: {123456789: lee}    # Telegram user or chat id -> Django username
+  respond_to:
+    users: all               # all, or Telegram ids and @usernames (default: those in users)
+    messages: all            # all, private (1:1 chats only), or mentions (in groups,
+                             # only @mentions of the bot and replies to it)
+  target_thread: Telegram    # every chat goes into one shared thread with this title
+  owner: lee                 # the thread's owner, a username or email (default: the first admin)
+  replies: auto              # auto: answers go back to the chat; tool: the bot sends
+                             # with ergo_telegram_message
+  photo_batch_wait: 0        # seconds to gather photos sent one at a time (0 = off)
   album_wait: 1.5            # seconds to collect an album's photos
   mode: auto                 # webhook, polling, or auto
   secret_env: KITCHEN_TELEGRAM_SECRET   # optional webhook secret
-  notify_delegations: true   # pass delegated replies in the root chat on to Telegram
+  notify_delegations: true   # pass delegated replies in the main chat on to Telegram
 ```
 
 In `auto` mode Telegram uses a webhook when `BOT_WEBHOOK_BASE_URL` is set:
@@ -1209,18 +1218,46 @@ In `auto` mode Telegram uses a webhook when `BOT_WEBHOOK_BASE_URL` is set:
 `hooks/<bot>/telegram/update/` with Telegram's secret-token header. Without
 a public URL it long-polls.
 
-`bot.serve()` long-polls the Bot API. Each message's sender is looked up in
-`users`, then its chat, so in a shared group chat each person talks to the
-bot as themselves (in their own root session) and the reply goes back to
-the group. Messages from anyone else are ignored. The photos of an album
-arrive as one turn. Photos, voice notes, audio
-and documents become attachments. A turn that stops for approval replies
-with Approve and Deny buttons that resume it. `plugin.notify(user, text)`
-sends a message from other code.
+**Where messages go.** Without `target_thread`, each message's sender is
+looked up in `users`, then its chat, so in a shared group chat each person
+talks to the bot as themselves (in their own main chat) and the reply goes
+back to the group; anyone else is ignored. With `target_thread`, every
+message goes into one thread under the owner's main chat, whoever sent it,
+so the household shares one conversation that also shows in the app. The
+thread loads the main chat's skills and the `telegram` skill from the
+start, and an archived thread comes back with the next message.
+`respond_to: {users: all}` needs a `target_thread`.
 
-The incoming message's `author` records the actual Telegram sender id and
-name when Telegram provides them, independently of the Django account used
-to route the chat. Forwarding preserves this `telegram_user` identity.
+**Who and what it answers.** `respond_to.users` is `all`, or a list of
+Telegram user or chat ids and `@usernames`; by default it is whoever
+`users` lists. `respond_to.messages` is `all`, `private` (1:1 chats only),
+or `mentions`: in a group only messages that @mention the bot or reply to
+it get a turn, while 1:1 chats always do.
+
+**Replies.** With `replies: auto` the turn's answer goes back to the chat
+it came from. With `replies: tool` it stays in the app, and the bot writes
+to Telegram with `ergo_telegram_message` (text, and `reply: true` to quote
+the latest Telegram message), which sends to the chat that last wrote to
+this conversation. Approval prompts and errors reach the chat either way.
+
+**People.** The message's `author` is the Telegram user (`telegram_user`,
+their id and name), whichever chat it lands in, and the plugin keeps an
+`AuthorProfile` for each one with their username and profile photo
+(refreshed daily). Ergonaut shows the photo next to their name. Forwarding
+preserves this `telegram_user` identity.
+
+**Media.** Photos, voice notes, audio and documents become attachments;
+voice and audio are transcribed when `DJANGO_ERGO["AUDIO_TRANSCRIBER"]` is
+set (Ergonaut sets it when `OPENAI_API_KEY` is). The photos of an album
+arrive as one turn, and with `photo_batch_wait` so do photos a person sends
+one at a time (handy for a recipe in several screenshots); a text they send
+while photos are gathering goes with them at once.
+
+A turn that stops for approval replies with Approve and Deny buttons that
+resume it (in a shared thread anyone it answers may press them).
+`plugin.notify(user, text)` sends a message from other code. Turns run
+through `DJANGO_ERGO["CHANNEL_TURN_RUNNER"]` when it is set, which Ergonaut
+uses to hold the session's turn lock so Telegram and the app take turns.
 
 ### Model context windows
 

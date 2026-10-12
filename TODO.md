@@ -86,6 +86,10 @@ Live on rigel from `~/p/boundcorp/django-ergo`, bots from `boundcorp/ergo-bots`.
 
 - [x] Pre-commit reconciled: ruff pinned to the dev version, prettier scoped to the Ergonaut frontend with its own config, the whole repo reformatted once; every hook passes, so commits no longer skip hooks.
 
+- [x] Telegram shared thread: `target_thread` puts every chat in one thread, `respond_to` picks the people and messages answered, `replies: tool` sends with `ergo_telegram_message`, `AuthorProfile` keeps each Telegram user's name and photo (shown in Ergonaut), photos sent one at a time batch (`photo_batch_wait`), and turns hold Ergonaut's session lock (`CHANNEL_TURN_RUNNER`).
+
+- [ ] Telegram: `ergo_telegram_message` sends text only; sending photos and files back needs multipart uploads.
+
 - [x] Telegram passes on delegated replies that land in a root chat, and approvals a delegated request is waiting on (`notify_delegations`).
 
 - [x] Changes section on the managing bot's page: open PRs with diff, Merge (squash, then pull) and Close; the unpublished draft with Discard. Admins only.

@@ -126,10 +126,16 @@ DJANGO_ERGO = {
     # Turns another bot or a finished worker starts can be steered and stopped like the user's own.
     "TURN_CONTROL": "ergonaut.apps.bots.tasks.InboxControl",
     "TURN_STOPPER": "ergonaut.apps.bots.tasks.request_stop",
+    # Telegram's turns hold the session's turn lock too, and the app's messages steer them.
+    "CHANNEL_TURN_RUNNER": "ergonaut.apps.bots.tasks.run_channel_turn",
     "SESSION_NOTIFIER": "ergonaut.apps.bots.tasks.notify",
     # The orchestrator block's open PRs come from the PRs bots and workers reported
     # (django_ergo.conversation.links), not a gh call per repo.
     "OPEN_PRS": "django_ergo.conversation.links.open_pull_requests",
+    # Voice notes and other audio are transcribed with OpenAI when there's a key.
+    "AUDIO_TRANSCRIBER": (
+        "django_ergo.conversation.attachments.openai_transcriber" if os.environ.get("OPENAI_API_KEY") else None
+    ),
 }
 
 SITE_ROOT = PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))

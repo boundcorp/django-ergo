@@ -1340,3 +1340,18 @@ def test_session_messages_expose_identity_without_model_attribution(client, cook
     assert ordinary["author"] == {}
     assert ordinary["provenance"] == {}
     assert ordinary["blocks"] == [{"type": "text", "text": "Legacy body"}]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_author_avatar(client, cook):
+    from django_ergo.conversation.models import AuthorProfile
+
+    AuthorProfile.objects.create(kind="telegram_user", ref="222", avatar=b"jpeg bytes", avatar_type="image/jpeg")
+    AuthorProfile.objects.create(kind="telegram_user", ref="333")
+
+    response = client.get("/api/authors/telegram_user/222/avatar")
+    assert response.status_code == 200
+    assert response["Content-Type"] == "image/jpeg"
+    assert response.content == b"jpeg bytes"
+    assert client.get("/api/authors/telegram_user/333/avatar").status_code == 404
+    assert client.get("/api/authors/telegram_user/444/avatar").status_code == 404

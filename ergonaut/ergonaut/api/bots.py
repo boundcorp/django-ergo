@@ -1819,6 +1819,19 @@ async def page_action_call(request, bot: str, name: str, data: PageActionIn):
         ) from None
 
 
+@router.get("/authors/{kind}/{ref}/avatar")
+def author_avatar(request, kind: str, ref: str):
+    """An external message author's picture (a Telegram user's profile photo)."""
+    from django_ergo.conversation.models import AuthorProfile
+
+    row = AuthorProfile.objects.filter(kind=kind, ref=ref).values("avatar", "avatar_type").first()
+    if not row or not row["avatar"]:
+        raise HttpError(404, "No picture")
+    response = HttpResponse(bytes(row["avatar"]), content_type=row["avatar_type"] or "image/jpeg")
+    response["Cache-Control"] = "private, max-age=3600"
+    return response
+
+
 @router.get("/attachments/{attachment_id}/download")
 def download_attachment(request, attachment_id: str, inline: bool = False):
     row = visible_attachment(request.auth, attachment_id)

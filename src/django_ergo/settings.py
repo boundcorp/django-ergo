@@ -80,6 +80,10 @@ DEFAULTS = {
     # Callable(session_id) -> bool that asks a session's running turn to stop at its next
     # step (returns whether one was running), for ergo_thread_stop. None = can't stop turns.
     "TURN_STOPPER": None,
+    # Async callable (session, run) that runs a turn a chat channel (Telegram) starts:
+    # it awaits ``run(control)`` while holding the session's turn lock, so the
+    # channel's turns and the app's take turns. None = an in-process lock, no control.
+    "CHANNEL_TURN_RUNNER": None,
     # Callable(bot) -> [{repo, number, title, draft}]: the open pull requests shown in
     # orchestrating chats' "Bots and threads" block. None = gh CLI on bot.yaml's pull_requests.
     "OPEN_PRS": None,
@@ -120,6 +124,7 @@ IMPORT_STRINGS = [
     "WORKER_RUNNER",
     "TURN_CONTROL",
     "TURN_STOPPER",
+    "CHANNEL_TURN_RUNNER",
     "OPEN_PRS",
     "SESSION_NOTIFIER",
 ]

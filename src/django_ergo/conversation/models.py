@@ -993,3 +993,33 @@ class RoutingSwitch(models.Model):
 
     def __str__(self):
         return f"{self.from_model} -> {self.to_model}"
+
+
+class AuthorProfile(models.Model):
+    """Who an external message author is, for apps to show: a name and a
+    small picture, keyed like a message's ``author`` (``kind``, ``ref``), e.g.
+    a Telegram user the Telegram plugin has heard from."""
+
+    kind = models.CharField(max_length=40)
+    ref = models.CharField(max_length=200)
+    display_name = models.CharField(max_length=300, blank=True, default="")
+    username = models.CharField(max_length=200, blank=True, default="")
+    # A small picture, stored inline (a Telegram profile photo is a few KB).
+    avatar = models.BinaryField(null=True, blank=True)
+    avatar_type = models.CharField(max_length=100, blank=True, default="")
+    # Where the picture came from (a Telegram file_unique_id), so it's fetched once.
+    avatar_source = models.CharField(max_length=200, blank=True, default="")
+    avatar_checked_at = models.DateTimeField(null=True, blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    last_seen_at = models.DateTimeField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["kind", "ref"], name="author_profile_kind_ref"
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.display_name or self.ref} ({self.kind})"

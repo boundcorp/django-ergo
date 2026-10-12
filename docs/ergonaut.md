@@ -84,6 +84,7 @@ Data lives under `DATA_DIR` (default `~/.ergonaut`, `/data` in the image).
 | --- | --- | --- |
 | `ERGONAUT_BOTS` | `/bot` | bot folders to serve (`:`-separated) |
 | `ERGONAUT_PUBLIC_URL` | unset | this server's public URL; turns on webhooks (`<url>/hooks/...`), so Telegram uses a webhook instead of polling |
+| `OPENAI_API_KEY` | unset | also turns on transcription of voice notes and audio attachments (Telegram voice clips) with OpenAI |
 | `ERGONAUT_BOTS_PULL_SECONDS` | unset | fast-forward each clean bot checkout from its upstream on this interval, so merged PRs go live |
 | `DATA_DIR` | `~/.ergonaut` | embedded database, Redis, Garage, secret key |
 | `PORT` | `8000` | web server port |

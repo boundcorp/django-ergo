@@ -7,6 +7,7 @@ import subprocess
 import textwrap
 
 import pytest
+from asgiref.sync import sync_to_async
 from django.contrib.auth import get_user_model
 
 from django_ergo.bots.runtime import Bot
@@ -464,6 +465,14 @@ class FakeTelegram:
         if method == "getUpdates":
             updates, self.updates = self.updates, []
             return updates
+        if method == "getMe":
+            return {"id": 4242, "username": "KitchenBot"}
+        if method == "getUserProfilePhotos":
+            sizes = [
+                {"file_id": f"pic-{params['user_id']}-{side}", "width": side}
+                for side in (160, 320, 640)
+            ]
+            return {"total_count": 1, "photos": [sizes]}
         return True
 
     async def download(self, file_id):
@@ -749,6 +758,256 @@ async def test_telegram_album_is_one_turn(tmp_path):
     assert [part["type"] for part in content] == ["text", "image", "image", "text"]
     assert content[-1]["text"] == "add these to the pantry"
     assert plugin.api.sent()[-1]["text"] == "Two receipts."
+
+
+THREAD_YAML = """
+    name: kitchen
+    tools: [tools/pantry.py]
+    chats:
+      main:
+        skills: [pantry]
+    plugins:
+      - name: telegram
+        token_env: TEST_TELEGRAM_TOKEN
+        target_thread: Telegram
+        owner: lee
+        respond_to: {users: all, messages: all}
+        replies: tool
+"""
+
+
+def telegram_thread_bot(tmp_path, *responses, yaml_text=THREAD_YAML):
+    bot, engine = make_bot(
+        tmp_path, *responses, yaml_text=yaml_text, tools=TELEGRAM_TOOLS
+    )
+    plugin = bot.plugin("telegram")
+    plugin.api = FakeTelegram()
+    plugin.api.token = "4242:secret"
+    return bot, engine, plugin
+
+
+def person(user_id, first_name, **extra):
+    return {"from": {"id": user_id, "first_name": first_name, **extra}}
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_telegram_target_thread_takes_everyone(tmp_path):
+    from django_ergo.conversation.models import AuthorProfile
+
+    lee = await User.objects.acreate(username="lee")
+    bot, engine, plugin = telegram_thread_bot(
+        tmp_path,
+        claude_tool("ergo_telegram_message", {"text": "Hi Lee!"}, tool_id="t1"),
+        say("Greeted Lee on Telegram."),
+        claude_tool("ergo_telegram_message", {"text": "Hi Audrey!"}, tool_id="t2"),
+        say("Greeted Audrey."),
+        say("Noted."),
+    )
+
+    await plugin.handle_update(
+        update(1, chat_id=-77, text="hello", **person(111, "Lee", username="lee"))
+    )
+    await plugin.handle_update(
+        update(2, chat_id=-77, text="hey", **person(222, "Audrey"))
+    )
+
+    # One shared thread under the owner's main chat, whoever wrote.
+    thread = await bot.sessions().aget(metadata__bot_role="thread")
+    assert thread.user_id == lee.id
+    assert thread.metadata["title"] == "Telegram"
+    assert thread.metadata["telegram"]["chat_id"] == -77
+    assert {"pantry", "telegram"} <= set(thread.metadata["always_skills"])
+    authors = [
+        m.author async for m in thread.messages.filter(role="user").order_by("sequence")
+    ]
+    authors = [a for a in authors if a]  # tool results are user rows too
+    assert [a["display_name"] for a in authors] == ["Lee", "Audrey"]
+    assert authors[1] == {
+        "kind": "telegram_user",
+        "ref": "222",
+        "display_name": "Audrey",
+    }
+
+    # replies: tool, so only what the bot sent with the tool reached Telegram.
+    assert [m["text"] for m in plugin.api.sent()] == ["Hi Lee!", "Hi Audrey!"]
+    assert {m["chat_id"] for m in plugin.api.sent()} == {-77}
+    tools = {t["name"] for t in engine._client.calls[0]["tools"]}
+    assert "ergo_telegram_message" in tools
+
+    # Each sender has a profile with their picture.
+    audrey = await AuthorProfile.objects.aget(kind="telegram_user", ref="222")
+    assert audrey.display_name == "Audrey"
+    assert bytes(audrey.avatar).endswith(b"pic-222-160")
+    lee_profile = await AuthorProfile.objects.aget(ref="111")
+    assert lee_profile.username == "lee"
+    photo_calls = [m for m, _ in plugin.api.calls if m == "getUserProfilePhotos"]
+    await plugin.handle_update(
+        update(3, chat_id=-77, text="again", **person(222, "Audrey"))
+    )
+    assert [
+        m for m, _ in plugin.api.calls if m == "getUserProfilePhotos"
+    ] == photo_calls
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_telegram_target_thread_comes_back_when_archived(tmp_path):
+    from django_ergo.bots import archival
+
+    await User.objects.acreate(username="lee")
+    bot, engine, plugin = telegram_thread_bot(tmp_path, say("One."), say("Two."))
+    await plugin.handle_update(update(1, text="a", **person(5, "Lee")))
+    thread = await bot.sessions().aget(metadata__bot_role="thread")
+    await sync_to_async(archival.archive)(thread)
+
+    await plugin.handle_update(update(2, text="b", **person(5, "Lee")))
+
+    await thread.arefresh_from_db()
+    assert thread.status == "active"
+    assert await bot.sessions().filter(metadata__bot_role="thread").acount() == 1
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_telegram_auto_replies_and_mentions_only(tmp_path):
+    await User.objects.acreate(username="lee", is_superuser=True)
+    yaml_text = (
+        THREAD_YAML.replace("replies: tool", "replies: auto")
+        .replace("messages: all", "messages: mentions")
+        .replace("        owner: lee\n", "")
+    )
+    bot, engine, plugin = telegram_thread_bot(
+        tmp_path,
+        say("Mentioned."),
+        say("Replied."),
+        say("Private."),
+        yaml_text=yaml_text,
+    )
+    group = {"id": -9, "type": "group"}
+
+    async def send(n, chat=group, **message):
+        await plugin.handle_update(
+            {"update_id": n, "message": {"chat": chat, **person(7, "Ann"), **message}}
+        )
+
+    await send(1, text="just chatting")
+    await send(2, text="@kitchenbot what's for dinner?")
+    await send(3, text="thanks", reply_to_message={"from": {"id": 4242}})
+    await send(4, chat={"id": 7, "type": "private"}, text="hi")
+
+    assert [m["text"] for m in plugin.api.sent()] == [
+        "Mentioned.",
+        "Replied.",
+        "Private.",
+    ]
+    assert len(engine._client.calls) == 3
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_telegram_respond_to_lists_users(tmp_path):
+    await User.objects.acreate(username="lee")
+    yaml_text = THREAD_YAML.replace("users: all", "users: [111, '@audrey']")
+    bot, engine, plugin = telegram_thread_bot(
+        tmp_path, say("a"), say("b"), yaml_text=yaml_text
+    )
+
+    await plugin.handle_update(update(1, chat_id=111, text="one", **person(111, "Lee")))
+    await plugin.handle_update(
+        update(2, chat_id=222, text="two", **person(222, "Audrey", username="Audrey"))
+    )
+    await plugin.handle_update(
+        update(3, chat_id=333, text="three", **person(333, "Stranger"))
+    )
+
+    assert len(engine._client.calls) == 2
+
+
+def test_telegram_all_users_needs_a_thread(tmp_path):
+    yaml_text = THREAD_YAML.replace("        target_thread: Telegram\n", "")
+    with pytest.raises(ValueError, match="target_thread"):
+        make_bot(tmp_path, yaml_text=yaml_text)
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_telegram_photos_sent_one_by_one_are_one_turn(tmp_path):
+    await User.objects.acreate(username="lee")
+    bot, engine, plugin = telegram_thread_bot(tmp_path, say("Recipe saved."))
+    plugin.photo_batch_wait = 60
+    plugin.replies = "auto"
+
+    await plugin.handle_update(update(1, photo=[{"file_id": "p1"}], **person(5, "Lee")))
+    await plugin.handle_update(update(2, photo=[{"file_id": "p2"}], **person(5, "Lee")))
+    assert engine._client.calls == []
+
+    # The words that follow go with the photos, at once.
+    await plugin.handle_update(update(3, text="add this recipe", **person(5, "Lee")))
+
+    content = engine._client.calls[0]["messages"][0]["content"]
+    assert [part["type"] for part in content] == ["text", "image", "image", "text"]
+    assert content[-1]["text"].endswith("add this recipe")
+    assert plugin.api.sent()[-1]["text"] == "Recipe saved."
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_telegram_thread_approvals_go_to_the_chat(tmp_path):
+    await User.objects.acreate(username="lee")
+    bot, engine, plugin = telegram_thread_bot(
+        tmp_path,
+        claude_tool("order", {"item": "flour"}, tool_id="o1"),
+        claude_tool("ergo_telegram_message", {"text": "Ordered."}, tool_id="t1"),
+        say("Done."),
+    )
+
+    await plugin.handle_update(update(1, text="order flour", **person(222, "Audrey")))
+    prompt = plugin.api.sent()[-1]
+    assert prompt["text"] == "Approve order?"
+    data = prompt["reply_markup"]["inline_keyboard"][0][0]["callback_data"]
+
+    # In a shared thread anyone it answers may approve.
+    callback = {
+        "id": "c1",
+        "data": data,
+        "from": {"id": 222},
+        "message": {"chat": {"id": 111}},
+    }
+    await plugin.handle_update({"update_id": 2, "callback_query": callback})
+
+    assert plugin.api.sent()[-1]["text"] == "Ordered."
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_telegram_turns_go_through_the_channel_runner(tmp_path, settings):
+    from django_ergo.settings import api_settings
+
+    ran = []
+
+    async def runner(session, run):
+        ran.append(session.metadata.get("title"))
+        return await run("control")
+
+    await User.objects.acreate(username="lee")
+    bot, engine, plugin = telegram_thread_bot(tmp_path, say("ok"))
+    settings.DJANGO_ERGO = {
+        **getattr(settings, "DJANGO_ERGO", {}),
+        "CHANNEL_TURN_RUNNER": runner,
+    }
+    api_settings.reload()
+    try:
+        asked = []
+        real_ask = bot.ask
+
+        async def ask(*args, **kwargs):
+            asked.append(kwargs.get("control"))
+            return await real_ask(*args, **{**kwargs, "control": None})
+
+        bot.ask = ask
+        await plugin.handle_update(update(1, text="hi", **person(5, "Lee")))
+    finally:
+        settings.DJANGO_ERGO = {
+            k: v for k, v in settings.DJANGO_ERGO.items() if k != "CHANNEL_TURN_RUNNER"
+        }
+        api_settings.reload()
+
+    assert ran == ["Telegram"]
+    assert asked == ["control"]
 
 
 @pytest.mark.django_db(transaction=True)

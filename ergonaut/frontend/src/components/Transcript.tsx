@@ -1,6 +1,6 @@
 import { Fragment, createContext, useContext, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import type { AttachmentFile, Block, Call, Compaction, Message, SentCard, Worker } from '../api'
+import type { AttachmentFile, Block, Call, Compaction, Message, MessageIdentity, SentCard, Worker } from '../api'
 import { api } from '../api'
 import { DirectoryContext } from './BotIcon'
 import Markdown from './Markdown'
@@ -319,12 +319,38 @@ function echoesReply(text: string, replies: string[]): boolean {
 }
 
 // "YOU · 10:42 🔗": who wrote a message, when, and a link to it.
-function RoleLabel({ who, timestamp, line }: { who: string; timestamp: string | null; line?: number }) {
+function RoleLabel({
+  who,
+  timestamp,
+  line,
+  author,
+}: {
+  who: string
+  timestamp: string | null
+  line?: number
+  author?: Message['author']
+}) {
   return (
     <div className="mb-1 font-mono text-[11px] font-semibold tracking-wide text-mint uppercase">
+      {author?.kind === 'telegram_user' && <AuthorAvatar author={author as MessageIdentity} />}
       {who}
       {line == null ? timestamp && ` · ${clock(timestamp)}` : <MessageLink line={line} timestamp={timestamp} />}
     </div>
+  )
+}
+
+/** A Telegram author's profile photo, before their name; nothing when they have none. */
+function AuthorAvatar({ author }: { author: MessageIdentity }) {
+  const [missing, setMissing] = useState(false)
+  if (author.kind !== 'telegram_user' || missing) return null
+  return (
+    <img
+      src={api.avatarUrl(author)}
+      alt=""
+      loading="lazy"
+      onError={() => setMissing(true)}
+      className="mr-1.5 inline-block h-5 w-5 rounded-full object-cover align-[-5px]"
+    />
   )
 }
 
@@ -521,7 +547,12 @@ function MessageView({
                 key={i}
                 className="max-w-[85%] rounded-card border border-accent/20 bg-indigo-tint px-4 py-3 text-ink"
               >
-                <RoleLabel who={authorLabel(message)} timestamp={message.timestamp} line={message.line} />
+                <RoleLabel
+                  who={authorLabel(message)}
+                  timestamp={message.timestamp}
+                  line={message.line}
+                  author={message.author}
+                />
                 <Markdown text={block.text} />
               </div>
             ) : (

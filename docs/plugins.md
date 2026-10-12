@@ -31,7 +31,8 @@ plugins:
 ```
 
 A plugin with tools is one [skill](skills.md), loaded when the chat needs
-it. A plugin without tools (like `telegram`) is always active.
+it. A plugin without tools is always active, and so are a plugin's hooks
+(its channel, webhooks and turn hooks) whether its skill is loaded or not.
 
 ### Official plugins
 
@@ -41,7 +42,7 @@ it. A plugin without tools (like `telegram`) is always active.
 | `bot_management` | `config_repo` | read, edit and publish its own repo, as a PR or straight to main |
 | `pages` | `pages` | write live `.jhtml` pages into a chat and pin them |
 | `attachments` | `attachments` | list, read, write, look at and archive chat files ([Attachments](attachments.md)) |
-| `telegram` | | a Telegram bot, by webhook or polling, with approval buttons |
+| `telegram` | `telegram` | a Telegram bot, by webhook or polling: one shared thread or a chat per person, voice and photos, approval buttons, `ergo_telegram_message` ([bots.md](bots.md#telegram)) |
 | `orca` | `orca` | the Orca CLI: worktrees, terminals and supervised coding workers |
 | `bash` | `bash` | shell commands on the host, each approved by default |
 | `browser` | `browser` | a running Chrome over CDP: open, read, click, type, screenshot ([Browser control](browser.md)) |
