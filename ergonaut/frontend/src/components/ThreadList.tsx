@@ -1,4 +1,4 @@
-import { Fragment, useState } from 'react'
+import { Fragment, useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Link, NavLink, useMatch } from 'react-router-dom'
 import type { Session } from '../api'
@@ -90,7 +90,7 @@ function StatusLine({ session }: { session: Session }) {
   }
   if (!text && !waiting) return null
   return (
-    <span className="block truncate text-xs text-muted" title={text}>
+    <span className="block text-xs text-muted full-thread-status" title={text}>
       {waiting && <span className={waiting.tone}>{waiting.word}</span>}
       {waiting && text && ' · '}
       {text}
@@ -142,29 +142,44 @@ export function ThreadGroups({
     grouped.set(key, [...(grouped.get(key) ?? []), session])
   }
   return (
-    <div className={full ? 'space-y-2' : 'space-y-0.5'}>
+    <div className={full ? 'space-y-4' : 'space-y-0.5'}>
       {GROUPS.filter(g => grouped.get(g.key)?.length).map(group => {
         const rows = grouped.get(group.key)!.sort((a, b) => activity(b).localeCompare(activity(a)))
         const shown = open[group.key] ?? group.open[full ? 1 : 0]
         const visible = group.capped && !more[group.key] ? rows.slice(0, cap) : rows
         return (
-          <div key={group.key}>
+          <section
+            key={group.key}
+            id={`${scope}-${group.key}`}
+            tabIndex={full ? -1 : undefined}
+            className={full ? `dashboard-group dashboard-group-${group.key}` : undefined}
+            aria-label={full ? group.label : undefined}
+          >
             <button
               type="button"
+              aria-controls={`${scope}-${group.key}-rows`}
               aria-expanded={shown}
               onClick={() => toggle(group.key, !shown)}
               className={
                 full
-                  ? 'flex w-full items-center gap-2 rounded-lg bg-raised px-3 py-2 text-left text-sm font-semibold text-ink'
+                  ? 'flex min-h-12 w-full items-center gap-2 px-4 py-3 text-left text-sm font-semibold text-ink'
                   : 'ml-3 flex items-center gap-1 px-2 py-0.5 text-xs font-medium text-muted hover:text-ink'
               }
             >
               <span className="w-3 text-muted">{shown ? '▾' : '▸'}</span>
               {group.label}
-              <span className="font-normal text-muted">{rows.length}</span>
+              <span
+                className={
+                  full
+                    ? 'ml-auto rounded-full bg-raised px-2 py-0.5 text-xs font-medium text-muted'
+                    : 'font-normal text-muted'
+                }
+              >
+                {rows.length}
+              </span>
             </button>
             {shown && (
-              <div className={full ? 'mt-1 space-y-0.5' : ''}>
+              <div id={`${scope}-${group.key}-rows`} className={full ? 'border-t border-stroke' : ''}>
                 {visible.map(session =>
                   full ? (
                     <FullRow key={session.id} session={session} onPinned={onChange} />
@@ -181,7 +196,7 @@ export function ThreadGroups({
                     onClick={() => setMore(m => ({ ...m, [group.key]: true }))}
                     className={
                       full
-                        ? 'w-full py-2 text-center text-sm text-muted hover:text-ink'
+                        ? 'min-h-11 w-full border-t border-stroke py-2 text-center text-sm font-medium text-accent hover:bg-raised'
                         : 'ml-6 px-2 py-0.5 text-xs text-muted hover:text-ink'
                     }
                   >
@@ -190,7 +205,7 @@ export function ThreadGroups({
                 )}
               </div>
             )}
-          </div>
+          </section>
         )
       })}
     </div>
@@ -231,61 +246,85 @@ export function SlimRow({ session }: { session: Session }) {
 /** A Threads page row: bot, title, status line, PR and worker chips, time, and a pin. */
 export function FullRow({ session, onPinned }: { session: Session; onPinned?: () => void }) {
   const [pinned, setPinned] = useState(!!session.pinned)
+  const [pinning, setPinning] = useState(false)
+  const [pinError, setPinError] = useState(false)
+  useEffect(() => setPinned(!!session.pinned), [session.pinned])
+  const done = resolved(session)
   return (
-    <div className="group flex items-center gap-3 rounded-lg px-3 py-2 hover:bg-raised">
-      <span className="w-2">{session.unread && <span className="block h-2 w-2 rounded-full bg-sky-500" />}</span>
-      <BotBadge name={session.bot} size={22} />
+    <div className="dashboard-thread">
+      <BotBadge name={session.bot} size={26} />
       <Link
         to={`/s/${session.id}`}
-        className="min-w-0 flex-1"
-        title={resolved(session) && session.status_line ? `Resolved: ${session.status_line}` : undefined}
+        className="dashboard-thread-main"
+        title={done ? session.resolved_summary || session.status_line || undefined : undefined}
       >
-        <span className="flex items-center gap-2">
-          <span className={`truncate text-sm ${resolved(session) ? 'text-muted' : 'font-medium text-ink'}`}>
-            {session.title}
-          </span>
-          <span className="shrink-0 text-xs text-muted">{session.bot}</span>
-          {session.busy && (
-            <span className="h-2.5 w-2.5 shrink-0 animate-spin rounded-full border-[1.5px] border-indigo-500 border-t-transparent" />
-          )}
+        <span className={`block break-words text-sm ${done ? 'text-muted' : 'font-semibold text-ink'}`}>
+          {session.title}
         </span>
-        {!resolved(session) && <StatusLine session={session} />}
-      </Link>
-      <span className={`hidden shrink-0 items-center gap-1.5 ${resolved(session) ? '' : 'sm:flex'}`}>
-        {!!session.workers_running && (
-          <span
-            className="rounded-full border border-stroke px-2 py-0.5 text-xs text-muted"
-            title={`${session.workers_running} of ${session.workers_total} workers still running`}
-          >
-            ◔ {(session.workers_total ?? 0) - session.workers_running}/{session.workers_total}
+        <span className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted">
+          <span>{session.bot}</span>
+          {session.unread && <span className="font-medium text-accent">Unread reply</span>}
+          {session.busy && <span className="text-teal">Working</span>}
+          {done && <span>Resolved</span>}
+          <time dateTime={activity(session)} title={new Date(activity(session)).toLocaleString()}>
+            {shortAgo(activity(session))}
+          </time>
+        </span>
+        {!done && (
+          <span className="mt-1 block">
+            <StatusLine session={session} />
           </span>
         )}
-        {session.prs?.slice(0, 2).map(pr => (
-          <span key={pr.url} className="max-w-48">
-            <PrChip pr={{ ...pr, title: '' }} />
-          </span>
-        ))}
-        {(session.prs?.length ?? 0) > 2 && <span className="text-xs text-muted">+{session.prs!.length - 2}</span>}
-      </span>
+      </Link>
       <button
         type="button"
         title={pinned ? 'Unpin' : 'Pin to the top'}
+        aria-label={`${pinned ? 'Unpin' : 'Pin'} ${session.title}`}
         aria-pressed={pinned}
-        className={`shrink-0 px-1 text-sm ${pinned ? 'text-warning' : 'text-muted opacity-0 group-hover:opacity-100 focus:opacity-100'}`}
+        disabled={pinning}
+        className={`dashboard-thread-pin ${pinned ? 'text-warning' : 'text-muted'}`}
         onClick={async () => {
-          setPinned(!pinned)
-          await api.pinSession(session.id, !pinned).catch(() => setPinned(pinned))
-          onPinned?.()
+          const next = !pinned
+          setPinned(next)
+          setPinning(true)
+          setPinError(false)
+          try {
+            await api.pinSession(session.id, next)
+            onPinned?.()
+          } catch {
+            setPinned(!next)
+            setPinError(true)
+          } finally {
+            setPinning(false)
+          }
         }}
       >
-        {pinned ? '★' : '☆'}
+        <span aria-hidden="true">{pinned ? '★' : '☆'}</span>
       </button>
-      <span
-        className="w-14 shrink-0 text-right text-xs text-muted"
-        title={new Date(activity(session)).toLocaleString()}
-      >
-        {shortAgo(activity(session))}
-      </span>
+      {!done && (!!session.workers_running || !!session.prs?.length) && (
+        <div className="dashboard-thread-evidence">
+          {!!session.workers_running && (
+            <span
+              className="rounded-full border border-stroke px-2 py-1 text-xs text-muted"
+              title={`${session.workers_running} of ${session.workers_total} workers still running`}
+            >
+              {session.workers_running} running · {(session.workers_total ?? 0) - session.workers_running}/
+              {session.workers_total} workers done
+            </span>
+          )}
+          {session.prs?.slice(0, 2).map(pr => <PrChip key={pr.url} pr={{ ...pr, title: '' }} />)}
+          {(session.prs?.length ?? 0) > 2 && (
+            <Link to={`/s/${session.id}`} className="dashboard-text-link text-xs">
+              +{session.prs!.length - 2} more PRs<span className="sr-only"> in {session.title}</span>
+            </Link>
+          )}
+        </div>
+      )}
+      {pinError && (
+        <p className="dashboard-thread-evidence text-xs text-danger" role="alert">
+          Could not update the pin. Try again.
+        </p>
+      )}
     </div>
   )
 }
