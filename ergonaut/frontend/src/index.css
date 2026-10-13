@@ -1048,3 +1048,193 @@ body {
     background-color: transparent;
   }
 }
+
+/* Workspace/dashboard: same reading order on desktop and phone. */
+.dashboard-page {
+  padding-top: 12px;
+}
+.dashboard-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  margin-bottom: 20px;
+}
+.dashboard-action {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border: 1px solid var(--color-stroke);
+  border-radius: var(--radius-control);
+  background: var(--color-surface);
+  color: var(--color-ink);
+  font-size: 13px;
+  font-weight: 600;
+}
+.dashboard-action:hover {
+  background: var(--color-raised);
+}
+.dashboard-action-primary {
+  border-color: var(--color-accent);
+  background: var(--color-indigo-tint);
+  color: var(--color-accent-soft);
+}
+.dashboard-action-primary:hover {
+  background: var(--color-indigo-tint);
+  border-color: var(--color-accent-soft);
+}
+.dashboard-text-link {
+  min-height: 44px;
+  align-items: center;
+  color: var(--color-accent);
+  font-size: 13px;
+  font-weight: 600;
+}
+.dashboard-text-link:hover {
+  text-decoration: underline;
+}
+.dashboard-overview {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 4px;
+  margin-bottom: 24px;
+  padding: 4px;
+  border: 1px solid var(--color-stroke);
+  border-radius: var(--radius-card);
+  background: var(--color-surface);
+}
+.dashboard-overview-item {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  border-radius: var(--radius-control);
+}
+.dashboard-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+  gap: 28px;
+}
+.dashboard-workspace {
+  min-width: 0;
+}
+.dashboard-bot-link,
+.dashboard-pin-link {
+  display: flex;
+  min-height: 44px;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 8px;
+  border-radius: var(--radius-control);
+}
+.dashboard-bot-link:hover,
+.dashboard-pin-link:hover {
+  background: var(--color-raised);
+}
+.dashboard-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.dashboard-filter {
+  min-width: 44px;
+  min-height: 44px;
+  padding: 8px 12px;
+  border-width: 1px;
+  border-radius: var(--radius-control);
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  font-weight: 600;
+}
+.dashboard-group {
+  border: 1px solid var(--color-stroke);
+  border-radius: var(--radius-card);
+  background: var(--color-surface);
+  overflow: hidden;
+}
+.dashboard-group-waiting > button {
+  background: var(--color-amber-tint);
+  color: var(--color-warning);
+}
+.dashboard-group-review > button {
+  background: var(--color-indigo-tint);
+  color: var(--color-accent-soft);
+}
+.dashboard-thread {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr) 44px;
+  column-gap: 12px;
+  align-items: start;
+  padding: 10px 12px;
+}
+.dashboard-thread + .dashboard-thread {
+  border-top: 1px solid var(--color-stroke);
+}
+.dashboard-thread:hover {
+  background: var(--color-raised);
+}
+.dashboard-thread-main {
+  min-width: 0;
+  min-height: 44px;
+}
+.dashboard-thread-pin {
+  display: flex;
+  width: 44px;
+  height: 44px;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-control);
+  font-size: 20px;
+}
+.dashboard-thread-pin:hover {
+  background: var(--color-indigo-tint);
+}
+.dashboard-thread-evidence {
+  grid-column: 2 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  min-width: 0;
+}
+.dashboard-thread-evidence a {
+  min-height: 32px;
+}
+.full-thread-status {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dashboard-thread .full-thread-status {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+@media (min-width: 1200px) {
+  .dashboard-layout {
+    grid-template-columns: minmax(0, 1fr) 260px;
+    gap: 24px;
+  }
+}
+@media (max-width: 639px) {
+  .dashboard-header {
+    gap: 16px;
+    margin-bottom: 20px;
+  }
+  .dashboard-overview {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 4px;
+    padding: 4px;
+    margin-bottom: 20px;
+  }
+  .dashboard-thread {
+    column-gap: 8px;
+    padding: 12px;
+  }
+}

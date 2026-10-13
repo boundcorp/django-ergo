@@ -20,85 +20,9 @@ import { UsageStatus } from './components/UsageStatus'
 import { useVisualViewport } from './viewport'
 import { topbarLocation } from './topbar'
 import './chat-mobile.css'
-import { ago } from './time'
+import { Home } from './pages/Home'
+import type { DirectoryState } from './components/DashboardWorkspace'
 import { DirectoryContext } from './components/BotIcon'
-
-function Home({ user, bots, sessions }: { user: User; bots: Bot[]; sessions: Session[] }) {
-  const recent = sessions.slice(0, 4)
-  const name = user.first_name || user.username
-  return (
-    <div className="page-content h-full overflow-y-auto">
-      <p className="eyebrow">Your workspace</p>
-      <h1 className="page-title mt-3">Good to see you, {name}</h1>
-      <p className="page-lede mt-3">Pick up a conversation or start a focused thread with a bot.</p>
-      <div className="mt-10 grid gap-8 lg:grid-cols-[1.15fr_0.85fr]">
-        <section className="surface-card flex min-h-64 flex-col items-center justify-center px-6 py-10 text-center">
-          <div className="h-16 w-16 rounded-panel bg-raised" aria-hidden="true" />
-          <h2 className="mt-6 text-lg font-semibold">Start with a question</h2>
-          <p className="mt-2 max-w-sm text-sm text-muted">
-            Choose a bot or open a recent thread to continue your work.
-          </p>
-          {!!bots.length && (
-            <div className="mt-6 flex flex-wrap justify-center gap-2">
-              {bots.map(bot => (
-                <Link
-                  key={bot.name}
-                  to={`/bots/${bot.name}/new-thread`}
-                  className="rounded-control border border-accent px-3 py-2 text-sm font-semibold text-accent hover:bg-indigo-tint"
-                >
-                  New thread with {bot.name}
-                </Link>
-              ))}
-            </div>
-          )}
-        </section>
-        <section>
-          <h2 className="font-display text-2xl font-bold">Recent threads</h2>
-          {recent.length ? (
-            <ul className="mt-5 space-y-3">
-              {recent.map(session => {
-                const unread = !!session.unread && !session.attention
-                const tone = session.attention
-                  ? 'border-warning bg-amber-tint'
-                  : unread
-                    ? 'border-accent bg-indigo-tint/60'
-                    : 'border-stroke bg-surface hover:border-accent'
-                return (
-                  <li key={session.id}>
-                    <Link
-                      to={`/s/${session.id}`}
-                      className={`flex items-center gap-3 rounded-card border px-4 py-3 ${tone}`}
-                    >
-                      <span
-                        className={`h-6 w-6 shrink-0 rounded-md ${session.attention ? 'bg-warning' : session.busy ? 'bg-mint' : 'bg-accent'}`}
-                        aria-hidden="true"
-                      />
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate font-semibold">{session.title}</span>
-                        <span className="block truncate text-xs text-muted">
-                          {session.bot} ·{' '}
-                          {session.attention ? 'action required' : session.busy ? 'working' : ago(session.updated_at)}
-                        </span>
-                      </span>
-                      {unread && (
-                        <>
-                          <span className="h-2 w-2 shrink-0 rounded-full bg-mint" aria-hidden="true" />
-                          <span className="sr-only">Unread reply</span>
-                        </>
-                      )}
-                    </Link>
-                  </li>
-                )
-              })}
-            </ul>
-          ) : (
-            <p className="mt-5 text-sm text-muted">No recent threads yet.</p>
-          )}
-        </section>
-      </div>
-    </div>
-  )
-}
 
 function App() {
   const [user, setUser] = useState<User | null | undefined>(undefined)
@@ -108,6 +32,7 @@ function App() {
   const [botErrors, setBotErrors] = useState<{ folder: string; name: string; error: string }[]>([])
   const [workers, setWorkers] = useState<Worker[]>([])
   const [workerState, setWorkerState] = useState<'loading' | 'ready' | 'error'>('loading')
+  const [directoryState, setDirectoryState] = useState<DirectoryState>('loading')
 
   useEffect(() => {
     api
@@ -118,26 +43,32 @@ function App() {
   }, [])
 
   const refresh = useCallback(async () => {
-    const [b, s, p, e, workerResult] = await Promise.all([
-      api.bots(),
-      api.sessions(),
-      api.allPins().catch(() => ({})),
-      api.botErrors().catch(() => []),
-      api.activeWorkers().then(
-        value => ({ value, error: false }),
-        () => ({ value: [] as Worker[], error: true }),
-      ),
-    ])
-    setBots(b)
-    setSessions(s)
-    setPins(p)
-    setBotErrors(e)
-    setWorkers(workerResult.value)
-    setWorkerState(workerResult.error ? 'error' : 'ready')
+    try {
+      const [b, s, p, e, workerResult] = await Promise.all([
+        api.bots(),
+        api.sessions(),
+        api.allPins().catch(() => ({})),
+        api.botErrors().catch(() => []),
+        api.activeWorkers().then(
+          value => ({ value, error: false }),
+          () => ({ value: [] as Worker[], error: true }),
+        ),
+      ])
+      setBots(b)
+      setSessions(s)
+      setPins(p)
+      setBotErrors(e)
+      setWorkers(workerResult.value)
+      setWorkerState(workerResult.error ? 'error' : 'ready')
+      setDirectoryState('ready')
+    } catch (error) {
+      setDirectoryState('error')
+      throw error
+    }
   }, [])
 
   useEffect(() => {
-    if (user) refresh().catch(() => setBots([]))
+    if (user) refresh().catch(() => {})
   }, [user, refresh])
 
   // Keep the sidebar's busy spinners current: poll quickly while a turn runs, slowly otherwise.
@@ -169,6 +100,7 @@ function App() {
                 workers={workers}
                 workerState={workerState}
                 refresh={refresh}
+                directoryState={directoryState}
                 onSignOut={() => api.logout().finally(() => setUser(null))}
               />
             }
@@ -189,6 +121,7 @@ function Shell({
   workers,
   workerState,
   refresh,
+  directoryState,
   onSignOut,
 }: {
   user: User
@@ -199,6 +132,7 @@ function Shell({
   workers: Worker[]
   workerState: 'loading' | 'ready' | 'error'
   refresh: () => Promise<void>
+  directoryState: DirectoryState
   onSignOut: () => void
 }) {
   const [navOpen, setNavOpen] = useState(false)
@@ -307,10 +241,31 @@ function Shell({
         <div className="min-h-0 flex-1 overflow-hidden">
           <PageErrorBoundary key={pathname}>
             <Routes>
-              <Route path="/" element={<Home user={user} bots={bots} sessions={sessions} />} />
+              <Route
+                path="/"
+                element={
+                  <Home
+                    user={user}
+                    bots={bots}
+                    sessions={sessions}
+                    pins={pins}
+                    state={directoryState}
+                    onRetry={() => refresh().catch(() => {})}
+                  />
+                }
+              />
               <Route
                 path="/threads"
-                element={<ThreadsPage user={user} bots={bots} sessions={sessions} onChange={refresh} />}
+                element={
+                  <ThreadsPage
+                    user={user}
+                    bots={bots}
+                    sessions={sessions}
+                    pins={pins}
+                    state={directoryState}
+                    onChange={refresh}
+                  />
+                }
               />
               <Route path="/s/:id" element={<ChatRoute onChange={refresh} />} />
               <Route path="/sessions" element={<Sessions bots={bots} />} />

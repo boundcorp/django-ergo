@@ -127,6 +127,17 @@ their own sessions. Only admins can approve tools of bots with the `bash`,
 username (or 50 from one address) in 15 minutes, the web app and `/mgmt/`
 refuse logins until the window passes.
 
+- **Workspace and Threads dashboard**: Workspace (`/`) keeps the four most
+  recent conversations and links to the full Threads dashboard (`/threads`).
+  The dashboard summarizes loaded waiting/review/working/unread conversations;
+  each nonzero count jumps to a matching group, including pinned items.
+  Pinned, Ready for review, Waiting on you, Working, Idle and Resolved retain
+  their order, activity sorting, remembered expansion and Show more behavior.
+  Bot filters still use the `bot` URL parameter. New-thread shortcuts and
+  pinned files/pages are also visible outside the navigation drawer. PR links,
+  worker progress and unread labels remain visible on phones. Pins have named,
+  touch-sized controls; fetch failures offer Try again without clearing loaded
+  conversations. See the [dashboard design note](dashboard-ux.md).
 - **Sidebar and account menu**: the sidebar keeps primary navigation: Bots,
   their chats and threads, and Threads. History, Costs, Routing, and API keys
   live in the account menu in the top bar, together with theme and sign-out
