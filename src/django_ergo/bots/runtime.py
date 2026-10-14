@@ -323,6 +323,9 @@ class Bot:
                 source="built-in",
             )
         )
+        from django_ergo.bots.todos import todo_skills
+
+        defs.extend(todo_skills(self))
         from django_ergo.bots.agents import AGENTS_INSTRUCTIONS
         from django_ergo.bots.agents import agent_toolkit
         from django_ergo.bots.agents import managers

@@ -27,6 +27,7 @@ bot.yaml::
     orchestration: true                # may the bot delegate downward (default true; upward always works)
     timezone: America/Los_Angeles      # for the current time in context
     current_time: true                 # put the current date and time in context
+    todos: true                        # the built-in todo list tools in every chat (bots.todos)
     max_turns: 50                      # model calls one reply may use, tool calls included
     tool_results_in_context: 6         # large tool results each model call keeps in full
     tool_results_tokens: 40000         # optional budget for older ones; default 20% of window
@@ -159,6 +160,7 @@ class BotDefinition:
     orchestration: bool = True
     timezone: str = ""
     current_time: bool = True
+    todos: bool = True
     allow_create_sessions: bool = False
     archive_after_days: int = 7
     default_compaction_mode: str = CompactionMode.CONTEXT_SIZE
@@ -240,6 +242,7 @@ class BotDefinition:
             orchestration=orchestration,
             timezone=str(data.get("timezone") or ""),
             current_time=bool(data.get("current_time", True)),
+            todos=bool(data.get("todos", True)),
             allow_create_sessions=bool(sessions.get("allow_create", False)),
             archive_after_days=int(sessions.get("archive_after_days", 7) or 0),
             default_compaction_mode=mode,

@@ -35,6 +35,7 @@ root:                                # context budget for main and named chats
 orchestration: true                  # may the bot delegate at all (false: never)
 timezone: America/Los_Angeles        # default for users without a timezone
 current_time: true                   # current date and time in every turn
+todos: true                          # the todo list tools in every chat and thread (false: none)
 tool_results_in_context: 6           # large tool results each model call keeps in full
 tool_results_tokens: 40000           # optional budget for older ones; default 20% of model window
 chats:
@@ -218,8 +219,9 @@ loads the same way (`django_ergo.bots.skillset`):
   module docstring is the description);
 - a plugin that adds tools (`kb`, `config_repo`, `orca`, `bash`, `browser`,
   `attachments`, ...) and each `toolkits:` factory;
-- built-ins: `history` (always loaded), `workers`, `orchestration`, and
-  `introspection` for bots loaded from a folder;
+- built-ins: `history` (always loaded), `workers`, `todos` (always loaded,
+  see [Todo lists](#todo-lists)), `orchestration`, and `introspection` for
+  bots loaded from a folder;
 - Ergo's skill library (`skillbuilder`), when bot.yaml or a skill names one,
   or by default (`DJANGO_ERGO["DEFAULT_SKILLS"]`, unless bot.yaml excludes it).
 
@@ -557,6 +559,22 @@ chat why.
   recorded counts and does not fail the worker. Counts are attributed by
   worktree and the worker time window, so overlapping workers in one worktree
   can each include the same agent requests.
+
+## Todo lists
+
+Every chat and thread keeps its own todo list, like Claude Code's TodoWrite
+(`django_ergo.bots.todos`). The built-in `todos` skill is always loaded, so
+the model can plan multi-step work and check it off as it goes:
+
+- `ergo_todo_write` replaces the whole list with `[{content, status}]` items
+  (`status` is `pending`, `in_progress` or `completed`); an empty list clears it.
+- `ergo_todo_update` changes one item by its number (from 1): its status, its
+  wording, or both.
+
+The list is kept in the session's metadata (`todos`), is in the model's
+context on every turn while it has items, and Ergonaut shows it in the thread
+view (open while anything is left, folded once it's all done). `todos: false`
+in bot.yaml leaves the skill out.
 
 ## Agents
 

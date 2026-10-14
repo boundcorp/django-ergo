@@ -569,6 +569,12 @@ export type Worker = {
   activity?: WorkerActivity | null
 }
 
+// One item of a chat's todo list (django_ergo.bots.todos).
+export type Todo = {
+  content: string
+  status: 'pending' | 'in_progress' | 'completed'
+}
+
 export type SessionDetail = {
   compactions?: Compaction[]
   session: Session
@@ -576,6 +582,7 @@ export type SessionDetail = {
   calls: Call[]
   requests?: DelegatedRequest[]
   workers?: Worker[]
+  todos?: Todo[] // the chat's todo list, kept by the model
   inbox?: { id: string; text: string; files: number }[] // sent mid-turn, not yet given to the model
   first_line?: number | null // the oldest line returned
   has_more?: boolean // older messages exist: ask with before=first_line

@@ -19,6 +19,12 @@ describe('statusSummary', () => {
     )
   })
 
+  test('shows an unfinished todo list, not a finished one', () => {
+    const todos = [{ status: 'completed' }, { status: 'in_progress' }, { status: 'pending' }]
+    expect(statusSummary([], [], 0, todos)).toBe('1/3 todos done')
+    expect(statusSummary([], [], 0, [{ status: 'completed' }])).toBe('')
+  })
+
   test('is empty when nothing is pending', () => {
     expect(statusSummary([{ direction: 'out', status: 'answered' }], [{ status: 'completed' }], 0)).toBe('')
   })
