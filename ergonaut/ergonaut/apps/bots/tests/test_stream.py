@@ -101,3 +101,26 @@ async def test_stream_exposes_identity_and_verbatim_forwarded_body(async_client,
     assert forwarded["author"] == author
     assert forwarded["provenance"] == provenance
     assert forwarded["blocks"] == [{"type": "text", "text": "Verbatim report"}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
+async def test_stream_and_detail_send_the_todo_list(async_client, fast):
+    from django_ergo.bots.todos import save_todos
+
+    user = await login(async_client, "planner")
+    session = await ConversationSession.objects.acreate(user=user, bot_name="kitchen", engine_type="claude")
+    todos = [{"content": "Shop", "status": "completed"}, {"content": "Cook", "status": "in_progress"}]
+    response = await async_client.get(f"/api/sessions/{session.id}/events")
+
+    async def write():
+        await asyncio.sleep(0.2)
+        await sync_to_async(save_todos)(session, todos)
+
+    writer = asyncio.create_task(write())
+    events = await asyncio.wait_for(
+        read_events(response, lambda events: any(e.get("todos") for e in events)), timeout=5
+    )
+    await writer
+    assert next(e["todos"] for e in events if e.get("todos")) == todos
+    assert (await async_client.get(f"/api/sessions/{session.id}")).json()["todos"] == todos

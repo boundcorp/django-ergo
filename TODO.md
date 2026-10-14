@@ -86,6 +86,8 @@ Live on rigel from `~/p/boundcorp/django-ergo`, bots from `boundcorp/ergo-bots`.
 
 ### Done
 
+- [x] Todo lists in every chat and thread: the built-in `todos` skill (`ergo_todo_write`, `ergo_todo_update`, like Claude Code's TodoWrite) keeps a checklist in the session's metadata, in context every turn, shown in Ergonaut's thread view; `todos: false` in bot.yaml turns it off.
+
 - [x] Pre-commit reconciled: ruff pinned to the dev version, prettier scoped to the Ergonaut frontend with its own config, the whole repo reformatted once; every hook passes, so commits no longer skip hooks.
 
 - [x] Telegram shared thread: `target_thread` puts every chat in one thread, `respond_to` picks the people and messages answered, `replies: tool` sends with `ergo_telegram_message`, `AuthorProfile` keeps each Telegram user's name and photo (shown in Ergonaut), photos sent one at a time batch (`photo_batch_wait`), and turns hold Ergonaut's session lock (`CHANNEL_TURN_RUNNER`).

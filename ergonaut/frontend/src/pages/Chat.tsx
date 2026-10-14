@@ -9,6 +9,7 @@ import type {
   PrLink,
   SentCard,
   SessionDetail,
+  Todo,
   Turn,
   Worker,
 } from '../api'
@@ -22,6 +23,7 @@ import ModelPicker, { EffortSlider, modelLabel, useBotModels } from '../componen
 import { PageViewer, Pins } from '../components/Pins'
 import { AttachmentView, replySuggestions, Transcript } from '../components/Transcript'
 import { ModelLink, MobileSessionBar, SuggestionChips, ThreadOptions } from '../components/ChatChrome'
+import { TodoList } from '../components/TodoList'
 import { WorkerActivityView, WorkerPulse } from '../components/WorkerActivity'
 import { agoLong } from '../time'
 import { linkedLine, messageAnchor } from '../messageLink'
@@ -281,7 +283,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
     const after = messages.length ? messages[messages.length - 1].line : -1
     const events = new EventSource(`/api/sessions/${id}/events?after=${after}`)
     events.onmessage = e => {
-      const { messages, calls, requests, title, workers, sent, prs } = JSON.parse(e.data) as {
+      const { messages, calls, requests, title, workers, sent, prs, todos } = JSON.parse(e.data) as {
         messages: Message[]
         calls: Call[]
         requests?: DelegatedRequest[]
@@ -289,6 +291,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
         workers?: Worker[]
         sent?: SentCard[]
         prs?: PrLink[]
+        todos?: Todo[]
       }
       setDetail(d =>
         d
@@ -305,6 +308,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
               ...(workers ? { workers } : {}),
               ...(sent ? { sent } : {}),
               ...(prs ? { prs } : {}),
+              ...(todos ? { todos } : {}),
             }
           : d,
       )
@@ -508,7 +512,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
   const mobileSuggestions = turnSuggestions.length
     ? turnSuggestions
     : replySuggestions(suggestionsFromMessages(detail.messages))
-  const summary = statusSummary(detail.requests ?? [], detail.workers ?? [], pinCount)
+  const summary = statusSummary(detail.requests ?? [], detail.workers ?? [], pinCount, detail.todos ?? [])
   const archived = detail.session.status === 'completed' && detail.session.role === 'thread'
   // A turn doesn't touch the session row, so its updated_at stays at creation.
   const lastActivity = [detail.session.updated_at, detail.messages[detail.messages.length - 1]?.timestamp]
@@ -594,6 +598,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
           </header>
           <Requests requests={detail.requests ?? []} />
           <Workers workers={detail.workers ?? []} />
+          <TodoList todos={detail.todos ?? []} />
           <Pins
             sessionId={id}
             refreshKey={`${detail.messages.length}:${pinsKey}`}
@@ -680,6 +685,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
         >
           <Requests requests={detail.requests ?? []} />
           <Workers workers={detail.workers ?? []} />
+          <TodoList todos={detail.todos ?? []} />
           <Pins
             sessionId={id}
             refreshKey={`${detail.messages.length}:${pinsKey}`}

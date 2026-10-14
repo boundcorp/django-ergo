@@ -5,7 +5,8 @@ Everything a bot can do beyond answering is a skill:
 - a skill folder (``skills/<name>/SKILL.md``, optionally with ``tools.py``),
 - a tool file listed in bot.yaml (``tools/tandoor.py`` is the ``tandoor`` skill),
 - a plugin that adds tools (``orca``, ``bash``, ``attachments``, ``ergo_kb``...),
-- built-ins: ``history`` (reading past conversations) and ``orchestration``
+- built-ins: ``history`` (reading past conversations), ``todos`` (the chat's
+  todo list, see ``bots.todos``) and ``orchestration``
   (messaging threads and other bots).
 
 A chat's per-turn context lists its skills before answering.
