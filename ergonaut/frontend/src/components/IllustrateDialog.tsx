@@ -2,6 +2,13 @@ import { useEffect, useRef, useState } from 'react'
 import type { IllustrationResult, IllustrationSuggestion } from '../api'
 import { api } from '../api'
 
+export const MAX_SELECTIONS = 3
+
+export function toggleSuggestion(selected: string[], id: string): string[] {
+  if (selected.includes(id)) return selected.filter(item => item !== id)
+  return selected.length < MAX_SELECTIONS ? [...selected, id] : selected
+}
+
 export function IllustrateDialog({
   sessionId,
   disabled,
@@ -13,6 +20,8 @@ export function IllustrateDialog({
 }) {
   const dialog = useRef<HTMLDialogElement>(null)
   const opener = useRef<HTMLButtonElement>(null)
+  const requestVersion = useRef(0)
+  const creating = useRef(false)
   const [loading, setLoading] = useState(false)
   const [generating, setGenerating] = useState(false)
   const [error, setError] = useState('')
@@ -22,9 +31,18 @@ export function IllustrateDialog({
   const [selected, setSelected] = useState<string[]>([])
   const [custom, setCustom] = useState('')
 
-  useEffect(() => () => dialog.current?.close(), [])
+  useEffect(
+    () => () => {
+      requestVersion.current += 1
+      dialog.current?.close()
+    },
+    [],
+  )
   async function open() {
+    const version = ++requestVersion.current
     setError('')
+    setSnapshot('')
+    setAsOf(0)
     setSelected([])
     setCustom('')
     setSuggestions([])
@@ -32,26 +50,27 @@ export function IllustrateDialog({
     setLoading(true)
     try {
       const response = await api.illustrateSuggestions(sessionId)
+      if (requestVersion.current !== version) return
       setSnapshot(response.snapshot)
       setAsOf(response.as_of_line)
       setSuggestions(response.suggestions)
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      if (requestVersion.current === version) setError(e instanceof Error ? e.message : String(e))
     } finally {
-      setLoading(false)
+      if (requestVersion.current === version) setLoading(false)
     }
   }
   function close() {
+    requestVersion.current += 1
     dialog.current?.close()
     opener.current?.focus()
   }
   function toggle(id: string) {
-    setSelected(items =>
-      items.includes(id) ? items.filter(item => item !== id) : items.length < 3 ? [...items, id] : items,
-    )
+    setSelected(items => toggleSuggestion(items, id))
   }
   async function create() {
-    if (!snapshot || (!selected.length && !custom.trim())) return
+    if (creating.current || !snapshot || (!selected.length && !custom.trim())) return
+    creating.current = true
     setGenerating(true)
     setError('')
     try {
@@ -61,6 +80,7 @@ export function IllustrateDialog({
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
+      creating.current = false
       setGenerating(false)
     }
   }
@@ -79,6 +99,9 @@ export function IllustrateDialog({
       <dialog
         ref={dialog}
         aria-labelledby="illustrate-title"
+        onCancel={event => {
+          if (generating) event.preventDefault()
+        }}
         className="m-auto w-[min(92vw,42rem)] rounded-card border border-stroke bg-surface p-0 text-ink shadow-xl backdrop:bg-black/40"
       >
         <form method="dialog" className="border-b border-stroke p-4">
@@ -93,8 +116,9 @@ export function IllustrateDialog({
             </div>
             <button
               type="submit"
+              disabled={generating}
               onClick={close}
-              className="ml-auto min-h-11 min-w-11 rounded-control text-muted hover:bg-raised"
+              className="ml-auto min-h-11 min-w-11 rounded-control text-muted hover:bg-raised disabled:opacity-50"
               aria-label="Close illustration picker"
             >
               ×
@@ -117,8 +141,9 @@ export function IllustrateDialog({
                   type="checkbox"
                   checked={selected.includes(suggestion.id)}
                   disabled={
+                    generating ||
                     suggestion.availability !== 'available' ||
-                    (!selected.includes(suggestion.id) && selected.length >= 3)
+                    (!selected.includes(suggestion.id) && selected.length >= MAX_SELECTIONS)
                   }
                   onChange={() => toggle(suggestion.id)}
                 />
@@ -140,6 +165,7 @@ export function IllustrateDialog({
               <textarea
                 id="illustrate-custom"
                 value={custom}
+                disabled={generating}
                 maxLength={500}
                 onChange={event => setCustom(event.target.value)}
                 rows={3}
@@ -158,7 +184,12 @@ export function IllustrateDialog({
           )}
         </div>
         <div className="flex justify-end gap-2 border-t border-stroke p-4">
-          <button type="button" onClick={close} className="rounded-control px-3 py-2 text-sm">
+          <button
+            type="button"
+            disabled={generating}
+            onClick={close}
+            className="rounded-control px-3 py-2 text-sm disabled:opacity-50"
+          >
             Cancel
           </button>
           <button

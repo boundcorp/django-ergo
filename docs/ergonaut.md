@@ -32,6 +32,11 @@ HTML or scripts. The initial release does not create data charts, flame graphs,
 or live `.jhtml` pages: without authorized typed measurement or trace data it
 states that performance evidence is unavailable.
 
+Suggestions and generation currently run in the web request. A slow model can
+therefore hold that request until the web server or reverse proxy times out;
+there is no background job, progress status, or cancellation path yet. A
+timed-out request creates no attachment, so retry from **Illustrate**.
+
 ## Which bots it runs
 
 `ERGONAUT_BOTS` (default `/bot`) is a path, or several joined with `:`.

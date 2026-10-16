@@ -1,4 +1,6 @@
 import re
+from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 from django.contrib.auth import get_user_model
@@ -70,8 +72,8 @@ def test_illustration_is_scoped_sanitized_and_historic(client, cook, use_bots, s
 
 
 @pytest.mark.django_db(transaction=True)
-def test_custom_only_illustration_validates_scope_and_permissions(client, cook, use_bots):  # noqa: F811
-    use_bots(say("Four eggs are available."), suggestion_output(), illustration_output())
+def test_custom_and_combined_illustrations_validate_scope_and_permissions(client, cook, use_bots):  # noqa: F811
+    use_bots(say("Four eggs are available."), suggestion_output(), illustration_output(), illustration_output())
     root = post(client, "/api/bots/kitchen/root").json()
     post(client, f"/api/sessions/{root['id']}/messages", {"text": "Should we make tacos?"})
     suggested = post(client, f"/api/sessions/{root['id']}/illustrations/suggest").json()
@@ -86,10 +88,20 @@ def test_custom_only_illustration_validates_scope_and_permissions(client, cook, 
     created = post(
         client,
         f"/api/sessions/{root['id']}/illustrations",
-        {"snapshot": suggested["snapshot"], "suggestion_ids": [], "custom": "Show the taco choice as a simple map"},
+        {"snapshot": suggested["snapshot"], "custom": "Show the taco choice as a simple map"},
     )
     assert created.status_code == 200, created.content
-    assert created.json()["attachment"]["filename"].endswith(".html")
+    combined = post(
+        client,
+        f"/api/sessions/{root['id']}/illustrations",
+        {
+            "snapshot": suggested["snapshot"],
+            "suggestion_ids": ["timeline"],
+            "custom": "Show the taco choice as a simple map",
+        },
+    )
+    assert combined.status_code == 200, combined.content
+    assert combined.json()["attachment"]["filename"].endswith(".html")
     assert (
         post(
             client,
@@ -117,3 +129,27 @@ def test_static_illustration_escapes_model_text():
     ).decode()
     assert "<script>" not in html
     assert "&lt;img src=x onerror=alert(1)&gt;" in html
+
+
+def test_snapshot_keeps_the_selected_messages():
+    from ergonaut.api.illustrate import Suggestion, _load_snapshot, _snapshot
+
+    session = SimpleNamespace(id=uuid4())
+    messages = [{"line": 4, "role": "user", "text": "Use the first decision."}]
+    token = _snapshot(
+        session,
+        messages,
+        4,
+        [
+            Suggestion(
+                id="timeline",
+                title="Timeline",
+                purpose="Show the decision.",
+                kind="timeline",
+                reason="The chat contains a decision.",
+            )
+        ],
+    )
+    snapshot = _load_snapshot(token, session)
+    assert snapshot["messages"] == messages
+    assert snapshot["digest"]
