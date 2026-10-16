@@ -14,6 +14,24 @@ click an “Earlier messages summarized” divider to read an older summary.
 Older replies made before context recording have no Context button. See
 [Session compaction](compaction.md) for policy keys and migration rollout.
 
+## Illustrations in chat
+
+The **Illustrate** action above a chat composer creates an immutable, static
+HTML attachment from a bounded recent-message snapshot. It offers timeline,
+status, and plan suggestions plus a 500-character “Something else” request;
+custom requests may be used alone or with suggestions. The attachment records
+its session, generated time, snapshot message boundary, selected category, and
+cited source message lines. Files use unique flat
+`illustration-<timestamp>-<descriptive-stub>-<id>.html` names because session
+attachment storage intentionally strips path components; older illustrations
+remain in the session Files list.
+
+Illustrations only read the active session and caller-visible history. Model
+output is structured content rendered by server templates, not model-provided
+HTML or scripts. The initial release does not create data charts, flame graphs,
+or live `.jhtml` pages: without authorized typed measurement or trace data it
+states that performance evidence is unavailable.
+
 ## Which bots it runs
 
 `ERGONAUT_BOTS` (default `/bot`) is a path, or several joined with `:`.
