@@ -99,6 +99,11 @@ Without a broker there is no worker or beat. Turns then run inside the
 web process, and schedules, worker polling and repo pulls by beat don't
 happen, so install Redis for anything beyond trying a bot.
 
+Illustration generation is deliberately unavailable without
+`CELERY_BROKER_URL` and a running `ergonaut worker -Q celery,bot_tasks`: it
+uses a durable Celery job (90-second soft limit, 120-second hard limit, two
+retries) instead of holding an HTTP request open.
+
 Data lives under `DATA_DIR` (default `~/.ergonaut`, `/data` in the image).
 
 ## Settings

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { IllustrationResult, IllustrationSuggestion } from '../api'
+import type { IllustrationJob, IllustrationResult, IllustrationSuggestion } from '../api'
 import { api } from '../api'
 
 export const MAX_SELECTIONS = 3
@@ -30,6 +30,7 @@ export function IllustrateDialog({
   const [suggestions, setSuggestions] = useState<IllustrationSuggestion[]>([])
   const [selected, setSelected] = useState<string[]>([])
   const [custom, setCustom] = useState('')
+  const [job, setJob] = useState<IllustrationJob | null>(null)
 
   useEffect(
     () => () => {
@@ -38,6 +39,39 @@ export function IllustrateDialog({
     },
     [],
   )
+
+  useEffect(() => {
+    if (!job || !['queued', 'running', 'retrying'].includes(job.status)) return
+    let cancelled = false
+    const timer = window.setTimeout(async () => {
+      try {
+        const next = await api.illustration(sessionId, job.id)
+        if (cancelled) return
+        setJob(next)
+        if (next.status === 'succeeded' && next.attachment) {
+          onCreated({ attachment: next.attachment, summary: next.summary, as_of_line: next.as_of_line })
+          close()
+        } else if (next.status === 'failed' || next.status === 'cancelled') {
+          setGenerating(false)
+          setError(
+            next.error ||
+              (next.status === 'cancelled'
+                ? 'Illustration generation was cancelled.'
+                : 'Illustration generation failed.'),
+          )
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setError(e instanceof Error ? e.message : String(e))
+          setJob(current => (current?.id === job.id ? { ...current } : current))
+        }
+      }
+    }, 750)
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
+  }, [job, onCreated, sessionId])
   async function open() {
     const version = ++requestVersion.current
     setError('')
@@ -45,6 +79,7 @@ export function IllustrateDialog({
     setAsOf(0)
     setSelected([])
     setCustom('')
+    setJob(null)
     setSuggestions([])
     dialog.current?.showModal()
     setLoading(true)
@@ -74,14 +109,36 @@ export function IllustrateDialog({
     setGenerating(true)
     setError('')
     try {
-      const result = await api.illustrate(sessionId, snapshot, selected, custom)
-      onCreated(result)
-      close()
+      const next = await api.illustrate(sessionId, snapshot, selected, custom)
+      setJob(next)
+      if (next.status === 'succeeded' && next.attachment) {
+        setGenerating(false)
+        onCreated({ attachment: next.attachment, summary: next.summary, as_of_line: next.as_of_line })
+        close()
+      } else if (next.status === 'failed' || next.status === 'cancelled') {
+        setGenerating(false)
+        setError(
+          next.error ||
+            (next.status === 'cancelled'
+              ? 'Illustration generation was cancelled.'
+              : 'Illustration generation failed.'),
+        )
+      }
     } catch (e) {
+      setGenerating(false)
       setError(e instanceof Error ? e.message : String(e))
     } finally {
       creating.current = false
+    }
+  }
+  async function cancel() {
+    if (!job || !generating) return
+    try {
+      setJob(await api.cancelIllustration(sessionId, job.id))
       setGenerating(false)
+      setError('Illustration generation was cancelled.')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
     }
   }
   return (
@@ -177,6 +234,12 @@ export function IllustrateDialog({
               </span>
             </label>
           )}
+          {generating && job && (
+            <p role="status" className="mt-3 text-sm text-muted">
+              {job.status === 'retrying' ? 'Retrying illustration generation' : 'Creating illustration'} · attempt{' '}
+              {Math.max(1, job.attempts)} of 3
+            </p>
+          )}
           {error && (
             <p role="alert" className="mt-3 rounded-control bg-red-tint p-2 text-sm text-danger">
               {error}
@@ -186,11 +249,19 @@ export function IllustrateDialog({
         <div className="flex justify-end gap-2 border-t border-stroke p-4">
           <button
             type="button"
+            disabled={!generating}
+            onClick={cancel}
+            className="rounded-control px-3 py-2 text-sm disabled:opacity-50"
+          >
+            Cancel generation
+          </button>
+          <button
+            type="button"
             disabled={generating}
             onClick={close}
             className="rounded-control px-3 py-2 text-sm disabled:opacity-50"
           >
-            Cancel
+            Close
           </button>
           <button
             type="button"

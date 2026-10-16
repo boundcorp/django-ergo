@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { act, createElement } from 'react'
 import type { createRoot as CreateRoot, Root } from 'react-dom/client'
 import { Window } from 'happy-dom'
-import type { IllustrationResult, IllustrationSuggestions } from '../api'
+import type { IllustrationJob, IllustrationResult, IllustrationSuggestions } from '../api'
 import { api } from '../api'
 import { IllustrateDialog, MAX_SELECTIONS, toggleSuggestion } from './IllustrateDialog'
 
@@ -60,12 +60,32 @@ const illustration: IllustrationResult = {
   as_of_line: 12,
 }
 
+const completeJob: IllustrationJob = {
+  id: 'job-1',
+  status: 'succeeded',
+  as_of_line: 12,
+  attempts: 1,
+  attachment: illustration.attachment,
+  summary: illustration.summary,
+  error: '',
+}
+
+const queuedJob: IllustrationJob = {
+  ...completeJob,
+  status: 'queued',
+  attempts: 0,
+  attachment: null,
+  summary: '',
+}
+
 let window: Window
 let root: Root
 let createRoot: typeof CreateRoot
 let container: HTMLDivElement
 const originalSuggestions = api.illustrateSuggestions
 const originalIllustrate = api.illustrate
+const originalIllustrationStatus = api.illustration
+const originalCancelIllustration = api.cancelIllustration
 
 function button(label: string): HTMLButtonElement {
   const found = [...container.querySelectorAll('button')].find(item => item.textContent?.trim() === label)
@@ -125,6 +145,8 @@ afterEach(() => {
   act(() => root.unmount())
   api.illustrateSuggestions = originalSuggestions
   api.illustrate = originalIllustrate
+  api.illustration = originalIllustrationStatus
+  api.cancelIllustration = originalCancelIllustration
   window.happyDOM.close()
 })
 
@@ -154,7 +176,7 @@ describe('IllustrateDialog', () => {
     let request: unknown[] = []
     api.illustrate = async (...args) => {
       request = args
-      return illustration
+      return completeJob
     }
     render(false, result => created.push(result))
 
@@ -174,7 +196,7 @@ describe('IllustrateDialog', () => {
     let request: unknown[] = []
     api.illustrate = async (...args) => {
       request = args
-      return illustration
+      return completeJob
     }
     render()
 
@@ -210,7 +232,7 @@ describe('IllustrateDialog', () => {
     api.illustrateSuggestions = async () => suggestions
     let reject: (reason: Error) => void = () => undefined
     api.illustrate = async () =>
-      new Promise<IllustrationResult>((_resolve, rejectRequest) => {
+      new Promise<IllustrationJob>((_resolve, rejectRequest) => {
         reject = rejectRequest
       })
     render()
@@ -229,5 +251,23 @@ describe('IllustrateDialog', () => {
     })
     expect(container.querySelector('[role="alert"]')?.textContent).toContain('Model timed out')
     expect(button('Create illustration').disabled).toBe(false)
+  })
+
+  test('shows queued job progress and cancels the durable generation', async () => {
+    api.illustrateSuggestions = async () => suggestions
+    api.illustrate = async () => queuedJob
+    api.cancelIllustration = async () => ({ ...queuedJob, status: 'cancelled' })
+    render()
+
+    act(() => button('✦ Illustrate').click())
+    await resolveSuggestions()
+    inputCustom('Map the decision')
+    act(() => button('Create illustration').click())
+    await resolveSuggestions()
+    expect(container.querySelector('[role="status"]')?.textContent).toContain('Creating illustration · attempt 1 of 3')
+
+    act(() => button('Cancel generation').click())
+    await resolveSuggestions()
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain('cancelled')
   })
 })

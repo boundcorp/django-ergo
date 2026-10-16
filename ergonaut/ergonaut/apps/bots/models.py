@@ -1,5 +1,7 @@
 """What people did through bot pages."""
 
+import uuid
+
 from django.conf import settings
 from django.db import models
 
@@ -41,3 +43,48 @@ class PageActionCall(models.Model):
     @property
     def ok(self) -> bool:
         return not self.error
+
+
+class IllustrationJob(models.Model):
+    """A durable request to generate one static chat illustration."""
+
+    class Status(models.TextChoices):
+        QUEUED = "queued", "Queued"
+        RUNNING = "running", "Running"
+        RETRYING = "retrying", "Retrying"
+        SUCCEEDED = "succeeded", "Succeeded"
+        FAILED = "failed", "Failed"
+        CANCELLED = "cancelled", "Cancelled"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    session = models.ForeignKey(
+        "django_ergo.ConversationSession", on_delete=models.CASCADE, related_name="illustration_jobs"
+    )
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="illustration_jobs")
+    request_key = models.CharField(max_length=64)
+    snapshot_digest = models.CharField(max_length=64)
+    as_of_line = models.IntegerField()
+    evidence = models.JSONField()
+    selected = models.JSONField(default=list)
+    custom = models.TextField(blank=True)
+    status = models.CharField(max_length=12, choices=Status, default=Status.QUEUED, db_index=True)
+    attempts = models.PositiveSmallIntegerField(default=0)
+    task_id = models.CharField(max_length=100, blank=True)
+    run_token = models.UUIDField(default=uuid.uuid4, editable=False)
+    attachment = models.ForeignKey(
+        "django_ergo.ConversationAttachment",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+    )
+    summary = models.CharField(max_length=500, blank=True)
+    error = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [models.Index(fields=["session", "created_at"])]
+        constraints = [
+            models.UniqueConstraint(fields=["session", "user", "request_key"], name="unique_illustration_job")
+        ]

@@ -1,3 +1,5 @@
+# ruff: noqa: F811
+
 import re
 from types import SimpleNamespace
 from uuid import uuid4
@@ -40,21 +42,41 @@ def illustration_output():
     )
 
 
+def queue_illustrations(settings, monkeypatch):
+    from types import SimpleNamespace
+
+    from ergonaut.apps.bots.tasks import generate_illustration
+
+    settings.CELERY_BROKER_URL = "redis://illustrations"
+    settings.CELERY_TASK_ALWAYS_EAGER = False
+    monkeypatch.setattr(generate_illustration, "delay", lambda *_args: SimpleNamespace(id="illustration-task"))
+
+
+def create_illustration(client, session_id, payload):
+    from ergonaut.api.illustrate import run_illustration_job
+    from ergonaut.apps.bots.models import IllustrationJob
+
+    response = post(client, f"/api/sessions/{session_id}/illustrations", payload)
+    assert response.status_code == 202, response.content
+    job = IllustrationJob.objects.get(id=response.json()["id"])
+    run_illustration_job(str(job.id), str(job.run_token))
+    return client.get(f"/api/sessions/{session_id}/illustrations/{job.id}")
+
+
 @pytest.mark.django_db(transaction=True)
-def test_illustration_is_scoped_sanitized_and_historic(client, cook, use_bots, settings, tmp_path):  # noqa: F811
+def test_illustration_is_scoped_sanitized_and_historic(client, cook, use_bots, settings, tmp_path, monkeypatch):
     settings.MEDIA_ROOT = str(tmp_path / "media")
-    use_bots(say("Four eggs are available."), suggestion_output(), illustration_output(), illustration_output())
+    use_bots(say("Four eggs are available."), suggestion_output(), illustration_output())
     root = post(client, "/api/bots/kitchen/root").json()
     assert post(client, f"/api/sessions/{root['id']}/messages", {"text": "Should we make tacos?"}).status_code == 200
+    queue_illustrations(settings, monkeypatch)
     suggested = post(client, f"/api/sessions/{root['id']}/illustrations/suggest").json()
     assert suggested["as_of_line"] >= 0
-    created = post(
-        client,
-        f"/api/sessions/{root['id']}/illustrations",
-        {"snapshot": suggested["snapshot"], "suggestion_ids": ["timeline"]},
+    completed = create_illustration(
+        client, root["id"], {"snapshot": suggested["snapshot"], "suggestion_ids": ["timeline"]}
     )
-    assert created.status_code == 200, created.content
-    first = created.json()["attachment"]
+    assert completed.status_code == 200, completed.content
+    first = completed.json()["attachment"]
     assert re.fullmatch(r"illustration-\d{8}-\d{6}-dinner-decision-[0-9a-f]{8}\.html", first["filename"])
     content = client.get(f"/api/attachments/{first['id']}/download?inline=true")
     assert content.status_code == 200
@@ -65,35 +87,36 @@ def test_illustration_is_scoped_sanitized_and_historic(client, cook, use_bots, s
         f"/api/sessions/{root['id']}/illustrations",
         {"snapshot": suggested["snapshot"], "suggestion_ids": ["timeline"]},
     )
-    assert again.status_code == 200
+    assert again.status_code == 202
+    assert again.json()["status"] == "succeeded"
+    assert again.json()["attachment"]["id"] == first["id"]
     files = client.get(f"/api/sessions/{root['id']}/attachments").json()
-    assert {first["id"], again.json()["attachment"]["id"]} <= {file["id"] for file in files}
-    assert first["filename"] != again.json()["attachment"]["filename"]
+    assert [file["id"] for file in files].count(first["id"]) == 1
 
 
 @pytest.mark.django_db(transaction=True)
-def test_custom_and_combined_illustrations_validate_scope_and_permissions(client, cook, use_bots):  # noqa: F811
+def test_custom_and_combined_illustrations_validate_scope_and_permissions(
+    client, cook, use_bots, settings, monkeypatch
+):
     use_bots(say("Four eggs are available."), suggestion_output(), illustration_output(), illustration_output())
     root = post(client, "/api/bots/kitchen/root").json()
     post(client, f"/api/sessions/{root['id']}/messages", {"text": "Should we make tacos?"})
+    queue_illustrations(settings, monkeypatch)
     suggested = post(client, f"/api/sessions/{root['id']}/illustrations/suggest").json()
-    assert (
-        post(
-            client,
-            f"/api/sessions/{root['id']}/illustrations",
-            {"snapshot": suggested["snapshot"], "suggestion_ids": ["status"]},
-        ).status_code
-        == 400
-    )
-    created = post(
+    invalid_selection = post(
         client,
         f"/api/sessions/{root['id']}/illustrations",
-        {"snapshot": suggested["snapshot"], "custom": "Show the taco choice as a simple map"},
+        {"snapshot": suggested["snapshot"], "suggestion_ids": ["timeline"] * 4},
+    )
+    assert invalid_selection.status_code == 400
+    assert invalid_selection.json()["detail"] == "Choose up to three current illustration suggestions"
+    created = create_illustration(
+        client, root["id"], {"snapshot": suggested["snapshot"], "custom": "Show the taco choice as a simple map"}
     )
     assert created.status_code == 200, created.content
-    combined = post(
+    combined = create_illustration(
         client,
-        f"/api/sessions/{root['id']}/illustrations",
+        root["id"],
         {
             "snapshot": suggested["snapshot"],
             "suggestion_ids": ["timeline"],
@@ -102,17 +125,60 @@ def test_custom_and_combined_illustrations_validate_scope_and_permissions(client
     )
     assert combined.status_code == 200, combined.content
     assert combined.json()["attachment"]["filename"].endswith(".html")
-    assert (
-        post(
-            client,
-            f"/api/sessions/{root['id']}/illustrations",
-            {"snapshot": suggested["snapshot"], "custom": "x" * 501},
-        ).status_code
-        == 400
+    custom_too_long = post(
+        client,
+        f"/api/sessions/{root['id']}/illustrations",
+        {"snapshot": suggested["snapshot"], "custom": "x" * 501},
     )
+    assert custom_too_long.status_code == 400
+    assert custom_too_long.json()["detail"] == "Custom illustration request is limited to 500 characters"
     other = get_user_model().objects.create_user("other", "o@example.com", "pw")
     client.force_login(other)
     assert post(client, f"/api/sessions/{root['id']}/illustrations/suggest").status_code == 404
+
+
+@pytest.mark.django_db(transaction=True)
+def test_illustration_job_retries_times_out_and_cancels(client, cook, use_bots, settings, monkeypatch):
+    from ergonaut.api.illustrate import mark_illustration_retry, run_illustration_job
+    from ergonaut.apps.bots.models import IllustrationJob
+
+    use_bots(say("Four eggs are available."), suggestion_output(), illustration_output())
+    root = post(client, "/api/bots/kitchen/root").json()
+    post(client, f"/api/sessions/{root['id']}/messages", {"text": "Should we make tacos?"})
+    queue_illustrations(settings, monkeypatch)
+    suggested = post(client, f"/api/sessions/{root['id']}/illustrations/suggest").json()
+    issued = post(
+        client,
+        f"/api/sessions/{root['id']}/illustrations",
+        {"snapshot": suggested["snapshot"], "suggestion_ids": ["timeline"]},
+    )
+    assert issued.status_code == 202
+    job = IllustrationJob.objects.get(id=issued.json()["id"])
+    token = str(job.run_token)
+    other = get_user_model().objects.create_user("other-job", "other-job@example.com", "pw")
+    client.force_login(other)
+    assert client.get(f"/api/sessions/{root['id']}/illustrations/{job.id}").status_code == 404
+    client.force_login(cook)
+    assert mark_illustration_retry(str(job.id), token, "SoftTimeLimitExceeded", final=False)
+    assert client.get(f"/api/sessions/{root['id']}/illustrations/{job.id}").json()["status"] == "retrying"
+    assert not mark_illustration_retry(str(job.id), token, "SoftTimeLimitExceeded", final=True)
+    timed_out = client.get(f"/api/sessions/{root['id']}/illustrations/{job.id}").json()
+    assert timed_out["status"] == "failed"
+    assert timed_out["error"] == "Illustration generation timed out."
+
+    retried = post(
+        client,
+        f"/api/sessions/{root['id']}/illustrations",
+        {"snapshot": suggested["snapshot"], "suggestion_ids": ["timeline"]},
+    )
+    assert retried.status_code == 202
+    job.refresh_from_db()
+    assert str(job.run_token) != token
+    cancelled = client.delete(f"/api/sessions/{root['id']}/illustrations/{job.id}")
+    assert cancelled.status_code == 200
+    assert cancelled.json()["status"] == "cancelled"
+    run_illustration_job(str(job.id), str(job.run_token))
+    assert not IllustrationJob.objects.get(id=job.id).attachment_id
 
 
 def test_static_illustration_escapes_model_text():
