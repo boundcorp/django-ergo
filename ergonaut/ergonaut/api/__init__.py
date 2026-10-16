@@ -24,9 +24,11 @@ def healthz(request):
 from ergonaut.api.auth import router as auth_router
 from ergonaut.api.bots import router as bots_router
 from ergonaut.api.costs import router as costs_router
+from ergonaut.api.illustrate import router as illustrate_router
 from ergonaut.api.version import router as version_router
 
 api.add_router("/auth/", auth_router)
 api.add_router("/", bots_router)
 api.add_router("/", costs_router)
+api.add_router("/", illustrate_router)
 api.add_router("/", version_router)

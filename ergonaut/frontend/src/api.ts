@@ -675,6 +675,38 @@ async function upload<T>(path: string, file: File): Promise<T> {
   return response.json() as Promise<T>
 }
 
+export type IllustrationSuggestion = {
+  id: 'timeline' | 'status' | 'plan'
+  title: string
+  purpose: string
+  kind: 'timeline' | 'status' | 'plan'
+  evidence_refs: number[]
+  availability: 'available' | 'unavailable'
+  reason: string
+}
+
+export type IllustrationSuggestions = {
+  snapshot: string
+  as_of_line: number
+  suggestions: IllustrationSuggestion[]
+}
+
+export type IllustrationResult = {
+  attachment: AttachmentFile
+  summary: string
+  as_of_line: number
+}
+
+export type IllustrationJob = {
+  id: string
+  status: 'queued' | 'running' | 'retrying' | 'succeeded' | 'failed' | 'cancelled'
+  as_of_line: number
+  attempts: number
+  attachment: AttachmentFile | null
+  summary: string
+  error: string
+}
+
 export type ApiKey = { id: string; name: string; hint: string; created_at: string; last_used_at: string | null }
 
 export const api = {
@@ -717,6 +749,18 @@ export const api = {
     const qs = query.toString()
     return request<SessionDetail>('GET', `/sessions/${id}${qs ? `?${qs}` : ''}`)
   },
+  illustrateSuggestions: (id: string, focus = '') =>
+    request<IllustrationSuggestions>('POST', `/sessions/${id}/illustrations/suggest`, { focus }),
+  illustrate: (id: string, snapshot: string, suggestionIds: string[], custom = '') =>
+    request<IllustrationJob>('POST', `/sessions/${id}/illustrations`, {
+      snapshot,
+      suggestion_ids: suggestionIds,
+      custom,
+    }),
+  illustration: (sessionId: string, jobId: string) =>
+    request<IllustrationJob>('GET', `/sessions/${sessionId}/illustrations/${jobId}`),
+  cancelIllustration: (sessionId: string, jobId: string) =>
+    request<IllustrationJob>('DELETE', `/sessions/${sessionId}/illustrations/${jobId}`),
   workerLog: (sessionId: string, workerId: string) =>
     request<WorkerLog>('GET', `/sessions/${sessionId}/workers/${workerId}/log`),
   callContext: (id: string) => request<TurnContext | null>('GET', `/calls/${id}/context`),

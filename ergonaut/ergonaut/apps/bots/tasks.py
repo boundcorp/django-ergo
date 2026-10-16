@@ -55,6 +55,9 @@ DEFAULT_TASK_WAIT_SECONDS = 600
 STOP_TTL_SECONDS = 10 * 60
 # Messages left in an inbox nobody drained (no worker running) expire after this long.
 INBOX_TTL_SECONDS = 24 * 60 * 60
+# Illustration jobs must return control to Celery before a typical web proxy timeout.
+ILLUSTRATION_SOFT_TIMEOUT_SECONDS = 90
+ILLUSTRATION_HARD_TIMEOUT_SECONDS = 120
 
 
 _clients: dict = {}
@@ -377,6 +380,26 @@ def run_turn(  # noqa: PLR0913
             answer_approval(session, approve, approval_ids)
             answer_inbox(session)
     queue_waiting(session_id)
+
+
+@shared_task(
+    name="ergonaut.generate_illustration",
+    bind=True,
+    max_retries=2,
+    soft_time_limit=ILLUSTRATION_SOFT_TIMEOUT_SECONDS,
+    time_limit=ILLUSTRATION_HARD_TIMEOUT_SECONDS,
+)
+def generate_illustration(self, job_id: str, run_token: str) -> None:
+    """Generate a durable illustration outside the web request."""
+    from ergonaut.api.illustrate import mark_illustration_retry, run_illustration_job
+
+    try:
+        run_illustration_job(job_id, run_token)
+    except Exception as exc:
+        error = f"{type(exc).__name__}: {exc}"
+        retry = mark_illustration_retry(job_id, run_token, error, final=self.request.retries >= self.max_retries)
+        if retry:
+            raise self.retry(exc=exc, countdown=5 * (self.request.retries + 1)) from exc
 
 
 def loaded_bot(session):

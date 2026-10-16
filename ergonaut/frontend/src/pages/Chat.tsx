@@ -4,6 +4,7 @@ import type {
   AttachmentFile,
   Call,
   DelegatedRequest,
+  IllustrationResult,
   Message,
   Pin,
   PrLink,
@@ -18,6 +19,7 @@ import { useDraft } from '../draft'
 import { prepareChatSend, type ChatSendSource } from '../chatSend'
 import { suggestionsFromMessages, statusSummary } from '../chatLayout'
 import Files from '../components/Files'
+import { IllustrateDialog } from '../components/IllustrateDialog'
 import Markdown from '../components/Markdown'
 import ModelPicker, { EffortSlider, modelLabel, useBotModels } from '../components/ModelPicker'
 import { PageViewer, Pins } from '../components/Pins'
@@ -91,6 +93,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
   // The chat's files, so the transcript can show the ones a bot made where it made them.
   const [files, setFiles] = useState<AttachmentFile[]>([])
   const [uploading, setUploading] = useState(false)
+  const [illustration, setIllustration] = useState<IllustrationResult | null>(null)
   const picker = useRef<HTMLInputElement>(null)
   // A turn a worker is running: what was sent, and how the calls and messages looked then.
   const [pending, setPending] = useState<{ text: string; lastCall: string; line: number; approvals: string } | null>(
@@ -251,6 +254,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
     firstTitle.current = undefined
     setPinCount(0)
     delete document.documentElement.dataset.chatScrolled
+    setIllustration(null)
   }, [id])
   useEffect(() => {
     return () => {
@@ -904,6 +908,33 @@ export function Chat({ onChange }: { onChange: () => void }) {
             ))}
           </div>
         )}
+        {illustration && (
+          <aside className="mx-4 mt-2 flex items-center gap-3 rounded-card border border-indigo-300 bg-indigo-tint px-3 py-2 text-sm dark:border-indigo-700">
+            <span aria-hidden="true">✦</span>
+            <span className="min-w-0 flex-1">
+              <strong>Illustration ready</strong> · {illustration.summary}{' '}
+              <span className="text-muted">(as of #{illustration.as_of_line})</span>
+            </span>
+            <a
+              className="shrink-0 font-medium text-indigo-700 underline dark:text-indigo-300"
+              href={api.viewUrl(illustration.attachment.id)}
+              target="_blank"
+              rel="noreferrer"
+            >
+              Open
+            </a>
+          </aside>
+        )}
+        <div className="mx-4 mt-2 flex justify-end">
+          <IllustrateDialog
+            sessionId={id}
+            disabled={closed || !!waiting.length || busy || uploading}
+            onCreated={result => {
+              setIllustration(result)
+              setFiles(items => [result.attachment, ...items.filter(item => item.id !== result.attachment.id)])
+            }}
+          />
+        </div>
         <form
           className="chat-composer mx-4 mb-2 rounded-panel border border-stroke bg-surface px-2 pt-1.5 pb-1 focus-within:border-accent/60"
           onSubmit={e => {

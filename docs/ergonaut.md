@@ -14,6 +14,29 @@ click an “Earlier messages summarized” divider to read an older summary.
 Older replies made before context recording have no Context button. See
 [Session compaction](compaction.md) for policy keys and migration rollout.
 
+## Illustrations in chat
+
+The **Illustrate** action above a chat composer creates an immutable, static
+HTML attachment from a bounded recent-message snapshot. It offers timeline,
+status, and plan suggestions plus a 500-character “Something else” request;
+custom requests may be used alone or with suggestions. The attachment records
+its session, generated time, snapshot message boundary, selected category, and
+cited source message lines. Files use unique flat
+`illustration-<timestamp>-<descriptive-stub>-<id>.html` names because session
+attachment storage intentionally strips path components; older illustrations
+remain in the session Files list.
+
+Illustrations only read the active session and caller-visible history. Model
+output is structured content rendered by server templates, not model-provided
+HTML or scripts. The initial release does not create data charts, flame graphs,
+or live `.jhtml` pages: without authorized typed measurement or trace data it
+states that performance evidence is unavailable.
+
+Suggestions and generation currently run in the web request. A slow model can
+therefore hold that request until the web server or reverse proxy times out;
+there is no background job, progress status, or cancellation path yet. A
+timed-out request creates no attachment, so retry from **Illustrate**.
+
 ## Which bots it runs
 
 `ERGONAUT_BOTS` (default `/bot`) is a path, or several joined with `:`.
@@ -75,6 +98,11 @@ Pass roles to run a subset: `ergonaut up web bots`.
 Without a broker there is no worker or beat. Turns then run inside the
 web process, and schedules, worker polling and repo pulls by beat don't
 happen, so install Redis for anything beyond trying a bot.
+
+Illustration generation is deliberately unavailable without
+`CELERY_BROKER_URL` and a running `ergonaut worker -Q celery,bot_tasks`: it
+uses a durable Celery job (90-second soft limit, 120-second hard limit, two
+retries) instead of holding an HTTP request open.
 
 Data lives under `DATA_DIR` (default `~/.ergonaut`, `/data` in the image).
 

@@ -1,0 +1,221 @@
+# ruff: noqa: F811
+
+import re
+from types import SimpleNamespace
+from uuid import uuid4
+
+import pytest
+from django.contrib.auth import get_user_model
+
+from ergonaut.apps.bots.tests.fakes import say, tool_call
+from ergonaut.apps.bots.tests.test_api import bot_folder, cook, post, use_bots  # noqa: F401
+
+
+def suggestion_output():
+    return tool_call(
+        "submit_output",
+        {
+            "suggestions": [
+                {
+                    "id": "timeline",
+                    "title": "Dinner decision timeline",
+                    "purpose": "Show the choices in order.",
+                    "kind": "timeline",
+                    "evidence_refs": [1],
+                    "availability": "available",
+                    "reason": "The chat contains decisions.",
+                }
+            ]
+        },
+    )
+
+
+def illustration_output():
+    return tool_call(
+        "submit_output",
+        {
+            "title": "Dinner decision",
+            "summary": "Eggs are available for tacos.",
+            "sections": [{"heading": "Decision", "body": "Use four eggs.", "evidence_refs": [1]}],
+            "caveats": ["No performance or trace data was supplied."],
+        },
+    )
+
+
+def queue_illustrations(settings, monkeypatch):
+    from types import SimpleNamespace
+
+    from ergonaut.apps.bots.tasks import generate_illustration
+
+    settings.CELERY_BROKER_URL = "redis://illustrations"
+    settings.CELERY_TASK_ALWAYS_EAGER = False
+    monkeypatch.setattr(generate_illustration, "delay", lambda *_args: SimpleNamespace(id="illustration-task"))
+
+
+def create_illustration(client, session_id, payload):
+    from ergonaut.api.illustrate import run_illustration_job
+    from ergonaut.apps.bots.models import IllustrationJob
+
+    response = post(client, f"/api/sessions/{session_id}/illustrations", payload)
+    assert response.status_code == 202, response.content
+    job = IllustrationJob.objects.get(id=response.json()["id"])
+    run_illustration_job(str(job.id), str(job.run_token))
+    return client.get(f"/api/sessions/{session_id}/illustrations/{job.id}")
+
+
+@pytest.mark.django_db(transaction=True)
+def test_illustration_is_scoped_sanitized_and_historic(client, cook, use_bots, settings, tmp_path, monkeypatch):
+    settings.MEDIA_ROOT = str(tmp_path / "media")
+    use_bots(say("Four eggs are available."), suggestion_output(), illustration_output())
+    root = post(client, "/api/bots/kitchen/root").json()
+    assert post(client, f"/api/sessions/{root['id']}/messages", {"text": "Should we make tacos?"}).status_code == 200
+    queue_illustrations(settings, monkeypatch)
+    suggested = post(client, f"/api/sessions/{root['id']}/illustrations/suggest").json()
+    assert suggested["as_of_line"] >= 0
+    completed = create_illustration(
+        client, root["id"], {"snapshot": suggested["snapshot"], "suggestion_ids": ["timeline"]}
+    )
+    assert completed.status_code == 200, completed.content
+    first = completed.json()["attachment"]
+    assert re.fullmatch(r"illustration-\d{8}-\d{6}-dinner-decision-[0-9a-f]{8}\.html", first["filename"])
+    content = client.get(f"/api/attachments/{first['id']}/download?inline=true")
+    assert content.status_code == 200
+    assert b"Use four eggs." in content.content
+    assert content["Content-Security-Policy"].startswith("sandbox")
+    again = post(
+        client,
+        f"/api/sessions/{root['id']}/illustrations",
+        {"snapshot": suggested["snapshot"], "suggestion_ids": ["timeline"]},
+    )
+    assert again.status_code == 202
+    assert again.json()["status"] == "succeeded"
+    assert again.json()["attachment"]["id"] == first["id"]
+    files = client.get(f"/api/sessions/{root['id']}/attachments").json()
+    assert [file["id"] for file in files].count(first["id"]) == 1
+
+
+@pytest.mark.django_db(transaction=True)
+def test_custom_and_combined_illustrations_validate_scope_and_permissions(
+    client, cook, use_bots, settings, monkeypatch
+):
+    use_bots(say("Four eggs are available."), suggestion_output(), illustration_output(), illustration_output())
+    root = post(client, "/api/bots/kitchen/root").json()
+    post(client, f"/api/sessions/{root['id']}/messages", {"text": "Should we make tacos?"})
+    queue_illustrations(settings, monkeypatch)
+    suggested = post(client, f"/api/sessions/{root['id']}/illustrations/suggest").json()
+    invalid_selection = post(
+        client,
+        f"/api/sessions/{root['id']}/illustrations",
+        {"snapshot": suggested["snapshot"], "suggestion_ids": ["timeline"] * 4},
+    )
+    assert invalid_selection.status_code == 400
+    assert invalid_selection.json()["detail"] == "Choose up to three current illustration suggestions"
+    created = create_illustration(
+        client, root["id"], {"snapshot": suggested["snapshot"], "custom": "Show the taco choice as a simple map"}
+    )
+    assert created.status_code == 200, created.content
+    combined = create_illustration(
+        client,
+        root["id"],
+        {
+            "snapshot": suggested["snapshot"],
+            "suggestion_ids": ["timeline"],
+            "custom": "Show the taco choice as a simple map",
+        },
+    )
+    assert combined.status_code == 200, combined.content
+    assert combined.json()["attachment"]["filename"].endswith(".html")
+    custom_too_long = post(
+        client,
+        f"/api/sessions/{root['id']}/illustrations",
+        {"snapshot": suggested["snapshot"], "custom": "x" * 501},
+    )
+    assert custom_too_long.status_code == 400
+    assert custom_too_long.json()["detail"] == "Custom illustration request is limited to 500 characters"
+    other = get_user_model().objects.create_user("other", "o@example.com", "pw")
+    client.force_login(other)
+    assert post(client, f"/api/sessions/{root['id']}/illustrations/suggest").status_code == 404
+
+
+@pytest.mark.django_db(transaction=True)
+def test_illustration_job_retries_times_out_and_cancels(client, cook, use_bots, settings, monkeypatch):
+    from ergonaut.api.illustrate import mark_illustration_retry, run_illustration_job
+    from ergonaut.apps.bots.models import IllustrationJob
+
+    use_bots(say("Four eggs are available."), suggestion_output(), illustration_output())
+    root = post(client, "/api/bots/kitchen/root").json()
+    post(client, f"/api/sessions/{root['id']}/messages", {"text": "Should we make tacos?"})
+    queue_illustrations(settings, monkeypatch)
+    suggested = post(client, f"/api/sessions/{root['id']}/illustrations/suggest").json()
+    issued = post(
+        client,
+        f"/api/sessions/{root['id']}/illustrations",
+        {"snapshot": suggested["snapshot"], "suggestion_ids": ["timeline"]},
+    )
+    assert issued.status_code == 202
+    job = IllustrationJob.objects.get(id=issued.json()["id"])
+    token = str(job.run_token)
+    other = get_user_model().objects.create_user("other-job", "other-job@example.com", "pw")
+    client.force_login(other)
+    assert client.get(f"/api/sessions/{root['id']}/illustrations/{job.id}").status_code == 404
+    client.force_login(cook)
+    assert mark_illustration_retry(str(job.id), token, "SoftTimeLimitExceeded", final=False)
+    assert client.get(f"/api/sessions/{root['id']}/illustrations/{job.id}").json()["status"] == "retrying"
+    assert not mark_illustration_retry(str(job.id), token, "SoftTimeLimitExceeded", final=True)
+    timed_out = client.get(f"/api/sessions/{root['id']}/illustrations/{job.id}").json()
+    assert timed_out["status"] == "failed"
+    assert timed_out["error"] == "Illustration generation timed out."
+
+    retried = post(
+        client,
+        f"/api/sessions/{root['id']}/illustrations",
+        {"snapshot": suggested["snapshot"], "suggestion_ids": ["timeline"]},
+    )
+    assert retried.status_code == 202
+    job.refresh_from_db()
+    assert str(job.run_token) != token
+    cancelled = client.delete(f"/api/sessions/{root['id']}/illustrations/{job.id}")
+    assert cancelled.status_code == 200
+    assert cancelled.json()["status"] == "cancelled"
+    run_illustration_job(str(job.id), str(job.run_token))
+    assert not IllustrationJob.objects.get(id=job.id).attachment_id
+
+
+def test_static_illustration_escapes_model_text():
+    from ergonaut.api.illustrate import IllustrationSection, IllustrationSpec, _render_html
+
+    html = _render_html(
+        "status",
+        IllustrationSpec(
+            title="<script>alert(1)</script>",
+            summary="Safe <b>text</b>",
+            sections=[IllustrationSection(heading="Facts", body="<img src=x onerror=alert(1)>")],
+        ),
+        3,
+    ).decode()
+    assert "<script>" not in html
+    assert "&lt;img src=x onerror=alert(1)&gt;" in html
+
+
+def test_snapshot_keeps_the_selected_messages():
+    from ergonaut.api.illustrate import Suggestion, _load_snapshot, _snapshot
+
+    session = SimpleNamespace(id=uuid4())
+    messages = [{"line": 4, "role": "user", "text": "Use the first decision."}]
+    token = _snapshot(
+        session,
+        messages,
+        4,
+        [
+            Suggestion(
+                id="timeline",
+                title="Timeline",
+                purpose="Show the decision.",
+                kind="timeline",
+                reason="The chat contains a decision.",
+            )
+        ],
+    )
+    snapshot = _load_snapshot(token, session)
+    assert snapshot["messages"] == messages
+    assert snapshot["digest"]

@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "test": "node --test src/toolFormat.test.ts && bun test src/chatLayout.test.ts src/chatChrome.test.tsx src/chatSend.test.ts src/quickReplyHold.test.ts src/toolCard.test.tsx src/pageBridge.test.ts src/pages/Routing.test.tsx src/components/ShellControls.test.tsx src/components/TodoList.test.tsx src/pages/Capacity.test.tsx src/pages/Costs.test.tsx src/components/UsageStatus.test.tsx src/topbar.test.ts src/messageLink.test.ts src/pages/Dashboard.test.tsx"
+    "test": "node --test src/toolFormat.test.ts && bun test src/chatLayout.test.ts src/chatChrome.test.tsx src/chatSend.test.ts src/quickReplyHold.test.ts src/toolCard.test.tsx src/pageBridge.test.ts src/pages/Routing.test.tsx src/components/IllustrateDialog.test.tsx src/components/ShellControls.test.tsx src/components/TodoList.test.tsx src/pages/Capacity.test.tsx src/pages/Costs.test.tsx src/components/UsageStatus.test.tsx src/topbar.test.ts src/messageLink.test.ts src/pages/Dashboard.test.tsx"
   },
   "dependencies": {
     "@fontsource/inter": "^5.3.0",
@@ -24,6 +24,7 @@
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^4.4.0",
+    "happy-dom": "^21.0.3",
     "tailwindcss": "^4.0.0",
     "typescript": "~5.7.0",
     "vite": "^6.0.0"
