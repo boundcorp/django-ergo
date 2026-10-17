@@ -26,16 +26,38 @@ cited source message lines. Files use unique flat
 attachment storage intentionally strips path components; older illustrations
 remain in the session Files list.
 
-Illustrations only read the active session and caller-visible history. Model
-output is structured content rendered by server templates, not model-provided
-HTML or scripts. The initial release does not create data charts, flame graphs,
-or live `.jhtml` pages: without authorized typed measurement or trace data it
-states that performance evidence is unavailable.
+Illustrations only read the active session and caller-visible history. The
+model never writes markup. It returns a typed spec: a title, summary and
+takeaways plus 3 to 14 components (timeline, status board, flow, diagram,
+comparison, cards, stats, chart, prose), each tagged with the topic it serves
+and citing message lines. `ergonaut/api/illustration_render.py` draws every tag,
+colour and SVG coordinate, so text is always escaped and pages have no scripts,
+network requests or model-supplied HTML. The page has a hero with a short
+version, one numbered band per selected topic, a limits panel, a verbatim
+Sources list for every cited line, and a provenance footer (snapshot boundary,
+model, time). Pages follow the system light/dark scheme and reflow to a phone:
+grids wrap, tables become stacked cards, and wide diagrams fall back to
+stacked stages.
 
-Suggestions and generation currently run in the web request. A slow model can
-therefore hold that request until the web server or reverse proxy times out;
-there is no background job, progress status, or cancellation path yet. A
-timed-out request creates no attachment, so retry from **Illustrate**.
+Depth scales with the request (`depth_for`): a thin thread needs about three
+components and one visual; a rich thread with three topics needs at least 11
+components and four visuals. The spec model rejects thinner or text-only output
+and the model is asked again with the validation error. The prompt receives the
+title and purpose of each suggestion the user ticked, not just its id.
+
+Figures are never decorated. `stats` and `chart` components are drawn only when
+the cited message actually contains the number; otherwise the panel shows
+“No figures to show” and the limits panel says what was left out. Flame graphs
+and live `.jhtml` pages are not generated.
+
+Generation uses the chat's own model (the picked model, else the bot's
+default, with `auto/<tier>` resolved as for a chat turn) in one structured call
+with no tools or skills. Its output budget is set to 8,000 tokens on the engine
+itself, because `StructuredCallSpec.max_tokens` is ignored when an engine is
+passed in.
+
+Suggestions run in the web request. Generation is a durable Celery job (see
+below), so a slow model cannot hold a web request.
 
 ## Which bots it runs
 
@@ -101,7 +123,7 @@ happen, so install Redis for anything beyond trying a bot.
 
 Illustration generation is deliberately unavailable without
 `CELERY_BROKER_URL` and a running `ergonaut worker -Q celery,bot_tasks`: it
-uses a durable Celery job (90-second soft limit, 120-second hard limit, two
+uses a durable Celery job (170-second soft limit, 200-second hard limit, two
 retries) instead of holding an HTTP request open.
 
 Data lives under `DATA_DIR` (default `~/.ergonaut`, `/data` in the image).

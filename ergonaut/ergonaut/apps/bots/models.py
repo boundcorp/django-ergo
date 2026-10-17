@@ -67,6 +67,8 @@ class IllustrationJob(models.Model):
     evidence = models.JSONField()
     selected = models.JSONField(default=list)
     custom = models.TextField(blank=True)
+    # The selected suggestions as shown to the user (id, title, purpose, kind) plus the free-form request.
+    topics = models.JSONField(default=list)
     status = models.CharField(max_length=12, choices=Status, default=Status.QUEUED, db_index=True)
     attempts = models.PositiveSmallIntegerField(default=0)
     task_id = models.CharField(max_length=100, blank=True)

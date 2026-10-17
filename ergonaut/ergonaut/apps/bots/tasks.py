@@ -56,8 +56,8 @@ STOP_TTL_SECONDS = 10 * 60
 # Messages left in an inbox nobody drained (no worker running) expire after this long.
 INBOX_TTL_SECONDS = 24 * 60 * 60
 # Illustration jobs must return control to Celery before a typical web proxy timeout.
-ILLUSTRATION_SOFT_TIMEOUT_SECONDS = 90
-ILLUSTRATION_HARD_TIMEOUT_SECONDS = 120
+ILLUSTRATION_SOFT_TIMEOUT_SECONDS = 170
+ILLUSTRATION_HARD_TIMEOUT_SECONDS = 200
 
 
 _clients: dict = {}
