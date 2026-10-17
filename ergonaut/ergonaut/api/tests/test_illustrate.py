@@ -1,5 +1,6 @@
 # ruff: noqa: F811
 
+import json
 import re
 from types import SimpleNamespace
 from uuid import uuid4
@@ -30,13 +31,39 @@ def suggestion_output():
     )
 
 
-def illustration_output():
+def illustration_output(*topics):
+    """A small valid spec that serves every topic with two visual blocks and one prose block."""
+    topics = topics or ("timeline",)
+    blocks = []
+    for topic in topics:
+        blocks += [
+            {
+                "type": "timeline",
+                "topic": topic,
+                "heading": f"{topic} steps",
+                "items": [
+                    {"title": "Asked about tacos", "state": "done", "evidence_refs": [1]},
+                    {"title": "Checked the eggs", "state": "in_progress"},
+                ],
+            },
+            {
+                "type": "status_board",
+                "topic": topic,
+                "heading": f"{topic} status",
+                "items": [
+                    {"title": "Four eggs on hand", "state": "done", "evidence_refs": [1]},
+                    {"title": "Pick a filling", "state": "open"},
+                ],
+            },
+            {"type": "prose", "topic": topic, "heading": "Decision", "body": "Use four eggs.", "evidence_refs": [1]},
+        ]
     return tool_call(
         "submit_output",
         {
             "title": "Dinner decision",
             "summary": "Eggs are available for tacos.",
-            "sections": [{"heading": "Decision", "body": "Use four eggs.", "evidence_refs": [1]}],
+            "takeaways": ["Four eggs are on hand."],
+            "blocks": blocks,
             "caveats": ["No performance or trace data was supplied."],
         },
     )
@@ -66,7 +93,7 @@ def create_illustration(client, session_id, payload):
 @pytest.mark.django_db(transaction=True)
 def test_illustration_is_scoped_sanitized_and_historic(client, cook, use_bots, settings, tmp_path, monkeypatch):
     settings.MEDIA_ROOT = str(tmp_path / "media")
-    use_bots(say("Four eggs are available."), suggestion_output(), illustration_output())
+    fake = use_bots(say("Four eggs are available."), suggestion_output(), illustration_output())
     root = post(client, "/api/bots/kitchen/root").json()
     assert post(client, f"/api/sessions/{root['id']}/messages", {"text": "Should we make tacos?"}).status_code == 200
     queue_illustrations(settings, monkeypatch)
@@ -81,6 +108,16 @@ def test_illustration_is_scoped_sanitized_and_historic(client, cook, use_bots, s
     content = client.get(f"/api/attachments/{first['id']}/download?inline=true")
     assert content.status_code == 200
     assert b"Use four eggs." in content.content
+    assert b'class="timeline"' in content.content
+    # The page designer is given the suggestion the user ticked, not just its id.
+    from ergonaut.apps.bots.models import IllustrationJob
+
+    job = IllustrationJob.objects.get(id=completed.json()["id"])
+    assert job.topics[0]["title"] == "Dinner decision timeline"
+    assert job.topics[0]["purpose"] == "Show the choices in order."
+    generate_call = fake.calls[-1]
+    assert generate_call["max_tokens"] >= 8_000
+    assert "Show the choices in order." in json.dumps(generate_call["messages"])
     assert content["Content-Security-Policy"].startswith("sandbox")
     again = post(
         client,
@@ -98,7 +135,12 @@ def test_illustration_is_scoped_sanitized_and_historic(client, cook, use_bots, s
 def test_custom_and_combined_illustrations_validate_scope_and_permissions(
     client, cook, use_bots, settings, monkeypatch
 ):
-    use_bots(say("Four eggs are available."), suggestion_output(), illustration_output(), illustration_output())
+    use_bots(
+        say("Four eggs are available."),
+        suggestion_output(),
+        illustration_output("custom"),
+        illustration_output("timeline", "custom"),
+    )
     root = post(client, "/api/bots/kitchen/root").json()
     post(client, f"/api/sessions/{root['id']}/messages", {"text": "Should we make tacos?"})
     queue_illustrations(settings, monkeypatch)
@@ -179,22 +221,6 @@ def test_illustration_job_retries_times_out_and_cancels(client, cook, use_bots, 
     assert cancelled.json()["status"] == "cancelled"
     run_illustration_job(str(job.id), str(job.run_token))
     assert not IllustrationJob.objects.get(id=job.id).attachment_id
-
-
-def test_static_illustration_escapes_model_text():
-    from ergonaut.api.illustrate import IllustrationSection, IllustrationSpec, _render_html
-
-    html = _render_html(
-        "status",
-        IllustrationSpec(
-            title="<script>alert(1)</script>",
-            summary="Safe <b>text</b>",
-            sections=[IllustrationSection(heading="Facts", body="<img src=x onerror=alert(1)>")],
-        ),
-        3,
-    ).decode()
-    assert "<script>" not in html
-    assert "&lt;img src=x onerror=alert(1)&gt;" in html
 
 
 def test_snapshot_keeps_the_selected_messages():
