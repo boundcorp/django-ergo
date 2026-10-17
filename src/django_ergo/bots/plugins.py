@@ -45,6 +45,7 @@ OFFICIAL_PLUGINS = {
     "bot_management": "django_ergo.plugins.bot_management.BotManagementPlugin",
     "telegram": "django_ergo.plugins.telegram.TelegramPlugin",
     "orca": "django_ergo.plugins.orca.OrcaPlugin",
+    "local_shell": "django_ergo.plugins.local_shell.LocalShellPlugin",
     "bash": "django_ergo.plugins.bash.BashPlugin",
     "browser": "django_ergo.plugins.browser.BrowserPlugin",
     "kubectl": "django_ergo.plugins.kubectl.KubectlPlugin",

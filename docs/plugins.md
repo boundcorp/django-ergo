@@ -44,6 +44,7 @@ it. A plugin without tools is always active, and so are a plugin's hooks
 | `attachments` | `attachments` | list, read, write, look at and archive chat files ([Attachments](attachments.md)) |
 | `telegram` | `telegram` | a Telegram bot, by webhook or polling: one shared thread or a chat per person, voice and photos, approval buttons, `ergo_telegram_message` ([bots.md](bots.md#telegram)) |
 | `orca` | `orca` | the Orca CLI: worktrees, terminals and supervised coding workers |
+| `local_shell` | `local_shell` | agent CLIs (Claude Code, Codex) on briefs in job folders on this host, watched as workers |
 | `bash` | `bash` | shell commands on the host, each approved by default |
 | `browser` | `browser` | a running Chrome over CDP: open, read, click, type, screenshot ([Browser control](browser.md)) |
 | `kubectl` | `kubectl` | configured-cluster Kubernetes inspection and individually approved changes with redacted previews |

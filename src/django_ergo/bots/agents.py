@@ -1,8 +1,8 @@
 """Agents: coding agents (Codex, Claude Code, omp) a bot starts on a task and hears back from.
 
 An agent runs a CLI on a subscription, never an API key, somewhere an
-**agent manager** can reach: an Orca host today, later a host over ssh or a
-local shell. A manager is a small class a plugin returns from
+**agent manager** can reach: an Orca host or a local job folder
+(``plugins.local_shell``) today, later a host over ssh. A manager is a small class a plugin returns from
 ``BotPlugin.agent_managers()``::
 
     class MyManager(AgentManager):
