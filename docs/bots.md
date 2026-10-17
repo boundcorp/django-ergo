@@ -580,8 +580,8 @@ in bot.yaml leaves the skill out.
 
 A coding agent (Codex, Claude Code, omp) works on a brief for minutes to
 hours, on a subscription and never an API key. An **agent manager** is
-whatever can run one: the Orca plugin today; a host over ssh and a local
-shell are next. A plugin adds managers from `agent_managers()`:
+whatever can run one: the Orca plugin and the `local_shell` plugin (job
+folders on this host) today; a host over ssh is next. A plugin adds managers from `agent_managers()`:
 
 ```python
 from django_ergo.bots.agents import AgentCheck, AgentManager, AgentQuestion
@@ -1108,6 +1108,52 @@ the bot. With `environment` set, the bot can't point a call elsewhere.
 It is also the `orca` agent manager (see [Agents](#agents)): `agents`
 (default `[codex, claude, omp]`) lists what `ergo_agent_start` may start, and
 loading the `orca` skill loads `agents` with it.
+
+### local_shell
+
+```yaml
+- name: local_shell
+  root: ~/agent-jobs/ads        # each job is <root>/<workspace>
+  template: ~/kits/creative     # optional: copied into each new job folder
+  agents: [claude, codex]
+  executables: {claude: claude-subscription}   # default: the agent's name
+  command_prefix: []            # e.g. [sudo, -n, -u, agentrunner] or a bwrap sandbox
+  allowed_tools: [Read, Write, Edit, Glob, Grep, Bash]
+  disallowed_tools: []
+  permission_mode: dontAsk      # Claude Code: anything not allowed is refused
+  codex_sandbox: workspace-write
+  max_turns: 100
+  pass_env: [PATH, HOME, LANG, LC_ALL, TZ, USER]
+  secrets: [HIGGSFIELD_API_KEY] # bot secrets every job gets
+  timeout_minutes: 60
+  max_concurrent: 2
+  approve: true
+  root_only: false
+  poll_seconds: 30
+```
+
+The `local` agent manager (see [Agents](#agents)): `ergo_agent_start` with a
+job name as `workspace` makes `<root>/<name>/` (copying `template` the first
+time, without symlinks), writes the brief to `brief.md` and runs the agent
+there headless (`claude -p --output-format stream-json`, or `codex exec
+--json`). A small supervisor runs it detached in its own process group and
+keeps the transcript, a heartbeat and the exit status in `<job>/.ergo/`, so a
+worker in another process or pod that shares the folder can watch it. A run
+whose heartbeat stops (its pod restarted) fails the worker. A final message
+that starts `NEEDS_INPUT:` reaches the chat as a question; `ergo_agent_reply`
+resumes the same Claude session with the answer. The report lists the
+files the run made or changed, with sizes and SHA-256 hashes, and Claude
+Code's token counts go to Costs.
+
+The agent's environment is rebuilt from `pass_env` plus `secrets`; variables
+that would move an agent CLI onto API billing (`ANTHROPIC_API_KEY`,
+`OPENAI_API_KEY` and the like) are never passed, and listing one in `secrets`
+is an error. The bot's other secrets never reach it. Runs time out after
+`timeout_minutes` and at most `max_concurrent` jobs run under `root`.
+`local_shell_jobs` lists jobs, `local_shell_upload` copies chat files into a
+job folder and `local_shell_attach` copies a job's file into the chat
+(paths stay inside the job, `.ergo/` and secret-looking names are refused);
+none of them asks first.
 
 ### kubectl
 

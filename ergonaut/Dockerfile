@@ -101,7 +101,9 @@ COPY ergonaut/infra/ /app/infra
 # Release Stage
 FROM base AS release
 
+# ffmpeg: local_shell agent jobs render and check video (the Ads bot's creative kit).
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
     libfreetype6-dev \
     libjpeg62-turbo-dev \
     libpng-dev \
