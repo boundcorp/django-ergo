@@ -60,17 +60,20 @@ request in the main chat stops for approval, the Approve and Deny buttons are.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import hmac
 import json
 import logging
 import os
+import time
 import urllib.request
 from datetime import timedelta
 from typing import TYPE_CHECKING
 from typing import Any
 
 from django.contrib.auth import get_user_model
+from django.db import DatabaseError
 
 from django_ergo.bots.plugins import BotPlugin
 from django_ergo.conversation.attachments import Attachment
@@ -88,6 +91,11 @@ REQUEST_TIMEOUT = 60
 MAX_APPROVAL_PREVIEW_CHARS = 3_000
 AVATAR_SIDE = 160  # pixels: the profile photo size kept for chat avatars
 AVATAR_REFRESH = timedelta(days=1)
+JOB_TARGET = "plugin:telegram"  # BotJob.target for saved updates
+REPLAY_AFTER = timedelta(minutes=2)  # a pending update this old was never started
+REPLAY_EVERY = 60  # seconds between looks for updates to replay
+KEEP_HANDLED = timedelta(days=7)  # handled updates are deleted after this
+MAX_ATTEMPTS = 3  # tries for an update the database kept failing
 
 
 class TelegramAPI:
@@ -135,6 +143,8 @@ class TelegramPlugin(BotPlugin):
         self._albums: dict[tuple, list[dict]] = {}
         self._album_timers: dict[tuple, asyncio.Task] = {}
         self._tasks: set[asyncio.Task] = set()
+        self._replaying = False
+        self._replayed_at = float("-inf")
         self._locks: dict[str, asyncio.Lock] = {}
         self.mode = str(self.config.get("mode", "auto"))
         if self.mode not in {"auto", "webhook", "polling"}:
@@ -754,15 +764,155 @@ class TelegramPlugin(BotPlugin):
             return
         await self.deliver(chat_id, result)
 
+    async def dispatch(self, update: dict) -> None:
+        if "callback_query" in update:
+            await self.handle_callback(update["callback_query"])
+        elif message := update.get("message"):
+            await self.handle_message(message)
+
     async def handle_update(self, update: dict) -> None:
         self._offset = max(self._offset, update["update_id"] + 1)
         try:
-            if "callback_query" in update:
-                await self.handle_callback(update["callback_query"])
-            elif message := update.get("message"):
-                await self.handle_message(message)
+            await self.dispatch(update)
         except Exception:
             logger.exception("Telegram update %s failed", update.get("update_id"))
+
+    # -- durable intake ----------------------------------------------------
+    # Each update is saved as a BotJob before Telegram hears it arrived, so an
+    # update that came in while the database could not write is redelivered
+    # by Telegram, and one that was saved but never handled is replayed.
+
+    async def accept(self, update: dict):
+        """Save an update as a pending BotJob; None if it was saved already."""
+        from django_ergo.conversation.models import BotJob
+
+        name = f"telegram update {update['update_id']}"
+        jobs = BotJob.objects.filter(bot_name=self.bot.name, target=JOB_TARGET)
+        if await jobs.filter(name=name).aexists():
+            return None
+        return await BotJob.objects.acreate(
+            bot_name=self.bot.name,
+            name=name,
+            target=JOB_TARGET,
+            args={"update": update},
+        )
+
+    async def process(self, job) -> None:
+        """Handle a saved update once: claim it, run it, record how it went."""
+        import traceback
+
+        from django.utils import timezone
+
+        from django_ergo.conversation.models import BotJob
+
+        claimed = await BotJob.objects.filter(pk=job.pk, status="pending").aupdate(
+            status="in_progress", started_at=timezone.now()
+        )
+        if not claimed:
+            return
+        update = job.args["update"]
+        try:
+            await self.dispatch(update)
+        except Exception as error:
+            logger.exception("Telegram update %s failed", update.get("update_id"))
+            await self._reset_connections()
+            attempts = int(job.args.get("attempts", 0)) + 1
+            if isinstance(error, DatabaseError) and attempts < MAX_ATTEMPTS:
+                # The database failed, not the message: replay it later.
+                with contextlib.suppress(Exception):
+                    await BotJob.objects.filter(pk=job.pk).aupdate(
+                        status="pending", args={**job.args, "attempts": attempts}
+                    )
+                return
+            await self._failed(update, error)
+            with contextlib.suppress(Exception):
+                await BotJob.objects.filter(pk=job.pk).aupdate(
+                    status="failed",
+                    error=str(error)[:2000],
+                    traceback=traceback.format_exc(),
+                    completed_at=timezone.now(),
+                )
+            return
+        await BotJob.objects.filter(pk=job.pk).aupdate(
+            status="completed", progress=100, completed_at=timezone.now()
+        )
+
+    @staticmethod
+    async def _reset_connections() -> None:
+        """Drop database connections that died (a failover, a restart): this
+        process runs for days, and Django only does it between requests."""
+        from asgiref.sync import sync_to_async
+        from django.db import close_old_connections
+
+        with contextlib.suppress(Exception):
+            await sync_to_async(close_old_connections)()
+
+    async def _failed(self, update: dict, error: Exception) -> None:
+        """Tell the chat its message was not handled, so it is not lost silently."""
+        message = update.get("message") or (update.get("callback_query") or {}).get(
+            "message"
+        )
+        chat_id = ((message or {}).get("chat") or {}).get("id")
+        if chat_id is None:
+            return
+        with contextlib.suppress(Exception):
+            await self.send_text(
+                chat_id,
+                f"Sorry, I couldn't handle that message ({type(error).__name__}). "
+                "Please send it again.",
+            )
+
+    async def replay(self) -> int:
+        """Handle saved updates that were never started (the process died or
+        the database failed first), and forget old handled ones. Returns how
+        many it ran."""
+        from django.utils import timezone
+
+        from django_ergo.conversation.models import BotJob
+
+        now = timezone.now()
+        await BotJob.objects.filter(
+            bot_name=self.bot.name,
+            target=JOB_TARGET,
+            status="completed",
+            created_at__lt=now - KEEP_HANDLED,
+        ).adelete()
+        cutoff = now - REPLAY_AFTER
+        jobs = [
+            job
+            async for job in BotJob.objects.filter(
+                bot_name=self.bot.name,
+                target=JOB_TARGET,
+                status="pending",
+                created_at__lt=cutoff,
+            ).order_by("created_at")
+        ]
+        for job in jobs:
+            logger.info("Replaying Telegram %s", job.name)
+            await self.process(job)
+        return len(jobs)
+
+    def _replay_soon(self) -> None:
+        """Replay in the background, at most once a minute per process."""
+        now = time.monotonic()
+        if self._replaying or now - self._replayed_at < REPLAY_EVERY:
+            return
+        self._replaying, self._replayed_at = True, now
+
+        async def run():
+            try:
+                await self.replay()
+            except Exception:
+                logger.exception("Replaying Telegram updates failed")
+            finally:
+                self._replaying = False
+
+        self._spawn(run())
+
+    def _spawn(self, coro) -> None:
+        task = asyncio.create_task(coro)
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
 
     async def poll_once(self) -> int:
         updates = await self.api.call(
@@ -772,7 +922,13 @@ class TelegramPlugin(BotPlugin):
             allowed_updates=["message", "callback_query"],
         )
         for update in updates:
-            await self.handle_update(update)
+            # Saved before the offset moves on: if saving fails, Telegram
+            # sends the update again on the next poll.
+            job = await self.accept(update)
+            self._offset = max(self._offset, update["update_id"] + 1)
+            if job is not None:
+                await self.process(job)
+        self._replay_soon()
         return len(updates)
 
     # -- webhook ---------------------------------------------------------
@@ -809,10 +965,18 @@ class TelegramPlugin(BotPlugin):
             update = json.loads(request.body or b"{}")
         except ValueError:
             return HttpResponse(status=400)
+        if not isinstance(update, dict) or "update_id" not in update:
+            return HttpResponse(status=400)
+        try:
+            job = await self.accept(update)
+        except Exception:
+            # Not saved: a 500 makes Telegram send it again later.
+            logger.exception("Could not save Telegram update %s", update["update_id"])
+            return HttpResponse(status=500)
         # Answer Telegram at once; the turn runs after the response.
-        task = asyncio.create_task(self.handle_update(update))
-        self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
+        if job is not None:
+            self._spawn(self.process(job))
+        self._replay_soon()
         return None
 
     async def drain(self) -> None:
@@ -829,6 +993,10 @@ class TelegramPlugin(BotPlugin):
         )
 
     async def serve(self) -> None:
+        try:
+            await self.replay()
+        except Exception:
+            logger.exception("Replaying Telegram updates failed")
         if self.uses_webhook:
             await self.register_webhook()
             return
@@ -840,6 +1008,7 @@ class TelegramPlugin(BotPlugin):
                 raise
             except Exception:
                 logger.exception("Telegram polling failed; retrying")
+                await self._reset_connections()
                 await asyncio.sleep(5)
 
 

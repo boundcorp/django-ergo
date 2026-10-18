@@ -1061,6 +1061,111 @@ async def test_telegram_webhook_mode(tmp_path, settings, monkeypatch):
         webhooks.set_registry(None)
 
 
+@pytest.mark.django_db(transaction=True)
+async def test_telegram_keeps_updates_the_database_could_not_take(
+    tmp_path, monkeypatch
+):
+    from django.db import OperationalError
+    from django.utils import timezone
+
+    from django_ergo.conversation.models import BotJob
+    from django_ergo.plugins import telegram
+
+    await User.objects.acreate(username="cook")
+    bot, engine, plugin = telegram_bot(tmp_path, say("Back again."))
+    plugin.api.updates = [update(5, text="hi")]
+
+    # Not saved: the offset stays, so Telegram sends the update again.
+    async def down(update):
+        msg = "database is down"
+        raise OperationalError(msg)
+
+    monkeypatch.setattr(plugin, "accept", down)
+    with pytest.raises(OperationalError):
+        await plugin.poll_once()
+    assert plugin._offset == 0
+    monkeypatch.undo()
+
+    # Saved, then the database fails mid-turn: it waits to be replayed.
+    real = plugin.dispatch
+    monkeypatch.setattr(plugin, "dispatch", down)
+    plugin.api.updates = [update(5, text="hi")]
+    assert await plugin.poll_once() == 1
+    assert plugin._offset == 6
+    job = await BotJob.objects.aget(bot_name="kitchen", target=telegram.JOB_TARGET)
+    assert (job.status, job.args["attempts"]) == ("pending", 1)
+    assert plugin.api.sent() == []
+
+    # Telegram resends it: still one job.
+    assert await plugin.accept(update(5, text="hi")) is None
+
+    monkeypatch.setattr(plugin, "dispatch", real)
+    await BotJob.objects.filter(pk=job.pk).aupdate(
+        created_at=timezone.now() - telegram.REPLAY_AFTER
+    )
+    assert await plugin.replay() == 1
+    await job.arefresh_from_db()
+    assert job.status == "completed"
+    assert plugin.api.sent() == [{"chat_id": 111, "text": "Back again."}]
+    assert await plugin.replay() == 0
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_telegram_says_when_a_message_failed(tmp_path, monkeypatch):
+    from django_ergo.conversation.models import BotJob
+
+    await User.objects.acreate(username="cook")
+    bot, engine, plugin = telegram_bot(tmp_path)
+
+    async def broken(update):
+        msg = "bad"
+        raise ValueError(msg)
+
+    monkeypatch.setattr(plugin, "dispatch", broken)
+    job = await plugin.accept(update(7, text="hi"))
+    await plugin.process(job)
+    await job.arefresh_from_db()
+    assert job.status == "failed"
+    assert "bad" in job.error
+    assert "Please send it again" in plugin.api.sent()[-1]["text"]
+    await plugin.process(job)  # already handled: not run twice
+    assert len(plugin.api.sent()) == 1
+    assert await BotJob.objects.acount() == 1
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_telegram_webhook_asks_for_a_resend_when_it_cannot_save(
+    tmp_path, monkeypatch
+):
+    from django.db import OperationalError
+    from django.test import AsyncClient
+
+    from django_ergo.bots import webhooks
+    from django_ergo.bots.registry import BotRegistry
+
+    bot, engine, plugin = telegram_bot(tmp_path)
+    plugin.api.token = "123:abc"
+    registry = BotRegistry()
+    registry.add(bot)
+    webhooks.set_registry(registry)
+
+    async def down(update):
+        msg = "database is down"
+        raise OperationalError(msg)
+
+    monkeypatch.setattr(plugin, "accept", down)
+    try:
+        response = await AsyncClient().post(
+            "/hooks/kitchen/telegram/update/",
+            json.dumps(update(9, text="hi")),
+            content_type="application/json",
+            headers={"X-Telegram-Bot-Api-Secret-Token": plugin.webhook_secret},
+        )
+        assert response.status_code == 500
+    finally:
+        webhooks.set_registry(None)
+
+
 def test_telegram_polling_without_public_url(tmp_path):
     bot, _, plugin = telegram_bot(tmp_path)
     assert plugin.uses_webhook is False
@@ -1138,6 +1243,15 @@ def test_orca_run_refuses_to_start_untracked_workers(tmp_path, orca_calls):
         ["orchestration", "worker-start"],
         ["orchestration", "worker-stop"],
     ]
+
+
+@pytest.mark.django_db
+def test_orca_closes_the_agent_terminal_of_a_stopped_worker(tmp_path, orca_calls):
+    _, _, plugin = orca_bot(tmp_path)
+    assert plugin.manager.stop({"dispatch": "d1"}) == "Its agent terminal is closed."
+    assert orca_calls[-1][1:5] == ["orchestration", "worker-stop", "--dispatch", "d1"]
+    assert plugin.end_worker("d1", "completed") == "Its agent terminal is closed."
+    assert orca_calls[-1][1:3] == ["orchestration", "worker-release"]
 
 
 @pytest.mark.django_db(transaction=True)

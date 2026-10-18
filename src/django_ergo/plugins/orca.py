@@ -47,6 +47,10 @@ The bot runs the CLI on the host Ergonaut runs on, as that user. Tools:
   ``files_host`` (or this host) every ``usage_minutes`` and when it settles.
   It records Claude Code, Codex, and omp token counts per worker for Costs;
   scanning is best effort and never changes the worker outcome.
+- When a worker settles, its agent terminal is closed (``worker-release``, or
+  ``worker-stop`` if Orca hasn't settled the dispatch yet); cancelling a
+  worker runs ``worker-stop``. Otherwise every finished worker leaves an idle
+  agent CLI running on the Orca host.
 - ``orca_run``: every other command (creating worktrees, stopping workers,
   sending to terminals...). Each call needs approval unless
   ``approve_changes: false``. It refuses ``orchestration worker-start``: a
@@ -1070,6 +1074,7 @@ class OrcaPlugin(BotPlugin):
         self.record_activity(ctx, dispatch, shown)
         self.scan_usage(ctx, settled=report is not None or status in SETTLED)
         if report is not None or status in SETTLED:
+            self.end_worker(dispatch, status)
             body = (report or {}).get("body") or ""
             if status == "failed" and not body:
                 failure = (shown.get("dispatch") or {}).get(
@@ -1099,6 +1104,20 @@ class OrcaPlugin(BotPlugin):
         if ctx.state.get("terminal_gone_since"):
             progress += f" · agent terminal {ctx.state.get('terminal')}; failing it if it stays that way"
         return AgentCheck("running", progress=progress, questions=questions)
+
+    def end_worker(self, dispatch: str, status: str) -> str:
+        """Close a finished worker's agent terminal, or each one stays open (an
+        idle agent CLI holding its memory) until someone closes it by hand.
+        ``worker-release`` once Orca has settled the dispatch (it archives the
+        output first, so worker-read still works), else ``worker-stop``. Best
+        effort: says what happened."""
+        command = "worker-release" if status in SETTLED else "worker-stop"
+        try:
+            self.cli_json(["orchestration", command, "--dispatch", dispatch])
+        except Exception as exc:  # noqa: BLE001 — the worker is finished either way
+            log.warning("Orca %s for %s failed: %s", command, dispatch, exc)
+            return f"Couldn't close its terminal: {exc}"
+        return "Its agent terminal is closed."
 
     def agent_terminal(self, shown: dict) -> tuple[str, str]:
         """The agent's terminal: ("live" | "exited" | "gone" | "unknown", last output)."""
@@ -1523,11 +1542,7 @@ class OrcaAgents(AgentManager):
         return f"Sent the answer to {question_id}."
 
     def stop(self, handle: dict) -> str:
-        return (
-            f"The Orca worker (dispatch {handle.get('dispatch')}) may keep running; "
-            "stop it with orca_run as the CLI's orchestration guide says (orca_read "
-            '["skills", "get", "orchestration"])'
-        )
+        return self.plugin.end_worker(handle.get("dispatch", ""), "")
 
     def log(self, worker, handle: dict) -> dict | None:
         return self.plugin.worker_log(worker)
