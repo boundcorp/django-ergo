@@ -545,7 +545,10 @@ workers; if Orca no longer knows them (their worktree was removed, Orca was
 reset), starting an agent makes new ones and tries once more. If a worker's agent
 terminal exits or vanishes without a `worker_done` (Orca keeps such a dispatch
 "dispatched"), the watcher fails the worker after five minutes and tells the
-chat why.
+chat why. When a worker settles, the watcher closes its agent terminal
+(`orchestration worker-release`, or `worker-stop` if Orca hasn't settled the
+dispatch yet), and `ergo_agent_stop` runs `worker-stop`, so finished workers
+don't leave idle agent CLIs holding memory on the Orca host.
   The watcher also scans its agent's session files on the worktree host every
   `usage_minutes` (default 10) and once after settlement. Claude Code, Codex,
   and omp tokens appear per worker on Costs, grouped by project: the scan also
@@ -1286,6 +1289,14 @@ In `auto` mode Telegram uses a webhook when `BOT_WEBHOOK_BASE_URL` is set:
 `bot.serve()` registers it and returns, and updates arrive at
 `hooks/<bot>/telegram/update/` with Telegram's secret-token header. Without
 a public URL it long-polls.
+
+**Outages.** Each update is saved (as a `BotJob`, target `plugin:telegram`)
+before Telegram is told it arrived: a webhook answers 500, and polling keeps
+its offset, when the database can't take it, so Telegram sends it again.
+A saved update the database failed on is replayed after two minutes (up to
+three tries), as is one the process died before starting; any other failure
+tells the chat to send the message again. Dead database connections are
+dropped after a failure, so a Postgres failover doesn't wedge the poller.
 
 **Where messages go.** Without `target_thread`, each message's sender is
 looked up in `users`, then its chat, so in a shared group chat each person

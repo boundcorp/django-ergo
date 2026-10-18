@@ -232,6 +232,7 @@ def test_orca_start_worker_watches_the_dispatch_and_reports_back(  # noqa: PLR09
         ("terminal", "send"): {"send": {"accepted": True}},
         ("terminal", "show"): {"terminal": {"connected": True, "paneRuntimeId": 7}},
         ("orchestration", "reply"): {"sent": True},
+        ("orchestration", "worker-release"): {"released": True},
     }
 
     def respond(args):
@@ -393,6 +394,10 @@ def test_orca_start_worker_watches_the_dispatch_and_reports_back(  # noqa: PLR09
         }
     )
     assert w.run(worker_id, bot.registry) == "completed"
+    # The finished worker's agent terminal is closed, not left running.
+    assert ["orchestration", "worker-release", "--dispatch", "ctx_1"] in [
+        c[1:5] for c in calls
+    ]
     [done] = sent(False)
     assert "Done; tests pass." in done.text and "Footer fixed" in done.text
     assert len(sent(True)) == 1  # the question was passed on once

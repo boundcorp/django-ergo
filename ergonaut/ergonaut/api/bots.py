@@ -539,7 +539,8 @@ def jobs_out(bot: Bot) -> list[dict]:
             "created_at": job.created_at,
             "completed_at": job.completed_at,
         }
-        for job in BotJob.objects.filter(bot_name=bot.name)[:20]
+        # Saved Telegram updates show only when they did not go through.
+        for job in BotJob.objects.filter(bot_name=bot.name).exclude(target="plugin:telegram", status="completed")[:20]
     ]
 
 
