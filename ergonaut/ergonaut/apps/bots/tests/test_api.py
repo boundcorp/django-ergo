@@ -412,6 +412,26 @@ def test_changes_list_and_merge_need_a_manager_and_an_admin(client, cook, use_bo
 
 
 @pytest.mark.django_db(transaction=True)
+def test_parallel_approvals_answer_each_call(client, cook, bot_folder, use_bots):
+    from types import SimpleNamespace
+
+    milk, eggs = tool_call("order", {"item": "milk"}), tool_call("order", {"item": "eggs"})
+    both = SimpleNamespace(content=milk.content + eggs.content, stop_reason="tool_use", usage=milk.usage)
+    fake = use_bots(both, say("Ordered milk, not eggs."))
+    root = post(client, "/api/bots/kitchen/root").json()
+    turn = post(client, f"/api/sessions/{root['id']}/messages", {"text": "Order milk and eggs"}).json()
+    milk_id, eggs_id = (a["id"] for a in turn["approvals"])
+    # Answering one of two is stale: both are sent together.
+    one = post(client, f"/api/sessions/{root['id']}/approvals", {"decisions": {milk_id: True}})
+    assert one.status_code == 409
+    done = post(client, f"/api/sessions/{root['id']}/approvals", {"decisions": {milk_id: True, eggs_id: False}})
+    assert done.json()["text"] == "Ordered milk, not eggs."
+    results = {b["tool_use_id"]: b["content"] for b in fake.calls[-1]["messages"][-1]["content"]}
+    assert "ordered milk" in str(results[milk_id])
+    assert "declined" in str(results[eggs_id])
+
+
+@pytest.mark.django_db(transaction=True)
 def test_stale_approvals_bad_ids_and_bot_access(client, cook, bot_folder, use_bots):
     from django_ergo.conversation.models import ConversationSession
 

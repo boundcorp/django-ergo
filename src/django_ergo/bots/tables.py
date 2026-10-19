@@ -270,18 +270,58 @@ def clean_values(model: type[BotTable], values: dict) -> dict:
     if not isinstance(values, dict):
         msg = "values must be an object"
         raise ValueError(msg)  # noqa: TRY004 — page actions turn ValueError into a 400
-    allowed = {field.name for field in writable_fields(model)}
-    unknown = set(values) - allowed
+    fields = [field.name for field in writable_fields(model)]
+    unknown = set(values) - set(fields)
     if unknown:
-        msg = f"{model.__name__} has no field(s) {', '.join(sorted(unknown))}"
+        msg = (
+            f"{model.__name__} has no field(s) {', '.join(sorted(unknown))}. "
+            f"Fields: {', '.join(fields)}"
+        )
         raise ValueError(msg)
     return values
+
+
+def full_clean(obj: BotTable) -> None:
+    """Validate ``obj`` for a write, the way a table tool or page form needs it.
+
+    A field left at an empty default (``JSONField(default=list)``) is valid
+    even without ``blank=True``: Django would call ``[]`` blank, so a row could
+    never keep an empty list. A bad choice names the choices.
+    """
+    from django.core.exceptions import FieldDoesNotExist
+    from django.core.exceptions import ValidationError
+
+    model = type(obj)
+    exclude = ["created_at", "updated_at"]
+    for field in writable_fields(model):
+        if field.blank or not field.has_default():
+            continue
+        value = getattr(obj, field.attname)
+        if value in field.empty_values and value == field.get_default():
+            exclude.append(field.name)
+    try:
+        obj.full_clean(exclude=exclude)
+    except ValidationError as exc:
+        if not hasattr(exc, "error_dict"):
+            raise
+        errors = exc.message_dict
+        for name, messages in errors.items():
+            try:
+                field = model._meta.get_field(name)
+            except FieldDoesNotExist:
+                continue
+            if field.choices and any(
+                e.code == "invalid_choice" for e in exc.error_dict[name]
+            ):
+                choices = ", ".join(str(c[0]) for c in field.flatchoices)
+                messages.append(f"Choices: {choices}.")
+        raise ValidationError(errors) from None
 
 
 def add_row(model: type[BotTable], values: dict) -> dict:
     """Create one row with the same validation used by table tools and page forms."""
     obj = model(**clean_values(model, values))
-    obj.full_clean(exclude=["created_at", "updated_at"])
+    full_clean(obj)
     obj.save()
     return _row(obj)
 
@@ -295,7 +335,7 @@ def update_row(model: type[BotTable], id: int, values: dict) -> dict:  # noqa: A
         raise ValueError(msg) from None
     for key, value in clean_values(model, values).items():
         setattr(obj, key, value)
-    obj.full_clean(exclude=["created_at", "updated_at"])
+    full_clean(obj)
     obj.save()
     return _row(obj)
 

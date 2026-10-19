@@ -101,6 +101,8 @@ export function Chat({ onChange }: { onChange: () => void }) {
   )
   // Stop was pressed; the turn ends at its next step.
   const [stopping, setStopping] = useState(false)
+  // Answers to the tool calls a turn waits on, sent together once every one has one.
+  const [choices, setChoices] = useState<Record<string, boolean>>({})
   // The Files panel stays open or closed across sessions, per browser.
   const [showFiles, setShowFiles] = useState(() => {
     try {
@@ -512,6 +514,16 @@ export function Chat({ onChange }: { onChange: () => void }) {
 
   const lastCall = detail.calls[detail.calls.length - 1]
   const waiting = lastCall?.status === 'awaiting_approval' ? lastCall.pending_approvals : []
+  function decide(approvalId: string, approve: boolean) {
+    const next = { ...choices, [approvalId]: approve }
+    if (waiting.every(a => a.id in next)) {
+      setChoices({})
+      const decisions = Object.fromEntries(waiting.map(a => [a.id, next[a.id]]))
+      run(() => api.decide(id, decisions))
+    } else {
+      setChoices(next)
+    }
+  }
   const turnSuggestions = !waiting.length ? replySuggestions(last?.suggestions ?? lastCall?.response?.suggestions) : []
   const mobileSuggestions = turnSuggestions.length
     ? turnSuggestions
@@ -797,21 +809,28 @@ export function Chat({ onChange }: { onChange: () => void }) {
                     {approval.preview}
                   </pre>
                 )}
-                <div className="mt-3 flex gap-2">
+                <div className="mt-3 flex items-center gap-2">
                   <button
                     disabled={busy || !!pending}
-                    className="rounded-control bg-warning px-4 py-2 font-semibold text-canvas disabled:opacity-50"
-                    onClick={() => run(() => api.approve(id, true, [approval.id]))}
+                    className={`rounded-control px-4 py-2 font-semibold disabled:opacity-50 ${
+                      choices[approval.id] === false ? 'border border-warning/50 text-muted' : 'bg-warning text-canvas'
+                    }`}
+                    onClick={() => decide(approval.id, true)}
                   >
-                    Approve
+                    {choices[approval.id] === true ? 'Approved' : 'Approve'}
                   </button>
                   <button
                     disabled={busy || !!pending}
-                    className="rounded-control border border-warning/50 px-4 py-2 disabled:opacity-50"
-                    onClick={() => run(() => api.approve(id, false, [approval.id]))}
+                    className={`rounded-control border px-4 py-2 disabled:opacity-50 ${
+                      choices[approval.id] === false ? 'border-danger/60 text-danger' : 'border-warning/50'
+                    }`}
+                    onClick={() => decide(approval.id, false)}
                   >
-                    Reject
+                    {choices[approval.id] === false ? 'Rejected' : 'Reject'}
                   </button>
+                  {approval.id in choices && waiting.length > 1 && (
+                    <span className="text-xs text-muted">Sent once every call has an answer</span>
+                  )}
                 </div>
               </section>
             ))}

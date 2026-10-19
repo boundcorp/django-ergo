@@ -351,12 +351,13 @@ def run_turn(  # noqa: PLR0913
     self,
     session_id: str,
     message: str | None = None,
-    approve: bool | None = None,
+    approve: bool | dict[str, bool] | None = None,
     attachment_ids: list[str] | None = None,
     approval_ids: list[str] | None = None,
 ) -> None:
     """Answer the session's inbox, or answer the approval the user saw (then the inbox).
 
+    ``approve`` is one answer for every waiting tool call, or one per call by id.
     ``approval_ids`` are the tool calls the user was shown; if the turn now
     waits on anything else (a double click after it moved on), nothing runs.
     A ``message`` passed in (a task queued before the inbox) joins the inbox.
@@ -412,7 +413,7 @@ def loaded_bot(session):
     return registry.get(session.bot_name)
 
 
-def answer_approval(session, approve: bool, approval_ids: list[str] | None) -> None:
+def answer_approval(session, approve: bool | dict[str, bool], approval_ids: list[str] | None) -> None:
     session_id = str(session.id)
     clear_stop(session_id)
     try:
@@ -508,7 +509,7 @@ def record_failure(session, message: str | None, exc: Exception) -> None:
 def queue_turn(
     session_id,
     *,
-    approve: bool | None = None,
+    approve: bool | dict[str, bool] | None = None,
     approval_ids: list[str] | None = None,
 ) -> bool:
     """Queue a turn. Returns True when a worker will run it, False when it already ran."""

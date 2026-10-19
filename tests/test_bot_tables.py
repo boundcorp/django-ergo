@@ -23,6 +23,7 @@ TABLES = textwrap.dedent(
         status = models.CharField(max_length=20, choices=[("new", "New"), ("sold", "Sold")], default="new")
         listed = models.BooleanField(default=True)
         notes = models.TextField(blank=True)
+        tags = models.JSONField(default=list)
     '''
 )
 
@@ -83,9 +84,22 @@ def test_tables_get_migrations_in_the_bot_folder_and_tools(realty):
     )
     assert '"count": 1' in found
     assert toolkit.requires_approval("ergo_table_delete")
-    with pytest.raises(ValueError, match="has no field"):
+    with pytest.raises(ValueError, match="has no field.*Fields: address, price"):
         toolkit.execute_tool(
             "ergo_table_add", {"table": "House", "values": {"color": "red"}}
+        )
+    # An empty list default is a value, not a blank field, and a bad choice names the choices.
+    added = toolkit.execute_tool(
+        "ergo_table_add",
+        {"table": "House", "values": {"address": "3 Pine Rd", "tags": []}},
+    )
+    assert '"tags": []' in added
+    from django.core.exceptions import ValidationError
+
+    with pytest.raises(ValidationError, match="Choices: new, sold"):
+        toolkit.execute_tool(
+            "ergo_table_add",
+            {"table": "House", "values": {"address": "4 Fir Ct", "status": "gone"}},
         )
 
     # A model change gets the next migration, ready to go in the same commit.
