@@ -379,9 +379,11 @@ class MessageIn(Schema):
 
 
 class ApprovalIn(Schema):
-    approve: bool
+    approve: bool = False
     # The tool calls the user was shown; if the turn now waits on others, nothing runs.
     approval_ids: list[str] | None = None
+    # Or one answer per waiting tool call, by id, in place of ``approve``/``approval_ids``.
+    decisions: dict[str, bool] | None = None
 
 
 class TurnOut(Schema):
@@ -1312,12 +1314,15 @@ async def answer_approval(request, session_id: str, data: ApprovalIn):
     pending = await bot.pending_call(session)
     if pending is None:
         raise HttpError(409, "Nothing is waiting for approval")
-    if data.approve:
+    approve, approval_ids = data.approve, data.approval_ids
+    if data.decisions is not None:
+        approve, approval_ids = data.decisions, list(data.decisions)
+    if any(approve.values()) if isinstance(approve, dict) else approve:
         require_admin_for_risky_tools(bot, request.auth)
     waiting = sorted(a["id"] for a in (pending.metadata or {}).get("pending_approvals", []))
-    if data.approval_ids is not None and sorted(data.approval_ids) != waiting:
+    if approval_ids is not None and sorted(approval_ids) != waiting:
         raise HttpError(409, "That approval was already answered")
-    return await sync_to_async(queue_and_report)(session, approve=data.approve, approval_ids=data.approval_ids)
+    return await sync_to_async(queue_and_report)(session, approve=approve, approval_ids=approval_ids)
 
 
 def models_out(bot: Bot) -> dict:

@@ -779,6 +779,9 @@ export const api = {
     request<{ text: string; attachment_ids: string[] }>('DELETE', `/sessions/${id}/inbox/${itemId}`),
   approve: (id: string, approve: boolean, approvalIds?: string[]) =>
     request<Turn>('POST', `/sessions/${id}/approvals`, { approve, approval_ids: approvalIds }),
+  // One answer per waiting tool call, by its id.
+  decide: (id: string, decisions: Record<string, boolean>) =>
+    request<Turn>('POST', `/sessions/${id}/approvals`, { decisions }),
   close: (id: string) => request<Session>('POST', `/sessions/${id}/close`),
   pinSession: (id: string, pinned: boolean) => request<Session>('POST', `/sessions/${id}/pin`, { pinned }),
   changes: (bot: string) => request<Changes>('GET', `/bots/${bot}/changes`),
