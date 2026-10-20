@@ -174,6 +174,16 @@ def _files_context(files: list[dict]) -> str:
     )
 
 
-def attributed_text(text: str, author: dict, provenance: dict) -> str:
+def sent_context(sent_at, tz) -> str:
+    """When a message was sent, in the format of the turn's current time."""
+    return f"[Sent: {sent_at.astimezone(tz).strftime('%A, %B %d, %Y at %H:%M %Z')}]"
+
+
+def attributed_text(
+    text: str, author: dict, provenance: dict, *, sent_at=None, tz=None
+) -> str:
     context = render_identity_context(author, provenance)
+    # Provenance headers already carry their own Sent line.
+    if sent_at is not None and tz is not None and not provenance.get("kind"):
+        context = "\n".join(c for c in (context, sent_context(sent_at, tz)) if c)
     return f"{context}\n\n{text}" if context else text

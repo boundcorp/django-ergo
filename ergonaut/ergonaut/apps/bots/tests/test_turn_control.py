@@ -20,8 +20,13 @@ def during_first_call(client, action):
     client.create = wrapped
 
 
+def unstamped(text):
+    """A user message's words, without the turn context and send time before them."""
+    return text.rpartition("]\n\n")[2] if text and "[Sent: " in text else text
+
+
 def texts(messages):
-    return [b.get("text") for m in messages if isinstance(m["content"], list) for b in m["content"]]
+    return [unstamped(b.get("text")) for m in messages if isinstance(m["content"], list) for b in m["content"]]
 
 
 @pytest.fixture

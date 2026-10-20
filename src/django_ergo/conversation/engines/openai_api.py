@@ -104,13 +104,16 @@ def attachment_part(row, *, audio_input: bool = False) -> dict:
     return openai_part(row, audio_input=audio_input)
 
 
-def openai_message_dicts(msg, attachments=(), *, audio_input: bool = False) -> list:
+def openai_message_dicts(
+    msg, attachments=(), *, audio_input: bool = False, timezone=None
+) -> list:
     """Render a SessionMessage row (plus its attachments) as OpenAI message dicts.
 
     Tool results become ``tool`` messages (images as list content, which
     prepare_messages moves into a user message), ahead of any user text. An
     assistant's tool calls become ``tool_calls``; thinking is left out, as
-    OpenAI can't take another model's reasoning back.
+    OpenAI can't take another model's reasoning back. With ``timezone``, user
+    text carries the time it was sent.
     """
     blocks = list(msg.content_blocks.all())
     texts = [b.text or "" for b in blocks if b.block_type == "text"]
@@ -147,7 +150,11 @@ def openai_message_dicts(msg, attachments=(), *, audio_input: bool = False) -> l
     if texts or attachments:
         text = "\n\n".join(texts)
         text = attributed_text(
-            text, getattr(msg, "author", {}), getattr(msg, "provenance", {})
+            text,
+            getattr(msg, "author", {}),
+            getattr(msg, "provenance", {}),
+            sent_at=getattr(msg, "created_at", None),
+            tz=timezone,
         )
         content = text
         if attachments:
@@ -226,7 +233,10 @@ class OpenAIAPIEngine(StoredMessagesMixin, Engine):
             (msg, message)
             for msg in model_rows(rows)
             for message in openai_message_dicts(
-                msg, attachments.get(msg.sequence, ()), audio_input=self.audio_input
+                msg,
+                attachments.get(msg.sequence, ()),
+                audio_input=self.audio_input,
+                timezone=self.message_timezone,
             )
         ]
 

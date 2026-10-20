@@ -68,8 +68,13 @@ def done_raw(response) -> dict:
     return raw
 
 
-def claude_message_dict(msg, *, include_attribution: bool = True) -> dict:
-    """Convert a SessionMessage row (with content_blocks) to an API message dict."""
+def claude_message_dict(
+    msg, *, include_attribution: bool = True, timezone=None
+) -> dict:
+    """Convert a SessionMessage row (with content_blocks) to an API message dict.
+
+    With ``timezone``, user text carries the time it was sent.
+    """
     content = []
     for block in msg.content_blocks.all():
         if block.block_type == "text":
@@ -101,6 +106,8 @@ def claude_message_dict(msg, *, include_attribution: bool = True) -> dict:
                     block["text"],
                     getattr(msg, "author", {}),
                     getattr(msg, "provenance", {}),
+                    sent_at=getattr(msg, "created_at", None),
+                    tz=timezone,
                 )
                 break
     return {"role": msg.role, "content": content}
@@ -148,7 +155,7 @@ class ClaudeAPIEngine(StoredMessagesMixin, Engine):
         attachments = attachments_by_sequence(session)
         result = []
         for msg in model_rows(rows):
-            message = claude_message_dict(msg)
+            message = claude_message_dict(msg, timezone=self.message_timezone)
             if msg.sequence in attachments:
                 # Attachments go before the text, as Anthropic recommends.
                 message["content"] = [

@@ -343,7 +343,7 @@ async def test_approval_tool_pauses_then_resumes_with_context(tmp_path):
     assert tool_result["content"] == "shopper added 2 milk"
     # The resumed turn goes natively, not in the recent-messages block too.
     resumed = engine._client.calls[-1]
-    assert resumed["messages"][0]["content"][1]["text"] == "We need milk"
+    assert unstamped(resumed["messages"][0]["content"][1]["text"]) == "We need milk"
     assert "We need milk" not in resumed["system"]
 
 
@@ -493,6 +493,13 @@ def _seeded(call):
         for part in message["content"]
         if part.get("type") == "tool_result"
     ]
+
+
+def unstamped(text):
+    """A user message's text without the send time it goes to the model with."""
+    stamp, _, rest = text.partition("\n\n")
+    assert stamp.startswith("[Sent: ") and stamp.endswith("]"), text
+    return rest
 
 
 def _texts(call):
@@ -893,6 +900,10 @@ async def test_bot_context_functions_secrets_and_current_time(tmp_path, monkeypa
     assert "## Current time" in system
     assert "MST" in system or "MDT" in system
     assert "pantry is down" not in system  # a failing context gives no text
+    # The user's message says when it was sent, in the same zone.
+    asked = engine._client.calls[0]["messages"][0]["content"][-1]["text"]
+    assert asked.startswith("[Sent: ") and asked.endswith("\n\nwhat do we need?")
+    assert "MST]" in asked or "MDT]" in asked
     result = engine._client.calls[1]["messages"][-1]["content"][0]["content"]
     assert result == "cooks-own"
 
@@ -914,6 +925,7 @@ def test_current_time_can_be_switched_off(tmp_path):
         tmp_path, yaml_text="name: kitchen\ncurrent_time: false\ntools: []\n"
     )
     assert bot.definition.current_time is False
+    assert bot.make_engine().message_timezone is None
 
 
 def test_explicit_parameters_respect_an_empty_required_list():
@@ -1885,7 +1897,7 @@ def _heard(call):
     return [
         text
         for text in _texts(call)
-        if text == "Hello"
+        if text.endswith("]\n\nHello")
         or text.startswith(("[Forwarded by", "[Message from", "[Report from"))
     ]
 
@@ -2132,7 +2144,7 @@ async def test_a_send_to_a_thread_busy_with_the_users_turn_queues_without_interr
     message = await ThreadMessage.objects.aget(id=sent["message_id"])
     assert (message.status, message.reply_text) == ("answered", "Eggs checked.")
     heard = _heard(engine._client.calls[-1])
-    assert heard[0] == "Hello" and heard[1].endswith("Also check the eggs")
+    assert unstamped(heard[0]) == "Hello" and heard[1].endswith("Also check the eggs")
 
 
 @pytest.mark.django_db(transaction=True)
@@ -2682,7 +2694,8 @@ async def test_senderless_system_thread_messages_are_not_human_authored(
     incoming = await root.messages.aget(sequence=0)
     assert incoming.author["kind"] == "system"
     assert incoming.author["display_name"] == display_name
-    assert engine._client.calls[0]["messages"][0]["content"][1]["text"] == expected
+    sent = engine._client.calls[0]["messages"][0]["content"][1]["text"]
+    assert unstamped(sent) == expected
 
 
 @pytest.mark.django_db(transaction=True)

@@ -747,6 +747,12 @@ class Bot:
         )
         if self.definition.tool_results_tokens is not None:
             engine.tool_results_tokens = self.definition.tool_results_tokens
+        if self.definition.current_time:
+            # Earlier messages carry their send time, in the current time's zone.
+            # _prepare loaded the user; don't query it here, in async code.
+            cached = session is not None and ConversationSession.user.is_cached(session)
+            user = session.user if cached else None
+            engine.message_timezone = ToolContext(bot=self, user=user).timezone
         return engine
 
     # -- sessions ----------------------------------------------------------

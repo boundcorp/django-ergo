@@ -34,7 +34,7 @@ root:                                # context budget for main and named chats
   granularity: conversation          # legacy; ignored by bots
 orchestration: true                  # may the bot delegate at all (false: never)
 timezone: America/Los_Angeles        # default for users without a timezone
-current_time: true                   # current date and time in every turn
+current_time: true                   # current time in every turn, send time on each user message
 todos: true                          # the todo list tools in every chat and thread (false: none)
 tool_results_in_context: 6           # large tool results each model call keeps in full
 tool_results_tokens: 40000           # optional budget for older ones; default 20% of model window
@@ -670,7 +670,9 @@ Each function's text becomes a section of the turn's context, trimmed to
 its share of `root.budget_tokens`. An empty string adds nothing, and an
 exception is logged and adds nothing, so an outage in one source never
 fails the turn. The current date and time is added the same way unless
-`current_time: false`.
+`current_time: false`, and each user message then goes to the model with
+a `[Sent: ...]` line in the same timezone, so the bot can tell how long
+ago something was said.
 
 Tools with `requires_approval=True` are not run. The turn ends with a
 `PendingApproval` instead, and `bot.resume(session, {tool_use_id: True})`

@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import UTC
 from datetime import datetime
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 import pytest
 from asgiref.sync import sync_to_async
@@ -52,9 +53,10 @@ PROVENANCE = {
 }
 
 
-def row(text, author=None, provenance=None):
+def row(text, author=None, provenance=None, created_at=None):
     return SimpleNamespace(
         role="user",
+        created_at=created_at,
         author=author or {},
         provenance=provenance or {},
         content_blocks=SimpleNamespace(
@@ -97,6 +99,33 @@ def test_model_rendering_has_original_author_forwarder_origin_and_files(render):
     assert claude_message_dict(message, include_attribution=False)["content"] == [
         {"type": "text", "text": "  Yes.\nDo exactly this.  "}
     ]
+
+
+SENT = datetime(2026, 10, 12, 21, 5, tzinfo=UTC)
+
+
+@pytest.mark.parametrize(
+    "render",
+    [
+        lambda message, tz: claude_message_dict(message, timezone=tz)["content"][0][
+            "text"
+        ],
+        lambda message, tz: openai_message_dicts(message, timezone=tz)[0]["content"],
+    ],
+)
+def test_user_messages_carry_their_send_time_when_asked(render):
+    la = ZoneInfo("America/Los_Angeles")
+    stamp = "[Sent: Monday, October 12, 2026 at 14:05 PDT]"
+    # The owner's own words: just the time.
+    assert render(row("Add eggs", created_at=SENT), la) == f"{stamp}\n\nAdd eggs"
+    # A Telegram user's words: author, then time.
+    text = render(row("Add eggs", AUTHOR, created_at=SENT), la)
+    assert text.startswith("[Author: External Writer")
+    assert text.endswith(f"]\n{stamp}\n\nAdd eggs")
+    # Forwarded messages already say when they were sent.
+    assert stamp not in render(row("Yes.", AUTHOR, PROVENANCE, created_at=SENT), la)
+    # Off unless the engine has a timezone.
+    assert render(row("Add eggs", created_at=SENT), None) == "Add eggs"
 
 
 def test_legacy_content_is_not_parsed_for_attribution():
