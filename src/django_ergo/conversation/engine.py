@@ -79,6 +79,9 @@ class Engine(ABC):
     # Large tool results each model call carries in full; None uses
     # DJANGO_ERGO["TOOL_RESULTS_IN_CONTEXT"] (see conversation.tool_results).
     tool_results_in_context: int | None = None
+    # When set (a tzinfo), each stored user message goes to the model with
+    # the time it was sent, so the model can tell how long ago it was.
+    message_timezone = None
 
     @abstractmethod
     async def start_session(self, session) -> str:

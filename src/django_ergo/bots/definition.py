@@ -26,7 +26,7 @@ bot.yaml::
       granularity: conversation
     orchestration: true                # may the bot delegate downward (default true; upward always works)
     timezone: America/Los_Angeles      # for the current time in context
-    current_time: true                 # put the current date and time in context
+    current_time: true                 # current time in context, send time on user messages
     todos: true                        # the built-in todo list tools in every chat (bots.todos)
     max_turns: 50                      # model calls one reply may use, tool calls included
     tool_results_in_context: 6         # large tool results each model call keeps in full

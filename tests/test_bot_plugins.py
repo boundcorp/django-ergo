@@ -548,7 +548,9 @@ async def test_telegram_photo_becomes_attachment(tmp_path):
     assert content[0]["type"] == "text"
     assert content[0]["text"].startswith("<turn-context>")
     assert content[1]["type"] == "image"
-    assert content[-1] == {"type": "text", "text": "what is this?"}
+    assert content[-1]["type"] == "text"
+    assert content[-1]["text"].startswith("[Sent: ")
+    assert content[-1]["text"].endswith("]\n\nwhat is this?")
     attachment = await ConversationAttachment.objects.aget()
     assert attachment.metadata == {"telegram_file_id": "big"}
     assert attachment.kind == "image"
@@ -756,7 +758,7 @@ async def test_telegram_album_is_one_turn(tmp_path):
     assert len(engine._client.calls) == 1
     content = engine._client.calls[0]["messages"][0]["content"]
     assert [part["type"] for part in content] == ["text", "image", "image", "text"]
-    assert content[-1]["text"] == "add these to the pantry"
+    assert content[-1]["text"].endswith("]\n\nadd these to the pantry")
     assert plugin.api.sent()[-1]["text"] == "Two receipts."
 
 
