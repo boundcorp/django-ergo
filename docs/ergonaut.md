@@ -321,7 +321,9 @@ refuse logins until the window passes.
   Grok Build). A window the provider does not report, or that has not synced,
   is **Unavailable**, never 0%. Values older than 15 minutes keep their number
   but show a **Stale** badge with the time they were observed; a provider whose
-  sync failed shows the error. **Pay-per-token providers** lists API-key
+  sync failed shows the error. When omp has disabled an account's login (an
+  expired OAuth refresh token, say), the error says so: sign in to that
+  provider again in omp on the Ergonaut host. **Pay-per-token providers** lists API-key
   providers separately: chats can use them when their tier lists them,
   but coding agents use subscriptions only. **Tiers** shows every configured
   tier (including custom names, not just `small`, `medium`, `large` and `xlarge`) and the
