@@ -429,6 +429,30 @@ def test_a_provider_missing_from_the_output_is_an_error_for_that_provider():
 
 
 @pytest.mark.django_db
+def test_a_login_omp_disabled_says_to_sign_in_again():
+    sync(report(anthropic(), codex()), now=NOW - timedelta(minutes=10))
+    data = report(codex())
+    data["disabledCredentials"] = [
+        {
+            "id": 3,
+            "provider": "anthropic",
+            "type": "oauth",
+            "cause": "oauth refresh failed: Refresh token expired",
+            "disabledAtMs": 1792365952000,
+        },
+        {"provider": "openai-codex", "cause": "an old login"},  # has a report
+        "junk",
+    ]
+    sync(data)
+    page = capacity()
+    assert page["sync"]["state"] == "partial"
+    error = account(page, "anthropic")["error"]
+    assert error.startswith("omp disabled this login, sign in again in omp")
+    assert "Refresh token expired" in error
+    assert account(page, "openai-codex")["status"] == "ok"
+
+
+@pytest.mark.django_db
 @pytest.mark.parametrize(
     "bad",
     [UsageSyncError("omp isn't installed"), RuntimeError("boom")],

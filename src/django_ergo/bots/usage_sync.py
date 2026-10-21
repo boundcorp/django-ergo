@@ -16,7 +16,9 @@ its own name and only shown. Every stored window carries ``observed_at``, so a
 window that stops being refreshed is shown as stale, never as current.
 :func:`sync_usage` never raises: a failed fetch leaves the old windows (now
 aging) and records why in :class:`UsageSync`; one account that errors leaves
-the other accounts' fresh values alone. A limit without a usable amount is a
+the other accounts' fresh values alone. An account whose login omp disabled
+(``disabledCredentials``, e.g. an expired OAuth refresh token) has no report;
+its error says to sign in again rather than just "missing". A limit without a usable amount is a
 window with ``used: None`` (unavailable), never 0.
 """
 
@@ -209,6 +211,13 @@ def parse_report(report, seen: float | None = None) -> dict[str, Account]:
         name = entry.get("provider") if isinstance(entry, dict) else None
         if isinstance(name, str) and name:
             found[name] = parse_limits(name, entry, seen)
+    disabled = report.get("disabledCredentials")
+    for cred in disabled if isinstance(disabled, list) else []:
+        name = cred.get("provider") if isinstance(cred, dict) else None
+        if isinstance(name, str) and name and name not in found:
+            cause = str(cred.get("cause") or "no reason given")
+            msg = f"omp disabled this login, sign in again in omp ({cause})"
+            found[name] = Account(name, error=msg[:300])
     return found
 
 
