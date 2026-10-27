@@ -536,8 +536,10 @@ on a person. `BotPlugin.worker_log` reads a worker's full recent output on
 demand (Orca: up to 50 transcript messages or 400 screen lines). `model` and `effort` go to Orca's
 `--model`/`--effort`, except for `agent: omp`, which Orca can't give a model
 at launch: the plugin writes the worktree's `.omp/config.yml`
-(`modelRoles.default: <model>:<effort>`, git-ignored by its own folder) and omp
-picks it up. With `tier: <name>` instead (small, medium, large, xlarge, or a
+(`modelRoles`, git-ignored by its own folder) and omp picks it up. Every
+chat role (`default`, `smol`, `task` subagents and the rest) is set to that
+model, with the effort on the roles that do the agent's work, so no role
+falls back to the host's omp config and spends another subscription. With `tier: <name>` instead (small, medium, large, xlarge, or a
 custom name), the agent, model and effort come from the `agents` tiers in
 providers.yaml, on whichever subscription has room (see
 [Routing by tier](building-bots.md#routing-by-tier)). Each chat keeps one Orca mailbox terminal and Run for its

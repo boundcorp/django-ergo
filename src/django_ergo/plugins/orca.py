@@ -131,6 +131,22 @@ TRACKED_ONLY = {("orchestration", "worker-start")}
 # any more (its worktree was removed, or Orca restarted and the terminal lost
 # its pane), so a new mailbox fixes them.
 STALE_MAILBOX = {"selector_not_found", "stable_pane_required"}
+# omp's chat model roles (its MODEL_ROLES with section "chat"), and the ones
+# that do the agent's own work, so they get its effort too.
+OMP_MODEL_ROLES = (
+    "default",
+    "smol",
+    "slow",
+    "vision",
+    "plan",
+    "commit",
+    "tiny",
+    "memory",
+    "task",
+    "advisor",
+    "widget",
+)
+OMP_EFFORT_ROLES = {"default", "slow", "plan", "task", "advisor"}
 MAX_OUTPUT_CHARS = 40_000  # about 10k tokens; a 26-worktree list is ~28k compact
 TARGET_FLAGS = ("--environment", "--pairing-code")
 ARGS_SCHEMA = {
@@ -743,12 +759,17 @@ class OrcaPlugin(BotPlugin):
         return f"id:{worktree_id}", _first_path(shown)
 
     def pin_omp_model(self, worktree: str, model: str, effort: str = "") -> None:
-        """Make omp in this worktree use ``model`` (at ``effort``): a project
-        ``.omp/config.yml`` overrides its default model role. The folder ignores
+        """Make omp in this worktree use ``model`` (at ``effort``) for every chat
+        model role: a project ``.omp/config.yml`` overrides the host's roles. A
+        role left out would keep the host's model (subtasks on another
+        subscription than the one the router picked). The folder ignores
         itself, so the setting never shows up in git."""
         root = self.worktree_path(worktree)
         selector = f"{model}:{effort}" if effort else model
-        config = f"modelRoles:\n  default: {json.dumps(selector)}\n"
+        config = "modelRoles:\n" + "".join(
+            f"  {role}: {json.dumps(selector if role in OMP_EFFORT_ROLES else model)}\n"
+            for role in OMP_MODEL_ROLES
+        )
         self.push(root, ".omp", "config.yml", config.encode())
         self.push(root, ".omp", ".gitignore", b"*\n")
 
