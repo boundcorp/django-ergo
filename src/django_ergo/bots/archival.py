@@ -2,9 +2,11 @@
 
 A thread (never a root chat) is idle when its last turn, and the session
 itself, are older than its bot's ``sessions.archive_after_days`` (default 7,
-0 = never). Threads with a turn in progress or waiting for approval, or with
-a thread message still being answered, are left alone. Archiving closes the
-session and records ``archived_at``; a new message reopens it.
+0 = never). Threads with a turn in progress or waiting for approval, a
+thread message still being answered, or a worker still running are left
+alone. Archiving closes the session, records ``archived_at`` and cancels the
+workers it still has (stopping the coding agents they watch): a resolved
+thread leaves nothing running. A new message reopens it.
 
 Run ``archive_idle_threads(registry)`` on a schedule (Ergonaut's Celery beat
 does it hourly).
@@ -22,6 +24,8 @@ from django.utils import timezone
 from django_ergo.conversation.models import ConversationSession
 from django_ergo.conversation.models import StructuredCallStatus
 from django_ergo.conversation.models import ThreadMessageStatus
+from django_ergo.conversation.models import Worker
+from django_ergo.conversation.models import WorkerStatus
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -45,6 +49,27 @@ def archive(session: ConversationSession, reason: str = "") -> None:
         **({"archived_reason": reason} if reason else {}),
     }
     session.save(update_fields=["status", "metadata", "updated_at"])
+    stop_workers(session)
+
+
+def stop_workers(session: ConversationSession) -> list[str]:
+    """Cancel the session's queued and running workers, and stop the coding agents
+    they watch when the session's bot is loaded. Returns what each cancel said."""
+    from django_ergo.bots import webhooks
+    from django_ergo.bots import workers
+
+    registry = webhooks.get_registry()
+    bot = (
+        registry.get(session.bot_name)
+        if registry and session.bot_name in registry
+        else None
+    )
+    return [
+        workers.cancel(worker, bot)
+        for worker in Worker.objects.filter(
+            session=session, status__in=[WorkerStatus.QUEUED, WorkerStatus.RUNNING]
+        )
+    ]
 
 
 def reopen(session: ConversationSession) -> bool:
@@ -73,6 +98,7 @@ def idle_threads(bot: Bot, now: datetime | None = None):
         .exclude(status="completed")
         .exclude(structured_calls__status__in=BUSY_CALLS)
         .exclude(thread_messages__status__in=OPEN_MESSAGES)
+        .exclude(workers__status__in=[WorkerStatus.QUEUED, WorkerStatus.RUNNING])
         .annotate(last_turn=Max("structured_calls__updated_at"))
         .annotate(last_activity=Greatest("updated_at", "last_turn"))
         .filter(last_activity__lt=cutoff)

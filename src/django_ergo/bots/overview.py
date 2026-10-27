@@ -90,6 +90,10 @@ def facts(
         out.append(f"working on {status['working_for']} request(s)")
     if status["waiting_on"]:
         out.append(f"waiting on {status['waiting_on']} reply(s)")
+    out.extend(
+        f"blocked: {other} waits for the user's approval"
+        for other in status.get("blocked_on", [])
+    )
     if status["workers_running"]:
         out.append(f"{status['workers_running']} worker(s) running")
     if status["last_asks"]:

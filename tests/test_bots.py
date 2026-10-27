@@ -1544,6 +1544,46 @@ async def test_idle_threads_are_archived_and_reopen_on_a_message(tmp_path):
     assert await sync_to_async(archival.archive_idle_threads)([bot]) == []
 
 
+@pytest.mark.django_db(transaction=True)
+async def test_archiving_a_thread_cancels_its_workers(tmp_path):
+    from datetime import timedelta
+
+    from django.utils import timezone
+
+    from django_ergo.bots import archival
+    from django_ergo.conversation.models import Worker
+
+    user = await User.objects.acreate(username="tidier")
+    bot, _ = make_bot(tmp_path, say("ok"))
+    root = await bot.root_session(user)
+    thread = await bot.create_session(user, parent=root, title="Renders")
+    running = await Worker.objects.acreate(
+        session=thread,
+        bot_name=bot.name,
+        title="render",
+        function="agent:local",
+        status="running",
+    )
+    done = await Worker.objects.acreate(
+        session=thread,
+        bot_name=bot.name,
+        title="earlier",
+        function="agent:local",
+        status="completed",
+    )
+
+    # A running worker keeps an idle thread from being archived on its own.
+    ago = timezone.now() - timedelta(days=8)
+    await ConversationSession.objects.filter(id=thread.id).aupdate(updated_at=ago)
+    assert await sync_to_async(archival.archive_idle_threads)([bot]) == []
+
+    # Resolving it (the user's Resolve, or a bot's) leaves nothing running.
+    await sync_to_async(archival.archive)(thread, "archived by the user")
+    await running.arefresh_from_db()
+    await done.arefresh_from_db()
+    assert (running.status, done.status) == ("cancelled", "completed")
+
+
 TASK_TOOLS = textwrap.dedent(
     """
     from django_ergo.bots import bot_task, bot_tool
