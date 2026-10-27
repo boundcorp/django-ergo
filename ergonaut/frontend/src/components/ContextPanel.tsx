@@ -30,10 +30,20 @@ export function ContextPanel({ call }: { call: Call }) {
               'Loading…'
             ) : (
               <>
-                <p>
-                  {context.prompt_tokens.toLocaleString()} prompt tokens (turn total) /{' '}
-                  {context.context_window.toLocaleString()} window
-                </p>
+                {context.request_tokens ? (
+                  <>
+                    <p>
+                      {context.request_tokens.toLocaleString()} prompt tokens (largest request) /{' '}
+                      {context.context_window.toLocaleString()} window
+                    </p>
+                    <p className="mt-1 text-muted">
+                      Turn total: {context.prompt_tokens.toLocaleString()} over {context.requests}{' '}
+                      {context.requests === 1 ? 'request' : 'requests'}
+                    </p>
+                  </>
+                ) : (
+                  <p>{context.prompt_tokens.toLocaleString()} prompt tokens (turn total)</p>
+                )}
                 <p className="mt-1 text-muted">
                   Estimated: {context.estimated_tokens.toLocaleString()} · Compact at:{' '}
                   {context.compact_at_tokens?.toLocaleString() ?? 'off'}

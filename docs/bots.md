@@ -41,6 +41,7 @@ tool_results_tokens: 40000           # optional budget for older ones; default 2
 chats:
   main:                              # every user's main chat (always there)
     skills: [orchestration, tandoor] # loaded from the start (default: [orchestration])
+    compaction: {compact_at_tokens: 80000, keep_tokens: 25000}  # optional; default 75% / 25% of the window
   reports:                           # a named chat: one per user, its own purpose
     description: Weekly reports
     instructions: Keep each report short.   # added to agents.md in this chat

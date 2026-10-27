@@ -869,7 +869,10 @@ def context_out(call: StructuredCall) -> dict | None:
             {key: value for key, value in section.items() if key != "text"} for section in context.get("sections", [])
         ],
         "section_tokens": sum(section.get("tokens", 0) for section in context.get("sections", [])),
+        # The turn's total over all its requests; request_tokens is the largest single one.
         "prompt_tokens": call.input_tokens + call.cache_creation_input_tokens + call.cache_read_input_tokens,
+        "request_tokens": context.get("largest_request_tokens"),
+        "requests": context.get("requests"),
     }
 
 
@@ -1190,7 +1193,13 @@ def call_context(request, call_id: str):
     context = (detail["metadata"] or {}).get("context")
     if context is None:
         return None
-    context = {**context, "prompt_tokens": (detail["context"] or {}).get("prompt_tokens", 0)}
+    summary = detail["context"] or {}
+    context = {
+        **context,
+        "prompt_tokens": summary.get("prompt_tokens", 0),
+        "request_tokens": summary.get("request_tokens"),
+        "requests": summary.get("requests"),
+    }
     active = context.get("compaction")
     if active:
         call = StructuredCall.objects.get(pk=call_id)
