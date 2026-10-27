@@ -151,7 +151,18 @@ function ToolCall({ use, result, pending }: { use: ToolUse; result?: ToolResult;
   if (card) return <ThreadCard card={card} />
   if (data && WORKER_TOOLS.has(use.name)) {
     const worker = workers.get(String(data.id ?? '')) ?? (data.title && data.status ? (data as Worker) : null)
-    if (worker) return <WorkerCard worker={worker} />
+    if (worker) {
+      return (
+        <details className="w-full rounded-card border border-stroke bg-surface text-sm">
+          <summary className="flex cursor-pointer items-center gap-2 px-3 py-2">
+            <span aria-hidden="true">⚙</span>
+            <span className="min-w-0 flex-1 truncate font-medium">{worker.title}</span>
+            <span className="shrink-0 text-xs capitalize text-muted">{worker.status}</span>
+          </summary>
+          <WorkerCard worker={worker} />
+        </details>
+      )
+    }
   }
   return (
     <>

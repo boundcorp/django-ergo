@@ -7,8 +7,7 @@ import { pace } from '../usagePace'
 export { pace, windowSeconds } from '../usagePace'
 import { useDismissablePopover } from './ShellControls'
 
-// The top bar's subscription usage: one ring per reported limit window, each with
-// a pace marker (how much of the window has passed), and a popover with the detail.
+// The top bar summarizes the tightest reported limit; the popover has every window.
 // Data comes from GET /api/routing, which already carries each provider's windows.
 
 const HOUR = 3600
@@ -203,43 +202,15 @@ function windowText(k: string, w: RoutingWindow, now?: number): string {
 }
 
 export function UsageTrigger({ providers, now }: { providers: RoutingProvider[]; now?: number }) {
-  const subs = providers.filter(p => p.subscription)
+  const tight = tightest(providers)
+  if (!tight) return <span className="usage-limit-value">Usage –</span>
+  const { provider, key, window } = tight
   return (
-    <>
-      {subs.map((p, i) => {
-        const windows = Object.entries(p.windows)
-        // On the narrowest screens only each provider's tightest window keeps its ring.
-        const tight = tightest([p])
-        return (
-          <span key={p.name} className="usage-provider">
-            {i > 0 && <span className="usage-divider" aria-hidden="true" />}
-            <Glyph type={p.type} />
-            {windows.length ? (
-              windows.map(([k, w]) => {
-                const primary = tight ? tight.key === k : k === windows[0][0]
-                return (
-                  <span
-                    key={k}
-                    className={`usage-limit${primary ? ' usage-primary' : ''}`}
-                    title={windowText(k, w, now)}
-                  >
-                    <Ring k={k} w={w} now={now} />
-                    <span className="usage-limit-text">
-                      <span className="usage-limit-value">{w.used == null ? '–' : `${Math.round(w.used)}%`}</span>
-                      <span className="usage-limit-tag">{shortTag(k, w)}</span>
-                    </span>
-                  </span>
-                )
-              })
-            ) : (
-              <span className="usage-limit usage-primary" title="No usage reported yet">
-                <Ring k="" w={{ used: null, resets_at: null, limit: 100 }} />
-              </span>
-            )}
-          </span>
-        )
-      })}
-    </>
+    <span className="usage-limit" title={`${provider.name}: ${windowText(key, window, now)}`}>
+      <Ring k={key} w={window} now={now} />
+      <span className="usage-limit-value">{Math.round(window.used!)}%</span>
+      <span className="usage-limit-tag">{shortTag(key, window)}</span>
+    </span>
   )
 }
 

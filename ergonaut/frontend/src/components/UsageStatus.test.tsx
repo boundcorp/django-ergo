@@ -81,7 +81,7 @@ describe('usage helpers', () => {
 })
 
 describe('UsageTrigger', () => {
-  test('one ring per limit window, with value and tag', () => {
+  test('summarizes the tightest subscription window', () => {
     const html = renderToStaticMarkup(
       createElement(UsageTrigger, {
         now,
@@ -91,11 +91,19 @@ describe('UsageTrigger', () => {
         ],
       }),
     )
-    expect(html.match(/class="usage-ring /g)?.length).toBe(2)
-    expect(html).toContain('>25%<')
-    expect(html).toContain('>5h<')
+    expect(html.match(/class="usage-ring /g)?.length).toBe(1)
+    expect(html).toContain('>54%<')
+    expect(html).not.toContain('>25%<')
     expect(html).toContain('>wk<')
     expect(html).toContain('usage-pace')
+  })
+
+  test('reports when no subscription usage is available', () => {
+    const html = renderToStaticMarkup(
+      createElement(UsageTrigger, { providers: [provider({ windows: { weekly: window({ used: null }) } })] }),
+    )
+    expect(html).toContain('Usage –')
+    expect(html).not.toContain('usage-ring')
   })
 })
 

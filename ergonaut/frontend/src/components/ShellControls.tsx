@@ -99,10 +99,6 @@ export function AccountMenu({
         <span className="account-avatar" aria-hidden="true">
           {initial}
         </span>
-        <span className="account-name">{name}</span>
-        <span className="account-caret" aria-hidden="true">
-          ▾
-        </span>
       </button>
       {open && (
         <div
@@ -185,12 +181,13 @@ export function WorkerStatus({
         aria-haspopup="dialog"
         aria-expanded={open}
         aria-controls={id}
+        aria-label={label}
         onClick={() => setOpen(value => !value)}
       >
         <span className="worker-mark" aria-hidden="true">
           ●
         </span>
-        {label}
+        <span className="worker-label">{label}</span>
       </button>
       {open && (
         <div ref={panel} id={id} className="worker-popover" role="dialog" aria-label="Active work">
