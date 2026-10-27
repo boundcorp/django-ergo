@@ -190,16 +190,16 @@ refuse logins until the window passes.
   conversations. See the [dashboard design note](dashboard-ux.md).
 - **Sidebar and account menu**: the sidebar keeps primary navigation: Bots,
   their chats and threads, and Threads. History, Costs, Routing, and API keys
-  live in the account menu in the top bar, together with theme and sign-out
+  live in the avatar account menu in the top bar, together with theme and sign-out
   actions. The account menu is keyboard accessible; Arrow keys, Home and End
   move between menu items, and Escape closes it.
 - **Top bar**: shows where you are: a chat shows its bot and parent thread
   as links, then its title; bot pages show the bot name; the home page shows
   Workspace. When queued or running workers exist, its Work control names
-  the active count and opens their status (queued or running) and reported progress. When subscription
-  providers (Claude Code or Codex CLIs) are configured, a usage control shows
-  one ring per limit window the provider reported (5-hour, weekly, a model's
-  weekly limit): the ring fills with the percentage used and turns amber
+  the active count and opens their status (queued or running) and reported progress,
+  including on narrow screens. When subscription providers (Claude Code or Codex
+  CLIs) are configured, a usage control summarizes the reported window closest
+  to its routing limit: the ring fills with the percentage used and turns amber
   within 15 points of the routing skip threshold and red past it, and a tick
   marks how much of the window has passed, so a fill ahead of the tick is
   burning faster than the window allows. Clicking it opens the detail: the
