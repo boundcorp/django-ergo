@@ -373,6 +373,43 @@ def test_sessions_show_delegated_requests(client, cook, use_bots):
 
 
 @pytest.mark.django_db(transaction=True)
+def test_a_chat_waiting_on_a_paused_thread_shows_the_approval(client, cook, use_bots):
+    from django_ergo.bots import orchestrator
+    from django_ergo.conversation.models import ConversationSession, StructuredCall, ThreadMessage
+
+    use_bots(say("hi"))
+    root = post(client, "/api/bots/kitchen/root").json()
+    parent = ConversationSession.objects.get(id=root["id"])
+    thread = ConversationSession.objects.create(
+        user=cook, bot_name="kitchen", parent=parent, metadata={"bot_role": "thread", "title": "Meals"}
+    )
+    ThreadMessage.objects.create(sender_session=parent, recipient_session=thread, text="Order milk", status="waiting")
+    approval = {"id": "toolu_1", "name": "order", "input": {"item": "milk"}}
+    StructuredCall.objects.create(
+        kind="chat_reply",
+        session=thread,
+        user=cook,
+        status="awaiting_approval",
+        metadata={"pending_approvals": [approval]},
+    )
+
+    detail = client.get(f"/api/sessions/{root['id']}").json()
+    [request] = detail["requests"]
+    assert (request["direction"], request["status"], request["approvals"]) == ("out", "waiting", [approval])
+    listed = {s["id"]: s for s in client.get("/api/sessions").json()}
+    waiter = listed[root["id"]]
+    assert (waiter["bucket"], waiter["waiting_for"], waiter["attention"]) == ("waiting", "blocked", True)
+    assert listed[str(thread.id)]["waiting_for"] == "approval"
+    assert orchestrator.thread_status(parent)["blocked_on"] == ["kitchen · Meals"]
+
+    # Answered there, the request is no longer blocked here.
+    StructuredCall.objects.filter(session=thread).update(status="completed")
+    assert client.get(f"/api/sessions/{root['id']}").json()["requests"][0]["approvals"] == []
+    assert {s["id"]: s for s in client.get("/api/sessions").json()}[root["id"]]["waiting_for"] == ""
+    assert orchestrator.thread_status(parent)["blocked_on"] == []
+
+
+@pytest.mark.django_db(transaction=True)
 def test_changes_list_and_merge_need_a_manager_and_an_admin(client, cook, use_bots, monkeypatch):
     from ergonaut.api import bots as api
 

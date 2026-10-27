@@ -79,6 +79,9 @@ Live on rigel from `~/p/boundcorp/django-ergo`, bots from `boundcorp/ergo-bots`.
 - [x] Upgrade path: `wait_idle` also waits for queued or running workers; `ergonaut upgrade` and `ERGONAUT_AUTO_UPGRADE_SECONDS` upgrade to a new GitHub release once idle through a pluggable `ERGONAUT_UPGRADER` (`systemd`, `command`, or a class in the bot repo); images record `ERGONAUT_VERSION`.
 - [ ] Start publishing GitHub releases of django-ergo (auto-upgrades follow `releases` by default; `ERGONAUT_UPGRADE_CHANNEL=branch:main` follows main).
 - [ ] Bots with bash/orca in a multi-user Ergonaut: approvals are admin-only now; consider per-plugin approver lists.
+- [x] A turn paused for approval no longer outlives a stop: Stop and `ergo_thread_stop` decline its tool calls and end it, and a chat waiting on such a thread shows as Blocked with the tool calls to Approve or Reject in its banner (and "blocked" in the Bots and threads block).
+- [x] Resolving a thread cancels its workers and stops their agents (the Resolve button used to leave an agent waiting for input running, which held up upgrades); the idle sweep skips threads with a running worker.
+- [ ] Expire approvals left unanswered (about an hour) and give cross-thread requests a deadline the sender hears about.
 - [ ] Managed brokers without REDIS_URL fall back to in-process turn locks only.
 
 

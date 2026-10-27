@@ -81,6 +81,24 @@ def test_stop_ends_the_turn_after_its_running_tool(session, use_bots):  # noqa: 
 
 
 @pytest.mark.django_db(transaction=True)
+def test_stop_ends_a_turn_waiting_for_approval(session, use_bots):  # noqa: F811
+    client = use_bots(tool_call("order", {"item": "milk"}), say("never sent"))
+    tasks.push_message(session.id, "Order milk")
+    tasks.run_turn(str(session.id))
+    call = session.structured_calls.get()
+    assert call.status == "awaiting_approval"
+
+    # Nothing holds the turn lock while it waits, but stop still ends it: the order is
+    # declined and the model gets no further step.
+    assert tasks.request_stop(session.id) is True
+    call.refresh_from_db()
+    assert (call.status, call.error) == ("stopped", "Stopped by the user")
+    assert len(client.calls) == 1
+    assert not tasks.stop_requested(session.id)
+    assert tasks.request_stop(session.id) is False  # nothing left to stop
+
+
+@pytest.mark.django_db(transaction=True)
 def test_interrupt_stops_the_turn_and_answers_the_new_message(session, use_bots):  # noqa: F811
     client = use_bots(tool_call("pantry_count", {"item": "eggs"}), say("Pasta it is."))
 

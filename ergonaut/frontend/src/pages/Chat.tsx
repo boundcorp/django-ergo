@@ -612,7 +612,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
               </button>
             </div>
           </header>
-          <Requests requests={detail.requests ?? []} />
+          <Requests requests={detail.requests ?? []} onAnswered={load} />
           <Workers workers={detail.workers ?? []} />
           <TodoList todos={detail.todos ?? []} />
           <Pins
@@ -699,7 +699,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
             </>
           }
         >
-          <Requests requests={detail.requests ?? []} />
+          <Requests requests={detail.requests ?? []} onAnswered={load} />
           <Workers workers={detail.workers ?? []} />
           <TodoList todos={detail.todos ?? []} />
           <Pins
@@ -1136,29 +1136,81 @@ function Workers({ workers }: { workers: Worker[] }) {
   )
 }
 
-function Requests({ requests }: { requests: DelegatedRequest[] }) {
+function Requests({ requests, onAnswered }: { requests: DelegatedRequest[]; onAnswered: () => void }) {
+  const [answering, setAnswering] = useState('')
+  const [failed, setFailed] = useState('')
   const open = requests.filter(r => r.status !== 'answered' && r.status !== 'failed')
   if (!open.length) return null
+  // The other chat is paused on an approval: answer it from here, without leaving this chat.
+  async function answer(r: DelegatedRequest, approve: boolean) {
+    if (!r.other_session_id) return
+    setAnswering(r.id)
+    setFailed('')
+    try {
+      await api.decide(r.other_session_id, Object.fromEntries((r.approvals ?? []).map(a => [a.id, approve])))
+      onAnswered()
+    } catch (e) {
+      setFailed(e instanceof Error ? e.message : String(e))
+    } finally {
+      setAnswering('')
+    }
+  }
   return (
     <div className="mx-4 mb-2 flex flex-col gap-2 rounded-card border border-teal/40 bg-teal-tint px-4 py-3 text-xs sm:mx-6">
       {open.map(r => (
-        <div key={r.id} className="flex items-center gap-2 truncate">
-          <span className={r.status === 'waiting' ? 'text-amber-600' : 'text-teal-600'}>
-            {r.direction === 'out' ? '⏳' : '📥'}
-          </span>
-          <span className="text-zinc-500">{r.direction === 'out' ? 'Waiting on' : 'Working for'}</span>
-          {r.other_session_id ? (
-            <Link
-              to={`/s/${r.other_session_id}`}
-              className="font-medium text-indigo-600 hover:underline dark:text-indigo-400"
-            >
-              {r.other}
-            </Link>
-          ) : (
-            <span className="font-medium">{r.other}</span>
+        <div key={r.id}>
+          <div className="flex items-center gap-2 truncate">
+            <span className={r.status === 'waiting' ? 'text-amber-600' : 'text-teal-600'}>
+              {r.direction === 'out' ? '⏳' : '📥'}
+            </span>
+            <span className="text-zinc-500">{r.direction === 'out' ? 'Waiting on' : 'Working for'}</span>
+            {r.other_session_id ? (
+              <Link
+                to={`/s/${r.other_session_id}`}
+                className="font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+              >
+                {r.other}
+              </Link>
+            ) : (
+              <span className="font-medium">{r.other}</span>
+            )}
+            <span className="text-zinc-500">
+              ·{' '}
+              {r.status === 'waiting' && r.direction === 'out' && !r.approvals?.length
+                ? REQUEST_STATUS.delivered
+                : REQUEST_STATUS[r.status]}
+            </span>
+            <span className="truncate text-zinc-400">“{r.text}”</span>
+          </div>
+          {r.direction === 'out' && !!r.approvals?.length && (
+            <div className="mt-2 rounded-control border border-warning/40 bg-amber-tint p-2">
+              {r.approvals.map(a => (
+                <div key={a.id} className="mb-1">
+                  <span className="font-medium">{a.name}</span>
+                  <pre className="mt-1 max-h-32 overflow-auto whitespace-pre-wrap text-ink">
+                    {a.preview || JSON.stringify(a.input, null, 2)}
+                  </pre>
+                </div>
+              ))}
+              <div className="mt-1 flex items-center gap-2">
+                <button
+                  disabled={!!answering}
+                  className="rounded-control bg-warning px-3 py-1 font-semibold text-canvas disabled:opacity-50"
+                  onClick={() => answer(r, true)}
+                >
+                  {r.approvals.length > 1 ? 'Approve all' : 'Approve'}
+                </button>
+                <button
+                  disabled={!!answering}
+                  className="rounded-control border border-warning/50 px-3 py-1 disabled:opacity-50"
+                  onClick={() => answer(r, false)}
+                >
+                  Reject
+                </button>
+                {failed && <span className="text-danger">{failed}</span>}
+              </div>
+            </div>
           )}
-          <span className="text-zinc-500">· {REQUEST_STATUS[r.status]}</span>
-          <span className="truncate text-zinc-400">“{r.text}”</span>
         </div>
       ))}
     </div>

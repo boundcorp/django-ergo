@@ -732,7 +732,7 @@ prompt for caching. The `orchestration` skill (loaded in main by default) has:
 | `ergo_thread_list` | A bot's main chat, named chats and threads with the user (default: this bot) |
 | `ergo_thread_send` | Message a bot's `main` chat, a named chat, a thread id, or a `new` thread; returns at once. A busy thread queues the message (in order, as its next turn) instead of refusing it; optional `interrupt` replaces this chat's own running request there |
 | `ergo_thread_forward` | Hand the user's own message (the one this turn answers) to a chat or thread, word for word with its author, time and files, plus an optional `note`. The recipient treats it as the user speaking and answers there; nothing comes back. Refused when the turn isn't answering the user |
-| `ergo_thread_stop` | Stop the running turn of a thread this bot started (or one of its own) and cancel what it queued there |
+| `ergo_thread_stop` | Stop the running turn of a thread this bot started (or one of its own), or end its turn that waits for approval (declining those tool calls), and cancel what it queued there |
 | `ergo_thread_resolve` | Resolve a finished thread (this one, one of this bot's, or another bot's it started), with a one-line `summary`; refused while workers run, a request is open, an approval is pending, or its last reply asks the user something. History stays readable; a new message reopens it. `ergo_thread_archive` is a deprecated alias |
 
 Messages between sessions are asynchronous, like thread-to-thread
@@ -789,7 +789,8 @@ answer "what's going on?" without asking anyone:
 - this bot and each bot it can message, with its description;
 - under each, its main chat, named chats and open threads with this user:
   working, waiting for approval or idle, when it last moved, who started it,
-  requests open in and out, and running workers
+  requests open in and out, running workers, and "blocked" when a chat it
+  waits on is paused for the user's approval
   (`orchestrator.thread_status(session)`, which UIs can use too);
 - the latest five messages of each chat as short snippets (the newest gets
   more room; the current chat's are in its native history);
@@ -874,16 +875,21 @@ Who may message whom:
   `interrupt` it, whoever started it.
 - **Managing what it started.** `ergo_thread_stop` and `ergo_thread_resolve`
   (with `bot`) work on threads of other bots that a chat of this bot
-  started. Stopping a running turn goes through
+  started. Stopping a turn goes through
   `DJANGO_ERGO["TURN_STOPPER"]` (`callable(session_id) -> bool`; Ergonaut
-  sets its stop flag, which the turn checks at its next step). Without it,
+  sets its stop flag, which the turn checks at its next step, and ends a
+  turn paused for approval by declining its tool calls, so the request gets
+  an answer and what queued behind it goes out). Without it,
   `ergo_thread_stop` only cancels this bot's queued messages there.
 
 Threads idle longer than `sessions.archive_after_days` (default 7) are
 archived by `django_ergo.bots.archival.archive_idle_threads`, which
 Ergonaut's Celery beat runs hourly; threads with a turn in progress, a
-pending approval or an unanswered thread message are left alone. Main and named
-chats are never archived. A message to an archived thread reopens it.
+pending approval, an unanswered thread message or a running worker are left
+alone. Main and named chats are never archived. Archiving or resolving a thread
+(the app's Resolve button, `ergo_thread_resolve`, the idle sweep) cancels the
+workers it still has and stops the coding agents they watch, so nothing keeps
+running for a resolved thread. A message to an archived thread reopens it.
 
 `BotRegistry.discover("bots/")` loads every folder at or under `bots/` that
 has a `bot.yaml`, and lets bots find each other by name. Bot folders can
