@@ -11,6 +11,7 @@ from django.contrib.auth import get_user_model
 from django.test import override_settings
 
 from django_ergo.conversation.attachments import Attachment
+from django_ergo.conversation.attachments import openai_part
 from django_ergo.conversation.engines.openai_api import OpenAIAPIEngine
 from django_ergo.conversation.models import ConversationAttachment
 from django_ergo.conversation.models import ConversationSession
@@ -31,6 +32,7 @@ pytestmark = pytest.mark.django_db(transaction=True)
 PNG = b"\x89PNG\r\n\x1a\nfake-image"
 WAV = b"RIFF....WAVEfake-audio"
 PDF = b"%PDF-1.4 fake"
+MP4 = b"\x00\x00\x00\x18ftypmp42fake-video"
 
 
 @pytest.fixture(autouse=True)
@@ -228,3 +230,22 @@ async def test_structured_call_with_image(user):
     # The transcript keeps a placeholder, not the bytes.
     stored = result.call.transcript[0]["content"][0]
     assert stored == {"type": "text", "text": "[image attachment, not stored]"}
+
+
+async def test_unreadable_documents_go_as_text_with_their_id(user):
+    """A video can't go to the model, so it gets a stand-in a tool can act on."""
+    session = await sync_to_async(make_session)(user)
+    engine = claude_engine(claude_text("ok"))
+    await engine.append_user_message(
+        session,
+        "launch this",
+        [Attachment(media_type="video/mp4", data=MP4, filename="ad.mp4")],
+    )
+    row = await ConversationAttachment.objects.aget(session=session)
+
+    messages = await sync_to_async(engine.reconstruct_messages)(session)
+
+    text = messages[0]["content"][0]["text"]
+    assert messages[0]["content"][0]["type"] == "text"
+    assert f"ad.mp4 (video/mp4), file id {row.id}" in text
+    assert openai_part(row) == {"type": "text", "text": text}

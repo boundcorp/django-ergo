@@ -118,6 +118,11 @@ How engines send them:
 | image | `image` block (base64 or URL), placed before the text | `image_url` part (data URL or URL) |
 | document | `document` block (PDF, plain text) | `file` part |
 | audio | transcript as text | `input_audio` (wav/mp3) when engine config has `"audio_input": True`, otherwise the transcript as text |
+| other documents (video, zip...) | text naming the file and its id | the same |
+
+The model can't read a video or a zip, so the stand-in tells it the file
+arrived and gives its id and filename, which a tool that takes a chat file
+(an upload tool, say) can use.
 
 Audio transcripts come from `Attachment(transcript=...)`, or from
 `DJANGO_ERGO["AUDIO_TRANSCRIBER"]` when that is set. It's an async callable

@@ -16,6 +16,10 @@ sequence and turned into engine-native content parts when context is rebuilt:
 |          |                                | config sets ``audio_input``, else    |
 |          |                                | transcript text                      |
 
+A document the model can't read (not a PDF or text, e.g. a video) goes as a
+text stand-in with its filename and file id, so the model knows it arrived
+and can hand it to a tool.
+
 Audio is transcribed on save when ``DJANGO_ERGO["AUDIO_TRANSCRIBER"]`` is set
 and no transcript was given.
 """
@@ -177,10 +181,32 @@ def audio_placeholder(row: ConversationAttachment | Attachment) -> str:
     return f"[Audio attachment {label}: no transcript available]"
 
 
+def model_readable(row: ConversationAttachment | Attachment) -> bool:
+    """Whether the engines can send this file to the model: an image, a PDF or
+    text. Anything else (a video, a zip) goes as a text stand-in."""
+    return row.kind != "document" or (
+        row.media_type == "application/pdf" or is_text(row.media_type)
+    )
+
+
+def unreadable_placeholder(row: ConversationAttachment | Attachment) -> str:
+    """Names a file the model can't read, with its id so tools can still use it."""
+    label = row.filename or row.url or row.media_type
+    file_id = getattr(row, "id", None)
+    ref = f", file id {file_id}" if file_id else ""
+    return (
+        f"[{row.kind.capitalize()} attachment {label} ({row.media_type}){ref}. "
+        "You can't open this file type yourself, but tools that take a file "
+        "can use it by id or filename.]"
+    )
+
+
 def claude_block(row: ConversationAttachment | Attachment) -> dict:
     """Engine-native Claude content block for an attachment."""
     if row.kind == "audio":
         return {"type": "text", "text": audio_placeholder(row)}
+    if not model_readable(row):
+        return {"type": "text", "text": unreadable_placeholder(row)}
     block_type = "image" if row.kind == "image" else "document"
     if _has_bytes(row):
         source = {
@@ -212,6 +238,8 @@ def openai_part(
                 "input_audio": {"data": _read_b64(row), "format": audio_format},
             }
         return {"type": "text", "text": audio_placeholder(row)}
+    if not model_readable(row):
+        return {"type": "text", "text": unreadable_placeholder(row)}
     if _has_bytes(row):
         return {
             "type": "file",
