@@ -49,6 +49,12 @@ DEFAULTS = {
     "TOOL_RESULTS_IN_CONTEXT": 6,
     "TOOL_RESULTS_TOKENS": None,
     "TOOL_RESULTS_CHARS_IN_CONTEXT": None,
+    # Older turns (all but the newest N) send long messages from other chats
+    # and long tool call arguments cut to OLD_MESSAGE_CHARS, with a note on
+    # where the rest is; a reply repeated as a turn's final text is sent once
+    # (conversation.old_turns). Stored history keeps them all. None = off.
+    "OLD_TURNS_IN_FULL": 3,
+    "OLD_MESSAGE_CHARS": 1500,
     # Extra bot plugins by short name: {"name": "dotted.path.PluginClass"}.
     "BOT_PLUGINS": {},
     # Skills from Ergo's skill library (bots/skill_library) that every bot

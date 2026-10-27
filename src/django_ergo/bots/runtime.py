@@ -98,6 +98,8 @@ logger = logging.getLogger(__name__)
 MAIN_ROLE = "main"
 CHAT_ROLE = "chat"  # a named chat from bot.yaml
 THREAD_ROLE = "thread"
+# Session metadata: the compaction settings bot.yaml last gave a chat.
+COMPACTION_KEY = "bot_compaction"
 ROOT_ROLE = MAIN_ROLE  # the main chat was called the root
 TOP_ROLES = {MAIN_ROLE, CHAT_ROLE, "root"}
 
@@ -1066,6 +1068,7 @@ class Bot:
             # Touch the user so sync tool code can use ctx.user.
             _ = session.user
             self._refresh_instructions(session)
+            self._refresh_compaction(session)
             skillset = self.skillset(session)
             return [skillset], self.context_builder(
                 session, message, skillset, incoming=incoming
@@ -1084,6 +1087,35 @@ class Bot:
             ConversationSession.objects.filter(pk=session.pk).update(
                 system_prompt=wanted
             )
+
+    def _refresh_compaction(self, session: ConversationSession) -> None:
+        """Keep a chat's compaction settings current with bot.yaml.
+
+        Only the keys bot.yaml set (remembered in ``bot_compaction``) are
+        replaced, so a chat's other compaction settings stay.
+        """
+        chat = self.chat_name(session)
+        if chat is None or session.pk is None:
+            return
+        wanted = self.definition.chat(chat).compaction
+        applied = (session.metadata or {}).get(COMPACTION_KEY) or {}
+        if wanted == applied:
+            return
+        config = {
+            key: value
+            for key, value in (session.compaction_config or {}).items()
+            if key not in applied
+        }
+        session.compaction_config = {**config, **wanted}
+        fresh = (
+            ConversationSession.objects.filter(pk=session.pk)
+            .values_list("metadata", flat=True)
+            .first()
+        )
+        session.metadata = {**(fresh or {}), COMPACTION_KEY: wanted}
+        ConversationSession.objects.filter(pk=session.pk).update(
+            compaction_config=session.compaction_config, metadata=session.metadata
+        )
 
     # -- turns -------------------------------------------------------------
 

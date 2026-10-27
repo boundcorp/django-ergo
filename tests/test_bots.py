@@ -2919,6 +2919,54 @@ async def test_main_context_metadata_and_seeds_return_after_compaction(tmp_path)
     )
 
 
+@pytest.mark.django_db(transaction=True)
+async def test_chat_compaction_comes_from_bot_yaml(tmp_path):
+    yaml_text = KITCHEN_YAML.replace(
+        "main: {skills: [orchestration, pantry]}",
+        "main: {skills: [orchestration, pantry], "
+        "compaction: {compact_at_tokens: 80000, keep_tokens: 25000}}",
+    )
+    user = await User.objects.acreate(username="chat-compaction")
+    bot, _engine = make_bot(tmp_path, say("one"), say("two"), yaml_text=yaml_text)
+    session = await bot.main_session(user)
+    session.compaction_config = {"note": "kept"}
+    await session.asave(update_fields=["compaction_config"])
+    await bot.ask(session, "hi")
+    await session.arefresh_from_db()
+    assert session.compaction_config == {
+        "note": "kept",
+        "compact_at_tokens": 80000,
+        "keep_tokens": 25000,
+    }
+    # Taking the key out of bot.yaml takes its settings off the chat.
+    bot.definition.chat("main").compaction = {}
+    await bot.ask(session, "again")
+    await session.arefresh_from_db()
+    assert session.compaction_config == {"note": "kept"}
+
+
+def test_chat_compaction_keys_are_checked():
+    with pytest.raises(BotDefinitionError, match="compaction takes"):
+        BotDefinition.from_dict(
+            {"name": "x", "chats": {"main": {"compaction": {"keep_recent": 3}}}}
+        )
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_turn_context_records_its_largest_request(tmp_path):
+    user = await User.objects.acreate(username="context-requests")
+    bot, _engine = make_bot(
+        tmp_path, claude_tool("pantry_count", {"item": "eggs"}), say("4 eggs")
+    )
+    session = await bot.main_session(user)
+    result = await bot.ask(session, "eggs?")
+    context = result.call.metadata["context"]
+    # Two requests of 10 prompt tokens each: the turn adds them up, the
+    # context panel compares the largest single one with the window.
+    assert result.call.input_tokens == 20
+    assert (context["requests"], context["largest_request_tokens"]) == (2, 10)
+
+
 def _turn_context(call):
     return "\n".join(
         block.get("text", "")

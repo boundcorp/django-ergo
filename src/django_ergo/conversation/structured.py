@@ -622,7 +622,23 @@ class _SessionTranscript:
 
     async def _add_usage(self, since: int) -> None:
         call = self.call
+        context = (call.metadata or {}).get("context")
         async for row in self._rows().filter(sequence__gte=since, role="assistant"):
+            if context is not None:
+                # The turn total adds up every request; the context panel
+                # compares the largest single one with the window.
+                prompt = sum(
+                    getattr(row, name, None) or 0
+                    for name in (
+                        "input_tokens",
+                        "cache_creation_input_tokens",
+                        "cache_read_input_tokens",
+                    )
+                )
+                context["requests"] = context.get("requests", 0) + 1
+                context["largest_request_tokens"] = max(
+                    context.get("largest_request_tokens", 0), prompt
+                )
             call.input_tokens += row.input_tokens or 0
             call.output_tokens += row.output_tokens or 0
             call.cache_creation_input_tokens += (
