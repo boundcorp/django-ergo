@@ -316,7 +316,18 @@ def test_orca_start_worker_watches_the_dispatch_and_reports_back(  # noqa: PLR09
             "/home/dev/p/site",
             ".omp",
             "config.yml",
-            b'modelRoles:\n  default: "anthropic/claude-sonnet-5-5:high"\n',
+            b"modelRoles:\n"
+            b'  default: "anthropic/claude-sonnet-5-5:high"\n'
+            b'  smol: "anthropic/claude-sonnet-5-5"\n'
+            b'  slow: "anthropic/claude-sonnet-5-5:high"\n'
+            b'  vision: "anthropic/claude-sonnet-5-5"\n'
+            b'  plan: "anthropic/claude-sonnet-5-5:high"\n'
+            b'  commit: "anthropic/claude-sonnet-5-5"\n'
+            b'  tiny: "anthropic/claude-sonnet-5-5"\n'
+            b'  memory: "anthropic/claude-sonnet-5-5"\n'
+            b'  task: "anthropic/claude-sonnet-5-5:high"\n'
+            b'  advisor: "anthropic/claude-sonnet-5-5:high"\n'
+            b'  widget: "anthropic/claude-sonnet-5-5"\n',
         ),
         ("/home/dev/p/site", ".omp", ".gitignore", b"*\n"),
     ]
