@@ -16,6 +16,16 @@ One model call is one ``claude -p`` process:
 - The response is read from the raw stream events of that one request. The
   process is stopped at ``message_stop``, before the CLI could make a
   second request.
+- The CLI keeps each call's transcript, and the next call that continues the
+  same history resumes it (``--resume`` with ``--resume-session-at`` the
+  last reply) and sends only the new messages. Replaying the whole history
+  instead would move the context the CLI adds to each request (environment,
+  date, reminders), so nothing past the system prompt would come from the
+  prompt cache and every request would write the whole chat to it again.
+  The CLI's own "permission denied" results for Ergo's tool calls are cut
+  from the transcript so the real results take their place. A history that
+  no longer matches (compaction, trimmed tool results, a new system prompt
+  or tool list) starts a new CLI session with the full replay.
 
 Usage counts against the subscription the way ``claude -p`` and the Agent
 SDK do. Anthropic allows this for a person's own login on the unmodified
@@ -30,16 +40,23 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import json
+import logging
 import os
+import re
 import shutil
 import signal
 import sys
 import tempfile
+import time
+import uuid
 from pathlib import Path
 from types import SimpleNamespace
 
 from django_ergo.conversation.engines.claude_api import ClaudeAPIEngine
+
+logger = logging.getLogger(__name__)
 
 MCP_SERVER = "ergo"
 TOOL_PREFIX = f"mcp__{MCP_SERVER}__"
@@ -60,8 +77,17 @@ CHILD_ENV = {
 }
 
 
+# How long a CLI transcript and its resume entries are kept. The prompt cache
+# lasts an hour; a day lets a quiet chat still pick its session back up.
+RESUME_SECONDS = 24 * 3600
+TURN_CONTEXT = re.compile(r"\A<turn-context>\n.*?\n</turn-context>(?:\n\n)?", re.S)
+
+
 class ClaudeCodeError(RuntimeError):
     """The CLI is missing, logged out, or failed the request."""
+
+    # True once the model started answering (so retrying would bill twice).
+    answered = False
 
 
 def claude_command(command: str = "") -> str:
@@ -149,6 +175,129 @@ def workdir() -> str:
     return str(path)
 
 
+def resume_dir() -> Path:
+    """Where resume entries live: one small file per resumable history."""
+    path = Path(f"{workdir()}-resume")
+    path.mkdir(mode=0o700, exist_ok=True)
+    return path
+
+
+def _block_key(block: dict) -> dict:
+    block = {k: v for k, v in block.items() if k != "cache_control"}
+    if block.get("type") == "tool_result":
+        block["is_error"] = bool(block.get("is_error"))
+    return block
+
+
+def _without_turn_context(message: dict) -> dict:
+    """A user message without the ``<turn-context>`` Ergo puts on a turn's first
+    message: the next turn sends that message without it, while the CLI's
+    transcript keeps it where it was."""
+    content = message.get("content")
+    if isinstance(content, str):
+        return {**message, "content": TURN_CONTEXT.sub("", content, count=1)}
+    if content and content[0].get("type") == "text":
+        text = TURN_CONTEXT.sub("", content[0].get("text") or "", count=1)
+        rest = [{**content[0], "text": text}] if text else []
+        return {**message, "content": rest + list(content[1:])}
+    return message
+
+
+def history_keys(
+    messages: list[dict], fingerprint: str, *, strip_context: bool = False
+) -> list[str]:
+    """``keys[k]`` identifies ``messages[:k]`` as the CLI sees them, under
+    ``fingerprint`` (model, system prompt, tools, login)."""
+    digest = hashlib.sha256(fingerprint.encode())
+    keys = [digest.hexdigest()]
+    for message in messages:
+        seen = message
+        if strip_context and message["role"] == "user":
+            seen = _without_turn_context(message)
+        blocks = [_block_key(block) for block in cli_blocks(seen)]
+        digest.update(json.dumps([seen["role"], blocks], sort_keys=True).encode())
+        keys.append(digest.copy().hexdigest())
+    return keys
+
+
+def _transcript_path(env: dict, session_id: str) -> Path | None:
+    home = Path(env.get("HOME") or Path.home())
+    root = Path(env.get("CLAUDE_CONFIG_DIR") or home / ".claude") / "projects"
+    return next(root.glob(f"*/{session_id}.jsonl"), None)
+
+
+def _results_for(row: dict) -> set[str]:
+    """The tool calls a transcript row carries results for."""
+    content = (row.get("message") or {}).get("content")
+    if row.get("type") != "user" or not isinstance(content, list):
+        return set()
+    return {
+        block.get("tool_use_id")
+        for block in content
+        if isinstance(block, dict) and block.get("type") == "tool_result"
+    }
+
+
+def _cut_denials(path: Path, replies: list[str], tool_ids: set[str]) -> bool:
+    """Drop the CLI's "permission denied" results for this reply's tool calls
+    from its transcript, so resuming at the reply sends Ergo's results instead.
+    False when the transcript still has a result for one of them."""
+    rows = [json.loads(line) for line in path.read_text().splitlines() if line]
+    replies = set(replies)
+    cut = {
+        row["uuid"]: row.get("parentUuid")
+        for row in rows
+        if row.get("type") == "user"
+        and row.get("toolDenialKind")
+        and row.get("sourceToolAssistantUUID") in replies
+    }
+
+    def parent(uuid_: str | None) -> str | None:
+        while uuid_ in cut:
+            uuid_ = cut[uuid_]
+        return uuid_
+
+    kept = [
+        {**row, "parentUuid": parent(row.get("parentUuid"))}
+        if row.get("parentUuid") in cut
+        else row
+        for row in rows
+        if row.get("uuid") not in cut
+    ]
+    first = next((i for i, row in enumerate(kept) if row.get("uuid") in replies), None)
+    if first is None or any(_results_for(row) & tool_ids for row in kept[first:]):
+        return False
+    if cut:
+        partial = path.with_suffix(".tmp")
+        partial.write_text("".join(json.dumps(row) + "\n" for row in kept))
+        partial.replace(path)
+    return True
+
+
+_pruned_at = 0.0
+
+
+def _prune(env: dict) -> None:
+    """Forget resume entries and transcripts older than ``RESUME_SECONDS``
+    (at most every ten minutes)."""
+    global _pruned_at  # noqa: PLW0603
+    now = time.time()
+    if now - _pruned_at < 600:  # noqa: PLR2004
+        return
+    _pruned_at = now
+    cutoff = now - RESUME_SECONDS
+    folders = [resume_dir()]
+    home = Path(env.get("HOME") or Path.home())
+    projects = Path(env.get("CLAUDE_CONFIG_DIR") or home / ".claude") / "projects"
+    # The CLI names a project folder after its cwd, which is only ever ours.
+    folders.append(projects / re.sub(r"[^A-Za-z0-9]", "-", workdir()))
+    for folder in folders:
+        for path in folder.glob("*"):
+            with contextlib.suppress(OSError):
+                if path.is_file() and path.stat().st_mtime < cutoff:
+                    path.unlink()
+
+
 class _Stream:
     """Builds one Anthropic message from the CLI's raw stream events."""
 
@@ -160,6 +309,8 @@ class _Stream:
         self.stop_reason = None
         self.stop_details = None
         self.model = ""
+        # The CLI's transcript ids for the blocks of this reply.
+        self.replies: list[str] = []
 
     def feed(self, event: dict) -> None:
         kind = event.get("type")
@@ -221,6 +372,7 @@ class _Stream:
         usage = self.usage
         return SimpleNamespace(
             content=content,
+            replies=self.replies,
             stop_reason=self.stop_reason,
             stop_details=self.stop_details,
             model=self.model or model,
@@ -275,7 +427,7 @@ class ClaudeCodeClient:
         if tool_choice and tool_choice.get("type") == "tool":
             # The CLI can't force a tool; ask for it instead.
             system = f"{system}\n\nAnswer by calling the {tool_choice['name']} tool."
-        frames = cli_frames(messages)
+        cli_frames(messages)  # check the history before starting anything
         with tempfile.TemporaryDirectory(prefix="ergo-claude-code-") as tmp:
             root = Path(tmp)
             (root / "system.md").write_text(system or "", encoding="utf-8")
@@ -305,7 +457,6 @@ class ClaudeCodeClient:
                 *("--mcp-config", json.dumps(mcp)),
                 *("--permission-mode", "dontAsk"),
                 *("--max-turns", "1"),
-                "--no-session-persistence",
             ]
             if self.effort:
                 args += ["--effort", self.effort]
@@ -315,7 +466,95 @@ class ClaudeCodeClient:
             if max_tokens:
                 env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = str(max_tokens)
             env.update(self.env)
-            return await self._run(args, frames, child_env(env), model)
+            env = child_env(env)
+            fingerprint = json.dumps(
+                [model, system, mcp_tools(tools or []), self.effort, self.command]
+                + [env.get("CLAUDE_CONFIG_DIR"), env.get("HOME")]
+            )
+            resume = self._resumable(messages, fingerprint, env)
+            if resume is not None:
+                session_id, at, start = resume
+                try:
+                    response = await self._run(
+                        [*args, "--resume", session_id, "--resume-session-at", at],
+                        cli_frames(messages[start:]),
+                        env,
+                        model,
+                    )
+                except ClaudeCodeError as error:
+                    if error.answered:
+                        raise
+                    logger.warning(
+                        "Claude Code couldn't resume %s: %s", session_id, error
+                    )
+                else:
+                    self._remember(messages, response, fingerprint, env, session_id)
+                    return response
+            session_id = str(uuid.uuid4())
+            response = await self._run(
+                [*args, "--session-id", session_id], cli_frames(messages), env, model
+            )
+            self._remember(messages, response, fingerprint, env, session_id)
+            return response
+
+    def _resumable(
+        self, messages: list[dict], fingerprint: str, env: dict
+    ) -> tuple[str, str, int] | None:
+        """(CLI session, reply to resume at, first new message) for the longest
+        start of ``messages`` an earlier call left a transcript for."""
+        keys = history_keys(messages, fingerprint)
+        folder = resume_dir()
+        for start in range(len(messages) - 1, 0, -1):
+            if messages[start - 1]["role"] != "assistant":
+                continue
+            try:
+                entry = json.loads((folder / f"{keys[start]}.json").read_text())
+            except (OSError, ValueError):
+                continue
+            if _transcript_path(env, entry["session"]) is not None:
+                return entry["session"], entry["at"], start
+        return None
+
+    def _remember(
+        self,
+        messages: list[dict],
+        response: SimpleNamespace,
+        fingerprint: str,
+        env: dict,
+        session_id: str,
+    ) -> None:
+        """Note where the CLI's transcript of this history ends, so the next
+        call that continues it can resume there."""
+        if not response.replies:
+            return
+        reply = {"role": "assistant", "content": []}
+        for block in response.content:
+            if block.type == "text":
+                reply["content"].append({"type": "text", "text": block.text})
+            elif block.type == "tool_use":
+                reply["content"].append(
+                    {
+                        "type": "tool_use",
+                        "id": block.id,
+                        "name": block.name,
+                        "input": block.input,
+                    }
+                )
+        tool_ids = {b["id"] for b in reply["content"] if b["type"] == "tool_use"}
+        try:
+            path = _transcript_path(env, session_id)
+            if path is None or not _cut_denials(path, response.replies, tool_ids):
+                logger.warning("Claude Code session %s can't be resumed", session_id)
+                return
+            entry = json.dumps({"session": session_id, "at": response.replies[-1]})
+            folder = resume_dir()
+            history = [*messages, reply]
+            for strip in (False, True):
+                key = history_keys(history, fingerprint, strip_context=strip)[-1]
+                (folder / f"{key}.json").write_text(entry)
+            _prune(env)
+        except (OSError, ValueError, KeyError):
+            logger.exception("Couldn't record Claude Code session %s", session_id)
 
     async def _run(
         self, args: list[str], frames: list[dict], env: dict, model: str
@@ -353,20 +592,29 @@ class ClaudeCodeClient:
                             await self._detail(msg, process, errors, stderr)
                         )
             process.stdin.close()
-            while not stream.stopped:
-                event = await self._next_event(process)
-                if event is None:
-                    break
-                self._note(event, stream, errors)
-            if not stream.stopped:
-                msg = "Claude Code request failed"
-                raise ClaudeCodeError(await self._detail(msg, process, errors, stderr))
+            try:
+                await self._read_reply(process, stream, errors, stderr)
+            except ClaudeCodeError as error:
+                error.answered = bool(stream.blocks)
+                raise
             return stream.response(model)
         finally:
             await self._stop(process)
             stderr.cancel()
             if self._rate_limit and self.on_rate_limit:
                 await self.on_rate_limit(self._rate_limit)
+
+    async def _read_reply(
+        self, process, stream: _Stream, errors: list[str], stderr: asyncio.Task
+    ) -> None:
+        while not stream.stopped:
+            event = await self._next_event(process)
+            if event is None:
+                break
+            self._note(event, stream, errors)
+        if not stream.stopped:
+            msg = "Claude Code request failed"
+            raise ClaudeCodeError(await self._detail(msg, process, errors, stderr))
 
     async def _next_event(self, process) -> dict | None:
         try:
@@ -397,6 +645,9 @@ class ClaudeCodeClient:
             self._rate_limit = event.get("rate_limit_info") or None
         elif kind == "stream_event":
             stream.feed(event.get("event") or {})
+        elif kind == "assistant" and event.get("uuid") and not event.get("error"):
+            # The CLI records each block of the reply under its own id.
+            stream.replies.append(event["uuid"])
         elif kind == "assistant" and event.get("error"):
             text = " ".join(
                 block.get("text", "")

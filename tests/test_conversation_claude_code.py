@@ -17,8 +17,10 @@ from django_ergo.bots.runtime import Bot
 from django_ergo.conversation.engines.claude_code import ClaudeCodeClient
 from django_ergo.conversation.engines.claude_code import ClaudeCodeEngine
 from django_ergo.conversation.engines.claude_code import ClaudeCodeError
+from django_ergo.conversation.engines.claude_code import _cut_denials
 from django_ergo.conversation.engines.claude_code import child_env
 from django_ergo.conversation.engines.claude_code import cli_frames
+from django_ergo.conversation.engines.claude_code import history_keys
 from django_ergo.conversation.engines.claude_code import mcp_tools
 from django_ergo.conversation.runtime import build_engine
 
@@ -337,7 +339,7 @@ class FakeAnthropic(BaseHTTPRequestHandler):
                 "index": 1,
                 "content_block": {
                     "type": "tool_use",
-                    "id": "toolu_1",
+                    "id": f"toolu_{len(self.requests)}",
                     "name": tool,
                     "input": {},
                 },
@@ -393,6 +395,154 @@ async def test_real_claude_code_cli_makes_one_request(tmp_path):
     replayed = [m for m in request["messages"] if m["role"] != "system"]
     assert [m["role"] for m in replayed] == ["user", "assistant", "user"]
     assert replayed[1]["content"][1]["name"] == "mcp__ergo__lookup"
+
+
+@pytest.mark.skipif(
+    shutil.which("claude") is None, reason="Claude Code isn't installed"
+)
+async def test_real_claude_code_cli_resumes_its_transcript(tmp_path, monkeypatch):
+    server = ThreadingHTTPServer(("127.0.0.1", 0), FakeAnthropic)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    FakeAnthropic.requests = []
+    client = ClaudeCodeClient(
+        timeout=60,
+        env={
+            "HOME": str(tmp_path),
+            "CLAUDE_CONFIG_DIR": str(tmp_path / ".claude"),
+            "ANTHROPIC_BASE_URL": f"http://127.0.0.1:{server.server_port}",
+            "ANTHROPIC_API_KEY": "sk-ant-test",
+        },
+    )
+    runs = []
+    run = client._run
+
+    async def spy(args, frames, env, model):
+        runs.append((args, frames))
+        return await run(args, frames, env, model)
+
+    monkeypatch.setattr(client, "_run", spy)
+    first = {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "<turn-context>\nMonday\n</turn-context>"},
+            {"type": "text", "text": "find me pasta"},
+        ],
+    }
+    call = {"model": "claude-sonnet-5-5", "system": "Kitchen bot.", "tools": TOOLS}
+    try:
+        reply = await client.messages.create(messages=[first], **call)
+        answer = {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "Checking."},
+                {
+                    "type": "tool_use",
+                    "id": "toolu_1",
+                    "name": "lookup",
+                    "input": {"q": "pasta"},
+                },
+            ],
+        }
+        assert [b.type for b in reply.content] == ["text", "tool_use"]
+        result = {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_1",
+                    "content": "carbonara",
+                }
+            ],
+        }
+        await client.messages.create(messages=[first, answer, result], **call)
+        # The next turn sends the first message without its turn context.
+        again = json.loads(json.dumps(answer).replace("toolu_1", "toolu_2"))
+        later = [
+            {"role": "user", "content": [first["content"][1]]},
+            answer,
+            result,
+            again,
+            json.loads(json.dumps(result).replace("toolu_1", "toolu_2")),
+        ]
+        await client.messages.create(messages=later, **call)
+        # A changed history starts over.
+        await client.messages.create(
+            messages=[{"role": "user", "content": "something else"}], **call
+        )
+    finally:
+        server.shutdown()
+
+    flags = [[a for a in args if a in ("--resume", "--session-id")] for args, _ in runs]
+    assert flags == [["--session-id"], ["--resume"], ["--resume"], ["--session-id"]]
+    # Resuming sends only what's new.
+    assert [len(frames) for _, frames in runs] == [1, 1, 1, 1]
+    sent = FakeAnthropic.requests[1]["messages"]
+    results = [
+        block
+        for message in sent
+        if isinstance(message["content"], list)
+        for block in message["content"]
+        if block.get("type") == "tool_result"
+    ]
+    # Ergo's result, not the CLI's "permission denied".
+    assert len(results) == 1
+    assert "carbonara" in json.dumps(results[0])
+    # Each request starts with the one before it, so it reads from the cache.
+    for before, after in zip(
+        FakeAnthropic.requests[:2], FakeAnthropic.requests[1:3], strict=True
+    ):
+        old = [m for m in before["messages"] if m["role"] != "system"]
+        new = [m for m in after["messages"] if m["role"] != "system"]
+        assert json.dumps(new[0]) == json.dumps(old[0])
+
+
+def test_history_keys_follow_what_the_cli_sees():
+    keys = history_keys(HISTORY, "fp")
+    assert len(keys) == len(HISTORY) + 1
+    assert keys == history_keys(HISTORY, "fp")
+    assert keys[1:] != history_keys(HISTORY, "other")[1:]
+    # Thinking and cache markers aren't part of what the CLI is sent.
+    plain = [HISTORY[0], {**HISTORY[1], "content": HISTORY[1]["content"][1:]}]
+    assert history_keys(plain, "fp")[2] == keys[2]
+    framed = {
+        "role": "user",
+        "content": "<turn-context>\nMonday\n</turn-context>\n\nfind me a recipe",
+    }
+    assert history_keys([framed], "fp")[1] != keys[1]
+    assert history_keys([framed], "fp", strip_context=True)[1] == keys[1]
+
+
+def test_denials_are_cut_from_the_transcript(tmp_path):
+    rows = [
+        {"type": "user", "uuid": "u1", "parentUuid": None},
+        {"type": "assistant", "uuid": "a1", "parentUuid": "u1"},
+        {
+            "type": "user",
+            "uuid": "d1",
+            "parentUuid": "a1",
+            "toolDenialKind": "mode",
+            "sourceToolAssistantUUID": "a1",
+            "message": {
+                "content": [{"type": "tool_result", "tool_use_id": "t1"}],
+            },
+        },
+        {"type": "assistant", "uuid": "a2", "parentUuid": "d1"},
+        {"type": "attachment", "uuid": "x", "parentUuid": "a2"},
+    ]
+    path = tmp_path / "s.jsonl"
+    path.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    assert _cut_denials(path, ["a1", "a2"], {"t1"})
+    kept = [json.loads(line) for line in path.read_text().splitlines()]
+    assert [(r["uuid"], r["parentUuid"]) for r in kept] == [
+        ("u1", None),
+        ("a1", "u1"),
+        ("a2", "a1"),
+        ("x", "a2"),
+    ]
+    # A result the CLI recorded some other way means the transcript can't be used.
+    rows[2].pop("toolDenialKind")
+    path.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    assert not _cut_denials(path, ["a1", "a2"], {"t1"})
 
 
 def test_the_api_engine_drops_unsigned_thinking():

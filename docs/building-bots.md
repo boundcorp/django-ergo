@@ -107,9 +107,15 @@ to a token from `claude setup-token`. The provider shows as available when
 the `claude` command is found. Without a `providers.yaml`, a bot can ask for
 it directly with `engine: {type: claude, transport: cli}`.
 
-Each model call runs `claude -p` once with the chat history. Ergo still runs
-the tools, approvals and compaction; the CLI's own tools, skills and settings
-are off. The CLI ignores any `ANTHROPIC_API_KEY` or gateway in the
+Each model call runs `claude -p` once. Ergo still runs the tools, approvals
+and compaction; the CLI's own tools, skills and settings are off. The CLI
+keeps a transcript of each call (in its config folder, under `projects/`),
+and the next call that continues the same history resumes it and sends only
+the new messages, so each request reads the chat so far from the prompt
+cache instead of writing all of it again. After a compaction, a changed
+system prompt or tool list, or anything else that rewrites earlier messages,
+the next call starts a new transcript with the whole history. Transcripts
+and their resume entries older than a day are deleted. The CLI ignores any `ANTHROPIC_API_KEY` or gateway in the
 environment, so usage always comes from the subscription, at the rate
 Anthropic meters `claude -p` and the Agent SDK. Token costs shown in
 Ergonaut are API list prices, not what the plan charges.
