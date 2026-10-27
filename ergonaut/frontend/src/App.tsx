@@ -232,7 +232,7 @@ function Shell({
               {title}
             </span>
           </nav>
-          <div className="ml-auto flex items-center gap-2">
+          <div className="topbar-controls ml-auto flex items-center gap-2">
             <UsageStatus />
             <WorkerStatus data={{ state: workerState, workers }} onRetry={() => refresh().catch(() => {})} />
             <AccountMenu user={user} onSignOut={onSignOut} />

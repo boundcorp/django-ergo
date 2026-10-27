@@ -18,6 +18,7 @@ import { api } from '../api'
 import { useDraft } from '../draft'
 import { prepareChatSend, type ChatSendSource } from '../chatSend'
 import { suggestionsFromMessages, statusSummary } from '../chatLayout'
+import { ActivityStrip } from '../components/ActivityStrip'
 import Files from '../components/Files'
 import { IllustrateDialog } from '../components/IllustrateDialog'
 import Markdown from '../components/Markdown'
@@ -547,7 +548,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
   const echo = pending?.text && !stored(detail.messages, pending.text, pending.line) ? pending.text : ''
 
   return (
-    <div className="chat-session flex h-full">
+    <div className="chat-session relative flex h-full">
       <div className="flex min-w-0 flex-1 flex-col">
         <div className="chat-desktop-chrome">
           <header className="chat-header flex flex-wrap items-center gap-3 px-4 py-4 sm:px-6">
@@ -602,6 +603,9 @@ export function Chat({ onChange }: { onChange: () => void }) {
                 </button>
               )}
               <button
+                type="button"
+                aria-expanded={showFiles}
+                aria-controls={showFiles ? 'chat-files' : undefined}
                 className={`rounded-md border px-2 py-0.5 text-xs ${showFiles ? 'border-indigo-400 text-indigo-700 dark:text-indigo-300' : 'border-zinc-300 text-zinc-600 dark:border-zinc-700 dark:text-zinc-400'}`}
                 onClick={() => toggleFiles(!showFiles)}
               >
@@ -612,9 +616,6 @@ export function Chat({ onChange }: { onChange: () => void }) {
               </button>
             </div>
           </header>
-          <Requests requests={detail.requests ?? []} onAnswered={load} />
-          <Workers workers={detail.workers ?? []} />
-          <TodoList todos={detail.todos ?? []} />
           <Pins
             sessionId={id}
             refreshKey={`${detail.messages.length}:${pinsKey}`}
@@ -679,7 +680,8 @@ export function Chat({ onChange }: { onChange: () => void }) {
               )}
               <button
                 type="button"
-                aria-pressed={showFiles}
+                aria-expanded={showFiles}
+                aria-controls={showFiles ? 'chat-files' : undefined}
                 onClick={() => {
                   toggleFiles(!showFiles)
                   document.querySelector<HTMLDialogElement>('#chat-session-sheet')?.close()
@@ -699,9 +701,6 @@ export function Chat({ onChange }: { onChange: () => void }) {
             </>
           }
         >
-          <Requests requests={detail.requests ?? []} onAnswered={load} />
-          <Workers workers={detail.workers ?? []} />
-          <TodoList todos={detail.todos ?? []} />
           <Pins
             sessionId={id}
             refreshKey={`${detail.messages.length}:${pinsKey}`}
@@ -713,6 +712,11 @@ export function Chat({ onChange }: { onChange: () => void }) {
             onCount={onPinCount}
           />
         </MobileSessionBar>
+        <ActivityStrip requests={detail.requests ?? []} workers={detail.workers ?? []} todos={detail.todos ?? []}>
+          <Requests requests={detail.requests ?? []} onAnswered={load} />
+          <Workers workers={detail.workers ?? []} />
+          <TodoList todos={detail.todos ?? []} />
+        </ActivityStrip>
         <PinnedDashboard
           pin={openPin}
           bot={detail.session.bot}
@@ -1062,9 +1066,14 @@ export function Chat({ onChange }: { onChange: () => void }) {
       {showFiles && (
         <Files
           sessionId={id}
-          refreshKey={detail.messages.length}
+          refreshKey={files}
           onPinsChanged={() => setPinsKey(k => k + 1)}
-          onView={setOpenPin}
+          onClose={() => toggleFiles(false)}
+          onView={pin => {
+            setOpenPin(pin)
+            // The phone rail overlays the viewer; uncover the selected file.
+            if (window.matchMedia('(max-width: 640px)').matches) toggleFiles(false)
+          }}
         />
       )}
     </div>
@@ -1095,8 +1104,7 @@ function Workers({ workers }: { workers: Worker[] }) {
   const [showDone, setShowDone] = useState(false)
   const running = workers.filter(w => w.status === 'queued' || w.status === 'running')
   const finished = workers.filter(w => !running.includes(w))
-  const done = finished.slice(-5)
-  const hiddenDone = finished.length - done.length
+  const done = finished
   if (!workers.length) return null
   return (
     <div className="mx-4 mb-2 flex flex-col gap-2 rounded-card border border-stroke bg-surface px-4 py-3 text-xs sm:mx-6">
@@ -1119,7 +1127,6 @@ function Workers({ workers }: { workers: Worker[] }) {
       {!!done.length && (
         <button className="self-start text-zinc-400 hover:text-zinc-600" onClick={() => setShowDone(s => !s)}>
           {showDone ? '▾' : '▸'} {done.length} finished worker{done.length === 1 ? '' : 's'}
-          {hiddenDone ? ` (latest; ${hiddenDone} earlier)` : ''}
         </button>
       )}
       {showDone &&

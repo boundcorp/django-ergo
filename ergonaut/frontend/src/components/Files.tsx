@@ -24,11 +24,13 @@ export default function Files({
   refreshKey,
   onPinsChanged,
   onView,
+  onClose,
 }: {
   sessionId: string
   refreshKey: unknown
   onPinsChanged: () => void
   onView: (pin: Pin) => void
+  onClose: () => void
 }) {
   const [files, setFiles] = useState<AttachmentFile[] | null>(null)
   const [error, setError] = useState('')
@@ -51,13 +53,14 @@ export default function Files({
   }, [load, refreshKey])
 
   async function uploadFiles(list: FileList | null) {
-    if (!list?.length) return
+    if (!list?.length || busy) return
     setBusy(true)
     setError('')
     try {
       for (const file of Array.from(list)) await api.uploadAttachment(sessionId, file)
       await load()
     } catch (e) {
+      await load()
       setError(String((e as Error).message ?? e))
     } finally {
       setBusy(false)
@@ -78,15 +81,28 @@ export default function Files({
   }
 
   return (
-    <aside className="flex w-72 shrink-0 flex-col border-l border-zinc-200 dark:border-zinc-800">
+    <aside
+      id="chat-files"
+      aria-label="Files"
+      className="absolute inset-y-0 right-0 z-30 flex w-[min(18rem,100%)] flex-col border-l border-zinc-200 bg-white shadow-xl dark:border-zinc-800 dark:bg-zinc-950 sm:static sm:w-72 sm:shrink-0 sm:shadow-none"
+    >
       <div className="flex items-center border-b border-zinc-200 px-4 py-3 dark:border-zinc-800">
         <div className="font-semibold">Files</div>
         <button
+          type="button"
           disabled={busy}
           className="ml-auto rounded-md border border-zinc-300 px-2 py-0.5 text-sm hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-900"
           onClick={() => input.current?.click()}
         >
           {busy ? 'Uploading…' : 'Upload'}
+        </button>
+        <button
+          type="button"
+          aria-label="Close files"
+          className="ml-2 rounded-md px-2 py-0.5 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-900"
+          onClick={onClose}
+        >
+          ✕
         </button>
         <input ref={input} type="file" multiple hidden onChange={e => uploadFiles(e.target.files)} />
       </div>
@@ -98,7 +114,11 @@ export default function Files({
           uploadFiles(e.dataTransfer.files)
         }}
       >
-        {error && <div className="p-2 text-sm text-red-600">{error}</div>}
+        {error && (
+          <div role="alert" className="p-2 text-sm text-red-600">
+            {error}
+          </div>
+        )}
         {files && !files.length && (
           <p className="p-2 text-sm text-zinc-500">No files yet. Upload or drop files here; the bot can read them.</p>
         )}
@@ -135,12 +155,16 @@ export default function Files({
                 <a
                   className="text-xs text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-100"
                   href={api.downloadUrl(file.id)}
+                  aria-label={`Download ${file.filename || file.media_type}`}
                   title="Download"
                 >
                   ⬇
                 </a>
                 <button
-                  className={`ml-auto text-xs ${file.pinned ? '' : 'hidden opacity-50 group-hover:block'}`}
+                  className={`ml-auto text-xs ${file.pinned ? '' : 'opacity-50 hover:opacity-100'}`}
+                  type="button"
+                  aria-label={`Pin ${file.filename || file.media_type}`}
+                  aria-pressed={file.pinned}
                   title={file.pinned ? 'Unpin' : 'Pin to the top of the chat'}
                   onClick={() => togglePin(file)}
                 >
@@ -148,7 +172,9 @@ export default function Files({
                 </button>
                 {file.message_sequence == null && (
                   <button
-                    className="hidden text-xs text-zinc-400 hover:text-red-600 group-hover:block"
+                    className="text-xs text-zinc-400 hover:text-red-600"
+                    type="button"
+                    aria-label={`Delete ${file.filename || file.media_type}`}
                     title="Delete"
                     onClick={() => remove(file)}
                   >
@@ -165,6 +191,8 @@ export default function Files({
         ))}
         {archivedCount > 0 && (
           <button
+            type="button"
+            aria-expanded={showArchived}
             className="p-2 text-xs text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-100"
             onClick={() => setShowArchived(v => !v)}
           >

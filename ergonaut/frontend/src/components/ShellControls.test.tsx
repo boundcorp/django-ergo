@@ -43,6 +43,8 @@ describe('AccountMenu', () => {
     expect(html).toContain('href="/api-keys"')
     expect(html).toContain('>Sign out<')
     expect(html).toContain('aria-expanded="true"')
+    expect(html).toContain('aria-label="Account menu for Lee"')
+    expect(html).toContain('class="account-avatar"')
   })
 
   test('uses menu keyboard order for arrows, Home, and End', () => {
@@ -67,6 +69,7 @@ describe('WorkerStatus', () => {
       }),
     )
     expect(html).toContain('Working · 2 active')
+    expect(html).toContain('aria-label="Working · 2 active"')
     expect(html).toContain('Running')
     expect(html).toContain('Queued')
     expect(html).toContain('3 of 5 checks')
