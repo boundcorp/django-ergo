@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { act, createElement } from 'react'
 import type { createRoot as CreateRoot, Root } from 'react-dom/client'
 import { Window } from 'happy-dom'
-import type { DelegatedRequest, Todo, Worker } from '../api'
+import type { DelegatedRequest, Worker } from '../api'
 import { ActivityStrip } from './ActivityStrip'
 
 const request = (status: DelegatedRequest['status']): DelegatedRequest => ({
@@ -27,10 +27,6 @@ const worker = (status: Worker['status']): Worker => ({
   created_at: '',
   completed_at: null,
 })
-const todos: Todo[] = [
-  { content: 'Finished task', status: 'completed' },
-  { content: 'Current task', status: 'in_progress' },
-]
 
 let window: Window
 let root: Root
@@ -38,11 +34,9 @@ let createRoot: typeof CreateRoot
 let container: HTMLDivElement
 const originalStorage = Object.getOwnPropertyDescriptor(globalThis, 'localStorage')
 
-function render(requests: DelegatedRequest[] = [], workers: Worker[] = [], items: Todo[] = todos) {
+function render(requests: DelegatedRequest[] = [request('waiting')], workers: Worker[] = []) {
   act(() =>
-    root.render(
-      createElement(ActivityStrip, { requests, workers, todos: items }, createElement('p', null, 'Activity details')),
-    ),
+    root.render(createElement(ActivityStrip, { requests, workers }, createElement('p', null, 'Activity details'))),
   )
 }
 
@@ -79,7 +73,7 @@ afterEach(() => {
 })
 
 describe('ActivityStrip', () => {
-  test('summarizes live requests, workers and todos, and hides when there is no visible activity', () => {
+  test('summarizes live requests and workers, and hides when there is no visible activity', () => {
     render(
       [request('waiting'), request('answered'), request('failed')],
       [worker('queued'), worker('running'), worker('completed')],
@@ -87,10 +81,8 @@ describe('ActivityStrip', () => {
     const button = disclosure()
     expect(button.textContent).toContain('1 request')
     expect(button.textContent).toContain('2 active / 3 workers')
-    expect(button.textContent).toContain('1 of 2 done')
-    expect(button.textContent).toContain('Current task')
     expect(container.querySelector('section')?.getAttribute('aria-label')).toBe('Chat activity')
-    render([request('answered'), request('failed')], [], [])
+    render([request('answered'), request('failed')], [])
     expect(container.textContent).toBe('')
   })
 

@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { Todo } from '../api'
-import { TodoList, todoProgress } from './TodoList'
+import { TodoButton, TodoList, todoProgress } from './TodoList'
 
 const todos: Todo[] = [
   { content: 'Read the code', status: 'completed' },
@@ -10,25 +10,34 @@ const todos: Todo[] = [
   { content: 'Open the PR', status: 'pending' },
 ]
 
+const button = (items: Todo[], open: boolean) =>
+  renderToStaticMarkup(createElement(TodoButton, { todos: items, open, controls: 'chat-todos', onToggle: () => {} }))
+
 describe('TodoList', () => {
-  test('an unfinished list is open, with each item and its status', () => {
-    const html = renderToStaticMarkup(createElement(TodoList, { todos }))
-    expect(html).toContain('aria-expanded="true"')
+  test('lists each item with its status and the progress', () => {
+    const html = renderToStaticMarkup(createElement(TodoList, { id: 'chat-todos', todos }))
+    expect(html).toContain('id="chat-todos"')
     expect(html).toContain('1 of 3 done')
     expect(html).toContain('data-status="in_progress"')
     expect(html).toContain('Open the PR')
   })
 
-  test('a finished list folds to its header', () => {
-    const done = todos.map(t => ({ ...t, status: 'completed' as const }))
-    const html = renderToStaticMarkup(createElement(TodoList, { todos: done }))
-    expect(html).toContain('aria-expanded="false"')
-    expect(html).toContain('3 of 3 done')
-    expect(html).not.toContain('Read the code')
-  })
-
   test('an empty list shows nothing', () => {
     expect(renderToStaticMarkup(createElement(TodoList, { todos: [] }))).toBe('')
     expect(todoProgress([])).toBe('0 of 0 done')
+  })
+})
+
+describe('TodoButton', () => {
+  test('shows done/total and whether the list is shown', () => {
+    const closed = button(todos, false)
+    expect(closed).toContain('Todo 1/3')
+    expect(closed).toContain('aria-expanded="false"')
+    expect(closed).toContain('aria-controls="chat-todos"')
+    expect(button(todos, true)).toContain('aria-expanded="true"')
+  })
+
+  test('hides when there are no todos', () => {
+    expect(button([], false)).toBe('')
   })
 })
