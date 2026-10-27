@@ -225,7 +225,10 @@ export type TurnContext = {
   estimated_tokens: number
   context_window: number
   compact_at_tokens: number | null
+  // The turn's total over all its requests; request_tokens is the largest single one (null on older turns).
   prompt_tokens: number
+  request_tokens: number | null
+  requests: number | null
 }
 
 export type Call = {

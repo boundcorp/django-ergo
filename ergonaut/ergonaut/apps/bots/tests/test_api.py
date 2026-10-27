@@ -1167,6 +1167,7 @@ def test_context_snapshot_compactions_and_visibility(client, cook, use_bots):
     assert context["native_messages"]["first_sequence"] == 0
     assert context["sections"][0]["title"] == "This chat"
     assert context["sections"][0]["text"]
+    assert (context["request_tokens"], context["requests"]) == (context["prompt_tokens"], 1)
     session = ConversationSession.objects.get(pk=session_id)
     compaction = ConversationCompaction.objects.create(
         session=session,

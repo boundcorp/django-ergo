@@ -16,6 +16,12 @@ Before each turn the runtime checks whether to summarize older messages.
 unset. `keep_recent`, `batch` and `min_tokens` are ignored by this policy.
 Time compaction retains its message-count `keep_recent` setting.
 
+A bot's main and named chats take their settings from bot.yaml
+(`chats: {main: {compaction: {compact_at_tokens: 80000, keep_tokens: 25000}}}`),
+kept current on every turn, so a change reaches chats that already exist.
+A chat that hands work to threads gains little from a long history: its
+summary and the per-turn Bots and threads section carry what it needs.
+
 Context size is the larger of the last assistant message's input plus cache
 read/write tokens and an estimate of the JSON message content since the
 latest compaction (four characters per token). Output usage does not count.
@@ -53,10 +59,22 @@ on demand; explicit `keep_recent=N` remains available to library callers.
 Pre-seeded tool exchanges run again after the summary folds their seeded
 call, as well as once on the session's first turn.
 
+## Older turns sent shorter
+
+Between compactions, each model call sends the newest three turns
+(`DJANGO_ERGO["OLD_TURNS_IN_FULL"]`) as stored. In older turns, a message
+from another chat (a report, reply or forward, never the user's own words)
+over 1,500 characters (`DJANGO_ERGO["OLD_MESSAGE_CHARS"]`) keeps its start
+and a note naming the chat with the rest, and long tool call arguments
+(briefs sent with `ergo_thread_send`, say) are cut the same way. In any
+finished turn, a `send_reply` argument that the turn's final text repeats is
+sent once. Stored history keeps everything in full
+(`django_ergo.conversation.old_turns`). `None` turns it off.
+
 ## Inspecting context in Ergonaut
 
-Each assistant reply's **Context** button shows recorded prompt usage and
-window size, estimated context and compaction threshold, section token
+Each assistant reply's **Context** button shows the largest single request's
+prompt tokens against the window, the turn total over all its requests, estimated context and compaction threshold, section token
 counts and expandable text, native message count and oldest sequence, and
 the number of stubbed tool results. The active compaction expands to its
 summary. History shows a clickable divider after each summarized range.
@@ -64,9 +82,11 @@ Older calls made before this feature have no recorded context.
 
 The first model request of each in-session structured call records
 `metadata["context"]`. Section text is capped at 20,000 characters each.
-The call's existing usage fields aggregate all model requests in that call;
-the panel's prompt usage is therefore the turn total, while its assembled
-context snapshot describes the first request.
+The call's usage fields aggregate all model requests in that call, so a
+two-request turn at 75,000 tokens each totals 150,000; the snapshot also
+counts the requests and the largest one (`requests`,
+`largest_request_tokens`), which is what to compare with the window. Its
+assembled context describes the first request.
 
 ## Existing-session migration
 

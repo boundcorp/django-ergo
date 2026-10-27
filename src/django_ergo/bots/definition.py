@@ -36,6 +36,7 @@ bot.yaml::
         skills: [orchestration, tandoor]   # loaded from the start (default: orchestration)
         pins: [pages/dashboard.jhtml]      # bot-folder files pinned in this chat (see bots.pages)
         # or with a title and icon: [{path: pages/dashboard.jhtml, title: Dashboard, icon: "📊"}]
+        compaction: {compact_at_tokens: 80000, keep_tokens: 25000}  # default: 75% / 25% of the window
       reports:                         # a named chat: one per user, its own purpose
         description: Weekly analytics
         instructions: Keep each report short.   # added to agents.md in this chat
@@ -140,6 +141,9 @@ class ChatDefinition:
     )  # bot-folder files shown pinned in the chat
     # Titles and icons given for pins, by path: {"title": ..., "icon": ...}.
     pin_labels: dict[str, dict] = field(default_factory=dict)
+    # Compaction settings for this chat (compact_at_tokens, keep_tokens),
+    # kept current on its sessions; empty = the window-relative defaults.
+    compaction: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -417,6 +421,18 @@ def _pin_labels(chat: str, values: list) -> dict[str, dict]:
     return labels
 
 
+CHAT_COMPACTION_KEYS = ("compact_at_tokens", "keep_tokens")
+
+
+def _chat_compaction(name: str, data) -> dict:
+    if not data:
+        return {}
+    if not isinstance(data, dict) or set(data) - set(CHAT_COMPACTION_KEYS):
+        msg = f"chats: {name}: compaction takes {', '.join(CHAT_COMPACTION_KEYS)}"
+        raise BotDefinitionError(msg)
+    return {key: int(value) for key, value in data.items()}
+
+
 def _chats(data: dict, *, orchestration: bool) -> dict[str, ChatDefinition]:
     if not isinstance(data, dict):
         msg = "chats must map chat names to their settings"
@@ -435,5 +451,6 @@ def _chats(data: dict, *, orchestration: bool) -> dict[str, ChatDefinition]:
             skills=[str(s) for s in config.get("skills", default_skills) or []],
             pins=[_pin(name, p) for p in config.get("pins") or []],
             pin_labels=_pin_labels(name, config.get("pins") or []),
+            compaction=_chat_compaction(name, config.get("compaction")),
         )
     return chats

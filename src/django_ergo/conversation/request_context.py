@@ -6,6 +6,7 @@ from django_ergo.conversation.compaction import compaction_config
 from django_ergo.conversation.compaction import estimate_message_tokens
 from django_ergo.conversation.compaction import native_turn_start
 from django_ergo.conversation.engine import session_system_prompt
+from django_ergo.conversation.old_turns import trim_old_turns
 from django_ergo.conversation.tool_results import budget_chars
 from django_ergo.conversation.tool_results import trim_tool_results
 
@@ -15,6 +16,9 @@ def prepare_turn_context(engine, session, messages, rows, compaction):
     sent_ids = {id(message) for message in messages}
     native = [(row, message) for row, message in rows if id(message) in sent_ids]
     stats = {}
+    messages = trim_old_turns(
+        messages, {id(message): row for row, message in native}, stats=stats
+    )
     messages = trim_tool_results(
         messages,
         keep=engine.tool_results_in_context,
