@@ -84,7 +84,8 @@ DEFAULTS = {
     # bot, or a finished worker) starts, so the user can still steer or stop them. None = none.
     "TURN_CONTROL": None,
     # Callable(session_id) -> bool that asks a session's running turn to stop at its next
-    # step (returns whether one was running), for ergo_thread_stop. None = can't stop turns.
+    # step, or ends its turn waiting for approval (returns whether there was one), for
+    # ergo_thread_stop. None = can't stop turns.
     "TURN_STOPPER": None,
     # Async callable (session, run) that runs a turn a chat channel (Telegram) starts:
     # it awaits ``run(control)`` while holding the session's turn lock, so the

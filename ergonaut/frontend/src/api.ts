@@ -38,7 +38,7 @@ export type Session = {
   resolved_summary?: string // its one-line summary of how the thread ended
   // Threads by status (components/ThreadList): the group, why it waits, the bot's status line.
   bucket?: 'waiting' | 'working' | 'review' | 'idle' | 'resolved' | ''
-  waiting_for?: 'approval' | 'question' | 'failure' | ''
+  waiting_for?: 'approval' | 'question' | 'failure' | 'blocked' | ''
   status_line?: string // the bot's one line from its latest reply (a resolved thread's summary)
   pinned?: boolean
   last_activity?: string | null // when its latest turn moved
@@ -164,6 +164,7 @@ export type DelegatedRequest = {
   text: string
   status: 'queued' | 'delivered' | 'waiting' | 'answered' | 'failed'
   reply: string
+  approvals?: Approval[] // an out request: what the other chat waits for you to approve before it answers
   created_at: string
   updated_at: string
 }

@@ -239,7 +239,11 @@ refuse logins until the window passes.
   and pages open as tabs above the transcript. The transcript follows new
   messages only while you're at the bottom; scrolled up, it stays put and a
   "Jump to bottom" button (or "New messages") takes you back. Sending a
-  message always scrolls to the bottom.
+  message always scrolls to the bottom. When a thread this chat asked for
+  something is paused on an approval, the "Waiting on" banner shows the tool
+  calls with Approve and Reject, and the chat sits under Waiting on you as
+  Blocked, so the approval is answered without opening the other thread.
+  Stop also ends a turn that waits for approval, declining its tool calls.
 - **Message links**: the link icon after a message's time copies its link
   (`/s/<chat id>#m-<line>`) and outlines the message. Opening a link
   loads older messages back to that line, scrolls to it and highlights it. Paste one to a bot and it reads the

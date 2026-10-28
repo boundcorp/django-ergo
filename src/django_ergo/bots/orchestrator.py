@@ -37,8 +37,8 @@ Who may message whom:
   and files, plus a short note. The recipient treats it as the user speaking and
   answers there; nothing comes back here, so this chat just says where it went.
 - ``ergo_thread_stop``: stop the running turn of a thread this bot started (or
-  one of its own threads) and cancel what this bot queued for it. Stopping a
-  running turn needs ``DJANGO_ERGO["TURN_STOPPER"]``.
+  one of its own threads), or end a turn of it that waits for approval, and cancel
+  what this bot queued for it. Stopping a turn needs ``DJANGO_ERGO["TURN_STOPPER"]``.
 - ``ergo_thread_resolve``: resolve a finished thread (this one, one of this
   bot's, or another bot's thread this bot started). Refused while workers run, a
   request is open, an approval is pending, or its last reply asks the user
@@ -168,6 +168,7 @@ def thread_status(session: ConversationSession) -> dict:
     ``last_activity`` is when its latest turn moved (sessions aren't touched per
     turn); ``started_by``/``started_by_id`` name another bot's chat that started
     it; ``working_for``/``waiting_on`` count open requests in and out;
+    ``blocked_on`` names the chats it waits on that are paused for the user's approval;
     ``workers_running`` counts queued or running workers; ``last_asks`` is
     whether its last reply was a question to the user; ``ready_to_resolve`` marks
     a thread that looks finished (quiet, nothing open, not asking anything).
@@ -208,6 +209,7 @@ def thread_status(session: ConversationSession) -> dict:
         "waiting_on": session.sent_thread_messages.filter(
             status__in=OPEN_STATUSES, in_reply_to__isnull=True
         ).count(),
+        "blocked_on": blocked_on(session),
         "workers_running": Worker.objects.filter(
             session=session, status__in=[WorkerStatus.QUEUED, WorkerStatus.RUNNING]
         ).count(),
@@ -221,6 +223,21 @@ def thread_status(session: ConversationSession) -> dict:
         and not resolve_blockers(status)
     )
     return status
+
+
+def blocked_on(session: ConversationSession) -> list[str]:
+    """The chats ``session`` waits on a reply from that are paused for the user's
+    approval: nothing moves there until the user answers it."""
+    waiting = (
+        session.sent_thread_messages.filter(
+            status=ThreadMessageStatus.WAITING,
+            in_reply_to__isnull=True,
+            recipient_session__structured_calls__status=StructuredCallStatus.AWAITING_APPROVAL,
+        )
+        .select_related("recipient_session")
+        .distinct()
+    )
+    return sorted({messaging.label(m.recipient_session) for m in waiting})
 
 
 def resolve_blockers(
@@ -798,9 +815,10 @@ def _managed_thread(
 
 @bot_tool(takes_context=True)
 def ergo_thread_stop(ctx: ToolContext, thread_id: str, bot: str = "") -> dict:
-    """Stop the running turn of a thread this bot started (default bot: this one)
-    and cancel the messages this bot queued for it. Use it for work that is no
-    longer wanted or has gone wrong."""
+    """Stop the running turn of a thread this bot started (default bot: this one),
+    or end its turn that waits for approval (declining those tool calls), and cancel
+    the messages this bot queued for it. Use it for work that is no longer wanted or
+    has gone wrong."""
     thread = _managed_thread(ctx, bot, thread_id, "stop")
     own = ctx.bot.sessions().filter(user_id=ctx.session.user_id)
     cancelled = ThreadMessage.objects.filter(

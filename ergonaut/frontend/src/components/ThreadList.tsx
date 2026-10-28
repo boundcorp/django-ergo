@@ -75,6 +75,7 @@ const WAITING: Record<string, { word: string; tone: string; fallback: string }> 
   approval: { word: 'Approval', tone: 'text-warning', fallback: 'Approve or deny a tool call' },
   question: { word: 'Question', tone: 'text-warning', fallback: 'Answer its question' },
   failure: { word: 'Failed', tone: 'text-danger', fallback: 'The last turn stopped; resume or dismiss it' },
+  blocked: { word: 'Blocked', tone: 'text-warning', fallback: 'A thread it waits on needs your approval' },
 }
 
 /** The row's second line: a colored state word when it waits on you, then the bot's status line. */

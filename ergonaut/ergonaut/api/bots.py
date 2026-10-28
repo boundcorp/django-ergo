@@ -25,7 +25,13 @@ from django_ergo.bots.todos import get_todos
 from django_ergo.conversation.attachments import save_session_file
 from django_ergo.conversation.history import SessionSource
 from django_ergo.conversation.links import GITHUB_PR, pull_request_out, pull_request_urls
-from django_ergo.conversation.models import ConversationAttachment, ConversationSession, StructuredCall, Worker
+from django_ergo.conversation.models import (
+    ConversationAttachment,
+    ConversationSession,
+    StructuredCall,
+    ThreadMessage,
+    Worker,
+)
 from ninja import File, Router, Schema, UploadedFile
 from ninja.errors import HttpError
 
@@ -123,7 +129,7 @@ class SessionOut(Schema):
     # Threads by status (Sidebar, Threads page): which group it sits in, why it waits,
     # the bot's one-line status from its latest reply, and what it has going.
     bucket: str = ""  # waiting, working, review (idle with an open PR), idle or resolved
-    waiting_for: str = ""  # approval, question or failure, when bucket is waiting
+    waiting_for: str = ""  # approval, question, failure or blocked (a chat it waits on needs an approval)
     status_line: str = ""
     pinned: bool = False
     last_activity: datetime | None = None  # when its latest turn moved
@@ -140,6 +146,7 @@ class RequestOut(Schema):
     text: str
     status: str
     reply: str
+    approvals: list[dict] = []  # "out", waiting: the tool calls the other chat waits for the user to approve
     created_at: datetime
     updated_at: datetime
 
@@ -307,7 +314,6 @@ def sent_out(session: ConversationSession, limit: int = 30) -> list[dict]:
     its status, the reply so far, the chat it went to, and that chat's outputs while it
     worked on it (pull requests it reported, or ones the reply links)."""
     from django_ergo.bots.messaging import snippet
-    from django_ergo.conversation.models import ThreadMessage
 
     rows = list(
         ThreadMessage.objects.filter(sender_session=session, in_reply_to__isnull=True).order_by("-created_at")[:limit]
@@ -576,7 +582,12 @@ def uuid_or_404(value: str, what: str = "session") -> str:
 
 
 def needs_attention(session: ConversationSession) -> bool:
-    """The latest turn waits on the user: an approval, a question, or a failure."""
+    """The chat waits on the user: its latest turn waits for an approval, asks a question
+    or failed, or a chat it asked for something waits for an approval (``blocked``)."""
+    return own_attention(session) or bool(getattr(session, "blocked", False))
+
+
+def own_attention(session: ConversationSession) -> bool:
     status = getattr(session, "latest_status", None)
     if status in RESUMABLE:
         return not getattr(session, "latest_dismissed", None)
@@ -620,9 +631,10 @@ def session_out(session: ConversationSession) -> dict:
 
 
 def waiting_for(session: ConversationSession) -> str:
-    """Why the latest turn waits on the user: an approval, a question, or a failure."""
-    if not needs_attention(session):
-        return ""
+    """Why the chat waits on the user: an approval, a question, a failure, or an approval
+    in a chat it waits on (``blocked``)."""
+    if not own_attention(session):
+        return "blocked" if getattr(session, "blocked", False) else ""
     status = getattr(session, "latest_status", None)
     if status == "awaiting_approval":
         return "approval"
@@ -695,8 +707,9 @@ BUSY_WITHIN_MINUTES = 30  # an in-progress call older than this is a crashed tur
 def with_open_counts(qs):
     """Annotate sessions with their open delegated requests, in and out, whether a
     turn is running now (``busy``), whether a reply came after the owner last looked
-    (``unread``), and whether the latest turn waits on the user (``attention``: an
-    approval, a question, or a failure)."""
+    (``unread``), whether the latest turn waits on the user (``attention``: an
+    approval, a question, or a failure), and whether a chat it asked for something
+    is paused for an approval (``blocked``)."""
     from django.db.models import Exists, OuterRef, Subquery
 
     finished = StructuredCall.objects.filter(session=OuterRef("pk"), kind="chat_reply").exclude(status="in_progress")
@@ -712,8 +725,13 @@ def with_open_counts(qs):
         updated_at__gte=timezone.now() - timezone.timedelta(minutes=BUSY_WITHIN_MINUTES),
     )
     working = Worker.objects.filter(session=OuterRef("pk"), status__in=["queued", "running"])
+    paused = StructuredCall.objects.filter(session=OuterRef("recipient_session"), status="awaiting_approval")
+    blocked = ThreadMessage.objects.filter(
+        sender_session=OuterRef("pk"), in_reply_to__isnull=True, status="waiting"
+    ).filter(Exists(paused))
     return qs.annotate(
         busy=Exists(running) | Exists(working),
+        blocked=Exists(blocked),
         unread=Exists(finished.filter(updated_at__gt=OuterRef("read_at"))),
         latest_status=Subquery(latest.values("status")[:1]),
         latest_type=Subquery(latest.values("response__type")[:1]),
@@ -751,7 +769,6 @@ def with_open_counts(qs):
 def requests_out(session: ConversationSession, limit: int = 20) -> list[dict]:
     """Recent delegated requests to and from a session, newest first."""
     from django_ergo.bots.messaging import label, snippet
-    from django_ergo.conversation.models import ThreadMessage
 
     rows = (
         ThreadMessage.objects.filter(in_reply_to__isnull=True)
@@ -764,6 +781,9 @@ def requests_out(session: ConversationSession, limit: int = 20) -> list[dict]:
     for row in rows:
         incoming = row.recipient_session_id == session.id
         other = row.sender_session if incoming else row.recipient_session
+        paused = None
+        if row.status == "waiting" and not incoming and other:
+            paused = other.structured_calls.filter(status="awaiting_approval").order_by("-created_at").first()
         out.append(
             {
                 "id": str(row.id),
@@ -773,6 +793,8 @@ def requests_out(session: ConversationSession, limit: int = 20) -> list[dict]:
                 "text": snippet(row.text),
                 "status": row.status,
                 "reply": snippet(row.reply_text or row.error),
+                # What the other chat waits for the user to approve before it can answer.
+                "approvals": (paused.metadata or {}).get("pending_approvals", []) if paused else [],
                 "created_at": row.created_at,
                 "updated_at": row.updated_at,
             }

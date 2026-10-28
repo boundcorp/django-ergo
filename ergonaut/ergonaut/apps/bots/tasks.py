@@ -142,16 +142,33 @@ def turn_running(session_id) -> bool:
 
 
 def request_stop(session_id) -> bool:
-    """Ask the running turn to stop at its next step. Returns whether one was running."""
+    """Ask the running turn to stop at its next step, or end a turn paused for approval
+    (its tool calls are declined). Returns whether there was a turn to stop."""
     if not turn_running(session_id):
+        return stop_paused_turn(session_id)
+    set_stop(session_id)
+    return True
+
+
+def stop_paused_turn(session_id) -> bool:
+    """End a turn waiting for approval: decline its tool calls and stop before the model's
+    next step, so its request gets an answer and the messages queued behind it go out."""
+    from django_ergo.conversation.models import StructuredCall
+
+    if not StructuredCall.objects.filter(session_id=session_id, status="awaiting_approval").exists():
         return False
+    run_turn.delay(str(session_id), None, False, [], None, True)
+    notify(session_id)
+    return True
+
+
+def set_stop(session_id) -> None:
     client = redis_client()
     if client is None:
         with _local_guard:
             _local_stops[str(session_id)] = time.monotonic() + STOP_TTL_SECONDS
     else:
         client.set(_stop_key(session_id), "1", ex=STOP_TTL_SECONDS)
-    return True
 
 
 def stop_requested(session_id) -> bool:
@@ -354,12 +371,14 @@ def run_turn(  # noqa: PLR0913
     approve: bool | dict[str, bool] | None = None,
     attachment_ids: list[str] | None = None,
     approval_ids: list[str] | None = None,
+    stop: bool = False,
 ) -> None:
     """Answer the session's inbox, or answer the approval the user saw (then the inbox).
 
     ``approve`` is one answer for every waiting tool call, or one per call by id.
     ``approval_ids`` are the tool calls the user was shown; if the turn now
     waits on anything else (a double click after it moved on), nothing runs.
+    ``stop`` ends the turn after the answer instead of giving the model another step.
     A ``message`` passed in (a task queued before the inbox) joins the inbox.
     """
     from django_ergo.conversation.models import ConversationSession
@@ -378,7 +397,7 @@ def run_turn(  # noqa: PLR0913
             if not locked:
                 # Another turn of this session is running; try again shortly.
                 raise self.retry(countdown=3)
-            answer_approval(session, approve, approval_ids)
+            answer_approval(session, approve, approval_ids, stop=stop)
             answer_inbox(session)
     queue_waiting(session_id)
 
@@ -413,9 +432,14 @@ def loaded_bot(session):
     return registry.get(session.bot_name)
 
 
-def answer_approval(session, approve: bool | dict[str, bool], approval_ids: list[str] | None) -> None:
+def answer_approval(
+    session, approve: bool | dict[str, bool], approval_ids: list[str] | None, *, stop: bool = False
+) -> None:
     session_id = str(session.id)
-    clear_stop(session_id)
+    if stop:
+        set_stop(session_id)  # the resumed turn stops before the model's next step
+    else:
+        clear_stop(session_id)
     try:
         bot = loaded_bot(session)
         pending = async_to_sync(bot.pending_call)(session)
