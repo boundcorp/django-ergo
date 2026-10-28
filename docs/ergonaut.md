@@ -212,11 +212,13 @@ refuse logins until the window passes.
   it moves focus into the drawer; Tab stays inside it and Escape or its
   backdrop closes it and returns focus to Menu.
 - **Chat**: the header shows the bot's name above the thread title (both
-  truncate). Under the header, the chat's todo list (see
-  [Bots](bots.md#todo-lists)) shows each item with its status and how many are
-  done; it stays open while anything is left and folds once it's all done. On a phone (640px and under) the site header hides the account
+  truncate). When the chat has a todo list (see
+  [Bots](bots.md#todo-lists)), a floating "Todo X/Y" button (done/total) sits
+  beside Illustrate above the composer; it shows or hides the list, with each
+  item and its status, at the bottom of the chat, and the browser remembers
+  the choice. On a phone (640px and under) the site header hides the account
   address (it stays in the menu) and the session title, meta, actions, waiting
-  list, workers, todo list and pins collapse into one bar. Opening that bar shows them in
+  list, workers and pins collapse into one bar. Opening that bar shows them in
   a sheet. The composer is a one-line box, with attach, the model line and
   send on one row. Wider screens keep the full header. The model (with a
   `providers.yaml`) shows in the composer as "Model: Sonnet 5.5"; it opens the

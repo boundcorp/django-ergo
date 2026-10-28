@@ -579,7 +579,7 @@ the model can plan multi-step work and check it off as it goes:
 
 The list is kept in the session's metadata (`todos`), is in the model's
 context on every turn while it has items, and Ergonaut shows it in the thread
-view (open while anything is left, folded once it's all done). `todos: false`
+view behind a "Todo X/Y" button beside Illustrate. `todos: false`
 in bot.yaml leaves the skill out.
 
 ## Agents

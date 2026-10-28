@@ -26,7 +26,7 @@ import ModelPicker, { EffortSlider, modelLabel, useBotModels } from '../componen
 import { PageViewer, Pins } from '../components/Pins'
 import { AttachmentView, replySuggestions, Transcript } from '../components/Transcript'
 import { ModelLink, MobileSessionBar, SuggestionChips, ThreadOptions } from '../components/ChatChrome'
-import { TodoList } from '../components/TodoList'
+import { TodoButton, TodoList, saveTodosShown, todosShown } from '../components/TodoList'
 import { WorkerActivityView, WorkerPulse } from '../components/WorkerActivity'
 import { agoLong } from '../time'
 import { linkedLine, messageAnchor } from '../messageLink'
@@ -84,6 +84,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
   const [detail, setDetail] = useState<SessionDetail | null>(null)
   const [text, setText] = useDraft(id)
   const [busy, setBusy] = useState(false)
+  const [showTodos, setShowTodos] = useState(todosShown)
   const [error, setError] = useState('')
   const [last, setLast] = useState<Turn | null>(null)
   // Files picked or pasted for the next message, already uploaded to the session.
@@ -712,10 +713,9 @@ export function Chat({ onChange }: { onChange: () => void }) {
             onCount={onPinCount}
           />
         </MobileSessionBar>
-        <ActivityStrip requests={detail.requests ?? []} workers={detail.workers ?? []} todos={detail.todos ?? []}>
+        <ActivityStrip requests={detail.requests ?? []} workers={detail.workers ?? []}>
           <Requests requests={detail.requests ?? []} onAnswered={load} />
           <Workers workers={detail.workers ?? []} />
-          <TodoList todos={detail.todos ?? []} />
         </ActivityStrip>
         <PinnedDashboard
           pin={openPin}
@@ -948,7 +948,17 @@ export function Chat({ onChange }: { onChange: () => void }) {
             </a>
           </aside>
         )}
-        <div className="mx-4 mt-2 flex justify-end">
+        {showTodos && <TodoList id="chat-todos" todos={detail.todos ?? []} />}
+        <div className="chat-floating-actions mx-5 mt-2 mb-2 flex justify-end gap-2">
+          <TodoButton
+            todos={detail.todos ?? []}
+            open={showTodos}
+            controls="chat-todos"
+            onToggle={() => {
+              setShowTodos(!showTodos)
+              saveTodosShown(!showTodos)
+            }}
+          />
           <IllustrateDialog
             sessionId={id}
             disabled={closed || !!waiting.length || busy || uploading}
