@@ -86,7 +86,6 @@ export function Chat({ onChange }: { onChange: () => void }) {
   const [busy, setBusy] = useState(false)
   const [showTodos, setShowTodos] = useState(todosShown)
   const [error, setError] = useState('')
-  const [last, setLast] = useState<Turn | null>(null)
   // Files picked or pasted for the next message, already uploaded to the session.
   type Outgoing = { id: string; filename: string; image: boolean }
   const [outgoing, setOutgoing] = useState<Outgoing[]>([])
@@ -221,7 +220,6 @@ export function Chat({ onChange }: { onChange: () => void }) {
 
   useEffect(() => {
     setDetail(null)
-    setLast(null)
     atBottom.current = true
     setScrolledUp(false)
     setUnseen(false)
@@ -430,7 +428,6 @@ export function Chat({ onChange }: { onChange: () => void }) {
     }
     try {
       const turn = await action()
-      setLast(turn)
       if (turn.queued) {
         setPending(before)
       } else {
@@ -526,10 +523,25 @@ export function Chat({ onChange }: { onChange: () => void }) {
       setChoices(next)
     }
   }
-  const turnSuggestions = !waiting.length ? replySuggestions(last?.suggestions ?? lastCall?.response?.suggestions) : []
-  const mobileSuggestions = turnSuggestions.length
-    ? turnSuggestions
-    : replySuggestions(suggestionsFromMessages(detail.messages))
+  // A newer user message or an unfinished call supersedes the previous reply.
+  const newerUserMessage = detail.messages.some(
+    m =>
+      m.role === 'user' &&
+      m.blocks.some(block => block.type === 'text' || block.type === 'attachment') &&
+      lastCall?.last_sequence != null &&
+      m.line > lastCall.last_sequence,
+  )
+  const suggestions =
+    waiting.length || newerUserMessage || (lastCall && lastCall.status !== 'completed')
+      ? []
+      : replySuggestions(
+          lastCall?.response?.suggestions ??
+            suggestionsFromMessages(
+              lastCall?.first_sequence == null
+                ? detail.messages
+                : detail.messages.filter(m => m.line >= lastCall.first_sequence!),
+            ),
+        )
   const summary = statusSummary(detail.requests ?? [], detail.workers ?? [], pinCount, detail.todos ?? [])
   const archived = detail.session.status === 'completed' && detail.session.role === 'thread'
   // A turn doesn't touch the session row, so its updated_at stays at creation.
@@ -900,13 +912,13 @@ export function Chat({ onChange }: { onChange: () => void }) {
           </div>
         )}
         <SuggestionChips
-          suggestions={turnSuggestions}
+          suggestions={suggestions}
           disabled={busy || !!pending || uploading}
           onPick={s => send(s, 'send', 'suggestion')}
           variant="desktop"
         />
         <SuggestionChips
-          suggestions={mobileSuggestions}
+          suggestions={suggestions}
           disabled={busy || !!pending || uploading}
           onPick={s => send(s, 'send', 'suggestion')}
         />

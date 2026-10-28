@@ -68,9 +68,9 @@ export function SuggestionChips({ suggestions, disabled, onPick, variant = 'mobi
       <span id={hintId} className="sr-only">
         Hold Enter, Space, or press and hold for 0.7 seconds to send a suggested reply.
       </span>
-      {suggestions.map(suggestion => (
+      {suggestions.map((suggestion, index) => (
         <button
-          key={suggestion}
+          key={index}
           type="button"
           className={chipClass}
           style={progressStyle}

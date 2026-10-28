@@ -48,9 +48,10 @@ export function statusSummary(
 type SuggestionBlock = { type: string; name?: string; input?: unknown }
 
 /** Suggestions stored on the latest send_reply tool call, when the turn response has none. */
-export function suggestionsFromMessages(messages: { blocks: SuggestionBlock[] }[]): unknown {
+export function suggestionsFromMessages(messages: { role?: string; blocks: SuggestionBlock[] }[]): unknown {
   for (let i = messages.length - 1; i >= 0; i--) {
-    const blocks = messages[i].blocks
+    const { blocks, role } = messages[i]
+    if (role === 'user' && blocks.some(block => block.type === 'text' || block.type === 'attachment')) return undefined
     for (let j = blocks.length - 1; j >= 0; j--) {
       const block = blocks[j]
       if (block.type !== 'tool_use' || block.name !== 'send_reply') continue
