@@ -10,6 +10,7 @@ One module per plugin:
 - ``browser`` (browser.py): drive a running Chrome over the DevTools protocol.
 - ``kubectl`` (kubectl.py): inspect configured Kubernetes clusters and run approved changes.
 - ``attachments`` (attachments.py): read and write files in chat sessions.
+- ``web_search`` (web_search.py): search the web and read pages.
 
 Bot-specific tools don't belong here; put them in the bot folder's ``tools/``.
 """
