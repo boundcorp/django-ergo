@@ -5,6 +5,11 @@
 Totals by kind, with chat replies (bot turns) split by bot, plus totals by
 model and by day. Tokens and cost are split into uncached input, cache writes,
 cache reads and output, each priced at its own rate. Superusers see everyone's calls; others see their own.
+
+``private`` breaks API-billed private pool spend (``private_pools`` in
+providers.yaml) down by pool, provider, exact model and bot, from the
+per-request ``InferenceRequest`` ledger. Those requests are already in the
+totals above (their calls are priced exactly); this is the billing view.
 """
 
 from __future__ import annotations
@@ -14,7 +19,7 @@ from datetime import timedelta
 
 from django.utils import timezone
 from django_ergo.conversation.chat_reply import CHAT_REPLY_KIND
-from django_ergo.conversation.models import AgentUsage, StructuredCall
+from django_ergo.conversation.models import AgentUsage, InferenceOutcome, InferenceRequest, StructuredCall
 from django_ergo.pricing import call_cost_parts, price_for
 from ninja import Router, Schema
 
@@ -139,6 +144,31 @@ class AgentsOut(Schema):
     by_project: list[AgentProject] = []
 
 
+class PrivateSpendRow(Schema):
+    """API-billed private pool requests for one (pool, provider, model, bot)."""
+
+    pool: str
+    provider: str
+    model: str
+    bot: str
+    billing_mode: str
+    requests: int  # HTTP attempts recorded, including those refused before sending
+    sent: int  # attempts that reached (or may have reached) the provider
+    prompt_tokens: int
+    cached_tokens: int
+    output_tokens: int
+    reasoning_tokens: int = 0  # part of output_tokens
+    cost: float  # priced attempts only
+    unknown_cost_requests: int  # sent, but no price or no usage: cost unknown, not 0
+    unsettled_reserved: float  # worst-case reservations still held for those
+
+
+class PrivateSpendOut(Schema):
+    cost: float
+    unknown_cost_requests: int
+    rows: list[PrivateSpendRow]
+
+
 class CostsOut(Schema):
     days: int
     total: Bucket
@@ -149,6 +179,49 @@ class CostsOut(Schema):
     unpriced_models: list[str]
     agents: AgentsOut
     usage: UsageOut
+    private: PrivateSpendOut
+
+
+def _private_spend(requests) -> dict:
+    rows: dict[tuple, dict] = {}
+    for req in requests:
+        key = (req.pool, req.provider, req.model, req.bot_name)
+        row = rows.setdefault(
+            key,
+            {
+                "pool": req.pool,
+                "provider": req.provider,
+                "model": req.model,
+                "bot": req.bot_name,
+                "billing_mode": req.billing_mode,
+                "requests": 0,
+                "sent": 0,
+                "prompt_tokens": 0,
+                "cached_tokens": 0,
+                "output_tokens": 0,
+                "reasoning_tokens": 0,
+                "cost": 0.0,
+                "unknown_cost_requests": 0,
+                "unsettled_reserved": 0.0,
+            },
+        )
+        row["requests"] += 1
+        if req.outcome == InferenceOutcome.NOT_SENT:
+            continue
+        row["sent"] += 1
+        for field in ("prompt_tokens", "cached_tokens", "output_tokens", "reasoning_tokens"):
+            row[field] += getattr(req, field) or 0
+        if req.cost_status == "priced" and req.cost_usd is not None:
+            row["cost"] += float(req.cost_usd)
+        else:
+            row["unknown_cost_requests"] += 1
+            row["unsettled_reserved"] += float(req.reserved_usd or 0)
+    ordered = sorted(rows.values(), key=lambda r: (-r["cost"], r["pool"], r["model"], r["bot"]))
+    return {
+        "cost": sum(r["cost"] for r in ordered),
+        "unknown_cost_requests": sum(r["unknown_cost_requests"] for r in ordered),
+        "rows": ordered,
+    }
 
 
 # (bucket token key, StructuredCall field, Price attribute)
@@ -395,7 +468,11 @@ def costs(request, days: int = 30, bot: str = ""):
         agent_rows = agent_rows.filter(session__user=request.auth)
     if bot:
         agent_rows = agent_rows.filter(bot_name=bot)
-
+    private = InferenceRequest.objects.filter(created_at__gte=since)
+    if not request.auth.is_superuser:
+        private = private.filter(user=request.auth)
+    if bot:
+        private = private.filter(bot_name=bot)
     total = _empty("total")
     by_kind: dict[str, dict] = {}
     by_bot: dict[str, dict] = {}
@@ -440,4 +517,5 @@ def costs(request, days: int = 30, bot: str = ""):
         "unpriced_models": sorted(unpriced),
         "agents": _agents(list(agent_rows)),
         "usage": _usage(total, by_session, main_tokens, subscription_tokens, compaction_tokens),
+        "private": _private_spend(private.order_by("created_at")),
     }

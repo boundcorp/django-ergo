@@ -35,6 +35,7 @@ from django_ergo.bots.tools import BotTool
 from django_ergo.bots.tools import FunctionToolkit
 from django_ergo.bots.tools import bot_tool
 from django_ergo.conversation.context import TextContextSource
+from django_ergo.conversation.inference_policy import scrubbed_env
 from django_ergo.conversation.toolkit import ApprovalPreview
 from django_ergo.plugins.bash import trim
 
@@ -352,6 +353,7 @@ class KubectlPlugin(BotPlugin):
                 timeout=self.timeout,
                 stdin=subprocess.DEVNULL,
                 check=False,
+                env=scrubbed_env(),
             )
         except FileNotFoundError:
             return None, redact_secret_data(

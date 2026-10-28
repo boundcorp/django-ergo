@@ -21,6 +21,8 @@ from django_ergo.conversation.identity import attributed_text
 from django_ergo.conversation.images import attachment_ref
 from django_ergo.conversation.images import memory_result
 from django_ergo.conversation.images import prepare_messages
+from django_ergo.conversation.inference_policy import assert_public_endpoint
+from django_ergo.conversation.inference_policy import effective_openai_base_url
 from django_ergo.conversation.messages import StoredMessagesMixin
 from django_ergo.conversation.messages import add_message
 from django_ergo.conversation.messages import model_rows
@@ -205,10 +207,16 @@ class OpenAIAPIEngine(StoredMessagesMixin, Engine):
         )
 
     def _get_client(self):
-        """Return the OpenAI client, initialising it lazily."""
+        """Return the OpenAI client, initialising it lazily. Refuses private
+        inference endpoints (``inference_policy``): a custom ``base_url`` or
+        OPENAI_BASE_URL can't turn this into a private engine."""
         if self._client is None:
             import openai
 
+            assert_public_endpoint(
+                effective_openai_base_url(self.base_url),
+                what="The OpenAI API engine",
+            )
             kwargs = {}
             if self.api_key:
                 kwargs["api_key"] = self.api_key
@@ -216,6 +224,15 @@ class OpenAIAPIEngine(StoredMessagesMixin, Engine):
                 kwargs["base_url"] = self.base_url
             self._client = openai.AsyncOpenAI(**kwargs)
         return self._client
+
+    async def _create_completion(self, kwargs: dict):
+        """Every model request goes through here (session turns, tool
+        continuations, ``complete`` and ``generate``)."""
+        client = self._get_client()
+        assert_public_endpoint(
+            getattr(client, "base_url", ""), what="The OpenAI API engine"
+        )
+        return await client.chat.completions.create(**kwargs)
 
     def get_tool_adapter(self) -> OpenAIToolAdapter:
         return self._adapter
@@ -308,7 +325,7 @@ class OpenAIAPIEngine(StoredMessagesMixin, Engine):
                 kwargs["tools"] = tools
                 kwargs["tool_choice"] = "auto"
 
-            response = await self._get_client().chat.completions.create(**kwargs)
+            response = await self._create_completion(kwargs)
             choice = response.choices[0]
             msg = choice.message
 
@@ -384,7 +401,7 @@ class OpenAIAPIEngine(StoredMessagesMixin, Engine):
             if tools:
                 kwargs["tools"] = tools
                 kwargs["tool_choice"] = "auto"
-            response = await self._get_client().chat.completions.create(**kwargs)
+            response = await self._create_completion(kwargs)
             usage = response.usage
             record_usage(
                 span,
@@ -520,7 +537,7 @@ class OpenAIAPIEngine(StoredMessagesMixin, Engine):
                     kwargs["tool_choice"] = "auto"
             kwargs.update(self._options(tools="tools" in kwargs))
 
-            response = await self._get_client().chat.completions.create(**kwargs)
+            response = await self._create_completion(kwargs)
             choice = response.choices[0]
             msg = choice.message
 

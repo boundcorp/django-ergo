@@ -167,6 +167,7 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
             # Return zero vector for empty text
             return [0.0] * self.get_dimensions()
 
+        self._assert_public_endpoint()
         try:
             response = self.openai.embeddings.create(
                 model=self.model, input=text.strip(), encoding_format="float"
@@ -186,6 +187,22 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
             logger.exception("OpenAI embedding generation failed")
             msg = f"Failed to generate OpenAI embedding: {e}"
             raise EmbeddingError(msg) from e
+
+    def _assert_public_endpoint(self) -> None:
+        """Refuse a private inference endpoint before the module-level call.
+
+        ``openai.embeddings`` uses ``openai.base_url``, else the cached module
+        client's URL, else ``OPENAI_BASE_URL``: check each that applies.
+        """
+        from django_ergo.conversation.inference_policy import assert_public_endpoint
+        from django_ergo.conversation.inference_policy import effective_openai_base_url
+
+        what = "The OpenAI embedding provider"
+        base_url = getattr(self.openai, "base_url", None)
+        assert_public_endpoint(effective_openai_base_url(base_url), what=what)
+        module_client = getattr(self.openai, "_client", None)
+        if module_client is not None:
+            assert_public_endpoint(getattr(module_client, "base_url", None), what=what)
 
     def get_dimensions(self) -> int:
         """

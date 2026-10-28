@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 import uuid
 from datetime import datetime
@@ -24,6 +25,7 @@ from django_ergo.bots.runtime import Bot
 from django_ergo.bots.todos import get_todos
 from django_ergo.conversation.attachments import save_session_file
 from django_ergo.conversation.history import SessionSource
+from django_ergo.conversation.inference_policy import FIREWORKS_KEY_ENV, PolicyError
 from django_ergo.conversation.links import GITHUB_PR, pull_request_out, pull_request_urls
 from django_ergo.conversation.models import (
     ConversationAttachment,
@@ -1392,10 +1394,40 @@ def models_out(bot: Bot) -> dict:
             for tier, refs in bot.providers.routing.tiers.items()
             if refs
         ],
+        # Only for a bot its private pools list in allowed_bots; kept apart
+        # from "models" so the ordinary picker never lists them.
+        "private_models": private_models_out(bot),
     }
 
 
+def private_models_out(bot: Bot) -> list[dict]:
+    """The private pool members ``bot`` may select (``personal/<alias>``)."""
+    return [
+        {
+            "id": f"{pool.name}/{alias}",
+            "name": f"{pool.name}/{alias}",
+            "label": f"{alias} ({pool.name}, API-billed)",
+            "provider": pool.name,
+            "engine_type": pool.provider,
+            "billing": "api",
+            "default": alias == pool.default,
+            "available": pool.enabled and bool(os.environ.get(FIREWORKS_KEY_ENV)),
+        }
+        for pool in bot.providers.private_pools.values()
+        if bot.name in pool.allowed_bots
+        for alias in pool.models
+    ]
+
+
 def check_model(bot: Bot, model: str) -> None:
+    if bot.providers.is_private(model):
+        try:
+            bot.private_target(model)
+        except PolicyError as exc:
+            raise HttpError(403, str(exc)) from exc
+        if not os.environ.get(FIREWORKS_KEY_ENV):
+            raise HttpError(409, f"The private pool has no API key set ({FIREWORKS_KEY_ENV})")
+        return
     if model.startswith("auto/") and bot.providers.knows(model):
         return
     found = bot.providers.find(model)

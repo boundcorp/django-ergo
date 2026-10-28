@@ -12,6 +12,11 @@ runs as, with that user's environment and permissions. That is a lot of
 power: keep ``approve: true`` unless the bot is trusted with the machine.
 Output is stdout and stderr together, with the exit code, trimmed to the
 first and last part when it is long.
+
+Protected variables (``FIREWORKS_*`` and ``DJANGO_ERGO["PROTECTED_ENV_PREFIXES"]``)
+are removed from the command's environment. That is defense-in-depth, not a
+sandbox: a login shell still reads the user's startup files, and the command
+runs as the same OS user as Ergonaut.
 """
 
 from __future__ import annotations
@@ -26,6 +31,7 @@ from django_ergo.bots.tools import BotTool
 from django_ergo.bots.tools import FunctionToolkit
 from django_ergo.bots.tools import bot_tool
 from django_ergo.conversation.context import TextContextSource
+from django_ergo.conversation.inference_policy import scrubbed_env
 
 if TYPE_CHECKING:
     from django_ergo.bots.tools import ToolContext
@@ -69,6 +75,7 @@ class BashPlugin(BotPlugin):
                 text=True,
                 timeout=self.timeout,
                 stdin=subprocess.DEVNULL,
+                env=scrubbed_env(),
                 check=False,
             )
         except subprocess.TimeoutExpired as exc:

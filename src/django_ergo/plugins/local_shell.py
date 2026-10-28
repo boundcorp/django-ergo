@@ -38,7 +38,9 @@ Permissions, outermost first: approval on start/reply/stop; the job folder
 is the agent's working directory (and, with a sandboxing
 ``command_prefix``, the only place it can write); the environment is
 rebuilt from ``pass_env`` plus the listed ``secrets``, never API keys that
-would switch an agent CLI off its subscription; Claude Code gets
+would switch an agent CLI off its subscription, and never protected
+variables (``FIREWORKS_*`` and ``DJANGO_ERGO["PROTECTED_ENV_PREFIXES"]``,
+defense-in-depth rather than a sandbox); Claude Code gets
 ``--permission-mode``, ``--allowedTools``/``--disallowedTools`` and
 ``--max-turns``; runs time out; and at most ``max_concurrent`` jobs run.
 The agent never gets this bot's other secrets.
@@ -74,6 +76,7 @@ from django_ergo.bots.tools import BotTool
 from django_ergo.bots.tools import FunctionToolkit
 from django_ergo.bots.tools import bot_tool
 from django_ergo.conversation.context import TextContextSource
+from django_ergo.conversation.inference_policy import is_protected_env
 from django_ergo.plugins.orca import is_secret
 
 if TYPE_CHECKING:
@@ -252,6 +255,9 @@ class LocalShellPlugin(BotPlugin):
                 f"local_shell won't pass {', '.join(bad)}: agents run on subscriptions"
             )
             raise ValueError(msg)
+        if bad := sorted(s for s in self.secrets if is_protected_env(s)):
+            msg = f"local_shell won't pass {', '.join(bad)}: reserved for private inference"
+            raise ValueError(msg)
         self.timeout_seconds = float(config.get("timeout_minutes", 60)) * 60
         self.max_concurrent = int(config.get("max_concurrent", 2))
         self.approve = bool(config.get("approve", True))
@@ -301,7 +307,7 @@ class LocalShellPlugin(BotPlugin):
         env = {
             k: os.environ[k]
             for k in self.pass_env
-            if k in os.environ and k not in NEVER_PASS
+            if k in os.environ and k not in NEVER_PASS and not is_protected_env(k)
         }
         for name in self.secrets:
             if value := ctx.secret(name):

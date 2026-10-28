@@ -377,7 +377,13 @@ def choose(  # noqa: PLR0913 - preserve custom-router/current contract, add cand
     custom = getattr(api_settings, "MODEL_ROUTER", None)
     if custom:
         router = import_string(custom) if isinstance(custom, str) else custom
-        return router(candidates, usage, rules, current)
+        picked = router(candidates, usage, rules, current)
+        if picked is not None and picked not in candidates:
+            # A router picks among the candidates it was given; anything else
+            # (another provider, a private model) would bypass the tier.
+            msg = f"MODEL_ROUTER returned {picked!r}, which isn't one of its candidates"
+            raise ValueError(msg)
+        return picked
     ok = [
         c
         for c in candidates
@@ -401,12 +407,14 @@ def pick_model(providers: Providers, tier: str, current: str = "") -> str:
     candidates = [
         ref
         for ref in listed
-        if (found := providers.find(ref)) is not None and found[0].available
+        if not providers.is_private(ref)
+        and (found := providers.find(ref)) is not None
+        and found[0].available
     ]
     if not candidates:
         msg = f"No provider in the {tier!r} tier is available"
         raise ValueError(msg)
-    return choose(
+    picked = choose(
         candidates,
         lambda ref: ref.partition("/")[0],
         current_usage(),
@@ -414,6 +422,7 @@ def pick_model(providers: Providers, tier: str, current: str = "") -> str:
         current if current in candidates else None,
         model_of=lambda ref: ref.partition("/")[2],
     )
+    return providers.check_public(picked, where=f"auto/{tier}")
 
 
 def pick_agent(providers: Providers, tier: str) -> AgentChoice:
@@ -429,17 +438,20 @@ def pick_agent(providers: Providers, tier: str) -> AgentChoice:
         for c in listed
         if (p := providers.providers.get(c.provider)) is not None
         and p.transport == "cli"
+        and not providers.is_private(c.model)
     ]
     if not candidates:
         msg = f"No subscription provider in the {tier!r} agents tier"
         raise ValueError(msg)
-    return choose(
+    picked = choose(
         candidates,
         lambda c: c.provider,
         current_usage(),
         active_rules(routing),
         model_of=lambda c: c.model,
     )
+    providers.check_public(picked.model, where=f"The {tier} agents tier")
+    return picked
 
 
 # -- routing.md -----------------------------------------------------------------
@@ -638,6 +650,7 @@ def retry_model(providers: Providers, tier: str, failed: str, error: str) -> str
             or (name == failed_provider and not scoped_limit)
             or found is None
             or not found[0].available
+            or providers.is_private(ref)
         ):
             continue
         if not over_limit(name, usage, rules, ref.partition("/")[2]):

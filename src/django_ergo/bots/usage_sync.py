@@ -40,6 +40,7 @@ from django_ergo.bots.routing import USAGE_STALE_SECONDS
 from django_ergo.bots.routing import _window
 from django_ergo.bots.routing import record_usage_windows
 from django_ergo.bots.routing import window_view
+from django_ergo.conversation.inference_policy import scrubbed_env
 
 if TYPE_CHECKING:
     from django_ergo.bots.providers import Providers
@@ -82,7 +83,12 @@ def fetch_report(command: str | None = None, timeout: float | None = None) -> di
     argv = shlex.split(command)
     try:
         proc = subprocess.run(  # noqa: S603 - the operator's own command
-            argv, capture_output=True, text=True, timeout=timeout, check=False
+            argv,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+            env=scrubbed_env(),
         )
     except FileNotFoundError as exc:
         msg = f"{argv[0]} isn't installed"

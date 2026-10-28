@@ -35,6 +35,7 @@ from django_ergo.conversation.context import estimate_tokens
 from django_ergo.conversation.history import Granularity
 from django_ergo.conversation.history import SessionSource
 from django_ergo.conversation.history import render_body
+from django_ergo.conversation.inference_policy import scrubbed_env
 from django_ergo.settings import api_settings
 
 if TYPE_CHECKING:
@@ -181,6 +182,7 @@ def gh_open_prs(repos: list[str]) -> list[str]:
                 text=True,
                 timeout=15,
                 check=False,
+                env=scrubbed_env(),
             )
             rows = json.loads(proc.stdout) if proc.returncode == 0 else None
         except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError):

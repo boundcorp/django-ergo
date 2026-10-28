@@ -13,6 +13,7 @@ User = get_user_model()
 class EngineType(models.TextChoices):
     CLAUDE = "claude", "Claude"
     OPENAI = "openai", "OpenAI"
+    FIREWORKS = "fireworks", "Fireworks (private pool)"
 
 
 class TransportType(models.TextChoices):
@@ -1023,3 +1024,88 @@ class AuthorProfile(models.Model):
 
     def __str__(self):
         return f"{self.display_name or self.ref} ({self.kind})"
+
+
+class InferenceOutcome(models.TextChoices):
+    PENDING = "pending", "Sending (cost reserved)"
+    OK = "ok", "Answered"
+    ERROR = "error", "Failed after it may have reached the provider"
+    NOT_SENT = "not_sent", "Refused before any HTTP request"
+
+
+class InferenceRequest(TimeStampedMixin):
+    """One HTTP attempt to an API-billed private model (a ``private_pools``
+    member, see ``conversation.inference_policy``), recorded before it's sent.
+
+    ``cost_usd`` is exact pricing by (provider, model ID) from the token
+    counts the provider reported; None (``cost_status`` unknown) when the
+    price or the usage is missing, never 0. ``reserved_usd`` is the
+    worst-case cost held against the pool's spend cap while it's in flight;
+    failed attempts keep it, since the provider may have billed them.
+    ``reasoning_tokens`` is part of ``output_tokens``. No credential or grant
+    is ever stored here.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    structured_call = models.ForeignKey(
+        StructuredCall,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="inference_requests",
+    )
+    session = models.ForeignKey(
+        ConversationSession,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="inference_requests",
+    )
+    user = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="inference_requests",
+    )
+    bot_name = models.CharField(max_length=100, db_index=True)
+    selector = models.CharField(
+        max_length=200
+    )  # what the bot asked for: personal/heavy
+    pool = models.CharField(max_length=64)
+    provider = models.CharField(max_length=32)
+    model = models.CharField(max_length=200)  # the exact model ID sent
+    purpose = models.CharField(max_length=32, blank=True, default="")
+    billing_mode = models.CharField(max_length=16, default="api")
+    attempt = models.PositiveIntegerField(default=1)  # within one engine (one turn)
+    upstream_request_id = models.CharField(max_length=200, blank=True, default="")
+    prompt_tokens = models.IntegerField(null=True, blank=True)  # all input
+    cached_tokens = models.IntegerField(null=True, blank=True)  # input read from cache
+    output_tokens = models.IntegerField(null=True, blank=True)
+    reasoning_tokens = models.IntegerField(null=True, blank=True)  # part of output
+    # USD per million tokens used, with where they came from.
+    rates = models.JSONField(default=dict, blank=True)
+    reserved_usd = models.DecimalField(
+        max_digits=16, decimal_places=10, null=True, blank=True
+    )
+    cost_usd = models.DecimalField(
+        max_digits=16, decimal_places=10, null=True, blank=True
+    )
+    cost_status = models.CharField(max_length=16, default="pending")
+    outcome = models.CharField(
+        max_length=16,
+        choices=InferenceOutcome.choices,
+        default=InferenceOutcome.PENDING,
+    )
+    error = models.TextField(blank=True, default="")
+    finished_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["created_at"]
+        indexes = [
+            models.Index(fields=["pool", "created_at"]),
+            models.Index(fields=["structured_call"]),
+        ]
+
+    def __str__(self):
+        return f"{self.bot_name} {self.selector} {self.outcome}"

@@ -84,6 +84,10 @@ result = await run_structured_call(spec, "Plan it", session=session)
   backoff. Nothing is written until a call succeeds, so retries never
   duplicate history. Other API errors are recorded on the row with an
   `error_category` (`auth`, `network`, `model`, `other`).
+- A private-inference refusal (`PolicyError`, see
+  [Private inference](bots.md#private-inference)) is recorded with
+  `error_category` `policy`, even when an SDK wraps it in a connection
+  error. It is never retried and never falls back to another model.
 - A refusal (Claude's `refusal` stop, OpenAI's `content_filter`) fails the
   call with `error_category` `refusal` and the refusal category in the
   error. Its tool calls never run, and it gets no correction: asking again

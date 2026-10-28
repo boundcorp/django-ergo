@@ -5,7 +5,6 @@ from __future__ import annotations
 import ast
 import hashlib
 import json
-import os
 import re
 import shutil
 import subprocess
@@ -126,6 +125,9 @@ class RepositoryCorpus:
     def _run(repository: Path, *args: str, text: bool = True) -> str | bytes:
         if not _GIT_BINARY:
             _fail("git executable is not available")
+        # Imported here: the conversation package needs configured settings.
+        from django_ergo.conversation.inference_policy import scrubbed_env
+
         result = subprocess.run(  # noqa: S603 - argv is passed without a shell.
             [_GIT_BINARY, "-C", str(repository), *args],
             check=False,
@@ -133,7 +135,7 @@ class RepositoryCorpus:
             text=text,
             env={
                 key: value
-                for key, value in os.environ.items()
+                for key, value in scrubbed_env().items()
                 if not key.startswith("GIT_")
             },
             timeout=30,

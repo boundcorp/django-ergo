@@ -1016,6 +1016,54 @@ def test_chats_pick_a_model_from_providers(client, cook, use_bots, monkeypatch):
 
 
 @pytest.mark.django_db(transaction=True)
+def test_private_pool_models_are_only_for_allowlisted_bots(client, cook, use_bots, monkeypatch):
+    from django_ergo.bots.providers import Providers
+    from django_ergo.conversation.models import ConversationSession
+
+    use_bots(say("hi"))
+    pool = {
+        "enabled": True,
+        "provider": "fireworks",
+        "allowed_bots": ["personal"],
+        "default": "flash",
+        "models": {"flash": "accounts/fireworks/models/deepseek-v4p1-flash-1017"},
+    }
+    registry = webhooks.get_registry()
+    registry.providers = Providers.from_dict(
+        {"providers": {"openai": {"type": "openai", "models": ["gpt-6-sol"]}}, "private_pools": {"personal": pool}}
+    )
+    monkeypatch.setenv("FIREWORKS_API_KEY", "fw-test-sentinel")
+
+    # kitchen isn't in allowed_bots: no private model is listed, and picking one is refused.
+    models = client.get("/api/bots/kitchen/models").json()
+    assert [m["id"] for m in models["models"]] == ["openai/gpt-6-sol"]
+    assert models["private_models"] == []
+    root = post(client, "/api/bots/kitchen/root").json()
+    for selector in ("personal", "personal/flash"):
+        refused = post(client, f"/api/sessions/{root['id']}/model", {"model": selector})
+        assert refused.status_code == 403
+        assert "isn't allowed to use private pool 'personal'" in refused.json()["detail"]
+    thread = post(client, "/api/bots/kitchen/threads", {"model": "personal/flash"})
+    assert thread.status_code in (403, 409)  # refused (or threads are off for kitchen)
+    assert not ConversationSession.objects.filter(model__startswith="personal").exists()
+
+    # Once kitchen is allowlisted, its private members are listed apart and can be picked.
+    registry.providers = Providers.from_dict(
+        {
+            "providers": {"openai": {"type": "openai", "models": ["gpt-6-sol"]}},
+            "private_pools": {"personal": {**pool, "allowed_bots": ["kitchen"]}},
+        }
+    )
+    models = client.get("/api/bots/kitchen/models").json()
+    assert [m["id"] for m in models["models"]] == ["openai/gpt-6-sol"]
+    assert [(m["id"], m["billing"], m["available"]) for m in models["private_models"]] == [
+        ("personal/flash", "api", True)
+    ]
+    picked = post(client, f"/api/sessions/{root['id']}/model", {"model": "personal/flash"}).json()
+    assert (picked["model"], picked["engine_type"]) == ("personal/flash", "fireworks")
+
+
+@pytest.mark.django_db(transaction=True)
 def test_chats_pick_an_effort_that_reaches_the_engine(client, cook, use_bots):
     from django_ergo.bots.providers import Providers
     from django_ergo.conversation.models import ConversationSession

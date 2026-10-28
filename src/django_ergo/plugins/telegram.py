@@ -77,6 +77,8 @@ from django.db import DatabaseError
 
 from django_ergo.bots.plugins import BotPlugin
 from django_ergo.conversation.attachments import Attachment
+from django_ergo.conversation.inference_policy import PolicyError
+from django_ergo.conversation.inference_policy import is_protected_env
 
 if TYPE_CHECKING:
     from django_ergo.bots.runtime import TurnResult
@@ -96,6 +98,14 @@ REPLAY_AFTER = timedelta(minutes=2)  # a pending update this old was never start
 REPLAY_EVERY = 60  # seconds between looks for updates to replay
 KEEP_HANDLED = timedelta(days=7)  # handled updates are deleted after this
 MAX_ATTEMPTS = 3  # tries for an update the database kept failing
+
+
+def _refuse_protected(env) -> None:
+    """``token_env``/``secret_env`` can't name a private-inference variable
+    (defense-in-depth: the value would be sent to Telegram)."""
+    if env and is_protected_env(env):
+        msg = f"{env} is reserved for private inference and can't be used by the Telegram plugin"
+        raise PolicyError(msg)
 
 
 class TelegramAPI:
@@ -186,6 +196,7 @@ class TelegramPlugin(BotPlugin):
     def api(self):
         if self._api is None:
             env = self.config.get("token_env")
+            _refuse_protected(env)
             token = os.environ.get(env, "") if env else ""
             if not token:
                 msg = f"Telegram plugin needs a token in ${env or 'token_env'}"
@@ -936,6 +947,7 @@ class TelegramPlugin(BotPlugin):
     @property
     def webhook_secret(self) -> str:
         env = self.config.get("secret_env")
+        _refuse_protected(env)
         if env and os.environ.get(env):
             return os.environ[env]
         return hashlib.sha256(f"ergo-telegram:{self.api.token}".encode()).hexdigest()[

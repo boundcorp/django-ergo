@@ -44,6 +44,9 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from django_ergo.conversation.engines.openai_api import OpenAIAPIEngine
+from django_ergo.conversation.inference_policy import PolicyError
+from django_ergo.conversation.inference_policy import is_protected_env
+from django_ergo.conversation.inference_policy import scrubbed_env
 
 # Config overrides (``-c key=value``) that leave Codex a plain model: no
 # shell, files, web, images, skills, plugins, apps or sub-agents, and no
@@ -192,9 +195,16 @@ def dynamic_tools(tools: list[dict]) -> list[dict]:
 
 
 def child_env(overrides: dict | None = None) -> dict:
-    env = {k: v for k, v in os.environ.items() if k not in DROP_ENV}
+    """This process's environment minus API-billing and protected variables.
+
+    An override naming a protected variable raises PolicyError. This is
+    defense-in-depth, not a sandbox: the CLI runs as the same OS user."""
+    if bad := sorted(k for k in overrides or {} if is_protected_env(k)):
+        msg = f"Codex can't be given {', '.join(bad)}: reserved for private inference"
+        raise PolicyError(msg)
+    env = {k: v for k, v in scrubbed_env().items() if k not in DROP_ENV}
     env.update(overrides or {})
-    return env
+    return scrubbed_env(env)
 
 
 def workdir() -> str:

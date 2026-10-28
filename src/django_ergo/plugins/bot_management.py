@@ -63,6 +63,7 @@ from django_ergo.bots.plugins import BotPlugin
 from django_ergo.bots.tools import BotTool
 from django_ergo.bots.tools import FunctionToolkit
 from django_ergo.bots.tools import bot_tool
+from django_ergo.conversation.inference_policy import scrubbed_env
 from django_ergo.plugins.bash import trim
 
 if TYPE_CHECKING:
@@ -226,6 +227,7 @@ class BotManagementPlugin(BotPlugin):
             text=True,
             timeout=COMMAND_TIMEOUT,
             check=False,
+            env=scrubbed_env(),
         )
         if proc.returncode != 0:
             detail = (proc.stderr or proc.stdout).strip()
@@ -248,7 +250,7 @@ class BotManagementPlugin(BotPlugin):
             msg = f"{command} takes no arguments"
             raise ValueError(msg)
         cwd = self.path(spec.cwd)
-        env = {k: os.environ[k] for k in RUN_ENV_KEYS if k in os.environ}
+        env = scrubbed_env({k: os.environ[k] for k in RUN_ENV_KEYS if k in os.environ})
         env["CI"] = "1"
         try:
             proc = subprocess.run(  # noqa: S603 — configured argv, no shell
@@ -436,7 +438,6 @@ class BotManagementPlugin(BotPlugin):
     def make_migrations(self, work) -> str:
         """Write migrations for any bot tables changed in ``work`` (a separate
         process, so the draft's models load fresh). Returns what it printed."""
-        import os
         import sys
 
         from django_ergo.bots.registry import find_bot_folders
@@ -459,7 +460,7 @@ class BotManagementPlugin(BotPlugin):
                 timeout=COMMAND_TIMEOUT,
                 check=False,
                 # No __pycache__ in the bot repo's migrations/.
-                env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+                env={**scrubbed_env(), "PYTHONDONTWRITEBYTECODE": "1"},
             )
             if proc.returncode != 0:
                 msg = f"makemigrations failed for {folder.name}: {(proc.stderr or proc.stdout).strip()[-800:]}"
@@ -470,7 +471,6 @@ class BotManagementPlugin(BotPlugin):
 
     def preview(self, path: str) -> str:
         """Render a .jhtml page from the draft (or checkout) in a separate process."""
-        import os
         import sys
 
         work = self.workdir
@@ -503,7 +503,7 @@ class BotManagementPlugin(BotPlugin):
             text=True,
             timeout=COMMAND_TIMEOUT,
             check=False,
-            env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+            env={**scrubbed_env(), "PYTHONDONTWRITEBYTECODE": "1"},
         )
         lines = proc.stdout.strip().splitlines()
         if proc.returncode != 0 or not lines:
@@ -733,6 +733,7 @@ class BotManagementPlugin(BotPlugin):
             capture_output=True,
             timeout=COMMAND_TIMEOUT,
             check=False,
+            env=scrubbed_env(),
         )
         return proc.stdout if proc.returncode == 0 else None
 

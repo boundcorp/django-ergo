@@ -28,6 +28,7 @@ engine:
   api_key_env: KITCHEN_OPENAI_KEY    # read at runtime, never stored
   # with a providers.yaml: config: {model: openai/gpt-6.1-sol}
   # transport: cli                   # the logged-in Claude Code or Codex CLI, no key
+  # a bot in a private pool's allowed_bots: config: {model: personal/heavy} (see Private inference)
 root:                                # context budget for main and named chats
   recent: 15                         # legacy; ignored by bots
   budget_tokens: 8000
@@ -1370,3 +1371,194 @@ The CLI receives the model name unchanged; display labels and price lookup
 strip the suffix. Native compaction defaults to 75% of that window and
 keeps 25% verbatim. `max_context_tokens` remains a threshold alias;
 `rolling`/`stream` map to `context_size` and ignore message-count keys.
+
+## Private inference
+
+A **private pool** is a set of API-billed models that only the bots it
+names may use. Pools are listed under `private_pools` in providers.yaml,
+never under `providers` (`django_ergo.bots.providers`,
+`django_ergo.conversation.inference_policy`):
+
+```yaml
+private_pools:
+  personal:
+    enabled: false
+    provider: fireworks
+    allowed_bots: [personal]
+    default: flash
+    daily_usd_cap: 5        # optional; example value — Lee chooses
+    models:
+      flash: accounts/fireworks/models/deepseek-v4p1-flash-1017
+      glm: accounts/fireworks/models/glm-5p3
+      heavy: accounts/fireworks/models/kimi-k3
+```
+
+| Key | What it does |
+| --- | --- |
+| `enabled` | `true` or `false` (default). Nothing sends to the pool until it's `true`. |
+| `provider` | Only `fireworks`: the endpoint is fixed at `https://api.fireworks.ai/inference/v1` and the key comes from `FIREWORKS_API_KEY` |
+| `allowed_bots` | The bots that may use the pool. The host controls this list; a bot's own files can't add it. |
+| `default` | The alias `personal` alone means; one of `models` |
+| `models` | Alias to exact model ID. An alias is one path segment; a model ID appears once across all pools. |
+| `daily_usd_cap` | Optional, more than 0: US dollars per UTC day (see [Spend cap](#spend-cap)) |
+
+The file is parsed strictly. Any of these is a load error (a reload keeps
+the last good public models but drops every private pool, a fresh start
+skips the file; admins see the error either way, and `personal` is never
+replaced by a public model):
+
+- an unknown key in a pool, a duplicate YAML key under `private_pools`, or a
+  pool named like a provider or `auto`;
+- a top-level key that starts with `private` but isn't `private_pools` (a
+  typo such as `private_pool`);
+- a public provider, model, `default`, `tiers` or `agents` entry that names
+  something private: a pool selector, a pool member's model ID, a Fireworks
+  model ID (`accounts/fireworks/...`) or anything containing `fireworks`;
+- a public provider named `personal`, with a `base_url`, `api_base` or
+  `endpoint` on a `fireworks.ai` host, or with an `api_key_env` that is a
+  protected name (`FIREWORKS_*`, see [Secret hygiene](#secret-hygiene-and-its-limits)).
+
+`personal` is a reserved selector even when no pool by that name is
+configured: a bot that asks for it fails instead of getting a public model.
+
+### Using a pool
+
+A bot listed in `allowed_bots` selects a member in its bot.yaml, as
+`personal` (the pool's `default`) or `personal/<alias>`:
+
+```yaml
+engine:
+  config: {model: personal/heavy, max_tokens: 8192}
+```
+
+Other engine options such as `max_tokens` and `temperature` pass through.
+The endpoint, key and model come from the pool: `api_key`, `api_key_env`,
+`base_url`, `api_base`, `endpoint`, `url`, `organization`, `project`,
+`default_headers`, `default_query`, `http_client` and `max_retries` in
+`engine.config`, or `engine.api_key_env`, fail the turn. `engine.type:
+fireworks` can't be set directly; only a pool selector builds that engine.
+
+In Ergonaut, `GET /api/bots/<bot>/models` lists the members under
+`private_models`, apart from `models`, and only for an allowlisted bot.
+Picking one for a chat (`POST /api/sessions/<id>/model`, or the model of a
+new thread) returns 403 for any other bot (see
+[Running Ergonaut](ergonaut.md#private-inference)).
+
+Thread titles, compaction, illustrations and other calls the allowlisted
+bot makes with its own engine spend on the pool too, each with its own
+`purpose` in the ledger.
+
+Audio transcription isn't one of them: `DJANGO_ERGO["AUDIO_TRANSCRIBER"]`
+is a deployment setting, so where it's set (for example to
+`openai_transcriber`), a voice note in an allowlisted bot's chat is
+transcribed by that public service, as in any other chat.
+
+### What fails closed
+
+A refusal is a `PolicyError`. The structured call records it with
+`error_category` `policy`, never retries it, and never falls back to a
+public model. It is raised when:
+
+- the bot isn't in `allowed_bots`, the pool is disabled, the alias is
+  unknown, or `personal` isn't configured;
+- a chat's picked private model can't be used any more: the pick is kept
+  and the turn fails, rather than moving to the bot's public default;
+- `FIREWORKS_API_KEY` isn't set.
+
+Public selection never reaches a pool: auto tiers, routers, the
+providers.yaml `default`, the model list and `agents` tiers hold only public
+models.
+
+Only `Bot.make_engine` mints a **grant**, one per engine (one turn), from
+the bot's reviewed config or its chat's authenticated pick. It is bound to
+the bot, the exact model ID, the session, the user and the purpose, lives
+in memory only (never read from session metadata, engine config, prompts or
+messages; it can't be copied or pickled) and expires after 6 hours. Nothing
+inherits it: a new thread gets its own grant on its own turns, and a
+delegated sub-bot is checked under its own name.
+
+The private engine (`conversation/engines/fireworks_api.py`) checks the
+grant before every HTTP attempt, before it reads the key. It speaks
+OpenAI-compatible Chat Completions to the fixed endpoint, reads
+`FIREWORKS_API_KEY` at send time inside its HTTP transport, sends only the
+grant's model, one HTTP request per attempt, and doesn't stream. The SDK's
+retries are off; the structured call's retry of transient failures (same
+model) is the only retry, and each attempt is checked and recorded again.
+
+The public engines refuse private endpoints. The OpenAI and Claude API
+engines, the legacy workflow engine, audio transcription and OpenAI
+embeddings fail on an effective base URL on a `fireworks.ai` host, including
+one from `OPENAI_BASE_URL` or `ANTHROPIC_BASE_URL`.
+
+### Cost ledger
+
+Each HTTP attempt is an `InferenceRequest` row, written before it's sent:
+bot, session, user, structured call, selector, pool, provider, exact model,
+purpose, attempt number, `billing_mode` (`api`), prompt, cached, output and
+reasoning tokens (reasoning is part of output), the rates used, the
+reservation (`reserved_usd`), `cost_usd` and `cost_status` (`priced`,
+`unknown` or `not_sent`), and the outcome (`ok`, `error` or `not_sent`).
+No key or grant is stored.
+
+Prices are exact by provider and model ID (`pricing.EXACT_API_PRICES`),
+with no prefix matching. A model without an exact price, or a response
+without usage, leaves the cost unknown, never 0. USD per million tokens,
+Fireworks standard serverless, checked 2026-10-28:
+
+| Model (`accounts/fireworks/models/...`) | Input | Cached input | Output |
+| --- | --- | --- | --- |
+| `deepseek-v4p1-flash-1017` | 0.30 | 0.006 | 1.20 |
+| `deepseek-v4p1-flash` | 0.30 | 0.006 | 1.20 |
+| `glm-5p3` | 1.40 | 0.26 | 4.40 |
+| `kimi-k3` | 3.00 | 0.30 | 15.00 |
+
+The structured call's cost uses the same prices, so cost totals include
+private spend. Ergonaut's Costs API also breaks it down by pool, provider,
+model and bot (the `private` block).
+
+### Spend cap
+
+With `daily_usd_cap` set, each attempt reserves its worst-case cost before
+it's sent: every request byte counted as an uncached input token, plus the
+full output limit (`max_tokens`, 4096 by default) at the output price.
+Under a lock (a PostgreSQL advisory lock), the attempt is refused
+(`SpendCapError`, a `PolicyError`, no HTTP) when today's spend plus held
+reservations plus this one would pass the cap. Days are UTC. It is also
+refused when the model has no exact price or the request has no output
+limit, since its cost can't be bounded.
+
+Priced attempts count at their cost. Attempts in flight, and failed
+attempts that may have reached Fireworks, keep their reservation; attempts
+refused before sending count nothing. Without a cap nothing limits spend,
+so set one.
+
+### Coding agents
+
+`ergo_agent_start`, `orca_start_worker` and `agents.start` refuse a private
+selector, a Fireworks model ID or any model containing `fireworks`, before
+any side effect, including a model picked from an `agents` tier. Their
+harnesses can't carry or enforce a grant, so private coding agents aren't
+supported.
+
+### Secret hygiene and its limits
+
+Environment variables starting with `FIREWORKS_`, plus any prefixes in
+`DJANGO_ERGO["PROTECTED_ENV_PREFIXES"]` (which can add to the defaults,
+never remove them), are protected:
+
+- they are left out of the environment of the bash and kubectl tools, the
+  Codex and Claude Code CLI engines, Orca and browser commands, git and the
+  other subprocesses Ergo starts;
+- `local_shell` refuses them in `secrets` and drops them from `pass_env`;
+- `ctx.secret()` raises `PolicyError` for them;
+- the telegram plugin's `token_env` and `secret_env`, a public provider's
+  `api_key_env` and a bot's `engine.api_key_env` can't name them.
+
+This is defense in depth, not a sandbox. The key is in the Ergonaut
+process's environment, so code running in that process or as the same OS
+user (a Python tool, a bash command reading `/proc` or a shell startup
+file) can still read it. Orca remote workers' own environments are outside
+these checks. The planned second phase moves private inference into a
+separate, credential-isolated service: its own workload and service user,
+the key mounted only there, signed short-lived grants, and network egress
+limited to Fireworks.

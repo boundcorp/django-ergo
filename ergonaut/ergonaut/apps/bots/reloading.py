@@ -18,6 +18,7 @@ need a restart to pick up a new bot.
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import os
 import subprocess
@@ -72,8 +73,10 @@ def keep_last_good(old: BotRegistry, new: BotRegistry) -> None:
             new.add(bot)
             logger.warning("Keeping the last good %s bot: its folder didn't load", bot.name)
     if PROVIDERS_FILE in new.failed and getattr(old, "providers", None):
-        new.providers = old.providers
-        logger.warning("Keeping the last good %s: it didn't load", PROVIDERS_FILE)
+        # The public models keep working, but private pools fail closed: the
+        # broken edit may have disabled a pool or removed a bot from allowed_bots.
+        new.providers = dataclasses.replace(old.providers, private_pools={})
+        logger.warning("Keeping the last good %s, without private pools: it didn't load", PROVIDERS_FILE)
 
 
 class ReloadingRegistry:
