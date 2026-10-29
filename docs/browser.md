@@ -107,7 +107,14 @@ browser call, closing the tabs it opened. While no session is open the
 other browser tools refuse to run. With `launch_command` set, starting a
 session runs it (over `ssh_host`) when Chrome doesn't answer; it must
 detach, for example
-`DISPLAY=:1 setsid google-chrome --user-data-dir=$HOME/.config/ergo-chrome --remote-debugging-port=9222 >/dev/null 2>&1 &`.
+`setsid google-chrome --user-data-dir=$HOME/.config/ergo-chrome --remote-debugging-port=9222 >/dev/null 2>&1 &`.
+Over ssh it has no desktop environment, so take `DISPLAY`,
+`WAYLAND_DISPLAY` and `XAUTHORITY` from the logged-in session
+(`systemctl --user show-environment`) rather than hardcoding them: they
+change between logins and between X11 and Wayland, and a Chrome pointed at
+a dead display hangs without opening the port. A Chrome already holding the
+profile but not answering takes over the new launch through its singleton
+lock, so the command should stop it first.
 `sessions: false` drops the start and stop tools for a bot that should
 always have the browser.
 
