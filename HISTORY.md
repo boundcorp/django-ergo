@@ -4,6 +4,27 @@ This document tracks the major milestones and evolution of the Django Ergo proje
 
 ## Development Timeline
 
+### Private inference pools (October 2026)
+
+- `private_pools` in providers.yaml lists API-billed models only the bots in
+  its `allowed_bots` may use, selected as `personal` or `personal/<alias>`.
+  The first provider is Fireworks: a guarded engine with a fixed endpoint,
+  `FIREWORKS_API_KEY` read at send time, SDK retries off, and a grant minted
+  per turn in `Bot.make_engine` and checked before every HTTP attempt.
+  Anything else fails closed with a `PolicyError` (`error_category`
+  `policy`, never retried, no public fallback); public engines, embeddings
+  and transcription refuse `fireworks.ai`, and coding agents refuse private
+  models.
+- Each attempt is an `InferenceRequest` row priced exactly by provider and
+  model ID (unknown, never 0, without a price or usage). An optional
+  `daily_usd_cap` reserves the worst case before sending. The Costs API has
+  a `private` block and the models API a `private_models` list.
+- `FIREWORKS_*` (and `DJANGO_ERGO["PROTECTED_ENV_PREFIXES"]`) are kept out
+  of subprocesses, `ctx.secret()` and local shell secrets: defense in depth,
+  not isolation. A credential-isolated service is the planned next phase.
+- The OpenAI extra installs `httpx` and restricts the SDK to versions before 3,
+  whose HTTP transport interface is used by the guarded Fireworks engine.
+
 ### Small, medium, large and xlarge tiers (October 2026)
 
 - The built-in routing tiers are now `small` (Haiku 5.5, GPT-6 Luna),

@@ -37,6 +37,7 @@ from django_ergo.bots.tools import bot_tool
 from django_ergo.conversation.context import TextContextSource
 from django_ergo.conversation.toolkit import ApprovalPreview
 from django_ergo.plugins.bash import trim
+from django_ergo.protected_env import scrubbed_env
 
 if TYPE_CHECKING:
     from django_ergo.bots.tools import ToolContext
@@ -352,6 +353,7 @@ class KubectlPlugin(BotPlugin):
                 timeout=self.timeout,
                 stdin=subprocess.DEVNULL,
                 check=False,
+                env=scrubbed_env(),
             )
         except FileNotFoundError:
             return None, redact_secret_data(

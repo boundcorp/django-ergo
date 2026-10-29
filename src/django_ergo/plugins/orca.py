@@ -91,6 +91,7 @@ from django_ergo.bots.tools import FunctionToolkit
 from django_ergo.bots.tools import bot_tool
 from django_ergo.conversation.context import TextContextSource
 from django_ergo.plugins.bash import trim
+from django_ergo.protected_env import scrubbed_env
 
 if TYPE_CHECKING:
     from django_ergo.bots.tools import ToolContext
@@ -430,6 +431,7 @@ class OrcaPlugin(BotPlugin):
                 text=True,
                 timeout=self.timeout,
                 check=False,
+                env=scrubbed_env(),
             )
         except FileNotFoundError:
             return f"The Orca CLI ({self.executable}) is not installed on this host."
@@ -471,6 +473,7 @@ class OrcaPlugin(BotPlugin):
             text=True,
             timeout=self.timeout,
             check=False,
+            env=scrubbed_env(),
         )
         found = (
             _first_path(json.loads(proc.stdout))
@@ -509,7 +512,11 @@ class OrcaPlugin(BotPlugin):
             else ["sh", "-c", script]
         )
         proc = subprocess.run(  # noqa: S603 — fixed script; paths are shell-quoted
-            argv, capture_output=True, timeout=self.timeout, check=False
+            argv,
+            capture_output=True,
+            timeout=self.timeout,
+            check=False,
+            env=scrubbed_env(),
         )
         if proc.returncode:
             msg = f"Couldn't read {path}: {proc.stderr.decode(errors='replace').strip()[:300]}"
@@ -553,6 +560,7 @@ class OrcaPlugin(BotPlugin):
             text=True,
             timeout=self.timeout,
             check=False,
+            env=scrubbed_env(),
         )
         try:
             payload = json.loads(proc.stdout)
@@ -630,7 +638,12 @@ class OrcaPlugin(BotPlugin):
             else ["sh", "-c", script]
         )
         proc = subprocess.run(  # noqa: S603 — fixed script; paths are shell-quoted
-            argv, input=data, capture_output=True, timeout=self.timeout, check=False
+            argv,
+            input=data,
+            capture_output=True,
+            timeout=self.timeout,
+            check=False,
+            env=scrubbed_env(),
         )
         if proc.returncode:
             msg = f"Couldn't write {name}: {proc.stderr.decode(errors='replace').strip()[:300]}"
@@ -683,6 +696,7 @@ class OrcaPlugin(BotPlugin):
             text=True,
             timeout=self.timeout,
             check=False,
+            env=scrubbed_env(),
         )
         try:
             payload = json.loads(proc.stdout)
@@ -953,6 +967,7 @@ class OrcaPlugin(BotPlugin):
             text=True,
             timeout=self.timeout,
             check=False,
+            env=scrubbed_env(),
         )
 
     def resolve_project(self, worker) -> dict | None:

@@ -102,6 +102,10 @@ DEFAULTS = {
     "BOT_WEBHOOK_BASE_URL": None,
     # Extra or overriding model prices, USD per million tokens (see pricing.py)
     "MODEL_PRICES": {},
+    # Name prefixes of environment variables that tools (ToolContext.secret) and
+    # subprocesses (bash, local shell, CLI engines, Orca) never get, on top of
+    # FIREWORKS_ (conversation.inference_policy). Can add, never remove.
+    "PROTECTED_ENV_PREFIXES": [],
     # Django storage alias for private native coding-agent history. Configure an
     # S3/Garage-backed alias in deployment; default_storage is local in tests.
     "AGENT_HISTORY_STORAGE": "default",

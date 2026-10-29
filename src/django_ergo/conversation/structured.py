@@ -66,6 +66,7 @@ import asyncio
 import json
 import logging
 import uuid
+from contextvars import ContextVar
 from dataclasses import dataclass
 from dataclasses import field
 from typing import TYPE_CHECKING
@@ -380,7 +381,21 @@ class StructuredOutputToolkit(Toolkit):
         return ""
 
 
+def _policy_refusal(exc: BaseException | None) -> bool:
+    """A private-inference PolicyError, itself or wrapped (an SDK turns
+    transport errors into APIConnectionError)."""
+    seen = set()
+    while exc is not None and id(exc) not in seen:
+        if any(cls.__name__ == "PolicyError" for cls in type(exc).__mro__):
+            return True
+        seen.add(id(exc))
+        exc = exc.__cause__ or exc.__context__
+    return False
+
+
 def _error_category(exc: BaseException) -> str:
+    if _policy_refusal(exc):
+        return "policy"
     for cls in type(exc).__mro__:
         if cls.__name__ in _ERROR_CATEGORIES:
             return _ERROR_CATEGORIES[cls.__name__]
@@ -388,6 +403,8 @@ def _error_category(exc: BaseException) -> str:
 
 
 def _is_transient(exc: BaseException) -> bool:
+    if _policy_refusal(exc):
+        return False
     return any(cls.__name__ in _TRANSIENT_ERRORS for cls in type(exc).__mro__)
 
 
@@ -794,8 +811,16 @@ class _Run:
         return signal.stop
 
 
+# The structured call whose model requests are being made, so a per-request
+# ledger (the private engine's InferenceRequest rows) can link to it.
+current_call: ContextVar[StructuredCall | None] = ContextVar(
+    "ergo_current_structured_call", default=None
+)
+
+
 async def _loop(run: _Run) -> StructuredCallResult:
     """Run the call to its end; a crash marks it FAILED instead of leaving it in progress."""
+    token = current_call.set(run.call)
     try:
         return await _run_loop(run)
     except BaseException as e:
@@ -807,6 +832,8 @@ async def _loop(run: _Run) -> StructuredCallResult:
             except Exception:
                 log.exception("Could not record the crash of call %s", call.pk)
         raise
+    finally:
+        current_call.reset(token)
 
 
 async def _run_loop(run: _Run) -> StructuredCallResult:  # noqa: C901, PLR0912, PLR0915

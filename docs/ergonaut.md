@@ -158,7 +158,8 @@ names their bot.yaml and tools use: `engine.api_key_env`, `token_env`,
 `ctx.secret("NAME")`, or the SDK default `OPENAI_API_KEY` (plus
 `ANTHROPIC_API_KEY` if a bot uses the optional Claude engine).
 `ergonaut check` lists any that are missing. Keep them in an env file
-outside the bot repo.
+outside the bot repo. `FIREWORKS_API_KEY` is the exception: see
+[Private inference](#private-inference).
 
 A provider with `transport: cli` needs the Claude Code CLI installed where
 turns run (the worker) and logged in, either in its `CLAUDE_CONFIG_DIR` or
@@ -607,3 +608,77 @@ serve until a new one is ready. Workers end the turns they are running
 when they stop, so gate the rollout with the upgrade's idle check (above),
 or `ergonaut manage wait_idle` in a pre-stop hook with a long enough grace
 period.
+
+## Private inference
+
+A private pool (`private_pools` in providers.yaml; see
+[Bot reference](bots.md#private-inference)) sends to Fireworks with the
+key in `FIREWORKS_API_KEY`, for the bots it lists in `allowed_bots` only.
+
+### Provisioning the key
+
+Inject `FIREWORKS_API_KEY` into the Ergonaut runtime through the
+deployment's secret mechanism. Never put it in a bot.yaml, providers.yaml,
+this repo, omp config or a `local_shell` secret.
+
+- **Kubernetes**: a dedicated Secret, referenced by the Ergonaut
+  deployment. For Boundcorp that's in `boundcorp/infra-octo`, referenced
+  from `kubernetes/apps/ergonaut/app/deployment.yaml`, encrypted with SOPS
+  per that repo's convention. Workers run turns; the web also needs it,
+  since picking a private model for a chat fails with 409 while it isn't
+  set.
+- **systemd**: an `EnvironmentFile` readable only by the service, for
+  example `EnvironmentFile=/etc/ergonaut/fireworks.env` owned by root with
+  mode 0600.
+
+Rotate the key through the same mechanism, then restart (after
+`ergonaut manage wait_idle`). The engine reads the variable at send time,
+so nothing else holds a copy.
+
+### Enabling
+
+Add the pool with `enabled: false`, the bots in `allowed_bots`, and a
+`daily_usd_cap`. Provision the key (a new variable needs a restart), then
+set `enabled: true`; providers.yaml reloads like the bot folders. A pool
+without the key, or still disabled, refuses every send; nothing falls back
+to a public model.
+
+### API
+
+- `GET /api/bots/<bot>/models` has a `private_models` list, separate from
+  `models` and only for a bot a pool allows. Each entry has `id`
+  (`personal/<alias>`), `label`, `engine_type` (`fireworks`), `billing`
+  (`api`), `default`, and `available` (the pool is enabled and the key is
+  set).
+- `POST /api/sessions/<id>/model` (and a new thread's `model`) with a
+  private selector returns 403 for any other bot, or when the pool is
+  disabled, and 409 when the key isn't set.
+- `GET /api/costs` has a `private` block: API-billed pool requests from the
+  `InferenceRequest` ledger, by pool, provider, exact model and bot, with
+  requests, sent attempts, prompt, cached, output and reasoning tokens,
+  cost, `unknown_cost_requests` (sent, but no price or usage, so cost
+  unknown rather than 0) and `unsettled_reserved` (worst-case reservations
+  still held for those). It's a billing view: those calls are already in
+  the totals. Admins see everyone's; others see their own.
+
+The web app's model picker and Costs page don't show `private_models` or
+the `private` block yet.
+
+### Residual risks
+
+- The key is in the Ergonaut process's environment. Code running in that
+  process or as the same OS user (a Python tool, a bash command reading
+  `/proc`) can read it; stripping `FIREWORKS_*` from subprocesses and
+  `ctx.secret()` is defense in depth, not a sandbox.
+- Bash and login shells can read shell startup files, so don't keep the key
+  in one for the service user.
+- Orca remote workers' own environments are outside Ergonaut's checks.
+- omp and Orca can't enforce a private model for a coding agent, so agents
+  refuse private models altogether.
+
+### Phase 2
+
+A separate, credential-isolated private inference service: its own
+workload and service user, the key mounted only there, signed short-lived
+grants from Ergonaut, and network egress limited to Fireworks. The bot and
+tool processes then never see the key.

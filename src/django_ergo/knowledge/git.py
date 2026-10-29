@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import subprocess
 from pathlib import Path
 from pathlib import PurePosixPath
@@ -42,6 +41,8 @@ class GitCorpus:
         self.manifest = _relative(manifest)
 
     def _git(self, *arguments):
+        from django_ergo.protected_env import scrubbed_env
+
         try:
             result = subprocess.run(
                 ["git", "-C", str(self.repository), *arguments],
@@ -50,7 +51,7 @@ class GitCorpus:
                 timeout=30,
                 env={
                     key: value
-                    for key, value in os.environ.items()
+                    for key, value in scrubbed_env().items()
                     if not key.startswith("GIT_")
                 },
             )

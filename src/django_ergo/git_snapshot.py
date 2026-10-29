@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import subprocess
 from pathlib import Path
 
@@ -12,8 +11,12 @@ from django_ergo.paths import validate_relative_path
 
 
 def git_environment():
+    from django_ergo.protected_env import scrubbed_env
+
     return {
-        key: value for key, value in os.environ.items() if not key.startswith("GIT_")
+        key: value
+        for key, value in scrubbed_env().items()
+        if not key.startswith("GIT_")
     }
 
 

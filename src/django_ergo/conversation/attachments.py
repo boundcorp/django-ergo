@@ -37,6 +37,8 @@ from typing import TYPE_CHECKING
 
 from django.core.files.base import ContentFile
 
+from django_ergo.conversation.inference_policy import assert_public_endpoint
+from django_ergo.conversation.inference_policy import effective_openai_base_url
 from django_ergo.settings import api_settings
 
 if TYPE_CHECKING:
@@ -97,7 +99,11 @@ async def openai_transcriber(data: bytes, media_type: str, filename: str) -> str
     """Transcribe audio with OpenAI's transcription API (whisper-1)."""
     import openai
 
+    # AsyncOpenAI() falls back to OPENAI_BASE_URL: refuse a private endpoint.
+    what = "The audio transcriber"
+    assert_public_endpoint(effective_openai_base_url(), what=what)
     client = openai.AsyncOpenAI()
+    assert_public_endpoint(getattr(client, "base_url", None), what=what)
     response = await client.audio.transcriptions.create(
         model="whisper-1",
         file=(filename or "audio", data, media_type),

@@ -66,6 +66,11 @@ from django_ergo.conversation.context import TextContextSource
 from django_ergo.conversation.history import SessionSource
 from django_ergo.conversation.history_search_toolkit import MessageHistoryToolkit
 from django_ergo.conversation.identity import thread_message_identity
+from django_ergo.conversation.inference_policy import FIREWORKS
+from django_ergo.conversation.inference_policy import PRIVATE_ENGINE_TYPES
+from django_ergo.conversation.inference_policy import PRIVATE_RESERVED_CONFIG
+from django_ergo.conversation.inference_policy import PolicyError
+from django_ergo.conversation.inference_policy import mint_grant
 from django_ergo.conversation.models import CompactionMode
 from django_ergo.conversation.models import ConversationSession
 from django_ergo.conversation.models import StructuredCall
@@ -77,6 +82,7 @@ from django_ergo.conversation.runtime import get_default_engine_spec
 from django_ergo.conversation.structured import StructuredCallError
 from django_ergo.conversation.structured import resume_structured_call
 from django_ergo.conversation.structured import run_structured_call
+from django_ergo.protected_env import is_protected_env
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -87,6 +93,7 @@ if TYPE_CHECKING:
     from django_ergo.bots.tools import ToolModule
     from django_ergo.conversation.attachments import Attachment
     from django_ergo.conversation.engine import Engine
+    from django_ergo.conversation.inference_policy import PrivatePool
     from django_ergo.conversation.models import ThreadMessage
     from django_ergo.conversation.runner import PendingApproval
     from django_ergo.conversation.structured import StructuredCallResult
@@ -527,13 +534,26 @@ class Bot:
         return registry.providers if registry is not None else Providers()
 
     def model_ref(self) -> str:
-        """The ``provider/model`` this bot uses by default, when providers.yaml names it."""
+        """The ``provider/model`` this bot uses by default, when providers.yaml
+        names it. A private selector (``personal``, ``personal/heavy``) is
+        returned as is: :meth:`engine_spec` allows it for an allowlisted bot or
+        refuses it, and never falls back to the public default."""
         model = str(self.definition.engine_config.get("model") or "")
+        if self.providers.is_private(model):
+            return model
         if "/" in model and self.providers.knows(model):
             return model
         if not self.definition.engine_type and self.providers.default:
             return self.providers.default
         return ""
+
+    def private_target(self, ref: str) -> tuple[PrivatePool, str, str]:
+        """(pool, alias, exact model ID) for a private selector this bot may
+        use now; PolicyError when the pool isn't configured, has no such
+        member, is disabled, or doesn't list this bot in ``allowed_bots``."""
+        pool, alias, model_id = self.providers.private(ref)
+        pool.check_bot(self.name)
+        return pool, alias, model_id
 
     def session_model(self, session: ConversationSession | None) -> str:
         """The model picked for this chat, if it's still enabled."""
@@ -547,7 +567,10 @@ class Bot:
         Messages are stored the same way for every engine, so a model on
         another engine just takes the next turn. Runs the ORM.
         """
-        session.model = self.session_model_ref(model)
+        ref = self.session_model_ref(model)
+        if self.providers.is_private(ref):
+            self.private_target(ref)  # refuse before changing anything
+        session.model = ref
         spec = self.engine_spec(session)
         fields = ["model", "updated_at"]
         if (spec.engine_type, spec.transport_type) != (
@@ -581,6 +604,10 @@ class Bot:
 
     def session_model_ref(self, picked) -> str:
         picked = str(picked or "")
+        if picked and self.providers.is_private(picked):
+            # Kept even when it can't be used, so the chat fails instead of
+            # quietly moving to a public model (engine_spec decides).
+            return picked
         return picked if picked and self.providers.knows(picked) else ""
 
     def route(self, session: ConversationSession) -> str:
@@ -595,7 +622,9 @@ class Bot:
             lambda: self.make_engine(model=self.resolve_ref("auto/small", None)),
         )
         before = (session.metadata or {}).get("routed_model", "")
-        picked = route_model(self.providers, tier_of(ref), before)
+        picked = self.providers.check_public(
+            route_model(self.providers, tier_of(ref), before), where=ref
+        )
         self._set_routed(session, tier_of(ref), picked)
         return picked
 
@@ -624,15 +653,18 @@ class Bot:
         if not is_auto(ref):
             return ""
         failed = self.resolve_ref(ref, session)
-        return routing_retry_model(self.providers, tier_of(ref), failed, error)
+        retry = routing_retry_model(self.providers, tier_of(ref), failed, error)
+        return self.providers.check_public(retry, where="A retry") if retry else ""
 
     def reroute(self, session: ConversationSession, model: str, reason: str) -> None:
         """Move an ``auto/<tier>`` chat to ``model``, one of its tier's
         candidates, for its next turns (it stays while that model qualifies).
         Runs the ORM."""
         ref = self.session_model(session) or self.model_ref()
-        if not is_auto(ref) or model not in self.providers.routing.tiers.get(
-            tier_of(ref), []
+        if (
+            not is_auto(ref)
+            or model not in self.providers.routing.tiers.get(tier_of(ref), [])
+            or self.providers.is_private(model)
         ):
             msg = f"{model!r} isn't a model in this chat's tier"
             raise ValueError(msg)
@@ -640,18 +672,23 @@ class Bot:
 
     def resolve_ref(self, ref: str, session: ConversationSession | None) -> str:
         """``auto/<tier>`` as a concrete model: the one routed for this chat,
-        else the tier's first available one. No ORM."""
+        else the tier's first available one. Never a private model. No ORM."""
         if not is_auto(ref):
             return ref
         tier = self.providers.routing.tiers.get(tier_of(ref), [])
         routed = ((session.metadata or {}) if session else {}).get("routed_model")
+        picked = ""
         if routed in tier:
-            return routed
-        for candidate in tier:
-            found = self.providers.find(candidate)
-            if found and found[0].available:
-                return candidate
-        return tier[0] if tier else ""
+            picked = routed
+        else:
+            for candidate in tier:
+                found = self.providers.find(candidate)
+                if found and found[0].available:
+                    picked = candidate
+                    break
+            else:
+                picked = tier[0] if tier else ""
+        return self.providers.check_public(picked, where=ref) if picked else ""
 
     def engine_spec(
         self, session: ConversationSession | None = None, model: str = ""
@@ -659,6 +696,8 @@ class Bot:
         """The engine for a chat: the model picked for it (or ``model``), else the bot's."""
         default = get_default_engine_spec()
         ref = model or self.session_model(session) or self.model_ref()
+        if self.providers.is_private(ref):
+            return self._private_spec(ref)
         ref = self.resolve_ref(ref, session)
         transport = default.transport_type
         if ref:
@@ -679,6 +718,15 @@ class Bot:
             config.update(self.definition.engine_config)
             key_env = self.definition.api_key_env
             transport = self.definition.engine_transport or transport
+        if engine_type in PRIVATE_ENGINE_TYPES:
+            msg = (
+                f"Bot {self.name!r}: the {engine_type} engine is only reachable "
+                "through a private pool selector (private_pools in providers.yaml)"
+            )
+            raise PolicyError(msg)
+        if is_protected_env(key_env):
+            msg = f"Bot {self.name!r}: {key_env} is reserved for private inference"
+            raise PolicyError(msg)
         with_effort(config, engine_type, transport, self.session_effort(session))
         if key_env:
             key = os.environ.get(key_env)
@@ -690,6 +738,25 @@ class Bot:
             engine_type=engine_type,
             transport_type=transport,
             config=config,
+        )
+
+    def _private_spec(self, ref: str) -> EngineSpec:
+        """The engine for an allowlisted bot's private selector. Its endpoint,
+        key and model come from the pool; bot config can't change them."""
+        _pool, _alias, model_id = self.private_target(ref)
+        extra = {k: v for k, v in self.definition.engine_config.items() if k != "model"}
+        reserved = sorted(PRIVATE_RESERVED_CONFIG & set(extra))
+        if reserved or self.definition.api_key_env:
+            names = ", ".join(reserved) or "api_key_env"
+            msg = (
+                f"Bot {self.name!r}: {names} can't be set for a private pool model "
+                "(its endpoint, key and model come from providers.yaml)"
+            )
+            raise PolicyError(msg)
+        return EngineSpec(
+            engine_type=FIREWORKS,
+            transport_type="api",
+            config={**extra, "model": model_id},
         )
 
     async def thread_metadata(
@@ -721,7 +788,7 @@ class Bot:
             spec,
             text[:4000],
             user=user,
-            engine=self.make_engine(),
+            engine=self.make_engine(purpose="new_thread_metadata"),
             metadata={"bot": self.name, "session": str(session.id) if session else ""},
         )
         title = (
@@ -733,15 +800,35 @@ class Bot:
         return {"title": title[:80]} if title else {}
 
     def make_engine(
-        self, session: ConversationSession | None = None, model: str = ""
+        self,
+        session: ConversationSession | None = None,
+        model: str = "",
+        *,
+        purpose: str = "chat",
     ) -> Engine:
+        spec = self.engine_spec(session, model)
         if self._engine_factory is not None:
             engine = self._engine_factory()
         else:
-            engine = build_engine(self.engine_spec(session, model))
+            engine = build_engine(spec)
+        if spec.engine_type == FIREWORKS and hasattr(engine, "authorize"):
+            # The only place a grant is minted: from this bot's own reviewed
+            # config or its chat's selection, for this engine (this turn) only.
+            ref = model or self.session_model(session) or self.model_ref()
+            pool, _alias, _model_id = self.private_target(ref)
+            engine.authorize(
+                mint_grant(
+                    pool,
+                    bot=self.name,
+                    selector=ref,
+                    user_id=getattr(session, "user_id", None),
+                    session_id=getattr(session, "pk", None),
+                    purpose=purpose,
+                )
+            )
         if self.definition.tool_results_in_context is not None:
             engine.tool_results_in_context = self.definition.tool_results_in_context
-        config = self.engine_spec(session, model).config
+        config = spec.config
         name = str(config.get("model") or getattr(engine, "model", ""))
         engine.context_window = int(
             config.get("context_window")

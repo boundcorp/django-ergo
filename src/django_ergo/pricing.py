@@ -29,6 +29,7 @@ that are priced from their totals, without the surcharge.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal
 
 # Sources (checked 2026-10-02):
 #   https://platform.claude.com/docs/en/about-claude/pricing
@@ -219,9 +220,24 @@ def price_table() -> dict[str, dict[str, float]]:
 
 
 def price_for(model: str) -> Price | None:
-    """The price of ``model``, or None when it isn't in the table."""
+    """The price of ``model``, or None when it isn't in the table. Private
+    (Fireworks-hosted) model IDs only match :data:`EXACT_API_PRICES` exactly."""
     if not model:
         return None
+    from django_ergo.conversation.inference_policy import names_private_model
+
+    if names_private_model(model):
+        exact = next(
+            (exact_price(p, m) for p, m in EXACT_API_PRICES if m == model), None
+        )
+        if exact is None:
+            return None
+        return Price(
+            input=float(exact.input),
+            output=float(exact.output),
+            cache_write=float(exact.input),
+            cache_read=float(exact.cached),
+        )
     model = model.removesuffix("[1m]")
     table = price_table()
     matches = [key for key in table if model == key or model.startswith(key)]
@@ -301,4 +317,93 @@ def add_request_cost(call, model: str, usage) -> None:
     call.metadata = meta
     call.cost_usd = (call.cost_usd or Decimal(0)) + Decimal(
         str(round(sum(parts.values()), 8))
+    )
+
+
+# API-billed private pool models (bots.providers ``private_pools``), USD per
+# million tokens, keyed by (provider, exact model ID). Matched exactly, never by
+# prefix, so a model ID that isn't listed is unpriced ("unknown"), not priced
+# as some other family. Fireworks standard serverless, from the public model
+# pages and https://docs.fireworks.ai/serverless/pricing (checked 2026-10-28;
+# GLM 5.3 Flash checked 2026-10-29).
+EXACT_PRICES_SOURCE = (
+    "fireworks.ai standard serverless pricing, checked 2026-10-28 "
+    "(GLM 5.3 Flash 2026-10-29)"
+)
+EXACT_API_PRICES: dict[tuple[str, str], dict[str, str]] = {
+    ("fireworks", "accounts/fireworks/models/deepseek-v4p1-flash-1017"): {
+        "input": "0.30",
+        "cached": "0.006",
+        "output": "1.20",
+    },
+    ("fireworks", "accounts/fireworks/models/deepseek-v4p1-flash"): {
+        "input": "0.30",
+        "cached": "0.006",
+        "output": "1.20",
+    },
+    ("fireworks", "accounts/fireworks/models/glm-5p3"): {
+        "input": "1.40",
+        "cached": "0.26",
+        "output": "4.40",
+    },
+    ("fireworks", "accounts/fireworks/models/glm-5p3-flash"): {
+        "input": "0.15",
+        "cached": "0.03",
+        "output": "0.50",
+    },
+    ("fireworks", "accounts/fireworks/models/kimi-k3"): {
+        "input": "3.00",
+        "cached": "0.30",
+        "output": "15.00",
+    },
+}
+
+
+@dataclass(frozen=True)
+class ExactPrice:
+    """A private model's price: USD per million uncached input, cached input
+    and output tokens (reasoning is part of output)."""
+
+    provider: str
+    model: str
+    input: Decimal
+    cached: Decimal
+    output: Decimal
+    source: str = EXACT_PRICES_SOURCE
+
+    def snapshot(self) -> dict[str, str]:
+        return {
+            "provider": self.provider,
+            "model": self.model,
+            "input": str(self.input),
+            "cached": str(self.cached),
+            "output": str(self.output),
+            "unit": "USD per 1M tokens",
+            "source": self.source,
+        }
+
+    def cost(
+        self, prompt_tokens: int, cached_tokens: int, output_tokens: int
+    ) -> Decimal:
+        """USD for one request: ``prompt_tokens`` includes ``cached_tokens``."""
+        cached = max(0, int(cached_tokens))
+        uncached = max(0, int(prompt_tokens) - cached)
+        return (
+            uncached * self.input
+            + cached * self.cached
+            + max(0, int(output_tokens)) * self.output
+        ) / Decimal(1_000_000)
+
+
+def exact_price(provider: str, model: str) -> ExactPrice | None:
+    """The price of exactly ``model`` on ``provider``, or None."""
+    row = EXACT_API_PRICES.get((provider, model))
+    if row is None:
+        return None
+    return ExactPrice(
+        provider=provider,
+        model=model,
+        input=Decimal(row["input"]),
+        cached=Decimal(row["cached"]),
+        output=Decimal(row["output"]),
     )

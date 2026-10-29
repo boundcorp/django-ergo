@@ -87,6 +87,11 @@ bot's model, even when it moves to another engine.
 The file reloads like the bot folders. If an edit breaks it, the last good
 version stays in use and admins see the error.
 
+API-billed models that only some bots may use go under `private_pools`
+instead, with the bots allowed to use them; they never appear in the
+picker's ordinary list, tiers or the default. See
+[Private inference](bots.md#private-inference).
+
 ### Claude on your subscription
 
 `transport: cli` runs Claude models through the Claude Code CLI, on the

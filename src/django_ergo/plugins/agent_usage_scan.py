@@ -219,6 +219,16 @@ def canonical_remote(remote: str) -> str:
     return f"{parsed.scheme.lower()}://{host}{path}"
 
 
+def _env() -> dict[str, str] | None:
+    """The scrubbed environment in-process; None (inherit) when this runs as a
+    standalone script (``python3 -``), whose caller already scrubbed it."""
+    if __name__ == "__main__":
+        return None
+    from django_ergo.protected_env import scrubbed_env
+
+    return scrubbed_env()
+
+
 def _git(cwd: str, *args: str) -> str:
     try:
         return subprocess.run(  # noqa: S603 — fixed executable, cwd is an argument.
@@ -227,6 +237,7 @@ def _git(cwd: str, *args: str) -> str:
             check=False,
             text=True,
             timeout=10,
+            env=_env(),
         ).stdout.strip()
     except (OSError, subprocess.TimeoutExpired):
         return ""

@@ -19,6 +19,8 @@ from typing import TYPE_CHECKING
 
 from django.utils import timezone
 
+from django_ergo.protected_env import scrubbed_env
+
 if TYPE_CHECKING:
     from django_ergo.conversation.models import ConversationAttachment
     from django_ergo.conversation.models import ConversationSession
@@ -117,6 +119,7 @@ def refresh_pull_request(row: ConversationAttachment) -> bool:
             text=True,
             timeout=GH_TIMEOUT,
             check=False,
+            env=scrubbed_env(),
         )
     except (OSError, subprocess.TimeoutExpired) as e:
         logger.warning("Couldn't read %s: %s", row.url, e)

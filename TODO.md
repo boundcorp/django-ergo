@@ -88,6 +88,15 @@ Live on rigel from `~/p/boundcorp/django-ergo`, bots from `boundcorp/ergo-bots`.
 
 - [ ] A bot tool waiting on a @bot_task holds a worker slot; watch worker concurrency if many tools wait at once.
 
+### Private inference (`private_pools`)
+
+- [x] Phase 1: `private_pools` in providers.yaml (strict schema, `allowed_bots`, reserved `personal` selector), the guarded Fireworks engine with per-turn grants minted in `Bot.make_engine`, public engines refusing `fireworks.ai`, coding agents refusing private models, the `InferenceRequest` ledger with exact prices and the optional `daily_usd_cap`, protected `FIREWORKS_*` env, `private_models` in the models API and the `private` block in the Costs API. Docs: `docs/bots.md` and `docs/ergonaut.md`, "Private inference".
+- [ ] Phase 2: a separate credential-isolated private inference service (own workload and service user, key mounted only there, signed short-lived grants, egress limited to Fireworks), so bot, tool and agent processes never see `FIREWORKS_API_KEY`.
+- [ ] Private coding agents: omp/Orca harnesses would have to carry and enforce a grant (subagents, defaults, model switches). Until then agents refuse private models.
+- [ ] Frontend: a separate, API-billed group for `private_models` in the model picker, and the Costs page's `private` block.
+- [ ] ergo-bots: the `personal` bot and a disabled `private_pools.personal` in providers.yaml; provision `FIREWORKS_API_KEY` as a Secret in infra-octo (`kubernetes/apps/ergonaut/app/deployment.yaml`); then enable.
+- [ ] Lee decides: the `daily_usd_cap` value (and whether a UTC day is the right period), the default member (`deepseek-v4p1-flash-1017` or the original `deepseek-v4p1-flash`), whether titles, compaction and illustrations of the personal bot's chats should spend on the pool (they do now), and whether its voice notes may go to the deployment's public `AUDIO_TRANSCRIBER` (they do now, when one is set).
+
 ### Done
 
 - [x] Todo lists in every chat and thread: the built-in `todos` skill (`ergo_todo_write`, `ergo_todo_update`, like Claude Code's TodoWrite) keeps a checklist in the session's metadata, in context every turn, shown in Ergonaut's thread view; `todos: false` in bot.yaml turns it off.

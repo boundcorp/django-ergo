@@ -30,6 +30,8 @@ from dataclasses import field
 from typing import TYPE_CHECKING
 from typing import Any
 
+from django_ergo.conversation.inference_policy import PolicyError
+
 if TYPE_CHECKING:
     from django_ergo.bots.runtime import Bot
     from django_ergo.bots.tools import ToolContext
@@ -176,6 +178,7 @@ def start(ctx: ToolContext, spec: AgentSpec, manager: str = "") -> Worker:
     if ctx.session is None:
         msg = "Agents belong to a chat"
         raise ValueError(msg)
+    _refuse_private(ctx.bot, spec.model)  # before any side effect
     found = manager_for(ctx.bot, manager, ctx)
     choice = None
     if spec.tier:
@@ -183,6 +186,7 @@ def start(ctx: ToolContext, spec: AgentSpec, manager: str = "") -> Worker:
 
         choice = pick_agent(ctx.bot.providers, spec.tier)
         spec.agent, spec.model, spec.effort = choice.agent, choice.model, choice.effort
+        _refuse_private(ctx.bot, spec.model)
     spec.agent = spec.agent or found.default_agent
     if found.agents and spec.agent not in found.agents:
         msg = f"{found.name} runs {', '.join(found.agents)}, not {spec.agent!r}" + (
@@ -214,6 +218,17 @@ def start(ctx: ToolContext, spec: AgentSpec, manager: str = "") -> Worker:
         state=state,
         handle=handle,
     )
+
+
+def _refuse_private(bot: Bot, model: str) -> None:
+    """Coding agents never run on a private pool (or any Fireworks model):
+    their harnesses can't carry or enforce a private grant yet."""
+    if bot.providers.is_private(model):
+        msg = (
+            f"Coding agents can't use the private model {model!r}: private pools "
+            "are for allowlisted bots' own chats only"
+        )
+        raise PolicyError(msg)
 
 
 def watch(ctx: WorkerContext, manager: AgentManager, handle: dict):

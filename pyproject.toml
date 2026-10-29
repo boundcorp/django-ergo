@@ -39,8 +39,8 @@ Changelog = "https://github.com/boundcorp/django-ergo/blob/master/HISTORY.md"
 # django_ergo = "django_ergo.cli:run"
 
 [project.optional-dependencies]
-legacy = ["psycopg[binary]", "pgvector", "openai"]
-openai = ["openai"]
+legacy = ["psycopg[binary]", "pgvector", "openai<3", "httpx"]
+openai = ["openai<3", "httpx"]
 filesystem = ["pyyaml>=6.0"]
 bots = ["pyyaml>=6.0", "jinja2>=3.1", "markdown-it-py>=3.0"]
 browser = ["playwright>=1.55"]  # the browser plugin (connects to Chrome over CDP)
@@ -52,7 +52,9 @@ telemetry = [
 ]
 dev = [
     "pgvector",
-    "openai",
+    "openai<3",
+    "httpx",
+    "anthropic",
     "twine",
     "wheel",
     "build",

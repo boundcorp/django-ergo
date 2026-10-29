@@ -117,8 +117,10 @@ def test_distribution_dependencies_offer_minimal_and_legacy_installs():
     )
     project = configuration["project"]
     assert not {"pgvector", "openai", "psycopg[binary]"} & set(project["dependencies"])
-    assert set(project["optional-dependencies"]["legacy"]) == {
-        "pgvector",
-        "openai",
-        "psycopg[binary]",
+    from packaging.requirements import Requirement
+
+    legacy = {
+        Requirement(dependency).name
+        for dependency in project["optional-dependencies"]["legacy"]
     }
+    assert {"pgvector", "openai", "psycopg"} <= legacy

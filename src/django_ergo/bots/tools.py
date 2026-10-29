@@ -35,7 +35,9 @@ on every turn, such as live data the bot should always see::
 
 Tools and context functions read per-user credentials with
 ``ctx.secret("TANDOOR_API_KEY")``: the environment variable
-``TANDOOR_API_KEY__<USERNAME>`` if set, else ``TANDOOR_API_KEY``.
+``TANDOOR_API_KEY__<USERNAME>`` if set, else ``TANDOOR_API_KEY``. Protected
+names (``FIREWORKS_*``, ``DJANGO_ERGO["PROTECTED_ENV_PREFIXES"]``) raise
+PolicyError: they belong to private inference, not tools.
 """
 
 from __future__ import annotations
@@ -57,8 +59,10 @@ from typing import get_type_hints
 from django_ergo.conversation.adapters import OpenAIToolAdapter
 from django_ergo.conversation.images import ToolResult
 from django_ergo.conversation.images import as_tool_result
+from django_ergo.conversation.inference_policy import PolicyError
 from django_ergo.conversation.toolkit import ApprovalPreview
 from django_ergo.conversation.toolkit import Toolkit
+from django_ergo.protected_env import is_protected_env
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -118,10 +122,21 @@ class ToolContext:
         return bool(self.session and self.session.parent_id is None)
 
     def secret(self, name: str, default: str | None = None) -> str | None:
-        """An environment value, preferring the user's own ``NAME__<USERNAME>``."""
+        """An environment value, preferring the user's own ``NAME__<USERNAME>``.
+
+        Protected names raise PolicyError. That stops tools asking for them by
+        name (defense-in-depth): it is not a sandbox for code in this process.
+        """
+        if is_protected_env(name):
+            msg = f"{name} is reserved for private inference and can't be read by tools"
+            raise PolicyError(msg)
         if self.user is not None:
             username = re.sub(r"\W", "_", self.user.get_username()).upper()
-            if value := os.environ.get(f"{name}__{username}"):
+            per_user = f"{name}__{username}"
+            if is_protected_env(per_user):
+                msg = f"{per_user} is reserved for private inference and can't be read by tools"
+                raise PolicyError(msg)
+            if value := os.environ.get(per_user):
                 return value
         return os.environ.get(name) or default
 

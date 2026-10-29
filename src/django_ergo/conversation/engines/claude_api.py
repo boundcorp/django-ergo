@@ -20,6 +20,8 @@ from django_ergo.conversation.identity import attributed_text
 from django_ergo.conversation.images import attachment_ref
 from django_ergo.conversation.images import memory_result
 from django_ergo.conversation.images import prepare_messages
+from django_ergo.conversation.inference_policy import assert_public_endpoint
+from django_ergo.conversation.inference_policy import effective_anthropic_base_url
 from django_ergo.conversation.messages import StoredMessagesMixin
 from django_ergo.conversation.messages import add_message
 from django_ergo.conversation.messages import model_rows
@@ -132,8 +134,16 @@ class ClaudeAPIEngine(StoredMessagesMixin, Engine):
         self._adapter = ClaudeToolAdapter()
 
     def _get_client(self):
-        """Lazily initialize the Anthropic async client."""
+        """Lazily initialize the Anthropic async client.
+
+        Refuses a private inference endpoint (explicit ``base_url`` or the SDK's
+        ``ANTHROPIC_BASE_URL`` default) before the client is built.
+        """
         if self._client is None:
+            assert_public_endpoint(
+                effective_anthropic_base_url(self.base_url),
+                what="The Claude API engine",
+            )
             import anthropic
 
             kwargs = {}
@@ -143,6 +153,15 @@ class ClaudeAPIEngine(StoredMessagesMixin, Engine):
                 kwargs["base_url"] = self.base_url
             self._client = anthropic.AsyncAnthropic(**kwargs)
         return self._client
+
+    async def _create_message(self, **kwargs):
+        """``messages.create`` on the client, re-checking the endpoint the
+        client actually sends to (covers a client swapped or mutated later)."""
+        client = self._get_client()
+        assert_public_endpoint(
+            getattr(client, "base_url", None), what="The Claude API engine"
+        )
+        return await client.messages.create(**kwargs)
 
     def get_tool_adapter(self) -> ClaudeToolAdapter:
         return self._adapter
@@ -254,8 +273,7 @@ class ClaudeAPIEngine(StoredMessagesMixin, Engine):
             if tools:
                 kwargs["tools"] = tools
 
-            client = self._get_client()
-            response = await client.messages.create(**kwargs)
+            response = await self._create_message(**kwargs)
 
             record_usage(
                 span,
@@ -346,7 +364,7 @@ class ClaudeAPIEngine(StoredMessagesMixin, Engine):
                 kwargs["system"] = system
             if tools:
                 kwargs["tools"] = tools
-            response = await self._get_client().messages.create(**kwargs)
+            response = await self._create_message(**kwargs)
             usage = response.usage
             record_usage(
                 span,
@@ -456,7 +474,6 @@ class ClaudeAPIEngine(StoredMessagesMixin, Engine):
             transport_type=self.transport_type,
             max_tokens=self.max_tokens,
         ) as span:
-            client = self._get_client()
             kwargs: dict[str, Any] = {
                 "model": self.model,
                 "max_tokens": self.max_tokens,
@@ -481,7 +498,7 @@ class ClaudeAPIEngine(StoredMessagesMixin, Engine):
                 if tools:
                     kwargs["tools"] = tools
 
-            response = await client.messages.create(**kwargs)
+            response = await self._create_message(**kwargs)
 
             record_usage(
                 span,

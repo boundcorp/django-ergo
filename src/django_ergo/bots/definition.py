@@ -20,6 +20,8 @@ bot.yaml::
       # transport: cli                 # the logged-in Claude Code (claude) or Codex (openai) CLI
       # or, with a providers.yaml (django_ergo.bots.providers):
       # config: {model: anthropic/claude-sonnet-5-5}
+      # or a private pool member, only for a bot its allowed_bots lists:
+      # config: {model: personal/heavy}
     root:                              # context budget for main and named chats
       recent: 15
       budget_tokens: 8000

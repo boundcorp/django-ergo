@@ -16,6 +16,8 @@ import openai
 from django.contrib.auth import get_user_model
 from django.dispatch import Signal
 
+from django_ergo.conversation.inference_policy import assert_public_endpoint
+from django_ergo.conversation.inference_policy import effective_openai_base_url
 from django_ergo.models import ChatMessage
 from django_ergo.models import MessageRole
 from django_ergo.models import MessageType
@@ -86,11 +88,20 @@ class WorkflowEngine:
             )
             raise ValueError(msg)
 
+        # The SDK falls back to OPENAI_BASE_URL: refuse a private endpoint.
+        assert_public_endpoint(effective_openai_base_url(), what="The workflow engine")
+
         try:
             self.openai_client = openai.OpenAI(api_key=api_key, timeout=self.timeout)
         except Exception as e:
             msg = f"Failed to initialize OpenAI client: {e}"
             raise ValueError(msg) from e
+
+    def _assert_public_client(self) -> None:
+        """Refuse to send if the client in use points at a private endpoint."""
+        assert_public_endpoint(
+            getattr(self.openai_client, "base_url", None), what="The workflow engine"
+        )
 
     def process_message(
         self,
@@ -252,6 +263,7 @@ class WorkflowEngine:
         # Get available tools for this workflow
         tools = self._get_workflow_tools(context.workflow)
 
+        self._assert_public_client()
         try:
             # Make OpenAI API call
             response = self.openai_client.chat.completions.create(
@@ -640,6 +652,7 @@ class WorkflowEngine:
             )
 
         # Get final response
+        self._assert_public_client()
         response = self.openai_client.chat.completions.create(
             model=self.model,
             messages=messages,

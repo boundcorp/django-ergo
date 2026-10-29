@@ -77,6 +77,7 @@ from django_ergo.bots.tools import FunctionToolkit
 from django_ergo.bots.tools import bot_tool
 from django_ergo.conversation.context import TextContextSource
 from django_ergo.plugins.bash import trim
+from django_ergo.protected_env import scrubbed_env
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -183,6 +184,7 @@ class BrowserPlugin(BotPlugin):
                 stderr=out,
                 timeout=self.timeout,
                 check=False,
+                env=scrubbed_env(),
             )
             out.seek(0)
             return subprocess.CompletedProcess(
@@ -397,6 +399,7 @@ class BrowserPlugin(BotPlugin):
                 stdin=subprocess.DEVNULL,
                 timeout=self.timeout,
                 check=False,
+                env=scrubbed_env(),
             )
         if proc.returncode != 0:
             msg = f"launch_command failed: {(proc.stderr or proc.stdout or '').strip()[:500]}"

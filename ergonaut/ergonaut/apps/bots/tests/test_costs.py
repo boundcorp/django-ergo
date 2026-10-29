@@ -360,3 +360,48 @@ def test_agent_usage_by_project_with_list_price_estimates(client, lee):
     assert by_project["(no project recorded)"]["unpriced_models"] == ["mystery-model"]
     timer = next(row for row in agents["rows"] if row["worker_title"] == "Timer")
     assert (timer["project"], timer["branch"], timer["priced"]) == ("meditate", "main", True)
+
+
+@pytest.mark.django_db
+def test_private_pool_spend_by_pool_provider_and_model(client, lee):
+    from decimal import Decimal
+
+    from django_ergo.conversation.models import InferenceRequest
+
+    kimi = "accounts/fireworks/models/kimi-k3"
+    common = {"user": lee, "bot_name": "personal", "selector": "personal/heavy", "pool": "personal"}
+    InferenceRequest.objects.create(
+        **common,
+        provider="fireworks",
+        model=kimi,
+        outcome="ok",
+        cost_status="priced",
+        cost_usd=Decimal("0.00492"),
+        prompt_tokens=1000,
+        cached_tokens=400,
+        output_tokens=200,
+        reasoning_tokens=50,
+    )
+    # Sent but unpriced (or no usage): unknown, never counted as $0.
+    InferenceRequest.objects.create(
+        **common, provider="fireworks", model=kimi, outcome="error", cost_status="unknown", reserved_usd=Decimal("0.2")
+    )
+    # Refused before HTTP: recorded, not sent.
+    InferenceRequest.objects.create(
+        **common, provider="fireworks", model=kimi, outcome="not_sent", cost_status="not_sent", cost_usd=0
+    )
+
+    private = client.get("/api/costs").json()["private"]
+
+    assert private["cost"] == pytest.approx(0.00492)
+    assert private["unknown_cost_requests"] == 1
+    [row] = private["rows"]
+    assert (row["pool"], row["provider"], row["model"], row["bot"], row["billing_mode"]) == (
+        "personal",
+        "fireworks",
+        kimi,
+        "personal",
+        "api",
+    )
+    assert (row["requests"], row["sent"], row["prompt_tokens"], row["cached_tokens"]) == (3, 2, 1000, 400)
+    assert row["unsettled_reserved"] == pytest.approx(0.2)
