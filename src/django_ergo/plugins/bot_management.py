@@ -63,8 +63,8 @@ from django_ergo.bots.plugins import BotPlugin
 from django_ergo.bots.tools import BotTool
 from django_ergo.bots.tools import FunctionToolkit
 from django_ergo.bots.tools import bot_tool
-from django_ergo.conversation.inference_policy import scrubbed_env
 from django_ergo.plugins.bash import trim
+from django_ergo.protected_env import scrubbed_env
 
 if TYPE_CHECKING:
     from django_ergo.bots.tools import ToolContext

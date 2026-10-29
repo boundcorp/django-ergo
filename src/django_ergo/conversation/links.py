@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING
 
 from django.utils import timezone
 
-from django_ergo.conversation.inference_policy import scrubbed_env
+from django_ergo.protected_env import scrubbed_env
 
 if TYPE_CHECKING:
     from django_ergo.conversation.models import ConversationAttachment

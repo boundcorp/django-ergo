@@ -70,7 +70,6 @@ from django_ergo.conversation.inference_policy import FIREWORKS
 from django_ergo.conversation.inference_policy import PRIVATE_ENGINE_TYPES
 from django_ergo.conversation.inference_policy import PRIVATE_RESERVED_CONFIG
 from django_ergo.conversation.inference_policy import PolicyError
-from django_ergo.conversation.inference_policy import is_protected_env
 from django_ergo.conversation.inference_policy import mint_grant
 from django_ergo.conversation.models import CompactionMode
 from django_ergo.conversation.models import ConversationSession
@@ -83,6 +82,7 @@ from django_ergo.conversation.runtime import get_default_engine_spec
 from django_ergo.conversation.structured import StructuredCallError
 from django_ergo.conversation.structured import resume_structured_call
 from django_ergo.conversation.structured import run_structured_call
+from django_ergo.protected_env import is_protected_env
 
 if TYPE_CHECKING:
     from collections.abc import Callable

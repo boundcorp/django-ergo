@@ -24,7 +24,7 @@ from pathlib import Path
 from django_ergo.bots.tools import BotTool
 from django_ergo.bots.tools import FunctionToolkit
 from django_ergo.bots.tools import bot_tool
-from django_ergo.conversation.inference_policy import scrubbed_env
+from django_ergo.protected_env import scrubbed_env
 
 MAX_ARTICLES = 2000
 MAX_ARTICLE_CHARS = 50_000

@@ -224,7 +224,7 @@ def _env() -> dict[str, str] | None:
     standalone script (``python3 -``), whose caller already scrubbed it."""
     if __name__ == "__main__":
         return None
-    from django_ergo.conversation.inference_policy import scrubbed_env
+    from django_ergo.protected_env import scrubbed_env
 
     return scrubbed_env()
 

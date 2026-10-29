@@ -56,8 +56,8 @@ from types import SimpleNamespace
 
 from django_ergo.conversation.engines.claude_api import ClaudeAPIEngine
 from django_ergo.conversation.inference_policy import PolicyError
-from django_ergo.conversation.inference_policy import is_protected_env
-from django_ergo.conversation.inference_policy import scrubbed_env
+from django_ergo.protected_env import is_protected_env
+from django_ergo.protected_env import scrubbed_env
 
 logger = logging.getLogger(__name__)
 

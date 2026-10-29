@@ -11,8 +11,7 @@ from django_ergo.paths import validate_relative_path
 
 
 def git_environment():
-    # Imported here: the conversation package needs configured settings.
-    from django_ergo.conversation.inference_policy import scrubbed_env
+    from django_ergo.protected_env import scrubbed_env
 
     return {
         key: value

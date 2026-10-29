@@ -78,7 +78,7 @@ from django.db import DatabaseError
 from django_ergo.bots.plugins import BotPlugin
 from django_ergo.conversation.attachments import Attachment
 from django_ergo.conversation.inference_policy import PolicyError
-from django_ergo.conversation.inference_policy import is_protected_env
+from django_ergo.protected_env import is_protected_env
 
 if TYPE_CHECKING:
     from django_ergo.bots.runtime import TurnResult

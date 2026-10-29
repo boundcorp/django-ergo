@@ -83,9 +83,9 @@ from django_ergo.conversation.inference_policy import RESERVED_POOL_NAMES
 from django_ergo.conversation.inference_policy import PolicyError
 from django_ergo.conversation.inference_policy import PrivatePool
 from django_ergo.conversation.inference_policy import is_private_host
-from django_ergo.conversation.inference_policy import is_protected_env
 from django_ergo.conversation.inference_policy import names_private_model
 from django_ergo.conversation.inference_policy import url_host
+from django_ergo.protected_env import is_protected_env
 
 PROVIDERS_FILE = "providers.yaml"
 ROUTING_FILE = "routing.md"

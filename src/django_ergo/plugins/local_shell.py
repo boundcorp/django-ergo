@@ -76,8 +76,8 @@ from django_ergo.bots.tools import BotTool
 from django_ergo.bots.tools import FunctionToolkit
 from django_ergo.bots.tools import bot_tool
 from django_ergo.conversation.context import TextContextSource
-from django_ergo.conversation.inference_policy import is_protected_env
 from django_ergo.plugins.orca import is_secret
+from django_ergo.protected_env import is_protected_env
 
 if TYPE_CHECKING:
     from django_ergo.bots.tools import ToolContext

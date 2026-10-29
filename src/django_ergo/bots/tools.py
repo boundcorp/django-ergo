@@ -60,9 +60,9 @@ from django_ergo.conversation.adapters import OpenAIToolAdapter
 from django_ergo.conversation.images import ToolResult
 from django_ergo.conversation.images import as_tool_result
 from django_ergo.conversation.inference_policy import PolicyError
-from django_ergo.conversation.inference_policy import is_protected_env
 from django_ergo.conversation.toolkit import ApprovalPreview
 from django_ergo.conversation.toolkit import Toolkit
+from django_ergo.protected_env import is_protected_env
 
 if TYPE_CHECKING:
     from collections.abc import Callable

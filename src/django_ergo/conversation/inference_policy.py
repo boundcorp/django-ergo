@@ -18,8 +18,8 @@ retries, defaults, saved session state, other bots) can reach them:
   there is no valid grant for the exact model it is about to send.
 - Public engines refuse private endpoints (:func:`assert_public_endpoint`),
   so an OpenAI-compatible client with a custom ``base_url`` can't reach them.
-- Subprocesses get environments without protected variables
-  (:func:`scrubbed_env`), and ``ToolContext.secret`` won't read them.
+- Subprocesses get environments without protected variables, and
+  ``ToolContext.secret`` won't read them.
 
 These are in-process guards: they stop Ergo's own code paths from routing a
 non-allowlisted bot to a private model. They are not a sandbox. Code that
@@ -76,9 +76,6 @@ PRIVATE_MODEL_MARKERS = ("accounts/fireworks/",)
 # Selector namespaces that are always private, configured or not, so a bot that
 # asks for ``personal`` without a configured pool fails instead of falling back.
 RESERVED_POOL_NAMES = ("personal",)
-# Environment variables subprocesses and tools never see (extend with
-# DJANGO_ERGO["PROTECTED_ENV_PREFIXES"]).
-DEFAULT_PROTECTED_ENV_PREFIXES = ("FIREWORKS_",)
 # A grant covers one engine, built for one turn; this bounds a stray reference.
 GRANT_TTL_SECONDS = 6 * 3600
 
@@ -322,34 +319,3 @@ def names_private_model(text) -> bool:
     if any(provider in text for provider in PRIVATE_PROVIDERS):
         return True
     return text.partition("/")[0] in RESERVED_POOL_NAMES
-
-
-# -- environment --------------------------------------------------------------
-
-
-def protected_env_prefixes() -> tuple[str, ...]:
-    """Name prefixes of environment variables tools and subprocesses never get.
-    Settings can add to the defaults, never remove them."""
-    extra: list = []
-    try:
-        from django_ergo.settings import api_settings
-
-        extra = list(getattr(api_settings, "PROTECTED_ENV_PREFIXES", None) or [])
-    except Exception:  # noqa: BLE001 - settings not configured: defaults still apply
-        extra = []
-    return tuple(
-        dict.fromkeys(
-            [*DEFAULT_PROTECTED_ENV_PREFIXES, *(str(p).upper() for p in extra if p)]
-        )
-    )
-
-
-def is_protected_env(name) -> bool:
-    return str(name or "").upper().startswith(protected_env_prefixes())
-
-
-def scrubbed_env(env=None) -> dict[str, str]:
-    """A copy of ``env`` (default: this process's) without protected variables."""
-    source = os.environ if env is None else env
-    prefixes = protected_env_prefixes()
-    return {k: v for k, v in source.items() if not str(k).upper().startswith(prefixes)}

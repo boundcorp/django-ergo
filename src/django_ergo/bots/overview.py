@@ -35,7 +35,7 @@ from django_ergo.conversation.context import estimate_tokens
 from django_ergo.conversation.history import Granularity
 from django_ergo.conversation.history import SessionSource
 from django_ergo.conversation.history import render_body
-from django_ergo.conversation.inference_policy import scrubbed_env
+from django_ergo.protected_env import scrubbed_env
 from django_ergo.settings import api_settings
 
 if TYPE_CHECKING:

@@ -45,8 +45,8 @@ from types import SimpleNamespace
 
 from django_ergo.conversation.engines.openai_api import OpenAIAPIEngine
 from django_ergo.conversation.inference_policy import PolicyError
-from django_ergo.conversation.inference_policy import is_protected_env
-from django_ergo.conversation.inference_policy import scrubbed_env
+from django_ergo.protected_env import is_protected_env
+from django_ergo.protected_env import scrubbed_env
 
 # Config overrides (``-c key=value``) that leave Codex a plain model: no
 # shell, files, web, images, skills, plugins, apps or sub-agents, and no
