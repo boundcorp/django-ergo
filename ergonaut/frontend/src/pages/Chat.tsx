@@ -28,6 +28,7 @@ import { AttachmentView, replySuggestions, Transcript } from '../components/Tran
 import { ModelLink, MobileSessionBar, SuggestionChips, ThreadOptions } from '../components/ChatChrome'
 import { TodoButton, TodoList, saveTodosShown, todosShown } from '../components/TodoList'
 import { WorkerActivityView, WorkerPulse } from '../components/WorkerActivity'
+import { UsageBars, useSessionUsage } from '../components/UsageSparkline'
 import { agoLong } from '../time'
 import { linkedLine, messageAnchor } from '../messageLink'
 
@@ -131,6 +132,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
   const [sheetOpen, setSheetOpen] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
   const models = useBotModels(detail?.session.bot ?? '')
+  const usage = useSessionUsage(id, detail?.messages.length)
   function openOptions() {
     if (window.matchMedia('(max-width: 640px)').matches) setSheetOpen(true)
     else setMenuOpen(true)
@@ -593,6 +595,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
               )}
             </div>
             <div className="ml-auto flex flex-wrap items-center gap-3">
+              {usage && <UsageBars usage={usage} />}
               {models && (
                 <ThreadOptions open={menuOpen} onOpenChange={setMenuOpen}>
                   <div className="flex flex-col gap-2">
@@ -663,6 +666,11 @@ export function Chat({ onChange }: { onChange: () => void }) {
                     {detail.session.started_by}
                   </Link>
                 </>
+              )}
+              {usage && (
+                <div className="mt-2">
+                  <UsageBars usage={usage} />
+                </div>
               )}
             </>
           }

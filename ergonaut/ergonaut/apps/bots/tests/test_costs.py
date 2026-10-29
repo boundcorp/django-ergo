@@ -405,3 +405,77 @@ def test_private_pool_spend_by_pool_provider_and_model(client, lee):
     )
     assert (row["requests"], row["sent"], row["prompt_tokens"], row["cached_tokens"]) == (3, 2, 1000, 400)
     assert row["unsettled_reserved"] == pytest.approx(0.2)
+
+
+@pytest.mark.django_db
+def test_session_usage_by_hour_splits_the_chat_from_its_agents(client, lee):
+    from datetime import timedelta
+
+    from django_ergo.conversation.models import AgentSession, AgentSessionThreadLink, AgentUsageEvent
+
+    chat = ConversationSession.objects.create(user=lee, bot_name="devbox", engine_type="claude")
+    other = ConversationSession.objects.create(user=lee, bot_name="devbox", engine_type="claude")
+    now = timezone.now()
+
+    def call(session, ago, tokens):
+        made = StructuredCall.objects.create(
+            kind="chat_reply", session=session, user=lee, input_tokens=tokens, cache_read_input_tokens=tokens
+        )
+        StructuredCall.objects.filter(pk=made.pk).update(created_at=now - ago)
+
+    call(chat, timedelta(minutes=10), 100)  # newest hour: 200
+    call(chat, timedelta(hours=2, minutes=30), 50)  # third from the end: 100
+    call(chat, timedelta(hours=7), 1000)  # before the window
+    call(other, timedelta(minutes=5), 999)  # another chat
+
+    # A worker whose transcript was captured: counted per event, not by its running totals.
+    captured = Worker.objects.create(session=chat, bot_name="devbox", title="fix", function="orca:watch")
+    native = AgentSession.objects.create(cli="omp", host_namespace="local", native_session_id="n1")
+    AgentSessionThreadLink.objects.create(session=native, conversation=chat, worker=captured)
+    AgentUsageEvent.objects.create(
+        session=native, source_event_key="a", occurred_at=now - timedelta(minutes=20), input_tokens=30, output_tokens=10
+    )
+    AgentUsage.objects.create(
+        worker=captured,
+        session=chat,
+        bot_name="devbox",
+        agent="omp",
+        model="m",
+        input_tokens=10_000,
+        first_at=now - timedelta(hours=1),
+        last_at=now,
+    )
+    # One without: its 600 tokens over the last 3 hours spread 200 an hour.
+    plain = Worker.objects.create(session=chat, bot_name="devbox", title="docs", function="orca:watch")
+    AgentUsage.objects.create(
+        worker=plain,
+        session=chat,
+        bot_name="devbox",
+        agent="claude",
+        model="m",
+        output_tokens=600,
+        first_at=now - timedelta(hours=3),
+        last_at=now,
+    )
+
+    data = client.get(f"/api/sessions/{chat.id}/usage?hours=6").json()
+    assert [h["thread_tokens"] for h in data["hours"]] == [0, 0, 0, 100, 0, 200]
+    agents = [h["agent_tokens"] for h in data["hours"]]
+    assert agents[:3] == [0, 0, 0]
+    assert sum(agents[3:]) == pytest.approx(640, abs=2)
+    assert agents[5] == pytest.approx(240, abs=2)
+    assert data["thread_tokens"] == 300
+    assert data["agent_tokens"] == sum(agents)
+
+
+@pytest.mark.django_db
+def test_session_usage_is_only_for_visible_chats(client):
+    owner = get_user_model().objects.create_user("other", "o@example.com", "pw")
+    chat = ConversationSession.objects.create(user=owner, bot_name="devbox")
+    get_user_model().objects.create_user("cook", "c@example.com", "pw")
+    client.post(
+        "/api/auth/login",
+        json.dumps({"username": "cook", "password": "pw"}),
+        content_type="application/json",
+    )
+    assert client.get(f"/api/sessions/{chat.id}/usage").status_code == 404

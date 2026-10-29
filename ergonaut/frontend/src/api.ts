@@ -283,6 +283,10 @@ export type CostBucket = {
   subscription_calls: number
 }
 
+// GET /api/sessions/{id}/usage: one chat's tokens per hour, its own calls and its workers' agents.
+export type UsageHour = { start: string; thread_tokens: number; agent_tokens: number }
+export type SessionUsage = { until: string; hours: UsageHour[]; thread_tokens: number; agent_tokens: number }
+
 export type Costs = {
   days: number
   total: CostBucket
@@ -753,6 +757,7 @@ export const api = {
     const qs = query.toString()
     return request<SessionDetail>('GET', `/sessions/${id}${qs ? `?${qs}` : ''}`)
   },
+  sessionUsage: (id: string, hours = 6) => request<SessionUsage>('GET', `/sessions/${id}/usage?hours=${hours}`),
   illustrateSuggestions: (id: string, focus = '') =>
     request<IllustrationSuggestions>('POST', `/sessions/${id}/illustrations/suggest`, { focus }),
   illustrate: (id: string, snapshot: string, suggestionIds: string[], custom = '') =>
