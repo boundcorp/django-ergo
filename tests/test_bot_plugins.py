@@ -2755,3 +2755,201 @@ def _turn_context(call):
         if block.get("type") == "text"
         and block.get("text", "").startswith("<turn-context>")
     )
+
+
+def _fake_gh(plugin, monkeypatch, prs, logs=None):
+    """Answer the plugin's gh calls from ``prs`` (number -> pr view JSON)."""
+    calls = []
+    real_run = plugin.run
+
+    def run(args, cwd=None):
+        if args[0] != "gh":
+            return real_run(args, cwd)
+        calls.append(args)
+        if args[1:3] == ["pr", "view"]:
+            return json.dumps(prs[int(args[3])])
+        if args[1:3] == ["run", "view"]:
+            return (logs or {})[args[5]]
+        return ""
+
+    monkeypatch.setattr(plugin, "run", run)
+    return calls
+
+
+@pytest.mark.django_db
+def test_bot_fixes_its_own_pr_instead_of_opening_another(bot_repo, monkeypatch):
+    remote, work = bot_repo
+    _, _, plugin = management_bot(work, "propose_pr")
+    git(work, "add", "-A")
+    git(work, "commit", "-m", "add bot")
+    git(work, "push")
+    branch = "bot/manager/20261029-1200-kinder"
+    git(work, "checkout", "-b", branch)
+    (work / "bots/manager/agents.md").write_text("Be kindd.")
+    git(work, "add", "-A")
+    git(work, "commit", "-m", "Kinder")
+    git(work, "push", "origin", branch)
+    git(work, "checkout", "main")
+    pr = {
+        "number": 9,
+        "url": "https://github.com/acme/bots/pull/9",
+        "state": "OPEN",
+        "headRefName": branch,
+        "isCrossRepository": False,
+    }
+    others = {**pr, "number": 10, "headRefName": "claude/someone-else"}
+    calls = _fake_gh(plugin, monkeypatch, {9: pr, 10: others})
+
+    with pytest.raises(ValueError, match="isn't a pull request manager opened"):
+        plugin.checkout_pr(10)
+    plugin.write("bots/manager/notes.md", "wip")
+    with pytest.raises(ValueError, match="unpublished changes"):
+        plugin.checkout_pr(9)
+    plugin.discard()
+
+    assert "PR #9" in plugin.checkout_pr(9)
+    assert plugin.read("bots/manager/agents.md") == "Be kindd."  # the PR's files
+    assert "updates PR #9" in plugin.status()
+    plugin.write("bots/manager/agents.md", "Be kind.")
+    result = plugin.publish("Fix the typo")
+
+    assert result.startswith("Pushed ") and "to PR #9" in result
+    assert git(remote, "log", "--format=%s", branch).splitlines()[:2] == [
+        "Fix the typo",
+        "Kinder",
+    ]
+    assert not any(c[:3] == ["gh", "pr", "create"] for c in calls)
+    assert plugin.draft_pr is None  # the next change starts from main again
+    assert "(clean)" in plugin.status()
+    assert plugin.read("bots/manager/agents.md") != "Be kind."
+
+    pr["state"] = "MERGED"
+    with pytest.raises(ValueError, match="#9 is merged"):
+        plugin.checkout_pr(9)
+
+
+@pytest.mark.django_db
+def test_pushing_to_a_pr_keeps_commits_someone_else_pushed(
+    bot_repo, tmp_path, monkeypatch
+):
+    remote, work = bot_repo
+    _, _, plugin = management_bot(work, "propose_pr")
+    git(work, "add", "-A")
+    git(work, "commit", "-m", "add bot")
+    git(work, "push")
+    branch = "bot/manager/1-x"
+    git(work, "push", "origin", f"main:{branch}")
+    pr = {"number": 3, "state": "OPEN", "headRefName": branch, "url": ""}
+    _fake_gh(plugin, monkeypatch, {3: pr})
+    plugin.checkout_pr(3)
+    plugin.write("bots/manager/a.md", "a")
+    other = tmp_path / "other"
+    git(tmp_path, "clone", "-b", branch, str(remote), str(other))
+    (other / "b.md").write_text("b")
+    git(other, "add", "-A")
+    git(other, "commit", "-m", "theirs")
+    git(other, "push", "origin", branch)
+
+    plugin.publish("mine")
+    assert git(remote, "log", "--format=%s", branch).splitlines()[:2] == [
+        "mine",
+        "theirs",
+    ]
+
+
+@pytest.mark.django_db
+def test_pr_status_shows_failed_checks_with_their_logs(bot_repo, monkeypatch):
+    _, work = bot_repo
+    _, _, plugin = management_bot(work, "propose_pr")
+    pr = {
+        "number": 9,
+        "title": "Kinder",
+        "url": "https://github.com/acme/bots/pull/9",
+        "state": "OPEN",
+        "isDraft": False,
+        "headRefName": "bot/manager/x",
+        "mergeable": "MERGEABLE",
+        "reviewDecision": "",
+        "statusCheckRollup": [
+            {
+                "name": "pytest",
+                "conclusion": "FAILURE",
+                "detailsUrl": "https://github.com/acme/bots/actions/runs/11/job/22",
+            },
+            {"name": "lint", "conclusion": "SUCCESS", "detailsUrl": ""},
+        ],
+        "latestReviews": [
+            {"author": {"login": "lee"}, "state": "CHANGES_REQUESTED", "body": "Typo"}
+        ],
+        "comments": [{"author": {"login": "lee"}, "body": "see CI"}],
+    }
+    log = (
+        "pytest\tRun tests\t2026-10-29T17:40:01.1234567Z FAILED test_launch\n"
+        "pytest\tRun tests\t2026-10-29T17:40:01.2Z assert 1000 == 4000\n"
+    )
+    calls = _fake_gh(plugin, monkeypatch, {9: pr}, {"22": log})
+
+    out = plugin.pr_status(9)
+    assert "Checks: failing" in out
+    assert (
+        "- pytest: failure https://github.com/acme/bots/actions/runs/11/job/22" in out
+    )
+    assert "- lint: success" in out
+    assert "FAILED test_launch\nassert 1000 == 4000" in out
+    assert "Review by lee: changes_requested\nTypo" in out
+    assert "Comment by lee:\nsee CI" in out
+    assert ["gh", "run", "view", "11", "--job", "22", "--log-failed"] in calls
+
+
+@pytest.mark.django_db
+def test_closing_only_the_bots_own_prs(bot_repo, monkeypatch):
+    _, work = bot_repo
+    _, _, plugin = management_bot(work, "propose_pr")
+    mine = {"number": 1, "state": "OPEN", "headRefName": "bot/manager/a"}
+    theirs = {"number": 2, "state": "OPEN", "headRefName": "bot/other/a"}
+    calls = _fake_gh(plugin, monkeypatch, {1: mine, 2: theirs})
+    with pytest.raises(ValueError, match="isn't a pull request manager opened"):
+        plugin.close_pr(2)
+    assert plugin.close_pr(1, "Replaced by #3") == "Closed #1."
+    assert calls[-1] == [
+        "gh", "pr", "close", "1", "--delete-branch", "--comment", "Replaced by #3",
+    ]  # fmt: skip
+    tools = {t.name: t for t in plugin._tools()}
+    assert tools["ergo_config_repo_close_pr"].requires_approval
+    assert not tools["ergo_config_repo_checkout_pr"].requires_approval
+    plugin.mode = "merge_main"
+    names = {t.name for t in plugin._tools()}
+    assert "ergo_config_repo_pr_status" in names
+    assert "ergo_config_repo_checkout_pr" not in names
+
+
+@pytest.mark.django_db
+def test_publish_records_the_pr_in_the_chat(bot_repo, monkeypatch):
+    from django_ergo.bots.tools import FunctionToolkit
+    from django_ergo.bots.tools import ToolContext
+    from django_ergo.conversation.models import ConversationSession
+
+    _, work = bot_repo
+    bot, _, plugin = management_bot(work, "propose_pr")
+    git(work, "add", "-A")
+    git(work, "commit", "-m", "add bot")
+    git(work, "push")
+    real_run = plugin.run
+    monkeypatch.setattr(
+        plugin,
+        "run",
+        lambda args, cwd=None: (
+            "https://github.com/acme/bots/pull/8\n"
+            if args[0] == "gh"
+            else real_run(args, cwd)
+        ),
+    )
+    user = User.objects.create_user("lee")
+    session = ConversationSession.objects.create(user=user, bot_name="manager")
+    ctx = ToolContext(bot=bot, session=session, user=user)
+    toolkit = FunctionToolkit(plugin._tools(ctx), ctx)
+    plugin.write("bots/manager/agents.md", "Be kind.")
+    toolkit.execute_tool("ergo_config_repo_publish", {"message": "Kinder"})
+    assert list(session.attachments.values_list("url", flat=True)) == [
+        "https://github.com/acme/bots/pull/8"
+    ]

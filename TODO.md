@@ -125,6 +125,7 @@ Live on rigel from `~/p/boundcorp/django-ergo`, bots from `boundcorp/ergo-bots`.
 
 - [x] Kitchen bot on Ergonaut (Tandoor tools, meal-planning skill, KB), boundcorp root bot, nested bots, `ergo_bot_call`.
 - [x] Official plugins in `django_ergo/plugins`: ergo_kb, bot_management (draft worktree + PR), telegram, orca, bash, kubectl, attachments.
+- [x] bot_management follows its own PRs: `ergo_config_repo_pr_status` (checks, failed logs, reviews), `ergo_config_repo_checkout_pr` + publish pushes fixes to the same PR, `ergo_config_repo_close_pr`, and `watch_checks` wakes the chat when its PR's checks pass or fail.
 - [x] Live bot reloads on file changes; auto-pull of the bot repo.
 - [x] CTO bot (orca on devbox, bash, threads) proposed by boundcorp and merged (ergo-bots #1).
 - [x] Costs page, bot pages, Memory page, Files panel; tool names prefixed `ergo_*`.

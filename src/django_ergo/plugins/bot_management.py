@@ -6,6 +6,7 @@
         main_branch: main
         remote: origin
         approve_publish: true   # ergo_config_repo_publish waits for the user's approval
+        watch_checks: true      # tell the chat when its own PR's checks pass or fail
         root_only: false        # true: only top-level chats get these tools, not threads
         run:                    # optional: commands ergo_config_repo_run may start in the draft
           approve: true         # each run waits for the user's approval (default)
@@ -28,6 +29,12 @@ The repository is the git checkout that contains the bot folder. Tools:
   branch and opens a pull request with the GitHub CLI (``gh``).
 - ``ergo_config_repo_discard``: throw away unpublished changes.
 - ``ergo_config_repo_pull``: fast-forward the main branch from the remote.
+- ``ergo_config_repo_pr_status``: a pull request's state, checks (with the
+  failed GitHub Actions logs), reviews and latest comments.
+- ``ergo_config_repo_checkout_pr``: make the draft one of the bot's own open
+  pull requests (branch ``bot/<name>/...``), so the next publish pushes a
+  commit to it instead of opening another.
+- ``ergo_config_repo_close_pr``: close one of the bot's own pull requests.
 - ``ergo_config_repo_run``: run one of the ``run.commands`` in the draft, so a
   bot can test code it wrote before it publishes it. Only named commands run,
   as an argv (no shell), with a bare environment (``PATH``, ``HOME``, ``LANG``;
@@ -44,11 +51,16 @@ follows the remote main branch, so work after a merge starts from it; a
 draft with changes is rebased onto it when published, and ``status`` says
 when main has moved on. Changes to bot.yaml,
 agents.md or tool files take effect when the bot is loaded again.
+
+With ``watch_checks`` (on by default), the chat that reported one of the
+bot's own pull requests gets a message when its checks finish, passing or
+failing (``conversation.links.announce_checks``), so it can fix what broke.
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import subprocess
@@ -70,9 +82,34 @@ if TYPE_CHECKING:
     from django_ergo.bots.tools import ToolContext
     from django_ergo.conversation.toolkit import Toolkit
 
+logger = logging.getLogger(__name__)
+
 MODES = {"merge_main", "propose_pr"}
 COMMAND_TIMEOUT = 120
 PR_FETCH_SECONDS = 30
+MAX_FAILED_JOBS = 3
+FAILED_LOG_LINES = 150
+JOB_URL = re.compile(r"/actions/runs/(\d+)/job/(\d+)")
+LOG_STAMP = re.compile(r"^\S+\t[^\t]*\t(\d{4}-\d\d-\d\dT\S+Z )?")
+
+
+FAILED = {"FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED"}
+
+
+def _check_result(check: dict) -> str:
+    return str(
+        check.get("conclusion") or check.get("state") or check.get("status") or ""
+    ).upper()
+
+
+def _record(session, text: str) -> None:
+    """Record the PR a publish opened in the chat, so its checks are watched."""
+    from django_ergo.conversation.links import record_pull_requests
+
+    try:
+        record_pull_requests(session, text)
+    except Exception:  # noqa: BLE001 — the PR is open either way
+        logger.warning("Couldn't record the pull request", exc_info=True)
 
 
 def _pr_number(version: str) -> int:
@@ -132,6 +169,7 @@ class BotManagementPlugin(BotPlugin):
         self.remote = self.config.get("remote", "origin")
         self.approve_publish = bool(self.config.get("approve_publish", True))
         self.root_only = bool(self.config.get("root_only", False))
+        self.watch_checks = bool(self.config.get("watch_checks", True))
         run = self.config.get("run") or {}
         self.run_commands = _run_commands(run)
         self.approve_run = bool(run.get("approve", True))
@@ -188,7 +226,10 @@ class BotManagementPlugin(BotPlugin):
 
         Without this, a draft made before a PR merged keeps the old main,
         and the next change re-proposes (and conflicts with) what merged.
+        A draft of a pull request stays on its branch.
         """
+        if self.draft_pr is not None:
+            return
         try:
             self._fetch_main()
         except ValueError:
@@ -214,10 +255,26 @@ class BotManagementPlugin(BotPlugin):
     def draft_branch(self) -> str:
         return f"bot/{self.bot.name}/draft"
 
+    @property
+    def _draft_pr_file(self) -> Path:
+        return self.draft_dir.with_name(f"{self.draft_dir.name}.pr.json")
+
+    @property
+    def draft_pr(self) -> dict | None:
+        """The pull request the draft updates ({number, branch, url}), if any."""
+        if self.mode == "merge_main":
+            return None
+        try:
+            return json.loads(self._draft_pr_file.read_text())
+        except (OSError, ValueError):
+            return None
+
     def drop_draft(self) -> None:
         if self.mode != "merge_main" and self.draft_dir.is_dir():
             self.git("worktree", "remove", "--force", str(self.draft_dir))
             self.git("branch", "-D", self.draft_branch)
+        if self.mode != "merge_main":
+            self._draft_pr_file.unlink(missing_ok=True)
 
     def run(self, args: list[str], cwd: Path | None = None) -> str:
         proc = subprocess.run(  # noqa: S603 — fixed argv, no shell
@@ -287,7 +344,12 @@ class BotManagementPlugin(BotPlugin):
         log = self.git("log", "--oneline", "-5", cwd=work).strip()
         where = "draft of " if work != self.repo else ""
         behind = ""
-        if work != self.repo and (count := self._behind(work)):
+        if target := self.draft_pr:
+            behind = (
+                f"\n\nThis draft updates PR #{target['number']} ({target['branch']}): "
+                "publishing pushes a commit to it."
+            )
+        elif work != self.repo and (count := self._behind(work)):
             behind = (
                 f"\n\n{self.remote_main} has {count} commit(s) this draft doesn't; "
                 "publishing rebases the changes onto it."
@@ -574,6 +636,8 @@ class BotManagementPlugin(BotPlugin):
             self.git("push", self.remote, f"HEAD:{self.main_branch}")
             sha = self.git("rev-parse", "--short", "HEAD").strip()
             return f"Pushed {sha} to {self.main_branch}."
+        if (target := self.draft_pr) is not None:
+            return self._push_to_pr(target, message, work)
 
         stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
         slug = re.sub(r"[^a-z0-9]+", "-", (title or message).lower()).strip("-")
@@ -597,21 +661,167 @@ class BotManagementPlugin(BotPlugin):
     def _rebase_on_main(self, work: Path) -> None:
         """Put the commit on the latest remote main, so the PR holds only this change."""
         self._fetch_main(force=True)
-        if not self._behind(work):
-            return
+        if self._behind(work):
+            self._rebase(work, self.remote_main)
+
+    def _rebase(self, work: Path, onto: str) -> None:
         try:
-            self.git("rebase", self.remote_main, cwd=work)
+            self.git("rebase", onto, cwd=work)
         except ValueError:
             conflicts = self.git(
                 "diff", "--name-only", "--diff-filter=U", cwd=work
             ).split()
             self.git("rebase", "--abort", cwd=work)
             msg = (
-                f"The changes conflict with {self.remote_main} in "
+                f"The changes conflict with {onto} in "
                 f"{', '.join(conflicts) or 'some files'}: discard the draft, "
-                "or read those files from main and write the changes again."
+                f"or read those files from {onto} and write the changes again."
             )
             raise ValueError(msg) from None
+
+    # -- the bot's own pull requests ---------------------------------------
+
+    def _pr_view(self, number: int, fields: str) -> dict:
+        return json.loads(
+            self.run(["gh", "pr", "view", str(int(number)), "--json", fields]) or "{}"
+        )
+
+    def _own_pr(self, number: int) -> dict:
+        """An open pull request this bot opened (its branch is bot/<name>/...)."""
+        pr = self._pr_view(number, "number,url,state,headRefName,isCrossRepository")
+        branch = str(pr.get("headRefName") or "")
+        if pr.get("isCrossRepository") or not branch.startswith(
+            f"bot/{self.bot.name}/"
+        ):
+            msg = (
+                f"#{int(number)} isn't a pull request {self.bot.name} opened (its branch "
+                f"is {branch or 'unknown'}); only those can be changed here."
+            )
+            raise ValueError(msg)
+        if pr.get("state") != "OPEN":
+            msg = f"#{int(number)} is {str(pr.get('state') or 'not open').lower()}."
+            raise ValueError(msg)
+        return pr
+
+    def _fetch_branch(self, branch: str) -> str:
+        ref = f"refs/remotes/{self.remote}/{branch}"
+        self.git("fetch", "--quiet", self.remote, f"+refs/heads/{branch}:{ref}")
+        return f"{self.remote}/{branch}"
+
+    def checkout_pr(self, number: int) -> str:
+        """Make the draft one of the bot's own open pull requests, to change it."""
+        if self.mode == "merge_main":
+            msg = "In merge_main mode there are no pull requests to update."
+            raise ValueError(msg)
+        number = int(number)
+        target = self.draft_pr
+        if target and target["number"] == number:
+            return f"The draft already updates PR #{number} ({target['branch']})."
+        pr = self._own_pr(number)
+        work = self.workdir
+        if self.git("status", "--porcelain", cwd=work).strip():
+            msg = (
+                "The draft has unpublished changes: publish or discard them before "
+                f"switching to PR #{number}."
+            )
+            raise ValueError(msg)
+        branch = pr["headRefName"]
+        head = self._fetch_branch(branch)
+        self.git("reset", "--hard", head, cwd=work)
+        self._draft_pr_file.write_text(
+            json.dumps({"number": number, "branch": branch, "url": pr.get("url", "")})
+        )
+        return (
+            f"The draft is now PR #{number} ({branch}), with its files as pushed. Edit, "
+            "then ergo_config_repo_publish pushes a commit to the same PR; "
+            "ergo_config_repo_discard goes back to main."
+        )
+
+    def _push_to_pr(self, target: dict, message: str, work: Path) -> str:
+        number, branch = int(target["number"]), target["branch"]
+        self._own_pr(number)  # still open, still the bot's
+        self.git("add", "--all", cwd=work)
+        self.git("commit", "-m", message, cwd=work)
+        try:
+            head = self._fetch_branch(branch)
+            if int(self.git("rev-list", "--count", f"HEAD..{head}", cwd=work)):
+                self._rebase(work, head)  # someone pushed to the PR meanwhile
+            self.git("push", self.remote, f"HEAD:refs/heads/{branch}", cwd=work)
+        except ValueError:
+            self.git("reset", "--soft", "HEAD~1", cwd=work)
+            raise
+        sha = self.git("rev-parse", "--short", "HEAD", cwd=work).strip()
+        self.drop_draft()
+        return (
+            f"Pushed {sha} to PR #{number} ({target.get('url') or branch}); its checks "
+            f"run again. ergo_config_repo_pr_status({number}) shows them."
+        )
+
+    def close_pr(self, number: int, comment: str = "") -> str:
+        """Close one of the bot's own pull requests and delete its branch."""
+        self._own_pr(number)
+        args = ["gh", "pr", "close", str(int(number)), "--delete-branch"]
+        if comment:
+            args += ["--comment", comment]
+        self.run(args)
+        target = self.draft_pr
+        if target and target["number"] == int(number):
+            self.drop_draft()
+        return f"Closed #{int(number)}."
+
+    def pr_status(self, number: int) -> str:
+        """A pull request's state, checks (with failed job logs), reviews and comments."""
+        from django_ergo.conversation.links import checks_state
+
+        pr = self._pr_view(
+            number,
+            "number,title,url,state,isDraft,headRefName,mergeable,reviewDecision,"
+            "statusCheckRollup,latestReviews,comments",
+        )
+        rollup = pr.get("statusCheckRollup") or []
+        state = str(pr.get("state") or "").lower()
+        lines = [
+            f"#{pr.get('number')} {pr.get('title', '')}",
+            str(pr.get("url", "")),
+            f"State: {state}{' (draft)' if pr.get('isDraft') else ''}; branch "
+            f"{pr.get('headRefName', '')}; mergeable: "
+            f"{str(pr.get('mergeable') or 'unknown').lower()}; review: "
+            f"{str(pr.get('reviewDecision') or 'none').lower()}",
+            f"Checks: {checks_state(rollup) or 'none'}",
+        ]
+        failed = []
+        for check in rollup:
+            result = _check_result(check)
+            url = check.get("detailsUrl") or check.get("targetUrl") or ""
+            name = check.get("name") or check.get("context") or "check"
+            lines.append(f"- {name}: {result.lower()} {url}".rstrip())
+            if result in FAILED and (match := JOB_URL.search(url)):
+                failed.append((name, match.group(1), match.group(2)))
+        for name, run_id, job_id in failed[:MAX_FAILED_JOBS]:
+            lines += ["", f"Failed log of {name}:", self._failed_log(run_id, job_id)]
+        for review in pr.get("latestReviews") or []:
+            who = (review.get("author") or {}).get("login", "")
+            body = str(review.get("body") or "").strip()[:1000]
+            lines.append(f"\nReview by {who}: {str(review.get('state', '')).lower()}")
+            if body:
+                lines.append(body)
+        for comment in (pr.get("comments") or [])[-5:]:
+            who = (comment.get("author") or {}).get("login", "")
+            lines.append(
+                f"\nComment by {who}:\n{str(comment.get('body') or '')[:1000]}"
+            )
+        return "\n".join(lines).strip()
+
+    def _failed_log(self, run_id: str, job_id: str) -> str:
+        """The failed steps' output of a GitHub Actions job, last lines only."""
+        try:
+            log = self.run(
+                ["gh", "run", "view", run_id, "--job", job_id, "--log-failed"]
+            )
+        except ValueError as exc:
+            return f"(couldn't read the log: {exc})"
+        text = [LOG_STAMP.sub("", line) for line in log.splitlines()]
+        return trim("\n".join(text[-FAILED_LOG_LINES:]))
 
     def _open_pr(self, branch: str, message: str, title: str, body: str, work) -> str:
         return self.run(
@@ -761,14 +971,15 @@ class BotManagementPlugin(BotPlugin):
     def toolkits(self, ctx: ToolContext) -> list[Toolkit]:
         if self.root_only and not ctx.bot.is_root(ctx.session):
             return []
-        return [FunctionToolkit(self._tools(), ctx)]
+        return [FunctionToolkit(self._tools(ctx), ctx)]
 
-    def _tools(self) -> list[BotTool]:  # noqa: C901 — one closure per tool
+    def _tools(self, ctx: ToolContext | None = None) -> list[BotTool]:  # noqa: C901 — one closure per tool
         plugin = self
         publish_help = (
             "Commit all changes and push them to the main branch."
             if self.mode == "merge_main"
-            else "Commit all changes on a new branch and open a pull request."
+            else "Commit all changes on a new branch and open a pull request, or, after "
+            "ergo_config_repo_checkout_pr, push them to that pull request."
         )
 
         @bot_tool(name="ergo_config_repo_status")
@@ -861,12 +1072,36 @@ class BotManagementPlugin(BotPlugin):
             requires_approval=self.approve_publish,
         )
         def publish(message: str, title: str = "", body: str = "") -> str:
-            return plugin.publish(message, title, body)
+            result = plugin.publish(message, title, body)
+            if ctx is not None and ctx.session is not None:
+                _record(ctx.session, result)
+            return result
 
         @bot_tool(name="ergo_config_repo_prs")
         def prs() -> str:
             """List open pull requests on the bot repository."""
             return plugin.prs()
+
+        @bot_tool(name="ergo_config_repo_pr_status")
+        def pr_status(number: int) -> str:
+            """Show a pull request's state, its checks with the failed GitHub Actions logs,
+            its reviews and latest comments."""
+            return plugin.pr_status(number)
+
+        @bot_tool(name="ergo_config_repo_checkout_pr")
+        def checkout_pr(number: int) -> str:
+            """Make the draft one of your own open pull requests, to fix it (failing checks,
+            review comments): edit, then ergo_config_repo_publish pushes a commit to the
+            same PR. Needs a draft with no unpublished changes."""
+            return plugin.checkout_pr(number)
+
+        @bot_tool(
+            name="ergo_config_repo_close_pr", requires_approval=self.approve_publish
+        )
+        def close_pr(number: int, comment: str = "") -> str:
+            """Close one of your own pull requests (one you replaced, or that isn't wanted)
+            and delete its branch; comment says why."""
+            return plugin.close_pr(number, comment)
 
         names = ", ".join(
             f"{n} (takes arguments)" if c.args else n
@@ -899,7 +1134,10 @@ class BotManagementPlugin(BotPlugin):
             pull,
             publish,
             prs,
+            pr_status,
         ]
+        if self.mode != "merge_main":
+            functions += [checkout_pr, close_pr]
         if self.run_commands:
             functions.append(run_command)
         return [fn.__bot_tool__ for fn in functions]

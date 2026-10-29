@@ -1052,6 +1052,7 @@ and `icon` (an emoji) for the pin. Loading the skill loads
   mode: propose_pr      # or merge_main
   main_branch: main
   approve_publish: true
+  watch_checks: true   # message the chat when its own PR's checks pass or fail
   root_only: false     # true: top-level chats only, not threads
   run:                 # optional: ergo_config_repo_run
     approve: true      # each run waits for approval (default)
@@ -1085,6 +1086,26 @@ its own, and with `ERGONAUT_BOTS_PULL_SECONDS` pulls merged changes too).
 For review screens the plugin also has `draft_diff()`, `pull_requests()`,
 `pull_request_diff(n)`, `merge_pull_request(n)` (squash-merge, then pull) and
 `close_pull_request(n)`; Ergonaut's bot page uses them for its Changes section.
+
+The bot can also follow its pull requests through review and CI.
+`ergo_config_repo_pr_status(number)` shows any PR's state, mergeability, review
+decision, each check with its link, the last lines of each failed GitHub Actions
+job's log (`gh run view --log-failed`), reviews and the latest comments. The rest
+only work on the bot's own open PRs, the ones on a `bot/<name>/` branch.
+`ergo_config_repo_checkout_pr(number)` makes the draft that PR's branch (the draft
+must have no unpublished changes), so the bot reads and edits the files as the PR
+has them; `ergo_config_repo_publish` then pushes a commit to the same PR instead of
+opening another (on top of anything else pushed there meanwhile), and the draft
+goes back to main. `ergo_config_repo_discard` drops the PR draft without pushing.
+`ergo_config_repo_close_pr(number, comment)` closes a PR the bot replaced or no
+longer wants and deletes its branch; it waits for approval like publishing.
+
+A published PR is recorded in the chat, and the host refreshes recorded PRs
+(Ergonaut every minute). With `watch_checks` (on by default), when the checks of one
+of the bot's own PRs finish, failing or passing, the chat gets a message that starts
+a turn: on a failure the bot reads the logs and pushes a fix to the same PR, and on a
+pass it tells the person the PR is ready. It hears again only when the result
+changes, such as after a fix is pushed.
 
 With `run.commands`, `ergo_config_repo_run(command, args)` runs one of those
 commands in the draft, so the bot can test code it wrote before publishing

@@ -6,7 +6,9 @@ and ``metadata["link"]`` is ``"github_pr"``, with the PR's ``repo``,
 ``closed``) and ``checks`` (``passing``, ``failing``, ``pending`` or ``""``).
 ``record_pull_requests`` adds one for each new PR URL in a reply or worker
 result; ``refresh_pull_request`` reads its live state with the GitHub CLI
-(``gh``), which apps run on a schedule.
+(``gh``), which apps run on a schedule. When the checks of a PR a bot opened
+(branch ``bot/<bot>/...``) finish, ``announce_checks`` tells the chat that
+recorded it, so the bot can fix a failure or say the PR is ready.
 """
 
 from __future__ import annotations
@@ -89,7 +91,8 @@ def pull_request_out(row: ConversationAttachment) -> dict:
     }
 
 
-def _checks(rollup: list) -> str:
+def checks_state(rollup: list) -> str:
+    """``passing``, ``failing``, ``pending`` or ``""`` for a ``statusCheckRollup``."""
     states = {
         str(c.get("conclusion") or c.get("state") or c.get("status") or "").upper()
         for c in rollup or []
@@ -113,7 +116,7 @@ def refresh_pull_request(row: ConversationAttachment) -> bool:
                 "view",
                 row.url,
                 "--json",
-                "title,state,isDraft,statusCheckRollup",
+                "title,state,isDraft,headRefName,statusCheckRollup",
             ],
             capture_output=True,
             text=True,
@@ -131,14 +134,72 @@ def refresh_pull_request(row: ConversationAttachment) -> bool:
     state = str(data.get("state") or "").lower()
     if state == "open" and data.get("isDraft"):
         state = "draft"
+    before = (row.metadata or {}).get("checks", "")
     row.metadata = {
         **(row.metadata or {}),
         "title": data.get("title") or "",
         "state": state,
-        "checks": _checks(data.get("statusCheckRollup") or []),
+        "branch": data.get("headRefName") or "",
+        "checks": checks_state(data.get("statusCheckRollup") or []),
         "checked_at": timezone.now().isoformat(timespec="seconds"),
     }
     row.save(update_fields=["metadata", "updated_at"])
+    if row.metadata["checks"] != before:
+        try:
+            announce_checks(row)
+        except Exception:  # noqa: BLE001 - the refresh itself worked
+            logger.warning("Couldn't announce the checks of %s", row.url, exc_info=True)
+    return True
+
+
+def announce_checks(row: ConversationAttachment) -> bool:
+    """Tell the bot chat that recorded one of its own open PRs that its checks finished.
+
+    Only for a PR on the bot's own branch (``bot/<bot>/...``, which
+    bot_management's publish makes) and a bot whose bot_management plugin has
+    ``watch_checks`` on. The message starts a turn, so a failure gets fixed
+    (``ergo_config_repo_checkout_pr``) and a pass gets reported.
+    """
+    from django_ergo.bots import messaging
+    from django_ergo.bots.background import find_bot
+
+    meta = row.metadata or {}
+    checks, bot_name = meta.get("checks"), row.session.bot_name
+    if (
+        checks not in ("passing", "failing")
+        or meta.get("state") not in ("open", "draft")
+        or not bot_name
+        or not str(meta.get("branch") or "").startswith(f"bot/{bot_name}/")
+    ):
+        return False
+    try:
+        bot = find_bot(bot_name)
+    except LookupError:
+        return False
+    plugin = bot.plugin("bot_management")
+    if plugin is None or not getattr(plugin, "watch_checks", False):
+        return False
+    number, name = meta.get("number"), f"{meta.get('repo', '')}#{meta.get('number')}"
+    if checks == "failing":
+        text = (
+            f"Checks failed on {name} ({row.url}), a pull request you opened. Read the "
+            f"failures with ergo_config_repo_pr_status({number}). To fix them, "
+            f"ergo_config_repo_checkout_pr({number}), change the files and "
+            "ergo_config_repo_publish: that pushes to the same PR, so don't open "
+            "another. Tell the user what failed and what you did."
+        )
+    else:
+        text = (
+            f"Checks passed on {name} ({row.url}), a pull request you opened. Tell the "
+            "user, in a line, that it's ready to review and merge."
+        )
+    messaging.send(
+        None,
+        row.session,
+        text,
+        registry=bot.registry,
+        metadata={"pull_request": row.url, "checks": checks},
+    )
     return True
 
 

@@ -68,16 +68,16 @@ def test_recording_and_refreshing_a_pull_request(monkeypatch):
 
 
 def test_check_rollups():
-    assert links._checks([]) == ""
+    assert links.checks_state([]) == ""
     assert (
-        links._checks([{"conclusion": "SUCCESS"}, {"conclusion": "SKIPPED"}])
+        links.checks_state([{"conclusion": "SUCCESS"}, {"conclusion": "SKIPPED"}])
         == "passing"
     )
     assert (
-        links._checks([{"conclusion": "SUCCESS"}, {"conclusion": "FAILURE"}])
+        links.checks_state([{"conclusion": "SUCCESS"}, {"conclusion": "FAILURE"}])
         == "failing"
     )
-    assert links._checks([{"state": "PENDING"}]) == "pending"
+    assert links.checks_state([{"state": "PENDING"}]) == "pending"
 
 
 def test_a_failed_gh_call_leaves_the_row(monkeypatch):
@@ -121,3 +121,63 @@ def test_open_pull_requests_feed_the_orchestrator_block():
         {"repo": "boundcorp/ergo-bots", "number": 3, "title": "Icons", "draft": True},
         {"repo": "boundcorp/django-ergo", "number": 1, "title": "", "draft": False},
     ]
+
+
+@pytest.mark.django_db
+def test_finished_checks_wake_the_bot_on_its_own_pr(monkeypatch):
+    from types import SimpleNamespace
+
+    from django_ergo.bots import background
+    from django_ergo.bots import messaging
+
+    user = get_user_model().objects.create_user("lee")
+    session = ConversationSession.objects.create(user=user, bot_name="ads")
+    [mine, theirs] = links.record_pull_requests(
+        session,
+        "https://github.com/boundcorp/ergo-bots/pull/135 and "
+        "https://github.com/boundcorp/ergo-bots/pull/126",
+    )
+    plugin = SimpleNamespace(watch_checks=True)
+    bot = SimpleNamespace(registry=None, plugin=lambda name: plugin)
+    monkeypatch.setattr(background, "find_bot", lambda name: bot)
+    sent = []
+    monkeypatch.setattr(
+        messaging,
+        "send",
+        lambda sender, recipient, text, **kw: sent.append((recipient, text, kw)),
+    )
+    views = {
+        mine.url: {"headRefName": "bot/ads/20261029-ads-accounts"},
+        theirs.url: {"headRefName": "claude/project-thread-aon3h2"},
+    }
+    rollup = [{"conclusion": "IN_PROGRESS"}]
+
+    def gh(args, **kwargs):
+        data = {"title": "x", "state": "OPEN", "statusCheckRollup": rollup}
+        return subprocess.CompletedProcess(
+            args, 0, json.dumps({**data, **views[args[3]]}), ""
+        )
+
+    monkeypatch.setattr(links.subprocess, "run", gh)
+    assert links.refresh_pull_request(mine) and links.refresh_pull_request(theirs)
+    assert sent == []  # pending
+
+    rollup = [{"conclusion": "FAILURE"}]
+    links.refresh_pull_request(mine)
+    links.refresh_pull_request(theirs)  # not the bot's branch: no message
+    [(recipient, text, kw)] = sent
+    assert recipient == session
+    assert "Checks failed on boundcorp/ergo-bots#135" in text
+    assert "ergo_config_repo_checkout_pr(135)" in text
+    assert kw["metadata"] == {"pull_request": mine.url, "checks": "failing"}
+    links.refresh_pull_request(mine)
+    assert len(sent) == 1  # still failing: said once
+
+    rollup = [{"conclusion": "SUCCESS"}]
+    links.refresh_pull_request(mine)
+    assert "Checks passed" in sent[-1][1]
+
+    rollup = [{"conclusion": "FAILURE"}]
+    plugin.watch_checks = False
+    links.refresh_pull_request(mine)
+    assert len(sent) == 2

@@ -34,6 +34,20 @@ pull request. Nothing you write runs until a person merges it.
 Keep one PR to one purpose. If the person asks for more while a PR is open,
 say whether it rides along or gets its own.
 
+## After the PR is open
+
+You'll get a message when its checks finish. Don't ask the person to run
+the tests or to fix your PR: that's your job.
+
+- `ergo_config_repo_pr_status(number)` shows the checks, the failed jobs'
+  logs, reviews and comments.
+- To fix your own open PR (failing checks, review comments, a change the
+  person asks for in it), `ergo_config_repo_checkout_pr(number)`, edit, and
+  `ergo_config_repo_publish`: it pushes a commit to the same PR. Never open a
+  second PR to replace one of yours.
+- If one of your PRs is no longer wanted, `ergo_config_repo_close_pr(number,
+  comment)`.
+
 ## Pick the smallest shape
 
 | Need | Shape |
