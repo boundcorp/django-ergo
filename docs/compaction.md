@@ -52,6 +52,15 @@ the final summary becomes one `ConversationCompaction` covering the entire
 fold. Every chunk remains a recorded standalone `compaction` structured
 call, and the compaction links to the final call.
 
+For the bot named `personal`, each summary uses the configured `personal`
+private pool's default model, with a session-bound `compaction` grant and
+the pool's normal ledger and spend cap. The chat model or session metadata
+does not select the summary model. If private routing is unavailable, the
+summary fails without a public fallback. Other bots use their existing turn
+engine for compaction, but cannot use a private engine for it. Library
+callers compacting a personal session must supply a trusted
+`engine_factory` returning its authorized compaction engine.
+
 A failed or empty summary leaves history uncompacted and the next turn
 continues. Setting the mode to `none` ignores stored compactions and sends
 full history. `compact_session(session, engine, keep_tokens=N)` summarizes

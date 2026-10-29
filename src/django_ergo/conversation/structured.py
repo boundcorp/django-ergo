@@ -1096,6 +1096,7 @@ async def run_structured_call(  # noqa: PLR0913
     context_builder: ContextBuilder | None = None,
     allow_approvals: bool = False,
     control: TurnControl | None = None,
+    compaction_engine_factory: Callable[[], Engine] | None = None,
 ) -> StructuredCallResult:
     """Make one structured call, standalone or as a turn of ``session``.
 
@@ -1110,7 +1111,7 @@ async def run_structured_call(  # noqa: PLR0913
     pre_seeds = await sync_to_async(spec.all_pre_seeds, thread_sensitive=True)()
     if session is not None:
         active = await _session_engine(spec, session, engine)
-        await maybe_compact(session, active)
+        await maybe_compact(session, active, engine_factory=compaction_engine_factory)
         from django_ergo.conversation.compaction import latest_compaction
 
         current = await sync_to_async(latest_compaction)(session)

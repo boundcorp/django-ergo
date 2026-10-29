@@ -788,7 +788,9 @@ class Bot:
             spec,
             text[:4000],
             user=user,
-            engine=self.make_engine(purpose="new_thread_metadata"),
+            engine=self.make_ancillary_engine(
+                session, purpose="new_thread_metadata", use_session=False
+            ),
             metadata={"bot": self.name, "session": str(session.id) if session else ""},
         )
         title = (
@@ -798,6 +800,26 @@ class Bot:
             .rstrip(".")
         )
         return {"title": title[:80]} if title else {}
+
+    def make_ancillary_engine(
+        self,
+        session: ConversationSession | None,
+        *,
+        purpose: str,
+        use_session: bool = True,
+    ) -> Engine:
+        """Select a personal-only private engine for an ancillary text call."""
+        if self.name == "personal":
+            if session is None or session.pk is None or session.bot_name != self.name:
+                msg = "Personal ancillary inference requires its own session"
+                raise PolicyError(msg)
+            return self.make_engine(session, model="personal", purpose=purpose)
+        selected_session = session if use_session else None
+        ref = self.session_model(selected_session) or self.model_ref()
+        if self.providers.is_private(ref):
+            msg = "Private ancillary inference is restricted to personal"
+            raise PolicyError(msg)
+        return self.make_engine(selected_session, purpose=purpose)
 
     def make_engine(
         self,
@@ -1269,6 +1291,11 @@ class Bot:
             message,
             session=session,
             engine=self.make_engine(session),
+            compaction_engine_factory=(
+                lambda: self.make_ancillary_engine(session, purpose="compaction")
+            )
+            if self.name == "personal"
+            else None,
             attachments=attachments,
             context_builder=builder,
             allow_approvals=True,
