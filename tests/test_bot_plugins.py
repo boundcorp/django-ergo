@@ -1775,6 +1775,19 @@ def test_browser_reports_an_unreachable_chrome(tmp_path):
 
 
 @pytest.mark.django_db
+def test_browser_launch_says_why_chrome_did_not_answer(tmp_path):
+    pytest.importorskip("playwright")
+    _, _, plugin = browser_bot(
+        tmp_path,
+        config="cdp_url: http://127.0.0.1:9, timeout: 2, launch_command: 'true'",
+    )
+    with pytest.raises(
+        RuntimeError, match="Chrome didn't answer: Can't reach the browser"
+    ):
+        plugin._launch()
+
+
+@pytest.mark.django_db
 def test_browser_tools_need_a_session(tmp_path):
     _, _, plugin = browser_bot(tmp_path)
     with pytest.raises(RuntimeError, match="start one with ergo_browser_start"):

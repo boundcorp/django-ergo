@@ -402,13 +402,18 @@ class BrowserPlugin(BotPlugin):
             msg = f"launch_command failed: {(proc.stderr or proc.stdout or '').strip()[:500]}"
             raise RuntimeError(msg)
         deadline = time.monotonic() + self.timeout
+        error: RuntimeError | None = None
         while time.monotonic() < deadline:
-            with contextlib.suppress(RuntimeError):
+            try:
                 self._run(lambda context: len(context.pages))
+            except RuntimeError as exc:
+                error = exc
+            else:
                 return "Started Chrome. "
             time.sleep(1)
-        msg = "launch_command ran, but Chrome didn't answer"
-        raise RuntimeError(msg)
+        # The last connection error says whether ssh, the tunnel or Chrome failed.
+        msg = f"launch_command ran, but Chrome didn't answer: {error}"
+        raise RuntimeError(msg) from error
 
     def stop(self, ctx: ToolContext, close_tabs: bool = True) -> str:
         from django_ergo.bots import workers
