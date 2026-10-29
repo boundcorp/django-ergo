@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from datetime import timedelta
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from asgiref.sync import sync_to_async
@@ -12,7 +14,12 @@ from django.utils import timezone
 from django_ergo.conversation.compaction import compact_session
 from django_ergo.conversation.compaction import decide_compaction
 from django_ergo.conversation.compaction import maybe_compact
+from django_ergo.conversation.compaction import structured_summarizer
+from django_ergo.conversation.engines.fireworks_api import FireworksAPIEngine
 from django_ergo.conversation.engines.openai_api import OpenAIAPIEngine
+from django_ergo.conversation.inference_policy import PolicyError
+from django_ergo.conversation.inference_policy import PrivatePool
+from django_ergo.conversation.inference_policy import mint_grant
 from django_ergo.conversation.models import ConversationCompaction
 from django_ergo.conversation.models import ConversationSession
 from django_ergo.conversation.models import MessageBlock
@@ -546,3 +553,133 @@ async def test_chunk_calls_are_recorded_and_final_call_is_linked(user):
     assert len(engine._client.calls) == len(calls)
     assert f"Previous summary:\n{calls[0].response['summary']}" in calls[1].request
     assert await session.compactions.acount() == 1
+
+
+def private_compaction_engine(session, *, purpose="compaction", selector="personal"):
+    pool = PrivatePool(
+        name="personal",
+        provider="fireworks",
+        enabled=True,
+        allowed_bots=frozenset({"personal"}),
+        models={"default": "accounts/fireworks/models/test"},
+        default="default",
+    )
+    engine = FireworksAPIEngine({"model": pool.models["default"]})
+    engine.authorize(
+        mint_grant(
+            pool,
+            bot="personal",
+            selector=selector,
+            user_id=session.user_id,
+            session_id=session.pk,
+            purpose=purpose,
+        )
+    )
+    return engine
+
+
+async def test_personal_compaction_uses_session_bound_ancillary_engine(
+    user, monkeypatch
+):
+    session = await sync_to_async(make_session)(user)
+    session.bot_name = "personal"
+    private = private_compaction_engine(session)
+    call = AsyncMock(return_value="mocked")
+    monkeypatch.setattr("django_ergo.conversation.structured.run_structured_call", call)
+
+    def factory():
+        return private
+
+    result = await structured_summarizer(claude_engine(), session, factory)(
+        "previous", "sensitive transcript"
+    )
+
+    assert result == "mocked"
+    assert call.await_args.kwargs["engine"] is private
+    assert call.await_args.args[0].kind == "compaction"
+    assert "sensitive transcript" in call.await_args.args[1]
+    assert private.grant.purpose == "compaction"
+    assert private.grant.selector == "personal"
+
+
+@pytest.mark.parametrize("variant", ["public", "chat", "alias", "other_session"])
+async def test_personal_compaction_rejects_untrusted_routing(
+    user, monkeypatch, variant
+):
+    session = await sync_to_async(make_session)(user)
+    session.bot_name = "personal"
+    other = await sync_to_async(make_session)(user)
+    if variant == "public":
+        engine = claude_engine()
+    elif variant == "chat":
+        engine = private_compaction_engine(session, purpose="chat")
+    elif variant == "alias":
+        engine = private_compaction_engine(session, selector="personal/default")
+    else:
+        engine = private_compaction_engine(other)
+    call = AsyncMock()
+    monkeypatch.setattr("django_ergo.conversation.structured.run_structured_call", call)
+
+    with pytest.raises(PolicyError):
+        await structured_summarizer(engine, session)("", "sensitive")
+    call.assert_not_awaited()
+
+
+async def test_nonpersonal_compaction_keeps_public_engine_but_rejects_private(
+    user, monkeypatch
+):
+    session = await sync_to_async(make_session)(user)
+    session.bot_name = "other"
+    public = claude_engine()
+    call = AsyncMock(return_value="summary")
+    monkeypatch.setattr("django_ergo.conversation.structured.run_structured_call", call)
+
+    await structured_summarizer(public, session)("", "transcript")
+    assert call.await_args.kwargs["engine"] is public
+    call.reset_mock()
+    with pytest.raises(PolicyError):
+        await structured_summarizer(private_compaction_engine(session), session)(
+            "", "transcript"
+        )
+    call.assert_not_awaited()
+
+
+async def test_personal_compaction_factory_failure_does_not_fallback(user, monkeypatch):
+    session = await sync_to_async(make_session)(
+        user, "context_size", {"compact_at_tokens": 1, "keep_tokens": 0}
+    )
+    session.bot_name = "personal"
+    await sync_to_async(chat)(session, 2)
+    call = AsyncMock()
+    monkeypatch.setattr("django_ergo.conversation.structured.run_structured_call", call)
+
+    def unavailable():
+        msg = "private pool unavailable"
+        raise PolicyError(msg)
+
+    assert (
+        await maybe_compact(session, claude_engine(), engine_factory=unavailable)
+        is None
+    )
+    assert await session.compactions.acount() == 0
+    call.assert_not_awaited()
+
+
+async def test_personal_compaction_factory_routes_folded_history(user, monkeypatch):
+    session = await sync_to_async(make_session)(
+        user, "context_size", {"compact_at_tokens": 1, "keep_tokens": 0}
+    )
+    session.bot_name = "personal"
+    await sync_to_async(chat)(session, 2)
+    private = private_compaction_engine(session)
+    result = SimpleNamespace(ok=True, parsed="private summary", call=None)
+    call = AsyncMock(return_value=result)
+    monkeypatch.setattr("django_ergo.conversation.structured.run_structured_call", call)
+
+    compaction = await maybe_compact(
+        session, claude_engine(), engine_factory=lambda: private
+    )
+
+    assert compaction.summary == "private summary"
+    assert call.await_args.kwargs["engine"] is private
+    assert "question 0" in call.await_args.args[1]

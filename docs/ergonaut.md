@@ -26,6 +26,13 @@ cited source message lines. Files use unique flat
 attachment storage intentionally strips path components; older illustrations
 remain in the session Files list.
 
+The text suggestion call for the bot named `personal` uses its authorized
+`personal` private pool, with purpose `illustrate_suggest` and the pool's
+normal ledger and spend cap. If the pool or call fails, suggestions are
+unavailable; the thread is not retried on a public model. Other bots cannot
+route suggestion calls to a private pool. This policy applies to suggestions,
+not to the subsequent illustration generation job.
+
 Illustrations only read the active session and caller-visible history. The
 model never writes markup. It returns a typed spec: a title, summary and
 takeaways plus 3 to 14 components (timeline, status board, flow, diagram,

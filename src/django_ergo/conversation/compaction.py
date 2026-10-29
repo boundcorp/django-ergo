@@ -310,12 +310,37 @@ async def decide_compaction(
     raise ValueError(msg)
 
 
-def structured_summarizer(engine: Engine, session: ConversationSession) -> Summarizer:
-    """Default summarizer: a standalone structured call on the session's engine."""
+def structured_summarizer(
+    engine: Engine, session: ConversationSession, engine_factory=None
+) -> Summarizer:
+    """Summarize on the turn engine, or a purpose-bound ancillary engine."""
 
     async def summarize(previous_summary: str, transcript: str):
+        from django_ergo.conversation.inference_policy import FIREWORKS
+        from django_ergo.conversation.inference_policy import PolicyError
+        from django_ergo.conversation.inference_policy import check_grant
         from django_ergo.conversation.structured import StructuredCallSpec
         from django_ergo.conversation.structured import run_structured_call
+
+        active = engine_factory() if engine_factory else engine
+        private = getattr(active, "engine_type", "") == FIREWORKS
+        if session.bot_name == "personal":
+            if not private:
+                msg = "Personal compaction requires a private engine"
+                raise PolicyError(msg)
+            grant = check_grant(getattr(active, "grant", None), model_id=active.model)
+            if (
+                grant.bot != "personal"
+                or grant.selector != "personal"
+                or grant.purpose != "compaction"
+                or str(grant.session_id) != str(session.pk)
+                or str(grant.user_id) != str(session.user_id)
+            ):
+                msg = "Personal compaction requires its own session-bound grant"
+                raise PolicyError(msg)
+        elif private:
+            msg = "Private compaction is only available to the personal bot"
+            raise PolicyError(msg)
 
         spec = StructuredCallSpec(
             kind="compaction",
@@ -331,7 +356,7 @@ def structured_summarizer(engine: Engine, session: ConversationSession) -> Summa
             spec,
             prompt,
             user=await sync_to_async(lambda: session.user)(),
-            engine=engine,
+            engine=active,
             metadata={"compacted_session": str(session.pk)},
         )
 
@@ -346,6 +371,7 @@ async def compact_session(  # noqa: PLR0913
     keep_tokens: int | None = None,
     reason: str = "manual",
     summarizer: Summarizer | None = None,
+    engine_factory=None,
 ) -> ConversationCompaction | None:
     """Fold older messages, retaining ``keep_tokens`` and complete turns.
 
@@ -380,7 +406,7 @@ async def compact_session(  # noqa: PLR0913
     renderer = ConversationRenderer(detail="digest")
     limit = max(1, min(100_000, int(engine.context_window * 0.4))) * 4
     chunks = renderer.render_chunks([message for _, message in folded], limit)
-    summarize = summarizer or structured_summarizer(engine, session)
+    summarize = summarizer or structured_summarizer(engine, session, engine_factory)
     summary = current.summary if current else ""
     call = None
     for chunk in chunks:
@@ -420,6 +446,7 @@ async def maybe_compact(
     *,
     now: datetime | None = None,
     summarizer: Summarizer | None = None,
+    engine_factory=None,
 ) -> ConversationCompaction | None:
     """Compact the session if its policy says so. Never raises.
 
@@ -443,6 +470,7 @@ async def maybe_compact(
             keep_tokens=decision.keep_tokens,
             reason=decision.reason,
             summarizer=summarizer,
+            engine_factory=engine_factory,
         )
     except Exception:
         log.exception("compaction failed for session %s", session.pk)
