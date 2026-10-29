@@ -114,6 +114,7 @@ FRONTEND_DIST = os.environ.get("FRONTEND_DIST", os.path.join(os.path.dirname(__f
 # Ergo. Bots' webhooks are served at /hooks/; ERGONAUT_PUBLIC_URL is this
 # server's public address, e.g. https://ergonaut.example.com.
 ERGONAUT_PUBLIC_URL = os.environ.get("ERGONAUT_PUBLIC_URL", "").rstrip("/")
+ERGONAUT_DEBUG_USERS = {name.strip() for name in os.environ.get("ERGONAUT_DEBUG_USERS", "").split(",") if name.strip()}
 DJANGO_ERGO = {
     "BOT_WEBHOOK_BASE_URL": f"{ERGONAUT_PUBLIC_URL}/hooks" if ERGONAUT_PUBLIC_URL else None,
     # Bot-to-bot thread messages are delivered by a Celery worker.

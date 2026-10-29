@@ -1,15 +1,17 @@
-import { useRef, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useEffect, useRef, useState } from 'react'
+import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { api } from '../api'
 import { clearDraft, useDraft } from '../draft'
 import ModelPicker, { useBotModels } from '../components/ModelPicker'
 
 // Start a thread by writing its first message (with files). The thread gets a title from the
 // message right away, and a generated one (new_thread_metadata) a moment later.
-export function NewThread({ onChange }: { onChange: () => void }) {
+export function NewThread({ onChange, userId }: { onChange: () => void; userId: string }) {
   const { name = '' } = useParams()
   const navigate = useNavigate()
-  const draftKey = `new-thread.${name}`
+  const location = useLocation()
+  // Devbox drafts can contain private chat links; do not reuse them across accounts.
+  const draftKey = name === 'devbox' ? `new-thread.${name}.user.${userId}` : `new-thread.${name}`
   const [text, setText] = useDraft(draftKey)
   const [files, setFiles] = useState<File[]>([])
   const [busy, setBusy] = useState(false)
@@ -17,6 +19,37 @@ export function NewThread({ onChange }: { onChange: () => void }) {
   const [error, setError] = useState('')
   const models = useBotModels(name)
   const picker = useRef<HTMLInputElement>(null)
+  const appliedLocation = useRef<string | null>(null)
+
+  useEffect(() => {
+    const state = location.state
+    if (name !== 'devbox' || !state || typeof state !== 'object' || !('debugSourceUrl' in state)) return
+    if (appliedLocation.current === location.key) return
+    appliedLocation.current = location.key
+    const { debugSourceUrl, ...remainingState } = state as Record<string, unknown>
+    if (typeof debugSourceUrl === 'string') {
+      try {
+        const url = new URL(debugSourceUrl)
+        if (
+          url.origin === window.location.origin &&
+          /^\/s\/[0-9a-f-]+$/i.test(url.pathname) &&
+          !url.search &&
+          !url.hash
+        ) {
+          setText(current => (current ? `${current}\n\n${url.href}` : url.href))
+        }
+      } catch {
+        // Ignore malformed navigation state.
+      }
+    }
+    navigate(
+      { pathname: location.pathname, search: location.search, hash: location.hash },
+      {
+        replace: true,
+        state: Object.keys(remainingState).length ? remainingState : null,
+      },
+    )
+  }, [location, name, navigate, setText])
 
   function add(list: FileList | File[] | null) {
     if (list?.length) setFiles(current => [...current, ...Array.from(list)])
