@@ -15,6 +15,7 @@ from datetime import datetime
 from typing import Any, Literal
 
 from asgiref.sync import async_to_sync, sync_to_async
+from django.conf import settings
 from django.db.models import Count, Q
 from django.http import FileResponse, HttpResponse
 from django.shortcuts import aget_object_or_404
@@ -193,6 +194,7 @@ class CallDetailOut(CallOut):
 
 class SessionDetailOut(Schema):
     session: SessionOut
+    debug_shortcut: bool
     messages: list[MessageOut]
     calls: list[CallOut]
     compactions: list[dict] = []
@@ -909,6 +911,21 @@ def visible_sessions(user):
     return qs if user.is_superuser else qs.filter(user=user)
 
 
+def debug_shortcut_available(user, session: ConversationSession) -> bool:
+    """Only same-owner links can be read by the destination bot thread."""
+    if (
+        session.user_id != user.pk
+        or not user.is_authenticated
+        or user.get_username() not in settings.ERGONAUT_DEBUG_USERS
+    ):
+        return False
+    bots = registry()
+    if "devbox" not in bots:
+        return False
+    bot = bots.get("devbox")
+    return may_use(bot, user) and bool(bot.definition.orchestration)
+
+
 async def get_session(request, session_id) -> ConversationSession:
     return await aget_object_or_404(visible_sessions(request.auth), id=uuid_or_404(session_id))
 
@@ -1134,6 +1151,7 @@ def session_detail(
     session = with_open_counts(visible_sessions(request.auth).filter(id=session.id)).first()
     return {
         "session": session_out(session),
+        "debug_shortcut": debug_shortcut_available(request.auth, session),
         "messages": messages,
         "calls": calls,
         "compactions": [
@@ -1161,6 +1179,14 @@ def session_detail(
         "retry_model": retry_model_for(session, request.auth),
         "prs": session_prs(session),
     }
+
+
+@router.get("/sessions/{session_id}/debug-shortcut")
+def debug_shortcut(request, session_id: str):
+    session = visible_sessions(request.auth).filter(id=uuid_or_404(session_id)).first()
+    if session is None or not debug_shortcut_available(request.auth, session):
+        raise HttpError(404, "No such session")
+    return {"url": f"/s/{session.id}"}
 
 
 @router.get("/sessions/{session_id}/workers/{worker_id}/log")

@@ -66,6 +66,7 @@ function reply(line: number, suggestions?: string[]): Message {
 }
 function detail(messages: Message[] = [], calls: Call[] = []): SessionDetail {
   return {
+    debug_shortcut: false,
     session: {
       id: 'thread',
       bot: 'helper',
@@ -146,6 +147,19 @@ afterEach(() => {
 })
 
 describe('Chat suggestions', () => {
+  test('hides debug when the server does not permit it', async () => {
+    await mount(detail())
+    expect(container.querySelector('.chat-floating-actions')?.textContent).not.toContain('Debug')
+  })
+
+  test('shows debug beside Illustrate when the server permits it', async () => {
+    await mount({ ...detail(), debug_shortcut: true })
+    const actions = container.querySelector('.chat-floating-actions')!
+    expect(actions.textContent).toContain('Debug')
+    expect(actions.textContent).toContain('Illustrate')
+    expect(actions.className).toContain('flex-wrap')
+  })
+
   test('queued send receives live suggestions and replaces them on subsequent events', async () => {
     window.localStorage.setItem('ergonaut.draft.thread', 'Hello')
     let sends = 0

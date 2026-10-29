@@ -1,5 +1,5 @@
-import { useRef, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useEffect, useRef, useState } from 'react'
+import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { api } from '../api'
 import { clearDraft, useDraft } from '../draft'
 import ModelPicker, { useBotModels } from '../components/ModelPicker'
@@ -9,6 +9,7 @@ import ModelPicker, { useBotModels } from '../components/ModelPicker'
 export function NewThread({ onChange }: { onChange: () => void }) {
   const { name = '' } = useParams()
   const navigate = useNavigate()
+  const location = useLocation()
   const draftKey = `new-thread.${name}`
   const [text, setText] = useDraft(draftKey)
   const [files, setFiles] = useState<File[]>([])
@@ -17,6 +18,37 @@ export function NewThread({ onChange }: { onChange: () => void }) {
   const [error, setError] = useState('')
   const models = useBotModels(name)
   const picker = useRef<HTMLInputElement>(null)
+  const appliedLocation = useRef<string | null>(null)
+
+  useEffect(() => {
+    const state = location.state
+    if (name !== 'devbox' || !state || typeof state !== 'object' || !('debugSourceUrl' in state)) return
+    if (appliedLocation.current === location.key) return
+    appliedLocation.current = location.key
+    const { debugSourceUrl, ...remainingState } = state as Record<string, unknown>
+    if (typeof debugSourceUrl === 'string') {
+      try {
+        const url = new URL(debugSourceUrl)
+        if (
+          url.origin === window.location.origin &&
+          /^\/s\/[0-9a-f-]+$/i.test(url.pathname) &&
+          !url.search &&
+          !url.hash
+        ) {
+          setText(current => (current ? `${current}\n\n${url.href}` : url.href))
+        }
+      } catch {
+        // Ignore malformed navigation state.
+      }
+    }
+    navigate(
+      { pathname: location.pathname, search: location.search, hash: location.hash },
+      {
+        replace: true,
+        state: Object.keys(remainingState).length ? remainingState : null,
+      },
+    )
+  }, [location, name, navigate, setText])
 
   function add(list: FileList | File[] | null) {
     if (list?.length) setFiles(current => [...current, ...Array.from(list)])
