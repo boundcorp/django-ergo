@@ -55,6 +55,25 @@ plugins:
 Then sign the profile in to whatever the bot needs, in that window.
 The profile keeps its cookies across restarts.
 
+### A window of its own
+
+On a desktop someone is using, a Chrome the bot drives can pop up or take
+focus. On Wayland, run it inside [cage](https://github.com/cage-kiosk/cage)
+(`apt install cage`): cage opens one ordinary window on the desktop and
+runs Chrome fullscreen inside it, so Chrome can't raise or focus anything
+outside that window. Minimize it or move it to another workspace, and click
+into it when the bot asks for a sign-in. Closing the window ends Chrome;
+with `launch_command` the next `ergo_browser_start` opens it again.
+
+```bash
+env -u DISPLAY setsid cage -- google-chrome --user-data-dir="$HOME/.config/ergo-chrome" \
+    --remote-debugging-port=9222 --no-first-run --ozone-platform=wayland about:blank &
+```
+
+On X11, `Xephyr :2` gives the same nested window; start Chrome with
+`DISPLAY=:2`. Set `takeover` to say where that window is (for example
+"the cage Chrome window on rigel") so the bot sends people there.
+
 ### When Ergonaut runs on another machine
 
 If the Ergonaut host can SSH to the browser machine (as the user Ergonaut
@@ -114,7 +133,22 @@ Over ssh it has no desktop environment, so take `DISPLAY`,
 change between logins and between X11 and Wayland, and a Chrome pointed at
 a dead display hangs without opening the port. A Chrome already holding the
 profile but not answering takes over the new launch through its singleton
-lock, so the command should stop it first.
+lock, so the command should stop it first. A launch command that wraps
+Chrome in cage looks like this; it can also be the forced `command=` of the
+bot's key in `authorized_keys`, so the key can do nothing else:
+
+```sh
+#!/bin/sh
+curl -sf -o /dev/null http://127.0.0.1:9222/json/version && exit 0
+profile="$HOME/.config/ergo-chrome"
+pkill -f -- "--user-data-dir=$profile" && sleep 2
+export XDG_RUNTIME_DIR=/run/user/$(id -u)
+eval "$(systemctl --user show-environment | grep -E '^(DISPLAY|WAYLAND_DISPLAY|XAUTHORITY)=' | sed 's/^/export /')"
+unset DISPLAY
+setsid cage -- google-chrome --user-data-dir="$profile" --remote-debugging-port=9222 \
+    --no-first-run --ozone-platform=wayland about:blank </dev/null >/dev/null 2>&1 &
+```
+
 `sessions: false` drops the start and stop tools for a bot that should
 always have the browser.
 
