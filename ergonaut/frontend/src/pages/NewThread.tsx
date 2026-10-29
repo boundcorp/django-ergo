@@ -6,11 +6,12 @@ import ModelPicker, { useBotModels } from '../components/ModelPicker'
 
 // Start a thread by writing its first message (with files). The thread gets a title from the
 // message right away, and a generated one (new_thread_metadata) a moment later.
-export function NewThread({ onChange }: { onChange: () => void }) {
+export function NewThread({ onChange, userId }: { onChange: () => void; userId: string }) {
   const { name = '' } = useParams()
   const navigate = useNavigate()
   const location = useLocation()
-  const draftKey = `new-thread.${name}`
+  // Devbox drafts can contain private chat links; do not reuse them across accounts.
+  const draftKey = name === 'devbox' ? `new-thread.${name}.user.${userId}` : `new-thread.${name}`
   const [text, setText] = useDraft(draftKey)
   const [files, setFiles] = useState<File[]>([])
   const [busy, setBusy] = useState(false)

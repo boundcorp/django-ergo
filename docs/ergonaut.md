@@ -193,6 +193,9 @@ opens a new-thread draft containing a normal private chat link; it does not send
 the draft automatically. The link is not a share token and grants no access to
 the chat to another user or bot. Devbox can read it only under the existing
 same-user linked-chat access rules.
+Devbox drafts are stored per account in browser local storage, which is not
+protected from someone with access to the browser profile. Previously saved
+unscoped devbox drafts are not migrated because their owner is unknown.
 
 - **Workspace and Threads dashboard**: Workspace (`/`) keeps the four most
   recent conversations and links to the full Threads dashboard (`/threads`).

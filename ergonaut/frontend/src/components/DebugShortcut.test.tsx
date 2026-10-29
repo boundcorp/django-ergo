@@ -20,11 +20,14 @@ function button() {
 function text() {
   return (container.querySelector('textarea[aria-label="First message"]') as HTMLTextAreaElement).value
 }
-function router(initialEntries: Parameters<typeof createMemoryRouter>[1] = { initialEntries: [`/s/${id}`] }) {
+function router(
+  initialEntries: Parameters<typeof createMemoryRouter>[1] = { initialEntries: [`/s/${id}`] },
+  userId = 'user-1',
+) {
   return createMemoryRouter(
     [
       { path: '/s/:id', element: <DebugShortcut sessionId={id} /> },
-      { path: '/bots/:name/new-thread', element: <NewThread onChange={() => undefined} /> },
+      { path: '/bots/:name/new-thread', element: <NewThread onChange={() => undefined} userId={userId} /> },
     ],
     initialEntries,
   )
@@ -66,7 +69,7 @@ afterEach(() => {
 
 describe('debug shortcut', () => {
   test('gets an authorized link, preserves the draft, and consumes state across history navigation', async () => {
-    window.localStorage.setItem('ergonaut.draft.new-thread.devbox', 'Existing draft')
+    window.localStorage.setItem('ergonaut.draft.new-thread.devbox.user.user-1', 'Existing draft')
     let requested = ''
     let sends = 0
     api.debugShortcut = async sessionId => {
@@ -108,6 +111,23 @@ describe('debug shortcut', () => {
     })
     expect(text()).toBe('Edited draft')
     expect(sends).toBe(0)
+  })
+
+  test('does not show another account’s devbox draft on a shared browser', async () => {
+    api.debugShortcut = async () => ({ url: `/s/${id}` })
+    const first = router()
+    await mount(first)
+    await act(async () => {
+      button().click()
+      await Promise.resolve()
+    })
+    expect(text()).toBe(source)
+    const second = router({ initialEntries: ['/bots/devbox/new-thread'] }, 'user-2')
+    await mount(second)
+    expect(text()).toBe('')
+    const firstAgain = router({ initialEntries: ['/bots/devbox/new-thread'] }, 'user-1')
+    await mount(firstAgain)
+    expect(text()).toBe(source)
   })
 
   test('shows request errors and allows retry without navigating', async () => {

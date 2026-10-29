@@ -273,7 +273,7 @@ function Shell({
               <Route path="/routing" element={<RoutingPage />} />
               <Route path="/api-keys" element={<ApiKeysPage />} />
               <Route path="/bots/:name" element={<BotPage />} />
-              <Route path="/bots/:name/new-thread" element={<NewThread onChange={refresh} />} />
+              <Route path="/bots/:name/new-thread" element={<NewThread onChange={refresh} userId={user.id} />} />
               <Route path="/bots/:name/kb" element={<Memory />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
