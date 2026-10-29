@@ -1510,7 +1510,13 @@ Fireworks standard serverless, checked 2026-10-28:
 | `deepseek-v4p1-flash-1017` | 0.30 | 0.006 | 1.20 |
 | `deepseek-v4p1-flash` | 0.30 | 0.006 | 1.20 |
 | `glm-5p3` | 1.40 | 0.26 | 4.40 |
+| `glm-5p3-flash` | 0.15 | 0.03 | 0.50 |
 | `kimi-k3` | 3.00 | 0.30 | 15.00 |
+
+GLM 5.3 Flash rates were checked against its
+[Fireworks model page](https://fireworks.ai/models/fireworks/glm-5p3-flash)
+and [serverless pricing](https://docs.fireworks.ai/serverless/pricing) on
+2026-10-29.
 
 The structured call's cost uses the same prices, so cost totals include
 private spend. Ergonaut's Costs API also breaks it down by pool, provider,

@@ -324,8 +324,12 @@ def add_request_cost(call, model: str, usage) -> None:
 # million tokens, keyed by (provider, exact model ID). Matched exactly, never by
 # prefix, so a model ID that isn't listed is unpriced ("unknown"), not priced
 # as some other family. Fireworks standard serverless, from the public model
-# pages and https://docs.fireworks.ai/serverless/pricing.md (checked 2026-10-28).
-EXACT_PRICES_SOURCE = "fireworks.ai standard serverless pricing, checked 2026-10-28"
+# pages and https://docs.fireworks.ai/serverless/pricing (checked 2026-10-28;
+# GLM 5.3 Flash checked 2026-10-29).
+EXACT_PRICES_SOURCE = (
+    "fireworks.ai standard serverless pricing, checked 2026-10-28 "
+    "(GLM 5.3 Flash 2026-10-29)"
+)
 EXACT_API_PRICES: dict[tuple[str, str], dict[str, str]] = {
     ("fireworks", "accounts/fireworks/models/deepseek-v4p1-flash-1017"): {
         "input": "0.30",
@@ -341,6 +345,11 @@ EXACT_API_PRICES: dict[tuple[str, str], dict[str, str]] = {
         "input": "1.40",
         "cached": "0.26",
         "output": "4.40",
+    },
+    ("fireworks", "accounts/fireworks/models/glm-5p3-flash"): {
+        "input": "0.15",
+        "cached": "0.03",
+        "output": "0.50",
     },
     ("fireworks", "accounts/fireworks/models/kimi-k3"): {
         "input": "3.00",

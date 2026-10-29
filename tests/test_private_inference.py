@@ -52,6 +52,7 @@ User = get_user_model()
 
 FLASH = "accounts/fireworks/models/deepseek-v4p1-flash-1017"
 GLM = "accounts/fireworks/models/glm-5p3"
+GLM_FLASH = "accounts/fireworks/models/glm-5p3-flash"
 KIMI = "accounts/fireworks/models/kimi-k3"
 KEY = "fw-test-sentinel-key-7c1e9a"
 ENDPOINT = "https://api.fireworks.ai/inference/v1/chat/completions"
@@ -866,6 +867,49 @@ def test_kimi_cost_is_exact():
     assert exact_price("fireworks", KIMI + "-turbo") is None
     assert price_for(KIMI + "-turbo") is None  # no prefix matching onto other models
     assert price_for(KIMI).cache_read == pytest.approx(0.30)
+
+
+def test_glm_flash_cost_is_exact():
+    price = exact_price("fireworks", GLM_FLASH)
+    assert (price.input, price.cached, price.output) == (
+        Decimal("0.15"),
+        Decimal("0.03"),
+        Decimal("0.50"),
+    )
+    assert price.cost(1000, 400, 200) == Decimal("0.000202")
+    assert exact_price("fireworks", GLM_FLASH + "-other") is None
+    assert price_for(GLM_FLASH + "-other") is None
+    assert price_for(GLM_FLASH).cache_read == pytest.approx(0.03)
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_glm_flash_is_priced_and_reserved_under_cap(found, fireworks):
+    capped = Providers(
+        providers=found.providers,
+        routing=found.routing,
+        private_pools={
+            "personal": pool(
+                found,
+                daily_usd_cap=Decimal("0.10"),
+                models={"flash": GLM_FLASH},
+                default="flash",
+            )
+        },
+    )
+    engine = bots(capped, personal={"config": {"model": "personal"}})[
+        "personal"
+    ].make_engine()
+    await engine.complete([{"role": "user", "content": "hi"}])
+    assert len(fireworks.requests) == 1
+    assert fireworks.bodies[0]["model"] == GLM_FLASH
+    row = await InferenceRequest.objects.aget()
+    assert row.model == GLM_FLASH
+    assert row.cost_status == "priced"
+    assert row.cost_usd == Decimal("0.000202")
+    assert row.reserved_usd > row.cost_usd
+    assert row.rates["input"] == "0.15"
+    assert row.rates["cached"] == "0.03"
+    assert row.rates["output"] == "0.50"
 
 
 @pytest.mark.django_db(transaction=True)
