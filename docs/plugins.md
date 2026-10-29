@@ -48,6 +48,7 @@ it. A plugin without tools is always active, and so are a plugin's hooks
 | `bash` | `bash` | shell commands on the host, each approved by default |
 | `browser` | `browser` | a running Chrome over CDP: open, read, click, type, screenshot ([Browser control](browser.md)) |
 | `kubectl` | `kubectl` | configured-cluster Kubernetes inspection and individually approved changes with redacted previews |
+| `web_search` | `web_search` | `ergo_web_search` and `ergo_web_fetch` on every engine, through Brave, the Claude Code subscription, or Anthropic's search tool |
 
 `bash`, `browser`, `orca` and `kubectl` default to `root_only: true` (top-level chats
 only, never threads); `bot_management` defaults to `root_only: false`, so a

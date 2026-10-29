@@ -1215,6 +1215,39 @@ host as the user Ergonaut runs as. Output is stdout and stderr with the exit
 code, trimmed to its start and end when long. It is the whole machine, so
 keep `approve: true` unless you trust the bot with it.
 
+### web_search
+
+```yaml
+- name: web_search
+  backend: auto              # auto, brave, claude_code or anthropic
+  brave_api_key_env: BRAVE_API_KEY
+  anthropic_api_key_env: ANTHROPIC_API_KEY
+  model: ""                  # claude_code: haiku; anthropic: claude-haiku-5-5
+  count: 8                   # results per search
+  timeout: 90                # seconds per search or fetch
+  max_page_chars: 20000      # ergo_web_fetch trims pages to this
+```
+
+Gives the bot `ergo_web_search(query, count?)`, which returns the top results
+as markdown links with snippets, and `ergo_web_fetch(url)`, which reads a page
+as text. The tools are the same whichever engine a chat is routed to; the
+backend decides where a search runs:
+
+- `brave`: the Brave Search API, with the key in `brave_api_key_env`.
+- `claude_code`: a short `claude -p` call that may only use Claude Code's
+  WebSearch tool, on the host's subscription login (the one the Claude Code
+  engine uses). No API cost, one small model call per search.
+- `anthropic`: one Messages API call with Anthropic's server-side web search
+  tool, billed per search on `anthropic_api_key_env`.
+- `auto` (the default): `brave` when its key is set, else `claude_code` when
+  the `claude` CLI is installed, else `anthropic` when its key is set.
+
+`ergo_web_fetch` is a plain GET from the Ergonaut host and only reaches
+public addresses: localhost, the private network and cloud metadata are
+refused, also through a redirect. Use the `browser` plugin for pages behind a
+sign-in or that block datacenter IPs. Add the `web_search` skill to the chats
+that should search, or let the bot load it when it needs to.
+
 ### browser
 
 ```yaml
