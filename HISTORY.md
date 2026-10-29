@@ -22,6 +22,8 @@ This document tracks the major milestones and evolution of the Django Ergo proje
 - `FIREWORKS_*` (and `DJANGO_ERGO["PROTECTED_ENV_PREFIXES"]`) are kept out
   of subprocesses, `ctx.secret()` and local shell secrets: defense in depth,
   not isolation. A credential-isolated service is the planned next phase.
+- The OpenAI extra installs `httpx` and restricts the SDK to versions before 3,
+  whose HTTP transport interface is used by the guarded Fireworks engine.
 
 ### Small, medium, large and xlarge tiers (October 2026)
 
