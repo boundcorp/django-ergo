@@ -3,7 +3,7 @@
 ## Setup
 
 ```bash
-make env               # uv virtualenv, dev requirements, pre-commit hooks
+make env               # uv virtualenv, the dev extra (pyproject.toml), pre-commit hooks
 source .venv/bin/activate
 pip install -e '.[dev]'
 ```

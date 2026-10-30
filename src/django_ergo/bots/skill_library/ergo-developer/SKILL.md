@@ -81,6 +81,10 @@ a browser, stay with `ergonaut-remote`.
   first.
 - Bot configs live in their own repo, not in django-ergo. `examples/`
   holds public examples only.
+- Layers import downward only (core < bots < plugins < ergonaut;
+  `tests/test_import_layers.py`). Before adding a helper, grep for an
+  existing one (CLAUDE.md lists the canonical modules); a second copy needs
+  a reason in the PR.
 
 ## Setting up a machine for this
 

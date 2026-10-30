@@ -56,6 +56,12 @@ and prettier (for `ergonaut/frontend`); every hook should pass.
 - `bots/skill_library/`: library skills (skillbuilder; the agent skills ergo-client, ergo-hosting, ergo-bot-development, ergo-developer, with `install.py` for Claude Code and Codex)
 - `plugins/`: `ergo_kb` (`kb.py`), `bot_management`, `pages`, `attachments`, `telegram`, `orca`, `bash`
 - `conversation/structured.py`: `StructuredCall` and `run_structured_call`; every bot turn is one (`chat_reply`)
+- `conversation/tool_dispatch.py`: the one tool dispatch (toolkits are the only tool system)
+- `conversation/roles.py`: main / named chat / thread (`is_main`, `is_top`, `title`)
+- `conversation/usage_windows.py`: provider rate-limit windows (engines record, `bots.routing` reads)
+- `bots/messaging.py`: `running_turn()` is the one "is a turn running" rule; `busy()` uses it
+- `plugins/_common.py`: `trim`, `clip`, `is_secret`, `record_agent_usage`; `daemon.start_daemon` for broker-less background work
+- `ergonaut/frontend/src/persistedFlag.ts`: open/closed panels remembered per browser
 - `conversation/compaction.py`, `conversation/context.py`, `conversation/window.py` (window chats), `conversation/history*.py`
 - `settings.py`: `DJANGO_ERGO` defaults
 
@@ -66,6 +72,12 @@ Ergonaut use pgserver (embedded PostgreSQL) when `DATABASE_URL` is unset.
 `django_ergo.knowledge` alone also runs on SQLite.
 
 ## Conventions
+
+- Layers import downward only: core (`django_ergo` outside `bots`/`plugins`)
+  < `bots` < `plugins` < `ergonaut`. `tests/test_import_layers.py` enforces
+  it, with the few existing exceptions listed and explained there.
+- Before adding a helper, grep for an existing one (see "Where things are");
+  a second copy needs a reason in the PR.
 
 - Keep docs current: a change to bot.yaml keys, plugins, tools or Ergonaut
   behavior updates `docs/bots.md` and the relevant guide in the same PR.
