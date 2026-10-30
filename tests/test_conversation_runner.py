@@ -1,43 +1,49 @@
-"""Tests for run_conversation_turn."""
+"""Tests for run_conversation_turn and the shared tool dispatch."""
 
 from unittest.mock import MagicMock
-from unittest.mock import patch
 
 from django_ergo.conversation.runner import PendingApproval
-from django_ergo.conversation.runner import _tool_requires_approval
+from django_ergo.conversation.tool_dispatch import collect_toolkit_schemas
+from django_ergo.conversation.tool_dispatch import dispatch_tool
+from django_ergo.conversation.tool_dispatch import find_toolkit
+from django_ergo.conversation.tool_dispatch import requires_approval
 
 
-async def _async_gen(*items):
-    for item in items:
-        yield item
+def toolkit(name, *, approval=False, result="ok", error=None):
+    tk = MagicMock()
+    tk.has_tool.side_effect = lambda n: n == name
+    tk.requires_approval.side_effect = lambda n: approval
+    if error is not None:
+        tk.execute_tool.side_effect = error
+    else:
+        tk.execute_tool.return_value = result
+    return tk
 
 
-class TestToolRequiresApproval:
+class TestRequiresApproval:
     def test_unknown_tool(self):
-        assert _tool_requires_approval("nonexistent", None) is False
+        assert requires_approval("nonexistent", None) is False
 
-    @patch("django_ergo.conversation.runner.tool_registry")
-    def test_tool_no_approval(self, mock_registry):
-        mock_config = MagicMock()
-        mock_config.requires_approval = False
-        mock_registry.get_tool.return_value = mock_config
-        assert _tool_requires_approval("safe_tool", None) is False
+    def test_the_toolkit_decides(self):
+        assert requires_approval("safe", [toolkit("safe")]) is False
+        assert requires_approval("danger", [toolkit("danger", approval=True)]) is True
 
-    @patch("django_ergo.conversation.runner.tool_registry")
-    def test_tool_needs_approval(self, mock_registry):
-        mock_config = MagicMock()
-        mock_config.requires_approval = True
-        mock_registry.get_tool.return_value = mock_config
-        assert _tool_requires_approval("danger_tool", None) is True
 
-    @patch("django_ergo.conversation.runner.tool_registry")
-    def test_tool_whitelisted(self, mock_registry):
-        mock_config = MagicMock()
-        mock_config.requires_approval = True
-        mock_registry.get_tool.return_value = mock_config
-        workflow = MagicMock()
-        workflow.get_tools_config.return_value = {"approved_tools": ["danger_tool"]}
-        assert _tool_requires_approval("danger_tool", workflow) is False
+class TestDispatchTool:
+    def test_first_matching_toolkit_handles_tool(self):
+        a, b = toolkit("other"), toolkit("kb_search", result="result from b")
+        assert dispatch_tool("kb_search", {"query": "x"}, [a, b]) == (
+            "result from b",
+            False,
+        )
+        a.execute_tool.assert_not_called()
+
+    def test_any_tool_failure_goes_back_as_an_error(self):
+        broken = toolkit("boom", error=LookupError("no such row"))
+        assert dispatch_tool("boom", {}, [broken]) == ("no such row", True)
+
+    def test_unknown_tool(self):
+        assert dispatch_tool("nope", {}, []) == ("Unknown tool: nope", True)
 
 
 class TestPendingApproval:
@@ -51,43 +57,7 @@ class TestPendingApproval:
 
 
 class TestExtraTools:
-    def test_extra_tools_accepts_list(self):
-        """run_conversation_turn accepts a list of Toolkits."""
-        import inspect
-
-        from django_ergo.conversation.runner import run_conversation_turn
-
-        sig = inspect.signature(run_conversation_turn)
-        assert "extra_tools" in sig.parameters
-        assert sig.parameters["extra_tools"].default is None
-
-    @patch("django_ergo.conversation.runner.tool_registry")
-    def test_first_matching_toolkit_handles_tool(self, mock_registry):
-        """When multiple toolkits are provided, the first one that claims the tool handles it."""
-        from unittest.mock import MagicMock
-
-        toolkit_a = MagicMock()
-        toolkit_a.has_tool.return_value = False
-        toolkit_b = MagicMock()
-        toolkit_b.has_tool.return_value = True
-        toolkit_b.execute_tool.return_value = "result from b"
-
-        # Simulate the dispatch logic
-        toolkits = [toolkit_a, toolkit_b]
-        name = "kb_search"
-        result = None
-        for tk in toolkits:
-            if tk.has_tool(name):
-                result = tk.execute_tool(name, {"query": "test"})
-                break
-
-        toolkit_a.has_tool.assert_called_with(name)
-        toolkit_b.has_tool.assert_called_with(name)
-        assert result == "result from b"
-        toolkit_a.execute_tool.assert_not_called()
-
-    def test_extra_tools_backward_compatible_with_none(self):
-        """run_conversation_turn still works without extra_tools."""
+    def test_extra_tools_defaults_to_none(self):
         import inspect
 
         from django_ergo.conversation.runner import run_conversation_turn
@@ -98,8 +68,6 @@ class TestExtraTools:
 
 class TestHelperFunctions:
     def test_collect_toolkit_schemas(self):
-        from django_ergo.conversation.runner import _collect_toolkit_schemas
-
         toolkit_a = MagicMock()
         toolkit_a.get_tools_schema.return_value = [{"name": "tool_a"}]
         toolkit_b = MagicMock()
@@ -107,38 +75,10 @@ class TestHelperFunctions:
             {"name": "tool_b"},
             {"name": "tool_c"},
         ]
+        result = collect_toolkit_schemas([toolkit_a, toolkit_b], MagicMock())
+        assert result == [{"name": "tool_a"}, {"name": "tool_b"}, {"name": "tool_c"}]
 
-        adapter = MagicMock()
-        result = _collect_toolkit_schemas([toolkit_a, toolkit_b], adapter)
-        expected_count = 3
-        assert len(result) == expected_count
-        assert result[0] == {"name": "tool_a"}
-        assert result[1] == {"name": "tool_b"}
-
-    def test_find_toolkit_for_tool_found(self):
-        from django_ergo.conversation.runner import _find_toolkit_for_tool
-
-        toolkit_a = MagicMock()
-        toolkit_a.has_tool.return_value = False
-        toolkit_b = MagicMock()
-        toolkit_b.has_tool.return_value = True
-
-        result = _find_toolkit_for_tool([toolkit_a, toolkit_b], "kb_search")
-        assert result is toolkit_b
-
-    def test_find_toolkit_for_tool_not_found(self):
-        from django_ergo.conversation.runner import _find_toolkit_for_tool
-
-        toolkit_a = MagicMock()
-        toolkit_a.has_tool.return_value = False
-
-        result = _find_toolkit_for_tool([toolkit_a], "unknown")
-        assert result is None
-
-
-class TestRunnerRecordsUsage:
-    def test_record_kb_usage_function(self):
-        """_record_kb_usage exists and is importable."""
-        from django_ergo.conversation.runner import _record_kb_usage
-
-        assert callable(_record_kb_usage)
+    def test_find_toolkit(self):
+        a, b = toolkit("other"), toolkit("kb_search")
+        assert find_toolkit([a, b], "kb_search") is b
+        assert find_toolkit([a], "unknown") is None

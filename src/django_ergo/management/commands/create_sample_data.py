@@ -118,7 +118,6 @@ Key Components:
 - Workflow: Defines AI logic, tools, and instructions
 - UserChat: Individual chat sessions owned by users
 - ChatMessage: Typed messages supporting multiple roles (user, assistant, system, tool)
-- WorkflowEngine: Processes messages through AI agents with tool execution
 
 The system supports tool approval workflows where certain tools require user approval before execution, and workflow state can be persisted for pause/resume functionality.""",
             },

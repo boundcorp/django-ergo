@@ -20,10 +20,11 @@ from django.db.models import Count, Q
 from django.http import FileResponse, HttpResponse
 from django.shortcuts import aget_object_or_404
 from django.utils import timezone
-from django_ergo.bots import archival, webhooks
+from django_ergo.bots import archival, messaging, webhooks
 from django_ergo.bots.pages import text_page, view_kind
 from django_ergo.bots.runtime import Bot
 from django_ergo.bots.todos import get_todos
+from django_ergo.conversation import roles
 from django_ergo.conversation.attachments import save_session_file
 from django_ergo.conversation.history import SessionSource
 from django_ergo.conversation.inference_policy import FIREWORKS_KEY_ENV, PolicyError
@@ -303,7 +304,7 @@ def thread_summary(session: ConversationSession) -> dict:
     role = meta.get("bot_role") or ""
     return {
         "id": str(session.id),
-        "title": meta.get("title") or ("Main" if role in ("root", "main") else "Thread"),
+        "title": roles.title(session),
         "bot": session.bot_name,
         "role": role,
         "archived": session.status == "completed" and role == "thread",
@@ -613,7 +614,7 @@ def session_out(session: ConversationSession) -> dict:
     return {
         "id": str(session.id),
         "bot": session.bot_name,
-        "title": meta.get("title") or ("Main" if meta.get("bot_role") in ("root", "main") else "Thread"),
+        "title": roles.title(session),
         "role": meta.get("bot_role") or "",
         "parent_id": str(session.parent_id) if session.parent_id else None,
         **started_by(session),
@@ -705,9 +706,6 @@ def resolution(session: ConversationSession) -> dict:
 OPEN_REQUESTS = ["queued", "delivered", "waiting"]
 
 
-BUSY_WITHIN_MINUTES = 30  # an in-progress call older than this is a crashed turn, not a busy one
-
-
 def with_open_counts(qs):
     """Annotate sessions with their open delegated requests, in and out, whether a
     turn is running now (``busy``), whether a reply came after the owner last looked
@@ -723,11 +721,7 @@ def with_open_counts(qs):
     )
     moved = StructuredCall.objects.filter(session=OuterRef("pk")).order_by("-updated_at")
 
-    running = StructuredCall.objects.filter(
-        session=OuterRef("pk"),
-        status="in_progress",
-        updated_at__gte=timezone.now() - timezone.timedelta(minutes=BUSY_WITHIN_MINUTES),
-    )
+    running = StructuredCall.objects.filter(messaging.running_turn(), session=OuterRef("pk"))
     working = Worker.objects.filter(session=OuterRef("pk"), status__in=["queued", "running"])
     paused = StructuredCall.objects.filter(session=OuterRef("recipient_session"), status="awaiting_approval")
     blocked = ThreadMessage.objects.filter(
@@ -959,7 +953,7 @@ def chats_out(bot: Bot, user) -> list[dict]:
     sessions = {
         (s.metadata or {}).get("chat") or "main": str(s.id)
         for s in bot.sessions(user)
-        .filter(parent__isnull=True, metadata__bot_role__in=["root", "main", "chat"])
+        .filter(parent__isnull=True, metadata__bot_role__in=list(roles.TOP))
         .exclude(status="completed")
         .order_by("-created_at")
     }
@@ -1469,14 +1463,6 @@ def bot_models(request, bot: str):
     return models_out(get_bot(bot, request.auth))
 
 
-@router.get("/bots/{bot}/routing")
-def bot_routing(request, bot: str):
-    """The auto/<tier> routing a bot's chats get: tiers, rules, subscription usage."""
-    from django_ergo.bots.routing import routing_report
-
-    return routing_report(get_bot(bot, request.auth).providers)
-
-
 class RoutingIn(Schema):
     text: str
 
@@ -1581,7 +1567,7 @@ async def set_session_effort(request, session_id: str, data: EffortIn):
 async def close_session(request, session_id: str):
     """Archive a thread (a root chat can't be archived)."""
     session = await get_session(request, session_id)
-    if (session.metadata or {}).get("bot_role") in ("root", "main", "chat"):
+    if roles.is_top(session):
         raise HttpError(409, "Main and named chats can't be archived")
     await sync_to_async(archival.archive)(session, "archived by the user")
     return await sync_to_async(session_out)(session)
@@ -1631,8 +1617,6 @@ class KBArticleDetailOut(Schema):
 
 def bot_kbs(bot: Bot) -> list[dict]:
     """The knowledge bases attached to ``bot`` through its ergo_kb plugins."""
-    from django_ergo.models import Knowledgebase
-
     found = []
     for index, plugin in enumerate(p for p in bot.plugins if p.name == "ergo_kb"):
         folder = getattr(plugin, "folder", None)
@@ -1653,7 +1637,7 @@ def bot_kbs(bot: Bot) -> list[dict]:
                     "_source": folder,
                 }
             )
-        for kb in Knowledgebase.objects.filter(name__in=plugin.config.get("knowledgebases") or []):
+        for kb in plugin.knowledgebases():
             found.append(
                 {
                     "id": str(kb.id),
@@ -2069,7 +2053,6 @@ def bot_file(request, bot_name: str, path: str):
     rewritten to ``bot_asset`` URLs, since a sandboxed page can't send its login."""
     import posixpath
 
-    from django_ergo.bots.pages import SERVED_SUFFIXES
     from django_ergo.bots.pages import bot_file as find
 
     bot = get_bot(bot_name, request.auth)
@@ -2086,17 +2069,13 @@ def bot_file(request, bot_name: str, path: str):
             asset_url=asset_urls(request.auth, bot_name),
         )
         return page_response(html, sandboxed=True)
-    response = FileResponse(found.open("rb"), content_type=SERVED_SUFFIXES[found.suffix.lower()])
-    response["Cache-Control"] = "no-cache"
-    response["X-Frame-Options"] = "SAMEORIGIN"
-    return response
+    return folder_file_response(found)
 
 
 @router.get("/bots/{bot_name}/assets/{token}/{path:path}", auth=None)
 def bot_asset(request, bot_name: str, token: str, path: str):
     """An asset of a sandboxed bot-folder page (see ``page_assets``): the token in the URL stands
     in for the login the sandboxed page can't send. Never a page, which renders with data."""
-    from django_ergo.bots.pages import SERVED_SUFFIXES
     from django_ergo.bots.pages import bot_file as find
 
     user = user_for_token(token, bot_name)
@@ -2106,13 +2085,23 @@ def bot_asset(request, bot_name: str, token: str, path: str):
     found = find(bot, path)
     if found is None or found.suffix == ".jhtml":
         raise HttpError(404, "No such file")
-    response = FileResponse(found.open("rb"), content_type=SERVED_SUFFIXES[found.suffix.lower()])
-    response["Cache-Control"] = "no-cache"
-    response["X-Frame-Options"] = "SAMEORIGIN"
+    response = folder_file_response(found)
     # The page's origin is opaque, so its module scripts and fonts are cross-origin requests.
     response["Access-Control-Allow-Origin"] = "*"
-    if found.suffix.lower() in (".html", ".htm", ".svg"):
-        response["Content-Security-Policy"] = SANDBOXED  # a document opened from here stays sandboxed
+    return response
+
+
+def folder_file_response(found) -> FileResponse:
+    """A bot-folder file. A document type (HTML, SVG) is sandboxed wherever it's served, so it
+    never runs with the viewer's login."""
+    from django_ergo.bots.pages import SERVED_SUFFIXES
+
+    suffix = found.suffix.lower()
+    response = FileResponse(found.open("rb"), content_type=SERVED_SUFFIXES[suffix])
+    response["Cache-Control"] = "no-cache"
+    response["X-Frame-Options"] = "SAMEORIGIN"
+    if suffix in (".html", ".htm", ".svg"):
+        response["Content-Security-Policy"] = SANDBOXED
     return response
 
 

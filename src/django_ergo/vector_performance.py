@@ -247,34 +247,6 @@ class VectorIndexManager:
         return tips
 
     @classmethod
-    def optimize_database_settings(cls) -> dict[str, str]:
-        """
-        Get recommended PostgreSQL settings for vector search optimization.
-
-        Returns:
-            Dict: Recommended settings
-        """
-        return {
-            "shared_preload_libraries": "vector",
-            "max_connections": "100",
-            "shared_buffers": "256MB",  # Adjust based on available RAM
-            "effective_cache_size": "1GB",  # Adjust based on available RAM
-            "random_page_cost": "1.1",  # SSD optimization
-            "cpu_tuple_cost": "0.01",
-            "cpu_index_tuple_cost": "0.005",
-            "cpu_operator_cost": "0.0025",
-            # Vector-specific settings
-            "hnsw.ef_search": "40",  # Runtime search effort for HNSW
-            "ivfflat.probes": "10",  # Number of probes for IVFFlat
-            # Memory settings for large vector operations
-            "work_mem": "64MB",  # For sorting and hash operations
-            "maintenance_work_mem": "512MB",  # For index creation
-            # Logging for performance monitoring
-            "log_min_duration_statement": "1000",  # Log slow queries
-            "log_statement": "none",  # Reduce logging overhead
-        }
-
-    @classmethod
     def maintenance_vacuum_analyze(cls) -> dict[str, Any]:
         """
         Run maintenance operations on vector tables and indexes.

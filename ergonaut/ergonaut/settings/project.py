@@ -443,11 +443,3 @@ if "SENTRY_BACKEND_URL" in os.environ:
         # django.contrib.auth) you may enable sending PII data.
         send_default_pii=True,
     )
-
-if "REDIS_URL" in os.environ:
-    redis_url = urlparse(os.environ["REDIS_URL"])
-
-    THUMBNAIL_REDIS_DB = "16"
-    THUMBNAIL_REDIS_PASSWORD = redis_url.password or ""
-    THUMBNAIL_REDIS_HOST = redis_url.hostname
-    THUMBNAIL_REDIS_PORT = redis_url.port or 6379

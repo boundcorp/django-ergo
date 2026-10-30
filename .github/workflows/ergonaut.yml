@@ -54,6 +54,27 @@ jobs:
       - name: Check migrations
         run: env -u DATABASE_URL .venv/bin/python manage.py makemigrations --check --dry-run
 
+  # The web app: type check and every *.test.ts(x) under src (bun runs the
+  # node:test suites too).
+  frontend:
+    if: github.event_name != 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: ergonaut/frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: ergonaut/frontend/package-lock.json
+      - uses: oven-sh/setup-bun@v2
+      - run: npm ci
+      - run: npx tsc -b
+      - run: npm test
+
   # Pushes (and by hand). Builds the release image, starts it with the hello
   # bot as a smoke test, and on main pushes it as sha-<commit> and then moves
   # the `main` tag to it, so `main` only ever points at an image that started.

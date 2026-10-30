@@ -40,17 +40,9 @@ JWT auth: `from ninja_jwt.authentication import JWTAuth`, use `auth=JWTAuth()` o
 
 ### Models
 
-User model: `apps/users/models.py` — extends AbstractUser with string PK (MediumIDMixin), timestamps, email mixin, JWT token generation.
+User model: `apps/users/models.py` extends AbstractUser with a string PK (`MediumIDMixin`), timestamps, a timezone and a Telegram id. `ApiKey` holds hashed API keys.
 
-Available mixins from `utils/models.py`:
-- `TimestampMixin` — created_at, updated_at with ordering
-- `ShortIdMixin` / `MediumIDMixin` / `UUIDMixin` — string/UUID primary keys
-- `ArchivedMixin` — soft delete via archived_at
-- `ModelDiffMixin` — track field changes
-
-### Storage & Presigned URLs
-
-`utils/services/storage.py` provides `presigned_put_object(key, content_type)` and `presigned_get_object(key)`. Uses boto3 with SigV4 for Garage compatibility. Falls back to GCP if `GOOGLE_APPLICATION_CREDENTIALS` is set.
+`utils/models.py` has the two mixins in use: `TimestampMixin` (created_at, updated_at with ordering) and `MediumIDMixin` (string primary key). Migrations import `_generate_medium_id` from it, so keep that name.
 
 ### Tasks
 

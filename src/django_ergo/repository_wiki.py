@@ -24,7 +24,7 @@ from django_ergo.repository_wiki_prompt import minimum_files_by_role
 from django_ergo.repository_wiki_prompt import minimum_source_files
 from django_ergo.repository_wiki_prompt import required_path_groups
 from django_ergo.repository_wiki_prompt import required_symbol_groups
-from django_ergo.tools import ToolConfig
+from django_ergo.tool_config import ToolConfig
 
 _MAX_CITATIONS = 12
 _MAX_GREP_MATCHES = 20

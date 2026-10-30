@@ -1,4 +1,4 @@
-// Run with `npm test` (Node's built-in runner; no extra dependency).
+// Run with `npm test` (bun runs node:test suites too).
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {

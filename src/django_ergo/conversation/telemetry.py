@@ -40,11 +40,10 @@ ERGO_CACHE_READ_TOKENS = "ergo.usage.cache_read_input_tokens"
 def _get_setting(name: str, default: Any = None) -> Any:
     """Get a django-ergo telemetry setting."""
     try:
-        from django.conf import settings
+        from django_ergo.settings import api_settings
 
-        ergo_settings = getattr(settings, "DJANGO_ERGO", {})
-        return ergo_settings.get(name, default)
-    except Exception:  # noqa: BLE001
+        return getattr(api_settings, name)
+    except Exception:  # noqa: BLE001 -- settings not configured
         return default
 
 

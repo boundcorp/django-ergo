@@ -58,6 +58,7 @@ from django_ergo.bots.skillset import SkillSet
 from django_ergo.bots.tools import FunctionToolkit
 from django_ergo.bots.tools import ToolContext
 from django_ergo.bots.tools import load_tool_module
+from django_ergo.conversation import roles
 from django_ergo.conversation.chat_reply import ChatReply
 from django_ergo.conversation.chat_reply import chat_reply_spec
 from django_ergo.conversation.context import ContextBuilder
@@ -102,13 +103,12 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-MAIN_ROLE = "main"
-CHAT_ROLE = "chat"  # a named chat from bot.yaml
-THREAD_ROLE = "thread"
+MAIN_ROLE = roles.MAIN
+CHAT_ROLE = roles.CHAT
+THREAD_ROLE = roles.THREAD
 # Session metadata: the compaction settings bot.yaml last gave a chat.
 COMPACTION_KEY = "bot_compaction"
 ROOT_ROLE = MAIN_ROLE  # the main chat was called the root
-TOP_ROLES = {MAIN_ROLE, CHAT_ROLE, "root"}
 
 
 @dataclass
@@ -533,6 +533,12 @@ class Bot:
         registry = getattr(self, "registry", None)
         return registry.providers if registry is not None else Providers()
 
+    @property
+    def private_pool(self) -> PrivatePool | None:
+        """The private pool this bot is allowlisted in (providers.yaml), if any:
+        its ancillary calls and compaction then stay in that pool."""
+        return self.providers.private_pool_for(self.name)
+
     def model_ref(self) -> str:
         """The ``provider/model`` this bot uses by default, when providers.yaml
         names it. A private selector (``personal``, ``personal/heavy``) is
@@ -808,16 +814,20 @@ class Bot:
         purpose: str,
         use_session: bool = True,
     ) -> Engine:
-        """Select a personal-only private engine for an ancillary text call."""
-        if self.name == "personal":
+        """The engine for an ancillary text call (titles, compaction, ...).
+
+        A bot in a private pool's ``allowed_bots`` always gets that pool's
+        default model, bound to its own session; any other bot gets a public one.
+        """
+        if pool := self.private_pool:
             if session is None or session.pk is None or session.bot_name != self.name:
-                msg = "Personal ancillary inference requires its own session"
+                msg = "Private ancillary inference requires the bot's own session"
                 raise PolicyError(msg)
-            return self.make_engine(session, model="personal", purpose=purpose)
+            return self.make_engine(session, model=pool.name, purpose=purpose)
         selected_session = session if use_session else None
         ref = self.session_model(selected_session) or self.model_ref()
         if self.providers.is_private(ref):
-            msg = "Private ancillary inference is restricted to personal"
+            msg = "Private ancillary inference is restricted to a private pool's allowed_bots"
             raise PolicyError(msg)
         return self.make_engine(selected_session, purpose=purpose)
 
@@ -883,10 +893,10 @@ class Bot:
 
     async def chat_session(self, user, name: str = MAIN) -> ConversationSession:
         """Get or create the user's ``main`` chat, or a named chat from bot.yaml."""
-        if name in ("root", MAIN):
+        if name in roles.MAIN_NAMES:
             name, role = MAIN, MAIN_ROLE
             qs = self.sessions(user).filter(
-                parent__isnull=True, metadata__bot_role__in=["root", MAIN_ROLE]
+                parent__isnull=True, metadata__bot_role=MAIN_ROLE
             )
         else:
             if name not in self.definition.chats:
@@ -928,12 +938,11 @@ class Bot:
     @staticmethod
     def chat_name(session: ConversationSession) -> str | None:
         """``main``, a named chat's name, or None for a thread."""
-        meta = session.metadata or {}
-        role = meta.get("bot_role")
-        if role in ("root", MAIN_ROLE):
+        role = roles.role(session)
+        if role == MAIN_ROLE:
             return MAIN
         if role == CHAT_ROLE:
-            return meta.get("chat")
+            return (session.metadata or {}).get("chat")
         return None
 
     async def create_session(  # noqa: PLR0913
@@ -1020,18 +1029,16 @@ class Bot:
     @staticmethod
     def is_root(session: ConversationSession) -> bool:
         """A top-level chat: main or a named chat (not a thread)."""
-        return (session.metadata or {}).get("bot_role") in TOP_ROLES
+        return roles.is_top(session)
 
     @staticmethod
     def is_main(session: ConversationSession) -> bool:
-        return (session.metadata or {}).get("bot_role") in ("root", MAIN_ROLE)
+        return roles.is_main(session)
 
     @staticmethod
     def is_window(session: ConversationSession) -> bool:
         """A window chat: only the current turn goes to the model natively."""
         return (session.compaction_config or {}).get("native_history") == "turn"
-
-    is_stream = is_window  # deprecated alias
 
     def history_sources(self, session: ConversationSession) -> list[SessionSource]:
         """Sessions the history tools can read: all of this user's sessions
@@ -1119,7 +1126,7 @@ class Bot:
         skillset: SkillSet | None = None,
         *,
         incoming: bool = True,
-    ) -> ContextBuilder | None:
+    ) -> ContextBuilder:
         """The turn's context. ``incoming`` is False when resuming a stored turn."""
         ctx = self.tool_context(session)
         skills = skillset or self.skillset(session)
@@ -1128,7 +1135,6 @@ class Bot:
 
         builder.add(TextContextSource("This chat", chat_identity(session), weight=3))
         builder.add(TextContextSource("Skills", skills.context_summary, weight=1))
-        empty = False
         if self.definition.current_time:
             builder.add(
                 TextContextSource(
@@ -1137,10 +1143,8 @@ class Bot:
                     weight=0.2,
                 )
             )
-            empty = False
         for source in self._function_context_sources(ctx, session, message):
             builder.add(source)
-            empty = False
         if self.is_window(session):
             builder.add(
                 MessageContextSource(
@@ -1155,20 +1159,16 @@ class Bot:
                     incoming=incoming,
                 )
             )
-            empty = False
         for plugin in self.plugins:
             for source in plugin.always_context_sources(ctx, message) or []:
                 builder.add(source)
-                empty = False
             if type(plugin).toolkits is BotPlugin.toolkits:
                 # Not a skill (e.g. telegram): its context is always on.
                 for source in plugin.context_sources(ctx, message) or []:
                     builder.add(source)
-                    empty = False
         for source in skills.context_sources(message):
             builder.add(source)
-            empty = False
-        return None if empty else builder
+        return builder
 
     async def _prepare(
         self, session: ConversationSession, message: str, *, incoming: bool = True
@@ -1294,7 +1294,7 @@ class Bot:
             compaction_engine_factory=(
                 lambda: self.make_ancillary_engine(session, purpose="compaction")
             )
-            if self.name == "personal"
+            if self.private_pool
             else None,
             attachments=attachments,
             context_builder=builder,

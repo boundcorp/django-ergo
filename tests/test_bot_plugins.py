@@ -127,6 +127,24 @@ def test_kb_plugin_config(tmp_path):
         bot.plugin("ergo_kb").make_toolkit(None)
     with pytest.raises(ValueError, match="needs path, knowledgebases or toolkit"):
         Bot.load(write_bot(tmp_path, "name: kb3\nplugins: [ergo_kb]\n", name="kb3"))
+
+    # The singular form from the docs works too.
+    single = "name: kb5\nplugins: [{name: ergo_kb, knowledgebase: Kitchen}]\n"
+    plugin = Bot.load(write_bot(tmp_path, single, name="kb5")).plugin("ergo_kb")
+    assert [kb.name for kb in plugin.knowledgebases()] == ["Kitchen"]
+
+    # Names aren't unique across owners: a shared name is refused, never merged,
+    # until owner picks one.
+    Knowledgebase.objects.create(
+        name="Kitchen", description="Someone else's", owner_id="7"
+    )
+    with pytest.raises(ValueError, match="Several knowledge bases are named Kitchen"):
+        plugin.make_toolkit(None)
+    owned = (
+        "name: kb6\nplugins: [{name: ergo_kb, knowledgebases: [Kitchen], owner: 7}]\n"
+    )
+    plugin = Bot.load(write_bot(tmp_path, owned, name="kb6")).plugin("ergo_kb")
+    assert [kb.description for kb in plugin.knowledgebases()] == ["Someone else's"]
     with pytest.raises(ValueError, match="prefetch must be one of"):
         Bot.load(
             write_bot(
@@ -1391,6 +1409,16 @@ def test_kubectl_read_refuses_aliases_sensitive_flags_and_secret_formats(
             ["get", "pods", "--context=other"],
         ).value.args[0]
     )
+    for flags in (
+        ["-s", "https://attacker.example"],
+        ["-shttps://attacker.example"],
+        ["-s=https://attacker.example"],
+        ["--cluster=other"],
+        ["--tls-server-name", "attacker.example"],
+        ["--proxy-url=http://attacker.example"],
+    ):
+        with pytest.raises(ValueError, match="pins kubeconfig"):
+            plugin.read("configured", ["get", "pods", *flags])
     assert "Secret reads" in plugin.read("configured", ["get", "secrets.v1", "-ojson"])
     assert "does not permit output formats" in plugin.read(
         "configured",
@@ -1419,6 +1447,20 @@ def test_kubectl_redacts_nested_secret_data_from_json_and_yaml():
     assert "secret-value" not in redact_secret_data(
         "items:\n  - data:\n      token: secret-value\n"
     )
+
+
+def test_kubectl_redacts_env_style_credential_names():
+    from django_ergo.plugins.kubectl import redact_secret_data
+
+    logs = (
+        "DB_PASSWORD=hunter2\nAPI_TOKEN: abc123\nDJANGO_SECRET_KEY=zzz\n"
+        "OPENAI_API_KEY=sk-live-999\nreplicas: 3\n"
+    )
+    redacted = redact_secret_data(logs)
+    for value in ("hunter2", "abc123", "zzz", "sk-live-999"):
+        assert value not in redacted
+    assert "DB_PASSWORD=[REDACTED]" in redacted
+    assert "replicas: 3" in redacted
 
 
 @pytest.mark.django_db
@@ -2494,6 +2536,24 @@ def _merge_on_remote(tmp_path, remote, path, text, message):
     git(other, "add", "-A")
     git(other, "commit", "-m", message)
     git(other, "push", "origin", "main")
+
+
+@pytest.mark.django_db
+def test_merge_main_publish_conflict_leaves_the_checkout_clean(bot_repo, tmp_path):
+    remote, work = bot_repo
+    _, _, plugin = management_bot(work, "merge_main")
+    git(work, "add", "-A")
+    git(work, "commit", "-m", "add bot")
+    git(work, "push")
+    _merge_on_remote(tmp_path, remote, "README.md", "theirs\n", "remote edit")
+    (work / "README.md").write_text("ours\n")
+
+    with pytest.raises(ValueError, match="conflict with origin/main in README.md"):
+        plugin.publish("Our edit")
+    assert not (work / ".git" / "rebase-merge").exists()
+    assert not (work / ".git" / "rebase-apply").exists()
+    assert (work / "README.md").read_text() == "ours\n"
+    assert "README.md" in git(work, "status", "--porcelain")
 
 
 @pytest.mark.django_db

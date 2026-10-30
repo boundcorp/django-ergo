@@ -13,8 +13,6 @@ from django_ergo.conversation.models import SessionMessage
 from django_ergo.conversation.models import SessionStatus
 from django_ergo.conversation.models import TransportType
 from django_ergo.models import Workflow
-from django_ergo.tools import ToolConfig
-from django_ergo.tools import tool_registry
 
 User = get_user_model()
 
@@ -224,50 +222,6 @@ def _msg(session, sequence, role, *blocks):
     return message
 
 
-# ---------------------------------------------------------------------------
-# get_tools_schema tests
-# ---------------------------------------------------------------------------
-
-
-class TestGetToolsSchema:
-    def test_get_tools_schema_returns_list(self, engine, workflow):
-        schema = engine.get_tools_schema(workflow)
-        assert isinstance(schema, list)
-
-    def test_get_tools_schema_format(self, engine, workflow):
-        """Each tool must follow OpenAI function-calling format."""
-        tool_name = "_test_openai_schema_tool"
-        test_tool = ToolConfig(
-            name=tool_name,
-            description="A test tool",
-            parameters={
-                "query": {
-                    "type": "string",
-                    "required": True,
-                    "description": "Search query",
-                }
-            },
-        )
-        # Insert directly via public-facing dict obtained through vars()
-        tools_store = vars(tool_registry)["_tools"]
-        tools_store[tool_name] = test_tool
-
-        try:
-            schema = engine.get_tools_schema(workflow)
-            tool_schemas = {s["function"]["name"]: s for s in schema}
-            assert tool_name in tool_schemas
-
-            entry = tool_schemas[tool_name]
-            assert entry["type"] == "function"
-            assert entry["function"]["description"] == "A test tool"
-            assert "query" in entry["function"]["parameters"]["properties"]
-            assert "query" in entry["function"]["parameters"]["required"]
-        finally:
-            del tools_store[tool_name]
-
-
-# ---------------------------------------------------------------------------
-# start_session tests
 # ---------------------------------------------------------------------------
 
 

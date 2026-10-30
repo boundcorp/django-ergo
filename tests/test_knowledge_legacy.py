@@ -6,38 +6,13 @@ from django.http import Http404
 from django.test import RequestFactory
 
 from django_ergo.fields import vector_search
-from django_ergo.kb_strategy_toolkit import KBStrategyToolkit
 from django_ergo.kb_toolkit import KBToolkit
-from django_ergo.kb_tools import get_article_by_hierarchy
-from django_ergo.kb_tools import get_kb_table_of_contents
-from django_ergo.kb_tools import list_user_knowledgebases
-from django_ergo.kb_tools import search_garden_kb
-from django_ergo.kb_tools import search_user_kb
 from django_ergo.models import Article
 from django_ergo.models import Knowledgebase
 from tests.example_app.api import get_article
 from tests.example_app.api import list_articles
 
 pytestmark = pytest.mark.django_db
-
-
-def test_virtual_strategy_write_and_gap_analysis_hide_archived(legacy_kbs):
-    _owner, owned, visible, archived, _foreign = legacy_kbs
-    owned.articles.filter(pk=visible.pk).update(hierarchy_code="AA01")
-    owned.articles.filter(pk=archived.pk).update(hierarchy_code="AA02")
-    toolkit = KBStrategyToolkit(owned)
-    toolkit.execute_tool("kb_update_strategy", {"strategy": "Reviewed organization"})
-    toolkit.execute_tool(
-        "kb_propose_tree",
-        {
-            "prefix": "AA",
-            "title": "Pumps",
-            "description": "Pump instructions",
-            "entries": ["Reset"],
-        },
-    )
-    assert "Reviewed organization" in toolkit.execute_tool("kb_get_strategy", {})
-    assert "Tree #AA: 1 articles" in toolkit.execute_tool("kb_get_tree_status", {})
 
 
 @pytest.fixture
@@ -100,19 +75,8 @@ def test_vector_queries_preserve_scope_and_lifecycle(legacy_kbs, method):
     assert [article.pk for article in results] == [visible.pk]
 
 
-def test_garden_search_cannot_select_global_kbs(legacy_kbs):
-    owner, _owned, visible, _archived, _foreign = legacy_kbs
-    with patch("django_ergo.models.generate_embedding", return_value=[1.0] * 1536):
-        assert [item["id"] for item in search_garden_kb(owner, "garden")] == [
-            str(visible.pk)
-        ]
-        assert [item["id"] for item in search_user_kb(owner, "garden")] == [
-            str(visible.pk)
-        ]
-
-
 def test_archived_pages_are_excluded_from_legacy_read_tools(legacy_kbs):
-    owner, owned, visible, archived, _foreign = legacy_kbs
+    _owner, owned, visible, archived, _foreign = legacy_kbs
     toolkit = KBToolkit([owned])
     assert "Hidden" not in toolkit.render_overview()
     assert "Articles: 1" in toolkit.render_overview()
@@ -126,14 +90,6 @@ def test_archived_pages_are_excluded_from_legacy_read_tools(legacy_kbs):
             "kb_get_article",
             {"kb_name": owned.name, "hierarchy_code": archived.hierarchy_code},
         )
-    assert "error" in get_article_by_hierarchy(
-        owner, owned.name, archived.hierarchy_code
-    )
-    assert list_user_knowledgebases(owner)[0]["article_count"] == 1
-    assert [
-        item["id"]
-        for item in get_kb_table_of_contents(owner, owned.name)["table_of_contents"]
-    ] == [str(visible.pk)]
     assert [item["id"] for item in owned.articles.to_prefetch_results()] == [
         str(visible.pk)
     ]

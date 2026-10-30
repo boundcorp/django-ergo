@@ -213,7 +213,8 @@ def claude_block(row: ConversationAttachment | Attachment) -> dict:
         return {"type": "text", "text": audio_placeholder(row)}
     if not model_readable(row):
         return {"type": "text", "text": unreadable_placeholder(row)}
-    block_type = "image" if row.kind == "image" else "document"
+    # Images never come here: engines send them as references (see ``images``),
+    # downscaled and windowed.
     if _has_bytes(row):
         source = {
             "type": "base64",
@@ -222,20 +223,13 @@ def claude_block(row: ConversationAttachment | Attachment) -> dict:
         }
     else:
         source = {"type": "url", "url": row.url}
-    return {"type": block_type, "source": source}
+    return {"type": "document", "source": source}
 
 
 def openai_part(
     row: ConversationAttachment | Attachment, *, audio_input: bool = False
 ) -> dict:
-    """Chat Completions content part for an attachment."""
-    if row.kind == "image":
-        url = (
-            f"data:{row.media_type};base64,{_read_b64(row)}"
-            if _has_bytes(row)
-            else row.url
-        )
-        return {"type": "image_url", "image_url": {"url": url}}
+    """Chat Completions content part for an attachment (images go as references)."""
     if row.kind == "audio":
         audio_format = _OPENAI_AUDIO_FORMATS.get(row.media_type)
         if audio_input and _has_bytes(row) and audio_format:

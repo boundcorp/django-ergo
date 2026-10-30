@@ -1224,3 +1224,25 @@ async def test_key_never_appears_in_reprs_config_ledger_errors_or_logs(
     for text in texts:
         assert KEY not in text
     assert fireworks.auth == [f"Bearer {KEY}", f"Bearer {KEY}"]  # only on the wire
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_any_pool_name_keeps_its_allowed_bots_private(monkeypatch, fireworks):
+    monkeypatch.setenv("TEST_OPENAI_KEY", "sk-test-openai")
+    text = PROVIDERS.replace("  personal:\n", "  family:\n").replace(
+        "allowed_bots: [personal]", "allowed_bots: [helper]"
+    )
+    found = providers_from(text)
+    pair = bots(found, helper={}, other={})
+    helper, other = pair["helper"], pair["other"]
+    assert helper.private_pool.name == "family"
+    assert other.private_pool is None
+    user = await User.objects.acreate(username="family-owner")
+    session = await ConversationSession.objects.acreate(
+        user=user, bot_name="helper", engine_type="openai", transport_type="api"
+    )
+    engine = helper.make_ancillary_engine(session, purpose="compaction")
+    assert engine.grant.selector == "family"
+    assert engine.grant.model_id == FLASH
+    with pytest.raises(PolicyError, match="own session"):
+        helper.make_ancillary_engine(None, purpose="title")

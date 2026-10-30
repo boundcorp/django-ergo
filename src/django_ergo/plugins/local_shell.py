@@ -76,7 +76,9 @@ from django_ergo.bots.tools import BotTool
 from django_ergo.bots.tools import FunctionToolkit
 from django_ergo.bots.tools import bot_tool
 from django_ergo.conversation.context import TextContextSource
-from django_ergo.plugins.orca import is_secret
+from django_ergo.plugins._common import clip
+from django_ergo.plugins._common import is_secret
+from django_ergo.plugins._common import record_agent_usage
 from django_ergo.protected_env import is_protected_env
 
 if TYPE_CHECKING:
@@ -117,11 +119,6 @@ you can't go on without a decision, stop and make your final message start
 with "NEEDS_INPUT:" followed by the question and the options. Otherwise end
 with a short summary: what you made (file paths), how, and anything that cost
 money."""
-
-
-def _clip(text: str, limit: int = CLIP) -> str:
-    text = " ".join(str(text).split())
-    return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
 def _read_json(path: Path) -> dict | None:
@@ -452,8 +449,6 @@ class LocalShellPlugin(BotPlugin):
             return
         from django.utils import timezone
 
-        from django_ergo.conversation.models import AgentUsage
-
         totals: dict[str, dict] = {}
         for number in self.runs(folder):
             events = self.transcript(folder, number)
@@ -473,31 +468,28 @@ class LocalShellPlugin(BotPlugin):
                 usage = event["usage"]
                 row = totals.setdefault(
                     model,
-                    {"input": 0, "write": 0, "read": 0, "output": 0, "requests": 0},
+                    {
+                        "input": 0,
+                        "cache_write": 0,
+                        "cache_read": 0,
+                        "output": 0,
+                        "requests": 0,
+                    },
                 )
                 row["input"] += int(usage.get("input_tokens") or 0)
-                row["write"] += int(usage.get("cache_creation_input_tokens") or 0)
-                row["read"] += int(usage.get("cache_read_input_tokens") or 0)
+                row["cache_write"] += int(usage.get("cache_creation_input_tokens") or 0)
+                row["cache_read"] += int(usage.get("cache_read_input_tokens") or 0)
                 row["output"] += int(usage.get("output_tokens") or 0)
                 row["requests"] += int(event.get("num_turns") or 1)
-        for model, row in totals.items():
-            AgentUsage.objects.update_or_create(
-                worker=ctx.worker,
-                model=model,
-                defaults={
-                    "session": ctx.session,
-                    "bot_name": ctx.worker.bot_name,
-                    "source": "local_shell",
-                    "agent": agent,
-                    "input_tokens": row["input"],
-                    "cache_write_tokens": row["write"],
-                    "cache_read_tokens": row["read"],
-                    "output_tokens": row["output"],
-                    "requests": row["requests"],
-                    "first_at": ctx.worker.created_at,
-                    "last_at": timezone.now(),
-                },
-            )
+        record_agent_usage(
+            ctx.worker,
+            session=ctx.session,
+            source="local_shell",
+            agent=agent,
+            models=totals,
+            first_at=ctx.worker.created_at,
+            last_at=timezone.now(),
+        )
 
     def check(self, ctx, handle: dict) -> AgentCheck:  # noqa: PLR0911 — one return per outcome
         folder = Path(handle["dir"])
@@ -510,7 +502,7 @@ class LocalShellPlugin(BotPlugin):
         events = self.transcript(folder, number)
         entries = self.entries(agent, events)
         ctx.activity(
-            [{**e, "text": _clip(e["text"])} for e in entries[-ACTIVITY_ENTRIES:]],
+            [{**e, "text": clip(e["text"], CLIP)} for e in entries[-ACTIVITY_ENTRIES:]],
             at=state["beat"] if state["alive"] else None,
             source="transcript",
             stall_after=600,
@@ -519,7 +511,7 @@ class LocalShellPlugin(BotPlugin):
         if state["exit"] is None:
             if state["alive"]:
                 last = entries[-1]["text"] if entries else "starting"
-                return AgentCheck("running", progress=_clip(last, 120))
+                return AgentCheck("running", progress=clip(last, 120))
             return AgentCheck(
                 "failed",
                 error=f"Job {folder.name}'s run stopped without finishing (Ergonaut restarted?)",
@@ -533,7 +525,7 @@ class LocalShellPlugin(BotPlugin):
         if ended.get("reason") in ("timeout", "stopped"):
             how = "timed out" if ended["reason"] == "timeout" else "was stopped"
             return AgentCheck(
-                "failed", error=f"Job {folder.name} {how}. {_clip(text)}".strip()
+                "failed", error=f"Job {folder.name} {how}. {clip(text, CLIP)}".strip()
             )
         if ended.get("code") != 0 or agent_error:
             err = folder / META / f"run-{number}.err"
@@ -544,7 +536,7 @@ class LocalShellPlugin(BotPlugin):
             )
             return AgentCheck(
                 "failed",
-                error=f"Job {folder.name} failed (exit {ended.get('code')}): {_clip(text or tail, 800)}",
+                error=f"Job {folder.name} failed (exit {ended.get('code')}): {clip(text or tail, 800)}",
             )
         if text.lstrip().startswith(QUESTION):
             body = text.lstrip()[len(QUESTION) :].strip()
@@ -601,7 +593,7 @@ class LocalShellPlugin(BotPlugin):
             entries += self.entries(agent, self.transcript(folder, number))
         return {
             "source": "transcript",
-            "entries": [{**e, "text": _clip(e["text"], 4000)} for e in entries[-200:]],
+            "entries": [{**e, "text": clip(e["text"], 4000)} for e in entries[-200:]],
         }
 
     # -- files ---------------------------------------------------------------
@@ -711,9 +703,6 @@ class LocalShellPlugin(BotPlugin):
         return written
 
     # -- plugin hooks --------------------------------------------------------
-
-    def _applies(self, ctx: ToolContext) -> bool:
-        return not (self.root_only and ctx.bot and not ctx.bot.is_root(ctx.session))
 
     def agent_managers(self) -> dict[str, AgentManager]:
         return {self.manager.name: self.manager}

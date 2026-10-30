@@ -48,8 +48,8 @@ class Toolkit(ABC):
     def requires_approval(self, tool_name: str) -> bool:
         """Whether a person must approve this call before it runs.
 
-        The runner yields PendingApproval instead of running it, and
-        resume_conversation_turn() continues once there's a decision.
+        A bot turn (a structured call) pauses for the decision. The plain
+        runner yields PendingApproval instead of running it and stops.
         """
         return False
 

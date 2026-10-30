@@ -27,7 +27,8 @@ import ModelPicker, { EffortSlider, modelLabel, useBotModels } from '../componen
 import { PageViewer, Pins } from '../components/Pins'
 import { AttachmentView, replySuggestions, Transcript } from '../components/Transcript'
 import { ModelLink, MobileSessionBar, SuggestionChips, ThreadOptions } from '../components/ChatChrome'
-import { TodoButton, TodoList, saveTodosShown, todosShown } from '../components/TodoList'
+import { TodoButton, TodoList } from '../components/TodoList'
+import { usePersistedFlag } from '../persistedFlag'
 import { WorkerActivityView, WorkerPulse } from '../components/WorkerActivity'
 import { UsageBars, useSessionUsage } from '../components/UsageSparkline'
 import { agoLong } from '../time'
@@ -86,7 +87,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
   const [detail, setDetail] = useState<SessionDetail | null>(null)
   const [text, setText] = useDraft(id)
   const [busy, setBusy] = useState(false)
-  const [showTodos, setShowTodos] = useState(todosShown)
+  const [showTodos, setShowTodos] = usePersistedFlag('ergonaut.todos')
   const [error, setError] = useState('')
   // Files picked or pasted for the next message, already uploaded to the session.
   type Outgoing = { id: string; filename: string; image: boolean }
@@ -107,21 +108,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
   // Answers to the tool calls a turn waits on, sent together once every one has one.
   const [choices, setChoices] = useState<Record<string, boolean>>({})
   // The Files panel stays open or closed across sessions, per browser.
-  const [showFiles, setShowFiles] = useState(() => {
-    try {
-      return localStorage.getItem('ergonaut.files') === 'open'
-    } catch {
-      return false
-    }
-  })
-  function toggleFiles(open: boolean) {
-    setShowFiles(open)
-    try {
-      localStorage.setItem('ergonaut.files', open ? 'open' : 'closed')
-    } catch {
-      // storage unavailable
-    }
-  }
+  const [showFiles, toggleFiles] = usePersistedFlag('ergonaut.files')
   // The pinned page shown in place of the transcript, if any.
   const [openPin, setOpenPin] = useState<Pin | null>(null)
   // Bumped when the Files panel pins or unpins, so the strip reloads.
@@ -977,7 +964,6 @@ export function Chat({ onChange }: { onChange: () => void }) {
             controls="chat-todos"
             onToggle={() => {
               setShowTodos(!showTodos)
-              saveTodosShown(!showTodos)
             }}
           />
           {detail.debug_shortcut && <DebugShortcut sessionId={id} />}

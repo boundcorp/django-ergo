@@ -28,7 +28,6 @@ pydantic = "*"
 pytz = "*"
 requests = "*"
 prometheus-client = "*"
-xhtml2pdf = ">=0.2.13"
 factory-boy = "*"
 ruff = "*"
 pytest = "*"
@@ -61,16 +60,11 @@ ignore = ["E501"]
 "ergonaut/utils/*.py" = ["E402", "UP031"]
 "ergonaut/utils/**/*.py" = ["UP031"]
 
-[tool.mypy]
-files = ["ergonaut"]
-ignore_missing_imports = true
-
 [tool.pytest.ini_options]
 DJANGO_SETTINGS_MODULE = "ergonaut.settings.test_settings"
 python_files = ["test_*.py", "*_test.py", "tests.py"]
 addopts = "--ds=ergonaut.settings.test_settings"
 
 [tool.djlint]
-# Email templates need inline styles and no meta tags; the SPA's index.html is
-# a Vite shell.
+# The SPA's index.html is a Vite shell.
 ignore = "H005,H021,H030,H031,H037,T003"

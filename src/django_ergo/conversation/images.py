@@ -39,7 +39,6 @@ from collections import OrderedDict
 from dataclasses import dataclass
 from dataclasses import field
 from io import BytesIO
-from pathlib import Path
 from typing import TYPE_CHECKING
 from typing import Any
 
@@ -85,15 +84,6 @@ class ToolImage:
             name=row.filename,
             attachment_id=str(row.id),
             url=row.url or "",
-        )
-
-    @classmethod
-    def from_path(cls, path: str | Path, media_type: str | None = None) -> ToolImage:
-        path = Path(path)
-        return cls(
-            data=path.read_bytes(),
-            media_type=media_type or mimetypes.guess_type(path.name)[0] or "image/png",
-            name=path.name,
         )
 
 

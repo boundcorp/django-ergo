@@ -32,7 +32,6 @@ from django_ergo.conversation.telemetry import record_usage
 from django_ergo.conversation.telemetry import trace_engine_call
 from django_ergo.openai_options import DEFAULT_OPENAI_MODEL
 from django_ergo.openai_options import chat_options
-from django_ergo.tools import tool_registry
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -278,11 +277,6 @@ class OpenAIAPIEngine(StoredMessagesMixin, Engine):
         )
         return prepare_messages(messages, "openai")
 
-    def get_tools_schema(self, workflow) -> list[dict]:
-        """Return all registered tools converted to OpenAI function-calling format."""
-        tools = tool_registry.list_tools()
-        return [self._adapter.to_engine_schema(tool) for tool in tools]
-
     async def start_session(self, session) -> str:
         """No-op: the system prompt is sent from the session on every call."""
         return str(session.id)
@@ -310,11 +304,7 @@ class OpenAIAPIEngine(StoredMessagesMixin, Engine):
             messages = await sync_to_async(
                 self.reconstruct_messages, thread_sensitive=True
             )(session)
-            tools = (
-                self.get_tools_schema(session.workflow) if session.workflow else None
-            )
-            if additional_tools:
-                tools = (tools or []) + additional_tools
+            tools = additional_tools or None
 
             kwargs: dict = {
                 "model": self.model,
@@ -530,11 +520,6 @@ class OpenAIAPIEngine(StoredMessagesMixin, Engine):
                     "type": "function",
                     "function": {"name": "structured_output"},
                 }
-            elif workflow:
-                tools = self.get_tools_schema(workflow)
-                if tools:
-                    kwargs["tools"] = tools
-                    kwargs["tool_choice"] = "auto"
             kwargs.update(self._options(tools="tools" in kwargs))
 
             response = await self._create_completion(kwargs)

@@ -271,9 +271,7 @@ legacy app startup produce an actionable installation error.
 
 `django-ergo[openai]` selects the optional SDK independently. Other providers
 remain host-selected. These extras change installation selection, not engine
-behavior or credentials. The legacy WorkflowEngine still constructs its client
-on import and requires its existing configuration; use the lightweight app
-when that legacy engine is unnecessary.
+behavior or credentials.
 
 `django-ergo[filesystem]` adds PyYAML for GitCorpus. Virtual and DB operations
 do not import YAML, Git, OpenAI or pgvector through the new API. Git itself is
@@ -612,12 +610,7 @@ Start a new absorption after clearing; do not reuse references to discarded
 pending evidence.
 
 Pass this toolkit via `extra_tools` to the existing conversation runtime.
-For a stored session, `kb_pipelines.absorb_corpus_conversation(session, toolkit,
-engine)` uses the host-prepared redacted capture, not implicit raw-session
-capture, and returns pending suggestions. It uses the host-selected engine
-and existing session store; no new provider or background executor is added.
-It supports both existing Claude and OpenAI schema adapters. The old
-`absorb_conversation(session, Knowledgebase, engine)` remains unchanged.
+It supports both existing Claude and OpenAI schema adapters.
 
 Logical corpora are not legacy Knowledgebase rows. Their toolkit intentionally
 returns no fabricated legacy `ConversationKBUsage` FK bindings. The runner

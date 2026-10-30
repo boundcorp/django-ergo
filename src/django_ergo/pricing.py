@@ -193,25 +193,6 @@ class Price:
             "output": (output_tokens or 0) * self.output * out_rate / 1_000_000,
         }
 
-    def cost(
-        self,
-        input_tokens: int = 0,
-        output_tokens: int = 0,
-        cache_creation_input_tokens: int = 0,
-        cache_read_input_tokens: int = 0,
-        *,
-        one_request: bool = True,
-    ) -> float:
-        return sum(
-            self.parts(
-                input_tokens,
-                output_tokens,
-                cache_creation_input_tokens,
-                cache_read_input_tokens,
-                one_request=one_request,
-            ).values()
-        )
-
 
 def price_table() -> dict[str, dict[str, float]]:
     from django_ergo.settings import api_settings

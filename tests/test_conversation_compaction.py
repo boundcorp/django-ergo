@@ -621,7 +621,9 @@ async def test_personal_compaction_rejects_untrusted_routing(
     monkeypatch.setattr("django_ergo.conversation.structured.run_structured_call", call)
 
     with pytest.raises(PolicyError):
-        await structured_summarizer(engine, session)("", "sensitive")
+        await structured_summarizer(claude_engine(), session, lambda: engine)(
+            "", "sensitive"
+        )
     call.assert_not_awaited()
 
 

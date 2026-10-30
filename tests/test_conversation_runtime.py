@@ -16,7 +16,6 @@ from django_ergo.conversation.runtime import generate_once
 from django_ergo.conversation.runtime import get_default_engine_spec
 from django_ergo.conversation.runtime import run_workflow_task
 from django_ergo.models import Workflow
-from django_ergo.tools import tool_registry
 
 User = get_user_model()
 
@@ -51,9 +50,6 @@ class FakeEngine(Engine):
         additional_tools=None,
     ):
         yield EngineResponse(event_type="done", raw={})
-
-    def get_tools_schema(self, workflow) -> list[dict]:
-        return []
 
     def reconstruct_messages(self, session) -> list[dict]:
         return []
@@ -139,31 +135,32 @@ class TestGenerateOnce:
 
 class TestRunWorkflowTask:
     def test_run_workflow_task_collects_text_and_approvals(self, user, workflow):
-        engine = FakeEngine()
-        original_tool = tool_registry._tools.get("dangerous")
-        original_func = tool_registry._tool_functions.get("dangerous")
-        tool_registry._tools["dangerous"] = type(
-            "ToolConfigStub",
-            (),
-            {"requires_approval": True},
-        )()
+        from django_ergo.conversation.toolkit import Toolkit
 
-        try:
-            result = async_to_sync(run_workflow_task)(
-                user=user,
-                workflow=workflow,
-                message="please do the thing",
-                engine=engine,
-            )
-        finally:
-            if original_tool is None:
-                tool_registry._tools.pop("dangerous", None)
-            else:
-                tool_registry._tools["dangerous"] = original_tool
-            if original_func is None:
-                tool_registry._tool_functions.pop("dangerous", None)
-            else:
-                tool_registry._tool_functions["dangerous"] = original_func
+        class Dangerous(Toolkit):
+            def has_tool(self, name):
+                return name == "dangerous"
+
+            def requires_approval(self, name):
+                return True
+
+            def execute_tool(self, name, args):
+                pytest.fail("needs approval first")
+
+            def get_tools_schema(self, adapter):
+                return []
+
+            def render_overview(self):
+                return ""
+
+        engine = FakeEngine()
+        result = async_to_sync(run_workflow_task)(
+            user=user,
+            workflow=workflow,
+            message="please do the thing",
+            engine=engine,
+            extra_tools=[Dangerous()],
+        )
 
         assert isinstance(result, AssistantTaskResult)
         assert result.text == "hello "

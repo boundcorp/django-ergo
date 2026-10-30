@@ -3,7 +3,6 @@
 Exercises the full KB toolkit stack end-to-end:
 - Create a KB with articles
 - Use KBToolkit to search/browse
-- Use KBWriteToolkit to add content
 - Verify ConversationKBUsage tracking
 """
 
@@ -13,13 +12,11 @@ from django.contrib.auth import get_user_model
 from django_ergo.conversation.models import ConversationKBUsage
 from django_ergo.conversation.models import ConversationSession
 from django_ergo.kb_toolkit import KBToolkit
-from django_ergo.kb_write_toolkit import KBWriteToolkit
 from django_ergo.models import Article
 from django_ergo.models import Knowledgebase
 
 TOP_LEVEL_COUNT = 4
 CHILDREN_OF_2_COUNT = 2
-MULTI_TOOLKIT_USAGE_COUNT = 2
 
 User = get_user_model()
 pytestmark = pytest.mark.django_db
@@ -154,49 +151,12 @@ class TestReadToolkit:
         assert "6" in result  # 6 articles
 
 
-class TestWriteToolkit:
-    def test_add_article_to_expert(self, lawn_kb):
-        toolkit = KBWriteToolkit(knowledgebase=lawn_kb)
-        result = toolkit.execute_tool(
-            "kb_create_article",
-            {
-                "title": "Aeration",
-                "content": "Aerate your lawn in fall to reduce soil compaction and improve root growth.",
-                "section": "3",
-            },
-        )
-        assert "Aeration" in result
-        assert Article.objects.filter(
-            knowledgebase=lawn_kb, hierarchy_code="30"
-        ).exists()
-
-    def test_add_sub_article(self, lawn_kb):
-        toolkit = KBWriteToolkit(knowledgebase=lawn_kb)
-        result = toolkit.execute_tool(
-            "kb_create_article",
-            {
-                "title": "Winter Fertilizing",
-                "content": "In cold climates, skip winter fertilization entirely.",
-                "parent_code": "2",
-            },
-        )
-        assert "22" in result
-        assert Article.objects.filter(
-            knowledgebase=lawn_kb, hierarchy_code="22"
-        ).exists()
-
-
 class TestUsageTracking:
     def test_read_toolkit_reports_bindings(self, lawn_kb):
         toolkit = KBToolkit(knowledgebases=[lawn_kb])
         bindings = toolkit.get_bound_knowledgebases()
         assert len(bindings) == 1
         assert bindings[0] == (lawn_kb, "read")
-
-    def test_write_toolkit_reports_bindings(self, lawn_kb):
-        toolkit = KBWriteToolkit(knowledgebase=lawn_kb)
-        bindings = toolkit.get_bound_knowledgebases()
-        assert bindings == [(lawn_kb, "write")]
 
     def test_usage_recorded_in_db(self, session, lawn_kb):
         toolkit = KBToolkit(knowledgebases=[lawn_kb])
@@ -211,20 +171,3 @@ class TestUsageTracking:
         assert usages.count() == 1
         assert usages.first().mode == "read"
         assert usages.first().knowledgebase == lawn_kb
-
-    def test_multi_toolkit_usage(self, session, lawn_kb):
-        read_toolkit = KBToolkit(knowledgebases=[lawn_kb])
-        write_toolkit = KBWriteToolkit(knowledgebase=lawn_kb)
-
-        for toolkit in [read_toolkit, write_toolkit]:
-            for kb, mode in toolkit.get_bound_knowledgebases():
-                ConversationKBUsage.objects.get_or_create(
-                    session=session,
-                    knowledgebase=kb,
-                    mode=mode,
-                )
-
-        usages = ConversationKBUsage.objects.filter(session=session)
-        assert usages.count() == MULTI_TOOLKIT_USAGE_COUNT
-        modes = set(usages.values_list("mode", flat=True))
-        assert modes == {"read", "write"}

@@ -16,14 +16,6 @@ class CorpusBackend(Protocol):
     def load(self) -> Snapshot: ...
 
 
-class WritableCorpusBackend(CorpusBackend, Protocol):
-    def commit(
-        self, snapshot: Snapshot, *, expected_revision: str, event: dict
-    ) -> None: ...
-
-    def operations(self) -> list[dict]: ...
-
-
 class MemoryCorpus:
     """An isolated virtual corpus; a host owns persistence and revision selection."""
 

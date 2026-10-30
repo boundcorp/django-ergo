@@ -97,6 +97,27 @@ Live on rigel from `~/p/boundcorp/django-ergo`, bots from `boundcorp/ergo-bots`.
 - [ ] ergo-bots: the `personal` bot and a disabled `private_pools.personal` in providers.yaml; provision `FIREWORKS_API_KEY` as a Secret in infra-octo (`kubernetes/apps/ergonaut/app/deployment.yaml`); then enable.
 - [ ] Lee decides: the `daily_usd_cap` value (and whether a UTC day is the right period), the default member (`deepseek-v4p1-flash-1017` or the original `deepseek-v4p1-flash`), whether titles, compaction and illustrations of the personal bot's chats should spend on the pool (they do now), and whether its voice notes may go to the deployment's public `AUDIO_TRANSCRIBER` (they do now, when one is set).
 
+### Functional review (2026-10-30)
+
+The review is in the project files (`reviews/functional-review/`). Done in one PR:
+
+- [x] Security: kubectl flags and env-style redaction, a worker step lease, merge_main conflicts, bot-folder dotfiles and `.html`/`.svg` CSP, single-use page-action approvals, `ergo_kb` singular key and owner.
+- [x] Deleted the legacy layer: workflow engine, global tool registry, `kb_*` toolkits and pipelines, history toolkit, dead helpers, Ergonaut leftovers. One tool dispatch (`conversation/tool_dispatch.py`).
+- [x] Import-layer test; engines record usage windows without importing bots.
+- [x] Private bots come from `private_pools[*].allowed_bots`, not the name `personal`.
+- [x] One roles module, one root-only plugin gate, one liveness rule, `plugins/_common.py`, `daemon.start_daemon`.
+- [x] Python >=3.11, one dependency source, frontend tests in CI, sign-out only on 401, SSE ids on the session stream, `usePersistedFlag`.
+
+Still to do:
+
+- [ ] Drop the `OpenAIMessage` table (a release after migration 0030) and decide on the legacy `Workflow`/`UserChat`/`ChatMessage` tables (a deployment decision).
+- [ ] A shared CLI-engine subprocess base for `claude_code.py` and `codex_cli.py` (~150 duplicated lines).
+- [ ] One git-checkout helper with an explicit pull policy (`reloading.pull_checkout` vs `folder_kb`).
+- [ ] Frontend `format.ts`/`status.ts` (status maps, the two `countdown`s, window labels) and `upload` folded into `request`.
+- [ ] `ergonaut/api/costs.py` should reuse `Price.parts` and the subscription exclusion.
+- [ ] Mechanical splits: `conversation/models.py`, `ergonaut/api/bots.py`, `apps/bots/tasks.py`, `Chat.tsx` (`useSessionStream`, `usePendingTurn`).
+- [ ] Second-tier review items: orca `TRACKED_ONLY` with a leading flag, `chat_session` get-or-create race, atomic metadata updates, bash timeouts killing children, bounded approval retries, `StructuredCallSpec.max_tokens` with a passed engine, emoji/`null` in page blocks, the empty OpenAI replay tier.
+
 ### Done
 
 - [x] Todo lists in every chat and thread: the built-in `todos` skill (`ergo_todo_write`, `ergo_todo_update`, like Claude Code's TodoWrite) keeps a checklist in the session's metadata, in context every turn, shown in Ergonaut's thread view; `todos: false` in bot.yaml turns it off.

@@ -64,11 +64,11 @@ goals:
     queries: [conversation tool approval]
     required_path_groups:
       engine-session: [src/django_ergo/conversation/engine.py, src/django_ergo/conversation/manager.py, src/django_ergo/conversation/runtime.py]
-      tool-approval: [src/django_ergo/conversation/runner.py, src/django_ergo/tools.py]
+      tool-approval: [src/django_ergo/conversation/runner.py, src/django_ergo/conversation/tool_dispatch.py]
       verification: [tests/test_conversation_*.py]
     required_symbol_groups:
       engine-session-mechanism: [Engine, SessionManager]
-      dispatch-mechanism: [run_conversation_turn, _execute_tool]
+      dispatch-mechanism: [run_conversation_turn, dispatch_tool]
   - id: 6ffb1685-f1e5-5f1c-a3bd-4186fdd4f578
     path: wiki/architecture/permission-boundaries.md
     title: Permission boundaries
@@ -79,26 +79,11 @@ goals:
     required_sections: [Overview, Boundaries, Obligations, Concrete Flow]
     queries: [permission knowledgebase managed]
     required_path_groups:
-      tenant-tools: [src/django_ergo/kb_toolkit.py, src/django_ergo/kb_suggest_toolkit.py, src/django_ergo/kb_tools.py]
+      tenant-tools: [src/django_ergo/kb_toolkit.py]
       managed-content: [src/django_ergo/models.py, src/django_ergo/sync.py]
     required_symbol_groups:
-      tenant-tool-mechanism: [KBToolkit, KBSuggestToolkit, search_user_kb]
+      tenant-tool-mechanism: [KBToolkit]
       managed-content-mechanism: [Article, project_commit]
-  - id: 977b3642-cad9-5afb-a126-271c519d5860
-    path: wiki/use-cases/conversation-absorption.md
-    title: Conversation absorption
-    type: use-case
-    project: django-ergo
-    question: Explain how conversations become reviewed knowledge proposals.
-    required_roles: [runtime]
-    required_sections: [Overview, Flow, Review]
-    queries: [conversation knowledge proposal]
-    required_path_groups:
-      conversation-pipeline: [src/django_ergo/kb_pipelines.py]
-      reviewed-proposal: [src/django_ergo/kb_suggest_toolkit.py]
-    required_symbol_groups:
-      pipeline-mechanism: [absorb_conversation]
-      proposal-mechanism: [KBSuggestToolkit]
   - id: 01726812-3630-5319-9221-0c4568e4c490
     path: wiki/use-cases/repository-self-wiki.md
     title: Repository self-wiki

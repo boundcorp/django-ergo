@@ -131,10 +131,6 @@ def test_generate_summary_mocked(self):
    - Uses both summary and embedding functions
    - Django model field integration
 
-4. **`django_ergo.workflow_engine.WorkflowEngine`** (commented out)
-   - API: `openai.chat.completions.create`
-   - Model: `gpt-4o-mini`
-   - Purpose: Chat completions with tools
 
 ## Environment Variables
 

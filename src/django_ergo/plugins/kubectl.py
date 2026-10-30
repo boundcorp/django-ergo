@@ -36,7 +36,7 @@ from django_ergo.bots.tools import FunctionToolkit
 from django_ergo.bots.tools import bot_tool
 from django_ergo.conversation.context import TextContextSource
 from django_ergo.conversation.toolkit import ApprovalPreview
-from django_ergo.plugins.bash import trim
+from django_ergo.plugins._common import trim
 from django_ergo.protected_env import scrubbed_env
 
 if TYPE_CHECKING:
@@ -61,20 +61,27 @@ DENIED_FLAGS = {
     "--as-group",
     "--as-uid",
     "--as-user-extra",
+    "--cache-dir",
     "--certificate-authority",
     "--client-certificate",
     "--client-key",
+    "--cluster",
     "--context",
     "--disable-compression",
     "--insecure-skip-tls-verify",
     "--kubeconfig",
     "--password",
+    "--proxy-url",
     "--request-timeout",
     "--server",
+    "--tls-server-name",
     "--token",
     "--user",
     "--username",
+    "-s",
 }
+# Short global flags kubectl accepts with the value packed on (``-shttps://x``).
+DENIED_SHORT_FLAGS = ("-s",)
 DENIED_READ_FLAGS = {"--raw"}
 NAMESPACE_FLAGS = {"--namespace", "-n"}
 ALL_NAMESPACES_FLAGS = {"--all-namespaces", "-A"}
@@ -101,9 +108,12 @@ SENSITIVE_KEY_LINE = re.compile(
     r"token)['\"]?)\s*:",
     re.IGNORECASE,
 )
+# The key may be part of a longer env-style name (``DB_PASSWORD``, ``API_TOKEN``,
+# ``DJANGO_SECRET_KEY``): ``_`` is a word character, so a bare ``\b`` misses them.
 CREDENTIAL_VALUE = re.compile(
-    r"(?im)\b(?P<key>api[_-]?key|authorization|client[_-]?(?:certificate|key)"
-    r"(?:[_-]?data)?|credentials?|password|secret|token)\s*(?P<separator>[:=])"
+    r"(?im)\b(?P<key>(?:\w+?[_-])?(?:api[_-]?key|authorization|client[_-]?"
+    r"(?:certificate|key)(?:[_-]?data)?|credentials?|password|secret|token)"
+    r"(?:[_-]\w+)?)\s*(?P<separator>[:=])"
     r"\s*(?:Bearer\s+)?[^\s,;]+"
 )
 PREVIEW_VERBS = {
@@ -160,6 +170,16 @@ def _flag_name(arg: str) -> str:
 
 def _has_flag(args: list[str], flags: set[str]) -> bool:
     return any(_flag_name(arg) in flags or arg in flags for arg in args)
+
+
+def _has_packed_short_flag(args: list[str], flags: tuple[str, ...]) -> bool:
+    """A short flag, alone or with its value packed on, before any ``--``."""
+    own = args[: args.index("--")] if "--" in args else args
+    return any(
+        arg.startswith(flag) and not arg.startswith("--")
+        for arg in own
+        for flag in flags
+    )
 
 
 def _has_namespace(args: list[str]) -> bool:
@@ -335,7 +355,9 @@ class KubectlPlugin(BotPlugin):
         if any(not arg or "\x00" in arg for arg in args):
             msg = "kubectl arguments must be non-empty strings without NUL bytes."
             raise ValueError(msg)
-        if _has_flag(args, DENIED_FLAGS):
+        if _has_flag(args, DENIED_FLAGS) or _has_packed_short_flag(
+            args, DENIED_SHORT_FLAGS
+        ):
             msg = "This bot pins kubeconfig and identity to the selected configured cluster."
             raise ValueError(msg)
         selected = self._cluster(cluster)
@@ -449,9 +471,6 @@ class KubectlPlugin(BotPlugin):
         if is_read_only(args):
             return "Use kubectl_read for read-only commands."
         return self.execute(cluster, args)
-
-    def _applies(self, ctx: ToolContext) -> bool:
-        return not (self.root_only and ctx.bot and not ctx.bot.is_root(ctx.session))
 
     def toolkits(self, ctx: ToolContext) -> list[Toolkit]:
         if not self._applies(ctx):

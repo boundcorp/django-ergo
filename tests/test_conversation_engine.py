@@ -45,7 +45,6 @@ class TestEngineABC:
             "resume_session",
             "send",
             "submit_tool_result",
-            "get_tools_schema",
             "reconstruct_messages",
             "close_session",
             "get_tool_adapter",

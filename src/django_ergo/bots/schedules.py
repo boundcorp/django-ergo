@@ -428,23 +428,15 @@ def run_code(bot: Bot, action: Action, user, *, name: str):
                 return await awaitable
 
             value = async_to_sync(wait)()
-        job.status, job.result = "completed", _jsonable(value)
+        from django_ergo.bots.workers import jsonable
+
+        job.status, job.result = "completed", jsonable(value)
     except Exception as exc:  # noqa: BLE001 — recorded on the job
         job.status, job.error = "failed", f"{type(exc).__name__}: {exc}"[:2000]
         job.traceback = "".join(traceback.format_exception(exc))[-20000:]
     job.completed_at = timezone.now()
     job.save()
     return job
-
-
-def _jsonable(value: Any) -> Any:
-    import json
-
-    try:
-        json.dumps(value)
-    except (TypeError, ValueError):
-        return str(value)
-    return value
 
 
 def _send_prompt(  # noqa: PLR0913

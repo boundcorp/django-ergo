@@ -18,22 +18,21 @@ import time
 from collections.abc import Callable
 
 from django.core.management.base import BaseCommand
-from django.utils import timezone
 
 
 def running_sessions() -> list[str]:
-    """Sessions with a turn running now: a held turn lock, or (without Redis) a
-    recently updated in-progress call."""
+    """Sessions with a turn running now: a held turn lock, or a running call
+    (``messaging.running_turn``)."""
+    from django_ergo.bots.messaging import running_turn
     from django_ergo.conversation.models import StructuredCall
 
     from ergonaut.apps.bots import tasks
 
-    recent = timezone.now() - timezone.timedelta(minutes=tasks.DEAD_TURN_MINUTES)
     ids = {
         str(sid)
-        for sid in StructuredCall.objects.filter(
-            status="in_progress", updated_at__gte=recent, session__isnull=False
-        ).values_list("session_id", flat=True)
+        for sid in StructuredCall.objects.filter(running_turn(), session__isnull=False).values_list(
+            "session_id", flat=True
+        )
     }
     client = tasks.redis_client()
     if client is not None:

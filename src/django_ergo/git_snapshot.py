@@ -5,8 +5,6 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-from django.conf import settings
-
 from django_ergo.paths import validate_relative_path
 
 
@@ -44,9 +42,9 @@ def _git(repository: Path, *args: str, text: bool = True) -> str | bytes:
 
 
 def repository_for(source) -> Path:
-    repositories = getattr(settings, "DJANGO_ERGO", {}).get(
-        "KNOWLEDGE_REPOSITORIES", {}
-    )
+    from django_ergo.settings import api_settings
+
+    repositories = api_settings.KNOWLEDGE_REPOSITORIES
     try:
         repository = Path(repositories[source.repository_alias]).resolve()
     except KeyError as exc:

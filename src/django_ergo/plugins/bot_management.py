@@ -75,7 +75,7 @@ from django_ergo.bots.plugins import BotPlugin
 from django_ergo.bots.tools import BotTool
 from django_ergo.bots.tools import FunctionToolkit
 from django_ergo.bots.tools import bot_tool
-from django_ergo.plugins.bash import trim
+from django_ergo.plugins._common import trim
 from django_ergo.protected_env import scrubbed_env
 
 if TYPE_CHECKING:
@@ -632,7 +632,13 @@ class BotManagementPlugin(BotPlugin):
             self.git("add", "--all")
             self.git("commit", "-m", message)
             self._fetch_main(force=True)
-            self.git("rebase", self.remote_main)
+            try:
+                # On a conflict _rebase aborts, so the live checkout is never left
+                # mid-rebase; the commit goes back to uncommitted changes.
+                self._rebase(work, self.remote_main)
+            except ValueError:
+                self.git("reset", "--soft", "HEAD~1")
+                raise
             self.git("push", self.remote, f"HEAD:{self.main_branch}")
             sha = self.git("rev-parse", "--short", "HEAD").strip()
             return f"Pushed {sha} to {self.main_branch}."
@@ -969,7 +975,7 @@ class BotManagementPlugin(BotPlugin):
         return f"Closed #{int(number)}."
 
     def toolkits(self, ctx: ToolContext) -> list[Toolkit]:
-        if self.root_only and not ctx.bot.is_root(ctx.session):
+        if not self._applies(ctx):
             return []
         return [FunctionToolkit(self._tools(ctx), ctx)]
 

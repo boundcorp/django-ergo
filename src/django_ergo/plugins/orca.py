@@ -90,7 +90,10 @@ from django_ergo.bots.tools import BotTool
 from django_ergo.bots.tools import FunctionToolkit
 from django_ergo.bots.tools import bot_tool
 from django_ergo.conversation.context import TextContextSource
-from django_ergo.plugins.bash import trim
+from django_ergo.plugins._common import clip
+from django_ergo.plugins._common import is_secret
+from django_ergo.plugins._common import record_agent_usage
+from django_ergo.plugins._common import trim
 from django_ergo.protected_env import scrubbed_env
 
 if TYPE_CHECKING:
@@ -216,16 +219,6 @@ def is_read_only(args: list[str]) -> bool:
     return any(command[: len(known)] == known for known in READ_ONLY)
 
 
-def is_secret(name: str) -> bool:
-    name = name.lower()
-    return (
-        name.startswith((".env", "id_rsa", "id_ed25519"))
-        or name.endswith((".pem", ".key", ".p12", ".pfx"))
-        or "secret" in name
-        or "credential" in name
-    )
-
-
 POLL_SECONDS = 120  # how often a watched Orca worker is checked (worker_poll_seconds)
 SETTLED = ("completed", "failed", "cancelled", "abandoned")
 # An agent terminal that has exited or vanished for this long, with no worker_done,
@@ -255,11 +248,6 @@ INPUT_KEYS = (
     "description",
     "prompt",
 )
-
-
-def _clip(text: str, limit: int) -> str:
-    text = text.strip()
-    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
 
 
 def _tool_input(value) -> str:
@@ -320,14 +308,18 @@ def output_entries(read: dict, chars: int = LOG_CHARS) -> tuple[str, list[dict]]
                     name = str(block.get("name") or "tool")
                     text = f"{name} {_tool_input(block.get('input'))}".strip()
                     entries.append(
-                        {"kind": "tool", "text": _clip(text, chars), "at": at}
+                        {
+                            "kind": "tool",
+                            "text": clip(text, chars, one_line=False),
+                            "at": at,
+                        }
                     )
                 elif kind == "tool-result":
                     text = _block_text(block)
                     entries.append(
                         {
                             "kind": "error" if block.get("isError") else "result",
-                            "text": _clip(text, chars),
+                            "text": clip(text, chars, one_line=False),
                             "at": at,
                         }
                     )
@@ -335,13 +327,17 @@ def output_entries(read: dict, chars: int = LOG_CHARS) -> tuple[str, list[dict]]
                     text = _block_text(block)
                     if text.strip():
                         entries.append(
-                            {"kind": role, "text": _clip(text, chars), "at": at}
+                            {
+                                "kind": role,
+                                "text": clip(text, chars, one_line=False),
+                                "at": at,
+                            }
                         )
         return "transcript", entries
     terminal = read.get("terminal") or {}
     lines = [ANSI.sub("", str(line)).rstrip() for line in terminal.get("tail") or []]
     entries = [
-        {"kind": "terminal", "text": _clip(line, chars), "at": None}
+        {"kind": "terminal", "text": clip(line, chars, one_line=False), "at": None}
         for line in lines
         if line.strip()
     ]
@@ -1000,8 +996,6 @@ class OrcaPlugin(BotPlugin):
             return
         from django.utils import timezone
 
-        from django_ergo.conversation.models import AgentUsage
-
         since = ctx.worker.created_at - timedelta(minutes=1)
         until = ctx.worker.completed_at or timezone.now()
         args = [
@@ -1039,32 +1033,22 @@ class OrcaPlugin(BotPlugin):
                     else None
                 )
 
-            seen = []
-            for model, usage in models.items():
-                if not isinstance(model, str) or not isinstance(usage, dict):
-                    continue
-                seen.append(model)
-                AgentUsage.objects.update_or_create(
-                    worker=ctx.worker,
-                    model=model,
-                    defaults={
-                        "session": ctx.session,
-                        "bot_name": ctx.worker.bot_name,
-                        "source": "orca",
-                        "agent": agent,
-                        "input_tokens": int(usage.get("input", 0)),
-                        "cache_write_tokens": int(usage.get("cache_write", 0)),
-                        "cache_read_tokens": int(usage.get("cache_read", 0)),
-                        "output_tokens": int(usage.get("output", 0)),
-                        "reasoning_tokens": int(usage.get("reasoning", 0)),
-                        "requests": int(usage.get("requests", 0)),
+            record_agent_usage(
+                ctx.worker,
+                session=ctx.session,
+                source="orca",
+                agent=agent,
+                models={
+                    model: {
+                        **usage,
                         "first_at": parse_at(usage.get("first_at")),
                         "last_at": parse_at(usage.get("last_at")),
-                    },
-                )
-            AgentUsage.objects.filter(worker=ctx.worker).exclude(
-                model__in=seen
-            ).delete()
+                    }
+                    for model, usage in models.items()
+                    if isinstance(model, str) and isinstance(usage, dict)
+                },
+                replace=True,
+            )
             ctx.state["usage_scanned_at"] = now
             self.capture_native_history(ctx, agent, str(worktree), data.get("history"))
         except Exception:  # noqa: BLE001 — agent session files are best effort
@@ -1316,12 +1300,12 @@ class OrcaPlugin(BotPlugin):
     # -- plugin hooks ------------------------------------------------------
 
     def toolkits(self, ctx: ToolContext) -> list[Toolkit]:
-        if self.root_only and ctx.bot and not ctx.bot.is_root(ctx.session):
+        if not self._applies(ctx):
             return []
         return [FunctionToolkit(self._tools(), ctx)]
 
     def context_sources(self, ctx: ToolContext, message: str) -> list[ContextSource]:
-        if self.root_only and ctx.bot and not ctx.bot.is_root(ctx.session):
+        if not self._applies(ctx):
             return []
         where = (
             f"the {self.environment!r} environment" if self.environment else "this host"
@@ -1561,9 +1545,7 @@ class OrcaAgents(AgentManager):
         self.where = f"Orca worktrees on {place}"
 
     def available(self, ctx) -> bool:
-        return not (
-            self.plugin.root_only and ctx.bot and not ctx.bot.is_root(ctx.session)
-        )
+        return self.plugin._applies(ctx)  # noqa: SLF001
 
     def start(self, ctx, spec: AgentSpec) -> dict:
         return self.plugin.start_agent(ctx, spec)

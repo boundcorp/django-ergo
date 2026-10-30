@@ -50,6 +50,9 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 MAX_POLLS = 10_000
+# How long one step may hold its worker before another runner call may take it over
+# (the process running it died). Steps are meant to be short polls.
+STEP_LEASE_SECONDS = 30 * 60
 MAX_RESULT_CHARS = 6000
 
 
@@ -271,12 +274,11 @@ def _run_in_thread(worker_id: str) -> None:
         close_old_connections()
 
 
-def run(worker_id: str, registry=None) -> str:
-    """Run one step of a worker (what a runner calls). Returns its status after."""
+def _claim(worker_id: str) -> tuple[Worker | None, str]:
+    """Take the worker's next step: (the worker, "") or (None, why not)."""
     from django.db import transaction
     from django.utils import timezone
 
-    from django_ergo.bots.background import find_bot
     from django_ergo.conversation.models import Worker
 
     with transaction.atomic():
@@ -287,11 +289,34 @@ def run(worker_id: str, registry=None) -> str:
             .first()
         )
         if worker is None or not worker.active:
-            return worker.status if worker else "missing"
+            return None, worker.status if worker else "missing"
+        now = timezone.now()
+        lease = timezone.timedelta(seconds=STEP_LEASE_SECONDS)
+        if worker.step_started_at and worker.step_started_at > now - lease:
+            return None, worker.status  # another runner is in the middle of a step
         worker.status = "running"
         worker.polls += 1
-        worker.started_at = worker.started_at or timezone.now()
-        worker.save(update_fields=["status", "polls", "started_at", "updated_at"])
+        worker.started_at = worker.started_at or now
+        worker.step_started_at = now
+        worker.save(
+            update_fields=[
+                "status",
+                "polls",
+                "started_at",
+                "step_started_at",
+                "updated_at",
+            ]
+        )
+    return worker, ""
+
+
+def run(worker_id: str, registry=None) -> str:
+    """Run one step of a worker (what a runner calls). Returns its status after."""
+    from django_ergo.bots.background import find_bot
+
+    worker, skipped = _claim(worker_id)
+    if worker is None:
+        return skipped
     _notify(worker)
     outcome: Any = None
     error = ""
@@ -330,14 +355,23 @@ def run(worker_id: str, registry=None) -> str:
         if outcome.progress:
             worker.progress = outcome.progress[:2000]
         worker.status = "running"
-        worker.save(update_fields=["state", "progress", "status", "updated_at"])
+        worker.step_started_at = None
+        worker.save(
+            update_fields=[
+                "state",
+                "progress",
+                "status",
+                "step_started_at",
+                "updated_at",
+            ]
+        )
         _notify(worker)
         schedule(worker, max(1.0, float(outcome.seconds)))
         return worker.status
     if error:
         _finish(worker, "failed", None, error)
     else:
-        _finish(worker, "completed", _jsonable(outcome), "")
+        _finish(worker, "completed", jsonable(outcome), "")
     return worker.status
 
 
@@ -367,17 +401,6 @@ def cancel(worker: Worker, bot: Bot | None = None) -> str:
     return f"Cancelled {worker.title}. {stopped}"
 
 
-def _record_outputs(worker: Worker, result: Any) -> None:
-    """Record the pull requests a worker's result links in its chat (conversation.links)."""
-    try:
-        from django_ergo.conversation.links import record_pull_requests
-
-        text = result if isinstance(result, str) else json.dumps(result, default=str)
-        record_pull_requests(worker.session, text)
-    except Exception:  # noqa: BLE001 - outputs are extra; the worker already finished
-        logger.warning("Couldn't record pull requests", exc_info=True)
-
-
 def _finish(worker: Worker, status: str, result: Any, error: str) -> None:
     from django.utils import timezone
 
@@ -388,6 +411,7 @@ def _finish(worker: Worker, status: str, result: Any, error: str) -> None:
     worker.error = error[:4000]
     worker.completed_at = timezone.now()
     worker.next_poll_at = None
+    worker.step_started_at = None
     worker.save(
         update_fields=[
             "status",
@@ -395,13 +419,19 @@ def _finish(worker: Worker, status: str, result: Any, error: str) -> None:
             "error",
             "completed_at",
             "next_poll_at",
+            "step_started_at",
             "state",
             "updated_at",
         ]
     )
     _notify(worker)
     if status == "completed":
-        _record_outputs(worker, result)
+        from django_ergo.conversation.links import record_outputs
+
+        record_outputs(
+            worker.session,
+            result if isinstance(result, str) else json.dumps(result, default=str),
+        )
     if not worker.notify or status == "cancelled":
         return
     if status == "completed":
@@ -441,7 +471,8 @@ def _notify(worker: Worker) -> None:
         logger.debug("Could not notify about worker %s", worker.pk, exc_info=True)
 
 
-def _jsonable(value: Any) -> Any:
+def jsonable(value: Any) -> Any:
+    """``value`` if it serializes to JSON, else its ``str``."""
     try:
         json.dumps(value)
     except (TypeError, ValueError):

@@ -8,8 +8,6 @@ admin.site.enable_nav_sidebar = False
 
 urlpatterns = [
     path("admin/", admin.site.urls),
-    # Django Ergo core plugin
-    path("django-ergo/", include("django_ergo.urls", namespace="django-ergo")),
     # API Example (demonstrates how to build APIs with django-ergo)
     path("api/", api.urls),
     # Webhooks for bot plugins

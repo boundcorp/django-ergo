@@ -56,72 +56,11 @@ results = Article.objects.multi_field_semantic_search('AI', weights={'content': 
 """
 
 import logging
-from typing import Any
 
 from django.db import models
 from pgvector.django import CosineDistance
 
 logger = logging.getLogger(__name__)
-
-
-def _summary_model() -> str:
-    from django_ergo.settings import api_settings
-
-    return api_settings.OPENAI_MODEL
-
-
-def generate_summary(
-    text: str, max_tokens: int = 100, user_context: dict[str, Any] | None = None
-) -> str:
-    """
-    Generate a summary of the text using OpenAI's API.
-
-    Args:
-        text: The text to summarize
-        max_tokens: Maximum tokens for the summary
-        user_context: Optional context for the summary
-
-    Returns:
-        str: Generated summary
-    """
-    # Import here to avoid circular imports
-    import os
-
-    import openai
-
-    # Configure OpenAI client - this still uses direct OpenAI for now
-    # TODO: Consider making summary generation pluggable as well
-    openai.api_key = os.getenv("OPENAI_API_KEY", "test-key-for-development")
-
-    messages: list[dict[str, Any]] = [
-        {
-            "role": "system",
-            "content": f"Return a summary of the text that is {max_tokens} tokens or less. Optimize for token usage, omit non-essential information.",
-        }
-    ]
-
-    if user_context:
-        messages.append(
-            {
-                "role": "function",
-                "name": "user_context",
-                "content": str(user_context),
-            }
-        )
-
-    messages.append({"role": "user", "content": text})
-
-    response = openai.chat.completions.create(
-        model=_summary_model(),
-        messages=messages,  # type: ignore[arg-type]
-    )
-
-    content = response.choices[0].message.content
-    if content is None:
-        empty_content_error = "OpenAI returned empty content"
-        raise ValueError(empty_content_error)
-
-    return content
 
 
 def generate_embedding(text: str) -> list[float]:

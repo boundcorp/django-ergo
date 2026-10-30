@@ -15,8 +15,9 @@ async def read_events(response, done):
     events = []
     async for chunk in response.streaming_content:
         text = chunk.decode() if isinstance(chunk, bytes) else chunk
-        if text.startswith("data: "):
-            events.append(json.loads(text[6:]))
+        _, found, data = text.partition("data: ")
+        if found:
+            events.append(json.loads(data))
             if done(events):
                 break
     return events
@@ -124,3 +125,31 @@ async def test_stream_and_detail_send_the_todo_list(async_client, fast):
     await writer
     assert next(e["todos"] for e in events if e.get("todos")) == todos
     assert (await async_client.get(f"/api/sessions/{session.id}")).json()["todos"] == todos
+
+
+async def first_event(response) -> tuple[str, dict]:
+    async for chunk in response.streaming_content:
+        text = chunk.decode() if isinstance(chunk, bytes) else chunk
+        if text.startswith("id: "):
+            ident, _, data = text.partition("\ndata: ")
+            return ident[4:], json.loads(data)
+    raise AssertionError("no event")
+
+
+@pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
+async def test_a_reconnect_resumes_after_the_last_event_id(async_client, fast):
+    user = await login(async_client, "cook")
+    session = await ConversationSession.objects.acreate(user=user, bot_name="kitchen", engine_type="claude")
+    for n in range(4):
+        message = await session.messages.acreate(role="user" if n % 2 == 0 else "assistant", sequence=n)
+        await message.content_blocks.acreate(block_type="text", text=f"m{n}", sequence=0)
+    url = f"/api/sessions/{session.id}/events?after=-1"
+
+    ident, event = await first_event(await async_client.get(url))
+    lines = [m["line"] for m in event["messages"]]
+    assert lines[0] == 0 and ident == str(lines[-1])
+
+    # The browser sends the id back when it reconnects to the same URL.
+    _, event = await first_event(await async_client.get(url, headers={"Last-Event-ID": "2"}))
+    assert min(m["line"] for m in event["messages"]) >= 2

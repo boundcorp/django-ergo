@@ -86,7 +86,7 @@ class KBToolkit(Toolkit):
         return tool_name in KB_TOOL_NAMES
 
     def get_tools_schema(self, adapter: ToolAdapter) -> list[dict]:
-        from django_ergo.tools import ToolConfig
+        from django_ergo.tool_config import ToolConfig
 
         schemas = []
         for tool_def in KB_TOOLS:

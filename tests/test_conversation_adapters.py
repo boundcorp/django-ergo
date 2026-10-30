@@ -4,7 +4,7 @@ import pytest
 
 from django_ergo.conversation.adapters import ClaudeToolAdapter
 from django_ergo.conversation.adapters import OpenAIToolAdapter
-from django_ergo.tools import ToolConfig
+from django_ergo.tool_config import ToolConfig
 
 
 @pytest.fixture

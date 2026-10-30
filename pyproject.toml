@@ -11,9 +11,6 @@ classifiers = [
   "Development Status :: 5 - Production/Stable",
   "Intended Audience :: Developers",
   "Natural Language :: English",
-  "Programming Language :: Python :: 3.8",
-  "Programming Language :: Python :: 3.9",
-  "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
 ]
@@ -23,7 +20,7 @@ dependencies = [
 ]
 
 dynamic = ["version", "readme"]
-requires-python = ">=3.8"
+requires-python = ">=3.11"
 authors = [
   { name = "leeward bound", email = "leeward@Boundcorp.net" },
 ]
@@ -63,11 +60,10 @@ dev = [
     "django-extensions",
     "pip-freezer",
     "pytest",
-    "pytest-mock",
     "pytest-xdist",
     "playwright>=1.55",  # the browser extra, so CI runs the browser plugin tests
     "Pillow",  # the images extra, so CI runs the image-downscaling tests
-    "ruff",
+    "ruff==0.12.5",  # keep in step with .pre-commit-config.yaml
     "coverage",
     "djlint",
     "pre-commit",
@@ -127,21 +123,6 @@ exclude_also = [
   "def __repr__",
   # "def __str__",
 ]
-
-# ==== mypy ====
-[tool.mypy]
-python_version = "3.11"
-check_untyped_defs = true
-ignore_missing_imports = true
-warn_unused_ignores = true
-warn_redundant_casts = true
-warn_unused_configs = true
-plugins = ["mypy_django_plugin.main", "mypy_drf_plugin.main"]
-
-[[tool.mypy.overrides]]
-# Django migrations should not produce any errors:
-module = "*.migrations.*"
-ignore_errors = true
 
 [tool.ruff]
 # Exclude a variety of commonly ignored directories.
@@ -289,9 +270,6 @@ dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
   "SLF001", # Accessing private members is acceptable in tests
   "T201",   # Print statements are acceptable in tests (e.g. fixture generation output)
   "PLR2004", # Magic values are acceptable in tests (e.g. embedding dimensions)
-]
-"src/django_ergo/approval_demo.py" = [
-  "T201",    # Print statements expected in demo script
 ]
 "examples/**/*.py" = [
   "INP001",  # Examples are not a package

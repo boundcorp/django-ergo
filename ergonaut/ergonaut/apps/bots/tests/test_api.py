@@ -588,6 +588,12 @@ def test_pins_bot_files_and_live_pages(client, cook, bot_folder, use_bots, setti
     assert home["Content-Security-Policy"].startswith("sandbox allow-scripts")
     assert home["X-Frame-Options"] == "SAMEORIGIN"
     assert client.get("/api/bots/kitchen/files/pages/app.mjs")["Content-Type"] == "text/javascript"
+    assert "Content-Security-Policy" not in client.get("/api/bots/kitchen/files/pages/app.mjs")
+    # A plain HTML file is a document too: sandboxed, never run with the viewer's login.
+    (bot_folder / "pages" / "raw.html").write_text("<script>fetch('/api/sessions')</script>")
+    raw = client.get("/api/bots/kitchen/files/pages/raw.html")
+    assert raw.status_code == 200
+    assert raw["Content-Security-Policy"].startswith("sandbox allow-scripts")
     for blocked in ("bot.yaml", "tools/pantry.py", "../kitchen/bot.yaml", "pages/nope.jhtml"):
         assert client.get(f"/api/bots/kitchen/files/{blocked}").status_code == 404
 

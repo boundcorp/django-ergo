@@ -37,9 +37,9 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from django_ergo.bots.routing import USAGE_STALE_SECONDS
-from django_ergo.bots.routing import _window
-from django_ergo.bots.routing import record_usage_windows
 from django_ergo.bots.routing import window_view
+from django_ergo.conversation.usage_windows import record_usage_windows
+from django_ergo.conversation.usage_windows import window_entry
 from django_ergo.protected_env import scrubbed_env
 
 if TYPE_CHECKING:
@@ -190,7 +190,7 @@ def parse_limits(provider: str, entry: dict, seen: float) -> Account:
             name = f"{name.rstrip('_0123456789')}_{count}"
         resets = _number(window.get("resetsAt"))
         scope = limit.get("scope") if isinstance(limit.get("scope"), dict) else {}
-        account.windows[name] = _window(
+        account.windows[name] = window_entry(
             name,
             _percent(amount),
             resets / 1000 if resets else None,

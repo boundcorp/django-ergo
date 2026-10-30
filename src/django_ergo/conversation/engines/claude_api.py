@@ -25,12 +25,10 @@ from django_ergo.conversation.inference_policy import effective_anthropic_base_u
 from django_ergo.conversation.messages import StoredMessagesMixin
 from django_ergo.conversation.messages import add_message
 from django_ergo.conversation.messages import model_rows
-from django_ergo.conversation.messages import tool_result_content  # noqa: F401
 from django_ergo.conversation.messages import tool_use_block
 from django_ergo.conversation.request_context import prepare_turn_context
 from django_ergo.conversation.telemetry import record_usage
 from django_ergo.conversation.telemetry import trace_engine_call
-from django_ergo.tools import tool_registry
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -215,18 +213,6 @@ class ClaudeAPIEngine(StoredMessagesMixin, Engine):
         )
         return prepare_messages(messages, "claude")
 
-    def get_tools_schema(self, workflow) -> list[dict]:
-        """Convert workflow tools to Claude API tool format."""
-        tools_config = workflow.get_tools_config() if workflow else {}
-        enabled_tools = tools_config.get("enabled_tools", [])
-
-        schemas = []
-        for tool_name in enabled_tools:
-            tool_config = tool_registry.get_tool(tool_name)
-            if tool_config is not None:
-                schemas.append(self._adapter.to_engine_schema(tool_config))
-        return schemas
-
     async def start_session(self, session) -> str:
         """No-op: the API is stateless, no server-side session to start."""
         return ""
@@ -256,11 +242,7 @@ class ClaudeAPIEngine(StoredMessagesMixin, Engine):
             messages = await sync_to_async(
                 self.reconstruct_messages, thread_sensitive=True
             )(session)
-            tools = (
-                self.get_tools_schema(session.workflow) if session.workflow else None
-            )
-            if additional_tools:
-                tools = (tools or []) + additional_tools
+            tools = additional_tools or None
 
             kwargs: dict[str, Any] = {
                 "model": self.model,
@@ -493,10 +475,6 @@ class ClaudeAPIEngine(StoredMessagesMixin, Engine):
                     }
                 ]
                 kwargs["tool_choice"] = {"type": "tool", "name": "structured_output"}
-            elif workflow:
-                tools = self.get_tools_schema(workflow)
-                if tools:
-                    kwargs["tools"] = tools
 
             response = await self._create_message(**kwargs)
 

@@ -15,9 +15,6 @@
   .topbar-brand {
     font-size: 15px;
   }
-  .topbar-identity {
-    display: none;
-  }
   .nav-toggle,
   .theme-toggle {
     display: inline-flex;
@@ -269,7 +266,4 @@
 .chat-sheet-panels > * {
   margin-left: 0 !important;
   margin-right: 0 !important;
-}
-.sidebar-account {
-  min-height: 44px;
 }
