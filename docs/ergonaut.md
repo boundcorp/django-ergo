@@ -26,6 +26,13 @@ cited source message lines. Files use unique flat
 attachment storage intentionally strips path components; older illustrations
 remain in the session Files list.
 
+The text suggestion call for the bot named `personal` uses its authorized
+`personal` private pool, with purpose `illustrate_suggest` and the pool's
+normal ledger and spend cap. If the pool or call fails, suggestions are
+unavailable; the thread is not retried on a public model. Other bots cannot
+route suggestion calls to a private pool. This policy applies to suggestions,
+not to the subsequent illustration generation job.
+
 Illustrations only read the active session and caller-visible history. The
 model never writes markup. It returns a typed spec: a title, summary and
 takeaways plus 3 to 14 components (timeline, status board, flow, diagram,
@@ -134,6 +141,7 @@ Data lives under `DATA_DIR` (default `~/.ergonaut`, `/data` in the image).
 | --- | --- | --- |
 | `ERGONAUT_BOTS` | `/bot` | bot folders to serve (`:`-separated) |
 | `ERGONAUT_PUBLIC_URL` | unset | this server's public URL; turns on webhooks (`<url>/hooks/...`), so Telegram uses a webhook instead of polling |
+| `ERGONAUT_DEBUG_USERS` | unset | comma-separated Django usernames allowed to use the devbox debug shortcut; no automatic admin bypass |
 | `OPENAI_API_KEY` | unset | also turns on transcription of voice notes and audio attachments (Telegram voice clips) with OpenAI |
 | `ERGONAUT_BOTS_PULL_SECONDS` | unset | fast-forward each clean bot checkout from its upstream on this interval, so merged PRs go live |
 | `DATA_DIR` | `~/.ergonaut` | embedded database, Redis, Garage, secret key |
@@ -177,6 +185,24 @@ their own sessions. Only admins can approve tools of bots with the `bash`,
 `orca` or `bot_management` plugins. After 10 wrong passwords for one
 username (or 50 from one address) in 15 minutes, the web app and `/mgmt/`
 refuse logins until the window passes.
+
+The debug shortcut is opt-in. For example, a deployment could set:
+
+```sh
+ERGONAUT_DEBUG_USERS=lee
+```
+
+Verify the actual authenticated Django username in each deployment before
+configuring this; `lee` is only an example. The user must be able to use a
+`devbox` bot with orchestration enabled, and the source chat must be their own
+(even an admin cannot use the shortcut on someone else's chat). The shortcut
+opens a new-thread draft containing a normal private chat link; it does not send
+the draft automatically. The link is not a share token and grants no access to
+the chat to another user or bot. Devbox can read it only under the existing
+same-user linked-chat access rules.
+Devbox drafts are stored per account in browser local storage, which is not
+protected from someone with access to the browser profile. Previously saved
+unscoped devbox drafts are not migrated because their owner is unknown.
 
 - **Workspace and Threads dashboard**: Workspace (`/`) keeps the four most
   recent conversations and links to the full Threads dashboard (`/threads`).

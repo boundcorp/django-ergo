@@ -20,6 +20,7 @@ import { prepareChatSend, type ChatSendSource } from '../chatSend'
 import { suggestionsFromMessages, statusSummary } from '../chatLayout'
 import { ActivityStrip } from '../components/ActivityStrip'
 import Files from '../components/Files'
+import { DebugShortcut } from '../components/DebugShortcut'
 import { IllustrateDialog } from '../components/IllustrateDialog'
 import Markdown from '../components/Markdown'
 import ModelPicker, { EffortSlider, modelLabel, useBotModels } from '../components/ModelPicker'
@@ -969,7 +970,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
           </aside>
         )}
         {showTodos && <TodoList id="chat-todos" todos={detail.todos ?? []} />}
-        <div className="chat-floating-actions mx-5 mt-2 mb-2 flex justify-end gap-2">
+        <div className="chat-floating-actions mx-5 mt-2 mb-2 flex flex-wrap justify-end gap-2">
           <TodoButton
             todos={detail.todos ?? []}
             open={showTodos}
@@ -979,6 +980,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
               saveTodosShown(!showTodos)
             }}
           />
+          {detail.debug_shortcut && <DebugShortcut sessionId={id} />}
           <IllustrateDialog
             sessionId={id}
             disabled={closed || !!waiting.length || busy || uploading}

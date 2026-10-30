@@ -584,6 +584,7 @@ export type Todo = {
 }
 
 export type SessionDetail = {
+  debug_shortcut: boolean
   compactions?: Compaction[]
   session: Session
   messages: Message[]
@@ -758,6 +759,7 @@ export const api = {
     return request<SessionDetail>('GET', `/sessions/${id}${qs ? `?${qs}` : ''}`)
   },
   sessionUsage: (id: string, hours = 6) => request<SessionUsage>('GET', `/sessions/${id}/usage?hours=${hours}`),
+  debugShortcut: (id: string) => request<{ url: string }>('GET', `/sessions/${id}/debug-shortcut`),
   illustrateSuggestions: (id: string, focus = '') =>
     request<IllustrationSuggestions>('POST', `/sessions/${id}/illustrations/suggest`, { focus }),
   illustrate: (id: string, snapshot: string, suggestionIds: string[], custom = '') =>

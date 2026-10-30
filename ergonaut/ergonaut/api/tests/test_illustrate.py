@@ -90,6 +90,86 @@ def create_illustration(client, session_id, payload):
     return client.get(f"/api/sessions/{session_id}/illustrations/{job.id}")
 
 
+@pytest.mark.parametrize("bot_name", ["personal", "kitchen"])
+def test_suggestions_use_session_bound_ancillary_engine(monkeypatch, bot_name):
+    from ergonaut.api import illustrate
+
+    session = SimpleNamespace(id=uuid4(), bot_name=bot_name)
+    user = object()
+    engine = object()
+    calls = []
+    messages = [{"line": 1, "role": "user", "text": "Private discussion"}]
+    monkeypatch.setattr(illustrate, "_brief", lambda _: (messages, 1))
+
+    def make_ancillary_engine(source, *, purpose):
+        calls.append((source, purpose))
+        return engine
+
+    monkeypatch.setattr(
+        illustrate, "get_bot", lambda name, owner: SimpleNamespace(make_ancillary_engine=make_ancillary_engine)
+    )
+
+    async def run(spec, prompt, **kwargs):
+        assert spec.kind == "illustrate_suggest"
+        assert kwargs["engine"] is engine
+        assert kwargs["user"] is user
+        assert "Private discussion" in prompt
+        return SimpleNamespace(parsed=illustrate.SuggestionList(suggestions=illustrate._fallback_suggestions([1])))
+
+    monkeypatch.setattr(illustrate, "run_structured_call", run)
+    suggestions, _, _ = illustrate._suggest(session, user, "")
+    assert suggestions
+    assert calls == [(session, "illustrate_suggest")]
+
+
+@pytest.mark.parametrize("error", ["cap", "provider"])
+def test_personal_suggestion_failure_does_not_fall_back(monkeypatch, error):
+    from ninja.errors import HttpError
+
+    from ergonaut.api import illustrate
+
+    session = SimpleNamespace(id=uuid4(), bot_name="personal")
+    engine = object()
+    calls = []
+    monkeypatch.setattr(illustrate, "_brief", lambda _: ([{"line": 1, "role": "user", "text": "secret"}], 1))
+    monkeypatch.setattr(
+        illustrate,
+        "get_bot",
+        lambda *_: SimpleNamespace(make_ancillary_engine=lambda *args, **kwargs: engine),
+    )
+
+    async def run(spec, prompt, **kwargs):
+        calls.append(kwargs["engine"])
+        return SimpleNamespace(parsed=None, call=SimpleNamespace(error=error))
+
+    monkeypatch.setattr(illustrate, "run_structured_call", run)
+    with pytest.raises(HttpError) as exc:
+        illustrate._suggest(session, object(), "")
+    assert exc.value.status_code == 503
+    assert calls == [engine]
+
+
+def test_suggestion_policy_refusal_does_not_send_or_retry(monkeypatch):
+    from django_ergo.conversation.inference_policy import PolicyError
+
+    from ergonaut.api import illustrate
+
+    session = SimpleNamespace(id=uuid4(), bot_name="kitchen")
+    monkeypatch.setattr(illustrate, "_brief", lambda _: ([{"line": 1, "role": "user", "text": "secret"}], 1))
+
+    def refuse(*args, **kwargs):
+        raise PolicyError("private route refused")
+
+    monkeypatch.setattr(illustrate, "get_bot", lambda *_: SimpleNamespace(make_ancillary_engine=refuse))
+
+    async def unexpected_send(*args, **kwargs):
+        pytest.fail("policy refusal must prevent the structured call")
+
+    monkeypatch.setattr(illustrate, "run_structured_call", unexpected_send)
+    with pytest.raises(PolicyError):
+        illustrate._suggest(session, object(), "")
+
+
 @pytest.mark.django_db(transaction=True)
 def test_illustration_is_scoped_sanitized_and_historic(client, cook, use_bots, settings, tmp_path, monkeypatch):
     settings.MEDIA_ROOT = str(tmp_path / "media")

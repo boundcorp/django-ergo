@@ -920,17 +920,129 @@ async def test_title_call_is_linked_to_its_structured_call(found, fireworks):
         )
     )
     user = await User.objects.acreate(username="lee-title")
-    personal = bots(found, personal={"config": {"model": "personal"}})["personal"]
-    assert await personal.thread_metadata("What's for dinner?", user=user) == {
-        "title": "Dinner plans"
-    }
+    personal = bots(found, personal={"config": {"model": "openai/gpt-6-luna"}})[
+        "personal"
+    ]
+    session = await ConversationSession.objects.acreate(
+        user=user,
+        bot_name="personal",
+        model="personal/heavy",
+        engine_type="openai",
+        transport_type="api",
+        metadata={"model": "other"},
+    )
+    assert await personal.thread_metadata(
+        "What's for dinner?", user=user, session=session
+    ) == {"title": "Dinner plans"}
     row = await InferenceRequest.objects.select_related("structured_call").aget()
     assert row.structured_call.kind == "new_thread_metadata"
     assert row.purpose == "new_thread_metadata"
+    assert (row.bot_name, row.session_id, row.user_id, row.selector, row.model) == (
+        "personal",
+        session.pk,
+        user.pk,
+        "personal",
+        FLASH,
+    )
+    assert fireworks.bodies[0]["model"] == FLASH
     call = await StructuredCall.objects.aget()
     assert float(call.cost_usd) == pytest.approx(
         float(exact_price("fireworks", FLASH).cost(1000, 400, 200)), abs=1e-8
     )
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_title_private_routing_fails_closed_without_own_session(found, fireworks):
+    user = await User.objects.acreate(username="title-owner")
+    personal = bots(found, personal={})["personal"]
+    other = await ConversationSession.objects.acreate(
+        user=user, bot_name="other", engine_type="openai", transport_type="api"
+    )
+    for session in (None, other):
+        with pytest.raises(PolicyError):
+            await personal.thread_metadata("hello", user=user, session=session)
+    assert fireworks.requests == []
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_title_for_other_bot_cannot_use_even_allowlisted_private_default(
+    found, fireworks
+):
+    allowed = Providers(
+        providers=found.providers,
+        routing=found.routing,
+        private_pools={"personal": pool(found, allowed_bots=frozenset({"other"}))},
+    )
+    other = bots(allowed, other={"config": {"model": "personal"}})["other"]
+    with pytest.raises(PolicyError):
+        await other.thread_metadata("hello")
+    assert fireworks.requests == []
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_title_cap_refuses_without_public_fallback(found, fireworks):
+    user = await User.objects.acreate(username="title-cap")
+    capped = Providers(
+        providers=found.providers,
+        routing=found.routing,
+        private_pools={"personal": pool(found, daily_usd_cap=Decimal("5"))},
+    )
+    personal = bots(capped, personal={})["personal"]
+    session = await ConversationSession.objects.acreate(
+        user=user, bot_name="personal", engine_type="openai", transport_type="api"
+    )
+    await InferenceRequest.objects.acreate(
+        user=user,
+        session=session,
+        bot_name="personal",
+        selector="personal/heavy",
+        pool="personal",
+        provider="fireworks",
+        model=KIMI,
+        purpose="chat",
+        reserved_usd=Decimal("5"),
+    )
+    assert await personal.thread_metadata("hello", user=user, session=session) == {}
+    call = await StructuredCall.objects.aget(kind="new_thread_metadata")
+    assert call.error_category == "policy"
+    assert fireworks.requests == []
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_personal_compaction_uses_ledger_and_default_pool(found, fireworks):
+    from django_ergo.conversation.compaction import structured_summarizer
+
+    user = await User.objects.acreate(username="compact-owner")
+    session = await ConversationSession.objects.acreate(
+        user=user,
+        bot_name="personal",
+        model="personal/heavy",
+        engine_type="openai",
+        transport_type="api",
+    )
+    personal = bots(found, personal={})["personal"]
+    fireworks.replies.append(
+        completion(
+            FLASH, usage=USAGE, tool=("submit_output", {"summary": "Dinner agreed"})
+        )
+    )
+    result = await structured_summarizer(
+        OpenAIAPIEngine({"model": "gpt-6-luna", "api_key": "unused"}),
+        session,
+        lambda: personal.make_ancillary_engine(session, purpose="compaction"),
+    )("", "Dinner discussion")
+    assert result.ok and result.parsed.summary == "Dinner agreed"
+    row = await InferenceRequest.objects.select_related("structured_call").aget()
+    assert (
+        row.bot_name,
+        row.user_id,
+        row.session_id,
+        row.selector,
+        row.purpose,
+        row.model,
+    ) == ("personal", user.pk, session.pk, "personal", "compaction", FLASH)
+    assert row.structured_call.kind == "compaction"
+    assert [body["model"] for body in fireworks.bodies] == [FLASH]
 
 
 @pytest.mark.django_db(transaction=True)
