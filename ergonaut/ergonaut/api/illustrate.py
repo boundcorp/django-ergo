@@ -238,14 +238,15 @@ def _suggest(session, user, focus: str) -> tuple[list[Suggestion], list[dict], i
         max_turns=2,
         max_tokens=700,
     )
+    bot = get_bot(session.bot_name, user)
     result = async_to_sync(run_structured_call)(
         spec,
         prompt,
         user=user,
-        engine=get_bot(session.bot_name, user).make_ancillary_engine(session, purpose="illustrate_suggest"),
+        engine=bot.make_ancillary_engine(session, purpose="illustrate_suggest"),
         metadata={"illustrate": "suggest", "session": str(session.id), "as_of_line": as_of_line},
     )
-    if session.bot_name == "personal" and result.parsed is None:
+    if bot.private_pool and result.parsed is None:
         raise HttpError(503, "Illustration suggestions are unavailable")
     return _safe_suggestions(result.parsed, {message["line"] for message in messages}), messages, as_of_line
 

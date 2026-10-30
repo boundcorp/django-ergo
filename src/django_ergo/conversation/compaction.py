@@ -313,7 +313,12 @@ async def decide_compaction(
 def structured_summarizer(
     engine: Engine, session: ConversationSession, engine_factory=None
 ) -> Summarizer:
-    """Summarize on the turn engine, or a purpose-bound ancillary engine."""
+    """Summarize on the turn engine, or on ``engine_factory``'s engine.
+
+    The bot runtime passes a factory only for a bot in a private pool; that
+    engine must then be private and hold a compaction grant for this very
+    session. Without a factory the summary runs on a public engine only.
+    """
 
     async def summarize(previous_summary: str, transcript: str):
         from django_ergo.conversation.inference_policy import FIREWORKS
@@ -324,22 +329,22 @@ def structured_summarizer(
 
         active = engine_factory() if engine_factory else engine
         private = getattr(active, "engine_type", "") == FIREWORKS
-        if session.bot_name == "personal":
+        if engine_factory is not None:
             if not private:
-                msg = "Personal compaction requires a private engine"
+                msg = "Private compaction requires a private engine"
                 raise PolicyError(msg)
             grant = check_grant(getattr(active, "grant", None), model_id=active.model)
             if (
-                grant.bot != "personal"
-                or grant.selector != "personal"
+                grant.bot != session.bot_name
+                or grant.selector != grant.pool.name
                 or grant.purpose != "compaction"
                 or str(grant.session_id) != str(session.pk)
                 or str(grant.user_id) != str(session.user_id)
             ):
-                msg = "Personal compaction requires its own session-bound grant"
+                msg = "Private compaction requires its own session-bound grant"
                 raise PolicyError(msg)
         elif private:
-            msg = "Private compaction is only available to the personal bot"
+            msg = "Private compaction needs the bot runtime's private engine factory"
             raise PolicyError(msg)
 
         spec = StructuredCallSpec(

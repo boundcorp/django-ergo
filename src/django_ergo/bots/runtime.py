@@ -533,6 +533,12 @@ class Bot:
         registry = getattr(self, "registry", None)
         return registry.providers if registry is not None else Providers()
 
+    @property
+    def private_pool(self) -> PrivatePool | None:
+        """The private pool this bot is allowlisted in (providers.yaml), if any:
+        its ancillary calls and compaction then stay in that pool."""
+        return self.providers.private_pool_for(self.name)
+
     def model_ref(self) -> str:
         """The ``provider/model`` this bot uses by default, when providers.yaml
         names it. A private selector (``personal``, ``personal/heavy``) is
@@ -808,16 +814,20 @@ class Bot:
         purpose: str,
         use_session: bool = True,
     ) -> Engine:
-        """Select a personal-only private engine for an ancillary text call."""
-        if self.name == "personal":
+        """The engine for an ancillary text call (titles, compaction, ...).
+
+        A bot in a private pool's ``allowed_bots`` always gets that pool's
+        default model, bound to its own session; any other bot gets a public one.
+        """
+        if pool := self.private_pool:
             if session is None or session.pk is None or session.bot_name != self.name:
-                msg = "Personal ancillary inference requires its own session"
+                msg = "Private ancillary inference requires the bot's own session"
                 raise PolicyError(msg)
-            return self.make_engine(session, model="personal", purpose=purpose)
+            return self.make_engine(session, model=pool.name, purpose=purpose)
         selected_session = session if use_session else None
         ref = self.session_model(selected_session) or self.model_ref()
         if self.providers.is_private(ref):
-            msg = "Private ancillary inference is restricted to personal"
+            msg = "Private ancillary inference is restricted to a private pool's allowed_bots"
             raise PolicyError(msg)
         return self.make_engine(selected_session, purpose=purpose)
 
@@ -1285,7 +1295,7 @@ class Bot:
             compaction_engine_factory=(
                 lambda: self.make_ancillary_engine(session, purpose="compaction")
             )
-            if self.name == "personal"
+            if self.private_pool
             else None,
             attachments=attachments,
             context_builder=builder,

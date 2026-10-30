@@ -1502,11 +1502,12 @@ Picking one for a chat (`POST /api/sessions/<id>/model`, or the model of a
 new thread) returns 403 for any other bot (see
 [Running Ergonaut](ergonaut.md#private-inference)).
 
-For the bot named `personal`, thread titles, illustration text suggestions,
-and compaction summaries use the `personal` pool's default model and its
-ledger and cap, regardless of the chat's model selection. They require an
-authorized pool and never fall back to a public model. Other bots cannot use
-a private engine for these ancillary calls. Illustration generation itself
+For a bot listed in a pool's `allowed_bots`, thread titles, illustration
+text suggestions, and compaction summaries use that pool's default model and
+its ledger and cap, regardless of the chat's model selection. They require an
+authorized pool (a disabled pool still counts, and refuses) and never fall
+back to a public model. Other bots cannot use a private engine for these
+ancillary calls. Illustration generation itself
 is unchanged.
 
 Audio transcription isn't one of them: `DJANGO_ERGO["AUDIO_TRANSCRIBER"]`

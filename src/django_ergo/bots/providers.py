@@ -183,6 +183,18 @@ class Providers:
         """Selector namespaces that are private, configured or reserved."""
         return frozenset((*RESERVED_POOL_NAMES, *self.private_pools))
 
+    def private_pool_for(self, bot: str) -> PrivatePool | None:
+        """The private pool that lists ``bot`` in ``allowed_bots`` (enabled or
+        not, so a disabled pool still fails closed), or None."""
+        return next(
+            (
+                pool
+                for _, pool in sorted(self.private_pools.items())
+                if bot and bot in pool.allowed_bots
+            ),
+            None,
+        )
+
     def is_private(self, ref) -> bool:
         """``ref`` names a private pool (``personal``, ``personal/heavy``) or a
         private model, so only an allowlisted bot may ever use it."""
