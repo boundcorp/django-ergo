@@ -1,23 +1,6 @@
-import { useId, useState, type ReactNode } from 'react'
+import { useId, type ReactNode } from 'react'
 import type { DelegatedRequest, Worker } from '../api'
-
-const STORAGE_KEY = 'ergonaut.activity'
-
-export function activityExpanded(): boolean {
-  try {
-    return localStorage.getItem(STORAGE_KEY) === 'open'
-  } catch {
-    return false
-  }
-}
-
-export function saveActivityExpanded(open: boolean) {
-  try {
-    localStorage.setItem(STORAGE_KEY, open ? 'open' : 'closed')
-  } catch {
-    // Storage may be unavailable in private browsing.
-  }
-}
+import { usePersistedFlag } from '../persistedFlag'
 
 /** One shared activity disclosure for both desktop and mobile. */
 export function ActivityStrip({
@@ -30,7 +13,7 @@ export function ActivityStrip({
   children: ReactNode
 }) {
   const panelId = useId()
-  const [open, setOpen] = useState(activityExpanded)
+  const [open, setOpen] = usePersistedFlag('ergonaut.activity')
   const waiting = requests.filter(r => r.status !== 'answered' && r.status !== 'failed').length
   const active = workers.filter(w => w.status === 'queued' || w.status === 'running').length
   if (!waiting && !workers.length) return null
@@ -49,7 +32,6 @@ export function ActivityStrip({
         className="mx-4 flex max-w-[calc(100%-2rem)] items-center gap-2 rounded-control px-2 py-1 text-left text-xs text-muted hover:bg-raised sm:mx-6"
         onClick={() => {
           setOpen(!open)
-          saveActivityExpanded(!open)
         }}
       >
         <span aria-hidden="true">{open ? '▾' : '▸'}</span>

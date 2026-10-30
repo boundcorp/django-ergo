@@ -34,13 +34,29 @@ function App() {
   const [workerState, setWorkerState] = useState<'loading' | 'ready' | 'error'>('loading')
   const [directoryState, setDirectoryState] = useState<DirectoryState>('loading')
 
+  // Only a 401 means signed out. Any other failure (the server restarting, no
+  // network) is retried, so a blip doesn't drop the user on the sign-in page.
+  const [authAttempt, setAuthAttempt] = useState(0)
+  const [authUnreachable, setAuthUnreachable] = useState(false)
   useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined
     api
       .csrf()
       .then(() => api.me())
-      .then(setUser)
-      .catch(e => (e instanceof ApiError && e.status === 401 ? setUser(null) : setUser(null)))
-  }, [])
+      .then(me => {
+        setAuthUnreachable(false)
+        setUser(me)
+      })
+      .catch(e => {
+        if (e instanceof ApiError && e.status === 401) {
+          setUser(null)
+          return
+        }
+        setAuthUnreachable(true)
+        timer = setTimeout(() => setAuthAttempt(n => n + 1), Math.min(30000, 2000 * 2 ** authAttempt))
+      })
+    return () => clearTimeout(timer)
+  }, [authAttempt])
 
   const refresh = useCallback(async () => {
     try {
@@ -79,7 +95,12 @@ function App() {
     return () => clearInterval(timer)
   }, [user, refresh, anyBusy])
 
-  if (user === undefined) return null
+  if (user === undefined)
+    return authUnreachable ? (
+      <p role="status" className="mx-auto mt-24 w-80 text-sm text-muted">
+        Can't reach Ergonaut. Retrying…
+      </p>
+    ) : null
   if (user === null) return <Login onLogin={setUser} />
 
   return (

@@ -12,24 +12,6 @@ export function todoProgress(todos: Todo[]): string {
   return `${done} of ${todos.length} done`
 }
 
-const STORAGE_KEY = 'ergonaut.todos'
-
-export function todosShown(): boolean {
-  try {
-    return localStorage.getItem(STORAGE_KEY) === 'open'
-  } catch {
-    return false
-  }
-}
-
-export function saveTodosShown(open: boolean) {
-  try {
-    localStorage.setItem(STORAGE_KEY, open ? 'open' : 'closed')
-  } catch {
-    // Storage may be unavailable in private browsing.
-  }
-}
-
 /** The floating "Todo X/Y" button beside Illustrate: shows or hides the list above the composer. */
 export function TodoButton({
   todos,

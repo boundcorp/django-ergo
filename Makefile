@@ -45,11 +45,8 @@ pyenv_rehash:	## Rehash pyenv
 # Pip
 # -----------------------------------------------------------------------------
 
-pip_install:  ## Install requirements
-	uv pip install --upgrade pip
-	@for file in $$(ls requirements/*.txt); do \
-			uv pip install -r $$file; \
-	done
+pip_install:  ## Install the dev dependencies (pyproject's dev extra, as CI does)
+	uv pip install -e '.[dev]'
 	pre-commit install
 
 pip_install_editable:  ## Install in editable mode

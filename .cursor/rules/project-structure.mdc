@@ -6,7 +6,7 @@
 - Use pyproject.toml for modern Python packaging
 - Maintain clear separation between source code and configuration
 - Keep tests in separate directory structure
-- Use requirements/ directory for dependency management
+- Dependencies live in pyproject.toml (the dev extra for development)
 
 ## Django App Structure
 
@@ -31,7 +31,6 @@ src/django_ergo/
 - `pyproject.toml` - Primary project configuration
 - `Makefile` - Development commands and automation
 - `.pre-commit-config.yaml` - Code quality automation
-- `requirements/` - Dependency management by environment
 - `.editorconfig` - Editor consistency
 - `conftest.py` - Test configuration
 
@@ -39,7 +38,6 @@ src/django_ergo/
 
 - `src/` - Source code (follows src layout pattern)
 - `tests/` - Test files mirroring src structure
-- `requirements/` - Environment-specific dependencies
 - `.cursor/` - Cursor AI configuration and rules
 - `docs/` - Documentation (when added)
 

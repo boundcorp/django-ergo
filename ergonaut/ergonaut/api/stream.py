@@ -104,8 +104,11 @@ def _snapshot(session_id, after: int, seen: dict):
     return messages, calls, requests, title, workers, extra
 
 
-def _event(payload) -> str:
-    return f"data: {json.dumps(payload, cls=DjangoJSONEncoder)}\n\n"
+def _event(payload, last: int | None = None) -> str:
+    """An SSE event. ``last`` (the newest line sent) becomes its id, which the
+    browser sends back as Last-Event-ID when it reconnects."""
+    event_id = f"id: {last}\n" if last is not None else ""
+    return f"{event_id}data: {json.dumps(payload, cls=DjangoJSONEncoder)}\n\n"
 
 
 async def session_events(request, session_id):
@@ -115,10 +118,14 @@ async def session_events(request, session_id):
     allowed = await visible_sessions(user).filter(id=session_id).aexists()
     if not allowed:
         return HttpResponse(status=404)
-    try:
-        after = int(request.GET.get("after", -1))
-    except ValueError:
-        after = -1
+    # A reconnect resumes after the last line the browser got (Last-Event-ID),
+    # not from the ?after= of the page load.
+    after = -1
+    for value in (request.GET.get("after"), request.headers.get("Last-Event-ID")):
+        try:
+            after = max(after, int(value))
+        except (TypeError, ValueError):
+            pass
 
     async def changes():
         """Wait for this session to change: a Redis notice, or the poll interval."""
@@ -172,7 +179,7 @@ async def session_events(request, session_id):
                 if workers is not None:
                     event["workers"] = workers
                 event.update(extra)
-                yield _event(event)
+                yield _event(event, last)
                 quiet = 0.0
             elif quiet >= KEEPALIVE_SECONDS:
                 yield ": keepalive\n\n"
