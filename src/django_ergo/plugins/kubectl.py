@@ -36,7 +36,7 @@ from django_ergo.bots.tools import FunctionToolkit
 from django_ergo.bots.tools import bot_tool
 from django_ergo.conversation.context import TextContextSource
 from django_ergo.conversation.toolkit import ApprovalPreview
-from django_ergo.plugins.bash import trim
+from django_ergo.plugins._common import trim
 from django_ergo.protected_env import scrubbed_env
 
 if TYPE_CHECKING:
@@ -471,9 +471,6 @@ class KubectlPlugin(BotPlugin):
         if is_read_only(args):
             return "Use kubectl_read for read-only commands."
         return self.execute(cluster, args)
-
-    def _applies(self, ctx: ToolContext) -> bool:
-        return not (self.root_only and ctx.bot and not ctx.bot.is_root(ctx.session))
 
     def toolkits(self, ctx: ToolContext) -> list[Toolkit]:
         if not self._applies(ctx):

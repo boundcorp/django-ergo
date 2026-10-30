@@ -371,7 +371,7 @@ def run(worker_id: str, registry=None) -> str:
     if error:
         _finish(worker, "failed", None, error)
     else:
-        _finish(worker, "completed", _jsonable(outcome), "")
+        _finish(worker, "completed", jsonable(outcome), "")
     return worker.status
 
 
@@ -401,17 +401,6 @@ def cancel(worker: Worker, bot: Bot | None = None) -> str:
     return f"Cancelled {worker.title}. {stopped}"
 
 
-def _record_outputs(worker: Worker, result: Any) -> None:
-    """Record the pull requests a worker's result links in its chat (conversation.links)."""
-    try:
-        from django_ergo.conversation.links import record_pull_requests
-
-        text = result if isinstance(result, str) else json.dumps(result, default=str)
-        record_pull_requests(worker.session, text)
-    except Exception:  # noqa: BLE001 - outputs are extra; the worker already finished
-        logger.warning("Couldn't record pull requests", exc_info=True)
-
-
 def _finish(worker: Worker, status: str, result: Any, error: str) -> None:
     from django.utils import timezone
 
@@ -437,7 +426,12 @@ def _finish(worker: Worker, status: str, result: Any, error: str) -> None:
     )
     _notify(worker)
     if status == "completed":
-        _record_outputs(worker, result)
+        from django_ergo.conversation.links import record_outputs
+
+        record_outputs(
+            worker.session,
+            result if isinstance(result, str) else json.dumps(result, default=str),
+        )
     if not worker.notify or status == "cancelled":
         return
     if status == "completed":
@@ -477,7 +471,8 @@ def _notify(worker: Worker) -> None:
         logger.debug("Could not notify about worker %s", worker.pk, exc_info=True)
 
 
-def _jsonable(value: Any) -> Any:
+def jsonable(value: Any) -> Any:
+    """``value`` if it serializes to JSON, else its ``str``."""
     try:
         json.dumps(value)
     except (TypeError, ValueError):

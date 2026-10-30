@@ -29,6 +29,7 @@ from django.utils import timezone
 
 from django_ergo.bots.orchestrator import can_resolve
 from django_ergo.bots.orchestrator import thread_status
+from django_ergo.conversation import roles
 from django_ergo.conversation.context import ContextSection
 from django_ergo.conversation.context import ContextSource
 from django_ergo.conversation.context import estimate_tokens
@@ -50,7 +51,6 @@ SNIPPET_CHARS = 250
 LATEST_CHARS = 600  # the newest message of a chat gets more room
 ROWS_READ = 40  # rows read per chat to find its latest visible messages
 PR_CACHE_SECONDS = 300
-TOP_ROLES = ("root", "main", "chat")
 HEADER = re.compile(r"^\[[^\]]*\]\s*")  # "[Message from design · Main (thread …)…]"
 _pr_cache: dict[str, tuple[float, list[str]]] = {}
 
@@ -112,10 +112,10 @@ def facts(
 
 def chat_name(session: ConversationSession) -> str:
     meta = session.metadata or {}
-    role = meta.get("bot_role")
-    if role in ("root", "main"):
-        return "main"
-    if role == "chat":
+    role = roles.role(session)
+    if role == roles.MAIN:
+        return roles.MAIN
+    if role == roles.CHAT:
         return f"{meta.get('chat') or meta.get('title')} (named chat)"
     return f"{meta.get('title') or 'Thread'} (thread {session.id})"
 
@@ -208,7 +208,9 @@ def collect(bots: list[Bot], current: ConversationSession) -> list[tuple]:
     chats = []
     for index, each in enumerate(bots):
         qs = each.sessions().filter(user_id=current.user_id)
-        qs = qs.filter(~Q(status="completed") | Q(metadata__bot_role__in=TOP_ROLES))
+        qs = qs.filter(
+            ~Q(status="completed") | Q(metadata__bot_role__in=list(roles.TOP))
+        )
         for session in qs.order_by("-updated_at")[:30]:
             status = thread_status(session)
             resolvable = not status["ready_to_resolve"] or can_resolve(

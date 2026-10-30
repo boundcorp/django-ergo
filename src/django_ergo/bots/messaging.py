@@ -32,7 +32,6 @@ from datetime import timedelta
 from typing import TYPE_CHECKING
 
 from asgiref.sync import async_to_sync
-from django.db import close_old_connections
 from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
@@ -47,6 +46,7 @@ from django_ergo.conversation.models import ConversationSession
 from django_ergo.conversation.models import StructuredCallStatus
 from django_ergo.conversation.models import ThreadMessage
 from django_ergo.conversation.models import ThreadMessageStatus
+from django_ergo.daemon import start_daemon
 from django_ergo.settings import api_settings
 
 if TYPE_CHECKING:
@@ -241,27 +241,26 @@ def dispatch(message_id: str, registry: BotRegistry | None = None) -> None:
     if runner is not None:
         runner(message_id)
         return
-
-    def run():
-        try:
-            deliver(message_id, registry)
-        finally:
-            close_old_connections()
-
-    threading.Thread(
-        target=run, name=f"ergo-thread-message-{message_id}", daemon=True
-    ).start()
+    start_daemon(
+        deliver, message_id, registry, name=f"ergo-thread-message-{message_id}"
+    )
 
 
 # -- delivering ----------------------------------------------------------------
 
 
+def running_turn() -> Q:
+    """StructuredCall filter for a running turn: in progress and touched within
+    STALE_TURN_SECONDS (an older one is a crashed turn). The one liveness rule:
+    use it wherever "is a turn running" is asked."""
+    stale = timezone.now() - timedelta(seconds=STALE_TURN_SECONDS)
+    return Q(status=StructuredCallStatus.IN_PROGRESS, updated_at__gte=stale)
+
+
 def busy(session: ConversationSession) -> bool:
     """A turn is running (and not stale), or one is waiting for approval."""
-    stale = timezone.now() - timedelta(seconds=STALE_TURN_SECONDS)
     return session.structured_calls.filter(
-        Q(status=StructuredCallStatus.AWAITING_APPROVAL)
-        | Q(status=StructuredCallStatus.IN_PROGRESS, updated_at__gte=stale)
+        Q(status=StructuredCallStatus.AWAITING_APPROVAL) | running_turn()
     ).exists()
 
 
@@ -425,21 +424,12 @@ def finish_turn(bot: Bot, session: ConversationSession, result: TurnResult) -> N
     try:
         _route_reply(bot, session, result)
     finally:
-        _record_outputs(session, result)
+        if result.reply is not None:
+            from django_ergo.conversation.links import record_outputs
+
+            record_outputs(session, result.reply.as_message())
         if not result.needs_approval:
             redispatch_waiting(session, registry=bot.registry)
-
-
-def _record_outputs(session: ConversationSession, result: TurnResult) -> None:
-    """Record the pull requests a reply links as chat files (conversation.links)."""
-    if result.reply is None:
-        return
-    try:
-        from django_ergo.conversation.links import record_pull_requests
-
-        record_pull_requests(session, result.reply.as_message())
-    except Exception:  # noqa: BLE001 - outputs are extra; the turn already finished
-        logger.warning("Couldn't record pull requests", exc_info=True)
 
 
 def _route_reply(bot: Bot, session: ConversationSession, result: TurnResult) -> None:

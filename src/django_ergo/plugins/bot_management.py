@@ -75,7 +75,7 @@ from django_ergo.bots.plugins import BotPlugin
 from django_ergo.bots.tools import BotTool
 from django_ergo.bots.tools import FunctionToolkit
 from django_ergo.bots.tools import bot_tool
-from django_ergo.plugins.bash import trim
+from django_ergo.plugins._common import trim
 from django_ergo.protected_env import scrubbed_env
 
 if TYPE_CHECKING:
@@ -975,7 +975,7 @@ class BotManagementPlugin(BotPlugin):
         return f"Closed #{int(number)}."
 
     def toolkits(self, ctx: ToolContext) -> list[Toolkit]:
-        if self.root_only and not ctx.bot.is_root(ctx.session):
+        if not self._applies(ctx):
             return []
         return [FunctionToolkit(self._tools(ctx), ctx)]
 

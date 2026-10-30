@@ -45,6 +45,15 @@ def pull_request_urls(text: str) -> list[tuple[str, str, int]]:
     return list(found.values())
 
 
+def record_outputs(session: ConversationSession, text: str) -> None:
+    """``record_pull_requests`` for a finished turn or worker: never raises,
+    since the outputs are extra to work that already finished."""
+    try:
+        record_pull_requests(session, text)
+    except Exception:  # noqa: BLE001
+        logger.warning("Couldn't record pull requests", exc_info=True)
+
+
 def record_pull_requests(
     session: ConversationSession, text: str
 ) -> list[ConversationAttachment]:

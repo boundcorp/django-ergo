@@ -12,11 +12,9 @@ def django_user_identity(user) -> dict:
 
 
 def session_label(session) -> str:
-    meta = session.metadata or {}
-    title = meta.get("title") or (
-        "Main" if meta.get("bot_role") in ("root", "main") else "Thread"
-    )
-    return f"{session.bot_name} · {title}"
+    from django_ergo.conversation import roles
+
+    return f"{session.bot_name} · {roles.title(session)}"
 
 
 def system_identity() -> dict:

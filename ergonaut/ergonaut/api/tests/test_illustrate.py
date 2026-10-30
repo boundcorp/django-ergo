@@ -106,7 +106,12 @@ def test_suggestions_use_session_bound_ancillary_engine(monkeypatch, bot_name):
         return engine
 
     monkeypatch.setattr(
-        illustrate, "get_bot", lambda name, owner: SimpleNamespace(make_ancillary_engine=make_ancillary_engine)
+        illustrate,
+        "get_bot",
+        lambda name, owner: SimpleNamespace(
+            make_ancillary_engine=make_ancillary_engine,
+            private_pool=object() if name == "personal" else None,
+        ),
     )
 
     async def run(spec, prompt, **kwargs):
@@ -135,7 +140,7 @@ def test_personal_suggestion_failure_does_not_fall_back(monkeypatch, error):
     monkeypatch.setattr(
         illustrate,
         "get_bot",
-        lambda *_: SimpleNamespace(make_ancillary_engine=lambda *args, **kwargs: engine),
+        lambda *_: SimpleNamespace(make_ancillary_engine=lambda *args, **kwargs: engine, private_pool=object()),
     )
 
     async def run(spec, prompt, **kwargs):

@@ -76,7 +76,7 @@ from django_ergo.bots.tools import BotTool
 from django_ergo.bots.tools import FunctionToolkit
 from django_ergo.bots.tools import bot_tool
 from django_ergo.conversation.context import TextContextSource
-from django_ergo.plugins.bash import trim
+from django_ergo.plugins._common import trim
 from django_ergo.protected_env import scrubbed_env
 
 if TYPE_CHECKING:
@@ -575,9 +575,6 @@ class BrowserPlugin(BotPlugin):
         return {"id": str(row.id), "filename": row.filename, "size": row.size}
 
     # -- wiring -------------------------------------------------------------
-
-    def _applies(self, ctx: ToolContext) -> bool:
-        return not (self.root_only and ctx.bot and not ctx.bot.is_root(ctx.session))
 
     def toolkits(self, ctx: ToolContext) -> list[Toolkit]:
         if not self._applies(ctx):

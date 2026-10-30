@@ -65,6 +65,7 @@ from django_ergo.bots import messaging
 from django_ergo.bots.tools import BotTool
 from django_ergo.bots.tools import FunctionToolkit
 from django_ergo.bots.tools import bot_tool
+from django_ergo.conversation import roles
 from django_ergo.conversation.attachments import find_session_file
 from django_ergo.conversation.identity import bot_identity
 from django_ergo.conversation.identity import django_user_identity
@@ -80,7 +81,6 @@ if TYPE_CHECKING:
     from django_ergo.bots.runtime import Bot
     from django_ergo.bots.tools import ToolContext
 
-TOP_ROLES = {"root", "main", "chat"}  # main and named chats (not threads)
 # In a turn that a chat's reply started, a message back to that chat this short is
 # taken for a nudge ("please continue") unless the reply asked a question.
 FOLLOW_UP_MIN_CHARS = 400
@@ -114,10 +114,10 @@ def chat_identity(session: ConversationSession) -> str:
     """Which chat this is, for its own context: a thread must know it's the
     thread, not the main chat its instructions also describe."""
     meta = session.metadata or {}
-    role = meta.get("bot_role")
-    if role in ("root", "main"):
+    role = roles.role(session)
+    if role == roles.MAIN:
         return f"You are {session.bot_name} · Main, the main chat."
-    if role == "chat":
+    if role == roles.CHAT:
         return f"You are {session.bot_name} · {meta.get('chat') or meta.get('title')}, a named chat."
     started = meta.get("started_by_label")
     if not started and session.parent_id:
@@ -217,7 +217,7 @@ def thread_status(session: ConversationSession) -> dict:
     }
     quiet = timezone.now() - status["last_activity"] > READY_AFTER
     status["ready_to_resolve"] = (
-        meta.get("bot_role") not in TOP_ROLES
+        not roles.is_top(session)
         and session.status != "completed"
         and quiet
         and not resolve_blockers(status)
@@ -261,7 +261,7 @@ def resolve_blockers(
 
 
 def _is_main(session: ConversationSession) -> bool:
-    return (session.metadata or {}).get("bot_role") in ("root", "main")
+    return roles.is_main(session)
 
 
 def _upward_only(ctx: ToolContext, target: Bot) -> bool:
@@ -322,11 +322,10 @@ def _session(target: Bot, ctx: ToolContext, thread_id: str) -> ConversationSessi
 
 def _thread_key(session: ConversationSession) -> str:
     """How ergo_thread_send names a session: main, a named chat, or a thread id."""
-    meta = session.metadata or {}
-    if meta.get("bot_role") in ("root", "main"):
-        return "main"
-    if meta.get("bot_role") == "chat":
-        return str(meta.get("chat") or session.id)
+    if roles.is_main(session):
+        return roles.MAIN
+    if roles.role(session) == roles.CHAT:
+        return str((session.metadata or {}).get("chat") or session.id)
     return str(session.id)
 
 
@@ -378,7 +377,7 @@ def ergo_thread_list(
     qs = target.sessions().filter(user_id=ctx.session.user_id).order_by("-updated_at")
     if not include_archived:
         qs = qs.filter(
-            ~Q(status="completed") | Q(metadata__bot_role__in=list(TOP_ROLES))
+            ~Q(status="completed") | Q(metadata__bot_role__in=list(roles.TOP))
         )
     return [_row(s, ctx.session) for s in qs[:50]]
 
@@ -606,7 +605,7 @@ def _recipient(
 ) -> ConversationSession:
     """The chat ``thread`` names on ``target``: main, a named chat, "new" or an id."""
     user = ctx.session.user
-    if thread in ("main", "root") or thread in target.definition.chats:
+    if thread in roles.MAIN_NAMES or thread in target.definition.chats:
         recipient = async_to_sync(target.chat_session)(user, thread)
     elif thread == "new":
         if not target.definition.allow_create_sessions:
@@ -651,7 +650,7 @@ def _send(  # noqa: PLR0913
 ) -> dict:
     thread = (thread or "main").strip()
     if _upward_only(ctx, target) and (
-        thread not in ("main", "root") or not _is_main(ctx.session)
+        thread not in roles.MAIN_NAMES or not _is_main(ctx.session)
     ):
         msg = (
             f"{target.name} is your parent bot: only your main chat may message it, "
@@ -805,7 +804,7 @@ def _managed_thread(
     """A thread this bot may stop or resolve (``can_resolve``)."""
     target = _target(ctx, bot)
     thread = _session(target, ctx, thread_id)
-    if (thread.metadata or {}).get("bot_role") in TOP_ROLES:
+    if roles.is_top(thread):
         msg = "Main and named chats can't be stopped or resolved from another chat."
         raise ValueError(msg)
     if not can_resolve(ctx.bot, ctx.session.user_id, thread):
@@ -844,7 +843,7 @@ def resolve(
     """Resolve a finished thread (see ``ergo_thread_resolve``)."""
     current = ctx.session
     if not thread_id or thread_id == str(current.id):
-        if (current.metadata or {}).get("bot_role") in TOP_ROLES:
+        if roles.is_top(current):
             msg = "Main and named chats aren't resolved; only threads are."
             raise ValueError(msg)
         thread, own_turn = current, True
@@ -978,10 +977,7 @@ def upward_targets(ctx: ToolContext) -> list[str]:
 def upward_toolkit(ctx: ToolContext) -> FunctionToolkit:
     """For bots without orchestration: just the upward messages."""
     tools = [ergo_message_up.__bot_tool__] if upward_targets(ctx) else []
-    if (
-        not _is_main(ctx.session)
-        and (ctx.session.metadata or {}).get("bot_role") not in TOP_ROLES
-    ):
+    if not roles.is_top(ctx.session):
         tools.append(ergo_thread_resolve.__bot_tool__)  # a thread may resolve itself
     return FunctionToolkit(tools, ctx)
 

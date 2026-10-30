@@ -37,6 +37,7 @@ import uuid
 
 from asgiref.sync import async_to_sync
 from celery import shared_task
+from django_ergo.daemon import start_daemon
 
 logger = logging.getLogger(__name__)
 
@@ -588,17 +589,7 @@ def queue_thread_message(message_id: str) -> None:
     from django.conf import settings
 
     if getattr(settings, "CELERY_TASK_ALWAYS_EAGER", False):
-        import threading
-
-        from django.db import close_old_connections
-
-        def run():
-            try:
-                deliver_locked(message_id)
-            finally:
-                close_old_connections()
-
-        threading.Thread(target=run, daemon=True).start()
+        start_daemon(deliver_locked, message_id)
         return
     deliver_thread_message.delay(message_id)
 
@@ -787,15 +778,7 @@ def queue_thread_naming(session_id: str, message: str) -> None:
     from django.conf import settings
 
     if getattr(settings, "CELERY_TASK_ALWAYS_EAGER", False):
-        from django.db import close_old_connections
-
-        def run():
-            try:
-                name_thread(session_id, message)
-            finally:
-                close_old_connections()
-
-        threading.Thread(target=run, daemon=True).start()
+        start_daemon(name_thread, session_id, message)
         return
     name_thread.delay(session_id, message)
 

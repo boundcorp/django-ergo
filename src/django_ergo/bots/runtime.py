@@ -58,6 +58,7 @@ from django_ergo.bots.skillset import SkillSet
 from django_ergo.bots.tools import FunctionToolkit
 from django_ergo.bots.tools import ToolContext
 from django_ergo.bots.tools import load_tool_module
+from django_ergo.conversation import roles
 from django_ergo.conversation.chat_reply import ChatReply
 from django_ergo.conversation.chat_reply import chat_reply_spec
 from django_ergo.conversation.context import ContextBuilder
@@ -102,13 +103,12 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-MAIN_ROLE = "main"
-CHAT_ROLE = "chat"  # a named chat from bot.yaml
-THREAD_ROLE = "thread"
+MAIN_ROLE = roles.MAIN
+CHAT_ROLE = roles.CHAT
+THREAD_ROLE = roles.THREAD
 # Session metadata: the compaction settings bot.yaml last gave a chat.
 COMPACTION_KEY = "bot_compaction"
 ROOT_ROLE = MAIN_ROLE  # the main chat was called the root
-TOP_ROLES = {MAIN_ROLE, CHAT_ROLE, "root"}
 
 
 @dataclass
@@ -893,10 +893,10 @@ class Bot:
 
     async def chat_session(self, user, name: str = MAIN) -> ConversationSession:
         """Get or create the user's ``main`` chat, or a named chat from bot.yaml."""
-        if name in ("root", MAIN):
+        if name in roles.MAIN_NAMES:
             name, role = MAIN, MAIN_ROLE
             qs = self.sessions(user).filter(
-                parent__isnull=True, metadata__bot_role__in=["root", MAIN_ROLE]
+                parent__isnull=True, metadata__bot_role=MAIN_ROLE
             )
         else:
             if name not in self.definition.chats:
@@ -938,12 +938,11 @@ class Bot:
     @staticmethod
     def chat_name(session: ConversationSession) -> str | None:
         """``main``, a named chat's name, or None for a thread."""
-        meta = session.metadata or {}
-        role = meta.get("bot_role")
-        if role in ("root", MAIN_ROLE):
+        role = roles.role(session)
+        if role == MAIN_ROLE:
             return MAIN
         if role == CHAT_ROLE:
-            return meta.get("chat")
+            return (session.metadata or {}).get("chat")
         return None
 
     async def create_session(  # noqa: PLR0913
@@ -1030,11 +1029,11 @@ class Bot:
     @staticmethod
     def is_root(session: ConversationSession) -> bool:
         """A top-level chat: main or a named chat (not a thread)."""
-        return (session.metadata or {}).get("bot_role") in TOP_ROLES
+        return roles.is_top(session)
 
     @staticmethod
     def is_main(session: ConversationSession) -> bool:
-        return (session.metadata or {}).get("bot_role") in ("root", MAIN_ROLE)
+        return roles.is_main(session)
 
     @staticmethod
     def is_window(session: ConversationSession) -> bool:

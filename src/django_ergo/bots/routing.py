@@ -51,7 +51,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
-import threading
 import time
 from dataclasses import dataclass
 from dataclasses import field
@@ -60,12 +59,14 @@ from typing import TYPE_CHECKING
 from pydantic import BaseModel
 from pydantic import Field
 
+from django_ergo.conversation import roles
 from django_ergo.conversation.usage_windows import WINDOW_NAMES
 from django_ergo.conversation.usage_windows import arecord_usage_windows  # noqa: F401
 from django_ergo.conversation.usage_windows import claude_windows  # noqa: F401
 from django_ergo.conversation.usage_windows import codex_windows  # noqa: F401
 from django_ergo.conversation.usage_windows import record_usage_windows  # noqa: F401
 from django_ergo.conversation.usage_windows import window_period
+from django_ergo.daemon import start_daemon
 
 if TYPE_CHECKING:
     from django_ergo.bots.providers import Providers
@@ -421,8 +422,6 @@ def ensure_compiled(providers: Providers, make_engine, *, retry: bool = False) -
     _failed.pop(sha, None)
 
     def run():
-        from django.db import close_old_connections
-
         try:
             asyncio.run(compile_routing(providers, text=text, engine=make_engine()))
         except Exception as exc:  # noqa: BLE001 - the YAML rules stay in use
@@ -430,9 +429,8 @@ def ensure_compiled(providers: Providers, make_engine, *, retry: bool = False) -
             _failed[sha] = str(exc)[:300]
         finally:
             _compiling.discard(sha)
-            close_old_connections()
 
-    threading.Thread(target=run, name="ergo-routing-compile", daemon=True).start()
+    start_daemon(run, name="ergo-routing-compile")
 
 
 # -- switches and the Routing page ----------------------------------------------
@@ -460,10 +458,7 @@ def record_switch(  # noqa: PLR0913
     reason = reason or switch_reason(
         providers, before, after, current_usage(), active_rules(providers.routing)
     )
-    meta = session.metadata or {}
-    title = meta.get("title") or (
-        "Main" if meta.get("bot_role") in ("root", "main") else "Thread"
-    )
+    title = roles.title(session)
     RoutingSwitch.objects.create(
         session=session,
         label=f"{session.bot_name} · {title}"[:300],

@@ -38,17 +38,7 @@ if TYPE_CHECKING:
     from django_ergo.conversation.context import ContextSource
     from django_ergo.conversation.toolkit import Toolkit
 
-MAX_OUTPUT_CHARS = 20_000
-
-
-def trim(text: str, limit: int = MAX_OUTPUT_CHARS) -> str:
-    """Keep the start and the end of long output, where the useful parts are."""
-    if len(text) <= limit:
-        return text
-    head = text[: limit // 4]
-    tail = text[-(limit - len(head)) :]
-    skipped = len(text) - len(head) - len(tail)
-    return f"{head}\n[... {skipped} characters skipped ...]\n{tail}"
+from django_ergo.plugins._common import trim
 
 
 class BashPlugin(BotPlugin):
@@ -85,9 +75,6 @@ class BashPlugin(BotPlugin):
             return trim(f"Timed out after {self.timeout}s.\n{partial}".strip())
         output = (proc.stdout + proc.stderr).strip() or "(no output)"
         return trim(f"Exit {proc.returncode}\n{output}")
-
-    def _applies(self, ctx: ToolContext) -> bool:
-        return not (self.root_only and ctx.bot and not ctx.bot.is_root(ctx.session))
 
     def toolkits(self, ctx: ToolContext) -> list[Toolkit]:
         if not self._applies(ctx):

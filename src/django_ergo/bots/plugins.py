@@ -61,9 +61,17 @@ class BotPlugin:
     # request, with this description in the listing.
     description: str = ""
 
+    # Plugins that take a ``root_only`` option set this from their config:
+    # True keeps their tools to main and named chats (not threads).
+    root_only: bool = False
+
     def __init__(self, bot: Bot, config: dict[str, Any] | None = None):
         self.bot = bot
         self.config = dict(config or {})
+
+    def _applies(self, ctx: ToolContext) -> bool:
+        """False in a thread when ``root_only`` is on."""
+        return not (self.root_only and ctx.bot and not ctx.bot.is_root(ctx.session))
 
     def on_load(self) -> None:
         """Called once, after the bot and all its plugins are constructed."""
