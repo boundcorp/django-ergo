@@ -413,7 +413,7 @@ class ClaudeCodeClient:
         self.effort = effort
         self.env = env or {}
         self.messages = self
-        # Called with each request's rate_limit_info (bots.routing reads it).
+        # Called with each request's rate_limit_info (conversation.usage_windows stores it).
         self.on_rate_limit = None
         self._rate_limit: dict | None = None
 
@@ -723,8 +723,10 @@ class ClaudeCodeEngine(ClaudeAPIEngine):
             if provider := self.provider:
 
                 async def record(info, provider=provider):
-                    from django_ergo.bots.routing import arecord_usage_windows
-                    from django_ergo.bots.routing import claude_windows
+                    from django_ergo.conversation.usage_windows import (
+                        arecord_usage_windows,
+                    )
+                    from django_ergo.conversation.usage_windows import claude_windows
 
                     await arecord_usage_windows(
                         provider,

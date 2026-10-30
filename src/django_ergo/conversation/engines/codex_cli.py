@@ -351,7 +351,7 @@ class CodexClient:
         self.env = env or {}
         self.require_chatgpt = require_chatgpt
         self.chat = SimpleNamespace(completions=self)
-        # Called with each response's rate-limit snapshot (bots.routing reads it).
+        # Called with each response's rate-limit snapshot (conversation.usage_windows stores it).
         self.on_rate_limit = None
 
     async def create(
@@ -602,8 +602,10 @@ class CodexCLIEngine(OpenAIAPIEngine):
             if provider := self.provider:
 
                 async def record(rate_limits, provider=provider):
-                    from django_ergo.bots.routing import arecord_usage_windows
-                    from django_ergo.bots.routing import codex_windows
+                    from django_ergo.conversation.usage_windows import (
+                        arecord_usage_windows,
+                    )
+                    from django_ergo.conversation.usage_windows import codex_windows
 
                     await arecord_usage_windows(
                         provider,
