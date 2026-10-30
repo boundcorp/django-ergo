@@ -74,7 +74,7 @@ def snippet(text: str) -> str:
     return text if len(text) <= SNIPPET else text[: SNIPPET - 1] + "…"
 
 
-def turn_text(message: ThreadMessage) -> str:
+def turn_text(message: ThreadMessage) -> str:  # noqa: C901 — one header per kind of message
     """What the recipient sees: who it's from, and what to do with it."""
     author, provenance = thread_message_identity(message)
     if provenance:
@@ -126,6 +126,11 @@ def turn_text(message: ThreadMessage) -> str:
         header = (
             "[A worker this chat started has finished. Tell the user what it did, "
             "using its result below.]"
+        )
+    elif (message.metadata or {}).get("pull_request"):
+        header = (
+            "[GitHub: the checks finished on a pull request this chat opened. "
+            "The user will see your reply.]"
         )
     elif schedule := (message.metadata or {}).get("schedule"):
         header = f"[Scheduled message: {schedule}. The user will see your reply.]"
