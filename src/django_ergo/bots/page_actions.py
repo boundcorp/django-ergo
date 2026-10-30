@@ -340,10 +340,6 @@ def set_call_log(log: CallLog | None) -> None:
     _call_log = log
 
 
-def get_call_log() -> CallLog | None:
-    return _call_log
-
-
 def context_text(session) -> str:
     """The bot's "Page actions since your last reply" section (empty when there are none)."""
     log = _call_log

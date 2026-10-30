@@ -4,7 +4,7 @@ DJANGO_ERGO setting. For example your project's
 `settings.py` file might look like this:
 
 DJANGO_ERGO = {
-    "WORKFLOW_MODEL": "django_ergo.models.Workflow"
+    "OPENAI_MODEL": "gpt-6-luna",
 }
 
 This module provides the `api_settings` object, that is used to access
@@ -18,7 +18,6 @@ from django.utils.module_loading import import_string
 
 DEFAULTS = {
     "KNOWLEDGE_REPOSITORIES": {},
-    "WORKFLOW_MODEL": "django_ergo.models.Workflow",  # example only
     # OpenAI Configuration
     "OPENAI_API_KEY": None,  # Can be overridden by environment variable
     "OPENAI_MODEL": "gpt-6-luna",
@@ -126,7 +125,6 @@ DEFAULTS = {
 
 # List of settings that may be in string import notation.
 IMPORT_STRINGS = [
-    "WORKFLOW_MODEL",  # example only as it will be imported as a class
     "EMBEDDING_PROVIDER",  # Import embedding provider class
     "AUDIO_TRANSCRIBER",
     "THREAD_MESSAGE_RUNNER",

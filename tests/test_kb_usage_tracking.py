@@ -126,27 +126,6 @@ class TestToolkitGetBoundKnowledgebases:
         assert len(bindings) == 2
         assert all(mode == "read" for _, mode in bindings)
 
-    def test_kb_write_toolkit_returns_write(self, kb):
-        from django_ergo.kb_write_toolkit import KBWriteToolkit
-
-        toolkit = KBWriteToolkit(knowledgebase=kb)
-        bindings = toolkit.get_bound_knowledgebases()
-        assert bindings == [(kb, "write")]
-
-    def test_kb_suggest_toolkit_returns_suggest(self, kb):
-        from django_ergo.kb_suggest_toolkit import KBSuggestToolkit
-
-        toolkit = KBSuggestToolkit(knowledgebase=kb)
-        bindings = toolkit.get_bound_knowledgebases()
-        assert bindings == [(kb, "suggest")]
-
-    def test_history_toolkit_returns_empty(self, session):
-        from django_ergo.conversation.history_toolkit import ChatWithHistoryToolkit
-
-        toolkit = ChatWithHistoryToolkit(sessions=[session])
-        bindings = toolkit.get_bound_knowledgebases()
-        assert bindings == []
-
     def test_default_returns_empty(self):
         from django_ergo.conversation.toolkit import Toolkit
 

@@ -17,128 +17,11 @@ from django.test import TestCase
 
 from django_ergo.fields import SemanticTextField
 from django_ergo.fields import generate_embedding
-from django_ergo.fields import generate_summary
 
 from .openai_test_utils import openai_test_manager
 from .openai_test_utils import save_openai_fixture
 
 User = get_user_model()
-
-
-class TestGenerateSummary:
-    """Test the generate_summary function with both real and mocked OpenAI API."""
-
-    @pytest.mark.openai_real
-    def test_generate_summary_real_api(self):
-        """Test generate_summary with real OpenAI API (costs credits)."""
-        if not openai_test_manager.should_use_real_api():
-            pytest.skip("TEST_OPENAI not set - skipping costly API test")
-
-        # Test data
-        test_text = "This is a long text that needs to be summarized. It contains multiple sentences with various information about different topics. The goal is to create a concise summary that captures the main points."
-        max_tokens = 50
-
-        # Call the real API
-        result = generate_summary(test_text, max_tokens)
-
-        # Basic assertions
-        assert isinstance(result, str)
-        assert len(result) > 0
-        assert len(result.split()) <= max_tokens + 10  # Allow some tolerance
-
-        # Save fixture for mocked test
-        input_data = {"text": test_text, "max_tokens": max_tokens, "user_context": None}
-
-        # Mock response structure for saving
-        mock_response = Mock()
-        mock_response.choices = [Mock()]
-        mock_response.choices[0].message = Mock()
-        mock_response.choices[0].message.content = result
-        mock_response.usage = Mock()
-        mock_response.usage.model_dump.return_value = {
-            "prompt_tokens": 50,
-            "completion_tokens": 20,
-        }
-
-        save_openai_fixture(
-            "generate_summary_basic", input_data, mock_response, "chat.completions"
-        )
-
-        print(f"✅ Real API test completed. Generated summary: {result[:100]}...")
-
-    @pytest.mark.openai_mocked
-    def test_generate_summary_mocked(self):
-        """Test generate_summary with mocked OpenAI API using saved fixtures."""
-        fixture = openai_test_manager.load_fixture("generate_summary_basic")
-        if not fixture:
-            pytest.skip("No fixture found - run with TEST_OPENAI=true first")
-
-        # Create mock response
-        mock_response = openai_test_manager.create_mock_response(fixture)
-
-        with patch("openai.chat.completions.create", return_value=mock_response):
-            result = generate_summary(
-                fixture.input_data["text"], fixture.input_data["max_tokens"]
-            )
-
-        # Verify result matches fixture
-        assert result == fixture.response_data["content"]
-        assert isinstance(result, str)
-        assert len(result) > 0
-
-        print(f"✅ Mocked test completed. Result: {result[:100]}...")
-
-    @pytest.mark.openai_real
-    def test_generate_summary_with_context_real_api(self):
-        """Test generate_summary with user context using real API."""
-        if not openai_test_manager.should_use_real_api():
-            pytest.skip("TEST_OPENAI not set - skipping costly API test")
-
-        test_text = "Django is a high-level Python web framework that encourages rapid development and clean, pragmatic design."
-        user_context = {"role": "developer", "interest": "web_frameworks"}
-
-        result = generate_summary(test_text, max_tokens=30, user_context=user_context)
-
-        assert isinstance(result, str)
-        assert len(result) > 0
-
-        # Save fixture
-        input_data = {"text": test_text, "max_tokens": 30, "user_context": user_context}
-
-        mock_response = Mock()
-        mock_response.choices = [Mock()]
-        mock_response.choices[0].message = Mock()
-        mock_response.choices[0].message.content = result
-        mock_response.usage = Mock()
-        mock_response.usage.model_dump.return_value = {
-            "prompt_tokens": 40,
-            "completion_tokens": 15,
-        }
-
-        save_openai_fixture(
-            "generate_summary_with_context",
-            input_data,
-            mock_response,
-            "chat.completions",
-        )
-
-    @pytest.mark.openai_mocked
-    def test_generate_summary_with_context_mocked(self):
-        """Test generate_summary with context using mocked API."""
-        fixture = openai_test_manager.load_fixture("generate_summary_with_context")
-        if not fixture:
-            pytest.skip("No fixture found - run with TEST_OPENAI=true first")
-
-        mock_response = openai_test_manager.create_mock_response(fixture)
-
-        with patch("openai.chat.completions.create", return_value=mock_response):
-            result = generate_summary(
-                fixture.input_data["text"],
-                fixture.input_data["max_tokens"],
-                fixture.input_data["user_context"],
-            )
-
-        assert result == fixture.response_data["content"]
 
 
 class TestGenerateEmbedding:
@@ -252,19 +135,6 @@ class TestOpenAIIntegrationErrors:
             "EMBEDDING_PROVIDER_CONFIG": {"api_key": placeholder},
         }
 
-    def test_generate_summary_empty_content(self):
-        """Test generate_summary with empty content handling."""
-        with patch("openai.chat.completions.create") as mock_create:
-            # Test empty string
-            mock_response = Mock()
-            mock_response.choices = [Mock()]
-            mock_response.choices[0].message = Mock()
-            mock_response.choices[0].message.content = None
-            mock_create.return_value = mock_response
-
-            with pytest.raises(ValueError, match="OpenAI returned empty content"):
-                generate_summary("Some text")
-
     def test_generate_embedding_api_error(self):
         """Test generate_embedding error handling."""
         with patch("openai.embeddings.create") as mock_create:
@@ -298,29 +168,3 @@ class TestFixtureGeneration:
         """Test loading a fixture that doesn't exist."""
         fixture = openai_test_manager.load_fixture("nonexistent_test")
         assert fixture is None
-
-    @pytest.mark.openai_real
-    def test_minimal_summary_real_api(self):
-        """Minimal test to generate a basic fixture."""
-        if not openai_test_manager.should_use_real_api():
-            pytest.skip("TEST_OPENAI not set - skipping costly API test")
-
-        result = generate_summary("Test text for fixture generation", max_tokens=20)
-
-        # Save a simple fixture
-        input_data = {"text": "Test text for fixture generation", "max_tokens": 20}
-        mock_response = Mock()
-        mock_response.choices = [Mock()]
-        mock_response.choices[0].message = Mock()
-        mock_response.choices[0].message.content = result
-        mock_response.usage = Mock()
-        mock_response.usage.model_dump.return_value = {}
-
-        save_openai_fixture(
-            "minimal_summary", input_data, mock_response, "chat.completions"
-        )
-
-        # Verify fixture was saved
-        fixture = openai_test_manager.load_fixture("minimal_summary")
-        assert fixture is not None
-        assert fixture.response_data["content"] == result

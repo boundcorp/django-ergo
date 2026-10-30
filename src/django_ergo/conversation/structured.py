@@ -94,19 +94,19 @@ from django_ergo.conversation.models import ConversationSession
 from django_ergo.conversation.models import StructuredCall
 from django_ergo.conversation.models import StructuredCallStatus
 from django_ergo.conversation.runner import PendingApproval
-from django_ergo.conversation.runner import _collect_toolkit_schemas
-from django_ergo.conversation.runner import _find_toolkit_for_tool
-from django_ergo.conversation.runner import _record_kb_usage
-from django_ergo.conversation.runner import _tool_requires_approval
 from django_ergo.conversation.runtime import EngineSpec
 from django_ergo.conversation.runtime import build_engine
 from django_ergo.conversation.runtime import get_default_engine_spec
+from django_ergo.conversation.tool_dispatch import collect_toolkit_schemas
+from django_ergo.conversation.tool_dispatch import dispatch_tool
+from django_ergo.conversation.tool_dispatch import find_toolkit
+from django_ergo.conversation.tool_dispatch import record_kb_usage
+from django_ergo.conversation.tool_dispatch import requires_approval
 from django_ergo.conversation.tool_results import budget_chars
 from django_ergo.conversation.tool_results import trim_tool_results
 from django_ergo.conversation.toolkit import ApprovalPreview
 from django_ergo.conversation.toolkit import Toolkit
 from django_ergo.pricing import add_request_cost
-from django_ergo.tools import tool_registry
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -406,33 +406,6 @@ def _is_transient(exc: BaseException) -> bool:
     if _policy_refusal(exc):
         return False
     return any(cls.__name__ in _TRANSIENT_ERRORS for cls in type(exc).__mro__)
-
-
-def _dispatch_tool(
-    name: str,
-    args: dict,
-    toolkits: list[Toolkit],
-    user,
-    workflow,
-) -> tuple[Any, bool]:
-    """Run one tool call. Returns (result, is_error); never raises for tool failures."""
-    toolkit = _find_toolkit_for_tool(toolkits, name)
-    if toolkit is not None:
-        try:
-            return toolkit.execute_tool(name, args), False
-        except Exception as e:  # noqa: BLE001 — any tool failure goes back to the model
-            return str(e), True
-
-    enabled = workflow.get_tools_config().get("enabled_tools", []) if workflow else []
-    if name in enabled and tool_registry.get_tool(name) is not None:
-        try:
-            result = tool_registry.execute_tool(
-                name=name, user=user, arguments=args, approved=True
-            )
-        except Exception as e:  # noqa: BLE001
-            return str(e), True
-        return result, False
-    return f"Unknown tool: {name}", True
 
 
 async def _record_tools(call: StructuredCall, spec: StructuredCallSpec) -> None:
@@ -778,18 +751,18 @@ class _Run:
     def tool_schemas(self) -> list[dict] | None:
         # Rebuilt for every model call: a toolkit's tools can change mid-turn
         # (loading a skill adds its tools to the next call).
-        return _collect_toolkit_schemas(self.toolkits, self.adapter) or None
+        return collect_toolkit_schemas(self.toolkits, self.adapter) or None
 
     def needs_approval(self, name: str) -> bool:
-        return _tool_requires_approval(name, self.workflow, self.toolkits)
+        return requires_approval(name, self.toolkits)
 
     async def run_tool(self, name: str, args: dict) -> tuple[Any, bool]:
-        return await sync_to_async(_dispatch_tool, thread_sensitive=True)(
-            name, args, self.toolkits, self.user, self.workflow
+        return await sync_to_async(dispatch_tool, thread_sensitive=True)(
+            name, args, self.toolkits
         )
 
     async def approval_preview(self, name: str, args: dict) -> ApprovalPreview | None:
-        toolkit = _find_toolkit_for_tool(self.toolkits, name)
+        toolkit = find_toolkit(self.toolkits, name)
         preview = getattr(toolkit, "approval_preview", None)
         if not callable(preview):
             return None
@@ -853,7 +826,7 @@ async def _run_loop(run: _Run) -> StructuredCallResult:  # noqa: C901, PLR0912, 
             and run.submit is not None
             and call.turns_used == spec.max_turns
         ):
-            schemas = _collect_toolkit_schemas([run.submit], run.adapter) or None
+            schemas = collect_toolkit_schemas([run.submit], run.adapter) or None
             note = _wrap_up_note(spec)
         try:
             events = await _with_retry(
@@ -1133,7 +1106,7 @@ async def run_structured_call(  # noqa: PLR0913
             metadata=metadata or {},
         )
         if spec.toolkits:
-            await _record_kb_usage(session, spec.toolkits)
+            await record_kb_usage(session, spec.toolkits)
         transcript = _SessionTranscript(
             active, call, await _extra_system(spec, context_builder)
         )

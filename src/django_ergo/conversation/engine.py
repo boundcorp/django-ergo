@@ -223,10 +223,6 @@ class Engine(ABC):
         msg = f"{type(self).__name__} does not support tool_result_messages"
         raise NotImplementedError(msg)
 
-    @abstractmethod
-    def get_tools_schema(self, workflow) -> list[dict]:
-        """Convert ergo tools to engine-native tool format."""
-
     def history_rows(self, session, after_sequence: int | None = None) -> list:
         """Return [(message row, engine-native message dict), ...] in order.
 

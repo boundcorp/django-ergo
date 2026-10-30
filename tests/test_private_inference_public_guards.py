@@ -15,7 +15,6 @@ from django_ergo.conversation.attachments import openai_transcriber
 from django_ergo.conversation.engines.claude_api import ClaudeAPIEngine
 from django_ergo.conversation.inference_policy import PolicyError
 from django_ergo.embedding_providers import OpenAIEmbeddingProvider
-from django_ergo.workflow_engine import WorkflowEngine
 
 FIREWORKS_URL = "https://api.fireworks.ai/inference/v1"
 PRIVATE_URLS = [FIREWORKS_URL, "https://foo.fireworks.ai", "fireworks.ai"]
@@ -111,61 +110,6 @@ async def test_claude_session_call_refuses_client_mutated_to_private():
         async for _event in engine._call(session):
             pass
     engine._client.messages.create.assert_not_awaited()
-
-
-# -- workflow engine ------------------------------------------------------------
-
-
-def test_workflow_engine_refuses_private_openai_base_url_env(monkeypatch):
-    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    monkeypatch.setenv("OPENAI_BASE_URL", FIREWORKS_URL)
-    with (
-        patch("django_ergo.workflow_engine.openai") as sdk,
-        pytest.raises(PolicyError),
-    ):
-        WorkflowEngine()
-    sdk.OpenAI.assert_not_called()
-
-
-def workflow_engine_with_client(monkeypatch, base_url):
-    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    with patch("django_ergo.workflow_engine.openai") as sdk:
-        engine = WorkflowEngine()
-    sdk.OpenAI.assert_called_once()
-    engine.openai_client.base_url = base_url
-    return engine
-
-
-def test_workflow_engine_refuses_client_mutated_to_private(monkeypatch):
-    engine = workflow_engine_with_client(monkeypatch, FIREWORKS_URL)
-    with (
-        patch.object(engine, "_build_openai_conversation_history", return_value=[]),
-        patch.object(engine, "_get_workflow_tools", return_value=[]),
-        pytest.raises(PolicyError),
-    ):
-        engine._process_with_agent(MagicMock())
-    engine.openai_client.chat.completions.create.assert_not_called()
-
-
-def test_workflow_engine_tool_followup_refuses_private_client(monkeypatch):
-    engine = workflow_engine_with_client(monkeypatch, FIREWORKS_URL)
-    with (
-        patch.object(engine, "_build_conversation_history", return_value=[]),
-        pytest.raises(PolicyError),
-    ):
-        engine._continue_with_tool_results(MagicMock(), [])
-    engine.openai_client.chat.completions.create.assert_not_called()
-
-
-def test_workflow_engine_public_client_sends(monkeypatch):
-    engine = workflow_engine_with_client(monkeypatch, "https://api.openai.com/v1")
-    engine.openai_client.chat.completions.create.return_value.choices = [
-        MagicMock(message=MagicMock(content="done"))
-    ]
-    with patch.object(engine, "_build_conversation_history", return_value=[]):
-        result = engine._continue_with_tool_results(MagicMock(), [])
-    engine.openai_client.chat.completions.create.assert_called_once()
-    assert result["content"] == "done"
 
 
 # -- audio transcription --------------------------------------------------------

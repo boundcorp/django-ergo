@@ -1031,8 +1031,6 @@ class Bot:
         """A window chat: only the current turn goes to the model natively."""
         return (session.compaction_config or {}).get("native_history") == "turn"
 
-    is_stream = is_window  # deprecated alias
-
     def history_sources(self, session: ConversationSession) -> list[SessionSource]:
         """Sessions the history tools can read: all of this user's sessions
         with the bot, from any chat or thread."""
@@ -1119,7 +1117,7 @@ class Bot:
         skillset: SkillSet | None = None,
         *,
         incoming: bool = True,
-    ) -> ContextBuilder | None:
+    ) -> ContextBuilder:
         """The turn's context. ``incoming`` is False when resuming a stored turn."""
         ctx = self.tool_context(session)
         skills = skillset or self.skillset(session)
@@ -1128,7 +1126,6 @@ class Bot:
 
         builder.add(TextContextSource("This chat", chat_identity(session), weight=3))
         builder.add(TextContextSource("Skills", skills.context_summary, weight=1))
-        empty = False
         if self.definition.current_time:
             builder.add(
                 TextContextSource(
@@ -1137,10 +1134,8 @@ class Bot:
                     weight=0.2,
                 )
             )
-            empty = False
         for source in self._function_context_sources(ctx, session, message):
             builder.add(source)
-            empty = False
         if self.is_window(session):
             builder.add(
                 MessageContextSource(
@@ -1155,20 +1150,16 @@ class Bot:
                     incoming=incoming,
                 )
             )
-            empty = False
         for plugin in self.plugins:
             for source in plugin.always_context_sources(ctx, message) or []:
                 builder.add(source)
-                empty = False
             if type(plugin).toolkits is BotPlugin.toolkits:
                 # Not a skill (e.g. telegram): its context is always on.
                 for source in plugin.context_sources(ctx, message) or []:
                     builder.add(source)
-                    empty = False
         for source in skills.context_sources(message):
             builder.add(source)
-            empty = False
-        return None if empty else builder
+        return builder
 
     async def _prepare(
         self, session: ConversationSession, message: str, *, incoming: bool = True

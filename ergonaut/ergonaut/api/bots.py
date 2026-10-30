@@ -1469,14 +1469,6 @@ def bot_models(request, bot: str):
     return models_out(get_bot(bot, request.auth))
 
 
-@router.get("/bots/{bot}/routing")
-def bot_routing(request, bot: str):
-    """The auto/<tier> routing a bot's chats get: tiers, rules, subscription usage."""
-    from django_ergo.bots.routing import routing_report
-
-    return routing_report(get_bot(bot, request.auth).providers)
-
-
 class RoutingIn(Schema):
     text: str
 

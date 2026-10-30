@@ -1,7 +1,7 @@
 import pytest
 from asgiref.sync import async_to_sync
 
-from django_ergo.conversation.runner import _record_kb_usage
+from django_ergo.conversation.tool_dispatch import record_kb_usage
 from django_ergo.knowledge.articles import ArticleCompatibility
 from django_ergo.knowledge.backends import MemoryCorpus
 from django_ergo.knowledge.retrieval import MemoryVectorIndex
@@ -11,8 +11,6 @@ from django_ergo.knowledge.service import AccessDeniedError
 from django_ergo.knowledge.service import CorpusService
 from django_ergo.knowledge.toolkit import CorpusToolkit
 from django_ergo.knowledge.usage import DatabaseUsageStore
-from tests.test_kb_pipelines import source_session
-from tests.test_kb_pipelines import user
 from tests.test_knowledge_corpus import corpus
 from tests.test_knowledge_corpus import host
 from tests.test_knowledge_corpus import policy_for
@@ -20,8 +18,18 @@ from tests.test_knowledge_features import TinyProvider
 from tests.test_knowledge_legacy import legacy_kbs
 from tests.test_knowledge_writes import reviewed
 
-__all__ = ["corpus", "host", "legacy_kbs", "source_session", "user"]
+__all__ = ["corpus", "host", "legacy_kbs"]
 pytestmark = pytest.mark.django_db
+
+
+@pytest.fixture
+def source_session(django_user_model):
+    from django_ergo.conversation.models import ConversationSession
+
+    user = django_user_model.objects.create_user(username="testuser", password="x")
+    return ConversationSession.objects.create(
+        user=user, engine_type="claude", transport_type="api", status="completed"
+    )
 
 
 def test_article_compatibility_roundtrip_preserves_existing_callers(
@@ -129,7 +137,7 @@ def test_runner_tracks_logical_corpus_context_without_legacy_fk(
         usage_store=DatabaseUsageStore(),
     )
     toolkit = CorpusToolkit(service)
-    async_to_sync(_record_kb_usage)(source_session, [toolkit])
+    async_to_sync(record_kb_usage)(source_session, [toolkit])
     toolkit.execute_tool("corpus_search", {"query": "pump"})
     events = service.usage(context_id=str(source_session.pk))
     assert [event["mode"] for event in events] == ["read", "search"]

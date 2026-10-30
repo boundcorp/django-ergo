@@ -145,10 +145,6 @@ def _markdown_parts(text, maximum):
     return parts or _bounded_parts(text, maximum)
 
 
-def _source_segment(lines, node):
-    return "".join(lines[node.lineno - 1 : node.end_lineno])
-
-
 def _python_units(path, text, maximum):
     try:
         tree = ast.parse(text, filename=path)

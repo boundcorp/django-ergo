@@ -14,8 +14,6 @@ from django_ergo.conversation.models import SessionMessageRole
 from django_ergo.conversation.models import SessionStatus
 from django_ergo.conversation.models import TransportType
 from django_ergo.models import Workflow
-from django_ergo.tools import ToolConfig
-from django_ergo.tools import tool_registry
 
 User = get_user_model()
 
@@ -344,85 +342,6 @@ class TestReconstructMessages:
         assert result[1]["content"][0]["text"] == "Second"
 
 
-# ---------------------------------------------------------------------------
-# get_tools_schema tests — require DB
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.django_db
-class TestGetToolsSchema:
-    def test_empty_workflow_tools_config(self, engine, workflow):
-        """Workflow with no enabled_tools returns empty list."""
-        result = engine.get_tools_schema(workflow)
-        assert result == []
-
-    def test_none_workflow_returns_empty_list(self, engine):
-        result = engine.get_tools_schema(None)
-        assert result == []
-
-    def test_enabled_tools_in_registry(self, engine, workflow):
-        """Tools listed in enabled_tools that exist in the registry are returned."""
-        # Register a temporary tool for this test
-        test_tool = ToolConfig(
-            name="_test_claude_api_tool",
-            description="A test tool for ClaudeAPIEngine tests",
-            parameters={
-                "query": {
-                    "type": "string",
-                    "required": True,
-                    "description": "Search query",
-                }
-            },
-        )
-        tool_registry._tools["_test_claude_api_tool"] = test_tool
-
-        workflow.tools_config = {"enabled_tools": ["_test_claude_api_tool"]}
-        workflow.save()
-
-        try:
-            result = engine.get_tools_schema(workflow)
-            assert len(result) == 1
-            schema = result[0]
-            assert schema["name"] == "_test_claude_api_tool"
-            assert schema["description"] == "A test tool for ClaudeAPIEngine tests"
-            assert "input_schema" in schema
-            assert "query" in schema["input_schema"]["properties"]
-        finally:
-            # Clean up the temporary tool
-            tool_registry._tools.pop("_test_claude_api_tool", None)
-
-    def test_unknown_tool_names_are_skipped(self, engine, workflow):
-        """Tools that are not in the registry are silently skipped."""
-        workflow.tools_config = {"enabled_tools": ["nonexistent_tool_xyz"]}
-        workflow.save()
-
-        result = engine.get_tools_schema(workflow)
-        assert result == []
-
-    def test_schema_uses_claude_format(self, engine, workflow):
-        """Returned schema uses Claude input_schema format, not OpenAI function format."""
-        test_tool = ToolConfig(
-            name="_test_claude_format_tool",
-            description="Format check tool",
-            parameters={},
-        )
-        tool_registry._tools["_test_claude_format_tool"] = test_tool
-
-        workflow.tools_config = {"enabled_tools": ["_test_claude_format_tool"]}
-        workflow.save()
-
-        try:
-            result = engine.get_tools_schema(workflow)
-            assert len(result) == 1
-            # Claude format has "input_schema", not OpenAI's "function" wrapper
-            assert "input_schema" in result[0]
-            assert "function" not in result[0]
-        finally:
-            tool_registry._tools.pop("_test_claude_format_tool", None)
-
-
-# ---------------------------------------------------------------------------
-# No-op lifecycle method tests
 # ---------------------------------------------------------------------------
 
 

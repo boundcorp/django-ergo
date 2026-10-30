@@ -9,7 +9,7 @@ embedding services. The system supports multiple providers through a pluggable a
 ### OpenAIEmbeddingProvider (Default)
 Uses OpenAI's text-embedding-3-small model to generate 1536-dimensional vectors.
 
-### TestEmbeddingProvider
+### DeterministicEmbeddingProvider
 For testing and development - returns deterministic vectors based on text hash.
 
 ### CustomEmbeddingProvider
@@ -345,15 +345,6 @@ class CustomEmbeddingProvider(EmbeddingProvider):
             repr(sorted(self.embeddings.items())).encode()
         ).hexdigest()
         return f"{super().get_index_id()}:{fingerprint}"
-
-
-# Provider registry
-EMBEDDING_PROVIDERS = {
-    "openai": OpenAIEmbeddingProvider,
-    "deterministic": DeterministicEmbeddingProvider,
-    "test": DeterministicEmbeddingProvider,  # Alias for backward compatibility
-    "custom": CustomEmbeddingProvider,
-}
 
 
 def get_embedding_provider() -> EmbeddingProvider:

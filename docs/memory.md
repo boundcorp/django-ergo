@@ -122,8 +122,7 @@ plugins:
 ```
 
 - `knowledgebases` uses Ergo's database KB (the `legacy` extra): articles
-  with embeddings and semantic search, managed in the admin or with
-  `django_ergo.kb_tools`. Tools: `kb_list`, `kb_search`, `kb_get_article`,
+  with embeddings and semantic search, managed in the admin. Tools: `kb_list`, `kb_search`, `kb_get_article`,
   `kb_table_of_contents`. See [semantic search](semantic-search.md).
 - `toolkit` takes any toolkit, such as a `CorpusToolkit` over the
   [knowledge foundation](knowledge-foundation.md)'s memory, database or Git

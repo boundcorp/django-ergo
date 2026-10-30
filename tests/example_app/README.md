@@ -56,8 +56,6 @@ This is an **example application** that demonstrates how to build a REST API usi
 django-ergo/
 ├── src/django_ergo/          # Core plugin
 │   ├── models.py            # Database models
-│   ├── tools.py             # Tool registry
-│   ├── workflow_engine.py   # Workflow orchestration
 │   └── fields.py            # Semantic fields
 └── tests/example_app/        # This example
     ├── api.py               # REST endpoints
