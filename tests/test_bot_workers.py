@@ -867,3 +867,35 @@ def test_orca_watcher_keeps_the_agents_activity_and_reads_its_log(
     log = w.log(bot, worker)
     assert not log["live"] and "no orca" in log["error"]
     assert [e["text"] for e in log["entries"]][-1] == "Editing footer.html"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_second_runner_call_skips_a_step_in_progress(tmp_path, workers):
+    from django.utils import timezone
+
+    from django_ergo.bots import workers as w
+    from django_ergo.bots.tools import ToolContext
+    from django_ergo.conversation.models import Worker
+
+    bot, _ = make_bot(tmp_path, yaml_text=YAML, tools=TOOLS)
+    user = get_user_model().objects.create(username="w-lease")
+    session = async_to_sync(bot.main_session)(user)
+    ctx = ToolContext(bot=bot, session=session, user=user)
+    worker = ctx.workers.start(
+        "watch", title="Watch", notify=False, target="x", polls=3
+    )
+
+    # Another process is in the middle of a step: a late or duplicate call skips it.
+    Worker.objects.filter(pk=worker.pk).update(
+        status="running", step_started_at=timezone.now()
+    )
+    assert w.run(str(worker.pk), bot.registry) == "running"
+    worker.refresh_from_db()
+    assert worker.polls == 0
+
+    # After the lease, the step is taken over (its process died).
+    stale = timezone.now() - timezone.timedelta(seconds=w.STEP_LEASE_SECONDS + 1)
+    Worker.objects.filter(pk=worker.pk).update(step_started_at=stale)
+    assert w.run(str(worker.pk), bot.registry) == "running"
+    worker.refresh_from_db()
+    assert (worker.polls, worker.step_started_at) == (1, None)

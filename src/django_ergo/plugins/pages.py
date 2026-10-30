@@ -29,6 +29,7 @@ from typing import Any
 from django_ergo.bots.pages import BLOCK_TYPES
 from django_ergo.bots.pages import PageError
 from django_ergo.bots.pages import blocks_source
+from django_ergo.bots.pages import bot_file
 from django_ergo.bots.pages import page_text
 from django_ergo.bots.pages import render_page
 from django_ergo.bots.plugins import BotPlugin
@@ -192,13 +193,8 @@ class PagesPlugin(BotPlugin):
             msg = "Give a page (an id or a bot-folder path) or source"
             raise ValueError(msg)
         elif not _is_uuid(page):
-            root = self.bot.definition.root_dir
-            path = (root / page).resolve() if root else None
-            if (
-                path is None
-                or not path.is_relative_to(root.resolve())
-                or not path.is_file()
-            ):
+            path = bot_file(self.bot, page)
+            if path is None:
                 msg = f"No page {page} in the bot folder"
                 raise ValueError(msg)
             source = path.read_text()

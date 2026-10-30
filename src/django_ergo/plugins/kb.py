@@ -3,7 +3,9 @@
     plugins:
       - name: ergo_kb
         path: kb                         # a folder of Markdown files in the bot repo
-        # or: knowledgebases: [Kitchen]  # Knowledgebase names (legacy KB app)
+        # or: knowledgebases: [Kitchen]  # Knowledgebase names (legacy KB app;
+        #     ``knowledgebase: Kitchen`` for one, ``owner: <owner_id>`` when a
+        #     name is shared by several owners)
         # or: toolkit: "myapp.kb:make_toolkit"   # factory(ctx) -> Toolkit
         write: false                     # path KBs: ergo_kb_write saves articles
         commit: true                     # ...and commits/pushes them when in a git repo
@@ -65,11 +67,10 @@ class ErgoKBPlugin(BotPlugin):
         factory = self.config.get("toolkit")
         self._factory = import_string(factory.replace(":", ".")) if factory else None
         self.folder = self._folder()
-        if (
-            self._factory is None
-            and self.folder is None
-            and not self.config.get("knowledgebases")
-        ):
+        self.kb_names = list(self.config.get("knowledgebases") or [])
+        if single := self.config.get("knowledgebase"):
+            self.kb_names.append(single)
+        if self._factory is None and self.folder is None and not self.kb_names:
             msg = "ergo_kb needs path, knowledgebases or toolkit"
             raise ValueError(msg)
         default_search = "ergo_kb_search" if self.folder is not None else "kb_search"
@@ -100,15 +101,35 @@ class ErgoKBPlugin(BotPlugin):
         if self.folder is not None:
             return self.folder.toolkit(ctx, writable=self.writable, commit=self.commit)
         from django_ergo.kb_toolkit import KBToolkit
-        from django_ergo.models import Knowledgebase
 
-        names = list(self.config["knowledgebases"])
-        kbs = list(Knowledgebase.objects.filter(name__in=names))
-        missing = set(names) - {kb.name for kb in kbs}
+        kbs = self.knowledgebases()
+        missing = set(self.kb_names) - {kb.name for kb in kbs}
         if missing:
             msg = f"Unknown knowledge bases: {', '.join(sorted(missing))}"
             raise ValueError(msg)
         return KBToolkit(kbs)
+
+    def knowledgebases(self) -> list:
+        """The configured ``Knowledgebase`` rows. Names aren't unique across owners, so
+        ``owner`` narrows them, and a name several owners share is refused, never merged."""
+        from collections import Counter
+
+        from django_ergo.models import Knowledgebase
+
+        if not self.kb_names:
+            return []
+        rows = Knowledgebase.objects.filter(name__in=self.kb_names)
+        if (owner := self.config.get("owner")) is not None:
+            rows = rows.filter(owner_id=str(owner))
+        kbs = list(rows)
+        shared = sorted(n for n, c in Counter(kb.name for kb in kbs).items() if c > 1)
+        if shared:
+            msg = (
+                f"Several knowledge bases are named {', '.join(shared)}; set the ergo_kb "
+                "plugin's owner to pick one"
+            )
+            raise ValueError(msg)
+        return kbs
 
     def toolkits(self, ctx: ToolContext) -> list[Toolkit]:
         return [self.make_toolkit(ctx)]

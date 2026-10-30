@@ -419,8 +419,9 @@ def restock(ctx, item: str, qty: int = 1) -> dict:
   `approval_preview(ctx, **args)` (or a default) as its text. The server
   answers the first call with `needs_approval`, a preview and a token signed
   over the user, bot, action and a hash of the arguments, valid 5 minutes; the
-  viewer repeats the call with it on Yes. The token never reaches the page, and
-  doesn't work for other arguments. Use it for anything that spends money,
+  viewer repeats the call with it on Yes. The token never reaches the page,
+  doesn't work for other arguments, and works once (its nonce is kept in
+  Django's cache). Use it for anything that spends money,
   messages people or is hard to undo.
 - A `ValueError` or Django `ValidationError` answers 400 with its text, which
   the page sees as the rejection's message. Any other exception answers 500
@@ -509,7 +510,9 @@ def deploy(ctx, release: str) -> str:
 - A worker function runs once, or **polls** by returning `ctx.again(seconds)`.
   Each poll is a fresh task (Ergonaut: a Celery task on the `bot_tasks` queue),
   so nothing holds a process while it waits and a restart loses nothing (beat
-  restarts overdue workers). `ctx.state` is a dict kept between polls,
+  restarts overdue workers). A step holds its worker while it runs, so a late
+  or duplicate runner call skips it; a step whose process died is taken over
+  after 30 minutes. `ctx.state` is a dict kept between polls,
   `ctx.progress(text)` updates the status line, `ctx.tell(text)` sends the chat
   a message while it keeps running (e.g. a question), and `ctx.stopping` turns
   true when it's cancelled.
@@ -999,7 +1002,8 @@ Tandoor tools) go in that bot folder's `tools/` instead.
 ```yaml
 - name: ergo_kb
   path: kb                           # Markdown folder, relative to the bot folder
-  # or knowledgebases: [Kitchen], or toolkit: "myapp.kb:make_toolkit"
+  # or knowledgebases: [Kitchen] (knowledgebase: Kitchen for one), or toolkit: "myapp.kb:make_toolkit"
+  # owner: "42"                      # knowledgebases: pick the owner's KB when several share a name
   write: false                       # path KBs: the bot may save articles (ergo_kb_write)
   commit: true                       # ...committed and pushed when the KB is in a git checkout
   prefetch: new_session              # new_session | every_turn | off
@@ -1216,9 +1220,9 @@ selected cluster with `--dry-run=server`; `apply` and `patch` also run
 and `rollout restart`, `undo`, or `status` explicitly state that their preview
 is skipped because Kubernetes has no safe cluster-state preview for them.
 Arguments are always an argv list. The plugin pins the selected cluster's
-kubeconfig and rejects flags that could change the kubeconfig, context, server,
-or identity. It redacts structured `data`, `stringData`, and credential-shaped
-output and refuses `get secret` custom formats, so Secret values are never
+kubeconfig and rejects flags that could change the kubeconfig, context, cluster,
+server (including the short `-s`), proxy, TLS server name or identity. It redacts structured `data`, `stringData`, and credential-shaped
+output (including env-style names such as `DB_PASSWORD=`) and refuses `get secret` custom formats, so Secret values are never
 returned.
 
 ### bash

@@ -759,10 +759,20 @@ def make_environment(bot: Bot):
     from jinja2 import ChoiceLoader
     from jinja2 import FileSystemLoader
     from jinja2 import StrictUndefined
+    from jinja2 import TemplateNotFound
     from jinja2.sandbox import ImmutableSandboxedEnvironment
 
+    class BotFolderLoader(FileSystemLoader):
+        """Templates from the bot folder, under the same rule as served files:
+        no dotfiles, no Python or YAML, nothing outside the folder."""
+
+        def get_source(self, environment, template):
+            if served_path(root, template) is None:
+                raise TemplateNotFound(template)
+            return super().get_source(environment, template)
+
     root = getattr(bot.definition, "root_dir", None)
-    loader = ChoiceLoader([FileSystemLoader(str(root))]) if root else None
+    loader = ChoiceLoader([BotFolderLoader(str(root))]) if root else None
     env = ImmutableSandboxedEnvironment(
         loader=loader, autoescape=True, undefined=StrictUndefined
     )
@@ -1055,9 +1065,13 @@ def bot_file(bot: Bot, relative: str):
     Only page and asset types (``SERVED_SUFFIXES``), never Python, YAML or
     dotfiles, and nothing outside the folder.
     """
+    return served_path(getattr(bot.definition, "root_dir", None), relative)
+
+
+def served_path(root, relative: str):
+    """``bot_file`` for a bot-folder root: the one rule for what a page may read."""
     from pathlib import Path
 
-    root = getattr(bot.definition, "root_dir", None)
     if root is None or not relative:
         return None
     parts = Path(relative).parts
@@ -1066,7 +1080,7 @@ def bot_file(bot: Bot, relative: str):
         or Path(relative).is_absolute()
     ):
         return None
-    path = (root / relative).resolve()
+    path = (Path(root) / relative).resolve()
     if not path.is_relative_to(Path(root).resolve()) or not path.is_file():
         return None
     if path.suffix.lower() not in SERVED_SUFFIXES:

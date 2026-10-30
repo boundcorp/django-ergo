@@ -334,3 +334,24 @@ def test_preview_samples_keep_short_unique_fields_distinct():
     plain = models.CharField(max_length=3, default="usd")
     plain.name = "currency"
     assert sample_value(plain, 2, empty=False) == "usd"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_pages_cannot_read_dotfiles_or_code_from_the_bot_folder(realty_bot):
+    from django_ergo.bots.pages import PageError
+    from django_ergo.bots.pages import render_page
+    from django_ergo.bots.tools import ToolContext
+
+    bot, user = realty_bot
+    root = bot.definition.root_dir
+    (root / ".env").write_text("TOKEN=hunter2\n")
+    for name in (".env", "secret.py", "bot.yaml"):
+        with pytest.raises(PageError):
+            render_page(bot, "{% include '" + name + "' %}", user=user)
+
+    plugin = bot.plugin("pages")
+    ctx = ToolContext(bot=bot, session=None, user=user)
+    for name in (".env", "secret.py"):
+        with pytest.raises(ValueError, match="No page"):
+            plugin.preview(ctx, page=name)
+    assert "houses" in str(plugin.preview(ctx, page="pages/board.jhtml"))

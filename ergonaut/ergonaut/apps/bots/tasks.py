@@ -833,12 +833,17 @@ def queue_worker(worker_id: str, delay: float) -> None:
 @shared_task(name="ergonaut.resume_workers", ignore_result=True)
 def resume_workers() -> int:
     """Restart workers whose next step is long overdue (a lost task, a restart). Beat runs this."""
+    from django.db.models import Q
     from django.utils import timezone
     from django_ergo.bots import workers
     from django_ergo.conversation.models import Worker
 
+    now = timezone.now()
+    step_lease = timezone.timedelta(seconds=workers.STEP_LEASE_SECONDS)
     overdue = Worker.objects.filter(
-        status__in=["queued", "running"], next_poll_at__lt=timezone.now() - timezone.timedelta(minutes=3)
+        Q(step_started_at__isnull=True) | Q(step_started_at__lt=now - step_lease),
+        status__in=["queued", "running"],
+        next_poll_at__lt=now - timezone.timedelta(minutes=3),
     )
     count = 0
     for worker in overdue[:100]:

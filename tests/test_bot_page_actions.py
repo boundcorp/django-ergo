@@ -217,6 +217,11 @@ def test_approval_is_a_signed_round_trip_for_exactly_these_arguments(
     house.refresh_from_db()
     assert house.price == 250
 
+    # One approval, one call: the same token can't run it again.
+    with pytest.raises(PageActionError, match="already used") as raised:
+        call_page_action(bot, "cut_price", args, user=user, approval=first.approval)
+    assert raised.value.status == 403
+
 
 def test_the_bot_sees_recent_calls_in_its_context(house_bot):
     from django_ergo.bots import page_actions

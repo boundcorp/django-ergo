@@ -180,17 +180,28 @@ def args_hash(args: dict) -> str:
 
 
 def approval_token(user, bot_name: str, action_name: str, args: dict) -> str:
+    import secrets
+
     from django.core import signing
 
     return signing.dumps(
-        {"u": str(user.pk), "b": bot_name, "a": action_name, "h": args_hash(args)},
+        {
+            "u": str(user.pk),
+            "b": bot_name,
+            "a": action_name,
+            "h": args_hash(args),
+            "n": secrets.token_hex(8),
+        },
         salt=APPROVAL_SALT,
     )
 
 
 def check_approval(token: str, user, bot_name: str, action_name: str, args: dict):
-    """Raise PageActionError unless ``token`` was issued to ``user`` for exactly this call."""
+    """Raise PageActionError unless ``token`` was issued to ``user`` for exactly this call,
+    and hasn't been used before (one approval, one call; the nonce is kept in Django's
+    cache, so it holds across processes when the cache is shared)."""
     from django.core import signing
+    from django.core.cache import cache
 
     try:
         data = signing.loads(token, salt=APPROVAL_SALT, max_age=APPROVAL_MAX_AGE)
@@ -206,8 +217,12 @@ def check_approval(token: str, user, bot_name: str, action_name: str, args: dict
         "a": action_name,
         "h": args_hash(args),
     }
-    if data != expected:
+    nonce = data.pop("n", None) if isinstance(data, dict) else None
+    if data != expected or not nonce:
         msg = "That approval is for a different call"
+        raise PageActionError(403, msg)
+    if not cache.add(f"ergo-page-approval:{nonce}", 1, APPROVAL_MAX_AGE):
+        msg = "That approval was already used; approve again"
         raise PageActionError(403, msg)
 
 

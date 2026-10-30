@@ -594,6 +594,8 @@ class Worker(TimeStampedMixin):
     notify = models.BooleanField(default=True)
     polls = models.PositiveIntegerField(default=0)
     next_poll_at = models.DateTimeField(null=True, blank=True)
+    # Set while one step runs, so a late or duplicate runner call skips it.
+    step_started_at = models.DateTimeField(null=True, blank=True)
     started_at = models.DateTimeField(null=True, blank=True)
     completed_at = models.DateTimeField(null=True, blank=True)
 
