@@ -6,6 +6,10 @@ Totals by kind, with chat replies (bot turns) split by bot, plus totals by
 model and by day. Tokens and cost are split into uncached input, cache writes,
 cache reads and output, each priced at its own rate. Superusers see everyone's calls; others see their own.
 
+``GET /api/sessions/{id}/usage?hours=6`` is one chat's token usage per
+hour (rolling hours ending now) for the sparkline in the chat header: its own
+structured calls, and separately the coding agents its workers ran.
+
 ``private`` breaks API-billed private pool spend (``private_pools`` in
 providers.yaml) down by pool, provider, exact model and bot, from the
 per-request ``InferenceRequest`` ledger. Those requests are already in the
@@ -19,11 +23,19 @@ from datetime import timedelta
 
 from django.utils import timezone
 from django_ergo.conversation.chat_reply import CHAT_REPLY_KIND
-from django_ergo.conversation.models import AgentUsage, InferenceOutcome, InferenceRequest, StructuredCall
+from django_ergo.conversation.models import (
+    AgentUsage,
+    AgentUsageEvent,
+    InferenceOutcome,
+    InferenceRequest,
+    StructuredCall,
+)
 from django_ergo.pricing import call_cost_parts, price_for
 from ninja import Router, Schema
+from ninja.errors import HttpError
 
 from ergonaut.api.auth import user_auth
+from ergonaut.api.bots import uuid_or_404, visible_sessions
 
 router = Router(tags=["costs"], auth=user_auth)
 
@@ -167,6 +179,19 @@ class PrivateSpendOut(Schema):
     cost: float
     unknown_cost_requests: int
     rows: list[PrivateSpendRow]
+
+
+class UsageHour(Schema):
+    start: str  # ISO time the hour starts; it ends at the next one's start (or ``until``)
+    thread_tokens: int  # the chat's own calls: turns, compaction, titles
+    agent_tokens: int  # coding agents run by the chat's workers
+
+
+class SessionUsageOut(Schema):
+    until: str
+    hours: list[UsageHour]
+    thread_tokens: int
+    agent_tokens: int
 
 
 class CostsOut(Schema):
@@ -448,6 +473,76 @@ def _agents(rows: list[AgentUsage]) -> dict:
         },
         "rows": output,
         "by_project": by_project,
+    }
+
+
+AGENT_FIELDS = tuple(f"{part}_tokens" for part in AGENT_PARTS)
+
+
+def _spread(bins: list[int], since, hour: timedelta, first, last, tokens: int) -> None:
+    """Add ``tokens`` spent evenly over [first, last] to the hours they overlap."""
+    first = first or last
+    span = (last - first).total_seconds()
+    if span <= 0:
+        index = int((last - since) / hour)
+        if index >= 0:
+            bins[min(index, len(bins) - 1)] += tokens
+        return
+    for index in range(len(bins)):
+        start = since + index * hour
+        overlap = (min(start + hour, last) - max(start, first)).total_seconds()
+        if overlap > 0:
+            bins[index] += round(tokens * overlap / span)
+
+
+@router.get("/sessions/{session_id}/usage", response=SessionUsageOut)
+def session_usage(request, session_id: str, hours: int = 6):
+    """Tokens per hour for one chat over the last ``hours``, split into its own calls and its
+    workers' coding agents. Agents report per-request events when their transcript was
+    captured; otherwise a worker's running totals are spread evenly over its active span."""
+    session = visible_sessions(request.auth).filter(id=uuid_or_404(session_id)).first()
+    if session is None:
+        raise HttpError(404, "No such session")
+    hours = max(1, min(hours, 48))
+    hour = timedelta(hours=1)
+    until = timezone.now()
+    since = until - hours * hour
+    thread = [0] * hours
+    agents = [0] * hours
+
+    def slot(at) -> int:
+        return min(hours - 1, int((at - since) / hour))
+
+    fields = [field for _, field, _ in PARTS]
+    for row in StructuredCall.objects.filter(session=session, created_at__gte=since, created_at__lte=until).values_list(
+        "created_at", *fields
+    ):
+        thread[slot(row[0])] += sum(n or 0 for n in row[1:])
+
+    events = AgentUsageEvent.objects.filter(
+        session__thread_links__conversation=session, occurred_at__gte=since, occurred_at__lte=until
+    ).distinct()
+    for row in events.values_list("occurred_at", *AGENT_FIELDS):
+        agents[slot(row[0])] += sum(n or 0 for n in row[1:])
+    # Workers whose agent transcript was captured are counted by event above.
+    captured = set(
+        AgentUsageEvent.objects.filter(
+            session__thread_links__conversation=session, session__thread_links__worker__isnull=False
+        ).values_list("session__thread_links__worker", flat=True)
+    )
+    totals = AgentUsage.objects.filter(session=session, last_at__gte=since).exclude(worker__in=captured)
+    for usage in totals:
+        tokens = sum(getattr(usage, field) for field in AGENT_FIELDS)
+        _spread(agents, since, hour, usage.first_at, min(usage.last_at, until), tokens)
+
+    return {
+        "until": until.isoformat(),
+        "hours": [
+            {"start": (since + index * hour).isoformat(), "thread_tokens": thread[index], "agent_tokens": agents[index]}
+            for index in range(hours)
+        ],
+        "thread_tokens": sum(thread),
+        "agent_tokens": sum(agents),
     }
 
 

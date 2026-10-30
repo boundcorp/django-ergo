@@ -239,7 +239,15 @@ unscoped devbox drafts are not migrated because their owner is unknown.
   it moves focus into the drawer; Tab stays inside it and Escape or its
   backdrop closes it and returns focus to Menu.
 - **Chat**: the header shows the bot's name above the thread title (both
-  truncate). When the chat has a todo list (see
+  truncate). Beside the actions, a token sparkline has one bar per hour for
+  the last six (rolling, newest on the right). Each bar stacks the chat's own
+  calls (turns, compaction, titles) under the tokens its workers' coding
+  agents used, with totals for each underneath; hover a bar for its counts.
+  It refreshes on new messages and every minute, and sits in the phone sheet
+  on narrow screens. It reads `GET /api/sessions/{id}/usage?hours=6`. Agent
+  tokens come from per-request events when the worker's transcript was
+  captured, otherwise from the worker's running totals spread evenly over the
+  time it was active. When the chat has a todo list (see
   [Bots](bots.md#todo-lists)), a floating "Todo X/Y" button (done/total) sits
   beside Illustrate above the composer; it shows or hides the list, with each
   item and its status, at the bottom of the chat, and the browser remembers
