@@ -151,8 +151,11 @@ def deploy(ctx, release: str) -> str:
 Each poll is a fresh task, so nothing holds a process while it waits and a
 restart loses nothing. `ctx.state` persists between polls, `ctx.tell(text)`
 messages the chat mid-run, and `ctx.stopping` turns true when someone
-cancels it. Every chat has the `workers` skill to list, start and cancel
-workers. See [Workers](bots.md#workers).
+cancels it. Updates, questions, completion and failure notices are automated
+events attributed to `Worker: <title>`, not to the chat's owner. They still
+wake the bot for a follow-up; they do not grant human approval. Every chat
+has the `workers` skill to list, start and cancel workers.
+See [Workers](bots.md#workers).
 
 ## Toolkits
 

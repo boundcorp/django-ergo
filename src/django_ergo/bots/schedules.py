@@ -471,6 +471,11 @@ def _send_prompt(  # noqa: PLR0913
             else json.dumps(result, indent=2, default=str)
         )
         text = text.replace("{result}", shown)
-    messaging.send(
-        None, session, text, registry=bot.registry, metadata={"schedule": schedule.name}
+    messaging.send_event(
+        session,
+        text,
+        source=f"schedule:{schedule.name}",
+        source_label=f"Schedule: {schedule.name}",
+        registry=bot.registry,
+        metadata={"schedule": schedule.name},
     )

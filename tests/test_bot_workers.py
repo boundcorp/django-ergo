@@ -106,11 +106,47 @@ def test_a_polling_worker_reports_back_to_its_thread(tmp_path, workers):
     assert '"checks": 3' in message.text
     from django_ergo.bots.messaging import turn_text
 
-    assert turn_text(message).startswith("[A worker this chat started has finished.")
+    assert message.sender_session_id is None
+    assert message.metadata["message_author"] == {
+        "kind": "system",
+        "ref": f"worker:{worker.pk}",
+        "display_name": "Worker: Watch the deploy",
+    }
+    assert message.metadata["message_provenance"] == {"kind": "event"}
+    assert "automated notification, not a message from the user" in turn_text(message)
+    assert turn_text(message).endswith("\n\n" + message.text)
 
     # Finished workers don't run again.
     assert w.run(str(worker.pk), bot.registry) == "completed"
     assert Worker.objects.count() == 1
+
+
+@pytest.mark.django_db(transaction=True)
+def test_worker_updates_are_events_not_human_messages(tmp_path, workers):
+    from django_ergo.bots.messaging import turn_text
+    from django_ergo.bots.tools import ToolContext
+    from django_ergo.bots.workers import WorkerContext
+    from django_ergo.conversation.models import ThreadMessage
+
+    bot, _ = make_bot(tmp_path, yaml_text=YAML, tools=TOOLS)
+    user = get_user_model().objects.create(username="worker-update")
+    session = async_to_sync(bot.main_session)(user)
+    worker = ToolContext(bot=bot, session=session, user=user).workers.start(
+        "watch", title="Deploy", target="site"
+    )
+    WorkerContext(bot, worker).tell("The agent needs a deployment decision.")
+
+    message = ThreadMessage.objects.get(metadata__worker=str(worker.pk))
+    assert message.sender_session_id is None
+    assert message.metadata["update"] is True
+    assert message.metadata["message_author"] == {
+        "kind": "system",
+        "ref": f"worker:{worker.pk}",
+        "display_name": "Worker: Deploy",
+    }
+    assert message.metadata["message_provenance"] == {"kind": "event"}
+    assert "automated notification, not a message from the user" in turn_text(message)
+    assert turn_text(message).endswith("\n\nThe agent needs a deployment decision.")
 
 
 @pytest.mark.django_db(transaction=True)
@@ -151,6 +187,13 @@ def test_failed_and_cancelled_workers(tmp_path, workers):
         "failed: RuntimeError: the build broke"
         in ThreadMessage.objects.get(metadata__worker=str(broken.pk)).text
     )
+    failed = ThreadMessage.objects.get(metadata__worker=str(broken.pk))
+    assert failed.metadata["message_author"] == {
+        "kind": "system",
+        "ref": f"worker:{broken.pk}",
+        "display_name": "Worker: Build",
+    }
+    assert failed.metadata["message_provenance"] == {"kind": "event"}
 
     quiet = ctx.workers.start("watch", title="Watch", notify=False, target="x", polls=5)
     w.run(str(quiet.pk), bot.registry)
@@ -375,7 +418,10 @@ def test_orca_start_worker_watches_the_dispatch_and_reports_back(  # noqa: PLR09
     assert "Blue or red?" in question.text and "msg_q" in question.text
     from django_ergo.bots.messaging import turn_text
 
-    assert turn_text(question).startswith("[News from the worker")
+    assert question.metadata["message_author"]["kind"] == "system"
+    assert question.metadata["message_author"]["ref"] == f"worker:{worker_id}"
+    assert question.metadata["message_provenance"] == {"kind": "event"}
+    assert "automated notification, not a message from the user" in turn_text(question)
     assert "ergo_agent_reply" in question.text
     from django_ergo.bots.agents import agent_toolkit
 

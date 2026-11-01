@@ -206,9 +206,11 @@ names, read in each person's timezone (theirs, else the bot's, else
 a `ScheduleRun` row keeps each from running twice. Actions run in order: a
 `run` step calls the function and is recorded as a `BotJob` (status, result,
 error, traceback; the bot page lists recent ones), and a failing step stops
-the rest. A `prompt` step is sent to its chat like a message. The bot answers in a turn of its own under a `[Scheduled
-message: <name>]` header, the reply stays in that chat, and the telegram
-plugin passes it on for a main chat.
+the rest. A `prompt` step is queued as an automated event from
+`Schedule: <name>`, not as a message authored by the person who owns the chat.
+The bot answers in a turn of its own under an `[Event from Schedule: <name>:
+automated notification, not a message from the user. …]` header. The reply
+stays in that chat, and the Telegram plugin passes it on for a main chat.
 
 ## Skills
 
@@ -490,8 +492,10 @@ A **Worker** is long-running work a chat or thread started: a build, a data
 pull, a coding agent in Orca. The tool that starts it returns at once, the
 chat shows as busy (a spinner in the sidebar, a strip above the transcript
 with the worker's latest progress), and when the worker finishes its result
-comes back to the chat as a message, so the bot follows up with a reply
-(`django_ergo.bots.workers`, model `Worker`).
+comes back as an automated event from `Worker: <title>`, so the bot follows
+up with a reply (`django_ergo.bots.workers`, model `Worker`). The worker's
+updates, questions, completion and failure notices are not human-authored
+messages, even though they wake a turn in a person's chat.
 
 ```python
 @bot_task
@@ -1106,10 +1110,14 @@ longer wants and deletes its branch; it waits for approval like publishing.
 
 A published PR is recorded in the chat, and the host refreshes recorded PRs
 (Ergonaut every minute). With `watch_checks` (on by default), when the checks of one
-of the bot's own PRs finish, failing or passing, the chat gets a message that starts
-a turn: on a failure the bot reads the logs and pushes a fix to the same PR, and on a
-pass it tells the person the PR is ready. It hears again only when the result
-changes, such as after a fix is pushed.
+of the bot's own PRs finish, failing or passing, the chat gets an automated
+event from `GitHub` that starts a turn. Its source identity is `system` /
+`github`, with event provenance; it is not a new request or approval from
+the person. The event provides the check result and repository policy:
+on a failure the bot reads the logs and pushes a fix to the same PR, and
+on a pass it tells the person the PR is ready for review. A passing event
+does not authorize merging. It hears again only when the result changes,
+such as after a fix is pushed. Existing publish approvals still apply.
 
 With `run.commands`, `ergo_config_repo_run(command, args)` runs one of those
 commands in the draft, so the bot can test code it wrote before publishing

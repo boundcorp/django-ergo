@@ -514,6 +514,81 @@ def _texts(call):
 
 
 @pytest.mark.django_db(transaction=True)
+async def test_pr_checks_event_wakes_bot_without_impersonating_owner(
+    tmp_path, thread_messages, monkeypatch
+):
+    from types import SimpleNamespace
+
+    from django_ergo.bots import background
+    from django_ergo.conversation.history import SessionSource
+    from django_ergo.conversation.history import render_message
+    from django_ergo.conversation.history_search_toolkit import MessageHistoryToolkit
+    from django_ergo.conversation.links import announce_checks
+    from django_ergo.conversation.models import ConversationAttachment
+    from django_ergo.conversation.models import ThreadMessage
+
+    user = await User.objects.acreate(username="owner", first_name="Lee")
+    bot, engine = make_bot(tmp_path, say("Checks passed; ready for review."))
+    session = await bot.root_session(user)
+    monkeypatch.setattr(
+        background,
+        "find_bot",
+        lambda name: SimpleNamespace(
+            registry=None, plugin=lambda name: SimpleNamespace(watch_checks=True)
+        ),
+    )
+    pr = await ConversationAttachment.objects.acreate(
+        session=session,
+        filename="PR #152",
+        media_type="text/uri-list",
+        url="https://github.com/example/bots/pull/152",
+        metadata={
+            "repo": "example/bots",
+            "number": 152,
+            "checks": "passing",
+            "state": "open",
+            "branch": f"bot/{bot.name}/fix",
+        },
+    )
+    assert await sync_to_async(announce_checks)(pr)
+    queued = await ThreadMessage.objects.aget(recipient_session=session)
+    assert queued.metadata["message_author"] == {
+        "kind": "system",
+        "ref": "github",
+        "display_name": "GitHub",
+    }
+    assert queued.metadata["message_provenance"]["kind"] == "event"
+    await thread_messages()
+    await queued.arefresh_from_db()
+    assert queued.status == "answered"
+    stored = await session.messages.aget(sequence=0)
+    assert stored.author == queued.metadata["message_author"]
+    assert stored.provenance["kind"] == "event"
+    assert not await stored.content_blocks.filter(text__contains="[Event").aexists()
+    event_text = next(
+        text for text in _texts(engine._client.calls[0]) if "checks" in text.lower()
+    )
+    assert "[Event from GitHub:" in event_text
+    assert "not a message from the user" in event_text
+    assert "Lee" not in event_text
+    history = await sync_to_async(
+        lambda: SessionSource(session, include_attribution=False).messages()
+    )()
+    assert "EVENT" in render_message(history[0])
+    assert "GitHub" in render_message(history[0])
+    assert " USER]" not in render_message(history[0])
+    assert any(
+        "Checks passed; ready for review." in item.text() for item in history[1:]
+    )
+    toolkit = MessageHistoryToolkit([SessionSource(session, include_attribution=False)])
+    search = await sync_to_async(toolkit.execute_tool)(
+        "ergo_chat_history_search", {"query": "Checks passed on"}
+    )
+    assert "EVENT · GitHub]" in search
+    assert " USER]" not in search
+
+
+@pytest.mark.django_db(transaction=True)
 async def test_a_bot_delegates_to_a_new_thread_and_gets_the_reply(
     tmp_path, thread_messages
 ):
@@ -2710,16 +2785,12 @@ async def test_queued_legacy_forward_delivers_raw_text_and_structured_identity(
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize(
-    ("metadata", "display_name"),
-    [
-        ({"worker": "worker-1"}, "Worker"),
-        ({"schedule": "weekly-plan"}, "Scheduled message"),
-    ],
+    "metadata",
+    [{"worker": "worker-1"}, {"schedule": "weekly-plan"}],
 )
 async def test_senderless_system_thread_messages_are_not_human_authored(
-    tmp_path, thread_messages, metadata, display_name
+    tmp_path, thread_messages, metadata
 ):
-    from django_ergo.bots import messaging
     from django_ergo.conversation.models import ThreadMessage
 
     user = await User.objects.acreate(username="system-owner")
@@ -2728,14 +2799,17 @@ async def test_senderless_system_thread_messages_are_not_human_authored(
     message = await ThreadMessage.objects.acreate(
         recipient_session=root, text="System result.", metadata=metadata
     )
-    expected = await sync_to_async(messaging.turn_text)(message)
     SENT.append(str(message.id))
     await thread_messages()
     incoming = await root.messages.aget(sequence=0)
     assert incoming.author["kind"] == "system"
-    assert incoming.author["display_name"] == display_name
+    assert incoming.provenance["kind"] == "event"
+    body = await incoming.content_blocks.aget(block_type="text")
+    assert body.text == "System result."
     sent = engine._client.calls[0]["messages"][0]["content"][1]["text"]
-    assert unstamped(sent) == expected
+    assert "[Event from " in sent
+    assert "not a message from the user" in sent
+    assert sent.endswith("System result.")
 
 
 @pytest.mark.django_db(transaction=True)

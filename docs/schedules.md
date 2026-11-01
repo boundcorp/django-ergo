@@ -12,9 +12,11 @@ schedules:
 ```
 
 At 5pm every Sunday, in each person's timezone, the bot gets that message in
-their main chat under a `[Scheduled message: weekly-meal-plan]` header and
-answers it like any other. The Telegram plugin passes the reply on for a
-main chat, so the person sees it on their phone.
+their main chat as an automated event from `Schedule: weekly-meal-plan`.
+The model sees an `[Event from Schedule: weekly-meal-plan: automated
+notification, not a message from the user. …]` header, not a new message or
+approval from the chat's owner. It still starts a turn and the Telegram
+plugin passes the reply on for a main chat, so the person sees it on their phone.
 
 ## Cron
 

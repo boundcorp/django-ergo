@@ -90,10 +90,11 @@ class WorkerContext:
         the work is waiting on. The worker keeps running."""
         from django_ergo.bots import messaging
 
-        messaging.send(
-            None,
+        messaging.send_event(
             self.session,
             text,
+            source=f"worker:{self.worker.pk}",
+            source_label=f"Worker: {self.worker.title}",
             registry=self.bot.registry,
             metadata={
                 "worker": str(self.worker.pk),
@@ -451,10 +452,11 @@ def _finish(worker: Worker, status: str, result: Any, error: str) -> None:
         registry = find_bot(worker.bot_name).registry
     except LookupError:
         registry = None
-    messaging.send(
-        None,
+    messaging.send_event(
         worker.session,
         text,
+        source=f"worker:{worker.pk}",
+        source_label=f"Worker: {worker.title}",
         registry=registry,
         metadata={"worker": str(worker.pk), "worker_title": worker.title},
     )

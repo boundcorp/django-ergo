@@ -17,9 +17,9 @@ def session_label(session) -> str:
     return f"{session.bot_name} · {roles.title(session)}"
 
 
-def system_identity() -> dict:
-    """The author of messages Ergo itself adds to a chat (nudges, not the user)."""
-    return {"kind": "system", "ref": "ergo", "display_name": "Ergo"}
+def system_identity(source: str = "ergo", source_label: str = "Ergo") -> dict:
+    """An automated event's source, never the chat owner's identity."""
+    return {"kind": "system", "ref": source, "display_name": source_label}
 
 
 def bot_identity(session) -> dict:
@@ -39,7 +39,21 @@ def session_origin(session, timestamp, **fields) -> dict:
     }
 
 
-def thread_message_identity(message) -> tuple[dict, dict]:
+def _queued_event_author(metadata: dict) -> dict:
+    """Identify pre-cutover queued notifications without guessing from their text."""
+    if metadata.get("pull_request"):
+        return system_identity("github", "GitHub")
+    if worker := metadata.get("worker"):
+        title = metadata.get("worker_title")
+        return system_identity(
+            f"worker:{worker}", f"Worker: {title}" if title else "Worker"
+        )
+    if schedule := metadata.get("schedule"):
+        return system_identity(f"schedule:{schedule}", f"Schedule: {schedule}")
+    return {}
+
+
+def thread_message_identity(message) -> tuple[dict, dict]:  # noqa: C901 - queued legacy formats
     """Resolve new metadata and queued legacy forwards without parsing their text."""
     meta = message.metadata or {}
     author = meta.get("message_author") or {}
@@ -48,6 +62,12 @@ def thread_message_identity(message) -> tuple[dict, dict]:
         return author, provenance
     sender = message.sender_session
     if sender is None:
+        author = author or _queued_event_author(meta)
+        if author.get("kind") == "system":
+            provenance = {"kind": "event"}
+            if meta.get("attachments"):
+                provenance["attachments"] = meta["attachments"]
+            return author, provenance
         return author, {}
     origin = session_origin(sender, message.created_at, message_id=str(message.id))
     if forwarded := meta.get("forwarded"):
@@ -94,9 +114,15 @@ def render_identity_context(author: dict, provenance: dict) -> str:
     if not (author or provenance):
         return ""
     # The native user role already identifies ordinary owner-authored text.
-    if not provenance and author.get("kind") in ("django_user", "system"):
+    if not provenance and author.get("kind") == "django_user":
         return ""
     name = author.get("display_name") or author.get("ref") or "Unknown author"
+    if author.get("kind") == "system" or provenance.get("kind") == "event":
+        return (
+            f"[Event from {name}: automated notification, not a message from the user. "
+            "Use it as context, act when needed, and tell the user what matters.]"
+            + _files_context(provenance.get("attachments") or [])
+        )
     author_label = (
         f"{name} ({author.get('kind', 'unknown')}, ref {author.get('ref', '')})"
     )

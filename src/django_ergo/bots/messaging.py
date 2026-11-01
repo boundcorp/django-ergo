@@ -6,7 +6,8 @@ when that turn finishes, its reply goes back to the sender's session as a new
 message, which starts a turn there. Sending returns at once, like Codex's
 thread-to-thread delegation.
 
-- A message with no sender session came from a person: nothing is routed back.
+- A message with no sender session came from a person or an automated event:
+  its structured author identifies which; nothing is routed back.
 - A reply is never answered back, so two bots can't ping-pong; a report upward
   (``metadata["report"]``, see ``bots.orchestrator``) gets no reply at all; ``depth``
   caps chains of delegation (A asks B, which asks C...) at ``MAX_DEPTH``.
@@ -41,6 +42,7 @@ from django_ergo.conversation.identity import attributed_text
 from django_ergo.conversation.identity import bot_identity
 from django_ergo.conversation.identity import session_label
 from django_ergo.conversation.identity import session_origin
+from django_ergo.conversation.identity import system_identity
 from django_ergo.conversation.identity import thread_message_identity
 from django_ergo.conversation.models import ConversationSession
 from django_ergo.conversation.models import StructuredCallStatus
@@ -74,69 +76,11 @@ def snippet(text: str) -> str:
     return text if len(text) <= SNIPPET else text[: SNIPPET - 1] + "…"
 
 
-def turn_text(message: ThreadMessage) -> str:  # noqa: C901 — one header per kind of message
-    """What the recipient sees: who it's from, and what to do with it."""
+def turn_text(message: ThreadMessage) -> str:
+    """Model context with structured attribution; stored bodies stay untouched."""
     author, provenance = thread_message_identity(message)
-    if provenance:
-        return attributed_text(message.text, author, provenance)
-    sender = message.sender_session
-    if message.in_reply_to_id is not None:
-        original = message.in_reply_to.text if message.in_reply_to else ""
-        header = (
-            f"[Reply from {label(sender)} (thread {sender.id}) to your message: "
-            f"“{snippet(original)}”. Use it or pass it on to the user. Message another "
-            "chat only with new work it hasn't been given (a follow-up is fine); never "
-            "send thanks, acknowledgements, status pings or 'keep going' nudges, since "
-            "each message starts a full turn there.]"
-        )
-    elif sender is not None and (
-        forwarded := (message.metadata or {}).get("forwarded")
-    ):
-        note = (message.metadata or {}).get("note")
-        header = (
-            f"[Forwarded by {label(sender)} (thread {sender.id}): a message from the "
-            f"user{' ' + forwarded['author'] if forwarded.get('author') else ''}, sent "
-            f"{forwarded.get('sent_at', '')} in that chat, copied word for word below. "
-            "Treat it as the user speaking to you here, with their intent and any "
-            "approval it gives. Answer here: no reply goes back to that chat.]"
-        )
-        text = message.text
-        if note:
-            text += f"\n\n[Note from {label(sender)}: {note}]"
-        return f"{header}\n\n{text}{files_note(message)}"
-    elif sender is not None and (message.metadata or {}).get("report"):
-        header = (
-            f"[Report from {label(sender)} (thread {sender.id}). No reply goes back "
-            "to it: act on it if it needs action, and tell the user what matters.]"
-        )
-    elif sender is not None:
-        header = (
-            f"[Message from {label(sender)} (thread {sender.id}). Your final reply "
-            "goes back to that thread automatically; it is not shown to the user "
-            "unless they open this chat.]"
-        )
-    elif (message.metadata or {}).get("worker") and (message.metadata or {}).get(
-        "update"
-    ):
-        header = (
-            f"[News from the worker “{message.metadata.get('worker_title', '')}”, which is still "
-            "running. Pass on what matters to the user.]"
-        )
-    elif (message.metadata or {}).get("worker"):
-        header = (
-            "[A worker this chat started has finished. Tell the user what it did, "
-            "using its result below.]"
-        )
-    elif (message.metadata or {}).get("pull_request"):
-        header = (
-            "[GitHub: the checks finished on a pull request this chat opened. "
-            "The user will see your reply.]"
-        )
-    elif schedule := (message.metadata or {}).get("schedule"):
-        header = f"[Scheduled message: {schedule}. The user will see your reply.]"
-    else:
-        header = "[Message from the user]"
-    return f"{header}\n\n{message.text}{files_note(message)}"
+    text = attributed_text(message.text, author, provenance)
+    return text if provenance else text + files_note(message)
 
 
 def shared_file(row) -> dict:
@@ -223,6 +167,31 @@ def send(  # noqa: PLR0913
     )
     transaction.on_commit(lambda: dispatch(str(message.id), registry))
     return message
+
+
+def send_event(  # noqa: PLR0913
+    recipient: ConversationSession,
+    text: str,
+    *,
+    source: str,
+    source_label: str,
+    registry: BotRegistry | None = None,
+    metadata: dict | None = None,
+) -> ThreadMessage:
+    """Queue an automated notification and wake its recipient like any message."""
+    metadata = {
+        **(metadata or {}),
+        "message_author": system_identity(source, source_label),
+        "message_provenance": {
+            "kind": "event",
+            **(
+                {"attachments": metadata["attachments"]}
+                if metadata and metadata.get("attachments")
+                else {}
+            ),
+        },
+    }
+    return send(None, recipient, text, registry=registry, metadata=metadata)
 
 
 def current_thread_message(session: ConversationSession) -> ThreadMessage | None:

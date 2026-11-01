@@ -201,6 +201,33 @@ outside service, once `DJANGO_ERGO["BOT_WEBHOOK_BASE_URL"]` is set
 `django_ergo.bots.urls` and call `django_ergo.bots.webhooks.set_registry(...)`
 at startup; see [the reference](bots.md#webhooks).
 
+An automated webhook notification is not a human channel message. Queue it
+through `messaging.send_event`, rather than calling `bot.ask` with the
+chat owner's default identity:
+
+```python
+from asgiref.sync import sync_to_async
+from django_ergo.bots import messaging
+
+await sync_to_async(messaging.send_event)(
+    session,
+    "Checks failed for the watched pull request.",
+    source="github",
+    source_label="GitHub",
+    registry=self.bot.registry,
+    metadata={"pull_request": pull_request_url, "checks": "failing"},
+)
+```
+
+The source is stored as a `system` author and `event` provenance, while the
+body stays unchanged. The model sees an `[Event from GitHub: automated
+notification, not a message from the user. …]` header. Events use the same
+queue and wake-up behavior as delegated messages, but do not impersonate
+the person or authorize actions that require their approval. Keep genuine
+human channel input on `bot.ask` (with its actual author), and bot-to-bot
+messages and reports on `messaging.send(sender_session, ...)` so their
+reply/report routing and bot attribution remain intact.
+
 ## Workers
 
 For long-running work started by a tool (a deploy, a coding agent),

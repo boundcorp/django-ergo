@@ -1266,17 +1266,6 @@ class Bot:
             if provenance:
                 message = thread_message.text
                 metadata["message_provenance"] = provenance
-            elif (thread_message.metadata or {}).get("worker") or (
-                thread_message.metadata or {}
-            ).get("schedule"):
-                meta = thread_message.metadata or {}
-                author = {
-                    "kind": "system",
-                    "ref": str(meta.get("worker") or meta.get("schedule") or ""),
-                    "display_name": "Worker"
-                    if meta.get("worker")
-                    else "Scheduled message",
-                }
             else:
                 message = thread_message.text
                 author = author or None

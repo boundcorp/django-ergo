@@ -169,13 +169,33 @@ def test_finished_checks_wake_the_bot_on_its_own_pr(monkeypatch):
     assert recipient == session
     assert "Checks failed on boundcorp/ergo-bots#135" in text
     assert "ergo_config_repo_checkout_pr(135)" in text
-    assert kw["metadata"] == {"pull_request": mine.url, "checks": "failing"}
+    assert kw["metadata"] == {
+        "pull_request": mine.url,
+        "checks": "failing",
+        "message_author": {
+            "kind": "system",
+            "ref": "github",
+            "display_name": "GitHub",
+        },
+        "message_provenance": {"kind": "event"},
+    }
+    assert "check-remediation policy" in text
+    assert "to the same PR, not open another" in text
+    assert "Tell the user" not in text
     links.refresh_pull_request(mine)
     assert len(sent) == 1  # still failing: said once
 
     rollup = [{"conclusion": "SUCCESS"}]
     links.refresh_pull_request(mine)
     assert "Checks passed" in sent[-1][1]
+    assert sent[-1][2]["metadata"]["message_author"] == {
+        "kind": "system",
+        "ref": "github",
+        "display_name": "GitHub",
+    }
+    assert sent[-1][2]["metadata"]["message_provenance"] == {"kind": "event"}
+    assert "does not request or authorize merging" in sent[-1][1]
+    assert "Tell the user" not in sent[-1][1]
 
     rollup = [{"conclusion": "FAILURE"}]
     plugin.watch_checks = False

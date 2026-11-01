@@ -191,21 +191,25 @@ def announce_checks(row: ConversationAttachment) -> bool:
     number, name = meta.get("number"), f"{meta.get('repo', '')}#{meta.get('number')}"
     if checks == "failing":
         text = (
-            f"Checks failed on {name} ({row.url}), a pull request you opened. Read the "
-            f"failures with ergo_config_repo_pr_status({number}). To fix them, "
-            f"ergo_config_repo_checkout_pr({number}), change the files and "
-            "ergo_config_repo_publish: that pushes to the same PR, so don't open "
-            "another. Tell the user what failed and what you did."
+            f"Checks failed on {name} ({row.url}), a pull request opened by this bot. "
+            "Repository check-remediation policy: inspect the failures with "
+            f"ergo_config_repo_pr_status({number}); check out the existing PR with "
+            f"ergo_config_repo_checkout_pr({number}), fix the files and use "
+            "ergo_config_repo_publish to push to the same PR, not open another. "
+            "The user-facing follow-up should summarize the failure and remediation."
         )
     else:
         text = (
-            f"Checks passed on {name} ({row.url}), a pull request you opened. Tell the "
-            "user, in a line, that it's ready to review and merge."
+            f"Checks passed on {name} ({row.url}), a pull request opened by this bot. "
+            "Repository notification policy: the user-facing follow-up should briefly "
+            "report that checks passed and the PR is ready for review; this event "
+            "does not request or authorize merging."
         )
-    messaging.send(
-        None,
+    messaging.send_event(
         row.session,
         text,
+        source="github",
+        source_label="GitHub",
         registry=bot.registry,
         metadata={"pull_request": row.url, "checks": checks},
     )
