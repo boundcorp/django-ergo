@@ -26,6 +26,16 @@ ENVIRONMENT = os.environ.get("APP_ENV", Environments.DEVELOPMENT).lower()
 BACKEND_PORT = int(os.environ.get("DEVELOP_BACKEND_PORT", 8000))
 INGRESS_PORT = int(os.environ.get("DEVELOP_INGRESS_PORT", 8888))
 DEBUG = os.environ.get("DJANGO_DEBUG", "") == "true"
+
+# Composer voice transcription is opt-in and uses the existing OpenAI key.
+VOICE_TRANSCRIPTION_ENABLED = env_variable_truthy("VOICE_TRANSCRIPTION_ENABLED")
+VOICE_TRANSCRIPTION_PROVIDER = os.environ.get("VOICE_TRANSCRIPTION_PROVIDER", "openai")
+VOICE_TRANSCRIPTION_MODEL = os.environ.get("VOICE_TRANSCRIPTION_MODEL", "whisper-1")
+VOICE_TRANSCRIPTION_MAX_DURATION = int(os.environ.get("VOICE_TRANSCRIPTION_MAX_DURATION", "120"))
+VOICE_TRANSCRIPTION_MAX_BYTES = int(os.environ.get("VOICE_TRANSCRIPTION_MAX_BYTES", str(10 * 1024 * 1024)))
+VOICE_TRANSCRIPTION_TIMEOUT = float(os.environ.get("VOICE_TRANSCRIPTION_TIMEOUT", "30"))
+VOICE_TRANSCRIPTION_PER_MINUTE = int(os.environ.get("VOICE_TRANSCRIPTION_PER_MINUTE", "5"))
+VOICE_TRANSCRIPTION_PER_DAY = int(os.environ.get("VOICE_TRANSCRIPTION_PER_DAY", "100"))
 ROOT_URLCONF = "ergonaut.settings.urls"
 
 

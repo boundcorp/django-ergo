@@ -95,17 +95,29 @@ class Attachment:
         )
 
 
-async def openai_transcriber(data: bytes, media_type: str, filename: str) -> str:
-    """Transcribe audio with OpenAI's transcription API (whisper-1)."""
+async def openai_transcriber(
+    data: bytes,
+    media_type: str,
+    filename: str,
+    *,
+    model: str = "whisper-1",
+    request_timeout: float | None = None,
+) -> str:
+    """Transcribe audio with OpenAI's transcription API."""
     import openai
 
     # AsyncOpenAI() falls back to OPENAI_BASE_URL: refuse a private endpoint.
     what = "The audio transcriber"
     assert_public_endpoint(effective_openai_base_url(), what=what)
-    client = openai.AsyncOpenAI()
+    options = (
+        {"timeout": request_timeout, "max_retries": 0}
+        if request_timeout is not None
+        else {}
+    )
+    client = openai.AsyncOpenAI(**options)
     assert_public_endpoint(getattr(client, "base_url", None), what=what)
     response = await client.audio.transcriptions.create(
-        model="whisper-1",
+        model=model,
         file=(filename or "audio", data, media_type),
     )
     return response.text

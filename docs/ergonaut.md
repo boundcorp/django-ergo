@@ -14,6 +14,40 @@ click an “Earlier messages summarized” divider to read an older summary.
 Older replies made before context recording have no Context button. See
 [Session compaction](compaction.md) for policy keys and migration rollout.
 
+## Voice input
+
+In an existing chat, the microphone records only after you press it. Stop
+transcribes the recording into the editable draft; it never sends a message.
+Cancel or Escape discards it. A recording stops automatically at the configured
+duration. The browser needs a secure context, microphone permission and
+MediaRecorder support. The control is unavailable until voice transcription is
+enabled and an OpenAI API key is configured.
+
+Audio is sent to the Ergonaut server and then to OpenAI, including from private
+pool chats; do not record material that must remain in a private inference pool.
+Ergonaut does not create a chat attachment or message for the recording.
+Django may use a temporary upload file, which is closed after the request.
+Retries keep the audio in browser memory until dismissed or the chat is left.
+Transcription is not included in Ergonaut's token-based cost reports. OpenAI
+lists `whisper-1` at $0.006 per minute and marks it deprecated; check
+[model pricing](https://developers.openai.com/api/docs/models/whisper-1) and
+availability before use. A different configured model has its own pricing.
+
+Enable with `VOICE_TRANSCRIPTION_ENABLED=true` and `OPENAI_API_KEY`. The
+server requires `ffprobe` to inspect recordings. Limits are per user in fixed
+UTC windows and count attempts, including failed ones. Settings:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `VOICE_TRANSCRIPTION_ENABLED` | `false` | Enable the chat microphone |
+| `VOICE_TRANSCRIPTION_PROVIDER` | `openai` | Transcription provider |
+| `VOICE_TRANSCRIPTION_MODEL` | `whisper-1` | OpenAI transcription model |
+| `VOICE_TRANSCRIPTION_MAX_DURATION` | `120` | Maximum recording duration in seconds |
+| `VOICE_TRANSCRIPTION_MAX_BYTES` | `10485760` | Maximum uploaded bytes |
+| `VOICE_TRANSCRIPTION_TIMEOUT` | `30` | Provider timeout in seconds |
+| `VOICE_TRANSCRIPTION_PER_MINUTE` | `5` | Attempts per user per minute |
+| `VOICE_TRANSCRIPTION_PER_DAY` | `100` | Attempts per user per UTC day |
+
 ## Illustrations in chat
 
 The **Illustrate** action above a chat composer creates an immutable, static
