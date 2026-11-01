@@ -14,6 +14,13 @@ click an “Earlier messages summarized” divider to read an older summary.
 Older replies made before context recording have no Context button. See
 [Session compaction](compaction.md) for policy keys and migration rollout.
 
+Automated input appears as a source-labeled **Event** notification rather than
+the chat owner's message: GitHub checks, worker questions/results and scheduled
+prompts still start bot turns. **Resume** also records an Ergo event when it
+continues a failed turn; it does not invent a message written by the user.
+Event bodies remain separate from generated model attribution, and the API/SSE
+carry their system author and event provenance.
+
 ## Voice input
 
 In an existing chat, the microphone records only after you press it. Stop

@@ -203,6 +203,43 @@ def test_structured_snapshots_survive_missing_sender_relation():
     assert thread_message_identity(message) == (AUTHOR, PROVENANCE)
 
 
+@pytest.mark.parametrize(
+    "render", [claude_message_dict, lambda message: openai_message_dicts(message)[0]]
+)
+@pytest.mark.parametrize("provenance", [{}, {"kind": "event"}])
+def test_system_events_are_never_presented_as_human_in_provider_input(
+    render, provenance
+):
+    author = {"kind": "system", "ref": "github", "display_name": "GitHub"}
+    message = row("Checks passed on example/bots#152.", author, provenance)
+    native = render(message)
+    text = native["content"]
+    if isinstance(text, list):
+        text = text[0]["text"]
+    assert native["role"] == "user"  # Provider slot, not author identity.
+    assert "[Event from GitHub:" in text
+    assert "not a message from the user" in text
+    assert text.endswith("Checks passed on example/bots#152.")
+    assert message.content_blocks.all()[0].text == "Checks passed on example/bots#152."
+
+
+@pytest.mark.parametrize(
+    ("metadata", "source"),
+    [
+        ({"pull_request": "https://github.com/example/bots/pull/152"}, "github"),
+        ({"worker": "worker-id", "worker_title": "Build"}, "worker:worker-id"),
+        ({"schedule": "morning"}, "schedule:morning"),
+    ],
+)
+def test_already_queued_automated_notifications_resolve_as_events(metadata, source):
+    author, provenance = thread_message_identity(
+        SimpleNamespace(sender_session=None, metadata=metadata)
+    )
+    assert author["kind"] == "system"
+    assert author["ref"] == source
+    assert provenance["kind"] == "event"
+
+
 @pytest.mark.django_db(transaction=True)
 async def test_storage_history_and_tool_rows_keep_identity_separate():
     user = await get_user_model().objects.acreate(

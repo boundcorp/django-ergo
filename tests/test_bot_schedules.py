@@ -134,7 +134,15 @@ def test_run_due_sends_each_schedule_once(tmp_path, settings):
     assert schedules.run_due([bot], sunday_5pm) == []  # once per minute
     sent = ThreadMessage.objects.get()
     assert sent.sender_session_id is None
-    assert sent.metadata == {"schedule": "weekly-plan"}
+    assert sent.metadata == {
+        "schedule": "weekly-plan",
+        "message_author": {
+            "kind": "system",
+            "ref": "schedule:weekly-plan",
+            "display_name": "Schedule: weekly-plan",
+        },
+        "message_provenance": {"kind": "event"},
+    }
     assert sent.recipient_session.metadata["bot_role"] == "main"
 
     saturday_9am = datetime(2026, 10, 3, 9, 0, tzinfo=LA).astimezone(UTC)
@@ -145,7 +153,8 @@ def test_run_due_sends_each_schedule_once(tmp_path, settings):
 
     from django_ergo.bots.messaging import turn_text
 
-    assert turn_text(sent).startswith("[Scheduled message: weekly-plan.")
+    assert "automated notification, not a message from the user" in turn_text(sent)
+    assert turn_text(sent).endswith("\n\nPlan next week's dinners.")
 
 
 def test_schedule_targets_and_thread_titles():

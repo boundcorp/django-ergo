@@ -427,7 +427,7 @@ function authorLabel(message: Message): string {
 /** Structured attribution is presentation data, never part of the verbatim message body. */
 function AttributedMessage({ message }: { message: Message }) {
   const provenance = message.provenance!
-  const origin = provenance.origin
+  const origin = provenance.origin!
   const forwarder = provenance.forwarded_by
   return (
     <div className="min-w-0 max-w-[85%] self-start rounded-card border border-teal/40 bg-teal-tint px-4 py-3 text-sm text-ink">
@@ -485,6 +485,30 @@ function AttributedMessage({ message }: { message: Message }) {
   )
 }
 
+/** Automated input is not a human message, even when its provider role is user. */
+function EventMessage({ message }: { message: Message }) {
+  const author = message.author
+  const source = author?.kind === 'system' ? author.display_name || author.ref : 'System'
+  return (
+    <aside
+      aria-label={`Automated event from ${source}`}
+      className="min-w-0 max-w-[85%] self-start rounded-card border border-stroke border-dashed bg-surface px-4 py-3 text-sm text-ink"
+    >
+      <RoleLabel who={`${source} · Event`} timestamp={message.timestamp} line={message.line} />
+      <div className="mb-2 text-xs text-muted">Automated notification, not a message from the user.</div>
+      <div className="min-w-0 break-words">
+        {message.blocks.map((block, i) =>
+          block.type === 'text' ? (
+            <Markdown key={i} text={block.text} />
+          ) : block.type === 'attachment' ? (
+            <AttachmentView key={i} id={block.id} label={block.label} image={block.kind === 'image'} />
+          ) : null,
+        )}
+      </div>
+    </aside>
+  )
+}
+
 function MessageView({
   message,
   results,
@@ -498,6 +522,8 @@ function MessageView({
 }) {
   const [showContext, setShowContext] = useState(false)
   const { hidden, rows } = useContext(FoldContext)
+  if (message.author?.kind === 'system' || message.provenance?.kind === 'event')
+    return <EventMessage message={message} />
   if (message.provenance?.kind && message.provenance.origin) return <AttributedMessage message={message} />
   const user = message.role === 'user'
   const parts = message.blocks.filter(

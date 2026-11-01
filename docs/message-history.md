@@ -22,6 +22,15 @@ Each `HistoryMessage` has `source_id`, `line`, `timestamp` (timezone-aware),
 Text injected by the CLI (environment context, slash-command output, system
 reminders) becomes a `context` block rather than user text.
 
+Database messages also carry `author` and `provenance` snapshots. Automated
+notifications use `author.kind = "system"` with a stable source `ref` and display
+name, plus `provenance.kind = "event"`. Their provider transport role may remain
+`user`, but history reads and search results label them `EVENT · GitHub` (or the
+source name), not `USER`. Ergonaut renders a separate event card; model input
+gets an explicit `[Event from …]` attribution without changing the stored body.
+`SessionSource(session, include_attribution=False)` omits generated model
+instructions but preserves these identity snapshots and event labels.
+
 ## Granularity
 
 | Level | Shows |

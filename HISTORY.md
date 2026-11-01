@@ -11,6 +11,16 @@ This document tracks the major milestones and evolution of the Django Ergo proje
   validates and limits uploads and uses the deployment's OpenAI credential.
   Audio is sent to OpenAI, including for private-pool chats; transcription
   costs are not included in token-based reports. See [Ergonaut](docs/ergonaut.md#voice-input).
+### System event messages (November 2026)
+
+- PR-check notifications, worker updates/results, scheduled prompts and
+  Ergonaut's Resume notifications have system source identities rather than
+  impersonating the chat owner. `messaging.send_event` uses the existing durable
+  queue and wakes the bot normally; bot-to-bot reports and real human messages
+  retain their original attribution.
+- Provider input explicitly labels events; chat cards and history reads/search
+  show their event source. Existing author/provenance JSON fields hold the
+  distinction, so no schema migration is required.
 
 ### Private inference pools (October 2026)
 

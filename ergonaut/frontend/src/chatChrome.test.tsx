@@ -149,6 +149,85 @@ describe('structured message attribution', () => {
     expect(html).not.toContain('Forwarding note')
   })
 
+  test('separates GitHub events from Lee’s messages and keeps event bodies and attachments', () => {
+    const html = renderToStaticMarkup(
+      createElement(
+        MemoryRouter,
+        null,
+        createElement(Transcript, {
+          calls: [],
+          messages: [
+            {
+              line: 0,
+              role: 'user',
+              timestamp: null,
+              author: { kind: 'django_user', ref: 'lee', display_name: 'Lee' },
+              blocks: [{ type: 'text', text: 'Please review my pull request.' }],
+            },
+            {
+              line: 1,
+              role: 'user',
+              timestamp: null,
+              author: { kind: 'system', ref: 'github', display_name: 'GitHub' },
+              provenance: { kind: 'event' },
+              blocks: [
+                { type: 'text', text: '**Pull request updated**' },
+                { type: 'attachment', id: 'event-file', label: 'check-log.txt' },
+              ],
+            },
+          ],
+        }),
+      ),
+    )
+    const event = html.match(/<aside\b[^>]*>[\s\S]*?<\/aside>/)?.[0]
+    expect(event).toBeDefined()
+    expect(event!).toContain('aria-label="Automated event from GitHub"')
+    expect(event!).toContain('GitHub · Event')
+    expect(event!).toContain('Automated notification, not a message from the user.')
+    expect(event!).toContain('<strong>Pull request updated</strong>')
+    expect(event!).toContain('check-log.txt')
+    expect(event!).toContain('event-file')
+    expect(event!).not.toContain('Lee')
+    expect(event!).not.toContain('>You')
+    expect(html.replace(event!, '')).toContain('>Lee<')
+    expect(html.replace(event!, '')).toContain('Please review my pull request.')
+  })
+
+  test.each([
+    { author: { kind: 'system', ref: 'github', display_name: 'GitHub' } },
+    { provenance: { kind: 'event' } },
+    {
+      author: { kind: 'django_user', ref: 'lee', display_name: 'Lee' },
+      provenance: { kind: 'event' },
+    },
+  ] satisfies Partial<Message>[])('recognizes event identity independently of its user role: %j', identity => {
+    const html = transcript({
+      line: 0,
+      role: 'user',
+      timestamp: null,
+      blocks: [{ type: 'text', text: 'Automated update' }],
+      ...identity,
+    })
+    expect(html).toContain('<aside')
+    expect(html).toContain(' · Event')
+    expect(html).not.toContain('>You')
+    expect(html).not.toContain('Lee')
+  })
+
+  test('keeps real Telegram messages attributed to the human, not an event', () => {
+    const html = transcript({
+      line: 0,
+      role: 'user',
+      timestamp: null,
+      author: { kind: 'telegram_user', ref: '123', display_name: 'Lee' },
+      blocks: [{ type: 'text', text: 'I sent this from Telegram.' }],
+    })
+    expect(html).toContain('Lee · Telegram')
+    expect(html).toContain('/api/authors/telegram_user/123/avatar')
+    expect(html).not.toContain('<aside')
+    expect(html).not.toContain(' · Event')
+  })
+
   test('keeps ordinary and legacy messages unchanged', () => {
     expect(transcript({ line: 0, role: 'user', timestamp: null, blocks: [{ type: 'text', text: 'Hello' }] })).toContain(
       'You',

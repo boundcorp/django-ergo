@@ -1344,8 +1344,14 @@ async def resume_session(request, session_id: str, model: str = ""):
             raise HttpError(400, str(e)) from e
     last.metadata = {**(last.metadata or {}), "dismissed": True, "resumed": True}
     await last.asave(update_fields=["metadata", "updated_at"])
-    queued = await sync_to_async(queue_message)(session.id, RESUME_NOTE.format(why=why))
-    return await sync_to_async(latest_turn)(session, queued=queued)
+    event = await sync_to_async(messaging.send_event)(
+        session,
+        RESUME_NOTE.format(why=why),
+        source="ergo",
+        source_label="Ergo",
+    )
+    await event.arefresh_from_db()
+    return await sync_to_async(latest_turn)(session, queued=event.status in ("queued", "delivered", "waiting"))
 
 
 @router.post("/calls/{call_id}/dismiss", response=CallOut)

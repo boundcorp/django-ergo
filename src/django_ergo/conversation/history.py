@@ -86,6 +86,15 @@ class HistoryMessage:
         """All content, at full detail, for search."""
         return render_body(self, Granularity.FULL)
 
+    def role_label(self) -> str:
+        if (
+            self.author.get("kind") == "system"
+            or self.provenance.get("kind") == "event"
+        ):
+            source = self.author.get("display_name") or self.author.get("ref") or "Ergo"
+            return f"EVENT · {source}"
+        return self.role.upper()
+
 
 @dataclass
 class SourceInfo:
@@ -224,7 +233,7 @@ def render_message(
         message.timestamp.isoformat(timespec="seconds") if message.timestamp else "-"
     )
     source = f"{message.source_id} " if include_source else ""
-    header = f"[{source}L{message.line} {stamp} {message.role.upper()}]"
+    header = f"[{source}L{message.line} {stamp} {message.role_label()}]"
     return f"{header} {render_body(message, granularity)}"
 
 

@@ -478,7 +478,7 @@ class MessageHistoryToolkit(Toolkit):
             )
             lines.append(
                 f"[{message.source_id} L{message.line} {stamp} "
-                f"{message.role.upper()}] {prefix}{snippet}"
+                f"{message.role_label()}] {prefix}{snippet}"
             )
         more = len(hits) - len(lines)
         if more > 0:

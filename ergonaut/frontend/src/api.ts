@@ -183,9 +183,9 @@ export type MessageIdentity = {
   display_name: string
 }
 export type MessageProvenance = {
-  kind: 'forwarded' | 'message' | 'report' | 'reply'
+  kind: 'forwarded' | 'message' | 'report' | 'reply' | 'event'
   forwarded_by?: MessageIdentity & { session_id?: string; label?: string }
-  origin: {
+  origin?: {
     session_id: string
     label: string
     message_id?: string

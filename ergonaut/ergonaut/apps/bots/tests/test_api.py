@@ -66,6 +66,13 @@ def post(client, url, data=None):
     return client.post(url, json.dumps(data or {}), content_type="application/json")
 
 
+@pytest.fixture
+def immediate_events(settings):
+    from ergonaut.apps.bots.tasks import deliver_locked
+
+    settings.DJANGO_ERGO = {**settings.DJANGO_ERGO, "THREAD_MESSAGE_RUNNER": deliver_locked}
+
+
 @pytest.mark.django_db(transaction=True)
 def test_login_required(client):
     assert client.get("/api/bots").status_code == 401
@@ -1094,7 +1101,7 @@ def test_chats_pick_an_effort_that_reaches_the_engine(client, cook, use_bots):
 
 
 @pytest.mark.django_db(transaction=True)
-def test_a_failed_turn_explains_itself_and_can_be_resumed_or_dismissed(client, cook, use_bots):
+def test_a_failed_turn_explains_itself_and_can_be_resumed_or_dismissed(client, cook, use_bots, immediate_events):
     from django_ergo.conversation.models import StructuredCall
 
     use_bots(say("Picked up where I left off."))
@@ -1122,8 +1129,15 @@ def test_a_failed_turn_explains_itself_and_can_be_resumed_or_dismissed(client, c
     turn = post(client, f"/api/sessions/{root['id']}/resume").json()
     assert turn["text"] == "Picked up where I left off."
     latest = StructuredCall.objects.filter(session_id=root["id"]).latest("created_at")
-    assert latest.request.startswith("[Resume] Your last turn stopped before it finished (")
     assert "out of credits" in latest.request
+    from django_ergo.conversation.models import SessionMessage
+
+    incoming = SessionMessage.objects.get(session_id=root["id"], sequence=latest.first_sequence)
+    assert incoming.author == {"kind": "system", "ref": "ergo", "display_name": "Ergo"}
+    assert incoming.provenance["kind"] == "event"
+    rendered = client.get(f"/api/sessions/{root['id']}").json()["messages"][0]
+    assert rendered["author"] == incoming.author
+    assert rendered["provenance"]["kind"] == "event"
     assert post(client, f"/api/sessions/{root['id']}/resume").status_code == 409  # it didn't fail this time
 
 
@@ -1382,7 +1396,9 @@ def test_routing_refresh_fetches_limits_and_the_page_reports_them_or_the_failure
 
 
 @pytest.mark.django_db(transaction=True)
-def test_a_turn_refused_at_its_limit_offers_a_retry_on_another_model(client, cook, use_bots, monkeypatch):
+def test_a_turn_refused_at_its_limit_offers_a_retry_on_another_model(
+    client, cook, use_bots, monkeypatch, immediate_events
+):
     from django_ergo.bots.providers import Providers
     from django_ergo.conversation.models import ConversationSession, StructuredCall
 
