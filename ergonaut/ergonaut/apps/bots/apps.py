@@ -6,6 +6,11 @@ class BotsConfig(AppConfig):
     label = "ergonaut_bots"
 
     def ready(self):
+        # ASGI servers do not run Django's management-command checks.
+        from ergonaut.apps.bots import checks
+
+        checks.warn_if_voice_ffprobe_missing()
+
         # Ergo registers its models on Django's default admin site; show them
         # in ours too.
         from django.contrib import admin

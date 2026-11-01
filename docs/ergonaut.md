@@ -28,20 +28,35 @@ pool chats; do not record material that must remain in a private inference pool.
 Ergonaut does not create a chat attachment or message for the recording.
 Django may use a temporary upload file, which is closed after the request.
 Retries keep the audio in browser memory until dismissed or the chat is left.
-Transcription is not included in Ergonaut's token-based cost reports. OpenAI
-lists `whisper-1` at $0.006 per minute and marks it deprecated; check
-[model pricing](https://developers.openai.com/api/docs/models/whisper-1) and
-availability before use. A different configured model has its own pricing.
+Successful dictations appear in Costs as `voice_transcription`, attributed to
+the signed-in user and chat. Provider token usage is priced at $3/million audio
+input, $1.25/million text input and $5/million output for
+`gpt-4o-mini-transcribe`. Provider duration usage is priced per minute; when
+usage is missing, the measured recording duration is an estimate at $0.003/min
+for `gpt-4o-mini-transcribe` or $0.006/min for `whisper-1`. Other models are
+unpriced until added to the transcription price table. The ledger stores no
+audio or transcript. Check [OpenAI model pricing](https://developers.openai.com/api/docs/models/gpt-4o-mini-transcribe)
+and availability before use.
 
 Enable with `VOICE_TRANSCRIPTION_ENABLED=true` and `OPENAI_API_KEY`. The
-server requires `ffprobe` to inspect recordings. Limits are per user in fixed
-UTC windows and count attempts, including failed ones. Settings:
+server requires `ffprobe` on PATH to inspect recordings; the release image
+includes it. Startup logs and Django system checks warn if voice is enabled and
+it is missing.
+Limits apply per user across
+sessions in fixed UTC minute and day windows, not rolling windows. An authorized
+and enabled request consumes an attempt before upload validation and provider
+processing, including malformed uploads and provider failures; a request rejected
+by the limit does not consume another attempt. A zero or negative limit blocks
+all requests. The database keeps at most one counter row per user (removed when
+the user is deleted); PostgreSQL row locks serialize concurrent requests across
+application processes. If the limiter's database operation fails, the request
+is rejected with HTTP 503 rather than bypassing the limit. Settings:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `VOICE_TRANSCRIPTION_ENABLED` | `false` | Enable the chat microphone |
 | `VOICE_TRANSCRIPTION_PROVIDER` | `openai` | Transcription provider |
-| `VOICE_TRANSCRIPTION_MODEL` | `whisper-1` | OpenAI transcription model |
+| `VOICE_TRANSCRIPTION_MODEL` | `gpt-4o-mini-transcribe` | OpenAI transcription model |
 | `VOICE_TRANSCRIPTION_MAX_DURATION` | `120` | Maximum recording duration in seconds |
 | `VOICE_TRANSCRIPTION_MAX_BYTES` | `10485760` | Maximum uploaded bytes |
 | `VOICE_TRANSCRIPTION_TIMEOUT` | `30` | Provider timeout in seconds |

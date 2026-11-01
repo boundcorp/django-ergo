@@ -281,7 +281,7 @@ def call_costs(call: StructuredCall) -> dict[str, float] | None:
 
 def _add(bucket: dict, call: StructuredCall, costs: dict[str, float] | None) -> None:
     bucket["calls"] += 1
-    if call.session and call.session.transport_type == "cli":
+    if call.session and call.session.transport_type == "cli" and call.kind != "voice_transcription":
         bucket["subscription_calls"] += 1
     for part, field, _ in PARTS:
         bucket[f"{part}_tokens"] += getattr(call, field) or 0

@@ -147,7 +147,29 @@ async def test_transcriber_public_endpoint_sends():
     with patch.object(openai, "AsyncOpenAI", return_value=client):
         text = await openai_transcriber(b"RIFF", "audio/wav", "a.wav")
     assert text == "hi"
-    client.audio.transcriptions.create.assert_awaited_once()
+    client.audio.transcriptions.create.assert_awaited_once_with(
+        model="whisper-1", file=("a.wav", b"RIFF", "audio/wav"), response_format="json"
+    )
+
+
+async def test_transcription_json_response_includes_usage():
+    from django_ergo.conversation.attachments import openai_transcription
+
+    client = mock_transcription_client()
+    with patch.object(openai, "AsyncOpenAI", return_value=client):
+        response = await openai_transcription(
+            b"RIFF",
+            "audio/wav",
+            "a.wav",
+            model="gpt-4o-mini-transcribe",
+            request_timeout=12,
+        )
+    assert response.text == "hi"
+    client.audio.transcriptions.create.assert_awaited_once_with(
+        model="gpt-4o-mini-transcribe",
+        file=("a.wav", b"RIFF", "audio/wav"),
+        response_format="json",
+    )
 
 
 # -- embeddings -----------------------------------------------------------------

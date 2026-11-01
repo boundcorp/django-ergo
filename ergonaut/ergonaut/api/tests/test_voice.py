@@ -63,8 +63,8 @@ def test_transcription_is_ephemeral_and_configurable(setup_voice, settings, monk
     settings.FILE_UPLOAD_TEMP_DIR = str(tmp_path)
     settings.VOICE_TRANSCRIPTION_MODEL = "gpt-4o-mini-transcribe"
     monkeypatch.setattr(voice, "_duration", lambda *_: 1.0)
-    transcribe = AsyncMock(return_value="hello world")
-    monkeypatch.setattr(voice, "openai_transcriber", transcribe)
+    transcribe = AsyncMock(return_value=SimpleNamespace(text="hello world", usage=None))
+    monkeypatch.setattr(voice, "openai_transcription", transcribe)
     response = client.post(url, {"audio": audio_file()})
     assert response.status_code == 200
     assert response.json() == {"text": "hello world"}
@@ -79,8 +79,8 @@ def test_transcription_is_ephemeral_and_configurable(setup_voice, settings, monk
 
 def test_validation_and_provider_errors(setup_voice, settings, monkeypatch):
     _, client, url = setup_voice
-    transcribe = AsyncMock(return_value="secret")
-    monkeypatch.setattr(voice, "openai_transcriber", transcribe)
+    transcribe = AsyncMock(return_value=SimpleNamespace(text="secret", usage=None))
+    monkeypatch.setattr(voice, "openai_transcription", transcribe)
     assert client.post(url, {}).status_code == 400
     assert client.post(url, {"audio": audio_file(b"not audio")}).status_code == 400
     assert client.post(url, {"audio": audio_file(content_type="audio/webm")}).status_code == 400
@@ -105,8 +105,8 @@ def test_rate_limits_are_per_user_and_window(setup_voice, settings, monkeypatch,
     clock = [86400.0]
     monkeypatch.setattr(voice, "time", SimpleNamespace(time=lambda: clock[0]))
     monkeypatch.setattr(voice, "_duration", lambda *_: 1)
-    transcribe = AsyncMock(return_value="ok")
-    monkeypatch.setattr(voice, "openai_transcriber", transcribe)
+    transcribe = AsyncMock(return_value=SimpleNamespace(text="ok", usage=None))
+    monkeypatch.setattr(voice, "openai_transcription", transcribe)
     assert client.post(url, {"audio": audio_file()}).status_code == 200
     assert client.post(url, {"audio": audio_file()}).status_code == 429
     clock[0] += 60
@@ -137,7 +137,7 @@ def test_provider_rate_limit_and_timeout_are_clean(setup_voice, monkeypatch):
     monkeypatch.setattr(voice, "_duration", lambda *_: 1)
     response = httpx.Response(429, request=httpx.Request("POST", "https://example.com"))
     transcribe = AsyncMock(side_effect=openai.RateLimitError("secret", response=response, body=None))
-    monkeypatch.setattr(voice, "openai_transcriber", transcribe)
+    monkeypatch.setattr(voice, "openai_transcription", transcribe)
     result = client.post(url, {"audio": audio_file()})
     assert result.status_code == 429
     assert "secret" not in result.content.decode()

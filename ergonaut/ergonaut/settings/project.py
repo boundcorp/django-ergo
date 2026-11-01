@@ -30,7 +30,7 @@ DEBUG = os.environ.get("DJANGO_DEBUG", "") == "true"
 # Composer voice transcription is opt-in and uses the existing OpenAI key.
 VOICE_TRANSCRIPTION_ENABLED = env_variable_truthy("VOICE_TRANSCRIPTION_ENABLED")
 VOICE_TRANSCRIPTION_PROVIDER = os.environ.get("VOICE_TRANSCRIPTION_PROVIDER", "openai")
-VOICE_TRANSCRIPTION_MODEL = os.environ.get("VOICE_TRANSCRIPTION_MODEL", "whisper-1")
+VOICE_TRANSCRIPTION_MODEL = os.environ.get("VOICE_TRANSCRIPTION_MODEL", "gpt-4o-mini-transcribe")
 VOICE_TRANSCRIPTION_MAX_DURATION = int(os.environ.get("VOICE_TRANSCRIPTION_MAX_DURATION", "120"))
 VOICE_TRANSCRIPTION_MAX_BYTES = int(os.environ.get("VOICE_TRANSCRIPTION_MAX_BYTES", str(10 * 1024 * 1024)))
 VOICE_TRANSCRIPTION_TIMEOUT = float(os.environ.get("VOICE_TRANSCRIPTION_TIMEOUT", "30"))

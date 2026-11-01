@@ -2,17 +2,20 @@
 
 import asyncio
 import json
+import logging
 import math
 import os
 import subprocess
 import time
+from decimal import Decimal
 
 import openai
 from asgiref.sync import async_to_sync
 from django.conf import settings
 from django.contrib.auth import get_user_model
-from django.db import transaction
-from django_ergo.conversation.attachments import openai_transcriber
+from django.db import DatabaseError, transaction
+from django_ergo.conversation.attachments import openai_transcription
+from django_ergo.conversation.models import StructuredCall, StructuredCallStatus
 from ninja import Router
 from ninja.errors import HttpError
 
@@ -21,6 +24,21 @@ from ergonaut.api.bots import uuid_or_404, visible_sessions
 from ergonaut.apps.bots.models import VoiceRateLimit
 
 router = Router(tags=["voice"], auth=user_auth)
+
+logger = logging.getLogger(__name__)
+
+# USD per minute; token rates are USD per million. Source:
+# https://developers.openai.com/api/docs/models/gpt-4o-mini-transcribe
+# https://developers.openai.com/api/docs/models/whisper-1
+TRANSCRIPTION_PRICES = {
+    "gpt-4o-mini-transcribe": {
+        "minute": Decimal("0.003"),
+        "audio_input": Decimal("3"),
+        "text_input": Decimal("1.25"),
+        "text_output": Decimal("5"),
+    },
+    "whisper-1": {"minute": Decimal("0.006")},
+}
 
 
 def _enabled():
@@ -32,8 +50,78 @@ def _enabled():
 
 
 def _authorize(request, session_id):
-    if not visible_sessions(request.auth).filter(id=uuid_or_404(session_id)).exists():
+    session = visible_sessions(request.auth).filter(id=uuid_or_404(session_id)).first()
+    if session is None:
         raise HttpError(404, "No such session")
+    return session
+
+
+def _record_transcription(user, session, model, response, duration):
+    """Record usage only: never persist audio, transcript, or provider errors."""
+    price = TRANSCRIPTION_PRICES.get(model)
+    usage = getattr(response, "usage", None)
+    input_tokens = getattr(usage, "input_tokens", None)
+    output_tokens = getattr(usage, "output_tokens", None)
+    details = getattr(usage, "input_token_details", None)
+    audio_tokens = getattr(details, "audio_tokens", None)
+    text_tokens = getattr(details, "text_tokens", None)
+    if (
+        text_tokens is None
+        and isinstance(input_tokens, int)
+        and not isinstance(input_tokens, bool)
+        and isinstance(audio_tokens, int)
+        and not isinstance(audio_tokens, bool)
+    ):
+        text_tokens = input_tokens - audio_tokens
+    valid_tokens = (
+        all(
+            isinstance(n, int) and not isinstance(n, bool) and n >= 0
+            for n in (input_tokens, output_tokens, audio_tokens, text_tokens)
+        )
+        and audio_tokens + text_tokens == input_tokens
+    )
+    parts = None
+    estimated = False
+    source = "unknown"
+    if price and valid_tokens and "audio_input" in price:
+        input_cost = (audio_tokens * price["audio_input"] + text_tokens * price["text_input"]) / Decimal(1000000)
+        output_cost = output_tokens * price["text_output"] / Decimal(1000000)
+        parts = {"input": float(input_cost), "cache_write": 0.0, "cache_read": 0.0, "output": float(output_cost)}
+        source = "tokens"
+    elif price:
+        seconds = getattr(usage, "seconds", None)
+        if (
+            not isinstance(seconds, int | float)
+            or isinstance(seconds, bool)
+            or not math.isfinite(seconds)
+            or seconds <= 0
+        ):
+            seconds = duration
+            estimated = True
+        amount = Decimal(str(seconds)) * price["minute"] / Decimal(60)
+        parts = {"input": float(amount), "cache_write": 0.0, "cache_read": 0.0, "output": 0.0}
+        source = "duration"
+    else:
+        logger.warning("No transcription price configured for model %s", model)
+    metadata = {"transcription": {"cost_source": source, "estimated": estimated, "unpriced": parts is None}}
+    if valid_tokens:
+        metadata["transcription"].update(audio_tokens=audio_tokens, text_tokens=text_tokens)
+    if source == "duration":
+        metadata["transcription"]["seconds"] = seconds
+    if parts is not None:
+        metadata["cost_parts"] = parts
+    StructuredCall.objects.create(
+        kind="voice_transcription",
+        user=user,
+        session=session,
+        status=StructuredCallStatus.COMPLETED,
+        engine_type="openai",
+        model_name=model,
+        input_tokens=input_tokens if valid_tokens else 0,
+        output_tokens=output_tokens if valid_tokens else 0,
+        cost_usd=Decimal(str(sum(parts.values()))) if parts is not None else None,
+        metadata=metadata,
+    )
 
 
 def _charge(user):
@@ -44,14 +132,19 @@ def _charge(user):
         row, _ = VoiceRateLimit.objects.get_or_create(user=user)
         now = int(time.time())
         minute, day = now // 60, now // 86400
+        reset = False
         if row.minute != minute:
             row.minute, row.minute_count = minute, 0
+            reset = True
         if row.day != day:
             row.day, row.day_count = day, 0
+            reset = True
         if (
             row.minute_count >= settings.VOICE_TRANSCRIPTION_PER_MINUTE
             or row.day_count >= settings.VOICE_TRANSCRIPTION_PER_DAY
         ):
+            if reset:
+                row.save(update_fields=["minute", "minute_count", "day", "day_count"])
             return False
         row.minute_count += 1
         row.day_count += 1
@@ -135,10 +228,14 @@ def voice_config(request, session_id: str):
 
 @router.post("/sessions/{session_id}/voice")
 def voice_transcribe(request, session_id: str):
-    _authorize(request, session_id)
+    session = _authorize(request, session_id)
     if not _enabled():
         raise HttpError(404, "Voice transcription is unavailable")
-    if not _charge(request.auth):
+    try:
+        allowed = _charge(request.auth)
+    except DatabaseError:
+        raise HttpError(503, "Voice transcription rate limiting is unavailable") from None
+    if not allowed:
         raise HttpError(429, "Voice transcription rate limit exceeded")
     # Reject obviously oversized requests before Django parses/spools the body.
     try:
@@ -165,7 +262,7 @@ def voice_transcribe(request, session_id: str):
 
         async def transcribe():
             return await asyncio.wait_for(
-                openai_transcriber(
+                openai_transcription(
                     data,
                     media_type,
                     filename,
@@ -176,12 +273,13 @@ def voice_transcribe(request, session_id: str):
             )
 
         try:
-            text = async_to_sync(transcribe)()
+            response = async_to_sync(transcribe)()
         except openai.RateLimitError:
             raise HttpError(429, "Transcription provider rate limit exceeded") from None
         except Exception:
             # Never log provider exceptions: they may contain request details.
             raise HttpError(502, "Voice transcription failed") from None
-        return {"text": text}
+        _record_transcription(request.auth, session, settings.VOICE_TRANSCRIPTION_MODEL, response, duration)
+        return {"text": response.text}
     finally:
         audio.close()
