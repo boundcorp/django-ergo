@@ -4,6 +4,14 @@ This document tracks the major milestones and evolution of the Django Ergo proje
 
 ## Development Timeline
 
+### Voice input in chat (November 2026)
+
+- Existing chat composers can record audio for an editable draft, without
+  sending it automatically. The optional session-scoped transcription API
+  validates and limits uploads and uses the deployment's OpenAI credential.
+  Audio is sent to OpenAI, including for private-pool chats; transcription
+  costs are not included in token-based reports. See [Ergonaut](docs/ergonaut.md#voice-input).
+
 ### Private inference pools (October 2026)
 
 - `private_pools` in providers.yaml lists API-billed models only the bots in

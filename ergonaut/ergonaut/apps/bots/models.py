@@ -90,3 +90,13 @@ class IllustrationJob(models.Model):
         constraints = [
             models.UniqueConstraint(fields=["session", "user", "request_key"], name="unique_illustration_job")
         ]
+
+
+class VoiceRateLimit(models.Model):
+    """Per-user fixed-window transcription counters; no audio or transcript is stored."""
+
+    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, primary_key=True)
+    minute = models.BigIntegerField(default=0)
+    minute_count = models.PositiveIntegerField(default=0)
+    day = models.BigIntegerField(default=0)
+    day_count = models.PositiveIntegerField(default=0)

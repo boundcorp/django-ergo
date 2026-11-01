@@ -14,6 +14,55 @@ click an “Earlier messages summarized” divider to read an older summary.
 Older replies made before context recording have no Context button. See
 [Session compaction](compaction.md) for policy keys and migration rollout.
 
+## Voice input
+
+In an existing chat, the microphone records only after you press it. Stop
+transcribes the recording into the editable draft; it never sends a message.
+Cancel or Escape discards it. A recording stops automatically at the configured
+duration. The browser needs a secure context, microphone permission and
+MediaRecorder support. The control is unavailable until voice transcription is
+enabled and an OpenAI API key is configured.
+
+Audio is sent to the Ergonaut server and then to OpenAI, including from private
+pool chats; do not record material that must remain in a private inference pool.
+Ergonaut does not create a chat attachment or message for the recording.
+Django may use a temporary upload file, which is closed after the request.
+Retries keep the audio in browser memory until dismissed or the chat is left.
+Successful dictations appear in Costs as `voice_transcription`, attributed to
+the signed-in user and chat. Provider token usage is priced at $3/million audio
+input, $1.25/million text input and $5/million output for
+`gpt-4o-mini-transcribe`. Provider duration usage is priced per minute; when
+usage is missing, the measured recording duration is an estimate at $0.003/min
+for `gpt-4o-mini-transcribe` or $0.006/min for `whisper-1`. Other models are
+unpriced until added to the transcription price table. The ledger stores no
+audio or transcript. Check [OpenAI model pricing](https://developers.openai.com/api/docs/models/gpt-4o-mini-transcribe)
+and availability before use.
+
+Enable with `VOICE_TRANSCRIPTION_ENABLED=true` and `OPENAI_API_KEY`. The
+server requires `ffprobe` on PATH to inspect recordings; the release image
+includes it. Startup logs and Django system checks warn if voice is enabled and
+it is missing.
+Limits apply per user across
+sessions in fixed UTC minute and day windows, not rolling windows. An authorized
+and enabled request consumes an attempt before upload validation and provider
+processing, including malformed uploads and provider failures; a request rejected
+by the limit does not consume another attempt. A zero or negative limit blocks
+all requests. The database keeps at most one counter row per user (removed when
+the user is deleted); PostgreSQL row locks serialize concurrent requests across
+application processes. If the limiter's database operation fails, the request
+is rejected with HTTP 503 rather than bypassing the limit. Settings:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `VOICE_TRANSCRIPTION_ENABLED` | `false` | Enable the chat microphone |
+| `VOICE_TRANSCRIPTION_PROVIDER` | `openai` | Transcription provider |
+| `VOICE_TRANSCRIPTION_MODEL` | `gpt-4o-mini-transcribe` | OpenAI transcription model |
+| `VOICE_TRANSCRIPTION_MAX_DURATION` | `120` | Maximum recording duration in seconds |
+| `VOICE_TRANSCRIPTION_MAX_BYTES` | `10485760` | Maximum uploaded bytes |
+| `VOICE_TRANSCRIPTION_TIMEOUT` | `30` | Provider timeout in seconds |
+| `VOICE_TRANSCRIPTION_PER_MINUTE` | `5` | Attempts per user per minute |
+| `VOICE_TRANSCRIPTION_PER_DAY` | `100` | Attempts per user per UTC day |
+
 ## Illustrations in chat
 
 The **Illustrate** action above a chat composer creates an immutable, static

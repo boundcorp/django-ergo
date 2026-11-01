@@ -683,6 +683,27 @@ async function upload<T>(path: string, file: File): Promise<T> {
   }
   return response.json() as Promise<T>
 }
+async function transcribeVoice(id: string, audio: Blob, signal: AbortSignal): Promise<{ text: string }> {
+  const form = new FormData()
+  form.append('audio', audio, 'recording')
+  const response = await fetch(`/api/sessions/${encodeURIComponent(id)}/voice`, {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'X-CSRFToken': csrfToken() },
+    body: form,
+    signal,
+  })
+  if (!response.ok) {
+    let detail = response.statusText
+    try {
+      detail = (await response.json()).detail ?? detail
+    } catch {
+      // not JSON
+    }
+    throw new ApiError(response.status, detail)
+  }
+  return response.json() as Promise<{ text: string }>
+}
 
 export type IllustrationSuggestion = {
   id: 'timeline' | 'status' | 'plan'
@@ -758,6 +779,9 @@ export const api = {
     const qs = query.toString()
     return request<SessionDetail>('GET', `/sessions/${id}${qs ? `?${qs}` : ''}`)
   },
+  voiceConfig: (id: string) =>
+    request<{ enabled: boolean; max_duration: number }>('GET', `/sessions/${encodeURIComponent(id)}/voice`),
+  transcribeVoice,
   sessionUsage: (id: string, hours = 6) => request<SessionUsage>('GET', `/sessions/${id}/usage?hours=${hours}`),
   debugShortcut: (id: string) => request<{ url: string }>('GET', `/sessions/${id}/debug-shortcut`),
   illustrateSuggestions: (id: string, focus = '') =>

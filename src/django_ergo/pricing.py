@@ -239,6 +239,11 @@ def call_cost_parts(call) -> dict[str, float] | None:
     """A StructuredCall's cost by part (input, cache_write, cache_read, output): what was
     recorded request by request, else (older calls) priced from its totals. None if
     unpriced."""
+    if getattr(call, "kind", None) == "voice_transcription":
+        recorded = (getattr(call, "metadata", None) or {}).get("cost_parts")
+        if recorded is None or getattr(call, "cost_usd", None) is None:
+            return None
+        return {k: float(v) for k, v in recorded.items()}
     if getattr(getattr(call, "session", None), "transport_type", None) == "cli":
         return dict.fromkeys(("input", "cache_write", "cache_read", "output"), 0.0)
     recorded = (getattr(call, "metadata", None) or {}).get("cost_parts")

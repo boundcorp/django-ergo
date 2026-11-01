@@ -22,6 +22,7 @@ import { ActivityStrip } from '../components/ActivityStrip'
 import Files from '../components/Files'
 import { DebugShortcut } from '../components/DebugShortcut'
 import { IllustrateDialog } from '../components/IllustrateDialog'
+import { VoiceRecorder } from '../components/VoiceRecorder'
 import Markdown from '../components/Markdown'
 import ModelPicker, { EffortSlider, modelLabel, useBotModels } from '../components/ModelPicker'
 import { PageViewer, Pins } from '../components/Pins'
@@ -1027,6 +1028,22 @@ export function Chat({ onChange }: { onChange: () => void }) {
                         : 'Message the bot'
               }
               className="min-w-0 flex-1 resize-none overflow-y-auto bg-transparent px-1 py-1.5 leading-snug focus:outline-none"
+            />
+            <VoiceRecorder
+              key={id}
+              sessionId={id}
+              disabled={closed || !!waiting.length}
+              onText={transcript => {
+                const input = composer.current
+                if (!input) return
+                const start = input.selectionStart
+                const end = input.selectionEnd
+                setText(current => current.slice(0, start) + transcript + current.slice(end))
+                requestAnimationFrame(() => {
+                  input.focus()
+                  input.setSelectionRange(start + transcript.length, start + transcript.length)
+                })
+              }}
             />
             {running && (
               <>

@@ -101,12 +101,13 @@ COPY ergonaut/infra/ /app/infra
 # Release Stage
 FROM base AS release
 
-# ffmpeg: local_shell agent jobs render and check video (the Ads bot's creative kit).
+# ffmpeg supplies ffprobe for voice validation and supports agent video jobs.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     libfreetype6-dev \
     libjpeg62-turbo-dev \
     libpng-dev \
+    && ffprobe -version >/dev/null \
     && rm -rf /var/lib/apt/lists/*
 
 # Agent toolchain: bots shell out to git/ssh/gh, kubectl, the Claude Code and omp
