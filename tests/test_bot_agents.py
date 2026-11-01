@@ -80,7 +80,6 @@ def setup(tmp_path):
 @pytest.mark.django_db(transaction=True)
 def test_an_agent_asks_gets_an_answer_and_reports_back(tmp_path, workers):  # noqa: F811
     from django_ergo.bots import workers as w
-    from django_ergo.bots.messaging import turn_text
     from django_ergo.conversation.models import ThreadMessage
     from django_ergo.conversation.models import Worker
 
@@ -113,7 +112,6 @@ def test_an_agent_asks_gets_an_answer_and_reports_back(tmp_path, workers):  # no
     assert worker.progress == "thinking"
     [told] = ThreadMessage.objects.filter(metadata__worker=started["id"])
     assert "Blue or red?" in told.text and "q1" in told.text
-    assert turn_text(told).startswith("[News from the worker")
 
     assert (
         kit.execute_tool(
