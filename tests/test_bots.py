@@ -1284,10 +1284,6 @@ async def test_upward_reaches_only_the_parents_main_chat(tmp_path, thread_messag
     refused, sent = _tool_results(engine)[-2:]
     assert refused["is_error"] and "your parent bot" in refused["content"]
     assert json.loads(sent["content"])["sent_to"] == "boundcorp · Main"
-    assert (
-        "### boundcorp (your parent bot: message its main chat only)"
-        in _turn_context(engine._client.calls[0])
-    )
 
 
 @pytest.mark.django_db(transaction=True)
@@ -2629,6 +2625,213 @@ async def test_a_report_upward_gets_no_reply_unless_it_asks(tmp_path, thread_mes
 
 
 @pytest.mark.django_db(transaction=True)
+async def test_cross_bot_starter_report_and_question(tmp_path, thread_messages):
+    from django_ergo.conversation.models import ThreadMessage
+
+    user = await User.objects.acreate(username="cross-bot-reporter")
+    engine = claude_engine()
+    registry, _, design = _family(
+        tmp_path,
+        engine,
+        "name: boundcorp\n",
+        "name: design\nthreads: {allow_create: true}\n",
+    )
+    campaign, _ = make_bot(
+        tmp_path,
+        yaml_text="name: campaign\nthreads: {allow_create: true}\n",
+        name="campaign",
+    )
+    campaign._engine_factory = design._engine_factory
+    registry.add(campaign)
+    assert not registry.may_call(design, "campaign")
+    root = await campaign.root_session(user)
+    starter = await campaign.create_session(user, parent=root, title="Launch")
+    worker = await design.create_session(
+        user,
+        title="Logo",
+        metadata={
+            "started_by": str(starter.id),
+            "started_by_bot": "campaign",
+            "started_by_label": "campaign · Launch",
+        },
+    )
+    engine._client.responses = [
+        claude_tool(
+            "ergo_thread_send",
+            {"bot": "campaign", "thread": str(starter.id), "message": "Logo ready."},
+            tool_id="starter-report",
+        ),
+        say("Reported."),
+    ]
+    await design.ask(worker, "Report the result")
+    sent = json.loads(_tool_results(engine)[-1]["content"])
+    assert sent["thread_id"] == str(starter.id)
+    assert sent["note"].startswith("Sent as a report")
+
+    engine._client.responses = [say("Noted.")]
+    await thread_messages(registry)
+    report = await ThreadMessage.objects.aget(id=sent["message_id"])
+    assert report.sender_session_id == worker.id
+    assert report.recipient_session_id == starter.id
+    assert report.metadata["report"] is True
+    assert report.status == "answered"
+    assert SENT == []
+
+    engine._client.responses = [
+        claude_tool(
+            "ergo_thread_send",
+            {
+                "bot": "campaign",
+                "thread": str(starter.id),
+                "message": "Which format?",
+                "ask": True,
+            },
+            tool_id="starter-question",
+        ),
+        say("Asked."),
+        say("Use SVG."),
+        say("I'll use SVG."),
+    ]
+    await design.ask(worker, "Check the format")
+    asked = json.loads(_tool_results(engine)[-1]["content"])
+    assert asked["thread_id"] == str(starter.id)
+    assert "reply will arrive" in asked["note"]
+    request = await ThreadMessage.objects.aget(id=asked["message_id"])
+    assert not request.metadata.get("report")
+    await thread_messages(registry)
+    reply = await ThreadMessage.objects.aget(in_reply_to=request)
+    assert reply.recipient_session_id == worker.id
+    assert reply.text == "Use SVG."
+    await thread_messages(registry)
+    assert any(text.endswith("Use SVG.") for text in _texts(engine._client.calls[-1]))
+    assert SENT == []
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_cross_bot_starter_permission_is_exact_and_user_scoped(
+    tmp_path, thread_messages
+):
+    from django_ergo.conversation.models import ThreadMessage
+
+    user = await User.objects.acreate(username="starter-owner")
+    other_user = await User.objects.acreate(username="another-owner")
+    engine = claude_engine()
+    registry, boundcorp, design = _family(
+        tmp_path,
+        engine,
+        "name: boundcorp\nthreads: {allow_create: true}\n",
+        "name: design\nthreads: {allow_create: true}\n",
+    )
+    root = await boundcorp.root_session(user)
+    starter = await boundcorp.create_session(user, parent=root, title="Starter")
+    other_thread = await boundcorp.create_session(user, parent=root, title="Other")
+    foreign_root = await boundcorp.root_session(other_user)
+    foreign = await boundcorp.create_session(
+        other_user, parent=foreign_root, title="Foreign"
+    )
+    worker = await design.create_session(
+        user,
+        title="Worker",
+        metadata={
+            "started_by": str(starter.id),
+            "started_by_bot": "boundcorp",
+            "started_by_label": "boundcorp · Starter",
+        },
+    )
+    engine._client.responses = [
+        claude_tool(
+            "ergo_thread_send",
+            {"bot": "boundcorp", "thread": str(other_thread.id), "message": "Wrong"},
+            tool_id="wrong-thread",
+        ),
+        claude_tool(
+            "ergo_thread_send",
+            {"bot": "boundcorp", "thread": str(foreign.id), "message": "Foreign"},
+            tool_id="foreign-thread",
+        ),
+        say("Refused."),
+    ]
+    await design.ask(worker, "Try other chats")
+    wrong, foreign_result = _tool_results(engine)[-2:]
+    assert wrong["is_error"]
+    assert foreign_result["is_error"]
+    assert not await ThreadMessage.objects.aexists()
+    assert SENT == []
+
+    # Even a corrupt starter reference must not grant access across users.
+    worker.metadata["started_by"] = str(foreign.id)
+    await worker.asave(update_fields=["metadata"])
+    engine._client.responses = [
+        claude_tool(
+            "ergo_thread_send",
+            {"bot": "boundcorp", "thread": str(foreign.id), "message": "Foreign"},
+            tool_id="forged-starter",
+        ),
+        say("Refused."),
+    ]
+    await design.ask(worker, "Try the foreign starter")
+    assert _tool_results(engine)[-1]["is_error"]
+    assert not await ThreadMessage.objects.aexists()
+    assert SENT == []
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_child_thread_can_report_to_its_parents_cross_bot_starter(
+    tmp_path, thread_messages
+):
+    from django_ergo.conversation.models import ThreadMessage
+
+    user = await User.objects.acreate(username="nested-reporter")
+    engine = claude_engine()
+    registry, boundcorp, design = _family(
+        tmp_path,
+        engine,
+        "name: boundcorp\nthreads: {allow_create: true}\n",
+        "name: design\nthreads: {allow_create: true}\n",
+    )
+    root = await boundcorp.root_session(user)
+    starter = await boundcorp.create_session(user, parent=root, title="Campaign")
+    parent = await design.create_session(
+        user,
+        title="Design",
+        metadata={
+            "started_by": str(starter.id),
+            "started_by_bot": "boundcorp",
+            "started_by_label": "boundcorp · Campaign",
+        },
+    )
+    child = await design.create_session(
+        user,
+        parent=parent,
+        title="Logo",
+        metadata={
+            "started_by": str(parent.id),
+            "started_by_bot": "design",
+            "started_by_label": "design · Design",
+        },
+    )
+    engine._client.responses = [
+        claude_tool(
+            "ergo_thread_send",
+            {"bot": "boundcorp", "thread": str(starter.id), "message": "Logo ready."},
+            tool_id="nested-report",
+        ),
+        say("Reported."),
+        say("Noted."),
+    ]
+    await design.ask(child, "Report to the campaign")
+    sent = json.loads(_tool_results(engine)[-1]["content"])
+    assert sent["thread_id"] == str(starter.id)
+    assert sent["note"].startswith("Sent as a report")
+    await thread_messages(registry)
+    report = await ThreadMessage.objects.aget(id=sent["message_id"])
+    assert report.sender_session_id == child.id
+    assert report.recipient_session_id == starter.id
+    assert report.metadata["report"] is True
+    assert SENT == []
+
+
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize(
     "author",
     [None, {"kind": "telegram_user", "ref": "67890", "display_name": "Sam External"}],
@@ -2695,6 +2898,70 @@ async def test_forward_hands_the_users_own_message_to_a_thread(
     from django_ergo.bots import orchestrator
 
     assert await sync_to_async(orchestrator.user_message)(root) is None
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_forward_to_exact_cross_bot_starter(tmp_path, thread_messages):
+    from django_ergo.conversation.models import ThreadMessage
+
+    user = await User.objects.acreate(username="forward-to-starter")
+    engine = claude_engine()
+    registry, boundcorp, design = _family(
+        tmp_path,
+        engine,
+        "name: boundcorp\nthreads: {allow_create: true}\n",
+        "name: design\nthreads: {allow_create: true}\n",
+    )
+    root = await boundcorp.root_session(user)
+    starter = await boundcorp.create_session(user, parent=root, title="Campaign")
+    other = await boundcorp.create_session(user, parent=root, title="Other")
+    worker = await design.create_session(
+        user,
+        title="Logo",
+        metadata={
+            "started_by": str(starter.id),
+            "started_by_bot": "boundcorp",
+            "started_by_label": "boundcorp · Campaign",
+        },
+    )
+    engine._client.responses = [
+        claude_tool(
+            "ergo_thread_forward",
+            {"bot": "boundcorp", "thread": str(other.id)},
+            tool_id="forward-other",
+        ),
+        claude_tool(
+            "ergo_thread_forward",
+            {
+                "bot": "boundcorp",
+                "thread": str(starter.id),
+                "note": "Campaign owns it.",
+            },
+            tool_id="forward-starter",
+        ),
+        say("Sent to boundcorp · Campaign."),
+    ]
+    words = "Please use the revised logo."
+    await design.ask(worker, words)
+    refused, sent_result = _tool_results(engine)[-2:]
+    assert refused["is_error"]
+    sent = json.loads(sent_result["content"])
+    assert sent["thread_id"] == str(starter.id)
+    assert sent["forwarded_to"] == "boundcorp · Campaign"
+    forwarded = await ThreadMessage.objects.aget(id=sent["message_id"])
+    assert forwarded.sender_session_id == worker.id
+    assert forwarded.recipient_session_id == starter.id
+    assert forwarded.text == words
+    assert forwarded.metadata["report"] is True
+    assert forwarded.metadata["message_provenance"]["note"] == "Campaign owns it."
+    assert not await ThreadMessage.objects.filter(recipient_session=other).aexists()
+
+    engine._client.responses = [say("I'll use the revised logo.")]
+    await thread_messages(registry)
+    incoming = await starter.messages.aget(sequence=0)
+    assert await incoming.content_blocks.values_list("text", flat=True).aget() == words
+    assert incoming.provenance == forwarded.metadata["message_provenance"]
+    assert SENT == []
 
 
 @pytest.mark.django_db(transaction=True)

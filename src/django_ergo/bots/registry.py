@@ -4,7 +4,11 @@ Bot folders can nest: a bot folder inside another bot's folder is that
 bot's sub-bot. ``discover`` finds every ``bot.yaml`` under a folder. A bot
 may message its sub-bots (downward, with ``orchestration`` on), the bots in
 ``permissions.call_bots`` (sideways), and its parent bot's main chat (upward,
-always, from its own main chat)::
+always, from its own main chat). A thread can also send or forward to its
+exact starter chat, including a starter inherited from a same-bot ancestor,
+even when that bot is not otherwise callable. Sends to the starter are reports
+by default; ``ask=True`` requests a reply. This exception does not grant access
+to other chats of the starter's bot::
 
     boundcorp/
       bot.yaml          # the parent, with orchestration on
@@ -86,8 +90,10 @@ class BotRegistry:
         return name in self.bots and self.bots[name].parent_name == caller.name
 
     def is_parent(self, caller: Bot, name: str) -> bool:
-        """``name`` is ``caller``'s parent bot, which it may always message upward
-        (main chat to main chat), unless ``call_bots`` grants more."""
+        """Whether ``name`` is the caller's parent, reachable upward by default.
+
+        Other permissions and exact starter chats may allow additional targets.
+        """
         return bool(name) and name == caller.parent_name and name in self.bots
 
     def callable_bots(self, caller: Bot) -> list[Bot]:
