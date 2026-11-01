@@ -920,6 +920,42 @@ def test_sessions_show_unread_replies_and_what_needs_attention(client, cook, use
 
 
 @pytest.mark.django_db(transaction=True)
+def test_report_marks_never_opened_thread_unread(client, cook, use_bots):
+    from django_ergo.bots import messaging
+    from django_ergo.conversation.models import ConversationSession, StructuredCall, ThreadMessage
+
+    use_bots(say("Report received."), say("Another report received."))
+    sender = ConversationSession.objects.create(user=cook, bot_name="kitchen", metadata={"bot_role": "root"})
+    thread = ConversationSession.objects.create(
+        user=cook, bot_name="kitchen", parent=sender, metadata={"bot_role": "thread", "title": "Starter"}
+    )
+    legacy = ConversationSession.objects.create(
+        user=cook, bot_name="kitchen", parent=sender, metadata={"bot_role": "thread", "title": "Old thread"}
+    )
+    StructuredCall.objects.create(session=legacy, user=cook, kind="chat_reply", status="completed")
+
+    def unread(session):
+        return {row["id"]: row["unread"] for row in client.get("/api/sessions").json()}[str(session.id)]
+
+    report = ThreadMessage.objects.create(
+        sender_session=sender, recipient_session=thread, text="Done", metadata={"report": True}
+    )
+    assert not unread(thread)  # queued is not yet delivered
+    assert not unread(legacy)  # migration-era null read_at alone does not make old replies unread
+    messaging.deliver(str(report.id), registry=webhooks.get_registry())
+    assert unread(thread)
+    assert not unread(legacy)
+
+    client.get(f"/api/sessions/{thread.id}")
+    assert not unread(thread)
+    report = ThreadMessage.objects.create(
+        sender_session=sender, recipient_session=thread, text="More", metadata={"report": True}
+    )
+    messaging.deliver(str(report.id), registry=webhooks.get_registry())
+    assert unread(thread)
+
+
+@pytest.mark.django_db(transaction=True)
 def test_threads_are_grouped_by_status_with_the_bots_status_line(client, cook, use_bots):
     from django_ergo.conversation.links import GITHUB_PR
     from django_ergo.conversation.models import ConversationAttachment, ConversationSession, StructuredCall

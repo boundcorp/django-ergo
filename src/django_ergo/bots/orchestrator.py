@@ -7,6 +7,8 @@ Who may message whom:
   ``orchestration: false`` get only ``ergo_message_up`` for this.
 - Downward (sub-bots nested in the bot's folder) needs ``orchestration``.
 - Sideways (any other bot) needs ``permissions.call_bots``.
+- A thread may also message the exact chat that started it, or the starter of
+  a same-bot ancestor, for the same user. These are reports unless asked.
 - A new thread is the target's decision: ``thread="new"`` needs the target
   bot's ``threads.allow_create``, whoever sends it.
 
@@ -93,13 +95,57 @@ OPEN_STATUSES = [
 ]
 
 
-def _target(ctx: ToolContext, bot: str) -> Bot:
-    """This bot (``bot`` empty or its own name), or one it may message."""
+def _starters(session: ConversationSession) -> list[ConversationSession]:
+    """Valid starter sessions of this thread and its same-bot ancestors."""
+    if roles.is_top(session):
+        return []
+    starters = []
+    seen = set()
+    current = session
+    while current and current.id not in seen:
+        seen.add(current.id)
+        meta = current.metadata or {}
+        starter_id = meta.get("started_by")
+        starter_bot = meta.get("started_by_bot")
+        if starter_id and starter_bot:
+            try:
+                starter = ConversationSession.objects.filter(
+                    id=starter_id, user_id=session.user_id, bot_name=starter_bot
+                ).first()
+            except (ValidationError, ValueError):
+                starter = None
+            if starter:
+                starters.append(starter)
+        parent = current.parent if current.parent_id else None
+        current = (
+            parent
+            if parent
+            and parent.bot_name == session.bot_name
+            and parent.user_id == session.user_id
+            else None
+        )
+    return starters
+
+
+def _is_starter(session: ConversationSession, bot: str, thread: str) -> bool:
+    return any(
+        starter.bot_name == bot and str(starter.id) == thread
+        for starter in _starters(session)
+    )
+
+
+def _target(ctx: ToolContext, bot: str, thread: str = "") -> Bot:
+    """This bot, one it may message, or the bot of the exact starter."""
     caller = ctx.bot
     if not bot or bot == caller.name:
         return caller
     registry = caller.registry
-    if registry is None or not registry.may_call(caller, bot) or bot not in registry:
+    starter = _is_starter(ctx.session, bot, (thread or "").strip())
+    if (
+        registry is None
+        or bot not in registry
+        or not (registry.may_call(caller, bot) or starter)
+    ):
         allowed = (
             ", ".join(b.name for b in registry.callable_bots(caller))
             if registry
@@ -123,14 +169,22 @@ def chat_identity(session: ConversationSession) -> str:
     if not started and session.parent_id:
         started = messaging.label(session.parent)
     title = meta.get("title") or "Thread"
-    if not started:
-        return f"You are {session.bot_name} · {title}, a thread. Do its work here."
-    return (
-        f"You are {session.bot_name} · {title}, a thread started by {started}. "
-        f"Do the work here; don't hand it to another {session.bot_name} thread. Your "
-        f"final reply to a message from {started} goes back to it automatically, so "
-        "report there with that reply, not with extra messages."
-    )
+    if started:
+        identity = (
+            f"You are {session.bot_name} · {title}, a thread started by {started}. "
+            f"Do the work here; don't hand it to another {session.bot_name} thread. Your "
+            f"final reply to a message from {started} goes back to it automatically."
+        )
+    else:
+        identity = f"You are {session.bot_name} · {title}, a thread. Do its work here."
+    for starter in _starters(session):
+        if starter.bot_name != session.bot_name:
+            identity += (
+                f" Report milestones straight to {messaging.label(starter)} with "
+                f"ergo_thread_send(bot={starter.bot_name!r}, thread={str(starter.id)!r}); "
+                "don't route through main."
+            )
+    return identity
 
 
 ORCHESTRATION_INSTRUCTIONS = """\
@@ -359,7 +413,7 @@ def ergo_bot_list(ctx: ToolContext) -> str:
     lines = [
         f"- {b.name}: {b.definition.description or 'no description'}"
         + (
-            " (your parent bot: its main chat only)"
+            " (your parent bot: its main chat or your starter chat)"
             if b.name == ctx.bot.parent_name
             else ""
         )
@@ -388,7 +442,7 @@ def ergo_thread_list(
         "message": {"type": "string", "description": "What you want done or asked"},
         "bot": {
             "type": "string",
-            "description": "Which bot: empty for this bot, or a name from ergo_bot_list",
+            "description": "Which bot: empty for this bot, a name from ergo_bot_list, or your starter's bot",
         },
         "thread": {
             "type": "string",
@@ -398,9 +452,8 @@ def ergo_thread_list(
         "ask": {
             "type": "boolean",
             "description": (
-                "Only for messages upward (to your own main chat, or your parent bot's): "
-                "true when you need an answer back. Otherwise it's a one-way report and "
-                "no reply comes back."
+                "For messages upward or to your starter chat: true when you need an "
+                "answer back. Otherwise it's a one-way report and no reply comes back."
             ),
         },
         "attachments": {
@@ -445,7 +498,7 @@ def ergo_thread_send(  # noqa: PLR0913
     """
     return _send(
         ctx,
-        _target(ctx, bot),
+        _target(ctx, bot, thread),
         message,
         thread,
         title,
@@ -548,8 +601,10 @@ def ergo_thread_forward(
             "to forward; use ergo_thread_send for your own request."
         )
         raise ValueError(msg)
-    target = _target(ctx, bot)
-    if _upward_only(ctx, target):
+    target = _target(ctx, bot, thread)
+    if _upward_only(ctx, target) and not _is_starter(
+        ctx.session, target.name, thread.strip()
+    ):
         msg = f"{target.name} is your parent bot; report to it with ergo_message_up."
         raise ValueError(msg)
     thread = (thread or "").strip()
@@ -649,8 +704,11 @@ def _send(  # noqa: PLR0913
     interrupt: bool = False,
 ) -> dict:
     thread = (thread or "main").strip()
-    if _upward_only(ctx, target) and (
-        thread not in roles.MAIN_NAMES or not _is_main(ctx.session)
+    starter = _is_starter(ctx.session, target.name, thread)
+    if (
+        _upward_only(ctx, target)
+        and not starter
+        and (thread not in roles.MAIN_NAMES or not _is_main(ctx.session))
     ):
         msg = (
             f"{target.name} is your parent bot: only your main chat may message it, "
@@ -674,7 +732,7 @@ def _send(  # noqa: PLR0913
     upward = _is_main(recipient) and (
         (target is ctx.bot and not _is_main(ctx.session)) or _upward_only(ctx, target)
     )
-    report = upward and not ask
+    report = (upward or starter) and not ask
     metadata = {"attachments": shared} if shared else {}
     if report:
         metadata["report"] = True

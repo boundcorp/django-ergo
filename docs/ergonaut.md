@@ -264,6 +264,8 @@ unscoped devbox drafts are not migrated because their owner is unknown.
   recent conversations and links to the full Threads dashboard (`/threads`).
   The dashboard summarizes loaded waiting/review/working/unread conversations;
   each nonzero count jumps to a matching group, including pinned items.
+  A delivered bot report marks a never-opened recipient chat unread; opening it
+  clears the indicator. Queued reports do not mark a chat unread.
   Pinned, Ready for review, Waiting on you, Working, Idle and Resolved retain
   their order, activity sorting, remembered expansion and Show more behavior.
   Bot filters still use the `bot` URL parameter. New-thread shortcuts and

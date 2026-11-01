@@ -236,7 +236,7 @@ class Block:
         registry = self.bot.registry
         note = " (this bot)" if each is self.bot else ""
         if registry and registry.is_parent(self.bot, each.name):
-            note = " (your parent bot: message its main chat only)"
+            note = " (your parent bot)"
         about = each.definition.description or "no description"
         return f"### {each.name}{note}: {about}"
 

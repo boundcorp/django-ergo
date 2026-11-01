@@ -826,16 +826,27 @@ Who may message whom:
   named chats). Bots with `orchestration: false` get one always-loaded tool
   for this, `ergo_message_up` (`to: main` or `to: parent`); with
   orchestration on, `ergo_thread_send` does it and `ergo_bot_list` marks the
-  parent.
+  parent. A thread can also message its exact starter chat, including a
+  starter inherited from a same-bot ancestor thread, as described below.
 - **Downward** to sub-bots needs `orchestration` (on by default).
-- **Sideways** to any other bot needs `permissions.call_bots`, which also
-  lifts the main-chat-only rule for a parent listed there.
+- **Sideways** to any other bot needs `permissions.call_bots`, except for
+  the exact starter chat; listing a parent there also lifts its
+  main-chat-only rule.
 - **New threads are the target's call.** `thread: "new"` needs the target
   bot's `threads.allow_create`, whether the sender is the bot itself or
   another bot; otherwise the sender messages its main chat. A thread another
   bot started records `started_by` (the sending chat), `started_by_bot` and
   `started_by_label` in its metadata; Ergonaut links back to that chat from
   the thread's header, and `ergo_thread_list` shows it.
+- **Reach the exact starter.** A thread may use `ergo_thread_send` or
+  `ergo_thread_forward` with the starter's bot name and the starter session
+  ID as `thread`, even if the bot would otherwise be unreachable or is a
+  parent restricted to main. This also applies to starters recorded on
+  same-bot ancestor threads, so a nested thread can reach its inherited
+  starter. The exception is for those exact chats, not other chats of their
+  bots. Starter references must identify an existing session belonging to the
+  same user and recorded bot. Forwarding still delivers the user's words
+  without routing a reply back.
 - **Resolving.** The orchestration skill's instructions tell every
   orchestrator when to resolve: when the work is finished (PR merged or
   closed, answer delivered, the user wrapped it up), never while it waits on
@@ -849,12 +860,13 @@ Who may message whom:
   who can resolve the thread. A thread resolves itself after its final report.
   A resolved thread keeps `resolved_by` and `resolved_summary` in its metadata
   until it reopens.
-- **Reports upward get no reply.** A thread's message to its own main chat,
-  or a main chat's to its parent's, is a one-way report: the recipient's turn
-  starts with `[Report from …]` and its reply isn't sent back, so a status
-  update doesn't cost the sender another turn for an acknowledgement. Pass
-  `ask: true` (to `ergo_thread_send` or `ergo_message_up`) when an answer is
-  needed.
+- **Reports get no reply.** A thread's message to its own main chat, a main
+  chat's to its parent's main chat, or a message addressed by session ID to
+  an exact or inherited starter is a one-way report by default. The
+  recipient's turn starts with `[Report from …]` and its reply isn't sent
+  back, so a status update doesn't cost the sender an acknowledgement turn.
+  Pass `ask: true` to `ergo_thread_send` (or `ergo_message_up` for its
+  upward destinations) when an answer is needed.
 - **Follow-ups are fine; status pings aren't.** A chat may send a thread
   several messages while its earlier request there is still open: they queue
   in order (see below), each is its own turn there, and each reply comes back
@@ -905,7 +917,8 @@ has a `bot.yaml`, and lets bots find each other by name. Bot folders can
 nest: a bot folder inside another bot's folder is its sub-bot, and the
 parent may message its sub-bots with `ergo_thread_send` (as well as
 any bot in `permissions.call_bots`), and each sub-bot's main chat may
-message the parent's main chat. Each session starts with an
+message the parent's main chat; a thread may also reach its exact starter as
+described above. Each session starts with an
 `ergo_bot_list` result already in its history, built from each bot's
 `description` in bot.yaml, so instructions don't need to list the bots.
 

@@ -709,10 +709,10 @@ OPEN_REQUESTS = ["queued", "delivered", "waiting"]
 def with_open_counts(qs):
     """Annotate sessions with their open delegated requests, in and out, whether a
     turn is running now (``busy``), whether a reply came after the owner last looked
-    (``unread``), whether the latest turn waits on the user (``attention``: an
-    approval, a question, or a failure), and whether a chat it asked for something
-    is paused for an approval (``blocked``)."""
-    from django.db.models import Exists, OuterRef, Subquery
+    or a never-opened chat received a report (``unread``), whether the latest turn
+    waits on the user (``attention``: an approval, a question, or a failure), and
+    whether a chat it asked for something is paused for an approval (``blocked``)."""
+    from django.db.models import Exists, OuterRef, Q, Subquery
 
     finished = StructuredCall.objects.filter(session=OuterRef("pk"), kind="chat_reply").exclude(status="in_progress")
     latest = StructuredCall.objects.filter(session=OuterRef("pk"), kind="chat_reply").order_by("-created_at")
@@ -727,10 +727,16 @@ def with_open_counts(qs):
     blocked = ThreadMessage.objects.filter(
         sender_session=OuterRef("pk"), in_reply_to__isnull=True, status="waiting"
     ).filter(Exists(paused))
+    delivered_reports = ThreadMessage.objects.filter(
+        recipient_session=OuterRef("pk"),
+        metadata__report=True,
+        status__in=["delivered", "waiting", "answered"],
+    )
     return qs.annotate(
         busy=Exists(running) | Exists(working),
         blocked=Exists(blocked),
-        unread=Exists(finished.filter(updated_at__gt=OuterRef("read_at"))),
+        unread=Exists(finished.filter(updated_at__gt=OuterRef("read_at")))
+        | (Q(read_at__isnull=True) & Exists(delivered_reports)),
         latest_status=Subquery(latest.values("status")[:1]),
         latest_type=Subquery(latest.values("response__type")[:1]),
         latest_dismissed=Subquery(latest.values("metadata__dismissed")[:1]),
