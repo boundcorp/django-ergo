@@ -33,9 +33,10 @@ voice input. The voice API rejects Ogg; it accepts WebM, MP4/M4A, MP3 and WAV
 with matching content types and audio signatures. The control is unavailable
 until voice transcription is enabled and an OpenAI API key is configured.
 The compact control shows a red recording indicator and timer, a spinner while
-transcribing, or an error icon with retry and dismiss controls. The microphone's
-tooltip and accessible label describe OpenAI processing; error details are
-available in the icon's tooltip and accessible label.
+transcribing, or an error icon with retry and dismiss controls. When idle it
+occupies only the microphone button's width, and expands for status controls as
+needed. The microphone's tooltip and accessible label describe OpenAI processing;
+error details are available in the icon's tooltip and accessible label.
 On narrow screens the empty composer placeholder truncates to one line; typed
 drafts still wrap and grow as usual.
 
