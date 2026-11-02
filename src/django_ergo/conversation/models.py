@@ -83,6 +83,8 @@ class ConversationSession(TimeStampedMixin):
         choices=SessionStatus.choices,
     )
     metadata = models.JSONField(default=dict, blank=True)
+    # Kept separate from metadata so stale metadata writers cannot undo a rename.
+    user_title = models.CharField(max_length=200, null=True, blank=True)  # noqa: DJ001 - NULL means automatic
     # Overrides workflow.instructions when set.
     system_prompt = models.TextField(blank=True, default="")
     compaction_mode = models.CharField(
@@ -112,6 +114,24 @@ class ConversationSession(TimeStampedMixin):
             models.Index(fields=["status"]),
             models.Index(fields=["engine_type"]),
         ]
+
+    def save(self, *args, **kwargs):
+        # A full save of a stale instance must not overwrite a concurrent rename.
+        # Explicit updates to user_title remain possible through update_fields.
+        update_fields = kwargs.get("update_fields", args[3] if len(args) > 3 else None)  # noqa: PLR2004
+        preserve = (
+            not self._state.adding
+            and update_fields is None
+            and "user_title" in self.__dict__
+        )
+        if not preserve:
+            return super().save(*args, **kwargs)
+        title = self.user_title
+        try:
+            self.user_title = models.F("user_title")
+            return super().save(*args, **kwargs)
+        finally:
+            self.user_title = title
 
     def __str__(self):
         return f"{self.user} - {self.engine_type} ({self.status})"

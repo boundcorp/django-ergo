@@ -771,6 +771,7 @@ export const api = {
   models: (bot: string) => request<BotModels>('GET', `/bots/${bot}/models`),
   setModel: (id: string, model: string) => request<Session>('POST', `/sessions/${id}/model`, { model }),
   setEffort: (id: string, effort: string) => request<Session>('POST', `/sessions/${id}/effort`, { effort }),
+  renameSession: (id: string, title: string) => request<{ title: string }>('POST', `/sessions/${id}/title`, { title }),
   // The newest page of messages, or the page before line `before` (`limit` messages, default 50).
   session: (id: string, before?: number, limit?: number) => {
     const query = new URLSearchParams()

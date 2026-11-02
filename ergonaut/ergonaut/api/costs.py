@@ -316,7 +316,7 @@ def _add_session(by_session: dict[str, dict], call: StructuredCall, parts: dict 
         meta = session.metadata or {}
         by_session[session_id] = {
             "id": session_id,
-            "title": meta.get("title") or f"{session.bot_name or 'Bot'} main",
+            "title": session.user_title or meta.get("title") or f"{session.bot_name or 'Bot'} main",
             "bot": session.bot_name or "(no bot)",
             "model": call.model_name or "(unknown)",
             "role": meta.get("bot_role") or "",
@@ -406,7 +406,9 @@ def _agents(rows: list[AgentUsage]) -> dict:
             "agent": usage.agent,
             "model": usage.model,
             "chat_id": str(session.id),
-            "chat_title": (session.metadata or {}).get("title") or f"{session.bot_name or 'Bot'} main",
+            "chat_title": session.user_title
+            or (session.metadata or {}).get("title")
+            or f"{session.bot_name or 'Bot'} main",
             "bot": usage.bot_name,
             "worker_status": worker.status if worker else "deleted",
             **{f"{part}_tokens": getattr(usage, f"{part}_tokens") for part in AGENT_PARTS},

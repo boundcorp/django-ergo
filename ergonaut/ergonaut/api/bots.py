@@ -10,6 +10,7 @@ import asyncio
 import logging
 import os
 import time
+import unicodedata
 import uuid
 from datetime import datetime
 from typing import Any, Literal
@@ -38,10 +39,12 @@ from django_ergo.conversation.models import (
 )
 from ninja import File, Router, Schema, UploadedFile
 from ninja.errors import HttpError
+from pydantic import field_validator
 
 from ergonaut.api.auth import user_auth
 from ergonaut.api.page_assets import asset_urls, user_for_token
 from ergonaut.apps.bots.tasks import (
+    notify,
     peek_inbox,
     queue_message,
     queue_turn,
@@ -977,7 +980,11 @@ def list_sessions(request, bot: str = "", q: str = "", status: str = ""):
     if status:
         qs = qs.filter(status=status)
     if q:
-        qs = qs.filter(Q(messages__content_blocks__text__icontains=q) | Q(metadata__title__icontains=q)).distinct()
+        qs = qs.filter(
+            Q(messages__content_blocks__text__icontains=q)
+            | Q(user_title__icontains=q)
+            | (Q(user_title__isnull=True) & Q(metadata__title__icontains=q))
+        ).distinct()
     rows = attach_prs(list(with_open_counts(qs).order_by("-updated_at")[:200]))
     return [session_out(s) for s in rows]
 
@@ -1583,6 +1590,27 @@ async def close_session(request, session_id: str):
         raise HttpError(409, "Main and named chats can't be archived")
     await sync_to_async(archival.archive)(session, "archived by the user")
     return await sync_to_async(session_out)(session)
+
+
+class RenameSessionIn(Schema):
+    title: str
+
+    @field_validator("title")
+    @classmethod
+    def validate_title(cls, value: str) -> str:
+        value = "".join(c for c in value if unicodedata.category(c) not in {"Cc", "Zl", "Zp"}).strip()
+        if not value or len(value) > 200:
+            raise ValueError("Title must contain 1 to 200 characters")
+        return value
+
+
+@router.post("/sessions/{session_id}/title")
+async def rename_session(request, session_id: str, data: RenameSessionIn):
+    """Set the shared user title without overwriting concurrent metadata changes."""
+    session = await get_session(request, session_id)
+    await ConversationSession.objects.filter(pk=session.pk).aupdate(user_title=data.title)
+    await sync_to_async(notify)(str(session.pk))
+    return {"title": data.title}
 
 
 class PinSessionIn(Schema):

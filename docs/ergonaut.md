@@ -307,8 +307,13 @@ unscoped devbox drafts are not migrated because their owner is unknown.
   it moves focus into the drawer; Tab stays inside it and Escape or its
   backdrop closes it and returns focus to Menu.
 - **Chat**: the header shows the bot's name above the thread title (both
-  truncate). Beside the actions, a token sparkline has one bar per hour for
-  the last six (rolling, newest on the right). Each bar stacks the chat's own
+  truncate). Use **Rename** in the header (or in the phone's session sheet) to
+  set a title shared by everyone who can view the session. Titles are trimmed,
+  stripped of control characters, and limited to 200 characters; empty titles
+  are rejected, so clearing does not restore automatic naming. A user-set
+  title takes precedence over later automatic titles. Beside the actions, a
+  token sparkline has one bar per hour for the last six (rolling, newest on the right).
+  Each bar stacks the chat's own
   calls (turns, compaction, titles) under the tokens its workers' coding
   agents used, with totals for each underneath; hover a bar for its counts.
   It refreshes on new messages and every minute, and sits in the phone sheet

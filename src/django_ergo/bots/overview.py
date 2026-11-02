@@ -111,13 +111,12 @@ def facts(
 
 
 def chat_name(session: ConversationSession) -> str:
-    meta = session.metadata or {}
     role = roles.role(session)
     if role == roles.MAIN:
-        return roles.MAIN
+        return session.user_title or roles.MAIN
     if role == roles.CHAT:
-        return f"{meta.get('chat') or meta.get('title')} (named chat)"
-    return f"{meta.get('title') or 'Thread'} (thread {session.id})"
+        return f"{session.user_title or (session.metadata or {}).get('chat') or roles.title(session)} (named chat)"
+    return f"{roles.title(session)} (thread {session.id})"
 
 
 def snippets(session: ConversationSession) -> list[str]:

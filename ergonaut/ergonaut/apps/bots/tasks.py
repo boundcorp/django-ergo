@@ -766,11 +766,12 @@ def name_thread(session_id: str, message: str) -> None:
 
         # Merge just the title in one UPDATE, so a turn writing the metadata at the
         # same moment keeps its own keys.
-        ConversationSession.objects.filter(id=session_id).update(
+        changed = ConversationSession.objects.filter(id=session_id, user_title__isnull=True).update(
             metadata=RawSQL("COALESCE(metadata, '{}'::jsonb) || %s::jsonb", [json.dumps({"title": found["title"]})]),
             updated_at=timezone.now(),
         )
-        notify(session_id)
+        if changed:
+            notify(session_id)
 
 
 def queue_thread_naming(session_id: str, message: str) -> None:

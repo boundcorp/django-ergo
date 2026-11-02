@@ -162,13 +162,13 @@ def chat_identity(session: ConversationSession) -> str:
     meta = session.metadata or {}
     role = roles.role(session)
     if role == roles.MAIN:
-        return f"You are {session.bot_name} · Main, the main chat."
+        return f"You are {session.bot_name} · {roles.title(session)}, the main chat."
     if role == roles.CHAT:
-        return f"You are {session.bot_name} · {meta.get('chat') or meta.get('title')}, a named chat."
+        return f"You are {session.bot_name} · {session.user_title or meta.get('chat') or meta.get('title')}, a named chat."
     started = meta.get("started_by_label")
     if not started and session.parent_id:
         started = messaging.label(session.parent)
-    title = meta.get("title") or "Thread"
+    title = roles.title(session)
     if started:
         identity = (
             f"You are {session.bot_name} · {title}, a thread started by {started}. "

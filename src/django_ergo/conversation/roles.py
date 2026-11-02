@@ -33,4 +33,8 @@ def is_top(session) -> bool:
 def title(session) -> str:
     """The session's title, or "Main" / "Thread" when it has none."""
     meta = session.metadata or {}
-    return meta.get("title") or ("Main" if is_main(session) else "Thread")
+    return (
+        getattr(session, "user_title", None)
+        or meta.get("title")
+        or ("Main" if is_main(session) else "Thread")
+    )

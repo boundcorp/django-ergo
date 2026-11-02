@@ -27,6 +27,7 @@ from django.core.serializers.json import DjangoJSONEncoder
 from django.db.models import Q
 from django.http import HttpResponse, StreamingHttpResponse
 from django_ergo.bots.todos import get_todos
+from django_ergo.conversation import roles
 from django_ergo.conversation.history import SessionSource
 from django_ergo.conversation.models import ConversationSession, MessageBlock
 
@@ -88,8 +89,8 @@ def _snapshot(session_id, after: int, seen: dict):
         workers = None
     else:
         seen["workers"] = key
-    # The title can change after the thread starts (new_thread_metadata names it).
-    title = (session.metadata or {}).get("title") or ""
+    # Generated and user-edited titles can change while the stream is open.
+    title = roles.title(session)
     if seen.get("title") == title:
         title = None
     else:

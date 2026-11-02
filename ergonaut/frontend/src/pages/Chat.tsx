@@ -27,7 +27,7 @@ import Markdown from '../components/Markdown'
 import ModelPicker, { EffortSlider, modelLabel, useBotModels } from '../components/ModelPicker'
 import { PageViewer, Pins } from '../components/Pins'
 import { AttachmentView, replySuggestions, Transcript } from '../components/Transcript'
-import { ModelLink, MobileSessionBar, SuggestionChips, ThreadOptions } from '../components/ChatChrome'
+import { ModelLink, MobileSessionBar, SessionTitle, SuggestionChips, ThreadOptions } from '../components/ChatChrome'
 import { TodoButton, TodoList } from '../components/TodoList'
 import { usePersistedFlag } from '../persistedFlag'
 import { WorkerActivityView, WorkerPulse } from '../components/WorkerActivity'
@@ -134,6 +134,11 @@ export function Chat({ onChange }: { onChange: () => void }) {
   async function pickEffort(effort: string) {
     await api.setEffort(id, effort).catch(e => setError(String(e.message ?? e)))
     await load()
+  }
+  async function renameSession(title: string) {
+    const renamed = await api.renameSession(id, title)
+    setDetail(d => (d && d.session.id === id ? { ...d, session: { ...d.session, title: renamed.title } } : d))
+    onChange()
   }
   const composer = useRef<HTMLTextAreaElement>(null)
   const latest = useRef<SessionDetail | null>(null)
@@ -560,9 +565,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
               <div className="chat-title-bot truncate text-xs font-semibold uppercase tracking-wide text-muted">
                 {detail.session.bot}
               </div>
-              <h1 className="chat-title font-display text-2xl font-bold [overflow-wrap:anywhere]">
-                {detail.session.title}
-              </h1>
+              <SessionTitle key={id} title={detail.session.title} onSave={renameSession} />
               <div className="mt-1 text-sm text-muted">
                 {detail.session.role || 'session'} · {(detail.message_count ?? detail.messages.length).toLocaleString()}{' '}
                 messages · Updated {agoLong(lastActivity)} · Session{' '}
@@ -632,6 +635,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
         <MobileSessionBar
           bot={detail.session.bot}
           title={detail.session.title}
+          titleEditor={<SessionTitle key={id} title={detail.session.title} onSave={renameSession} mobile />}
           open={sheetOpen}
           onOpenChange={setSheetOpen}
           options={

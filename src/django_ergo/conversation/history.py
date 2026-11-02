@@ -401,7 +401,8 @@ class SessionSource(MessageSource):
     def title(self) -> str:
         meta = self.session.metadata or {}
         return (
-            meta.get("title")
+            self.session.user_title
+            or meta.get("title")
             or meta.get("slug")
             or f"{self.session.engine_type} session"
         )

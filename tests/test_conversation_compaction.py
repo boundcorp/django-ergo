@@ -248,6 +248,24 @@ async def test_cut_never_splits_tool_call_from_result(user):
     assert compaction.upto_sequence == 3
 
 
+async def test_compaction_in_flight_preserves_user_title(user):
+    session = await sync_to_async(make_session)(user)
+    await sync_to_async(chat)(session, 2)
+
+    async def rename_during_summary(previous, transcript):
+        await ConversationSession.objects.filter(pk=session.pk).aupdate(
+            user_title="My title"
+        )
+        return "Summary"
+
+    result = await compact_session(
+        session, claude_engine(), summarizer=rename_during_summary
+    )
+    assert result is not None
+    await session.arefresh_from_db()
+    assert session.user_title == "My title"
+
+
 # ---------------------------------------------------------------------------
 # Time and context-size modes
 # ---------------------------------------------------------------------------
