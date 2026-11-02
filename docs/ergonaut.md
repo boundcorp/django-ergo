@@ -36,6 +36,8 @@ The compact control shows a red recording indicator and timer, a spinner while
 transcribing, or an error icon with retry and dismiss controls. The microphone's
 tooltip and accessible label describe OpenAI processing; error details are
 available in the icon's tooltip and accessible label.
+On narrow screens the empty composer placeholder truncates to one line; typed
+drafts still wrap and grow as usual.
 
 Audio is sent to the Ergonaut server and then to OpenAI, including from private
 pool chats; do not record material that must remain in a private inference pool.

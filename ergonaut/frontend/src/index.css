@@ -167,6 +167,10 @@ body {
 .chat-composer textarea {
   background-color: transparent;
 }
+.chat-composer textarea::placeholder {
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
 .chat-composer textarea:focus-visible {
   outline: none;
 }
