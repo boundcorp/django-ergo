@@ -32,6 +32,10 @@ instead of the browser default; browsers that can only record Ogg cannot use
 voice input. The voice API rejects Ogg; it accepts WebM, MP4/M4A, MP3 and WAV
 with matching content types and audio signatures. The control is unavailable
 until voice transcription is enabled and an OpenAI API key is configured.
+The compact control shows a red recording indicator and timer, a spinner while
+transcribing, or an error icon with retry and dismiss controls. The microphone's
+tooltip and accessible label describe OpenAI processing; error details are
+available in the icon's tooltip and accessible label.
 
 Audio is sent to the Ergonaut server and then to OpenAI, including from private
 pool chats; do not record material that must remain in a private inference pool.

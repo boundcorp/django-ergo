@@ -220,33 +220,36 @@ export function VoiceRecorder({
 
   const supported = window.isSecureContext && !!recordingType() && !!navigator.mediaDevices?.getUserMedia
   if (!config?.enabled) return null
-  if (!supported)
-    return (
-      <span className="text-xs text-muted">
-        <button
-          type="button"
-          disabled
-          aria-label="Record voice message"
-          title="Use HTTPS and a browser that supports a compatible audio recording format"
-        >
-          🎙
-        </button>{' '}
-        Voice recording requires a secure connection (HTTPS) and a browser with a compatible audio recording format.
-      </span>
-    )
+  const privacy = 'Voice input (audio sent to OpenAI to transcribe)'
+  const buttonClass =
+    'flex h-11 w-11 shrink-0 items-center justify-center rounded-control hover:bg-raised focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50'
+  const announcement = !supported
+    ? 'Voice recording requires a secure connection and a compatible browser.'
+    : phase === 'permission'
+      ? 'Waiting for microphone permission.'
+      : phase === 'recording'
+        ? 'Recording. Audio will be sent to OpenAI for transcription.'
+        : phase === 'processing'
+          ? `${limitReached ? 'Maximum duration reached. ' : ''}Transcribing audio with OpenAI.`
+          : phase === 'error'
+            ? error
+            : ''
 
   return (
-    <div className="flex flex-wrap items-center gap-2 text-xs" aria-live="polite">
-      {phase === 'idle' && (
+    <div className="flex w-[132px] shrink-0 items-center text-xs">
+      <span className="sr-only" aria-live="polite" aria-atomic="true">
+        {announcement}
+      </span>
+      {phase === 'idle' ? (
         <button
           ref={trigger}
           type="button"
-          disabled={disabled}
+          disabled={disabled || !supported}
           onClick={start}
-          aria-label="Record voice message"
+          aria-label={`Record voice message. ${privacy}`}
           aria-pressed={false}
-          title="Record voice message; audio is sent for remote transcription"
-          className="flex min-h-11 min-w-11 items-center justify-center rounded-control text-mint hover:bg-raised focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50"
+          title={supported ? privacy : `${privacy}. Requires HTTPS and a compatible browser.`}
+          className={`${buttonClass} text-mint`}
         >
           <svg
             width="20"
@@ -261,56 +264,60 @@ export function VoiceRecorder({
             <path d="M5 11a7 7 0 0 0 14 0M12 18v4M8 22h8" />
           </svg>
         </button>
+      ) : phase === 'recording' ? (
+        <button
+          ref={action}
+          type="button"
+          aria-label="Stop recording"
+          title="Stop recording"
+          aria-pressed="true"
+          className={buttonClass}
+          onClick={() => recorder.current?.stop()}
+        >
+          <span aria-hidden="true" className="h-3 w-3 rounded-full bg-red-500 motion-safe:animate-pulse" />
+        </button>
+      ) : phase === 'error' ? (
+        <span
+          className="flex h-11 w-11 shrink-0 items-center justify-center text-red-500"
+          role="img"
+          tabIndex={0}
+          aria-label={error}
+          title={error}
+        >
+          ⚠
+        </span>
+      ) : (
+        <span className="flex h-11 w-11 shrink-0 items-center justify-center" aria-hidden="true">
+          <span className="inline-block motion-safe:animate-spin">◌</span>
+        </span>
       )}
-      {phase === 'permission' && <span>Waiting for microphone permission…</span>}
       {phase === 'recording' && (
-        <>
-          <span>
-            Recording {String(Math.floor(elapsed / 60)).padStart(2, '0')}:{String(elapsed % 60).padStart(2, '0')}. Audio
-            will be sent for remote transcription.
-          </span>
-          <button
-            ref={action}
-            type="button"
-            aria-label="Stop recording"
-            aria-pressed={true}
-            className="min-h-11 rounded-control px-2"
-            onClick={() => recorder.current?.stop()}
-          >
-            Stop recording
-          </button>
-        </>
-      )}
-      {phase === 'processing' && (
-        <span>
-          {limitReached ? 'Maximum duration reached. ' : ''}
-          <span aria-hidden="true" className="inline-block animate-spin">
-            ◌
-          </span>{' '}
-          Transcribing… Audio is sent to the server and provider.
+        <span className="w-11 text-center tabular-nums" aria-hidden="true">
+          {String(Math.floor(elapsed / 60)).padStart(2, '0')}:{String(elapsed % 60).padStart(2, '0')}
         </span>
       )}
       {phase === 'error' && (
-        <>
-          <span role="alert">{error}</span>
-          <button
-            ref={action}
-            type="button"
-            className="min-h-11 rounded-control px-2"
-            onClick={() => (audio.current ? void transcribe(audio.current, generation.current) : void start())}
-          >
-            Retry
-          </button>
-        </>
+        <button
+          ref={action}
+          type="button"
+          className={buttonClass}
+          aria-label="Retry"
+          title="Retry"
+          onClick={() => (audio.current ? void transcribe(audio.current, generation.current) : void start())}
+        >
+          <span aria-hidden="true">↻</span>
+        </button>
       )}
       {phase !== 'idle' && (
         <button
           ref={phase === 'permission' || phase === 'processing' ? action : undefined}
           type="button"
-          className="min-h-11 rounded-control px-2"
+          className={buttonClass}
+          aria-label={phase === 'error' ? 'Dismiss' : 'Cancel'}
+          title={phase === 'error' ? 'Dismiss' : 'Cancel'}
           onClick={cancel}
         >
-          {phase === 'error' ? 'Dismiss' : 'Cancel'}
+          <span aria-hidden="true">×</span>
         </button>
       )}
     </div>
