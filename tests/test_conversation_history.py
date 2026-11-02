@@ -475,6 +475,57 @@ def test_open_link_shows_the_linked_message_and_resolves_other_chats():
         toolkit.execute_tool("ergo_chat_history_open_link", {"link": f"/s/{stranger}"})
 
 
+@pytest.mark.django_db
+@pytest.mark.parametrize("tool", ["read", "search"])
+@pytest.mark.parametrize("form", ["session", "uuid", "link"])
+def test_history_source_resolves_linked_chat(tool, form):
+    user = User.objects.create_user(username="history-link", password="x")
+    session = ConversationSession.objects.create(
+        user=user, engine_type="claude", transport_type="api", status="active"
+    )
+    _say(session, 0, "user", "distinctive history message")
+    session_id = str(session.pk)
+    source_id = {
+        "session": f"session:{session_id}",
+        "uuid": session_id,
+        "link": f"https://ergo.example.com/s/{session_id}#m-1",
+    }[form]
+    asked = []
+
+    def loader(linked_id):
+        asked.append(linked_id)
+        return SessionSource(session) if linked_id == session_id else None
+
+    toolkit = MessageHistoryToolkit([], link_loader=loader)
+    arguments = {"source_id": source_id}
+    if tool == "search":
+        arguments["query"] = "distinctive"
+    assert "distinctive history message" in toolkit.execute_tool(
+        f"ergo_chat_history_{tool}", arguments
+    )
+    assert "distinctive history message" in toolkit.execute_tool(
+        f"ergo_chat_history_{tool}", arguments
+    )
+    assert asked == [session_id]
+
+
+@pytest.mark.parametrize("tool", ["read", "search"])
+@pytest.mark.parametrize("form", ["session", "uuid", "link"])
+def test_history_source_refuses_unreadable_chat(tool, form):
+    session_id = "0b6c3a1e-5f7d-4c2b-9a8e-1d2f3a4b5c6d"
+    source_id = {
+        "session": f"session:{session_id}",
+        "uuid": session_id,
+        "link": f"/s/{session_id}#m-1",
+    }[form]
+    asked = []
+    toolkit = MessageHistoryToolkit([], link_loader=lambda sid: asked.append(sid))
+    arguments = {"source_id": source_id, "query": "anything"}
+    with pytest.raises(ValueError, match="isn't one you can read"):
+        toolkit.execute_tool(f"ergo_chat_history_{tool}", arguments)
+    assert asked == [session_id]
+
+
 # ---------------------------------------------------------------------------
 # Importers
 # ---------------------------------------------------------------------------

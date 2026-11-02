@@ -235,8 +235,10 @@ it's made of, whether or not it can change its repository (that's
 sources, plugins with secret-looking config hidden, tables, schedules, chats,
 sub-bots), `ergo_self_files` and `ergo_self_read` (files in the bot folder, by
 line range; `ergo:` paths read Ergo's own source, e.g.
-`ergo:plugins/attachments.py`). Hidden files such as `.env` are never listed
-or read.
+`ergo:plugins/attachments.py`). Paths cannot escape their respective folders;
+for other files in the bot's config repository, use the `config_repo` skill's
+`ergo_config_repo_list` and `ergo_config_repo_read` tools if available. Hidden
+files such as `.env` are never listed or read.
 
 ```markdown
 ---
@@ -1090,6 +1092,9 @@ change its own instructions, config and tools, or add new bots.
 Use `ergo_config_repo_edit` for an exact, targeted replacement in an existing
 file; `ergo_config_repo_write` creates or replaces a whole file. Ranged reads
 return numbered lines, and all paths can't leave the repo or touch `.git`.
+Files that cannot be decoded as UTF-8 are treated as binary: reads report their
+size, edits reject them, and grep identifies a named binary file or skips and
+counts binary files when searching a directory, including when nothing matches.
 `ergo_config_repo_discard` throws unpublished edits away.
 
 In `merge_main` mode the bot edits the checkout it runs from, and

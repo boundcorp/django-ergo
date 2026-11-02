@@ -74,10 +74,14 @@ example `More: ergo_chat_history_read start_line=57`. `source_id` is optional wh
 toolkit holds a single source. Session sources re-read the database on each
 call, so a live session sees its own new messages.
 
-`ergo_chat_history_open_link` reads chats that are sources, and asks
-`link_loader(session_id)` for any other; return a `MessageSource`, or None
-when the chat isn't readable. A bot's loader opens any chat (with any bot)
-of the same person, which is what they can open in Ergonaut themselves.
+`source_id` can also be a session id, a bare chat UUID, or a chat link
+(the message fragment is ignored when selecting a source).
+`ergo_chat_history_open_link` and source selection ask `link_loader(session_id)`
+for chats not already loaded; return a `MessageSource`, or None when the chat
+isn't readable. The loaded chat is then available to the other history tools.
+A bot's loader permits sessions belonging to the current session's user with a
+nonempty bot name, including chats with other bots; it refuses all linked
+sessions when the current session has no user.
 
 ## Importing
 
