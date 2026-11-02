@@ -615,6 +615,11 @@ async def test_a_bot_delegates_to_a_new_thread_and_gets_the_reply(
     sent = json.loads(engine._client.calls[1]["messages"][-1]["content"][0]["content"])
     assert sent["sent_to"] == "kitchen · Meal plan"
     thread = await ConversationSession.objects.aget(id=sent["thread_id"])
+    assert (sent["session_id"], sent["title"], sent["bot"]) == (
+        str(thread.id),
+        "kitchen · Meal plan",
+        "kitchen",
+    )
     assert thread.parent_id == root.id
 
     # The thread answers in a turn of its own...
@@ -743,8 +748,19 @@ async def test_threads_are_listed_targeted_and_archived(tmp_path, thread_message
         (str(thread.id), "kitchen · Groceries"),
         ("main", "kitchen · Main"),
     ]
+    assert [(r["session_id"], r["bot"]) for r in listing] == [
+        (str(thread.id), "kitchen"),
+        (str(root.id), "kitchen"),
+    ]
     assert listing[1]["you_are_here"] is True
-    assert results[1]["content"].startswith("Resolved kitchen · Groceries")
+    archived = json.loads(results[1]["content"])
+    assert archived == {
+        "session_id": str(thread.id),
+        "title": "kitchen · Groceries",
+        "bot": "kitchen",
+        "status": "resolved",
+        "note": "Resolved kitchen · Groceries. Its history stays readable; a new message reopens it.",
+    }
     assert [r["thread"] for r in json.loads(results[2]["content"])] == ["main"]
     assert json.loads(results[3]["content"])["thread_id"] == str(thread.id)
     assert results[4]["is_error"] and "No thread nope" in results[4]["content"]
@@ -1223,6 +1239,12 @@ async def test_a_bot_without_orchestration_can_always_message_upward(
     sent = await ThreadMessage.objects.select_related("recipient_session").aget()
     assert sent.recipient_session.bot_name == "boundcorp"
     assert sent.recipient_session.metadata["bot_role"] == "main"
+    result = json.loads(_tool_results(engine)[-1]["content"])
+    assert (result["session_id"], result["title"], result["bot"]) == (
+        str(sent.recipient_session_id),
+        "boundcorp · Main",
+        "boundcorp",
+    )
     assert sent.metadata["message_author"] == {
         "kind": "bot",
         "ref": "design",
@@ -1433,10 +1455,18 @@ async def test_the_target_decides_whether_it_takes_new_threads(
         "thread": "design · Logo",
         "cancelled_messages": 1,  # the request was still queued
         "stopped_running_turn": True,
+        "session_id": str(thread.id),
+        "title": "design · Logo",
+        "bot": "design",
     }
     assert stopped == [str(thread.id)]
     assert not_ours["is_error"] and "only design can resolve it" in not_ours["content"]
-    assert archived["content"].startswith("Resolved design · Logo")
+    archived_result = json.loads(archived["content"])
+    assert archived_result["note"].startswith("Resolved design · Logo")
+    assert (archived_result["session_id"], archived_result["bot"]) == (
+        str(thread.id),
+        "design",
+    )
     await thread.arefresh_from_db()
     assert thread.status == "completed"
 
@@ -1535,8 +1565,15 @@ async def test_ready_to_resolve_is_marked_only_where_the_viewer_may_resolve(
         in (refused["content"])
     )
     assert "only design can resolve it" in refused["content"]
-    assert resolved_started["content"].startswith("Resolved design · Started by")
-    assert resolved_own["content"].startswith("Resolved boundcorp · Own")
+    started_result = json.loads(resolved_started["content"])
+    own_result = json.loads(resolved_own["content"])
+    assert started_result["note"].startswith("Resolved design · Started by")
+    assert (started_result["session_id"], started_result["bot"]) == (
+        str(started.id),
+        "design",
+    )
+    assert own_result["note"].startswith("Resolved boundcorp · Own")
+    assert (own_result["session_id"], own_result["bot"]) == (str(own.id), "boundcorp")
     await theirs.arefresh_from_db()
     assert theirs.status != "completed"
 
@@ -1824,6 +1861,48 @@ LAZY_YAML = """
 
 
 @pytest.mark.django_db(transaction=True)
+async def test_thread_tool_metadata_for_named_chat_and_unstoppable_thread(
+    tmp_path, thread_messages, settings
+):
+    from django_ergo.bots import orchestrator
+    from django_ergo.bots.tools import ToolContext
+
+    settings.DJANGO_ERGO = {**settings.DJANGO_ERGO, "TURN_STOPPER": None}
+    user = await User.objects.acreate(username="metadata")
+    bot, _ = make_bot(tmp_path, say("ok"), yaml_text=LAZY_YAML, name="lazy")
+    main = await bot.root_session(user)
+    named = await bot.chat_session(user, "reports")
+    thread = await bot.create_session(user, parent=main, title="Work")
+    ctx = ToolContext(bot=bot, session=main, user=user)
+
+    rows = await sync_to_async(orchestrator.ergo_thread_list)(ctx)
+    row = next(r for r in rows if r["thread"] == "reports")
+    assert (row["id"], row["session_id"], row["title"], row["bot"]) == (
+        str(named.id),
+        str(named.id),
+        "lazy · Weekly reports",
+        "lazy",
+    )
+    sent = await sync_to_async(orchestrator.ergo_thread_send)(
+        ctx, message="Report", thread="reports"
+    )
+    assert (sent["thread_id"], sent["session_id"], sent["title"], sent["bot"]) == (
+        str(named.id),
+        str(named.id),
+        "lazy · Weekly reports",
+        "lazy",
+    )
+    stopped = await sync_to_async(orchestrator.ergo_thread_stop)(ctx, str(thread.id))
+    assert (stopped["session_id"], stopped["title"], stopped["bot"]) == (
+        str(thread.id),
+        "lazy · Work",
+        "lazy",
+    )
+    assert "can't stop a running turn" in stopped["note"]
+    assert "stopped_running_turn" not in stopped
+
+
+@pytest.mark.django_db(transaction=True)
 async def test_skills_load_mid_turn_require_each_other_and_unload(tmp_path):
     user = await User.objects.acreate(username="lazy-user")
     bot, engine = make_bot(
@@ -2039,6 +2118,13 @@ async def test_a_send_right_after_a_forward_to_the_same_thread_is_queued_in_orde
     assert not follow_up.get("is_error"), follow_up["content"]
     queued = json.loads(follow_up["content"])
     assert (queued["status"], queued["queue_position"]) == ("queued", 2)
+    first_result = json.loads(forwarded["content"])
+    for result in (first_result, queued):
+        assert (result["session_id"], result["title"], result["bot"]) == (
+            str(thread.id),
+            "kitchen · Deploy",
+            "kitchen",
+        )
     first, second = [m async for m in ThreadMessage.objects.order_by("created_at")]
     assert first.metadata["forwarded"] and second.text == "It is the octo cluster."
     assert len(SENT) == 2
@@ -2438,6 +2524,11 @@ async def test_stopping_a_thread_cancels_everything_this_bot_queued_for_it(
     await bot.ask(root, "Never mind")
     stopped = json.loads(_tool_results(engine)[-1]["content"])
     assert stopped["cancelled_messages"] == 2
+    assert (stopped["session_id"], stopped["title"], stopped["bot"]) == (
+        str(thread.id),
+        "kitchen · Deploy",
+        "kitchen",
+    )
     assert turn_stopper == [str(thread.id)]
 
     calls = len(engine._client.calls)
@@ -2848,6 +2939,7 @@ async def test_child_thread_can_report_to_its_parents_cross_bot_starter(
     await design.ask(child, "Report to the campaign")
     sent = json.loads(_tool_results(engine)[-1]["content"])
     assert sent["thread_id"] == str(starter.id)
+    assert (sent["session_id"], sent["bot"]) == (str(starter.id), "boundcorp")
     assert sent["note"].startswith("Sent as a report")
     await thread_messages(registry)
     report = await ThreadMessage.objects.aget(id=sent["message_id"])
@@ -2891,6 +2983,11 @@ async def test_forward_hands_the_users_own_message_to_a_thread(
     sent = json.loads(_tool_results(engine)[-1]["content"])
     assert sent["forwarded_to"] == "kitchen · Deploy"
     assert sent["shared_files"] == ["log.txt"]
+    assert (sent["session_id"], sent["title"], sent["bot"]) == (
+        str(thread.id),
+        "kitchen · Deploy",
+        "kitchen",
+    )
 
     forwarded = await ThreadMessage.objects.aget(recipient_session=thread)
     assert forwarded.text == words  # verbatim, not retold
@@ -3139,7 +3236,9 @@ async def test_finished_threads_are_resolved_and_unfinished_ones_refused(
     q1, q2, q3, q4 = _tool_results(engine)[-4:]
     assert q1["is_error"] and "asks the user something" in q1["content"]
     assert q2["is_error"] and "1 worker(s) are running" in q2["content"]
-    assert q3["content"].startswith("Resolved kitchen · Done")
+    resolved = json.loads(q3["content"])
+    assert resolved["note"].startswith("Resolved kitchen · Done")
+    assert (resolved["session_id"], resolved["status"]) == (str(done.id), "resolved")
     assert q4["is_error"] and "only threads are" in q4["content"]
     await done.arefresh_from_db()
     assert done.status == "completed"
@@ -3152,6 +3251,12 @@ async def test_finished_threads_are_resolved_and_unfinished_ones_refused(
         say("Done, and resolved."),
     ]
     await bot.ask(asking, "Tuesday. That's all.")
+    self_result = json.loads(_tool_results(engine)[-1]["content"])
+    assert (self_result["session_id"], self_result["bot"], self_result["status"]) == (
+        str(asking.id),
+        "kitchen",
+        "resolved",
+    )
     await asking.arefresh_from_db()
     assert asking.status == "completed"
     # A new message reopens it (Ergonaut's message endpoint and thread-message
