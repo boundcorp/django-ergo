@@ -4,6 +4,26 @@ import { api } from '../api'
 type Config = { enabled: boolean; max_duration: number }
 type Phase = 'idle' | 'permission' | 'recording' | 'processing' | 'error'
 
+const recordingTypes = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/mpeg', 'audio/wav']
+const acceptedTypes = [
+  'audio/webm',
+  'video/webm',
+  'audio/mp4',
+  'video/mp4',
+  'audio/m4a',
+  'audio/x-m4a',
+  'audio/mpeg',
+  'audio/mp3',
+  'audio/wav',
+  'audio/wave',
+  'audio/x-wav',
+]
+
+function recordingType() {
+  if (typeof MediaRecorder === 'undefined' || typeof MediaRecorder.isTypeSupported !== 'function') return undefined
+  return recordingTypes.find(type => MediaRecorder.isTypeSupported(type))
+}
+
 export function VoiceRecorder({
   sessionId,
   disabled,
@@ -133,6 +153,12 @@ export function VoiceRecorder({
     setLimitReached(false)
     setElapsed(0)
     setPhase('permission')
+    const mimeType = recordingType()
+    if (!mimeType) {
+      setError('Your browser does not support a compatible audio recording format.')
+      setPhase('error')
+      return
+    }
     try {
       const media = await navigator.mediaDevices.getUserMedia({ audio: true })
       if (generation.current !== token) {
@@ -140,7 +166,7 @@ export function VoiceRecorder({
         return
       }
       stream.current = media
-      const active = new MediaRecorder(media)
+      const active = new MediaRecorder(media, { mimeType })
       recorder.current = active
       const chunks: Blob[] = []
       active.ondataavailable = event => {
@@ -159,7 +185,13 @@ export function VoiceRecorder({
         if (generation.current !== token) return
         release()
         recorder.current = null
-        const blob = new Blob(chunks, { type: active.mimeType || 'audio/webm' })
+        const actualType = active.mimeType || mimeType
+        if (!acceptedTypes.includes(actualType.split(';', 1)[0].trim().toLowerCase())) {
+          setError('Your browser recorded an unsupported audio format.')
+          setPhase('error')
+          return
+        }
+        const blob = new Blob(chunks, { type: actualType })
         audio.current = blob
         void transcribe(blob, token)
       }
@@ -186,8 +218,7 @@ export function VoiceRecorder({
     }
   }
 
-  const supported =
-    window.isSecureContext && typeof MediaRecorder !== 'undefined' && !!navigator.mediaDevices?.getUserMedia
+  const supported = window.isSecureContext && !!recordingType() && !!navigator.mediaDevices?.getUserMedia
   if (!config?.enabled) return null
   if (!supported)
     return (
@@ -196,11 +227,11 @@ export function VoiceRecorder({
           type="button"
           disabled
           aria-label="Record voice message"
-          title="Use HTTPS and a browser that supports microphone recording"
+          title="Use HTTPS and a browser that supports a compatible audio recording format"
         >
           🎙
         </button>{' '}
-        Voice recording requires a supported browser and a secure connection (HTTPS).
+        Voice recording requires a secure connection (HTTPS) and a browser with a compatible audio recording format.
       </span>
     )
 

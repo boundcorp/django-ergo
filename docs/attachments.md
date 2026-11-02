@@ -127,7 +127,7 @@ arrived and gives its id and filename, which a tool that takes a chat file
 Audio transcripts come from `Attachment(transcript=...)`, or from
 `DJANGO_ERGO["AUDIO_TRANSCRIBER"]` when that is set. It's an async callable
 `(data, media_type, filename) -> str`, and
-`django_ergo.conversation.attachments.openai_transcriber` (whisper-1) is
+`django_ergo.conversation.attachments.openai_transcriber` (`gpt-transcribe`) is
 provided. A failed transcription is logged and leaves the transcript empty.
 
 Renderers and compaction summaries show attachments as placeholders, so

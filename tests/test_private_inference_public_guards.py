@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 from unittest.mock import patch
 
 import anthropic
+import httpx
 import openai
 import pytest
 
@@ -148,8 +149,36 @@ async def test_transcriber_public_endpoint_sends():
         text = await openai_transcriber(b"RIFF", "audio/wav", "a.wav")
     assert text == "hi"
     client.audio.transcriptions.create.assert_awaited_once_with(
-        model="whisper-1", file=("a.wav", b"RIFF", "audio/wav"), response_format="json"
+        model="gpt-transcribe",
+        file=("a.wav", b"RIFF", "audio/wav"),
+        response_format="json",
     )
+
+
+async def test_gpt_transcribe_sdk_response():
+    from django_ergo.conversation.attachments import openai_transcription
+
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        return httpx.Response(
+            200, json={"text": "Bonjour", "languages": [{"code": "fr"}]}
+        )
+
+    client = openai.AsyncOpenAI(
+        api_key="test-key",
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(respond)),
+    )
+    with patch.object(openai, "AsyncOpenAI", return_value=client):
+        response = await openai_transcription(b"RIFF", "audio/wav", "a.wav")
+    await client.close()
+    assert response.text == "Bonjour"
+    language = response.languages[0]
+    assert (language["code"] if isinstance(language, dict) else language.code) == "fr"
+    body = requests[0].content
+    assert b"gpt-transcribe" in body
+    assert b'name="response_format"' in body and b"json" in body
 
 
 async def test_transcription_json_response_includes_usage():

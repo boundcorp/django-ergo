@@ -100,7 +100,7 @@ async def openai_transcriber(
     media_type: str,
     filename: str,
     *,
-    model: str = "whisper-1",
+    model: str = "gpt-transcribe",
     request_timeout: float | None = None,
 ) -> str:
     """Transcribe audio, returning text for attachment callers."""
@@ -115,7 +115,7 @@ async def openai_transcription(
     media_type: str,
     filename: str,
     *,
-    model: str = "whisper-1",
+    model: str = "gpt-transcribe",
     request_timeout: float | None = None,
 ):
     """Return the OpenAI JSON response, including any provider usage."""

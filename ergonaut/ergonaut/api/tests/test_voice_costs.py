@@ -74,6 +74,8 @@ def test_paid_transcription_in_cli_session(transcription):
 @pytest.mark.parametrize(
     "model,usage,expected,estimated",
     [
+        ("gpt-transcribe", None, "0.0045", True),
+        ("gpt-transcribe", SimpleNamespace(seconds=30.0), "0.00225", False),
         ("gpt-4o-mini-transcribe", None, "0.003", True),
         ("whisper-1", None, "0.006", True),
         ("whisper-1", SimpleNamespace(seconds=30.0), "0.003", False),

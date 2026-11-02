@@ -11,15 +11,21 @@ let container: HTMLDivElement
 let stopped: number
 let requested: number
 let instances: FakeRecorder[]
+let supportedTypes: string[]
+let actualType: string | undefined
 const original = { config: api.voiceConfig, transcribe: api.transcribeVoice }
 
 class FakeRecorder {
   state: 'recording' | 'inactive' = 'inactive'
-  mimeType = 'audio/webm'
+  mimeType: string
   ondataavailable: ((event: { data: Blob }) => void) | null = null
   onstop: (() => void) | null = null
   onerror: (() => void) | null = null
-  constructor(_stream: MediaStream) {
+  static isTypeSupported(type: string) {
+    return supportedTypes.includes(type)
+  }
+  constructor(_stream: MediaStream, options: MediaRecorderOptions) {
+    this.mimeType = actualType ?? options.mimeType ?? ''
     instances.push(this)
   }
   start() {
@@ -58,6 +64,8 @@ beforeEach(async () => {
   stopped = 0
   requested = 0
   instances = []
+  supportedTypes = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4']
+  actualType = undefined
   Object.assign(globalThis, {
     window: win,
     document: win.document,
@@ -103,6 +111,55 @@ describe('voice recorder', () => {
     await click('Stop recording')
     expect(stopped).toBe(1)
     expect(result).toBe('spoken words')
+  })
+
+  test('prefers supported WebM over an Ogg browser default', async () => {
+    let uploaded: Blob | undefined
+    api.transcribeVoice = async (_id, blob) => {
+      uploaded = blob
+      return { text: 'ok' }
+    }
+    await mount()
+    await click('Record voice message')
+    expect(instances[0].mimeType).toBe('audio/webm;codecs=opus')
+    await click('Stop recording')
+    expect(uploaded?.type).toBe('audio/webm;codecs=opus')
+  })
+
+  test('falls back to supported MP4 when WebM is unavailable', async () => {
+    supportedTypes = ['audio/mp4']
+    let uploaded: Blob | undefined
+    api.transcribeVoice = async (_id, blob) => {
+      uploaded = blob
+      return { text: 'ok' }
+    }
+    await mount()
+    await click('Record voice message')
+    await click('Stop recording')
+    expect(uploaded?.type).toBe('audio/mp4')
+  })
+
+  test('disables recording when only Ogg is supported', async () => {
+    supportedTypes = ['audio/ogg']
+    await mount()
+    expect(button('Record voice message').disabled).toBe(true)
+    expect(container.textContent).toContain('compatible audio recording format')
+    expect(requested).toBe(0)
+  })
+
+  test('does not upload if the recorder returns an unsupported format', async () => {
+    actualType = 'audio/ogg'
+    let calls = 0
+    api.transcribeVoice = async () => {
+      calls++
+      return { text: 'ok' }
+    }
+    await mount()
+    await click('Record voice message')
+    await click('Stop recording')
+    expect(calls).toBe(0)
+    expect(stopped).toBe(1)
+    expect(container.textContent).toContain('unsupported audio format')
   })
 
   test('escape discards recording and stops tracks without upload', async () => {
@@ -218,7 +275,7 @@ describe('voice recorder', () => {
   test('explains missing browser recording support', async () => {
     Object.defineProperty(win.navigator, 'mediaDevices', { configurable: true, value: undefined })
     await mount()
-    expect(container.textContent).toContain('supported browser')
+    expect(container.textContent).toContain('compatible audio recording format')
     expect(requested).toBe(0)
   })
 
