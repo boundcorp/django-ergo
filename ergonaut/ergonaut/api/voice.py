@@ -28,9 +28,11 @@ router = Router(tags=["voice"], auth=user_auth)
 logger = logging.getLogger(__name__)
 
 # USD per minute; token rates are USD per million. Source:
+# https://developers.openai.com/api/docs/models/gpt-transcribe
 # https://developers.openai.com/api/docs/models/gpt-4o-mini-transcribe
 # https://developers.openai.com/api/docs/models/whisper-1
 TRANSCRIPTION_PRICES = {
+    "gpt-transcribe": {"minute": Decimal("0.0045")},
     "gpt-4o-mini-transcribe": {
         "minute": Decimal("0.003"),
         "audio_input": Decimal("3"),
@@ -156,8 +158,6 @@ def _format(data, content_type):
     mime = (content_type or "").split(";", 1)[0].strip().lower()
     if mime in ("audio/webm", "video/webm") and data.startswith(b"\x1a\x45\xdf\xa3"):
         return "matroska", "audio/webm", "audio.webm"
-    if mime in ("audio/ogg", "application/ogg") and data.startswith(b"OggS"):
-        return "ogg", "audio/ogg", "audio.ogg"
     if mime in ("audio/mpeg", "audio/mp3") and (
         data.startswith(b"ID3") or (len(data) >= 2 and data[0] == 0xFF and data[1] & 0xE0 == 0xE0)
     ):

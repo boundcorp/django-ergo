@@ -4,13 +4,20 @@ This document tracks the major milestones and evolution of the Django Ergo proje
 
 ## Development Timeline
 
+### GPT-Transcribe defaults (November 2026)
+
+- Composer voice and attachment transcription now default to `gpt-transcribe`.
+  Voice costs use its audio-duration price, estimating from the measured recording
+  when provider usage is unavailable.
+
 ### Voice input in chat (November 2026)
 
 - Existing chat composers can record audio for an editable draft, without
   sending it automatically. The optional session-scoped transcription API
   validates and limits uploads and uses the deployment's OpenAI credential.
-  Audio is sent to OpenAI, including for private-pool chats; transcription
-  costs are not included in token-based reports. See [Ergonaut](docs/ergonaut.md#voice-input).
+  Audio is sent to OpenAI, including for private-pool chats; voice costs appear
+  in the ledger. See [Ergonaut](docs/ergonaut.md#voice-input).
+
 ### System event messages (November 2026)
 
 - PR-check notifications, worker updates/results, scheduled prompts and

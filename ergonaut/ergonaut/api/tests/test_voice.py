@@ -197,9 +197,25 @@ def test_missing_or_broken_probe_returns_clean_json(setup_voice, monkeypatch):
             b"\x1a\x45\xdf\xa3more",
             ("matroska", "audio/webm", "audio.webm"),
         ),
-        ("audio/ogg", b"OggSmore", ("ogg", "audio/ogg", "audio.ogg")),
         ("audio/mp4", b"\x00\x00\x00\x18ftypmore", ("mov", "audio/mp4", "audio.m4a")),
+        ("audio/mpeg", b"ID3more", ("mp3", "audio/mpeg", "audio.mp3")),
+        ("audio/wav", b"RIFF\0\0\0\0WAVE", ("wav", "audio/wav", "audio.wav")),
+        ("audio/x-m4a", b"\x00\x00\x00\x18ftypmore", ("mov", "audio/mp4", "audio.m4a")),
     ],
 )
 def test_browser_formats_get_safe_provider_filenames(mime, magic, expected):
     assert voice._format(magic, mime) == expected
+
+
+@pytest.mark.parametrize("mime", ["audio/ogg", "application/ogg", "audio/ogg;codecs=opus"])
+def test_ogg_is_rejected_before_probing_or_provider(setup_voice, monkeypatch, mime):
+    _, client, url = setup_voice
+    transcribe = AsyncMock()
+    probe = AsyncMock()
+    monkeypatch.setattr(voice, "openai_transcription", transcribe)
+    monkeypatch.setattr(voice, "_duration", probe)
+    response = client.post(url, {"audio": audio_file(b"OggSmore", content_type=mime)})
+    assert response.status_code == 400
+    assert response.json() == {"detail": "Unsupported or invalid audio format"}
+    assert not probe.called
+    assert not transcribe.called

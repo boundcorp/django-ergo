@@ -8,11 +8,7 @@ from django.core.checks import run_checks
 from ergonaut.api.voice import _duration, _format
 
 
-@pytest.mark.parametrize(
-    ("container", "content_type", "demuxer"),
-    [("webm", "audio/webm", "matroska"), ("ogg", "audio/ogg", "ogg")],
-)
-def test_generated_browser_audio_duration(container, content_type, demuxer):
+def test_generated_browser_audio_duration():
     if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
         pytest.skip("ffmpeg and ffprobe are required for real audio probe tests")
     # Streaming output has no seekable header to backfill duration, like a
@@ -29,15 +25,15 @@ def test_generated_browser_audio_duration(container, content_type, demuxer):
             "-c:a",
             "libopus",
             "-f",
-            container,
+            "webm",
             "pipe:1",
         ],
         capture_output=True,
         check=True,
         timeout=10,
     ).stdout
-    detected, _, _ = _format(audio, content_type)
-    assert detected == demuxer
+    detected, _, _ = _format(audio, "audio/webm")
+    assert detected == "matroska"
     assert 0.9 <= _duration(audio, detected) <= 1.1
 
 
