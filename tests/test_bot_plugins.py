@@ -367,6 +367,38 @@ def test_bot_management_reads_edits_and_greps_files(bot_repo, monkeypatch):
     assert "start_line=3" in truncated
 
 
+def test_bot_management_binary_files(bot_repo, monkeypatch):
+    _, work = bot_repo
+    _, _, plugin = management_bot(work, "propose_pr")
+    git(work, "add", "-A")
+    git(work, "commit", "-m", "add bot")
+    git(work, "push")
+    plugin.write("search/text.txt", "needle\n")
+    (plugin.workdir / "search/a.bin").write_bytes(b"\x9b\x00")
+    (plugin.workdir / "search/z.bin").write_bytes(b"\xfe")
+
+    assert plugin.read("search/a.bin") == "search/a.bin is a binary file (2 bytes)"
+    assert plugin.read("search/a.bin", start_line=1) == (
+        "search/a.bin is a binary file (2 bytes)"
+    )
+    assert plugin.grep("needle", "search/a.bin") == (
+        "search/a.bin is a binary file (2 bytes)"
+    )
+    assert plugin.grep("needle", "search") == (
+        "search/text.txt:1:needle\n[skipped 2 binary file(s)]"
+    )
+    assert plugin.grep("missing", "search") == (
+        "No matches.\n[skipped 2 binary file(s)]"
+    )
+    monkeypatch.setattr("django_ergo.plugins.bot_management.MAX_GREP_MATCHES", 1)
+    assert plugin.grep("needle", "search") == (
+        "search/text.txt:1:needle\n[truncated at 1 matches]\n[skipped 2 binary file(s)]"
+    )
+    with pytest.raises(ValueError, match="binary file"):
+        plugin.edit("search/a.bin", "x", "y")
+    assert (plugin.workdir / "search/a.bin").read_bytes() == b"\x9b\x00"
+
+
 def test_bot_management_pull_ignores_multiple_tracking_branches(bot_repo, tmp_path):
     remote, work = bot_repo
     _, _, plugin = management_bot(work, "merge_main")

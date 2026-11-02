@@ -2569,6 +2569,32 @@ def test_introspection_reads_the_bot_folder_and_ergo_but_nothing_hidden(tmp_path
     assert "did you mean 'tools/big.py'?" in str(err.value)
 
 
+def test_introspection_rejects_escapes_with_repository_and_source_guidance(
+    tmp_path, monkeypatch
+):
+    from django_ergo.bots import introspection
+
+    bot, _ = make_bot(tmp_path)
+    folder = bot.definition.root_dir
+    outside = tmp_path / "outside.txt"
+    outside.write_text("outside")
+    (folder / "escape").symlink_to(outside)
+    ergo_folder = tmp_path / "ergo_source"
+    ergo_folder.mkdir()
+    (ergo_folder / "escape").symlink_to(outside)
+    monkeypatch.setattr(introspection, "ergo_root", lambda: ergo_folder)
+
+    for path in ("../outside.txt", "escape", "ergo:../outside.txt", "ergo:escape"):
+        for operation in (introspection.list_files, introspection.read_file):
+            with pytest.raises(ValueError, match="outside") as err:
+                operation(bot, path)
+            message = str(err.value)
+            assert "config_repo" in message
+            assert "ergo_config_repo_list" in message
+            assert "ergo_config_repo_read" in message
+            assert "ergo:plugins/attachments.py" in message
+
+
 @pytest.mark.django_db(transaction=True)
 async def test_a_report_upward_gets_no_reply_unless_it_asks(tmp_path, thread_messages):
     from django_ergo.conversation.models import ThreadMessage

@@ -46,7 +46,10 @@ SNIPPET_CHARS = 300
 _SOURCE = {
     "type": "string",
     "required": False,
-    "description": "Source id from ergo_chat_history_sources. Optional when only one source exists.",
+    "description": (
+        "Source id from ergo_chat_history_sources, a chat id, or a chat link. "
+        "Optional when only one source exists."
+    ),
 }
 _GRANULARITY = {
     "type": "string",
@@ -258,6 +261,18 @@ class MessageHistoryToolkit(Toolkit):
         return handler(arguments or {})
 
     # -- helpers ------------------------------------------------------------
+    def _session_source(self, session_id: str) -> MessageSource:
+        source_id = f"session:{session_id}"
+        source = self.sources.get(source_id)
+        if source is None and self.link_loader is not None:
+            source = self.link_loader(session_id)
+            if source is not None:
+                self.add_source(source)
+                source = self.sources.get(source_id)
+        if source is None:
+            msg = f"Chat {session_id} isn't one you can read"
+            raise ValueError(msg)
+        return source
 
     def _source(self, arguments: dict) -> MessageSource:
         source_id = arguments.get("source_id")
@@ -271,6 +286,9 @@ class MessageHistoryToolkit(Toolkit):
                 raise ValueError(msg)
         else:
             source = self.sources.get(source_id)
+            if source is None and LINK.search(str(source_id).strip()):
+                session_id, _ = parse_link(str(source_id))
+                source = self._session_source(session_id)
             if source is None:
                 msg = f"Unknown source {source_id!r}; call ergo_chat_history_sources to list them"
                 raise ValueError(msg)
@@ -383,15 +401,10 @@ class MessageHistoryToolkit(Toolkit):
 
     def _open_link(self, arguments: dict) -> str:
         session_id, line = parse_link(str(arguments.get("link") or ""))
-        source_id = f"session:{session_id}"
-        if source_id not in self.sources and self.link_loader is not None:
-            source = self.link_loader(session_id)
-            if source is not None:
-                self.add_source(source)
-        if source_id not in self.sources:
-            msg = f"Chat {session_id} isn't one you can read"
-            raise ValueError(msg)
-        source = self._source({"source_id": source_id})
+        source = self._session_source(session_id)
+        source_id = source.source_id
+        if isinstance(source, SessionSource):
+            source.refresh()
         granularity = self._granularity(arguments)
         visible = [
             m for m in source.messages() if is_visible(m, granularity) or m.line == line

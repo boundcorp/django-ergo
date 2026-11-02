@@ -371,7 +371,11 @@ class BotManagementPlugin(BotPlugin):
     def read(
         self, path: str, start_line: int | None = None, end_line: int | None = None
     ) -> str:
-        text = self.path(path).read_text()
+        target = self.path(path)
+        try:
+            text = target.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            return f"{path} is a binary file ({target.stat().st_size} bytes)"
         lines = text.splitlines()
         total = len(lines)
         if start_line is None and end_line is None:
@@ -421,7 +425,8 @@ class BotManagementPlugin(BotPlugin):
             raise ValueError(msg) from None
         base = self.path(path)
         work = self.workdir
-        if base.is_file():
+        named_file = base.is_file()
+        if named_file:
             targets = [base]
         else:
             prefix = "" if base == work else f"{base.relative_to(work)}/"
@@ -429,21 +434,44 @@ class BotManagementPlugin(BotPlugin):
                 "ls-files", "--cached", "--others", "--exclude-standard", cwd=work
             ).splitlines()
             targets = [self.path(name) for name in names if name.startswith(prefix)]
+        return self._grep(matcher, path, targets, named_file)
+
+    def _grep(
+        self, matcher: re.Pattern, path: str, targets: list[Path], named_file: bool
+    ) -> str:
+        work = self.workdir
 
         matches = []
+        binary_count = 0
+        truncated = False
         for target in targets:
             if not target.is_file():
                 continue
             relative = target.relative_to(work)
-            for number, line in enumerate(target.read_text().splitlines(), 1):
-                if matcher.search(line):
-                    matches.append(f"{relative}:{number}:{line}")
-                    if len(matches) == MAX_GREP_MATCHES:
-                        return (
-                            "\n".join(matches)
-                            + f"\n[truncated at {MAX_GREP_MATCHES} matches]"
-                        )
-        return "\n".join(matches) or "No matches."
+            try:
+                text = target.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                if named_file:
+                    return f"{path} is a binary file ({target.stat().st_size} bytes)"
+                binary_count += 1
+                continue
+            if truncated:
+                continue
+            for number, line in (
+                (number, line)
+                for number, line in enumerate(text.splitlines(), 1)
+                if matcher.search(line)
+            ):
+                matches.append(f"{relative}:{number}:{line}")
+                if len(matches) == MAX_GREP_MATCHES:
+                    break
+            truncated = len(matches) == MAX_GREP_MATCHES
+        result = "\n".join(matches) or "No matches."
+        if truncated:
+            result += f"\n[truncated at {MAX_GREP_MATCHES} matches]"
+        if binary_count:
+            result += f"\n[skipped {binary_count} binary file(s)]"
+        return result
 
     def edit(
         self, path: str, old_text: str, new_text: str, replace_all: bool = False
@@ -455,7 +483,11 @@ class BotManagementPlugin(BotPlugin):
         if not old_text:
             msg = "old_text must not be empty"
             raise ValueError(msg)
-        text = target.read_text()
+        try:
+            text = target.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            msg = f"{path} is a binary file and cannot be edited"
+            raise ValueError(msg) from None
         count = text.count(old_text)
         if not count:
             msg = f"old_text wasn't found in {path}"

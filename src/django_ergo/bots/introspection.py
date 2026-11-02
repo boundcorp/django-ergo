@@ -49,7 +49,13 @@ def resolve(bot: Bot, path: str) -> tuple[Path, Path]:
         root = Path(bot.definition.root_dir).resolve()
     target = (root / path.lstrip("/")).resolve()
     if not target.is_relative_to(root):
-        msg = f"{path} is outside the bot folder"
+        scope = "Ergo source folder" if in_ergo else "bot folder"
+        msg = (
+            f"{path} is outside the {scope}. For other files in your bot's "
+            "config repository, use the config_repo skill's ergo_config_repo_list "
+            "and ergo_config_repo_read tools, if available. To inspect Ergo's "
+            "installed source, use an ergo: path, e.g. ergo:plugins/attachments.py."
+        )
         raise ValueError(msg)
     if any(part.startswith(".") for part in target.relative_to(root).parts):
         msg = f"{path} is hidden"
