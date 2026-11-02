@@ -717,7 +717,7 @@ class OrcaPlugin(BotPlugin):
         saved = (meta.get("orca") or {}).get(place) or {}
         if saved.get("mailbox") and saved.get("run"):
             return saved["mailbox"], saved["run"]
-        title = (meta.get("title") or f"{ctx.bot.name} chat")[:60]
+        title = (session.user_title or meta.get("title") or f"{ctx.bot.name} chat")[:60]
         terminal = self.cli_json(
             [
                 "terminal",

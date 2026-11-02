@@ -223,6 +223,104 @@ def test_browser_writes_pass_the_csrf_check(use_bots):
 
 
 @pytest.mark.django_db(transaction=True)
+def test_rename_session_is_shared_visible_and_preserves_stale_saves(client, cook, use_bots):
+    from django_ergo.conversation.models import ConversationSession
+
+    from ergonaut.api.stream import _snapshot
+
+    use_bots(say("hi"))
+    root = post(client, "/api/bots/kitchen/root").json()
+    url = f"/api/sessions/{root['id']}/title"
+    stale = ConversationSession.objects.get(id=root["id"])
+    seen = {}
+    _snapshot(root["id"], 0, seen)
+    assert post(client, url, {"title": "  Family meals  "}).json() == {"title": "Family meals"}
+    assert _snapshot(root["id"], 0, seen)[3] == "Family meals"
+    assert _snapshot(root["id"], 0, seen)[3] is None
+    stale.metadata = {**stale.metadata, "title": "stale generated", "other": "kept"}
+    stale.save()
+    session = ConversationSession.objects.get(pk=stale.pk)
+    assert session.user_title == "Family meals"
+    assert session.metadata["other"] == "kept"
+    assert client.get(f"/api/sessions/{root['id']}").json()["session"]["title"] == "Family meals"
+    assert post(client, f"/api/sessions/{root['id']}/pin", {"pinned": True}).json()["title"] == "Family meals"
+    assert client.get("/api/sessions?q=Family").json()[0]["title"] == "Family meals"
+    assert client.get("/api/sessions?q=stale%20generated").json() == []
+    assert post(client, url, {"title": "Again"}).json() == {"title": "Again"}
+    assert client.get(f"/api/sessions/{root['id']}").json()["session"]["title"] == "Again"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_rename_validation_permissions_and_csrf(client, cook, use_bots):
+    import uuid
+
+    from django.test import Client
+    from django_ergo.conversation.models import ConversationSession
+
+    use_bots(say("hi"))
+    root = post(client, "/api/bots/kitchen/root").json()
+    url = f"/api/sessions/{root['id']}/title"
+    for value in ("", "   ", "x" * 201, "\x00", "\n\t", None, 123):
+        assert post(client, url, {"title": value}).status_code == 422
+    assert post(client, url, {}).status_code == 422
+    assert post(client, url, {"title": "x" * 200}).status_code == 200
+    assert post(client, url, {"title": "  First\nSecond\x00\u0085\u2028<script>  "}).json() == {
+        "title": "FirstSecond<script>"
+    }
+    assert client.get(f"/api/sessions/{root['id']}").json()["session"]["title"] == "FirstSecond<script>"
+    other = get_user_model().objects.create_user("other-title", password="pw")
+    theirs = ConversationSession.objects.create(user=other, bot_name="kitchen", engine_type="claude")
+    missing = uuid.uuid4()
+    forbidden = post(client, f"/api/sessions/{theirs.pk}/title", {"title": "No"})
+    absent = post(client, f"/api/sessions/{missing}/title", {"title": "No"})
+    assert forbidden.status_code == absent.status_code == 404
+    assert forbidden.content == absent.content
+    assert post(client, "/api/sessions/not-a-uuid/title", {"title": "No"}).status_code == 404
+    assert post(Client(), url, {"title": "No"}).status_code == 401
+    browser = Client(enforce_csrf_checks=True)
+    browser.force_login(cook)
+    assert post(browser, url, {"title": "No"}).status_code == 403
+    browser.get("/api/auth/csrf")
+    token = browser.cookies["csrftoken"].value
+    response = browser.post(url, json.dumps({"title": "Yes"}), content_type="application/json", HTTP_X_CSRFTOKEN=token)
+    assert response.status_code == 200
+    cook.is_superuser = True
+    cook.save(update_fields=["is_superuser"])
+    assert post(client, f"/api/sessions/{theirs.pk}/title", {"title": "Admin"}).status_code == 200
+    from ergonaut.apps.users.models import ApiKey
+
+    _, key = ApiKey.issue(cook, "rename")
+    api = Client(enforce_csrf_checks=True)
+    response = api.post(
+        url, json.dumps({"title": "Via key"}), content_type="application/json", HTTP_AUTHORIZATION=f"Bearer {key}"
+    )
+    assert response.status_code == 200
+
+
+@pytest.mark.django_db(transaction=True)
+def test_inflight_thread_naming_cannot_replace_user_title(client, cook, use_bots, monkeypatch):
+    from django_ergo.conversation.models import ConversationSession
+
+    from ergonaut.apps.bots import tasks
+
+    use_bots(say("hi"))
+    root = post(client, "/api/bots/kitchen/root").json()
+    bot = webhooks.get_registry().get("kitchen")
+
+    async def generated(text, *, user, session):
+        # The model call started before the rename and finishes after it.
+        await ConversationSession.objects.filter(pk=session.pk).aupdate(user_title="My choice")
+        return {"title": "Generated too late"}
+
+    monkeypatch.setattr(bot, "thread_metadata", generated)
+    tasks.name_thread(root["id"], "first message")
+    session = ConversationSession.objects.get(pk=root["id"])
+    assert session.user_title == "My choice"
+    assert (session.metadata or {}).get("title") != "Generated too late"
+    assert client.get(f"/api/sessions/{root['id']}").json()["session"]["title"] == "My choice"
+
+
+@pytest.mark.django_db(transaction=True)
 def test_browse_a_bots_knowledge_base(client, cook, bot_folder, use_bots):
     kb = bot_folder / "kb"
     (kb / "recipes").mkdir(parents=True)

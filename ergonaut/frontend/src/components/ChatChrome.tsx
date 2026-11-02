@@ -111,6 +111,132 @@ export function SuggestionChips({ suggestions, disabled, onPick, variant = 'mobi
   )
 }
 
+/** Edit a shared session title without interrupting the rest of the session. */
+export function SessionTitle({
+  title,
+  onSave,
+  mobile = false,
+}: {
+  title: string
+  onSave: (title: string) => Promise<void>
+  mobile?: boolean
+}) {
+  const [editing, setEditing] = useState(false)
+  const [value, setValue] = useState(title)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  const input = useRef<HTMLInputElement>(null)
+  const button = useRef<HTMLButtonElement>(null)
+  const errorId = useId()
+
+  useEffect(() => {
+    if (editing) {
+      input.current?.focus()
+      input.current?.select()
+    }
+  }, [editing])
+
+  function cancel() {
+    setEditing(false)
+    setError('')
+    requestAnimationFrame(() => button.current?.focus())
+  }
+
+  async function save() {
+    const trimmed = value.trim()
+    if (!trimmed || Array.from(trimmed).length > 200) {
+      setError('Enter a title between 1 and 200 characters.')
+      return
+    }
+    setSaving(true)
+    setError('')
+    try {
+      await onSave(trimmed)
+      cancel()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (editing) {
+    return (
+      <form
+        className="mt-1 flex min-w-0 flex-wrap items-center gap-2"
+        onSubmit={event => {
+          event.preventDefault()
+          void save()
+        }}
+        onKeyDown={event => {
+          if (event.key === 'Escape') {
+            event.preventDefault()
+            event.stopPropagation()
+            if (!saving) cancel()
+          }
+        }}
+      >
+        <label className="sr-only" htmlFor={`${errorId}-input`}>
+          Session title
+        </label>
+        <input
+          ref={input}
+          id={`${errorId}-input`}
+          className="min-w-0 flex-1 basis-40 rounded border border-zinc-400 bg-transparent px-2 py-1 text-base text-ink"
+          value={value}
+          onChange={event => setValue(event.target.value)}
+          aria-invalid={!!error}
+          aria-describedby={error ? errorId : undefined}
+          disabled={saving}
+        />
+        <button
+          type="submit"
+          disabled={saving}
+          className="rounded border border-zinc-400 px-2 py-1 text-sm disabled:opacity-50"
+        >
+          {saving ? 'Saving…' : 'Save'}
+        </button>
+        <button
+          type="button"
+          disabled={saving}
+          onClick={cancel}
+          className="rounded border border-zinc-400 px-2 py-1 text-sm disabled:opacity-50"
+        >
+          Cancel
+        </button>
+        {error && (
+          <span id={errorId} role="alert" className="w-full text-sm text-red-600">
+            {error}
+          </span>
+        )}
+      </form>
+    )
+  }
+
+  return (
+    <div className="flex min-w-0 items-start gap-2">
+      {mobile ? (
+        <h2 className="chat-sheet-title max-h-24 min-w-0 overflow-y-auto [overflow-wrap:anywhere]">{title}</h2>
+      ) : (
+        <h1 className="chat-title min-w-0 font-display text-2xl font-bold [overflow-wrap:anywhere]">{title}</h1>
+      )}
+      <button
+        ref={button}
+        type="button"
+        className="shrink-0 rounded border border-zinc-400 px-2 py-1 text-xs"
+        aria-label="Rename session"
+        onClick={() => {
+          setValue(title)
+          setError('')
+          setEditing(true)
+        }}
+      >
+        Rename
+      </button>
+    </div>
+  )
+}
+
 /**
  * Phone-only session bar. The agent name, title and counts stay compact; the sheet holds
  * the options, meta, actions, waiting list, worker cards and pins. Those children stay
@@ -120,6 +246,7 @@ export function SuggestionChips({ suggestions, disabled, onPick, variant = 'mobi
 export function MobileSessionBar({
   bot,
   title,
+  titleEditor,
   summary,
   open,
   onOpenChange,
@@ -131,6 +258,7 @@ export function MobileSessionBar({
 }: {
   bot: string
   title: string
+  titleEditor: ReactNode
   summary: string
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -180,7 +308,7 @@ export function MobileSessionBar({
         <div className="chat-sheet-head">
           <div className="chat-sheet-heading">
             <div className="chat-sheet-bot">{bot}</div>
-            <h2 className="chat-sheet-title">{title}</h2>
+            {titleEditor}
           </div>
           <button
             type="button"
