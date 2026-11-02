@@ -236,7 +236,7 @@ export function VoiceRecorder({
             : ''
 
   return (
-    <div className="flex w-[132px] shrink-0 items-center text-xs">
+    <div className="flex shrink-0 items-center text-xs">
       <span className="sr-only" aria-live="polite" aria-atomic="true">
         {announcement}
       </span>
