@@ -40,7 +40,7 @@ class FakeRecorder {
 
 function button(label: string) {
   const found = [...container.querySelectorAll('button')].find(
-    el => el.getAttribute('aria-label') === label || el.textContent === label,
+    el => el.getAttribute('aria-label')?.startsWith(label) || el.textContent === label,
   )
   if (!found) throw new Error(`Missing button ${label}`)
   return found
@@ -105,9 +105,13 @@ describe('voice recorder', () => {
       result = text
     })
     expect(requested).toBe(0)
+    expect(button('Record voice message').getAttribute('aria-label')).toContain('audio sent to OpenAI')
+    expect(button('Record voice message').title).toContain('OpenAI')
     await click('Record voice message')
     expect(requested).toBe(1)
-    expect(container.textContent).toContain('Recording')
+    expect(container.querySelector('[aria-live]')?.textContent).toContain('Recording')
+    expect(button('Stop recording').title).toBe('Stop recording')
+    expect(button('Cancel').title).toBe('Cancel')
     await click('Stop recording')
     expect(stopped).toBe(1)
     expect(result).toBe('spoken words')
@@ -143,7 +147,7 @@ describe('voice recorder', () => {
     supportedTypes = ['audio/ogg']
     await mount()
     expect(button('Record voice message').disabled).toBe(true)
-    expect(container.textContent).toContain('compatible audio recording format')
+    expect(button('Record voice message').title).toContain('compatible browser')
     expect(requested).toBe(0)
   })
 
@@ -205,7 +209,7 @@ describe('voice recorder', () => {
     })
     await click('Record voice message')
     await click('Stop recording')
-    expect(container.textContent).toContain('Audio is sent to the server and provider')
+    expect(container.querySelector('[aria-live]')?.textContent).toContain('Transcribing audio with OpenAI')
     await click('Cancel')
     expect(signal?.aborted).toBe(true)
     await act(async () => {
@@ -228,7 +232,10 @@ describe('voice recorder', () => {
     })
     await click('Record voice message')
     await click('Stop recording')
-    expect(container.textContent).toContain('Rate limited')
+    expect(container.querySelector('[aria-live]')?.textContent).toContain('Rate limited')
+    expect(container.querySelector('[role="img"]')?.getAttribute('title')).toBe('Rate limited')
+    expect(button('Retry').title).toBe('Retry')
+    expect(button('Dismiss').title).toBe('Dismiss')
     await click('Retry')
     expect(result).toBe('ok')
     expect(requested).toBe(1)
@@ -275,7 +282,7 @@ describe('voice recorder', () => {
   test('explains missing browser recording support', async () => {
     Object.defineProperty(win.navigator, 'mediaDevices', { configurable: true, value: undefined })
     await mount()
-    expect(container.textContent).toContain('compatible audio recording format')
+    expect(button('Record voice message').title).toContain('compatible browser')
     expect(requested).toBe(0)
   })
 
