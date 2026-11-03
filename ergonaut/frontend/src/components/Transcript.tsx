@@ -172,6 +172,23 @@ function shortId(value: string): string {
   return SESSION_ID.test(value) ? value.slice(0, 8) : value
 }
 
+function Preview({ text }: { text: string }) {
+  const [expanded, setExpanded] = useState(false)
+  return (
+    <div className="text-xs text-muted">
+      <div className={`whitespace-pre-wrap [overflow-wrap:anywhere] ${expanded ? '' : 'line-clamp-2'}`}>{text}</div>
+      <button
+        type="button"
+        className="min-h-10 text-accent hover:underline sm:min-h-6"
+        aria-expanded={expanded}
+        onClick={() => setExpanded(!expanded)}
+      >
+        {expanded ? 'Show less' : 'Show more'}
+      </button>
+    </div>
+  )
+}
+
 /** Messaging results changed shape over time; only link an input when it is an actual session id. */
 function MessagingCall({ use, result, pending }: { use: ToolUse; result?: ToolResult; pending: boolean }) {
   const { cards, known } = useContext(DelegatedContext)
@@ -226,11 +243,19 @@ function MessagingCall({ use, result, pending }: { use: ToolUse; result?: ToolRe
     labels.ergo_thread_archive = 'Resolve thread'
     labels.ergo_thread_stop = 'Stop thread'
   }
-  const status = textValue(data.status)
-  const state = pending ? 'Needs approval' : !result ? 'Running' : result.is_error ? 'Failed' : status ? '' : 'Done'
   const card = SEND_TOOLS[use.name] ? cards.get(textValue(data.message_id)) : undefined
+  const handled = textValue(data.status) === 'queued' && !!card && card.status !== 'queued'
+  const status = handled ? '' : textValue(data.status)
+  const state = pending
+    ? 'Needs approval'
+    : !result
+      ? 'Running'
+      : result.is_error
+        ? 'Failed'
+        : status || handled
+          ? ''
+          : 'Done'
   const message = textValue(args.message)
-  const note = textValue(data.note)
   const plain = typeof parsed === 'string' ? parsed : ''
   return (
     <div className="w-full min-w-0 space-y-1 rounded-card border border-stroke bg-surface px-3 py-2 text-sm">
@@ -244,7 +269,7 @@ function MessagingCall({ use, result, pending }: { use: ToolUse; result?: ToolRe
           </span>
         )}
       </div>
-      {typeof data.queue_position === 'number' && (
+      {!handled && typeof data.queue_position === 'number' && (
         <div className="text-xs text-muted">Queue position {data.queue_position}</div>
       )}
       {typeof data.stopped_running_turn === 'boolean' && (
@@ -262,25 +287,19 @@ function MessagingCall({ use, result, pending }: { use: ToolUse; result?: ToolRe
           {data.interrupted ? 'Running turn interrupted' : 'Running turn not interrupted'}
         </div>
       )}
-      {message && <div className="whitespace-pre-wrap text-xs text-muted [overflow-wrap:anywhere]">{message}</div>}
-      {textValue(args.note) && (
-        <div className="whitespace-pre-wrap text-xs text-muted [overflow-wrap:anywhere]">
-          Note: {textValue(args.note)}
-        </div>
-      )}
-      {textValue(args.summary) && (
-        <div className="whitespace-pre-wrap text-xs text-muted [overflow-wrap:anywhere]">
-          Summary: {textValue(args.summary)}
-        </div>
-      )}
+      {message && <Preview text={message} />}
+      {textValue(args.note) && <Preview text={`Note: ${textValue(args.note)}`} />}
+      {textValue(args.summary) && <Preview text={`Summary: ${textValue(args.summary)}`} />}
       {result?.is_error && raw && (
         <div className="whitespace-pre-wrap text-xs text-danger [overflow-wrap:anywhere]">
           {textValue(data.error) || plain || raw}
         </div>
       )}
-      {!result?.is_error && (note || plain) && (
-        <div className="whitespace-pre-wrap text-xs text-muted [overflow-wrap:anywhere]">{note || plain}</div>
-      )}
+      {!result?.is_error &&
+        plain &&
+        ['ergo_bot_list', 'ergo_thread_resolve', 'ergo_thread_archive'].includes(use.name) && (
+          <div className="whitespace-pre-wrap text-xs text-muted [overflow-wrap:anywhere]">{plain}</div>
+        )}
       {list &&
         (list.length ? (
           <ul className="space-y-1">

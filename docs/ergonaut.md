@@ -383,7 +383,11 @@ unscoped devbox drafts are not migrated because their owner is unknown.
   `ergo_message_up`) shows as a card instead of a tool call: the chat it went
   to, with the bot's icon, a live status (queued, working, waiting on you,
   done, failed), the reply, and the pull requests that came out of it. The
-  card opens that chat. Workers (`ergo_agent_start`, `orca_start_worker`, `ergo_worker_start`)
+  card opens that chat. Messaging activity cards clamp notes and message previews
+  behind Show more. Model-facing result guidance stays in Tool details. When a
+  live request card shows that a queued message has moved on, the call no longer
+  shows its old queue position; without live request data the original status
+  remains. Workers (`ergo_agent_start`, `orca_start_worker`, `ergo_worker_start`)
   get a card with their status, progress and PRs. An Orca worker's card also
   shows the agent's last few tool calls and output lines, how long ago it
   last did something ("stalled" past the plugin's `stall_minutes`, or
