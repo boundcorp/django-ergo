@@ -69,7 +69,6 @@ import logging
 import os
 import time
 import urllib.request
-import weakref
 from collections import deque
 from datetime import timedelta
 from typing import TYPE_CHECKING
@@ -101,11 +100,6 @@ REPLAY_AFTER = timedelta(minutes=2)  # a pending update this old was never start
 REPLAY_EVERY = 60  # seconds between looks for updates to replay
 KEEP_HANDLED = timedelta(days=7)  # handled updates are deleted after this
 MAX_ATTEMPTS = 3  # tries for an update the database kept failing
-MAX_UPDATE_WORKERS = 2  # leave executor threads free for intake and turn-lock release
-
-# All bots served in one event loop share this limit. Weak values discard the
-# loop and semaphore once its last worker exits (including test/request loops).
-_worker_limits: weakref.WeakValueDictionary = weakref.WeakValueDictionary()
 _current_job: contextvars.ContextVar = contextvars.ContextVar(
     "telegram_update_job", default=None
 )
@@ -113,15 +107,6 @@ _current_job: contextvars.ContextVar = contextvars.ContextVar(
 
 class _UpdateAlreadyClaimedError(Exception):
     """Another worker already started this durable update."""
-
-
-def _update_slots() -> asyncio.Semaphore:
-    loop = asyncio.get_running_loop()
-    slots = _worker_limits.get(loop)
-    if slots is None:
-        slots = asyncio.Semaphore(MAX_UPDATE_WORKERS)
-        _worker_limits[loop] = slots
-    return slots
 
 
 def _refuse_protected(env) -> None:
@@ -181,6 +166,7 @@ class TelegramPlugin(BotPlugin):
         self._replayed_at = float("-inf")
         self._locks: dict[str, asyncio.Lock] = {}
         self._update_queues: dict[tuple, deque] = {}
+        self._update_events: dict[tuple, asyncio.Event] = {}
         self._queued_jobs: set = set()
         self.mode = str(self.config.get("mode", "auto"))
         if self.mode not in {"auto", "webhook", "polling"}:
@@ -631,8 +617,7 @@ class TelegramPlugin(BotPlugin):
     async def _flush_album_later(self, key: tuple, wait: float) -> None:
         await asyncio.sleep(wait)
         self._album_timers.pop(key, None)
-        async with _update_slots():
-            await self._flush_album(key)
+        await self._flush_album(key)
 
     async def _flush_album(self, key: tuple) -> None:
         messages = self._albums.pop(key, [])
@@ -640,8 +625,9 @@ class TelegramPlugin(BotPlugin):
             return
         try:
             await self.handle_messages(messages)
-        except Exception:
+        except Exception as error:
             logger.exception("Telegram album %s failed", key[1])
+            await self._failed({"message": messages[0]}, error)
 
     async def flush_albums(self) -> None:
         """Handle every album still being collected, now."""
@@ -802,19 +788,13 @@ class TelegramPlugin(BotPlugin):
         from django_ergo.settings import api_settings
 
         async def claimed_run(control):
-            # Preparing an update or waiting for the host's turn lock is not
-            # execution: leave it pending so a restart can replay it.
-            if job := _current_job.get():
-                from django.utils import timezone
-
-                from django_ergo.conversation.models import BotJob
-
-                claimed = await BotJob.objects.filter(
-                    pk=job.pk, status="pending"
-                ).aupdate(status="in_progress", started_at=timezone.now())
-                if not claimed:
-                    raise _UpdateAlreadyClaimedError
-            return await run(control)
+            jobs = _current_job.get()
+            if jobs:
+                await self._claim(jobs, session)
+            result = await run(control)
+            if jobs:
+                await self._complete(jobs)
+            return result
 
         runner = api_settings.CHANNEL_TURN_RUNNER
         if runner is not None:
@@ -822,6 +802,52 @@ class TelegramPlugin(BotPlugin):
         lock = self._locks.setdefault(str(session.id), asyncio.Lock())
         async with lock:
             return await claimed_run(None)
+
+    @staticmethod
+    async def _claim(jobs, session) -> None:
+        """Claim every source row in one transaction, or claim none."""
+        from asgiref.sync import sync_to_async
+        from django.db import transaction
+        from django.utils import timezone
+
+        from django_ergo.conversation.models import BotJob
+
+        def claim():
+            with transaction.atomic():
+                rows = list(
+                    BotJob.objects.select_for_update()
+                    .filter(pk__in=[job.pk for job in jobs])
+                    .order_by("pk")
+                )
+                if len(rows) != len(jobs) or any(
+                    row.status != "pending" for row in rows
+                ):
+                    raise _UpdateAlreadyClaimedError
+                for row in rows:
+                    row.status = "in_progress"
+                    row.started_at = timezone.now()
+                    row.args = {
+                        **row.args,
+                        "session_id": str(session.pk),
+                        "claim_id": jobs[0].pk,
+                    }
+                BotJob.objects.bulk_update(rows, ["status", "started_at", "args"])
+                for job, row in zip(
+                    sorted(jobs, key=lambda job: job.pk), rows, strict=True
+                ):
+                    job.status, job.args = row.status, row.args
+
+        await sync_to_async(claim)()
+
+    @staticmethod
+    async def _complete(jobs) -> None:
+        from django.utils import timezone
+
+        from django_ergo.conversation.models import BotJob
+
+        await BotJob.objects.filter(
+            pk__in=[job.pk for job in jobs], status__in=["pending", "in_progress"]
+        ).aupdate(status="completed", progress=100, completed_at=timezone.now())
 
     async def handle_messages(self, messages: list[dict]) -> None:
         """Answer one or more messages (an album) as a single turn."""
@@ -852,16 +878,16 @@ class TelegramPlugin(BotPlugin):
                 # A new message instead of Approve/Deny: decline what was waiting.
                 await self._retire_approval_prompt(pending, [])
                 await self.bot.resume(session, decisions=False)
-            return await self.bot.ask(
+            result = await self.bot.ask(
                 session,
                 text,
                 attachments=attachments or None,
                 author=author,
                 control=control,
             )
+            await self.deliver(chat_id, result)
 
-        result = await self.run_turn(session, run)
-        await self.deliver(chat_id, result)
+        await self.run_turn(session, run)
 
     async def handle_callback(self, query: dict) -> None:
         from django_ergo.conversation.models import StructuredCall
@@ -916,14 +942,15 @@ class TelegramPlugin(BotPlugin):
                 or pending.id != call.id
                 or approvals_stamp(waiting) != stamp
             ):
-                return None
-            return await self.bot.resume(session, action == "ok", control=control)
+                await self.send_text(chat_id, "That request was already handled.")
+                return
+            result = await self.bot.resume(session, action == "ok", control=control)
+            if result is None or result.call is None:
+                await self.send_text(chat_id, "That request was already handled.")
+            else:
+                await self.deliver(chat_id, result)
 
-        result = await self.run_turn(session, run)
-        if result is None or result.call is None:
-            await self.send_text(chat_id, "That request was already handled.")
-            return
-        await self.deliver(chat_id, result)
+        await self.run_turn(session, run)
 
     async def dispatch(self, update: dict) -> None:
         if "callback_query" in update:
@@ -968,36 +995,53 @@ class TelegramPlugin(BotPlugin):
         with contextlib.suppress(Exception):
             await self.api.call("answerCallbackQuery", callback_query_id=query["id"])
 
-    async def process(self, job) -> None:
-        """Handle a saved update; claim only once its turn lock is held."""
+    async def process(self, job, jobs=None) -> None:
+        """Handle saved sources; execution and completion share the turn lock."""
         import traceback
 
         from django.utils import timezone
 
         from django_ergo.conversation.models import BotJob
 
-        if not await BotJob.objects.filter(pk=job.pk, status="pending").aexists():
+        await job.arefresh_from_db()
+        if job.status == "in_progress":
+            await self._recover_interrupted(job)
             return
+        if job.status != "pending":
+            return
+        jobs = jobs or [job]
         update = job.args["update"]
-        token = _current_job.set(job)
+        token = _current_job.set(jobs)
         try:
-            await self.dispatch(update)
+            if len(jobs) > 1 or self._batch_key(update):
+                await self.handle_messages(
+                    [source.args["update"]["message"] for source in jobs]
+                )
+            else:
+                await self.dispatch(update)
         except _UpdateAlreadyClaimedError:
             return
         except Exception as error:
             logger.exception("Telegram update %s failed", update.get("update_id"))
             await self._reset_connections()
-            attempts = int(job.args.get("attempts", 0)) + 1
-            if isinstance(error, DatabaseError) and attempts < MAX_ATTEMPTS:
-                # The database failed, not the message: replay it later.
-                with contextlib.suppress(Exception):
-                    await BotJob.objects.filter(pk=job.pk).aupdate(
-                        status="pending", args={**job.args, "attempts": attempts}
-                    )
+            attempts = max(int(source.args.get("attempts", 0)) for source in jobs) + 1
+            if (
+                isinstance(error, DatabaseError)
+                and attempts < MAX_ATTEMPTS
+                and all(source.status == "pending" for source in jobs)
+            ):
+                # Retry only failures before execution: tools may have run after a claim.
+                for source in jobs:
+                    with contextlib.suppress(Exception):
+                        await BotJob.objects.filter(
+                            pk=source.pk, status="pending"
+                        ).aupdate(args={**source.args, "attempts": attempts})
                 return
             await self._failed(update, error)
             with contextlib.suppress(Exception):
-                await BotJob.objects.filter(pk=job.pk).aupdate(
+                await BotJob.objects.filter(
+                    pk__in=[source.pk for source in jobs]
+                ).aupdate(
                     status="failed",
                     error=str(error)[:2000],
                     traceback=traceback.format_exc(),
@@ -1006,9 +1050,74 @@ class TelegramPlugin(BotPlugin):
             return
         finally:
             _current_job.reset(token)
-        await BotJob.objects.filter(
-            pk=job.pk, status__in=["pending", "in_progress"]
-        ).aupdate(status="completed", progress=100, completed_at=timezone.now())
+        # Ignored/unauthorized updates have no turn to claim.
+        await self._complete(jobs)
+
+    async def _interrupted_session(self, job):
+        """New claims record the session; older claims need their update resolved."""
+        from django_ergo.conversation.models import ConversationSession
+        from django_ergo.conversation.models import StructuredCall
+
+        if session_id := job.args.get("session_id"):
+            return await ConversationSession.objects.filter(pk=session_id).afirst()
+        if query := job.args["update"].get("callback_query"):
+            _, _, rest = (query.get("data") or "").partition(":")
+            call_id = rest.partition(":")[0]
+            if _is_uuid(call_id):
+                call = (
+                    await StructuredCall.objects.select_related("session")
+                    .filter(pk=call_id)
+                    .afirst()
+                )
+                return call.session if call else None
+        elif message := job.args["update"].get("message"):
+            return await self.session_for(message.get("from") or {}, message["chat"])
+        return None
+
+    async def _recover_interrupted(self, job) -> None:
+        """Never re-run an uncertain tool side effect; surface it under its lock."""
+        from django.utils import timezone
+
+        from django_ergo.conversation.models import BotJob
+        from django_ergo.settings import api_settings
+
+        session = await self._interrupted_session(job)
+
+        async def recover(control):
+            rows = BotJob.objects.filter(
+                bot_name=self.bot.name, target=JOB_TARGET, status="in_progress"
+            )
+            if claim_id := job.args.get("claim_id"):
+                rows = rows.filter(args__claim_id=claim_id)
+            else:
+                rows = rows.filter(pk=job.pk)
+            if not await rows.aexists():
+                return
+            # Notify before marking failed: a crash in between can repeat the
+            # warning, but can neither repeat tools nor silently retire the job.
+            message = job.args["update"].get("message") or job.args["update"].get(
+                "callback_query", {}
+            ).get("message", {})
+            if chat_id := message.get("chat", {}).get("id"):
+                await self.send_text(
+                    chat_id,
+                    "A Telegram turn was interrupted. Some actions may already have "
+                    "completed; I will not run them again automatically. Please check "
+                    "the conversation before sending the request again.",
+                )
+            await rows.aupdate(
+                status="failed",
+                error="Turn interrupted; execution outcome unknown",
+                completed_at=timezone.now(),
+            )
+
+        if session is None:
+            await recover(None)
+        elif api_settings.CHANNEL_TURN_RUNNER is not None:
+            await api_settings.CHANNEL_TURN_RUNNER(session, recover)
+        else:
+            async with self._locks.setdefault(str(session.pk), asyncio.Lock()):
+                await recover(None)
 
     @staticmethod
     async def _reset_connections() -> None:
@@ -1053,7 +1162,9 @@ class TelegramPlugin(BotPlugin):
             created_at__lt=now - KEEP_HANDLED,
         ).adelete()
         pending = BotJob.objects.filter(
-            bot_name=self.bot.name, target=JOB_TARGET, status="pending"
+            bot_name=self.bot.name,
+            target=JOB_TARGET,
+            status__in=["pending", "in_progress"],
         )
         if not startup:
             pending = pending.filter(created_at__lt=now - REPLAY_AFTER)
@@ -1061,7 +1172,7 @@ class TelegramPlugin(BotPlugin):
         for job in jobs:
             logger.info("Replaying Telegram %s", job.name)
             self._enqueue(job)
-        return len(jobs)
+        return sum(job.status == "pending" for job in jobs)
 
     def _replay_soon(self) -> None:
         """Replay in the background, at most once a minute per process."""
@@ -1107,24 +1218,106 @@ class TelegramPlugin(BotPlugin):
             if self.target_thread
             else ("chat", (message.get("chat") or {}).get("id"))
         )
+        if (query := update.get("callback_query")) and not self.target_thread:
+            # An unrelated person's busy session in a group must not delay a
+            # decision. Same-person messages/taps retain the main chat FIFO.
+            sender_id = (query.get("from") or {}).get("id")
+            lane = ("callback", key, sender_id)
+            queue = self._update_queues.get(key)
+            own_queued = False
+            for source in queue or ():
+                earlier = source.args["update"]
+                earlier_sender = (
+                    earlier.get("message") or earlier.get("callback_query") or {}
+                ).get("from") or {}
+                if earlier_sender.get("id") == sender_id:
+                    own_queued = True
+                    break
+            if not own_queued and (queue or lane in self._update_queues):
+                key = lane
         self._queued_jobs.add(job.pk)
         if key in self._update_queues:
             self._update_queues[key].append(job)
+            self._update_events[key].set()
             return
         queue = self._update_queues[key] = deque([job])
+        self._update_events[key] = asyncio.Event()
         self._spawn(self._work_updates(key, queue))
 
+    def _batch_key(self, update: dict):
+        message = update.get("message") or {}
+        chat_id = message.get("chat", {}).get("id")
+        if group_id := message.get("media_group_id"):
+            return (chat_id, "album", group_id)
+        if self.photo_batch_wait and message.get("photo"):
+            return (chat_id, "photos", message.get("from", {}).get("id"))
+        return None
+
+    async def _collect_jobs(self, job, queue, changed):
+        """Keep collection in the chat FIFO; source rows remain pending."""
+        from django_ergo.conversation.models import BotJob
+
+        key = self._batch_key(job.args["update"])
+        if not key or job.status != "pending":
+            return [job]
+        wait = self.album_wait if key[1] == "album" else self.photo_batch_wait
+        count = 0
+        deadline = asyncio.get_running_loop().time() + wait
+        while True:
+            changed.clear()
+            sources = [job]
+            for source in list(queue)[1:]:
+                update = source.args["update"]
+                if self._batch_key(update) == key:
+                    sources.append(source)
+                elif (
+                    key[1] == "photos"
+                    and (message := update.get("message"))
+                    and (
+                        not self._batch_key(update)
+                        and message.get("from", {}).get("id") == key[2]
+                    )
+                ):
+                    return [*sources, source]
+                else:
+                    break
+            if len(sources) != count:
+                count = len(sources)
+                deadline = asyncio.get_running_loop().time() + wait
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                break
+            try:
+                await asyncio.wait_for(changed.wait(), remaining)
+            except TimeoutError:
+                break
+        if key[1] == "album":
+            # Include all durably accepted parts, even if another process or
+            # startup replay has only queued a subset of them locally.
+            return [
+                source
+                async for source in BotJob.objects.filter(
+                    bot_name=self.bot.name,
+                    target=JOB_TARGET,
+                    args__update__message__chat__id=key[0],
+                    args__update__message__media_group_id=key[2],
+                    status="pending",
+                ).order_by("created_at", "pk")
+            ] or [job]
+        return sources
+
     async def _work_updates(self, key: tuple, queue: deque) -> None:
-        slots = _update_slots()
         try:
             while queue:
-                # Waiting chats use asyncio, never the shared thread pool.
-                # Release between jobs so a busy chat cannot monopolize slots.
-                async with slots:
-                    job = queue[0]
+                job = queue[0]
+                jobs = await self._collect_jobs(job, queue, self._update_events[key])
+                if len(jobs) == 1:
                     await self.process(job)
-                    queue.popleft()
-                    self._queued_jobs.discard(job.pk)
+                else:
+                    await self.process(job, jobs)
+                handled = {source.pk for source in jobs}
+                while queue and queue[0].pk in handled:
+                    self._queued_jobs.discard(queue.popleft().pk)
         except Exception:
             # An intake/claim/status write may fail outside dispatch's handler.
             # Unstarted work stays pending for replay; do not orphan its queue.
@@ -1132,6 +1325,7 @@ class TelegramPlugin(BotPlugin):
             await self._reset_connections()
         finally:
             self._update_queues.pop(key, None)
+            self._update_events.pop(key, None)
             for job in queue:
                 self._queued_jobs.discard(job.pk)
 

@@ -127,7 +127,7 @@ Still to do:
 
 - [x] Telegram shared thread: `target_thread` puts every chat in one thread, `respond_to` picks the people and messages answered, `replies: tool` sends with `ergo_telegram_message`, `AuthorProfile` keeps each Telegram user's name and photo (shown in Ergonaut), photos sent one at a time batch (`photo_batch_wait`), and turns hold Ergonaut's session lock (`CHANNEL_TURN_RUNNER`).
 
-- [x] Telegram approval intake remains responsive during resumes: durable updates use bounded per-chat FIFO workers, claim only under the host's turn lock, and recover pending work on restart; post-turn prompt-retirement errors cannot withhold an executed turn's result.
+- [x] Telegram approval intake remains responsive during resumes: per-chat FIFO workers retain durable album/photo-batch sources until transactional, lock-scoped execution; nonblocking host-lock waits leave other chats/bots available, interrupted claims are surfaced without tool replay, and retirement errors cannot withhold an executed turn's result.
 
 - [ ] Telegram: `ergo_telegram_message` sends text only; sending photos and files back needs multipart uploads.
 

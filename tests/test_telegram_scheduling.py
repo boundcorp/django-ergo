@@ -48,7 +48,7 @@ def channel_runner(settings, runner):
 
 
 class BoundedSessionLock:
-    """A real blocking session lock, with bounded acquire and failure cleanup."""
+    """A real nonblocking session lock, with cancellation/failure cleanup."""
 
     def __init__(self, lock, closing):
         self.lock = lock
@@ -57,7 +57,7 @@ class BoundedSessionLock:
         self.acquired = False
 
     def __enter__(self):
-        locked = self.lock.acquire(timeout=10)
+        locked = self.lock.acquire(blocking=False)
         with self.state:
             if locked and self.closing.is_set():
                 self.lock.release()
@@ -80,8 +80,6 @@ class ThreadedChannelRunner:
         self.contexts = []
         self.closing = threading.Event()
         self.attempts = asyncio.Queue()
-        self.active = 0
-        self.max_active = 0
 
     async def __call__(self, session, run):
         session_id = str(session.id)
@@ -90,44 +88,32 @@ class ThreadedChannelRunner:
         )
         self.contexts.append(lock)
         self.attempts.put_nowait(session_id)
-        self.active += 1
-        self.max_active = max(self.max_active, self.active)
+        deadline = asyncio.get_running_loop().time() + 10
         try:
-            # These default-executor calls are the production CHANNEL_TURN_RUNNER
-            # lock path. In particular, release must compete with waiting enters.
-            locked = await bounded(
-                sync_to_async(lock.__enter__, thread_sensitive=False)(), seconds=15
-            )
-            if not locked:
-                await bounded(
-                    sync_to_async(lock.__exit__, thread_sensitive=False)(
-                        None, None, None
-                    )
-                )
-                message = f"Session {session_id} is busy"
-                raise RuntimeError(message)
-            try:
-                return await run(None)
-            finally:
-                await bounded(
-                    sync_to_async(lock.__exit__, thread_sensitive=False)(
-                        None, None, None
-                    )
-                )
+            # Match the host: serialize brief nonblocking probes, then wait on
+            # asyncio instead of occupying default-executor threads.
+            while not await sync_to_async(lock.__enter__, thread_sensitive=True)():
+                if asyncio.get_running_loop().time() >= deadline:
+                    message = f"Session {session_id} is busy"
+                    raise RuntimeError(message)
+                await asyncio.sleep(0.01)
+            return await run(None)
         finally:
-            self.active -= 1
+            # Serial cleanup follows even a probe whose result was cancelled.
+            await asyncio.shield(
+                sync_to_async(lock.__exit__, thread_sensitive=True)(None, None, None)
+            )
 
     def close(self):
-        # Cancelled sync_to_async calls can leave an acquire running in a thread.
-        # Mark all such acquires abandoned, then release any acquired locks so
-        # even a regression cannot hang executor shutdown or the pytest process.
+        # A cancelled nonblocking probe may still complete in the serial executor.
+        # Mark it abandoned and release acquired locks before shutdown.
         self.closing.set()
         for context in self.contexts:
             context.__exit__(None, None, None)
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_telegram_shared_workers_leave_executor_and_callback_intake_available(  # noqa: PLR0915 — full executor/lock lifecycle
+async def test_telegram_busy_sessions_leave_executor_and_callback_intake_available(  # noqa: PLR0915 — full executor/lock lifecycle
     tmp_path, settings, monkeypatch
 ):
     await User.objects.acreate(username="lee")
@@ -189,9 +175,8 @@ async def test_telegram_shared_workers_leave_executor_and_callback_intake_availa
             started_count = len(dispatch_started)
             assert started_count >= 2
             dispatch_release.set()
-            # Wait for every admitted worker to submit its blocking acquire.
-            # Before the fix this is many more than the three executor threads;
-            # after it only two workers, globally, can get this far.
+            # Every admitted chat can reach its asynchronous lock wait, even
+            # though there are many more waiters than default-executor threads.
             for _ in range(started_count):
                 assert await bounded(runner.attempts.get()) == str(session.id)
 
@@ -229,7 +214,6 @@ async def test_telegram_shared_workers_leave_executor_and_callback_intake_availa
             await bounded(holder)
             assert not runner.contexts[0].acquired
             await bounded(asyncio.gather(*(plugin.drain() for plugin in plugins)))
-            assert runner.max_active <= 3  # external holder + two shared workers
             assert len(completed) == 12
             assert len(set(completed)) == 12
             assert (
