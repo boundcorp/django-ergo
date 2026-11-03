@@ -77,6 +77,7 @@ from django_ergo.conversation.models import ConversationSession
 from django_ergo.conversation.models import StructuredCallStatus
 from django_ergo.conversation.models import ThreadMessage
 from django_ergo.conversation.models import ThreadMessageStatus
+from django_ergo.conversation.tool_dispatch import ToolError
 from django_ergo.settings import api_settings
 
 if TYPE_CHECKING:
@@ -383,6 +384,20 @@ def _thread_key(session: ConversationSession) -> str:
     return str(session.id)
 
 
+def _session_metadata(session: ConversationSession) -> dict:
+    """Stable link target and display information for a tool result."""
+    return {
+        "session_id": str(session.id),
+        "title": messaging.label(session),
+        "bot": session.bot_name,
+    }
+
+
+def _refused(message: str, session: ConversationSession) -> ToolError:
+    """A refusal that names the thread it concerned, so a client can link it."""
+    return ToolError(message, **_session_metadata(session))
+
+
 def _row(session: ConversationSession, current: ConversationSession) -> dict:
     open_requests = session.thread_messages.filter(
         status__in=OPEN_STATUSES, in_reply_to__isnull=True
@@ -396,6 +411,7 @@ def _row(session: ConversationSession, current: ConversationSession) -> dict:
         "last_activity": session.updated_at.isoformat(timespec="seconds"),
         "open_requests": open_requests,
     }
+    row.update(_session_metadata(session))
     if meta.get("started_by_label"):
         row["started_by"] = meta["started_by_label"]
     if session.id == current.id:
@@ -646,6 +662,7 @@ def ergo_thread_forward(
         "forwarded_to": where,
         "thread_id": str(recipient.id),
         "message_id": str(sent.id),
+        **_session_metadata(recipient),
         **_delivery(recipient, sent),
         "note": (
             f"Forwarded verbatim; {where} answers the user there and nothing comes "
@@ -688,7 +705,7 @@ def _recipient(
         recipient = _session(target, ctx, thread)
     if recipient.id == ctx.session.id:
         msg = "That is this chat; send it somewhere else."
-        raise ValueError(msg)
+        raise _refused(msg, recipient)
     return recipient
 
 
@@ -765,6 +782,7 @@ def _send(  # noqa: PLR0913
         "sent_to": messaging.label(recipient),
         "thread_id": str(recipient.id),
         "message_id": str(sent.id),
+        **_session_metadata(recipient),
         **delivery,
         **({"interrupted": interrupted} if interrupt else {}),
         "note": note,
@@ -853,7 +871,7 @@ def _refuse_nudge_after_reply(
         "back. If the user asked for a next step there, send one complete request with "
         "everything it needs, or wait for the user's next message."
     )
-    raise ValueError(msg)
+    raise _refused(msg, recipient)
 
 
 def _managed_thread(
@@ -864,9 +882,9 @@ def _managed_thread(
     thread = _session(target, ctx, thread_id)
     if roles.is_top(thread):
         msg = "Main and named chats can't be stopped or resolved from another chat."
-        raise ValueError(msg)
+        raise _refused(msg, thread)
     if not can_resolve(ctx.bot, ctx.session.user_id, thread):
-        raise ValueError(_refusal(thread, action))
+        raise _refused(_refusal(thread, action), thread)
     return thread
 
 
@@ -885,7 +903,11 @@ def ergo_thread_stop(ctx: ToolContext, thread_id: str, bot: str = "") -> dict:
     ).update(status=ThreadMessageStatus.FAILED, error="cancelled by the sender")
     stopper = api_settings.TURN_STOPPER
     stopped = None if stopper is None else bool(stopper(str(thread.id)))
-    result = {"thread": messaging.label(thread), "cancelled_messages": cancelled}
+    result = {
+        "thread": messaging.label(thread),
+        "cancelled_messages": cancelled,
+        **_session_metadata(thread),
+    }
     if stopped is None:
         result["note"] = (
             "This app can't stop a running turn; it will finish on its own."
@@ -897,32 +919,36 @@ def ergo_thread_stop(ctx: ToolContext, thread_id: str, bot: str = "") -> dict:
 
 def resolve(
     ctx: ToolContext, thread_id: str = "", bot: str = "", summary: str = ""
-) -> str:
+) -> dict:
     """Resolve a finished thread (see ``ergo_thread_resolve``)."""
     current = ctx.session
     if not thread_id or thread_id == str(current.id):
         if roles.is_top(current):
             msg = "Main and named chats aren't resolved; only threads are."
-            raise ValueError(msg)
+            raise _refused(msg, current)
         thread, own_turn = current, True
     else:
         thread, own_turn = _managed_thread(ctx, bot, thread_id, "resolve"), False
     status = thread_status(thread)
     if not own_turn and status["state"] == "working":
         msg = f"{messaging.label(thread)} is working; stop it with ergo_thread_stop first."
-        raise ValueError(msg)
+        raise _refused(msg, thread)
     handling = messaging.current_thread_message(thread) if own_turn else None
     open_here = int(bool(handling and handling.in_reply_to_id is None))
     if blockers := resolve_blockers(status, skip_open=open_here, own_turn=own_turn):
         msg = f"{messaging.label(thread)} isn't finished: " + "; ".join(blockers) + "."
-        raise ValueError(msg)
+        raise _refused(msg, thread)
     archival.archive(thread, reason=f"resolved by {messaging.label(current)}")
     meta = {**(thread.metadata or {}), "resolved_by": messaging.label(current)}
     if summary:
         meta["resolved_summary"] = summary[:2000]
     ConversationSession.objects.filter(pk=thread.pk).update(metadata=meta)
     thread.metadata = meta
-    return f"Resolved {messaging.label(thread)}. Its history stays readable; a new message reopens it."
+    return {
+        **_session_metadata(thread),
+        "status": "resolved",
+        "note": f"Resolved {messaging.label(thread)}. Its history stays readable; a new message reopens it.",
+    }
 
 
 @bot_tool(
@@ -944,7 +970,7 @@ def resolve(
 )
 def ergo_thread_resolve(
     ctx: ToolContext, thread_id: str = "", bot: str = "", summary: str = ""
-) -> str:
+) -> dict:
     """Resolve a finished thread: this one (empty thread_id), one of this bot's, or
     another bot's thread this bot started (the Bots and threads block marks the
     ones you may resolve as "ready to resolve"; any other bot's thread is its
@@ -956,7 +982,7 @@ def ergo_thread_resolve(
 
 
 @bot_tool(takes_context=True)
-def ergo_thread_archive(ctx: ToolContext, thread_id: str, bot: str = "") -> str:
+def ergo_thread_archive(ctx: ToolContext, thread_id: str, bot: str = "") -> dict:
     """Deprecated: use ergo_thread_resolve (the same thing)."""
     return resolve(ctx, thread_id, bot)
 

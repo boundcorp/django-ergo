@@ -746,6 +746,17 @@ prompt for caching. The `orchestration` skill (loaded in main by default) has:
 | `ergo_thread_stop` | Stop the running turn of a thread this bot started (or one of its own), or end its turn that waits for approval (declining those tool calls), and cancel what it queued there |
 | `ergo_thread_resolve` | Resolve a finished thread (this one, one of this bot's, or another bot's it started), with a one-line `summary`; refused while workers run, a request is open, an approval is pending, or its last reply asks the user something. History stays readable; a new message reopens it. `ergo_thread_archive` is a deprecated alias |
 
+List entries and successful send, forward, upward-message, stop and resolve
+results include `session_id`, `title` (the bot-and-chat display label), and
+`bot` for the target. Send and forward retain `thread_id` and report delivery
+`status` (`sent` or `queued`, with `queue_position` when queued). List entries
+retain `id` and their session `status`. Resolve and its archive alias return an
+object with `status: "resolved"` and the original confirmation text in `note`;
+older stored results may be plain text. A refused call that concerns a known
+thread (stop or resolve refused, send to the chat itself, a nudge right after a
+reply) fails with a JSON object: the reason in `error`, plus the same
+`session_id`, `title` and `bot`; other failures stay plain text.
+
 Messages between sessions are asynchronous, like thread-to-thread
 delegation in Codex (`django_ergo.bots.messaging`). `ergo_thread_send`
 stores a `ThreadMessage` and returns. The recipient answers it in a turn of

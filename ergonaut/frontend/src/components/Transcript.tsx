@@ -11,8 +11,16 @@ import { clock } from '../time'
 import { messageAnchor, messageLink } from '../messageLink'
 import { ContextPanel, CompactionDivider } from './ContextPanel'
 
-// Tools that send work to another chat or start a worker; their calls show as cards.
-const THREAD_TOOLS = new Set(['ergo_thread_send', 'ergo_message_up'])
+// Messaging calls stay visible even in long runs of tool calls.
+const SEND_TOOLS: Record<string, true> = { ergo_thread_send: true, ergo_message_up: true, ergo_thread_forward: true }
+const THREAD_TOOLS: Record<string, true> = {
+  ...SEND_TOOLS,
+  ergo_thread_list: true,
+  ergo_thread_resolve: true,
+  ergo_thread_archive: true,
+  ergo_thread_stop: true,
+  ergo_bot_list: true,
+}
 const WORKER_TOOLS = new Set(['ergo_agent_start', 'orca_start_worker', 'ergo_worker_start'])
 
 // What the transcript knows about the chat's delegated work (from the session API).
@@ -71,7 +79,7 @@ function foldRuns(
   let run: ToolUse[] = []
   const close = () => {
     const pinned = (use: ToolUse) =>
-      pending.has(use.id) || !!results.get(use.id)?.is_error || THREAD_TOOLS.has(use.name) || WORKER_TOOLS.has(use.name)
+      pending.has(use.id) || !!results.get(use.id)?.is_error || !!THREAD_TOOLS[use.name] || WORKER_TOOLS.has(use.name)
     const foldable = run.filter(use => !pinned(use)).slice(0, -VISIBLE_CALLS)
     if (foldable.length) {
       const key = run[0].id
@@ -142,13 +150,179 @@ function resultJson(result?: ToolResult): Record<string, unknown> | null {
   }
 }
 
+function objectValue(value: unknown): Record<string, unknown> {
+  if (typeof value === 'string') {
+    try {
+      value = JSON.parse(value)
+    } catch {
+      return {}
+    }
+  }
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {}
+}
+
+function textValue(value: unknown): string {
+  return typeof value === 'string' ? value : ''
+}
+
+const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/** A session id is too long for a chip; names such as "main" pass through. */
+function shortId(value: string): string {
+  return SESSION_ID.test(value) ? value.slice(0, 8) : value
+}
+
+/** Messaging results changed shape over time; only link an input when it is an actual session id. */
+function MessagingCall({ use, result, pending }: { use: ToolUse; result?: ToolResult; pending: boolean }) {
+  const { cards, known } = useContext(DelegatedContext)
+  const current = useContext(SessionContext)
+  const { durations } = useContext(FoldContext)
+  const args = objectValue(use.input)
+  const raw = result ? resultText(result.content) : ''
+  let parsed: unknown = raw
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    // Older resolve/archive results are plain text.
+  }
+  const data = objectValue(parsed)
+  const list = Array.isArray(parsed) ? parsed : null
+  const inputId = textValue(args.thread_id) || textValue(args.thread)
+  const ownResolve = use.name === 'ergo_thread_resolve' && !inputId
+  const id =
+    textValue(data.session_id) ||
+    textValue(data.thread_id) ||
+    (SESSION_ID.test(inputId) ? inputId : '') ||
+    (ownResolve ? current : '')
+  const title =
+    textValue(data.title) ||
+    textValue(data.forwarded_to) ||
+    textValue(data.sent_to) ||
+    textValue(data.thread) ||
+    known.get(id) ||
+    shortId(inputId) ||
+    (ownResolve ? 'This thread' : shortId(id))
+  const bot = textValue(data.bot) || textValue(args.bot)
+  const labels: Record<string, string> = {
+    ergo_thread_send: 'Send message',
+    ergo_message_up: 'Message up',
+    ergo_thread_forward: 'Forward message',
+    ergo_thread_list: 'List chats and threads',
+    ergo_thread_resolve: 'Resolve thread',
+    ergo_thread_archive: 'Resolve thread',
+    ergo_thread_stop: 'Stop thread',
+    ergo_bot_list: 'List available bots',
+  }
+  if (use.name === 'ergo_thread_send' && args.thread === 'new') labels.ergo_thread_send = 'Started thread'
+  else if (use.name === 'ergo_thread_send') labels.ergo_thread_send = 'Messaged'
+  if (use.name === 'ergo_thread_forward') labels.ergo_thread_forward = 'Forwarded to'
+  if (use.name === 'ergo_thread_resolve' || use.name === 'ergo_thread_archive') labels[use.name] = 'Resolved'
+  if (use.name === 'ergo_thread_stop') labels.ergo_thread_stop = 'Stopped'
+  if (use.name === 'ergo_thread_list') labels.ergo_thread_list = 'Listed threads'
+  if (!result || pending || result.is_error) {
+    labels.ergo_thread_send = 'Send message'
+    labels.ergo_thread_forward = 'Forward message'
+    labels.ergo_thread_resolve = 'Resolve thread'
+    labels.ergo_thread_archive = 'Resolve thread'
+    labels.ergo_thread_stop = 'Stop thread'
+  }
+  const status = textValue(data.status)
+  const state = pending ? 'Needs approval' : !result ? 'Running' : result.is_error ? 'Failed' : status ? '' : 'Done'
+  const card = SEND_TOOLS[use.name] ? cards.get(textValue(data.message_id)) : undefined
+  const message = textValue(args.message)
+  const note = textValue(data.note)
+  const plain = typeof parsed === 'string' ? parsed : ''
+  return (
+    <div className="w-full min-w-0 space-y-1 rounded-card border border-stroke bg-surface px-3 py-2 text-sm">
+      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+        <span className="font-medium">{labels[use.name]}</span>
+        {title && (id ? <ThreadLink id={id}>{title}</ThreadLink> : <span className="text-muted">{title}</span>)}
+        {bot && !title.startsWith(`${bot} ·`) && <span className="text-xs text-muted">{bot}</span>}
+        {(state || status) && (
+          <span className={`text-xs ${result?.is_error ? 'text-danger' : 'text-muted'}`}>
+            {state || status.replace(/_/g, ' ')}
+          </span>
+        )}
+      </div>
+      {typeof data.queue_position === 'number' && (
+        <div className="text-xs text-muted">Queue position {data.queue_position}</div>
+      )}
+      {typeof data.stopped_running_turn === 'boolean' && (
+        <div className="text-xs text-muted">
+          {data.stopped_running_turn ? 'Running turn stopped' : 'No running turn stopped'}
+        </div>
+      )}
+      {typeof data.cancelled_messages === 'number' && (
+        <div className="text-xs text-muted">
+          {data.cancelled_messages} queued message{data.cancelled_messages === 1 ? '' : 's'} cancelled
+        </div>
+      )}
+      {typeof data.interrupted === 'boolean' && (
+        <div className="text-xs text-muted">
+          {data.interrupted ? 'Running turn interrupted' : 'Running turn not interrupted'}
+        </div>
+      )}
+      {message && <div className="whitespace-pre-wrap text-xs text-muted [overflow-wrap:anywhere]">{message}</div>}
+      {textValue(args.note) && (
+        <div className="whitespace-pre-wrap text-xs text-muted [overflow-wrap:anywhere]">
+          Note: {textValue(args.note)}
+        </div>
+      )}
+      {textValue(args.summary) && (
+        <div className="whitespace-pre-wrap text-xs text-muted [overflow-wrap:anywhere]">
+          Summary: {textValue(args.summary)}
+        </div>
+      )}
+      {result?.is_error && raw && (
+        <div className="whitespace-pre-wrap text-xs text-danger [overflow-wrap:anywhere]">
+          {textValue(data.error) || plain || raw}
+        </div>
+      )}
+      {!result?.is_error && (note || plain) && (
+        <div className="whitespace-pre-wrap text-xs text-muted [overflow-wrap:anywhere]">{note || plain}</div>
+      )}
+      {list &&
+        (list.length ? (
+          <ul className="space-y-1">
+            {list.map((item, index) => {
+              const row = objectValue(item)
+              const rowId = textValue(row.session_id) || textValue(row.id)
+              const rowTitle = textValue(row.title) || textValue(row.thread) || rowId
+              return (
+                <li key={`${rowId}-${index}`} className="flex flex-wrap items-baseline gap-2 text-xs">
+                  {rowId ? <ThreadLink id={rowId}>{rowTitle}</ThreadLink> : <span>{rowTitle || pretty(item)}</span>}
+                  {textValue(row.bot) && <span className="text-muted">{textValue(row.bot)}</span>}
+                  {textValue(row.status) && (
+                    <span className="text-muted">{textValue(row.status).replace(/_/g, ' ')}</span>
+                  )}
+                  {row.you_are_here === true && <span className="text-muted">You are here</span>}
+                  {typeof row.open_requests === 'number' && (
+                    <span className="text-muted">
+                      {row.open_requests} open request{row.open_requests === 1 ? '' : 's'}
+                    </span>
+                  )}
+                </li>
+              )
+            })}
+          </ul>
+        ) : (
+          <div className="text-xs text-muted">No chats or threads found.</div>
+        ))}
+      {card && <ThreadCard card={card} />}
+      <details className="text-xs text-muted">
+        <summary className="cursor-pointer py-1">Tool details</summary>
+        <ToolCard use={use} result={result} pending={pending} duration={durations.get(use.id)} />
+      </details>
+    </div>
+  )
+}
+
 /** A tool call: a card for work sent to another chat or a worker, otherwise the call itself. */
 function ToolCall({ use, result, pending }: { use: ToolUse; result?: ToolResult; pending: boolean }) {
-  const { cards, workers } = useContext(DelegatedContext)
+  const { workers } = useContext(DelegatedContext)
   const { durations, folded } = useContext(FoldContext)
   const data = resultJson(result)
-  const card = data && THREAD_TOOLS.has(use.name) ? cards.get(String(data.message_id ?? '')) : undefined
-  if (card) return <ThreadCard card={card} />
+  if (THREAD_TOOLS[use.name]) return <MessagingCall use={use} result={result} pending={pending} />
   if (data && WORKER_TOOLS.has(use.name)) {
     const worker = workers.get(String(data.id ?? '')) ?? (data.title && data.status ? (data as Worker) : null)
     if (worker) {
@@ -889,7 +1063,7 @@ function sentNotes(
   const notes = new Map<number, SentCard[]>()
   for (const message of messages)
     for (const block of message.blocks) {
-      if (block.type !== 'tool_use' || !THREAD_TOOLS.has(block.name)) continue
+      if (block.type !== 'tool_use' || !SEND_TOOLS[block.name]) continue
       const card = cards.get(String(resultJson(results.get(block.id))?.message_id ?? ''))
       const call = calls.find(
         c =>
