@@ -1400,10 +1400,51 @@ a public URL it long-polls.
 **Outages.** Each update is saved (as a `BotJob`, target `plugin:telegram`)
 before Telegram is told it arrived: a webhook answers 500, and polling keeps
 its offset, when the database can't take it, so Telegram sends it again.
-A saved update the database failed on is replayed after two minutes (up to
-three tries), as is one the process died before starting; any other failure
-tells the chat to send the message again. Dead database connections are
-dropped after a failure, so a Postgres failover doesn't wedge the poller.
+A saved update the database failed on **before execution** is replayed after
+two minutes (up to three tries); startup also queues recent updates the
+process died before starting. A database failure after execution starts
+does not automatically repeat tools. Other failures tell the chat that
+handling failed. Dead database connections are dropped after a failure,
+so a Postgres failover doesn't wedge the poller.
+
+Polling and webhooks acknowledge button taps as soon as their updates are
+saved, independently of turn execution. Messages run through a FIFO worker
+per chat (one shared queue when `target_thread` is set), including album
+collection, media downloads and turn-lock waits. Without `target_thread`,
+an approval from another person in a group can bypass messages waiting on
+an unrelated person's session; authorization is unchanged, same-person
+messages and taps keep their order, and turns still take the session lock.
+Idle queues are removed and worker failures are logged.
+
+Ergonaut waits for a busy session with asynchronous polling and serialized,
+nonblocking lock probes, not blocked executor threads or shared worker
+slots. Busy sessions and long Telegram turns therefore do not prevent
+unlocked chats, other bots, or unrelated approval decisions from running.
+Intake and lock release retain executor capacity.
+
+Every source job stays `pending` while queued, collecting an album or photo
+batch, preparing media, or waiting for the host's turn lock. An album is
+rebuilt from its saved `media_group_id` and chat on restart. All collected
+source jobs are claimed as `in_progress` in one database transaction under
+the session lock immediately before execution; competing replay processes
+cannot run the same claimed sources again. The grouped turn delivers its
+result and marks all sources `completed` before releasing that lock.
+`photo_batch_wait` collections also stay inside the FIFO and retain their
+source jobs until completion.
+
+A crash before the claim leaves replayable jobs; a crash inside the claim
+transaction rolls all claims back. A crash **after** the claim has an
+uncertain outcome: some tools may already have run. Recovery waits for the
+same session lock (so a live replica can finish), warns the Telegram chat
+that execution was interrupted and must be checked, and marks the stranded
+jobs `failed` without rerunning tools. A failed warning remains retryable;
+a crash between warning and status update can repeat the warning, not the
+tools. Approval decisions additionally retain their atomic resume claim,
+so a double tap cannot execute an approved tool twice.
+
+Polling advances its offset only after durable acceptance.
+`await plugin.drain()` waits for saved updates to finish when using the
+plugin directly. No migration or new configuration is required.
 
 **Where messages go.** Without `target_thread`, each message's sender is
 looked up in `users`, then its chat, so in a shared group chat each person
@@ -1440,8 +1481,19 @@ arrive as one turn, and with `photo_batch_wait` so do photos a person sends
 one at a time (handy for a recipe in several screenshots); a text they send
 while photos are gathering goes with them at once.
 
-A turn that stops for approval replies with Approve and Deny buttons that
-resume it (in a shared thread anyone it answers may press them).
+A turn that stops for approval replies with Approve and Deny buttons for the
+pending batch of tool calls (in a shared thread anyone it answers may press
+them; otherwise only the mapped session user may). The clicked prompt's
+keyboard is removed before the resumed tools run, on a best-effort basis;
+repeated or stale buttons never approve a newer batch. Telegram rejecting a
+callback acknowledgement or message edit does not discard an otherwise
+authorized decision. The final message's chat ID, message ID and approval
+fingerprint are saved with the call so completion or a changed approval batch
+also retires the prompt when the decision comes from another channel. A new
+text message declines the pending batch and retires its prompt before starting
+its own turn. Approval requests do not automatically expire.
+Failure to clear the saved prompt after a turn is logged without failing an
+already executed turn or withholding its result.
 `plugin.notify(user, text)` sends a message from other code. Turns run
 through `DJANGO_ERGO["CHANNEL_TURN_RUNNER"]` when it is set, which Ergonaut
 uses to hold the session's turn lock so Telegram and the app take turns.

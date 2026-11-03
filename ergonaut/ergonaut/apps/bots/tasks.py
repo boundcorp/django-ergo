@@ -27,6 +27,7 @@ streams watching it.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
 import logging
@@ -485,21 +486,48 @@ async def run_channel_turn(session, run):
     from asgiref.sync import sync_to_async
 
     session_id = str(session.id)
-    lock = session_lock(session_id)
-    locked = await sync_to_async(lock.__enter__, thread_sensitive=False)()
-    if not locked:
-        await sync_to_async(lock.__exit__, thread_sensitive=False)(None, None, None)
-        msg = f"Session {session_id} is busy"
-        raise RuntimeError(msg)
     control = InboxControl(session)
+    lock = None
+
+    def acquire():
+        nonlocal lock
+        candidate = session_lock(session_id, wait=False)
+        if candidate.__enter__():
+            lock = candidate
+            return True
+        candidate.__exit__(None, None, None)
+        return False
+
+    def finish():
+        if lock is None:
+            return
+        try:
+            remove_uploads(control.uploads)
+        finally:
+            try:
+                lock.__exit__(None, None, None)
+            finally:
+                notify(session_id)
+                queue_waiting(session_id)
+
+    deadline = time.monotonic() + LOCK_SECONDS
     try:
+        while not await sync_to_async(acquire, thread_sensitive=True)():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                msg = f"Session {session_id} is busy"
+                raise RuntimeError(msg)
+            await asyncio.sleep(min(0.1, remaining))
+            if time.monotonic() >= deadline:
+                msg = f"Session {session_id} is busy"
+                raise RuntimeError(msg)
         await sync_to_async(clear_stop)(session_id)  # a stop meant for an earlier turn
         return await run(control)
     finally:
-        await sync_to_async(remove_uploads)(control.uploads)
-        await sync_to_async(lock.__exit__, thread_sensitive=False)(None, None, None)
-        await sync_to_async(notify)(session_id)
-        await sync_to_async(queue_waiting)(session_id)
+        # Both callbacks use the same serial executor: even if cancellation hides a
+        # successful acquire's return, finish runs after it and releases its lock.
+        # Shield cleanup so a second cancellation cannot discard that queued release.
+        await asyncio.shield(sync_to_async(finish, thread_sensitive=True)())
 
 
 def queue_waiting(session_id) -> None:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import subprocess
 import textwrap
@@ -515,6 +516,11 @@ class FakeTelegram:
         if method == "getUpdates":
             updates, self.updates = self.updates, []
             return updates
+        if method == "sendMessage":
+            return {
+                "message_id": 50 + len(self.sent()),
+                "chat": {"id": params["chat_id"]},
+            }
         if method == "getMe":
             return {"id": 4242, "username": "KitchenBot"}
         if method == "getUserProfilePhotos":
@@ -574,6 +580,7 @@ async def test_telegram_routes_chats_to_root_sessions(tmp_path):
     ]
 
     assert await plugin.poll_once() == 2
+    await plugin.drain()
 
     assert plugin._offset == 7
     assert plugin.api.sent() == [{"chat_id": 111, "text": "Hello cook!"}]
@@ -629,16 +636,25 @@ async def test_telegram_approval_buttons_resume_the_turn(tmp_path):
         "id": "cb0",
         "data": buttons[0]["callback_data"],
         "from": {"id": 999},
-        "message": {"chat": {"id": 111}},
+        "message": {"message_id": 51, "chat": {"id": 111}},
     }
     await plugin.handle_update({"update_id": 2, "callback_query": stranger})
     assert plugin.api.sent()[-1]["text"] == "Approve order?"
+    assert not any(m == "editMessageReplyMarkup" for m, _ in plugin.api.calls)
 
     callback = {**stranger, "id": "cb1", "from": {"id": 111}}
     await plugin.handle_update({"update_id": 3, "callback_query": callback})
 
     assert ("answerCallbackQuery", {"callback_query_id": "cb1"}) in plugin.api.calls
     assert plugin.api.sent()[-1]["text"] == "Flour is on the way."
+    assert (
+        "editMessageReplyMarkup",
+        {
+            "chat_id": 111,
+            "message_id": 51,
+            "reply_markup": {"inline_keyboard": []},
+        },
+    ) in plugin.api.calls
     result = engine._client.calls[-1]["messages"][-1]["content"][0]
     assert result["content"] == "ordered flour"
 
@@ -646,6 +662,397 @@ async def test_telegram_approval_buttons_resume_the_turn(tmp_path):
     await plugin.handle_update({"update_id": 4, "callback_query": callback})
     assert plugin.api.sent()[-1]["text"] == "That request was already handled."
     assert json.dumps(plugin.api.calls)  # calls are plain data
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("action", ["ok", "no"])
+@pytest.mark.parametrize(
+    "failed_method", ["answerCallbackQuery", "editMessageReplyMarkup"]
+)
+async def test_telegram_callback_ui_failure_does_not_lose_saved_decision(
+    tmp_path, monkeypatch, action, failed_method
+):
+    from django_ergo.conversation.models import BotJob
+    from django_ergo.conversation.models import StructuredCallStatus
+
+    user = await User.objects.acreate(username="cook")
+    bot, engine, plugin = telegram_bot(
+        tmp_path,
+        claude_tool("order", {"item": "flour"}, tool_id="o1"),
+        say("Ordered." if action == "ok" else "Not ordered."),
+    )
+    await plugin.handle_update(update(1, text="We need flour"))
+    prompt = plugin.api.sent()[-1]
+    button = prompt["reply_markup"]["inline_keyboard"][0][action == "no"]
+    session = await bot.root_session(user)
+    call = await bot.pending_call(session)
+    api_call = plugin.api.call
+
+    async def fail_ui(method, **params):
+        if method == failed_method:
+            msg = "Telegram rejected the callback UI update"
+            raise RuntimeError(msg)
+        return await api_call(method, **params)
+
+    monkeypatch.setattr(plugin.api, "call", fail_ui)
+    job = await plugin.accept(
+        {
+            "update_id": 2,
+            "callback_query": {
+                "id": "saved-callback",
+                "data": button["callback_data"],
+                "from": {"id": 111},
+                "message": {"message_id": 51, "chat": {"id": 111}},
+            },
+        }
+    )
+    await plugin.process(job)
+
+    await call.arefresh_from_db()
+    assert call.status == StructuredCallStatus.COMPLETED
+    assert await bot.pending_call(session) is None
+    assert (await BotJob.objects.aget(pk=job.pk)).status == "completed"
+    tool_result = engine._client.calls[-1]["messages"][-1]["content"][0]
+    assert tool_result["is_error"] == (action == "no")
+    assert tool_result["content"] == (
+        "ordered flour" if action == "ok" else "The user declined this tool call."
+    )
+    assert plugin.api.sent()[-1]["text"] == (
+        "Ordered." if action == "ok" else "Not ordered."
+    )
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_telegram_retirement_database_failure_preserves_approved_result(
+    tmp_path, monkeypatch
+):
+    from unittest.mock import Mock
+
+    from django.db import OperationalError
+    from django.utils import timezone
+
+    from django_ergo.bots import messaging
+    from django_ergo.bots.tools import FunctionToolkit
+    from django_ergo.conversation.models import StructuredCall
+    from django_ergo.conversation.models import StructuredCallStatus
+    from django_ergo.plugins.telegram import REPLAY_AFTER
+
+    user = await User.objects.acreate(username="cook")
+    bot, engine, plugin = telegram_bot(
+        tmp_path,
+        claude_tool("order", {"item": "flour"}, tool_id="o1"),
+        say("Ordered."),
+    )
+    await plugin.handle_update(update(1, text="Order flour"))
+    prompt = plugin.api.sent()[-1]
+    session = await bot.root_session(user)
+    call = await bot.pending_call(session)
+    assert "telegram_approval_prompt" in call.metadata
+    tool_runs = []
+    retirement_failures = []
+    execute_tool = FunctionToolkit.execute_tool
+    save = StructuredCall.save
+    finish_turn = Mock(wraps=messaging.finish_turn)
+
+    def track_tool(toolkit, tool_name, arguments):
+        result = execute_tool(toolkit, tool_name, arguments)
+        if tool_name == "order":
+            tool_runs.append((arguments, result))
+        return result
+
+    def fail_retirement(saved, *args, **kwargs):
+        if (
+            saved.pk == call.pk
+            and saved.status == StructuredCallStatus.COMPLETED
+            and kwargs.get("update_fields") == ["metadata"]
+            and "telegram_approval_prompt" not in saved.metadata
+        ):
+            # Fail the actual database write in retirement, after the real tool ran.
+            assert tool_runs == [({"item": "flour"}, "ordered flour")]
+            retirement_failures.append(saved.pk)
+            msg = "database failed while retiring the approval prompt"
+            raise OperationalError(msg)
+        return save(saved, *args, **kwargs)
+
+    monkeypatch.setattr(FunctionToolkit, "execute_tool", track_tool)
+    monkeypatch.setattr(StructuredCall, "save", fail_retirement)
+    monkeypatch.setattr(messaging, "finish_turn", finish_turn)
+    job = await plugin.accept(
+        {
+            "update_id": 2,
+            "callback_query": {
+                "id": "retirement-failure",
+                "data": prompt["reply_markup"]["inline_keyboard"][0][0][
+                    "callback_data"
+                ],
+                "from": {"id": 111},
+                "message": {"message_id": 51, "chat": {"id": 111}},
+            },
+        }
+    )
+    await plugin.process(job)
+
+    assert retirement_failures == [call.pk]
+    await call.arefresh_from_db()
+    assert call.status == StructuredCallStatus.COMPLETED
+    assert "telegram_approval_prompt" in call.metadata
+    assert await bot.pending_call(session) is None
+    await job.arefresh_from_db()
+    assert job.status == "completed"
+    assert plugin.api.sent()[-1] == {"chat_id": 111, "text": "Ordered."}
+    finish_turn.assert_called_once()
+
+    # Even after the recovery cutoff, this completed callback must not replay as
+    # "already handled" and replace the successful result.
+    await (
+        type(job)
+        .objects.filter(pk=job.pk)
+        .aupdate(created_at=timezone.now() - REPLAY_AFTER)
+    )
+    assert await plugin.replay() == 0
+    await plugin.drain()
+    assert tool_runs == [({"item": "flour"}, "ordered flour")]
+    finish_turn.assert_called_once()
+    assert [message["text"] for message in plugin.api.sent()] == [
+        prompt["text"],
+        "Ordered.",
+    ]
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_telegram_batch_buttons_cannot_answer_a_later_approval(tmp_path):
+    user = await User.objects.acreate(username="cook")
+    batch = claude_tool("order", {"item": "flour"}, tool_id="o1")
+    batch.content.extend(claude_tool("order", {"item": "eggs"}, tool_id="o2").content)
+    bot, engine, plugin = telegram_bot(
+        tmp_path,
+        batch,
+        claude_tool("order", {"item": "butter"}, tool_id="o3"),
+        say("No butter ordered."),
+    )
+    await plugin.handle_update(update(1, text="Order the baking ingredients"))
+    first_prompt = plugin.api.sent()[-1]
+    assert first_prompt["text"] == "Approve order, order?"
+    first_button = first_prompt["reply_markup"]["inline_keyboard"][0][0]
+    callback = {
+        "id": "batch-callback",
+        "data": first_button["callback_data"],
+        "from": {"id": 111},
+        "message": {"message_id": 51, "chat": {"id": 111}},
+    }
+    await plugin.handle_callback(callback)
+
+    approved = engine._client.calls[1]["messages"][-1]["content"]
+    assert [(r["tool_use_id"], r["content"]) for r in approved] == [
+        ("o1", "ordered flour"),
+        ("o2", "ordered eggs"),
+    ]
+    second_prompt = plugin.api.sent()[-1]
+    deny_button = second_prompt["reply_markup"]["inline_keyboard"][0][1]
+    assert (
+        deny_button["callback_data"].split(":")[1]
+        == first_button["callback_data"].split(":")[1]
+    )
+    assert (
+        deny_button["callback_data"].split(":")[2]
+        != first_button["callback_data"].split(":")[2]
+    )
+
+    # A repeated tap on the first batch cannot approve the next batch in this call.
+    await plugin.handle_callback({**callback, "id": "stale-callback"})
+    assert len(engine._client.calls) == 2
+    assert plugin.api.sent()[-1]["text"] == "That request was already handled."
+    pending = await bot.pending_call(await bot.root_session(user))
+    assert [a["id"] for a in pending.metadata["pending_approvals"]] == ["o3"]
+    assert all(
+        params["message_id"] == 51
+        for method, params in plugin.api.calls
+        if method == "editMessageReplyMarkup"
+    )
+
+    await plugin.handle_callback(
+        {
+            **callback,
+            "id": "deny-next-batch",
+            "data": deny_button["callback_data"],
+            "message": {"message_id": 52, "chat": {"id": 111}},
+        }
+    )
+    declined = engine._client.calls[-1]["messages"][-1]["content"][0]
+    assert declined["tool_use_id"] == "o3"
+    assert declined["content"] == "The user declined this tool call."
+    assert declined["is_error"]
+    assert plugin.api.sent()[-1]["text"] == "No butter ordered."
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_telegram_polling_acks_next_callback_while_resume_is_running(
+    tmp_path, monkeypatch
+):
+    from django_ergo.conversation.models import BotJob
+
+    await User.objects.acreate(username="cook")
+    bot, engine, plugin = telegram_bot(
+        tmp_path,
+        claude_tool("order", {"item": "flour"}, tool_id="o1"),
+        say("Ordered."),
+    )
+    await plugin.handle_update(update(1, text="Order flour"))
+    prompt = plugin.api.sent()[-1]
+    callback = {
+        "id": "first-tap",
+        "data": prompt["reply_markup"]["inline_keyboard"][0][0]["callback_data"],
+        "from": {"id": 111},
+        "message": {"message_id": 51, "chat": {"id": 111}},
+    }
+    resuming = asyncio.Event()
+    release = asyncio.Event()
+    second_acked = asyncio.Event()
+    real_resume = bot.resume
+    api_call = plugin.api.call
+
+    async def slow_resume(*args, **kwargs):
+        resuming.set()
+        await release.wait()
+        return await real_resume(*args, **kwargs)
+
+    async def track_ack(method, **params):
+        result = await api_call(method, **params)
+        if (
+            method == "answerCallbackQuery"
+            and params["callback_query_id"] == "second-tap"
+        ):
+            second_acked.set()
+        return result
+
+    monkeypatch.setattr(bot, "resume", slow_resume)
+    monkeypatch.setattr(plugin.api, "call", track_ack)
+    try:
+        plugin.api.updates = [{"update_id": 2, "callback_query": callback}]
+        assert await asyncio.wait_for(plugin.poll_once(), timeout=5) == 1
+        await asyncio.wait_for(resuming.wait(), timeout=5)
+        assert any(m == "editMessageReplyMarkup" for m, _ in plugin.api.calls)
+
+        plugin.api.updates = [
+            {
+                "update_id": 3,
+                "callback_query": {**callback, "id": "second-tap"},
+            }
+        ]
+        assert await asyncio.wait_for(plugin.poll_once(), timeout=5) == 1
+        await asyncio.wait_for(second_acked.wait(), timeout=5)
+        assert len(engine._client.calls) == 1
+        assert plugin._offset == 4
+        assert await BotJob.objects.filter(target="plugin:telegram").acount() == 2
+    finally:
+        release.set()
+        await asyncio.wait_for(plugin.drain(), timeout=5)
+
+    assert len(engine._client.calls) == 2
+    assert plugin.api.sent()[-1]["text"] == "That request was already handled."
+    assert not await BotJob.objects.exclude(status="completed").aexists()
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("channel", ["text", "web"])
+async def test_telegram_retires_saved_prompt_after_other_channel_decision(
+    tmp_path, channel
+):
+    from django_ergo.conversation.chat_reply import ChatReply
+    from django_ergo.plugins.telegram import MAX_MESSAGE
+
+    user = await User.objects.acreate(username="cook")
+    bot, engine, plugin = telegram_bot(
+        tmp_path,
+        claude_tool("order", {"item": "flour"}, tool_id="o1"),
+        say("Not ordered."),
+        say("Let us cook instead."),
+    )
+    session = await bot.root_session(user)
+    paused = await bot.ask(session, "Order flour")
+    original_metadata = dict(paused.call.metadata)
+    paused.reply = ChatReply(text="Context " * MAX_MESSAGE)
+    await plugin.send_result(111, paused)
+    sent = plugin.api.sent()
+    assert len(sent) > 1
+    assert all("reply_markup" not in message for message in sent[:-1])
+    assert "reply_markup" in sent[-1]
+    await paused.call.arefresh_from_db()
+    prompt = paused.call.metadata["telegram_approval_prompt"]
+    assert prompt["message_id"] == 50 + len(sent)
+    assert {
+        key: value
+        for key, value in paused.call.metadata.items()
+        if key != "telegram_approval_prompt"
+    } == original_metadata
+
+    if channel == "text":
+        await plugin.handle_update(
+            update(2, text="Let us cook instead", **person(111, "Cook"))
+        )
+        assert plugin.api.sent()[-1]["text"] == "Let us cook instead."
+    else:
+        done = await bot.resume(session, False)
+        assert done.text == "Not ordered."
+
+    assert (
+        "editMessageReplyMarkup",
+        {
+            "chat_id": 111,
+            "message_id": prompt["message_id"],
+            "reply_markup": {"inline_keyboard": []},
+        },
+    ) in plugin.api.calls
+    await paused.call.arefresh_from_db()
+    assert "telegram_approval_prompt" not in paused.call.metadata
+    assert await bot.pending_call(session) is None
+    declined = engine._client.calls[1]["messages"][-1]["content"][0]
+    assert declined["content"] == "The user declined this tool call."
+    assert declined["is_error"]
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("next_batch", [False, True])
+async def test_telegram_retires_prompt_answered_while_send_is_in_flight(
+    tmp_path, monkeypatch, next_batch
+):
+    user = await User.objects.acreate(username="cook")
+    bot, engine, plugin = telegram_bot(
+        tmp_path,
+        claude_tool("order", {"item": "flour"}, tool_id="o1"),
+        claude_tool("order", {"item": "eggs"}, tool_id="o2")
+        if next_batch
+        else say("Not ordered."),
+    )
+    session = await bot.root_session(user)
+    paused = await bot.ask(session, "Order flour")
+    api_call = plugin.api.call
+
+    async def answer_before_send_returns(method, **params):
+        sent = await api_call(method, **params)
+        if method == "sendMessage" and "reply_markup" in params:
+            await bot.resume(session, False)
+        return sent
+
+    monkeypatch.setattr(plugin.api, "call", answer_before_send_returns)
+    await plugin.send_result(111, paused)
+
+    await paused.call.arefresh_from_db()
+    assert "telegram_approval_prompt" not in paused.call.metadata
+    assert (
+        "editMessageReplyMarkup",
+        {
+            "chat_id": 111,
+            "message_id": 51,
+            "reply_markup": {"inline_keyboard": []},
+        },
+    ) in plugin.api.calls
+    pending = await bot.pending_call(session)
+    if next_batch:
+        assert pending is not None
+        assert [item["id"] for item in pending.metadata["pending_approvals"]] == ["o2"]
+    else:
+        assert pending is None
 
 
 def test_telegram_needs_token(tmp_path, monkeypatch):
@@ -1143,6 +1550,7 @@ async def test_telegram_keeps_updates_the_database_could_not_take(
     monkeypatch.setattr(plugin, "dispatch", down)
     plugin.api.updates = [update(5, text="hi")]
     assert await plugin.poll_once() == 1
+    await plugin.drain()
     assert plugin._offset == 6
     job = await BotJob.objects.aget(bot_name="kitchen", target=telegram.JOB_TARGET)
     assert (job.status, job.args["attempts"]) == ("pending", 1)
@@ -1156,6 +1564,7 @@ async def test_telegram_keeps_updates_the_database_could_not_take(
         created_at=timezone.now() - telegram.REPLAY_AFTER
     )
     assert await plugin.replay() == 1
+    await plugin.drain()
     await job.arefresh_from_db()
     assert job.status == "completed"
     assert plugin.api.sent() == [{"chat_id": 111, "text": "Back again."}]

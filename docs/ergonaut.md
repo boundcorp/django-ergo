@@ -527,6 +527,13 @@ a row), or fails after `--timeout` (30 minutes by default).
 restart (beat resumes it), but one in the middle of a step loses that step.
 Thread messages that were waiting are redelivered.
 
+Telegram messages and albums accepted but not started survive a bots-process
+restart and are rebuilt from their saved jobs. A turn interrupted after its
+durable execution claim is not automatically repeated: once its session lock
+is free, recovery warns the chat that actions may already have completed and
+marks the jobs failed. Wait for idle before restarting to avoid uncertain
+tool outcomes; see [Telegram outages](bots.md#telegram).
+
 With Celery a restart is gentler on workers than that suggests: each worker
 is a database row plus one short Celery step at a time, a step in flight
 finishes during Celery's warm shutdown, and beat's `resume_workers`
