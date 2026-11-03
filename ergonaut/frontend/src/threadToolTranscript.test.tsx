@@ -2,12 +2,19 @@ import { describe, expect, test } from 'bun:test'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router-dom'
-import type { Message } from './api'
+import type { Message, SentCard } from './api'
 import { Transcript } from './components/Transcript'
 
 const id = '12345678-1234-1234-1234-123456789abc'
 
-function renderTool(name: string, input: unknown, content?: unknown, isError = false, sessionId = '') {
+function renderTool(
+  name: string,
+  input: unknown,
+  content?: unknown,
+  isError = false,
+  sessionId = '',
+  sent: SentCard[] = [],
+) {
   const messages: Message[] = [
     { line: 0, role: 'assistant', timestamp: null, blocks: [{ type: 'tool_use', id: 'call', name, input }] },
   ]
@@ -19,11 +26,64 @@ function renderTool(name: string, input: unknown, content?: unknown, isError = f
       blocks: [{ type: 'tool_result', tool_use_id: 'call', content: JSON.stringify(content), is_error: isError }],
     })
   return renderToStaticMarkup(
-    createElement(MemoryRouter, null, createElement(Transcript, { messages, calls: [], sessionId })),
+    createElement(MemoryRouter, null, createElement(Transcript, { messages, calls: [], sessionId, sent })),
   )
 }
 
 describe('messaging tool transcript', () => {
+  test.each([
+    'ergo_thread_send',
+    'ergo_message_up',
+    'ergo_thread_forward',
+    'ergo_thread_resolve',
+    'ergo_thread_archive',
+    'ergo_thread_stop',
+    'ergo_thread_list',
+  ])('%s keeps model guidance in tool details', name => {
+    const html = renderTool(name, {}, { note: 'Tell the model to say this' })
+    const [card] = html.split('<summary class="cursor-pointer py-1">Tool details</summary>')
+    expect(card).not.toContain('Tell the model to say this')
+    expect(html).toContain('Tool details')
+  })
+
+  test('uses live message state rather than a stale queue position', () => {
+    const card: SentCard = {
+      message_id: 'msg',
+      created_at: '',
+      status: 'done',
+      text: 'Request',
+      reply: '',
+      prs: [],
+      thread: {
+        id,
+        title: 'Target',
+        bot: 'helper',
+        role: '',
+        archived: false,
+        attention: false,
+        state: 'idle',
+        started_by: '',
+        started_by_id: '',
+        working_for: 0,
+        waiting_on: 0,
+        workers_running: 0,
+      },
+    }
+    const result = { message_id: 'msg', session_id: id, status: 'queued', queue_position: 1 }
+    const handled = renderTool('ergo_thread_forward', {}, result, false, '', [card]).split('Tool details')[0]
+    expect(handled).not.toContain('Queue position')
+    expect(handled).not.toContain('queued')
+    const unknown = renderTool('ergo_thread_forward', {}, result).split('Tool details')[0]
+    expect(unknown).toContain('Queue position 1')
+    expect(unknown).toContain('queued')
+  })
+
+  test('clamps message and note previews with an expansion control', () => {
+    const html = renderTool('ergo_thread_forward', { message: 'one\ntwo\nthree', note: 'four\nfive\nsix' }, {})
+    expect(html.match(/line-clamp-2/g)?.length).toBe(2)
+    expect(html.split('Tool details')[0].match(/aria-expanded="false"/g)?.length).toBe(2)
+  })
+
   test.each(['ergo_thread_send', 'ergo_message_up', 'ergo_thread_forward'])(
     '%s shows its target and delivery',
     name => {
