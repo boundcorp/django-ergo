@@ -4,6 +4,19 @@ This document tracks the major milestones and evolution of the Django Ergo proje
 
 ## Development Timeline
 
+### Telegram approval intake and recovery (November 2026)
+
+- Callback acknowledgement follows durable acceptance rather than waiting
+  for a running turn. Per-chat FIFO workers share a two-worker limit across
+  Telegram plugins on each event loop, keeping executor capacity available
+  for polling, acknowledgement and turn-lock release.
+- Updates queued or waiting for the host's turn lock remain pending and
+  recover on startup. Prompt-retirement failures after tools execute are
+  logged without failing the completed turn or suppressing its reply.
+- Authorization, atomic approval execution and prompt retirement remain
+  unchanged; no migration or configuration change is required.
+
+
 ### GPT-Transcribe defaults (November 2026)
 
 - Composer voice and attachment transcription now default to `gpt-transcribe`.

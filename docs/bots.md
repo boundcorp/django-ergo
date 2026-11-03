@@ -1401,13 +1401,26 @@ a public URL it long-polls.
 before Telegram is told it arrived: a webhook answers 500, and polling keeps
 its offset, when the database can't take it, so Telegram sends it again.
 A saved update the database failed on is replayed after two minutes (up to
-three tries), as is one the process died before starting; any other failure
-tells the chat to send the message again. Dead database connections are
-dropped after a failure, so a Postgres failover doesn't wedge the poller.
-Polling and webhooks process saved updates in the background, so a long turn
-does not block intake or acknowledgement of later button taps. Turns in one
-session still use the same turn lock. `await plugin.drain()` waits for saved
-updates to finish when using the plugin directly.
+three tries); startup also queues recent updates the process died before
+starting. Any other failure tells the chat to send the message again. Dead
+database connections are dropped after a failure, so a Postgres failover
+doesn't wedge the poller.
+
+Polling and webhooks acknowledge button taps as soon as their updates are
+saved, independently of turn execution. Updates run through a FIFO worker
+per chat (one shared queue when `target_thread` is set), preserving order
+through media downloads and turn-lock waits. Across all Telegram plugins in
+one event loop, at most two workers process updates concurrently; other
+chats wait asynchronously without occupying executor threads needed for
+intake and lock release. Workers release their slot between updates, log
+failures, and remove idle queues. Media collection windows still apply.
+Jobs remain `pending` while queued, preparing media, or waiting for the
+host's turn lock; the atomic `in_progress` claim happens under that lock
+immediately before the turn starts, so restart recovery includes those
+waiting updates. A turn already started is not automatically re-executed.
+Polling advances its offset only after durable acceptance. Turns retain
+the host's session lock. `await plugin.drain()` waits for saved updates to
+finish when using the plugin directly.
 
 **Where messages go.** Without `target_thread`, each message's sender is
 looked up in `users`, then its chat, so in a shared group chat each person
@@ -1455,6 +1468,8 @@ fingerprint are saved with the call so completion or a changed approval batch
 also retires the prompt when the decision comes from another channel. A new
 text message declines the pending batch and retires its prompt before starting
 its own turn. Approval requests do not automatically expire.
+Failure to clear the saved prompt after a turn is logged without failing an
+already executed turn or withholding its result.
 `plugin.notify(user, text)` sends a message from other code. Turns run
 through `DJANGO_ERGO["CHANNEL_TURN_RUNNER"]` when it is set, which Ergonaut
 uses to hold the session's turn lock so Telegram and the app take turns.

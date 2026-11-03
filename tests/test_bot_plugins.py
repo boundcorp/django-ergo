@@ -723,6 +723,103 @@ async def test_telegram_callback_ui_failure_does_not_lose_saved_decision(
 
 
 @pytest.mark.django_db(transaction=True)
+async def test_telegram_retirement_database_failure_preserves_approved_result(
+    tmp_path, monkeypatch
+):
+    from unittest.mock import Mock
+
+    from django.db import OperationalError
+    from django.utils import timezone
+
+    from django_ergo.bots import messaging
+    from django_ergo.bots.tools import FunctionToolkit
+    from django_ergo.conversation.models import StructuredCall
+    from django_ergo.conversation.models import StructuredCallStatus
+    from django_ergo.plugins.telegram import REPLAY_AFTER
+
+    user = await User.objects.acreate(username="cook")
+    bot, engine, plugin = telegram_bot(
+        tmp_path,
+        claude_tool("order", {"item": "flour"}, tool_id="o1"),
+        say("Ordered."),
+    )
+    await plugin.handle_update(update(1, text="Order flour"))
+    prompt = plugin.api.sent()[-1]
+    session = await bot.root_session(user)
+    call = await bot.pending_call(session)
+    assert "telegram_approval_prompt" in call.metadata
+    tool_runs = []
+    retirement_failures = []
+    execute_tool = FunctionToolkit.execute_tool
+    save = StructuredCall.save
+    finish_turn = Mock(wraps=messaging.finish_turn)
+
+    def track_tool(toolkit, tool_name, arguments):
+        result = execute_tool(toolkit, tool_name, arguments)
+        if tool_name == "order":
+            tool_runs.append((arguments, result))
+        return result
+
+    def fail_retirement(saved, *args, **kwargs):
+        if (
+            saved.pk == call.pk
+            and saved.status == StructuredCallStatus.COMPLETED
+            and kwargs.get("update_fields") == ["metadata"]
+            and "telegram_approval_prompt" not in saved.metadata
+        ):
+            # Fail the actual database write in retirement, after the real tool ran.
+            assert tool_runs == [({"item": "flour"}, "ordered flour")]
+            retirement_failures.append(saved.pk)
+            msg = "database failed while retiring the approval prompt"
+            raise OperationalError(msg)
+        return save(saved, *args, **kwargs)
+
+    monkeypatch.setattr(FunctionToolkit, "execute_tool", track_tool)
+    monkeypatch.setattr(StructuredCall, "save", fail_retirement)
+    monkeypatch.setattr(messaging, "finish_turn", finish_turn)
+    job = await plugin.accept(
+        {
+            "update_id": 2,
+            "callback_query": {
+                "id": "retirement-failure",
+                "data": prompt["reply_markup"]["inline_keyboard"][0][0][
+                    "callback_data"
+                ],
+                "from": {"id": 111},
+                "message": {"message_id": 51, "chat": {"id": 111}},
+            },
+        }
+    )
+    await plugin.process(job)
+
+    assert retirement_failures == [call.pk]
+    await call.arefresh_from_db()
+    assert call.status == StructuredCallStatus.COMPLETED
+    assert "telegram_approval_prompt" in call.metadata
+    assert await bot.pending_call(session) is None
+    await job.arefresh_from_db()
+    assert job.status == "completed"
+    assert plugin.api.sent()[-1] == {"chat_id": 111, "text": "Ordered."}
+    finish_turn.assert_called_once()
+
+    # Even after the recovery cutoff, this completed callback must not replay as
+    # "already handled" and replace the successful result.
+    await (
+        type(job)
+        .objects.filter(pk=job.pk)
+        .aupdate(created_at=timezone.now() - REPLAY_AFTER)
+    )
+    assert await plugin.replay() == 0
+    await plugin.drain()
+    assert tool_runs == [({"item": "flour"}, "ordered flour")]
+    finish_turn.assert_called_once()
+    assert [message["text"] for message in plugin.api.sent()] == [
+        prompt["text"],
+        "Ordered.",
+    ]
+
+
+@pytest.mark.django_db(transaction=True)
 async def test_telegram_batch_buttons_cannot_answer_a_later_approval(tmp_path):
     user = await User.objects.acreate(username="cook")
     batch = claude_tool("order", {"item": "flour"}, tool_id="o1")
@@ -832,7 +929,7 @@ async def test_telegram_polling_acks_next_callback_while_resume_is_running(
     monkeypatch.setattr(plugin.api, "call", track_ack)
     try:
         plugin.api.updates = [{"update_id": 2, "callback_query": callback}]
-        assert await plugin.poll_once() == 1
+        assert await asyncio.wait_for(plugin.poll_once(), timeout=5) == 1
         await asyncio.wait_for(resuming.wait(), timeout=5)
         assert any(m == "editMessageReplyMarkup" for m, _ in plugin.api.calls)
 
@@ -842,14 +939,14 @@ async def test_telegram_polling_acks_next_callback_while_resume_is_running(
                 "callback_query": {**callback, "id": "second-tap"},
             }
         ]
-        assert await plugin.poll_once() == 1
+        assert await asyncio.wait_for(plugin.poll_once(), timeout=5) == 1
         await asyncio.wait_for(second_acked.wait(), timeout=5)
         assert len(engine._client.calls) == 1
         assert plugin._offset == 4
         assert await BotJob.objects.filter(target="plugin:telegram").acount() == 2
     finally:
         release.set()
-        await plugin.drain()
+        await asyncio.wait_for(plugin.drain(), timeout=5)
 
     assert len(engine._client.calls) == 2
     assert plugin.api.sent()[-1]["text"] == "That request was already handled."
@@ -1467,6 +1564,7 @@ async def test_telegram_keeps_updates_the_database_could_not_take(
         created_at=timezone.now() - telegram.REPLAY_AFTER
     )
     assert await plugin.replay() == 1
+    await plugin.drain()
     await job.arefresh_from_db()
     assert job.status == "completed"
     assert plugin.api.sent() == [{"chat_id": 111, "text": "Back again."}]
