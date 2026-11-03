@@ -752,7 +752,10 @@ results include `session_id`, `title` (the bot-and-chat display label), and
 `status` (`sent` or `queued`, with `queue_position` when queued). List entries
 retain `id` and their session `status`. Resolve and its archive alias return an
 object with `status: "resolved"` and the original confirmation text in `note`;
-older stored results may be plain text.
+older stored results may be plain text. A refused call that concerns a known
+thread (stop or resolve refused, send to the chat itself, a nudge right after a
+reply) fails with a JSON object: the reason in `error`, plus the same
+`session_id`, `title` and `bot`; other failures stay plain text.
 
 Messages between sessions are asynchronous, like thread-to-thread
 delegation in Codex (`django_ergo.bots.messaging`). `ergo_thread_send`

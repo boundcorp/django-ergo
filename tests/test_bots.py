@@ -1565,6 +1565,12 @@ async def test_ready_to_resolve_is_marked_only_where_the_viewer_may_resolve(
         in (refused["content"])
     )
     assert "only design can resolve it" in refused["content"]
+    refusal = json.loads(refused["content"])
+    assert (refusal["session_id"], refusal["title"], refusal["bot"]) == (
+        str(theirs.id),
+        "design · Started by design",
+        "design",
+    )
     started_result = json.loads(resolved_started["content"])
     own_result = json.loads(resolved_own["content"])
     assert started_result["note"].startswith("Resolved design · Started by")
@@ -1900,6 +1906,52 @@ async def test_thread_tool_metadata_for_named_chat_and_unstoppable_thread(
     )
     assert "can't stop a running turn" in stopped["note"]
     assert "stopped_running_turn" not in stopped
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_a_refused_thread_call_names_its_target_when_there_is_one(
+    tmp_path, thread_messages
+):
+    from django_ergo.bots import orchestrator
+    from django_ergo.bots.tools import ToolContext
+    from django_ergo.conversation.tool_dispatch import dispatch_tool
+
+    user = await User.objects.acreate(username="refused")
+    bot, _ = make_bot(tmp_path, say("ok"), yaml_text=LAZY_YAML, name="lazy")
+    main = await bot.root_session(user)
+    thread = await bot.create_session(user, parent=main, title="Work")
+
+    def call(name, session=thread, **args):
+        toolkit = orchestrator.orchestrator_toolkit(
+            ToolContext(bot=bot, session=session, user=user)
+        )
+        return dispatch_tool(name, args, [toolkit])
+
+    target = {"session_id": str(main.id), "title": "lazy · Main", "bot": "lazy"}
+    for name, session, args in (
+        # A thread can't stop or resolve a top-level chat; a chat can't message itself.
+        ("ergo_thread_stop", thread, {"thread_id": str(main.id)}),
+        ("ergo_thread_resolve", thread, {"thread_id": str(main.id)}),
+        ("ergo_thread_send", main, {"message": "Hello", "thread": "main"}),
+    ):
+        content, is_error = await sync_to_async(call)(name, session, **args)
+        assert is_error, (name, content)
+        refusal = json.loads(content)
+        assert refusal.pop("error")
+        assert refusal == target, name
+
+    content, is_error = await sync_to_async(call)(
+        "ergo_thread_resolve", thread_id=str(thread.id)
+    )
+    assert not is_error
+    assert json.loads(content)["session_id"] == str(thread.id)
+
+    # No thread to name: the error stays plain text.
+    content, is_error = await sync_to_async(call)(
+        "ergo_thread_stop", thread_id="00000000-0000-0000-0000-000000000000"
+    )
+    assert is_error
+    assert content.startswith("No thread 00000000-0000-0000-0000-000000000000 in lazy")
 
 
 @pytest.mark.django_db(transaction=True)

@@ -77,6 +77,7 @@ from django_ergo.conversation.models import ConversationSession
 from django_ergo.conversation.models import StructuredCallStatus
 from django_ergo.conversation.models import ThreadMessage
 from django_ergo.conversation.models import ThreadMessageStatus
+from django_ergo.conversation.tool_dispatch import ToolError
 from django_ergo.settings import api_settings
 
 if TYPE_CHECKING:
@@ -392,6 +393,11 @@ def _session_metadata(session: ConversationSession) -> dict:
     }
 
 
+def _refused(message: str, session: ConversationSession) -> ToolError:
+    """A refusal that names the thread it concerned, so a client can link it."""
+    return ToolError(message, **_session_metadata(session))
+
+
 def _row(session: ConversationSession, current: ConversationSession) -> dict:
     open_requests = session.thread_messages.filter(
         status__in=OPEN_STATUSES, in_reply_to__isnull=True
@@ -699,7 +705,7 @@ def _recipient(
         recipient = _session(target, ctx, thread)
     if recipient.id == ctx.session.id:
         msg = "That is this chat; send it somewhere else."
-        raise ValueError(msg)
+        raise _refused(msg, recipient)
     return recipient
 
 
@@ -865,7 +871,7 @@ def _refuse_nudge_after_reply(
         "back. If the user asked for a next step there, send one complete request with "
         "everything it needs, or wait for the user's next message."
     )
-    raise ValueError(msg)
+    raise _refused(msg, recipient)
 
 
 def _managed_thread(
@@ -876,9 +882,9 @@ def _managed_thread(
     thread = _session(target, ctx, thread_id)
     if roles.is_top(thread):
         msg = "Main and named chats can't be stopped or resolved from another chat."
-        raise ValueError(msg)
+        raise _refused(msg, thread)
     if not can_resolve(ctx.bot, ctx.session.user_id, thread):
-        raise ValueError(_refusal(thread, action))
+        raise _refused(_refusal(thread, action), thread)
     return thread
 
 
@@ -919,19 +925,19 @@ def resolve(
     if not thread_id or thread_id == str(current.id):
         if roles.is_top(current):
             msg = "Main and named chats aren't resolved; only threads are."
-            raise ValueError(msg)
+            raise _refused(msg, current)
         thread, own_turn = current, True
     else:
         thread, own_turn = _managed_thread(ctx, bot, thread_id, "resolve"), False
     status = thread_status(thread)
     if not own_turn and status["state"] == "working":
         msg = f"{messaging.label(thread)} is working; stop it with ergo_thread_stop first."
-        raise ValueError(msg)
+        raise _refused(msg, thread)
     handling = messaging.current_thread_message(thread) if own_turn else None
     open_here = int(bool(handling and handling.in_reply_to_id is None))
     if blockers := resolve_blockers(status, skip_open=open_here, own_turn=own_turn):
         msg = f"{messaging.label(thread)} isn't finished: " + "; ".join(blockers) + "."
-        raise ValueError(msg)
+        raise _refused(msg, thread)
     archival.archive(thread, reason=f"resolved by {messaging.label(current)}")
     meta = {**(thread.metadata or {}), "resolved_by": messaging.label(current)}
     if summary:

@@ -116,6 +116,26 @@ describe('messaging tool transcript', () => {
     expect(renderTool('ergo_thread_send', { thread: 'main' })).toContain('Running')
   })
 
+  test('a failed call names its target when the refusal carries it, and shortens a bare id when not', () => {
+    const refusal = {
+      error: 'kitchen · Groceries was started by boundcorp',
+      session_id: id,
+      title: 'kitchen · Groceries',
+      bot: 'kitchen',
+    }
+    for (const name of ['ergo_thread_resolve', 'ergo_thread_stop', 'ergo_thread_send', 'ergo_thread_forward']) {
+      const html = renderTool(name, { thread_id: id, thread: id, bot: 'kitchen' }, refusal, true)
+      expect(html).toContain('Failed')
+      expect(html).toContain(`href="/s/${id}"`)
+      expect(html).toContain('>kitchen · Groceries</a>')
+      expect(html).toContain('kitchen · Groceries was started by boundcorp')
+    }
+    const unknown = renderTool('ergo_thread_resolve', { thread_id: id }, `No thread ${id} in kitchen`, true)
+    expect(unknown).toContain('Failed')
+    expect(unknown).toContain(`href="/s/${id}"`)
+    expect(unknown).toContain('>12345678<')
+  })
+
   test('bot listing remains readable', () => {
     expect(renderTool('ergo_bot_list', {}, 'Bots you can message:\nResearch bot')).toContain('Research bot')
   })

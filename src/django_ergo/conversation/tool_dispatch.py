@@ -8,6 +8,7 @@ it raises goes back to the model as an error result.
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING
 from typing import Any
 
@@ -41,6 +42,19 @@ def requires_approval(tool_name: str, toolkits: list[Toolkit] | None) -> bool:
     return bool(checker(tool_name)) if callable(checker) else False
 
 
+class ToolError(ValueError):
+    """A tool failure that names what it concerned.
+
+    The model gets a JSON object (``error`` plus ``fields``) instead of bare
+    text, so a client can show the target of a failed call as it does for a
+    successful one.
+    """
+
+    def __init__(self, message: str, **fields: Any) -> None:
+        super().__init__(message)
+        self.fields = fields
+
+
 def dispatch_tool(name: str, args: dict, toolkits: list[Toolkit]) -> tuple[Any, bool]:
     """Run one tool call. Returns (result, is_error); never raises for tool failures."""
     toolkit = find_toolkit(toolkits, name)
@@ -48,6 +62,8 @@ def dispatch_tool(name: str, args: dict, toolkits: list[Toolkit]) -> tuple[Any, 
         return f"Unknown tool: {name}", True
     try:
         return toolkit.execute_tool(name, args), False
+    except ToolError as e:
+        return json.dumps({"error": str(e), **e.fields}, ensure_ascii=False), True
     except Exception as e:  # noqa: BLE001 — any tool failure goes back to the model
         return str(e), True
 

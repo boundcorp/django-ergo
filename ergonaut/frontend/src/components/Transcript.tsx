@@ -167,6 +167,11 @@ function textValue(value: unknown): string {
 
 const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
+/** A session id is too long for a chip; names such as "main" pass through. */
+function shortId(value: string): string {
+  return SESSION_ID.test(value) ? value.slice(0, 8) : value
+}
+
 /** Messaging results changed shape over time; only link an input when it is an actual session id. */
 function MessagingCall({ use, result, pending }: { use: ToolUse; result?: ToolResult; pending: boolean }) {
   const { cards, known } = useContext(DelegatedContext)
@@ -195,8 +200,8 @@ function MessagingCall({ use, result, pending }: { use: ToolUse; result?: ToolRe
     textValue(data.sent_to) ||
     textValue(data.thread) ||
     known.get(id) ||
-    inputId ||
-    (ownResolve ? 'This thread' : id)
+    shortId(inputId) ||
+    (ownResolve ? 'This thread' : shortId(id))
   const bot = textValue(data.bot) || textValue(args.bot)
   const labels: Record<string, string> = {
     ergo_thread_send: 'Send message',
@@ -269,7 +274,9 @@ function MessagingCall({ use, result, pending }: { use: ToolUse; result?: ToolRe
         </div>
       )}
       {result?.is_error && raw && (
-        <div className="whitespace-pre-wrap text-xs text-danger [overflow-wrap:anywhere]">{plain || raw}</div>
+        <div className="whitespace-pre-wrap text-xs text-danger [overflow-wrap:anywhere]">
+          {textValue(data.error) || plain || raw}
+        </div>
       )}
       {!result?.is_error && (note || plain) && (
         <div className="whitespace-pre-wrap text-xs text-muted [overflow-wrap:anywhere]">{note || plain}</div>
