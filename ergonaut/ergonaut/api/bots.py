@@ -17,7 +17,9 @@ from typing import Any, Literal
 
 from asgiref.sync import async_to_sync, sync_to_async
 from django.conf import settings
-from django.db.models import Count, Q
+from django.db.models import Case, CharField, Count, OuterRef, Q, Subquery, Value, When
+from django.db.models.fields.json import KeyTextTransform
+from django.db.models.functions import Coalesce, Greatest, Lower, NullIf, StrIndex, Substr
 from django.http import FileResponse, HttpResponse
 from django.shortcuts import aget_object_or_404
 from django.utils import timezone
@@ -33,6 +35,8 @@ from django_ergo.conversation.links import GITHUB_PR, pull_request_out, pull_req
 from django_ergo.conversation.models import (
     ConversationAttachment,
     ConversationSession,
+    MessageBlock,
+    SessionMessage,
     StructuredCall,
     ThreadMessage,
     Worker,
@@ -143,6 +147,16 @@ class SessionOut(Schema):
     workers_running: int = 0
     workers_total: int = 0
     prs: list[dict] = []
+
+
+class SessionSearchOut(Schema):
+    id: str
+    title: str
+    bot: str
+    resolved: bool
+    last_activity: datetime
+    snippet: str
+    line: int | None
 
 
 class RequestOut(Schema):
@@ -969,6 +983,73 @@ def chats_out(bot: Bot, user) -> list[dict]:
     return [
         {"name": name, "description": chat.description, "session_id": sessions.get(name)}
         for name, chat in bot.definition.chats.items()
+    ]
+
+
+@router.get("/bots/session-search", response=list[SessionSearchOut])
+def search_sessions(request, q: str = ""):
+    """Search titles and the latest 100 messages in the 500 newest accessible sessions."""
+    q = q.strip()
+    if not q:
+        return []
+    if len(q) > 200:
+        raise HttpError(400, "Search query is too long")
+
+    allowed_bots = [bot.name for bot in registry() if may_use(bot, request.auth)]
+    visible = visible_sessions(request.auth).filter(user=request.auth, bot_name__in=allowed_bots)
+    recent_sessions = visible.order_by("-created_at", "-pk").values("pk")[:500]
+    oldest_recent_line = (
+        SessionMessage.objects.filter(session_id=OuterRef("pk")).order_by("-sequence").values("sequence")[99:100]
+    )
+
+    # Search the same effective title that is displayed, including default titles.
+    title = Coalesce(
+        NullIf("user_title", Value("")),
+        NullIf(KeyTextTransform("title", "metadata"), Value("")),
+        Case(
+            When(metadata__bot_role="main", then=Value("Main")),
+            default=Value("Thread"),
+            output_field=CharField(),
+        ),
+        output_field=CharField(),
+    )
+    matches = (
+        MessageBlock.objects.filter(
+            message__session_id=OuterRef("pk"),
+            message__sequence__gte=OuterRef("search_min_line"),
+            block_type="text",
+            text__icontains=q,
+        )
+        .order_by("-message__sequence", "-sequence", "-pk")
+        .annotate(
+            excerpt=Substr("text", Greatest(StrIndex(Lower("text"), Value(q.lower())) - Value(60), Value(1)), 180)
+        )
+        .values("excerpt")[:1]
+    )
+    rows = (
+        visible.annotate(search_min_line=Coalesce(Subquery(oldest_recent_line), Value(-2147483648)))
+        .annotate(
+            search_title=title,
+            search_snippet=Case(When(pk__in=Subquery(recent_sessions), then=Subquery(matches))),
+            search_line=Case(
+                When(pk__in=Subquery(recent_sessions), then=Subquery(matches.values("message__sequence")))
+            ),
+        )
+        .filter(Q(search_title__icontains=q) | Q(search_snippet__isnull=False))
+        .annotate(title_match=Case(When(search_title__icontains=q, then=Value(0)), default=Value(1)))
+        .order_by("title_match", "-updated_at", "pk")[:50]
+    )
+    return [
+        {
+            "id": str(session.id),
+            "title": roles.title(session),
+            "bot": session.bot_name,
+            "resolved": session.status == "completed",
+            "last_activity": session.updated_at,
+            "snippet": session.search_snippet or "",
+            "line": session.search_line,
+        }
+        for session in rows
     ]
 
 

@@ -1617,3 +1617,175 @@ def test_author_avatar(client, cook):
     assert response.content == b"jpeg bytes"
     assert client.get("/api/authors/telegram_user/333/avatar").status_code == 404
     assert client.get("/api/authors/telegram_user/444/avatar").status_code == 404
+
+
+@pytest.fixture
+def search_bots(monkeypatch):
+    from types import SimpleNamespace
+
+    from ergonaut.api import bots
+
+    registry = [
+        SimpleNamespace(name="kitchen", definition=SimpleNamespace(allowed_users=[])),
+        SimpleNamespace(name="helper", definition=SimpleNamespace(allowed_users=[])),
+        SimpleNamespace(name="restricted", definition=SimpleNamespace(allowed_users=["other"])),
+    ]
+    monkeypatch.setattr(bots, "registry", lambda: registry)
+
+
+@pytest.mark.django_db
+def test_session_search_titles_content_permissions_and_anchors(client, cook, search_bots):
+    from django_ergo.conversation.models import ConversationSession
+
+    other = get_user_model().objects.create_user("other")
+    admin = get_user_model().objects.create_superuser("admin", "admin@example.com", "pw")
+    title = ConversationSession.objects.create(
+        user=cook,
+        bot_name="kitchen",
+        engine_type="claude",
+        user_title="Needle title",
+        metadata={"title": "stale secret"},
+    )
+    content = ConversationSession.objects.create(
+        user=cook,
+        bot_name="helper",
+        engine_type="claude",
+        status="completed",
+        metadata={"title": "Finished"},
+    )
+    message = content.messages.create(role="assistant", sequence=7)
+    message.content_blocks.create(block_type="text", sequence=0, text="a" * 100 + " Needle <b>plain</b> " + "z" * 300)
+    message.content_blocks.create(block_type="thinking", sequence=1, text="hidden reasoning")
+    ConversationSession.objects.create(
+        user=other,
+        bot_name="kitchen",
+        engine_type="claude",
+        user_title="Needle private",
+    )
+    ConversationSession.objects.create(user=cook, bot_name="", engine_type="claude", user_title="Needle no bot")
+    ConversationSession.objects.create(
+        user=cook,
+        bot_name="restricted",
+        engine_type="claude",
+        user_title="Needle restricted",
+    )
+    ConversationSession.objects.create(user=cook, bot_name="missing", engine_type="claude", user_title="Needle missing")
+    admin_session = ConversationSession.objects.create(
+        user=admin,
+        bot_name="restricted",
+        engine_type="claude",
+        user_title="Needle admin",
+    )
+
+    response = client.get("/api/bots/session-search", {"q": "  NeEdLe  "})
+    assert response.status_code == 200
+    results = response.json()
+    assert [row["id"] for row in results] == [str(title.id), str(content.id)]
+    assert results[0]["title"] == "Needle title"
+    assert results[0]["line"] is None and results[0]["snippet"] == ""
+    assert results[1]["bot"] == "helper" and results[1]["resolved"] is True
+    assert results[1]["line"] == 7
+    assert "Needle <b>plain</b>" in results[1]["snippet"]
+    assert len(results[1]["snippet"]) <= 180
+    assert results[1]["last_activity"]
+    assert client.get("/api/bots/session-search", {"q": "stale secret"}).json() == []
+    assert client.get("/api/bots/session-search", {"q": "hidden reasoning"}).json() == []
+    assert client.get("/api/bots/session-search", {"q": "  "}).json() == []
+    assert client.get("/api/bots/session-search", {"q": "x" * 201}).status_code == 400
+
+    client.force_login(admin)
+    assert [row["id"] for row in client.get("/api/bots/session-search", {"q": "needle"}).json()] == [
+        str(admin_session.id)
+    ]
+    client.logout()
+    assert client.get("/api/bots/session-search", {"q": "needle"}).status_code == 401
+
+
+@pytest.mark.django_db
+def test_session_search_bounds_and_query_count(client, cook, search_bots):
+    from django.db import connection
+    from django.test.utils import CaptureQueriesContext
+    from django_ergo.conversation.models import ConversationSession
+
+    def create_session(n):
+        session = ConversationSession.objects.create(
+            user=cook, bot_name="kitchen", engine_type="claude", metadata={"title": f"Chat {n}"}
+        )
+        message = session.messages.create(role="user", sequence=0)
+        message.content_blocks.create(block_type="text", sequence=0, text="findme")
+
+    create_session(0)
+    with CaptureQueriesContext(connection) as first:
+        assert len(client.get("/api/bots/session-search", {"q": "findme"}).json()) == 1
+    for n in range(1, 55):
+        create_session(n)
+    with CaptureQueriesContext(connection) as many:
+        rows = client.get("/api/bots/session-search", {"q": "findme"}).json()
+    assert len(rows) == 50
+    assert len(many) == len(first)
+
+
+@pytest.mark.django_db
+def test_session_search_effective_titles_and_recency(client, cook, search_bots):
+    from datetime import timedelta
+
+    from django_ergo.conversation.models import ConversationSession
+
+    older = ConversationSession.objects.create(
+        user=cook,
+        bot_name="kitchen",
+        engine_type="claude",
+        metadata={"title": "Project"},
+    )
+    newer = ConversationSession.objects.create(
+        user=cook,
+        bot_name="kitchen",
+        engine_type="claude",
+        user_title="Project renamed",
+        metadata={"title": "Project old"},
+    )
+    main = ConversationSession.objects.create(
+        user=cook,
+        bot_name="kitchen",
+        engine_type="claude",
+        metadata={"bot_role": "main"},
+    )
+    ConversationSession.objects.filter(pk=older.pk).update(updated_at=timezone.now() - timedelta(days=1))
+    assert [row["id"] for row in client.get("/api/bots/session-search", {"q": "project"}).json()] == [
+        str(newer.id),
+        str(older.id),
+    ]
+    assert client.get("/api/bots/session-search", {"q": "project old"}).json() == []
+    assert [row["id"] for row in client.get("/api/bots/session-search", {"q": "main"}).json()] == [str(main.id)]
+
+
+@pytest.mark.django_db
+def test_session_search_only_recent_content_but_all_titles(client, cook, search_bots):
+    from django_ergo.conversation.models import ConversationSession, SessionMessage
+
+    old = ConversationSession.objects.create(
+        user=cook,
+        bot_name="kitchen",
+        engine_type="claude",
+        user_title="Old title needle",
+    )
+    old_message = old.messages.create(role="user", sequence=0)
+    old_message.content_blocks.create(block_type="text", sequence=0, text="old content needle")
+    ConversationSession.objects.bulk_create(
+        [ConversationSession(user=cook, bot_name="kitchen", engine_type="claude") for _ in range(499)]
+    )
+    recent = ConversationSession.objects.create(user=cook, bot_name="kitchen", engine_type="claude")
+    messages = SessionMessage.objects.bulk_create(
+        [SessionMessage(session=recent, role="user", sequence=n) for n in range(101)]
+    )
+    messages[0].content_blocks.create(block_type="text", sequence=0, text="outside window needle")
+    messages[1].content_blocks.create(block_type="text", sequence=0, text="inside window needle")
+
+    assert client.get("/api/bots/session-search", {"q": "old content needle"}).json() == []
+    assert client.get("/api/bots/session-search", {"q": "outside window needle"}).json() == []
+    results = client.get("/api/bots/session-search", {"q": "inside window needle"}).json()
+    assert [row["id"] for row in results] == [str(recent.id)]
+    assert results[0]["line"] == 1
+    assert [row["id"] for row in client.get("/api/bots/session-search", {"q": "Old title needle"}).json()] == [
+        str(old.id)
+    ]

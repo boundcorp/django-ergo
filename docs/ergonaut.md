@@ -284,11 +284,16 @@ unscoped devbox drafts are not migrated because their owner is unknown.
   worker progress and unread labels remain visible on phones. Pins have named,
   touch-sized controls; fetch failures offer Try again without clearing loaded
   conversations. See the [dashboard design note](dashboard-ux.md).
-- **Sidebar and account menu**: the sidebar keeps primary navigation: Bots,
-  their chats and threads, and Threads. History, Costs, Routing, and API keys
-  live in the avatar account menu in the top bar, together with theme and sign-out
-  actions. The account menu is keyboard accessible; Arrow keys, Home and End
-  move between menu items, and Escape closes it.
+- **Sidebar and account menu**: the sidebar header's Threads icon opens the
+  Threads dashboard; its badge counts threads waiting on you. The Search icon
+  opens a dialog for accessible chats and threads, including resolved threads.
+  Search matches titles and message text, with title matches first; select a
+  result to open the conversation. Use Ctrl+K or Command+K to open search,
+  arrow keys and Enter to choose a result, and Escape to close it.
+  Bots and their chats and threads remain in the sidebar. History, Costs, Routing,
+  and API keys live in the avatar account menu in the top bar, together with theme
+  and sign-out actions. The account menu is keyboard accessible; Arrow keys, Home
+  and End move between menu items, and Escape closes it.
 - **Top bar**: shows where you are: a chat shows its bot and parent thread
   as links, then its title; bot pages show the bot name; the home page shows
   Workspace. When queued or running workers exist, its Work control names
