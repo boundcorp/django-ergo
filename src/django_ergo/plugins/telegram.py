@@ -215,12 +215,16 @@ class TelegramPlugin(BotPlugin):
 
     # -- outbound ----------------------------------------------------------
 
-    async def send_text(self, chat_id, text: str, **extra) -> None:
+    async def send_text(self, chat_id, text: str, **extra) -> dict:
+        """Send text and return the final message (the one with any buttons)."""
         text = text or "(no reply)"
         chunks = [text[i : i + MAX_MESSAGE] for i in range(0, len(text), MAX_MESSAGE)]
         for i, chunk in enumerate(chunks):
             params = extra if i == len(chunks) - 1 else {}
-            await self.api.call("sendMessage", chat_id=chat_id, text=chunk, **params)
+            sent = await self.api.call(
+                "sendMessage", chat_id=chat_id, text=chunk, **params
+            )
+        return sent
 
     def chat_for(self, user) -> str | None:
         for chat_id, username in self.users.items():
@@ -239,6 +243,8 @@ class TelegramPlugin(BotPlugin):
     async def after_turn(self, session, message: str, result: TurnResult) -> None:
         """Pass delegated work in a main chat on to the user's Telegram chat."""
         call = result.call
+        if call is not None:
+            await self._retire_approval_prompt(call, result.approvals)
         message_id = (call.metadata or {}).get("thread_message") if call else None
         if not (self.notify_delegations and message_id and self.bot.is_root(session)):
             return
@@ -310,7 +316,7 @@ class TelegramPlugin(BotPlugin):
         # prompt can't approve a newer one (even in the same call).
         call_id = result.call.id if result.call else ""
         stamp = approvals_stamp([a.tool_use_id for a in result.approvals])
-        await self.send_text(
+        sent = await self.send_text(
             chat_id,
             text,
             reply_markup={
@@ -322,6 +328,84 @@ class TelegramPlugin(BotPlugin):
                 ]
             },
         )
+        if result.call is not None:
+            registered = await self._save_approval_prompt(
+                result.call,
+                {"chat_id": chat_id, "message_id": sent["message_id"], "stamp": stamp},
+            )
+            if not registered:
+                # The decision may have arrived while sendMessage was in flight.
+                with contextlib.suppress(Exception):
+                    await self.api.call(
+                        "editMessageReplyMarkup",
+                        chat_id=chat_id,
+                        message_id=sent["message_id"],
+                        reply_markup={"inline_keyboard": []},
+                    )
+
+    @staticmethod
+    async def _save_approval_prompt(call, prompt: dict) -> bool:
+        from asgiref.sync import sync_to_async
+        from django.db import transaction
+
+        from django_ergo.conversation.models import StructuredCall
+        from django_ergo.conversation.models import StructuredCallStatus
+
+        def save():
+            with transaction.atomic():
+                saved = StructuredCall.objects.select_for_update().get(pk=call.pk)
+                waiting = [
+                    item["id"]
+                    for item in (saved.metadata or {}).get("pending_approvals", [])
+                ]
+                if (
+                    saved.status != StructuredCallStatus.AWAITING_APPROVAL
+                    or not waiting
+                    or approvals_stamp(waiting) != prompt["stamp"]
+                ):
+                    return False
+                saved.metadata = {
+                    **(saved.metadata or {}),
+                    "telegram_approval_prompt": prompt,
+                }
+                saved.save(update_fields=["metadata"])
+                call.metadata = saved.metadata
+                return True
+
+        return await sync_to_async(save, thread_sensitive=True)()
+
+    async def _retire_approval_prompt(self, call, approvals) -> None:
+        from asgiref.sync import sync_to_async
+        from django.db import transaction
+
+        from django_ergo.conversation.models import StructuredCall
+
+        keep_stamp = (
+            approvals_stamp([a.tool_use_id for a in approvals]) if approvals else ""
+        )
+
+        def take():
+            with transaction.atomic():
+                saved = StructuredCall.objects.select_for_update().get(pk=call.pk)
+                metadata = dict(saved.metadata or {})
+                prompt = metadata.get("telegram_approval_prompt")
+                if not prompt or prompt["stamp"] == keep_stamp:
+                    return None
+                del metadata["telegram_approval_prompt"]
+                saved.metadata = metadata
+                saved.save(update_fields=["metadata"])
+                call.metadata = metadata
+                return prompt
+
+        prompt = await sync_to_async(take, thread_sensitive=True)()
+        if prompt is not None:
+            with contextlib.suppress(Exception):
+                await self.api.call(
+                    "editMessageReplyMarkup",
+                    chat_id=prompt["chat_id"],
+                    message_id=prompt["message_id"],
+                    reply_markup={"inline_keyboard": []},
+                )
 
     # -- the bot's tool ------------------------------------------------------
 
@@ -711,8 +795,9 @@ class TelegramPlugin(BotPlugin):
         author = self.author_for(sender)
 
         async def run(control):
-            if await self.bot.pending_call(session) is not None:
+            if pending := await self.bot.pending_call(session):
                 # A new message instead of Approve/Deny: decline what was waiting.
+                await self._retire_approval_prompt(pending, [])
                 await self.bot.resume(session, decisions=False)
             return await self.bot.ask(
                 session,
@@ -728,7 +813,10 @@ class TelegramPlugin(BotPlugin):
     async def handle_callback(self, query: dict) -> None:
         from django_ergo.conversation.models import StructuredCall
 
-        await self.api.call("answerCallbackQuery", callback_query_id=query["id"])
+        # A saved update can outlive Telegram's callback-query acknowledgement
+        # window. Clearing the spinner must not gate the authorized decision.
+        with contextlib.suppress(Exception):
+            await self.api.call("answerCallbackQuery", callback_query_id=query["id"])
         chat_id = query["message"]["chat"]["id"]
         sender = query.get("from") or {}
         action, _, rest = (query.get("data") or "").partition(":")
@@ -761,6 +849,16 @@ class TelegramPlugin(BotPlugin):
                 if pending
                 else []
             )
+            # Retire only the clicked, authorized prompt, before slow tools run.
+            # A stale prompt is retired too, without answering any newer batch.
+            if message_id := query["message"].get("message_id"):
+                with contextlib.suppress(Exception):
+                    await self.api.call(
+                        "editMessageReplyMarkup",
+                        chat_id=chat_id,
+                        message_id=message_id,
+                        reply_markup={"inline_keyboard": []},
+                    )
             if (
                 pending is None
                 or pending.id != call.id
@@ -938,7 +1036,7 @@ class TelegramPlugin(BotPlugin):
             job = await self.accept(update)
             self._offset = max(self._offset, update["update_id"] + 1)
             if job is not None:
-                await self.process(job)
+                self._spawn(self.process(job))
         self._replay_soon()
         return len(updates)
 
@@ -992,7 +1090,7 @@ class TelegramPlugin(BotPlugin):
         return None
 
     async def drain(self) -> None:
-        """Wait for webhook updates still being handled."""
+        """Wait for saved polling/webhook updates still being handled."""
         while self._tasks:
             await asyncio.gather(*list(self._tasks))
 
