@@ -159,6 +159,11 @@ _TRUNCATED_TOOL_CALL = (
     "arguments were complete. Nothing happened. Retry with smaller arguments, "
     "for example by splitting a large file or text across several calls."
 )
+_INVALID_TOOL_ARGUMENTS = (
+    "Not run: this tool call's arguments weren't a valid JSON object. Nothing "
+    "happened. Retry the call with valid JSON arguments; if they are long, "
+    "split the work across several smaller calls."
+)
 
 
 def _submit_nudge(tool_name: str, events) -> str:
@@ -873,6 +878,10 @@ async def _run_loop(run: _Run) -> StructuredCallResult:  # noqa: C901, PLR0912, 
                     # The reply was cut off, so this call's arguments may be
                     # incomplete (often {}): never run or ask approval for it.
                     results.append((tool_id, _TRUNCATED_TOOL_CALL, True))
+                    continue
+                if event.tool_use.get("invalid_arguments"):
+                    # The engine couldn't parse the arguments: don't guess.
+                    results.append((tool_id, _INVALID_TOOL_ARGUMENTS, True))
                     continue
                 if run.needs_approval(name):
                     if run.allow_approvals:
