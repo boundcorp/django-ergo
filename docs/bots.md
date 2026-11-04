@@ -1170,6 +1170,8 @@ waits for approval unless `approve: false`.
   environment: devhost        # every call is pinned to this Orca environment
   executable: orca-ide       # default: orca-ide if installed, else orca
   files_host: devhost        # SSH host holding worktrees; "" means local
+  max_attach_bytes: 20000000   # largest worktree file orca_attach brings into a chat
+  max_upload_bytes: 200000000  # largest chat file orca_upload copies to a worktree (streamed)
   usage_minutes: 10          # minimum minutes between agent session scans
   approve_changes: true
   root_only: true
@@ -1362,6 +1364,7 @@ Setting up Chrome and SSH: [Browser control](browser.md).
 ```yaml
 - name: attachments
   max_bytes: 5000000     # largest file the bot may write
+  max_look_bytes: 20000000  # largest file ergo_attachments_look sends to the model
   other_sessions: true   # may read files in the user's other sessions
 ```
 
@@ -1375,7 +1378,10 @@ sessions, and sees the session's file list in every turn's context.
 `ergo_attachments_look(attachment_id, question)` lets it see an image or PDF.
 An image comes back in the tool result, so the bot looks at it itself. A PDF
 or other file goes to the bot's own model as an attachment in a separate call
-(kind `attachment_look`) that answers the question. Files sent with a
+(kind `attachment_look`) that answers the question. Files the model can't
+see at all (a video, an archive) are refused with a note to process them
+elsewhere first, for example by copying a video to a worktree with
+`orca_upload` and extracting frames. Files sent with a
 message (Ergonaut's 📎 button or a pasted image) reach the model natively.
 Only the latest two images stay in what's sent to the model (plus those the
 bot's newest round of tool calls just returned); older ones

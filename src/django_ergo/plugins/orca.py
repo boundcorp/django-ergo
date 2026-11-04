@@ -9,7 +9,8 @@
         timeout: 120               # seconds per command
         files_host: devbox         # ssh host holding the worktrees (default: the environment;
                                    # "" reads them on this host)
-        max_attach_bytes: 20000000
+        max_attach_bytes: 20000000   # largest worktree file orca_attach brings into a chat
+        max_upload_bytes: 200000000  # largest chat file orca_upload copies to a worktree
         agents: [codex, claude, omp]  # the agents ergo_agent_start may start here
         worker_poll_seconds: 120   # how often an agent's watcher checks it
         usage_minutes: 10          # minimum minutes between agent-session usage scans
@@ -97,6 +98,8 @@ from django_ergo.plugins._common import trim
 from django_ergo.protected_env import scrubbed_env
 
 if TYPE_CHECKING:
+    from typing import BinaryIO
+
     from django_ergo.bots.tools import ToolContext
     from django_ergo.conversation.context import ContextSource
     from django_ergo.conversation.toolkit import Toolkit
@@ -401,6 +404,7 @@ class OrcaPlugin(BotPlugin):
         self.files_host = str(self.config.get("files_host", self.environment) or "")
         self.usage_minutes = float(self.config.get("usage_minutes", USAGE_MINUTES))
         self.max_attach_bytes = int(self.config.get("max_attach_bytes", 20_000_000))
+        self.max_upload_bytes = int(self.config.get("max_upload_bytes", 200_000_000))
         self.poll_seconds = float(self.config.get("worker_poll_seconds", POLL_SECONDS))
         self.stall_minutes = float(self.config.get("stall_minutes", STALL_MINUTES))
         self.manager = OrcaAgents(self)
@@ -606,8 +610,9 @@ class OrcaPlugin(BotPlugin):
             "size": row.size,
         }
 
-    def push(self, root: str, folder: str, name: str, data: bytes) -> str:
-        """Write ``data`` as ``folder/name`` inside the worktree at ``root``; returns its path."""
+    def push(self, root: str, folder: str, name: str, data: bytes | BinaryIO) -> str:
+        """Write ``data`` (bytes, or a binary file streamed in chunks) as
+        ``folder/name`` inside the worktree at ``root``; returns its path."""
         import posixpath
         import shlex
 
@@ -633,18 +638,46 @@ class OrcaPlugin(BotPlugin):
             if self.files_host
             else ["sh", "-c", script]
         )
-        proc = subprocess.run(  # noqa: S603 — fixed script; paths are shell-quoted
-            argv,
-            input=data,
-            capture_output=True,
-            timeout=self.timeout,
-            check=False,
-            env=scrubbed_env(),
-        )
-        if proc.returncode:
-            msg = f"Couldn't write {name}: {proc.stderr.decode(errors='replace').strip()[:300]}"
+        if isinstance(data, bytes):
+            proc = subprocess.run(  # noqa: S603 — fixed script; paths are shell-quoted
+                argv,
+                input=data,
+                capture_output=True,
+                timeout=self.timeout,
+                check=False,
+                env=scrubbed_env(),
+            )
+            returncode, stdout, stderr = proc.returncode, proc.stdout, proc.stderr
+        else:
+            returncode, stdout, stderr = self.stream_to(argv, data)
+        if returncode:
+            msg = f"Couldn't write {name}: {stderr.decode(errors='replace').strip()[:300]}"
             raise ValueError(msg)
-        return proc.stdout.decode(errors="replace").strip()
+        return stdout.decode(errors="replace").strip()
+
+    def stream_to(self, argv: list[str], handle: BinaryIO) -> tuple[int, bytes, bytes]:
+        """Run ``argv`` with ``handle`` copied to its stdin in chunks, so a large
+        file never sits in memory. The timeout covers the command after the copy."""
+        import tempfile
+
+        with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
+            proc = subprocess.Popen(  # noqa: S603 — fixed script; paths are shell-quoted
+                argv, stdin=subprocess.PIPE, stdout=out, stderr=err, env=scrubbed_env()
+            )
+            try:
+                with proc.stdin:
+                    shutil.copyfileobj(handle, proc.stdin, 1024 * 1024)
+            except BrokenPipeError:
+                pass  # the command exited early; its status and stderr say why
+            try:
+                proc.wait(timeout=self.timeout)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+                raise
+            out.seek(0)
+            err.seek(0)
+            return proc.returncode, out.read(), err.read()
 
     def upload(
         self,
@@ -673,13 +706,12 @@ class OrcaPlugin(BotPlugin):
         root = self.worktree_path(worktree)
         written = []
         for row in rows:
-            if row.size > self.max_attach_bytes:
-                msg = f"{row.filename} is larger than {self.max_attach_bytes} bytes"
+            if row.size > self.max_upload_bytes:
+                msg = f"{row.filename} is larger than {self.max_upload_bytes} bytes"
                 raise ValueError(msg)
             with row.file.open("rb") as handle:
-                data = handle.read()
-            path = self.push(root, folder, row.filename, data)
-            written.append({"file": row.filename, "path": path, "size": len(data)})
+                path = self.push(root, folder, row.filename, handle)
+            written.append({"file": row.filename, "path": path, "size": row.size})
         return written
 
     # -- supervised Orca workers as thread Workers ---------------------------

@@ -2769,6 +2769,24 @@ async def test_bot_sees_every_image_it_looks_at_in_one_round(tmp_path, settings)
 
 
 @pytest.mark.django_db(transaction=True)
+def test_looking_at_a_video_says_it_cant_be_seen(tmp_path, settings):
+    from asgiref.sync import async_to_sync
+
+    from django_ergo.bots.tools import ToolContext
+    from django_ergo.conversation.attachments import save_session_file
+
+    settings.MEDIA_ROOT = str(tmp_path / "media")
+    bot, _, plugin = files_bot(tmp_path, config="max_bytes: 100, max_look_bytes: 10")
+    user = User.objects.create(username="video-looker")
+    root = async_to_sync(bot.root_session)(user)
+    clip = save_session_file(root, "clip.mp4", b"x" * 50, media_type="video/mp4")
+    ctx = ToolContext(bot=bot, session=root, user=user)
+    # Not "too large": a video never reaches the model, whatever its size.
+    with pytest.raises(ValueError, match=r"clip.mp4 \(video/mp4\) can't be looked at"):
+        plugin.look(ctx, str(clip.id))
+
+
+@pytest.mark.django_db(transaction=True)
 async def test_bot_looks_at_a_pdf_in_a_side_call(tmp_path, settings):
     from asgiref.sync import sync_to_async
 
@@ -3189,6 +3207,11 @@ def test_orca_upload_copies_chat_files_into_a_worktree_folder(
     with pytest.raises(ValueError, match="can't be written"):
         plugin.push(str(worktree), "design", ".env", b"x")
     assert not (tmp_path / "elsewhere" / "home.png").exists()
+    # Uploads have their own limit (200 MB by default), apart from orca_attach's.
+    assert plugin.max_upload_bytes == 200_000_000
+    plugin.max_upload_bytes = 5
+    with pytest.raises(ValueError, match="larger than 5 bytes"):
+        plugin.upload(ctx, "wt", ["home.png"], "design", str(design.id))
 
 
 @pytest.mark.django_db(transaction=True)

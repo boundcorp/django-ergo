@@ -50,6 +50,7 @@ from django_ergo.bots.tools import BotTool
 from django_ergo.bots.tools import FunctionToolkit
 from django_ergo.bots.tools import bot_tool
 from django_ergo.conversation.attachments import is_text
+from django_ergo.conversation.attachments import model_readable
 from django_ergo.conversation.attachments import read_text
 from django_ergo.conversation.attachments import replace_session_file
 from django_ergo.conversation.attachments import save_session_file
@@ -212,6 +213,15 @@ class AttachmentsPlugin(BotPlugin):
             return self.read(ctx, attachment_id)
         if not row.file:
             msg = f"{row.filename} has no stored copy to look at"
+            raise ValueError(msg)
+        if not model_readable(row):
+            # A video or archive would reach the model as a text stand-in only.
+            msg = (
+                f"{row.filename} ({row.media_type or 'unknown type'}) can't be looked at: "
+                "the model only sees images, PDFs and text. Copy it somewhere a tool "
+                "can process it (for a video, extract frames or a transcript) and look "
+                "at those instead."
+            )
             raise ValueError(msg)
         if (row.size or 0) > self.max_look_bytes:
             msg = f"{row.filename} is too large to look at ({row.size} bytes)"
