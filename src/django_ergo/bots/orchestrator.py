@@ -60,7 +60,9 @@ from typing import TYPE_CHECKING
 
 from asgiref.sync import async_to_sync
 from django.core.exceptions import ValidationError
+from django.db.models import CharField
 from django.db.models import Q
+from django.db.models.functions import Cast
 
 from django_ergo.bots import archival
 from django_ergo.bots import messaging
@@ -438,18 +440,54 @@ def ergo_bot_list(ctx: ToolContext) -> str:
     return "Bots you can message:\n" + "\n".join(lines)
 
 
-@bot_tool(takes_context=True)
+@bot_tool(
+    takes_context=True,
+    parameters={
+        "bot": {"type": "string", "description": "Bot name; defaults to this bot."},
+        "query": {
+            "type": "string",
+            "description": "Find a specific thread by title, chat name, or id prefix; all words must match. Includes resolved threads by default.",
+        },
+        "include_archived": {
+            "type": "boolean",
+            "description": "Include resolved threads; defaults to false without a query and true with one.",
+        },
+        "limit": {
+            "type": "integer",
+            "description": "Maximum results, newest activity first (default and maximum 50).",
+        },
+    },
+    required=[],
+)
 def ergo_thread_list(
-    ctx: ToolContext, bot: str = "", include_archived: bool = False
+    ctx: ToolContext,
+    bot: str = "",
+    include_archived: bool | None = None,
+    query: str = "",
+    limit: int = 50,
 ) -> list[dict]:
-    """List a bot's main chat, named chats and threads with the user (default: this bot), newest first."""
+    """List chats and threads. Use query to find a specific thread, including resolved ones. To read a known thread id, use chat history directly."""
     target = _target(ctx, bot)
+    words = query.split()
     qs = target.sessions().filter(user_id=ctx.session.user_id).order_by("-updated_at")
+    if include_archived is None:
+        include_archived = bool(words)
+    if isinstance(include_archived, str):
+        include_archived = include_archived.lower() == "true"
     if not include_archived:
         qs = qs.filter(
             ~Q(status="completed") | Q(metadata__bot_role__in=list(roles.TOP))
         )
-    return [_row(s, ctx.session) for s in qs[:50]]
+    if words:
+        qs = qs.annotate(search_id=Cast("id", output_field=CharField()))
+        for word in words:
+            qs = qs.filter(
+                Q(user_title__icontains=word)
+                | Q(metadata__title__icontains=word)
+                | Q(metadata__chat__icontains=word)
+                | Q(search_id__istartswith=word)
+            )
+    return [_row(s, ctx.session) for s in qs[: max(1, min(int(limit), 50))]]
 
 
 @bot_tool(
