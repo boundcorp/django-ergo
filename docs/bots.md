@@ -740,7 +740,7 @@ prompt for caching. The `orchestration` skill (loaded in main by default) has:
 | Tool | What it does |
 | --- | --- |
 | `ergo_bot_list` | The bots it can message, with their `description`s (also in the context block below) |
-| `ergo_thread_list` | A bot's main chat, named chats and threads with the user (default: this bot) |
+| `ergo_thread_list` | A bot's main chat, named chats and threads with the user (default: this bot). Use `query` to find a specific thread by title, chat name or ID prefix; all words must match, and resolved threads are included by default. Without a query only active threads are listed; `include_archived` overrides that choice. Results are newest first, limited to 50 by default and at most 50; use `limit` for fewer. Read a known thread ID directly with chat history instead of listing. |
 | `ergo_thread_send` | Message a bot's `main` chat, a named chat, a thread id, or a `new` thread; returns at once. A busy thread queues the message (in order, as its next turn) instead of refusing it; optional `interrupt` replaces this chat's own running request there |
 | `ergo_thread_forward` | Hand the user's own message (the one this turn answers) to a chat or thread, word for word with its author, time and files, plus an optional `note`. The recipient treats it as the user speaking and answers there; nothing comes back. Refused when the turn isn't answering the user |
 | `ergo_thread_stop` | Stop the running turn of a thread this bot started (or one of its own), or end its turn that waits for approval (declining those tool calls), and cancel what it queued there |

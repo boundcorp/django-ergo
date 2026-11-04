@@ -721,6 +721,45 @@ async def test_a_delegated_turn_waits_for_approval_before_replying(
 
 
 @pytest.mark.django_db(transaction=True)
+async def test_thread_list_search_and_limit(tmp_path):
+    from django_ergo.bots import orchestrator
+    from django_ergo.bots.tools import ToolContext
+
+    user = await User.objects.acreate(username="thread-search")
+    bot, _ = make_bot(tmp_path, say("ok"), yaml_text=LAZY_YAML, name="lazy")
+    root = await bot.root_session(user)
+    named = await bot.chat_session(user, "reports")
+    resolved = await bot.create_session(
+        user, parent=root, title="ElevenLabs credential provisioning"
+    )
+    partial = await bot.create_session(user, parent=root, title="ElevenLabs other")
+    active = await bot.create_session(
+        user, parent=root, title="Credential provisioning active"
+    )
+    await ConversationSession.objects.filter(id=resolved.id).aupdate(status="completed")
+    ctx = ToolContext(bot=bot, session=root, user=user)
+
+    async def listed(**kwargs):
+        return await sync_to_async(orchestrator.ergo_thread_list)(ctx, **kwargs)
+
+    assert str(resolved.id) not in {row["id"] for row in await listed()}
+    assert [row["id"] for row in await listed(query="eLeVeNlAbS CREDENTIAL")] == [
+        str(resolved.id)
+    ]
+    assert await listed(query="elevenlabs credential", include_archived=False) == []
+    assert str(resolved.id) in {
+        row["id"] for row in await listed(include_archived="true")
+    }
+    assert [row["id"] for row in await listed(query="credential", limit=1)] == [
+        str(active.id)
+    ]
+    assert [row["id"] for row in await listed(query=str(partial.id)[:8])] == [
+        str(partial.id)
+    ]
+    assert [row["id"] for row in await listed(query="reports")] == [str(named.id)]
+
+
+@pytest.mark.django_db(transaction=True)
 async def test_threads_are_listed_targeted_and_archived(tmp_path, thread_messages):
     user = await User.objects.acreate(username="lister")
     bot, engine = make_bot(tmp_path, say("ok"))
@@ -731,6 +770,7 @@ async def test_threads_are_listed_targeted_and_archived(tmp_path, thread_message
         # ergo_thread_archive is the old name of ergo_thread_resolve.
         claude_tool("ergo_thread_archive", {"thread_id": str(thread.id)}, tool_id="a1"),
         claude_tool("ergo_thread_list", {}, tool_id="l2"),
+        claude_tool("ergo_thread_list", {"query": "groceries"}, tool_id="l3"),
         claude_tool(
             "ergo_thread_send",
             {"thread": str(thread.id), "message": "Eggs?"},
@@ -742,7 +782,7 @@ async def test_threads_are_listed_targeted_and_archived(tmp_path, thread_message
         say("Done."),
     ]
     await bot.ask(root, "Tidy up")
-    results = [c["messages"][-1]["content"][0] for c in engine._client.calls[1:6]]
+    results = [c["messages"][-1]["content"][0] for c in engine._client.calls[1:7]]
     listing = json.loads(results[0]["content"])
     assert [(r["thread"], r["title"]) for r in listing] == [
         (str(thread.id), "kitchen · Groceries"),
@@ -762,8 +802,9 @@ async def test_threads_are_listed_targeted_and_archived(tmp_path, thread_message
         "note": "Resolved kitchen · Groceries. Its history stays readable; a new message reopens it.",
     }
     assert [r["thread"] for r in json.loads(results[2]["content"])] == ["main"]
-    assert json.loads(results[3]["content"])["thread_id"] == str(thread.id)
-    assert results[4]["is_error"] and "No thread nope" in results[4]["content"]
+    assert [r["thread"] for r in json.loads(results[3]["content"])] == [str(thread.id)]
+    assert json.loads(results[4]["content"])["thread_id"] == str(thread.id)
+    assert results[5]["is_error"] and "No thread nope" in results[5]["content"]
 
     # A message to a resolved thread reopens it.
     engine._client.responses = [say("Four eggs.")]

@@ -343,6 +343,9 @@ skill: `ergo_bot_list`, `ergo_thread_list`, `ergo_thread_send` and
 `ergo_thread_archive`. Messages are asynchronous. `ergo_thread_send` returns
 at once; the recipient answers in a turn of its own, and its reply comes
 back to the sender as a new message.
+Use `ergo_thread_list(query="words in title")` to find a specific thread,
+including resolved ones. If you already know its ID, read it directly with
+the chat history tools instead.
 Successful thread tool results identify the target with `session_id`, `title`
 and `bot`; see the [orchestration tool results](bots.md#running-a-bot) for
 delivery and resolution details.
