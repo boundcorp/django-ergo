@@ -4,6 +4,14 @@ This document tracks the major milestones and evolution of the Django Ergo proje
 
 ## Development Timeline
 
+### Local jobs survive upgrades and get kit fixes (November 2026)
+
+- The restart gate (`wait_idle`, the upgrader) waits for `local_shell` jobs
+  whose agent is running, even when it ignores other workers: those runs die
+  with their pod.
+- A job's unchanged template files are updated to the template's current
+  version before each run (`.ergo/template.json`); edited files stay.
+
 ### Local job secrets and kit refresh (November 2026)
 
 - `local_shell` reports listed secrets that aren't set where a run launches
