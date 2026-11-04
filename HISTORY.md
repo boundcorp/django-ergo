@@ -4,6 +4,12 @@ This document tracks the major milestones and evolution of the Django Ergo proje
 
 ## Development Timeline
 
+### Agent replies check the question id (November 2026)
+
+- `ergo_agent_reply` refuses a question id the agent never asked and names
+  the open one, instead of queuing an answer that fails later out of sight.
+  The watcher saves a question as asked before telling the chat about it.
+
 ### Local job secrets and kit refresh (November 2026)
 
 - `local_shell` reports listed secrets that aren't set where a run launches

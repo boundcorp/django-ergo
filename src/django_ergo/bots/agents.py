@@ -244,6 +244,15 @@ def _reply_queue(worker_id: str, question_id: str, answer: str) -> str:
         replies = dict(args.get("_agent_replies") or {})
         if question_id in replies:
             return f"An answer to question {question_id} was already queued."
+        asked = list((worker.state or {}).get("seen") or [])
+        if question_id not in asked:
+            unanswered = [q for q in asked if q not in replies]
+            msg = f"{question_id} isn't a question this agent asked. " + (
+                f"Its open question is {', '.join(unanswered)}."
+                if unanswered
+                else "It has no unanswered question."
+            )
+            raise ValueError(msg)
         if not worker.active:
             msg = f"Agent worker {worker_id} is no longer running"
             raise ValueError(msg)
@@ -325,6 +334,19 @@ def _deliver_replies(ctx: WorkerContext, manager: AgentManager, handle: dict) ->
             worker.save(update_fields=["args", "updated_at"])
 
 
+def _save_seen(worker_id, seen: set[str]) -> None:
+    from django.db import transaction
+
+    from django_ergo.conversation.models import Worker
+
+    with transaction.atomic():
+        worker = Worker.objects.select_for_update().get(pk=worker_id)
+        state = dict(worker.state or {})
+        state["seen"] = sorted(set(state.get("seen") or []) | seen)
+        worker.state = state
+        worker.save(update_fields=["state", "updated_at"])
+
+
 def watch(ctx: WorkerContext, manager: AgentManager, handle: dict):
     """One check of an agent: pass on new questions, finish with its report."""
     if _deliver_replies(ctx, manager, handle):
@@ -334,10 +356,14 @@ def watch(ctx: WorkerContext, manager: AgentManager, handle: dict):
         msg = f"{manager.name} reported an unknown status {check.status!r}"
         raise ValueError(msg)
     seen = set(ctx.state.get("seen") or [])
-    for question in check.questions:
-        if question.id in seen:
-            continue
-        seen.add(question.id)
+    new = [q for q in check.questions if q.id not in seen]
+    if new:
+        # Saved before the chat hears of them: its answer can come back
+        # before this step ends, and ergo_agent_reply checks the id.
+        seen |= {q.id for q in new}
+        ctx.state["seen"] = sorted(seen)
+        _save_seen(ctx.worker.pk, seen)
+    for question in new:
         subject = f": {question.subject}" if question.subject else ""
         ctx.tell(
             f"The agent sent a {question.kind}{subject}\n\n{question.body}\n\n"
