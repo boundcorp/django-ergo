@@ -1865,7 +1865,7 @@ def upload_attachment(request, session_id: str, file: UploadedFile = File(...)):
     row = save_session_file(
         session,
         file.name or "upload",
-        file.read(),
+        file,
         media_type=file.content_type if file.content_type not in ("", "application/octet-stream") else "",
         source="upload",
         metadata={"uploaded_by": request.auth.get_username()},

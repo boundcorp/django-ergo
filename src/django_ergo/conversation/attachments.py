@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from django.core.files.base import ContentFile
+from django.core.files.base import File
 
 from django_ergo.conversation.inference_policy import assert_public_endpoint
 from django_ergo.conversation.inference_policy import effective_openai_base_url
@@ -331,13 +332,14 @@ def is_text(media_type: str) -> bool:
 def save_session_file(  # noqa: PLR0913
     session: ConversationSession,
     filename: str,
-    data: bytes,
+    data: bytes | File,
     *,
     media_type: str = "",
     source: str = "upload",
     metadata: dict | None = None,
 ) -> ConversationAttachment:
-    """Store a file in a session, not tied to any message."""
+    """Store a file in a session, not tied to any message. ``data`` may be a
+    Django ``File`` (an upload), which is streamed rather than read whole."""
     from django_ergo.conversation.models import ConversationAttachment
 
     media_type = media_type or guess_media_type(filename)
@@ -371,7 +373,18 @@ def replace_session_file(
     return row
 
 
-def _store(row: ConversationAttachment, data: bytes) -> None:
+def _store(row: ConversationAttachment, data: bytes | File) -> None:
+    """Save ``data`` as the row's file. A ``File`` (an upload) is hashed and
+    copied in chunks, so a large video never sits in memory whole."""
+    if isinstance(data, File):
+        digest = hashlib.sha256()
+        for chunk in data.chunks():
+            digest.update(chunk)
+        data.seek(0)
+        row.size = data.size
+        row.sha256 = digest.hexdigest()
+        row.file.save(row.filename or f"{row.id}", data, save=False)
+        return
     row.size = len(data)
     row.sha256 = hashlib.sha256(data).hexdigest()
     row.file.save(row.filename or f"{row.id}", ContentFile(data), save=False)
