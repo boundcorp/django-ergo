@@ -4,6 +4,7 @@ import { api } from '../api'
 import BotIcon from './BotIcon'
 import { pinIcon } from './Pins'
 import { StatusDot, ThreadGroups } from './ThreadList'
+import { SessionSearch } from './SessionSearch'
 import VersionFooter from './VersionFooter'
 
 function SessionLink({ session, nested }: { session: Session; nested?: boolean }) {
@@ -120,9 +121,39 @@ export function Sidebar({
 
   return (
     <nav className="flex h-full flex-col gap-5 overflow-y-auto p-4">
-      <Link to="/" className="sidebar-brand px-2 py-3">
-        ERGONAUT_
-      </Link>
+      <div className="flex items-center gap-1">
+        <Link to="/" className="sidebar-brand min-w-0 flex-1 px-2 py-3">
+          ERGONAUT_
+        </Link>
+        <NavLink
+          to="/threads"
+          end
+          aria-label={`Threads (${waitingAll})`}
+          title={`Threads (${waitingAll})`}
+          className={({ isActive }) =>
+            `flex items-center gap-1 rounded-lg p-2 text-muted ${isActive ? 'bg-indigo-tint text-ink' : 'hover:bg-raised hover:text-ink'}`
+          }
+        >
+          <svg
+            aria-hidden="true"
+            width="18"
+            height="18"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+          >
+            <path d="M4 5h16v11H8l-4 3z" />
+            <path d="M8 9h8M8 12h6" />
+          </svg>
+          {!!waitingAll && (
+            <span aria-hidden="true" className="rounded-full bg-accent px-1.5 text-xs font-semibold text-white">
+              {waitingAll}
+            </span>
+          )}
+        </NavLink>
+        <SessionSearch />
+      </div>
       {botErrors.map(e => (
         <div
           key={e.folder}
@@ -132,21 +163,6 @@ export function Sidebar({
           ⚠ {e.name} didn't load: <span className="break-words">{e.error.slice(0, 160)}</span>
         </div>
       ))}
-      <NavLink
-        to="/threads"
-        end
-        className={({ isActive }) =>
-          `flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold ${isActive ? 'bg-indigo-tint' : 'hover:bg-raised'}`
-        }
-      >
-        Threads
-        {!!waitingAll && (
-          <span className="rounded-full bg-accent px-1.5 text-xs font-semibold text-white" title="Waiting on you">
-            {waitingAll}
-          </span>
-        )}
-        <span className="ml-auto text-xs font-normal text-muted">⤢</span>
-      </NavLink>
       <div className="px-2 text-xs font-semibold uppercase tracking-wide text-muted">Bots</div>
       {bots.map(bot => {
         const mine = sessions.filter(s => s.bot === bot.name)

@@ -47,6 +47,16 @@ export type Session = {
   prs?: PrLink[] // pull requests it reported, newest first
 }
 
+export type SessionSearchResult = {
+  id: string
+  title: string
+  bot: string
+  resolved: boolean
+  last_activity: string | null
+  snippet: string
+  line: number | null
+}
+
 // The Routing page (GET /api/routing): what auto/<tier> chats and Orca tiers pick now.
 export type RoutingWindow = {
   label?: string
@@ -763,6 +773,8 @@ export const api = {
     const query = new URLSearchParams(Object.entries(params).filter(([, v]) => v) as [string, string][])
     return request<Session[]>('GET', `/sessions?${query}`)
   },
+  searchSessions: (q: string) =>
+    request<SessionSearchResult[]>('GET', `/bots/session-search?q=${encodeURIComponent(q)}`),
   activeWorkers: () => request<Worker[]>('GET', '/workers'),
   openRoot: (bot: string) => request<Session>('POST', `/bots/${bot}/root`),
   openChat: (bot: string, name: string) => request<Session>('POST', `/bots/${bot}/chats/${name}`),
