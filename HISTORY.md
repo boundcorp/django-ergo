@@ -9,6 +9,7 @@ This document tracks the major milestones and evolution of the Django Ergo proje
 - `ergo_agent_reply` refuses a question id the agent never asked and names
   the open one, instead of queuing an answer that fails later out of sight.
   The watcher saves a question as asked before telling the chat about it.
+
 ### Local jobs survive upgrades and get kit fixes (November 2026)
 
 - The restart gate (`wait_idle`, the upgrader) waits for `local_shell` jobs
