@@ -226,10 +226,27 @@ def running_turn() -> Q:
     return Q(status=StructuredCallStatus.IN_PROGRESS, updated_at__gte=stale)
 
 
+def awaiting_approval() -> Q:
+    """StructuredCall filter for a turn still waiting for approval: one a later
+    call of its kind (the user wrote again) hasn't replaced. A replaced one
+    shows no approval card and can't be answered, so it must not hold the chat."""
+    from django.db.models import Exists
+    from django.db.models import OuterRef
+
+    from django_ergo.conversation.models import StructuredCall
+
+    later = StructuredCall.objects.filter(
+        session_id=OuterRef("session_id"),
+        kind=OuterRef("kind"),
+        created_at__gt=OuterRef("created_at"),
+    )
+    return Q(status=StructuredCallStatus.AWAITING_APPROVAL) & ~Exists(later)
+
+
 def busy(session: ConversationSession) -> bool:
     """A turn is running (and not stale), or one is waiting for approval."""
     return session.structured_calls.filter(
-        Q(status=StructuredCallStatus.AWAITING_APPROVAL) | running_turn()
+        awaiting_approval() | running_turn()
     ).exists()
 
 

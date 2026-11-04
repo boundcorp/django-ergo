@@ -66,6 +66,15 @@ def start(kit, args: dict) -> dict:
     return json.loads(kit.execute_tool("ergo_agent_start", args))
 
 
+def asked(worker_id: str, *question_ids: str) -> None:
+    """As if the watcher had passed these questions on."""
+    from django_ergo.conversation.models import Worker
+
+    worker = Worker.objects.get(pk=worker_id)
+    worker.state = {**worker.state, "seen": list(question_ids)}
+    worker.save(update_fields=["state"])
+
+
 def setup(tmp_path):
     from django_ergo.bots.agents import agent_toolkit
     from django_ergo.bots.tools import ToolContext
@@ -119,6 +128,8 @@ def test_an_agent_asks_gets_an_answer_and_reports_back(tmp_path, workers):  # no
     )
     assert manager.replies == []
     assert "already queued" in kit.execute_tool("ergo_agent_reply", answer)
+    with pytest.raises(ValueError, match="q2 isn't a question this agent asked"):
+        kit.execute_tool("ergo_agent_reply", {**answer, "question_id": "q2"})
 
     # The watcher delivers the answer and the final report.
     manager.checks = [AgentCheck("done", report="Footer fixed", questions=[question])]
@@ -163,6 +174,7 @@ def test_slow_reply_does_not_block_tool_or_duplicate(tmp_path, workers):  # noqa
             close_old_connections()
 
     manager.reply = slow
+    asked(started["id"], "q")
     answer = {"worker_id": started["id"], "question_id": "q", "answer": "yes"}
     assert "queued" in kit.execute_tool("ergo_agent_reply", answer)
     assert not entered.is_set()
@@ -194,6 +206,7 @@ def test_reply_failure_is_reported_and_not_retried(tmp_path, workers):  # noqa: 
         raise RuntimeError(msg)
 
     manager.reply = fail
+    asked(started["id"], "q")
     answer = {"worker_id": started["id"], "question_id": "q", "answer": "yes"}
     assert "queued" in kit.execute_tool("ergo_agent_reply", answer)
     manager.checks = [AgentCheck("done", report="Final report")]
@@ -239,6 +252,7 @@ def test_answer_queued_during_final_check_is_delivered(tmp_path, workers):  # no
 
     bot, _, manager, kit = setup(tmp_path)
     started = start(kit, {"brief": "Fix", "workspace": "site"})
+    asked(started["id"], "q")
 
     def check(ctx, handle):
         kit.execute_tool(
@@ -310,3 +324,23 @@ def test_a_bot_without_agent_managers_has_no_agents_skill(tmp_path):
 
     bot, _ = make_bot(tmp_path, yaml_text=PLAIN)
     assert "agents" not in {s.name for s in bot._skill_defs()}
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_reply_to_a_question_never_asked_names_the_open_one(tmp_path, workers):  # noqa: F811
+    from django_ergo.bots import workers as w
+
+    bot, _, manager, kit = setup(tmp_path)
+    started = start(kit, {"brief": "Fix", "workspace": "site"})
+    reply = {"worker_id": started["id"], "question_id": "job:1", "answer": "Go"}
+    with pytest.raises(ValueError, match="no unanswered question"):
+        kit.execute_tool("ergo_agent_reply", reply)
+
+    question = AgentQuestion(id="job:2", body="Which option?")
+    manager.checks = [AgentCheck(progress="waiting", questions=[question])]
+    assert w.run(started["id"], bot.registry) == "running"
+    with pytest.raises(ValueError, match="Its open question is job:2"):
+        kit.execute_tool("ergo_agent_reply", reply)
+    assert "queued" in kit.execute_tool(
+        "ergo_agent_reply", {**reply, "question_id": "job:2"}
+    )

@@ -640,7 +640,8 @@ A bot with a manager has the `agents` skill:
 - Each check (`AgentManager.check`) passes new questions to the chat once,
   as a message naming the worker and question. `ergo_agent_reply(worker_id,
   question_id, answer)` queues the answer for the worker and returns without
-  waiting for the manager; repeated answers to the same question are rejected.
+  waiting for the manager; repeated answers to the same question are rejected,
+  and so is an id the agent never asked (the error names its open question).
   The worker reports delivery errors and continues polling for the next question
   or report. `done` finishes the worker with the report as its result, which
   comes back as a message; `failed` fails it.
