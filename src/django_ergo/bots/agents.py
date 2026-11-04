@@ -231,8 +231,104 @@ def _refuse_private(bot: Bot, model: str) -> None:
         raise PolicyError(msg)
 
 
+def _reply_queue(worker_id: str, question_id: str, answer: str) -> str:
+    """Persist one answer independently of the watcher's state snapshot."""
+    from django.db import transaction
+
+    from django_ergo.bots.workers import schedule
+    from django_ergo.conversation.models import Worker
+
+    with transaction.atomic():
+        worker = Worker.objects.select_for_update().get(pk=worker_id)
+        args = dict(worker.args or {})
+        replies = dict(args.get("_agent_replies") or {})
+        if question_id in replies:
+            return f"An answer to question {question_id} was already queued."
+        if not worker.active:
+            msg = f"Agent worker {worker_id} is no longer running"
+            raise ValueError(msg)
+        replies[question_id] = {"answer": answer, "status": "queued"}
+        args["_agent_replies"] = replies
+        worker.args = args
+        worker.save(update_fields=["args", "updated_at"])
+        transaction.on_commit(lambda: schedule(worker, 0))
+    return f"Answer to question {question_id} queued."
+
+
+def _deliver_replies(ctx: WorkerContext, manager: AgentManager, handle: dict) -> bool:
+    """Deliver each answer at most once, reporting an uncertain interrupted step."""
+    from django.db import transaction
+
+    from django_ergo.conversation.models import Worker
+
+    while True:
+        with transaction.atomic():
+            worker = Worker.objects.select_for_update().get(pk=ctx.worker.pk)
+            args = dict(worker.args or {})
+            replies = dict(args.get("_agent_replies") or {})
+            pending = next(
+                (
+                    (qid, reply)
+                    for qid, reply in replies.items()
+                    if reply["status"] == "processing"
+                ),
+                None,
+            ) or next(
+                (
+                    (qid, reply)
+                    for qid, reply in replies.items()
+                    if reply["status"] == "queued" or not reply.get("reported", False)
+                ),
+                None,
+            )
+            if pending is None:
+                return False
+            question_id, reply = pending
+            status = reply["status"]
+            if status == "processing":
+                if not reply.get("uncertain_reported"):
+                    ctx.tell(
+                        f"Answer to agent question {question_id} is still pending; "
+                        "delivery may still be running or may have been interrupted. "
+                        "Whether the agent received it is unknown."
+                    )
+                    reply["uncertain_reported"] = True
+            elif status == "queued":
+                reply["status"] = "processing"
+            else:
+                prefix = "failed: " if status == "failed" else ""
+                ctx.tell(
+                    f"Answer to agent question {question_id}: {prefix}{reply['result']}"
+                )
+                reply["reported"] = True
+            args["_agent_replies"] = replies
+            worker.args = args
+            worker.save(update_fields=["args", "updated_at"])
+
+        if status == "processing":
+            return True
+        if status != "queued":
+            continue
+        try:
+            result = manager.reply(ctx._tools, handle, question_id, reply["answer"])  # noqa: SLF001
+            status = "sent"
+        except Exception as exc:  # noqa: BLE001 — report failure to the chat
+            result = f"{type(exc).__name__}: {exc}"
+            status = "failed"
+        with transaction.atomic():
+            worker = Worker.objects.select_for_update().get(pk=ctx.worker.pk)
+            args = dict(worker.args or {})
+            replies = dict(args.get("_agent_replies") or {})
+            replies[question_id].update(status=status, result=str(result))
+            args["_agent_replies"] = replies
+            worker.args = args
+            worker.save(update_fields=["args", "updated_at"])
+
+
 def watch(ctx: WorkerContext, manager: AgentManager, handle: dict):
     """One check of an agent: pass on new questions, finish with its report."""
+    if _deliver_replies(ctx, manager, handle):
+        return ctx.again(manager.poll_seconds, progress="Sending an agent reply")
     check = manager.check(ctx, handle)
     if check.status not in STATUSES:
         msg = f"{manager.name} reported an unknown status {check.status!r}"
@@ -392,8 +488,8 @@ def agent_toolkit(bot: Bot, ctx: ToolContext):
     def reply_agent(
         ctx: ToolContext, worker_id: str, question_id: str, answer: str
     ) -> str:
-        _, found, handle = find(worker_id)
-        return found.reply(ctx, handle, question_id, answer)
+        worker, _, _ = find(worker_id)
+        return _reply_queue(str(worker.pk), question_id, answer)
 
     @bot_tool(
         name="ergo_agent_stop",

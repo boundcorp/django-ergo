@@ -327,6 +327,8 @@ def run(worker_id: str, registry=None) -> str:
         ctx = WorkerContext(bot, worker)
         params = list(inspect.signature(function).parameters)
         args = dict(worker.args or {})
+        # Agent answers are durable worker bookkeeping, not function arguments.
+        args.pop("_agent_replies", None)
         outcome = (
             function(ctx, **args) if params and params[0] == "ctx" else function(**args)
         )
@@ -372,8 +374,33 @@ def run(worker_id: str, registry=None) -> str:
     if error:
         _finish(worker, "failed", None, error)
     else:
-        _finish(worker, "completed", jsonable(outcome), "")
+        _finish_unless_reply_pending(worker, outcome)
     return worker.status
+
+
+def _finish_unless_reply_pending(worker: Worker, outcome: Any) -> None:
+    from django.db import transaction
+
+    from django_ergo.conversation.models import Worker
+
+    # Serialize completion with a reply being queued for this worker.
+    with transaction.atomic():
+        current = Worker.objects.select_for_update().get(pk=worker.pk)
+        replies = (current.args or {}).get("_agent_replies", {})
+        pending = any(
+            reply.get("status") in ("queued", "processing")
+            for reply in replies.values()
+        )
+        if current.status == "cancelled":
+            worker.status = "cancelled"
+            _finish(worker, "cancelled", None, "Cancelled")
+        elif pending:
+            worker.step_started_at = None
+            worker.save(update_fields=["state", "step_started_at", "updated_at"])
+        else:
+            _finish(worker, "completed", jsonable(outcome), "")
+    if pending and worker.status != "cancelled":
+        schedule(worker, 1)
 
 
 def cancel(worker: Worker, bot: Bot | None = None) -> str:

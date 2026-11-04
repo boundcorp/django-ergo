@@ -60,14 +60,22 @@ def main(folder: str, number: str) -> int:
         (meta / f"run-{number}.jsonl").open("ab") as out,
         (meta / f"run-{number}.err").open("ab") as err,
     ):
-        proc = subprocess.Popen(  # noqa: S603 — argv from the plugin's own config
-            spec["argv"],
-            cwd=root,
-            stdin=subprocess.DEVNULL,
-            stdout=out,
-            stderr=err,
-            start_new_session=True,
-        )
+        try:
+            proc = subprocess.Popen(  # noqa: S603 — argv from the plugin's own config
+                spec["argv"],
+                cwd=root,
+                stdin=subprocess.DEVNULL,
+                stdout=out,
+                stderr=err,
+                start_new_session=True,
+            )
+        except OSError as exc:
+            err.write(f"Could not start agent: {exc}\n".encode())
+            write_json(
+                meta / f"run-{number}.exit.json",
+                {"code": 1, "reason": "start_failed", "ended_at": time.time()},
+            )
+            return 1
         write_json(meta / f"run-{number}.pid.json", {"pid": proc.pid})
         reason = ""
         while proc.poll() is None:

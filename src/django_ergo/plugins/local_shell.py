@@ -53,6 +53,7 @@ approval: they only read, or write inside a job folder.
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import logging
@@ -346,34 +347,54 @@ class LocalShellPlugin(BotPlugin):
             raise LocalShellError(msg)
         return [*self.command_prefix, *argv]
 
-    def launch(
-        self, ctx, folder: Path, agent: str, argv: list[str], number: int
+    def launch(  # noqa: PLR0913
+        self,
+        ctx,
+        folder: Path,
+        agent: str,
+        argv: list[str],
+        number: int,
+        *,
+        question_id: str = "",
     ) -> None:
         meta = folder / META
         meta.mkdir(parents=True, exist_ok=True)
-        (meta / f"run-{number}.json").write_text(
-            json.dumps(
-                {
-                    "agent": agent,
-                    "argv": argv,
-                    "timeout_seconds": self.timeout_seconds,
-                    "started_at": time.time(),
-                    "before": _snapshot(folder),
-                }
-            ),
-            encoding="utf-8",
-        )
-        (meta / "stop").unlink(missing_ok=True)
-        (meta / "heartbeat").touch()
-        subprocess.Popen(  # noqa: S603 — fixed interpreter and runner; argv from config
-            [sys.executable, str(RUNNER), str(folder), str(number)],
-            cwd=folder,
-            env=self.env(ctx),
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-        )
+        spec = {
+            "agent": agent,
+            "argv": argv,
+            "timeout_seconds": self.timeout_seconds,
+            "started_at": time.time(),
+            "before": _snapshot(folder),
+        }
+        if question_id:
+            spec["question_id"] = question_id
+        spec_path = meta / f"run-{number}.json"
+        tmp = meta / f"run-{number}.json.tmp"
+        tmp.write_text(json.dumps(spec), encoding="utf-8")
+        tmp.replace(spec_path)
+        try:
+            (meta / "stop").unlink(missing_ok=True)
+            (meta / "heartbeat").touch()
+            subprocess.Popen(  # noqa: S603 — fixed interpreter and runner; argv from config
+                [sys.executable, str(RUNNER), str(folder), str(number)],
+                cwd=folder,
+                env=self.env(ctx),
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        except Exception as exc:
+            (meta / f"run-{number}.err").write_text(str(exc), encoding="utf-8")
+            exit_tmp = meta / f"run-{number}.exit.json.tmp"
+            exit_tmp.write_text(
+                json.dumps(
+                    {"code": None, "reason": "launch_error", "ended_at": time.time()}
+                ),
+                encoding="utf-8",
+            )
+            exit_tmp.replace(meta / f"run-{number}.exit.json")
+            raise
 
     def start_agent(self, ctx, spec: AgentSpec) -> dict:
         folder = self.folder(spec.workspace)
@@ -557,22 +578,56 @@ class LocalShellPlugin(BotPlugin):
 
     def reply(self, ctx, handle: dict, question_id: str, text: str) -> str:
         folder = Path(handle["dir"])
-        runs = self.runs(folder)
-        if not runs or question_id != f"{folder.name}:{runs[-1]}":
+        meta = folder / META
+        if not meta.is_dir():
             msg = f"{question_id} isn't this job's open question"
             raise LocalShellError(msg)
-        if self.running(folder):
-            msg = f"Job {folder.name} is already running"
-            raise LocalShellError(msg)
-        agent = str(handle.get("agent") or "claude")
-        session = self.session_id(folder)
-        if agent == "claude" and not session:
-            msg = "Couldn't find the Claude session to resume"
-            raise LocalShellError(msg)
-        number = runs[-1] + 1
-        argv = self.argv(agent, text, model="", number=number, resume=session)
-        self.launch(ctx, folder, agent, argv, number)
-        return f"Resumed job {folder.name} with the answer (run {number})."
+        # A lock in the shared job folder serializes replies across processes and
+        # pods, not just threads in this process. The run spec is the durable
+        # record of which question was consumed.
+        with (meta / "reply.lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            runs = self.runs(folder)
+            for number in runs:
+                state = self.run_state(folder, number)
+                if state["spec"].get("question_id") == question_id:
+                    if (state["exit"] or {}).get("reason") == "launch_error":
+                        error = (meta / f"run-{number}.err").read_text(encoding="utf-8")
+                        msg = f"Couldn't launch job {folder.name}: {error}"
+                        raise LocalShellError(msg)
+                    return f"Resumed job {folder.name} with the answer (run {number})."
+            if not runs or question_id != f"{folder.name}:{runs[-1]}":
+                msg = f"{question_id} isn't this job's open question"
+                raise LocalShellError(msg)
+            number = runs[-1]
+            state = self.run_state(folder, number)
+            if state["alive"]:
+                msg = f"Job {folder.name} is already running"
+                raise LocalShellError(msg)
+            agent = str(state["spec"].get("agent") or handle.get("agent") or "claude")
+            result, agent_error = self.final_text(
+                folder, number, agent, self.transcript(folder, number)
+            )
+            if (
+                not state["exit"]
+                or state["exit"].get("code") != 0
+                or state["exit"].get("reason") in ("timeout", "stopped")
+                or agent_error
+                or not result.lstrip().startswith(QUESTION)
+            ):
+                msg = f"{question_id} isn't this job's open question"
+                raise LocalShellError(msg)
+            if agent != "claude":
+                msg = "Codex jobs can't be resumed here; start a new run with the answer in the brief"
+                raise LocalShellError(msg)
+            session = self.session_id(folder)
+            if not session:
+                msg = "Couldn't find the Claude session to resume"
+                raise LocalShellError(msg)
+            number += 1
+            argv = self.argv(agent, text, model="", number=number, resume=session)
+            self.launch(ctx, folder, agent, argv, number, question_id=question_id)
+            return f"Resumed job {folder.name} with the answer (run {number})."
 
     def stop(self, handle: dict) -> str:
         folder = Path(handle["dir"])

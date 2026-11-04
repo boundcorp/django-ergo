@@ -638,9 +638,15 @@ A bot with a manager has the `agents` skill:
   The manager must run the picked agent. `manager` is needed only when the
   chat has more than one.
 - Each check (`AgentManager.check`) passes new questions to the chat once,
-  as a message naming the worker and question; `ergo_agent_reply(worker_id,
-  question_id, answer)` answers. `done` finishes the worker with the report
-  as its result, which comes back as a message; `failed` fails it.
+  as a message naming the worker and question. `ergo_agent_reply(worker_id,
+  question_id, answer)` queues the answer for the worker and returns without
+  waiting for the manager; repeated answers to the same question are rejected.
+  The worker reports delivery errors and continues polling for the next question
+  or report. `done` finishes the worker with the report as its result, which
+  comes back as a message; `failed` fails it.
+  If delivery is interrupted, its outcome may be unknown: the worker reports
+  this and keeps waiting rather than risk delivering the same answer twice.
+  An operator must check the agent before intervening.
 - `ergo_agent_stop(worker_id)`, or cancelling the worker, calls the
   manager's `stop` and cancels the worker.
 - The worker card's log (`workers.log`) reads `AgentManager.log`. A check

@@ -4,6 +4,12 @@ This document tracks the major milestones and evolution of the Django Ergo proje
 
 ## Development Timeline
 
+### Nonblocking agent replies (November 2026)
+
+- Agent answers are queued for the polling worker instead of holding the bot's
+  turn open. Duplicate answers are rejected and delivery errors are reported
+  back to the chat.
+
 ### Telegram approval intake and recovery (November 2026)
 
 - Callback acknowledgement follows durable acceptance rather than waiting
