@@ -1800,8 +1800,6 @@ def read_kb_article(request, bot: str, kb_id: str, path: str):
 
 # -- attachments ---------------------------------------------------------------
 
-MAX_UPLOAD_BYTES = 25 * 1024 * 1024
-
 
 class AttachmentOut(Schema):
     id: str
@@ -1861,8 +1859,9 @@ def upload_attachment(request, session_id: str, file: UploadedFile = File(...)):
     session = visible_sessions(request.auth).filter(id=uuid_or_404(session_id)).first()
     if session is None:
         raise HttpError(404, "No such session")
-    if file.size and file.size > MAX_UPLOAD_BYTES:
-        raise HttpError(413, f"Files are limited to {MAX_UPLOAD_BYTES // (1024 * 1024)} MB")
+    limit = settings.ATTACHMENT_UPLOAD_MAX_BYTES
+    if file.size and file.size > limit:
+        raise HttpError(413, f"Files are limited to {limit // (1024 * 1024)} MB")
     row = save_session_file(
         session,
         file.name or "upload",
