@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event
 from typing import TYPE_CHECKING
 
 import pytest
@@ -131,7 +133,8 @@ def test_a_job_asks_is_answered_and_reports_its_files(tmp_path, workers, monkeyp
         "ergo_agent_reply",
         {"worker_id": started["id"], "question_id": "2026-w42:1", "answer": "Blue"},
     )
-    assert "run 2" in said
+    assert "queued" in said
+    w.run(started["id"], bot.registry)
     wait_for_exit(folder, 2)
     argv = json.loads((folder / ".ergo" / "run-2.json").read_text())["argv"]
     assert argv[argv.index("--resume") + 1] == "sess-1"
@@ -227,3 +230,110 @@ def test_a_dead_runner_fails_the_job(tmp_path, workers):  # noqa: F811
     refused = LocalShellPlugin(bot, {"secrets": ["ANTHROPIC_API_KEY"]})
     with pytest.raises(ValueError, match="won't pass ANTHROPIC_API_KEY"):
         refused.on_load()
+
+
+def question_job(tmp_path):
+    from django_ergo.plugins.local_shell import LocalShellPlugin
+
+    plugin = LocalShellPlugin(None, {})
+    plugin.on_load()
+    folder = tmp_path / "job"
+    meta = folder / ".ergo"
+    meta.mkdir(parents=True)
+    (meta / "run-1.json").write_text(json.dumps({"agent": "claude"}))
+    (meta / "run-1.exit.json").write_text(json.dumps({"code": 0}))
+    (meta / "run-1.jsonl").write_text(
+        json.dumps(
+            {"type": "result", "result": "NEEDS_INPUT: Which?", "session_id": "session"}
+        )
+        + "\n"
+    )
+    return plugin, folder, {"dir": str(folder), "agent": "claude"}
+
+
+def test_concurrent_replies_launch_only_once(tmp_path, monkeypatch):
+    plugin, folder, handle = question_job(tmp_path)
+    entered = Event()
+    release = Event()
+    calls = []
+
+    def launch(ctx, folder, agent, argv, number, *, question_id):  # noqa: PLR0913
+        calls.append(argv)
+        entered.set()
+        assert release.wait(5)
+        (folder / ".ergo" / f"run-{number}.json").write_text(
+            json.dumps({"agent": agent, "question_id": question_id})
+        )
+
+    monkeypatch.setattr(plugin, "launch", launch)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(plugin.reply, None, handle, "job:1", "first")
+        assert entered.wait(5)
+        second = pool.submit(plugin.reply, None, handle, "job:1", "second")
+        release.set()
+        assert first.result(timeout=5) == second.result(timeout=5)
+    assert len(calls) == 1
+    assert calls[0][calls[0].index("-p") + 1] == "first"
+    assert plugin.reply(None, handle, "job:1", "third").endswith("(run 2).")
+    assert plugin.runs(folder) == [1, 2]
+
+
+def test_reply_launch_failure_is_visible_and_not_retried(tmp_path, monkeypatch):
+    from django_ergo.plugins.local_shell import LocalShellError
+
+    plugin, folder, handle = question_job(tmp_path)
+
+    def fail(*args, **kwargs):
+        msg = "cannot start supervisor"
+        raise OSError(msg)
+
+    monkeypatch.setattr("django_ergo.plugins.local_shell.subprocess.Popen", fail)
+    with pytest.raises(OSError, match="cannot start supervisor"):
+        plugin.reply(None, handle, "job:1", "answer")
+
+    class Ctx:
+        def activity(self, *args, **kwargs):
+            pass
+
+    check = plugin.check(Ctx(), handle)
+    assert check.status == "failed"
+    assert "cannot start supervisor" in check.error
+    with pytest.raises(LocalShellError, match="cannot start supervisor"):
+        plugin.reply(None, handle, "job:1", "answer")
+    assert plugin.runs(folder) == [1, 2]
+
+
+def test_reply_rejects_a_completed_run_without_a_question(tmp_path):
+    from django_ergo.plugins.local_shell import LocalShellError
+
+    plugin, folder, handle = question_job(tmp_path)
+    (folder / ".ergo" / "run-1.jsonl").write_text(
+        json.dumps({"type": "result", "result": "Done", "session_id": "session"}) + "\n"
+    )
+    with pytest.raises(LocalShellError, match="isn't this job's open question"):
+        plugin.reply(None, handle, "job:1", "answer")
+    assert plugin.runs(folder) == [1]
+
+
+def test_missing_agent_executable_is_reported_by_supervisor(tmp_path):
+    from django_ergo.plugins.local_shell import LocalShellPlugin
+
+    plugin = LocalShellPlugin(
+        None, {"executables": {"claude": str(tmp_path / "missing")}}
+    )
+    plugin.on_load()
+    folder = tmp_path / "job"
+    folder.mkdir()
+    argv = plugin.argv("claude", "do work", model="", number=1)
+    plugin.launch(None, folder, "claude", argv, 1)
+    wait_for_exit(folder, 1)
+
+    class Ctx:
+        session = None
+
+        def activity(self, *args, **kwargs):
+            pass
+
+    check = plugin.check(Ctx(), {"dir": str(folder), "agent": "claude"})
+    assert check.status == "failed"
+    assert "missing" in check.error

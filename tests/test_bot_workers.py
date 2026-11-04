@@ -429,7 +429,8 @@ def test_orca_start_worker_watches_the_dispatch_and_reports_back(  # noqa: PLR09
         "ergo_agent_reply",
         {"worker_id": worker_id, "question_id": "msg_q", "answer": "Blue"},
     )
-    assert calls[-1][1:7] == [
+    assert w.run(worker_id, bot.registry) == "running"
+    assert next(c for c in calls if c[1:3] == ["orchestration", "reply"])[1:7] == [
         "orchestration",
         "reply",
         "--id",
@@ -457,7 +458,7 @@ def test_orca_start_worker_watches_the_dispatch_and_reports_back(  # noqa: PLR09
     ]
     [done] = sent(False)
     assert "Done; tests pass." in done.text and "Footer fixed" in done.text
-    assert len(sent(True)) == 1  # the question was passed on once
+    assert sum("Blue or red?" in m.text for m in sent(True)) == 1
     assert (
         len([c for c in calls if c[1:3] == ["terminal", "send"]]) == 1
     )  # Enter was pressed only once

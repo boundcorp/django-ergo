@@ -113,24 +113,150 @@ def test_an_agent_asks_gets_an_answer_and_reports_back(tmp_path, workers):  # no
     [told] = ThreadMessage.objects.filter(metadata__worker=started["id"])
     assert "Blue or red?" in told.text and "q1" in told.text
 
+    answer = {"worker_id": started["id"], "question_id": "q1", "answer": "Blue"}
     assert (
-        kit.execute_tool(
-            "ergo_agent_reply",
-            {"worker_id": started["id"], "question_id": "q1", "answer": "Blue"},
-        )
-        == "Sent."
+        kit.execute_tool("ergo_agent_reply", answer) == "Answer to question q1 queued."
     )
-    assert manager.replies == [("job_1", "q1", "Blue")]
+    assert manager.replies == []
+    assert "already queued" in kit.execute_tool("ergo_agent_reply", answer)
 
-    # The same question isn't passed on twice; the report finishes the worker.
+    # The watcher delivers the answer and the final report.
     manager.checks = [AgentCheck("done", report="Footer fixed", questions=[question])]
     assert w.run(started["id"], bot.registry) == "completed"
+    assert manager.replies == [("job_1", "q1", "Blue")]
     messages = ThreadMessage.objects.filter(metadata__worker=started["id"])
-    assert messages.count() == 2
-    assert "Footer fixed" in messages.exclude(pk=told.pk).get().text
+    assert messages.count() == 3
+    assert any("Footer fixed" in message.text for message in messages)
+    assert any("Sent." in message.text for message in messages)
 
     log = w.log(bot, Worker.objects.get(pk=started["id"]))
     assert (log["live"], log["entries"][0]["text"]) == (True, "job_1")
+
+
+@pytest.mark.django_db(transaction=True)
+def test_slow_reply_does_not_block_tool_or_duplicate(tmp_path, workers):  # noqa: F811
+    import threading
+
+    from django.db import close_old_connections
+
+    from django_ergo.bots import workers as w
+
+    bot, _, manager, kit = setup(tmp_path)
+    started = start(kit, {"brief": "Fix", "workspace": "site"})
+    entered = threading.Event()
+    release = threading.Event()
+    calls = []
+    outcomes = []
+
+    def slow(ctx, handle, question_id, text):
+        calls.append(question_id)
+        entered.set()
+        if not release.wait(5):
+            msg = "test did not release reply"
+            raise RuntimeError(msg)
+        return "Resumed"
+
+    def run_watcher():
+        try:
+            outcomes.append(w.run(started["id"], bot.registry))
+        finally:
+            close_old_connections()
+
+    manager.reply = slow
+    answer = {"worker_id": started["id"], "question_id": "q", "answer": "yes"}
+    assert "queued" in kit.execute_tool("ergo_agent_reply", answer)
+    assert not entered.is_set()
+    thread = threading.Thread(target=run_watcher)
+    thread.start()
+    try:
+        assert entered.wait(5)
+        assert "already queued" in kit.execute_tool("ergo_agent_reply", answer)
+    finally:
+        release.set()
+        thread.join(5)
+    assert not thread.is_alive()
+    assert outcomes == ["running"]
+    assert calls == ["q"]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_reply_failure_is_reported_and_not_retried(tmp_path, workers):  # noqa: F811
+    from django_ergo.bots import workers as w
+    from django_ergo.conversation.models import ThreadMessage
+
+    bot, _, manager, kit = setup(tmp_path)
+    started = start(kit, {"brief": "Fix", "workspace": "site"})
+    calls = []
+
+    def fail(ctx, handle, question_id, text):
+        calls.append(question_id)
+        msg = "resume failed"
+        raise RuntimeError(msg)
+
+    manager.reply = fail
+    answer = {"worker_id": started["id"], "question_id": "q", "answer": "yes"}
+    assert "queued" in kit.execute_tool("ergo_agent_reply", answer)
+    manager.checks = [AgentCheck("done", report="Final report")]
+    assert w.run(started["id"], bot.registry) == "completed"
+    assert calls == ["q"]
+    assert "already queued" in kit.execute_tool("ergo_agent_reply", answer)
+    texts = list(
+        ThreadMessage.objects.filter(metadata__worker=started["id"]).values_list(
+            "text", flat=True
+        )
+    )
+    assert any("resume failed" in text for text in texts)
+    assert any("Final report" in text for text in texts)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_interrupted_reply_is_reported_without_redelivery(tmp_path, workers):  # noqa: F811
+    from django_ergo.bots import workers as w
+    from django_ergo.conversation.models import ThreadMessage
+    from django_ergo.conversation.models import Worker
+
+    bot, _, manager, kit = setup(tmp_path)
+    started = start(kit, {"brief": "Fix", "workspace": "site"})
+    worker = Worker.objects.get(pk=started["id"])
+    worker.args["_agent_replies"] = {"q": {"answer": "yes", "status": "processing"}}
+    worker.save(update_fields=["args"])
+    assert w.run(started["id"], bot.registry) == "running"
+    assert w.run(started["id"], bot.registry) == "running"
+    assert manager.replies == []
+    texts = list(
+        ThreadMessage.objects.filter(metadata__worker=started["id"]).values_list(
+            "text", flat=True
+        )
+    )
+    assert len(texts) == 1
+    assert "unknown" in texts[0] and "interrupted" in texts[0]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_answer_queued_during_final_check_is_delivered(tmp_path, workers):  # noqa: F811
+    from django_ergo.bots import workers as w
+    from django_ergo.conversation.models import ThreadMessage
+
+    bot, _, manager, kit = setup(tmp_path)
+    started = start(kit, {"brief": "Fix", "workspace": "site"})
+
+    def check(ctx, handle):
+        kit.execute_tool(
+            "ergo_agent_reply",
+            {"worker_id": started["id"], "question_id": "q", "answer": "yes"},
+        )
+        return AgentCheck("done", report="Final report")
+
+    manager.check = check
+    assert w.run(started["id"], bot.registry) == "running"
+    assert w.run(started["id"], bot.registry) == "completed"
+    assert manager.replies == [("job_1", "q", "yes")]
+    assert any(
+        "Final report" in text
+        for text in ThreadMessage.objects.filter(
+            metadata__worker=started["id"]
+        ).values_list("text", flat=True)
+    )
 
 
 @pytest.mark.django_db(transaction=True)
