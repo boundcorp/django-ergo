@@ -66,3 +66,32 @@ def test_active_workers_block_unless_ignored(cook, monkeypatch):  # noqa: F811
     worker.status = "completed"
     worker.save()
     call_command("wait_idle", quiet_for=0, poll=0)
+
+
+@pytest.mark.django_db
+def test_a_running_local_job_blocks_even_when_workers_are_ignored(cook, monkeypatch, tmp_path):  # noqa: F811
+    import json
+    import time
+
+    from django_ergo.conversation.models import Worker
+
+    session = ConversationSession.objects.create(user=cook, bot_name="kitchen")
+    monkeypatch.setattr(wait_idle, "running_sessions", lambda: [])
+    folder = tmp_path / "job"
+    (folder / ".ergo").mkdir(parents=True)
+    (folder / ".ergo" / "run-1.json").write_text(json.dumps({"agent": "claude", "started_at": time.time()}))
+    (folder / ".ergo" / "heartbeat").touch()
+    Worker.objects.create(
+        session=session,
+        bot_name="kitchen",
+        title="claude: Storyboard",
+        function="agent:local",
+        status="running",
+        args={"handle": {"dir": str(folder)}},
+    )
+
+    assert wait_idle.busy(workers=False) == ["job kitchen: claude: Storyboard"]
+
+    # Once the run has ended (e.g. it's waiting for an answer), a restart can't hurt it.
+    (folder / ".ergo" / "run-1.exit.json").write_text(json.dumps({"code": 0}))
+    assert wait_idle.busy(workers=False) == []

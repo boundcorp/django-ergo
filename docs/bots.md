@@ -1225,9 +1225,11 @@ worker in another process or pod that shares the folder can watch it. A run
 whose heartbeat stops (its pod restarted) fails the worker. A final message
 that starts `NEEDS_INPUT:` reaches the chat as a question; `ergo_agent_reply`
 resumes the same Claude session with the answer. Before every run,
-including a resumed one, template files the job folder doesn't have yet are
-copied in (files the job already has are never overwritten), so a job made
-before the kit gained a helper still gets it. The report lists the
+including a resumed one, the job's copy of the template is brought up to
+date: files it lacks are copied in, and files still exactly as the template
+gave them (hashes in `.ergo/template.json`) get the template's new version;
+files the job changed are never overwritten. So a job made before a kit fix
+or a new helper still gets it. The report lists the
 files the run made or changed, with sizes and SHA-256 hashes, and Claude
 Code's token counts go to Costs.
 
@@ -1239,7 +1241,10 @@ isn't set in the process launching the run is left out, and
 `ergo_agent_start` (as `warnings`) or the reply's result says which ones.
 Processes read their environment when they start, so after adding a key to a
 deployment's secret, restart every process that runs tools and workers, not
-just one of them. Runs time out after
+just one of them. Job runs live in the process that launched them, so a
+restart ends them: `ergonaut manage wait_idle` (and the upgrader) wait for
+running `local_shell` jobs even with `--ignore-workers` /
+`ERGONAUT_UPGRADE_WAIT_FOR_WORKERS=0`. Runs time out after
 `timeout_minutes` and at most `max_concurrent` jobs run under `root`.
 `local_shell_jobs` lists jobs, `local_shell_upload` copies chat files into a
 job folder and `local_shell_attach` copies a job's file into the chat

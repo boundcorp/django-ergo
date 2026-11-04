@@ -5,7 +5,8 @@
 Exits 0 once no session holds its turn lock, no worker-tracked call is in
 progress and no worker (``ergo_worker_start``, Orca) is queued or running, or 1
 after ``--timeout`` seconds (default 30 minutes). ``--ignore-workers`` waits
-for turns only. ``--quiet-for`` makes it wait until it has seen nothing running
+for turns, and for ``local_shell`` jobs whose agent is running (they run in
+this pod and a restart kills them), but not other workers. ``--quiet-for`` makes it wait until it has seen nothing running
 for that many seconds in a row, so a chat that answers in a few quick turns
 isn't caught between two of them.
 
@@ -55,11 +56,32 @@ def active_workers() -> list[str]:
     return sorted(f"{bot}: {title}" for bot, title in rows)
 
 
+def running_local_jobs() -> list[str]:
+    """``local_shell`` jobs whose agent is running now, as ``bot: title``. Unlike
+    Orca agents, these run inside the pod that launched them and die with it, so
+    they count even when the gate ignores workers. A job waiting for an answer
+    has no live run and doesn't count."""
+    from pathlib import Path
+
+    from django_ergo.conversation.models import Worker, WorkerStatus
+    from django_ergo.plugins.local_shell import job_running
+
+    rows = Worker.objects.filter(status__in=[WorkerStatus.QUEUED, WorkerStatus.RUNNING], function="agent:local")
+    found = []
+    for worker in rows:
+        folder = ((worker.args or {}).get("handle") or {}).get("dir")
+        if folder and job_running(Path(folder)):
+            found.append(f"{worker.bot_name}: {worker.title}")
+    return sorted(found)
+
+
 def busy(*, workers: bool = True) -> list[str]:
     """What would be cut off by a restart now; empty when idle."""
     items = [f"turn {sid}" for sid in running_sessions()]
     if workers:
         items += [f"worker {w}" for w in active_workers()]
+    else:
+        items += [f"job {j}" for j in running_local_jobs()]
     return items
 
 

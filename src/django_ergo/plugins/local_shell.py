@@ -131,6 +131,32 @@ def _read_json(path: Path) -> dict | None:
     return value if isinstance(value, dict) else None
 
 
+def _runs(folder: Path) -> list[int]:
+    return sorted(
+        int(p.name[4:-5])
+        for p in (folder / META).glob("run-*.json")
+        if re.fullmatch(r"run-\d+\.json", p.name)
+    )
+
+
+def _run_state(folder: Path, number: int) -> dict:
+    """One run: its spec, exit (when it ended) and whether its supervisor is alive."""
+    meta = folder / META
+    spec = _read_json(meta / f"run-{number}.json") or {}
+    ended = _read_json(meta / f"run-{number}.exit.json")
+    beat = meta / "heartbeat"
+    last = beat.stat().st_mtime if beat.exists() else spec.get("started_at", 0)
+    alive = ended is None and time.time() - float(last or 0) < STALE_SECONDS
+    return {"spec": spec, "exit": ended, "alive": alive, "beat": last}
+
+
+def job_running(folder: Path) -> bool:
+    """Whether a job's supervisor is alive now. It runs inside the process (pod)
+    that launched it, so a restart kills it; restarts wait for these."""
+    runs = _runs(folder)
+    return bool(runs) and _run_state(folder, runs[-1])["alive"]
+
+
 def _events(path: Path) -> list[dict]:
     """The JSON lines of a transcript; lines that aren't JSON are skipped."""
     try:
@@ -177,14 +203,12 @@ def _copy_template(source: Path, target: Path) -> None:
     shutil.copytree(source, target, ignore=skip_links, dirs_exist_ok=True)
 
 
-def _add_template_files(source: Path, target: Path) -> list[str]:
-    """Copy template files a job folder doesn't have yet; never overwrite.
+TEMPLATE_MANIFEST = "template.json"
 
-    A job made before the template gained a file (a new helper in ``bin/``)
-    gets it on its next run, while files the job already has, edited or not,
-    stay as they are. Symlinks on either side are left alone.
-    """
-    added = []
+
+def _template_files(source: Path, target: Path):
+    """(relative name, template file, job file) for each regular template file,
+    skipping symlinks on either side, ``.ergo`` and folders the job replaced."""
     stack = [Path()]
     while stack:
         rel = stack.pop()
@@ -199,12 +223,45 @@ def _add_template_files(source: Path, target: Path) -> list[str]:
                 stack.append(name)
                 continue
             dest = target / name
-            if not path.is_file() or dest.exists() or dest.is_symlink():
+            if (
+                path.is_file()
+                and not dest.is_symlink()
+                and (not dest.exists() or dest.is_file())
+            ):
+                yield name.as_posix(), path, dest
+
+
+def _sync_template(source: Path, target: Path) -> tuple[list[str], list[str]]:
+    """Bring a job folder's copy of the template up to date: (added, updated).
+
+    A file the job lacks is copied in. A file still exactly as the template
+    last gave it (``.ergo/template.json`` keeps that file's hash) is replaced
+    by the template's new version. A file the job changed is left alone, as
+    is anything behind a symlink on either side. A job made before the
+    manifest existed gets new files only, until its files match the template.
+    """
+    manifest_path = target / META / TEMPLATE_MANIFEST
+    manifest = _read_json(manifest_path) or {}
+    added, updated = [], []
+    for key, path, dest in _template_files(source, target):
+        new = _sha256(path)
+        if dest.exists():
+            have = _sha256(dest)
+            if have == new:
+                manifest[key] = new
                 continue
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(path, dest)
-            added.append(name.as_posix())
-    return sorted(added)
+            if manifest.get(key) != have:
+                continue  # the job changed it (or it predates the manifest)
+            updated.append(key)
+        else:
+            added.append(key)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(path, dest)
+        manifest[key] = new
+    if manifest:
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        manifest_path.write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
+    return sorted(added), sorted(updated)
 
 
 def _warnings(notes: dict) -> list[str]:
@@ -215,6 +272,12 @@ def _warnings(notes: dict) -> list[str]:
             f" and {more} more" if more > 0 else ""
         )
         out.append(f"Added new template files to the job: {shown}.")
+    if updated := notes.get("template_updated"):
+        more = len(updated) - MAX_LISTED
+        shown = ", ".join(updated[:MAX_LISTED]) + (
+            f" and {more} more" if more > 0 else ""
+        )
+        out.append(f"Updated template files the job hadn't changed: {shown}.")
     if missing := notes.get("missing_secrets"):
         out.append(
             f"Not set where this job was launched, so the job doesn't have them: "
@@ -322,25 +385,13 @@ class LocalShellPlugin(BotPlugin):
         return self.root / name
 
     def runs(self, folder: Path) -> list[int]:
-        return sorted(
-            int(p.name[4:-5])
-            for p in (folder / META).glob("run-*.json")
-            if re.fullmatch(r"run-\d+\.json", p.name)
-        )
+        return _runs(folder)
 
     def run_state(self, folder: Path, number: int) -> dict:
-        """One run: its spec, exit (when it ended) and whether its supervisor is alive."""
-        meta = folder / META
-        spec = _read_json(meta / f"run-{number}.json") or {}
-        ended = _read_json(meta / f"run-{number}.exit.json")
-        beat = meta / "heartbeat"
-        last = beat.stat().st_mtime if beat.exists() else spec.get("started_at", 0)
-        alive = ended is None and time.time() - float(last or 0) < STALE_SECONDS
-        return {"spec": spec, "exit": ended, "alive": alive, "beat": last}
+        return _run_state(folder, number)
 
     def running(self, folder: Path) -> bool:
-        runs = self.runs(folder)
-        return bool(runs) and self.run_state(folder, runs[-1])["alive"]
+        return job_running(folder)
 
     def active_jobs(self) -> list[str]:
         if not self.root.is_dir():
@@ -358,8 +409,11 @@ class LocalShellPlugin(BotPlugin):
         """Bring a job folder up to date before a run: what was added and what's missing."""
         notes = {}
         if self.template and self.template.is_dir() and folder.is_dir():
-            if added := _add_template_files(self.template, folder):
+            added, updated = _sync_template(self.template, folder)
+            if added:
                 notes["template_added"] = added
+            if updated:
+                notes["template_updated"] = updated
         if missing := self.missing_secrets(ctx):
             notes["missing_secrets"] = missing
         return notes
