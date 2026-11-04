@@ -1224,14 +1224,22 @@ keeps the transcript, a heartbeat and the exit status in `<job>/.ergo/`, so a
 worker in another process or pod that shares the folder can watch it. A run
 whose heartbeat stops (its pod restarted) fails the worker. A final message
 that starts `NEEDS_INPUT:` reaches the chat as a question; `ergo_agent_reply`
-resumes the same Claude session with the answer. The report lists the
+resumes the same Claude session with the answer. Before every run,
+including a resumed one, template files the job folder doesn't have yet are
+copied in (files the job already has are never overwritten), so a job made
+before the kit gained a helper still gets it. The report lists the
 files the run made or changed, with sizes and SHA-256 hashes, and Claude
 Code's token counts go to Costs.
 
 The agent's environment is rebuilt from `pass_env` plus `secrets`; variables
 that would move an agent CLI onto API billing (`ANTHROPIC_API_KEY`,
 `OPENAI_API_KEY` and the like) are never passed, and listing one in `secrets`
-is an error. The bot's other secrets never reach it. Runs time out after
+is an error. The bot's other secrets never reach it. A listed secret that
+isn't set in the process launching the run is left out, and
+`ergo_agent_start` (as `warnings`) or the reply's result says which ones.
+Processes read their environment when they start, so after adding a key to a
+deployment's secret, restart every process that runs tools and workers, not
+just one of them. Runs time out after
 `timeout_minutes` and at most `max_concurrent` jobs run under `root`.
 `local_shell_jobs` lists jobs, `local_shell_upload` copies chat files into a
 job folder and `local_shell_attach` copies a job's file into the chat

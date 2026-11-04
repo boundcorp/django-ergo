@@ -111,6 +111,7 @@ DEFAULT_TOOLS = ("Read", "Write", "Edit", "Glob", "Grep", "Bash")
 MAX_ATTACH_BYTES = 50_000_000
 MAX_OUTPUTS = 200
 ACTIVITY_ENTRIES = 8
+MAX_LISTED = 10
 CLIP = 300
 JOB_PROMPT = """\
 You are working headless in a job folder: {folder}. Work only inside it and
@@ -174,6 +175,53 @@ def _copy_template(source: Path, target: Path) -> None:
         return [n for n in names if (Path(folder) / n).is_symlink()]
 
     shutil.copytree(source, target, ignore=skip_links, dirs_exist_ok=True)
+
+
+def _add_template_files(source: Path, target: Path) -> list[str]:
+    """Copy template files a job folder doesn't have yet; never overwrite.
+
+    A job made before the template gained a file (a new helper in ``bin/``)
+    gets it on its next run, while files the job already has, edited or not,
+    stay as they are. Symlinks on either side are left alone.
+    """
+    added = []
+    stack = [Path()]
+    while stack:
+        rel = stack.pop()
+        dest_dir = target / rel
+        if dest_dir.is_symlink() or (dest_dir.exists() and not dest_dir.is_dir()):
+            continue
+        for path in sorted((source / rel).iterdir()):
+            name = rel / path.name
+            if path.is_symlink() or name.parts[0] == META:
+                continue
+            if path.is_dir():
+                stack.append(name)
+                continue
+            dest = target / name
+            if not path.is_file() or dest.exists() or dest.is_symlink():
+                continue
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(path, dest)
+            added.append(name.as_posix())
+    return sorted(added)
+
+
+def _warnings(notes: dict) -> list[str]:
+    out = []
+    if added := notes.get("template_added"):
+        more = len(added) - MAX_LISTED
+        shown = ", ".join(added[:MAX_LISTED]) + (
+            f" and {more} more" if more > 0 else ""
+        )
+        out.append(f"Added new template files to the job: {shown}.")
+    if missing := notes.get("missing_secrets"):
+        out.append(
+            f"Not set where this job was launched, so the job doesn't have them: "
+            f"{', '.join(missing)}. If they were added recently, restart the "
+            "processes that run tools and workers so they read the new environment."
+        )
+    return out
 
 
 def claude_entries(events: list[dict]) -> list[dict]:
@@ -301,6 +349,21 @@ class LocalShellPlugin(BotPlugin):
             p.name for p in self.root.iterdir() if p.is_dir() and self.running(p)
         )
 
+    def missing_secrets(self, ctx) -> list[str]:
+        """Listed ``secrets`` this process can't see. Pods read their environment
+        when they start, so a key added later is missing until they restart."""
+        return [name for name in self.secrets if not ctx.secret(name)]
+
+    def prepare(self, ctx, folder: Path) -> dict:
+        """Bring a job folder up to date before a run: what was added and what's missing."""
+        notes = {}
+        if self.template and self.template.is_dir() and folder.is_dir():
+            if added := _add_template_files(self.template, folder):
+                notes["template_added"] = added
+        if missing := self.missing_secrets(ctx):
+            notes["missing_secrets"] = missing
+        return notes
+
     def env(self, ctx) -> dict[str, str]:
         env = {
             k: os.environ[k]
@@ -414,12 +477,16 @@ class LocalShellPlugin(BotPlugin):
             if self.template:
                 _copy_template(self.template, folder)
             folder.mkdir(exist_ok=True)
+        notes = self.prepare(ctx, folder)
         (folder / "brief.md").write_text(spec.brief, encoding="utf-8")
         number = (self.runs(folder) or [0])[-1] + 1
         prompt = "Do the task in brief.md.\n\n" + spec.brief
         argv = self.argv(agent, prompt, model=spec.model, number=number)
         self.launch(ctx, folder, agent, argv, number)
-        return {"job": folder.name, "dir": str(folder), "agent": agent}
+        handle = {"job": folder.name, "dir": str(folder), "agent": agent}
+        if warnings := _warnings(notes):
+            handle["warnings"] = warnings
+        return handle
 
     # -- watching ------------------------------------------------------------
 
@@ -625,9 +692,11 @@ class LocalShellPlugin(BotPlugin):
                 msg = "Couldn't find the Claude session to resume"
                 raise LocalShellError(msg)
             number += 1
+            notes = self.prepare(ctx, folder)
             argv = self.argv(agent, text, model="", number=number, resume=session)
             self.launch(ctx, folder, agent, argv, number, question_id=question_id)
-            return f"Resumed job {folder.name} with the answer (run {number})."
+            done = f"Resumed job {folder.name} with the answer (run {number})."
+            return " ".join([done, *_warnings(notes)])
 
     def stop(self, handle: dict) -> str:
         folder = Path(handle["dir"])
