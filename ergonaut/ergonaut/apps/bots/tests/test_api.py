@@ -353,6 +353,13 @@ def test_upload_list_download_and_delete_session_files(client, cook, use_bots, s
         {"file": SimpleUploadedFile("pantry.csv", b"item,count\neggs,4\n", content_type="text/csv")},
     )
     assert upload.status_code == 200, upload.content
+    settings.ATTACHMENT_UPLOAD_MAX_BYTES = 10
+    too_big = client.post(
+        f"/api/sessions/{root['id']}/attachments",
+        {"file": SimpleUploadedFile("big.bin", b"x" * 11)},
+    )
+    assert too_big.status_code == 413
+    settings.ATTACHMENT_UPLOAD_MAX_BYTES = 200 * 1024 * 1024
     file = upload.json()
     assert (file["filename"], file["source"], file["media_type"], file["size"]) == (
         "pantry.csv",
