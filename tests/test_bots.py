@@ -814,6 +814,48 @@ async def test_threads_are_listed_targeted_and_archived(tmp_path, thread_message
 
 
 @pytest.mark.django_db(transaction=True)
+async def test_only_a_starter_reopens_a_resolved_thread(tmp_path):
+    from django_ergo.bots import orchestrator
+    from django_ergo.bots.tools import ToolContext
+    from django_ergo.conversation.tool_dispatch import dispatch_tool
+
+    user = await User.objects.acreate(username="resolved-peer")
+    bot, _ = make_bot(tmp_path, say("ok"), yaml_text=LAZY_YAML, name="lazy")
+    main = await bot.root_session(user)
+    setup = await bot.create_session(user, parent=main, title="Phone setup")
+    peer = await bot.create_session(user, parent=main, title="App launch")
+    child = await bot.create_session(user, parent=setup, title="Phone runbook")
+    for thread, summary in ((setup, "Lock pattern written down"), (child, "")):
+        await sync_to_async(orchestrator.resolve)(
+            ToolContext(bot=bot, session=main, user=user),
+            str(thread.id),
+            summary=summary,
+        )
+
+    def send(session, thread):
+        toolkit = orchestrator.orchestrator_toolkit(
+            ToolContext(bot=bot, session=session, user=user)
+        )
+        args = {"thread": str(thread.id), "message": "Phone handed back"}
+        return dispatch_tool("ergo_thread_send", args, [toolkit])
+
+    # A peer thread can't report to a finished thread (it would reopen it).
+    content, is_error = await sync_to_async(send)(peer, setup)
+    assert is_error
+    refusal = json.loads(content)
+    assert refusal["session_id"] == str(setup.id)
+    assert (
+        "lazy · Phone setup is resolved (Lock pattern written down)"
+        in (refusal["error"])
+    )
+    assert "ask lazy · Main, which started it" in refusal["error"]
+    # Its starter (a parent thread) and the bot's main chat still can.
+    for session, thread in ((setup, child), (main, setup)):
+        content, is_error = await sync_to_async(send)(session, thread)
+        assert not is_error, content
+
+
+@pytest.mark.django_db(transaction=True)
 async def test_thread_creation_needs_permission(tmp_path):
     user = await User.objects.acreate(username="no-threads")
     bot, engine = make_bot(

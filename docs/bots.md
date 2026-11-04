@@ -750,7 +750,7 @@ prompt for caching. The `orchestration` skill (loaded in main by default) has:
 | `ergo_thread_send` | Message a bot's `main` chat, a named chat, a thread id, or a `new` thread; returns at once. A busy thread queues the message (in order, as its next turn) instead of refusing it; optional `interrupt` replaces this chat's own running request there |
 | `ergo_thread_forward` | Hand the user's own message (the one this turn answers) to a chat or thread, word for word with its author, time and files, plus an optional `note`. The recipient treats it as the user speaking and answers there; nothing comes back. Refused when the turn isn't answering the user |
 | `ergo_thread_stop` | Stop the running turn of a thread this bot started (or one of its own), or end its turn that waits for approval (declining those tool calls), and cancel what it queued there |
-| `ergo_thread_resolve` | Resolve a finished thread (this one, one of this bot's, or another bot's it started), with a one-line `summary`; refused while workers run, a request is open, an approval is pending, or its last reply asks the user something. History stays readable; a new message reopens it. `ergo_thread_archive` is a deprecated alias |
+| `ergo_thread_resolve` | Resolve a finished thread (this one, one of this bot's, or another bot's it started), with a one-line `summary`; refused while workers run, a request is open, an approval is pending, or its last reply asks the user something. History stays readable; a new message from its starter or its bot's main chat reopens it, and `ergo_thread_send` from any other chat is refused, so a finished thread doesn't become a standing coordinator `ergo_thread_archive` is a deprecated alias |
 
 List entries and successful send, forward, upward-message, stop and resolve
 results include `session_id`, `title` (the bot-and-chat display label), and
@@ -930,6 +930,9 @@ alone. Main and named chats are never archived. Archiving or resolving a thread
 (the app's Resolve button, `ergo_thread_resolve`, the idle sweep) cancels the
 workers it still has and stops the coding agents they watch, so nothing keeps
 running for a resolved thread. A message to an archived thread reopens it.
+From another bot chat, only the thread's starter (or parent thread) and its
+bot's main chat may send one; any other `ergo_thread_send` is refused and
+names the starter to ask. The user can always reopen a thread by writing in it.
 
 `BotRegistry.discover("bots/")` loads every folder at or under `bots/` that
 has a `bot.yaml`, and lets bots find each other by name. Bot folders can

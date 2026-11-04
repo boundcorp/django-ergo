@@ -214,7 +214,10 @@ Resolving threads: keep the thread list to work that is still going on.
 - Each turn, check the Bots and threads block: threads marked "ready to resolve"
   look finished, and you may resolve them. A finished thread of another bot that
   is not marked that way is its owner's to close: leave it.
-- Resolving keeps the history readable, and a new message reopens the thread."""
+- Resolving keeps the history readable. A message from its starter or this bot's
+  main chat reopens the thread; other chats can't message a resolved thread, so
+  don't make a thread the standing owner of something shared (a device, a lock):
+  write the rule down where the work lives, and resolve the thread."""
 
 
 def thread_status(session: ConversationSession) -> dict:
@@ -778,6 +781,7 @@ def _send(  # noqa: PLR0913
         ctx, target, thread, title or messaging.snippet(message)[:60]
     )
     _refuse_nudge_after_reply(ctx, recipient, message)
+    _refuse_resolved_peer(ctx, recipient)
     interrupting, not_interrupted = (
         _interruptible(ctx, recipient) if interrupt else (None, "")
     )
@@ -908,6 +912,40 @@ def _refuse_nudge_after_reply(
         "Don't send it a nudge, thanks, or 'continue' message: tell the user what came "
         "back. If the user asked for a next step there, send one complete request with "
         "everything it needs, or wait for the user's next message."
+    )
+    raise _refused(msg, recipient)
+
+
+def _refuse_resolved_peer(ctx: ToolContext, recipient: ConversationSession) -> None:
+    """Refuse a message to a resolved thread from a chat that didn't start it.
+
+    A message reopens a resolved thread, so a finished thread that other threads
+    keep reporting to (a setup thread treated as the owner of a shared device, say)
+    never stays closed. Its starters and its bot's main chat may still reopen it
+    for follow-up work; anyone else starts a new thread or asks the starter.
+    """
+    if roles.is_top(recipient) or recipient.status != "completed":
+        return
+    starters = _starters(recipient)
+    if recipient.parent_id and recipient.parent.user_id == recipient.user_id:
+        starters.append(recipient.parent)
+    if any(starter.id == ctx.session.id for starter in starters) or (
+        _is_main(ctx.session) and ctx.session.bot_name == recipient.bot_name
+    ):
+        return
+    ask = (
+        f"ask {messaging.label(starters[0])}, which started it, or start a new thread"
+        if starters
+        else "start a new thread"
+    )
+    summary = (recipient.metadata or {}).get("resolved_summary", "")
+    msg = (
+        f"{messaging.label(recipient)} is resolved"
+        + (f" ({summary})" if summary else "")
+        + ", and only the chat that started it may reopen it. Don't send it reports, "
+        "handoffs or hand-backs: a finished thread doesn't coordinate other work. "
+        "Follow the rules or locks it set up yourself. For new work there, "
+        f"{ask}."
     )
     raise _refused(msg, recipient)
 
