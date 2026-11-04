@@ -98,6 +98,42 @@ def usage_tokens(usage) -> tuple[int | None, int | None, int | None]:
     )
 
 
+def tool_arguments(tc) -> dict | None:
+    """A tool call's arguments as a dict, or None when they aren't a JSON object.
+
+    Models write the arguments as a JSON string, and a reply cut off by the
+    output token limit (or a model that writes bad JSON) leaves an
+    unparseable one. Raising here would fail the whole turn, so the caller
+    reports the call as invalid instead and the model can retry it.
+    """
+    try:
+        parsed = json.loads(tc.function.arguments or "{}")
+    except ValueError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _tool_use(tc) -> dict:
+    """An ``EngineResponse.tool_use`` for an OpenAI tool call.
+
+    Unparseable arguments become ``{}`` with ``invalid_arguments`` set, which
+    the structured call answers with an error instead of running the tool.
+    """
+    args = tool_arguments(tc)
+    use = {"id": tc.id, "name": tc.function.name, "input": args or {}}
+    if args is None:
+        use["invalid_arguments"] = True
+    return use
+
+
+def _stored_tool_call(tc) -> dict:
+    """``tc`` as an assistant message's tool call, with arguments the API accepts back."""
+    raw = tc.model_dump()
+    if tool_arguments(tc) is None:
+        raw["function"]["arguments"] = "{}"
+    return raw
+
+
 def attachment_part(row, *, audio_input: bool = False) -> dict:
     """A user-message attachment: images as references (sent by prepare_messages)."""
     if row.kind == "image":
@@ -331,9 +367,7 @@ class OpenAIAPIEngine(StoredMessagesMixin, Engine):
                 [{"block_type": "text", "text": msg.content}] if msg.content else []
             )
             blocks += [
-                tool_use_block(
-                    tc.id, tc.function.name, json.loads(tc.function.arguments or "{}")
-                )
+                tool_use_block(tc.id, tc.function.name, tool_arguments(tc) or {})
                 for tc in msg.tool_calls or []
             ]
             await add_message(
@@ -353,11 +387,7 @@ class OpenAIAPIEngine(StoredMessagesMixin, Engine):
                     yield EngineResponse(
                         event_type="tool_use",
                         raw=tc.model_dump(),
-                        tool_use={
-                            "id": tc.id,
-                            "name": tc.function.name,
-                            "input": json.loads(tc.function.arguments),
-                        },
+                        tool_use=_tool_use(tc),
                     )
 
             yield EngineResponse(
@@ -373,7 +403,6 @@ class OpenAIAPIEngine(StoredMessagesMixin, Engine):
         system: str = "",
         tools: list[dict] | None = None,
     ) -> Completion:
-        import json
 
         with trace_engine_call(
             operation="complete",
@@ -406,16 +435,12 @@ class OpenAIAPIEngine(StoredMessagesMixin, Engine):
         if msg.content:
             events.append(EngineResponse(event_type="text", raw={}, text=msg.content))
         if msg.tool_calls:
-            message["tool_calls"] = [tc.model_dump() for tc in msg.tool_calls]
+            message["tool_calls"] = [_stored_tool_call(tc) for tc in msg.tool_calls]
             events.extend(
                 EngineResponse(
                     event_type="tool_use",
                     raw=tc.model_dump(),
-                    tool_use={
-                        "id": tc.id,
-                        "name": tc.function.name,
-                        "input": json.loads(tc.function.arguments),
-                    },
+                    tool_use=_tool_use(tc),
                 )
                 for tc in msg.tool_calls
             )

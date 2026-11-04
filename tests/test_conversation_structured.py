@@ -81,22 +81,23 @@ class FakeClaudeClient:
         return response
 
 
-def openai_tool(name, args, call_id="call_1"):
+def openai_tool(name, args, call_id="call_1", *, raw=None, finish="tool_calls"):
+    arguments = json.dumps(args) if raw is None else raw
     tc = SimpleNamespace(
         id=call_id,
         type="function",
-        function=SimpleNamespace(name=name, arguments=json.dumps(args)),
+        function=SimpleNamespace(name=name, arguments=arguments),
     )
     tc.model_dump = lambda: {
         "id": call_id,
         "type": "function",
-        "function": {"name": name, "arguments": json.dumps(args)},
+        "function": {"name": name, "arguments": arguments},
     }
     return SimpleNamespace(
         choices=[
             SimpleNamespace(
                 message=SimpleNamespace(content=None, tool_calls=[tc]),
-                finish_reason="tool_calls",
+                finish_reason=finish,
             )
         ],
         usage=SimpleNamespace(prompt_tokens=7, completion_tokens=3),
@@ -499,6 +500,31 @@ async def test_truncated_tool_call_is_not_run(user):
     assert toolkit.calls == []
     sent = json.dumps(engine._client.calls[1]["messages"][-1])
     assert "output token limit" in sent
+
+
+@pytest.mark.parametrize(
+    ("finish", "message"),
+    [("length", "output token limit"), ("tool_calls", "valid JSON object")],
+)
+async def test_unparseable_openai_tool_arguments_are_not_run(user, finish, message):
+    # A chat completions reply cut off mid-arguments (or bad JSON from the
+    # model) used to fail the whole turn with a JSONDecodeError.
+    engine = OpenAIAPIEngine(config={"model": "gpt-test"})
+    engine._client = FakeOpenAIClient(
+        openai_tool("lookup", None, raw='{"q": "unterminated', finish=finish),
+        openai_tool("submit_output", VALID_PLAN, call_id="call_2"),
+    )
+    toolkit = LookupToolkit()
+    spec = StructuredCallSpec(kind="planner", response_model=Plan, toolkits=[toolkit])
+
+    result = await run_structured_call(spec, "Plan", user=user, engine=engine)
+
+    assert result.ok
+    assert toolkit.calls == []
+    replay = engine._client.calls[1]["messages"]
+    # The broken call is sent back with arguments the API accepts.
+    assert replay[-2]["tool_calls"][0]["function"]["arguments"] == "{}"
+    assert message in replay[-1]["content"]
 
 
 async def test_plain_text_nudge_quotes_the_answer(user):
