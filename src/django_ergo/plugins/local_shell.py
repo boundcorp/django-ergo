@@ -108,7 +108,8 @@ NEVER_PASS = {
 }
 DEFAULT_PASS_ENV = ("PATH", "HOME", "LANG", "LC_ALL", "TZ", "USER")
 DEFAULT_TOOLS = ("Read", "Write", "Edit", "Glob", "Grep", "Bash")
-MAX_ATTACH_BYTES = 50_000_000
+MAX_ATTACH_BYTES = 50_000_000  # a job file attached to the chat
+MAX_UPLOAD_BYTES = 200_000_000  # a chat file copied into a job (streamed)
 MAX_OUTPUTS = 200
 ACTIVITY_ENTRIES = 8
 MAX_LISTED = 10
@@ -812,15 +813,18 @@ class LocalShellPlugin(BotPlugin):
         for ref in files:
             row = find_session_file(ctx.session, ref)
             name = Path(row.filename).name
-            if is_secret(name) or row.size > MAX_ATTACH_BYTES:
+            if is_secret(name):
                 msg = f"{row.filename} can't be copied into a job"
+                raise LocalShellError(msg)
+            if row.size > MAX_UPLOAD_BYTES:
+                msg = f"{row.filename} is larger than {MAX_UPLOAD_BYTES} bytes"
                 raise LocalShellError(msg)
             dest = target / name
             if dest.is_symlink():
                 msg = f"Refusing to write {name} through a symlink"
                 raise LocalShellError(msg)
-            with row.file.open("rb") as handle:
-                dest.write_bytes(handle.read())
+            with row.file.open("rb") as handle, dest.open("wb") as out:
+                shutil.copyfileobj(handle, out, 1024 * 1024)
             written.append(
                 {"file": row.filename, "path": dest.relative_to(base).as_posix()}
             )
