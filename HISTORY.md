@@ -9,6 +9,13 @@ This document tracks the major milestones and evolution of the Django Ergo proje
 - `ergo_agent_reply` refuses a question id the agent never asked and names
   the open one, instead of queuing an answer that fails later out of sight.
   The watcher saves a question as asked before telling the chat about it.
+### Local jobs survive upgrades and get kit fixes (November 2026)
+
+- The restart gate (`wait_idle`, the upgrader) waits for `local_shell` jobs
+  whose agent is running, even when it ignores other workers: those runs die
+  with their pod.
+- A job's unchanged template files are updated to the template's current
+  version before each run (`.ergo/template.json`); edited files stay.
 
 ### Local job secrets and kit refresh (November 2026)
 

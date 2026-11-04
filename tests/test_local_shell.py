@@ -208,6 +208,7 @@ def test_runs_add_new_template_files_and_flag_missing_secrets(
     wait_for_exit(folder, 2)
     assert (folder / "bin" / "sume").read_text() == "#!/bin/sh\n"
     assert (folder / "renderers" / "render.py").read_text() == "print('job edit')\n"
+    assert (folder / ".ergo" / "template.json").exists()
     assert not (folder / "linked").exists()
     assert "HIGGSFIELD_API_KEY" in json.loads((folder / "env.json").read_text())
     w.run(started["id"], bot.registry)
@@ -388,3 +389,30 @@ def test_missing_agent_executable_is_reported_by_supervisor(tmp_path):
     check = plugin.check(Ctx(), {"dir": str(folder), "agent": "claude"})
     assert check.status == "failed"
     assert "missing" in check.error
+
+
+def test_template_updates_reach_files_the_job_left_alone(tmp_path):
+    from django_ergo.plugins.local_shell import _copy_template
+    from django_ergo.plugins.local_shell import _sync_template
+
+    kit, job = tmp_path / "kit", tmp_path / "job"
+    (kit / "bin").mkdir(parents=True)
+    (kit / "bin" / "helper").write_text("v1")
+    (kit / "bin" / "edited").write_text("v1")
+    _copy_template(kit, job)
+    assert _sync_template(kit, job) == ([], [])  # records what the job got
+
+    (job / "bin" / "edited").write_text("job's own")
+    (kit / "bin" / "helper").write_text("v2")
+    (kit / "bin" / "edited").write_text("v2")
+    (kit / "bin" / "new").write_text("v1")
+    assert _sync_template(kit, job) == (["bin/new"], ["bin/helper"])
+    assert (job / "bin" / "helper").read_text() == "v2"
+    assert (job / "bin" / "edited").read_text() == "job's own"
+
+    # A job from before the manifest keeps differing files, and picks up updates once it matches.
+    old = tmp_path / "old"
+    (old / "bin").mkdir(parents=True)
+    (old / "bin" / "helper").write_text("v0")
+    assert _sync_template(kit, old) == (["bin/edited", "bin/new"], [])
+    assert (old / "bin" / "helper").read_text() == "v0"
