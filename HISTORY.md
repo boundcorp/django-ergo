@@ -4,6 +4,12 @@ This document tracks the major milestones and evolution of the Django Ergo proje
 
 ## Development Timeline
 
+### Local job secrets and kit refresh (November 2026)
+
+- `local_shell` reports listed secrets that aren't set where a run launches
+  (in `ergo_agent_start`'s `warnings` and the reply result), and copies template
+  files a job folder lacks before each run, without overwriting the job's own.
+
 ### Nonblocking agent replies (November 2026)
 
 - Agent answers are queued for the polling worker instead of holding the bot's

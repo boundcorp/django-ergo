@@ -466,12 +466,16 @@ def agent_toolkit(bot: Bot, ctx: ToolContext):
     ) -> dict:
         spec = AgentSpec(brief, workspace, agent, model, effort, title, tier)
         worker = start(ctx, spec, manager)
-        return {
+        out = {
             **describe(worker),
             "agent": {
                 k: getattr(spec, k) for k in ("agent", "model", "effort", "tier")
             },
         }
+        # A manager can flag what the agent will lack (a missing secret).
+        if warnings := ((worker.args or {}).get("handle") or {}).get("warnings"):
+            out["warnings"] = list(warnings)
+        return out
 
     @bot_tool(
         name="ergo_agent_reply",

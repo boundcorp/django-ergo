@@ -169,6 +169,57 @@ def test_a_job_asks_is_answered_and_reports_its_files(tmp_path, workers, monkeyp
     assert (job["job"], job["status"], job["runs"]) == ("2026-w42", "ended", 2)
 
 
+@pytest.mark.django_db(transaction=True)
+def test_runs_add_new_template_files_and_flag_missing_secrets(
+    tmp_path,
+    workers,  # noqa: F811
+    monkeypatch,
+):
+    from django_ergo.bots import workers as w
+    from django_ergo.conversation.models import ThreadMessage
+
+    monkeypatch.delenv("HIGGSFIELD_API_KEY", raising=False)
+    bot, plugin, ctx, kit = setup(tmp_path)
+    started = json.loads(
+        kit.execute_tool(
+            "ergo_agent_start", {"brief": "Make an ad. ASK first.", "workspace": "old"}
+        )
+    )
+    [warning] = started["warnings"]
+    assert "HIGGSFIELD_API_KEY" in warning and "restart" in warning
+    folder = tmp_path / "jobs" / "old"
+    wait_for_exit(folder, 1)
+    assert "HIGGSFIELD_API_KEY" not in json.loads((folder / "env.json").read_text())
+
+    # The kit gains a helper after the job was made, and the job edited a file.
+    kit_dir = tmp_path / "kit"
+    (kit_dir / "bin").mkdir()
+    (kit_dir / "bin" / "sume").write_text("#!/bin/sh\n")
+    (kit_dir / "renderers" / "render.py").write_text("print('new')\n")
+    (folder / "renderers" / "render.py").write_text("print('job edit')\n")
+    monkeypatch.setenv("HIGGSFIELD_API_KEY", "hf-test")
+
+    w.run(started["id"], bot.registry)
+    kit.execute_tool(
+        "ergo_agent_reply",
+        {"worker_id": started["id"], "question_id": "old:1", "answer": "Go"},
+    )
+    w.run(started["id"], bot.registry)
+    wait_for_exit(folder, 2)
+    assert (folder / "bin" / "sume").read_text() == "#!/bin/sh\n"
+    assert (folder / "renderers" / "render.py").read_text() == "print('job edit')\n"
+    assert not (folder / "linked").exists()
+    assert "HIGGSFIELD_API_KEY" in json.loads((folder / "env.json").read_text())
+    w.run(started["id"], bot.registry)
+    told = " ".join(
+        ThreadMessage.objects.filter(metadata__worker=started["id"]).values_list(
+            "text", flat=True
+        )
+    )
+    assert "Added new template files to the job: bin/sume." in told
+    assert "Not set where" not in told
+
+
 def kit_tools(bot, ctx):
     return bot.plugin("local_shell").toolkits(ctx)[0]
 
