@@ -75,7 +75,6 @@ from django_ergo.conversation.inference_policy import mint_grant
 from django_ergo.conversation.models import CompactionMode
 from django_ergo.conversation.models import ConversationSession
 from django_ergo.conversation.models import StructuredCall
-from django_ergo.conversation.models import StructuredCallStatus
 from django_ergo.conversation.models import normalize_compaction_mode
 from django_ergo.conversation.runtime import EngineSpec
 from django_ergo.conversation.runtime import build_engine
@@ -1302,9 +1301,7 @@ class Bot:
     async def pending_call(self, session: ConversationSession) -> StructuredCall | None:
         """The session's latest turn if it is waiting for approval."""
         return (
-            await session.structured_calls.filter(
-                status=StructuredCallStatus.AWAITING_APPROVAL
-            )
+            await session.structured_calls.filter(messaging.awaiting_approval())
             .order_by("-created_at")
             .afirst()
         )

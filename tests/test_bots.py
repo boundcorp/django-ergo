@@ -348,6 +348,27 @@ async def test_approval_tool_pauses_then_resumes_with_context(tmp_path):
 
 
 @pytest.mark.django_db(transaction=True)
+async def test_a_newer_turn_replaces_one_left_waiting_for_approval(tmp_path):
+    """A turn the user wrote past (no card, can't be answered) must not keep the
+    chat busy: queued thread messages and worker reports would never go out."""
+    from django_ergo.bots import messaging
+
+    user = await User.objects.acreate(username="mover")
+    bot, _ = make_bot(
+        tmp_path,
+        claude_tool("add_to_list", {"item": "milk", "qty": 2}, tool_id="t1"),
+        say("Never mind then."),
+    )
+    root = await bot.root_session(user)
+    assert (await bot.ask(root, "We need milk")).needs_approval
+    assert await sync_to_async(messaging.busy)(root)
+
+    assert (await bot.ask(root, "Actually, skip it")).text == "Never mind then."
+    assert not await sync_to_async(messaging.busy)(root)
+    assert await bot.pending_call(root) is None
+
+
+@pytest.mark.django_db(transaction=True)
 async def test_threads_use_default_compaction_and_root_reads_them(tmp_path):
     user = await User.objects.acreate(username="planner")
     bot, engine = make_bot(tmp_path)

@@ -237,7 +237,7 @@ def thread_status(session: ConversationSession) -> dict:
     from django_ergo.conversation.models import WorkerStatus
 
     calls = session.structured_calls
-    if calls.filter(status=StructuredCallStatus.AWAITING_APPROVAL).exists():
+    if calls.filter(messaging.awaiting_approval()).exists():
         state = "waiting_for_approval"
     elif messaging.busy(session):
         state = "working"
@@ -294,7 +294,15 @@ def blocked_on(session: ConversationSession) -> list[str]:
         .select_related("recipient_session")
         .distinct()
     )
-    return sorted({messaging.label(m.recipient_session) for m in waiting})
+    return sorted(
+        {
+            messaging.label(m.recipient_session)
+            for m in waiting
+            if m.recipient_session.structured_calls.filter(
+                messaging.awaiting_approval()
+            ).exists()
+        }
+    )
 
 
 def resolve_blockers(

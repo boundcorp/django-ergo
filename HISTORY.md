@@ -9,6 +9,9 @@ This document tracks the major milestones and evolution of the Django Ergo proje
 - `ergo_agent_reply` refuses a question id the agent never asked and names
   the open one, instead of queuing an answer that fails later out of sight.
   The watcher saves a question as asked before telling the chat about it.
+- A turn left waiting for approval no longer keeps the chat busy once the
+  user has written again (it shows no card and can't be answered). Before,
+  it held every queued thread message and worker report indefinitely.
 
 ### Local jobs survive upgrades and get kit fixes (November 2026)
 
