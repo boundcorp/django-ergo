@@ -403,7 +403,6 @@ class OpenAIAPIEngine(StoredMessagesMixin, Engine):
         system: str = "",
         tools: list[dict] | None = None,
     ) -> Completion:
-
         with trace_engine_call(
             operation="complete",
             engine_type=self.engine_type,

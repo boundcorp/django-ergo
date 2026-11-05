@@ -446,3 +446,42 @@ def _route_reply(bot: Bot, session: ConversationSession, result: TurnResult) -> 
     report = (message.metadata or {}).get("report")  # a one-way report: no reply back
     if message.sender_session_id and message.in_reply_to_id is None and not report:
         reply(message, text, registry=bot.registry)
+    elif result.reply is not None:
+        _report_worker_result(session, message, text, registry=bot.registry)
+
+
+def _report_worker_result(
+    session: ConversationSession,
+    message: ThreadMessage,
+    text: str,
+    *,
+    registry: BotRegistry | None = None,
+) -> None:
+    """A thread that another chat started passes on what it made of a worker's
+    result. Its answer to that chat's request was often "I've started a worker",
+    so without this the finished work never reaches the chat that asked."""
+    if not (message.metadata or {}).get("worker_finished"):
+        return
+    starter_id = (session.metadata or {}).get("started_by")
+    if not starter_id or str(starter_id) == str(session.id):
+        return
+    starter = ConversationSession.objects.filter(id=starter_id).first()
+    if starter is None:
+        return
+    if ThreadMessage.objects.filter(
+        sender_session=session,
+        recipient_session=starter,
+        created_at__gte=message.created_at,
+    ).exists():
+        return  # the turn already told it
+    title = (message.metadata or {}).get("worker_title") or "a worker"
+    try:
+        send(
+            session,
+            starter,
+            f"[Result of {title}]\n\n{text}",
+            registry=registry,
+            metadata={"report": True, "worker": message.metadata.get("worker")},
+        )
+    except ValueError:
+        logger.warning("Couldn't report a worker result to %s", starter_id)

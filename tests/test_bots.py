@@ -3628,3 +3628,63 @@ def test_files_note_lists_files_without_a_size():
     note = files_note(SimpleNamespace(metadata={"attachments": files}))
     assert "- plan.md (text/markdown, 1,200 bytes), id a" in note
     assert "- PR #14 (text/uri-list), id b" in note
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_a_workers_result_reaches_the_chat_that_started_the_thread(
+    tmp_path, thread_messages
+):
+    """The thread answered the request with "I've started a worker"; what it makes
+    of the worker's result goes back to the starter as a report."""
+    from django_ergo.bots import messaging
+    from django_ergo.conversation.models import ThreadMessage
+
+    user = await User.objects.acreate(username="delegator")
+    bot, engine = make_bot(tmp_path, say("The key lacks speech permission."))
+    root = await bot.root_session(user)
+    thread = await bot.create_session(
+        user,
+        parent=root,
+        title="Check key",
+        metadata={"started_by": str(root.id), "started_by_label": "kitchen · Main"},
+    )
+    event = await sync_to_async(messaging.send_event)(
+        thread,
+        "Worker “Check the key” finished.\n\nResult:\n401 missing text_to_speech",
+        source="worker:w1",
+        source_label="Worker: Check the key",
+        metadata={
+            "worker": "w1",
+            "worker_title": "Check the key",
+            "worker_finished": True,
+        },
+    )
+    await thread_messages()  # the thread's turn on the worker result
+    [report] = [
+        m
+        async for m in ThreadMessage.objects.filter(
+            sender_session=thread, recipient_session=root
+        )
+    ]
+    assert report.metadata["report"] is True
+    assert "Check the key" in report.text and "lacks speech permission" in report.text
+    assert (await ThreadMessage.objects.aget(pk=event.pk)).status == "answered"
+
+    # A worker's progress update (not its result) stays in the thread.
+    SENT.clear()  # the report to main, not delivered here
+    engine._client.responses = [say("Still checking.")]
+    await sync_to_async(messaging.send_event)(
+        thread,
+        "progress",
+        source="worker:w2",
+        source_label="Worker: x",
+        metadata={"worker": "w2", "update": True},
+    )
+    await thread_messages()
+    assert engine._client.calls[-1]["messages"][-1]["content"]  # the turn ran
+    assert (
+        await ThreadMessage.objects.filter(
+            sender_session=thread, recipient_session=root
+        ).acount()
+        == 1
+    )
