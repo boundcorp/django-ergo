@@ -233,6 +233,10 @@ def test_failures_limits_and_stopping(tmp_path, workers):  # noqa: F811
     bot, plugin, ctx, kit = setup(tmp_path)
     with pytest.raises(ValueError, match="isn't a job name"):
         kit.execute_tool("ergo_agent_start", {"brief": "x", "workspace": "../etc"})
+    with pytest.raises(ValueError, match="not a path: use a short name"):
+        kit.execute_tool(
+            "ergo_agent_start", {"brief": "x", "workspace": "/home/dev/p/repo"}
+        )
 
     failing = json.loads(
         kit.execute_tool("ergo_agent_start", {"brief": "FAIL", "workspace": "bad"})
