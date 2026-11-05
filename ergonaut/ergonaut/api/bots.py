@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import time
 import unicodedata
 import uuid
@@ -2035,6 +2036,36 @@ def author_avatar(request, kind: str, ref: str):
     return response
 
 
+RANGE_CHUNK = 4 * 1024 * 1024  # most bytes an open-ended range ("bytes=N-") gets per response
+
+
+def ranged_response(request, row) -> HttpResponse | None:
+    """A 206 for a media file's Range request, so players can seek (Safari won't play without it).
+
+    None when the request has no single byte range we understand: the whole file is sent."""
+    match = re.fullmatch(r"bytes=(\d*)-(\d*)", request.headers.get("Range", "").strip())
+    if not match or not (match[1] or match[2]):
+        return None
+    size = row.file.size
+    if match[1]:
+        start = int(match[1])
+        end = min(int(match[2]) if match[2] else start + RANGE_CHUNK - 1, size - 1)
+    else:  # the last N bytes
+        start, end = max(size - int(match[2]), 0), size - 1
+    if start > end:
+        response = HttpResponse(status=416)
+        response["Content-Range"] = f"bytes */{size}"
+        return response
+    with row.file.open("rb") as handle:
+        handle.seek(start)
+        data = handle.read(end - start + 1)
+    response = HttpResponse(data, status=206, content_type=row.media_type)
+    response["Content-Range"] = f"bytes {start}-{end}/{size}"
+    response["Accept-Ranges"] = "bytes"
+    response["X-Frame-Options"] = "SAMEORIGIN"
+    return response
+
+
 @router.get("/attachments/{attachment_id}/download")
 def download_attachment(request, attachment_id: str, inline: bool = False):
     row = visible_attachment(request.auth, attachment_id)
@@ -2059,9 +2090,13 @@ def download_attachment(request, attachment_id: str, inline: bool = False):
         from django_ergo.conversation.attachments import read_text
 
         return page_response(text_page(row.filename, read_text(row, limit=500_000), kind), sandboxed=True)
+    if kind == "media" and (ranged := ranged_response(request, row)):
+        return ranged
     if kind in ("image", "pdf", "media"):
         # Shown in the chat's viewer. SVG can carry scripts, so it gets the sandbox too.
         response = FileResponse(row.file.open("rb"), filename=row.filename, content_type=row.media_type)
+        if kind == "media":
+            response["Accept-Ranges"] = "bytes"
         response["X-Frame-Options"] = "SAMEORIGIN"
         if row.media_type == "image/svg+xml":
             response["Content-Security-Policy"] = SANDBOXED
