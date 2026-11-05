@@ -252,6 +252,7 @@ def test_pages_plugin_writes_previews_and_pins(realty_bot):
         ("bot_file", "pages/missing.jhtml", False),
         ("file", "board.jhtml", None),
     ]
+    assert pins[-1]["view"] == "page"
     toolkit.execute_tool(
         "ergo_page_pin", {"attachment_id": written["id"], "pinned": False}
     )

@@ -21,6 +21,15 @@ export function pinIcon(pin: { icon?: string; filename?: string; path?: string; 
   return TYPE_ICONS.find(([pattern]) => pattern.test(file))?.[1] ?? '📄'
 }
 
+const MEDIA = /\.(mp4|m4v|webm|mov|ogv|mp3|m4a|wav|ogg|oga|opus|flac|aac)$/i
+
+/** Whether an open pin reloads when the chat changes. Audio and video don't: a reload would
+ * restart the player, and the file doesn't change with the chat the way a page or a doc can. */
+export function followsChat(pin: Pin): boolean {
+  if (pin.view) return pin.view !== 'media'
+  return !MEDIA.test(pin.path ?? pin.filename ?? pin.name)
+}
+
 // The chat's pinned files, as a strip of tabs under the header.
 export function Pins({
   sessionId,
@@ -166,14 +175,16 @@ function PageFrame({
     }
   }, [bot, bridge, streamKey])
 
-  // New chat content re-renders the page.
+  // New chat content re-renders the page (not a playing video or recording: see followsChat).
   const shownKey = useRef(refreshKey)
+  const follows = followsChat(pin)
   useEffect(() => {
     if (Object.is(shownKey.current, refreshKey)) return
     shownKey.current = refreshKey
+    if (!follows) return
     bridge.frameReplaced()
     setNonce(n => n + 1)
-  }, [refreshKey, bridge])
+  }, [refreshKey, bridge, follows])
 
   // Leaving the page counts as "No" for any approval still waiting.
   const waiting = useRef(confirms)

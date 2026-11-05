@@ -502,6 +502,7 @@ export type Pin = {
   id?: string
   filename?: string
   exists?: boolean
+  view?: AttachmentFile['view'] // how a chat file is shown, when known
 }
 
 // POST /api/bots/{bot}/actions/{name}: what a page's ergo.call sends, and the two answers.
