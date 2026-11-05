@@ -485,7 +485,11 @@ def _finish(worker: Worker, status: str, result: Any, error: str) -> None:
         source=f"worker:{worker.pk}",
         source_label=f"Worker: {worker.title}",
         registry=registry,
-        metadata={"worker": str(worker.pk), "worker_title": worker.title},
+        metadata={
+            "worker": str(worker.pk),
+            "worker_title": worker.title,
+            "worker_finished": True,
+        },
     )
 
 

@@ -4,6 +4,12 @@ This document tracks the major milestones and evolution of the Django Ergo proje
 
 ## Development Timeline
 
+### Worker results reach the chat that asked (November 2026)
+
+- A thread started by another chat reports what it made of a finished
+  worker's result back to that chat. Before, its "I've started a worker"
+  answer closed the request and the finished work stayed in the thread.
+
 ### Agent replies check the question id (November 2026)
 
 - `ergo_agent_reply` refuses a question id the agent never asked and names

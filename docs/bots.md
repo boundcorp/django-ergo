@@ -887,6 +887,11 @@ Who may message whom:
   back, so a status update doesn't cost the sender an acknowledgement turn.
   Pass `ask: true` to `ergo_thread_send` (or `ergo_message_up` for its
   upward destinations) when an answer is needed.
+- **Worker results reach the starter.** A thread often answers a request
+  with "I've started a worker". When that worker finishes, the thread's reply
+  to the result goes to the chat that started the thread as a report
+  (`[Result of <worker>]`), unless that turn already messaged the starter.
+  Workers' progress updates and questions stay in the thread.
 - **Follow-ups are fine; status pings aren't.** A chat may send a thread
   several messages while its earlier request there is still open: they queue
   in order (see below), each is its own turn there, and each reply comes back
