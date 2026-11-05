@@ -9,6 +9,7 @@ import { ToolCard, copyText } from './ToolCard'
 import { pretty, resultText } from '../toolFormat'
 import { clock } from '../time'
 import { messageAnchor, messageLink } from '../messageLink'
+import { eventSummary } from '../eventSummary'
 import { ContextPanel, CompactionDivider } from './ContextPanel'
 
 // Messaging calls stay visible even in long runs of tool calls.
@@ -707,6 +708,23 @@ function AttributedMessage({ message }: { message: Message }) {
   )
 }
 
+/** A long event (such as a worker's full result) shows its summary; the full text is one click away. */
+function EventText({ text }: { text: string }) {
+  const summary = eventSummary(text)
+  if (summary === null) return <Markdown text={text} />
+  return (
+    <>
+      <Markdown text={summary} />
+      <details className="mt-2">
+        <summary className="cursor-pointer text-xs text-muted hover:text-ink">Show full text</summary>
+        <div className="mt-2">
+          <Markdown text={text} />
+        </div>
+      </details>
+    </>
+  )
+}
+
 /** Automated input is not a human message, even when its provider role is user. */
 function EventMessage({ message }: { message: Message }) {
   const author = message.author
@@ -721,7 +739,7 @@ function EventMessage({ message }: { message: Message }) {
       <div className="min-w-0 break-words">
         {message.blocks.map((block, i) =>
           block.type === 'text' ? (
-            <Markdown key={i} text={block.text} />
+            <EventText key={i} text={block.text} />
           ) : block.type === 'attachment' ? (
             <AttachmentView
               key={i}

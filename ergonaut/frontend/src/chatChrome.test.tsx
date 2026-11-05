@@ -193,6 +193,40 @@ describe('structured message attribution', () => {
     expect(html.replace(event!, '')).toContain('Please review my pull request.')
   })
 
+  test('collapses a long worker result to its summary with the full text behind a disclosure', () => {
+    const result = {
+      summary: `Both catalog checks returned HTTP 200.\n\n${'Preset voices follow. '.repeat(40)}`,
+      outputs: [{ path: 'out/catalog.md', size: 2774, sha256: 'abc123' }],
+    }
+    const html = renderToStaticMarkup(
+      createElement(
+        MemoryRouter,
+        null,
+        createElement(Transcript, {
+          calls: [],
+          messages: [
+            {
+              line: 0,
+              role: 'user',
+              timestamp: null,
+              author: { kind: 'system', ref: 'worker:1', display_name: 'Worker: Catalog' },
+              provenance: { kind: 'event' },
+              blocks: [
+                { type: 'text', text: `Worker “Catalog” finished.\n\nResult:\n${JSON.stringify(result, null, 2)}` },
+              ],
+            },
+          ] as Message[],
+        }),
+      ),
+    )
+    const event = html.match(/<aside\b[^>]*>[\s\S]*?<\/aside>/)![0]
+    const [shown, hidden] = event.split('<details')
+    expect(shown).toContain('Both catalog checks returned HTTP 200.')
+    expect(shown).not.toContain('out/catalog.md')
+    expect(hidden).toContain('Show full text')
+    expect(hidden).toContain('out/catalog.md')
+  })
+
   test.each([
     { author: { kind: 'system', ref: 'github', display_name: 'GitHub' } },
     { provenance: { kind: 'event' } },
