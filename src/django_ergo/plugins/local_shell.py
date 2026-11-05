@@ -382,6 +382,12 @@ class LocalShellPlugin(BotPlugin):
         name = str(name).strip()
         if not JOB_NAME.match(name):
             msg = f"{name!r} isn't a job name (letters, digits, . _ -; up to 80)"
+            if "/" in name or "\\" in name:
+                msg += (
+                    f". A job is a folder under {self.root}, named, not a path: use a "
+                    "short name like 2026-w45-sume-voice-pr, and put any other folder "
+                    "the agent should work in (a repo checkout) in the brief"
+                )
             raise LocalShellError(msg)
         return self.root / name
 
