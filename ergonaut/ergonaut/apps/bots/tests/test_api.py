@@ -382,6 +382,22 @@ def test_upload_list_download_and_delete_session_files(client, cook, use_bots, s
     download = client.get(f"/api/attachments/{file['id']}/download")
     assert b"".join(download.streaming_content) == b"item,count\neggs,4\n"
 
+    # Audio plays inline, and answers byte ranges so players can seek (Safari needs them).
+    clip = client.post(
+        f"/api/sessions/{root['id']}/attachments",
+        {"file": SimpleUploadedFile("clip.mp3", b"0123456789", content_type="audio/mpeg")},
+    ).json()
+    url = f"/api/attachments/{clip['id']}/download?inline=true"
+    whole = client.get(url)
+    assert whole["Accept-Ranges"] == "bytes"
+    assert b"".join(whole.streaming_content) == b"0123456789"
+    part = client.get(url, HTTP_RANGE="bytes=2-5")
+    assert (part.status_code, part.content, part["Content-Range"]) == (206, b"2345", "bytes 2-5/10")
+    assert client.get(url, HTTP_RANGE="bytes=7-").content == b"789"
+    assert client.get(url, HTTP_RANGE="bytes=-3").content == b"789"
+    assert client.get(url, HTTP_RANGE="bytes=20-").status_code == 416
+    ConversationSession.objects.get(id=root["id"]).attachments.filter(id=clip["id"]).delete()
+
     # A row whose file is gone (wiped media) is a 404 that says so, not a 500.
     row = ConversationSession.objects.get(id=root["id"]).attachments.get()
     content = row.file.read()

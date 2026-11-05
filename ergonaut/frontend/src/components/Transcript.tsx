@@ -382,21 +382,38 @@ type ToolUse = Extract<Block, { type: 'tool_use' }>
 
 const REPLY_TOOL = 'send_reply'
 
-// A file in the chat: images as a thumbnail, anything else as a chip. Both open the file.
+// A file in the chat: images as a thumbnail, audio as a player, anything else as a chip.
 export function AttachmentView({
   id,
   label,
   image,
+  audio,
   note,
   link,
 }: {
   id?: string
   label: string
   image?: boolean
+  audio?: boolean
   note?: string
   link?: AttachmentFile['link']
 }) {
   if (link) return <PrChip pr={link} />
+  if (id && audio)
+    return (
+      <div className="flex w-80 max-w-full flex-col gap-1 rounded-lg border border-zinc-300 p-2 dark:border-zinc-700">
+        <a
+          href={api.viewUrl(id)}
+          target="_blank"
+          rel="noreferrer"
+          title={note}
+          className="truncate text-xs text-indigo-600 hover:underline dark:text-indigo-400"
+        >
+          🔊 {label}
+        </a>
+        <audio controls preload="metadata" src={api.viewUrl(id)} aria-label={label} className="h-9 w-full" />
+      </div>
+    )
   if (id && image)
     return (
       <a href={api.viewUrl(id)} target="_blank" rel="noreferrer" title={note ? `${label} · ${note}` : label}>
@@ -423,6 +440,11 @@ export function AttachmentView({
       📎 {label}
     </div>
   )
+}
+
+/** Whether an attachment is audio, from its kind or media type. */
+export function isAudio(file: { kind?: string; media_type?: string }): boolean {
+  return file.kind === 'audio' || !!file.media_type?.startsWith('audio/')
 }
 
 type ImageRef = { type: 'image_ref'; attachment_id?: string; name?: string; media_type?: string }
@@ -479,6 +501,7 @@ function BotFiles({ files }: { files: AttachmentFile[] }) {
           id={file.id}
           label={file.filename}
           image={file.kind === 'image' || file.view === 'image'}
+          audio={isAudio(file)}
           note="made by the bot"
           link={file.link}
         />
@@ -661,7 +684,13 @@ function AttributedMessage({ message }: { message: Message }) {
           block.type === 'text' ? (
             <Markdown key={i} text={block.text} />
           ) : block.type === 'attachment' ? (
-            <AttachmentView key={i} id={block.id} label={block.label} image={block.kind === 'image'} />
+            <AttachmentView
+              key={i}
+              id={block.id}
+              label={block.label}
+              image={block.kind === 'image'}
+              audio={isAudio(block)}
+            />
           ) : null,
         )}
       </div>
@@ -670,7 +699,7 @@ function AttributedMessage({ message }: { message: Message }) {
           {provenance.attachments
             .filter(file => !message.blocks.some(block => block.type === 'attachment' && block.id === file.id))
             .map(file => (
-              <AttachmentView key={file.id} id={file.id} label={file.filename} />
+              <AttachmentView key={file.id} id={file.id} label={file.filename} audio={isAudio(file)} />
             ))}
         </div>
       )}
@@ -694,7 +723,13 @@ function EventMessage({ message }: { message: Message }) {
           block.type === 'text' ? (
             <Markdown key={i} text={block.text} />
           ) : block.type === 'attachment' ? (
-            <AttachmentView key={i} id={block.id} label={block.label} image={block.kind === 'image'} />
+            <AttachmentView
+              key={i}
+              id={block.id}
+              label={block.label}
+              image={block.kind === 'image'}
+              audio={isAudio(block)}
+            />
           ) : null,
         )}
       </div>
@@ -798,7 +833,12 @@ function MessageView({
           case 'attachment':
             return (
               <div key={i} className="max-w-[85%]">
-                <AttachmentView id={block.id} label={block.label} image={block.kind === 'image'} />
+                <AttachmentView
+                  id={block.id}
+                  label={block.label}
+                  image={block.kind === 'image'}
+                  audio={isAudio(block)}
+                />
               </div>
             )
           case 'thinking':

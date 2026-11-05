@@ -26,7 +26,7 @@ import { VoiceRecorder } from '../components/VoiceRecorder'
 import Markdown from '../components/Markdown'
 import ModelPicker, { EffortSlider, modelLabel, useBotModels } from '../components/ModelPicker'
 import { PageViewer, Pins } from '../components/Pins'
-import { AttachmentView, replySuggestions, Transcript } from '../components/Transcript'
+import { AttachmentView, isAudio, replySuggestions, Transcript } from '../components/Transcript'
 import { ModelLink, MobileSessionBar, SessionTitle, SuggestionChips, ThreadOptions } from '../components/ChatChrome'
 import { TodoButton, TodoList } from '../components/TodoList'
 import { usePersistedFlag } from '../persistedFlag'
@@ -91,7 +91,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
   const [showTodos, setShowTodos] = usePersistedFlag('ergonaut.todos')
   const [error, setError] = useState('')
   // Files picked or pasted for the next message, already uploaded to the session.
-  type Outgoing = { id: string; filename: string; image: boolean }
+  type Outgoing = { id: string; filename: string; image: boolean; audio: boolean }
   const [outgoing, setOutgoing] = useState<Outgoing[]>([])
   // Files sent with the queued message, shown with it until the worker stores it.
   const [sentFiles, setSentFiles] = useState<Outgoing[]>([])
@@ -489,7 +489,12 @@ export function Chat({ onChange }: { onChange: () => void }) {
         const saved = await api.uploadAttachment(id, file)
         setOutgoing(list => [
           ...list,
-          { id: saved.id, filename: saved.filename, image: saved.kind === 'image' || saved.view === 'image' },
+          {
+            id: saved.id,
+            filename: saved.filename,
+            image: saved.kind === 'image' || saved.view === 'image',
+            audio: isAudio(saved),
+          },
         ])
       }
     } catch (e) {
@@ -788,7 +793,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
             <div className="mt-3 flex flex-col items-end gap-1">
               {sentFiles.map(file => (
                 <div key={file.id} className="max-w-[80%]">
-                  <AttachmentView id={file.id} label={file.filename} image={file.image} />
+                  <AttachmentView id={file.id} label={file.filename} image={file.image} audio={file.audio} />
                 </div>
               ))}
               {(!sentFiles.length || echo !== sentFiles.map(f => f.filename).join(', ')) && (
