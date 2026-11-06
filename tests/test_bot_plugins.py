@@ -2347,6 +2347,93 @@ async def test_a_browser_session_is_approved_used_and_stopped(
     assert opened["tab"] not in left
 
 
+@pytest.mark.django_db
+def test_a_browser_batch_runs_its_steps_and_stops_at_a_failure(tmp_path, chrome):
+    _, _, plugin = browser_bot(tmp_path, config=f"cdp_url: {chrome}, sessions: false")
+    ctx = type("Ctx", (), {"session": None})()
+    plugin.open(ctx, BROWSER_PAGE, new_tab=True)
+    done = plugin.batch(
+        ctx,
+        [
+            {"action": "type", "target": "#q", "text": "tacos"},
+            {"action": "click", "target": "text=Go"},
+            {"action": "wait", "seconds": 0},
+        ],
+    )
+    assert done["done"] == 3
+    assert done["title"] == "sent tacos"
+    assert "failed" not in done
+
+    failed = plugin.batch(
+        ctx,
+        [
+            {"action": "type", "target": "#q", "text": "nachos"},
+            {"action": "jump"},
+            {"action": "click", "target": "text=Go"},
+        ],
+    )
+    assert failed["done"] == 1
+    assert failed["failed"]["step"] == 2
+    assert "Unknown action 'jump'" in failed["failed"]["error"]
+    assert failed["title"] == "sent tacos"  # the third step never ran
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_a_browser_task_hands_its_goal_to_a_driver_model(tmp_path, chrome):
+    from django_ergo.conversation.models import StructuredCall
+
+    bot, engine, _ = browser_bot(
+        tmp_path,
+        claude_tool(
+            "ergo_browser_task",
+            {"goal": "Search for tacos", "done_when": "the title says sent tacos"},
+            tool_id="task",
+        ),
+        # The driver's own loop, on the same fake client.
+        claude_tool(
+            "ergo_browser_open", {"url": BROWSER_PAGE, "new_tab": True}, tool_id="d1"
+        ),
+        claude_tool(
+            "ergo_browser_batch",
+            {
+                "steps": [
+                    {"action": "type", "target": "#q", "text": "tacos", "submit": True}
+                ]
+            },
+            tool_id="d2",
+        ),
+        claude_tool(
+            "submit_output",
+            {"status": "done", "summary": "Searched for tacos."},
+            tool_id="d3",
+        ),
+        say("Searched."),
+        config=f"cdp_url: {chrome}, sessions: false, driver_model: auto/small",
+    )
+    user = await User.objects.acreate(username="surfer-user")
+    root = await bot.root_session(user)
+    done = await bot.ask(root, "Search for tacos")
+    assert done.text == "Searched."
+
+    (report,) = _tool_results(engine)
+    assert report["status"] == "done"
+    assert report["summary"] == "Searched for tacos."
+    assert report["page"]["title"] == "sent tacos"
+    call = await StructuredCall.objects.aget(kind="browser_task")
+    assert "Goal: Search for tacos" in call.request
+    assert "Done when: the title says sent tacos" in call.request
+
+
+def test_a_browser_task_is_approved_as_a_whole(tmp_path):
+    _, _, plugin = browser_bot(tmp_path, config="approve_actions: true")
+    outer = {t.name: t.requires_approval for t in plugin._tools()}
+    assert outer["ergo_browser_task"] and outer["ergo_browser_batch"]
+    driving = {t.name: t.requires_approval for t in plugin._tools(driving=True)}
+    assert "ergo_browser_task" not in driving  # a driver can't hand off again
+    assert "ergo_browser_start" not in driving
+    assert not any(driving.values())
+
+
 @pytest.mark.usefixtures("workers")
 @pytest.mark.django_db(transaction=True)
 def test_an_idle_browser_session_ends_itself(tmp_path, chrome):

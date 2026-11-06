@@ -1355,6 +1355,8 @@ that should search, or let the bot load it when it needs to.
   root_only: true
   timeout: 30                # seconds per browser call
   max_snapshot_chars: 20000
+  driver_model: auto/small   # the model ergo_browser_task drives the browser with
+  driver_steps: 30           # its tool calls per task, at most
 ```
 
 Attaches to a running Chrome over CDP with Playwright (the `browser`
@@ -1365,7 +1367,10 @@ checks Chrome and ends after `idle_minutes` without a browser call;
 is open the bot has `ergo_browser_tabs`, `ergo_browser_open`,
 `ergo_browser_snapshot`, `ergo_browser_screenshot`, and
 `ergo_browser_click`, `ergo_browser_type` and `ergo_browser_press`, which
-also wait for approval with `approve_actions: true`. With `sessions: false`
+also wait for approval with `approve_actions: true`, as do
+`ergo_browser_batch` (several steps in one call, one snapshot at the end)
+and `ergo_browser_task` (a goal handed to `driver_model`, which drives the
+other tools in its own loop and reports back). With `sessions: false`
 there are no start and stop tools and the browser tools always work.
 Snapshots are accessibility trees whose refs (`e12`) the actions take; a
 Playwright selector works too. The bot is told to hand sign-ins, two-factor

@@ -12,6 +12,8 @@
         root_only: true            # only the root session gets the tools
         timeout: 30                # seconds per browser call
         max_snapshot_chars: 20000
+        driver_model: auto/small   # the model ergo_browser_task drives the browser with
+        driver_steps: 30           # its tool calls per task, at most
 
 The bot attaches to a Chrome someone already started, with Playwright's
 ``connect_over_cdp``. That Chrome is an ordinary headed browser with its own
@@ -33,6 +35,14 @@ Tools:
   ``ergo_browser_click``, ``ergo_browser_type``, ``ergo_browser_press`` and
   ``ergo_browser_screenshot``. With ``sessions: true`` they refuse to run
   until a session is open.
+- ``ergo_browser_batch``: several clicks, typing, key presses or page loads
+  in one call, with one snapshot at the end, for steps the bot already knows.
+- ``ergo_browser_task``: hand a goal to a fast model (``driver_model``) that
+  drives the tools above in its own loop and reports back, so a big model
+  states the intent once instead of making a call per click. The driver
+  stops before sign-ins, payments and anything that submits, publishes,
+  saves or deletes unless the goal asks for it. With ``approve_actions`` the
+  user approves the goal instead of each action.
 
 Each call connects, works and disconnects; Chrome and its tabs keep running.
 Refs belong to the snapshot that made them, so an action takes a fresh
@@ -69,7 +79,11 @@ from dataclasses import field
 from pathlib import Path
 from typing import TYPE_CHECKING
 from typing import Any
+from typing import Literal
 from urllib.parse import urlsplit
+
+from pydantic import BaseModel
+from pydantic import Field
 
 from django_ergo.bots.plugins import BotPlugin
 from django_ergo.bots.tools import BotTool
@@ -91,6 +105,35 @@ if TYPE_CHECKING:
 
 TAB_ID_CHARS = 8
 SESSION_FUNCTION = "browser:session"
+
+DRIVER_PROMPT = """\
+You drive a Chrome browser for another assistant, which gave you one goal. \
+Work quickly with the ergo_browser_ tools: read the page (ergo_browser_snapshot), \
+act on the refs it shows (e12), check the result in the snapshot each action \
+returns, and repeat. Use ergo_browser_batch for several steps you're sure of. \
+Don't explain as you go.
+
+Stop and report instead of acting when:
+- the page needs a person: a sign-in, two-factor code, captcha or consent \
+screen (they use {takeover});
+- the next step would pay, buy, publish, submit, send, save or delete \
+something and the goal doesn't ask for that step in so many words;
+- you can't tell what the goal means here, or the page isn't what it expects.
+Never type passwords or codes.
+
+Report "done" only once the page shows the goal met (and the "done when" \
+check, if given). Report "stopped" with what's needed when you stop for one \
+of the reasons above, and "failed" when you tried and couldn't get there. The \
+summary says what you did and what the page shows now, briefly."""
+
+
+class TaskReport(BaseModel):
+    status: Literal["done", "stopped", "failed"]
+    summary: str = Field(description="What you did and what the page shows now")
+    needs: str = Field(
+        default="",
+        description="When stopped: what a person or the assistant must do or decide",
+    )
 
 
 @dataclass
@@ -117,6 +160,8 @@ class BrowserPlugin(BotPlugin):
         self.root_only = bool(self.config.get("root_only", True))
         self.timeout = float(self.config.get("timeout", 30))
         self.max_snapshot_chars = int(self.config.get("max_snapshot_chars", 20_000))
+        self.driver_model = str(self.config.get("driver_model") or "auto/small")
+        self.driver_steps = int(self.config.get("driver_steps", 30))
         self._current: dict[str, str] = {}  # chat -> tab id, without sessions
         self._lock = threading.Lock()
         key = hashlib.sha1(  # noqa: S324 — a file name, not security
@@ -546,6 +591,97 @@ class BrowserPlugin(BotPlugin):
     def press(self, ctx: ToolContext, key: str, tab: str = "") -> dict:
         return self.act(ctx, tab, lambda page: page.keyboard.press(key))
 
+    def batch(self, ctx: ToolContext, steps: list[dict], tab: str = "") -> dict:
+        """Run ``steps`` in order on one connection; stop at the first that fails."""
+        if not steps:
+            msg = "Give at least one step."
+            raise ValueError(msg)
+        with self._use(ctx) as use:
+
+            def work(context: Any) -> dict:
+                tab_id, page = self._page(context, use, tab)
+                for number, step in enumerate(steps, 1):
+                    try:
+                        self._step(page, step)
+                    except Exception as exc:  # noqa: BLE001 — reported with the page
+                        return {
+                            **self._state(tab_id, page),
+                            "done": number - 1,
+                            "failed": {"step": number, "error": str(exc)[:500]},
+                        }
+                return {**self._state(tab_id, page), "done": len(steps)}
+
+            return self._run(work)
+
+    def _step(self, page: Any, step: dict) -> None:
+        action = step.get("action")
+        if action == "click":
+            self._locator(page, step["target"]).click()
+        elif action == "type":
+            field = self._locator(page, step["target"])
+            field.fill(str(step.get("text", "")))
+            if step.get("submit"):
+                field.press("Enter")
+        elif action == "press":
+            page.keyboard.press(step["key"])
+        elif action == "open":
+            url = str(step["url"])
+            page.goto(url if "://" in url else f"https://{url}")
+        elif action == "wait":
+            page.wait_for_timeout(min(float(step.get("seconds", 1)), 10) * 1000)
+        else:
+            msg = f"Unknown action {action!r}: use click, type, press, open or wait"
+            raise ValueError(msg)
+
+    def task(
+        self, ctx: ToolContext, goal: str, done_when: str = "", tab: str = ""
+    ) -> dict:
+        """Have ``driver_model`` drive the browser toward ``goal`` and report."""
+        from asgiref.sync import async_to_sync
+
+        from django_ergo.conversation.structured import StructuredCallSpec
+        from django_ergo.conversation.structured import run_structured_call
+
+        if not goal.strip():
+            msg = "Say what the browser should get done."
+            raise ValueError(msg)
+        with self._use(ctx):
+            pass  # refuse before spending a model call when no session is open
+        request = f"Goal: {goal.strip()}"
+        if done_when.strip():
+            request += f"\nDone when: {done_when.strip()}"
+        if tab:
+            request += f"\nWork in tab {tab}."
+        spec = StructuredCallSpec(
+            kind="browser_task",
+            system_prompt=DRIVER_PROMPT.format(takeover=self.takeover),
+            response_model=TaskReport,
+            toolkits=[FunctionToolkit(self._tools(driving=True), ctx)],
+            max_turns=self.driver_steps,
+            wrap_up=True,
+        )
+        started = time.monotonic()
+        result = async_to_sync(run_structured_call)(
+            spec,
+            request,
+            user=ctx.user,
+            engine=self.bot.make_engine(
+                ctx.session, self.driver_model, purpose="browser"
+            ),
+            metadata={"session": str(ctx.session.pk) if ctx.session else ""},
+        )
+        report = result.parsed
+        out: dict = {
+            "status": report.status if report else "failed",
+            "summary": report.summary if report else (result.call.error or "no report"),
+            "seconds": round(time.monotonic() - started, 1),
+        }
+        if report and report.needs:
+            out["needs"] = report.needs
+        with contextlib.suppress(RuntimeError, ValueError):
+            out["page"] = self.snapshot(ctx, tab)
+        return out
+
     def screenshot(
         self, ctx: ToolContext, tab: str = "", full_page: bool = False
     ) -> dict:
@@ -585,7 +721,8 @@ class BrowserPlugin(BotPlugin):
         if not self._applies(ctx):
             return []
         approval = (
-            "Clicks, typing and key presses wait for the user's approval, so say what each does."
+            "Clicks, typing, key presses, batches and tasks wait for the user's approval, "
+            "so say what each does."
             if self.approve_actions
             else "Clicks, typing and key presses run without approval."
         )
@@ -601,15 +738,23 @@ class BrowserPlugin(BotPlugin):
                 f"{session}"
                 "The ergo_browser_ tools drive a real Chrome that stays open between calls, "
                 "with the user's sign-ins. Read a page with ergo_browser_snapshot and act on "
-                f"the refs it shows (e12). {approval} When a page needs a person (sign-in, "
+                f"the refs it shows (e12). {approval} For more than a step or two, hand "
+                "the goal to ergo_browser_task (a fast model drives it and reports back) "
+                "or, when you already know the steps, run them in one ergo_browser_batch. "
+                "When a page needs a person (sign-in, "
                 f"two-factor code, captcha, consent screen), stop and ask the user to do it in "
                 f"{self.takeover}, then take a new snapshot once they say it's done. Never ask "
                 "for passwords or codes in chat.",
             )
         ]
 
-    def _tools(self) -> list[BotTool]:
+    def _tools(self, *, driving: bool = False) -> list[BotTool]:  # noqa: C901
+        """The browser tools; ``driving`` is the set ergo_browser_task's model gets.
+
+        A task's goal was approved as a whole, so its actions need no approval.
+        """
         plugin = self
+        approve = self.approve_actions and not driving
         tab_param = {
             "type": "string",
             "description": "Tab id from ergo_browser_tabs (default: this chat's current tab)",
@@ -693,7 +838,7 @@ class BrowserPlugin(BotPlugin):
             description="Click an element and return the page's new snapshot.",
             parameters={"target": target_param, "tab": tab_param},
             required=["target"],
-            requires_approval=self.approve_actions,
+            requires_approval=approve,
         )
         def click(ctx: ToolContext, target: str, tab: str = "") -> dict:
             return plugin.click(ctx, target, tab)
@@ -712,7 +857,7 @@ class BrowserPlugin(BotPlugin):
                 "tab": tab_param,
             },
             required=["target", "text"],
-            requires_approval=self.approve_actions,
+            requires_approval=approve,
         )
         def type_text(
             ctx: ToolContext,
@@ -735,7 +880,7 @@ class BrowserPlugin(BotPlugin):
                 "tab": tab_param,
             },
             required=["key"],
-            requires_approval=self.approve_actions,
+            requires_approval=approve,
         )
         def press(ctx: ToolContext, key: str, tab: str = "") -> dict:
             return plugin.press(ctx, key, tab)
@@ -760,6 +905,79 @@ class BrowserPlugin(BotPlugin):
         ) -> dict:
             return plugin.screenshot(ctx, tab, full_page)
 
-        browsing = (tabs, open_url, snapshot, click, type_text, press, screenshot)
+        @bot_tool(
+            name="ergo_browser_batch",
+            takes_context=True,
+            description=(
+                "Run several steps in one call and return the page's snapshot after the "
+                "last. Stops at the first step that fails and says which. Refs come from "
+                "the latest snapshot; after a step loads a new page, use selectors or "
+                "take a new snapshot."
+            ),
+            parameters={
+                "steps": {
+                    "type": "array",
+                    "description": (
+                        'In order, each {"action": "click", "target": ...}, {"action": '
+                        '"type", "target": ..., "text": ..., "submit": false}, {"action": '
+                        '"press", "key": ...}, {"action": "open", "url": ...} or '
+                        '{"action": "wait", "seconds": 1}'
+                    ),
+                    "items": {"type": "object"},
+                },
+                "tab": tab_param,
+            },
+            required=["steps"],
+            requires_approval=approve,
+        )
+        def batch(ctx: ToolContext, steps: list[dict], tab: str = "") -> dict:
+            return plugin.batch(ctx, steps, tab)
+
+        @bot_tool(
+            name="ergo_browser_task",
+            takes_context=True,
+            description=(
+                "Hand the browser a goal: a fast model drives it (opening pages, "
+                "reading, clicking, typing) until the goal is met, then reports with "
+                "the final page. One call instead of one per click. It stops and says "
+                "so before sign-ins, payments, or submitting, saving, publishing or "
+                "deleting anything the goal doesn't ask for, so name those steps if you "
+                "want them done. Check its report against the page."
+            ),
+            parameters={
+                "goal": {
+                    "type": "string",
+                    "description": "What to get done, with the details it needs (names, values, URLs)",
+                },
+                "done_when": {
+                    "type": "string",
+                    "description": "What the page shows once it's done",
+                },
+                "tab": tab_param,
+            },
+            required=["goal"],
+            requires_approval=approve,
+        )
+        def task(
+            ctx: ToolContext, goal: str, done_when: str = "", tab: str = ""
+        ) -> dict:
+            return plugin.task(ctx, goal, done_when, tab)
+
+        if driving:
+            return [
+                t.__bot_tool__
+                for t in (tabs, open_url, snapshot, click, type_text, press, batch)
+            ]
+        browsing = (
+            tabs,
+            open_url,
+            snapshot,
+            click,
+            type_text,
+            press,
+            batch,
+            task,
+            screenshot,
+        )
         sessions = (start, stop) if self.sessions else ()
         return [t.__bot_tool__ for t in (*sessions, *browsing)]
