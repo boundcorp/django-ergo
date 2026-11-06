@@ -162,6 +162,8 @@ always have the browser.
 | `ergo_browser_click` | click a ref or Playwright selector | `approve_actions` |
 | `ergo_browser_type` | fill a field, optionally press Enter | `approve_actions` |
 | `ergo_browser_press` | press a key or chord | `approve_actions` |
+| `ergo_browser_batch` | several clicks, typing, key presses, page loads or waits in one call | `approve_actions` |
+| `ergo_browser_task` | hand a goal to a fast model that drives the tools above and reports back | `approve_actions` |
 | `ergo_browser_screenshot` | attach a screenshot to the chat | no |
 
 Opening, reading and the actions all return the page's title, URL and new
@@ -171,6 +173,25 @@ taken on the same connection, so an action takes a fresh snapshot and
 resolves the ref against it: if the page changed in between, the ref may
 point somewhere else; set `approve_actions: true` to approve each action
 too. Each chat's current tab is kept on the session.
+
+### Fewer round trips
+
+A big model that clicks through a page one tool call at a time spends a
+model call, and its whole context, on every click. Two tools cut that down:
+
+- `ergo_browser_batch` runs steps the bot already knows (fill these fields,
+  click Next) in one call, with one snapshot at the end. It stops at the
+  first step that fails and says which.
+- `ergo_browser_task` takes a goal and an optional "done when" check. A
+  fast model (`driver_model`, by default the providers' `small` tier) drives
+  the browser tools in its own loop, up to `driver_steps` calls, and returns
+  `done`, `stopped` or `failed` with a short summary and the final page.
+  The bot makes one call instead of twenty. The driver stops and reports
+  before a sign-in or captcha, and before paying, submitting, publishing,
+  sending, saving or deleting anything the goal doesn't ask for in so many
+  words, so the bot names those steps when it wants them done. Its run is
+  stored as a `browser_task` structured call. With `approve_actions` the
+  user approves the goal and the steps, not each action inside them.
 
 When a page needs a person (a sign-in, a two-factor code, a captcha, a
 consent screen) the bot's context tells it to stop and ask the user to do
