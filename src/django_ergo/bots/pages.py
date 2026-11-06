@@ -1108,6 +1108,7 @@ def session_pins(bot: Bot, session) -> list[dict]:
             "icon": (row.metadata or {}).get("icon") or "",
             "id": str(row.id),
             "filename": row.filename,
+            "view": view_kind(row.filename, row.media_type),
         }
         for row in session.attachments.filter(metadata__pinned=True).order_by(
             "created_at"

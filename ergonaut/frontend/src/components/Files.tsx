@@ -138,7 +138,13 @@ export default function Files({
                     className="truncate text-left text-sm text-indigo-600 hover:underline dark:text-indigo-400"
                     title={`View ${file.filename}`}
                     onClick={() =>
-                      onView({ kind: 'file', name: file.filename, id: file.id, url: api.viewUrl(file.id) })
+                      onView({
+                        kind: 'file',
+                        name: file.filename,
+                        id: file.id,
+                        url: api.viewUrl(file.id),
+                        view: file.view,
+                      })
                     }
                   >
                     {file.filename || file.media_type}

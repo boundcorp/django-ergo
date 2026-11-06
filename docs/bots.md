@@ -482,6 +482,9 @@ it's connected, and on a change:
   yourself;
 - re-renders at once after an action returns `reload: true`.
 
+In a chat, the viewer also reloads an open file when a new message arrives,
+except audio and video, so a recording or clip keeps playing while the bot works.
+
 A viewer that was disconnected catches up with one event when it reconnects.
 So pages don't need to poll or reload on a timer.
 
