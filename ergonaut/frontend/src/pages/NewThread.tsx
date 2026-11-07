@@ -3,6 +3,7 @@ import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { api } from '../api'
 import { clearDraft, useDraft } from '../draft'
 import ModelPicker, { useBotModels } from '../components/ModelPicker'
+import { ComposerVoice } from '../components/VoiceRecorder'
 
 // Start a thread by writing its first message (with files). The thread gets a title from the
 // message right away, and a generated one (new_thread_metadata) a moment later.
@@ -18,8 +19,27 @@ export function NewThread({ onChange, userId }: { onChange: () => void; userId: 
   const [model, setModel] = useState('')
   const [error, setError] = useState('')
   const models = useBotModels(name)
+  const [voiceSession, setVoiceSession] = useState<{ bot: string; id: string } | null>(null)
+  const composer = useRef<HTMLTextAreaElement>(null)
   const picker = useRef<HTMLInputElement>(null)
   const appliedLocation = useRef<string | null>(null)
+
+  // Drafts do not have a session yet; use the bot's main chat for voice usage accounting.
+  useEffect(() => {
+    if (!name) return
+    let current = true
+    api
+      .openRoot(name)
+      .then(session => {
+        if (current) setVoiceSession({ bot: name, id: session.id })
+      })
+      .catch(() => {
+        if (current) setVoiceSession(null)
+      })
+    return () => {
+      current = false
+    }
+  }, [name])
 
   useEffect(() => {
     const state = location.state
@@ -118,9 +138,9 @@ export function NewThread({ onChange, userId }: { onChange: () => void; userId: 
         }}
       >
         <input ref={picker} type="file" multiple hidden onChange={e => add(e.target.files)} />
-        {/* Voice input goes here. */}
         <textarea
           autoFocus
+          ref={composer}
           value={text}
           disabled={busy}
           onChange={e => setText(e.target.value)}
@@ -152,6 +172,9 @@ export function NewThread({ onChange, userId }: { onChange: () => void; userId: 
           >
             + Attach
           </button>
+          {voiceSession?.bot === name && (
+            <ComposerVoice sessionId={voiceSession.id} disabled={busy} composer={composer} setText={setText} />
+          )}
           <button
             disabled={busy || (!text.trim() && !files.length)}
             className="ml-auto rounded-control bg-accent px-5 py-2.5 font-semibold text-canvas disabled:opacity-50"
