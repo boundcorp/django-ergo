@@ -12,6 +12,7 @@ import type {
   SessionDetail,
   Todo,
   Turn,
+  Wake,
   Worker,
 } from '../api'
 import { api } from '../api'
@@ -29,6 +30,7 @@ import { PageViewer, Pins } from '../components/Pins'
 import { AttachmentView, isAudio, replySuggestions, Transcript } from '../components/Transcript'
 import { ModelLink, MobileSessionBar, SessionTitle, SuggestionChips, ThreadOptions } from '../components/ChatChrome'
 import { TodoButton, TodoList } from '../components/TodoList'
+import { WakeNotice } from '../components/WakeNotice'
 import { usePersistedFlag } from '../persistedFlag'
 import { WorkerActivityView, WorkerPulse } from '../components/WorkerActivity'
 import { UsageBars, useSessionUsage } from '../components/UsageSparkline'
@@ -285,7 +287,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
     const after = messages.length ? messages[messages.length - 1].line : -1
     const events = new EventSource(`/api/sessions/${id}/events?after=${after}`)
     events.onmessage = e => {
-      const { messages, calls, requests, title, workers, sent, prs, todos } = JSON.parse(e.data) as {
+      const { messages, calls, requests, title, workers, sent, prs, todos, wakes } = JSON.parse(e.data) as {
         messages: Message[]
         calls: Call[]
         requests?: DelegatedRequest[]
@@ -294,6 +296,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
         sent?: SentCard[]
         prs?: PrLink[]
         todos?: Todo[]
+        wakes?: Wake[]
       }
       setDetail(d =>
         d
@@ -311,6 +314,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
               ...(sent ? { sent } : {}),
               ...(prs ? { prs } : {}),
               ...(todos ? { todos } : {}),
+              ...(wakes ? { wakes } : {}),
             }
           : d,
       )
@@ -543,7 +547,13 @@ export function Chat({ onChange }: { onChange: () => void }) {
                 : detail.messages.filter(m => m.line >= lastCall.first_sequence!),
             ),
         )
-  const summary = statusSummary(detail.requests ?? [], detail.workers ?? [], pinCount, detail.todos ?? [])
+  const summary = statusSummary(
+    detail.requests ?? [],
+    detail.workers ?? [],
+    pinCount,
+    detail.todos ?? [],
+    detail.wakes ?? [],
+  )
   const archived = detail.session.status === 'completed' && detail.session.role === 'thread'
   // A turn doesn't touch the session row, so its updated_at stays at creation.
   const lastActivity = [detail.session.updated_at, detail.messages[detail.messages.length - 1]?.timestamp]
@@ -966,6 +976,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
             </a>
           </aside>
         )}
+        <WakeNotice wakes={detail.wakes ?? []} />
         {showTodos && <TodoList id="chat-todos" todos={detail.todos ?? []} />}
         <div className="chat-floating-actions mx-5 mt-2 mb-2 flex flex-wrap justify-end gap-2">
           <TodoButton

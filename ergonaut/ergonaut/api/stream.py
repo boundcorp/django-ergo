@@ -27,6 +27,7 @@ from django.core.serializers.json import DjangoJSONEncoder
 from django.db.models import Q
 from django.http import HttpResponse, StreamingHttpResponse
 from django_ergo.bots.todos import get_todos
+from django_ergo.bots.wakes import pending_wakes
 from django_ergo.conversation import roles
 from django_ergo.conversation.history import SessionSource
 from django_ergo.conversation.models import ConversationSession, MessageBlock
@@ -97,7 +98,12 @@ def _snapshot(session_id, after: int, seen: dict):
         seen["title"] = title
     # Thread cards, pull requests and the todo list: sent when anything in them changed.
     extra = {}
-    for name, value in (("sent", sent_out(session)), ("prs", session_prs(session)), ("todos", get_todos(session))):
+    for name, value in (
+        ("sent", sent_out(session)),
+        ("prs", session_prs(session)),
+        ("todos", get_todos(session)),
+        ("wakes", pending_wakes(session)),
+    ):
         key = json.dumps(value, cls=DjangoJSONEncoder)
         if seen.get(name) != key:
             seen[name] = key

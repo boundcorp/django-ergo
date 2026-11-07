@@ -121,6 +121,8 @@ Still to do:
 
 ### Done
 
+- [x] Self-wakes in every chat and thread: the built-in `wake` skill (`ergo_wake_later`, `ergo_wake_cancel`) schedules one later turn with a note, fired once from beat as an automated event (never retried), capped at one pending per chat, 1 minute to 24 hours ahead and 3 in a row without a human message; shown above the composer and in the admin.
+
 - [x] Todo lists in every chat and thread: the built-in `todos` skill (`ergo_todo_write`, `ergo_todo_update`, like Claude Code's TodoWrite) keeps a checklist in the session's metadata, in context every turn, shown in Ergonaut's thread view; `todos: false` in bot.yaml turns it off.
 
 - [x] Pre-commit reconciled: ruff pinned to the dev version, prettier scoped to the Ergonaut frontend with its own config, the whole repo reformatted once; every hook passes, so commits no longer skip hooks.

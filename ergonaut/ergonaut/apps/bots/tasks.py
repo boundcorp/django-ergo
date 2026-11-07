@@ -744,6 +744,18 @@ def redispatch_thread_messages() -> int:
     return messaging.redispatch_waiting(older_than=60)
 
 
+@shared_task(name="ergonaut.fire_wakes", ignore_result=True)
+def fire_wakes() -> list[str]:
+    """Send the self-wakes bots scheduled that are due (beat runs this). Each fires once:
+    a duplicate run finds it already claimed, and a failure is never retried."""
+    from django_ergo.bots import wakes, webhooks
+
+    fired = wakes.fire_due(registry=webhooks.get_registry())
+    if fired:
+        logger.info("Fired %d self-wakes", len(fired))
+    return fired
+
+
 @shared_task(name="ergonaut.run_schedules", ignore_result=True)
 def run_schedules() -> list[str]:
     """Send the bots' scheduled messages that are due this minute (beat runs this)."""

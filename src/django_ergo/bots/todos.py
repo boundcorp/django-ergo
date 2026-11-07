@@ -102,12 +102,13 @@ def save_todos(session: ConversationSession, items: list[dict]) -> list[dict]:
         metadata.pop(STATE_KEY)
     ConversationSession.objects.filter(pk=session.pk).update(metadata=metadata)
     session.metadata = metadata
-    _notify(session)
+    notify_session(session)
     return items
 
 
-def _notify(session: ConversationSession) -> None:
-    """Tell live views the list changed (Ergonaut wires SESSION_NOTIFIER)."""
+def notify_session(session: ConversationSession) -> None:
+    """Tell live views the session's todos or wakes changed (Ergonaut wires
+    SESSION_NOTIFIER)."""
     from django_ergo.settings import api_settings
 
     notifier = api_settings.SESSION_NOTIFIER
@@ -116,7 +117,7 @@ def _notify(session: ConversationSession) -> None:
     try:
         notifier(str(session.pk))
     except Exception:  # noqa: BLE001 — live updates are best-effort
-        logger.debug("Could not notify about todos in %s", session.pk, exc_info=True)
+        logger.debug("Could not notify live views of %s", session.pk, exc_info=True)
 
 
 def render(items: list[dict]) -> str:

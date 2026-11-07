@@ -38,6 +38,7 @@ from django.db.models import Q
 from django.utils import timezone
 
 from django_ergo.bots import archival
+from django_ergo.bots import wakes
 from django_ergo.conversation.identity import attributed_text
 from django_ergo.conversation.identity import bot_identity
 from django_ergo.conversation.identity import session_label
@@ -122,9 +123,12 @@ def send(  # noqa: PLR0913
     in_reply_to: ThreadMessage | None = None,
     registry: BotRegistry | None = None,
     metadata: dict | None = None,
+    depth: int = 0,
 ) -> ThreadMessage:
-    """Queue a message for ``recipient`` and start delivering it."""
-    depth = 0
+    """Queue a message for ``recipient`` and start delivering it.
+
+    ``depth``: the hops a message with no sender continues (a self-wake keeps
+    the depth of the message its turn was answering)."""
     if in_reply_to is not None:
         depth = in_reply_to.depth
     elif sender is not None:
@@ -177,6 +181,7 @@ def send_event(  # noqa: PLR0913
     source_label: str,
     registry: BotRegistry | None = None,
     metadata: dict | None = None,
+    depth: int = 0,
 ) -> ThreadMessage:
     """Queue an automated notification and wake its recipient like any message."""
     metadata = {
@@ -191,7 +196,9 @@ def send_event(  # noqa: PLR0913
             ),
         },
     }
-    return send(None, recipient, text, registry=registry, metadata=metadata)
+    return send(
+        None, recipient, text, registry=registry, metadata=metadata, depth=depth
+    )
 
 
 def current_thread_message(session: ConversationSession) -> ThreadMessage | None:
@@ -387,6 +394,7 @@ def fail(message: ThreadMessage, error: str) -> None:
     message.status = ThreadMessageStatus.FAILED
     message.error = error
     message.save(update_fields=["status", "error", "updated_at"])
+    wakes.delivery_failed(message, error)
     if message.sender_session_id and message.in_reply_to_id is None:
         reply(message, f"(Could not deliver your message: {error})")
 
@@ -440,6 +448,7 @@ def _route_reply(bot: Bot, session: ConversationSession, result: TurnResult) -> 
             text = f"[They ask] {text}"
     else:
         text = f"(no reply: {result.error or 'the turn did not answer'})"
+        wakes.delivery_failed(message, result.error)
     message.status = ThreadMessageStatus.ANSWERED
     message.reply_text = text
     message.save(update_fields=["status", "reply_text", "updated_at"])

@@ -13,7 +13,7 @@ for bot tables.
 
 Keep web, worker and beat as separate, independently restartable
 workloads; don't background a worker inside the web pod. Beat must run, or
-schedules, archival and worker polling stop.
+schedules, self-wakes, archival and worker polling stop.
 
 There is no deploy pipeline in this repo yet. See
 [docs/ergonaut.md](../../../docs/ergonaut.md#production).

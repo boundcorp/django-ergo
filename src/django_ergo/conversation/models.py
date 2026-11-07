@@ -631,6 +631,60 @@ class Worker(TimeStampedMixin):
         return self.status in (WorkerStatus.QUEUED, WorkerStatus.RUNNING)
 
 
+class WakeStatus(models.TextChoices):
+    PENDING = "pending", "Pending"
+    FIRED = "fired", "Fired (its message went to the chat)"
+    CANCELLED = "cancelled", "Cancelled"
+    FAILED = "failed", "Failed (not retried)"
+
+
+class Wake(TimeStampedMixin):
+    """A turn a bot scheduled for itself in one chat or thread (see django_ergo.bots.wakes).
+
+    It fires at most once: the firer claims the pending row under a row lock, and the
+    message it sends is a ThreadMessage, which is itself claimed once. ``chain`` counts
+    wakes in a row with no human message (or bot.yaml schedule prompt) between them;
+    ``depth`` is the delegation depth of the message the scheduling turn answered,
+    which the wake's message keeps (``bots.messaging.MAX_DEPTH``).
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    session = models.ForeignKey(
+        ConversationSession, on_delete=models.CASCADE, related_name="wakes"
+    )
+    bot_name = models.CharField(max_length=100, db_index=True)
+    note = models.TextField()
+    due_at = models.DateTimeField()
+    status = models.CharField(
+        max_length=20, choices=WakeStatus.choices, default=WakeStatus.PENDING
+    )
+    chain = models.PositiveSmallIntegerField(default=1)
+    depth = models.PositiveIntegerField(default=0)
+    thread_message = models.ForeignKey(
+        ThreadMessage,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+    )
+    fired_at = models.DateTimeField(null=True, blank=True)
+    error = models.TextField(blank=True, default="")
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [models.Index(fields=["status", "due_at"])]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["session"],
+                condition=models.Q(status="pending"),
+                name="one_pending_wake_per_session",
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.bot_name} wake {self.due_at:%Y-%m-%d %H:%M} ({self.status})"
+
+
 class AgentUsage(TimeStampedMixin):
     """Token usage an Orca worker's coding agent wrote to its own session files."""
 

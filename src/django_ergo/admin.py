@@ -846,6 +846,8 @@ try:
     from django_ergo.conversation.models import MessageBlock
     from django_ergo.conversation.models import SessionMessage
     from django_ergo.conversation.models import StructuredCall
+    from django_ergo.conversation.models import Wake
+    from django_ergo.conversation.models import WakeStatus
 
     class StructuredCallInline(admin.TabularInline):
         model = StructuredCall
@@ -1142,6 +1144,37 @@ try:
             "created_at",
         ]
         readonly_fields = [field.name for field in AgentSessionThreadLink._meta.fields]  # noqa: SLF001
+
+        def has_add_permission(self, request):
+            return False
+
+    @admin.register(Wake)
+    class WakeAdmin(admin.ModelAdmin):
+        list_display = [
+            "bot_name",
+            "session",
+            "status",
+            "due_at",
+            "chain",
+            "fired_at",
+            "note_preview",
+            "created_at",
+        ]
+        list_filter = ["status", "bot_name"]
+        search_fields = ["note", "error", "bot_name"]
+        readonly_fields = [field.name for field in Wake._meta.fields]  # noqa: SLF001
+        actions = ["cancel_wakes"]
+
+        @admin.display(description="Note")
+        def note_preview(self, obj):
+            return obj.note[:100]
+
+        @admin.action(description="Cancel the selected pending wakes")
+        def cancel_wakes(self, request, queryset):
+            count = queryset.filter(status=WakeStatus.PENDING).update(
+                status=WakeStatus.CANCELLED, updated_at=timezone.now()
+            )
+            self.message_user(request, f"Cancelled {count} pending wakes.")
 
         def has_add_permission(self, request):
             return False

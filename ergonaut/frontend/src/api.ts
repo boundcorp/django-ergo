@@ -594,6 +594,15 @@ export type Todo = {
   status: 'pending' | 'in_progress' | 'completed'
 }
 
+// A turn the bot scheduled for itself in this chat (django_ergo.bots.wakes); it fires once.
+export type Wake = {
+  id: string
+  due_at: string
+  note: string
+  chain: number
+  status: string
+}
+
 export type SessionDetail = {
   debug_shortcut: boolean
   compactions?: Compaction[]
@@ -603,6 +612,7 @@ export type SessionDetail = {
   requests?: DelegatedRequest[]
   workers?: Worker[]
   todos?: Todo[] // the chat's todo list, kept by the model
+  wakes?: Wake[] // the bot's pending self-wake, if it scheduled one
   inbox?: { id: string; text: string; files: number }[] // sent mid-turn, not yet given to the model
   first_line?: number | null // the oldest line returned
   has_more?: boolean // older messages exist: ask with before=first_line
