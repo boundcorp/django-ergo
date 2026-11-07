@@ -3,6 +3,8 @@ import { act } from 'react'
 import type { Root } from 'react-dom/client'
 import { Window } from 'happy-dom'
 import { api } from '../api'
+import { createMemoryRouter, RouterProvider } from 'react-router-dom'
+import { NewThread } from '../pages/NewThread'
 import { VoiceRecorder } from './VoiceRecorder'
 
 let win: Window
@@ -13,7 +15,12 @@ let requested: number
 let instances: FakeRecorder[]
 let supportedTypes: string[]
 let actualType: string | undefined
-const original = { config: api.voiceConfig, transcribe: api.transcribeVoice }
+const original = {
+  config: api.voiceConfig,
+  transcribe: api.transcribeVoice,
+  openRoot: api.openRoot,
+  models: api.models,
+}
 
 class FakeRecorder {
   state: 'recording' | 'inactive' = 'inactive'
@@ -72,6 +79,8 @@ beforeEach(async () => {
     navigator: win.navigator,
     HTMLElement: win.HTMLElement,
     Event: win.Event,
+    localStorage: win.localStorage,
+    requestAnimationFrame: (callback: FrameRequestCallback) => win.requestAnimationFrame(callback),
     MediaRecorder: FakeRecorder,
     IS_REACT_ACT_ENVIRONMENT: true,
   })
@@ -95,10 +104,50 @@ beforeEach(async () => {
 afterEach(() => {
   act(() => root.unmount())
   api.voiceConfig = original.config
+  api.openRoot = original.openRoot
+  api.models = original.models
   api.transcribeVoice = original.transcribe
 })
 
 describe('voice recorder', () => {
+  test('new thread inserts dictated text at the selection and keeps it as a draft', async () => {
+    win.localStorage.setItem('ergonaut.draft.new-thread.example', 'before replace after')
+    api.openRoot = async () => ({
+      id: 'main',
+      bot: 'example',
+      title: '',
+      role: 'main',
+      parent_id: null,
+      status: '',
+      username: '',
+      created_at: '',
+      updated_at: '',
+    })
+    api.models = async () => ({ models: [], default: '', default_engine_type: '' })
+    let session = ''
+    api.transcribeVoice = async id => {
+      session = id
+      return { text: 'spoken' }
+    }
+    const router = createMemoryRouter(
+      [{ path: '/bots/:name/new-thread', element: <NewThread onChange={() => {}} userId="user" /> }],
+      { initialEntries: ['/bots/example/new-thread'] },
+    )
+    await act(async () => {
+      root.render(<RouterProvider router={router} />)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    const input = container.querySelector('textarea') as HTMLTextAreaElement
+    input.setSelectionRange(7, 14)
+    await click('Record voice message')
+    await click('Stop recording')
+    expect(session).toBe('main')
+    expect(input.value).toBe('before spoken after')
+    expect(win.localStorage.getItem('ergonaut.draft.new-thread.example')).toBe('before spoken after')
+    expect(router.state.location.pathname).toBe('/bots/example/new-thread')
+  })
+
   test('requests permission only on click and inserts the transcription after stopping', async () => {
     let result = ''
     await mount(text => {

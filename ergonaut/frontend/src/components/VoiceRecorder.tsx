@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import type { RefObject } from 'react'
 import { api } from '../api'
 
 type Config = { enabled: boolean; max_duration: number }
@@ -22,6 +23,38 @@ const acceptedTypes = [
 function recordingType() {
   if (typeof MediaRecorder === 'undefined' || typeof MediaRecorder.isTypeSupported !== 'function') return undefined
   return recordingTypes.find(type => MediaRecorder.isTypeSupported(type))
+}
+
+/** Insert dictated text at the composer's selection, just like typing. */
+export function ComposerVoice({
+  sessionId,
+  disabled,
+  composer,
+  setText,
+}: {
+  sessionId: string
+  disabled: boolean
+  composer: RefObject<HTMLTextAreaElement | null>
+  setText: (text: string | ((current: string) => string)) => void
+}) {
+  return (
+    <VoiceRecorder
+      key={sessionId}
+      sessionId={sessionId}
+      disabled={disabled}
+      onText={transcript => {
+        const input = composer.current
+        if (!input) return
+        const start = input.selectionStart
+        const end = input.selectionEnd
+        setText(current => current.slice(0, start) + transcript + current.slice(end))
+        requestAnimationFrame(() => {
+          input.focus()
+          input.setSelectionRange(start + transcript.length, start + transcript.length)
+        })
+      }}
+    />
+  )
 }
 
 export function VoiceRecorder({

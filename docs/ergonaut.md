@@ -23,8 +23,8 @@ carry their system author and event provenance.
 
 ## Voice input
 
-In an existing chat, the microphone records only after you press it. Stop
-transcribes the recording into the editable draft; it never sends a message.
+In a chat or on the new-thread page, the microphone records only after you press
+it. Stop transcribes the recording into the editable draft; it never sends a message.
 Cancel or Escape discards it. A recording stops automatically at the configured
 duration. The browser needs a secure context, microphone permission and
 MediaRecorder support for WebM, MP4, MP3 or WAV. It selects a supported format
@@ -46,7 +46,9 @@ Ergonaut does not create a chat attachment or message for the recording.
 Django may use a temporary upload file, which is closed after the request.
 Retries keep the audio in browser memory until dismissed or the chat is left.
 Successful dictations appear in Costs as `voice_transcription`, attributed to
-the signed-in user and chat. `gpt-transcribe` is priced at $0.0045 per minute
+the signed-in user and chat. New-thread dictations are attributed to the bot's
+main chat, since the new thread does not exist until it is sent.
+`gpt-transcribe` is priced at $0.0045 per minute
 of audio. When provider duration usage is missing, the ledger estimates cost
 from the measured recording duration. For older models, token usage is priced at
 $3/million audio input, $1.25/million text input and $5/million output for
