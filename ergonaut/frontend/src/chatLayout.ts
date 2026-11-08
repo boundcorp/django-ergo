@@ -1,8 +1,11 @@
 /** Counts and labels for the phone session bar. Pure so the live bar and tests share one rule. */
 
+import { clock } from './time'
+
 export type StatusRequest = { direction: string; status: string }
 export type StatusWorker = { status: string }
 export type StatusTodo = { status: string }
+export type StatusWake = { due_at: string }
 
 const CLOSED_REQUEST: Record<string, true> = { answered: true, failed: true }
 
@@ -30,6 +33,7 @@ export function statusSummary(
   workers: StatusWorker[],
   pinCount = 0,
   todos: StatusTodo[] = [],
+  wakes: StatusWake[] = [],
 ): string {
   const parts: string[] = []
   const waiting = waitingCount(requests)
@@ -42,6 +46,8 @@ export function statusSummary(
   // An unfinished todo list: how far along it is.
   const done = todos.filter(todo => todo.status === 'completed').length
   if (done < todos.length) parts.push(`${done}/${todos.length} todos done`)
+  // A self-wake the bot scheduled: it continues on its own at that time.
+  if (wakes.length) parts.push(`wakes ${clock(wakes[0].due_at)}`)
   return parts.join(' · ')
 }
 

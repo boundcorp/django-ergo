@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { suggestionsFromMessages, statusSummary } from './chatLayout'
+import { clock } from './time'
 
 describe('statusSummary', () => {
   test('counts waiting threads and a running worker', () => {
@@ -23,6 +24,11 @@ describe('statusSummary', () => {
     const todos = [{ status: 'completed' }, { status: 'in_progress' }, { status: 'pending' }]
     expect(statusSummary([], [], 0, todos)).toBe('1/3 todos done')
     expect(statusSummary([], [], 0, [{ status: 'completed' }])).toBe('')
+  })
+
+  test('shows when a pending self-wake is due', () => {
+    const dueAt = '2026-11-07T15:30:00Z'
+    expect(statusSummary([], [], 0, [], [{ due_at: dueAt }])).toBe(`wakes ${clock(dueAt)}`)
   })
 
   test('is empty when nothing is pending', () => {

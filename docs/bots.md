@@ -636,6 +636,47 @@ context on every turn while it has items, and Ergonaut shows it in the thread
 view behind a "Todo X/Y" button beside Illustrate. `todos: false`
 in bot.yaml leaves the skill out.
 
+## Self-wakes
+
+A bot can schedule one later turn of its own in a chat or thread
+(`django_ergo.bots.wakes`), for work it can't finish now and can't hand to
+anyone: waiting out a rate limit ("try again in a few minutes") or a long
+external job. The built-in `wake` skill is loaded in every chat and thread:
+
+- `ergo_wake_later(note, delay_minutes | at)` schedules it 1 minute to 24 hours
+  ahead (`at` is ISO 8601; without an offset it is in the user's timezone).
+  The note is for the bot's future self: what it was doing and what to retry.
+- `ergo_wake_cancel()` cancels the chat's pending wake (and one that fired
+  but is still queued behind a busy turn).
+
+When it is due, the chat gets an automated event from "Self-wake" (not the
+user) with the note and whether the user wrote since it was scheduled, and the
+bot carries on. It is not for waiting on a person, reminders or a worker's
+result (that comes back by itself).
+
+Each wake is a `Wake` row (in the admin), with limits so it can't loop:
+
+- It fires at most once: `fire_due` claims the row (pending to fired) in the
+  same transaction that queues its message, so a duplicate task, a double beat
+  tick or a restart finds it already fired. The message is a thread message,
+  which waits for a busy chat and is itself delivered once.
+- A failure is final: a send that raises, a delivery that fails or a turn that
+  ends without an answer marks the wake `failed`, and nothing retries it.
+- One pending wake per chat (a database constraint).
+- At most 3 wakes in a row: a wake scheduled after one fired counts as one more
+  unless the user wrote (or a bot.yaml schedule prompt arrived) in between.
+  Replies from other chats and worker results don't reset it, since the bot can
+  cause those itself. Past the cap the tool refuses and the bot tells the user.
+- The wake's message keeps the delegation depth of the message the scheduling
+  turn answered, so a wake never resets the cap on hops between chats: threads
+  that wake and start more threads stop at the usual limit.
+- A human message doesn't cancel a pending wake.
+
+The pending wake is in the model's context each turn. Ergonaut fires due wakes
+from beat every 30 seconds (`ergonaut.fire_wakes`) and shows the pending one
+above the composer and in the phone session bar. Without Ergonaut, call
+`django_ergo.bots.wakes.fire_due()` every 30-60 seconds.
+
 ## Agents
 
 A coding agent (Codex, Claude Code, omp) works on a brief for minutes to

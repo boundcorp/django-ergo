@@ -28,6 +28,7 @@ from django_ergo.bots import archival, messaging, webhooks
 from django_ergo.bots.pages import text_page, view_kind
 from django_ergo.bots.runtime import Bot
 from django_ergo.bots.todos import get_todos
+from django_ergo.bots.wakes import pending_wakes
 from django_ergo.conversation import roles
 from django_ergo.conversation.attachments import save_session_file
 from django_ergo.conversation.history import SessionSource
@@ -221,6 +222,8 @@ class SessionDetailOut(Schema):
     workers: list[dict] = []
     # The chat's todo list (django_ergo.bots.todos): [{content, status}].
     todos: list[dict] = []
+    # Self-wakes the bot scheduled here (django_ergo.bots.wakes): [{id, due_at, note, chain, status}].
+    wakes: list[dict] = []
     # Messages sent while a turn runs that the model hasn't taken yet (they can be unsent).
     inbox: list[dict] = []
     # Paging: the first line returned, and whether older messages exist (ask with before=first_line).
@@ -1261,6 +1264,7 @@ def session_detail(
         "requests": requests_out(session),
         "workers": workers_out(session),
         "todos": get_todos(session),
+        "wakes": pending_wakes(session),
         "inbox": [
             {"id": item.get("id", ""), "text": item.get("text", ""), "files": len(item.get("attachment_ids") or [])}
             for item in peek_inbox(session.id)

@@ -408,6 +408,8 @@ CELERY_BEAT_SCHEDULE = {
     "recover-dead-turns": {"task": "ergonaut.recover_dead_turns", "schedule": 60},
     # Workers whose next step got lost (a restart) start again.
     "resume-workers": {"task": "ergonaut.resume_workers", "schedule": 60},
+    # Self-wakes bots scheduled (django_ergo.bots.wakes); each fires once, never retried.
+    "fire-wakes": {"task": "ergonaut.fire_wakes", "schedule": 30},
     # Each bot's schedules (bot.yaml); the task checks which are due this minute.
     "run-bot-schedules": {"task": "ergonaut.run_schedules", "schedule": crontab()},
     # Pull requests bots and workers reported: their state for thread cards and chips.

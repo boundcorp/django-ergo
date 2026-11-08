@@ -194,8 +194,8 @@ and the bots process. If any one exits, it stops them all.
 Pass roles to run a subset: `ergonaut up web bots`.
 
 Without a broker there is no worker or beat. Turns then run inside the
-web process, and schedules, worker polling and repo pulls by beat don't
-happen, so install Redis for anything beyond trying a bot.
+web process, and schedules, self-wakes, worker polling and repo pulls by beat
+don't happen, so install Redis for anything beyond trying a bot.
 
 Illustration generation is deliberately unavailable without
 `CELERY_BROKER_URL` and a running `ergonaut worker -Q celery,bot_tasks`: it
@@ -537,7 +537,9 @@ running (`--quiet-for` waits until nothing has run for that many seconds in
 a row), or fails after `--timeout` (30 minutes by default).
 `--ignore-workers` waits for turns only: a polling worker survives a
 restart (beat resumes it), but one in the middle of a step loses that step.
-Thread messages that were waiting are redelivered.
+Thread messages that were waiting are redelivered. A bot's pending self-wake
+(`ergo_wake_later`) is a database row, so it fires after the restart; one that
+had already fired is never sent again.
 
 Telegram messages and albums accepted but not started survive a bots-process
 restart and are rebuilt from their saved jobs. A turn interrupted after its
