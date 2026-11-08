@@ -19,55 +19,58 @@ Install the extra for YAML support: `pip install 'django-ergo[bots]'`.
 ```yaml
 name: kitchen
 description: Household kitchen manager
-icon: "🍳"                            # shown before the name in Ergonaut (default: its first letter)
-color: amber                         # a palette name or hex like "#f59e0b" (default: picked from the name)
-instructions: agents.md              # default
+icon: "🍳" # shown before the name in Ergonaut (default: its first letter)
+color: amber # a palette name or hex like "#f59e0b" (default: picked from the name)
+instructions: agents.md # default
 engine:
-  type: openai                       # or claude (optional); default is the settings engine (openai)
-  config: {model: gpt-6-luna}
-  api_key_env: KITCHEN_OPENAI_KEY    # read at runtime, never stored
+  type: openai # or claude (optional); default is the settings engine (openai)
+  config: { model: gpt-6-luna }
+  api_key_env: KITCHEN_OPENAI_KEY # read at runtime, never stored
   # with a providers.yaml: config: {model: openai/gpt-6.1-sol}
   # transport: cli                   # the logged-in Claude Code or Codex CLI, no key
   # a bot in a private pool's allowed_bots: config: {model: personal/heavy} (see Private inference)
-root:                                # context budget for main and named chats
-  recent: 15                         # legacy; ignored by bots
+root: # context budget for main and named chats
+  recent: 15 # legacy; ignored by bots
   budget_tokens: 8000
-  granularity: conversation          # legacy; ignored by bots
-orchestration: true                  # may the bot delegate at all (false: never)
-timezone: America/Los_Angeles        # default for users without a timezone
-current_time: true                   # current time in every turn, send time on each user message
-todos: true                          # the todo list tools in every chat and thread (false: none)
-tool_results_in_context: 6           # large tool results each model call keeps in full
-tool_results_tokens: 40000           # optional budget for older ones; default 20% of model window
+  granularity: conversation # legacy; ignored by bots
+orchestration: true # may the bot delegate at all (false: never)
+timezone: America/Los_Angeles # default for users without a timezone
+current_time: true # current time in every turn, send time on each user message
+todos: true # the todo list tools in every chat and thread (false: none)
+tool_results_in_context: 6 # large tool results each model call keeps in full
+tool_results_tokens: 40000 # optional budget for older ones; default 20% of model window
 chats:
-  main:                              # every user's main chat (always there)
+  main: # every user's main chat (always there)
     skills: [orchestration, tandoor] # loaded from the start (default: [orchestration])
-    compaction: {compact_at_tokens: 80000, keep_tokens: 25000}  # optional; default 75% / 25% of the window
-  reports:                           # a named chat: one per user, its own purpose
+    compaction: { compact_at_tokens: 80000, keep_tokens: 25000 } # optional; default 75% / 25% of the window
+  reports: # a named chat: one per user, its own purpose
     description: Weekly reports
-    instructions: Keep each report short.   # added to agents.md in this chat
+    instructions: Keep each report short. # added to agents.md in this chat
     skills: [analytics]
-threads:                             # child threads (`sessions:` also works)
+threads: # child threads (`sessions:` also works)
   skills: []
-  allow_create: true                 # may chats (this bot's or other bots') start threads of it?
-  archive_after_days: 7              # archive threads idle this long (0 = never)
-  default_compaction: {mode: context_size, config: {compact_at_tokens: 150000, keep_tokens: 50000}} # optional; window-relative defaults
+  allow_create: true # may chats (this bot's or other bots') start threads of it?
+  archive_after_days: 7 # archive threads idle this long (0 = never)
+  default_compaction: {
+      mode: context_size,
+      config: { compact_at_tokens: 150000, keep_tokens: 50000 },
+    } # optional; window-relative defaults
 skills:
-  folder: skills                     # default
-  unload_after_turns: 30             # drop a loaded skill unused this many turns
-  requires: {meal-planning: [tandoor]}
-  include: [skillbuilder]            # skills from Ergo's library (docs/skills.md)
-  exclude: [skillbuilder]            # leave out some of DJANGO_ERGO["DEFAULT_SKILLS"]
-  defaults: true                     # false: none of the default skills
+  folder: skills # default
+  unload_after_turns: 30 # drop a loaded skill unused this many turns
+  requires: { meal-planning: [tandoor] }
+  include: [skillbuilder] # skills from Ergo's library (docs/skills.md)
+  exclude: [skillbuilder] # leave out some of DJANGO_ERGO["DEFAULT_SKILLS"]
+  defaults: true # false: none of the default skills
 tools: [tools/tandoor.py]
-toolkits: ["myapp.toolkits:make_toolkit"]   # factory(ctx) -> Toolkit or list
+toolkits: ["myapp.toolkits:make_toolkit"] # factory(ctx) -> Toolkit or list
 plugins:
   - name: ergo_kb
     knowledgebase: Kitchen
   - name: myapp.plugins:AuditPlugin
 pull_requests: [boundcorp/ergo-bots] # repos whose open PRs orchestrating chats see
 permissions:
-  call_bots: [sysadmin]              # other bots this bot may message
+  call_bots: [sysadmin] # other bots this bot may message
 ```
 
 Only files listed under `tools` are imported, and only from inside the bot
@@ -182,20 +185,21 @@ A bot can message its chats on a schedule, set in its bot.yaml:
 ```yaml
 schedules:
   - name: weekly-meal-plan
-    cron: "0 17 * * sun"      # minute hour day-of-month month day-of-week
+    cron: "0 17 * * sun" # minute hour day-of-month month day-of-week
     message: Propose next week's dinners with the meal-planning skill.
-    to: main                  # main (default), a named chat, or a new thread:
+    to: main # main (default), a named chat, or a new thread:
     # to: {thread: "Reports {n}", in: main}   # {n} run number, {date:%b %d} and strftime codes
-  - name: weekly-stats        # or an ordered list of actions
+  - name: weekly-stats # or an ordered list of actions
     cron: "0 8 * * mon"
     actions:
-      - run: tools/analytics.py:pull_stats   # a function in a .py file in the bot folder
-        args: {days: 7}                      # it may take ctx (a ToolContext) first
-        stop_if_empty: true                  # returns nothing: skip the rest, quietly
-      - prompt: "Summarize last week: {result}"   # {result}: the last run step's value
-        to: {thread: "Stats {date:%b %d}"}
-    users: [lee]              # default: permissions.users, else everyone with a chat
-                              # (a schedule of only run steps: once, as the first admin)
+      - run: tools/analytics.py:pull_stats # a function in a .py file in the bot folder
+        args: { days: 7 } # it may take ctx (a ToolContext) first
+        stop_if_empty: true # returns nothing: skip the rest, quietly
+      - prompt: "Summarize last week: {result}" # {result}: the last run step's value
+        to: { thread: "Stats {date:%b %d}" }
+    users:
+      [lee] # default: permissions.users, else everyone with a chat
+      # (a schedule of only run steps: once, as the first admin)
     enabled: true
 ```
 
@@ -211,6 +215,35 @@ the rest. A `prompt` step is queued as an automated event from
 The bot answers in a turn of its own under an `[Event from Schedule: <name>:
 automated notification, not a message from the user. …]` header. The reply
 stays in that chat, and the Telegram plugin passes it on for a main chat.
+
+Use `workflow:` instead of `actions:` for context-aware Python checks and
+safe conditional prompts:
+
+```yaml
+schedules:
+  - name: weekly-model-discovery
+    cron: "0 9 * * sun"
+    timezone: UTC
+    workflow:
+      - python: ergo.models.check_available
+        save_as: models
+      - if: models.notify
+      - prompt: "Review {models}; propose catalog updates as a PR, never auto-enable."
+        to: { thread: "New models available {date:%Y-%m-%d}" }
+```
+
+`python` selects the registered core check or a trusted bot file callable
+(`tools/check.py:check`), receiving the context dictionary and optional `args`.
+`save_as` exposes its result to later conditions and `{name}` prompt templates.
+False `if` ends silently without a chat message or LLM turn. Conditions read
+JSON data only; no function calls or arbitrary Python evaluation.
+`llm: false` on a prompt posts without invoking a model. `timezone` pins the
+cron and date templates to an IANA timezone instead of the person's timezone.
+Runs retain status, step results, timestamps, and sanitized errors; failures
+notify main without an LLM turn. Model checks use only catalogs/list endpoints,
+persist an idempotent diff, and never change routing. Private models and
+quarantined providers are not coding/shared-routing candidates.
+See [Schedules](schedules.md#workflows) for the complete format and safety rules.
 
 ## Skills
 
@@ -244,10 +277,11 @@ files such as `.env` are never listed or read.
 ---
 name: meal-planning
 description: Plan a week of dinners from the recipe library
-requires: [tandoor]      # load these too
-always_load: false       # load in every chat from the start
-plugins: {bot_management: {mode: propose_pr}}   # plugins it needs, with settings
+requires: [tandoor] # load these too
+always_load: false # load in every chat from the start
+plugins: { bot_management: { mode: propose_pr } } # plugins it needs, with settings
 ---
+
 1. Review the last 60 days of the meal plan with view_meal_plan.
 ```
 
@@ -314,21 +348,23 @@ tables each time it's opened (`django_ergo.bots.pages`).
 
 ```html
 <h1>Ad spend</h1>
-<p>{{ table("AdStat").filter(date__gte=days_ago(7)).sum("spend") | money }} this week</p>
-{{ blocks.metric(label="Installs", table="AdStat", aggregate="sum", field="installs") }}
-{{ blocks.chart(table="AdStat", x="date", y="spend", group="campaign") }}
-{% for row in table("AdStat").order_by("-date").limit(10) %}{{ row.campaign }} {{ row.spend | money }}<br>{% endfor %}
+<p>
+  {{ table("AdStat").filter(date__gte=days_ago(7)).sum("spend") | money }} this
+  week
+</p>
+{{ blocks.metric(label="Installs", table="AdStat", aggregate="sum",
+field="installs") }} {{ blocks.chart(table="AdStat", x="date", y="spend",
+group="campaign") }} {% for row in table("AdStat").order_by("-date").limit(10)
+%}{{ row.campaign }} {{ row.spend | money }}<br />{% endfor %}
 ```
 
 Pages run in Jinja's sandbox and can only read: `table(name)` is a view with
 `filter`, `exclude`, `order_by`, `limit`, `count`, `sum`, `avg`, `min`,
-max`, `group(...)`, `first` and `rows`, never a queryset. `blocks.*` (heading,
-markdown, metric, form, table, button, chart, html) render common pieces;
-`now`, `today`, `days_ago(n)`, `user`, `bot` and the `money`, `number`,
-`percent` and `markdown` filters are there too, and `{% include %}` loads other files from
-the bot folder. Rows give dates as ISO strings, so for date math use
-`as_datetime` (back to a datetime), `seconds_until` (seconds from now,
-negative once past) and `duration` (seconds as `2h 15m`):
+max`, `group(...)`, `first`and`rows`, never a queryset. `blocks.*`(heading,
+markdown, metric, form, table, button, chart, html) render common pieces;`now`, `today`, `days_ago(n)`, `user`, `bot`and the`money`, `number`,
+`percent`and`markdown`filters are there too, and`{% include %}`loads other files from
+the bot folder. Rows give dates as ISO strings, so for date math use`as_datetime`(back to a datetime),`seconds_until`(seconds from now,
+negative once past) and`duration`(seconds as`2h 15m`):
 `{{ row.resets_at | seconds_until | duration }}`. A page without an `<html>` tag gets a layout with Chart.js.
 
 Pages come from two places:
@@ -351,7 +387,7 @@ Pages come from two places:
   `python -m django ergo_bot_preview <bot folder> <page>`.
 - **Files the bot writes** into a chat with the `pages` plugin. They're
   served from the file's own URL and sandboxed (`Content-Security-Policy:
-  sandbox`): scripts run, but without the app's cookies or API.
+sandbox`): scripts run, but without the app's cookies or API.
   A page the bot writes can call page actions too, if its bot declares them.
 
 Any chat file can be pinned (`metadata.pinned`, from the Files panel or
@@ -402,7 +438,11 @@ def restock(ctx, item: str, qty: int = 1) -> dict:
 ```
 
 ```html
-<button onclick="ergo.call('restock', {item: 'flour', qty: 2}).catch(e => alert(e.message))">Restock</button>
+<button
+  onclick="ergo.call('restock', {item: 'flour', qty: 2}).catch(e => alert(e.message))"
+>
+  Restock
+</button>
 ```
 
 - The first parameter is the `ToolContext`: `ctx.user` is the viewer,
@@ -447,9 +487,10 @@ validated add form; `blocks.table(edit=true, delete=true)` adds per-row edit
 and approved delete controls; and `blocks.button` invokes a page action:
 
 ```html
-{{ blocks.form(table="Pantry", fields=["name", "quantity"], submit="Add item") }}
-{{ blocks.table(table="Pantry", columns=["name", "quantity"], edit=true, delete=true) }}
-{{ blocks.button(label="Review the list", ask="What should I buy next?", args={"chat": "main"}) }}
+{{ blocks.form(table="Pantry", fields=["name", "quantity"], submit="Add item")
+}} {{ blocks.table(table="Pantry", columns=["name", "quantity"], edit=true,
+delete=true) }} {{ blocks.button(label="Review the list", ask="What should I buy
+next?", args={"chat": "main"}) }}
 ```
 
 The built-in actions are `ergo.table.add`, `ergo.table.update` and
@@ -565,19 +606,19 @@ chat why. When a worker settles, the watcher closes its agent terminal
 (`orchestration worker-release`, or `worker-stop` if Orca hasn't settled the
 dispatch yet), and `ergo_agent_stop` runs `worker-stop`, so finished workers
 don't leave idle agent CLIs holding memory on the Orca host.
-  The watcher also scans its agent's session files on the worktree host every
-  `usage_minutes` (default 10) and once after settlement. Claude Code, Codex,
-  and omp tokens appear per worker on Costs, grouped by project: the scan also
-  runs git in the worktree and saves the repository (name, canonical remote,
-  branch and the same `project_key` as agent history) in the worker's
-  `state["project"]`, so every worktree of one remote counts as one project.
-  `ergonaut manage agent_projects` looks it up for older workers (a worktree
-  that's gone is recorded as unresolved, named after its folder). Set
-  `files_host` to the SSH host that holds the worktrees, or `""` to scan files
-  locally. It is best effort: an unreadable session file preserves the last
-  recorded counts and does not fail the worker. Counts are attributed by
-  worktree and the worker time window, so overlapping workers in one worktree
-  can each include the same agent requests.
+The watcher also scans its agent's session files on the worktree host every
+`usage_minutes` (default 10) and once after settlement. Claude Code, Codex,
+and omp tokens appear per worker on Costs, grouped by project: the scan also
+runs git in the worktree and saves the repository (name, canonical remote,
+branch and the same `project_key` as agent history) in the worker's
+`state["project"]`, so every worktree of one remote counts as one project.
+`ergonaut manage agent_projects` looks it up for older workers (a worktree
+that's gone is recorded as unresolved, named after its folder). Set
+`files_host` to the SSH host that holds the worktrees, or `""` to scan files
+locally. It is best effort: an unreadable session file preserves the last
+recorded counts and does not fail the worker. Counts are attributed by
+worktree and the worker time window, so overlapping workers in one worktree
+can each include the same agent requests.
 
 ## Todo lists
 
@@ -630,7 +671,7 @@ class BoxPlugin(BotPlugin):
 A bot with a manager has the `agents` skill:
 
 - `ergo_agent_start(brief, workspace, title, tier | agent/model/effort,
-  manager)` asks the manager to start the agent and starts a polling Worker,
+manager)` asks the manager to start the agent and starts a polling Worker,
   `agent:<manager>`, with the handle as its argument. With `tier`, the agent,
   model and effort come from providers.yaml's `agents` tiers. Built-in
   small/medium/large/xlarge lists are derived from listed subscription catalog models
@@ -642,7 +683,7 @@ A bot with a manager has the `agents` skill:
   chat has more than one.
 - Each check (`AgentManager.check`) passes new questions to the chat once,
   as a message naming the worker and question. `ergo_agent_reply(worker_id,
-  question_id, answer)` queues the answer for the worker and returns without
+question_id, answer)` queues the answer for the worker and returns without
   waiting for the manager; repeated answers to the same question are rejected,
   and so is an id the agent never asked (the error names its open question).
   The worker reports delivery errors and continues polling for the next question
@@ -747,14 +788,14 @@ every session this bot has with the user. `root.recent` and
 prepended to the current turn's user message, preserving a stable system
 prompt for caching. The `orchestration` skill (loaded in main by default) has:
 
-| Tool | What it does |
-| --- | --- |
-| `ergo_bot_list` | The bots it can message, with their `description`s (also in the context block below) |
-| `ergo_thread_list` | A bot's main chat, named chats and threads with the user (default: this bot). Use `query` to find a specific thread by title, chat name or ID prefix; all words must match, and resolved threads are included by default. Without a query only active threads are listed; `include_archived` overrides that choice. Results are newest first, limited to 50 by default and at most 50; use `limit` for fewer. Read a known thread ID directly with chat history instead of listing. |
-| `ergo_thread_send` | Message a bot's `main` chat, a named chat, a thread id, or a `new` thread; returns at once. A busy thread queues the message (in order, as its next turn) instead of refusing it; optional `interrupt` replaces this chat's own running request there |
-| `ergo_thread_forward` | Hand the user's own message (the one this turn answers) to a chat or thread, word for word with its author, time and files, plus an optional `note`. The recipient treats it as the user speaking and answers there; nothing comes back. Refused when the turn isn't answering the user |
-| `ergo_thread_stop` | Stop the running turn of a thread this bot started (or one of its own), or end its turn that waits for approval (declining those tool calls), and cancel what it queued there |
-| `ergo_thread_resolve` | Resolve a finished thread (this one, one of this bot's, or another bot's it started), with a one-line `summary`; refused while workers run, a request is open, an approval is pending, or its last reply asks the user something. History stays readable; a new message reopens it. `ergo_thread_archive` is a deprecated alias |
+| Tool                  | What it does                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ergo_bot_list`       | The bots it can message, with their `description`s (also in the context block below)                                                                                                                                                                                                                                                                                                                                                                                                |
+| `ergo_thread_list`    | A bot's main chat, named chats and threads with the user (default: this bot). Use `query` to find a specific thread by title, chat name or ID prefix; all words must match, and resolved threads are included by default. Without a query only active threads are listed; `include_archived` overrides that choice. Results are newest first, limited to 50 by default and at most 50; use `limit` for fewer. Read a known thread ID directly with chat history instead of listing. |
+| `ergo_thread_send`    | Message a bot's `main` chat, a named chat, a thread id, or a `new` thread; returns at once. A busy thread queues the message (in order, as its next turn) instead of refusing it; optional `interrupt` replaces this chat's own running request there                                                                                                                                                                                                                               |
+| `ergo_thread_forward` | Hand the user's own message (the one this turn answers) to a chat or thread, word for word with its author, time and files, plus an optional `note`. The recipient treats it as the user speaking and answers there; nothing comes back. Refused when the turn isn't answering the user                                                                                                                                                                                             |
+| `ergo_thread_stop`    | Stop the running turn of a thread this bot started (or one of its own), or end its turn that waits for approval (declining those tool calls), and cancel what it queued there                                                                                                                                                                                                                                                                                                       |
+| `ergo_thread_resolve` | Resolve a finished thread (this one, one of this bot's, or another bot's it started), with a one-line `summary`; refused while workers run, a request is open, an approval is pending, or its last reply asks the user something. History stays readable; a new message reopens it. `ergo_thread_archive` is a deprecated alias                                                                                                                                                     |
 
 List entries and successful send, forward, upward-message, stop and resolve
 results include `session_id`, `title` (the bot-and-chat display label), and
@@ -812,7 +853,6 @@ forwards use their existing structured `ThreadMessage` metadata when
 delivered. This is groundwork, not shared-chat membership: participant
 rosters, access control, invitations, identity linking and avatars are
 not implemented.
-
 
 Every turn of a chat with the `orchestration` skill loaded also gets a
 **Bots and threads** context block (`django_ergo.bots.overview`), so it can
@@ -915,7 +955,7 @@ Who may message whom:
   `ergo_thread_stop` cancels it) until its turn starts, and queues are sent
   on whenever the thread's turn ends, whether it completed, failed or was
   stopped. `ergo_thread_send` never interrupts the thread's turn unless
-  `interrupt: true`, and that only replaces a request *this chat* sent that
+  `interrupt: true`, and that only replaces a request _this chat_ sent that
   the thread is working on right now: a turn that answers the user (their
   message, a forward of it, a schedule or a worker) or another chat is never
   stopped by a bot, and the message queues behind it (the result says
@@ -1046,12 +1086,12 @@ Tandoor tools) go in that bot folder's `tools/` instead.
 
 ```yaml
 - name: ergo_kb
-  path: kb                           # Markdown folder, relative to the bot folder
+  path: kb # Markdown folder, relative to the bot folder
   # or knowledgebases: [Kitchen] (knowledgebase: Kitchen for one), or toolkit: "myapp.kb:make_toolkit"
   # owner: "42"                      # knowledgebases: pick the owner's KB when several share a name
-  write: false                       # path KBs: the bot may save articles (ergo_kb_write)
-  commit: true                       # ...committed and pushed when the KB is in a git checkout
-  prefetch: new_session              # new_session | every_turn | off
+  write: false # path KBs: the bot may save articles (ergo_kb_write)
+  commit: true # ...committed and pushed when the KB is in a git checkout
+  prefetch: new_session # new_session | every_turn | off
   search_tool: ergo_kb_search
   top_k: 5
 ```
@@ -1098,17 +1138,17 @@ and `icon` (an emoji) for the pin. Loading the skill loads
 
 ```yaml
 - name: bot_management
-  mode: propose_pr      # or merge_main
+  mode: propose_pr # or merge_main
   main_branch: main
   approve_publish: true
-  watch_checks: true   # message the chat when its own PR's checks pass or fail
-  root_only: false     # true: top-level chats only, not threads
-  run:                 # optional: ergo_config_repo_run
-    approve: true      # each run waits for approval (default)
+  watch_checks: true # message the chat when its own PR's checks pass or fail
+  root_only: false # true: top-level chats only, not threads
+  run: # optional: ergo_config_repo_run
+    approve: true # each run waits for approval (default)
     timeout: 300
     commands:
-      toolkit-test: {argv: [npm, test], cwd: ficsit/toolkit}
-      node: {argv: [node], cwd: ficsit/toolkit, args: true}
+      toolkit-test: { argv: [npm, test], cwd: ficsit/toolkit }
+      node: { argv: [node], cwd: ficsit/toolkit, args: true }
 ```
 
 Lets the bot maintain the git repository its folder lives in, so it can
@@ -1176,12 +1216,12 @@ waits for approval unless `approve: false`.
 
 ```yaml
 - name: orca
-  environment: devhost        # every call is pinned to this Orca environment
-  executable: orca-ide       # default: orca-ide if installed, else orca
-  files_host: devhost        # SSH host holding worktrees; "" means local
-  max_attach_bytes: 20000000   # largest worktree file orca_attach brings into a chat
-  max_upload_bytes: 200000000  # largest chat file orca_upload copies to a worktree (streamed)
-  usage_minutes: 10          # minimum minutes between agent session scans
+  environment: devhost # every call is pinned to this Orca environment
+  executable: orca-ide # default: orca-ide if installed, else orca
+  files_host: devhost # SSH host holding worktrees; "" means local
+  max_attach_bytes: 20000000 # largest worktree file orca_attach brings into a chat
+  max_upload_bytes: 200000000 # largest chat file orca_upload copies to a worktree (streamed)
+  usage_minutes: 10 # minimum minutes between agent session scans
   approve_changes: true
   root_only: true
 ```
@@ -1207,14 +1247,14 @@ loading the `orca` skill loads `agents` with it.
 
 ```yaml
 - name: local_shell
-  root: ~/agent-jobs/ads        # each job is <root>/<workspace>
-  template: ~/kits/creative     # optional: copied into each new job folder
+  root: ~/agent-jobs/ads # each job is <root>/<workspace>
+  template: ~/kits/creative # optional: copied into each new job folder
   agents: [claude, codex]
-  executables: {claude: claude-subscription}   # default: the agent's name
-  command_prefix: []            # e.g. [sudo, -n, -u, agentrunner] or a bwrap sandbox
+  executables: { claude: claude-subscription } # default: the agent's name
+  command_prefix: [] # e.g. [sudo, -n, -u, agentrunner] or a bwrap sandbox
   allowed_tools: [Read, Write, Edit, Glob, Grep, Bash]
   disallowed_tools: []
-  permission_mode: dontAsk      # Claude Code: anything not allowed is refused
+  permission_mode: dontAsk # Claude Code: anything not allowed is refused
   codex_sandbox: workspace-write
   max_turns: 100
   pass_env: [PATH, HOME, LANG, LC_ALL, TZ, USER]
@@ -1269,8 +1309,8 @@ none of them asks first.
   clusters:
     cluster-name:
       kubeconfig: /mounted/kubeconfig
-      namespace: default       # optional default for calls without -n/--namespace
-  approve: true                # required; every kubectl_run call waits for approval
+      namespace: default # optional default for calls without -n/--namespace
+  approve: true # required; every kubectl_run call waits for approval
   timeout: 120
   root_only: true
 ```
@@ -1296,8 +1336,8 @@ returned.
 
 ```yaml
 - name: bash
-  cwd: ~               # working directory
-  approve: true        # every command waits for approval
+  cwd: ~ # working directory
+  approve: true # every command waits for approval
   timeout: 120
   root_only: true
 ```
@@ -1311,13 +1351,13 @@ keep `approve: true` unless you trust the bot with it.
 
 ```yaml
 - name: web_search
-  backend: auto              # auto, brave, claude_code or anthropic
+  backend: auto # auto, brave, claude_code or anthropic
   brave_api_key_env: BRAVE_API_KEY
   anthropic_api_key_env: ANTHROPIC_API_KEY
-  model: ""                  # claude_code: haiku; anthropic: claude-haiku-5-5
-  count: 8                   # results per search
-  timeout: 90                # seconds per search or fetch
-  max_page_chars: 20000      # ergo_web_fetch trims pages to this
+  model: "" # claude_code: haiku; anthropic: claude-haiku-5-5
+  count: 8 # results per search
+  timeout: 90 # seconds per search or fetch
+  max_page_chars: 20000 # ergo_web_fetch trims pages to this
 ```
 
 Gives the bot `ergo_web_search(query, count?)`, which returns the top results
@@ -1344,19 +1384,19 @@ that should search, or let the bot load it when it needs to.
 
 ```yaml
 - name: browser
-  cdp_url: http://127.0.0.1:9222   # Chrome's --remote-debugging-port, as ssh_host sees it
-  ssh_host: rigel            # optional: reach cdp_url through an ssh master on this host
-  takeover: the Chrome window on rigel  # where a person signs in for the bot
-  sessions: true             # browser tools need an approved ergo_browser_start
-  idle_minutes: 30           # a session with no browser calls this long ends
-  poll_seconds: 120          # how often the session worker checks Chrome
-  launch_command: ""         # run over ssh_host at start when Chrome doesn't answer
-  approve_actions: false     # clicks, typing and key presses also wait for approval
+  cdp_url: http://127.0.0.1:9222 # Chrome's --remote-debugging-port, as ssh_host sees it
+  ssh_host: rigel # optional: reach cdp_url through an ssh master on this host
+  takeover: the Chrome window on rigel # where a person signs in for the bot
+  sessions: true # browser tools need an approved ergo_browser_start
+  idle_minutes: 30 # a session with no browser calls this long ends
+  poll_seconds: 120 # how often the session worker checks Chrome
+  launch_command: "" # run over ssh_host at start when Chrome doesn't answer
+  approve_actions: false # clicks, typing and key presses also wait for approval
   root_only: true
-  timeout: 30                # seconds per browser call
+  timeout: 30 # seconds per browser call
   max_snapshot_chars: 20000
-  driver_model: auto/small   # the model ergo_browser_task drives the browser with
-  driver_steps: 30           # its tool calls per task, at most
+  driver_model: auto/small # the model ergo_browser_task drives the browser with
+  driver_steps: 30 # its tool calls per task, at most
 ```
 
 Attaches to a running Chrome over CDP with Playwright (the `browser`
@@ -1382,9 +1422,9 @@ Setting up Chrome and SSH: [Browser control](browser.md).
 
 ```yaml
 - name: attachments
-  max_bytes: 5000000     # largest file the bot may write
-  max_look_bytes: 20000000  # largest file ergo_attachments_look sends to the model
-  other_sessions: true   # may read files in the user's other sessions
+  max_bytes: 5000000 # largest file the bot may write
+  max_look_bytes: 20000000 # largest file ergo_attachments_look sends to the model
+  other_sessions: true # may read files in the user's other sessions
 ```
 
 Files in a chat session are `ConversationAttachment` rows: sent with a
@@ -1415,20 +1455,22 @@ become `[image omitted: name (id=...)]`, and the bot can look again by id.
 ```yaml
 - name: telegram
   token_env: KITCHEN_TELEGRAM_TOKEN
-  users: {123456789: lee}    # Telegram user or chat id -> Django username
+  users: { 123456789: lee } # Telegram user or chat id -> Django username
   respond_to:
-    users: all               # all, or Telegram ids and @usernames (default: those in users)
-    messages: all            # all, private (1:1 chats only), or mentions (in groups,
-                             # only @mentions of the bot and replies to it)
-  target_thread: Telegram    # every chat goes into one shared thread with this title
-  owner: lee                 # the thread's owner, a username or email (default: the first admin)
-  replies: auto              # auto: answers go back to the chat; tool: the bot sends
-                             # with ergo_telegram_message
-  photo_batch_wait: 0        # seconds to gather photos sent one at a time (0 = off)
-  album_wait: 1.5            # seconds to collect an album's photos
-  mode: auto                 # webhook, polling, or auto
-  secret_env: KITCHEN_TELEGRAM_SECRET   # optional webhook secret
-  notify_delegations: true   # pass delegated replies in the main chat on to Telegram
+    users: all # all, or Telegram ids and @usernames (default: those in users)
+    messages:
+      all # all, private (1:1 chats only), or mentions (in groups,
+      # only @mentions of the bot and replies to it)
+  target_thread: Telegram # every chat goes into one shared thread with this title
+  owner: lee # the thread's owner, a username or email (default: the first admin)
+  replies:
+    auto # auto: answers go back to the chat; tool: the bot sends
+    # with ergo_telegram_message
+  photo_batch_wait: 0 # seconds to gather photos sent one at a time (0 = off)
+  album_wait: 1.5 # seconds to collect an album's photos
+  mode: auto # webhook, polling, or auto
+  secret_env: KITCHEN_TELEGRAM_SECRET # optional webhook secret
+  notify_delegations: true # pass delegated replies in the main chat on to Telegram
 ```
 
 In `auto` mode Telegram uses a webhook when `BOT_WEBHOOK_BASE_URL` is set:
@@ -1572,21 +1614,21 @@ private_pools:
     provider: fireworks
     allowed_bots: [personal]
     default: flash
-    daily_usd_cap: 5        # optional; example value — Lee chooses
+    daily_usd_cap: 5 # optional; example value — Lee chooses
     models:
       flash: accounts/fireworks/models/deepseek-v4p1-flash-1017
       glm: accounts/fireworks/models/glm-5p3
       heavy: accounts/fireworks/models/kimi-k3
 ```
 
-| Key | What it does |
-| --- | --- |
-| `enabled` | `true` or `false` (default). Nothing sends to the pool until it's `true`. |
-| `provider` | Only `fireworks`: the endpoint is fixed at `https://api.fireworks.ai/inference/v1` and the key comes from `FIREWORKS_API_KEY` |
-| `allowed_bots` | The bots that may use the pool. The host controls this list; a bot's own files can't add it. |
-| `default` | The alias `personal` alone means; one of `models` |
-| `models` | Alias to exact model ID. An alias is one path segment; a model ID appears once across all pools. |
-| `daily_usd_cap` | Optional, more than 0: US dollars per UTC day (see [Spend cap](#spend-cap)) |
+| Key             | What it does                                                                                                                  |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `enabled`       | `true` or `false` (default). Nothing sends to the pool until it's `true`.                                                     |
+| `provider`      | Only `fireworks`: the endpoint is fixed at `https://api.fireworks.ai/inference/v1` and the key comes from `FIREWORKS_API_KEY` |
+| `allowed_bots`  | The bots that may use the pool. The host controls this list; a bot's own files can't add it.                                  |
+| `default`       | The alias `personal` alone means; one of `models`                                                                             |
+| `models`        | Alias to exact model ID. An alias is one path segment; a model ID appears once across all pools.                              |
+| `daily_usd_cap` | Optional, more than 0: US dollars per UTC day (see [Spend cap](#spend-cap))                                                   |
 
 The file is parsed strictly. Any of these is a load error (a reload keeps
 the last good public models but drops every private pool, a fresh start
@@ -1614,7 +1656,7 @@ A bot listed in `allowed_bots` selects a member in its bot.yaml, as
 
 ```yaml
 engine:
-  config: {model: personal/heavy, max_tokens: 8192}
+  config: { model: personal/heavy, max_tokens: 8192 }
 ```
 
 Other engine options such as `max_tokens` and `temperature` pass through.
@@ -1696,12 +1738,12 @@ without usage, leaves the cost unknown, never 0. USD per million tokens,
 Fireworks standard serverless, checked 2026-10-28:
 
 | Model (`accounts/fireworks/models/...`) | Input | Cached input | Output |
-| --- | --- | --- | --- |
-| `deepseek-v4p1-flash-1017` | 0.30 | 0.006 | 1.20 |
-| `deepseek-v4p1-flash` | 0.30 | 0.006 | 1.20 |
-| `glm-5p3` | 1.40 | 0.26 | 4.40 |
-| `glm-5p3-flash` | 0.15 | 0.03 | 0.50 |
-| `kimi-k3` | 3.00 | 0.30 | 15.00 |
+| --------------------------------------- | ----- | ------------ | ------ |
+| `deepseek-v4p1-flash-1017`              | 0.30  | 0.006        | 1.20   |
+| `deepseek-v4p1-flash`                   | 0.30  | 0.006        | 1.20   |
+| `glm-5p3`                               | 1.40  | 0.26         | 4.40   |
+| `glm-5p3-flash`                         | 0.15  | 0.03         | 0.50   |
+| `kimi-k3`                               | 3.00  | 0.30         | 15.00  |
 
 GLM 5.3 Flash rates were checked against its
 [Fireworks model page](https://fireworks.ai/models/fireworks/glm-5p3-flash)

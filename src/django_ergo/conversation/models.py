@@ -535,6 +535,11 @@ class ScheduleRun(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="+")
     minute = models.DateTimeField()
     created_at = models.DateTimeField(auto_now_add=True)
+    status = models.CharField(max_length=20, default="pending")
+    steps = models.JSONField(default=list, blank=True)
+    error = models.TextField(blank=True, default="")
+    started_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         constraints = [
@@ -1131,3 +1136,15 @@ class InferenceRequest(TimeStampedMixin):
 
     def __str__(self):
         return f"{self.bot_name} {self.selector} {self.outcome}"
+
+
+class ModelCatalogSnapshot(TimeStampedMixin):
+    """Last successful non-billable discovery baseline for a schedule/user.
+
+    Model records contain allowlisted catalog metadata only, never credentials,
+    provider configuration, raw HTTP responses, or exception text.
+    """
+
+    scope = models.CharField(max_length=64, unique=True)
+    coverage = models.JSONField(default=list, blank=True)
+    models = models.JSONField(default=dict, blank=True)

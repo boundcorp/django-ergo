@@ -406,17 +406,21 @@ export type BotDetail = Bot & {
   schedules?: {
     name: string
     cron: string
+    timezone: string
     users: string[]
     enabled: boolean
     next_run: string | null
     actions: {
-      kind: 'prompt' | 'run'
+      kind: 'prompt' | 'run' | 'python' | 'if'
       message: string
       to: string
       thread_title: string
       thread_in: string
       run: string
       args: Record<string, unknown>
+      save_as: string
+      expression: string
+      llm: boolean
     }[]
   }[]
   tables?: { name: string; description: string; rows: number | null }[]

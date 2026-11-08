@@ -297,9 +297,19 @@ def test_run_steps_feed_the_next_prompt_and_failures_stop_the_rest(tmp_path, set
     assert schedules.run_due([bot], monday_9am) == ["stats/flaky/lee"]
     failed = BotJob.objects.get(target="jobs/stats.py:broken")
     assert failed.status == "failed"
-    assert "the API is down" in failed.error
+    assert "RuntimeError" in failed.error
+    assert "the API is down" not in failed.error
     assert "RuntimeError" in failed.traceback
     assert ThreadMessage.objects.count() == 1  # the prompt after it never went out
+    from django_ergo.conversation.models import ScheduleRun
+    from django_ergo.conversation.models import SessionMessage
+
+    run = ScheduleRun.objects.get(schedule="flaky")
+    assert run.status == "failed"
+    assert run.steps[0]["status"] == "failed"
+    notice = SessionMessage.objects.get()
+    assert "Schedule flaky failed" in notice.content_blocks.get().text
+    assert notice.session.metadata["bot_role"] == "main"
 
 
 @pytest.mark.django_db(transaction=True)
@@ -361,3 +371,396 @@ def test_code_only_schedules_run_once_as_the_first_admin(tmp_path):
     # Nobody has a chat with the bot, and it still runs: once, as the first admin.
     assert schedules.run_due([bot], noon) == ["stats/pull/lee"]
     assert BotJob.objects.get().status == "completed"
+
+
+WORKFLOW_CODE = """
+def inspect_context(context, *, label):
+    assert context["bot"].name == "workflow"
+    assert context["user"].username == "lee"
+    assert context["run"].schedule == "check"
+    assert context["models"]["notify"] is True
+    return {"ordered": context["result"] == context["models"], "literal": "{models}", "label": label}
+
+
+async def async_step(context):
+    return {"ready": True}
+
+
+def broken(context):
+    raise RuntimeError("credential=sk-DO-NOT-STORE-123456789")
+
+
+def private_result(context):
+    return {"api_key": "do-not-store", "message": "secret-from-env",
+            "capabilities": {"maxTokens": 8192, "max_tokens": 4096, "access_token": "hide-me"}}
+"""
+
+
+def workflow_bot(tmp_path, workflow, *, timezone=None):
+    import yaml
+
+    schedule = {
+        "name": "check",
+        "cron": "0 9 * * sun",
+        "users": ["lee"],
+        "workflow": workflow,
+    }
+    if timezone:
+        schedule["timezone"] = timezone
+    bot, _ = make_bot(
+        tmp_path,
+        name="workflow",
+        yaml_text=yaml.safe_dump(
+            {
+                "name": "workflow",
+                "timezone": "America/Los_Angeles",
+                "chats": {"reports": {"description": "Reports"}},
+                "schedules": [schedule],
+            }
+        ),
+    )
+    (bot.definition.root_dir / "workflow.py").write_text(WORKFLOW_CODE)
+    return bot
+
+
+@pytest.mark.parametrize(
+    "expression",
+    [
+        "models.notify",
+        "models['notify'] and models.count >= 2",
+        "not models.missing",
+        "'new' in models.names",
+        "models.names[0] == 'new'",
+        "models.count == 2 or models.unknown",
+    ],
+)
+def test_workflow_conditions_are_json_only(expression):
+    from django_ergo.bots.schedule_workflow import condition
+
+    assert condition(
+        expression,
+        {
+            "models": {"notify": True, "count": 2, "missing": False, "names": ["new"]},
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    "expression",
+    [
+        "__import__('os')",
+        "models.get('notify')",
+        "models.__class__",
+        "models['notify'].__class__",
+        "models.count + 1",
+        "[x for x in models]",
+        "(lambda: True)()",
+        "True or models.clear()",
+        "models is models",
+    ],
+)
+def test_workflow_refuses_executable_conditions(expression):
+    from django_ergo.bots.schedules import Schedule
+
+    with pytest.raises(ScheduleError):
+        Schedule.from_config(
+            {
+                "name": "s",
+                "cron": "* * * * *",
+                "workflow": [{"if": expression}],
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    "workflow",
+    [
+        [],
+        [{"python": "os.system"}],
+        [{"python": "../file.py:run"}],
+        [{"python": "file.py:run", "save_as": "bot"}],
+        [{"python": "file.py:run", "save_as": "__secret"}],
+        [{"python": "file.py:run", "save_as": "x"}] * 2,
+        [{"python": "file.py:run", "prompt": "ambiguous"}],
+        [{"prompt": "text", "llm": "false"}],
+    ],
+)
+def test_workflow_configuration_is_checked(workflow):
+    from django_ergo.bots.schedules import Schedule
+
+    with pytest.raises(ScheduleError):
+        Schedule.from_config({"name": "s", "cron": "* * * * *", "workflow": workflow})
+
+
+@pytest.mark.django_db(transaction=True)
+def test_workflow_orders_context_templates_and_audits_once(
+    tmp_path, settings, monkeypatch
+):
+    from django_ergo.bots import model_catalog
+    from django_ergo.bots import schedules
+    from django_ergo.conversation.models import ScheduleRun
+    from django_ergo.conversation.models import ThreadMessage
+
+    settings.DJANGO_ERGO = {"THREAD_MESSAGE_RUNNER": "tests.test_bots.record_message"}
+    seen = []
+
+    def check(context):
+        seen.append((context["bot"].name, context["user"].username, context["run"].pk))
+        return {"notify": True, "new": ["model-new"]}
+
+    monkeypatch.setattr(model_catalog, "check_available", check)
+    bot = workflow_bot(
+        tmp_path,
+        [
+            {"python": "ergo.models.check_available", "save_as": "models"},
+            {"if": "models.notify"},
+            {
+                "python": "workflow.py:inspect_context",
+                "args": {"label": "catalog-review"},
+                "save_as": "summary",
+            },
+            {
+                "prompt": "Models: {models}\nSummary: {summary}",
+                "to": {"thread": "New models {date:%Y-%m-%d}"},
+            },
+        ],
+        timezone="UTC",
+    )
+    User.objects.create(username="lee")
+    now = datetime(2026, 10, 4, 9, 0, tzinfo=UTC)
+    assert schedules.run_due([bot], now) == ["workflow/check/lee"]
+    run = ScheduleRun.objects.get()
+    assert seen == [("workflow", "lee", run.pk)]
+    assert run.status == "completed"
+    assert run.started_at <= run.completed_at
+    assert [step["kind"] for step in run.steps] == ["python", "if", "python", "prompt"]
+    assert all(step["status"] == "completed" for step in run.steps)
+    assert all(step["started_at"] <= step["completed_at"] for step in run.steps)
+    assert run.steps[0]["result"]["new"] == ["model-new"]
+    assert run.steps[2]["result"]["ordered"] is True
+    assert run.steps[2]["result"]["label"] == "catalog-review"
+    sent = ThreadMessage.objects.get()
+    assert '"model-new"' in sent.text
+    assert '"literal": "{models}"' in sent.text  # no recursive interpolation
+    assert sent.recipient_session.metadata["title"] == "New models 2026-10-04"
+    schedules.run_actions(run.pk, bot.registry)
+    assert ThreadMessage.objects.count() == 1
+    assert len(seen) == 1
+
+
+@pytest.mark.django_db(transaction=True)
+def test_false_workflow_is_quiet_without_sessions_or_dispatch(
+    tmp_path, settings, monkeypatch
+):
+    from django_ergo.bots import model_catalog
+    from django_ergo.bots import schedules
+    from django_ergo.conversation.models import ConversationSession
+    from django_ergo.conversation.models import ScheduleRun
+    from django_ergo.conversation.models import SessionMessage
+    from django_ergo.conversation.models import ThreadMessage
+
+    settings.DJANGO_ERGO = {"THREAD_MESSAGE_RUNNER": "tests.test_bots.record_message"}
+    monkeypatch.setattr(
+        model_catalog, "check_available", lambda context: {"notify": False}
+    )
+    bot = workflow_bot(
+        tmp_path,
+        [
+            {"python": "ergo.models.check_available", "save_as": "models"},
+            {"if": "models.notify"},
+            {"python": "workflow.py:broken"},
+            {"prompt": "Never", "to": {"thread": "Never"}},
+        ],
+        timezone="UTC",
+    )
+    User.objects.create(username="lee")
+    schedules.run_due([bot], datetime(2026, 10, 4, 9, 0, tzinfo=UTC))
+    run = ScheduleRun.objects.get()
+    assert run.status == "noop"
+    assert len(run.steps) == 2
+    assert run.steps[1]["result"] is False
+    assert not ConversationSession.objects.exists()
+    assert not SessionMessage.objects.exists()
+    assert not ThreadMessage.objects.exists()
+
+
+@pytest.mark.parametrize(
+    ("target", "role"),
+    [
+        ("main", "main"),
+        ("reports", "chat"),
+        ({"thread": "Summary"}, "thread"),
+    ],
+)
+@pytest.mark.django_db(transaction=True)
+def test_workflow_message_only_targets_without_llm(tmp_path, settings, target, role):
+    from django_ergo.bots import schedules
+    from django_ergo.conversation.models import ScheduleRun
+    from django_ergo.conversation.models import SessionMessage
+    from django_ergo.conversation.models import ThreadMessage
+
+    settings.DJANGO_ERGO = {"THREAD_MESSAGE_RUNNER": "tests.test_bots.record_message"}
+    bot = workflow_bot(
+        tmp_path,
+        [
+            {"python": "workflow.py:async_step", "save_as": "check"},
+            {"prompt": "Status {check}", "to": target, "llm": False},
+        ],
+        timezone="UTC",
+    )
+    User.objects.create(username="lee")
+    schedules.run_due([bot], datetime(2026, 10, 4, 9, 0, tzinfo=UTC))
+    message = SessionMessage.objects.get()
+    assert message.session.metadata["bot_role"] == role
+    assert message.role == "assistant"
+    assert message.author["kind"] == "system"
+    assert '"ready": true' in message.content_blocks.get().text
+    assert not ThreadMessage.objects.exists()
+    assert ScheduleRun.objects.get().status == "completed"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_workflow_failure_is_audited_and_notifies_main_safely(
+    tmp_path, settings, caplog
+):
+    from django_ergo.bots import schedules
+    from django_ergo.conversation.models import ScheduleRun
+    from django_ergo.conversation.models import SessionMessage
+    from django_ergo.conversation.models import ThreadMessage
+
+    settings.DJANGO_ERGO = {"THREAD_MESSAGE_RUNNER": "tests.test_bots.record_message"}
+    bot = workflow_bot(
+        tmp_path,
+        [
+            {"python": "workflow.py:broken"},
+            {"prompt": "Never"},
+        ],
+        timezone="UTC",
+    )
+    User.objects.create(username="lee")
+    schedules.run_due([bot], datetime(2026, 10, 4, 9, 0, tzinfo=UTC))
+    run = ScheduleRun.objects.get()
+    assert run.status == "failed"
+    assert run.completed_at is not None
+    assert len(run.steps) == 1
+    assert run.steps[0]["status"] == "failed"
+    assert "RuntimeError" in run.error
+    message = SessionMessage.objects.get()
+    assert message.session.metadata["bot_role"] == "main"
+    assert "Schedule check failed" in message.content_blocks.get().text
+    assert "sk-DO-NOT" not in (
+        str(run.steps) + run.error + message.content_blocks.get().text + caplog.text
+    )
+    assert not ThreadMessage.objects.exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_workflow_results_redact_credentials_before_audit_and_prompt(
+    tmp_path, settings, monkeypatch
+):
+    from django_ergo.bots import schedules
+    from django_ergo.conversation.models import ScheduleRun
+    from django_ergo.conversation.models import SessionMessage
+
+    settings.DJANGO_ERGO = {"THREAD_MESSAGE_RUNNER": "tests.test_bots.record_message"}
+    monkeypatch.setenv("TEST_API_TOKEN", "secret-from-env")
+    bot = workflow_bot(
+        tmp_path,
+        [
+            {"python": "workflow.py:private_result", "save_as": "data"},
+            {"prompt": "{data}", "llm": False},
+        ],
+        timezone="UTC",
+    )
+    User.objects.create(username="lee")
+    schedules.run_due([bot], datetime(2026, 10, 4, 9, 0, tzinfo=UTC))
+    result = ScheduleRun.objects.get().steps[0]["result"]
+    assert result == {
+        "api_key": "[hidden]",
+        "message": "[hidden]",
+        "capabilities": {
+            "maxTokens": 8192,
+            "max_tokens": 4096,
+            "access_token": "[hidden]",
+        },
+    }
+    assert "do-not-store" not in SessionMessage.objects.get().content_blocks.get().text
+
+
+def test_schedule_timezone_is_validated():
+    from django_ergo.bots.schedules import Schedule
+
+    with pytest.raises(ScheduleError, match="timezone"):
+        Schedule.from_config(
+            {
+                "name": "s",
+                "cron": "* * * * *",
+                "message": "hi",
+                "timezone": "not/a/timezone",
+            }
+        )
+
+
+def test_workflow_missing_json_lookup_is_an_error():
+    from django_ergo.bots.schedule_workflow import WorkflowError
+    from django_ergo.bots.schedule_workflow import condition
+
+    with pytest.raises(WorkflowError, match="missing or incompatible"):
+        condition("models.notify", {"models": {}})
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        object(),
+        {"not-json": object()},
+        {1: "non-string-key"},
+        float("nan"),
+        float("inf"),
+        "x" * 1_000_001,
+    ],
+)
+def test_workflow_results_require_bounded_finite_json(value):
+    from django_ergo.bots.schedule_workflow import WorkflowError
+    from django_ergo.bots.schedule_workflow import safe_json
+
+    with pytest.raises(WorkflowError):
+        safe_json(value)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_catalog_fetch_failure_reaches_main_with_safe_source_details(
+    tmp_path, settings, monkeypatch
+):
+    from django_ergo.bots import model_catalog
+    from django_ergo.bots import schedules
+    from django_ergo.conversation.models import ScheduleRun
+    from django_ergo.conversation.models import SessionMessage
+    from django_ergo.conversation.models import ThreadMessage
+
+    settings.DJANGO_ERGO = {"THREAD_MESSAGE_RUNNER": "tests.test_bots.record_message"}
+
+    def unavailable(context):
+        provider = "openai"
+        raise model_catalog.ModelCatalogError(provider, "official_list")
+
+    monkeypatch.setattr(model_catalog, "check_available", unavailable)
+    bot = workflow_bot(
+        tmp_path,
+        [
+            {"python": "ergo.models.check_available", "save_as": "models"},
+            {"if": "models.notify"},
+            {"prompt": "Never", "to": {"thread": "Never"}},
+        ],
+        timezone="UTC",
+    )
+    User.objects.create(username="lee")
+    schedules.run_due([bot], datetime(2026, 10, 4, 9, 0, tzinfo=UTC))
+    run = ScheduleRun.objects.get()
+    assert run.status == "failed"
+    assert len(run.steps) == 1
+    assert "openai" in run.error and "official_list" in run.error
+    notice = SessionMessage.objects.get()
+    assert notice.session.metadata["bot_role"] == "main"
+    assert run.error in notice.content_blocks.get().text
+    assert not ThreadMessage.objects.exists()
