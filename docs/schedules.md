@@ -158,10 +158,29 @@ results, prompt templates, or step arguments.
 `ergo.models.check_available` reads catalogs only; it never performs inference,
 enables a model, or modifies providers, routing, or a bot's model table.
 It persists the last successful catalog snapshot in the database and returns
-`new`, `removed`, `changed`, `flagged`, `notify`, and provider `coverage`.
+`new`, `removed`, `changed`, `flagged`, `notify`, provider `coverage`,
+`baseline_seeded`, `model_count`, and a concise `summary`.
 Repeated checks of an unchanged catalog produce empty diffs and
 `notify: false`. A provider fetch failure fails the step rather than treating
 the provider's entire catalog as removed.
+
+The first successful check for a bot folder/name, user, and schedule seeds
+the entire discovered catalog without listing every existing model as new.
+It returns `baseline_seeded: true`, `model_count: N`, and
+`summary: "Baseline seeded, N models"`, with empty `new`, `removed`, `changed`,
+and `flagged` lists. `notify: true` allows the workflow to announce this summary
+once. Later checks return `baseline_seeded: false`; only actual differences
+produce model records or notifications. Even an empty catalog is seeded only
+once. Existing persisted baselines are never reseeded by this behavior.
+
+This baseline is independent of a bot's own model table or another schedule's
+refresh history. Its database
+scope includes the definition's root directory, bot name, user primary key,
+and schedule name, not the run ID, timestamp, or process-local object identity.
+Reconstructed tasks and pod restarts reuse it when those values stay the same.
+Moving the bot folder or renaming the schedule creates a different scope;
+keep those identities stable to retain the existing baseline.
+
 The complete report is validated against workflow JSON limits before the
 snapshot commits (10,000 values, depth 32, 1 MB encoded JSON). Flags contain a
 `selector`, `reason`, and `severity`, referring to the full model record in
@@ -170,16 +189,35 @@ exceeds a limit, the check fails visibly and retains its prior snapshot;
 the discovery diff is not consumed.
 
 Each discovered model carries policy and metadata flags, including
-`allowed_for_coding`, `priced`, and `private`. Coding candidates are limited
-to `anthropic`, `openai`, `openai-codex`, and `xai-oauth`. Other providers,
-including Fireworks, are quarantined for coding; private pool models are
-never shared/general-routing candidates. Unknown pricing stays unknown.
-Removal of a model used by configured routing is flagged for review.
+`allowed_for_coding`, `routable`, `priced`, and `private`. Coding candidates
+require an allowed provider (`anthropic`, `openai`, `openai-codex`, or
+`xai-oauth`) and explicit `kind: chat` capability metadata. Explicitly unsupported
+tools, unknown/non-chat kinds (including TTS, STT, embedding, image, realtime,
+and moderation), and missing kind metadata fail closed. Clear task tokens in
+the model ID (`tts`, `stt`, `transcribe`, `transcription`, `embedding(s)`,
+`realtime`, `moderation`, `image`, `video`, `audio`, delimited by `-`, `.`, `_`,
+or `/`) also exclude coding, even if an upstream cache mislabels the model as
+chat. Text input, generation limits, or tool support alone do not prove a chat
+endpoint. Provider and capability exclusions are flagged separately.
+`routable` additionally requires
+known pricing and no private/quarantine restriction; it is a review flag, not
+permission to execute. Other providers, including Google and Fireworks, remain
+excluded from coding; private pool models are never shared/general-routing
+candidates. Unknown pricing stays unknown. Removal of a model used by
+configured routing is flagged for review.
 
 List endpoints often omit prices. Catalog metadata and its provenance are
 reported when available; check the provider's official pricing before
 recommending a configuration change. Discovery is a review trigger, not an
 automatic routing decision.
+
+The core does not consume a deployment's `ModelsAvailable` table when launching
+workers. `orca_start_worker` delegates to `agents.start`; explicit model
+selectors and configured agent tiers use provider/private-pool policy, and tiers
+require a CLI subscription. They do not consult discovery's `routable` flag or
+the table's enabled/pricing fields. Enforce deployment-specific selection in
+that deployment's tools and reviewed provider/tier configuration; do not treat
+this report or its baseline as an execution allowlist.
 
 Sources are discovered from the bot registry and the host's configured omp
 providers. The omp model cache is opened read-only; saved OAuth credential
@@ -200,7 +238,6 @@ appear explicitly in `coverage`; their prior snapshot is retained, not
 interpreted as an empty catalog. Subscription sources never substitute an
 API account's membership for the subscription's catalog. Official requests
 use fixed HTTPS list endpoints, never redirects or billable inference.
-The first successful check reports all discovered models as new.
 
 ## How schedules run
 

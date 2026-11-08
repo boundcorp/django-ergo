@@ -4,6 +4,17 @@ This document tracks the major milestones and evolution of the Django Ergo proje
 
 ## Development Timeline
 
+### Model discovery seeds a baseline and fails closed for coding (November 2026)
+
+- A first catalog check persists its baseline and returns a one-time
+  `Baseline seeded, N models` summary instead of listing the existing catalog
+  as newly released models. Subsequent checks report actual differences;
+  existing baseline scopes and snapshots are preserved.
+- Coding review flags require explicit chat-kind metadata. Non-chat and
+  missing-kind models remain in discovery but cannot become coding candidates;
+  task tokens such as `realtime` also reject upstream chat misclassifications.
+  Pricing, private-pool and provider restrictions remain in force.
+
 ### Worker results reach the chat that asked (November 2026)
 
 - A thread started by another chat reports what it made of a finished

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import traceback
+from copy import deepcopy
 from types import SimpleNamespace
 
 import httpx
@@ -17,7 +18,7 @@ pytestmark = pytest.mark.django_db
 
 @pytest.fixture
 def discovery(monkeypatch, tmp_path):
-    """All catalogs are mocked; neither inference nor external HTTP is possible."""
+    """Mock all sources and seed an empty baseline for catalog-delta tests."""
     monkeypatch.setattr(catalog, "_local_configuration", lambda: set())
     monkeypatch.setattr(catalog, "_official_models", lambda source: None)
     rows = {"openai-codex": []}
@@ -48,6 +49,7 @@ def discovery(monkeypatch, tmp_path):
         "user": SimpleNamespace(pk=1),
         "run": SimpleNamespace(schedule="weekly"),
     }
+    catalog.check_available(context)
     return context, rows
 
 
@@ -56,6 +58,8 @@ def model(name="coding-one", **extra):
         "id": name,
         "cost": {"input": 2, "output": 8, "cacheRead": 0.2},
         "contextWindow": 200000,
+        "kind": "chat",
+        "input": ["text"],
         "maxTokens": 32000,
         "reasoning": True,
         "thinking": {"mode": "effort", "efforts": ["low", "high"]},
@@ -63,7 +67,34 @@ def model(name="coding-one", **extra):
     }
 
 
-def test_first_run_discovers_and_second_run_is_quiet(discovery):
+@pytest.mark.parametrize("model_count", [0, 2])
+def test_first_baseline_seeds_once_without_a_catalog_dump(discovery, model_count):
+    from django_ergo.bots.schedules import Action
+    from django_ergo.bots.schedules import _run_python
+
+    context, rows = discovery
+    ModelCatalogSnapshot.objects.all().delete()
+    rows["openai-codex"] = [
+        model(f"initial-{index}", kind="tts", cost={}) for index in range(model_count)
+    ]
+    action = Action("python", function="ergo.models.check_available")
+    first = _run_python(context["bot"], action, context)
+    assert first["baseline_seeded"] is True
+    assert first["model_count"] == model_count
+    assert first["summary"] == f"Baseline seeded, {model_count} models"
+    assert first["notify"] is True
+    assert first["new"] == first["removed"] == first["changed"] == []
+    assert first["flagged"] == []
+    assert len(ModelCatalogSnapshot.objects.get().models) == model_count
+    second = _run_python(context["bot"], action, context)
+    assert second["baseline_seeded"] is False
+    assert second["model_count"] == model_count
+    assert second["notify"] is False
+    assert second["new"] == second["removed"] == second["changed"] == []
+    assert second["flagged"] == []
+
+
+def test_new_model_is_discovered_and_next_run_is_quiet(discovery):
     context, rows = discovery
     rows["openai-codex"] = [model()]
     first = catalog.check_available(context)
@@ -83,6 +114,150 @@ def test_first_run_discovers_and_second_run_is_quiet(discovery):
         == []
     )
     assert ModelCatalogSnapshot.objects.count() == 1
+
+
+def test_recreated_schedule_context_reuses_persisted_baseline(discovery):
+    from django_ergo.bots.schedules import Action
+    from django_ergo.bots.schedules import _run_python
+
+    context, rows = discovery
+    ModelCatalogSnapshot.objects.all().delete()
+    rows["openai-codex"] = [model()]
+    root = context["bot"].path
+    context["bot"].definition = SimpleNamespace(root_dir=root)
+    context["run"] = SimpleNamespace(pk=101, schedule="weekly", minute="2026-11-08")
+    action = Action("python", function="ergo.models.check_available")
+    first = _run_python(context["bot"], action, context)
+    baseline = ModelCatalogSnapshot.objects.get()
+    assert first["baseline_seeded"] is True
+    assert first["model_count"] == 1
+    assert first["summary"] == "Baseline seeded, 1 models"
+    assert first["notify"] is True
+    assert first["new"] == first["removed"] == first["changed"] == []
+    assert first["flagged"] == []
+    assert "chatgpt/coding-one" in baseline.models
+
+    # A later scheduled task reconstructs every object; its run ID/minute and
+    # fallback path are transient, but its definition root/name/user/schedule
+    # identify the same persisted baseline.
+    later = {
+        "bot": SimpleNamespace(
+            name=context["bot"].name,
+            path=root / "another-worker",
+            definition=SimpleNamespace(root_dir=root),
+            providers=deepcopy(context["bot"].providers),
+        ),
+        "user": SimpleNamespace(pk=context["user"].pk),
+        "run": SimpleNamespace(pk=202, schedule="weekly", minute="2026-11-15"),
+    }
+    second = _run_python(later["bot"], action, later)
+    assert second["new"] == second["removed"] == second["changed"] == []
+    assert second["flagged"] == []
+    assert second["notify"] is False
+    assert second["baseline_seeded"] is False
+    assert ModelCatalogSnapshot.objects.get().pk == baseline.pk
+
+    rows["openai-codex"] = [model(), model("later-model")]
+    third = _run_python(later["bot"], action, later)
+    assert third["baseline_seeded"] is False
+    assert third["model_count"] == 2
+    assert third["notify"] is True
+    assert [record["id"] for record in third["new"]] == ["later-model"]
+    assert third["removed"] == third["changed"] == []
+    assert third["summary"] == "1 new, 0 removed, 0 changed models"
+
+
+@pytest.mark.parametrize(
+    "kind",
+    ["tts", "stt", "embedding", "image", "realtime", "moderation", "audio", "video"],
+)
+def test_non_chat_models_are_not_coding_candidates(discovery, kind):
+    context, rows = discovery
+    # Even positive tool/text metadata cannot override a non-chat kind.
+    rows["openai-codex"] = [model(kind, kind=kind, supportsTools=True)]
+    result = catalog.check_available(context)
+    record = result["new"][0]
+    assert record["priced"] is True
+    assert record["allowed_for_coding"] is False
+    assert record["routable"] is False
+    assert {flag["reason"] for flag in result["flagged"]} == {
+        "coding_capability_not_supported"
+    }
+    assert catalog.check_available(context)["notify"] is False
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {},
+        {"kind": "unrecognized"},
+        {"kind": "text"},
+        {"input": ["text"]},
+        {"input": ["image"], "maxTokens": 1000},
+        {"input": ["text"], "maxTokens": 0},
+        {"input": ["text"], "maxTokens": True},
+        {"input": ["text"], "maxTokens": 1000, "supportsTools": False},
+        {"kind": "chat", "supportsTools": False},
+    ],
+)
+def test_missing_or_incompatible_capabilities_fail_closed(discovery, metadata):
+    context, rows = discovery
+    rows["openai-codex"] = [
+        {"id": "not-established-chat", "cost": {"input": 2, "output": 8}, **metadata}
+    ]
+    record = catalog.check_available(context)["new"][0]
+    assert record["priced"] is True
+    assert record["allowed_for_coding"] is False
+    assert record["routable"] is False
+
+
+@pytest.mark.parametrize(
+    "model_id",
+    [
+        "gpt-realtime-2.1",
+        "tts-1",
+        "speech.stt",
+        "gpt-transcribe",
+        "speech-transcription",
+        "text-embedding-3-small",
+        "text-embeddings-v2",
+        "omni-moderation-latest",
+        "gpt-image-2",
+        "video-gen",
+        "gpt-audio",
+        "voice/TTS",
+    ],
+)
+def test_non_chat_name_tokens_override_chat_metadata(discovery, model_id):
+    context, rows = discovery
+    rows["openai-codex"] = [model(model_id, supportsTools=True)]
+    result = catalog.check_available(context)
+    record = result["new"][0]
+    assert record["capabilities"]["kind"] == "chat"
+    assert record["priced"] is True
+    assert record["allowed_for_coding"] is False
+    assert record["routable"] is False
+    assert {flag["reason"] for flag in result["flagged"]} == {
+        "coding_capability_not_supported"
+    }
+
+
+def test_realtime_without_kind_is_not_inferred_to_be_chat(discovery):
+    context, rows = discovery
+    rows["openai-codex"] = [
+        {
+            "id": "gpt-realtime-2.1",
+            "cost": {"input": 4, "output": 16},
+            "input": ["text", "audio"],
+            "maxTokens": 32000,
+            "contextWindow": 128000,
+            "supportsTools": True,
+        }
+    ]
+    record = catalog.check_available(context)["new"][0]
+    assert record["priced"] is True
+    assert record["allowed_for_coding"] is False
+    assert record["routable"] is False
 
 
 def test_new_priced_unpriced_and_zero_placeholder_models(discovery):
@@ -531,10 +706,10 @@ def test_large_private_catalog_survives_the_actual_workflow_wrapper(
     assert _run_python(context["bot"], action, context)["notify"] is False
 
 
-@pytest.mark.parametrize("has_baseline", [False, True])
+@pytest.mark.parametrize("populated_baseline", [False, True])
 @pytest.mark.parametrize("overflow", ["items", "bytes"])
 def test_report_validation_failure_never_consumes_a_diff(
-    discovery, has_baseline, overflow
+    discovery, populated_baseline, overflow
 ):
     from django_ergo.bots.schedule_workflow import WorkflowError
     from django_ergo.bots.schedules import Action
@@ -543,7 +718,7 @@ def test_report_validation_failure_never_consumes_a_diff(
     context, rows = discovery
     action = Action("python", function="ergo.models.check_available")
     rows["openai-codex"] = [model()]
-    if has_baseline:
+    if populated_baseline:
         _run_python(context["bot"], action, context)
     previous = list(ModelCatalogSnapshot.objects.values("models", "coverage"))
     excessive = [0] * 10001 if overflow == "items" else "x" * 1_000_001
@@ -555,5 +730,5 @@ def test_report_validation_failure_never_consumes_a_diff(
     recovered = _run_python(context["bot"], action, context)
     assert [record["id"] for record in recovered["new"]] == ["later"]
     assert [record["id"] for record in recovered["removed"]] == (
-        ["coding-one"] if has_baseline else []
+        ["coding-one"] if populated_baseline else []
     )
