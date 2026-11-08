@@ -505,3 +505,55 @@ def test_catalog_error_restricts_audit_values_to_public_identifiers():
     assert error.provider == "other"
     assert error.source == "catalog"
     assert "secret" not in str(error)
+
+
+def test_large_private_catalog_survives_the_actual_workflow_wrapper(
+    discovery, monkeypatch
+):
+    from django_ergo.bots.schedules import Action
+    from django_ergo.bots.schedules import _run_python
+
+    context, rows = discovery
+    monkeypatch.setattr(catalog, "_local_configuration", lambda: {"fireworks"})
+    expected = {f"private-{index}" for index in range(100)}
+    rows["fireworks"] = [model(name, cost={}) for name in sorted(expected)]
+    action = Action("python", function="ergo.models.check_available")
+    result = _run_python(context["bot"], action, context)
+    assert {record["id"] for record in result["new"]} == expected
+    assert all(record["private"] and not record["routable"] for record in result["new"])
+    assert all(record["capabilities"]["maxTokens"] == 32000 for record in result["new"])
+    flagged = {(flag["selector"], flag["reason"]) for flag in result["flagged"]}
+    assert flagged == {
+        (f"fireworks/{name}", reason)
+        for name in expected
+        for reason in ("private", "unpriced", "coding_provider_not_allowed")
+    }
+    assert _run_python(context["bot"], action, context)["notify"] is False
+
+
+@pytest.mark.parametrize("has_baseline", [False, True])
+@pytest.mark.parametrize("overflow", ["items", "bytes"])
+def test_report_validation_failure_never_consumes_a_diff(
+    discovery, has_baseline, overflow
+):
+    from django_ergo.bots.schedule_workflow import WorkflowError
+    from django_ergo.bots.schedules import Action
+    from django_ergo.bots.schedules import _run_python
+
+    context, rows = discovery
+    action = Action("python", function="ergo.models.check_available")
+    rows["openai-codex"] = [model()]
+    if has_baseline:
+        _run_python(context["bot"], action, context)
+    previous = list(ModelCatalogSnapshot.objects.values("models", "coverage"))
+    excessive = [0] * 10001 if overflow == "items" else "x" * 1_000_001
+    rows["openai-codex"] = [model("later", thinking={"details": excessive})]
+    with pytest.raises(WorkflowError):
+        _run_python(context["bot"], action, context)
+    assert list(ModelCatalogSnapshot.objects.values("models", "coverage")) == previous
+    rows["openai-codex"] = [model("later")]
+    recovered = _run_python(context["bot"], action, context)
+    assert [record["id"] for record in recovered["new"]] == ["later"]
+    assert [record["id"] for record in recovered["removed"]] == (
+        ["coding-one"] if has_baseline else []
+    )
