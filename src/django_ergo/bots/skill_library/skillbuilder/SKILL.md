@@ -3,8 +3,9 @@ name: skillbuilder
 description: Build or change this bot's dashboards and pages (.jhtml), tables, tools, schedules and skills, and propose them as a pull request. Use it for any change to a bot's own folder, such as a new dashboard or a column on a table, instead of Orca workers. Load it before writing any Python, bot.yaml, skill or .jhtml change.
 requires: [config_repo, introspection]
 plugins:
-  bot_management: {mode: propose_pr}
+  bot_management: { mode: propose_pr }
 ---
+
 You change bots by editing their folder in the bot repository and proposing a
 pull request. Nothing you write runs until a person merges it.
 
@@ -46,23 +47,23 @@ the tests or to fix your PR: that's your job.
   `ergo_config_repo_publish`: it pushes a commit to the same PR. Never open a
   second PR to replace one of yours.
 - If one of your PRs is no longer wanted, `ergo_config_repo_close_pr(number,
-  comment)`.
+comment)`.
 
 ## Pick the smallest shape
 
-| Need | Shape |
-| --- | --- |
-| A procedure the bot should follow | `skills/<name>.md` (instructions only) |
-| A procedure plus its own tools | `skills/<name>/SKILL.md` + `skills/<name>/tools.py` |
-| Tools on their own | `tools/<name>.py`, listed under `tools:` in bot.yaml |
-| Data you'll filter, count, sum or chart | a table in `tables.py` |
-| Prose the bot should know | the knowledge base (`kb/`), not a table |
-| Work on a clock | a `schedules:` entry with `run:` and `prompt:` steps |
-| A dashboard | a `.jhtml` page, pinned in `chats.<name>.pins` |
+| Need                                    | Shape                                                                                                       |
+| --------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| A procedure the bot should follow       | `skills/<name>.md` (instructions only)                                                                      |
+| A procedure plus its own tools          | `skills/<name>/SKILL.md` + `skills/<name>/tools.py`                                                         |
+| Tools on their own                      | `tools/<name>.py`, listed under `tools:` in bot.yaml                                                        |
+| Data you'll filter, count, sum or chart | a table in `tables.py`                                                                                      |
+| Prose the bot should know               | the knowledge base (`kb/`), not a table                                                                     |
+| Work on a clock                         | a `schedules:` entry: `workflow:` Python/check/conditional/prompt steps, or simple `run:`/`prompt:` actions |
+| A dashboard                             | a `.jhtml` page, pinned in `chats.<name>.pins`                                                              |
 
 Skill front matter: `name`, `description`, `requires: [...]` (skills loaded
 with it), `always_load`, and `plugins: {name: {setting: value}}` (plugins it
-needs). The description is all the model sees before loading, so say *when*
+needs). The description is all the model sees before loading, so say _when_
 to use the skill. A skill with tools must also be loadable: don't put
 everything in `always_load`; list it in `chats.<chat>.skills` only when that
 chat uses it on most turns.
@@ -214,8 +215,35 @@ schedules:
     actions:
       - run: tools/receipts.py:pull_yesterday
       - prompt: "New receipts: {result}. Flag anything unusual."
-        to: {thread: "Receipts {date:%b %d}"}
+        to: { thread: "Receipts {date:%b %d}" }
 ```
+
+For checks that should only wake a model when something changed, use a
+workflow. Core `ergo.models.check_available` uses only non-billable catalogs,
+persists its diff, and never enables models or changes routing:
+
+```yaml
+schedules:
+  - name: weekly-model-discovery
+    cron: "0 9 * * sun"
+    timezone: UTC
+    workflow:
+      - python: ergo.models.check_available
+        save_as: models
+      - if: models.notify
+      - prompt: "Review {models}. Propose catalog/config changes as a PR; never auto-enable."
+        to: { thread: "New models available {date:%Y-%m-%d}" }
+```
+
+Bot-folder Python steps (`python: tools/checks.py:check`) receive a context
+dict with `bot`, `user`, `run` and previous named results, plus `args` keyword
+arguments. `save_as` names JSON results; `{name}` inserts them in prompts.
+`if` supports safe JSON lookups/boolean comparisons, not function calls;
+false ends silently with no thread, message or model turn. `llm: false` posts
+a prompt without invoking a model. Every run retains step results and status;
+failures post to main without invoking a model. Never return credentials.
+Private/quarantined models and unknown prices require explicit review, not
+automatic routing changes. Read `docs/schedules.md` for the full format.
 
 ## Dashboards: .jhtml pages
 
@@ -224,11 +252,13 @@ opened. Pages are read-only and sandboxed.
 
 ```html
 <h1>Receipts</h1>
-{{ blocks.metric(label="This month", table="Receipt", aggregate="sum", field="amount", format="money") }}
-{{ blocks.chart(table="Receipt", x="filed_on", y="amount", group="category", kind="bar") }}
-{{ blocks.table(table="Receipt", columns=["vendor", "amount", "category"], order_by=["-filed_on"], limit=20) }}
-{% for row in table("Receipt").filter(filed_on__gte=days_ago(30)).group("category", total="sum:amount") %}
-  {{ row.category }}: {{ row.total | money }}<br>
+{{ blocks.metric(label="This month", table="Receipt", aggregate="sum",
+field="amount", format="money") }} {{ blocks.chart(table="Receipt",
+x="filed_on", y="amount", group="category", kind="bar") }} {{
+blocks.table(table="Receipt", columns=["vendor", "amount", "category"],
+order_by=["-filed_on"], limit=20) }} {% for row in
+table("Receipt").filter(filed_on__gte=days_ago(30)).group("category",
+total="sum:amount") %} {{ row.category }}: {{ row.total | money }}<br />
 {% endfor %}
 ```
 

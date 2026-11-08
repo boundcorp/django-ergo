@@ -442,9 +442,9 @@ def schedules_out(bot: Bot, user) -> list[dict]:
     from django.utils import timezone
     from django_ergo.bots.schedules import local_now
 
-    now = local_now(bot, user, timezone.now())
     out = []
     for schedule in bot.definition.schedules:
+        now = local_now(bot, user, timezone.now(), schedule)
         upcoming = schedule.cron.next_after(now) if schedule.enabled else None
         out.append(
             {
@@ -452,6 +452,7 @@ def schedules_out(bot: Bot, user) -> list[dict]:
                 "cron": schedule.cron.expression,
                 "users": list(schedule.users),
                 "enabled": schedule.enabled,
+                "timezone": schedule.timezone,
                 "next_run": upcoming.isoformat() if upcoming else None,
                 "actions": [
                     {
@@ -460,7 +461,10 @@ def schedules_out(bot: Bot, user) -> list[dict]:
                         "to": a.to,
                         "thread_title": a.thread_title,
                         "thread_in": a.thread_in,
-                        "run": f"{a.path}:{a.function}" if a.kind == "run" else "",
+                        "run": f"{a.path}:{a.function}" if a.path else a.function,
+                        "save_as": a.save_as,
+                        "expression": a.expression,
+                        "llm": a.llm,
                         "args": a.args,
                     }
                     for a in schedule.actions

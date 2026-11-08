@@ -123,15 +123,21 @@ export function BotPage() {
               {bot.schedules.map(s => (
                 <tr key={s.name} className="border-t border-zinc-200 align-top dark:border-zinc-800">
                   <td className="py-1.5 pr-4 font-mono text-xs whitespace-nowrap">{s.name}</td>
-                  <td className="py-1.5 pr-4 font-mono text-xs whitespace-nowrap text-zinc-500">{s.cron}</td>
+                  <td className="py-1.5 pr-4 font-mono text-xs whitespace-nowrap text-zinc-500">
+                    {s.cron}
+                    {s.timezone && <div>{s.timezone}</div>}
+                  </td>
                   <td className="py-1.5 pr-4">
                     <ol className="flex flex-col gap-1">
                       {s.actions.map((a, i) => (
                         <li key={i}>
-                          {a.kind === 'run' ? (
+                          {a.kind === 'if' ? (
+                            <span className="font-mono text-xs">if {a.expression}</span>
+                          ) : a.kind === 'run' || a.kind === 'python' ? (
                             <span className="font-mono text-xs">
-                              run {a.run}
+                              {a.kind} {a.run}
                               {Object.keys(a.args).length ? ` ${JSON.stringify(a.args)}` : ''}
+                              {a.save_as && ` → ${a.save_as}`}
                             </span>
                           ) : (
                             <>
@@ -143,6 +149,7 @@ export function BotPage() {
                                   : a.to === 'main'
                                     ? 'main chat'
                                     : a.to}
+                                {a.llm === false && ' (message only)'}
                               </span>
                             </>
                           )}

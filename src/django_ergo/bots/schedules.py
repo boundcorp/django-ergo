@@ -38,12 +38,21 @@ too, as a success: an alert check posts only when it found something.
 from __future__ import annotations
 
 import logging
+from copy import deepcopy
 from dataclasses import dataclass
 from dataclasses import field
 from datetime import datetime
 from datetime import timedelta
 from typing import TYPE_CHECKING
 from typing import Any
+from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfoNotFoundError
+
+from django_ergo.bots.schedule_workflow import WorkflowError
+from django_ergo.bots.schedule_workflow import condition
+from django_ergo.bots.schedule_workflow import condition_tree
+from django_ergo.bots.schedule_workflow import safe_error
+from django_ergo.bots.schedule_workflow import safe_json
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -51,6 +60,8 @@ if TYPE_CHECKING:
     from django_ergo.bots.runtime import Bot
 
 logger = logging.getLogger(__name__)
+
+MAX_WORKFLOW_STEPS = 100
 
 NAMES = {
     "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
@@ -178,6 +189,9 @@ class Action:
     function: str = ""  # run: the function in it
     args: dict = field(default_factory=dict)  # run: keyword arguments
     stop_if_empty: bool = False  # run: an empty result ends the run, quietly
+    save_as: str = ""
+    expression: str = ""
+    llm: bool = True
 
     def title_for(self, moment: datetime, run_number: int) -> str:
         """A new thread's title: ``{n}`` is the run number, ``{date:...}`` and
@@ -189,7 +203,7 @@ class Action:
             return f"{self.thread_title} {run_number}"
 
     @classmethod
-    def prompt(cls, name: str, message: str, target) -> Action:
+    def prompt(cls, name: str, message: str, target, *, llm: bool = True) -> Action:
         target = target or "main"
         thread_title, thread_in = "", "main"
         if isinstance(target, dict):
@@ -209,6 +223,7 @@ class Action:
             to=to,
             thread_title=thread_title,
             thread_in="main" if thread_in == "root" else thread_in,
+            llm=llm,
         )
 
     @classmethod
@@ -248,9 +263,10 @@ class Schedule:
     actions: tuple[Action, ...]
     users: tuple[str, ...] = field(default_factory=tuple)
     enabled: bool = True
+    timezone: str = ""
 
     @classmethod
-    def from_config(cls, data: dict) -> Schedule:
+    def from_config(cls, data: dict) -> Schedule:  # noqa: C901 — mutually exclusive schedule formats
         if not isinstance(data, dict):
             msg = "each schedule needs name, cron and actions (or a message)"
             raise ScheduleError(msg)
@@ -258,7 +274,25 @@ class Schedule:
         if not name or not data.get("cron"):
             msg = f"schedule {name or '?'} needs name, cron and message"
             raise ScheduleError(msg)
-        if data.get("actions") is not None:
+        workflow = data.get("workflow") is not None
+        if workflow and ("actions" in data or "message" in data):
+            msg = "workflow cannot be combined with actions or message"
+            raise ScheduleError(msg)
+        if workflow:
+            items = data["workflow"]
+            if (
+                not isinstance(items, list)
+                or not items
+                or len(items) > MAX_WORKFLOW_STEPS
+            ):
+                msg = "workflow must be a non-empty list of at most 100 steps"
+                raise ScheduleError(msg)
+            actions = [cls._workflow_action(name, item) for item in items]
+            names = [action.save_as for action in actions if action.save_as]
+            if len(names) != len(set(names)):
+                msg = "workflow save_as names must be unique"
+                raise ScheduleError(msg)
+        elif data.get("actions") is not None:
             items = data["actions"]
             if not isinstance(items, list) or not items:
                 msg = f"schedule {name}: actions must be a non-empty list"
@@ -270,12 +304,20 @@ class Schedule:
                 msg = f"schedule {name} needs name, cron and message"
                 raise ScheduleError(msg)
             actions = [Action.prompt(name, message, data.get("to"))]
+        tz = str(data.get("timezone") or "")
+        if tz:
+            try:
+                ZoneInfo(tz)
+            except (ZoneInfoNotFoundError, ValueError) as exc:
+                msg = "schedule timezone must be a valid IANA timezone"
+                raise ScheduleError(msg) from exc
         return cls(
             name=name,
             cron=Cron.parse(str(data["cron"])),
             actions=tuple(actions),
             users=tuple(str(u) for u in data.get("users") or []),
             enabled=bool(data.get("enabled", True)),
+            timezone=tz,
         )
 
     @staticmethod
@@ -299,6 +341,57 @@ class Schedule:
         msg = f"schedule {name}: each action is {{prompt: ...}} or {{run: ...}}"
         raise ScheduleError(msg)
 
+    @staticmethod
+    def _workflow_action(name: str, item) -> Action:
+        if (
+            not isinstance(item, dict)
+            or sum(key in item for key in ("python", "if", "prompt")) != 1
+        ):
+            msg = "each workflow step needs exactly one of python, if, prompt"
+            raise ScheduleError(msg)
+        if "if" in item:
+            expression = item["if"]
+            try:
+                condition_tree(expression)
+            except WorkflowError as exc:
+                raise ScheduleError(str(exc)) from exc
+            return Action("if", expression=expression)
+        if "prompt" in item:
+            if not isinstance(item.get("llm", True), bool):
+                msg = "workflow prompt llm must be true or false"
+                raise ScheduleError(msg)
+            message = str(item["prompt"] or "").strip()
+            if not message:
+                msg = "workflow prompt needs text"
+                raise ScheduleError(msg)
+            return Action.prompt(
+                name, message, item.get("to"), llm=item.get("llm", True)
+            )
+        spec = str(item["python"])
+        save_as = str(item.get("save_as") or "")
+        if save_as and (
+            not save_as.isascii()
+            or not save_as.isidentifier()
+            or save_as.startswith("_")
+            or save_as in {"bot", "user", "run", "result", "date", "n"}
+        ):
+            msg = "save_as needs a public, non-reserved identifier"
+            raise ScheduleError(msg)
+        args = item.get("args", {})
+        if not isinstance(args, dict):
+            msg = "workflow python args must be a mapping"
+            raise ScheduleError(msg)
+        if spec == "ergo.models.check_available":
+            return Action("python", function=spec, save_as=save_as, args=dict(args))
+        parsed = Action.run(name, spec, args)
+        return Action(
+            "python",
+            path=parsed.path,
+            function=parsed.function,
+            save_as=save_as,
+            args=parsed.args,
+        )
+
 
 def people_for(bot: Bot, schedule: Schedule) -> list:
     """Who a schedule runs for: its users, else the bot's allowed users, else
@@ -310,14 +403,18 @@ def people_for(bot: Bot, schedule: Schedule) -> list:
     names = list(schedule.users) or list(bot.definition.allowed_users)
     if names:
         return list(users.filter(username__in=names))
-    if all(action.kind == "run" for action in schedule.actions):
+    if all(action.kind != "prompt" for action in schedule.actions):
         return list(users.filter(is_superuser=True).order_by("pk")[:1])
     return list(users.filter(conversation_sessions__bot_name=bot.name).distinct())
 
 
-def local_now(bot: Bot, user, now: datetime) -> datetime:
+def local_now(
+    bot: Bot, user, now: datetime, schedule: Schedule | None = None
+) -> datetime:
     from django_ergo.bots.tools import ToolContext
 
+    if schedule and schedule.timezone:
+        return now.astimezone(ZoneInfo(schedule.timezone))
     return now.astimezone(ToolContext(bot=bot, user=user).timezone)
 
 
@@ -342,7 +439,8 @@ def run_due(bots: Iterable[Bot], now: datetime | None = None) -> list[str]:
             if not schedule.enabled:
                 continue
             for user in people_for(bot, schedule):
-                if not schedule.cron.matches(local_now(bot, user, now)):
+                moment = local_now(bot, user, now, schedule)
+                if not schedule.cron.matches(moment):
                     continue
                 try:
                     run = ScheduleRun.objects.create(
@@ -352,49 +450,168 @@ def run_due(bots: Iterable[Bot], now: datetime | None = None) -> list[str]:
                     continue  # already ran this minute (another beat, a retry)
                 try:
                     runner(run.pk)
-                except Exception:
-                    logger.exception(
-                        "Schedule %s of %s failed", schedule.name, bot.name
-                    )
+                except Exception as exc:  # noqa: BLE001 — audit failures from configured runners
+                    _fail_run(run, bot, safe_error(exc))
                     continue
                 ran.append(f"{bot.name}/{schedule.name}/{user.get_username()}")
     return ran
 
 
-def run_actions(run_id: int, registry=None) -> None:
-    """Carry out one schedule run's actions, in order (a worker calls this)."""
+# Keep claiming, ordered execution and audit transitions in one lifecycle.
+def run_actions(run_id: int, registry=None) -> None:  # noqa: C901, PLR0912, PLR0915
+    """Claim and audit a run once, including deliveries and quiet stops."""
+    from django.utils import timezone
+
     from django_ergo.bots.background import find_bot
     from django_ergo.conversation.models import ScheduleRun
 
-    run = ScheduleRun.objects.select_related("user").get(pk=run_id)
-    bot = find_bot(run.bot_name, registry)
-    schedule = next(
-        (s for s in bot.definition.schedules if s.name == run.schedule), None
-    )
-    if schedule is None:
-        logger.warning("Schedule %s of %s is gone", run.schedule, run.bot_name)
+    if not ScheduleRun.objects.filter(pk=run_id, status="pending").update(
+        status="in_progress", started_at=timezone.now()
+    ):
         return
-    moment = local_now(bot, run.user, run.minute)
-    result: Any = None
-    for step, action in enumerate(schedule.actions, start=1):
-        label = f"schedule {schedule.name}, step {step}"
-        if action.kind == "run":
-            job = run_code(bot, action, run.user, name=label)
-            if job.status != "completed":
-                logger.warning("%s of %s failed: %s", label, bot.name, job.error)
-                return
-            result = job.result
-            if action.stop_if_empty and result in (None, "", [], {}):
-                logger.info("%s of %s: nothing to report", label, bot.name)
-                return
+    run = ScheduleRun.objects.select_related("user").get(pk=run_id)
+    bot = None
+    try:
+        bot = find_bot(run.bot_name, registry)
+        schedule = next(
+            (s for s in bot.definition.schedules if s.name == run.schedule), None
+        )
+        if schedule is None:
+            msg = "schedule no longer exists"
+            raise ScheduleError(msg)  # noqa: TRY301 — missing schedules must fail the claimed run
+        moment = local_now(bot, run.user, run.minute, schedule)
+        result: Any = None
+        values = {}
+        for step, action in enumerate(schedule.actions, start=1):
+            audit = {
+                "step": step,
+                "kind": action.kind,
+                "status": "in_progress",
+                "started_at": timezone.now().isoformat(),
+            }
+            if action.kind in {"run", "python"}:
+                audit["target"] = (
+                    f"{action.path}:{action.function}"
+                    if action.path
+                    else action.function
+                )
+                if action.save_as:
+                    audit["save_as"] = action.save_as
+            if action.kind == "if":
+                audit["expression"] = action.expression
+            if action.kind == "prompt":
+                audit.update(to=action.to, llm=action.llm)
+            run.steps.append(audit)
+            run.save(update_fields=["steps"])
+            stop = False
+            try:
+                if action.kind == "run":
+                    job = run_code(
+                        bot,
+                        action,
+                        run.user,
+                        name=f"schedule {schedule.name}, step {step}",
+                    )
+                    audit["job"] = str(job.pk)
+                    if job.status != "completed":
+                        msg = "legacy job failed"
+                        raise WorkflowError(msg)  # noqa: TRY301 — record the failed step before failing the run
+                    result = job.result
+                    stop = action.stop_if_empty and result in (None, "", [], {})
+                    audit["result"] = result
+                elif action.kind == "python":
+                    context = {
+                        **deepcopy(values),
+                        "result": deepcopy(result),
+                        "bot": bot,
+                        "user": run.user,
+                        "run": run,
+                    }
+                    result = _run_python(bot, action, context)
+                    audit["result"] = result
+                    if action.save_as:
+                        values[action.save_as] = result
+                elif action.kind == "if":
+                    audit["result"] = condition(action.expression, values)
+                    stop = not audit["result"]
+                else:
+                    audit["result"] = _send_prompt(
+                        bot, action, run, moment, result, values
+                    )
+                audit["status"] = "completed"
+            except Exception as exc:
+                audit.update(status="failed", error=safe_error(exc))
+                raise
+            finally:
+                audit["completed_at"] = timezone.now().isoformat()
+                run.save(update_fields=["steps"])
+            if stop:
+                run.status = "noop"
+                break
         else:
-            _send_prompt(bot, schedule, action, run, moment, result)
+            run.status = "completed"
+        run.completed_at = timezone.now()
+        run.save(update_fields=["status", "completed_at"])
+    except Exception as exc:  # noqa: BLE001 — audit failures from arbitrary workflow steps
+        _fail_run(run, bot, safe_error(exc))
+
+
+def _run_python(bot, action, context):
+    if action.function == "ergo.models.check_available" and not action.path:
+        from django_ergo.bots.model_catalog import check_available
+
+        function = check_available
+    else:
+        function = getattr(bot.code(action.path), action.function, None)
+        if not callable(function):
+            msg = "python step function does not exist"
+            raise WorkflowError(msg)
+    return safe_json(_await_value(function(context, **action.args)))
+
+
+def _await_value(value):
+    import inspect
+
+    if inspect.isawaitable(value):
+        from asgiref.sync import async_to_sync
+
+        async def wait():
+            return await value
+
+        return async_to_sync(wait)()
+    return value
+
+
+def _fail_run(run, bot, error):
+    from django.utils import timezone
+
+    run.status, run.error, run.completed_at = "failed", error, timezone.now()
+    run.save(update_fields=["status", "error", "completed_at"])
+    if bot is None:
+        return
+    try:
+        _send_prompt(
+            bot,
+            Action.prompt(
+                run.schedule,
+                f"Schedule {run.schedule} failed. {error}",
+                "main",
+                llm=False,
+            ),
+            run,
+            run.minute,
+            None,
+        )
+    except Exception:  # noqa: BLE001 — failure reporting must not replace the audited error
+        # Do not leak a second exception while reporting the first.
+        logger.warning(
+            "Could not deliver failure notification for schedule run %s", run.pk
+        )
 
 
 def run_code(bot: Bot, action: Action, user, *, name: str):
     """Run a function from the bot's Python files, recorded as a BotJob."""
     import inspect
-    import traceback
 
     from django.utils import timezone
 
@@ -405,7 +622,7 @@ def run_code(bot: Bot, action: Action, user, *, name: str):
         bot_name=bot.name,
         name=name,
         target=f"{action.path}:{action.function}",
-        args=action.args,
+        args=safe_json(action.args),
         user=user,
         status="in_progress",
         started_at=timezone.now(),
@@ -421,27 +638,21 @@ def run_code(bot: Bot, action: Action, user, *, name: str):
             value = function(ToolContext(bot=bot, user=user), **args)
         else:
             value = function(**args)
-        if inspect.isawaitable(value):
-            from asgiref.sync import async_to_sync
-
-            async def wait(awaitable=value):
-                return await awaitable
-
-            value = async_to_sync(wait)()
+        value = _await_value(value)
         from django_ergo.bots.workers import jsonable
 
-        job.status, job.result = "completed", jsonable(value)
-    except Exception as exc:  # noqa: BLE001 — recorded on the job
-        job.status, job.error = "failed", f"{type(exc).__name__}: {exc}"[:2000]
-        job.traceback = "".join(traceback.format_exception(exc))[-20000:]
+        job.status, job.result = "completed", safe_json(jsonable(value))
+    except Exception as exc:  # noqa: BLE001 — recorded without exception values
+        job.status, job.error = "failed", safe_error(exc)
+        job.traceback = job.error
     job.completed_at = timezone.now()
     job.save()
     return job
 
 
 def _send_prompt(  # noqa: PLR0913
-    bot: Bot, schedule: Schedule, action: Action, run, moment, result
-) -> None:
+    bot: Bot, action: Action, run, moment, result, values=None
+) -> dict:
     import json
 
     from asgiref.sync import async_to_sync
@@ -453,29 +664,52 @@ def _send_prompt(  # noqa: PLR0913
     if action.to == "thread":
         parent = async_to_sync(bot.chat_session)(user, action.thread_in)
         runs = ScheduleRun.objects.filter(
-            bot_name=bot.name, schedule=schedule.name, user=user
+            bot_name=bot.name, schedule=run.schedule, user=user
         ).count()
         session = async_to_sync(bot.create_session)(
             user,
             parent=parent,
             title=action.title_for(moment, runs),
-            metadata={"schedule": schedule.name},
+            metadata={"schedule": run.schedule},
         )
     else:
         session = async_to_sync(bot.chat_session)(user, action.to)
-    text = action.message
-    if "{result}" in text:
-        shown = (
-            result
-            if isinstance(result, str)
-            else json.dumps(result, indent=2, default=str)
-        )
-        text = text.replace("{result}", shown)
-    messaging.send_event(
-        session,
-        text,
-        source=f"schedule:{schedule.name}",
-        source_label=f"Schedule: {schedule.name}",
-        registry=bot.registry,
-        metadata={"schedule": schedule.name},
+    # Literal replacements do not evaluate attribute/index/format expressions,
+    # and do not reinterpret braces in JSON results or user-authored text.
+    replacements = {
+        "{result}": result if isinstance(result, str) else json.dumps(result, indent=2),
+        **{
+            f"{{{name}}}": json.dumps(value, indent=2)
+            for name, value in (values or {}).items()
+        },
+    }
+    import re
+
+    text = re.sub(
+        r"\{([A-Za-z][A-Za-z0-9_]*)\}",
+        lambda match: replacements.get(match.group(0), match.group(0)),
+        action.message,
     )
+    if not action.llm:
+        from django_ergo.conversation.identity import system_identity
+        from django_ergo.conversation.messages import add_message
+
+        message = async_to_sync(add_message)(
+            session,
+            "assistant",
+            [{"block_type": "text", "text": text}],
+            author=system_identity(
+                f"schedule:{run.schedule}", f"Schedule: {run.schedule}"
+            ),
+            provenance={"kind": "event"},
+        )
+    else:
+        message = messaging.send_event(
+            session,
+            text,
+            source=f"schedule:{run.schedule}",
+            source_label=f"Schedule: {run.schedule}",
+            registry=bot.registry,
+            metadata={"schedule": run.schedule},
+        )
+    return {"session": str(session.pk), "message": str(message.pk)}
