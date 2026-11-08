@@ -12,6 +12,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
@@ -73,6 +74,11 @@ CAPABILITIES = (
 )
 PRICE_KEYS = {"input", "output", "cacheRead", "cacheWrite", "longContext"}
 MIN_SECRET_LENGTH = 6
+NON_CHAT_MODEL_ID = re.compile(
+    r"(?:^|[-._/])(?:tts|stt|transcribe|transcription|embedding|embeddings|"
+    r"realtime|moderation|image|video|audio)(?:$|[-._/])",
+    re.IGNORECASE,
+)
 
 
 class ModelCatalogError(RuntimeError):
@@ -376,16 +382,16 @@ def _normalize(
         or source.custom_endpoint
         or raw.get("lifecycle") == "retired"
     )
-    allowed = source.provider in ALLOWED_FOR_CODING
-    kind = raw.get("kind", "")
-    coding = (
-        allowed
-        and priced
-        and not private
-        and not quarantined
-        and kind not in {"image", "embedding", "audio", "video"}
+    # Text input, generation limits and tools can also describe realtime or
+    # other non-chat endpoints. Only explicit chat metadata establishes coding
+    # eligibility; missing kind must not silently become an execution candidate.
+    allowed = (
+        source.provider in ALLOWED_FOR_CODING
+        and raw.get("kind") == "chat"
+        and not NON_CHAT_MODEL_ID.search(model_id)
         and raw.get("supportsTools") is not False
     )
+    coding = allowed and priced and not private and not quarantined
     selector = f"{source.alias}/{model_id}"
     return {
         "id": model_id,
@@ -445,8 +451,10 @@ def _routed(providers, bot) -> set[str]:
 def check_available(context: dict) -> dict:  # noqa: C901, PLR0912, PLR0915 — discovery and its atomic snapshot diff form one operation
     """Discover configured providers and atomically diff their last good snapshot.
 
-    Returns JSON-only new/removed model records, changed before/after records,
-    policy/routing flags, a notify boolean, and explicit source coverage.
+    Returns JSON-only diffs, policy flags, source coverage and a concise summary.
+    A newly created baseline reports its count once, with empty diffs/flags and
+    notify=True; existing baselines report only real changes, never reseeding
+    merely because their model map is empty.
     Unhandled providers retain their previous baseline; a fetch/parse failure
     raises ModelCatalogError and advances no part of the snapshot.
     """
@@ -568,7 +576,9 @@ def check_available(context: dict) -> dict:  # noqa: C901, PLR0912, PLR0915 — 
     ]
     scope = hashlib.sha256(json.dumps(scope_data).encode()).hexdigest()
     with transaction.atomic():
-        snapshot, _ = ModelCatalogSnapshot.objects.get_or_create(scope=scope)
+        snapshot, baseline_seeded = ModelCatalogSnapshot.objects.get_or_create(
+            scope=scope
+        )
         snapshot = ModelCatalogSnapshot.objects.select_for_update().get(pk=snapshot.pk)
         previous = snapshot.models
         # Unavailable sources are not evidence of removal; preserve their last good data.
@@ -578,7 +588,11 @@ def check_available(context: dict) -> dict:  # noqa: C901, PLR0912, PLR0915 — 
             if value["configured_provider"] not in successful
         }
         current.update(records)
-        new = [current[k] for k in sorted(current.keys() - previous.keys())]
+        new = (
+            []
+            if baseline_seeded
+            else [current[k] for k in sorted(current.keys() - previous.keys())]
+        )
         removed = [previous[k] for k in sorted(previous.keys() - current.keys())]
         changed = [
             {"before": previous[k], "after": current[k]}
@@ -601,7 +615,15 @@ def check_available(context: dict) -> dict:  # noqa: C901, PLR0912, PLR0915 — 
                 ("private", record["private"]),
                 ("quarantined", record["quarantined"]),
                 ("unpriced", not record["priced"]),
-                ("coding_provider_not_allowed", not record["allowed_for_coding"]),
+                (
+                    "coding_provider_not_allowed",
+                    record["provider"] not in ALLOWED_FOR_CODING,
+                ),
+                (
+                    "coding_capability_not_supported",
+                    record["provider"] in ALLOWED_FOR_CODING
+                    and not record["allowed_for_coding"],
+                ),
             ):
                 if applies:
                     flags.append(
@@ -628,7 +650,17 @@ def check_available(context: dict) -> dict:  # noqa: C901, PLR0912, PLR0915 — 
                 "removed": removed,
                 "changed": changed,
                 "flagged": flags,
-                "notify": bool(new or removed or changed or flags),
+                "baseline_seeded": baseline_seeded,
+                "model_count": len(current),
+                "summary": (
+                    f"Baseline seeded, {len(current)} models"
+                    if baseline_seeded
+                    else (
+                        f"{len(new)} new, {len(removed)} removed, "
+                        f"{len(changed)} changed models"
+                    )
+                ),
+                "notify": baseline_seeded or bool(new or removed or changed or flags),
                 "coverage": coverage,
             }
         )

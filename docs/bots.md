@@ -241,8 +241,20 @@ JSON data only; no function calls or arbitrary Python evaluation.
 cron and date templates to an IANA timezone instead of the person's timezone.
 Runs retain status, step results, timestamps, and sanitized errors; failures
 notify main without an LLM turn. Model checks use only catalogs/list endpoints,
-persist an idempotent diff, and never change routing. Private models and
-quarantined providers are not coding/shared-routing candidates.
+persist an idempotent diff, and never change routing. Their first successful
+run seeds the catalog for that bot folder/name, user, and schedule, returning
+`baseline_seeded: true`, `model_count`, and a summary such as
+`"Baseline seeded, 234 models"` instead of dumping every model as new.
+It sets `notify: true` once with empty diffs/flags; subsequent unchanged runs
+are silent and later real changes produce ordinary diffs. A separate bot table
+refresh does not establish this baseline; existing core baselines are preserved.
+Private models and quarantined providers are not coding/shared-routing
+candidates. Coding flags also require explicit `kind: chat` metadata; non-chat
+and missing-kind records fail closed, even when priced. Task tokens in model
+IDs (for example `realtime` or `tts`) also exclude coding when an upstream cache
+mislabels them as chat. Discovery flags and a
+deployment's `ModelsAvailable` table are not core worker execution allowlists:
+explicit worker models and configured agent tiers do not consult them.
 See [Schedules](schedules.md#workflows) for the complete format and safety rules.
 
 ## Skills
