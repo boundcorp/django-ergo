@@ -14,6 +14,7 @@ Live on rigel from `~/p/boundcorp/django-ergo`, bots from `boundcorp/ergo-bots`.
 - [x] **Schedules in each bot's bot.yaml** (`schedules:`, run every minute by Celery beat; bot page lists them with the next run). PR from `claude/bot-schedules`.
 - [x] **Auditable schedule workflows**: trusted Python steps, named JSON context, safe conditions, message-only prompts, fixed timezones, silent no-op runs and failure notices.
 - [x] **Read-only model discovery**: core catalog/list checks, persisted idempotent diffs, pricing/capability provenance and private/coding policy flags; new-thread review prompts never enable routing.
+- [x] **Model report snapshot safety**: compact warning references and validate the exact workflow payload before committing the catalog baseline; oversized reports roll back rather than consuming the diff.
 
 - [x] **Toolkit pre-seeding**: toolkits declare tool calls run and written into the chat before the first completion; orchestration pre-seeds `ergo_bot_list` (names + YAML descriptions); skills use the same path; boundcorp's instructions stop listing bots.
 - [x] **Turns as Celery tasks**: web messages and approvals queue a turn task (inline without a broker); Redis pub/sub wakes the SSE stream; rigel runs `up web worker beat`.

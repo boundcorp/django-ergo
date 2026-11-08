@@ -162,6 +162,12 @@ It persists the last successful catalog snapshot in the database and returns
 Repeated checks of an unchanged catalog produce empty diffs and
 `notify: false`. A provider fetch failure fails the step rather than treating
 the provider's entire catalog as removed.
+The complete report is validated against workflow JSON limits before the
+snapshot commits (10,000 values, depth 32, 1 MB encoded JSON). Flags contain a
+`selector`, `reason`, and `severity`, referring to the full model record in
+the diff instead of copying its metadata for every warning. If a report
+exceeds a limit, the check fails visibly and retains its prior snapshot;
+the discovery diff is not consumed.
 
 Each discovered model carries policy and metadata flags, including
 `allowed_for_coding`, `priced`, and `private`. Coding candidates are limited

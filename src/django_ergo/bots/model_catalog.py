@@ -450,6 +450,7 @@ def check_available(context: dict) -> dict:  # noqa: C901, PLR0912, PLR0915 — 
     Unhandled providers retain their previous baseline; a fetch/parse failure
     raises ModelCatalogError and advances no part of the snapshot.
     """
+    from django_ergo.bots.schedule_workflow import safe_json
     from django_ergo.conversation.models import ModelCatalogSnapshot
 
     bot = context["bot"]
@@ -586,7 +587,11 @@ def check_available(context: dict) -> dict:  # noqa: C901, PLR0912, PLR0915 — 
         ]
         routed = _routed(providers, bot)
         flags = [
-            {"reason": "removed_in_route", "severity": "critical", "model": record}
+            {
+                "reason": "removed_in_route",
+                "severity": "critical",
+                "selector": record["selector"],
+            }
             for record in removed
             if record["selector"] in routed
         ]
@@ -600,24 +605,34 @@ def check_available(context: dict) -> dict:  # noqa: C901, PLR0912, PLR0915 — 
             ):
                 if applies:
                     flags.append(
-                        {"reason": reason, "severity": "warning", "model": record}
+                        {
+                            "reason": reason,
+                            "severity": "warning",
+                            "selector": record["selector"],
+                        }
                     )
             if record["capabilities"].get("lifecycle") in {"deprecated", "retired"}:
                 flags.append(
                     {
                         "reason": "model_" + record["capabilities"]["lifecycle"],
                         "severity": "warning",
-                        "model": record,
+                        "selector": record["selector"],
                     }
                 )
+        # Validate the exact workflow payload before committing its baseline.
+        # Flags reference records already present in the diff, rather than
+        # multiplying full pricing/capability metadata for each policy warning.
+        report = safe_json(
+            {
+                "new": new,
+                "removed": removed,
+                "changed": changed,
+                "flagged": flags,
+                "notify": bool(new or removed or changed or flags),
+                "coverage": coverage,
+            }
+        )
         snapshot.models = current
         snapshot.coverage = coverage
         snapshot.save(update_fields=["models", "coverage", "updated_at"])
-    return {
-        "new": new,
-        "removed": removed,
-        "changed": changed,
-        "flagged": flags,
-        "notify": bool(new or removed or changed or flags),
-        "coverage": coverage,
-    }
+    return report
