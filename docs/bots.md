@@ -957,8 +957,10 @@ Who may message whom:
   their main chat, the parent's main chat.
 - **Downward** to sub-bots needs `orchestration` (on by default).
 - **Sideways** to another bot, including a sibling bot, needs
-  `permissions.call_bots`, except for the exact starter chat. A chat may
-  message any same-user chat or thread of an authorized bot.
+  `permissions.call_bots`, except for the exact starter chat. The user's
+  `permissions.users` access to the target bot is required in every case;
+  superusers retain access. A chat may message any same-user chat or thread
+  of an authorized bot.
 - **New threads are the target's call.** `thread: "new"` needs the target
   bot's `threads.allow_create`, whether the sender is the bot itself or
   another bot; otherwise the sender messages its main chat. A thread another

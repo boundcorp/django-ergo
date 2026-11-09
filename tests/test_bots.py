@@ -1493,6 +1493,67 @@ async def test_thread_messaging_respects_bot_access_user_and_management_ownershi
 
 
 @pytest.mark.django_db(transaction=True)
+async def test_parent_user_access_applies_to_messaging_and_discovery(
+    tmp_path, thread_messages
+):
+    from django_ergo.bots import orchestrator
+    from django_ergo.bots import overview
+    from django_ergo.conversation.models import ThreadMessage
+
+    user = await User.objects.acreate(username="not-allowed")
+    admin = await User.objects.acreate(username="admin", is_superuser=True)
+    engine = claude_engine()
+    _, parent, child = _family(
+        tmp_path,
+        engine,
+        "name: boundcorp\npermissions: {users: [someone-else]}\n",
+        "name: design\nthreads: {allow_create: true}\n",
+    )
+    parent_thread = await parent.create_session(user, title="Private")
+    sender = await child.create_session(
+        user,
+        title="Sender",
+        metadata={"started_by": str(parent_thread.id), "started_by_bot": "boundcorp"},
+    )
+    engine._client.responses = [
+        claude_tool(
+            "ergo_thread_send",
+            {"bot": "boundcorp", "thread": str(parent_thread.id), "message": "hello"},
+            tool_id="send",
+        ),
+        claude_tool(
+            "ergo_thread_forward",
+            {"bot": "boundcorp", "thread": str(parent_thread.id)},
+            tool_id="forward",
+        ),
+        say("Done."),
+    ]
+    await child.ask(sender, "Forward this")
+    assert all(result.get("is_error") for result in _tool_results(engine)[-2:])
+    assert "Report milestones straight to" not in _turn_context(engine._client.calls[0])
+    assert not await ThreadMessage.objects.filter(
+        recipient_session=parent_thread
+    ).aexists()
+    ctx = ToolContext(bot=child, session=sender, user=user)
+    assert "boundcorp" not in await sync_to_async(orchestrator.ergo_bot_list)(ctx)
+    assert "### boundcorp" not in await sync_to_async(overview.overview)(ctx)
+
+    admin_target = await parent.create_session(admin, title="Admin target")
+    admin_sender = await child.create_session(admin, title="Admin sender")
+    engine._client.responses = [
+        claude_tool(
+            "ergo_thread_send",
+            {"bot": "boundcorp", "thread": str(admin_target.id), "message": "hello"},
+            tool_id="admin-send",
+        ),
+        say("Done."),
+    ]
+    await child.ask(admin_sender, "Send this")
+    assert not _tool_results(engine)[-1].get("is_error")
+    assert await ThreadMessage.objects.filter(recipient_session=admin_target).aexists()
+
+
+@pytest.mark.django_db(transaction=True)
 async def test_orchestrators_see_every_bots_chats_and_latest_messages(
     tmp_path, thread_messages, monkeypatch
 ):

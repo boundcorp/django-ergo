@@ -1168,7 +1168,9 @@ class Bot:
         builder = ContextBuilder(budget_tokens=self.definition.budget_tokens)
         from django_ergo.bots.orchestrator import chat_identity
 
-        builder.add(TextContextSource("This chat", chat_identity(session), weight=3))
+        builder.add(
+            TextContextSource("This chat", chat_identity(session, self), weight=3)
+        )
         builder.add(TextContextSource("Skills", skills.context_summary, weight=1))
         if self.definition.current_time:
             builder.add(

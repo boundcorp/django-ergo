@@ -26,6 +26,7 @@ from django.shortcuts import aget_object_or_404
 from django.utils import timezone
 from django_ergo.bots import archival, messaging, webhooks
 from django_ergo.bots.pages import text_page, view_kind
+from django_ergo.bots.registry import may_use
 from django_ergo.bots.runtime import Bot
 from django_ergo.bots.todos import get_todos
 from django_ergo.bots.wakes import pending_wakes
@@ -580,12 +581,6 @@ def jobs_out(bot: Bot) -> list[dict]:
         # Saved Telegram updates show only when they did not go through.
         for job in BotJob.objects.filter(bot_name=bot.name).exclude(target="plugin:telegram", status="completed")[:20]
     ]
-
-
-def may_use(bot: Bot, user) -> bool:
-    """permissions.users in bot.yaml limits a bot to those people (admins always)."""
-    allowed = bot.definition.allowed_users
-    return not allowed or user is None or user.is_superuser or user.get_username() in allowed
 
 
 def get_bot(name: str, user=None) -> Bot:

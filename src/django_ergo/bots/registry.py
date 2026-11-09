@@ -34,6 +34,17 @@ if TYPE_CHECKING:
 SKIP_DIRS = {"node_modules", "__pycache__", "skills", "tools", "kb"}
 
 
+def may_use(bot: Bot, user) -> bool:
+    """Whether a user may access this bot; superusers are always allowed."""
+    allowed = bot.definition.allowed_users
+    return (
+        not allowed
+        or user is None
+        or user.is_superuser
+        or user.get_username() in allowed
+    )
+
+
 def find_bot_folders(directory: str | Path) -> list[Path]:
     """Every folder at or under ``directory`` with a bot.yaml, parents first."""
     root = Path(directory).resolve()
