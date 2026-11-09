@@ -1490,8 +1490,9 @@ is open the bot has `ergo_browser_tabs`, `ergo_browser_open`,
 with `approve_actions: true`, as do `ergo_browser_batch` (several steps in
 one call, one snapshot at the end) and `ergo_browser_task` (a goal handed
 to `driver_model`, which drives the other tools in its own loop and reports
-back). Actions refuse to run in a tab that moved since the bot last looked,
-since the user is likely using it. With `sessions: false`
+back). Actions refuse to run in a tab the user has taken over (navigated
+since the bot last looked, or scrolled, clicked or typed in between 3 of
+the bot's calls within 5 minutes). With `sessions: false`
 there are no start and stop tools and the browser tools always work.
 Snapshots are accessibility trees whose refs (`e12`) the actions take; a
 Playwright selector works too. The bot is told to hand sign-ins, two-factor
