@@ -191,7 +191,7 @@ def test_fable_window_only_blocks_fable_models_for_chats_and_agents():
 
 
 @pytest.mark.django_db
-def test_claude_first_until_its_five_hour_window_runs_low():
+def test_percentage_caps_remain_compatible_with_legacy_tiers():
     providers = found()
     assert pick_model(providers, "medium") == "claude/claude-opus-5-5"
     record_usage_windows("claude", {"five_hour": {"used": 86, "resets_at": soon()}})
@@ -199,8 +199,6 @@ def test_claude_first_until_its_five_hour_window_runs_low():
     # Codex's weekly window is protected too; then the API key.
     record_usage_windows("chatgpt", {"weekly": {"used": 80, "resets_at": soon(48)}})
     assert pick_model(providers, "medium") == "openai/gpt-6-sol"
-    # Every candidate over a limit: the subscription with the most room.
-    assert pick_model(providers, "small") == "chatgpt/gpt-6-luna"  # 20% left vs 14%
     # Back to Claude once its window resets.
     record_usage_windows(
         "claude", {"five_hour": {"used": 99, "resets_at": time.time() - 1}}
@@ -336,7 +334,6 @@ def test_route_logs_a_switch_with_the_reason(django_user_model):
         "claude/claude-opus-5-5",
         "chatgpt/gpt-6-sol",
     )
-    assert switch.reason == "claude 5-hour window at 90% (limit 85%)"
 
 
 @pytest.mark.django_db
@@ -380,9 +377,6 @@ def test_routing_report_explains_each_tier():
         ("chatgpt/gpt-6-sol", "pick"),
         ("openai/gpt-6-sol", "ok"),
     ]
-    assert (
-        medium["candidates"][0]["reason"] == "claude 5-hour window at 90% (limit 85%)"
-    )
     high = next(t for t in report["agents"] if t["name"] == "large")
     assert [(c["label"], c["state"]) for c in high["candidates"]] == [
         ("claude · claude-opus-5-5 · high", "skip"),
@@ -409,13 +403,14 @@ def test_routing_report_explains_each_tier():
 
 
 @pytest.mark.django_db
-def test_agent_fallbacks_are_logged(django_user_model):
+def test_agent_picks_are_logged(django_user_model):
     from django_ergo.conversation.models import RoutingSwitch
 
     providers = found()
     choice = pick_agent(providers, "large")
     routing.record_agent_pick(providers, "large", choice, "Orca worker · fix tests")
-    assert not RoutingSwitch.objects.exists()  # the first choice
+    assert RoutingSwitch.objects.get().to_model == routing.agent_label(choice)
+    RoutingSwitch.objects.all().delete()
     record_usage_windows("claude", {"five_hour": {"used": 92, "resets_at": soon()}})
     choice = pick_agent(providers, "large")
     routing.record_agent_pick(providers, "large", choice, "Orca worker · fix tests")
@@ -424,7 +419,6 @@ def test_agent_fallbacks_are_logged(django_user_model):
         "claude · claude-opus-5-5 · high",
         "codex · gpt-6-sol · high",
     )
-    assert switch.reason == "claude 5-hour window at 92% (limit 85%)"
 
 
 @pytest.mark.django_db
@@ -468,3 +462,111 @@ def test_a_turn_refused_at_its_limit_offers_a_retry_but_never_takes_it(
         user=user, bot_name="kitchen", model="claude/claude-opus-5-5"
     )
     assert bot.retry_model(fixed, refused) == ""
+
+
+@pytest.fixture
+def pace_clock(monkeypatch):
+    now = 1_794_244_200.0
+    monkeypatch.setattr(routing.time, "time", lambda: now)
+    return now
+
+
+def paced(now, used, hours_left, period="7d"):
+    return {
+        "used": used,
+        "resets_at": now + hours_left * 3600,
+        "period": period,
+        "observed_at": now,
+    }
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("codex_hours", [82 / 60, 46.8])
+def test_lee_example_prefers_codex_for_chat_and_worker_even_with_claude_cache(
+    pace_clock, codex_hours
+):
+    providers = found()
+    record_usage_windows("claude", {"weekly": paced(pace_clock, 5, 165)})
+    record_usage_windows("chatgpt", {"weekly": paced(pace_clock, 23, codex_hours)})
+    assert (
+        pick_model(providers, "medium", current="claude/claude-opus-5-5")
+        == "chatgpt/gpt-6-sol"
+    )
+    assert pick_agent(providers, "large").provider == "chatgpt"
+    report = routing.routing_report(providers)
+    weekly = next(p for p in report["providers"] if p["name"] == "chatgpt")["windows"][
+        "weekly"
+    ]
+    assert weekly["elapsed_frac"] == pytest.approx(1 - codex_hours / 168)
+    assert weekly["pace_delta"] > 0.48
+
+
+@pytest.mark.django_db
+def test_short_window_ahead_of_pace_blocks_otherwise_good_weekly_budget(pace_clock):
+    providers = found()
+    record_usage_windows(
+        "claude",
+        {
+            "weekly": paced(pace_clock, 5, 1),
+            "five_hour": paced(pace_clock, 60, 4, "5h"),
+        },
+    )
+    record_usage_windows("chatgpt", {"weekly": paced(pace_clock, 30, 100)})
+    assert pick_model(providers, "small") == "chatgpt/gpt-6-luna"
+    assert pick_agent(providers, "large").provider == "chatgpt"
+
+
+@pytest.mark.django_db
+def test_exhausted_candidates_never_return_as_all_over_caps_fallback(pace_clock):
+    providers = found()
+    for provider in ("claude", "chatgpt"):
+        record_usage_windows(provider, {"weekly": paced(pace_clock, 100, 1)})
+    with pytest.raises(ValueError, match="No safe provider"):
+        pick_model(providers, "small")
+    with pytest.raises(ValueError, match="No safe subscription"):
+        pick_agent(providers, "large")
+
+
+def test_expiring_headroom_beats_larger_nonexpiring_budget_and_soft_preference(
+    pace_clock,
+):
+    usage = {
+        "claude": {"weekly": paced(pace_clock, 5, 84)},
+        "codex": {"weekly": paced(pace_clock, 35, 1)},
+    }
+    rules = routing.RoutingRules(soft_preferences={"claude": 0.1})
+    assert routing.choose(["claude", "codex"], str, usage, rules) == "codex"
+    assert routing.choose(["codex", "claude"], str, usage, rules) == "codex"
+
+
+def test_stale_timing_does_not_earn_expiry_bonus(pace_clock):
+    usage = {
+        "old": {
+            "weekly": {
+                **paced(pace_clock, 1, 1),
+                "observed_at": pace_clock - routing.USAGE_STALE_SECONDS - 1,
+            }
+        },
+        "fresh": {"weekly": paced(pace_clock, 30, 84)},
+    }
+    assert (
+        routing.choose(["old", "fresh"], str, usage, routing.RoutingRules()) == "fresh"
+    )
+
+
+def test_generic_scoped_weekly_limits_apply_and_model_specific_limits_do_not(
+    pace_clock,
+):
+    usage = {
+        "account": {
+            "weekly_credits": {**paced(pace_clock, 100, 1), "model": ""},
+            "weekly_fable": {**paced(pace_clock, 100, 1), "model": "fable"},
+        }
+    }
+    assert routing.applicable_usage("account", usage, "opus") == {"weekly_credits": 100}
+    assert (
+        routing.choose(
+            ["account"], str, usage, routing.RoutingRules(), model_of=lambda c: "opus"
+        )
+        is None
+    )

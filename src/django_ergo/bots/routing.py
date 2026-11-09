@@ -1,49 +1,17 @@
-"""Model routing: built-in and custom tiers from each subscription's headroom.
+"""Capability-tier routing by subscription pace, shared by chats and workers.
 
-``providers.yaml`` lists each tier's candidates in order of preference, for
-bot chats (``tiers``) and for coding agents started through Orca
-(``agents``)::
+Tier lists define eligible models and capability/cost tie-break order, not a
+provider preference. Weekly elapsed-minus-used quota drives the score, with
+an urgency bonus for unused quota near reset. Short windows more than ten
+percentage points ahead of pace, and exhausted windows, exclude a candidate.
+Configured percentage caps still apply; when all candidates exceed a soft
+cap the best non-exhausted, short-window-safe candidate remains eligible.
 
-    tiers:
-      small:  [subscription/claude-haiku-5-5, chatgpt/gpt-6-luna]
-      medium: [subscription/claude-sonnet-5-5, chatgpt/gpt-6.1-sol]
-      large:  [subscription/claude-opus-5-5, chatgpt/gpt-6-sol]
-      xlarge: [subscription/claude-fable-5-1, chatgpt/gpt-6-astra,
-               subscription/claude-opus-5-5, chatgpt/gpt-6-sol]
-    agents:                      # subscriptions only: a candidate names its provider
-      medium:
-        - {agent: claude, model: claude-sonnet-5-5, provider: subscription}
-        - {agent: codex, model: gpt-6.1-sol, effort: medium, provider: chatgpt}
-    routing:                     # optional rules; routing.md can say it in words
-      limits:
-        - {provider: subscription, window: five_hour, max_used: 85}
-        - {provider: chatgpt, window: weekly, max_used: 80}
-
-The built-in tiers are small, medium, large and xlarge. The old names ``low``
-and ``high`` still work as aliases of small and large (:func:`tier_of`), in
-``auto/<tier>`` refs and as providers.yaml keys.
-
-A chat (or a bot's ``engine.model``) set to ``auto/<tier>`` gets a model per
-turn from :func:`pick_model`: the first candidate whose provider is
-available and under every limit. A chat keeps the model it had while that
-model still qualifies, so a prompt cache isn't thrown away for nothing.
-When every candidate is over a limit, the one whose subscription has the
-most room wins. Agent candidates must be CLI subscriptions, never API keys.
-
-Limits read :class:`ProviderUsage`: only the windows each CLI reports
-(Claude Code's ``rate_limit_event``, Codex's ``account/rateLimits``), including
-Claude's separate Fable weekly window, applied only to Fable models.
-A provider that refused a call counts that window as fully used until reset.
-
-``routing.md`` next to ``providers.yaml`` states the priorities in plain
-words (Ergonaut's Routing page can replace it per deployment, see
-:func:`routing_text`) ("lean on Claude until its 5-hour window is 85% used, keep Codex's
-weekly window under 80%"). :func:`compile_routing` turns it into the same
-``limits`` once per change of the file (a structured call), stored in
-:class:`RoutingPolicy`; until then the YAML ``routing`` rules apply. Without
-any rules, a provider is skipped only at 98% used. A deployment can replace
-the policy entirely with ``DJANGO_ERGO["MODEL_ROUTER"]``, a dotted path to a
-callable ``(candidates, usage, rules, current) -> candidate``.
+``current_usage`` preserves the numeric mapping passed to custom MODEL_ROUTER
+callbacks, carrying timing metadata separately. Legacy tier lists, aliases,
+explicit models, percentage limits and custom router signatures still work.
+``routing.soft_preferences`` adds a bounded, optional fractional-score nudge.
+Picks and the Routing page expose the same pace calculation and reasons.
 """
 
 from __future__ import annotations
@@ -83,6 +51,9 @@ DEFAULT_EFFORT = "medium"
 AUTO = "auto/"
 DEFAULT_MAX_USED = 98.0
 USAGE_STALE_SECONDS = 15 * 60  # three missed 5-minute syncs
+EXHAUSTED_PERCENT = 100
+WEEK_SECONDS = 7 * 24 * 3600
+SHORT_PACE_MARGIN = 0.10
 
 
 class Limit(BaseModel):
@@ -97,6 +68,7 @@ class Limit(BaseModel):
 
 class RoutingRules(BaseModel):
     limits: list[Limit] = Field(default_factory=list)
+    soft_preferences: dict[str, float] = Field(default_factory=dict)
 
 
 @dataclass
@@ -131,8 +103,8 @@ class Routing:
 
 
 def text_sha(text: str) -> str:
-    # Recompile pre-window-aware policies rather than retaining engine-name rules.
-    return hashlib.sha256(f"routing-v2:{text}".encode()).hexdigest() if text else ""
+    # Recompile policies whose prompt described provider-first selection.
+    return hashlib.sha256(f"routing-v3:{text}".encode()).hexdigest() if text else ""
 
 
 def routing_text(routing: Routing) -> str:
@@ -157,12 +129,20 @@ def tier_of(ref: str) -> str:
 # -- usage windows ------------------------------------------------------------
 
 
+class _Usage(dict):
+    """Numeric usage for custom routers, plus timing for the built-in scorer."""
+
+    def __init__(self):
+        super().__init__()
+        self.windows: dict[str, dict] = {}
+
+
 def current_usage(now: float | None = None) -> dict[str, dict]:
-    """{provider: {window: used %}}, leaving out windows that have reset."""
+    """{provider: {window: used %}}, with timing metadata in ``.windows``."""
     from django_ergo.conversation.models import ProviderUsage
 
     now = time.time() if now is None else now
-    usage: dict[str, dict] = {}
+    usage = _Usage()
     for row in ProviderUsage.objects.all():
         for name, window in (row.windows or {}).items():
             resets = window.get("resets_at")
@@ -170,6 +150,7 @@ def current_usage(now: float | None = None) -> dict[str, dict]:
                 continue
             if window.get("used") is not None:
                 usage.setdefault(row.provider, {})[name] = float(window["used"])
+                usage.windows.setdefault(row.provider, {})[name] = window
     return usage
 
 
@@ -202,17 +183,129 @@ def limit_of(provider: str, window: str, rules: RoutingRules) -> float:
 
 
 def applicable_usage(provider: str, usage: dict, model: str = "") -> dict:
-    """Model-specific weekly limits never disqualify unrelated models."""
+    """Model-specific windows never disqualify unrelated models."""
+    windows = getattr(usage, "windows", {})
+    out = {}
+    for name, used in (usage.get(provider) or {}).items():
+        details = windows.get(provider, {}).get(name)
+        if details is None and isinstance(used, dict):
+            details = used
+        scope = (
+            details.get("model", "")
+            if details is not None
+            else name.removeprefix("weekly_")
+            if name.startswith("weekly_")
+            else ""
+        )
+        if scope and scope.lower() not in model.lower():
+            continue
+        value = used.get("used") if isinstance(used, dict) else used
+        if value is not None:
+            out[name] = value
+    return out
+
+
+def window_pace(window: dict, *, now: float | None = None) -> dict:
+    """Fractions, not percentages; unknown/stale timing earns no urgency."""
+    now = time.time() if now is None else now
+    used = window.get("used")
+    resets = window.get("resets_at")
+    period = window.get("period_seconds") or window.get("period")
+    seconds = {"5h": 18000, "7d": 604800, "1w": 604800}.get(period)
+    if seconds is None and isinstance(period, int | float):
+        seconds = period
+    hours = max(0.0, (resets - now) / 3600) if resets else None
+    elapsed = None
+    if seconds and seconds > 0 and resets and resets > now:
+        elapsed = min(1.0, max(0.0, 1 - (resets - now) / seconds))
+    used_frac = used / 100 if used is not None else None
     return {
-        name: used
-        for name, used in (usage.get(provider) or {}).items()
-        if not name.startswith("weekly_")
-        or (model and name.removeprefix("weekly_") in model.lower())
+        "elapsed_frac": elapsed,
+        "used_frac": used_frac,
+        "pace_delta": elapsed - used_frac
+        if elapsed is not None and used_frac is not None
+        else None,
+        "hours_to_reset": hours,
     }
+
+
+def _paced_windows(provider: str, usage: dict, model: str, now: float):
+    details = getattr(usage, "windows", usage).get(provider, {})
+    for name in applicable_usage(provider, usage, model):
+        window = details.get(name)
+        if not isinstance(window, dict):
+            continue
+        observed = window.get("observed_at")
+        if observed is None or now - observed > USAGE_STALE_SECONDS:
+            continue
+        window = {"period": window_period(name), **window}
+        pace = window_pace(window, now=now)
+        if pace["pace_delta"] is not None:
+            yield name, window, pace
+
+
+def pace_block(provider: str, usage: dict, model: str = "") -> str:
+    """Hard constraints, never bypassed by the all-over-soft-caps fallback."""
+    for name, used in applicable_usage(provider, usage, model).items():
+        if used >= EXHAUSTED_PERCENT:
+            return f"{provider} {name} exhausted"
+    for name, window, pace in _paced_windows(provider, usage, model, time.time()):
+        period = window.get("period_seconds") or window.get("period")
+        weekly = period in ("7d", "1w") or (
+            isinstance(period, int | float) and period >= WEEK_SECONDS
+        )
+        if not weekly and pace["pace_delta"] < -SHORT_PACE_MARGIN:
+            return f"{provider} {name} {-100 * pace['pace_delta']:.0f}% ahead of pace"
+    return ""
+
+
+def pace_score(
+    provider: str,
+    usage: dict,
+    rules: RoutingRules,
+    model: str = "",
+    *,
+    now: float | None = None,
+) -> float:
+    """Worst weekly window dominates; short windows constrain, never reward."""
+    weekly, short = [], []
+    now = time.time() if now is None else now
+    for _name, window, pace in _paced_windows(provider, usage, model, now):
+        delta = pace["pace_delta"]
+        period = window.get("period_seconds") or window.get("period")
+        is_weekly = period in ("7d", "1w") or (
+            isinstance(period, int | float) and period >= WEEK_SECONDS
+        )
+        if is_weekly:
+            urgency = 1 + min(7.0, 24 / max(1.0, pace["hours_to_reset"]))
+            weekly.append(delta * urgency if delta > 0 else 2 * delta)
+        else:
+            short.append(2 * min(0.0, delta))
+    preference = max(-0.1, min(0.1, rules.soft_preferences.get(provider, 0.0)))
+    return min(weekly, default=0.0) + min(short, default=0.0) + preference
+
+
+def pick_reason(
+    provider: str, usage: dict, rules: RoutingRules, model: str = ""
+) -> str:
+    windows = list(_paced_windows(provider, usage, model, time.time()))
+    if not windows:
+        return f"chose {provider}: pace unavailable; capability/cost tie-break"
+    # Explain the weekly budget first; short-window constraints are separate.
+    name, _window, pace = next((w for w in windows if w[0] == "weekly"), windows[0])
+    delta = pace["pace_delta"]
+    return (
+        f"chose {provider}: {abs(delta) * 100:.0f}% "
+        f"{'under' if delta >= 0 else 'ahead of'} {name.replace('_', ' ')} pace, "
+        f"resets in {pace['hours_to_reset']:.1f}h "
+        f"(score {pace_score(provider, usage, rules, model):.2f})"
+    )
 
 
 def why_over(provider: str, usage: dict, rules: RoutingRules, model: str = "") -> str:
     """Why this candidate is skipped, or "" while under its applicable limits."""
+    if blocked := pace_block(provider, usage, model):
+        return blocked
     for window, used in applicable_usage(provider, usage, model).items():
         cap = limit_of(provider, window, rules)
         if used >= cap:
@@ -229,10 +322,6 @@ def over_limit(
     return bool(why_over(provider, usage, rules, model))
 
 
-def headroom(provider: str, usage: dict, model: str = "") -> float:
-    return 100 - max(applicable_usage(provider, usage, model).values(), default=0)
-
-
 def choose(  # noqa: PLR0913 - preserve custom-router/current contract, add candidate model scope
     candidates: list,
     provider_of,
@@ -241,8 +330,7 @@ def choose(  # noqa: PLR0913 - preserve custom-router/current contract, add cand
     current=None,
     model_of=lambda c: "",
 ):
-    """The candidate to use: ``current`` while it qualifies, else the first
-    one under its limits, else the one with the most room."""
+    """Best pace among safe candidates; cache affinity breaks exact ties only."""
     if not candidates:
         return None
     from django.utils.module_loading import import_string
@@ -259,16 +347,21 @@ def choose(  # noqa: PLR0913 - preserve custom-router/current contract, add cand
             msg = f"MODEL_ROUTER returned {picked!r}, which isn't one of its candidates"
             raise ValueError(msg)
         return picked
-    ok = [
-        c
-        for c in candidates
-        if not over_limit(provider_of(c), usage, rules, model_of(c))
-    ]
-    if current is not None and current in ok:
-        return current
-    if ok:
-        return ok[0]
-    return max(candidates, key=lambda c: headroom(provider_of(c), usage, model_of(c)))
+    safe = [c for c in candidates if not pace_block(provider_of(c), usage, model_of(c))]
+    ok = [c for c in safe if not over_limit(provider_of(c), usage, rules, model_of(c))]
+    eligible = ok or safe
+    if not eligible:
+        return None
+    clock = time.time()  # All candidates share one instant, including exact ties.
+    picked = max(
+        eligible,
+        key=lambda c: (
+            pace_score(provider_of(c), usage, rules, model_of(c), now=clock),
+            c == current,
+        ),
+    )
+    logger.info("%s", pick_reason(provider_of(picked), usage, rules, model_of(picked)))
+    return picked
 
 
 def pick_model(providers: Providers, tier: str, current: str = "") -> str:
@@ -297,6 +390,9 @@ def pick_model(providers: Providers, tier: str, current: str = "") -> str:
         current if current in candidates else None,
         model_of=lambda ref: ref.partition("/")[2],
     )
+    if picked is None:
+        msg = f"No safe provider in the {tier!r} tier"
+        raise ValueError(msg)
     return providers.check_public(picked, where=f"auto/{tier}")
 
 
@@ -312,6 +408,7 @@ def pick_agent(providers: Providers, tier: str) -> AgentChoice:
         c
         for c in listed
         if (p := providers.providers.get(c.provider)) is not None
+        and p.available
         and p.transport == "cli"
         and not providers.is_private(c.model)
     ]
@@ -325,6 +422,9 @@ def pick_agent(providers: Providers, tier: str) -> AgentChoice:
         active_rules(routing),
         model_of=lambda c: c.model,
     )
+    if picked is None:
+        msg = f"No safe subscription in the {tier!r} agents tier"
+        raise ValueError(msg)
     providers.check_public(picked.model, where=f"The {tier} agents tier")
     return picked
 
@@ -332,19 +432,22 @@ def pick_agent(providers: Providers, tier: str) -> AgentChoice:
 # -- routing.md -----------------------------------------------------------------
 
 COMPILE_PROMPT = """\
-You turn a deployment's model routing priorities, written in plain words, into
-usage limits. Providers (name: type, transport, models):
+You turn a deployment's model routing priorities into optional percentage caps
+and soft_preferences (provider name to a small fractional-score nudge).
+Providers (name: type, transport, models):
 {providers}
 
-Windows are provider-reported IDs: five_hour (5 hours), weekly (7 days),
-weekly_fable (7 days for Fable models only), or another reported window ID.
-Use the configured provider NAME exactly, not its engine type. GPT, ChatGPT
-and Codex mean the OpenAI CLI subscription, NOT an OpenAI API-key provider.
-Each limit says: stop routing to this provider once this window is at least
-max_used percent used, so the next candidate in the tier is used instead.
-Candidates are tried in the order their tier lists them, so preferences like
-"Claude first" are already in the tiers; only write limits. Use provider "*"
-for a limit on every provider. Write no limits the text doesn't ask for.
+The router ALREADY scores elapsed fraction minus used fraction for every
+window, prioritizes weekly budgets with unused quota expiring soon, excludes
+exhausted windows and guards short windows more than 10 points over pace.
+Do not invent raw percentage caps for pace instructions. Weekly 23% used with
+one hour left is preferable to weekly 5% used just after reset.
+Use configured provider NAME exactly. GPT/ChatGPT/Codex means the OpenAI CLI
+subscription, NOT an API-key provider. Windows include five_hour, weekly,
+weekly_fable (only Fable), and other reported IDs.
+Only explicit maximum-used instructions become limits. Provider preference is
+optional soft_preferences, bounded -0.1 to 0.1; never encode it in tier order.
+Return no limits/preferences the text does not request.
 """
 
 
@@ -446,7 +549,7 @@ def switch_reason(
         return f"{before} isn't available"
     if why := why_over(old, usage, rules, before.partition("/")[2]):
         return why
-    return f"{after.partition('/')[0]} is back under its limits"
+    return pick_reason(after.partition("/")[0], usage, rules, after.partition("/")[2])
 
 
 def record_switch(  # noqa: PLR0913
@@ -511,6 +614,7 @@ def retry_model(providers: Providers, tier: str, failed: str, error: str) -> str
         over_limit(failed_provider, usage, rules, failed.partition("/")[2])
         and not over_limit(failed_provider, usage, rules)
     )
+    candidates = []
     for ref in routing.tiers.get(tier, []):
         name = ref.partition("/")[0]
         found = providers.find(ref)
@@ -520,11 +624,20 @@ def retry_model(providers: Providers, tier: str, failed: str, error: str) -> str
             or found is None
             or not found[0].available
             or providers.is_private(ref)
+            or over_limit(name, usage, rules, ref.partition("/")[2])
         ):
             continue
-        if not over_limit(name, usage, rules, ref.partition("/")[2]):
-            return ref
-    return ""
+        candidates.append(ref)
+    return (
+        choose(
+            candidates,
+            lambda ref: ref.partition("/")[0],
+            usage,
+            rules,
+            model_of=lambda ref: ref.partition("/")[2],
+        )
+        or ""
+    )
 
 
 def agent_label(choice: AgentChoice) -> str:
@@ -534,23 +647,15 @@ def agent_label(choice: AgentChoice) -> str:
 def record_agent_pick(
     providers: Providers, tier: str, choice: AgentChoice, label: str, session=None
 ) -> None:
-    """Log a coding agent started on a fallback, i.e. not its tier's first
-    choice (runs the ORM)."""
+    """Log every coding-agent tier selection and its pace reason."""
     from django_ergo.conversation.models import RoutingSwitch
 
     tier = tier_of(tier)
     first = (providers.routing.agents.get(tier) or [None])[0]
-    if first is None or first == choice:
+    if first is None:
         return
     usage, rules = current_usage(), active_rules(providers.routing)
-    provider = providers.providers.get(first.provider)
-    if provider is None or provider.transport != "cli":
-        reason = f"{first.provider} isn't a subscription"
-    else:
-        reason = (
-            why_over(first.provider, usage, rules, first.model)
-            or "picked by MODEL_ROUTER"
-        )
+    reason = pick_reason(choice.provider, usage, rules, choice.model)
     RoutingSwitch.objects.create(
         session=session,
         label=label[:300],
@@ -586,8 +691,12 @@ class _Now:
             return "unavailable", _unavailable(provider)
         why = why_over(name, self.usage, self.rules, model)
         if is_pick:
-            return "pick", why
-        return ("skip", why) if why else ("ok", "")
+            return "pick", pick_reason(name, self.usage, self.rules, model)
+        return (
+            ("skip", why)
+            if why
+            else ("ok", pick_reason(name, self.usage, self.rules, model))
+        )
 
 
 def _tier_rows(now: _Now) -> list[dict]:
@@ -668,6 +777,7 @@ def window_view(name: str, seen: dict, clock: float) -> dict:
         "period": seen.get("period") or window_period(name),
         "observed_at": observed,
         "stale": observed is None or clock - observed > USAGE_STALE_SECONDS,
+        **window_pace({"period": window_period(name), **seen, "used": used}, now=clock),
     }
 
 

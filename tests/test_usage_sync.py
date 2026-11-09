@@ -20,6 +20,7 @@ from django_ergo.bots.usage_sync import parse_report
 from django_ergo.bots.usage_sync import sync_usage
 from django_ergo.conversation.models import ProviderUsage
 from django_ergo.conversation.models import UsageSync
+from django_ergo.conversation.usage_windows import codex_windows
 
 from .test_bot_routing import PROVIDERS
 
@@ -165,6 +166,45 @@ def test_window_periods_fall_back_to_the_duration_and_fractions():
     found = parse_report(report(entry), NOW.timestamp())["anthropic"].windows
     assert found["five_hour_burst"]["period"] == "5h"
     assert found["five_hour_burst"]["used"] == 25
+
+
+def test_report_preserves_arbitrary_window_durations_and_observation_times():
+    entry = fetched(codex(), NOW)
+    entry["limits"][0]["window"]["durationMs"] = 604_800_000
+    short = limit("openai-codex:secondary", "1 hour", "1h", 42, FIVE_HOUR_RESET)
+    short["window"]["durationMs"] = 3_600_000
+    entry["limits"].append(short)
+    windows = parse_report(report(entry), NOW.timestamp() + 60)["openai-codex"].windows
+    assert set(windows) == {"weekly", "1h"}
+    assert windows["weekly"]["period_seconds"] == 604_800
+    assert windows["1h"]["period"] == ""
+    assert windows["1h"]["period_seconds"] == 3_600
+    assert windows["1h"]["model"] == ""  # a generic window is not model-specific
+    assert windows["1h"]["used"] == 42
+    assert windows["1h"]["resets_at"] == FIVE_HOUR_RESET
+    assert windows["1h"]["observed_at"] == NOW.timestamp()
+
+
+def test_cli_snapshot_preserves_arbitrary_window_durations():
+    windows = codex_windows(
+        {
+            "primary": {
+                "usedPercent": 23,
+                "windowDurationMins": 10080,
+                "resetsAt": CODEX_RESET,
+            },
+            "secondary": {
+                "usedPercent": 42,
+                "windowDurationMins": 60,
+                "resetsAt": FIVE_HOUR_RESET,
+            },
+        }
+    )
+    assert set(windows) == {"weekly", "minutes_60"}
+    assert windows["weekly"]["period_seconds"] == 604_800
+    assert windows["minutes_60"]["period_seconds"] == 3_600
+    assert windows["minutes_60"]["model"] == ""
+    assert windows["minutes_60"]["resets_at"] == FIVE_HOUR_RESET
 
 
 @pytest.mark.parametrize(

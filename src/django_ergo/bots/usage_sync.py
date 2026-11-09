@@ -7,7 +7,7 @@ account instead (``DJANGO_ERGO["USAGE_COMMAND"]``), maps each reported limit to
 a window and stores it in :class:`ProviderUsage`::
 
     anthropic     5h -> five_hour   7d -> weekly   7d:fable -> weekly_fable
-    openai-codex  7d -> weekly
+    openai-codex  5h -> five_hour (when reported)   7d -> weekly
     xai-oauth     credits:1w -> weekly_credits   product:grokbuild:1w -> weekly_grokbuild
 
 ``anthropic`` feeds the CLI providers of type ``claude``, ``openai-codex`` those
@@ -189,6 +189,7 @@ def parse_limits(provider: str, entry: dict, seen: float) -> Account:
             count += 1
             name = f"{name.rstrip('_0123456789')}_{count}"
         resets = _number(window.get("resetsAt"))
+        duration = _number(window.get("durationMs"))
         scope = limit.get("scope") if isinstance(limit.get("scope"), dict) else {}
         account.windows[name] = window_entry(
             name,
@@ -198,6 +199,7 @@ def parse_limits(provider: str, entry: dict, seen: float) -> Account:
             status=str(limit.get("status") or ""),
             model=str(scope.get("tier") or ""),
             period=period,
+            period_seconds=duration / 1000 if duration and duration > 0 else None,
             observed_at=account.fetched_at,
         )
     if not account.windows:
