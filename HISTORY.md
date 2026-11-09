@@ -4,6 +4,12 @@ This document tracks the major milestones and evolution of the Django Ergo proje
 
 ## Development Timeline
 
+### Direct messaging to parent chats (November 2026)
+
+- Chats with orchestration enabled may send or forward directly to any
+  same-user chat or thread of an authorized bot, including their parent.
+  Bot access checks, disabled orchestration, and stop/resolve ownership remain.
+
 ### Opt-in passive Telegram group context (November 2026)
 
 - Selected groups retain attributed, untrusted context and downloaded media

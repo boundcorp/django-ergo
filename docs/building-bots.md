@@ -401,11 +401,14 @@ with nothing routed back; ordinary bot sends identify the sending bot and
 still route replies back. See [message identity](bots.md#message-identity)
 for the storage and compatibility details.
 
-A bot may message:
-
-- its sub-bots (bot folders nested inside its folder),
-- bots listed in `permissions.call_bots`,
-- its own threads (`new` starts one).
+A chat with orchestration enabled may send to or forward a user's message to
+its own bot's chats and threads, its parent bot, its sub-bots (bot folders
+nested inside its folder), and bots listed in `permissions.call_bots`.
+That includes named chats and sibling threads belonging to the same user;
+sibling bots need `permissions.call_bots`. A thread can also reach its exact
+starter chat. `new` starts a thread if the target bot permits creation.
+Stopping and resolving other bots' threads remain limited to those this bot
+started. See [who may message whom](bots.md#running-a-bot) for details.
 
 A typical setup is one orchestrating bot at the root of a repo with
 specialists nested under it, each with `orchestration: false`.

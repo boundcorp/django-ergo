@@ -2,11 +2,10 @@
 
 Who may message whom:
 
-- Upward is always allowed: any chat may message its own bot's main chat, and a
-  bot's main chat may message its parent bot's main chat. Bots with
-  ``orchestration: false`` get only ``ergo_message_up`` for this.
-- Downward (sub-bots nested in the bot's folder) needs ``orchestration``.
-- Sideways (any other bot) needs ``permissions.call_bots``.
+- With orchestration enabled, a chat may message any same-user chat of its own
+  bot, its parent, a sub-bot, or a bot in ``permissions.call_bots``.
+- Bots with ``orchestration: false`` get only ``ergo_message_up``, which sends
+  to their own main chat or, from their main chat, their parent's main chat.
 - A thread may also message the exact chat that started it, or the starter of
   a same-bot ancestor, for the same user. These are reports unless asked.
 - A new thread is the target's decision: ``thread="new"`` needs the target
@@ -438,11 +437,7 @@ def ergo_bot_list(ctx: ToolContext) -> str:
         return "There are no other bots you can message."
     lines = [
         f"- {b.name}: {b.definition.description or 'no description'}"
-        + (
-            " (your parent bot: its main chat or your starter chat)"
-            if b.name == ctx.bot.parent_name
-            else ""
-        )
+        + (" (your parent bot)" if b.name == ctx.bot.parent_name else "")
         for b in bots
     ]
     return "Bots you can message:\n" + "\n".join(lines)
@@ -664,11 +659,6 @@ def ergo_thread_forward(
         )
         raise ValueError(msg)
     target = _target(ctx, bot, thread)
-    if _upward_only(ctx, target) and not _is_starter(
-        ctx.session, target.name, thread.strip()
-    ):
-        msg = f"{target.name} is your parent bot; report to it with ergo_message_up."
-        raise ValueError(msg)
     thread = (thread or "").strip()
     if not thread:
         msg = 'Name the thread: an id, "main", a named chat, or "new".'
@@ -768,16 +758,6 @@ def _send(  # noqa: PLR0913
 ) -> dict:
     thread = (thread or "main").strip()
     starter = _is_starter(ctx.session, target.name, thread)
-    if (
-        _upward_only(ctx, target)
-        and not starter
-        and (thread not in roles.MAIN_NAMES or not _is_main(ctx.session))
-    ):
-        msg = (
-            f"{target.name} is your parent bot: only your main chat may message it, "
-            "and only its main chat."
-        )
-        raise ValueError(msg)
     shared = [
         messaging.shared_file(find_session_file(ctx.session, ref))
         for ref in attachments or []
@@ -789,7 +769,7 @@ def _send(  # noqa: PLR0913
     interrupting, not_interrupted = (
         _interruptible(ctx, recipient) if interrupt else (None, "")
     )
-    # Upward (a thread to its main chat, a main chat to its parent's) is a report
+    # Upward (a chat to its bot's or its parent bot's main) is a report
     # unless it asks: no reply goes back, so a status update doesn't cost a turn
     # here for the recipient's acknowledgement.
     upward = _is_main(recipient) and (
@@ -1078,9 +1058,7 @@ def ergo_message_up(
             msg = "This bot has no parent bot."
             raise ValueError(msg)
         if not _is_main(ctx.session):
-            msg = (
-                "Only the main chat may message the parent bot; message your main chat."
-            )
+            msg = "Only the main chat may use ergo_message_up to reach the parent bot."
             raise ValueError(msg)
         target = registry.get(ctx.bot.parent_name)
     elif to == "main":
