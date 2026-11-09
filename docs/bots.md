@@ -1484,12 +1484,14 @@ browser session for the bot, shown as a `browser:session` worker that
 checks Chrome and ends after `idle_minutes` without a browser call;
 `ergo_browser_stop` ends it and closes the tabs it opened. While a session
 is open the bot has `ergo_browser_tabs`, `ergo_browser_open`,
-`ergo_browser_snapshot`, `ergo_browser_screenshot`, and
-`ergo_browser_click`, `ergo_browser_type` and `ergo_browser_press`, which
-also wait for approval with `approve_actions: true`, as do
-`ergo_browser_batch` (several steps in one call, one snapshot at the end)
-and `ergo_browser_task` (a goal handed to `driver_model`, which drives the
-other tools in its own loop and reports back). With `sessions: false`
+`ergo_browser_snapshot`, `ergo_browser_screenshot`, `ergo_browser_wait`
+(wait while the user signs in), and `ergo_browser_click`,
+`ergo_browser_type` and `ergo_browser_press`, which also wait for approval
+with `approve_actions: true`, as do `ergo_browser_batch` (several steps in
+one call, one snapshot at the end) and `ergo_browser_task` (a goal handed
+to `driver_model`, which drives the other tools in its own loop and reports
+back). Actions refuse to run in a tab that moved since the bot last looked,
+since the user is likely using it. With `sessions: false`
 there are no start and stop tools and the browser tools always work.
 Snapshots are accessibility trees whose refs (`e12`) the actions take; a
 Playwright selector works too. The bot is told to hand sign-ins, two-factor
