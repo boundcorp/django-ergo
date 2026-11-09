@@ -11,6 +11,7 @@
         disallowed_tools: [WebSearch]                          # Claude Code --disallowedTools
         permission_mode: dontAsk      # Claude Code: anything not allowed is refused
         codex_sandbox: workspace-write
+        codex_network_access: true    # set false to disable network in workspace-write
         max_turns: 100
         pass_env: [PATH, HOME, LANG, LC_ALL, TZ, USER]   # the only host variables passed on
         secrets: [HIGGSFIELD_API_KEY] # bot secrets every job gets (API-billed tools)
@@ -357,6 +358,10 @@ class LocalShellPlugin(BotPlugin):
         self.disallowed_tools = list(config.get("disallowed_tools") or [])
         self.permission_mode = str(config.get("permission_mode") or "dontAsk")
         self.codex_sandbox = str(config.get("codex_sandbox") or "workspace-write")
+        self.codex_network_access: bool = config.get("codex_network_access", True)
+        if not isinstance(self.codex_network_access, bool):
+            msg = "local_shell codex_network_access must be a boolean"
+            raise TypeError(msg)
         self.max_turns = int(config.get("max_turns", 100))
         self.pass_env = tuple(config.get("pass_env") or DEFAULT_PASS_ENV)
         self.secrets = [str(s) for s in config.get("secrets") or []]
@@ -462,6 +467,8 @@ class LocalShellPlugin(BotPlugin):
                 raise LocalShellError(msg)
             argv = [exe, "exec", "--json", "--skip-git-repo-check"]
             argv += ["--sandbox", self.codex_sandbox]
+            network = str(self.codex_network_access).lower()
+            argv += ["-c", f"sandbox_workspace_write.network_access={network}"]
             argv += ["--output-last-message", f"{META}/run-{number}.last.txt"]
             if model:
                 argv += ["--model", model]
