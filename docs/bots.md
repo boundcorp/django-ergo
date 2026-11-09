@@ -1563,6 +1563,15 @@ an unrelated person's session; authorization is unchanged, same-person
 messages and taps keep their order, and turns still take the session lock.
 Idle queues are removed and worker failures are logged.
 
+**Deployment boundary.** The intake FIFO is process-local, not a distributed
+ordering guarantee. Durable acceptance uses check-then-insert deduplication;
+concurrent webhook workers can race when accepting the same update. A single
+polling process for a bot avoids those concurrent intake paths, provided no
+second poller or webhook consumer handles that bot (including during rollouts).
+Session locks do not turn multiple intake queues into one globally ordered
+queue. Do not infer cross-worker ordering or exactly-once delivery from the
+FIFO or replay behavior.
+
 Ergonaut waits for a busy session with asynchronous polling and serialized,
 nonblocking lock probes, not blocked executor threads or shared worker
 slots. Busy sessions and long Telegram turns therefore do not prevent
@@ -1629,9 +1638,14 @@ plugins:
 ```
 
 Replace both placeholders with numeric IDs; do not put a token in the bot
-configuration. Disable the Telegram bot's group privacy mode so Telegram
+configuration. Obtain group members' consent before enabling passive capture.
+Disable the Telegram bot's group privacy mode in BotFather so Telegram
 delivers ordinary group messages. Telegram cannot backfill messages from before
-the bot joined the group.
+the bot joined the group. Discover the group ID from existing session metadata
+or a separate discovery bot, not a second `getUpdates` consumer using an
+already-running bot's token. See the [Storytime operations handoff](telegram-storytime-handoff.md)
+for the concrete sender policy and deployment prerequisites; kitchen defaults
+remain unchanged.
 
 In an opted-in group, messages that do not otherwise get a response are
 stored in the target thread as user messages, without starting a bot turn or
@@ -1646,6 +1660,12 @@ the group ID; configure `respond_to.users` accordingly. Messages in opted-in
 groups are processed individually, not batched as albums or photo collections,
 so each message is authorized independently. Without the opt-in, existing
 message handling and defaults are unchanged.
+
+Active and passive message writes share a short database row lock while
+allocating a sequence and saving content blocks. Concurrent first messages
+recheck thread creation under an owner-row lock. Passive capture does not use
+`CHANNEL_TURN_RUNNER`: it must not clear stop flags or dispatch queued work.
+These database locks protect storage, not distributed intake order.
 
 **Replies.** With `replies: auto` the turn's answer goes back to the chat
 it came from. With `replies: tool` it stays in the app, and the bot writes
@@ -1677,6 +1697,12 @@ fingerprint are saved with the call so completion or a changed approval batch
 also retires the prompt when the decision comes from another channel. A new
 text message declines the pending batch and retires its prompt before starting
 its own turn. Approval requests do not automatically expire.
+The `tags` filter governs new group messages, not an authorized person's
+explicit decision on an existing approval prompt. Lee can press a current
+Approve/Deny button without adding a tag. Callbacks still require sender
+authorization (never a group-ID substitute in an opted-in group), the matching
+bot/thread, and the current pending-batch fingerprint checked under the turn
+lock; a partner cannot approve through a shared group mapping.
 Failure to clear the saved prompt after a turn is logged without failing an
 already executed turn or withholding its result.
 `plugin.notify(user, text)` sends a message from other code. Turns run

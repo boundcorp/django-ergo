@@ -4,6 +4,18 @@ This document tracks the major milestones and evolution of the Django Ergo proje
 
 ## Development Timeline
 
+### Opt-in passive Telegram group context (November 2026)
+
+- Selected groups retain attributed, untrusted context without starting turns or
+  downloading media. Sender-only authorization and explicit `tags` routing keep
+  partner messages and untagged replies passive; existing defaults stay unchanged.
+- Active and passive message writes share a short database row lock for sequence
+  allocation. Concurrent Telegram thread creation rechecks under an owner-row
+  lock. The host's turn runner remains exclusive to active turns and approvals.
+- Approval callbacks honor the configured sender allowlist. Process-local intake
+  FIFO/deduplication still requires one polling consumer, not concurrent webhook
+  workers, for the intended Storytime deployment.
+
 ### Model discovery seeds a baseline and fails closed for coding (November 2026)
 
 - A first catalog check persists its baseline and returns a one-time

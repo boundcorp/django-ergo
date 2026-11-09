@@ -698,7 +698,9 @@ class TelegramPlugin(BotPlugin):
         if not self.target_thread:
             user = await self.user_for(sender.get("id"), chat.get("id"))
             return None if user is None else await self.bot.root_session(user)
+        from asgiref.sync import async_to_sync
         from asgiref.sync import sync_to_async
+        from django.db import transaction
 
         from django_ergo.bots import archival
 
@@ -718,14 +720,36 @@ class TelegramPlugin(BotPlugin):
                 "Telegram thread %r has no owner to belong to", self.target_thread
             )
             return None
-        main = self.bot.definition.chats.get("main")
-        skills = [*(main.skills if main else []), self.skill_name]
-        return await self.bot.create_session(
-            owner,
-            parent=await self.bot.root_session(owner),
-            title=self.target_thread,
-            metadata={"telegram_thread": self.target_thread, "always_skills": skills},
-        )
+
+        def get_or_create():
+            # There may be no session row yet. Lock the existing owner while
+            # checking again and creating both the main chat and shared thread.
+            # Unlike the turn runner this has no stop/dispatch side effects.
+            with transaction.atomic():
+                get_user_model().objects.select_for_update().get(pk=owner.pk)
+                found = (
+                    self.bot.sessions()
+                    .filter(metadata__telegram_thread=self.target_thread)
+                    .select_related("user")
+                    .order_by("created_at")
+                    .first()
+                )
+                if found is not None:
+                    archival.reopen(found)
+                    return found
+                main = self.bot.definition.chats.get("main")
+                skills = [*(main.skills if main else []), self.skill_name]
+                return async_to_sync(self.bot.create_session)(
+                    owner,
+                    parent=async_to_sync(self.bot.root_session)(owner),
+                    title=self.target_thread,
+                    metadata={
+                        "telegram_thread": self.target_thread,
+                        "always_skills": skills,
+                    },
+                )
+
+        return await sync_to_async(get_or_create, thread_sensitive=True)()
 
     async def thread_owner(self):
         """``owner`` (a username or email), else the first admin, else the first listed user."""
@@ -1054,8 +1078,13 @@ class TelegramPlugin(BotPlugin):
         # A saved update can outlive Telegram's callback-query acknowledgement
         # window. Clearing the spinner must not gate the authorized decision.
         await self._acknowledge(query)
-        chat_id = query["message"]["chat"]["id"]
+        chat = query["message"]["chat"]
+        chat_id = chat["id"]
         sender = query.get("from") or {}
+        # Approval is an explicit decision, not a new message: tags do not apply,
+        # but the configured sender policy still does, including in private chats.
+        if not self.allowed(sender, None if self.target_thread else chat):
+            return
         action, _, rest = (query.get("data") or "").partition(":")
         call_id, _, stamp = rest.partition(":")
         if action not in {"ok", "no"} or not _is_uuid(call_id):
@@ -1064,9 +1093,6 @@ class TelegramPlugin(BotPlugin):
             id=call_id, session__bot_name=self.bot.name
         )
         if self.target_thread:
-            # Anyone the thread answers may answer its approvals.
-            if not self.allowed(sender):
-                return
             calls = calls.filter(session__metadata__telegram_thread=self.target_thread)
         else:
             # Only the person themselves can answer, never anyone else in a group chat.
@@ -1293,12 +1319,14 @@ class TelegramPlugin(BotPlugin):
         message = update.get("message") or (update.get("callback_query") or {}).get(
             "message"
         )
-        if (
-            update.get("message")
-            and self.passive_chat(message.get("chat") or {})
-            and (not self.message_allowed(message) or not await self.wanted(message))
-        ):
-            return
+        if self.passive_chat((message or {}).get("chat") or {}):
+            if update.get("message"):
+                if not self.message_allowed(message) or not await self.wanted(message):
+                    return
+            elif not self.allowed(
+                (update.get("callback_query") or {}).get("from") or {}
+            ):
+                return
         chat_id = ((message or {}).get("chat") or {}).get("id")
         if chat_id is None:
             return
