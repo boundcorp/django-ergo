@@ -929,13 +929,60 @@ class LocalShellPlugin(BotPlugin):
             "size": row.size,
         }
 
-    def upload(
-        self, ctx: ToolContext, job: str, files: list[str], folder: str = "inputs"
-    ) -> list[dict]:
+    def _upload_file(self, ctx: ToolContext, ref: str, session_id: str):
+        import uuid
+
         from django_ergo.conversation.attachments import find_session_file
+        from django_ergo.conversation.models import ThreadMessage
+
+        try:
+            row = find_session_file(ctx.session, ref)
+        except ValueError as not_found:
+            try:
+                file_id = str(uuid.UUID(str(ref).strip()))
+            except ValueError:
+                raise not_found from None
+            shares = ThreadMessage.objects.filter(
+                recipient_session=ctx.session, metadata__has_key="attachments"
+            ).values_list("metadata", flat=True)
+            if not any(
+                isinstance(item, dict) and str(item.get("id")) == file_id
+                for metadata in shares
+                for item in ((metadata or {}).get("attachments") or [])
+            ):
+                msg = f"No shared file {ref!r} in that chat"
+                raise ValueError(msg) from None
+            attachments = ctx.bot.plugin("attachments") if ctx.bot else None
+            if attachments is None:
+                msg = "Reading a shared file requires the attachments plugin"
+                raise ValueError(msg) from None
+            row = attachments.file_for(ctx, file_id)
+        if session_id and str(row.session_id) != session_id:
+            msg = f"No file {ref!r} in that session"
+            raise ValueError(msg)
+        return row
+
+    def upload(
+        self,
+        ctx: ToolContext,
+        job: str,
+        files: list[str],
+        folder: str = "inputs",
+        session_id: str = "",
+    ) -> list[dict]:
+        from django_ergo.bots.registry import may_use
 
         if ctx.session is None:
             msg = "Uploading needs a chat"
+            raise LocalShellError(msg)
+        if (ctx.user is not None and ctx.user.pk != ctx.session.user_id) or (
+            ctx.bot is not None
+            and (
+                ctx.bot.name != ctx.session.bot_name
+                or not may_use(ctx.bot, ctx.session.user)
+            )
+        ):
+            msg = "Not authorized for this chat"
             raise LocalShellError(msg)
         base = self.folder(job)
         base.mkdir(parents=True, exist_ok=True)
@@ -943,7 +990,7 @@ class LocalShellPlugin(BotPlugin):
         target.mkdir(parents=True, exist_ok=True)
         written = []
         for ref in files:
-            row = find_session_file(ctx.session, ref)
+            row = self._upload_file(ctx, ref, session_id)
             name = Path(row.filename).name
             if is_secret(name):
                 msg = f"{row.filename} can't be copied into a job"
@@ -1018,27 +1065,35 @@ class LocalShellPlugin(BotPlugin):
             name="local_shell_upload",
             takes_context=True,
             description=(
-                "Copy files from this chat into a job folder (default subfolder inputs), "
-                "before starting the agent; name the paths in its brief."
+                "Copy this chat's files, or files explicitly shared with it by ID, "
+                "into a job folder (default inputs) before starting the agent."
             ),
             parameters={
                 "job": {"type": "string", "description": "The job name"},
                 "files": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Filenames or file ids",
+                    "description": "Current-chat filenames or IDs; shared files by ID",
                 },
                 "folder": {
                     "type": "string",
                     "description": 'Subfolder (default "inputs")',
                 },
+                "session_id": {
+                    "type": "string",
+                    "description": "Optional source session ID; all files must belong to it",
+                },
             },
             required=["job", "files"],
         )
         def upload(
-            ctx: ToolContext, job: str, files: list[str], folder: str = "inputs"
+            ctx: ToolContext,
+            job: str,
+            files: list[str],
+            folder: str = "inputs",
+            session_id: str = "",
         ) -> list[dict]:
-            return plugin.upload(ctx, job, files, folder)
+            return plugin.upload(ctx, job, files, folder, session_id)
 
         return [t.__bot_tool__ for t in (jobs, attach, upload)]
 

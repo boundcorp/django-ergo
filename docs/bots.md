@@ -1387,6 +1387,13 @@ running `local_shell` jobs even with `--ignore-workers` /
 job folder and `local_shell_attach` copies a job's file into the chat
 (paths stay inside the job, `.ergo/` and secret-looking names are refused);
 none of them asks first.
+Use `local_shell_upload(job="render", files=["<shared-id>"], session_id="<source-session-id>")`
+for a file explicitly shared with this chat. The ID alone also works; the
+optional `session_id` restricts every file to that source. Filenames resolve
+only in the current chat. Shared files stay in their source session and require
+the attachments plugin with `other_sessions: true` and the same session owner;
+unshared cross-session IDs are rejected.
+
 
 ### kubectl
 
