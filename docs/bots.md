@@ -348,11 +348,12 @@ have a place to live:
 - `python -m django ergo_bot_migrate <paths>` applies what's committed.
   Ergonaut runs it at start (`ergonaut up`) and after pulling a bot repo.
 
-A bot with tables gets the `tables` skill: `ergo_table_query` (Django field
-lookups, ordering, up to 200 rows or a count), `ergo_table_add`,
-`ergo_table_update` (both validated with `full_clean`) and
-`ergo_table_delete` (waits for approval). Loading the skill describes each
-table's fields; a model's docstring is its description.
+A bot with tables gets the `tables` skill: `ergo_table_schema` describes
+writable fields and unique keys; `ergo_table_query` and `ergo_table_aggregate`
+read bounded results; `ergo_table_add`, `ergo_table_update` and
+`ergo_table_batch` validate writes. `ergo_table_delete` waits for approval.
+Loading the skill describes each table's fields; a model's docstring is its
+description. See [Data tables](tables.md#what-the-bot-can-do).
 
 ## Pages and pins
 

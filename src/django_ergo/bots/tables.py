@@ -224,8 +224,8 @@ def describe(table: type[BotTable]) -> str:
             ": "
         )
     ]
-    for field in table._meta.get_fields():
-        if field.auto_created and not field.concrete:
+    for field in table._meta.concrete_fields:
+        if field.is_relation and not safe_relation(table, field):
             continue
         kind = field.get_internal_type()
         extra = []
@@ -233,27 +233,100 @@ def describe(table: type[BotTable]) -> str:
             extra.append("optional")
         if field.choices:
             extra.append("one of " + ", ".join(str(c[0]) for c in field.choices))
-        lines.append(
-            f"  - {field.name} ({kind}{', ' + ', '.join(extra) if extra else ''})"
-        )
+        name = field.attname if field.is_relation else field.name
+        lines.append(f"  - {name} ({kind}{', ' + ', '.join(extra) if extra else ''})")
     return "\n".join(lines)
 
 
 def _row(obj: models.Model) -> dict:
     from django.forms.models import model_to_dict
 
-    data = model_to_dict(obj)
+    from django_ergo.bots.table_query import _safe
+
+    data = model_to_dict(
+        obj, fields=[field.name for field in obj._meta.concrete_fields]
+    )
+    for field in obj._meta.concrete_fields:
+        if field.is_relation:
+            if safe_relation(type(obj), field):
+                data[field.name] = getattr(obj, field.attname)
+            else:
+                data.pop(field.name, None)
     data["id"] = obj.pk
     for name in ("created_at", "updated_at"):
         value = getattr(obj, name, None)
         if value is not None:
             data[name] = value.isoformat(timespec="seconds")
-    return {
-        k: (v.isoformat() if hasattr(v, "isoformat") else v) for k, v in data.items()
-    }
+    return _safe(data)
 
 
 WRITE_EXCLUDED_FIELDS = frozenset({"id", "created_at", "updated_at"})
+
+
+def safe_relation(model: type[BotTable], field: models.Field) -> bool:
+    """Only forward foreign keys to tables in the same bot are accessible."""
+    target = field.related_model
+    return bool(
+        field.many_to_one
+        and isinstance(target, type)
+        and issubclass(target, BotTable)
+        and target._meta.app_label == model._meta.app_label
+    )
+
+
+def table_schema(model: type[BotTable]) -> dict:
+    """Expose useful model metadata without evaluating or disclosing defaults."""
+    import json
+
+    from django.core.serializers.json import DjangoJSONEncoder
+
+    writable = set(writable_fields(model))
+    fields = []
+    for field in model._meta.concrete_fields:
+        if field.is_relation and not safe_relation(model, field):
+            continue
+        info = {
+            "name": field.name,
+            "type": field.get_internal_type(),
+            "writable": field in writable,
+            "write_name": field.attname if field in writable else None,
+            "required": field in writable
+            and not field.blank
+            and not field.null
+            and not field.has_default(),
+            "null": field.null,
+            "has_default": field.has_default(),
+            "help_text": str(field.help_text),
+            "choices": list(field.flatchoices) if field.choices else [],
+        }
+        if field.is_relation:
+            info["related_table"] = field.related_model.__name__
+        fields.append(info)
+    unique = [[field.attname] for field in writable_fields(model) if field.unique]
+    for names in model._meta.unique_together:
+        fields_for_key = [model._meta.get_field(name) for name in names]
+        if all(field in writable for field in fields_for_key):
+            unique.append([field.attname for field in fields_for_key])
+    for constraint in model._meta.constraints:
+        if (
+            isinstance(constraint, models.UniqueConstraint)
+            and constraint.fields
+            and not constraint.condition
+            and not constraint.expressions
+            and not constraint.deferrable
+            and not constraint.include
+            and not constraint.opclasses
+            and getattr(constraint, "nulls_distinct", None) is None
+        ):
+            fields_for_key = [model._meta.get_field(name) for name in constraint.fields]
+            if all(field in writable for field in fields_for_key):
+                unique.append([field.attname for field in fields_for_key])
+    return json.loads(
+        json.dumps(
+            {"table": model.__name__, "fields": fields, "unique_keys": unique},
+            cls=DjangoJSONEncoder,
+        )
+    )
 
 
 def writable_fields(model: type[BotTable]) -> list[models.Field]:
@@ -262,6 +335,10 @@ def writable_fields(model: type[BotTable]) -> list[models.Field]:
         field
         for field in model._meta.concrete_fields
         if field.name not in WRITE_EXCLUDED_FIELDS
+        and not field.primary_key
+        and field.editable
+        and not getattr(field, "generated", False)
+        and (not field.is_relation or safe_relation(model, field))
     ]
 
 
@@ -270,15 +347,25 @@ def clean_values(model: type[BotTable], values: dict) -> dict:
     if not isinstance(values, dict):
         msg = "values must be an object"
         raise ValueError(msg)  # noqa: TRY004 — page actions turn ValueError into a 400
-    fields = [field.name for field in writable_fields(model)]
-    unknown = set(values) - set(fields)
+    allowed = writable_fields(model)
+    fields = [field.name for field in allowed]
+    aliases = {field.attname: field for field in allowed}
+    aliases.update({field.name: field for field in allowed})
+    unknown = set(values) - aliases.keys()
     if unknown:
         msg = (
             f"{model.__name__} has no field(s) {', '.join(sorted(unknown))}. "
             f"Fields: {', '.join(fields)}"
         )
         raise ValueError(msg)
-    return values
+    cleaned = {}
+    for name, value in values.items():
+        field = aliases[name]
+        if field.attname in cleaned:
+            msg_0 = f"Both {field.name} and {field.attname} were supplied"
+            raise ValueError(msg_0)
+        cleaned[field.attname] = value
+    return cleaned
 
 
 def full_clean(obj: BotTable) -> None:
@@ -432,24 +519,102 @@ def table_tools(tables: list[type[BotTable]]) -> list[BotTool]:
                 "description": f"Default 20, at most {MAX_ROWS}",
             },
             "count_only": {"type": "boolean"},
+            "fields": {"type": "array", "items": {"type": "string"}},
+            "offset": {"type": "integer"},
+            "exclude": {"type": "object"},
+            "predicate": {
+                "type": "object",
+                "description": 'Lookup object or {"and":[...]}, {"or":[...]}, {"not":{...}}.',
+            },
         },
         required=["table"],
     )
-    def query(
+    def query(  # noqa: PLR0913
         table: str,
         filters: dict | None = None,
         order_by: list | None = None,
         limit: int = 20,
         count_only: bool = False,
+        fields: list | None = None,
+        offset: int = 0,
+        exclude: dict | None = None,
+        predicate: dict | None = None,
     ) -> Any:
-        model = lookup(table)
-        qs = model.objects.filter(**(filters or {}))
-        if count_only:
-            return {"count": qs.count()}
-        if order_by:
-            qs = qs.order_by(*order_by)
-        rows = [_row(obj) for obj in qs[: max(1, min(int(limit or 20), MAX_ROWS))]]
-        return {"count": qs.count(), "rows": rows}
+        from django_ergo.bots.table_query import query as run_query
+
+        return run_query(
+            lookup(table),
+            filters,
+            order_by,
+            limit,
+            count_only,
+            fields,
+            offset,
+            exclude,
+            predicate,
+        )
+
+    @bot_tool(
+        name="ergo_table_schema",
+        description="Inspect table fields, writable names, and declared unique keys.",
+        parameters={"table": {"type": "string"}},
+        required=["table"],
+    )
+    def schema(table: str) -> dict:
+        return table_schema(lookup(table))
+
+    @bot_tool(
+        name="ergo_table_aggregate",
+        description="Summarize rows with count, sum, avg, min, or max; optionally group by fields.",
+        parameters={
+            "table": {"type": "string"},
+            "metrics": {
+                "type": "object",
+                "description": 'Alias to metric, e.g. {"n":{"op":"count"},"total":{"op":"sum","field":"price"}}.',
+            },
+            "group_by": {"type": "array", "items": {"type": "string"}},
+            "filters": {"type": "object"},
+            "exclude": {"type": "object"},
+            "predicate": {
+                "type": "object",
+                "description": 'Lookup object or {"and":[...]}, {"or":[...]}, {"not":{...}}.',
+            },
+            "limit": {"type": "integer"},
+        },
+        required=["table", "metrics"],
+    )
+    def aggregate(  # noqa: PLR0913
+        table: str,
+        metrics: dict,
+        group_by: list | None = None,
+        filters: dict | None = None,
+        exclude: dict | None = None,
+        predicate: dict | None = None,
+        limit: int = 100,
+    ) -> Any:
+        from django_ergo.bots.table_query import aggregate as run_aggregate
+
+        return run_aggregate(
+            lookup(table), metrics, group_by, filters, exclude, predicate, limit
+        )
+
+    @bot_tool(
+        name="ergo_table_batch",
+        description="Atomically add, update or upsert up to 100 rows in one table.",
+        parameters={
+            "table": {"type": "string"},
+            "operations": {
+                "type": "array",
+                "items": {"type": "object"},
+                "description": 'Operations: {"op":"add","values":{...}}, {"op":"update","id":1,"values":{...}}, or {"op":"upsert","match":{...},"values":{...}}. Match an entire declared unique key.',
+            },
+        },
+        required=["table", "operations"],
+    )
+    def batch(table: str, operations: list) -> Any:
+        from django_ergo.bots.table_batch import batch as run_batch
+
+        return run_batch(lookup(table), operations)
 
     @bot_tool(
         name="ergo_table_add",
@@ -483,4 +648,6 @@ def table_tools(tables: list[type[BotTable]]) -> list[BotTool]:
     def delete(table: str, id: int) -> str:  # noqa: A002
         return delete_row(lookup(table), id)
 
-    return [fn.__bot_tool__ for fn in (query, add, update, delete)]
+    return [
+        fn.__bot_tool__ for fn in (query, schema, aggregate, batch, add, update, delete)
+    ]

@@ -397,7 +397,8 @@ class Bot:
                     "tables",
                     "Look up and change rows in this bot's tables: "
                     + ", ".join(t.__name__ for t in self.tables),
-                    instructions="Tables and their fields:\n"
+                    instructions="Use ergo_table_schema for writable fields and unique keys. "
+                    "Set foreign keys using their _id field. Tables and their fields:\n"
                     + "\n".join(describe(t) for t in self.tables),
                     toolkits=lambda ctx, tools=tools: [FunctionToolkit(tools, ctx)],
                     requires=requires.get("tables", []),
