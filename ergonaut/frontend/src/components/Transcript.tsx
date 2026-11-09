@@ -4,13 +4,17 @@ import type { AttachmentFile, Block, Call, Compaction, Message, MessageIdentity,
 import { api } from '../api'
 import { DirectoryContext } from './BotIcon'
 import Markdown from './Markdown'
-import { PrChip, ThreadCard, ThreadLink, WorkerCard, linkThreads } from './Threads'
+import { ThreadCard, ThreadLink, WorkerCard, linkThreads } from './Threads'
 import { ToolCard, copyText } from './ToolCard'
 import { pretty, resultText } from '../toolFormat'
 import { clock } from '../time'
 import { messageAnchor, messageLink } from '../messageLink'
 import { eventSummary } from '../eventSummary'
 import { ContextPanel, CompactionDivider } from './ContextPanel'
+import { AttachmentView, MediaGallery, isAudio, resolveFiles } from './MediaGallery'
+import type { MediaItem } from './MediaGallery'
+
+export { AttachmentView, isAudio }
 
 // Messaging calls stay visible even in long runs of tool calls.
 const SEND_TOOLS: Record<string, true> = { ergo_thread_send: true, ergo_message_up: true, ergo_thread_forward: true }
@@ -34,6 +38,8 @@ const DelegatedContext = createContext<Delegated>({ cards: new Map(), workers: n
 
 // The chat being shown, so each message's label can link to it.
 const SessionContext = createContext('')
+// The chat's files, so a reply's attachments (ids or filenames) can be found.
+const FilesContext = createContext<AttachmentFile[]>([])
 
 // Long runs of tool calls show their last few; the rest fold into a "+N more" row.
 const VISIBLE_CALLS = 3
@@ -384,68 +390,19 @@ type ToolUse = Extract<Block, { type: 'tool_use' }>
 const REPLY_TOOL = 'send_reply'
 
 // A file in the chat: images as a thumbnail, audio as a player, anything else as a chip.
-export function AttachmentView({
-  id,
-  label,
-  image,
-  audio,
-  note,
-  link,
-}: {
-  id?: string
-  label: string
-  image?: boolean
-  audio?: boolean
-  note?: string
-  link?: AttachmentFile['link']
-}) {
-  if (link) return <PrChip pr={link} />
-  if (id && audio)
-    return (
-      <div className="flex w-80 max-w-full flex-col gap-1 rounded-lg border border-zinc-300 p-2 dark:border-zinc-700">
-        <a
-          href={api.viewUrl(id)}
-          target="_blank"
-          rel="noreferrer"
-          title={note}
-          className="truncate text-xs text-indigo-600 hover:underline dark:text-indigo-400"
-        >
-          🔊 {label}
-        </a>
-        <audio controls preload="metadata" src={api.viewUrl(id)} aria-label={label} className="h-9 w-full" />
-      </div>
-    )
-  if (id && image)
-    return (
-      <a href={api.viewUrl(id)} target="_blank" rel="noreferrer" title={note ? `${label} · ${note}` : label}>
-        <img
-          src={api.viewUrl(id)}
-          alt={label}
-          loading="lazy"
-          className="max-h-60 max-w-full rounded-lg border border-zinc-300 dark:border-zinc-700"
-        />
-      </a>
-    )
-  return id ? (
-    <a
-      href={api.viewUrl(id)}
-      target="_blank"
-      rel="noreferrer"
-      title={note}
-      className="rounded-md border border-zinc-300 px-2 py-1 text-xs text-indigo-600 hover:underline dark:border-zinc-700 dark:text-indigo-400"
-    >
-      📎 {label}
-    </a>
-  ) : (
-    <div className="rounded-md border border-zinc-300 px-2 py-1 text-xs text-zinc-500 dark:border-zinc-700">
-      📎 {label}
-    </div>
-  )
+
+type AttachmentBlock = Extract<Block, { type: 'attachment' }>
+
+function blockItem(block: AttachmentBlock): MediaItem {
+  return { id: block.id, label: block.label, kind: block.kind, media_type: block.media_type }
 }
 
-/** Whether an attachment is audio, from its kind or media type. */
-export function isAudio(file: { kind?: string; media_type?: string }): boolean {
-  return file.kind === 'audio' || !!file.media_type?.startsWith('audio/')
+/** A message's files together (a gallery when there are several), where its first file was. */
+function attachmentGroups(blocks: Block[]): Map<number, MediaItem[]> {
+  const groups = new Map<number, MediaItem[]>()
+  const first = blocks.findIndex(b => b.type === 'attachment')
+  if (first >= 0) groups.set(first, blocks.filter((b): b is AttachmentBlock => b.type === 'attachment').map(blockItem))
+  return groups
 }
 
 type ImageRef = { type: 'image_ref'; attachment_id?: string; name?: string; media_type?: string }
@@ -473,6 +430,13 @@ function shownFileIds(messages: Message[]): Set<string> {
 /** Files a bot made (ergo_attachments_create, orca_attach, …), keyed by the last message written before each. */
 function placeFiles(messages: Message[], files: AttachmentFile[], complete: boolean): Map<number, AttachmentFile[]> {
   const shown = shownFileIds(messages)
+  // Files a reply attached show in its bubble, not again where they were made.
+  const attached = messages.flatMap(m =>
+    m.blocks.flatMap(b =>
+      b.type === 'tool_use' && b.name === REPLY_TOOL ? replySuggestions((b.input as Reply)?.attachments) : [],
+    ),
+  )
+  for (const item of resolveFiles(attached, files)) if (item.id) shown.add(item.id)
   const placed = new Map<number, AttachmentFile[]>()
   const stamped = messages.filter(m => m.timestamp)
   // Only part of a long chat is loaded: files from before it wait until it is.
@@ -496,23 +460,22 @@ function placeFiles(messages: Message[], files: AttachmentFile[], complete: bool
 
 function BotFiles({ files }: { files: AttachmentFile[] }) {
   return (
-    <div className="mt-2 flex flex-col items-start gap-2">
-      {files.map(file => (
-        <AttachmentView
-          key={file.id}
-          id={file.id}
-          label={file.filename}
-          image={file.kind === 'image' || file.view === 'image'}
-          audio={isAudio(file)}
-          note="made by the bot"
-          link={file.link}
-        />
-      ))}
+    <div className="mt-2">
+      <MediaGallery
+        items={files.map(file => ({
+          id: file.id,
+          label: file.filename,
+          kind: file.kind,
+          media_type: file.media_type,
+          note: 'made by the bot',
+          link: file.link,
+        }))}
+      />
     </div>
   )
 }
 
-type Reply = { type?: string; text?: string; suggestions?: string[] }
+type Reply = { type?: string; text?: string; suggestions?: string[]; attachments?: unknown }
 
 // The input is what the model sent, which may not match the schema
 // (suggestions as a JSON string, say), so don't trust its shape.
@@ -529,11 +492,18 @@ export function replySuggestions(value: unknown): string[] {
 
 function ReplyBubble({ reply, message }: { reply: Reply; message: Message }) {
   const suggestions = replySuggestions(reply.suggestions)
+  const files = useContext(FilesContext)
+  const attached = replySuggestions(reply.attachments)
   return (
     <div className="max-w-[85%] rounded-card border border-stroke bg-surface px-4 py-3">
       <RoleLabel who="Assistant" timestamp={message.timestamp} line={message.line} />
       {reply.type === 'question' && <div className="mb-1 text-xs font-medium text-amber-600">Question</div>}
       <BotMarkdown text={reply.text ?? ''} />
+      {!!attached.length && (
+        <div className="mt-2">
+          <MediaGallery items={resolveFiles(attached, files)} />
+        </div>
+      )}
       {!!suggestions.length && (
         <div className="reply-suggestions mt-1 text-xs text-zinc-500">Suggested: {suggestions.join(' · ')}</div>
       )}
@@ -645,6 +615,14 @@ function authorLabel(message: Message): string {
 /** Structured attribution is presentation data, never part of the verbatim message body. */
 function AttributedMessage({ message }: { message: Message }) {
   const provenance = message.provenance!
+  // Files sent with the message and files shared with it, as one gallery.
+  const sent = [...attachmentGroups(message.blocks).values()].flat()
+  const shared = [
+    ...sent,
+    ...(provenance.attachments ?? [])
+      .filter(file => !sent.some(item => item.id === file.id))
+      .map(file => ({ id: file.id, label: file.filename, media_type: file.media_type })),
+  ]
   const origin = provenance.origin!
   const forwarder = provenance.forwarded_by
   return (
@@ -682,27 +660,11 @@ function AttributedMessage({ message }: { message: Message }) {
         </div>
       )}
       <div className="min-w-0 break-words">
-        {message.blocks.map((block, i) =>
-          block.type === 'text' ? (
-            <Markdown key={i} text={block.text} />
-          ) : block.type === 'attachment' ? (
-            <AttachmentView
-              key={i}
-              id={block.id}
-              label={block.label}
-              image={block.kind === 'image'}
-              audio={isAudio(block)}
-            />
-          ) : null,
-        )}
+        {message.blocks.map((block, i) => (block.type === 'text' ? <Markdown key={i} text={block.text} /> : null))}
       </div>
-      {!!provenance.attachments?.length && (
-        <div className="mt-3 flex min-w-0 flex-wrap gap-2 break-all">
-          {provenance.attachments
-            .filter(file => !message.blocks.some(block => block.type === 'attachment' && block.id === file.id))
-            .map(file => (
-              <AttachmentView key={file.id} id={file.id} label={file.filename} audio={isAudio(file)} />
-            ))}
+      {!!shared.length && (
+        <div className="mt-3 min-w-0 break-all">
+          <MediaGallery items={shared} />
         </div>
       )}
     </div>
@@ -730,6 +692,7 @@ function EventText({ text }: { text: string }) {
 function EventMessage({ message }: { message: Message }) {
   const author = message.author
   const source = author?.kind === 'system' ? author.display_name || author.ref : 'System'
+  const groups = attachmentGroups(message.blocks)
   return (
     <aside
       aria-label={`Automated event from ${source}`}
@@ -742,13 +705,7 @@ function EventMessage({ message }: { message: Message }) {
           block.type === 'text' ? (
             <EventText key={i} text={block.text} />
           ) : block.type === 'attachment' ? (
-            <AttachmentView
-              key={i}
-              id={block.id}
-              label={block.label}
-              image={block.kind === 'image'}
-              audio={isAudio(block)}
-            />
+            groups.has(i) && <MediaGallery key={i} items={groups.get(i)!} />
           ) : null,
         )}
       </div>
@@ -780,6 +737,7 @@ function MessageView({
       !(b.type === 'tool_use' && hidden.has(b.id) && !rows.has(b.id)),
   )
   if (!parts.length) return null
+  const groups = attachmentGroups(parts)
   return (
     <div className={`flex flex-col gap-1 ${user ? 'items-end' : 'items-start'}`}>
       {parts.map((block, i) => {
@@ -850,16 +808,11 @@ function MessageView({
             )
           }
           case 'attachment':
-            return (
+            return groups.has(i) ? (
               <div key={i} className="max-w-[85%]">
-                <AttachmentView
-                  id={block.id}
-                  label={block.label}
-                  image={block.kind === 'image'}
-                  audio={isAudio(block)}
-                />
+                <MediaGallery items={groups.get(i)!} />
               </div>
-            )
+            ) : null
           case 'thinking':
             return (
               <details key={i} className="max-w-[85%] text-xs text-zinc-500">
@@ -907,10 +860,8 @@ function ToolImages({ result }: { result?: ToolResult }) {
   const refs = imageRefs(result?.content)
   if (!refs.length) return null
   return (
-    <div className="mt-1 flex flex-wrap gap-2">
-      {refs.map((ref, i) => (
-        <AttachmentView key={ref.attachment_id || i} id={ref.attachment_id} label={ref.name || 'image'} image />
-      ))}
+    <div className="mt-1">
+      <MediaGallery items={refs.map(ref => ({ id: ref.attachment_id, label: ref.name || 'image', image: true }))} />
     </div>
   )
 }
@@ -1063,59 +1014,61 @@ export function Transcript({
   }
   return (
     <SessionContext.Provider value={sessionId}>
-      <DelegatedContext.Provider value={delegated}>
-        <FoldContext.Provider value={folds}>
-          <div className="flex flex-col">
-            {made.has(-1) && <BotFiles files={made.get(-1)!} />}
-            {messages.map(message => (
-              <div
-                key={message.line}
-                id={messageAnchor(message.line)}
-                className={`empty:hidden ${toolsOnly(message) && !starts.has(message.line) ? 'mt-1.5' : 'mt-6'} ${highlight === message.line ? 'message-target' : ''}`}
-              >
-                {starts.has(message.line) && <CallHeader call={starts.get(message.line)!} />}
-                <MessageView message={message} results={results} pending={pending} replies={replies} />
-                {sentFrom.has(message.line) && (
-                  <div className="mt-1 flex flex-wrap items-center justify-end gap-1.5 text-xs text-muted">
-                    ↪ Sent to
-                    {sentFrom.get(message.line)!.map(card => (
-                      <ThreadLink key={card.message_id} id={card.thread.id}>
-                        {card.thread.title}
-                      </ThreadLink>
+      <FilesContext.Provider value={files}>
+        <DelegatedContext.Provider value={delegated}>
+          <FoldContext.Provider value={folds}>
+            <div className="flex flex-col">
+              {made.has(-1) && <BotFiles files={made.get(-1)!} />}
+              {messages.map(message => (
+                <div
+                  key={message.line}
+                  id={messageAnchor(message.line)}
+                  className={`empty:hidden ${toolsOnly(message) && !starts.has(message.line) ? 'mt-1.5' : 'mt-6'} ${highlight === message.line ? 'message-target' : ''}`}
+                >
+                  {starts.has(message.line) && <CallHeader call={starts.get(message.line)!} />}
+                  <MessageView message={message} results={results} pending={pending} replies={replies} />
+                  {sentFrom.has(message.line) && (
+                    <div className="mt-1 flex flex-wrap items-center justify-end gap-1.5 text-xs text-muted">
+                      ↪ Sent to
+                      {sentFrom.get(message.line)!.map(card => (
+                        <ThreadLink key={card.message_id} id={card.thread.id}>
+                          {card.thread.title}
+                        </ThreadLink>
+                      ))}
+                    </div>
+                  )}
+                  {made.has(message.line) && <BotFiles files={made.get(message.line)!} />}
+                  {message.role === 'assistant' &&
+                    (() => {
+                      const call = calls.find(
+                        c =>
+                          c.first_sequence != null &&
+                          c.first_sequence <= message.line &&
+                          (c.last_sequence ?? Infinity) >= message.line,
+                      )
+                      const last =
+                        call &&
+                        messages
+                          .filter(
+                            m =>
+                              m.role === 'assistant' &&
+                              m.line >= call.first_sequence! &&
+                              m.line <= (call.last_sequence ?? Infinity),
+                          )
+                          .slice(-1)[0]
+                      return call && last?.line === message.line ? <ContextPanel call={call} /> : null
+                    })()}
+                  {compactions
+                    .filter(c => c.upto_sequence === message.line)
+                    .map(c => (
+                      <CompactionDivider key={c.id} compaction={c} sessionId={sessionId} />
                     ))}
-                  </div>
-                )}
-                {made.has(message.line) && <BotFiles files={made.get(message.line)!} />}
-                {message.role === 'assistant' &&
-                  (() => {
-                    const call = calls.find(
-                      c =>
-                        c.first_sequence != null &&
-                        c.first_sequence <= message.line &&
-                        (c.last_sequence ?? Infinity) >= message.line,
-                    )
-                    const last =
-                      call &&
-                      messages
-                        .filter(
-                          m =>
-                            m.role === 'assistant' &&
-                            m.line >= call.first_sequence! &&
-                            m.line <= (call.last_sequence ?? Infinity),
-                        )
-                        .slice(-1)[0]
-                    return call && last?.line === message.line ? <ContextPanel call={call} /> : null
-                  })()}
-                {compactions
-                  .filter(c => c.upto_sequence === message.line)
-                  .map(c => (
-                    <CompactionDivider key={c.id} compaction={c} sessionId={sessionId} />
-                  ))}
-              </div>
-            ))}
-          </div>
-        </FoldContext.Provider>
-      </DelegatedContext.Provider>
+                </div>
+              ))}
+            </div>
+          </FoldContext.Provider>
+        </DelegatedContext.Provider>
+      </FilesContext.Provider>
     </SessionContext.Provider>
   )
 }

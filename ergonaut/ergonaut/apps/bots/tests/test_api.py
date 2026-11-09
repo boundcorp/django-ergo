@@ -1,5 +1,6 @@
 import hashlib
 import json
+import shutil
 import textwrap
 import time
 
@@ -473,6 +474,36 @@ def test_files_shared_from_another_chat_and_image_thumbnails(client, cook, use_b
     other = get_user_model().objects.create_user("other", "o@example.com", "pw")
     client.force_login(other)
     assert client.get(f"/api/attachments/{photo.id}/thumbnail").status_code == 404
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="needs ffmpeg")
+@pytest.mark.django_db(transaction=True)
+def test_a_video_preview_is_a_frame_and_a_disguised_playlist_gets_none(client, cook, use_bots, settings, tmp_path):
+    import subprocess
+
+    from django_ergo.conversation.attachments import save_session_file
+    from django_ergo.conversation.models import ConversationSession
+
+    settings.MEDIA_ROOT = str(tmp_path / "media")
+    use_bots(say("hi"))
+    root = post(client, "/api/bots/kitchen/root").json()
+    session = ConversationSession.objects.get(id=root["id"])
+    clip = tmp_path / "clip.mp4"
+    subprocess.run(
+        ["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "testsrc=duration=2:size=640x360:rate=10"]
+        + ["-pix_fmt", "yuv420p", str(clip)],
+        check=True,
+    )
+    video = save_session_file(session, "clip.mp4", clip.read_bytes(), media_type="video/mp4", source="bot")
+    [listed] = client.get(f"/api/sessions/{root['id']}/attachments").json()
+    thumb = client.get(listed["thumbnail"])
+    assert (thumb.status_code, thumb["Content-Type"]) == (200, "image/jpeg")
+    assert thumb.content[:2] == b"\xff\xd8"
+
+    playlist = b"#EXTM3U\n#EXTINF:1,\nfile:///etc/passwd\n"
+    fake = save_session_file(session, "evil.mp4", playlist, media_type="video/mp4", source="upload")
+    assert client.get(f"/api/attachments/{fake.id}/thumbnail").status_code == 404
+    assert video.id != fake.id
 
 
 @pytest.mark.django_db(transaction=True)
