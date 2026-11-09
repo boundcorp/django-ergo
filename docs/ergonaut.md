@@ -31,7 +31,9 @@ Resuming is manual, including after a repeated output-limit failure.
 In a chat or on the new-thread page, the microphone records only after you press
 it. Stop transcribes the recording into the editable draft; it never sends a message.
 Cancel or Escape discards it. Recordings exceeding the server's configured limits
-are rejected; on failure, retry or download the captured audio. The browser
+are rejected; on failure, retry or download the captured audio. If a browser
+produces an unsupported format, download the recording instead of retrying
+transcription. If no audio was captured, retry starts a new recording. The browser
 requests a screen wake lock while recording when supported, and reacquires it
 after returning to a visible tab. The browser needs a secure context, microphone permission and
 MediaRecorder support for WebM, MP4, MP3 or WAV. It selects a supported format
@@ -40,7 +42,7 @@ voice input. The voice API rejects Ogg; it accepts WebM, MP4/M4A, MP3 and WAV
 with matching content types and audio signatures. The control is unavailable
 until voice transcription is enabled and an OpenAI API key is configured.
 The compact control shows a red recording indicator and timer, a spinner while
-transcribing, or an error icon with retry and dismiss controls. When idle it
+transcribing, or an error icon with dismiss and, where applicable, retry controls. When idle it
 occupies only the microphone button's width, and expands for status controls as
 needed. The microphone's tooltip and accessible label describe OpenAI processing;
 error details are available in the icon's tooltip and accessible label.

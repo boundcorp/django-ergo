@@ -213,6 +213,51 @@ describe('voice recorder', () => {
     expect(calls).toBe(0)
     expect(stopped).toBe(1)
     expect(container.textContent).toContain('unsupported audio format')
+    expect(button('Download recording')).toBeTruthy()
+    expect([...container.querySelectorAll('button')].some(el => el.getAttribute('aria-label') === 'Retry')).toBe(false)
+    expect(win.document.activeElement).toBe(button('Dismiss'))
+  })
+
+  test('downloads an unsupported Ogg recording with the correct extension', async () => {
+    actualType = 'audio/ogg'
+    let filename = ''
+    const originalClick = win.HTMLAnchorElement.prototype.click
+    const originalCreate = URL.createObjectURL
+    const originalRevoke = URL.revokeObjectURL
+    win.HTMLAnchorElement.prototype.click = function () {
+      filename = this.download
+    }
+    URL.createObjectURL = () => 'blob:recording'
+    URL.revokeObjectURL = () => {}
+    try {
+      await mount()
+      await click('Record voice message')
+      await click('Stop recording')
+      await click('Download recording')
+      expect(filename).toBe('recording.ogg')
+    } finally {
+      win.HTMLAnchorElement.prototype.click = originalClick
+      URL.createObjectURL = originalCreate
+      URL.revokeObjectURL = originalRevoke
+    }
+  })
+
+  test('offers a new recording rather than uploading empty audio', async () => {
+    let calls = 0
+    api.transcribeVoice = async () => {
+      calls++
+      return { text: 'ok' }
+    }
+    await mount()
+    await click('Record voice message')
+    await act(async () => {
+      instances[0].state = 'inactive'
+      instances[0].onstop?.()
+    })
+    expect(calls).toBe(0)
+    expect(container.textContent).toContain('No audio was captured')
+    await click('Retry')
+    expect(requested).toBe(2)
   })
 
   test('escape discards recording and stops tracks without upload', async () => {
@@ -389,6 +434,66 @@ describe('voice recorder', () => {
     expect(requests).toBe(2)
     await click('Stop recording')
     expect(releases).toBe(1)
+  })
+
+  test('retries a pending wake lock rejected after returning to the tab', async () => {
+    let requests = 0
+    const pending = Promise.withResolvers<never>()
+    Object.defineProperty(win.navigator, 'wakeLock', {
+      configurable: true,
+      value: {
+        request: () => {
+          requests++
+          return requests === 1
+            ? pending.promise
+            : Promise.resolve({ addEventListener: () => {}, release: async () => {} })
+        },
+      },
+    })
+    Object.defineProperty(win.document, 'visibilityState', { configurable: true, value: 'visible' })
+    await mount()
+    await click('Record voice message')
+    await act(async () => {
+      Object.defineProperty(win.document, 'visibilityState', { configurable: true, value: 'hidden' })
+      win.document.dispatchEvent(new win.Event('visibilitychange'))
+      Object.defineProperty(win.document, 'visibilityState', { configurable: true, value: 'visible' })
+      win.document.dispatchEvent(new win.Event('visibilitychange'))
+      pending.reject(new Error('hidden'))
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(requests).toBe(2)
+  })
+
+  test('reacquires when the previous wake lock releases after the tab becomes visible', async () => {
+    let requests = 0
+    let releaseListener: (() => void) | undefined
+    Object.defineProperty(win.navigator, 'wakeLock', {
+      configurable: true,
+      value: {
+        request: async () => {
+          requests++
+          return {
+            addEventListener: (_type: string, listener: () => void) => {
+              releaseListener = listener
+            },
+            release: async () => {},
+          }
+        },
+      },
+    })
+    Object.defineProperty(win.document, 'visibilityState', { configurable: true, value: 'visible' })
+    await mount()
+    await click('Record voice message')
+    await act(async () => {
+      Object.defineProperty(win.document, 'visibilityState', { configurable: true, value: 'hidden' })
+      win.document.dispatchEvent(new win.Event('visibilitychange'))
+      Object.defineProperty(win.document, 'visibilityState', { configurable: true, value: 'visible' })
+      win.document.dispatchEvent(new win.Event('visibilitychange'))
+      releaseListener?.()
+      await Promise.resolve()
+    })
+    expect(requests).toBe(2)
   })
 
   test('recording works when wake lock is rejected', async () => {

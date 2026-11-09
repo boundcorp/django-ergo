@@ -25,6 +25,10 @@ function recordingType() {
   return recordingTypes.find(type => MediaRecorder.isTypeSupported(type))
 }
 
+function acceptedType(type: string) {
+  return acceptedTypes.includes(type.split(';', 1)[0].trim().toLowerCase())
+}
+
 /** Insert dictated text at the composer's selection, just like typing. */
 export function ComposerVoice({
   sessionId,
@@ -72,6 +76,7 @@ export function VoiceRecorder({
   const [elapsed, setElapsed] = useState(0)
   const wakeLock = useRef<WakeLockSentinel | null>(null)
   const wakeRequest = useRef(false)
+  const wakeRetry = useRef(false)
   const stream = useRef<MediaStream | null>(null)
   const recorder = useRef<MediaRecorder | null>(null)
   const upload = useRef<AbortController | null>(null)
@@ -87,6 +92,7 @@ export function VoiceRecorder({
   async function acquireWakeLock(token: number) {
     if (!navigator.wakeLock || document.visibilityState !== 'visible' || wakeLock.current || wakeRequest.current) return
     wakeRequest.current = true
+    wakeRetry.current = false
     try {
       const lock = await navigator.wakeLock.request('screen')
       if (
@@ -98,20 +104,26 @@ export function VoiceRecorder({
       } else {
         wakeLock.current = lock
         lock.addEventListener('release', () => {
-          if (wakeLock.current === lock) wakeLock.current = null
+          if (wakeLock.current !== lock) return
+          wakeLock.current = null
+          if (wakeRetry.current && !wakeRequest.current && recorder.current?.state === 'recording') {
+            wakeRetry.current = false
+            void acquireWakeLock(generation.current)
+          }
         })
       }
     } catch {
       // Wake locks are optional; recording must work without them.
     } finally {
       wakeRequest.current = false
-      if (generation.current !== token && recorder.current?.state === 'recording') {
+      if ((generation.current !== token || wakeRetry.current) && recorder.current?.state === 'recording') {
         void acquireWakeLock(generation.current)
       }
     }
   }
 
   function releaseWakeLock() {
+    wakeRetry.current = false
     const lock = wakeLock.current
     wakeLock.current = null
     if (lock) void lock.release().catch(() => {})
@@ -191,7 +203,8 @@ export function VoiceRecorder({
   useEffect(() => {
     const onVisibilityChange = () => {
       if (document.visibilityState === 'visible' && recorder.current?.state === 'recording') {
-        void acquireWakeLock(generation.current)
+        if (wakeRequest.current || wakeLock.current) wakeRetry.current = true
+        else void acquireWakeLock(generation.current)
       }
     }
     document.addEventListener('visibilitychange', onVisibilityChange)
@@ -258,12 +271,23 @@ export function VoiceRecorder({
         const blob = new Blob(chunks, { type: actualType })
         audio.current = blob.size ? blob : null
         if (recordingFailed) {
-          setError('Recording failed. Retry transcription or download the captured audio.')
+          setError(
+            !audio.current
+              ? 'Recording failed without capturing audio. Try recording again.'
+              : acceptedType(audio.current.type)
+                ? 'Recording failed. Retry transcription or download the captured audio.'
+                : 'Recording failed with an unsupported audio format. Download the captured audio.',
+          )
           setPhase('error')
           return
         }
-        if (!acceptedTypes.includes(actualType.split(';', 1)[0].trim().toLowerCase())) {
+        if (!acceptedType(actualType)) {
           setError('Your browser recorded an unsupported audio format.')
+          setPhase('error')
+          return
+        }
+        if (!blob.size) {
+          setError('No audio was captured. Try recording again.')
           setPhase('error')
           return
         }
@@ -369,7 +393,7 @@ export function VoiceRecorder({
           {String(Math.floor(elapsed / 60)).padStart(2, '0')}:{String(elapsed % 60).padStart(2, '0')}
         </span>
       )}
-      {phase === 'error' && (
+      {phase === 'error' && (!audio.current || acceptedType(audio.current.type)) && (
         <button
           ref={action}
           type="button"
@@ -400,7 +424,11 @@ export function VoiceRecorder({
                   ? 'wav'
                   : type.includes('mpeg') || type.includes('mp3')
                     ? 'mp3'
-                    : 'webm'
+                    : type.includes('webm')
+                      ? 'webm'
+                      : type.includes('ogg')
+                        ? 'ogg'
+                        : 'bin'
             link.href = url
             link.download = `recording.${extension}`
             link.click()
@@ -412,7 +440,13 @@ export function VoiceRecorder({
       )}
       {phase !== 'idle' && (
         <button
-          ref={phase === 'permission' || phase === 'processing' ? action : undefined}
+          ref={
+            phase === 'permission' ||
+            phase === 'processing' ||
+            (phase === 'error' && !!audio.current && !acceptedType(audio.current.type))
+              ? action
+              : undefined
+          }
           type="button"
           className={buttonClass}
           aria-label={phase === 'error' ? 'Dismiss' : 'Cancel'}
