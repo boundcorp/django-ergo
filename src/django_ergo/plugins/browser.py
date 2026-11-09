@@ -69,6 +69,7 @@ import concurrent.futures
 import contextlib
 import fcntl
 import hashlib
+import re
 import socket
 import subprocess
 import tempfile
@@ -104,6 +105,8 @@ if TYPE_CHECKING:
     from django_ergo.conversation.toolkit import Toolkit
 
 TAB_ID_CHARS = 8
+REF = re.compile(r"(?:f\d+)?e\d+")
+REF_IN_SNAPSHOT = re.compile(r"\[ref=(f\d+)?(e\d+)\]")
 SESSION_FUNCTION = "browser:session"
 
 DRIVER_PROMPT = """\
@@ -134,6 +137,27 @@ class TaskReport(BaseModel):
         default="",
         description="When stopped: what a person or the assistant must do or decide",
     )
+
+
+def fresh_refs(snapshot: str) -> str:
+    """``snapshot``'s refs as the next connection will number them.
+
+    Playwright prefixes refs with a frame number (``f2e5``) that it counts per
+    connection: once a page has navigated, the main frame's refs carry one too.
+    Each call connects anew, and a new connection numbers the main frame bare
+    (``e5``) and the other frames ``f1``, ``f2``... in the order the snapshot
+    reaches them. Renumber the same way, so the refs the bot sees are the ones
+    the next call resolves.
+    """
+    frames: dict[str, str] = {}
+
+    def renumber(match: re.Match) -> str:
+        frame = match.group(1) or ""
+        if frame not in frames:
+            frames[frame] = f"f{len(frames)}" if frames else ""
+        return f"[ref={frames[frame]}{match.group(2)}]"
+
+    return REF_IN_SNAPSHOT.sub(renumber, snapshot)
 
 
 @dataclass
@@ -329,14 +353,16 @@ class BrowserPlugin(BotPlugin):
             "tab": tab_id,
             "title": page.title(),
             "url": page.url,
-            "snapshot": trim(page.aria_snapshot(mode="ai"), self.max_snapshot_chars),
+            "snapshot": trim(
+                fresh_refs(page.aria_snapshot(mode="ai")), self.max_snapshot_chars
+            ),
         }
 
     @staticmethod
     def _locator(page: Any, target: str) -> Any:
         """A ref from the snapshot (e12, or [ref=e12]) or any Playwright selector."""
         ref = target.strip().removeprefix("[").removesuffix("]").removeprefix("ref=")
-        if ref[:1] == "e" and ref[1:].isdigit():
+        if REF.fullmatch(ref):
             # Refs only resolve against a snapshot taken on this connection.
             page.aria_snapshot(mode="ai")
             return page.locator(f"aria-ref={ref}")
@@ -737,11 +763,15 @@ class BrowserPlugin(BotPlugin):
                 "Browser",
                 f"{session}"
                 "The ergo_browser_ tools drive a real Chrome that stays open between calls, "
-                "with the user's sign-ins. Read a page with ergo_browser_snapshot and act on "
-                f"the refs it shows (e12). {approval} For more than a step or two, hand "
-                "the goal to ergo_browser_task (a fast model drives it and reports back) "
-                "or, when you already know the steps, run them in one ergo_browser_batch. "
-                "When a page needs a person (sign-in, "
+                "with the user's sign-ins. Browse with ergo_browser_task by default: give it "
+                "the goal once (search a site, fill a form, find and read pages, collect "
+                "links) and a fast model does the clicking and typing and reports back. "
+                "Each click you make yourself costs a full model turn, so don't drive a "
+                "page step by step. Use ergo_browser_open and ergo_browser_snapshot to "
+                "look at a page, ergo_browser_batch for steps you already know, and the "
+                "single click, type and press tools only for one action or to finish what "
+                f"a task stopped at. Refs (e12, f1e3) come from the latest snapshot. "
+                f"{approval} When a page needs a person (sign-in, "
                 f"two-factor code, captcha, consent screen), stop and ask the user to do it in "
                 f"{self.takeover}, then take a new snapshot once they say it's done. Never ask "
                 "for passwords or codes in chat.",
@@ -835,7 +865,10 @@ class BrowserPlugin(BotPlugin):
         @bot_tool(
             name="ergo_browser_click",
             takes_context=True,
-            description="Click an element and return the page's new snapshot.",
+            description=(
+                "Click one element and return the page's new snapshot. For more than "
+                "one action, use ergo_browser_task or ergo_browser_batch."
+            ),
             parameters={"target": target_param, "tab": tab_param},
             required=["target"],
             requires_approval=approve,
@@ -937,9 +970,9 @@ class BrowserPlugin(BotPlugin):
             name="ergo_browser_task",
             takes_context=True,
             description=(
-                "Hand the browser a goal: a fast model drives it (opening pages, "
-                "reading, clicking, typing) until the goal is met, then reports with "
-                "the final page. One call instead of one per click. It stops and says "
+                "The default way to browse: hand the browser a goal and a fast model "
+                "drives it (opening pages, reading, clicking, typing) until the goal is "
+                "met, then reports with the final page. One call instead of one per click. It stops and says "
                 "so before sign-ins, payments, or submitting, saving, publishing or "
                 "deleting anything the goal doesn't ask for, so name those steps if you "
                 "want them done. Check its report against the page."

@@ -172,7 +172,11 @@ Chrome and its tabs stay as they are. Refs only resolve against a snapshot
 taken on the same connection, so an action takes a fresh snapshot and
 resolves the ref against it: if the page changed in between, the ref may
 point somewhere else; set `approve_actions: true` to approve each action
-too. Each chat's current tab is kept on the session.
+too. Refs in frames carry a frame number (`f1e3`) that Playwright counts
+per connection, and once a page has navigated the main frame's refs carry
+one too; snapshots the bot gets are renumbered the way the next call's
+connection will number them, so the refs it acts on still match.
+Each chat's current tab is kept on the session.
 
 ### Fewer round trips
 

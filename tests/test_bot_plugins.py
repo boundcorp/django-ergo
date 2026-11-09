@@ -2732,6 +2732,27 @@ def test_browser_launch_says_why_chrome_did_not_answer(tmp_path):
         plugin._launch()
 
 
+def test_browser_snapshot_refs_are_numbered_as_the_next_call_sees_them():
+    from django_ergo.plugins.browser import REF
+    from django_ergo.plugins.browser import fresh_refs
+
+    # After a navigation the main frame's refs carry a frame number; a new
+    # connection numbers it bare and the iframes f1, f2... in order.
+    seen = (
+        '- generic [ref=f1e1]:\n  - button "Two" [ref=f1e2]\n'
+        '  - iframe [ref=f1e3]:\n    - button "Inner" [ref=f2e2]'
+    )
+    assert fresh_refs(seen) == (
+        '- generic [ref=e1]:\n  - button "Two" [ref=e2]\n'
+        '  - iframe [ref=e3]:\n    - button "Inner" [ref=f1e2]'
+    )
+    assert fresh_refs("- button [ref=e4]\n- iframe:\n  - link [ref=f1e2]") == (
+        "- button [ref=e4]\n- iframe:\n  - link [ref=f1e2]"
+    )
+    assert REF.fullmatch("f4e17") and REF.fullmatch("e3")
+    assert not REF.fullmatch("input")
+
+
 @pytest.mark.django_db
 def test_browser_tools_need_a_session(tmp_path):
     _, _, plugin = browser_bot(tmp_path)
