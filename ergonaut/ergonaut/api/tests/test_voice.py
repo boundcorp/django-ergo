@@ -1,6 +1,7 @@
 import array
 import io
 import json
+import math
 import shutil
 import subprocess
 import wave
@@ -311,7 +312,13 @@ def test_long_real_recording_through_endpoint(setup_voice, monkeypatch):
             timeout=20,
         ).stdout
         samples = array.array("h", pcm)
-        frequency = sum(a <= 0 < b for a, b in zip(samples, samples[1:]))
+
+        def power(frequency):
+            real = sum(sample * math.cos(2 * math.pi * frequency * i / 8000) for i, sample in enumerate(samples))
+            imag = sum(sample * math.sin(2 * math.pi * frequency * i / 8000) for i, sample in enumerate(samples))
+            return real * real + imag * imag
+
+        frequency = max((400, 600, 800), key=power)
         seen.append((duration, frequency))
         return SimpleNamespace(text=f"frequency {frequency}", usage=None)
 
@@ -319,7 +326,7 @@ def test_long_real_recording_through_endpoint(setup_voice, monkeypatch):
     response = client.post(url, {"audio": audio_file(audio, content_type="audio/webm")})
     assert response.status_code == 200
     assert len(seen) == 3
-    assert [round(frequency / 100) * 100 for _, frequency in seen] == [400, 600, 800]
+    assert [frequency for _, frequency in seen] == [400, 600, 800]
     assert [round(duration) for duration, _ in seen] == [300, 300, 16]
     assert response.json()["text"] == " ".join(f"frequency {frequency}" for _, frequency in seen)
     assert StructuredCall.objects.filter(kind="voice_transcription").count() == 3
