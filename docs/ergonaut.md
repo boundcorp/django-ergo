@@ -71,9 +71,11 @@ Enable with `VOICE_TRANSCRIPTION_ENABLED=true` and `OPENAI_API_KEY`. The
 server requires `ffprobe` and `ffmpeg` on PATH to inspect and split recordings;
 the release image includes them. Startup logs and Django system checks warn if
 `ffprobe` is missing. Long or oversized provider inputs are converted to
-overlapping five-minute chunks and transcribed in order. Clear multi-word
-overlap is deduplicated; ambiguous overlaps may remain repeated. If any chunk
-fails, the request fails rather than returning a partial transcript. Successful
+overlapping five-minute chunks and transcribed in order. Matching multi-word
+overlaps and some near-matches differing by a word ending are deduplicated;
+ambiguous overlaps may remain repeated, and repeated speech at a join can be
+mistaken for overlap. If any chunk fails, the request fails rather than
+returning a partial transcript. Successful
 provider calls are recorded individually, including overlaps and calls in a
 failed request. The HTTP connection must remain open through processing; any
 reverse proxy request and upload limits must accommodate the configured limits.

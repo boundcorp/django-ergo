@@ -246,6 +246,31 @@ def test_join_transcripts_preserves_uncertain_boundaries():
     assert voice._join_transcripts(["a word", "word again"]) == "a word word again"
 
 
+def test_join_actual_provider_boundary_outputs():
+    # Synthesized source contained each numbered passage once.
+    first = "This is passage number 37. The curious astronaut carefully observes."
+    second = (
+        "And the curious astronaut carefully observed the quiet forest while the river flows beneath the ancient bridge. "
+        "This is passage number 73."
+    )
+    third = "This is passage number 73. The curious astronaut carefully observes the quiet forest while the"
+    fourth = (
+        "Astronaut carefully observed the quiet forest while the river flows beneath the ancient bridge. "
+        "This is passage number 120. The closing signal is Violet Mountain."
+    )
+    assert voice._join_transcripts([first, second, third, fourth]) == (
+        "This is passage number 37. And the curious astronaut carefully observed the quiet forest while the river "
+        "flows beneath the ancient bridge. This is passage number 73. The curious Astronaut carefully observed "
+        "the quiet forest while the river flows beneath the ancient bridge. "
+        "This is passage number 120. The closing signal is Violet Mountain."
+    )
+    assert voice._join_transcripts(["we say go go", "go go again"]) == "we say go go again"
+    assert voice._join_transcripts(["please go now", "go now go now"]) == "please go now go now"
+    assert voice._join_transcripts(["the red fox jumped over", "the red fox slept over there"]) == (
+        "the red fox jumped over the red fox slept over there"
+    )
+
+
 def test_chunks_cover_boundaries_and_provider_limits(monkeypatch):
     calls = []
 

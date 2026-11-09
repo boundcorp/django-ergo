@@ -296,6 +296,26 @@ def _join_transcripts(texts):
             if left == right and all(left):
                 text = text[current[count - 1].end() :].lstrip()
                 break
+        else:
+            # A provider can inflect one overlapping word differently. Require
+            # four exact words and a shared stem before preferring the newer
+            # rendition; shorter or less certain matches retain both sides.
+            right = [m.group().strip(".,!?;:\"'()[]{}").casefold() for m in current]
+            offset = 1 if right and right[0] == "and" else 0
+            for count in range(min(len(previous), len(current) - offset, 30), 4, -1):
+                left = [m.group().strip(".,!?;:\"'()[]{}").casefold() for m in previous[-count:]]
+                pairs = list(zip(left, right[offset : offset + count]))
+                changed = [(a, b) for a, b in pairs if a != b]
+                if len(changed) != 1 or not all(a and b for a, b in pairs):
+                    continue
+                a, b = changed[0]
+                stem = 0
+                while stem < min(len(a), len(b)) and a[stem] == b[stem]:
+                    stem += 1
+                endings = {"", "s", "d", "ed", "es", "ing"}
+                if stem >= 5 and a[stem:] in endings and b[stem:] in endings:
+                    result = result[: previous[-count].start()].rstrip()
+                    break
         if text:
             result = f"{result} {text}".strip()
     return result
