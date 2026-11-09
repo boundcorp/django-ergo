@@ -75,6 +75,7 @@ def test_adopt_and_rollback_preserve_session_and_children(setup_chat):
     assert child.parent_id == thread.pk
     assert async_to_sync(bot.chat_session)(user, "reports").pk == thread.pk
     assert overview.chat_name(adopted) == "reports (named chat)"
+    assert "- reports (named chat):" in overview.overview(bot.tool_context(main))
     assert not archival.idle_threads(bot).filter(pk=thread.pk).exists()
     assert adopt_chat(bot, "reports", thread)[1] is False
     restored, changed = adopt_chat(bot, "reports", thread, rollback=True)
