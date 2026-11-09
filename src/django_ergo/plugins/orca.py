@@ -1532,7 +1532,8 @@ class OrcaPlugin(BotPlugin):
                     "description": (
                         "Pick agent, model and effort for a configured agents tier in "
                         "providers.yaml (including custom names) from a subscription "
-                        "with room (replaces agent, model and effort)"
+                        "with the best safe pace score; prefer tier over provider pins "
+                        "(replaces agent, model and effort)"
                     ),
                 },
             },

@@ -174,7 +174,7 @@ def start(ctx: ToolContext, spec: AgentSpec, manager: str = "") -> Worker:
     """Start an agent and the Worker that watches it.
 
     With ``spec.tier``, the agent, model and effort come from providers.yaml's
-    ``agents`` tiers, on whichever subscription has room."""
+    ``agents`` tiers, on the subscription with the best safe pace score."""
     if ctx.session is None:
         msg = "Agents belong to a chat"
         raise ValueError(msg)
@@ -411,7 +411,8 @@ Coding agents (Codex, Claude Code, omp) run on a subscription for minutes to
 hours. ergo_agent_start starts one on a self-contained brief: the target, the
 change, constraints, who owns what, and how to prove it's done. Pass a configured
 tier (small, medium, large, xlarge, or a custom name from providers.yaml) to let routing
-pick the agent and model from a subscription with room. The chat shows it as a
+pick the agent and model by subscription pace, favouring unused quota near reset.
+Do not pin a provider unless the task requires it. The chat shows it as a
 worker; its questions and its final report arrive here as messages, so don't
 wait or poll. Answer a question with ergo_agent_reply; ergo_agent_stop stops one.
 """
@@ -466,7 +467,7 @@ def agent_toolkit(bot: Bot, ctx: ToolContext):
                 "type": "string",
                 "description": "Pick agent, model and effort for a configured agents "
                 "tier in providers.yaml (including custom names) from a subscription "
-                "with room (replaces agent, model and effort)",
+                "with the best safe pace score (replaces agent, model and effort)",
             },
             "agent": {"type": "string", "description": "codex, claude or omp"},
             "model": {

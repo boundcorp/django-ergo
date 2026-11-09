@@ -609,7 +609,8 @@ chat role (`default`, `smol`, `task` subagents and the rest) is set to that
 model, with the effort on the roles that do the agent's work, so no role
 falls back to the host's omp config and spends another subscription. With `tier: <name>` instead (small, medium, large, xlarge, or a
 custom name), the agent, model and effort come from the `agents` tiers in
-providers.yaml, on whichever subscription has room (see
+providers.yaml, by the best safe subscription pace score, prioritizing unused
+weekly quota near reset while respecting shorter windows (see
 [Routing by tier](building-bots.md#routing-by-tier)). Each chat keeps one Orca mailbox terminal and Run for its
 workers; if Orca no longer knows them (their worktree was removed, Orca was
 reset), starting an agent makes new ones and tries once more. If a worker's agent

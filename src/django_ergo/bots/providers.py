@@ -96,7 +96,7 @@ POOL_KEYS = frozenset(
     {"enabled", "provider", "allowed_bots", "default", "models", "daily_usd_cap"}
 )
 
-# Preference order is by model family, then providers.yaml's provider order.
+# Capability/cost tie-break order only; subscription pace determines the pick.
 # Only exact catalog models on configured CLI subscriptions become candidates.
 DEFAULT_TIER_MODELS = {
     "small": (

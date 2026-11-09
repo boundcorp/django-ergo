@@ -30,6 +30,7 @@ def window_period(name: str) -> str:
 
 
 def window_entry(name: str, used, resets, **metadata) -> dict:
+    period = metadata.get("period") or window_period(name)
     return {
         "label": metadata.get("label")
         or WINDOW_NAMES.get(name, name.replace("_", " ")).removesuffix(" window"),
@@ -38,7 +39,9 @@ def window_entry(name: str, used, resets, **metadata) -> dict:
         "resets_at": resets,
         "status": metadata.get("status", ""),
         "model": metadata.get("model", ""),
-        "period": metadata.get("period") or window_period(name),
+        "period": period,
+        "period_seconds": metadata.get("period_seconds")
+        or {"5h": 18_000, "7d": 604_800}.get(period),
         "observed_at": metadata.get("observed_at"),
     }
 
@@ -63,6 +66,7 @@ def codex_windows(rate_limits: dict | None) -> dict:
             window.get("resetsAt"),
             label=label,
             status=window.get("status") or "",
+            period_seconds=minutes * 60 if minutes else None,
         )
     return out
 

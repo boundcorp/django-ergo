@@ -172,15 +172,15 @@ configured `transport: cli` providers; it never adds a provider or model
 and never includes an API-key provider in a default tier. Provider names
 are yours to choose; defaults match their engine type and exact model name:
 
-| Tier | Candidate order (unlisted models are skipped) |
+| Tier | Capability/cost tie-break order (unlisted models are skipped) |
 | --- | --- |
 | `small` | Claude Haiku 5.5, GPT-6 Luna, Claude Haiku 4.5 |
 | `medium` | Claude Sonnet 5.5, GPT-6.1 Sol, then the `small` pair |
 | `large` | Claude Opus 5.5, GPT-6 Sol, then the `medium` pair |
 | `xlarge` | Claude Fable 5.1, GPT-6 Astra, then the `large` pair |
 
-If several subscriptions list the same model, they are tried in provider
-declaration order. A tier with no matching candidates cannot be used.
+List order breaks equal pace scores only; it does not prefer a provider over
+an account with better pacing. A tier with no matching candidates cannot be used.
 Built-in agent choices use `claude` or `codex` at effort `medium`, whatever
 the tier. Chat tiers select models only: their engine settings still come
 from the provider, model and bot config.
@@ -210,7 +210,7 @@ providers:
     type: openai
     transport: cli
     models: [gpt-6-luna, gpt-6.1-sol, gpt-6-sol, gpt-6-astra]
-tiers:                # chat candidates, in preference order
+tiers:                # eligible chat models; order breaks equal pace scores
   small: [openai-codex/gpt-6-luna, anthropic/claude-haiku-5-5]  # override a built-in
   research: [anthropic/claude-fable-5-1, openai-codex/gpt-6-astra]  # custom
 agents:               # coding agents (ergo_agent_start tier=...), subscriptions only
@@ -219,10 +219,9 @@ agents:               # coding agents (ergo_agent_start tier=...), subscriptions
   research:
     - {agent: claude, model: claude-fable-5-1, effort: high, provider: anthropic}
 routing:
-  limits:             # skip a provider once a window is this % used
-    - {provider: anthropic, window: five_hour, max_used: 85}
-    - {provider: openai-codex, window: weekly, max_used: 80}
-    - {provider: anthropic, window: weekly_fable, max_used: 80}
+  soft_preferences: {}  # optional fractional-score nudges, bounded to +/-0.1
+  limits:              # optional backwards-compatible used-percentage caps
+    - {provider: "*", window: five_hour, max_used: 95}
 ```
 
 Use `engine: {model: auto/research}` in bot.yaml (or choose `auto/research`
@@ -251,17 +250,33 @@ event updates only the windows it reports, so the others keep their own age.
 A window is stale once its own observation is older than 15 minutes. A failed
 fetch, or one account that errors, keeps the last values (aging, never
 refreshed) and records why in `UsageSync`. The Routing page shows
-used/remaining percentages, reset countdowns, status and each window's age.
+used/remaining percentages, reset countdowns, elapsed fraction and pace delta.
 Windows past their reset time are not used to disqualify a model. A call
 refused for a limit counts that reported window as used up until it resets.
 A turn refused that way is never retried on its own: the chat's error offers
-**Retry on** the tier's next model with room (`POST
+**Retry on** the best safe pace-ranked alternative (`POST
 /api/sessions/<id>/resume?model=...`), next to Resume, which waits for the
-same model. The chat then stays on the model it moved to while that model
-qualifies.
-Without limits, a provider is skipped only at 98% used. When every candidate
-is over a limit, the one with the most room is used. Agent candidates must
-name a `transport: cli` provider, so agents never run on an API key.
+same model. Cache affinity keeps a chat's current model only on an equal
+pace score, not while another account has expiring headroom.
+
+For each fresh window with a known duration, `elapsed_frac = 1 -
+seconds_to_reset / period_seconds`, clamped to `[0, 1]`; `used_frac = used /
+100`; `pace_delta = elapsed_frac - used_frac`. Positive delta means headroom
+to spend. The worst applicable weekly score is used: positive delta is
+multiplied by `1 + min(7, 24 / max(1, hours_to_reset))`; negative delta is
+doubled. Short windows contribute only a penalty (`2 * min(0, delta)`),
+and more than ten percentage points ahead of short-window pace excludes
+the account even when its weekly budget is healthy. Exhausted windows
+always exclude. A bounded `soft_preferences` nudge is optional and defaults
+to no provider preference.
+
+Unknown/stale timing earns no urgency bonus. Known used percentages still
+enforce caps and exhaustion; windows past reset are omitted until refreshed.
+Without explicit caps the soft cap is 98% used. When every candidate exceeds
+a soft cap, use the best pace score among non-exhausted, short-window-safe
+candidates; if none are safe, report no safe provider rather than spend an
+exhausted account. Agent candidates must name an available `transport: cli`
+provider, so agents never run on an API key.
 Explicit chat tier lists may still include a listed API-key model, but
 selecting it bills that key; built-in defaults never do.
 
@@ -269,20 +284,21 @@ The same priorities can be written in words, in a `routing.md` next to
 providers.yaml:
 
 ```markdown
-Lean on Claude: use it until its 5-hour window is 85% used.
-Keep Codex's weekly window under 80%, since it runs out first.
+Choose a thinking tier, then spend subscription headroom that expires soon.
+Respect weekly pace and the shorter five-hour constraint; no provider preference.
 ```
 
 Use configured provider **names**, not engine types, in YAML limits: for the
 example above, Codex/GPT priorities target `openai-codex`, not a separate
-`openai` API-key provider. The priorities compiler is given this distinction;
-older compiled policies are recompiled under the window-aware compiler.
+`openai` API-key provider. Old compiled policies are recompiled for the
+pace-aware compiler. Explicit percentage caps and soft preferences remain optional.
 
-The first turn after the file changes compiles it into limits with one
-structured call, in the background; the `routing:` limits apply until it's
-done. Ergonaut's **Routing** page shows each subscription's windows against
-its limits, what every tier picks now and why, and the chats and workers
-recently moved off their first choice. An admin can rewrite the priorities
+The first turn after the file changes compiles explicit caps/preferences with
+one structured call in the background; YAML rules apply until it finishes.
+Ergonaut's **Routing** page shows subscription windows and pace numbers,
+what every tier picks now and why, and model switches and worker picks.
+Every selection logs a reason such as `chose chatgpt: 76% under weekly pace,
+resets in 1.4h`. An admin can rewrite the priorities
 there; the saved text replaces `routing.md` for that deployment until they
 switch back. `DJANGO_ERGO["MODEL_ROUTER"]` replaces the policy with your own
 callable `(candidates, usage, rules, current)`.
