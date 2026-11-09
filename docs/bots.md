@@ -1651,10 +1651,10 @@ In an opted-in group, messages that do not otherwise get a response are
 stored in the target thread as user messages, without starting a bot turn or
 changing the chat used for replies. They retain the real Telegram author and
 `telegram_passive` provenance, including the originating chat and message IDs
-and, when present, the replied-to message ID. Text or captions and textual
-attachment descriptors are captured; attachments are not downloaded or
-transcribed, and passive capture does not fetch author profiles. This is
-untrusted context, not an instruction to the bot or authorization to act.
+and, when present, the replied-to message ID. Captions and downloaded media
+are saved as message attachments; passive audio is not transcribed and passive
+capture does not fetch author profiles. This is untrusted context, not an
+instruction to the bot or authorization to act.
 Active response authorization in these groups matches the sender only, never
 the group ID; configure `respond_to.users` accordingly. Messages in opted-in
 groups are processed individually, not batched as albums or photo collections,
@@ -1671,7 +1671,12 @@ These database locks protect storage, not distributed intake order.
 it came from. With `replies: tool` it stays in the app, and the bot writes
 to Telegram with `ergo_telegram_message` (text, and `reply: true` to quote
 the latest Telegram message), which sends to the chat that last wrote to
-this conversation. Approval prompts and errors reach the chat either way.
+this conversation. `ergo_telegram_file(attachment_id, caption, reply)` sends
+an existing file from the current session by ID or filename: images as photos,
+videos as videos, and other files as documents. The stored attachment remains
+in the thread. URL-only attachments cannot be uploaded; uploads are limited
+to 50,000,000 bytes. Telegram can impose stricter limits. Approval prompts and
+errors reach the chat either way.
 
 **People.** The message's `author` is the Telegram user (`telegram_user`,
 their id and name), whichever chat it lands in, and the plugin keeps an
@@ -1679,12 +1684,16 @@ their id and name), whichever chat it lands in, and the plugin keeps an
 (refreshed daily). Ergonaut shows the photo next to their name. Forwarding
 preserves this `telegram_user` identity.
 
-**Media.** Photos, voice notes, audio and documents become attachments;
-voice and audio are transcribed when `DJANGO_ERGO["AUDIO_TRANSCRIBER"]` is
-set (Ergonaut sets it when `OPENAI_API_KEY` is). The photos of an album
-arrive as one turn, and with `photo_batch_wait` so do photos a person sends
-one at a time (handy for a recipe in several screenshots); a text they send
-while photos are gathering goes with them at once.
+**Media.** Photos, videos, voice notes, audio and documents become attachments.
+Active voice and audio are transcribed when `DJANGO_ERGO["AUDIO_TRANSCRIBER"]`
+is set (Ergonaut sets it when `OPENAI_API_KEY` is); passive audio is not.
+The photos of an album arrive as one active turn, and with `photo_batch_wait`
+so do photos a person sends one at a time (handy for a recipe in several
+screenshots); a text they send while photos are gathering goes with them at once.
+Downloads are limited to 20,000,000 bytes per file; empty, oversized or failed
+downloads are represented by a not-downloaded note. Telegram may enforce
+stricter media and upload restrictions.
+
 
 A turn that stops for approval replies with Approve and Deny buttons for the
 pending batch of tool calls (in a shared thread anyone it answers may press

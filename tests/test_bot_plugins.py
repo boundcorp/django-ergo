@@ -718,8 +718,14 @@ async def test_telegram_passive_photos_cannot_join_a_tagged_turn(tmp_path, album
     )
     assert len(engine._client.calls) == 1
     assert len(plugin.api.sent()) == 1
-    attachment = await ConversationAttachment.objects.aget()
-    assert attachment.metadata == {"telegram_file_id": "authorized"}
+    attachments = [
+        row async for row in ConversationAttachment.objects.filter(session=session)
+    ]
+    assert {row.metadata["telegram_file_id"] for row in attachments} == {
+        "partner",
+        "untagged",
+        "authorized",
+    }
     assert not plugin._albums
     assert not plugin._album_timers
 
@@ -733,13 +739,9 @@ async def test_telegram_passive_group_context_is_attributed_and_seen_next_turn(
     await User.objects.acreate(username="cook")
     bot, engine, plugin = passive_telegram_bot(tmp_path, say("Noted."))
 
-    async def no_download(file_id):
-        pytest.fail(f"Passive media must not be downloaded: {file_id}")
-
     async def no_turn_runner(*args):
         pytest.fail("Passive capture must not invoke the host turn runner")
 
-    monkeypatch.setattr(plugin.api, "download", no_download)
     monkeypatch.setattr(api_settings, "CHANNEL_TURN_RUNNER", no_turn_runner)
     await plugin.handle_update(
         group_update(
@@ -763,11 +765,14 @@ async def test_telegram_passive_group_context_is_attributed_and_seen_next_turn(
     assert saved.provenance["origin"]["message_id"] == 101
     assert saved.provenance["origin"]["reply_to_message_id"] == 77
     blocks = [block async for block in saved.content_blocks.all()]
-    assert all(block.block_type == "text" for block in blocks)
     text = " ".join(block.text or "" for block in blocks)
     assert "A recipe from the group" in text
-    assert "recipe.pdf" in text
-    assert not await ConversationAttachment.objects.aexists()
+    attachment = await ConversationAttachment.objects.aget(
+        session=session, message_sequence=saved.sequence
+    )
+    assert attachment.filename == "recipe.pdf"
+    assert attachment.metadata["telegram_file_id"] == "secret-file"
+    assert await sync_to_async(attachment.file.read)() == b"\x89PNG fake secret-file"
     assert not engine._client.calls
     assert not plugin.api.calls
     assert "telegram" not in session.metadata  # passive capture must not link_chat

@@ -2,7 +2,7 @@
 
 ## Scope and release gate
 
-PR [#267](https://github.com/boundcorp/django-ergo/pull/267) adds opt-in passive group context. The initial handoff refers to commit `86ff2e5`; this worktree contains further correctness work. This document is an operator plan, not authorization to merge, provision, enable, restart, or deploy. Production remains read-only during this task. No token values were read, printed, or written for this handoff.
+PR [#267](https://github.com/boundcorp/django-ergo/pull/267) adds opt-in passive group context. Lee authorized merge and deployment for this task; group enablement and secret provisioning remain separate operator steps. No token values were read, printed, or written for this handoff.
 
 The active/passive sequence collision and concurrent first-thread creation were reproduced locally, then fixed with short database row locks; both independent-connection concurrency regressions now pass. The isolated end-to-end smoke and integrated regression suite also passed (details below). Distributed intake ordering and atomic cross-worker deduplication are not promised.
 
@@ -16,7 +16,7 @@ Lee's nonsecret Telegram sender ID is **107609281**. The prior handoff obtained 
 | Lee sends an untagged message or only replies to the bot | Passive context only |
 | A partner tags the bot, replies, or sends ordinary text | Passive context only |
 
-A group ID never substitutes for sender authorization in an opted-in group. Passive capture stores attributed, untrusted text/captions and textual media descriptors without downloading or transcribing media, fetching author profiles, starting a turn, or changing the reply destination. It is not permission to execute instructions in that context. Album items are authorized individually. Private chats still bypass the group message-kind filter, but not sender authorization; this is not a private-chat ban.
+A group ID never substitutes for sender authorization in an opted-in group. Passive capture stores attributed, untrusted text/captions and media attachments without transcribing audio, fetching author profiles, starting a turn, or changing the reply destination. It is not permission to execute instructions in that context. Album items are authorized individually. Private chats still bypass the group message-kind filter, but not sender authorization; this is not a private-chat ban.
 
 The tag requirement governs new group messages. Separately, authorized Lee may deliberately click a current Approve/Deny button to resolve an already pending approval without an @tag. That callback must match this bot/thread and the current batch fingerprint under the turn lock. Partner callbacks and group-ID mappings do not authorize approval. Final integrated verification must cover this explicit approval flow as well as message routing.
 
@@ -69,13 +69,31 @@ The durable infrastructure repository is **`boundcorp/infra-octo`**, locally `/h
 
 The same Secret is also injected into web, Celery, bot-task, beat, and migration processes. The prior handoff records SOPS decryption in the deployed Flux pipeline; the checked-out child Kustomization does not itself declare a decryption block. Preserve the established authorized SOPS workflow rather than adding plaintext or applying a cluster-only Secret patch. The prior inventory listed `KITCHEN_TELEGRAM_BOT_TOKEN` but no Storytime token key; that is a historical observation, not a fresh secret inventory.
 
-An authorized owner must add the new key through encrypted Git review, confirm Flux decryption/reconciliation, and plan process rollout separately. `envFrom` is read at process startup: reconciling a Secret alone does not update a running process environment. Never print the Secret, decode it for documentation, log token-bearing URLs, or fetch a token from logs. This task does not provision a token or execute any rollout.
+The orchestrator owns provisioning the new key through encrypted Git and confirming Flux decryption/reconciliation. `envFrom` is read at process startup: reconciling a Secret alone does not update a running process environment. Never print the Secret, decode it for documentation, log token-bearing URLs, or fetch a token from logs.
 
 ## Intake deployment boundary
 
-The checked-out deployment manifest declares one `bots` replica running `ergonaut bots`; kitchen explicitly polls there. Keep Storytime explicitly in polling mode with **one actual polling process for its token**, and no webhook consumer or second polling client. One replica alone is insufficient if rolling updates briefly overlap old and new pods; the eventual operator must arrange a nonoverlapping handover for that token. Do not change shared deployment strategy or restart shared Ergonaut infrastructure as part of this task.
+The deployment manifest declares one `bots` replica running `ergonaut bots`; kitchen explicitly polls there. Keep Storytime explicitly in polling mode with **one actual polling process for its token**, and no webhook consumer or second polling client. One replica alone is insufficient if rolling updates briefly overlap old and new pods; the operator enabling Storytime must arrange a nonoverlapping handover for that token.
 
 This arrangement avoids the inherited multi-webhook-worker intake paths: each process has its own FIFO, and durable update acceptance uses check-then-insert deduplication, which can race across processes. It does **not** make intake globally ordered, distributed, or exactly-once. Database session/sequence locking and first-thread creation fixes do not convert process-local queues into a distributed queue. Do not enable concurrent webhook workers or multiple pollers on the strength of the single-process tests.
+
+## Attachment audit
+
+Before this change, passive media was recorded only as descriptors, active video
+was not downloaded, and the only outbound Telegram tool sent text. Incoming
+photos, videos, documents, voice, audio, video notes, animations and stickers
+now save their bytes as attachments on the message in the shared thread, including
+each passive album item. Downloads are limited to 20,000,000 bytes per file;
+Telegram may impose its own stricter limits. An oversized, empty or failed
+download is recorded as a not-downloaded descriptor rather than silently
+claiming the file was saved. Passive audio is never transcribed.
+
+`ergo_telegram_file` sends a persistent current-session attachment by ID or
+filename as a photo, video, or document, with optional caption and reply. It does
+not remove the attachment. URL-only files cannot be uploaded, and uploads are
+limited to 50,000,000 bytes. Telegram's own file-type, size and caption
+restrictions still apply. No real group media was
+sent during this audit.
 
 ## Evidence and remaining operator prerequisites
 
@@ -102,6 +120,16 @@ Current verification:
     tests/test_conversation_runtime.py tests/test_import_layers.py tests/test_bots.py
   ```
 
-The smoke script was removed after execution. No production API operations, merges, deployments, provisioning, or restarts were performed by this task.
+The earlier smoke script was removed after execution. Those historical results precede the attachment audit and are not evidence of the later release.
+
+Attachment audit verification:
+
+- Telegram and attachment regression run: **185 passed, 5 skipped**; updated
+  media-specific tests subsequently passed **19/19**.
+- Isolated PostgreSQL round-trip smoke with local Telegram and model adapters:
+  passive photo and audio saved their bytes with no model calls or transcript;
+  an authorized message started one turn, and the saved photo was sent through
+  `sendPhoto` to the linked chat. No real Telegram group was contacted.
+- Pinned Ruff 0.12.5 check and format check passed for the changed Python files.
 
 Operational prerequisites still outstanding: confirmed numeric group ID and consent; confirmed owner mapping; BotFather privacy configuration and delivery confirmation; separately authorized Storytime token provisioning through SOPS/Flux; and a single-consumer, nonoverlapping rollout plan. These are enablement prerequisites, not reasons to redesign intake for multiple webhook workers. None is a claim that infrastructure is unreachable. If later access fails, run `envcheck` and try the documented route from `/home/dev/ENVIRONMENT.md` before reporting unavailability; all Kubernetes reads must explicitly specify `--context octo` and must avoid secret values.

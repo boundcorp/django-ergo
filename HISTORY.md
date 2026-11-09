@@ -6,9 +6,11 @@ This document tracks the major milestones and evolution of the Django Ergo proje
 
 ### Opt-in passive Telegram group context (November 2026)
 
-- Selected groups retain attributed, untrusted context without starting turns or
-  downloading media. Sender-only authorization and explicit `tags` routing keep
-  partner messages and untagged replies passive; existing defaults stay unchanged.
+- Selected groups retain attributed, untrusted context and downloaded media
+  without starting turns or transcribing passive audio. Sender-only authorization
+  and explicit `tags` routing keep partner messages and untagged replies passive;
+  existing defaults stay unchanged.
+- Telegram can send saved session attachments back as photos, videos or documents.
 - Active and passive message writes share a short database row lock for sequence
   allocation. Concurrent Telegram thread creation rechecks under an owner-row
   lock. The host's turn runner remains exclusive to active turns and approvals.

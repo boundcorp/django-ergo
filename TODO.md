@@ -136,7 +136,7 @@ Still to do:
 
 - [x] Telegram approval intake remains responsive during resumes: per-chat FIFO workers retain durable album/photo-batch sources until transactional, lock-scoped execution; nonblocking host-lock waits leave other chats/bots available, interrupted claims are surfaced without tool replay, and retirement errors cannot withhold an executed turn's result.
 
-- [ ] Telegram: `ergo_telegram_message` sends text only; sending photos and files back needs multipart uploads.
+- [x] Telegram: `ergo_telegram_file` sends saved session images, videos and documents with multipart uploads.
 
 - [x] Telegram passes on delegated replies that land in a root chat, and approvals a delegated request is waiting on (`notify_delegations`).
 
