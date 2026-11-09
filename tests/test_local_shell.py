@@ -260,6 +260,129 @@ def kit_tools(bot, ctx):
     return bot.plugin("local_shell").toolkits(ctx)[0]
 
 
+@pytest.mark.django_db
+def test_upload_shared_files_are_scoped_to_recipient(settings, tmp_path):
+    from types import SimpleNamespace
+
+    from django_ergo.bots.messaging import shared_file
+    from django_ergo.bots.tools import FunctionToolkit
+    from django_ergo.bots.tools import ToolContext
+    from django_ergo.conversation.attachments import save_session_file
+    from django_ergo.conversation.models import ConversationSession
+    from django_ergo.conversation.models import ThreadMessage
+
+    settings.MEDIA_ROOT = tmp_path / "media"
+    bot, _ = make_bot(
+        tmp_path,
+        yaml_text=yaml_for(tmp_path) + "\n      - name: attachments\n",
+        name="ads",
+    )
+    user = get_user_model().objects.create_user("upload-owner")
+    other_user = get_user_model().objects.create_user("upload-other")
+    source = ConversationSession.objects.create(user=user, bot_name="source")
+    destination = ConversationSession.objects.create(user=user, bot_name=bot.name)
+    other_session = ConversationSession.objects.create(user=user, bot_name=bot.name)
+    private_session = ConversationSession.objects.create(
+        user=other_user, bot_name="source"
+    )
+    text = save_session_file(source, "brief.txt", b"Shared brief\n")
+    binary = save_session_file(source, "image.bin", b"\x00\xffbinary\n")
+    unshared = save_session_file(source, "unshared.txt", b"not shared")
+    private = save_session_file(private_session, "private.txt", b"private")
+    owned = save_session_file(destination, "owned.txt", b"owned bytes")
+    ThreadMessage.objects.create(
+        sender_session=source,
+        recipient_session=destination,
+        text="Files for the job",
+        metadata={"attachments": [shared_file(text), shared_file(binary)]},
+    )
+    # Even an explicit reference cannot grant access to another user's file.
+    ThreadMessage.objects.create(
+        sender_session=private_session,
+        recipient_session=destination,
+        text="Private file",
+        metadata={"attachments": [shared_file(private)]},
+    )
+    plugin = bot.plugin("local_shell")
+
+    def toolkit(session=destination, viewer=user, current_bot=bot):
+        return FunctionToolkit(
+            plugin._tools(),
+            ToolContext(bot=current_bot, session=session, user=viewer),
+        )
+
+    tools = toolkit()
+    result = json.loads(
+        tools.execute_tool(
+            "local_shell_upload",
+            {"job": "shared", "files": [str(text.id), str(binary.id)]},
+        )
+    )
+    assert result == [
+        {"file": "brief.txt", "path": "inputs/brief.txt"},
+        {"file": "image.bin", "path": "inputs/image.bin"},
+    ]
+    inputs = tmp_path / "jobs" / "shared" / "inputs"
+    assert (inputs / "brief.txt").read_bytes() == b"Shared brief\n"
+    assert (inputs / "image.bin").read_bytes() == b"\x00\xffbinary\n"
+
+    # Source session selection works for a shared ID, not for an unshared name.
+    tools.execute_tool(
+        "local_shell_upload",
+        {"job": "selected", "files": [str(text.id)], "session_id": str(source.id)},
+    )
+    assert (
+        tmp_path / "jobs" / "selected" / "inputs" / "brief.txt"
+    ).read_bytes() == b"Shared brief\n"
+    tools.execute_tool(
+        "local_shell_upload",
+        {"job": "owned", "files": [str(owned.id), "owned.txt"], "folder": "assets"},
+    )
+    assert (
+        tmp_path / "jobs" / "owned" / "assets" / "owned.txt"
+    ).read_bytes() == b"owned bytes"
+
+    denied = [
+        (tools, str(unshared.id), {}),
+        (tools, str(private.id), {}),
+        (tools, "brief.txt", {}),
+        (tools, "brief.txt", {"session_id": str(source.id)}),
+        (tools, str(text.id), {"session_id": str(other_session.id)}),
+        (tools, str(owned.id), {"session_id": str(source.id)}),
+        (toolkit(session=other_session), str(text.id), {}),
+        (toolkit(viewer=other_user), str(text.id), {}),
+        (toolkit(current_bot=SimpleNamespace(name="wrong-bot")), str(text.id), {}),
+    ]
+    for index, (caller, ref, extra) in enumerate(denied):
+        job = f"denied-{index}"
+        with pytest.raises(ValueError, match="No |Not authorized"):
+            caller.execute_tool(
+                "local_shell_upload", {"job": job, "files": [ref], **extra}
+            )
+        assert not (tmp_path / "jobs" / job / "inputs" / "brief.txt").exists()
+        assert not (tmp_path / "jobs" / job / "inputs" / "unshared.txt").exists()
+        assert not (tmp_path / "jobs" / job / "inputs" / "private.txt").exists()
+
+    attachments = bot.plugin("attachments")
+    attachments.other_sessions = False
+    with pytest.raises(ValueError, match="only read files in its own session"):
+        tools.execute_tool(
+            "local_shell_upload", {"job": "restricted", "files": [str(text.id)]}
+        )
+    tools.execute_tool(
+        "local_shell_upload", {"job": "restricted", "files": [str(owned.id)]}
+    )
+
+    bot.plugins.remove(attachments)
+    with pytest.raises(ValueError, match="requires the attachments plugin"):
+        tools.execute_tool(
+            "local_shell_upload", {"job": "no-plugin", "files": [str(text.id)]}
+        )
+    tools.execute_tool(
+        "local_shell_upload", {"job": "no-plugin", "files": [str(owned.id)]}
+    )
+
+
 @pytest.mark.django_db(transaction=True)
 def test_failures_limits_and_stopping(tmp_path, workers):  # noqa: F811
     from django_ergo.bots import workers as w
