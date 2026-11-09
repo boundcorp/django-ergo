@@ -1322,6 +1322,7 @@ loading the `orca` skill loads `agents` with it.
   disallowed_tools: []
   permission_mode: dontAsk # Claude Code: anything not allowed is refused
   codex_sandbox: workspace-write
+  codex_network_access: true # false disables networking in workspace-write
   max_turns: 100
   pass_env: [PATH, HOME, LANG, LC_ALL, TZ, USER]
   secrets: [HIGGSFIELD_API_KEY] # bot secrets every job gets
@@ -1349,6 +1350,12 @@ files the job changed are never overwritten. So a job made before a kit fix
 or a new helper still gets it. The report lists the
 files the run made or changed, with sizes and SHA-256 hashes, and Claude
 Code's token counts go to Costs.
+
+Local Codex jobs default to the `workspace-write` sandbox with network
+access enabled globally, without changing the CLI's home configuration.
+Set `codex_network_access: false` to disable network access in that sandbox.
+`codex_sandbox` still selects the sandbox; this setting does not affect Claude
+or grant writes outside the workspace.
 
 The agent's environment is rebuilt from `pass_env` plus `secrets`; variables
 that would move an agent CLI onto API billing (`ANTHROPIC_API_KEY`,

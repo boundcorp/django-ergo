@@ -93,6 +93,41 @@ def wait_for_exit(folder: Path, number: int, seconds: float = 20) -> None:
         time.sleep(0.1)
 
 
+@pytest.mark.parametrize(
+    ("config", "network", "sandbox"),
+    [
+        ({}, "true", "workspace-write"),
+        ({"codex_network_access": False}, "false", "workspace-write"),
+        ({"codex_sandbox": "read-only"}, "true", "read-only"),
+    ],
+)
+def test_codex_network_and_sandbox_configuration(config, network, sandbox):
+    from django_ergo.plugins.local_shell import LocalShellPlugin
+
+    plugin = LocalShellPlugin(None, {**config, "command_prefix": ["env"]})
+    plugin.on_load()
+    argv = plugin.argv("codex", "brief", model="model-name", number=1)
+    assert argv[:3] == ["env", "codex", "exec"]
+    assert argv[argv.index("--sandbox") + 1] == sandbox
+    assert argv[argv.index("-c") + 1] == (
+        f"sandbox_workspace_write.network_access={network}"
+    )
+    assert argv[argv.index("--model") + 1] == "model-name"
+
+    claude = plugin.argv("claude", "brief", model="model-name", number=1)
+    assert claude[:2] == ["env", "claude"]
+    assert "-c" not in claude and "--sandbox" not in claude
+    assert claude[claude.index("--model") + 1] == "model-name"
+
+
+def test_codex_network_access_requires_boolean():
+    from django_ergo.plugins.local_shell import LocalShellPlugin
+
+    plugin = LocalShellPlugin(None, {"codex_network_access": "false"})
+    with pytest.raises(TypeError, match="codex_network_access must be a boolean"):
+        plugin.on_load()
+
+
 @pytest.mark.django_db(transaction=True)
 def test_a_job_asks_is_answered_and_reports_its_files(tmp_path, workers, monkeypatch):  # noqa: F811
     from django_ergo.bots import workers as w
