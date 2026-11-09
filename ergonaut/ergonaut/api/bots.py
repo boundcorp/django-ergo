@@ -1861,10 +1861,18 @@ class AttachmentOut(Schema):
 
 
 THUMBNAIL_SIDE = 320  # px on the long side: sharp at the sidebar's 2x sizes
+VIDEO_DEMUXERS = "mov,mp4,m4a,3gp,3g2,mj2,matroska,webm,avi,mpeg,mpegts,ogg,flv"
+
+
+def has_preview(row: ConversationAttachment) -> bool:
+    """Images, and videos (a frame, with ffmpeg)."""
+    return bool(row.file) and (
+        view_kind(row.filename, row.media_type) == "image" or row.media_type.startswith("video/")
+    )
 
 
 def thumbnail_url(row: ConversationAttachment) -> str:
-    if not row.file or view_kind(row.filename, row.media_type) != "image":
+    if not has_preview(row):
         return ""
     # The file's hash in the URL lets the browser keep the preview until the file changes.
     return f"/api/attachments/{row.id}/thumbnail?v={(row.sha256 or str(row.updated_at.timestamp()))[:12]}"
@@ -2198,27 +2206,63 @@ def download_attachment(request, attachment_id: str, inline: bool = False):
 
 @router.get("/attachments/{attachment_id}/thumbnail")
 def attachment_thumbnail(request, attachment_id: str):
-    """A small preview of an image file, for the Files panel (downscaled with Pillow)."""
+    """A small preview of an image (downscaled with Pillow) or a video (a frame, with ffmpeg)."""
     from django_ergo.conversation.images import prepare_image
 
     row = visible_attachment(request.auth, attachment_id)
-    if not row.file or view_kind(row.filename, row.media_type) != "image":
+    if not has_preview(row):
         raise HttpError(404, "No preview for this file")
     if not row.file.storage.exists(row.file.name):
         raise HttpError(404, "This file's stored copy is missing")
-    with row.file.open("rb") as handle:
-        data = handle.read()
-    if row.media_type == "image/svg+xml":
-        # Pillow can't read SVG; an <img> never runs its scripts, and the sandbox covers a direct open.
-        prepared = (data, row.media_type)
+    if row.media_type.startswith("video/"):
+        prepared = video_frame(row)
     else:
-        prepared = prepare_image(data, row.media_type, THUMBNAIL_SIDE)
+        with row.file.open("rb") as handle:
+            data = handle.read()
+        if row.media_type == "image/svg+xml":
+            # Pillow can't read SVG; an <img> never runs its scripts, and the sandbox covers a direct open.
+            prepared = (data, row.media_type)
+        else:
+            prepared = prepare_image(data, row.media_type, THUMBNAIL_SIDE)
     if prepared is None:
         raise HttpError(404, "No preview for this file")
     response = HttpResponse(prepared[0], content_type=prepared[1])
     response["Cache-Control"] = "private, max-age=604800"
     response["Content-Security-Policy"] = SANDBOXED
     return response
+
+
+def video_frame(row: ConversationAttachment) -> tuple[bytes, str] | None:
+    """A JPEG of a video's frame about a second in (its first frame for a shorter one), or None
+    without ffmpeg or for a file it can't read. Local files are read in place, others by URL."""
+    import shutil
+    import subprocess
+
+    if not shutil.which("ffmpeg"):
+        return None
+    try:
+        source, protocols = row.file.path, "file"
+    except NotImplementedError:  # remote storage (S3): ffmpeg reads the signed URL
+        source, protocols = row.file.url, "https,tls,tcp"
+    # Only plain video containers over those protocols: a playlist (HLS, concat) in disguise
+    # could otherwise make ffmpeg read other files on the server into the frame.
+    guard = ["-format_whitelist", VIDEO_DEMUXERS, "-protocol_whitelist", protocols]
+    scale = f"scale='min({THUMBNAIL_SIDE},iw)':-2"
+    for seek in ("1", "0"):
+        try:
+            result = subprocess.run(
+                ["ffmpeg", "-v", "error", *guard, "-ss", seek, "-i", source, "-frames:v", "1", "-vf", scale]
+                + ["-f", "image2", "-c:v", "mjpeg", "pipe:1"],
+                capture_output=True,
+                timeout=20,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            logger.warning("Attachment %s: no video frame", row.id, exc_info=True)
+            return None
+        if result.returncode == 0 and result.stdout:
+            return result.stdout, "image/jpeg"
+    return None
 
 
 class PinIn(Schema):

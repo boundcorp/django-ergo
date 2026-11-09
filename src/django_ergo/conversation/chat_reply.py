@@ -30,6 +30,7 @@ if TYPE_CHECKING:
 CHAT_REPLY_KIND = "chat_reply"
 CHAT_REPLY_TOOL = "send_reply"
 MAX_SUGGESTIONS = 6
+MAX_ATTACHMENTS = 50
 
 CHAT_REPLY_INSTRUCTIONS = f"""\
 Every reply to the user goes through the {CHAT_REPLY_TOOL} tool; never \
@@ -42,6 +43,9 @@ you can go on. Ask one question and give 2 to 4 short suggested answers.
 - status: one short line for the thread list, in plain words: what you need \
 from the user ("Approve the migration run"), or what you are doing now \
 ("Running the full test suite"). Leave it empty when there's nothing to add.
+- attachments: files to show with the reply (file ids or filenames from this \
+chat, or shared with it). Several images or videos show as a gallery the user \
+can page through; audio and video get players. Leave it empty otherwise.
 - When you read a large tool result, note the detail you need; call the tool \
 again only if you still need it."""
 
@@ -60,6 +64,14 @@ class ChatReply(BaseModel):
         description=(
             "Short replies the user can pick instead of typing: the answer "
             "options for a question, or likely follow-ups for a message"
+        ),
+    )
+    attachments: list[str] = Field(
+        default_factory=list,
+        max_length=MAX_ATTACHMENTS,
+        description=(
+            "Files to show with this reply, by id or filename: renders, "
+            "screenshots, clips. Several images or videos become a gallery"
         ),
     )
     status: str = Field(

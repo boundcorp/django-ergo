@@ -833,6 +833,10 @@ by calling `send_reply` with a `ChatReply`:
 - `status` (optional, both types): one line for thread lists, saying what
   the bot needs from the user or what it is doing now. Ergonaut shows it
   under the thread's title.
+- `attachments` (optional): files to show with the reply, by id or
+  filename (the chat's own files or ones shared with it). Ergonaut shows
+  several images or videos as a gallery that opens into a slideshow, and
+  audio and video with players.
 
 If the model answers in plain text instead, that text is taken as a
 `message` reply (no suggestions or status) and stored as a `send_reply`
