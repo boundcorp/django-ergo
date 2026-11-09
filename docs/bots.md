@@ -1528,6 +1528,7 @@ become `[image omitted: name (id=...)]`, and the bot can look again by id.
       all # all, private (1:1 chats only), or mentions (in groups,
       # only @mentions of the bot and replies to it)
   target_thread: Telegram # every chat goes into one shared thread with this title
+  passive_group_chats: [-100123] # optional group/supergroup chat IDs to capture as context
   owner: lee # the thread's owner, a username or email (default: the first admin)
   replies:
     auto # auto: answers go back to the chat; tool: the bot sends
@@ -1562,6 +1563,15 @@ an approval from another person in a group can bypass messages waiting on
 an unrelated person's session; authorization is unchanged, same-person
 messages and taps keep their order, and turns still take the session lock.
 Idle queues are removed and worker failures are logged.
+
+**Deployment boundary.** The intake FIFO is process-local, not a distributed
+ordering guarantee. Durable acceptance uses check-then-insert deduplication;
+concurrent webhook workers can race when accepting the same update. A single
+polling process for a bot avoids those concurrent intake paths, provided no
+second poller or webhook consumer handles that bot (including during rollouts).
+Session locks do not turn multiple intake queues into one globally ordered
+queue. Do not infer cross-worker ordering or exactly-once delivery from the
+FIFO or replay behavior.
 
 Ergonaut waits for a busy session with asynchronous polling and serialized,
 nonblocking lock probes, not blocked executor threads or shared worker
@@ -1607,13 +1617,67 @@ start, and an archived thread comes back with the next message.
 Telegram user or chat ids and `@usernames`; by default it is whoever
 `users` lists. `respond_to.messages` is `all`, `private` (1:1 chats only),
 or `mentions`: in a group only messages that @mention the bot or reply to
-it get a turn, while 1:1 chats always do.
+it get a turn. `tags` is stricter: only an explicit @mention of the bot
+starts a group turn; a reply alone does not. In all modes 1:1 chats always
+pass the message filter (sender authorization still applies).
+
+**Passive group context.** `passive_group_chats` is an opt-in list of
+explicit Telegram group or supergroup chat IDs and requires `target_thread`.
+For Storytime (`@storytime69bot`), use the actual numeric sender and group IDs:
+
+```yaml
+plugins:
+  - name: telegram
+    token_env: STORYTIME_TELEGRAM_TOKEN
+    users: {LEE_TELEGRAM_ID: lee}
+    owner: lee
+    target_thread: Telegram
+    passive_group_chats: [GROUP_CHAT_ID]
+    respond_to:
+      users: [LEE_TELEGRAM_ID]
+      messages: tags
+```
+
+Replace both placeholders with numeric IDs; do not put a token in the bot
+configuration. Obtain group members' consent before enabling passive capture.
+Disable the Telegram bot's group privacy mode in BotFather so Telegram
+delivers ordinary group messages. Telegram cannot backfill messages from before
+the bot joined the group. Discover the group ID from existing session metadata
+or a separate discovery bot, not a second `getUpdates` consumer using an
+already-running bot's token. See the [Storytime operations handoff](telegram-storytime-handoff.md)
+for the concrete sender policy and deployment prerequisites; kitchen defaults
+remain unchanged.
+
+In an opted-in group, messages that do not otherwise get a response are
+stored in the target thread as user messages, without starting a bot turn or
+changing the chat used for replies. They retain the real Telegram author and
+`telegram_passive` provenance, including the originating chat and message IDs
+and, when present, the replied-to message ID. Captions and downloaded media
+are saved as message attachments; passive audio is not transcribed and passive
+capture does not fetch author profiles. This is untrusted context, not an
+instruction to the bot or authorization to act.
+Active response authorization in these groups matches the sender only, never
+the group ID; configure `respond_to.users` accordingly. Messages in opted-in
+groups are processed individually, not batched as albums or photo collections,
+so each message is authorized independently. Without the opt-in, existing
+message handling and defaults are unchanged.
+
+Active and passive message writes share a short database row lock while
+allocating a sequence and saving content blocks. Concurrent first messages
+recheck thread creation under an owner-row lock. Passive capture does not use
+`CHANNEL_TURN_RUNNER`: it must not clear stop flags or dispatch queued work.
+These database locks protect storage, not distributed intake order.
 
 **Replies.** With `replies: auto` the turn's answer goes back to the chat
 it came from. With `replies: tool` it stays in the app, and the bot writes
 to Telegram with `ergo_telegram_message` (text, and `reply: true` to quote
 the latest Telegram message), which sends to the chat that last wrote to
-this conversation. Approval prompts and errors reach the chat either way.
+this conversation. `ergo_telegram_file(attachment_id, caption, reply)` sends
+an existing file from the current session by ID or filename: images as photos,
+videos as videos, and other files as documents. The stored attachment remains
+in the thread. URL-only attachments cannot be uploaded; uploads are limited
+to 50,000,000 bytes. Telegram can impose stricter limits. Approval prompts and
+errors reach the chat either way.
 
 **People.** The message's `author` is the Telegram user (`telegram_user`,
 their id and name), whichever chat it lands in, and the plugin keeps an
@@ -1621,12 +1685,16 @@ their id and name), whichever chat it lands in, and the plugin keeps an
 (refreshed daily). Ergonaut shows the photo next to their name. Forwarding
 preserves this `telegram_user` identity.
 
-**Media.** Photos, voice notes, audio and documents become attachments;
-voice and audio are transcribed when `DJANGO_ERGO["AUDIO_TRANSCRIBER"]` is
-set (Ergonaut sets it when `OPENAI_API_KEY` is). The photos of an album
-arrive as one turn, and with `photo_batch_wait` so do photos a person sends
-one at a time (handy for a recipe in several screenshots); a text they send
-while photos are gathering goes with them at once.
+**Media.** Photos, videos, voice notes, audio and documents become attachments.
+Active voice and audio are transcribed when `DJANGO_ERGO["AUDIO_TRANSCRIBER"]`
+is set (Ergonaut sets it when `OPENAI_API_KEY` is); passive audio is not.
+The photos of an album arrive as one active turn, and with `photo_batch_wait`
+so do photos a person sends one at a time (handy for a recipe in several
+screenshots); a text they send while photos are gathering goes with them at once.
+Downloads are limited to 20,000,000 bytes per file; empty, oversized or failed
+downloads are represented by a not-downloaded note. Telegram may enforce
+stricter media and upload restrictions.
+
 
 A turn that stops for approval replies with Approve and Deny buttons for the
 pending batch of tool calls (in a shared thread anyone it answers may press
@@ -1639,6 +1707,12 @@ fingerprint are saved with the call so completion or a changed approval batch
 also retires the prompt when the decision comes from another channel. A new
 text message declines the pending batch and retires its prompt before starting
 its own turn. Approval requests do not automatically expire.
+The `tags` filter governs new group messages, not an authorized person's
+explicit decision on an existing approval prompt. Lee can press a current
+Approve/Deny button without adding a tag. Callbacks still require sender
+authorization (never a group-ID substitute in an opted-in group), the matching
+bot/thread, and the current pending-batch fingerprint checked under the turn
+lock; a partner cannot approve through a shared group mapping.
 Failure to clear the saved prompt after a turn is logged without failing an
 already executed turn or withholding its result.
 `plugin.notify(user, text)` sends a message from other code. Turns run

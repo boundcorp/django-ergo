@@ -570,6 +570,373 @@ def update(update_id, chat_id=111, **message):
     return {"update_id": update_id, "message": {"chat": {"id": chat_id}, **message}}
 
 
+def passive_telegram_bot(tmp_path, *responses, passive=True, messages="all"):
+    """A shared thread with one active speaker and an opted-in group."""
+    passive_config = "passive_group_chats: [-100123]" if passive else ""
+    bot, engine = make_bot(
+        tmp_path,
+        *responses,
+        yaml_text=f"""
+        name: kitchen
+        tools: [tools/pantry.py]
+        plugins:
+          - name: telegram
+            token_env: TEST_TELEGRAM_TOKEN
+            target_thread: Telegram
+            owner: cook
+            users: {{111: cook, -100123: cook}}
+            respond_to: {{users: [111], messages: {messages}}}
+            {passive_config}
+        """,
+        tools=TELEGRAM_TOOLS,
+    )
+    plugin = bot.plugin("telegram")
+    plugin.api = FakeTelegram()
+    return bot, engine, plugin
+
+
+def group_update(update_id, sender_id=222, chat_id=-100123, **message):
+    return {
+        "update_id": update_id,
+        "message": {
+            "chat": {"id": chat_id, "type": "supergroup"},
+            "from": {"id": sender_id, "first_name": "Ada", "last_name": "Lovelace"},
+            "message_id": update_id + 100,
+            **message,
+        },
+    }
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize(
+    ("sender", "text", "reply", "active"),
+    [
+        (111, "@KitchenBot hello", False, True),
+        (111, "hello", False, False),
+        (111, "hello", True, False),
+        (111, "@KitchenBot_extra hello", False, False),
+        (111, "/start", False, False),
+        (111, "/start@KitchenBot", False, False),
+        (111, "@KitchenBot /start", False, True),
+        (222, "@KitchenBot hello", False, False),
+        (222, "hello", False, False),
+        (222, "hello", True, False),
+        (222, "/start", False, False),
+        (222, "/start@KitchenBot", False, False),
+        (222, "@KitchenBot /start", False, False),
+    ],
+)
+async def test_telegram_passive_tags_sender_matrix(
+    tmp_path, sender, text, reply, active
+):
+    await User.objects.acreate(username="cook")
+    bot, engine, plugin = passive_telegram_bot(tmp_path, say("OK"), messages="tags")
+    plugin._username = "KitchenBot"
+    message = group_update(1, sender_id=sender, text=text)
+    if reply:
+        message["message"]["reply_to_message"] = {"from": {"id": 4242}}
+    await plugin.handle_update(message)
+    session = await bot.sessions().aget(metadata__telegram_thread="Telegram")
+    assert len(engine._client.calls) == int(active)
+    assert len(plugin.api.sent()) == int(active)
+    if not active:
+        saved = await session.messages.aget()
+        assert saved.provenance["kind"] == "telegram_passive"
+        assert saved.author["ref"] == str(sender)
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize(
+    "identity",
+    [
+        {"from": {"id": 111, "is_bot": True}},
+        {
+            "from": {"id": 111},
+            "sender_chat": {"id": -100123, "title": "Anonymous group"},
+        },
+        {"from": {}},
+    ],
+)
+async def test_telegram_passive_tags_require_a_real_authorized_sender(
+    tmp_path, identity
+):
+    await User.objects.acreate(username="cook")
+    bot, engine, plugin = passive_telegram_bot(tmp_path, messages="tags")
+    await plugin.handle_update(group_update(1, text="@KitchenBot act", **identity))
+    session = await bot.sessions().aget(metadata__telegram_thread="Telegram")
+    assert (
+        await session.messages.filter(provenance__kind="telegram_passive").acount() == 1
+    )
+    assert not engine._client.calls
+    assert not plugin.api.sent()
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("sender", [111, 222])
+async def test_telegram_tags_keep_private_chat_sender_policy(tmp_path, sender):
+    await User.objects.acreate(username="cook")
+    _, engine, plugin = passive_telegram_bot(tmp_path, say("Hello"), messages="tags")
+    await plugin.handle_update(
+        {
+            "update_id": 1,
+            "message": {
+                "chat": {"id": sender, "type": "private"},
+                "from": {"id": sender},
+                "text": "no tag is needed in private",
+            },
+        }
+    )
+    assert len(engine._client.calls) == int(sender == 111)
+    assert len(plugin.api.sent()) == int(sender == 111)
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("album", [False, True])
+async def test_telegram_passive_photos_cannot_join_a_tagged_turn(tmp_path, album):
+    await User.objects.acreate(username="cook")
+    bot, engine, plugin = passive_telegram_bot(tmp_path, say("Seen"), messages="tags")
+    plugin.album_wait = 60
+    plugin.photo_batch_wait = 60
+    for number, sender, caption, file_id in [
+        (1, 222, "@KitchenBot partner photo", "partner"),
+        (2, 111, "untagged owner photo", "untagged"),
+        (3, 111, "@KitchenBot authorized photo", "authorized"),
+    ]:
+        media = {"media_group_id": "same-album"} if album else {}
+        await plugin.handle_update(
+            group_update(
+                number,
+                sender_id=sender,
+                caption=caption,
+                photo=[{"file_id": file_id}],
+                **media,
+            )
+        )
+    session = await bot.sessions().aget(metadata__telegram_thread="Telegram")
+    assert (
+        await session.messages.filter(provenance__kind="telegram_passive").acount() == 2
+    )
+    assert len(engine._client.calls) == 1
+    assert len(plugin.api.sent()) == 1
+    attachments = [
+        row async for row in ConversationAttachment.objects.filter(session=session)
+    ]
+    assert {row.metadata["telegram_file_id"] for row in attachments} == {
+        "partner",
+        "untagged",
+        "authorized",
+    }
+    assert not plugin._albums
+    assert not plugin._album_timers
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_telegram_passive_group_context_is_attributed_and_seen_next_turn(
+    tmp_path, monkeypatch
+):
+    from django_ergo.settings import api_settings
+
+    await User.objects.acreate(username="cook")
+    bot, engine, plugin = passive_telegram_bot(tmp_path, say("Noted."))
+
+    async def no_turn_runner(*args):
+        pytest.fail("Passive capture must not invoke the host turn runner")
+
+    monkeypatch.setattr(api_settings, "CHANNEL_TURN_RUNNER", no_turn_runner)
+    await plugin.handle_update(
+        group_update(
+            1,
+            caption="A recipe from the group",
+            reply_to_message={"message_id": 77},
+            document={"file_id": "secret-file", "file_name": "recipe.pdf"},
+        )
+    )
+
+    session = await bot.sessions().aget(metadata__telegram_thread="Telegram")
+    saved = await session.messages.aget()
+    assert saved.role == "user"
+    assert saved.author == {
+        "kind": "telegram_user",
+        "ref": "222",
+        "display_name": "Ada Lovelace",
+    }
+    assert saved.provenance["kind"] == "telegram_passive"
+    assert saved.provenance["origin"]["chat_id"] == -100123
+    assert saved.provenance["origin"]["message_id"] == 101
+    assert saved.provenance["origin"]["reply_to_message_id"] == 77
+    blocks = [block async for block in saved.content_blocks.all()]
+    text = " ".join(block.text or "" for block in blocks)
+    assert "A recipe from the group" in text
+    attachment = await ConversationAttachment.objects.aget(
+        session=session, message_sequence=saved.sequence
+    )
+    assert attachment.filename == "recipe.pdf"
+    assert attachment.metadata["telegram_file_id"] == "secret-file"
+    assert await sync_to_async(attachment.file.read)() == b"\x89PNG fake secret-file"
+    assert not engine._client.calls
+    assert not plugin.api.calls
+    assert "telegram" not in session.metadata  # passive capture must not link_chat
+
+    monkeypatch.undo()
+    # Normal authorized speech starts a turn and receives the captured context.
+    await plugin.handle_update(group_update(2, sender_id=111, text="What was shared?"))
+    assert len(engine._client.calls) == 1
+    sent = json.dumps(engine._client.calls[0]["messages"])
+    assert "A recipe from the group" in sent
+    assert "Ada Lovelace" in sent
+    assert "recipe.pdf" in sent
+    assert "untrusted" in sent.lower()
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("partner_action", ["ok", "no"])
+async def test_telegram_passive_group_cannot_start_turn_or_answer_approval(
+    tmp_path, partner_action
+):
+    await User.objects.acreate(username="cook")
+    bot, engine, plugin = passive_telegram_bot(
+        tmp_path,
+        claude_tool("order", {"item": "flour"}, tool_id="o1"),
+        say("Ordered."),
+        messages="tags",
+    )
+    await plugin.handle_update(
+        group_update(1, sender_id=111, text="@KitchenBot Order flour")
+    )
+    prompt = plugin.api.sent()[-1]
+    button = prompt["reply_markup"]["inline_keyboard"][0][0]["callback_data"]
+    session = await bot.sessions().aget(metadata__telegram_thread="Telegram")
+    pending = await bot.pending_call(session)
+    assert pending is not None
+
+    # The group ID itself is mapped in users, but neither a message nor a
+    # command from an unmapped sender may act as that user or decline approval.
+    await plugin.handle_update(group_update(2, text="please order sugar"))
+    await plugin.handle_update(group_update(3, text="/start"))
+    await plugin.handle_update(group_update(6, sender_id=111, text="/start"))
+    await plugin.handle_update(
+        group_update(
+            7, sender_id=111, text="yes", reply_to_message={"from": {"id": 4242}}
+        )
+    )
+    await plugin.handle_update(group_update(8, text="@KitchenBot approve"))
+    await plugin.handle_update(
+        {
+            "update_id": 4,
+            "callback_query": {
+                "id": "stranger",
+                "data": partner_action + ":" + button.partition(":")[2],
+                "from": {"id": 222},
+                "message": {
+                    "message_id": 51,
+                    "chat": {"id": -100123, "type": "supergroup"},
+                },
+            },
+        }
+    )
+    assert len(engine._client.calls) == 1
+    assert (await bot.pending_call(session)).id == pending.id
+    assert plugin.api.sent() == [prompt]
+    assert not any(method == "editMessageReplyMarkup" for method, _ in plugin.api.calls)
+
+    # The owner's deliberate button click resolves the existing approval; it is
+    # a separate authorized decision, not a new untagged group request.
+
+    await plugin.handle_update(
+        {
+            "update_id": 5,
+            "callback_query": {
+                "id": "owner",
+                "data": button,
+                "from": {"id": 111},
+                "message": {"message_id": 51, "chat": {"id": -100123}},
+            },
+        }
+    )
+    history = engine._client.calls[-1]["messages"]
+    tool_index = next(
+        i
+        for i, row in enumerate(history)
+        if any(
+            block.get("type") == "tool_use" and block.get("id") == "o1"
+            for block in row["content"]
+        )
+    )
+    result_index = next(
+        i
+        for i, row in enumerate(history)
+        if any(
+            block.get("type") == "tool_result" and block.get("tool_use_id") == "o1"
+            for block in row["content"]
+        )
+    )
+    passive_index = next(
+        i
+        for i, row in enumerate(history)
+        if any(
+            "please order sugar" in block.get("text", "") for block in row["content"]
+        )
+    )
+    assert tool_index < result_index < passive_index
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("passive", [False, True])
+async def test_telegram_passive_capture_is_opt_in_and_limited_to_listed_groups(
+    tmp_path, passive
+):
+    await User.objects.acreate(username="cook")
+    bot, engine, plugin = passive_telegram_bot(tmp_path, passive=passive)
+    if not passive:
+        plugin.users.pop("-100123")
+    await plugin.handle_update(group_update(1, chat_id=-100999, text="other group"))
+    await plugin.handle_update(group_update(2, text="configured group"))
+    assert not engine._client.calls
+    assert not plugin.api.sent()
+    if passive:
+        session = await bot.sessions().aget(metadata__telegram_thread="Telegram")
+        messages = [message async for message in session.messages.all()]
+        assert len(messages) == 1
+        assert messages[0].provenance["origin"]["chat_id"] == -100123
+    else:
+        assert (
+            not await bot.sessions()
+            .filter(metadata__telegram_thread="Telegram")
+            .aexists()
+        )
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_telegram_passive_updates_replay_once_in_order(tmp_path):
+    await User.objects.acreate(username="cook")
+    _, _, old = passive_telegram_bot(tmp_path / "before")
+    first = group_update(10, text="first observation")
+    second = group_update(11, text="second observation")
+    assert await old.accept(first) is not None
+    assert await old.accept(second) is not None
+    assert await old.accept(first) is None
+
+    # A fresh plugin replays the durable intake after a restart.
+    bot, engine, fresh = passive_telegram_bot(tmp_path / "after")
+    assert await fresh.replay(startup=True) == 2
+    await fresh.drain()
+    session = await bot.sessions().aget(metadata__telegram_thread="Telegram")
+    messages = [message async for message in session.messages.all()]
+    assert [message.provenance["origin"]["message_id"] for message in messages] == [
+        110,
+        111,
+    ]
+    assert [message.sequence for message in messages] == sorted(
+        message.sequence for message in messages
+    )
+    assert await fresh.accept(first) is None
+    assert await fresh.replay(startup=True) == 0
+    await fresh.drain()
+    assert await session.messages.acount() == 2
+    assert not engine._client.calls
+    assert not fresh.api.sent()
+
+
 @pytest.mark.django_db(transaction=True)
 async def test_telegram_routes_chats_to_root_sessions(tmp_path):
     user = await User.objects.acreate(username="cook")
@@ -662,6 +1029,53 @@ async def test_telegram_approval_buttons_resume_the_turn(tmp_path):
     await plugin.handle_update({"update_id": 4, "callback_query": callback})
     assert plugin.api.sent()[-1]["text"] == "That request was already handled."
     assert json.dumps(plugin.api.calls)  # calls are plain data
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("action", ["ok", "no"])
+@pytest.mark.parametrize(
+    "chat",
+    [
+        {"id": 111, "type": "private"},
+        {"id": -500, "type": "group"},
+    ],
+)
+async def test_telegram_callback_respects_restricted_users_without_target_thread(
+    tmp_path, action, chat
+):
+    user = await User.objects.acreate(username="cook")
+    bot, engine, plugin = telegram_bot(
+        tmp_path,
+        claude_tool("order", {"item": "flour"}, tool_id="o1"),
+    )
+    await plugin.handle_update(update(1, text="Order flour"))
+    session = await bot.root_session(user)
+    pending = await bot.pending_call(session)
+    prompt = plugin.api.sent()[-1]
+    # A mapped user's earlier pending call can outlive a tightened sender policy.
+    # Session ownership is necessary to approve, but must not override that policy.
+    plugin.allowed_users = {"222"}
+    data = prompt["reply_markup"]["inline_keyboard"][0][0]["callback_data"]
+    data = action + ":" + data.partition(":")[2]
+    job = await plugin.accept(
+        {
+            "update_id": 2,
+            "callback_query": {
+                "id": "restricted-user",
+                "data": data,
+                "from": {"id": 111},
+                "message": {"message_id": 51, "chat": chat},
+            },
+        }
+    )
+    await plugin.process(job)
+    await job.arefresh_from_db()
+    assert job.status == "completed"
+    assert job.started_at is None
+    assert (await bot.pending_call(session)).id == pending.id
+    assert len(engine._client.calls) == 1
+    assert plugin.api.sent() == [prompt]
+    assert not any(method == "editMessageReplyMarkup" for method, _ in plugin.api.calls)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1592,6 +2006,54 @@ async def test_telegram_says_when_a_message_failed(tmp_path, monkeypatch):
     await plugin.process(job)  # already handled: not run twice
     assert len(plugin.api.sent()) == 1
     assert await BotJob.objects.acount() == 1
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize(
+    "incoming",
+    [
+        group_update(1, text="@KitchenBot please act"),
+        group_update(1, text="/start@KitchenBot"),
+        group_update(1, sender_id=111, text="untagged"),
+        group_update(
+            1,
+            sender_id=111,
+            text="yes",
+            reply_to_message={"from": {"id": 4242}},
+        ),
+        {
+            "update_id": 1,
+            "callback_query": {
+                "id": "partner",
+                "from": {"id": 222},
+                "data": "ignored",
+                "message": {
+                    "message_id": 51,
+                    "chat": {"id": -100123, "type": "supergroup"},
+                },
+            },
+        },
+    ],
+)
+async def test_telegram_passive_intake_failure_does_not_message_the_group(
+    tmp_path, monkeypatch, incoming
+):
+    bot, engine, plugin = passive_telegram_bot(tmp_path, messages="tags")
+    plugin._username = "KitchenBot"
+
+    async def broken(update):
+        msg = "intake failed before authorization"
+        raise ValueError(msg)
+
+    monkeypatch.setattr(plugin, "dispatch", broken)
+    job = await plugin.accept(incoming)
+    await plugin.process(job)
+    await job.arefresh_from_db()
+    assert job.status == "failed"
+    assert "intake failed before authorization" in job.error
+    assert not await bot.sessions().aexists()
+    assert not engine._client.calls
+    assert not plugin.api.sent()
 
 
 @pytest.mark.django_db(transaction=True)

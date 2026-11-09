@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import Any
 
 from asgiref.sync import sync_to_async
+from django.db import transaction
 from django.db.models import Max
 
 from django_ergo.conversation.identity import bot_identity
@@ -50,7 +51,28 @@ def model_rows(rows) -> list:
         if not is_response_copy(row, previous):
             kept.append(row)
         previous = row
-    return kept
+    return _defer_passive_until_tool_results(kept)
+
+
+def _defer_passive_until_tool_results(rows) -> list:
+    """Keep passive observations out of a provider's tool-use/result pair."""
+    if not any(row.provenance.get("kind") == "telegram_passive" for row in rows):
+        return rows
+    ordered, deferred, outstanding = [], [], set()
+    for row in rows:
+        if outstanding and row.provenance.get("kind") == "telegram_passive":
+            deferred.append(row)
+            continue
+        ordered.append(row)
+        for block in row.content_blocks.all():
+            if block.block_type == "tool_use":
+                outstanding.add(block.tool_use_id)
+            elif block.block_type == "tool_result":
+                outstanding.discard(block.tool_result_for)
+        if not outstanding and deferred:
+            ordered.extend(deferred)
+            deferred.clear()
+    return ordered
 
 
 def next_sequence(session) -> int:
@@ -72,6 +94,7 @@ async def tool_result_content(session, result: Any) -> str | list[dict]:
 
 async def add_message(session, role: str, blocks: list[dict], **fields):
     """Store a message of ``blocks`` (MessageBlock fields) as the session's next one."""
+    from django_ergo.conversation.models import ConversationSession
     from django_ergo.conversation.models import MessageBlock
     from django_ergo.conversation.models import SessionMessage
 
@@ -81,13 +104,23 @@ async def add_message(session, role: str, blocks: list[dict], **fields):
         and any(block["block_type"] == "text" for block in blocks)
     ):
         fields.setdefault("author", bot_identity(session))
-    message = await SessionMessage.objects.acreate(
-        session=session, role=role, sequence=await anext_sequence(session), **fields
-    )
-    # One by one, not bulk_create: post_save on blocks wakes live views.
-    for i, block in enumerate(blocks):
-        await MessageBlock.objects.acreate(message=message, sequence=i, **block)
-    return message
+
+    def save():
+        # Share the passive writer's short DB lock, not its host turn runner.
+        # Allocation and blocks commit together; no model/network work holds it.
+        with transaction.atomic():
+            ConversationSession.objects.select_for_update().only("pk").get(
+                pk=session.pk
+            )
+            message = SessionMessage.objects.create(
+                session=session, role=role, sequence=next_sequence(session), **fields
+            )
+            # One by one, not bulk_create: post_save on blocks wakes live views.
+            for i, block in enumerate(blocks):
+                MessageBlock.objects.create(message=message, sequence=i, **block)
+            return message
+
+    return await sync_to_async(save, thread_sensitive=True)()
 
 
 async def add_user_text(session, text: str, *, author=None, provenance=None):
