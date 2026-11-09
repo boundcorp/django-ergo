@@ -64,7 +64,7 @@ def _model(model):
     return model
 
 
-def _path(model, path, *, lookup=False):  # noqa: C901, PLR0912
+def _path(model, path, *, lookup=False):  # noqa: C901, PLR0912, PLR0915
     """Resolve only concrete fields and forward, same-bot foreign keys."""
     if not isinstance(path, str) or not path or len(path) > 300:  # noqa: PLR2004
         msg = "Invalid field path"
@@ -83,6 +83,19 @@ def _path(model, path, *, lookup=False):  # noqa: C901, PLR0912
     current = model
     normalized = []
     for index, part in enumerate(parts):
+        if isinstance(current, models.JSONField):
+            # JSON keys are transforms, never model relations.
+            if (
+                lookup
+                and suffix is None
+                and index == len(parts) - 1
+                and current.get_lookup(part) is not None
+            ):
+                msg = f"Lookup {part!r} is not allowed for {path!r}"
+                raise ValueError(msg)
+            normalized.append(part)
+            field = current
+            continue
         try:
             field = current._meta.pk if part == "pk" else current._meta.get_field(part)  # noqa: SLF001
         except FieldDoesNotExist:
@@ -116,10 +129,12 @@ def _path(model, path, *, lookup=False):  # noqa: C901, PLR0912
             # Avoid Django expanding a relation's default ordering or loading objects.
             normalized.append(field.attname)
         else:
-            if not last:
+            if not last and not isinstance(field, models.JSONField):
                 msg = f"Cannot traverse non-relation field: {path!r}"
                 raise ValueError(msg)
             normalized.append(field.name)
+            if isinstance(field, models.JSONField):
+                current = field
     if suffix:
         if field.get_lookup(suffix) is None:
             msg = f"Lookup {suffix!r} is not supported for {path!r}"
@@ -128,16 +143,22 @@ def _path(model, path, *, lookup=False):  # noqa: C901, PLR0912
     return "__".join(normalized), field, suffix
 
 
-def _json_value(value, depth=0):
+def _json_value(value, depth=0, budget=None):
     # Reject ORM expressions and cap nested data and IN lists before reaching Django.
     if depth > MAX_DEPTH:
         msg = "Filter value is too deeply nested"
         raise ValueError(msg)
+    if budget is None:
+        budget = [0]
     if value is None or isinstance(value, str | bool | int | float):
         return
     if isinstance(value, list | dict) and len(value) <= MAX_TERMS:
+        budget[0] += len(value)
+        if budget[0] > MAX_TERMS:
+            msg = "Filter values must be bounded JSON values"
+            raise ValueError(msg)
         for item in value.values() if isinstance(value, dict) else value:
-            _json_value(item, depth + 1)
+            _json_value(item, depth + 1, budget)
         if isinstance(value, dict) and not all(isinstance(k, str) for k in value):
             msg = "Filter object keys must be strings"
             raise ValueError(msg)
@@ -157,6 +178,9 @@ def _conditions(model, value, budget):
             msg = "Too many predicate terms"
             raise ValueError(msg)
         path, _, suffix = _path(model, key, lookup=True)
+        if path in result:
+            msg = f"Duplicate filter path: {key!r}"
+            raise ValueError(msg)
         _json_value(item)
         if suffix == "in" and not isinstance(item, list):
             msg = "The in lookup requires a list"
@@ -238,7 +262,7 @@ def _paths(model, values, name):
 
 class _Encoder(DjangoJSONEncoder):
     def default(self, value):
-        if isinstance(value, bytes):
+        if isinstance(value, bytes | memoryview):
             return base64.b64encode(value).decode("ascii")
         from django.db.models.fields.files import FieldFile
 

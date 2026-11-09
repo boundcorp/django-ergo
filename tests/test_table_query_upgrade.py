@@ -3,16 +3,16 @@ import json
 import pytest
 from django.core.management import call_command
 
-from tests.test_bot_tables import realty  # noqa: F401
+from tests.table_upgrade_fixtures import table_upgrade_bot  # noqa: F401
 
 
 @pytest.mark.django_db(transaction=True)
-def test_query_and_aggregate_are_bounded_and_safe(realty):  # noqa: F811
+def test_query_and_aggregate_are_bounded_and_safe(table_upgrade_bot):  # noqa: F811
     from django_ergo.bots.runtime import Bot
     from django_ergo.bots.table_query import aggregate
     from django_ergo.bots.table_query import query
 
-    folder, engine = realty
+    folder, engine = table_upgrade_bot
     call_command("ergo_bot_makemigrations", str(folder), "--name", "houses")
     call_command("ergo_bot_migrate", str(folder))
     [house] = Bot.load(folder, engine_factory=lambda: engine).tables
@@ -65,3 +65,35 @@ def test_query_and_aggregate_are_bounded_and_safe(realty):  # noqa: F811
             query(house, **kwargs)
     with pytest.raises(ValueError):  # noqa: PT011
         aggregate(house, {"total": {"op": "sum", "field": "address"}})
+    with pytest.raises(ValueError, match="metrics"):
+        aggregate(house, {f"metric{i}": {"op": "count"} for i in range(21)})
+    with pytest.raises(ValueError, match="limit"):
+        aggregate(house, {"n": {"op": "count"}}, group_by=["status"], limit=201)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_query_json_paths_and_predicate_bounds(table_upgrade_bot):  # noqa: F811
+    from django_ergo.bots.runtime import Bot
+    from django_ergo.bots.table_query import MAX_DEPTH
+    from django_ergo.bots.table_query import MAX_TERMS
+    from django_ergo.bots.table_query import query
+
+    folder, engine = table_upgrade_bot
+    call_command("ergo_bot_makemigrations", str(folder))
+    call_command("ergo_bot_migrate", str(folder))
+    [house] = Bot.load(folder, engine_factory=lambda: engine).tables
+    house.objects.create(address="Oak", tags={"place": {"city": "York"}, "list": ["a"]})
+    assert query(house, filters={"tags__place__city__icontains": "yor"})["count"] == 1
+    assert query(house, filters={"tags__list__0": "a"})["count"] == 1
+    with pytest.raises(ValueError, match="not allowed"):
+        query(house, filters={"tags__place__regex": ".*"})
+    predicate = {"address": "Oak"}
+    for _ in range(MAX_DEPTH):
+        predicate = {"not": predicate}
+    assert query(house, predicate=predicate)["count"] == (0 if MAX_DEPTH % 2 else 1)
+    with pytest.raises(ValueError, match="deeply nested"):
+        query(house, predicate={"not": predicate})
+    with pytest.raises(ValueError, match="Too many"):
+        query(house, predicate={"or": [{"address": "Oak"}] * MAX_TERMS})
+    with pytest.raises(ValueError, match="bounded JSON"):
+        query(house, filters={"tags": {"a": list(range(MAX_TERMS))}})

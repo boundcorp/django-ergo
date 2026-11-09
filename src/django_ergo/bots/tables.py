@@ -241,14 +241,12 @@ def describe(table: type[BotTable]) -> str:
 def _row(obj: models.Model) -> dict:
     from django.forms.models import model_to_dict
 
-    from django_ergo.bots.table_query import _safe
-
     data = model_to_dict(
         obj, fields=[field.name for field in obj._meta.concrete_fields]
     )
     for field in obj._meta.concrete_fields:
         if field.is_relation:
-            if safe_relation(type(obj), field):
+            if field.editable and safe_relation(type(obj), field):
                 data[field.name] = getattr(obj, field.attname)
             else:
                 data.pop(field.name, None)
@@ -257,7 +255,9 @@ def _row(obj: models.Model) -> dict:
         value = getattr(obj, name, None)
         if value is not None:
             data[name] = value.isoformat(timespec="seconds")
-    return _safe(data)
+    return {
+        k: (v.isoformat() if hasattr(v, "isoformat") else v) for k, v in data.items()
+    }
 
 
 WRITE_EXCLUDED_FIELDS = frozenset({"id", "created_at", "updated_at"})
@@ -407,14 +407,18 @@ def full_clean(obj: BotTable) -> None:
 
 def add_row(model: type[BotTable], values: dict) -> dict:
     """Create one row with the same validation used by table tools and page forms."""
+    from django_ergo.bots.table_query import _safe
+
     obj = model(**clean_values(model, values))
     full_clean(obj)
     obj.save()
-    return _row(obj)
+    return _safe(_row(obj))
 
 
 def update_row(model: type[BotTable], id: int, values: dict) -> dict:  # noqa: A002
     """Update one row with the same validation used by table tools and page forms."""
+    from django_ergo.bots.table_query import _safe
+
     try:
         obj = model.objects.get(pk=id)
     except model.DoesNotExist:
@@ -424,7 +428,7 @@ def update_row(model: type[BotTable], id: int, values: dict) -> dict:  # noqa: A
         setattr(obj, key, value)
     full_clean(obj)
     obj.save()
-    return _row(obj)
+    return _safe(_row(obj))
 
 
 def delete_row(model: type[BotTable], id: int) -> str:  # noqa: A002
@@ -450,12 +454,30 @@ def page_model(bot, table: str) -> type[BotTable]:
     return model
 
 
+def _page_values(model: type[BotTable], values: dict) -> dict:
+    """An empty optional FK input clears the relation."""
+    if not isinstance(values, dict):
+        return values
+    nullable = {
+        name
+        for field in writable_fields(model)
+        if field.is_relation and field.null and field.blank
+        for name in (field.name, field.attname)
+    }
+    return {
+        name: None if name in nullable and value == "" else value
+        for name, value in values.items()
+    }
+
+
 def page_add(bot, table: str, values: dict) -> dict:
-    return add_row(page_model(bot, table), values)
+    model = page_model(bot, table)
+    return add_row(model, _page_values(model, values))
 
 
 def page_update(bot, table: str, id: int, values: dict) -> dict:  # noqa: A002
-    return update_row(page_model(bot, table), id, values)
+    model = page_model(bot, table)
+    return update_row(model, id, _page_values(model, values))
 
 
 def page_delete(bot, table: str, id: int) -> dict:  # noqa: A002

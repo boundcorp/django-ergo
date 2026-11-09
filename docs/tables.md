@@ -77,13 +77,17 @@ fields, then offers:
 | `ergo_table_delete(table, id)` | delete one row, after approval |
 
 Use `ergo_table_schema` for writable field names. Foreign keys to another
-table of the same bot use the ID attname (for example `goal_id`); returned
-rows retain the relation name (`goal`) with its ID as the value. Relation
-traversal is restricted to forward foreign keys to the same bot. Reverse and
-many-to-many fields and cross-app relations are unavailable. Predicates are
-lookup objects combined using `{"and": [...]}`, `{"or": [...]}`, or
-`{"not": {...}}`. `exclude` negates its lookup object. Pagination uses the
-primary key as a tie-breaker; concurrent writes can still shift offsets.
+table of the same bot use the ID attname (for example `goal_id`); for a
+`to_field` foreign key, supply the target field's value rather than its primary
+key. Returned rows retain the relation name (`goal`) with that stored value.
+Relation traversal is restricted to forward foreign keys to the same bot.
+Reverse and many-to-many fields and cross-app relations are unavailable.
+JSON field lookups can traverse keys and array indexes within the path limit.
+Predicates are lookup objects combined using `{"and": [...]}`, `{"or": [...]}`,
+or `{"not": {...}}`. `exclude` negates its lookup object. Predicate trees and
+nested JSON filter values have depth and size limits. Equivalent lookup aliases
+cannot be specified twice in the same lookup object. Pagination uses the primary
+key as a tie-breaker; concurrent writes can still shift offsets.
 
 For a goal journal, first query `StrategicGoal`, then call
 `ergo_table_add` with `{"table":"GoalProgress","values":{"goal_id":42,"notes":"Made progress"}}`.

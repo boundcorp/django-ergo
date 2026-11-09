@@ -7,16 +7,16 @@ from django.db.models.signals import post_save
 
 from django_ergo.bots.table_batch import MAX_BATCH_OPERATIONS
 from django_ergo.bots.table_batch import batch
-from tests.test_bot_tables import realty  # noqa: F401 — fixture
+from tests.table_upgrade_fixtures import table_upgrade_bot  # noqa: F401
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
 
 @pytest.fixture
-def item_model(realty):  # noqa: F811
+def item_model(table_upgrade_bot):  # noqa: F811
     from django_ergo.bots.runtime import Bot
 
-    folder, engine = realty
+    folder, engine = table_upgrade_bot
     with (folder / "tables.py").open("a") as file:
         file.write(
             "\n    sku = models.CharField(max_length=30, unique=True)\n"

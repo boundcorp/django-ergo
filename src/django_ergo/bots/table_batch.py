@@ -8,6 +8,7 @@ from django.db import models
 from django.db import router
 from django.db import transaction
 
+from django_ergo.bots.table_query import _safe
 from django_ergo.bots.tables import BotTable
 from django_ergo.bots.tables import _row
 from django_ergo.bots.tables import clean_values
@@ -144,7 +145,7 @@ def batch(model: type[BotTable], operations: list[dict]) -> list[dict]:
         with transaction.atomic(using=using):
             for index, operation in enumerate(operations):
                 try:
-                    results.append(_execute(model, manager, using, operation))
+                    results.append(_safe(_execute(model, manager, using, operation)))
                 except Exception as exc:
                     msg = f"operation {index}: {exc}"
                     raise ValueError(msg) from exc
