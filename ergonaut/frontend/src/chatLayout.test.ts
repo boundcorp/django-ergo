@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { suggestionsFromMessages, statusSummary } from './chatLayout'
+import { lastTurn, suggestionsFromMessages, statusSummary } from './chatLayout'
 import { clock } from './time'
 
 describe('statusSummary', () => {
@@ -56,5 +56,21 @@ describe('suggestionsFromMessages', () => {
     expect(suggestionsFromMessages([{ blocks: [{ type: 'tool_use', name: 'ergo_worker_list', input: {} }] }])).toBe(
       undefined,
     )
+  })
+})
+
+describe('lastTurn', () => {
+  test('skips side calls recorded after the turn', () => {
+    const calls = [
+      { id: 'a', kind: 'chat_reply' },
+      { id: 'b', kind: 'chat_reply' },
+      { id: 'c', kind: 'voice_transcription' },
+    ]
+    expect(lastTurn(calls)?.id).toBe('b')
+  })
+
+  test('is undefined without a turn', () => {
+    expect(lastTurn([{ kind: 'illustrate_suggest' }])).toBeUndefined()
+    expect(lastTurn([])).toBeUndefined()
   })
 })

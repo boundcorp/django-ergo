@@ -18,7 +18,7 @@ import type {
 import { api } from '../api'
 import { useDraft } from '../draft'
 import { prepareChatSend, type ChatSendSource } from '../chatSend'
-import { suggestionsFromMessages, statusSummary } from '../chatLayout'
+import { lastTurn, suggestionsFromMessages, statusSummary } from '../chatLayout'
 import { ActivityStrip } from '../components/ActivityStrip'
 import Files from '../components/Files'
 import { DebugShortcut } from '../components/DebugShortcut'
@@ -396,7 +396,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
   // or the paused call moving on for an approval answer.
   useEffect(() => {
     if (!pending || !detail) return
-    const call = detail.calls[detail.calls.length - 1]
+    const call = lastTurn(detail.calls)
     if (!call || call.status === 'in_progress') return
     const done = pending.text
       ? call.id !== pending.lastCall || stored(detail.messages, pending.text, pending.line)
@@ -409,8 +409,8 @@ export function Chat({ onChange }: { onChange: () => void }) {
   }, [detail, pending, onChange])
 
   // Stopping ends with the running call: it stopped, or a new call (an interrupt's) started.
-  const lastCallId = detail?.calls[detail.calls.length - 1]?.id
-  const lastStatus = detail?.calls[detail.calls.length - 1]?.status
+  const lastCallId = lastTurn(detail?.calls ?? [])?.id
+  const lastStatus = lastTurn(detail?.calls ?? [])?.status
   useEffect(() => {
     if (lastStatus !== 'in_progress') setStopping(false)
   }, [lastCallId, lastStatus])
@@ -422,9 +422,9 @@ export function Chat({ onChange }: { onChange: () => void }) {
     const messages = detail?.messages ?? []
     const before = {
       text: sent,
-      lastCall: calls[calls.length - 1]?.id ?? '',
+      lastCall: lastTurn(calls)?.id ?? '',
       line: messages.length ? messages[messages.length - 1].line : -1,
-      approvals: JSON.stringify(calls[calls.length - 1]?.pending_approvals ?? []),
+      approvals: JSON.stringify(lastTurn(calls)?.pending_approvals ?? []),
     }
     try {
       const turn = await action()
@@ -516,7 +516,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
 
   if (!detail) return <div className="p-6 text-zinc-500">{error || 'Loading…'}</div>
 
-  const lastCall = detail.calls[detail.calls.length - 1]
+  const lastCall = lastTurn(detail.calls)
   const waiting = lastCall?.status === 'awaiting_approval' ? lastCall.pending_approvals : []
   function decide(approvalId: string, approve: boolean) {
     const next = { ...choices, [approvalId]: approve }
