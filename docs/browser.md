@@ -162,6 +162,7 @@ always have the browser.
 | `ergo_browser_click` | click a ref or Playwright selector | `approve_actions` |
 | `ergo_browser_type` | fill a field, optionally press Enter | `approve_actions` |
 | `ergo_browser_press` | press a key or chord | `approve_actions` |
+| `ergo_browser_wait` | wait (up to 5 minutes) while the user does something in the browser, until the page moves on or some text shows | no |
 | `ergo_browser_batch` | several clicks, typing, key presses, page loads or waits in one call | `approve_actions` |
 | `ergo_browser_task` | hand a goal to a fast model that drives the tools above and reports back | `approve_actions` |
 | `ergo_browser_screenshot` | attach a screenshot to the chat | no |
@@ -172,7 +173,11 @@ Chrome and its tabs stay as they are. Refs only resolve against a snapshot
 taken on the same connection, so an action takes a fresh snapshot and
 resolves the ref against it: if the page changed in between, the ref may
 point somewhere else; set `approve_actions: true` to approve each action
-too. Each chat's current tab is kept on the session.
+too. Refs in frames carry a frame number (`f1e3`) that Playwright counts
+per connection, and once a page has navigated the main frame's refs carry
+one too; snapshots the bot gets are renumbered the way the next call's
+connection will number them, so the refs it acts on still match.
+Each chat's current tab is kept on the session.
 
 ### Fewer round trips
 
@@ -193,9 +198,21 @@ model call, and its whole context, on every click. Two tools cut that down:
   stored as a `browser_task` structured call. With `approve_actions` the
   user approves the goal and the steps, not each action inside them.
 
-When a page needs a person (a sign-in, a two-factor code, a captcha, a
-consent screen) the bot's context tells it to stop and ask the user to do
-it in the `takeover` place, then snapshot again. It never asks for
+### Working alongside a person
+
+The user can watch the browser and take it over (in a cage window, say).
+When a page needs them (a sign-in, a two-factor code, a captcha, a consent
+screen), the bot's context tells it to say so in its reply and call
+`ergo_browser_wait`, which returns as soon as the tab moves on (or a given
+text shows), so a user who is already signing in doesn't have to come
+back and say so. If nothing changes, the bot ends its turn and asks. The
+task driver waits 90 seconds once before stopping. It never asks for
 passwords in chat.
+
+The bot remembers the URL it last saw in each tab. If a tab has gone
+somewhere else since, someone else is using it: clicks, typing, key presses
+and batches in that tab refuse to run and tell the bot to work in a new tab
+instead, and a snapshot carries a note. After a snapshot the bot may carry
+on in that tab if it means to.
 
 All options are in the [bot reference](bots.md#browser).

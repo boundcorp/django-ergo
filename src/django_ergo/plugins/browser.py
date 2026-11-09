@@ -69,6 +69,7 @@ import concurrent.futures
 import contextlib
 import fcntl
 import hashlib
+import re
 import socket
 import subprocess
 import tempfile
@@ -104,6 +105,9 @@ if TYPE_CHECKING:
     from django_ergo.conversation.toolkit import Toolkit
 
 TAB_ID_CHARS = 8
+WAIT_MAX_SECONDS = 300
+REF = re.compile(r"(?:f\d+)?e\d+")
+REF_IN_SNAPSHOT = re.compile(r"\[ref=(f\d+)?(e\d+)\]")
 SESSION_FUNCTION = "browser:session"
 
 DRIVER_PROMPT = """\
@@ -113,9 +117,15 @@ act on the refs it shows (e12), check the result in the snapshot each action \
 returns, and repeat. Use ergo_browser_batch for several steps you're sure of. \
 Don't explain as you go.
 
+A person can watch and use this Chrome in {takeover}. When a page needs them \
+(a sign-in, two-factor code, captcha or consent screen), they may already be \
+on it: call ergo_browser_wait once (90 seconds) and carry on if the page moved \
+on. If a tool says a tab moved since your last look, the person is using it: \
+leave that tab and open what you need in a new one (ergo_browser_open with \
+new_tab).
+
 Stop and report instead of acting when:
-- the page needs a person: a sign-in, two-factor code, captcha or consent \
-screen (they use {takeover});
+- the page still needs a person after that wait;
 - the next step would pay, buy, publish, submit, send, save or delete \
 something and the goal doesn't ask for that step in so many words;
 - you can't tell what the goal means here, or the page isn't what it expects.
@@ -136,12 +146,35 @@ class TaskReport(BaseModel):
     )
 
 
+def fresh_refs(snapshot: str) -> str:
+    """``snapshot``'s refs as the next connection will number them.
+
+    Playwright prefixes refs with a frame number (``f2e5``) that it counts per
+    connection: once a page has navigated, the main frame's refs carry one too.
+    Each call connects anew, and a new connection numbers the main frame bare
+    (``e5``) and the other frames ``f1``, ``f2``... in the order the snapshot
+    reaches them. Renumber the same way, so the refs the bot sees are the ones
+    the next call resolves.
+    """
+    frames: dict[str, str] = {}
+
+    def renumber(match: re.Match) -> str:
+        frame = match.group(1) or ""
+        if frame not in frames:
+            frames[frame] = f"f{len(frames)}" if frames else ""
+        return f"[ref={frames[frame]}{match.group(2)}]"
+
+    return REF_IN_SNAPSHOT.sub(renumber, snapshot)
+
+
 @dataclass
 class Use:
-    """One call's view of a chat's tabs: its current tab, and tabs it opened."""
+    """One call's view of a chat's tabs: its current tab, tabs it opened, and
+    the URL the bot last saw in each tab (to notice a person using one)."""
 
     current: str = ""
     opened: list[str] = field(default_factory=list)
+    seen: dict[str, str] = field(default_factory=dict)
 
 
 class BrowserPlugin(BotPlugin):
@@ -163,6 +196,9 @@ class BrowserPlugin(BotPlugin):
         self.driver_model = str(self.config.get("driver_model") or "auto/small")
         self.driver_steps = int(self.config.get("driver_steps", 30))
         self._current: dict[str, str] = {}  # chat -> tab id, without sessions
+        self._seen: dict[
+            str, str
+        ] = {}  # tab id -> URL the bot last saw, without sessions
         self._lock = threading.Lock()
         key = hashlib.sha1(  # noqa: S324 — a file name, not security
             f"{self.ssh_host}|{self.cdp_url}".encode()
@@ -323,20 +359,24 @@ class BrowserPlugin(BotPlugin):
         use.opened.append(use.current)
         return use.current, page
 
-    def _state(self, tab_id: str, page: Any) -> dict:
+    def _state(self, tab_id: str, page: Any, use: Use | None = None) -> dict:
         page.wait_for_load_state()
+        if use is not None:
+            use.seen[tab_id] = page.url
         return {
             "tab": tab_id,
             "title": page.title(),
             "url": page.url,
-            "snapshot": trim(page.aria_snapshot(mode="ai"), self.max_snapshot_chars),
+            "snapshot": trim(
+                fresh_refs(page.aria_snapshot(mode="ai")), self.max_snapshot_chars
+            ),
         }
 
     @staticmethod
     def _locator(page: Any, target: str) -> Any:
         """A ref from the snapshot (e12, or [ref=e12]) or any Playwright selector."""
         ref = target.strip().removeprefix("[").removesuffix("]").removeprefix("ref=")
-        if ref[:1] == "e" and ref[1:].isdigit():
+        if REF.fullmatch(ref):
             # Refs only resolve against a snapshot taken on this connection.
             page.aria_snapshot(mode="ai")
             return page.locator(f"aria-ref={ref}")
@@ -367,17 +407,21 @@ class BrowserPlugin(BotPlugin):
         """This chat's tab bookkeeping for one call, saved on the session."""
         key = self._key(ctx)
         if not self.sessions:
-            use = Use(current=self._current.get(key, ""))
+            use = Use(current=self._current.get(key, ""), seen=dict(self._seen))
             yield use
             with self._lock:
                 self._current[key] = use.current
+                self._seen.update(use.seen)
             return
         worker = self.session()
         if worker is None:
             self.close_tunnel()
             msg = "No browser session is open; start one with ergo_browser_start."
             raise RuntimeError(msg)
-        use = Use(current=(worker.state.get("current") or {}).get(key, ""))
+        use = Use(
+            current=(worker.state.get("current") or {}).get(key, ""),
+            seen=dict(worker.state.get("seen") or {}),
+        )
         try:
             yield use
         finally:
@@ -396,6 +440,7 @@ class BrowserPlugin(BotPlugin):
             state = dict(worker.state or {})
             state["current"] = {**(state.get("current") or {}), key: use.current}
             state["opened"] = [*(state.get("opened") or []), *use.opened]
+            state["seen"] = {**(state.get("seen") or {}), **use.seen}
             state["used_at"] = time.time()
             worker.state = state
             worker.save(update_fields=["state", "updated_at"])
@@ -549,23 +594,84 @@ class BrowserPlugin(BotPlugin):
                 tab_id, page = self._page(context, use, tab, new=new_tab)
                 page.goto(url)
                 page.bring_to_front()
-                return self._state(tab_id, page)
+                return self._state(tab_id, page, use)
 
             return self._run(work)
 
     def snapshot(self, ctx: ToolContext, tab: str = "") -> dict:
         with self._use(ctx) as use:
-            return self._run(
-                lambda context: self._state(*self._page(context, use, tab))
+
+            def work(context: Any) -> dict:
+                tab_id, page = self._page(context, use, tab)
+                moved = self._moved(use, tab_id, page)
+                state = self._state(tab_id, page, use)
+                if moved:
+                    state["note"] = (
+                        f"This tab was at {moved} when you last looked; someone may be "
+                        "using it. If they are, leave it to them and work in a new tab."
+                    )
+                return state
+
+            return self._run(work)
+
+    @staticmethod
+    def _moved(use: Use, tab_id: str, page: Any) -> str:
+        """The URL the bot last saw in this tab, if the tab has gone elsewhere since."""
+        last = use.seen.get(tab_id, "")
+        if last and last.partition("#")[0] != page.url.partition("#")[0]:
+            return last
+        return ""
+
+    def _check_not_moved(self, use: Use, tab_id: str, page: Any) -> None:
+        if moved := self._moved(use, tab_id, page):
+            msg = (
+                f"Tab {tab_id} moved from {moved} to {page.url} since your last look, "
+                "so the user may be using it. Leave it to them: open what you need in a "
+                "new tab (ergo_browser_open with new_tab), or take a snapshot first if "
+                "you mean to carry on in this one."
             )
+            raise RuntimeError(msg)
 
     def act(self, ctx: ToolContext, tab: str, action: Callable[[Any], None]) -> dict:
         with self._use(ctx) as use:
 
             def work(context: Any) -> dict:
                 tab_id, page = self._page(context, use, tab)
+                self._check_not_moved(use, tab_id, page)
                 action(page)
-                return self._state(tab_id, page)
+                return self._state(tab_id, page, use)
+
+            return self._run(work)
+
+    def wait(
+        self, ctx: ToolContext, seconds: float = 60, until: str = "", tab: str = ""
+    ) -> dict:
+        """Wait while a person uses the tab, until it moves on or ``until`` shows."""
+        seconds = max(1.0, min(float(seconds), WAIT_MAX_SECONDS))
+        with self._use(ctx) as use:
+
+            def work(context: Any) -> dict:
+                tab_id, page = self._page(context, use, tab)
+                start = page.url
+                deadline = time.monotonic() + seconds
+                done = False
+                while time.monotonic() < deadline and not done:
+                    page.wait_for_timeout(2000)
+                    with contextlib.suppress(Exception):  # mid-navigation reads fail
+                        if until:
+                            done = (
+                                until.lower()
+                                in (
+                                    page.url
+                                    + " "
+                                    + page.title()
+                                    + " "
+                                    + page.inner_text("body")
+                                ).lower()
+                            )
+                        else:
+                            done = page.url != start
+                return {**self._state(tab_id, page, use), "waited_until_done": done}
 
             return self._run(work)
 
@@ -600,16 +706,17 @@ class BrowserPlugin(BotPlugin):
 
             def work(context: Any) -> dict:
                 tab_id, page = self._page(context, use, tab)
+                self._check_not_moved(use, tab_id, page)
                 for number, step in enumerate(steps, 1):
                     try:
                         self._step(page, step)
                     except Exception as exc:  # noqa: BLE001 — reported with the page
                         return {
-                            **self._state(tab_id, page),
+                            **self._state(tab_id, page, use),
                             "done": number - 1,
                             "failed": {"step": number, "error": str(exc)[:500]},
                         }
-                return {**self._state(tab_id, page), "done": len(steps)}
+                return {**self._state(tab_id, page, use), "done": len(steps)}
 
             return self._run(work)
 
@@ -737,14 +844,23 @@ class BrowserPlugin(BotPlugin):
                 "Browser",
                 f"{session}"
                 "The ergo_browser_ tools drive a real Chrome that stays open between calls, "
-                "with the user's sign-ins. Read a page with ergo_browser_snapshot and act on "
-                f"the refs it shows (e12). {approval} For more than a step or two, hand "
-                "the goal to ergo_browser_task (a fast model drives it and reports back) "
-                "or, when you already know the steps, run them in one ergo_browser_batch. "
-                "When a page needs a person (sign-in, "
-                f"two-factor code, captcha, consent screen), stop and ask the user to do it in "
-                f"{self.takeover}, then take a new snapshot once they say it's done. Never ask "
-                "for passwords or codes in chat.",
+                "with the user's sign-ins. Browse with ergo_browser_task by default: give it "
+                "the goal once (search a site, fill a form, find and read pages, collect "
+                "links) and a fast model does the clicking and typing and reports back. "
+                "Each click you make yourself costs a full model turn, so don't drive a "
+                "page step by step. Use ergo_browser_open and ergo_browser_snapshot to "
+                "look at a page, ergo_browser_batch for steps you already know, and the "
+                "single click, type and press tools only for one action or to finish what "
+                f"a task stopped at. Refs (e12, f1e3) come from the latest snapshot. "
+                f"{approval}\n\nThe user can watch and use this Chrome in {self.takeover}, "
+                "and may take over a tab. When a page needs them (a sign-in, two-factor "
+                "code, captcha or consent screen), say so in your reply, then call "
+                "ergo_browser_wait (60 to 180 seconds) so they can do it while you wait, and "
+                "carry on once the page moves on; if it doesn't, end your turn asking them "
+                "to tell you when it's done. If a tab moved since your last look (a tool "
+                "says so), the user is using it: leave it to them and open what you need in "
+                "a new tab with ergo_browser_open new_tab. Never ask for passwords or codes "
+                "in chat.",
             )
         ]
 
@@ -835,7 +951,10 @@ class BrowserPlugin(BotPlugin):
         @bot_tool(
             name="ergo_browser_click",
             takes_context=True,
-            description="Click an element and return the page's new snapshot.",
+            description=(
+                "Click one element and return the page's new snapshot. For more than "
+                "one action, use ergo_browser_task or ergo_browser_batch."
+            ),
             parameters={"target": target_param, "tab": tab_param},
             required=["target"],
             requires_approval=approve,
@@ -884,6 +1003,32 @@ class BrowserPlugin(BotPlugin):
         )
         def press(ctx: ToolContext, key: str, tab: str = "") -> dict:
             return plugin.press(ctx, key, tab)
+
+        @bot_tool(
+            name="ergo_browser_wait",
+            takes_context=True,
+            description=(
+                "Wait while the user does something in the browser (signs in, enters a "
+                "code, solves a captcha), up to `seconds`. Returns as soon as the tab "
+                "goes to another page, or `until` text shows on it, with the new "
+                "snapshot. Tell the user what you're waiting for first."
+            ),
+            parameters={
+                "seconds": {
+                    "type": "number",
+                    "description": f"At most this long (default 60, max {WAIT_MAX_SECONDS})",
+                },
+                "until": {
+                    "type": "string",
+                    "description": "Text to wait for in the page, title or URL (default: any change of page)",
+                },
+                "tab": tab_param,
+            },
+        )
+        def wait(
+            ctx: ToolContext, seconds: float = 60, until: str = "", tab: str = ""
+        ) -> dict:
+            return plugin.wait(ctx, seconds, until, tab)
 
         @bot_tool(
             name="ergo_browser_screenshot",
@@ -937,9 +1082,9 @@ class BrowserPlugin(BotPlugin):
             name="ergo_browser_task",
             takes_context=True,
             description=(
-                "Hand the browser a goal: a fast model drives it (opening pages, "
-                "reading, clicking, typing) until the goal is met, then reports with "
-                "the final page. One call instead of one per click. It stops and says "
+                "The default way to browse: hand the browser a goal and a fast model "
+                "drives it (opening pages, reading, clicking, typing) until the goal is "
+                "met, then reports with the final page. One call instead of one per click. It stops and says "
                 "so before sign-ins, payments, or submitting, saving, publishing or "
                 "deleting anything the goal doesn't ask for, so name those steps if you "
                 "want them done. Check its report against the page."
@@ -966,7 +1111,16 @@ class BrowserPlugin(BotPlugin):
         if driving:
             return [
                 t.__bot_tool__
-                for t in (tabs, open_url, snapshot, click, type_text, press, batch)
+                for t in (
+                    tabs,
+                    open_url,
+                    snapshot,
+                    click,
+                    type_text,
+                    press,
+                    batch,
+                    wait,
+                )
             ]
         browsing = (
             tabs,
@@ -975,6 +1129,7 @@ class BrowserPlugin(BotPlugin):
             click,
             type_text,
             press,
+            wait,
             batch,
             task,
             screenshot,

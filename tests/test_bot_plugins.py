@@ -2732,6 +2732,27 @@ def test_browser_launch_says_why_chrome_did_not_answer(tmp_path):
         plugin._launch()
 
 
+def test_browser_snapshot_refs_are_numbered_as_the_next_call_sees_them():
+    from django_ergo.plugins.browser import REF
+    from django_ergo.plugins.browser import fresh_refs
+
+    # After a navigation the main frame's refs carry a frame number; a new
+    # connection numbers it bare and the iframes f1, f2... in order.
+    seen = (
+        '- generic [ref=f1e1]:\n  - button "Two" [ref=f1e2]\n'
+        '  - iframe [ref=f1e3]:\n    - button "Inner" [ref=f2e2]'
+    )
+    assert fresh_refs(seen) == (
+        '- generic [ref=e1]:\n  - button "Two" [ref=e2]\n'
+        '  - iframe [ref=e3]:\n    - button "Inner" [ref=f1e2]'
+    )
+    assert fresh_refs("- button [ref=e4]\n- iframe:\n  - link [ref=f1e2]") == (
+        "- button [ref=e4]\n- iframe:\n  - link [ref=f1e2]"
+    )
+    assert REF.fullmatch("f4e17") and REF.fullmatch("e3")
+    assert not REF.fullmatch("input")
+
+
 @pytest.mark.django_db
 def test_browser_tools_need_a_session(tmp_path):
     _, _, plugin = browser_bot(tmp_path)
@@ -2840,6 +2861,34 @@ def test_a_browser_batch_runs_its_steps_and_stops_at_a_failure(tmp_path, chrome)
     assert failed["title"] == "sent tacos"  # the third step never ran
 
 
+@pytest.mark.django_db
+def test_the_browser_leaves_a_tab_the_user_took_over(tmp_path, chrome):
+    _, _, plugin = browser_bot(tmp_path, config=f"cdp_url: {chrome}, sessions: false")
+    ctx = type("Ctx", (), {"session": None})()
+    tab = plugin.open(ctx, BROWSER_PAGE, new_tab=True)["tab"]
+    other = "data:text/html,<title>Theirs</title><p>signing in"
+
+    def person_navigates(context):
+        page = next(p for i, p in plugin._pages(context) if i == tab)
+        page.goto(other)
+
+    plugin._run(person_navigates)
+    with pytest.raises(RuntimeError, match="moved from .* since your last look"):
+        plugin.click(ctx, "text=Go")
+    with pytest.raises(RuntimeError, match="moved from"):
+        plugin.batch(ctx, [{"action": "press", "key": "Tab"}])
+
+    looked = plugin.snapshot(ctx)
+    assert looked["title"] == "Theirs"
+    assert "someone may be using it" in looked["note"]
+    assert "note" not in plugin.snapshot(ctx)
+    assert plugin.press(ctx, "Tab")["title"] == "Theirs"  # carrying on after a look
+
+    waited = plugin.wait(ctx, seconds=10, until="signing in")
+    assert waited["waited_until_done"] is True
+    assert plugin.wait(ctx, seconds=1)["waited_until_done"] is False
+
+
 @pytest.mark.django_db(transaction=True)
 async def test_a_browser_task_hands_its_goal_to_a_driver_model(tmp_path, chrome):
     from django_ergo.conversation.models import StructuredCall
@@ -2892,6 +2941,7 @@ def test_a_browser_task_is_approved_as_a_whole(tmp_path):
     assert outer["ergo_browser_task"] and outer["ergo_browser_batch"]
     driving = {t.name: t.requires_approval for t in plugin._tools(driving=True)}
     assert "ergo_browser_task" not in driving  # a driver can't hand off again
+    assert "ergo_browser_wait" in driving
     assert "ergo_browser_start" not in driving
     assert not any(driving.values())
 
