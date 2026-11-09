@@ -88,12 +88,14 @@ Telegram may impose its own stricter limits. An oversized, empty or failed
 download is recorded as a not-downloaded descriptor rather than silently
 claiming the file was saved. Passive audio is never transcribed.
 
-`ergo_telegram_file` sends a persistent current-session attachment by ID or
-filename as a photo, video, or document, with optional caption and reply. It does
-not remove the attachment. URL-only files cannot be uploaded, and uploads are
-limited to 50,000,000 bytes. Telegram's own file-type, size and caption
-restrictions still apply. No real group media was
-sent during this audit.
+`ergo_telegram_file` sends a saved attachment by ID or filename as a photo,
+video, or document, with optional caption and reply. For a file shared to the
+Storytime Telegram thread by `ergo_thread_send(attachments=[...])`, use its
+shared ID and source thread ID as `attachment_id` and `session_id`. Cross-session
+access requires the attachments plugin, `other_sessions: true`, and the same
+session owner. The destination message keeps the reference and the original
+file stays in the source thread. URL-only files cannot be uploaded, and uploads
+are limited to 50,000,000 bytes. Telegram's own restrictions still apply.
 
 ## Evidence and remaining operator prerequisites
 

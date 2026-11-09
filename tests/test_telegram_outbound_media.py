@@ -5,12 +5,17 @@ import json
 import pytest
 from django.contrib.auth import get_user_model
 
+from django_ergo.bots.orchestrator import orchestrator_toolkit
 from django_ergo.bots.tools import FunctionToolkit
 from django_ergo.bots.tools import ToolContext
 from django_ergo.conversation.attachments import save_session_file
+from django_ergo.conversation.models import ConversationAttachment
 from django_ergo.conversation.models import ConversationSession
+from django_ergo.conversation.models import ThreadMessage
 from django_ergo.plugins.telegram import TelegramAPI
 from django_ergo.plugins.telegram import TelegramPlugin
+from tests.test_bots import _family
+from tests.test_conversation_structured import claude_engine
 
 
 class RecordingAPI:
@@ -93,6 +98,136 @@ def test_send_cannot_access_another_session(settings, tmp_path):
     with pytest.raises(ValueError, match="No file"):
         toolkit.execute_tool("ergo_telegram_file", {"attachment_id": str(row.id)})
     assert not plugin.api.uploads
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("filename", "media_type", "method", "field"),
+    [
+        ("mockup.png", "image/png", "sendPhoto", "photo"),
+        ("clip.mp4", "video/mp4", "sendVideo", "video"),
+        ("report.pdf", "application/pdf", "sendDocument", "document"),
+    ],
+)
+def test_send_file_shared_by_another_bot(  # noqa: PLR0913
+    settings, tmp_path, filename, media_type, method, field
+):
+    settings.MEDIA_ROOT = tmp_path / "media"
+    user = get_user_model().objects.create_user("shared")
+    _, destination_bot, source_bot = _family(
+        tmp_path,
+        claude_engine(),
+        "name: boundcorp\nplugins: [{name: attachments}]\n",
+        "name: design\n",
+    )
+    source = ConversationSession.objects.create(user=user, bot_name=source_bot.name)
+    destination = ConversationSession.objects.create(
+        user=user,
+        bot_name=destination_bot.name,
+        metadata={"telegram": {"chat_id": -987, "message_id": 21}},
+    )
+    content = b"\x00shared file\xff\n"
+    row = save_session_file(source, filename, content, media_type=media_type)
+    original_path = row.file.name
+    sender = orchestrator_toolkit(
+        ToolContext(bot=source_bot, session=source, user=user)
+    )
+    sent = json.loads(
+        sender.execute_tool(
+            "ergo_thread_send",
+            {
+                "bot": destination_bot.name,
+                "thread": str(destination.id),
+                "message": "Please send this report",
+                "attachments": [str(row.id)],
+            },
+        )
+    )
+    message = ThreadMessage.objects.get(id=sent["message_id"])
+    assert message.recipient_session_id == destination.id
+    reference = message.metadata["attachments"][0]
+    assert reference["id"] == str(row.id)
+    assert reference["session"] == str(source.id)
+
+    plugin = TelegramPlugin(destination_bot, {})
+    plugin.on_load()
+    plugin.api = RecordingAPI()
+    toolkit = FunctionToolkit(
+        plugin._tools(),
+        ToolContext(bot=destination_bot, session=destination, user=user),
+    )
+    result = toolkit.execute_tool(
+        "ergo_telegram_file",
+        {
+            "attachment_id": reference["id"],
+            "session_id": reference["session"],
+            "caption": "Report",
+            "reply": True,
+        },
+    )
+    assert "Sent to Telegram" in result
+    assert plugin.api.uploads == [
+        (
+            method,
+            field,
+            filename,
+            media_type,
+            content,
+            {
+                "chat_id": -987,
+                "caption": "Report",
+                "reply_parameters": {
+                    "message_id": 21,
+                    "allow_sending_without_reply": True,
+                },
+            },
+        )
+    ]
+    message.refresh_from_db()
+    assert message.metadata["attachments"][0] == reference
+    row.refresh_from_db()
+    assert row.session_id == source.id
+    assert row.file.name == original_path
+    with row.file.open("rb") as file:
+        assert file.read() == content
+    assert not ConversationAttachment.objects.filter(session=destination).exists()
+
+    # A bare ID never grants implicit access to another session, even after sharing.
+    with pytest.raises(ValueError, match="No file"):
+        toolkit.execute_tool("ergo_telegram_file", {"attachment_id": str(row.id)})
+
+    unshared = save_session_file(source, "unshared.txt", b"not shared")
+    with pytest.raises(ValueError, match="No file"):
+        toolkit.execute_tool("ergo_telegram_file", {"attachment_id": str(unshared.id)})
+
+    other_user = get_user_model().objects.create_user("private")
+    private_session = ConversationSession.objects.create(
+        user=other_user, bot_name=source_bot.name
+    )
+    private = save_session_file(private_session, "private.txt", b"private")
+    with pytest.raises(ValueError, match="No session"):
+        toolkit.execute_tool(
+            "ergo_telegram_file",
+            {"attachment_id": str(private.id), "session_id": str(private_session.id)},
+        )
+    with pytest.raises(ValueError, match="No file"):
+        toolkit.execute_tool(
+            "ergo_telegram_file",
+            {"attachment_id": str(private.id), "session_id": str(source.id)},
+        )
+    destination_bot.plugin("attachments").other_sessions = False
+    with pytest.raises(ValueError, match="only read files in its own session"):
+        toolkit.execute_tool(
+            "ergo_telegram_file",
+            {"attachment_id": reference["id"], "session_id": reference["session"]},
+        )
+    destination_bot.plugins.remove(destination_bot.plugin("attachments"))
+    with pytest.raises(ValueError, match="requires the attachments plugin"):
+        toolkit.execute_tool(
+            "ergo_telegram_file",
+            {"attachment_id": reference["id"], "session_id": reference["session"]},
+        )
+    assert len(plugin.api.uploads) == 1
 
 
 def test_multipart_upload_encodes_bytes_and_reply(monkeypatch):

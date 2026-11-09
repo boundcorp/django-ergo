@@ -1685,11 +1685,18 @@ These database locks protect storage, not distributed intake order.
 it came from. With `replies: tool` it stays in the app, and the bot writes
 to Telegram with `ergo_telegram_message` (text, and `reply: true` to quote
 the latest Telegram message), which sends to the chat that last wrote to
-this conversation. `ergo_telegram_file(attachment_id, caption, reply)` sends
-an existing file from the current session by ID or filename: images as photos,
-videos as videos, and other files as documents. The stored attachment remains
-in the thread. URL-only attachments cannot be uploaded; uploads are limited
-to 50,000,000 bytes. Telegram can impose stricter limits. Approval prompts and
+this conversation. `ergo_telegram_file(attachment_id, caption, reply, session_id)`
+sends a saved file by ID or filename: images as photos, videos as videos, and
+other files as documents. It uses the current session unless `session_id` names
+another session owned by the same user; cross-session access requires the
+attachments plugin with `other_sessions: true`. To send a design from another
+bot, have it call `ergo_thread_send` to the Telegram thread with the file in
+`attachments`. On the user's explicit request, call `ergo_telegram_file` in
+that thread with the shared file's ID as `attachment_id` and its source thread ID
+as `session_id`. The shared reference remains in the destination message and the
+original stays in its source session; no file is moved. URL-only attachments
+cannot be uploaded; uploads are limited to 50,000,000 bytes and inbound downloads
+to 20,000,000 bytes. Telegram can impose stricter limits. Approval prompts and
 errors reach the chat either way.
 
 **People.** The message's `author` is the Telegram user (`telegram_user`,
