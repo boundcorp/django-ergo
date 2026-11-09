@@ -68,10 +68,44 @@ fields, then offers:
 
 | Tool | Does |
 | --- | --- |
-| `ergo_table_query(table, filters, order_by, limit, count_only)` | rows matching Django lookups (`{"price__lte": 500000, "address__icontains": "oak"}`), up to 200, or just a count |
+| `ergo_table_schema(table)` | field metadata, writable names, related tables and declared unique keys; default values are never returned |
+| `ergo_table_query(table, filters, order_by, limit, count_only, fields, offset, exclude, predicate)` | validated lookups, projection and deterministic pages of at most 200 rows; returns total `count`, `rows`, `has_more`, `next_offset` |
+| `ergo_table_aggregate(table, metrics, group_by, filters, exclude, predicate, limit)` | bounded count, sum, avg, min and max summaries |
+| `ergo_table_batch(table, operations)` | atomic add, update and unique-key upsert of at most 100 operations |
 | `ergo_table_add(table, values)` | add a validated row |
 | `ergo_table_update(table, id, values)` | change fields of one row |
 | `ergo_table_delete(table, id)` | delete one row, after approval |
+
+Use `ergo_table_schema` for writable field names. Foreign keys to another
+table of the same bot use the ID attname (for example `goal_id`); for a
+`to_field` foreign key, supply the target field's value rather than its primary
+key. Returned rows retain the relation name (`goal`) with that stored value.
+Relation traversal is restricted to forward foreign keys to the same bot.
+Reverse and many-to-many fields and cross-app relations are unavailable.
+JSON field lookups can traverse keys and array indexes within the path limit.
+Predicates are lookup objects combined using `{"and": [...]}`, `{"or": [...]}`,
+or `{"not": {...}}`. `exclude` negates its lookup object. Predicate trees and
+nested JSON filter values have depth and size limits. Equivalent lookup aliases
+cannot be specified twice in the same lookup object. Pagination uses the primary
+key as a tie-breaker; concurrent writes can still shift offsets.
+
+For a goal journal, first query `StrategicGoal`, then call
+`ergo_table_add` with `{"table":"GoalProgress","values":{"goal_id":42,"notes":"Made progress"}}`.
+To page recent progress, call `ergo_table_query` with
+`{"table":"GoalProgress","filters":{"goal_id":42},"order_by":["-created_at"],"fields":["id","goal_id","notes"],"limit":20,"offset":0}`.
+Advance using `next_offset` while `has_more` is true.
+
+For example, `metrics={"n":{"op":"count"},"total":{"op":"sum","field":"price"}}`
+summarizes rows; `group_by=["status"]` returns up to `limit` groups.
+Batch operations use `{"op":"add","values":{...}}`,
+`{"op":"update","id":1,"values":{...}}`, or
+`{"op":"upsert","match":{"unique_field":"value"},"values":{...}}`.
+An upsert match must be a declared unconditional unique key; each operation
+validates and saves normally, and any failure rolls back the whole batch.
+Null upsert keys, conditional or deferred constraints, optimistic concurrency,
+count distinct, batch delete and filter-wide updates are not supported.
+Offsets are limited to 100,000; beyond that boundary `has_more` may be true
+with no `next_offset`. Grouped summaries return at most 200 groups.
 
 Load it from the start in chats that work with the data:
 `chats: {main: {skills: [tables]}}`.
