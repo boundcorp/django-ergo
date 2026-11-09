@@ -2,9 +2,10 @@
 
 Bot folders can nest: a bot folder inside another bot's folder is that
 bot's sub-bot. ``discover`` finds every ``bot.yaml`` under a folder. A bot
-may message its sub-bots (downward, with ``orchestration`` on), the bots in
-``permissions.call_bots`` (sideways), and its parent bot's main chat (upward,
-always, from its own main chat). A thread can also send or forward to its
+may message chats of its sub-bots (downward, with ``orchestration`` on), the
+bots in ``permissions.call_bots`` (sideways), and its parent bot. Without
+orchestration, ``ergo_message_up`` permits only its own main chat or its parent
+bot's main chat from its own main chat. A thread can also send or forward to its
 exact starter chat, including a starter inherited from a same-bot ancestor,
 even when that bot is not otherwise callable. Sends to the starter are reports
 by default; ``ask=True`` requests a reply. This exception does not grant access
@@ -31,6 +32,17 @@ if TYPE_CHECKING:
 
 # Folders never searched for bots.
 SKIP_DIRS = {"node_modules", "__pycache__", "skills", "tools", "kb"}
+
+
+def may_use(bot: Bot, user) -> bool:
+    """Whether a user may access this bot; superusers are always allowed."""
+    allowed = bot.definition.allowed_users
+    return (
+        not allowed
+        or user is None
+        or user.is_superuser
+        or user.get_username() in allowed
+    )
 
 
 def find_bot_folders(directory: str | Path) -> list[Path]:

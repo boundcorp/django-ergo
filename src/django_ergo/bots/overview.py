@@ -29,6 +29,7 @@ from django.utils import timezone
 
 from django_ergo.bots.orchestrator import can_resolve
 from django_ergo.bots.orchestrator import thread_status
+from django_ergo.bots.registry import may_use
 from django_ergo.conversation import roles
 from django_ergo.conversation.context import ContextSection
 from django_ergo.conversation.context import ContextSource
@@ -256,7 +257,14 @@ class Block:
 def overview(ctx: ToolContext, max_chars: int = MAX_CHARS) -> str:
     """The block's text: bots, their chats with this user, snippets, PRs."""
     bot, current = ctx.bot, ctx.session
-    bots: list[Bot] = [bot, *(bot.registry.callable_bots(bot) if bot.registry else [])]
+    bots: list[Bot] = [
+        bot,
+        *(
+            [b for b in bot.registry.callable_bots(bot) if may_use(b, current.user)]
+            if bot.registry
+            else []
+        ),
+    ]
     chats = collect(bots, current)
     block = Block(bot, bots, chats, open_prs(bot))
     by_activity = list(chats)

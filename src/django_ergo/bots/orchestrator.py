@@ -2,11 +2,10 @@
 
 Who may message whom:
 
-- Upward is always allowed: any chat may message its own bot's main chat, and a
-  bot's main chat may message its parent bot's main chat. Bots with
-  ``orchestration: false`` get only ``ergo_message_up`` for this.
-- Downward (sub-bots nested in the bot's folder) needs ``orchestration``.
-- Sideways (any other bot) needs ``permissions.call_bots``.
+- With orchestration enabled, a chat may message any same-user chat of its own
+  bot, its parent, a sub-bot, or a bot in ``permissions.call_bots``.
+- Bots with ``orchestration: false`` get only ``ergo_message_up``, which sends
+  to their own main chat or, from their main chat, their parent's main chat.
 - A thread may also message the exact chat that started it, or the starter of
   a same-bot ancestor, for the same user. These are reports unless asked.
 - A new thread is the target's decision: ``thread="new"`` needs the target
@@ -66,6 +65,7 @@ from django.db.models.functions import Cast
 
 from django_ergo.bots import archival
 from django_ergo.bots import messaging
+from django_ergo.bots.registry import may_use
 from django_ergo.bots.tools import BotTool
 from django_ergo.bots.tools import FunctionToolkit
 from django_ergo.bots.tools import bot_tool
@@ -141,6 +141,9 @@ def _target(ctx: ToolContext, bot: str, thread: str = "") -> Bot:
     """This bot, one it may message, or the bot of the exact starter."""
     caller = ctx.bot
     if not bot or bot == caller.name:
+        if not may_use(caller, ctx.session.user):
+            msg = f"This user may not access {caller.name!r}."
+            raise ValueError(msg)
         return caller
     registry = caller.registry
     starter = _is_starter(ctx.session, bot, (thread or "").strip())
@@ -148,9 +151,14 @@ def _target(ctx: ToolContext, bot: str, thread: str = "") -> Bot:
         registry is None
         or bot not in registry
         or not (registry.may_call(caller, bot) or starter)
+        or not may_use(registry.get(bot), ctx.session.user)
     ):
         allowed = (
-            ", ".join(b.name for b in registry.callable_bots(caller))
+            ", ".join(
+                b.name
+                for b in registry.callable_bots(caller)
+                if may_use(b, ctx.session.user)
+            )
             if registry
             else ""
         )
@@ -159,7 +167,7 @@ def _target(ctx: ToolContext, bot: str, thread: str = "") -> Bot:
     return registry.get(bot)
 
 
-def chat_identity(session: ConversationSession) -> str:
+def chat_identity(session: ConversationSession, bot: Bot) -> str:
     """Which chat this is, for its own context: a thread must know it's the
     thread, not the main chat its instructions also describe."""
     meta = session.metadata or {}
@@ -181,7 +189,13 @@ def chat_identity(session: ConversationSession) -> str:
     else:
         identity = f"You are {session.bot_name} · {title}, a thread. Do its work here."
     for starter in _starters(session):
-        if starter.bot_name != session.bot_name:
+        if (
+            starter.bot_name != session.bot_name
+            and bot.definition.orchestration
+            and bot.registry
+            and starter.bot_name in bot.registry
+            and may_use(bot.registry.get(starter.bot_name), session.user)
+        ):
             identity += (
                 f" Report milestones straight to {messaging.label(starter)} with "
                 f"ergo_thread_send(bot={starter.bot_name!r}, thread={str(starter.id)!r}); "
@@ -433,16 +447,16 @@ def _row(session: ConversationSession, current: ConversationSession) -> dict:
 def ergo_bot_list(ctx: ToolContext) -> str:
     """List the bots this bot can message, with their descriptions."""
     registry = ctx.bot.registry
-    bots = registry.callable_bots(ctx.bot) if registry else []
+    bots = (
+        [b for b in registry.callable_bots(ctx.bot) if may_use(b, ctx.session.user)]
+        if registry
+        else []
+    )
     if not bots:
         return "There are no other bots you can message."
     lines = [
         f"- {b.name}: {b.definition.description or 'no description'}"
-        + (
-            " (your parent bot: its main chat or your starter chat)"
-            if b.name == ctx.bot.parent_name
-            else ""
-        )
+        + (" (your parent bot)" if b.name == ctx.bot.parent_name else "")
         for b in bots
     ]
     return "Bots you can message:\n" + "\n".join(lines)
@@ -664,11 +678,6 @@ def ergo_thread_forward(
         )
         raise ValueError(msg)
     target = _target(ctx, bot, thread)
-    if _upward_only(ctx, target) and not _is_starter(
-        ctx.session, target.name, thread.strip()
-    ):
-        msg = f"{target.name} is your parent bot; report to it with ergo_message_up."
-        raise ValueError(msg)
     thread = (thread or "").strip()
     if not thread:
         msg = 'Name the thread: an id, "main", a named chat, or "new".'
@@ -768,16 +777,6 @@ def _send(  # noqa: PLR0913
 ) -> dict:
     thread = (thread or "main").strip()
     starter = _is_starter(ctx.session, target.name, thread)
-    if (
-        _upward_only(ctx, target)
-        and not starter
-        and (thread not in roles.MAIN_NAMES or not _is_main(ctx.session))
-    ):
-        msg = (
-            f"{target.name} is your parent bot: only your main chat may message it, "
-            "and only its main chat."
-        )
-        raise ValueError(msg)
     shared = [
         messaging.shared_file(find_session_file(ctx.session, ref))
         for ref in attachments or []
@@ -789,7 +788,7 @@ def _send(  # noqa: PLR0913
     interrupting, not_interrupted = (
         _interruptible(ctx, recipient) if interrupt else (None, "")
     )
-    # Upward (a thread to its main chat, a main chat to its parent's) is a report
+    # Upward (a chat to its bot's or its parent bot's main) is a report
     # unless it asks: no reply goes back, so a status update doesn't cost a turn
     # here for the recipient's acknowledgement.
     upward = _is_main(recipient) and (
@@ -1078,13 +1077,11 @@ def ergo_message_up(
             msg = "This bot has no parent bot."
             raise ValueError(msg)
         if not _is_main(ctx.session):
-            msg = (
-                "Only the main chat may message the parent bot; message your main chat."
-            )
+            msg = "Only the main chat may use ergo_message_up to reach the parent bot."
             raise ValueError(msg)
-        target = registry.get(ctx.bot.parent_name)
+        target = _target(ctx, ctx.bot.parent_name)
     elif to == "main":
-        target = ctx.bot
+        target = _target(ctx, "")
     else:
         msg = 'to must be "main" or "parent"'
         raise ValueError(msg)
@@ -1099,6 +1096,7 @@ def upward_targets(ctx: ToolContext) -> list[str]:
         _is_main(ctx.session)
         and registry
         and registry.is_parent(ctx.bot, ctx.bot.parent_name)
+        and may_use(registry.get(ctx.bot.parent_name), ctx.session.user)
     ):
         targets.append("parent")
     return targets
