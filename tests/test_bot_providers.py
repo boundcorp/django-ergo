@@ -148,3 +148,76 @@ def test_model_context_window_suffix_and_override(tmp_path):
     engine = first.make_engine(model="subscription/small")
     assert engine.context_window == 64000
     assert engine.model == "small"
+
+
+@pytest.mark.django_db
+def test_explicit_reroute_is_used_once_before_pace_routing_resumes(
+    django_user_model, monkeypatch
+):
+    from django_ergo.conversation.models import ConversationSession
+    from django_ergo.conversation.models import RoutingSwitch
+
+    monkeypatch.setenv("TEST_OPENAI_KEY", "sk-test")
+    monkeypatch.setenv("TEST_ANTHROPIC_KEY", "sk-ant")
+    config = yaml.safe_load(PROVIDERS)
+    config["default"] = "auto/medium"
+    config["tiers"] = {"medium": ["openai/gpt-6-sol", "anthropic/claude-opus-5-5"]}
+    bot = bot_with(Providers.from_dict(config))
+    monkeypatch.setattr("django_ergo.bots.runtime.ensure_compiled", lambda *args: None)
+    monkeypatch.setattr(
+        "django_ergo.bots.runtime.route_model",
+        lambda providers, tier, current: "openai/gpt-6-sol",
+    )
+    user = django_user_model.objects.create(username="retry")
+    chat = ConversationSession.objects.create(
+        user=user, bot_name="kitchen", model="auto/medium", engine_type="openai"
+    )
+    assert bot.route(chat) == "openai/gpt-6-sol"
+    bot.reroute(chat, "anthropic/claude-opus-5-5", "retry after refusal")
+
+    # The resume endpoint queues a new turn, which loads the session again.
+    chat.refresh_from_db()
+    assert bot.route(chat) == "anthropic/claude-opus-5-5"
+    assert bot.engine_spec(chat).config["model"] == "claude-opus-5-5"
+    chat.refresh_from_db()
+    assert "retry_route" not in chat.metadata
+    assert bot.route(chat) == "openai/gpt-6-sol"
+    assert list(
+        RoutingSwitch.objects.order_by("created_at").values_list("to_model", flat=True)
+    ) == ["anthropic/claude-opus-5-5", "openai/gpt-6-sol"]
+
+
+@pytest.mark.django_db
+def test_retry_route_is_discarded_when_model_changes_or_becomes_unavailable(
+    django_user_model, monkeypatch
+):
+    from django_ergo.conversation.models import ConversationSession
+
+    monkeypatch.setenv("TEST_OPENAI_KEY", "sk-test")
+    monkeypatch.setenv("TEST_ANTHROPIC_KEY", "sk-ant")
+    config = yaml.safe_load(PROVIDERS)
+    config["default"] = "auto/medium"
+    config["tiers"] = {"medium": ["openai/gpt-6-sol", "anthropic/claude-opus-5-5"]}
+    bot = bot_with(Providers.from_dict(config))
+    monkeypatch.setattr("django_ergo.bots.runtime.ensure_compiled", lambda *args: None)
+    monkeypatch.setattr(
+        "django_ergo.bots.runtime.route_model",
+        lambda providers, tier, current: "openai/gpt-6-sol",
+    )
+    user = django_user_model.objects.create(username="retry-change")
+    chat = ConversationSession.objects.create(
+        user=user, bot_name="kitchen", model="auto/medium", engine_type="openai"
+    )
+    bot.route(chat)
+    bot.reroute(chat, "anthropic/claude-opus-5-5", "retry")
+    bot.pick_model(chat, "openai/gpt-6-sol")
+    bot.pick_model(chat, "auto/medium")
+    chat.refresh_from_db()
+    assert bot.route(chat) == "openai/gpt-6-sol"
+
+    bot.reroute(chat, "anthropic/claude-opus-5-5", "retry again")
+    monkeypatch.delenv("TEST_ANTHROPIC_KEY")
+    chat.refresh_from_db()
+    assert bot.route(chat) == "openai/gpt-6-sol"
+    chat.refresh_from_db()
+    assert "retry_route" not in chat.metadata

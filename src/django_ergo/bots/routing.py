@@ -191,8 +191,8 @@ def applicable_usage(provider: str, usage: dict, model: str = "") -> dict:
         if details is None and isinstance(used, dict):
             details = used
         scope = (
-            details.get("model", "")
-            if details is not None
+            details["model"]
+            if details is not None and "model" in details
             else name.removeprefix("weekly_")
             if name.startswith("weekly_")
             else ""
@@ -408,7 +408,6 @@ def pick_agent(providers: Providers, tier: str) -> AgentChoice:
         c
         for c in listed
         if (p := providers.providers.get(c.provider)) is not None
-        and p.available
         and p.transport == "cli"
         and not providers.is_private(c.model)
     ]
@@ -682,12 +681,12 @@ class _Now:
     rules: RoutingRules
 
     def state(
-        self, name: str, *, model: str = "", is_pick: bool = False
+        self, name: str, *, model: str = "", is_pick: bool = False, remote: bool = False
     ) -> tuple[str, str]:
         provider = self.providers.providers.get(name)
         if provider is None:
             return "unavailable", f"{name} isn't in providers.yaml"
-        if not provider.available:
+        if not remote and not provider.available:
             return "unavailable", _unavailable(provider)
         why = why_over(name, self.usage, self.rules, model)
         if is_pick:
@@ -744,7 +743,10 @@ def _agent_rows(now: _Now) -> list[dict]:
         rows = []
         for choice in choices:
             state, reason = now.state(
-                choice.provider, model=choice.model, is_pick=choice == picked
+                choice.provider,
+                model=choice.model,
+                is_pick=choice == picked,
+                remote=True,
             )
             rows.append(
                 {

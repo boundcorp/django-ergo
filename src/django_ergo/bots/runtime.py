@@ -581,6 +581,10 @@ class Bot:
         session.model = ref
         spec = self.engine_spec(session)
         fields = ["model", "updated_at"]
+        if "retry_route" in (session.metadata or {}):
+            session.metadata = {**session.metadata}
+            session.metadata.pop("retry_route")
+            fields.append("metadata")
         if (spec.engine_type, spec.transport_type) != (
             session.engine_type,
             session.transport_type,
@@ -624,11 +628,33 @@ class Bot:
         the model, or "" for a chat with a fixed model. Runs the ORM."""
         ref = self.session_model(session) or self.model_ref()
         if not is_auto(ref):
+            if "retry_route" in (session.metadata or {}):
+                session.metadata = {**session.metadata}
+                session.metadata.pop("retry_route")
+                session.save(update_fields=["metadata", "updated_at"])
             return ""
         ensure_compiled(
             self.providers,
             lambda: self.make_engine(model=self.resolve_ref("auto/small", None)),
         )
+        pending = (session.metadata or {}).get("retry_route")
+        if pending is not None:
+            meta = dict(session.metadata)
+            meta.pop("retry_route")
+            session.metadata = meta
+            session.save(update_fields=["metadata", "updated_at"])
+            if isinstance(pending, dict):
+                model = pending.get("model", "")
+                found = self.providers.find(model)
+                if (
+                    pending.get("ref") == ref
+                    and model == meta.get("routed_model")
+                    and model in self.providers.routing.tiers.get(tier_of(ref), [])
+                    and not self.providers.is_private(model)
+                    and found
+                    and found[0].available
+                ):
+                    return self.providers.check_public(model, where=ref)
         before = (session.metadata or {}).get("routed_model", "")
         picked = self.providers.check_public(
             route_model(self.providers, tier_of(ref), before), where=ref
@@ -637,15 +663,22 @@ class Bot:
         return picked
 
     def _set_routed(
-        self, session: ConversationSession, tier: str, picked: str, reason: str = ""
+        self,
+        session: ConversationSession,
+        tier: str,
+        picked: str,
+        reason: str = "",
+        retry_ref: str = "",
     ) -> None:
         meta = session.metadata or {}
         before = meta.get("routed_model", "")
-        if picked == before:
+        if picked == before and not retry_ref:
             return
-        if before:
+        if before and picked != before:
             record_switch(self.providers, session, tier, before, picked, reason)
         session.metadata = {**meta, "routed_model": picked}
+        if retry_ref:
+            session.metadata["retry_route"] = {"ref": retry_ref, "model": picked}
         spec = self.engine_spec(session)
         session.engine_type = spec.engine_type
         session.transport_type = spec.transport_type
@@ -665,9 +698,8 @@ class Bot:
         return self.providers.check_public(retry, where="A retry") if retry else ""
 
     def reroute(self, session: ConversationSession, model: str, reason: str) -> None:
-        """Move an ``auto/<tier>`` chat to ``model``, one of its tier's
-        candidates, for its next turns (it stays while that model qualifies).
-        Runs the ORM."""
+        """Move an ``auto/<tier>`` chat to a tier candidate for its next turn.
+        Later turns use normal routing. Runs the ORM."""
         ref = self.session_model(session) or self.model_ref()
         if (
             not is_auto(ref)
@@ -676,7 +708,7 @@ class Bot:
         ):
             msg = f"{model!r} isn't a model in this chat's tier"
             raise ValueError(msg)
-        self._set_routed(session, tier_of(ref), model, reason)
+        self._set_routed(session, tier_of(ref), model, reason, retry_ref=ref)
 
     def resolve_ref(self, ref: str, session: ConversationSession | None) -> str:
         """``auto/<tier>`` as a concrete model: the one routed for this chat,

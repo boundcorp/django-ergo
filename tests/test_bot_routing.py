@@ -183,6 +183,11 @@ def test_fable_window_only_blocks_fable_models_for_chats_and_agents():
         == "claude/claude-opus-5-5"
     )
     record_usage_windows(
+        "claude", {"weekly_fable": {"used": 100, "resets_at": soon(48)}}
+    )
+    assert pick_model(providers, "large") == "claude/claude-opus-5-5"
+    assert pick_agent(providers, "large").model == "anthropic/claude-opus-5-5"
+    record_usage_windows(
         "claude", {"weekly_fable": {"used": 99, "resets_at": time.time() - 1}}
     )
     assert pick_model(providers, "large") == "claude/claude-fable-5-1"
@@ -228,6 +233,17 @@ def test_agents_use_subscriptions_only():
     choice = pick_agent(providers, "large")
     assert (choice.agent, choice.model, choice.effort) == ("codex", "gpt-6-sol", "high")
     assert pick_agent(providers, "small").provider == "chatgpt"
+
+
+@pytest.mark.django_db
+def test_remote_agent_does_not_require_provider_cli_on_host():
+    data = yaml.safe_load(PROVIDERS)
+    data["providers"]["claude"]["config"]["command"] = "/nonexistent/claude"
+    providers = Providers.from_dict(data)
+    assert pick_agent(providers, "large").provider == "claude"
+    report = routing.routing_report(providers)
+    row = next(row for row in report["agents"] if row["name"] == "large")
+    assert row["candidates"][0]["state"] == "pick"
 
 
 @pytest.mark.django_db

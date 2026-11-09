@@ -42,6 +42,8 @@ Unknown/stale timing earns no urgency bonus. Known utilization still enforces pe
 - Existing providers.yaml tier lists, agent entries, aliases, percentage caps, custom tiers, explicit model pins and custom `MODEL_ROUTER(candidates, usage, rules, current)` signatures remain valid. Numeric usage mappings remain numeric for custom routers; timing is attached separately for the built-in scorer. Custom routers intentionally replace built-in selection policy.
 - Compiled text policies are versioned to recompile with pace-aware instructions. Saved Routing-page text still overrides file policy and should be reviewed if it explicitly requests old provider-specific percentage caps.
 - Deploy the matching library before the bot config: devbox limits imports the new shared `window_pace` helper. No database migration or secrets change is needed.
+- Explicit retry model selections apply to the next turn before normal pace routing resumes. Agent tiers do not require the provider CLI on the Ergonaut host; remote managers execute the agent elsewhere. Legacy model-scoped windows without metadata remain scoped by name.
+- Devbox's fresh limits check also syncs the report to the router; a cached dashboard reading does not prove the router snapshot is fresh, and sync errors are surfaced.
 - Draft PRs only. No deployments, pod restarts, live policy edits or secret changes were performed.
 
 ## Verification
