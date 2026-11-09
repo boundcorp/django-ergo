@@ -551,7 +551,7 @@ class LocalShellPlugin(BotPlugin):
         prompt = "Do the task in brief.md.\n\n" + spec.brief
         argv = self.argv(agent, prompt, model=spec.model, number=number)
         self.launch(ctx, folder, agent, argv, number)
-        handle = {"job": folder.name, "dir": str(folder), "agent": agent}
+        handle = {"job": folder.name, "dir": str(folder), "agent": agent, "run": number}
         if warnings := _warnings(notes):
             handle["warnings"] = warnings
         return handle
@@ -647,13 +647,37 @@ class LocalShellPlugin(BotPlugin):
             last_at=timezone.now(),
         )
 
+    def own_runs(self, folder: Path, handle: dict) -> tuple[list[int], int | None]:
+        """The runs that belong to this worker, and the fresh run that replaced it.
+
+        A worker owns the run it started and the runs that answered its
+        questions (their spec has ``question_id``). Another ``ergo_agent_start``
+        in the same folder starts a fresh run: that one belongs to a new
+        worker, and this one stops following the folder there. Handles from
+        before ``run`` was recorded follow the whole folder, as they used to.
+        """
+        runs = self.runs(folder)
+        first = handle.get("run")
+        if not isinstance(first, int) or first not in runs:
+            return runs, None
+        own = [first]
+        for number in runs[runs.index(first) + 1 :]:
+            if not self.run_state(folder, number)["spec"].get("question_id"):
+                return own, number
+            own.append(number)
+        return own, None
+
     def check(self, ctx, handle: dict) -> AgentCheck:  # noqa: PLR0911 — one return per outcome
         folder = Path(handle["dir"])
-        runs = self.runs(folder)
+        runs, newer = self.own_runs(folder, handle)
         if not runs:
             return AgentCheck("failed", error=f"Job {folder.name} has no runs")
         number = runs[-1]
         state = self.run_state(folder, number)
+        if newer is not None:
+            # The folder's heartbeat is the newer run's now, so don't read it
+            # as this run's, and don't show the newer run's transcript here.
+            return self.superseded(folder, number, newer, state)
         agent = str(state["spec"].get("agent") or handle.get("agent") or "claude")
         events = self.transcript(folder, number)
         entries = self.entries(agent, events)
@@ -708,6 +732,40 @@ class LocalShellPlugin(BotPlugin):
                 "folder": str(folder),
                 "summary": text.strip(),
                 "outputs": self.outputs(folder, state["spec"].get("before") or {}),
+            },
+        )
+
+    def superseded(
+        self, folder: Path, number: int, newer: int, state: dict
+    ) -> AgentCheck:
+        """Close a worker whose job folder has a fresh run (``newer``) started
+        by another worker, so it neither stays "running" nor repeats the newer
+        run's question."""
+        later = f"Run {newer} has since started in job {folder.name}"
+        if state["exit"] is None:
+            return AgentCheck(
+                "failed",
+                error=f"Job {folder.name}'s run {number} stopped without finishing. {later}.",
+            )
+        agent = str(state["spec"].get("agent") or "claude")
+        text, agent_error = self.final_text(
+            folder, number, agent, self.transcript(folder, number)
+        )
+        if state["exit"].get("code") != 0 or agent_error:
+            return AgentCheck(
+                "failed",
+                error=f"Job {folder.name} failed (exit {state['exit'].get('code')}): {clip(text, 800)}",
+            )
+        if text.lstrip().startswith(QUESTION):
+            text = ""  # the newer run took the question over
+        return AgentCheck(
+            "done",
+            report={
+                "job": folder.name,
+                "folder": str(folder),
+                "summary": f"{text.strip()}\n\n{later}; follow that worker.".strip(),
+                "outputs": [],
+                "superseded_by_run": newer,
             },
         )
 
@@ -779,7 +837,7 @@ class LocalShellPlugin(BotPlugin):
             return None
         folder = Path(handle["dir"])
         entries = []
-        for number in self.runs(folder):
+        for number in self.own_runs(folder, handle)[0]:
             spec = _read_json(folder / META / f"run-{number}.json") or {}
             agent = str(spec.get("agent") or "claude")
             entries += self.entries(agent, self.transcript(folder, number))

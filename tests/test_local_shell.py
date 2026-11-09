@@ -455,3 +455,48 @@ def test_template_updates_reach_files_the_job_left_alone(tmp_path):
     (old / "bin" / "helper").write_text("v0")
     assert _sync_template(kit, old) == (["bin/edited", "bin/new"], [])
     assert (old / "bin" / "helper").read_text() == "v0"
+
+
+def test_a_fresh_run_in_the_same_folder_closes_the_older_worker(tmp_path):
+    """Two ergo_agent_start calls on one job folder: the first worker stops
+    following the folder instead of staying "running" and repeating the newer
+    run's question (seen with three Codex recovery runs on one ads job)."""
+    plugin, folder, _ = question_job(tmp_path)
+    meta = folder / ".ergo"
+    first = {"dir": str(folder), "agent": "codex", "run": 1}
+    (meta / "run-1.json").write_text(json.dumps({"agent": "codex"}))
+    (meta / "run-1.last.txt").write_text("NEEDS_INPUT: Retry the task?")
+    (meta / "run-2.json").write_text(json.dumps({"agent": "codex"}))
+    (meta / "run-2.exit.json").write_text(json.dumps({"code": 0}))
+    (meta / "run-2.last.txt").write_text("NEEDS_INPUT: Still failing. Retry later?")
+    (meta / "heartbeat").touch()
+    second = {"dir": str(folder), "agent": "codex", "run": 2}
+
+    class Ctx:
+        def activity(self, *a, **k):
+            pass
+
+    old = plugin.check(Ctx(), first)
+    assert old.status == "done" and not old.questions
+    assert "Run 2 has since started" in old.report["summary"]
+    assert old.report["superseded_by_run"] == 2
+    new = plugin.check(Ctx(), second)
+    assert new.status == "running"
+    assert [q.id for q in new.questions] == ["job:2"]
+
+    # A run that answers this worker's question is still this worker's.
+    (meta / "run-3.json").write_text(
+        json.dumps({"agent": "claude", "question_id": "job:2"})
+    )
+    assert plugin.own_runs(folder, second) == ([2, 3], None)
+    # An older handle without "run" follows the whole folder, as before.
+    assert plugin.own_runs(folder, {"dir": str(folder)}) == ([1, 2, 3], None)
+
+    # A run that never wrote its exit is dead once a newer run exists, even
+    # though the shared heartbeat is fresh.
+    (meta / "run-1.json").unlink()
+    (meta / "run-1.last.txt").unlink()
+    (meta / "run-1.exit.json").unlink(missing_ok=True)
+    (meta / "run-1.json").write_text(json.dumps({"agent": "claude"}))
+    dead = plugin.check(Ctx(), first)
+    assert dead.status == "failed" and "Run 2 has since started" in dead.error
