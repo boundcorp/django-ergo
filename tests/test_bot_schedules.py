@@ -217,6 +217,19 @@ def test_schedule_targets_and_thread_titles():
         )
 
 
+@pytest.mark.parametrize("target", ["reports", {"thread": "Digest", "in": "reports"}])
+def test_schedule_rejects_retired_chat_target(target):
+    config = {
+        "name": "k",
+        "chats": {"reports": {"retired": True}},
+        "schedules": [{"name": "a", "cron": "* * * * *", "message": "x", "to": target}],
+    }
+    with pytest.raises(BotDefinitionError, match="targets retired chat 'reports'"):
+        BotDefinition.from_dict(config)
+    config["chats"]["reports"]["retired"] = False
+    assert BotDefinition.from_dict(config).schedules
+
+
 STATS_TOOLS = """
 def pull_stats(days: int = 1) -> dict:
     return {"visits": 10 * days}

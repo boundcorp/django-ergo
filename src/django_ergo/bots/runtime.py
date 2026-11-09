@@ -894,16 +894,13 @@ class Bot:
     root_session = main_session  # the main chat used to be called the root
 
     async def chat_session(self, user, name: str = MAIN) -> ConversationSession:
-        """Get or create the user's ``main`` chat, or a named chat from bot.yaml."""
+        """Get an existing chat, or create one declared in bot.yaml."""
         if name in roles.MAIN_NAMES:
             name, role = MAIN, MAIN_ROLE
             qs = self.sessions(user).filter(
                 parent__isnull=True, metadata__bot_role=MAIN_ROLE
             )
         else:
-            if name not in self.definition.chats:
-                msg = f"{self.name} has no chat named {name!r}"
-                raise ValueError(msg)
             role = CHAT_ROLE
             qs = self.sessions(user).filter(
                 metadata__bot_role=CHAT_ROLE, metadata__chat=name
@@ -911,6 +908,9 @@ class Bot:
         existing = await qs.exclude(status="completed").order_by("created_at").afirst()
         if existing is not None:
             return existing
+        if name not in self.definition.chats:
+            msg = f"{self.name} has no chat named {name!r}"
+            raise ValueError(msg)
         chat = self.definition.chat(name)
         metadata = (
             {}

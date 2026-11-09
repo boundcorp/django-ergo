@@ -47,6 +47,7 @@ chats:
     description: Weekly reports
     instructions: Keep each report short. # added to agents.md in this chat
     skills: [analytics]
+    retired: false # true hides it from navigation and disallows schedule targets
 threads: # child threads (`sessions:` also works)
   skills: []
   allow_create: true # may chats (this bot's or other bots') start threads of it?
@@ -753,16 +754,26 @@ question_id, answer)` queues the answer for the worker and returns without
 
 ## Chats
 
-Every user has a **main** chat with each bot (formerly the root session),
-plus one chat for each named chat in `chats:`, created when first opened.
-Main and named chats keep native history with token compaction and history tools over every session
-the bot has with the user. A named chat adds its own `instructions` to
-agents.md and loads its own skills. Threads are child sessions of any chat;
-their history tools reach the same sessions, so a thread can read the
-person's other chats with the bot.
+Every user has a persistent, top-level **main** chat with each bot, plus
+one non-completed chat per named entry in `chats:`, created when first opened.
+Named chats add their own `instructions` to agents.md and have their own
+skills and pinned files. Task-scoped threads are children of a chat, have no
+chat-specific instructions, and may be auto-resolved when idle. Both keep
+history, and history tools can reach the user's other sessions with the bot.
 Instructions are rebuilt every turn, so edits to agents.md and bot.yaml reach
 existing chats. `bot.main_session(user)` and `bot.chat_session(user, name)`
 open them (`root_session` still works).
+
+Set `retired: true` on a named chat to hide it from navigation and prevent
+new schedules from targeting it, without deleting its session, files or
+threads. Existing links and history still work, and
+`bot.chat_session(user, name)` still opens it for integrations. Removing a
+chat from bot.yaml also preserves existing sessions and their history, but
+removes their chat-specific configuration; prefer retirement while code
+still refers to the chat by name.
+
+To turn an existing thread into a named chat without changing its ID, see
+the [adoption and rollback commands](building-bots.md#chats-and-threads).
 
 ## Knowledge base folder
 

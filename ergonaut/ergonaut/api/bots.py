@@ -936,6 +936,21 @@ def visible_sessions(user):
     return qs if user.is_superuser else qs.filter(user=user)
 
 
+def navigation_sessions(user):
+    """Visible sessions excluding retired named chats, for navigation lists."""
+    qs = visible_sessions(user)
+    for bot in registry():
+        retired = [name for name, chat in bot.definition.chats.items() if chat.retired]
+        if retired:
+            qs = qs.exclude(
+                bot_name=bot.name,
+                parent__isnull=True,
+                metadata__bot_role="chat",
+                metadata__chat__in=retired,
+            )
+    return qs
+
+
 def debug_shortcut_available(user, session: ConversationSession) -> bool:
     """Only same-owner links can be read by the destination bot thread."""
     if (
@@ -981,16 +996,18 @@ async def list_bots(request):
 
 def chats_out(bot: Bot, user) -> list[dict]:
     """The bot's main chat and named chats, with the user's session for each."""
-    sessions = {
-        (s.metadata or {}).get("chat") or "main": str(s.id)
-        for s in bot.sessions(user)
+    sessions = {}
+    for session in (
+        bot.sessions(user)
         .filter(parent__isnull=True, metadata__bot_role__in=list(roles.TOP))
         .exclude(status="completed")
-        .order_by("-created_at")
-    }
+        .order_by("created_at")
+    ):
+        sessions.setdefault((session.metadata or {}).get("chat") or "main", str(session.id))
     return [
         {"name": name, "description": chat.description, "session_id": sessions.get(name)}
         for name, chat in bot.definition.chats.items()
+        if not chat.retired
     ]
 
 
@@ -1063,7 +1080,7 @@ def search_sessions(request, q: str = ""):
 
 @router.get("/sessions", response=list[SessionOut])
 def list_sessions(request, bot: str = "", q: str = "", status: str = ""):
-    qs = visible_sessions(request.auth)
+    qs = navigation_sessions(request.auth)
     if bot:
         qs = qs.filter(bot_name=bot)
     if status:
@@ -2179,7 +2196,8 @@ def all_pins(request):
 
     bots = registry()
     out: dict[str, list] = {}
-    sessions = visible_sessions(request.auth).filter(user=request.auth).order_by("-updated_at")[:200]
+    visible = navigation_sessions(request.auth).filter(user=request.auth)
+    sessions = visible.order_by("-updated_at")[:200]
     for session in sessions:
         bot = bots.get(session.bot_name) if session.bot_name in bots else None
         chat = BotClass.chat_name(session)
@@ -2194,9 +2212,7 @@ def all_pins(request):
                     "url": f"/api/bots/{bot.name}/files/{relative}",
                 }
             )
-    pinned = ConversationAttachment.objects.filter(
-        metadata__pinned=True, session__in=visible_sessions(request.auth).filter(user=request.auth)
-    ).order_by("created_at")
+    pinned = ConversationAttachment.objects.filter(metadata__pinned=True, session__in=visible).order_by("created_at")
     for row in pinned:
         out.setdefault(str(row.session_id), []).append(
             {

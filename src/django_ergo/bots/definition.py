@@ -136,6 +136,7 @@ class ChatDefinition:
 
     name: str
     description: str = ""
+    retired: bool = False
     instructions: str = ""  # added to the bot's instructions in this chat
     skills: list[str] = field(default_factory=list)  # loaded from the start
     pins: list[str] = field(
@@ -230,6 +231,9 @@ class BotDefinition:
             for chat in {c for action in schedule.actions for c in action.chats}:
                 if chat not in chats:
                     msg = f"schedules: {schedule.name} targets {chat!r}, which isn't in chats"
+                    raise BotDefinitionError(msg)
+                if chats[chat].retired:
+                    msg = f"schedules: {schedule.name} targets retired chat {chat!r}"
                     raise BotDefinitionError(msg)
         return cls(
             name=name,
@@ -445,10 +449,18 @@ def _chats(data: dict, *, orchestration: bool) -> dict[str, ChatDefinition]:
         if not CHAT_NAME.match(name):
             msg = f"chats: {name!r} must be lowercase letters, digits, - or _"
             raise BotDefinitionError(msg)
+        retired = config.get("retired", False)
+        if not isinstance(retired, bool):
+            msg = f"chats: {name}: retired must be a boolean"
+            raise BotDefinitionError(msg)
+        if name == MAIN and retired:
+            msg = "chats: main cannot be retired"
+            raise BotDefinitionError(msg)
         default_skills = ["orchestration"] if name == MAIN and orchestration else []
         chats[name] = ChatDefinition(
             name=name,
             description=str(config.get("description") or ""),
+            retired=retired,
             instructions=str(config.get("instructions") or ""),
             skills=[str(s) for s in config.get("skills", default_skills) or []],
             pins=[_pin(name, p) for p in config.get("pins") or []],
