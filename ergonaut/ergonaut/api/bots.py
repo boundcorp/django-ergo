@@ -1854,9 +1854,23 @@ class AttachmentOut(Schema):
     updated_at: datetime
     archived_at: datetime | None = None  # archived by the bot (ergo_attachments_archive)
     link: dict | None = None  # a pull request (django_ergo.conversation.links.pull_request_out)
+    thumbnail: str = ""  # a small preview's URL, for images
+    # Shared with this chat by a message from another chat (it stays in that chat):
+    # {"session_id", "label", "message_id", "shared_at"}.
+    shared_from: dict | None = None
 
 
-def attachment_out(row: ConversationAttachment) -> dict:
+THUMBNAIL_SIDE = 320  # px on the long side: sharp at the sidebar's 2x sizes
+
+
+def thumbnail_url(row: ConversationAttachment) -> str:
+    if not row.file or view_kind(row.filename, row.media_type) != "image":
+        return ""
+    # The file's hash in the URL lets the browser keep the preview until the file changes.
+    return f"/api/attachments/{row.id}/thumbnail?v={(row.sha256 or str(row.updated_at.timestamp()))[:12]}"
+
+
+def attachment_out(row: ConversationAttachment, shared_from: dict | None = None) -> dict:
     return {
         "id": str(row.id),
         "filename": row.filename,
@@ -1871,7 +1885,46 @@ def attachment_out(row: ConversationAttachment) -> dict:
         "created_at": row.created_at,
         "updated_at": row.updated_at,
         "archived_at": row.archived_at,
+        "thumbnail": thumbnail_url(row),
+        "shared_from": shared_from,
     }
+
+
+def shared_attachments(user, session: ConversationSession) -> list[dict]:
+    """Files other chats shared with this one (ergo_thread_send attachments, forwards, events).
+
+    They stay in the sender's chat, so ``session.attachments`` doesn't have them; the
+    messages that brought them do. Newest share first, each file once.
+    """
+    shares: dict[str, dict] = {}
+    messages = ThreadMessage.objects.filter(recipient_session=session, metadata__has_key="attachments")
+    for message in messages.order_by("-created_at"):
+        provenance = (message.metadata or {}).get("message_provenance") or {}
+        label = (provenance.get("origin") or {}).get("label") or ""
+        for ref in (message.metadata or {}).get("attachments") or []:
+            if isinstance(ref, dict) and ref.get("id") and str(ref["id"]) not in shares:
+                shares[str(ref["id"])] = {
+                    "session_id": str(ref.get("session") or message.sender_session_id or ""),
+                    "label": label,
+                    "message_id": str(message.id),
+                    "shared_at": message.created_at,
+                }
+    if not shares:
+        return []
+    ids = [uuid.UUID(i) for i in shares if _is_uuid(i)]
+    rows = ConversationAttachment.objects.filter(id__in=ids, session__in=visible_sessions(user)).exclude(
+        session=session
+    )
+    found = {str(row.id): row for row in rows}
+    return [attachment_out(found[i], share) for i, share in shares.items() if i in found]
+
+
+def _is_uuid(value: str) -> bool:
+    try:
+        uuid.UUID(value)
+    except ValueError:
+        return False
+    return True
 
 
 def visible_attachment(user, attachment_id: str) -> ConversationAttachment:
@@ -1890,7 +1943,8 @@ def list_attachments(request, session_id: str):
     session = visible_sessions(request.auth).filter(id=uuid_or_404(session_id)).first()
     if session is None:
         raise HttpError(404, "No such session")
-    return [attachment_out(r) for r in session.attachments.order_by("-updated_at")]
+    own = [attachment_out(r) for r in session.attachments.order_by("-updated_at")]
+    return own + shared_attachments(request.auth, session)
 
 
 @router.post("/sessions/{session_id}/attachments", response=AttachmentOut)
@@ -2140,6 +2194,31 @@ def download_attachment(request, attachment_id: str, inline: bool = False):
             response["Content-Security-Policy"] = SANDBOXED
         return response
     return FileResponse(row.file.open("rb"), as_attachment=True, filename=row.filename, content_type=row.media_type)
+
+
+@router.get("/attachments/{attachment_id}/thumbnail")
+def attachment_thumbnail(request, attachment_id: str):
+    """A small preview of an image file, for the Files panel (downscaled with Pillow)."""
+    from django_ergo.conversation.images import prepare_image
+
+    row = visible_attachment(request.auth, attachment_id)
+    if not row.file or view_kind(row.filename, row.media_type) != "image":
+        raise HttpError(404, "No preview for this file")
+    if not row.file.storage.exists(row.file.name):
+        raise HttpError(404, "This file's stored copy is missing")
+    with row.file.open("rb") as handle:
+        data = handle.read()
+    if row.media_type == "image/svg+xml":
+        # Pillow can't read SVG; an <img> never runs its scripts, and the sandbox covers a direct open.
+        prepared = (data, row.media_type)
+    else:
+        prepared = prepare_image(data, row.media_type, THUMBNAIL_SIDE)
+    if prepared is None:
+        raise HttpError(404, "No preview for this file")
+    response = HttpResponse(prepared[0], content_type=prepared[1])
+    response["Cache-Control"] = "private, max-age=604800"
+    response["Content-Security-Policy"] = SANDBOXED
+    return response
 
 
 class PinIn(Schema):

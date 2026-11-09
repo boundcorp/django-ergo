@@ -451,6 +451,9 @@ export type AttachmentFile = {
   updated_at: string
   archived_at?: string | null
   link?: PrLink | null // a pull request the bot reported (no stored file)
+  thumbnail?: string // a small preview's URL, for images
+  // Shared with this chat by a message from another chat; the file stays there.
+  shared_from?: { session_id: string; label: string; message_id: string; shared_at: string } | null
 }
 
 // A pull request a bot or worker reported (django_ergo.conversation.links); state is read with gh.
