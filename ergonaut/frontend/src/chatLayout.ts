@@ -68,3 +68,11 @@ export function suggestionsFromMessages(messages: { role?: string; blocks: Sugge
   }
   return undefined
 }
+
+/** The session's latest turn: its newest ``chat_reply`` call. Side calls the chat also records
+ *  (a voice transcription, an illustration, an attachment look) don't end or replace a turn, so
+ *  one made while a turn waits on an approval must not hide the Approve buttons. */
+export function lastTurn<T extends { kind: string }>(calls: T[]): T | undefined {
+  for (let i = calls.length - 1; i >= 0; i--) if (calls[i].kind === 'chat_reply') return calls[i]
+  return undefined
+}

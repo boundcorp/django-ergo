@@ -1377,7 +1377,7 @@ def compaction_detail(request, session_id: str, compaction_id: str):
 
 def latest_turn(session: ConversationSession, *, queued: bool) -> dict:
     """The session's newest chat reply as a TurnOut (empty while it's queued)."""
-    call = None if queued else session.structured_calls.order_by("-created_at").first()
+    call = None if queued else session.structured_calls.filter(kind="chat_reply").order_by("-created_at").first()
     response = (call.response if call else None) or {}
     return {
         "session_id": str(session.id),
