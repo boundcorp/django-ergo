@@ -68,6 +68,17 @@ def done_raw(response) -> dict:
     return raw
 
 
+def _tool_use(block) -> dict:
+    """Build an event, retaining stream-only argument metadata when available."""
+    use = {"id": block.id, "name": block.name, "input": block.input}
+    count = getattr(block, "argument_chars", None)
+    if count is not None:
+        use["argument_chars"] = count
+    if getattr(block, "invalid_arguments", False):
+        use["invalid_arguments"] = True
+    return use
+
+
 def claude_message_dict(
     msg, *, include_attribution: bool = True, timezone=None
 ) -> dict:
@@ -127,7 +138,7 @@ class ClaudeAPIEngine(StoredMessagesMixin, Engine):
         self.model = config.get("model", "claude-3-5-sonnet-20241022")
         self.api_key = config.get("api_key")
         self.base_url = config.get("base_url")
-        self.max_tokens = config.get("max_tokens", 8192)
+        self.max_tokens = config.get("max_tokens", 32000)
         self._client = None
         self._adapter = ClaudeToolAdapter()
 
@@ -283,11 +294,7 @@ class ClaudeAPIEngine(StoredMessagesMixin, Engine):
                         EngineResponse(
                             event_type="tool_use",
                             raw={"type": "tool_use"},
-                            tool_use={
-                                "id": block.id,
-                                "name": block.name,
-                                "input": block.input,
-                            },
+                            tool_use=_tool_use(block),
                         )
                     )
                 elif block.type == "thinking":
@@ -371,7 +378,9 @@ class ClaudeAPIEngine(StoredMessagesMixin, Engine):
                 content.append({"type": "tool_use", **call})
                 events.append(
                     EngineResponse(
-                        event_type="tool_use", raw={"type": "tool_use"}, tool_use=call
+                        event_type="tool_use",
+                        raw={"type": "tool_use"},
+                        tool_use=_tool_use(block),
                     )
                 )
             elif block.type == "thinking":

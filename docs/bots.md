@@ -1822,7 +1822,7 @@ model and bot (the `private` block).
 
 With `daily_usd_cap` set, each attempt reserves its worst-case cost before
 it's sent: every request byte counted as an uncached input token, plus the
-full output limit (`max_tokens`, 4096 by default) at the output price.
+full output limit (`max_tokens`, 32000 by default) at the output price.
 Under a lock (a PostgreSQL advisory lock), the attempt is refused
 (`SpendCapError`, a `PolicyError`, no HTTP) when today's spend plus held
 reservations plus this one would pass the cap. Days are UTC. It is also

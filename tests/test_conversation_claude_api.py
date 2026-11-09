@@ -103,7 +103,7 @@ class TestClaudeAPIEngineInit:
     def test_default_config(self):
         e = ClaudeAPIEngine(config={})
         assert e.model == "claude-3-5-sonnet-20241022"
-        assert e.max_tokens == 8192
+        assert e.max_tokens == 32000
         assert e.api_key is None
 
     def test_client_not_eagerly_initialized(self, engine):
@@ -114,6 +114,27 @@ class TestClaudeAPIEngineInit:
 
         adapter = engine.get_tool_adapter()
         assert isinstance(adapter, ClaudeToolAdapter)
+
+    @pytest.mark.parametrize(
+        ("config", "expected"), [({}, 32000), ({"max_tokens": 1024}, 1024)]
+    )
+    @pytest.mark.asyncio
+    async def test_completion_uses_configured_token_limit(self, config, expected):
+        from tests.test_conversation_structured import FakeClaudeClient
+        from tests.test_conversation_structured import claude_text
+
+        engine = ClaudeAPIEngine(config=config)
+        engine._client = FakeClaudeClient(claude_text("hello"))
+        await engine.complete([{"role": "user", "content": "hi"}])
+        assert engine._client.calls[0]["max_tokens"] == expected
+
+    @pytest.mark.parametrize(
+        ("config", "expected"), [({}, 32000), ({"max_tokens": 1024}, 1024)]
+    )
+    def test_claude_code_inherits_token_limit(self, config, expected):
+        from django_ergo.conversation.engines.claude_code import ClaudeCodeEngine
+
+        assert ClaudeCodeEngine(config=config).max_tokens == expected
 
 
 # ---------------------------------------------------------------------------
@@ -369,3 +390,24 @@ class TestLifecycleMethods:
         import inspect
 
         assert inspect.isasyncgenfunction(engine.submit_tool_result)
+
+
+async def test_complete_preserves_api_stop_reason_and_tool_input(engine):
+    from types import SimpleNamespace
+
+    response = SimpleNamespace(
+        content=[SimpleNamespace(type="tool_use", id="t1", name="write", input={})],
+        stop_reason="max_tokens",
+        usage=SimpleNamespace(input_tokens=10, output_tokens=20),
+    )
+
+    async def create(**kwargs):
+        return response
+
+    engine._create_message = create
+    result = await engine.complete([{"role": "user", "content": "go"}])
+    assert result.events[0].tool_use == {"id": "t1", "name": "write", "input": {}}
+    assert result.events[-1].raw == {"stop_reason": "max_tokens"}
+    assert result.message["content"] == [
+        {"type": "tool_use", "id": "t1", "name": "write", "input": {}}
+    ]

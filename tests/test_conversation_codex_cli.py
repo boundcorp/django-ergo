@@ -225,7 +225,7 @@ async def test_real_codex_cli_makes_one_request(tmp_path):
         server.shutdown()
 
     calls = [e.tool_use for e in completion.events if e.event_type == "tool_use"]
-    assert calls == [
+    assert [{key: call[key] for key in ("id", "name", "input")} for call in calls] == [
         {"id": "call_1", "name": "lookup", "input": {"q": "pasta"}},
         {"id": "call_2", "name": "lookup", "input": {"q": "pesto"}},
     ]

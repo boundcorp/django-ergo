@@ -193,7 +193,14 @@ async def test_engine_completes_one_model_call_through_the_cli(tmp_path):
         ],
     }
     calls = [e.tool_use for e in completion.events if e.event_type == "tool_use"]
-    assert calls == [{"id": "toolu_1", "name": "lookup", "input": {"q": "pasta"}}]
+    assert calls == [
+        {
+            "id": "toolu_1",
+            "name": "lookup",
+            "input": {"q": "pasta"},
+            "argument_chars": len('{"q": "pasta"}'),
+        }
+    ]
     assert (completion.input_tokens, completion.output_tokens) == (100, 12)
     assert (
         completion.cache_read_input_tokens,
@@ -386,7 +393,12 @@ async def test_real_claude_code_cli_makes_one_request(tmp_path):
         server.shutdown()
 
     assert [e.tool_use for e in completion.events if e.event_type == "tool_use"] == [
-        {"id": "toolu_1", "name": "lookup", "input": {"q": "pasta"}}
+        {
+            "id": "toolu_1",
+            "name": "lookup",
+            "input": {"q": "pasta"},
+            "argument_chars": len('{"q": "pasta"}'),
+        }
     ]
     (request,) = FakeAnthropic.requests
     assert [t["name"] for t in request["tools"]] == ["mcp__ergo__lookup"]
@@ -576,3 +588,131 @@ def test_a_refusal_keeps_its_category():
     response = stream.response("claude-opus-5-5")
     assert response.content == []
     assert done_raw(response) == {"stop_reason": "refusal", "refusal_category": "cyber"}
+
+
+@pytest.mark.parametrize(
+    ("parts", "block_stop", "expected", "invalid"),
+    [
+        (['{"q": "', 'pasta"}'], True, {"q": "pasta"}, False),
+        (['{"q": "é'], True, {}, True),
+        (['{"q": "é'], False, {}, True),
+        ([], True, {}, False),
+        (["[1]"], True, {}, True),
+    ],
+)
+async def test_stream_preserves_tool_argument_length(
+    parts, block_stop, expected, invalid
+):
+    from django_ergo.conversation.engines.claude_code import _Stream
+
+    stream = _Stream()
+    stream.feed(
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {
+                "type": "tool_use",
+                "id": "toolu_1",
+                "name": "mcp__ergo__lookup",
+                "input": {},
+            },
+        }
+    )
+    for part in parts:
+        stream.feed(
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "input_json_delta", "partial_json": part},
+            }
+        )
+    if block_stop:
+        stream.feed({"type": "content_block_stop", "index": 0})
+    stream.feed({"type": "message_delta", "delta": {"stop_reason": "max_tokens"}})
+    stream.feed({"type": "message_stop"})
+    response = stream.response("claude")
+    engine = ClaudeCodeEngine({})
+
+    async def create(**kwargs):
+        return response
+
+    engine._create_message = create
+    completion = await engine.complete([{"role": "user", "content": "go"}])
+    call = next(event.tool_use for event in completion.events if event.tool_use)
+    assert call == {
+        "id": "toolu_1",
+        "name": "lookup",
+        "input": expected,
+        "argument_chars": len("".join(parts)),
+        **({"invalid_arguments": True} if invalid else {}),
+    }
+    assert completion.events[-1].raw["stop_reason"] == "max_tokens"
+    assert completion.message["content"][0]["input"] == expected
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_truncated_cli_tool_call_recovers_in_structured_call():
+    from asgiref.sync import sync_to_async
+    from django.contrib.auth import get_user_model
+
+    from django_ergo.conversation.engines.claude_code import _Stream
+    from django_ergo.conversation.structured import _TRUNCATED_TOOL_CALL
+    from django_ergo.conversation.structured import StructuredCallSpec
+    from django_ergo.conversation.structured import run_structured_call
+    from tests.test_conversation_structured import VALID_PLAN
+    from tests.test_conversation_structured import FakeClaudeClient
+    from tests.test_conversation_structured import LookupToolkit
+    from tests.test_conversation_structured import Plan
+    from tests.test_conversation_structured import claude_tool
+
+    raw = '{"q": "café'
+    stream = _Stream()
+    stream.feed(
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {
+                "type": "tool_use",
+                "id": "toolu_1",
+                "name": "mcp__ergo__lookup",
+                "input": {},
+            },
+        }
+    )
+    stream.feed(
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "input_json_delta", "partial_json": raw},
+        }
+    )
+    stream.feed({"type": "content_block_stop", "index": 0})
+    stream.feed({"type": "message_delta", "delta": {"stop_reason": "max_tokens"}})
+    stream.feed({"type": "message_stop"})
+
+    engine = ClaudeCodeEngine({"model": "claude-test"})
+    engine._client = FakeClaudeClient(
+        stream.response("claude-test"),
+        claude_tool("submit_output", VALID_PLAN, tool_id="toolu_2"),
+    )
+    toolkit = LookupToolkit()
+    user = await sync_to_async(get_user_model().objects.create_user)(
+        username="claude-code-structured", password="x"
+    )
+    result = await run_structured_call(
+        StructuredCallSpec(kind="planner", response_model=Plan, toolkits=[toolkit]),
+        "Plan",
+        user=user,
+        engine=engine,
+    )
+
+    assert result.ok
+    assert result.parsed == Plan(**VALID_PLAN)
+    assert toolkit.calls == []
+    tool_result = engine._client.calls[1]["messages"][-1]["content"][0]
+    assert tool_result["tool_use_id"] == "toolu_1"
+    assert tool_result["is_error"] is True
+    assert tool_result["content"] == (
+        _TRUNCATED_TOOL_CALL
+        + f" Received {len(raw)} argument characters before truncation."
+    )

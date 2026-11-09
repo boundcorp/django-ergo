@@ -1354,6 +1354,7 @@ def test_a_failed_turn_explains_itself_and_can_be_resumed_or_dismissed(client, c
     assert turn["text"] == "Picked up where I left off."
     latest = StructuredCall.objects.filter(session_id=root["id"]).latest("created_at")
     assert "out of credits" in latest.request
+    assert "An unfinished tool call was not saved" not in latest.request
     from django_ergo.conversation.models import SessionMessage
 
     incoming = SessionMessage.objects.get(session_id=root["id"], sequence=latest.first_sequence)
@@ -1363,6 +1364,51 @@ def test_a_failed_turn_explains_itself_and_can_be_resumed_or_dismissed(client, c
     assert rendered["author"] == incoming.author
     assert rendered["provenance"]["kind"] == "event"
     assert post(client, f"/api/sessions/{root['id']}/resume").status_code == 409  # it didn't fail this time
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize(
+    ("error", "summary"),
+    [
+        (
+            "Model hit its max_tokens limit before finishing; raise StructuredCallSpec.max_tokens",
+            "The response was cut off at the output limit.",
+        ),
+        (
+            "The model's response was cut off because it reached the max_tokens output limit (512 tokens).",
+            "The response was cut off at the output limit (512 tokens).",
+        ),
+        (
+            "Model hit its max_tokens limit (4096 output tokens) before finishing",
+            "The response was cut off at the output limit (4096 tokens).",
+        ),
+    ],
+)
+def test_output_limit_resume_is_explicit_and_can_be_repeated(client, cook, use_bots, immediate_events, error, summary):
+    from django_ergo.conversation.models import StructuredCall
+
+    use_bots(say("A shorter answer."), say("A shorter answer."))
+    root = post(client, "/api/bots/kitchen/root").json()
+    url = f"/api/sessions/{root['id']}"
+
+    for _ in range(2):
+        failed = StructuredCall.objects.create(
+            kind="chat_reply", session_id=root["id"], user=cook, request="Tell a story", status="failed", error=error
+        )
+        detail = client.get(url).json()
+        call = next(call for call in detail["calls"] if call["id"] == str(failed.id))
+        assert call["error_summary"] == summary
+        assert "Resume" in call["error_hint"]
+        assert StructuredCall.objects.filter(session_id=root["id"]).latest("created_at").id == failed.id
+
+        assert post(client, f"{url}/resume").json()["text"] == "A shorter answer."
+        failed.refresh_from_db()
+        assert failed.metadata["resumed"] is True
+        resumed = StructuredCall.objects.filter(session_id=root["id"]).latest("created_at")
+        assert summary.rstrip(".") in resumed.request
+        assert "An unfinished tool call was not saved or run" in resumed.request
+        assert "one file per call" in resumed.request
+        assert "2,000 words" in resumed.request
 
 
 @pytest.mark.django_db(transaction=True)
