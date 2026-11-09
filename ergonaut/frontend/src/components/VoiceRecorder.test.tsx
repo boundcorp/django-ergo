@@ -213,6 +213,51 @@ describe('voice recorder', () => {
     expect(calls).toBe(0)
     expect(stopped).toBe(1)
     expect(container.textContent).toContain('unsupported audio format')
+    expect(button('Download recording')).toBeTruthy()
+    expect([...container.querySelectorAll('button')].some(el => el.getAttribute('aria-label') === 'Retry')).toBe(false)
+    expect(win.document.activeElement).toBe(button('Dismiss'))
+  })
+
+  test('downloads an unsupported Ogg recording with the correct extension', async () => {
+    actualType = 'audio/ogg'
+    let filename = ''
+    const originalClick = win.HTMLAnchorElement.prototype.click
+    const originalCreate = URL.createObjectURL
+    const originalRevoke = URL.revokeObjectURL
+    win.HTMLAnchorElement.prototype.click = function () {
+      filename = this.download
+    }
+    URL.createObjectURL = () => 'blob:recording'
+    URL.revokeObjectURL = () => {}
+    try {
+      await mount()
+      await click('Record voice message')
+      await click('Stop recording')
+      await click('Download recording')
+      expect(filename).toBe('recording.ogg')
+    } finally {
+      win.HTMLAnchorElement.prototype.click = originalClick
+      URL.createObjectURL = originalCreate
+      URL.revokeObjectURL = originalRevoke
+    }
+  })
+
+  test('offers a new recording rather than uploading empty audio', async () => {
+    let calls = 0
+    api.transcribeVoice = async () => {
+      calls++
+      return { text: 'ok' }
+    }
+    await mount()
+    await click('Record voice message')
+    await act(async () => {
+      instances[0].state = 'inactive'
+      instances[0].onstop?.()
+    })
+    expect(calls).toBe(0)
+    expect(container.textContent).toContain('No audio was captured')
+    await click('Retry')
+    expect(requested).toBe(2)
   })
 
   test('escape discards recording and stops tracks without upload', async () => {
@@ -284,6 +329,7 @@ describe('voice recorder', () => {
     expect(container.querySelector('[aria-live]')?.textContent).toContain('Rate limited')
     expect(container.querySelector('[role="img"]')?.getAttribute('title')).toBe('Rate limited')
     expect(button('Retry').title).toBe('Retry')
+    expect(button('Download recording')).toBeTruthy()
     expect(button('Dismiss').title).toBe('Dismiss')
     await click('Retry')
     expect(result).toBe('ok')
@@ -306,18 +352,187 @@ describe('voice recorder', () => {
     expect(button('Record voice message')).toBeTruthy()
   })
 
-  test('automatically stops at the configured duration', async () => {
+  test('continues past the configured duration and uploads all captured chunks', async () => {
     api.voiceConfig = async () => ({ enabled: true, max_duration: 0.01 })
-    let result = ''
-    await mount(text => {
-      result = text
+    let uploaded: Blob | undefined
+    api.transcribeVoice = async (_id, blob) => {
+      uploaded = blob
+      return { text: 'ok' }
+    }
+    await mount()
+    const originalNow = Date.now
+    try {
+      Date.now = () => 0
+      await click('Record voice message')
+      instances[0].ondataavailable?.({ data: new Blob(['first']) })
+      Date.now = () => 31 * 60 * 1000
+      const { promise, resolve } = Promise.withResolvers<void>()
+      setTimeout(resolve, 300)
+      await act(async () => {
+        await promise
+      })
+      expect(container.textContent).toContain('31:00')
+    } finally {
+      Date.now = originalNow
+    }
+    expect(stopped).toBe(0)
+    await click('Stop recording')
+    expect(await uploaded?.text()).toBe('firstaudio')
+  })
+
+  test('recorder errors retain final data for retry and download', async () => {
+    let uploaded: Blob | undefined
+    api.transcribeVoice = async (_id, blob) => {
+      uploaded = blob
+      return { text: 'ok' }
+    }
+    await mount()
+    await click('Record voice message')
+    const active = instances[0]
+    active.ondataavailable?.({ data: new Blob(['first']) })
+    await act(async () => {
+      active.state = 'inactive'
+      active.onerror?.()
+      active.ondataavailable?.({ data: new Blob(['final']) })
+      active.onstop?.()
     })
+    expect(button('Download recording')).toBeTruthy()
+    expect(uploaded).toBeUndefined()
+    await click('Retry')
+    expect(await uploaded?.text()).toBe('firstfinal')
+  })
+
+  test('acquires, reacquires and releases a screen wake lock', async () => {
+    let releases = 0
+    let requests = 0
+    let releaseListener: (() => void) | undefined
+    Object.defineProperty(win.navigator, 'wakeLock', {
+      configurable: true,
+      value: {
+        request: async () => {
+          requests++
+          return {
+            addEventListener: (_type: string, listener: () => void) => {
+              releaseListener = listener
+            },
+            release: async () => {
+              releases++
+            },
+          }
+        },
+      },
+    })
+    Object.defineProperty(win.document, 'visibilityState', { configurable: true, value: 'visible' })
+    await mount()
+    await click('Record voice message')
+    expect(requests).toBe(1)
+    await act(async () => {
+      releaseListener?.()
+      win.document.dispatchEvent(new win.Event('visibilitychange'))
+      await Promise.resolve()
+    })
+    expect(requests).toBe(2)
+    await click('Stop recording')
+    expect(releases).toBe(1)
+  })
+
+  test('retries a pending wake lock rejected after returning to the tab', async () => {
+    let requests = 0
+    const pending = Promise.withResolvers<never>()
+    Object.defineProperty(win.navigator, 'wakeLock', {
+      configurable: true,
+      value: {
+        request: () => {
+          requests++
+          return requests === 1
+            ? pending.promise
+            : Promise.resolve({ addEventListener: () => {}, release: async () => {} })
+        },
+      },
+    })
+    Object.defineProperty(win.document, 'visibilityState', { configurable: true, value: 'visible' })
+    await mount()
     await click('Record voice message')
     await act(async () => {
-      await new Promise(resolve => setTimeout(resolve, 300))
+      Object.defineProperty(win.document, 'visibilityState', { configurable: true, value: 'hidden' })
+      win.document.dispatchEvent(new win.Event('visibilitychange'))
+      Object.defineProperty(win.document, 'visibilityState', { configurable: true, value: 'visible' })
+      win.document.dispatchEvent(new win.Event('visibilitychange'))
+      pending.reject(new Error('hidden'))
+      await Promise.resolve()
+      await Promise.resolve()
     })
+    expect(requests).toBe(2)
+  })
+
+  test('reacquires when the previous wake lock releases after the tab becomes visible', async () => {
+    let requests = 0
+    let releaseListener: (() => void) | undefined
+    Object.defineProperty(win.navigator, 'wakeLock', {
+      configurable: true,
+      value: {
+        request: async () => {
+          requests++
+          return {
+            addEventListener: (_type: string, listener: () => void) => {
+              releaseListener = listener
+            },
+            release: async () => {},
+          }
+        },
+      },
+    })
+    Object.defineProperty(win.document, 'visibilityState', { configurable: true, value: 'visible' })
+    await mount()
+    await click('Record voice message')
+    await act(async () => {
+      Object.defineProperty(win.document, 'visibilityState', { configurable: true, value: 'hidden' })
+      win.document.dispatchEvent(new win.Event('visibilitychange'))
+      Object.defineProperty(win.document, 'visibilityState', { configurable: true, value: 'visible' })
+      win.document.dispatchEvent(new win.Event('visibilitychange'))
+      releaseListener?.()
+      await Promise.resolve()
+    })
+    expect(requests).toBe(2)
+  })
+
+  test('recording works when wake lock is rejected', async () => {
+    Object.defineProperty(win.navigator, 'wakeLock', {
+      configurable: true,
+      value: {
+        request: async () => {
+          throw new Error('not available')
+        },
+      },
+    })
+    Object.defineProperty(win.document, 'visibilityState', { configurable: true, value: 'visible' })
+    await mount()
+    await click('Record voice message')
+    await click('Stop recording')
     expect(stopped).toBe(1)
-    expect(result).toBe('spoken words')
+  })
+
+  test('releases a wake lock granted after cancellation', async () => {
+    let releases = 0
+    const { promise, resolve } = Promise.withResolvers<{
+      release: () => Promise<void>
+      addEventListener: () => void
+    }>()
+    Object.defineProperty(win.navigator, 'wakeLock', { configurable: true, value: { request: () => promise } })
+    Object.defineProperty(win.document, 'visibilityState', { configurable: true, value: 'visible' })
+    await mount()
+    await click('Record voice message')
+    await click('Cancel')
+    await act(async () => {
+      resolve({
+        release: async () => {
+          releases++
+        },
+        addEventListener: () => {},
+      })
+      await promise
+    })
+    expect(releases).toBe(1)
   })
 
   test('hides controls if configuration cannot be loaded', async () => {
@@ -363,17 +578,19 @@ describe('voice recorder', () => {
     }
   })
 
-  test('pagehide discards recording and stops microphone tracks', async () => {
-    let uploads = 0
-    api.transcribeVoice = async () => {
-      uploads++
-      return { text: 'unexpected' }
+  test('pagehide does not discard captured audio', async () => {
+    let uploaded: Blob | undefined
+    api.transcribeVoice = async (_id, blob) => {
+      uploaded = blob
+      return { text: 'ok' }
     }
     await mount()
     await click('Record voice message')
+    instances[0].ondataavailable?.({ data: new Blob(['before sleep']) })
     await act(async () => win.dispatchEvent(new win.Event('pagehide')))
-    expect(stopped).toBe(1)
-    expect(uploads).toBe(0)
+    expect(stopped).toBe(0)
+    await click('Stop recording')
+    expect(await uploaded?.text()).toBe('before sleepaudio')
   })
 
   test('session changes stop active tracks and disabled configuration hides controls', async () => {

@@ -5,6 +5,7 @@ import json
 import logging
 import math
 import os
+import re
 import subprocess
 import time
 from decimal import Decimal
@@ -41,6 +42,12 @@ TRANSCRIPTION_PRICES = {
     },
     "whisper-1": {"minute": Decimal("0.006")},
 }
+
+# Keep each provider request comfortably below its duration and 25 MB limits.
+CHUNK_SECONDS = 300
+CHUNK_OVERLAP = 3
+PROVIDER_MAX_BYTES = 24 * 1000 * 1000
+CHUNK_CONCURRENCY = 4
 
 
 def _enabled():
@@ -195,7 +202,7 @@ def _duration(data, demuxer):
             input=data,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
-            timeout=5,
+            timeout=60,
             check=True,
         )
         packets = json.loads(result.stdout)["packets"]
@@ -215,6 +222,103 @@ def _duration(data, demuxer):
         json.JSONDecodeError,
     ):
         raise HttpError(400, "Could not read audio duration") from None
+
+
+def _chunks(data, demuxer, duration):
+    """Transcode independently decodable, overlapping chunks without writing audio to disk."""
+    chunks = []
+    start = 0
+    while start < duration:
+        length = min(CHUNK_SECONDS, duration - start)
+        try:
+            result = subprocess.run(
+                [
+                    "ffmpeg",
+                    "-v",
+                    "error",
+                    "-xerror",
+                    "-protocol_whitelist",
+                    "pipe",
+                    "-f",
+                    demuxer,
+                    "-i",
+                    "pipe:0",
+                    "-ss",
+                    str(start),
+                    "-t",
+                    str(length),
+                    "-map",
+                    "0:a:0",
+                    "-vn",
+                    "-ac",
+                    "1",
+                    "-ar",
+                    "16000",
+                    "-c:a",
+                    "libmp3lame",
+                    "-b:a",
+                    "32k",
+                    "-f",
+                    "mp3",
+                    "pipe:1",
+                ],
+                input=data,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                timeout=120,
+                check=True,
+            )
+        except FileNotFoundError:
+            raise HttpError(503, "Audio processing is unavailable") from None
+        except subprocess.SubprocessError:
+            raise HttpError(400, "Could not process audio") from None
+        if not result.stdout or len(result.stdout) > PROVIDER_MAX_BYTES:
+            raise HttpError(400, "Could not process audio")
+        chunks.append((result.stdout, "audio/mpeg", "audio.mp3", length))
+        if start + length >= duration:
+            break
+        start += CHUNK_SECONDS - CHUNK_OVERLAP
+    return chunks
+
+
+def _join_transcripts(texts):
+    """Remove only matching multi-word overlaps; retain uncertain boundary words."""
+    result = ""
+    for text in texts:
+        text = text.strip()
+        if not text:
+            continue
+        previous = list(re.finditer(r"\S+", result))
+        current = list(re.finditer(r"\S+", text))
+        for count in range(min(len(previous), len(current), 30), 1, -1):
+            left = [m.group().strip(".,!?;:\"'()[]{}").casefold() for m in previous[-count:]]
+            right = [m.group().strip(".,!?;:\"'()[]{}").casefold() for m in current[:count]]
+            if left == right and all(left):
+                text = text[current[count - 1].end() :].lstrip()
+                break
+        else:
+            # A provider can inflect one overlapping word differently. Require
+            # four exact words and a shared stem before preferring the newer
+            # rendition; shorter or less certain matches retain both sides.
+            right = [m.group().strip(".,!?;:\"'()[]{}").casefold() for m in current]
+            offset = 1 if right and right[0] == "and" else 0
+            for count in range(min(len(previous), len(current) - offset, 30), 4, -1):
+                left = [m.group().strip(".,!?;:\"'()[]{}").casefold() for m in previous[-count:]]
+                pairs = list(zip(left, right[offset : offset + count]))
+                changed = [(a, b) for a, b in pairs if a != b]
+                if len(changed) != 1 or not all(a and b for a, b in pairs):
+                    continue
+                a, b = changed[0]
+                stem = 0
+                while stem < min(len(a), len(b)) and a[stem] == b[stem]:
+                    stem += 1
+                endings = {"", "s", "d", "ed", "es", "ing"}
+                if stem >= 5 and a[stem:] in endings and b[stem:] in endings:
+                    result = result[: previous[-count].start()].rstrip()
+                    break
+        if text:
+            result = f"{result} {text}".strip()
+    return result
 
 
 @router.get("/sessions/{session_id}/voice")
@@ -260,26 +364,40 @@ def voice_transcribe(request, session_id: str):
         if duration > settings.VOICE_TRANSCRIPTION_MAX_DURATION:
             raise HttpError(400, "Audio exceeds the maximum duration")
 
-        async def transcribe():
-            return await asyncio.wait_for(
-                openai_transcription(
-                    data,
-                    media_type,
-                    filename,
-                    model=settings.VOICE_TRANSCRIPTION_MODEL,
-                    request_timeout=settings.VOICE_TRANSCRIPTION_TIMEOUT,
-                ),
-                timeout=settings.VOICE_TRANSCRIPTION_TIMEOUT,
-            )
+        if duration <= CHUNK_SECONDS and len(data) <= PROVIDER_MAX_BYTES:
+            chunks = [(data, media_type, filename, duration)]
+        else:
+            chunks = _chunks(data, demuxer, duration)
 
-        try:
-            response = async_to_sync(transcribe)()
-        except openai.RateLimitError:
-            raise HttpError(429, "Transcription provider rate limit exceeded") from None
-        except Exception:
+        async def transcribe():
+            semaphore = asyncio.Semaphore(CHUNK_CONCURRENCY)
+
+            async def one(chunk):
+                async with semaphore:
+                    return await asyncio.wait_for(
+                        openai_transcription(
+                            *chunk[:3],
+                            model=settings.VOICE_TRANSCRIPTION_MODEL,
+                            request_timeout=settings.VOICE_TRANSCRIPTION_TIMEOUT,
+                        ),
+                        timeout=settings.VOICE_TRANSCRIPTION_TIMEOUT,
+                    )
+
+            return await asyncio.gather(*(one(chunk) for chunk in chunks), return_exceptions=True)
+
+        responses = async_to_sync(transcribe)()
+        # Account for every successful provider call, even if another chunk failed.
+        for chunk, response in zip(chunks, responses):
+            if not isinstance(response, BaseException):
+                _record_transcription(request.auth, session, settings.VOICE_TRANSCRIPTION_MODEL, response, chunk[3])
+        if any(isinstance(response, openai.RateLimitError) for response in responses):
+            raise HttpError(429, "Transcription provider rate limit exceeded")
+        if any(
+            isinstance(response, BaseException) or not isinstance(getattr(response, "text", None), str)
+            for response in responses
+        ):
             # Never log provider exceptions: they may contain request details.
-            raise HttpError(502, "Voice transcription failed") from None
-        _record_transcription(request.auth, session, settings.VOICE_TRANSCRIPTION_MODEL, response, duration)
-        return {"text": response.text}
+            raise HttpError(502, "Voice transcription failed")
+        return {"text": _join_transcripts([response.text for response in responses])}
     finally:
         audio.close()

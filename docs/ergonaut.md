@@ -30,15 +30,19 @@ Resuming is manual, including after a repeated output-limit failure.
 
 In a chat or on the new-thread page, the microphone records only after you press
 it. Stop transcribes the recording into the editable draft; it never sends a message.
-Cancel or Escape discards it. A recording stops automatically at the configured
-duration. The browser needs a secure context, microphone permission and
+Cancel or Escape discards it. Recordings exceeding the server's configured limits
+are rejected; on failure, retry or download the captured audio. If a browser
+produces an unsupported format, download the recording instead of retrying
+transcription. If no audio was captured, retry starts a new recording. The browser
+requests a screen wake lock while recording when supported, and reacquires it
+after returning to a visible tab. The browser needs a secure context, microphone permission and
 MediaRecorder support for WebM, MP4, MP3 or WAV. It selects a supported format
 instead of the browser default; browsers that can only record Ogg cannot use
 voice input. The voice API rejects Ogg; it accepts WebM, MP4/M4A, MP3 and WAV
 with matching content types and audio signatures. The control is unavailable
 until voice transcription is enabled and an OpenAI API key is configured.
 The compact control shows a red recording indicator and timer, a spinner while
-transcribing, or an error icon with retry and dismiss controls. When idle it
+transcribing, or an error icon with dismiss and, where applicable, retry controls. When idle it
 occupies only the microphone button's width, and expands for status controls as
 needed. The microphone's tooltip and accessible label describe OpenAI processing;
 error details are available in the icon's tooltip and accessible label.
@@ -64,9 +68,17 @@ transcription price table. The ledger stores no audio or transcript. Check
 and availability before use.
 
 Enable with `VOICE_TRANSCRIPTION_ENABLED=true` and `OPENAI_API_KEY`. The
-server requires `ffprobe` on PATH to inspect recordings; the release image
-includes it. Startup logs and Django system checks warn if voice is enabled and
-it is missing.
+server requires `ffprobe` and `ffmpeg` on PATH to inspect and split recordings;
+the release image includes them. Startup logs and Django system checks warn if
+`ffprobe` is missing. Long or oversized provider inputs are converted to
+overlapping five-minute chunks and transcribed in order. Matching multi-word
+overlaps and some near-matches differing by a word ending are deduplicated;
+ambiguous overlaps may remain repeated, and repeated speech at a join can be
+mistaken for overlap. If any chunk fails, the request fails rather than
+returning a partial transcript. Successful
+provider calls are recorded individually, including overlaps and calls in a
+failed request. The HTTP connection must remain open through processing; any
+reverse proxy request and upload limits must accommodate the configured limits.
 Limits apply per user across
 sessions in fixed UTC minute and day windows, not rolling windows. An authorized
 and enabled request consumes an attempt before upload validation and provider
@@ -82,9 +94,9 @@ is rejected with HTTP 503 rather than bypassing the limit. Settings:
 | `VOICE_TRANSCRIPTION_ENABLED` | `false` | Enable the chat microphone |
 | `VOICE_TRANSCRIPTION_PROVIDER` | `openai` | Transcription provider |
 | `VOICE_TRANSCRIPTION_MODEL` | `gpt-transcribe` | OpenAI transcription model |
-| `VOICE_TRANSCRIPTION_MAX_DURATION` | `120` | Maximum recording duration in seconds |
-| `VOICE_TRANSCRIPTION_MAX_BYTES` | `10485760` | Maximum uploaded bytes |
-| `VOICE_TRANSCRIPTION_TIMEOUT` | `30` | Provider timeout in seconds |
+| `VOICE_TRANSCRIPTION_MAX_DURATION` | `3600` | Maximum recording duration in seconds |
+| `VOICE_TRANSCRIPTION_MAX_BYTES` | `188743680` | Maximum uploaded bytes |
+| `VOICE_TRANSCRIPTION_TIMEOUT` | `30` | Timeout per provider chunk in seconds |
 | `VOICE_TRANSCRIPTION_PER_MINUTE` | `5` | Attempts per user per minute |
 | `VOICE_TRANSCRIPTION_PER_DAY` | `100` | Attempts per user per UTC day |
 

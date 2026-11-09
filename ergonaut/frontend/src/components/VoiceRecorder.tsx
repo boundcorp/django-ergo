@@ -25,6 +25,10 @@ function recordingType() {
   return recordingTypes.find(type => MediaRecorder.isTypeSupported(type))
 }
 
+function acceptedType(type: string) {
+  return acceptedTypes.includes(type.split(';', 1)[0].trim().toLowerCase())
+}
+
 /** Insert dictated text at the composer's selection, just like typing. */
 export function ComposerVoice({
   sessionId,
@@ -70,7 +74,9 @@ export function VoiceRecorder({
   const [phase, setPhase] = useState<Phase>('idle')
   const [error, setError] = useState('')
   const [elapsed, setElapsed] = useState(0)
-  const [limitReached, setLimitReached] = useState(false)
+  const wakeLock = useRef<WakeLockSentinel | null>(null)
+  const wakeRequest = useRef(false)
+  const wakeRetry = useRef(false)
   const stream = useRef<MediaStream | null>(null)
   const recorder = useRef<MediaRecorder | null>(null)
   const upload = useRef<AbortController | null>(null)
@@ -83,7 +89,48 @@ export function VoiceRecorder({
   const onTextRef = useRef(onText)
   onTextRef.current = onText
 
+  async function acquireWakeLock(token: number) {
+    if (!navigator.wakeLock || document.visibilityState !== 'visible' || wakeLock.current || wakeRequest.current) return
+    wakeRequest.current = true
+    wakeRetry.current = false
+    try {
+      const lock = await navigator.wakeLock.request('screen')
+      if (
+        generation.current !== token ||
+        recorder.current?.state !== 'recording' ||
+        document.visibilityState !== 'visible'
+      ) {
+        await lock.release()
+      } else {
+        wakeLock.current = lock
+        lock.addEventListener('release', () => {
+          if (wakeLock.current !== lock) return
+          wakeLock.current = null
+          if (wakeRetry.current && !wakeRequest.current && recorder.current?.state === 'recording') {
+            wakeRetry.current = false
+            void acquireWakeLock(generation.current)
+          }
+        })
+      }
+    } catch {
+      // Wake locks are optional; recording must work without them.
+    } finally {
+      wakeRequest.current = false
+      if ((generation.current !== token || wakeRetry.current) && recorder.current?.state === 'recording') {
+        void acquireWakeLock(generation.current)
+      }
+    }
+  }
+
+  function releaseWakeLock() {
+    wakeRetry.current = false
+    const lock = wakeLock.current
+    wakeLock.current = null
+    if (lock) void lock.release().catch(() => {})
+  }
+
   function release() {
+    releaseWakeLock()
     clearInterval(timer.current)
     timer.current = undefined
     stream.current?.getTracks().forEach(track => track.stop())
@@ -154,11 +201,15 @@ export function VoiceRecorder({
   }, [phase])
 
   useEffect(() => {
-    if (phase === 'idle') return
-    const onPageHide = () => cancel()
-    window.addEventListener('pagehide', onPageHide)
-    return () => window.removeEventListener('pagehide', onPageHide)
-  }, [phase])
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && recorder.current?.state === 'recording') {
+        if (wakeRequest.current || wakeLock.current) wakeRetry.current = true
+        else void acquireWakeLock(generation.current)
+      }
+    }
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    return () => document.removeEventListener('visibilitychange', onVisibilityChange)
+  }, [])
 
   async function transcribe(blob: Blob, token: number) {
     const controller = new AbortController()
@@ -183,7 +234,7 @@ export function VoiceRecorder({
   async function start() {
     const token = ++generation.current
     setError('')
-    setLimitReached(false)
+    audio.current = null
     setElapsed(0)
     setPhase('permission')
     const mimeType = recordingType()
@@ -202,42 +253,52 @@ export function VoiceRecorder({
       const active = new MediaRecorder(media, { mimeType })
       recorder.current = active
       const chunks: Blob[] = []
+      let recordingFailed = false
       active.ondataavailable = event => {
         if (event.data.size) chunks.push(event.data)
       }
       active.onerror = () => {
         if (generation.current !== token) return
-        generation.current++
-        recorder.current = null
-        if (active.state !== 'inactive') active.stop()
+        recordingFailed = true
         release()
-        setError('Recording failed. Please try again.')
-        setPhase('error')
+        if (active.state !== 'inactive') active.stop()
       }
       active.onstop = () => {
         if (generation.current !== token) return
         release()
         recorder.current = null
         const actualType = active.mimeType || mimeType
-        if (!acceptedTypes.includes(actualType.split(';', 1)[0].trim().toLowerCase())) {
+        const blob = new Blob(chunks, { type: actualType })
+        audio.current = blob.size ? blob : null
+        if (recordingFailed) {
+          setError(
+            !audio.current
+              ? 'Recording failed without capturing audio. Try recording again.'
+              : acceptedType(audio.current.type)
+                ? 'Recording failed. Retry transcription or download the captured audio.'
+                : 'Recording failed with an unsupported audio format. Download the captured audio.',
+          )
+          setPhase('error')
+          return
+        }
+        if (!acceptedType(actualType)) {
           setError('Your browser recorded an unsupported audio format.')
           setPhase('error')
           return
         }
-        const blob = new Blob(chunks, { type: actualType })
-        audio.current = blob
+        if (!blob.size) {
+          setError('No audio was captured. Try recording again.')
+          setPhase('error')
+          return
+        }
         void transcribe(blob, token)
       }
-      active.start()
+      active.start(1000)
       setPhase('recording')
+      void acquireWakeLock(token)
       const started = Date.now()
       timer.current = window.setInterval(() => {
-        const duration = (Date.now() - started) / 1000
-        setElapsed(Math.min(Math.floor(duration), config!.max_duration))
-        if (duration >= config!.max_duration && active.state !== 'inactive') {
-          setLimitReached(true)
-          active.stop()
-        }
+        setElapsed(Math.floor((Date.now() - started) / 1000))
       }, 250)
     } catch (err) {
       if (generation.current !== token) return
@@ -263,7 +324,7 @@ export function VoiceRecorder({
       : phase === 'recording'
         ? 'Recording. Audio will be sent to OpenAI for transcription.'
         : phase === 'processing'
-          ? `${limitReached ? 'Maximum duration reached. ' : ''}Transcribing audio with OpenAI.`
+          ? 'Transcribing audio with OpenAI.'
           : phase === 'error'
             ? error
             : ''
@@ -305,7 +366,10 @@ export function VoiceRecorder({
           title="Stop recording"
           aria-pressed="true"
           className={buttonClass}
-          onClick={() => recorder.current?.stop()}
+          onClick={() => {
+            releaseWakeLock()
+            recorder.current?.stop()
+          }}
         >
           <span aria-hidden="true" className="h-3 w-3 rounded-full bg-red-500 motion-safe:animate-pulse" />
         </button>
@@ -329,7 +393,7 @@ export function VoiceRecorder({
           {String(Math.floor(elapsed / 60)).padStart(2, '0')}:{String(elapsed % 60).padStart(2, '0')}
         </span>
       )}
-      {phase === 'error' && (
+      {phase === 'error' && (!audio.current || acceptedType(audio.current.type)) && (
         <button
           ref={action}
           type="button"
@@ -341,9 +405,48 @@ export function VoiceRecorder({
           <span aria-hidden="true">↻</span>
         </button>
       )}
+      {phase === 'error' && audio.current && (
+        <button
+          type="button"
+          className={buttonClass}
+          aria-label="Download recording"
+          title="Download recording"
+          onClick={() => {
+            const blob = audio.current
+            if (!blob) return
+            const url = URL.createObjectURL(blob)
+            const link = document.createElement('a')
+            const type = blob.type.split(';', 1)[0]
+            const extension =
+              type.includes('mp4') || type.includes('m4a')
+                ? 'm4a'
+                : type.includes('wav')
+                  ? 'wav'
+                  : type.includes('mpeg') || type.includes('mp3')
+                    ? 'mp3'
+                    : type.includes('webm')
+                      ? 'webm'
+                      : type.includes('ogg')
+                        ? 'ogg'
+                        : 'bin'
+            link.href = url
+            link.download = `recording.${extension}`
+            link.click()
+            window.setTimeout(() => URL.revokeObjectURL(url), 0)
+          }}
+        >
+          <span aria-hidden="true">↓</span>
+        </button>
+      )}
       {phase !== 'idle' && (
         <button
-          ref={phase === 'permission' || phase === 'processing' ? action : undefined}
+          ref={
+            phase === 'permission' ||
+            phase === 'processing' ||
+            (phase === 'error' && !!audio.current && !acceptedType(audio.current.type))
+              ? action
+              : undefined
+          }
           type="button"
           className={buttonClass}
           aria-label={phase === 'error' ? 'Dismiss' : 'Cancel'}

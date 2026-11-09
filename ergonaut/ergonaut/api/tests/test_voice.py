@@ -1,5 +1,9 @@
+import array
 import io
 import json
+import math
+import shutil
+import subprocess
 import wave
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -7,7 +11,7 @@ from unittest.mock import AsyncMock
 import pytest
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import Client
-from django_ergo.conversation.models import ConversationAttachment, ConversationSession
+from django_ergo.conversation.models import ConversationAttachment, ConversationSession, StructuredCall
 
 from ergonaut.api import voice
 
@@ -219,3 +223,135 @@ def test_ogg_is_rejected_before_probing_or_provider(setup_voice, monkeypatch, mi
     assert response.json() == {"detail": "Unsupported or invalid audio format"}
     assert not probe.called
     assert not transcribe.called
+
+
+def test_chunk_failure_returns_no_partial_text_but_accounts_success(setup_voice, monkeypatch):
+    _, client, url = setup_voice
+    monkeypatch.setattr(voice, "_duration", lambda *_: 601)
+    monkeypatch.setattr(
+        voice,
+        "_chunks",
+        lambda *_: [(b"one", "audio/mpeg", "one.mp3", 300), (b"two", "audio/mpeg", "two.mp3", 300)],
+    )
+    provider = AsyncMock(side_effect=[SimpleNamespace(text="private words", usage=None), RuntimeError("secret")])
+    monkeypatch.setattr(voice, "openai_transcription", provider)
+    response = client.post(url, {"audio": audio_file()})
+    assert response.status_code == 502
+    assert response.json() == {"detail": "Voice transcription failed"}
+    assert StructuredCall.objects.filter(kind="voice_transcription").count() == 1
+
+
+def test_join_transcripts_preserves_uncertain_boundaries():
+    assert voice._join_transcripts(["one two three", "Two three four", "five"]) == "one two three four five"
+    assert voice._join_transcripts(["a word", "word again"]) == "a word word again"
+
+
+def test_join_actual_provider_boundary_outputs():
+    # Synthesized source contained each numbered passage once.
+    first = "This is passage number 37. The curious astronaut carefully observes."
+    second = (
+        "And the curious astronaut carefully observed the quiet forest while the river flows beneath the ancient bridge. "
+        "This is passage number 73."
+    )
+    third = "This is passage number 73. The curious astronaut carefully observes the quiet forest while the"
+    fourth = (
+        "Astronaut carefully observed the quiet forest while the river flows beneath the ancient bridge. "
+        "This is passage number 120. The closing signal is Violet Mountain."
+    )
+    assert voice._join_transcripts([first, second, third, fourth]) == (
+        "This is passage number 37. And the curious astronaut carefully observed the quiet forest while the river "
+        "flows beneath the ancient bridge. This is passage number 73. The curious Astronaut carefully observed "
+        "the quiet forest while the river flows beneath the ancient bridge. "
+        "This is passage number 120. The closing signal is Violet Mountain."
+    )
+    assert voice._join_transcripts(["we say go go", "go go again"]) == "we say go go again"
+    assert voice._join_transcripts(["please go now", "go now go now"]) == "please go now go now"
+    assert voice._join_transcripts(["the red fox jumped over", "the red fox slept over there"]) == (
+        "the red fox jumped over the red fox slept over there"
+    )
+
+
+def test_chunks_cover_boundaries_and_provider_limits(monkeypatch):
+    calls = []
+
+    def run(args, **kwargs):
+        calls.append((float(args[args.index("-ss") + 1]), float(args[args.index("-t") + 1])))
+        return SimpleNamespace(stdout=b"encoded mp3")
+
+    monkeypatch.setattr(voice.subprocess, "run", run)
+    chunks = voice._chunks(b"audio", "matroska", 1801)
+    assert calls == [(0, 300), (297, 300), (594, 300), (891, 300), (1188, 300), (1485, 300), (1782, 19)]
+    assert [chunk[3] for chunk in chunks] == [length for _, length in calls]
+
+
+def test_long_real_recording_through_endpoint(setup_voice, monkeypatch):
+    if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
+        pytest.skip("ffmpeg and ffprobe are required")
+    _, client, url = setup_voice
+    audio = subprocess.run(
+        [
+            "ffmpeg",
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "aevalsrc=sin(2*PI*if(lt(t\\,200)\\,400\\,if(lt(t\\,500)\\,600\\,800))*t):s=8000:d=610",
+            "-c:a",
+            "libopus",
+            "-f",
+            "webm",
+            "pipe:1",
+        ],
+        capture_output=True,
+        check=True,
+        timeout=120,
+    ).stdout
+    seen = []
+
+    async def provider(data, mime, filename, **kwargs):
+        assert (mime, filename) == ("audio/mpeg", "audio.mp3")
+        duration = voice._duration(data, "mp3")
+        pcm = subprocess.run(
+            [
+                "ffmpeg",
+                "-v",
+                "error",
+                "-f",
+                "mp3",
+                "-i",
+                "pipe:0",
+                "-t",
+                "1",
+                "-f",
+                "s16le",
+                "-ac",
+                "1",
+                "-ar",
+                "8000",
+                "pipe:1",
+            ],
+            input=data,
+            capture_output=True,
+            check=True,
+            timeout=20,
+        ).stdout
+        samples = array.array("h", pcm)
+
+        def power(frequency):
+            real = sum(sample * math.cos(2 * math.pi * frequency * i / 8000) for i, sample in enumerate(samples))
+            imag = sum(sample * math.sin(2 * math.pi * frequency * i / 8000) for i, sample in enumerate(samples))
+            return real * real + imag * imag
+
+        frequency = max((400, 600, 800), key=power)
+        seen.append((duration, frequency))
+        return SimpleNamespace(text=f"frequency {frequency}", usage=None)
+
+    monkeypatch.setattr(voice, "openai_transcription", provider)
+    response = client.post(url, {"audio": audio_file(audio, content_type="audio/webm")})
+    assert response.status_code == 200
+    assert len(seen) == 3
+    assert [frequency for _, frequency in seen] == [400, 600, 800]
+    assert [round(duration) for duration, _ in seen] == [300, 300, 16]
+    assert response.json()["text"] == " ".join(f"frequency {frequency}" for _, frequency in seen)
+    assert StructuredCall.objects.filter(kind="voice_transcription").count() == 3
