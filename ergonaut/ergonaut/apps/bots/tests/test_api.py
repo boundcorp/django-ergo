@@ -420,6 +420,62 @@ def test_upload_list_download_and_delete_session_files(client, cook, use_bots, s
 
 
 @pytest.mark.django_db(transaction=True)
+def test_files_shared_from_another_chat_and_image_thumbnails(client, cook, use_bots, settings, tmp_path):
+    from io import BytesIO
+
+    from django_ergo.conversation.attachments import save_session_file
+    from django_ergo.conversation.models import ConversationSession, ThreadMessage
+    from PIL import Image
+
+    settings.MEDIA_ROOT = str(tmp_path / "media")
+    use_bots(say("hi"))
+    root = post(client, "/api/bots/kitchen/root").json()
+    here = ConversationSession.objects.get(id=root["id"])
+    there = ConversationSession.objects.create(user=cook, bot_name="kitchen", metadata={"bot_role": "thread"})
+    plan = save_session_file(there, "plan.md", b"# Plan", media_type="text/markdown", source="bot")
+    picture = BytesIO()
+    Image.new("RGB", (1200, 800), "purple").save(picture, "PNG")
+    photo = save_session_file(here, "photo.png", picture.getvalue(), media_type="image/png", source="upload")
+    ref = {
+        "id": str(plan.id),
+        "filename": "plan.md",
+        "media_type": "text/markdown",
+        "size": 6,
+        "session": str(there.id),
+    }
+    ThreadMessage.objects.create(
+        sender_session=there,
+        recipient_session=here,
+        text="Plan attached",
+        metadata={
+            "attachments": [ref, {"id": "not-a-uuid"}],
+            "message_provenance": {"kind": "message", "origin": {"label": "kitchen · Planning"}},
+        },
+    )
+
+    # A file another chat shared shows here too, marked with where it lives.
+    listed = client.get(f"/api/sessions/{root['id']}/attachments").json()
+    assert [f["filename"] for f in listed] == ["photo.png", "plan.md"]
+    shared = listed[1]
+    assert shared["shared_from"]["session_id"] == str(there.id)
+    assert shared["shared_from"]["label"] == "kitchen · Planning"
+    assert listed[0]["shared_from"] is None
+    assert client.get(f"/api/attachments/{shared['id']}/download").status_code == 200
+
+    # Images get a small preview; other files don't.
+    assert shared["thumbnail"] == ""
+    thumb = client.get(listed[0]["thumbnail"])
+    assert thumb.status_code == 200, thumb.content
+    assert max(Image.open(BytesIO(thumb.content)).size) == 320
+    assert client.get(f"/api/attachments/{plan.id}/thumbnail").status_code == 404
+
+    # Someone else sees neither.
+    other = get_user_model().objects.create_user("other", "o@example.com", "pw")
+    client.force_login(other)
+    assert client.get(f"/api/attachments/{photo.id}/thumbnail").status_code == 404
+
+
+@pytest.mark.django_db(transaction=True)
 def test_a_queued_turn_returns_at_once(client, cook, use_bots, monkeypatch, settings):
     from ergonaut.apps.bots import tasks
 

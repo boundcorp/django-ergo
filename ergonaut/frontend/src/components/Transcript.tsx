@@ -478,7 +478,8 @@ function placeFiles(messages: Message[], files: AttachmentFile[], complete: bool
   // Only part of a long chat is loaded: files from before it wait until it is.
   const loadedFrom = !complete && stamped.length ? Date.parse(stamped[0].timestamp!) : -Infinity
   for (const file of files) {
-    if (file.source !== 'bot' || file.message_sequence != null || file.archived_at || shown.has(file.id)) continue
+    if (file.source !== 'bot' || file.message_sequence != null || file.archived_at || file.shared_from) continue
+    if (shown.has(file.id)) continue
     const created = Date.parse(file.created_at)
     if (created < loadedFrom) continue
     let line = messages.length ? messages[messages.length - 1].line : -1

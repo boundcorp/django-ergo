@@ -191,6 +191,14 @@ only files in its own session. Archiving is reversible, so neither tool asks
 for approval. Ergonaut's Files panel hides archived files behind a "Show N
 archived" toggle.
 
+Ergonaut's Files panel lists the chat's own files and, under "Shared with this
+chat", files another chat shared with it (`ergo_thread_send` attachments,
+forwards and events). Those stay in the sender's chat, so they open and
+download from here but are pinned or deleted there. Images show a preview
+(`/api/attachments/<id>/thumbnail`, downscaled with Pillow); the panel filters
+by type (images as a grid, docs, media) and searches by name once a chat has
+a few files.
+
 A tool that replaces its own earlier files (say, a fresh render of the same
 board) should archive the old ones rather than delete them. Tool results in
 history point at an image by file id (`image_ref`), so a deleted file leaves a
