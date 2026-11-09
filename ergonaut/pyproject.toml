@@ -34,7 +34,7 @@ pytest = "*"
 pytest-django = "*"
 pytest-asyncio = "*"
 # Ergo itself. Dev installs it editable from the parent folder (make venv).
-django-ergo = {extras = ["legacy", "bots"], version = "*"}
+django-ergo = {extras = ["legacy", "bots", "images"], version = "*"}
 anthropic = "*"
 
 [tool.poetry.scripts]
