@@ -1343,7 +1343,12 @@ keeps the transcript, a heartbeat and the exit status in `<job>/.ergo/`, so a
 worker in another process or pod that shares the folder can watch it. A run
 whose heartbeat stops (its pod restarted) fails the worker. A final message
 that starts `NEEDS_INPUT:` reaches the chat as a question; `ergo_agent_reply`
-resumes the same Claude session with the answer. Before every run,
+resumes the same Claude session with the answer (Codex can't be resumed, so
+the bot starts a new run with the answer in the brief). A worker follows the
+run it started and the runs that answered its questions; once another
+`ergo_agent_start` begins a fresh run in the same folder, the older worker
+closes (done, or failed if its run never finished) and stops repeating the
+newer run's questions. Before every run,
 including a resumed one, the job's copy of the template is brought up to
 date: files it lacks are copied in, and files still exactly as the template
 gave them (hashes in `.ergo/template.json`) get the template's new version;
