@@ -50,7 +50,28 @@ def model_rows(rows) -> list:
         if not is_response_copy(row, previous):
             kept.append(row)
         previous = row
-    return kept
+    return _defer_passive_until_tool_results(kept)
+
+
+def _defer_passive_until_tool_results(rows) -> list:
+    """Keep passive observations out of a provider's tool-use/result pair."""
+    if not any(row.provenance.get("kind") == "telegram_passive" for row in rows):
+        return rows
+    ordered, deferred, outstanding = [], [], set()
+    for row in rows:
+        if outstanding and row.provenance.get("kind") == "telegram_passive":
+            deferred.append(row)
+            continue
+        ordered.append(row)
+        for block in row.content_blocks.all():
+            if block.block_type == "tool_use":
+                outstanding.add(block.tool_use_id)
+            elif block.block_type == "tool_result":
+                outstanding.discard(block.tool_result_for)
+        if not outstanding and deferred:
+            ordered.extend(deferred)
+            deferred.clear()
+    return ordered
 
 
 def next_sequence(session) -> int:

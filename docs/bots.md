@@ -1527,6 +1527,7 @@ become `[image omitted: name (id=...)]`, and the bot can look again by id.
       all # all, private (1:1 chats only), or mentions (in groups,
       # only @mentions of the bot and replies to it)
   target_thread: Telegram # every chat goes into one shared thread with this title
+  passive_group_chats: [-100123] # optional group/supergroup chat IDs to capture as context
   owner: lee # the thread's owner, a username or email (default: the first admin)
   replies:
     auto # auto: answers go back to the chat; tool: the bot sends
@@ -1606,7 +1607,45 @@ start, and an archived thread comes back with the next message.
 Telegram user or chat ids and `@usernames`; by default it is whoever
 `users` lists. `respond_to.messages` is `all`, `private` (1:1 chats only),
 or `mentions`: in a group only messages that @mention the bot or reply to
-it get a turn, while 1:1 chats always do.
+it get a turn. `tags` is stricter: only an explicit @mention of the bot
+starts a group turn; a reply alone does not. In all modes 1:1 chats always
+pass the message filter (sender authorization still applies).
+
+**Passive group context.** `passive_group_chats` is an opt-in list of
+explicit Telegram group or supergroup chat IDs and requires `target_thread`.
+For Storytime (`@storytime69bot`), use the actual numeric sender and group IDs:
+
+```yaml
+plugins:
+  - name: telegram
+    token_env: STORYTIME_TELEGRAM_TOKEN
+    users: {LEE_TELEGRAM_ID: lee}
+    owner: lee
+    target_thread: Telegram
+    passive_group_chats: [GROUP_CHAT_ID]
+    respond_to:
+      users: [LEE_TELEGRAM_ID]
+      messages: tags
+```
+
+Replace both placeholders with numeric IDs; do not put a token in the bot
+configuration. Disable the Telegram bot's group privacy mode so Telegram
+delivers ordinary group messages. Telegram cannot backfill messages from before
+the bot joined the group.
+
+In an opted-in group, messages that do not otherwise get a response are
+stored in the target thread as user messages, without starting a bot turn or
+changing the chat used for replies. They retain the real Telegram author and
+`telegram_passive` provenance, including the originating chat and message IDs
+and, when present, the replied-to message ID. Text or captions and textual
+attachment descriptors are captured; attachments are not downloaded or
+transcribed, and passive capture does not fetch author profiles. This is
+untrusted context, not an instruction to the bot or authorization to act.
+Active response authorization in these groups matches the sender only, never
+the group ID; configure `respond_to.users` accordingly. Messages in opted-in
+groups are processed individually, not batched as albums or photo collections,
+so each message is authorized independently. Without the opt-in, existing
+message handling and defaults are unchanged.
 
 **Replies.** With `replies: auto` the turn's answer goes back to the chat
 it came from. With `replies: tool` it stays in the app, and the bot writes
