@@ -694,7 +694,7 @@ class LocalShellPlugin(BotPlugin):
                 return AgentCheck("running", progress=clip(last, 120))
             return AgentCheck(
                 "failed",
-                error=f"Job {folder.name}'s run stopped without finishing (Ergonaut restarted?)",
+                error=f"Job {folder.name}'s run stopped without finishing: its supervisor died (Ergonaut restarted, or its pod ran out of memory)",
             )
         try:
             self.record_usage(ctx, folder, agent)
@@ -702,6 +702,13 @@ class LocalShellPlugin(BotPlugin):
             log.warning("Couldn't record usage for job %s", folder.name, exc_info=True)
         ended = state["exit"]
         text, agent_error = self.final_text(folder, number, agent, events)
+        if ended.get("reason") == "killed":
+            return AgentCheck(
+                "failed",
+                error=f"Job {folder.name}'s agent was killed (SIGKILL), most likely for "
+                "running out of memory. Make the step that was running use less memory "
+                "before starting it again.",
+            )
         if ended.get("reason") in ("timeout", "stopped"):
             how = "timed out" if ended["reason"] == "timeout" else "was stopped"
             return AgentCheck(

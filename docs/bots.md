@@ -1345,7 +1345,10 @@ there headless (`claude -p --output-format stream-json`, or `codex exec
 --json`). A small supervisor runs it detached in its own process group and
 keeps the transcript, a heartbeat and the exit status in `<job>/.ergo/`, so a
 worker in another process or pod that shares the folder can watch it. A run
-whose heartbeat stops (its pod restarted) fails the worker. A final message
+whose heartbeat stops (its pod restarted) fails the worker. The agent and
+everything it starts get the highest OOM score, so a job that runs its pod out
+of memory is killed instead of the Ergonaut process that launched it, and the
+worker fails saying so. A final message
 that starts `NEEDS_INPUT:` reaches the chat as a question; `ergo_agent_reply`
 resumes the same Claude session with the answer (Codex can't be resumed, so
 the bot starts a new run with the answer in the brief). A worker follows the

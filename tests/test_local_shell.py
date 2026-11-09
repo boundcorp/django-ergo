@@ -500,3 +500,36 @@ def test_a_fresh_run_in_the_same_folder_closes_the_older_worker(tmp_path):
     (meta / "run-1.json").write_text(json.dumps({"agent": "claude"}))
     dead = plugin.check(Ctx(), first)
     assert dead.status == "failed" and "Run 2 has since started" in dead.error
+
+
+def test_an_agent_killed_for_memory_is_reported_and_its_supervisor_survives(tmp_path):
+    """The agent gets the top OOM score, so a job that runs the pod out of
+    memory loses the agent, not Ergonaut; the supervisor records the kill."""
+    from django_ergo.plugins.local_shell import LocalShellPlugin
+
+    agent = tmp_path / "hog"
+    agent.write_text(
+        f"#!{sys.executable}\n"
+        "import os, signal\n"
+        "print(open('/proc/self/oom_score_adj').read().strip(), file=open('score', 'w'))\n"
+        "os.kill(os.getpid(), signal.SIGKILL)\n"
+    )
+    agent.chmod(0o755)
+    plugin = LocalShellPlugin(None, {"executables": {"claude": str(agent)}})
+    plugin.on_load()
+    folder = tmp_path / "job"
+    folder.mkdir()
+    plugin.launch(None, folder, "claude", [str(agent)], 1)
+    wait_for_exit(folder, 1)
+    assert (folder / "score").read_text().strip() == "1000"
+    ended = json.loads((folder / ".ergo" / "run-1.exit.json").read_text())
+    assert ended["reason"] == "killed"
+
+    class Ctx:
+        session = None
+
+        def activity(self, *args, **kwargs):
+            pass
+
+    check = plugin.check(Ctx(), {"dir": str(folder), "agent": "claude", "run": 1})
+    assert check.status == "failed" and "out of memory" in check.error

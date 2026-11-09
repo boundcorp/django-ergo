@@ -11,6 +11,11 @@ watcher in another process (or pod) can tell it's alive. A ``.ergo/stop``
 file, or the timeout, stops the agent's process group. When it ends it writes
 ``.ergo/run-<n>.exit.json``: ``{"code", "reason", "ended_at"}``.
 
+The agent and everything it starts get the highest OOM score, so when a job
+(an ffmpeg pass, say) runs the container out of memory the kernel kills the
+job, not the Ergonaut process that launched it; this supervisor survives and
+records the kill (``reason: "killed"``).
+
 Standard library only, so it runs wherever Python 3 does.
 """
 
@@ -27,6 +32,14 @@ from pathlib import Path
 
 BEAT_SECONDS = 5
 KILL_GRACE_SECONDS = 10
+OOM_SCORE_ADJ = Path("/proc/self/oom_score_adj")
+
+
+def prefer_oom_kill() -> None:
+    """Run in the agent's child before exec: be the first thing the OOM killer
+    picks. Raising one's own score needs no privileges; it's best effort."""
+    with contextlib.suppress(OSError):
+        OOM_SCORE_ADJ.write_text("1000")
 
 
 def write_json(path: Path, value: dict) -> None:
@@ -68,6 +81,7 @@ def main(folder: str, number: str) -> int:
                 stdout=out,
                 stderr=err,
                 start_new_session=True,
+                preexec_fn=prefer_oom_kill,  # noqa: PLW1509 — writes one /proc file, no locks
             )
         except OSError as exc:
             err.write(f"Could not start agent: {exc}\n".encode())
@@ -90,6 +104,8 @@ def main(folder: str, number: str) -> int:
             with contextlib.suppress(subprocess.TimeoutExpired):
                 proc.wait(timeout=BEAT_SECONDS)
     code = proc.poll()
+    if not reason and code == -signal.SIGKILL:
+        reason = "killed"  # most likely the OOM killer (see prefer_oom_kill)
     write_json(
         meta / f"run-{number}.exit.json",
         {"code": code, "reason": reason or "exited", "ended_at": time.time()},
