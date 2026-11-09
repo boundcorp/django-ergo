@@ -877,7 +877,13 @@ async def _run_loop(run: _Run) -> StructuredCallResult:  # noqa: C901, PLR0912, 
                 if stop in _MAX_TOKENS_STOPS:
                     # The reply was cut off, so this call's arguments may be
                     # incomplete (often {}): never run or ask approval for it.
-                    results.append((tool_id, _TRUNCATED_TOOL_CALL, True))
+                    chars = event.tool_use.get("argument_chars")
+                    detail = (
+                        f" Received {chars} argument characters before truncation."
+                        if chars is not None
+                        else ""
+                    )
+                    results.append((tool_id, _TRUNCATED_TOOL_CALL + detail, True))
                     continue
                 if event.tool_use.get("invalid_arguments"):
                     # The engine couldn't parse the arguments: don't guess.
@@ -929,10 +935,14 @@ async def _run_loop(run: _Run) -> StructuredCallResult:  # noqa: C901, PLR0912, 
             continue
 
         if stop in _MAX_TOKENS_STOPS:
+            budget = getattr(transcript.engine, "max_tokens", None)
+            limit = f" ({budget} tokens)" if budget is not None else ""
             _fail(
                 call,
-                "Model hit its max_tokens limit before finishing; "
-                "raise StructuredCallSpec.max_tokens",
+                "The model's response was cut off at the max_tokens output "
+                f"limit{limit}. The unfinished tool call was not saved. Write "
+                "long content in smaller pieces: one file per call, and split "
+                "documents into parts of about 2,000 words.",
                 "model",
             )
             finished = True

@@ -475,14 +475,21 @@ async def test_wrap_up_spends_the_last_turn_on_the_answer(user):
     assert "last step" not in json.dumps(calls[0]["system"])
 
 
-async def test_max_tokens_stop_fails(user):
+@pytest.mark.parametrize("budget", [512, 77])
+async def test_max_tokens_stop_fails(user, budget):
     engine = claude_engine(claude_text("truncated", stop="max_tokens"))
+    engine.max_tokens = budget
     spec = StructuredCallSpec(kind="planner", response_model=Plan)
 
     result = await run_structured_call(spec, "Plan", user=user, engine=engine)
 
     assert result.status == StructuredCallStatus.FAILED
-    assert "max_tokens" in result.error
+    assert result.error == (
+        "The model's response was cut off at the max_tokens output "
+        f"limit ({budget} tokens). The unfinished tool call was not saved. Write "
+        "long content in smaller pieces: one file per call, and split "
+        "documents into parts of about 2,000 words."
+    )
 
 
 async def test_truncated_tool_call_is_not_run(user):
@@ -503,15 +510,21 @@ async def test_truncated_tool_call_is_not_run(user):
 
 
 @pytest.mark.parametrize(
-    ("finish", "message"),
-    [("length", "output token limit"), ("tool_calls", "valid JSON object")],
+    ("finish", "raw", "message"),
+    [
+        ("length", '{"q": "unterminated', "Received 19 argument characters"),
+        ("length", "", "Received 0 argument characters"),
+        ("tool_calls", '{"q": "unterminated', "valid JSON object"),
+    ],
 )
-async def test_unparseable_openai_tool_arguments_are_not_run(user, finish, message):
+async def test_unparseable_openai_tool_arguments_are_not_run(
+    user, finish, raw, message
+):
     # A chat completions reply cut off mid-arguments (or bad JSON from the
     # model) used to fail the whole turn with a JSONDecodeError.
     engine = OpenAIAPIEngine(config={"model": "gpt-test"})
     engine._client = FakeOpenAIClient(
-        openai_tool("lookup", None, raw='{"q": "unterminated', finish=finish),
+        openai_tool("lookup", None, raw=raw, finish=finish),
         openai_tool("submit_output", VALID_PLAN, call_id="call_2"),
     )
     toolkit = LookupToolkit()
@@ -522,8 +535,7 @@ async def test_unparseable_openai_tool_arguments_are_not_run(user, finish, messa
     assert result.ok
     assert toolkit.calls == []
     replay = engine._client.calls[1]["messages"]
-    # The broken call is sent back with arguments the API accepts.
-    assert replay[-2]["tool_calls"][0]["function"]["arguments"] == "{}"
+    assert replay[-1]["tool_call_id"] == "call_1"
     assert message in replay[-1]["content"]
 
 

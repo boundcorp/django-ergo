@@ -332,12 +332,6 @@ class _Stream:
             self.blocks[event["index"]] = dict(event["content_block"])
         elif kind == "content_block_delta":
             self._delta(event["index"], event["delta"])
-        elif kind == "content_block_stop":
-            index = event["index"]
-            if index in self.partial_json:
-                self.blocks[index]["input"] = json.loads(
-                    self.partial_json.pop(index) or "{}"
-                )
         elif kind == "message_delta":
             delta = event.get("delta") or {}
             self.stop_reason = delta.get("stop_reason")
@@ -361,7 +355,7 @@ class _Stream:
 
     def response(self, model: str) -> SimpleNamespace:
         content = []
-        for _, block in sorted(self.blocks.items()):
+        for index, block in sorted(self.blocks.items()):
             kind = block.get("type")
             if kind == "text":
                 content.append(SimpleNamespace(type="text", text=block.get("text", "")))
@@ -371,12 +365,25 @@ class _Stream:
                 )
             elif kind == "tool_use":
                 name = block["name"].removeprefix(TOOL_PREFIX)
+                raw_input = self.partial_json.get(index, "")
+                try:
+                    arguments = (
+                        json.loads(raw_input or "{}")
+                        if index in self.partial_json
+                        else block.get("input") or {}
+                    )
+                except ValueError:
+                    arguments = None
+                if not isinstance(arguments, dict):
+                    arguments = None
                 content.append(
                     SimpleNamespace(
                         type="tool_use",
                         id=block["id"],
                         name=name,
-                        input=block.get("input") or {},
+                        input=arguments if arguments is not None else {},
+                        argument_chars=len(raw_input),
+                        invalid_arguments=arguments is None,
                     )
                 )
         usage = self.usage

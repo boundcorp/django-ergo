@@ -55,3 +55,14 @@ async def test_engine_sends_gpt_6_tool_options():
     assert sent["max_completion_tokens"] == 256
     assert "temperature" not in sent
     assert "max_tokens" not in sent
+
+
+@pytest.mark.parametrize(
+    ("config", "expected"), [({}, 32000), ({"max_tokens": 256}, 256)]
+)
+@pytest.mark.asyncio
+async def test_engine_sends_configured_token_limit(config, expected):
+    engine = OpenAIAPIEngine(config=config)
+    engine._client = FakeOpenAIClient(openai_tool("lookup", {"q": "x"}))
+    await engine.complete([{"role": "user", "content": "hi"}])
+    assert engine._client.calls[0]["max_completion_tokens"] == expected

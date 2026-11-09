@@ -120,7 +120,12 @@ def _tool_use(tc) -> dict:
     the structured call answers with an error instead of running the tool.
     """
     args = tool_arguments(tc)
-    use = {"id": tc.id, "name": tc.function.name, "input": args or {}}
+    use = {
+        "id": tc.id,
+        "name": tc.function.name,
+        "input": args or {},
+        "argument_chars": len(tc.function.arguments or ""),
+    }
     if args is None:
         use["invalid_arguments"] = True
     return use
@@ -218,7 +223,7 @@ class OpenAIAPIEngine(StoredMessagesMixin, Engine):
         self.api_key = config.get("api_key")
         self.base_url = config.get("base_url")
         self.temperature = config.get("temperature", 0.7)
-        self.max_tokens = config.get("max_tokens", 4096)
+        self.max_tokens = config.get("max_tokens", 32000)
         # Reasoning models only; GPT-6 tool calls always use "none".
         self.reasoning_effort = config.get("reasoning_effort")
         # Send audio attachments natively (needs an audio-capable model);

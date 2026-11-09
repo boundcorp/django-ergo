@@ -63,6 +63,11 @@ result = await run_structured_call(spec, "Plan it", session=session)
 
 ## Behavior
 
+- Claude API, Claude Code and OpenAI API engines default to a 32000-token
+  output limit per model call. Set `max_tokens` in engine configuration or,
+  when Ergo constructs the engine, `StructuredCallSpec` to choose another
+  limit for the model. Codex CLI uses its own output limit and does not apply
+  this setting.
 - With `response_model`, the model gets a `submit_output` tool whose input
   schema is the Pydantic schema. Invalid input goes back as a tool error. A
   plain-text answer gets a correction asking for the tool that quotes the

@@ -91,6 +91,9 @@ class TestOpenAIAPIEngineAttributes:
         assert engine.temperature == expected_temperature
         assert engine.max_tokens == expected_max_tokens
 
+    def test_default_max_tokens(self):
+        assert OpenAIAPIEngine(config={}).max_tokens == 32000
+
     def test_get_tool_adapter_returns_openai_adapter(self, engine):
         from django_ergo.conversation.adapters import OpenAIToolAdapter
 
@@ -275,3 +278,53 @@ class TestUsageTokens:
             )
         ) == (3, 4, 3)
         assert usage_tokens(None) == (None, None, None)
+
+
+@pytest.mark.parametrize(
+    ("arguments", "expected", "invalid"),
+    [
+        ('{"text":"é"}', {"text": "é"}, False),
+        ('{"text":"é', {}, True),
+        ("", {}, False),
+        ("[1]", {}, True),
+    ],
+)
+async def test_complete_preserves_argument_counts_on_length_stop(
+    engine, arguments, expected, invalid
+):
+    from types import SimpleNamespace
+
+    call = SimpleNamespace(
+        id="call_1",
+        function=SimpleNamespace(name="write", arguments=arguments),
+        model_dump=lambda: {
+            "id": "call_1",
+            "type": "function",
+            "function": {"name": "write", "arguments": arguments},
+        },
+    )
+    response = SimpleNamespace(
+        usage=None,
+        choices=[
+            SimpleNamespace(
+                finish_reason="length",
+                message=SimpleNamespace(content=None, tool_calls=[call]),
+            )
+        ],
+    )
+
+    async def create(kwargs):
+        return response
+
+    engine._create_completion = create
+    result = await engine.complete([{"role": "user", "content": "go"}])
+    assert result.events[0].tool_use == {
+        "id": "call_1",
+        "name": "write",
+        "input": expected,
+        "argument_chars": len(arguments),
+        **({"invalid_arguments": True} if invalid else {}),
+    }
+    assert result.events[-1].raw == {"finish_reason": "length"}
+    stored = result.message["tool_calls"][0]["function"]["arguments"]
+    assert stored == ("{}" if invalid else arguments)

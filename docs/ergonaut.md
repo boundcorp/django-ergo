@@ -20,6 +20,11 @@ prompts still start bot turns. **Resume** also records an Ergo event when it
 continues a failed turn; it does not invent a message written by the user.
 Event bodies remain separate from generated model attribution, and the API/SSE
 carry their system author and event provenance.
+When a reply hits its output-length limit, the failure stays visible until you
+choose **Resume** or dismiss it. Resume asks the bot to avoid repeating completed
+work and write long content in smaller pieces: one file per call and documents
+in parts of about 2,000 words. An unfinished tool call was not saved or run.
+Resuming is manual, including after a repeated output-limit failure.
 
 ## Voice input
 

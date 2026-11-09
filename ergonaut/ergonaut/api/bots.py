@@ -856,7 +856,6 @@ ERROR_KINDS = [
         "Couldn't reach the model provider.",
         "Check the connection, then Resume.",
     ),
-    (("max_tokens",), "The reply hit its output-length limit.", "Resume to let it continue in a new reply."),
     (
         ("Crashed", "died", "no longer running"),
         "The turn stopped unexpectedly (the server restarted or crashed).",
@@ -874,6 +873,16 @@ def error_out(call: StructuredCall) -> dict:
         }
     if call.status != "failed" or not call.error:
         return {"error_summary": "", "error_hint": ""}
+    if "max_tokens" in call.error:
+        match = re.search(r"\((\d+) (?:output )?tokens\)", call.error)
+        limit = f" ({match.group(1)} tokens)" if match else ""
+        return {
+            "error_summary": f"The response was cut off at the output limit{limit}.",
+            "error_hint": (
+                "An unfinished tool call was not saved. Resume and write long content in smaller pieces: "
+                "one file per call and documents in parts of about 2,000 words."
+            ),
+        }
     for needles, summary, hint in ERROR_KINDS:
         if any(n in call.error for n in needles):
             return {"error_summary": summary, "error_hint": hint}
@@ -885,6 +894,14 @@ RESUME_NOTE = (
     "[Resume] Your last turn stopped before it finished ({why}). Pick up where you left off: "
     "check what you already did above (tool calls and their results), don't repeat finished "
     "steps, and complete the request."
+)
+
+MAX_TOKENS_RESUME_NOTE = (
+    "[Resume] Your last turn stopped before it finished ({why}). "
+    "An unfinished tool call was not saved or run. Check the conversation and tool results "
+    "to see what was actually completed, and don't repeat completed work. "
+    "Write long content in smaller pieces: one file per call and split documents into "
+    "parts of about 2,000 words."
 )
 
 
@@ -1464,9 +1481,10 @@ async def resume_session(request, session_id: str, model: str = ""):
             raise HttpError(400, str(e)) from e
     last.metadata = {**(last.metadata or {}), "dismissed": True, "resumed": True}
     await last.asave(update_fields=["metadata", "updated_at"])
+    note = MAX_TOKENS_RESUME_NOTE if last.status == "failed" and "max_tokens" in (last.error or "") else RESUME_NOTE
     event = await sync_to_async(messaging.send_event)(
         session,
-        RESUME_NOTE.format(why=why),
+        note.format(why=why),
         source="ergo",
         source_label="Ergo",
     )
