@@ -303,8 +303,8 @@ real messages, tool calls and results included, and once the context reaches
 kept verbatim (see [compaction.md](compaction.md)). The model reads further
 back with history tools. A main chat never needs resetting.
 
-Named chats are more of the same, one per person, each with its own
-instructions and skills:
+Named chats are persistent top-level sessions, one per person, each with its
+own instructions, skills and pinned files:
 
 ```yaml
 chats:
@@ -316,6 +316,32 @@ chats:
     instructions: Keep each report under 200 words.
     skills: [analytics]
 ```
+
+To hide a named chat from navigation without losing its history or breaking
+code that opens it with `chat_session`, set `retired: true` under its
+definition. Retired chats and their threads remain accessible by link and
+history tools, but schedules cannot target them. Removing the definition
+also preserves existing sessions, but removes their chat-specific
+configuration; keep a retired definition when integrations still use it.
+
+An operator can adopt an existing thread as a named chat without changing
+its session ID. Define the destination chat first, verify the bot, owner and
+session ID, then run the command in the Ergonaut environment:
+
+```bash
+python manage.py ergo_adopt_chat --bot BOT --chat CHAT --session SESSION_UUID --user OWNER_EMAIL --dry-run
+python manage.py ergo_adopt_chat --bot BOT --chat CHAT --session SESSION_UUID --user OWNER_EMAIL
+# To undo that adoption:
+python manage.py ergo_adopt_chat --bot BOT --chat CHAT --session SESSION_UUID --user OWNER_EMAIL --rollback --dry-run
+python manage.py ergo_adopt_chat --bot BOT --chat CHAT --session SESSION_UUID --user OWNER_EMAIL --rollback
+```
+
+Adoption makes the session top-level, preserves its ID and children, and
+refreshes its system prompt unless it has custom instructions. Links, files
+and session pins therefore continue to refer to the same session. Rollback
+restores the recorded thread state. Review the dry-run and the destination
+chat's configuration before running either operation on production, and
+avoid concurrent turns or chat creation while operating.
 
 **Threads** are child sessions for a piece of work: a delegated task, a
 scheduled report, a conversation you start from the web app. They keep

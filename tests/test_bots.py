@@ -165,6 +165,21 @@ def test_definition_defaults_and_inline_instructions():
         BotDefinition.from_dict({})
 
 
+def test_retired_chat_definition_validation():
+    definition = BotDefinition.from_dict(
+        {"name": "k", "chats": {"old": {"retired": True}, "active": {"retired": False}}}
+    )
+    assert definition.chat("old").retired is True
+    assert definition.chat("active").retired is False
+    assert definition.chat("main").retired is False
+    assert definition.chat("missing").retired is False
+    for value in ("true", 1, None, [], {}):
+        with pytest.raises(BotDefinitionError, match="retired must be a boolean"):
+            BotDefinition.from_dict({"name": "k", "chats": {"old": {"retired": value}}})
+    with pytest.raises(BotDefinitionError, match="main cannot be retired"):
+        BotDefinition.from_dict({"name": "k", "chats": {"main": {"retired": True}}})
+
+
 def test_pins_with_titles_and_icons():
     definition = BotDefinition.from_dict(
         {
@@ -2074,6 +2089,27 @@ async def test_skills_load_mid_turn_require_each_other_and_unload(tmp_path):
     assert "pantry_count" in _tool_names(engine._client.calls[-1])
     with pytest.raises(ValueError, match="no chat named"):
         await bot.chat_session(user, "nope")
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_retired_and_removed_named_chat_sessions(tmp_path):
+    user = await User.objects.acreate(username="retirement")
+    other = await User.objects.acreate(username="other-retirement")
+    bot, engine = make_bot(tmp_path, say("ok"), yaml_text=LAZY_YAML, name="lazy")
+    reports = await bot.chat_session(user, "reports")
+
+    bot.definition.chats["reports"].retired = True
+    assert await bot.chat_session(user, "reports") == reports
+    assert (await bot.chat_session(other, "reports")).metadata["chat"] == "reports"
+
+    del bot.definition.chats["reports"]
+    assert await bot.chat_session(user, "reports") == reports
+    assert bot.instructions_for("reports") == bot.definition.instructions
+    await bot.ask(reports, "Still here?")
+    assert engine._client.calls[-1]["system"].startswith(bot.definition.instructions)
+    missing_user = await User.objects.acreate(username="missing-retirement")
+    with pytest.raises(ValueError, match="no chat named 'reports'"):
+        await bot.chat_session(missing_user, "reports")
 
 
 @pytest.mark.django_db(transaction=True)

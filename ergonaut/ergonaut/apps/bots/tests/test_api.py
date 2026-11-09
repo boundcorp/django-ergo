@@ -661,6 +661,8 @@ def test_bot_page_lists_schedules(client, cook, bot_folder, use_bots):
 
 @pytest.mark.django_db(transaction=True)
 def test_named_chats_open_from_the_api(client, cook, bot_folder, use_bots):
+    from django_ergo.conversation.models import ConversationSession
+
     (bot_folder / "bot.yaml").write_text(BOT + "chats:\n  reports: {description: Weekly reports}\n")
     use_bots(say("hi"))
     [bot] = client.get("/api/bots").json()
@@ -668,9 +670,70 @@ def test_named_chats_open_from_the_api(client, cook, bot_folder, use_bots):
     opened = post(client, "/api/bots/kitchen/chats/reports").json()
     assert (opened["role"], opened["title"]) == ("chat", "Weekly reports")
     assert post(client, "/api/bots/kitchen/chats/reports").json()["id"] == opened["id"]
+    ConversationSession.objects.create(user=cook, bot_name="kitchen", metadata={"bot_role": "chat", "chat": "reports"})
+    assert post(client, "/api/bots/kitchen/chats/reports").json()["id"] == opened["id"]
     assert post(client, "/api/bots/kitchen/chats/nope").status_code == 404
     [bot] = client.get("/api/bots").json()
     assert bot["chats"][1]["session_id"] == opened["id"]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_retired_named_chat_is_hidden_from_navigation_but_remains_accessible(
+    client, cook, bot_folder, use_bots, settings, tmp_path
+):
+    from django_ergo.conversation.attachments import save_session_file
+    from django_ergo.conversation.models import ConversationSession
+
+    settings.MEDIA_ROOT = str(tmp_path / "media")
+    (bot_folder / "pages").mkdir()
+    (bot_folder / "pages" / "reports.jhtml").write_text("<p>Reports</p>")
+    (bot_folder / "bot.yaml").write_text(
+        BOT + "chats:\n  reports: {description: Weekly reports, pins: [pages/reports.jhtml]}\n"
+    )
+    use_bots(say("hi"))
+    main = post(client, "/api/bots/kitchen/root").json()
+    reports = post(client, "/api/bots/kitchen/chats/reports").json()
+    post(client, f"/api/sessions/{reports['id']}/pin", {"pinned": True})
+    attachment = save_session_file(
+        ConversationSession.objects.get(id=reports["id"]), "report.txt", b"report", source="bot"
+    )
+    post(client, f"/api/attachments/{attachment.id}/pin", {"pinned": True})
+    assert [pin["name"] for pin in client.get("/api/pins").json()[reports["id"]]] == [
+        "reports.jhtml",
+        "report.txt",
+    ]
+    thread = ConversationSession.objects.create(
+        user=cook, bot_name="kitchen", parent_id=reports["id"], metadata={"bot_role": "thread", "chat": "reports"}
+    )
+
+    (bot_folder / "bot.yaml").write_text(
+        BOT + "chats:\n  reports: {description: Weekly reports, retired: true, pins: [pages/reports.jhtml]}\n"
+        "  active: {}\n"
+    )
+    use_bots(say("hi"))
+    [bot] = client.get("/api/bots").json()
+    assert [chat["name"] for chat in bot["chats"]] == ["main", "active"]
+    assert bot["root_session_id"] == main["id"]
+    listed = {s["id"] for s in client.get("/api/sessions").json()}
+    assert reports["id"] not in listed
+    assert main["id"] in listed
+    assert str(thread.id) in listed
+    assert client.get(f"/api/sessions/{reports['id']}").json()["session"]["id"] == reports["id"]
+    assert reports["id"] not in client.get("/api/pins").json()
+    assert [pin["name"] for pin in client.get(f"/api/sessions/{reports['id']}/pins").json()] == [
+        "reports.jhtml",
+        "report.txt",
+    ]
+    reopened = post(client, "/api/bots/kitchen/chats/reports").json()
+    assert reopened["id"] == reports["id"]
+    assert reopened["pinned"] is True
+
+    (bot_folder / "bot.yaml").write_text(BOT + "chats:\n  reports: {description: Weekly reports}\n")
+    use_bots(say("hi"))
+    [bot] = client.get("/api/bots").json()
+    assert bot["chats"][1]["session_id"] == reports["id"]
+    assert reports["id"] in [s["id"] for s in client.get("/api/sessions").json()]
+    assert reports["id"] in client.get("/api/pins").json()
 
 
 @pytest.mark.django_db(transaction=True)
