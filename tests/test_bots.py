@@ -727,6 +727,25 @@ async def test_no_nudge_right_after_a_reply(tmp_path, thread_messages):
 
 
 @pytest.mark.django_db(transaction=True)
+async def test_run_together_message_is_refused(tmp_path):
+    user = await User.objects.acreate(username="squasher")
+    squashed = (
+        "Measured openingboundaryconfirmed: deliveredVO003guestline ends14.35s, "
+        "Insertnewcontext there preservingallprior audio unchanged."
+    )
+    bot, engine = make_bot(
+        tmp_path,
+        claude_tool("ergo_thread_send", {"thread": "new", "message": squashed}),
+        say("I'll rewrite it."),
+    )
+    root = await bot.root_session(user)
+    await bot.ask(root, "Plan meals")
+    refused = _tool_results(engine)[-1]
+    assert refused["is_error"] and "words run together" in refused["content"]
+    assert not await ConversationSession.objects.filter(parent=root).aexists()
+
+
+@pytest.mark.django_db(transaction=True)
 async def test_a_delegated_turn_waits_for_approval_before_replying(
     tmp_path, thread_messages
 ):

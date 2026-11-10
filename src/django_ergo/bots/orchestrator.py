@@ -65,6 +65,7 @@ from django.db.models.functions import Cast
 
 from django_ergo.bots import archival
 from django_ergo.bots import messaging
+from django_ergo.bots.plain_text import check_spacing
 from django_ergo.bots.registry import may_use
 from django_ergo.bots.tools import BotTool
 from django_ergo.bots.tools import FunctionToolkit
@@ -677,6 +678,7 @@ def ergo_thread_forward(
             "to forward; use ergo_thread_send for your own request."
         )
         raise ValueError(msg)
+    check_spacing(note, "note")
     target = _target(ctx, bot, thread)
     thread = (thread or "").strip()
     if not thread:
@@ -775,6 +777,7 @@ def _send(  # noqa: PLR0913
     ask: bool = False,
     interrupt: bool = False,
 ) -> dict:
+    check_spacing(message, "message")
     thread = (thread or "main").strip()
     starter = _is_starter(ctx.session, target.name, thread)
     shared = [

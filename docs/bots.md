@@ -878,6 +878,15 @@ thread (stop or resolve refused, send to the chat itself, a nudge right after a
 reply) fails with a JSON object: the reason in `error`, plus the same
 `session_id`, `title` and `bot`; other failures stay plain text.
 
+Text one agent writes for another must read as plain sentences. Some models
+drop the spaces between words when they write for an agent rather than a person
+("Measured openingboundaryconfirmed: deliveredVO003guestline ends14.35s"), so
+`ergo_thread_send` and `ergo_message_up` messages, `ergo_thread_forward` notes,
+`ergo_agent_start` briefs and `ergo_agent_reply` answers with several
+run-together words are refused with a request to rewrite them
+(`django_ergo.bots.plain_text`). Paths, URLs, ids, hashes, file names and
+hyphenated compounds don't count.
+
 Messages between sessions are asynchronous, like thread-to-thread
 delegation in Codex (`django_ergo.bots.messaging`). `ergo_thread_send`
 stores a `ThreadMessage` and returns. The recipient answers it in a turn of
