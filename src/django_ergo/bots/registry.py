@@ -45,6 +45,18 @@ def may_use(bot: Bot, user) -> bool:
     )
 
 
+def closed_to(bot: Bot, session) -> bool:
+    """Whether ``session`` is a chat of a private bot other than ``bot``, so
+    ``bot`` may not read it or its files (a file shared with a message is the
+    exception, see ``messaging.shared_with``)."""
+    registry = bot.registry
+    return bool(
+        registry is not None
+        and session.bot_name != bot.name
+        and registry.is_private(session.bot_name)
+    )
+
+
 def find_bot_folders(directory: str | Path) -> list[Path]:
     """Every folder at or under ``directory`` with a bot.yaml, parents first."""
     root = Path(directory).resolve()
@@ -97,9 +109,17 @@ class BotRegistry:
         return [b for b in self.bots.values() if b.parent_name == bot.name]
 
     def may_call(self, caller: Bot, name: str) -> bool:
+        if self.is_private(name) and name != caller.name:
+            return False
         if name in caller.definition.call_bots or self.is_parent(caller, name):
             return True
         return name in self.bots and self.bots[name].parent_name == caller.name
+
+    def is_private(self, name: str) -> bool:
+        """Whether ``name`` is a bot with ``private: true``: no other bot may
+        message it or read its chats. Only a chat it started reaches back, and
+        only to that chat (the starter exception in bots.orchestrator)."""
+        return name in self.bots and self.bots[name].definition.private
 
     def is_parent(self, caller: Bot, name: str) -> bool:
         """Whether ``name`` is the caller's parent, reachable upward by default.

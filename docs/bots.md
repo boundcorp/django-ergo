@@ -34,6 +34,7 @@ root: # context budget for main and named chats
   budget_tokens: 8000
   granularity: conversation # legacy; ignored by bots
 orchestration: true # may the bot delegate at all (false: never)
+private: true # no other bot may message it or read its chats and files (default false)
 timezone: America/Los_Angeles # default for users without a timezone
 current_time: true # current time in every turn, send time on each user message
 todos: true # the todo list tools in every chat and thread (false: none)
@@ -270,7 +271,8 @@ loads the same way (`django_ergo.bots.skillset`):
 - a plugin that adds tools (`kb`, `config_repo`, `orca`, `bash`, `browser`,
   `attachments`, ...) and each `toolkits:` factory;
 - built-ins: `history` (always loaded), `workers`, `todos` (always loaded,
-  see [Todo lists](#todo-lists)), `orchestration`, and `introspection` for
+  see [Todo lists](#todo-lists)), `orchestration`, `models` (see
+  [Model choice for tasks](#model-choice-for-tasks)), and `introspection` for
   bots loaded from a folder;
 - Ergo's skill library (`skillbuilder`), when bot.yaml or a skill names one,
   or by default (`DJANGO_ERGO["DEFAULT_SKILLS"]`, unless bot.yaml excludes it).
@@ -724,7 +726,8 @@ class BoxPlugin(BotPlugin):
     def agent_managers(self): return {"box": self.manager}
 ```
 
-A bot with a manager has the `agents` skill:
+A bot with a manager has the `agents` skill, which loads the `models` skill
+with it (see [Model choice for tasks](#model-choice-for-tasks)):
 
 - `ergo_agent_start(brief, workspace, title, tier | agent/model/effort,
 manager)` asks the manager to start the agent and starts a polling Worker,
@@ -735,7 +738,9 @@ manager)` asks the manager to start the agent and starts a polling Worker,
   name's list, and custom names are supported. Chat `tiers.<name>` overrides
   are independent. Restart Ergonaut and its bot workers after editing
   providers.yaml (see [Routing by tier](building-bots.md#routing-by-tier)).
-  The manager must run the picked agent. `manager` is needed only when the
+  Routing picks only among the tier's candidates the manager runs (list
+  `claude` and `codex` candidates for `local_shell`, `omp` for Orca), so a
+  used-up subscription falls back to another one. `manager` is needed only when the
   chat has more than one.
 - Each check (`AgentManager.check`) passes new questions to the chat once,
   as a message naming the worker and question. `ergo_agent_reply(worker_id,
@@ -753,6 +758,32 @@ question_id, answer)` queues the answer for the worker and returns without
 - The worker card's log (`workers.log`) reads `AgentManager.log`. A check
   may also keep activity and state on the worker (`ctx.activity`,
   `ctx.state`), as Orca's does.
+
+
+## Model choice for tasks
+
+Every bot has the built-in `models` skill, loaded with `agents` and with the
+browser plugin. Its `ergo_models_list(kind)` lists what this bot may hand a
+sub-agent or task it starts, and what routing would pick for each tier now:
+
+- `agent_tiers`: the `agents` tiers of providers.yaml, for `tier` on
+  `ergo_agent_start` and `orca_start_worker` (local_shell jobs too).
+- `model_tiers` and `models`: `auto/<tier>` and the public `provider/model`s,
+  for a task that runs an Ergo model, like `ergo_browser_task(model=...)`.
+- For a bot in a private pool, only that pool's members and no agent tiers.
+
+`bots.model_choice.check(bot, model, kind)` is the one rule for a model
+argument, with `kind` `agent` (a coding agent CLI) or `model` (an Ergo
+engine call). It refuses a private model for any other bot, an unknown
+tier or model for a `model` task, and for a bot in a private pool anything
+outside its pool (and every coding agent). A bot's own tools that start
+tasks call it the same way and list `models` in their skill's `requires`:
+
+```python
+from django_ergo.bots import model_choice
+
+model = model_choice.check(ctx.bot, model, model_choice.MODEL) or "auto/small"
+```
 
 ## Chats
 
@@ -1069,6 +1100,19 @@ may message its parent bot's chats and threads. A thread may also reach its
 exact starter as described above. Each session starts with an
 `ergo_bot_list` result already in its history, built from each bot's
 `description` in bot.yaml, so instructions don't need to list the bots.
+
+A bot with `private: true` is closed to other bots: none of them, its parent
+and bots that list it in `call_bots` included, can message it, list its chats,
+see it in the "Bots and threads" block, open a link to one of its chats with
+the history tools, or open its files (attachments, `orca_upload`). It is one
+way: the private bot still messages its parent and the bots in its own
+`call_bots`, gets their replies, and can share a file with a message
+(`attachments`), which the recipient may then open. A thread it started may
+report to and ask the exact chat that started it, as any thread may. What the
+private bot sends is then in the other bot's history, so its instructions
+should say what may leave. This is a rule for Ergo's own tools, not a sandbox:
+a bot with a shell on the same host and user can still read the files and the
+database (see "Secret hygiene and its limits").
 
 ### Pre-seeded tool calls
 
@@ -1526,7 +1570,9 @@ is open the bot has `ergo_browser_tabs`, `ergo_browser_open`,
 with `approve_actions: true`, as do `ergo_browser_batch` (several steps in
 one call, one snapshot at the end) and `ergo_browser_task` (a goal handed
 to `driver_model`, which drives the other tools in its own loop and reports
-back). Actions refuse to run in a tab the user has taken over (navigated
+back; its `model` argument picks another driver for one task, checked as in
+[Model choice for tasks](#model-choice-for-tasks)). A bot in a private pool always drives with that pool (its
+default, or a `driver_model` of the pool such as `personal/flash`). Actions refuse to run in a tab the user has taken over (navigated
 since the bot last looked, or scrolled, clicked or typed in between 3 of
 the bot's calls within 5 minutes). With `sessions: false`
 there are no start and stop tools and the browser tools always work.
@@ -1706,6 +1752,16 @@ or a separate discovery bot, not a second `getUpdates` consumer using an
 already-running bot's token. See the [Storytime operations handoff](telegram-storytime-handoff.md)
 for the concrete sender policy and deployment prerequisites; kitchen defaults
 remain unchanged.
+
+Telegram gives a group a new id (`-100...`) when it becomes a supergroup,
+which happens when it gains admin features such as message links. The
+plugin follows the upgrade's service message: the new id is recorded as
+passive (kept in the target thread's metadata, so it survives restarts), the
+chat used for replies moves to it, and a warning asks you to put the new id
+in `passive_group_chats`. An upgrade that happened before this was in place
+was missed, so list the supergroup's id yourself (a `t.me/c/<n>/...` message
+link means id `-100<n>`). Untagged messages from a group that is not listed
+are dropped, with an info-level log line saying so.
 
 In an opted-in group, messages that do not otherwise get a response are
 stored in the target thread as user messages, without starting a bot turn or
@@ -1991,7 +2047,8 @@ so set one.
 selector, a Fireworks model ID or any model containing `fireworks`, before
 any side effect, including a model picked from an `agents` tier. Their
 harnesses can't carry or enforce a grant, so private coding agents aren't
-supported.
+supported. For the same reason a bot in a private pool's `allowed_bots`
+can't start coding agents at all: its brief would leave the pool.
 
 ### Secret hygiene and its limits
 

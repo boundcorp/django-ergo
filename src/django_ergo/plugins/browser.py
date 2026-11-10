@@ -13,6 +13,7 @@
         timeout: 30                # seconds per browser call
         max_snapshot_chars: 20000
         driver_model: auto/small   # the model ergo_browser_task drives the browser with
+                                   # (a bot in a private pool always drives with that pool)
         driver_steps: 30           # its tool calls per task, at most
 
 The bot attaches to a Chrome someone already started, with Playwright's
@@ -39,7 +40,9 @@ Tools:
   in one call, with one snapshot at the end, for steps the bot already knows.
 - ``ergo_browser_task``: hand a goal to a fast model (``driver_model``) that
   drives the tools above in its own loop and reports back, so a big model
-  states the intent once instead of making a call per click. The driver
+  states the intent once instead of making a call per click. ``model``
+  picks another driver for one task (a tier or model ``ergo_models_list``
+  shows, checked by ``bots.model_choice``). The driver
   stops before sign-ins, payments and anything that submits, publishes,
   saves or deletes unless the goal asks for it. With ``approve_actions`` the
   user approves the goal instead of each action.
@@ -205,6 +208,20 @@ class BrowserPlugin(BotPlugin):
     name = "browser"
     description = "Drive a Chrome browser (open pages, read them, click and type)"
 
+    @property
+    def driver_model(self) -> str:
+        """The model ergo_browser_task drives with. A bot in a private pool keeps
+        the goal and the pages in that pool: a ``driver_model`` of the pool
+        (``personal/flash``), else the pool's default; never a public model."""
+        pool = self.bot.private_pool
+        if pool and not self.bot.providers.is_private(self.configured_driver):
+            return pool.name
+        return self.configured_driver
+
+    @property
+    def skill_requires(self) -> list[str]:
+        return ["models"]
+
     def on_load(self) -> None:
         self.cdp_url = str(self.config.get("cdp_url") or "http://127.0.0.1:9222")
         self.ssh_host = str(self.config.get("ssh_host") or "")
@@ -217,7 +234,7 @@ class BrowserPlugin(BotPlugin):
         self.root_only = bool(self.config.get("root_only", True))
         self.timeout = float(self.config.get("timeout", 30))
         self.max_snapshot_chars = int(self.config.get("max_snapshot_chars", 20_000))
-        self.driver_model = str(self.config.get("driver_model") or "auto/small")
+        self.configured_driver = str(self.config.get("driver_model") or "auto/small")
         self.driver_steps = int(self.config.get("driver_steps", 30))
         self._current: dict[str, str] = {}  # chat -> tab id, without sessions
         # Without sessions: tab id -> the URL the bot last saw, and interruptions.
@@ -847,17 +864,26 @@ class BrowserPlugin(BotPlugin):
             raise ValueError(msg)
 
     def task(
-        self, ctx: ToolContext, goal: str, done_when: str = "", tab: str = ""
+        self,
+        ctx: ToolContext,
+        goal: str,
+        done_when: str = "",
+        tab: str = "",
+        model: str = "",
     ) -> dict:
-        """Have ``driver_model`` drive the browser toward ``goal`` and report."""
+        """Have ``model`` (default ``driver_model``) drive the browser toward
+        ``goal`` and report."""
         from asgiref.sync import async_to_sync
 
+        from django_ergo.bots.model_choice import MODEL
+        from django_ergo.bots.model_choice import check
         from django_ergo.conversation.structured import StructuredCallSpec
         from django_ergo.conversation.structured import run_structured_call
 
         if not goal.strip():
             msg = "Say what the browser should get done."
             raise ValueError(msg)
+        driver = check(self.bot, model, MODEL) or self.driver_model
         with self._use(ctx):
             pass  # refuse before spending a model call when no session is open
         request = f"Goal: {goal.strip()}"
@@ -878,9 +904,7 @@ class BrowserPlugin(BotPlugin):
             spec,
             request,
             user=ctx.user,
-            engine=self.bot.make_engine(
-                ctx.session, self.driver_model, purpose="browser"
-            ),
+            engine=self.bot.make_engine(ctx.session, driver, purpose="browser"),
             metadata={"session": str(ctx.session.pk) if ctx.session else ""},
         )
         report = result.parsed
@@ -1207,14 +1231,24 @@ class BrowserPlugin(BotPlugin):
                     "description": "What the page shows once it's done",
                 },
                 "tab": tab_param,
+                "model": {
+                    "type": "string",
+                    "description": "The model that drives it, for a task that needs "
+                    "a stronger or cheaper one: a tier or model from ergo_models_list "
+                    f"(default {plugin.driver_model})",
+                },
             },
             required=["goal"],
             requires_approval=approve,
         )
         def task(
-            ctx: ToolContext, goal: str, done_when: str = "", tab: str = ""
+            ctx: ToolContext,
+            goal: str,
+            done_when: str = "",
+            tab: str = "",
+            model: str = "",
         ) -> dict:
-            return plugin.task(ctx, goal, done_when, tab)
+            return plugin.task(ctx, goal, done_when, tab, model)
 
         if driving:
             return [

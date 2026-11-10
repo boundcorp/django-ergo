@@ -3921,3 +3921,89 @@ async def test_a_workers_result_reaches_the_chat_that_started_the_thread(
         ).acount()
         == 1
     )
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_a_private_bot_is_closed_to_other_bots_but_reaches_out(tmp_path):
+    from django_ergo.bots import messaging
+    from django_ergo.bots import orchestrator
+    from django_ergo.bots.overview import overview
+    from django_ergo.conversation.attachments import save_session_file
+    from django_ergo.conversation.models import ThreadMessage
+
+    user = await User.objects.acreate(username="lee")
+    parent = write_bot(
+        tmp_path,
+        "name: boundcorp\nplugins: [{name: attachments}]\n",
+        name="boundcorp",
+    )
+    write_bot(
+        parent,
+        "name: personal\nprivate: true\npermissions: {call_bots: [devbox]}\n",
+        name="personal",
+    )
+    write_bot(
+        parent,
+        "name: devbox\nthreads: {allow_create: true}\nplugins: [{name: attachments}]\n"
+        "permissions: {call_bots: [personal]}\n",
+        name="devbox",
+    )
+    registry = BotRegistry.discover(parent, engine_factory=claude_engine)
+    boundcorp, personal, devbox = (
+        registry.get(n) for n in ("boundcorp", "personal", "devbox")
+    )
+    assert personal.definition.private
+
+    # Nobody calls in, not the parent and not a bot that lists it; it calls out.
+    assert not registry.may_call(boundcorp, "personal")
+    assert not registry.may_call(devbox, "personal")
+    assert registry.may_call(personal, "devbox")
+    assert registry.may_call(personal, "boundcorp")
+    assert "personal" not in [b.name for b in registry.callable_bots(boundcorp)]
+
+    main = await personal.root_session(user)
+    secret = await sync_to_async(save_session_file)(
+        main, "bank.txt", b"balance", media_type="text/plain"
+    )
+    shared = await sync_to_async(save_session_file)(
+        main, "task.txt", b"brief", media_type="text/plain"
+    )
+    root = await boundcorp.root_session(user)
+    work = await devbox.create_session(
+        user,
+        title="Task",
+        metadata={"started_by": str(main.id), "started_by_bot": "personal"},
+    )
+
+    def checks():
+        ctx, worker = boundcorp.tool_context(root), devbox.tool_context(work)
+        # Not in the parent's context block, and not a target for its tools.
+        assert "personal" not in overview(ctx)
+        with pytest.raises(ValueError, match="may not message 'personal'"):
+            orchestrator._target(ctx, "personal")
+        # The thread it started reaches back to that chat, and only to it.
+        assert orchestrator._target(worker, "personal", str(main.id)) is personal
+        for thread in ("", "main"):
+            with pytest.raises(ValueError, match="may not message"):
+                orchestrator._target(worker, "personal", thread)
+        # A link to its chat opens for it alone.
+        assert personal.linked_source(main, str(main.id)) is not None
+        assert boundcorp.linked_source(root, str(main.id)) is None
+        assert devbox.linked_source(work, str(main.id)) is None
+        assert devbox.linked_source(work, str(root.id)) is not None
+        # Its files open elsewhere only when a message shared them.
+        files = devbox.plugin("attachments")
+        ThreadMessage.objects.create(
+            sender_session=main,
+            recipient_session=work,
+            text="Here",
+            metadata={"attachments": [messaging.shared_file(shared)]},
+        )
+        assert files.file_for(worker, str(shared.id)).id == shared.id
+        with pytest.raises(ValueError, match="No file"):
+            files.file_for(worker, str(secret.id))
+        with pytest.raises(ValueError, match="No session"):
+            files.session_for(worker, str(main.id))
+        assert files.session_for(worker, str(root.id)).id == root.id
+
+    await sync_to_async(checks)()

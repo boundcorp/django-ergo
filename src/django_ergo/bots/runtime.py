@@ -340,7 +340,20 @@ class Bot:
         from django_ergo.bots.agents import AGENTS_INSTRUCTIONS
         from django_ergo.bots.agents import agent_toolkit
         from django_ergo.bots.agents import managers
+        from django_ergo.bots.model_choice import MODELS_INSTRUCTIONS
+        from django_ergo.bots.model_choice import models_toolkit
 
+        defs.append(
+            SkillDef(
+                "models",
+                "List the model tiers and models you may hand a sub-agent or task "
+                "you start, and what routing picks for each now",
+                instructions=MODELS_INSTRUCTIONS,
+                toolkits=lambda ctx: [models_toolkit(self, ctx)],
+                requires=requires.get("models", []),
+                source="built-in",
+            )
+        )
         if managers(self):
             defs.append(
                 SkillDef(
@@ -349,7 +362,7 @@ class Bot:
                     "their questions and stop them",
                     instructions=AGENTS_INSTRUCTIONS,
                     toolkits=lambda ctx: [agent_toolkit(self, ctx)],
-                    requires=requires.get("agents", []),
+                    requires=["models", *requires.get("agents", [])],
                     source="built-in",
                 )
             )
@@ -1089,7 +1102,10 @@ class Bot:
         self, session: ConversationSession, session_id: str
     ) -> SessionSource | None:
         """A chat someone linked to (ergo_chat_history_open_link): any bot's chat
-        of the same person, which is what they can open in the web app."""
+        of the same person, which is what they can open in the web app. A chat
+        of a private bot opens only for that bot."""
+        from django_ergo.bots.registry import closed_to
+
         if session.user_id is None:
             return None
         linked = (
@@ -1097,7 +1113,9 @@ class Bot:
             .exclude(bot_name="")
             .first()
         )
-        return SessionSource(linked) if linked is not None else None
+        if linked is None or closed_to(self, linked):
+            return None
+        return SessionSource(linked)
 
     def skillset(self, session: ConversationSession) -> SkillSet:
         """The chat's skills for this turn (see bots.skillset)."""

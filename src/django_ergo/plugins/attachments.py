@@ -53,7 +53,9 @@ from typing import TYPE_CHECKING
 
 from django.utils import timezone
 
+from django_ergo.bots import messaging
 from django_ergo.bots.plugins import BotPlugin
+from django_ergo.bots.registry import closed_to
 from django_ergo.bots.tools import BotTool
 from django_ergo.bots.tools import FunctionToolkit
 from django_ergo.bots.tools import bot_tool
@@ -142,7 +144,7 @@ class AttachmentsPlugin(BotPlugin):
         found = ConversationSession.objects.filter(
             id=session_id, user_id=ctx.session.user_id
         ).first()
-        if found is None:
+        if found is None or closed_to(ctx.bot, found):
             msg = f"No session {session_id} of yours"
             raise ValueError(msg)
         return found
@@ -163,7 +165,11 @@ class AttachmentsPlugin(BotPlugin):
             .filter(id=attachment_id, session__user_id=ctx.session.user_id)
             .first()
         )
-        if row is None:
+        # A private bot's file opens elsewhere only when a message shared it.
+        if row is None or (
+            closed_to(ctx.bot, row.session)
+            and not messaging.shared_with(ctx.session, str(row.id))
+        ):
             msg = f"No file {attachment_id}"
             raise ValueError(msg)
         if row.session_id != ctx.session.id and not self.other_sessions:
