@@ -70,7 +70,6 @@ from django_ergo.bots.tools import BotTool
 from django_ergo.bots.tools import FunctionToolkit
 from django_ergo.bots.tools import bot_tool
 from django_ergo.conversation import roles
-from django_ergo.conversation.attachments import find_session_file
 from django_ergo.conversation.identity import bot_identity
 from django_ergo.conversation.identity import django_user_identity
 from django_ergo.conversation.identity import session_origin
@@ -536,8 +535,9 @@ def ergo_thread_list(
             "type": "array",
             "items": {"type": "string"},
             "description": (
-                "Files from this chat to share (filenames or file ids). The recipient "
-                "can open them; they stay in this chat."
+                "Files from this chat to share (filenames or file ids), or ids of "
+                "files shared with this chat, to pass them on. The recipient can "
+                "open them; they stay in the chat that has them."
             ),
         },
         "interrupt": {
@@ -778,7 +778,7 @@ def _send(  # noqa: PLR0913
     thread = (thread or "main").strip()
     starter = _is_starter(ctx.session, target.name, thread)
     shared = [
-        messaging.shared_file(find_session_file(ctx.session, ref))
+        messaging.shared_file(messaging.find_shareable_file(ctx.session, ref))
         for ref in attachments or []
     ]
     recipient = _recipient(
@@ -1047,7 +1047,10 @@ def ergo_thread_archive(ctx: ToolContext, thread_id: str, bot: str = "") -> dict
         "attachments": {
             "type": "array",
             "items": {"type": "string"},
-            "description": "Files from this chat to share (filenames or file ids)",
+            "description": (
+                "Files from this chat to share (filenames or file ids), or ids of "
+                "files shared with this chat"
+            ),
         },
         "ask": {
             "type": "boolean",

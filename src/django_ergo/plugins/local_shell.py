@@ -932,8 +932,9 @@ class LocalShellPlugin(BotPlugin):
     def _upload_file(self, ctx: ToolContext, ref: str, session_id: str):
         import uuid
 
+        from django_ergo.bots.messaging import not_shared_error
+        from django_ergo.bots.messaging import shared_with
         from django_ergo.conversation.attachments import find_session_file
-        from django_ergo.conversation.models import ThreadMessage
 
         try:
             row = find_session_file(ctx.session, ref)
@@ -942,16 +943,8 @@ class LocalShellPlugin(BotPlugin):
                 file_id = str(uuid.UUID(str(ref).strip()))
             except ValueError:
                 raise not_found from None
-            shares = ThreadMessage.objects.filter(
-                recipient_session=ctx.session, metadata__has_key="attachments"
-            ).values_list("metadata", flat=True)
-            if not any(
-                isinstance(item, dict) and str(item.get("id")) == file_id
-                for metadata in shares
-                for item in ((metadata or {}).get("attachments") or [])
-            ):
-                msg = f"No shared file {ref!r} in that chat"
-                raise ValueError(msg) from None
+            if not shared_with(ctx.session, file_id):
+                raise not_shared_error(ref) from None
             attachments = ctx.bot.plugin("attachments") if ctx.bot else None
             if attachments is None:
                 msg = "Reading a shared file requires the attachments plugin"

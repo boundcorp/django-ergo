@@ -383,6 +383,87 @@ def test_upload_shared_files_are_scoped_to_recipient(settings, tmp_path):
     )
 
 
+@pytest.mark.django_db
+def test_shared_files_can_be_passed_on_and_then_uploaded(settings, tmp_path):
+    """A chat that received a share can pass it on (ergo_thread_send), and
+    the next chat can copy it into a job; an id quoted in text is no share."""
+    from django_ergo.bots.messaging import find_shareable_file
+    from django_ergo.bots.messaging import shared_file
+    from django_ergo.bots.tools import FunctionToolkit
+    from django_ergo.bots.tools import ToolContext
+    from django_ergo.conversation.attachments import save_session_file
+    from django_ergo.conversation.models import ConversationSession
+    from django_ergo.conversation.models import ThreadMessage
+
+    settings.MEDIA_ROOT = tmp_path / "media"
+    bot, _ = make_bot(
+        tmp_path,
+        yaml_text=yaml_for(tmp_path) + "\n      - name: attachments\n",
+        name="ads",
+    )
+    user = get_user_model().objects.create_user("pass-on-owner")
+    stranger = get_user_model().objects.create_user("pass-on-stranger")
+    origin = ConversationSession.objects.create(user=user, bot_name="devbox")
+    design = ConversationSession.objects.create(user=user, bot_name=bot.name)
+    board = ConversationSession.objects.create(user=user, bot_name=bot.name)
+    image = save_session_file(origin, "sheet.png", b"\x89PNG sheet")
+    ThreadMessage.objects.create(
+        sender_session=origin,
+        recipient_session=design,
+        text="Teaser files",
+        metadata={"attachments": [shared_file(image)]},
+    )
+
+    def upload(session, ref):
+        tools = FunctionToolkit(
+            bot.plugin("local_shell")._tools(),
+            ToolContext(bot=bot, session=session, user=user),
+        )
+        return json.loads(
+            tools.execute_tool("local_shell_upload", {"job": "art", "files": [ref]})
+        )
+
+    # Only quoted in text: the error says how to get a real share.
+    ThreadMessage.objects.create(
+        sender_session=design, recipient_session=board, text=f"use {image.id}"
+    )
+    with pytest.raises(ValueError, match="share it here"):
+        upload(board, str(image.id))
+    with pytest.raises(ValueError, match="share it here"):
+        find_shareable_file(board, str(image.id))
+
+    # design passes the share on; it stays stored in its origin chat.
+    passed = find_shareable_file(design, str(image.id))
+    assert passed.session_id == origin.id
+    ThreadMessage.objects.create(
+        sender_session=design,
+        recipient_session=board,
+        text="Refs",
+        metadata={"attachments": [shared_file(passed)]},
+    )
+    assert upload(board, str(image.id)) == [
+        {"file": "sheet.png", "path": "inputs/sheet.png"}
+    ]
+    assert (tmp_path / "jobs" / "art" / "inputs" / "sheet.png").read_bytes() == (
+        b"\x89PNG sheet"
+    )
+
+    # A share names a file; it can't hand over another person's.
+    theirs = save_session_file(
+        ConversationSession.objects.create(user=stranger, bot_name="x"),
+        "theirs.txt",
+        b"no",
+    )
+    ThreadMessage.objects.create(
+        sender_session=origin,
+        recipient_session=design,
+        text="Theirs",
+        metadata={"attachments": [shared_file(theirs)]},
+    )
+    with pytest.raises(ValueError, match="share it here"):
+        find_shareable_file(design, str(theirs.id))
+
+
 @pytest.mark.django_db(transaction=True)
 def test_failures_limits_and_stopping(tmp_path, workers):  # noqa: F811
     from django_ergo.bots import workers as w
