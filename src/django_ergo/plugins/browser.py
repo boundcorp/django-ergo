@@ -13,6 +13,7 @@
         timeout: 30                # seconds per browser call
         max_snapshot_chars: 20000
         driver_model: auto/small   # the model ergo_browser_task drives the browser with
+                                   # (a bot in a private pool always drives with that pool)
         driver_steps: 30           # its tool calls per task, at most
 
 The bot attaches to a Chrome someone already started, with Playwright's
@@ -205,6 +206,16 @@ class BrowserPlugin(BotPlugin):
     name = "browser"
     description = "Drive a Chrome browser (open pages, read them, click and type)"
 
+    @property
+    def driver_model(self) -> str:
+        """The model ergo_browser_task drives with. A bot in a private pool keeps
+        the goal and the pages in that pool: a ``driver_model`` of the pool
+        (``personal/flash``), else the pool's default; never a public model."""
+        pool = self.bot.private_pool
+        if pool and not self.bot.providers.is_private(self.configured_driver):
+            return pool.name
+        return self.configured_driver
+
     def on_load(self) -> None:
         self.cdp_url = str(self.config.get("cdp_url") or "http://127.0.0.1:9222")
         self.ssh_host = str(self.config.get("ssh_host") or "")
@@ -217,7 +228,7 @@ class BrowserPlugin(BotPlugin):
         self.root_only = bool(self.config.get("root_only", True))
         self.timeout = float(self.config.get("timeout", 30))
         self.max_snapshot_chars = int(self.config.get("max_snapshot_chars", 20_000))
-        self.driver_model = str(self.config.get("driver_model") or "auto/small")
+        self.configured_driver = str(self.config.get("driver_model") or "auto/small")
         self.driver_steps = int(self.config.get("driver_steps", 30))
         self._current: dict[str, str] = {}  # chat -> tab id, without sessions
         # Without sessions: tab id -> the URL the bot last saw, and interruptions.

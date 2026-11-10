@@ -87,6 +87,7 @@ from django_ergo.bots.agents import AgentManager
 from django_ergo.bots.agents import AgentQuestion
 from django_ergo.bots.agents import AgentSpec
 from django_ergo.bots.plugins import BotPlugin
+from django_ergo.bots.registry import closed_to
 from django_ergo.bots.tools import BotTool
 from django_ergo.bots.tools import FunctionToolkit
 from django_ergo.bots.tools import bot_tool
@@ -699,7 +700,7 @@ class OrcaPlugin(BotPlugin):
             source = ConversationSession.objects.filter(
                 id=session_id, user_id=ctx.session.user_id
             ).first()
-            if source is None:
+            if source is None or closed_to(ctx.bot, source):
                 msg = f"No chat {session_id} of yours"
                 raise ValueError(msg)
         rows = [find_session_file(source, ref) for ref in files]

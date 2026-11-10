@@ -1246,3 +1246,26 @@ async def test_any_pool_name_keeps_its_allowed_bots_private(monkeypatch, firewor
     assert engine.grant.model_id == FLASH
     with pytest.raises(PolicyError, match="own session"):
         helper.make_ancillary_engine(None, purpose="title")
+
+
+def test_a_private_pool_bot_drives_browser_tasks_with_its_pool(found):
+    def browser(name, **config):
+        bot = Bot(
+            BotDefinition.from_dict(
+                {"name": name, "plugins": [{"name": "browser", **config}]}
+            )
+        )
+        registry = BotRegistry()
+        registry.providers = found
+        registry.add(bot)
+        return bot.plugin("browser")
+
+    # The default (a public tier) and a public model never leave the pool.
+    assert browser("personal").driver_model == "personal"
+    assert browser("personal", driver_model="openai/gpt-6-luna").driver_model == (
+        "personal"
+    )
+    assert browser("personal", driver_model="personal/glm").driver_model == (
+        "personal/glm"
+    )
+    assert browser("other").driver_model == "auto/small"

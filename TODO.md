@@ -99,6 +99,7 @@ Live on rigel from `~/p/boundcorp/django-ergo`, bots from `boundcorp/ergo-bots`.
 ### Private inference (`private_pools`)
 
 - [x] Phase 1: `private_pools` in providers.yaml (strict schema, `allowed_bots`, reserved `personal` selector), the guarded Fireworks engine with per-turn grants minted in `Bot.make_engine`, public engines refusing `fireworks.ai`, coding agents refusing private models, the `InferenceRequest` ledger with exact prices and the optional `daily_usd_cap`, protected `FIREWORKS_*` env, `private_models` in the models API and the `private` block in the Costs API. Docs: `docs/bots.md` and `docs/ergonaut.md`, "Private inference".
+- [x] Private bots (`private: true` in bot.yaml): closed to other bots' messages, thread lists, context block, history links and files, while they still message out; browser tasks of a private-pool bot stay in the pool.
 - [ ] Phase 2: a separate credential-isolated private inference service (own workload and service user, key mounted only there, signed short-lived grants, egress limited to Fireworks), so bot, tool and agent processes never see `FIREWORKS_API_KEY`.
 - [ ] Private coding agents: omp/Orca harnesses would have to carry and enforce a grant (subagents, defaults, model switches). Until then agents refuse private models.
 - [ ] Frontend: a separate, API-billed group for `private_models` in the model picker, and the Costs page's `private` block.
