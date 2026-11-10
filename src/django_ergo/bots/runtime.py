@@ -340,7 +340,20 @@ class Bot:
         from django_ergo.bots.agents import AGENTS_INSTRUCTIONS
         from django_ergo.bots.agents import agent_toolkit
         from django_ergo.bots.agents import managers
+        from django_ergo.bots.model_choice import MODELS_INSTRUCTIONS
+        from django_ergo.bots.model_choice import models_toolkit
 
+        defs.append(
+            SkillDef(
+                "models",
+                "List the model tiers and models you may hand a sub-agent or task "
+                "you start, and what routing picks for each now",
+                instructions=MODELS_INSTRUCTIONS,
+                toolkits=lambda ctx: [models_toolkit(self, ctx)],
+                requires=requires.get("models", []),
+                source="built-in",
+            )
+        )
         if managers(self):
             defs.append(
                 SkillDef(
@@ -349,7 +362,7 @@ class Bot:
                     "their questions and stop them",
                     instructions=AGENTS_INSTRUCTIONS,
                     toolkits=lambda ctx: [agent_toolkit(self, ctx)],
-                    requires=requires.get("agents", []),
+                    requires=["models", *requires.get("agents", [])],
                     source="built-in",
                 )
             )

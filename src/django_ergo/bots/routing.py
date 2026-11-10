@@ -396,8 +396,11 @@ def pick_model(providers: Providers, tier: str, current: str = "") -> str:
     return providers.check_public(picked, where=f"auto/{tier}")
 
 
-def pick_agent(providers: Providers, tier: str) -> AgentChoice:
-    """A coding agent, model and effort for ``tier``, on a subscription only."""
+def pick_agent(
+    providers: Providers, tier: str, agents: tuple[str, ...] = ()
+) -> AgentChoice:
+    """A coding agent, model and effort for ``tier``, on a subscription only.
+    ``agents`` (a manager's) keeps the candidates it can run; empty means any."""
     tier = tier_of(tier)
     routing = providers.routing
     listed = routing.agents.get(tier)
@@ -414,6 +417,17 @@ def pick_agent(providers: Providers, tier: str) -> AgentChoice:
     if not candidates:
         msg = f"No subscription provider in the {tier!r} agents tier"
         raise ValueError(msg)
+    if agents:
+        runnable = [c for c in candidates if c.agent in agents]
+        if not runnable:
+            listed_agents = ", ".join(sorted({c.agent for c in candidates}))
+            msg = (
+                f"The {tier!r} agents tier lists {listed_agents}, and this manager "
+                f"runs {', '.join(agents)}: add {' or '.join(agents)} candidates to "
+                "the tier in providers.yaml"
+            )
+            raise ValueError(msg)
+        candidates = runnable
     picked = choose(
         candidates,
         lambda c: c.provider,

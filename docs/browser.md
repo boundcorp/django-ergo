@@ -189,7 +189,8 @@ model call, and its whole context, on every click. Two tools cut that down:
   first step that fails and says which.
 - `ergo_browser_task` takes a goal and an optional "done when" check. A
   fast model (`driver_model`, by default the providers' `small` tier) drives
-  the browser tools in its own loop, up to `driver_steps` calls, and returns
+  the browser tools in its own loop, up to `driver_steps` calls (`model`
+  picks another driver for one task, from what `ergo_models_list` shows), and returns
   `done`, `stopped` or `failed` with a short summary and the final page.
   The bot makes one call instead of twenty. The driver stops and reports
   before a sign-in or captcha, and before paying, submitting, publishing,
