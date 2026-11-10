@@ -30,6 +30,7 @@ from dataclasses import field
 from typing import TYPE_CHECKING
 from typing import Any
 
+from django_ergo.bots.plain_text import check_spacing
 from django_ergo.conversation.inference_policy import PolicyError
 
 if TYPE_CHECKING:
@@ -499,6 +500,7 @@ def agent_toolkit(bot: Bot, ctx: ToolContext):
         effort: str = "",
         manager: str = "",
     ) -> dict:
+        check_spacing(brief, "brief")
         spec = AgentSpec(brief, workspace, agent, model, effort, title, tier)
         worker = start(ctx, spec, manager)
         out = {
@@ -528,6 +530,7 @@ def agent_toolkit(bot: Bot, ctx: ToolContext):
         ctx: ToolContext, worker_id: str, question_id: str, answer: str
     ) -> str:
         worker, _, _ = find(worker_id)
+        check_spacing(answer, "answer")
         return _reply_queue(str(worker.pk), question_id, answer)
 
     @bot_tool(
