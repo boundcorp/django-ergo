@@ -3368,7 +3368,9 @@ async def test_bot_sees_every_image_it_looks_at_in_one_round(tmp_path, settings)
 
 
 @pytest.mark.django_db(transaction=True)
-def test_looking_at_a_video_says_it_cant_be_seen(tmp_path, settings):
+def test_looking_at_a_video_without_a_gemini_key_points_at_frames(
+    tmp_path, settings, monkeypatch
+):
     from asgiref.sync import async_to_sync
 
     from django_ergo.bots.tools import ToolContext
@@ -3380,8 +3382,11 @@ def test_looking_at_a_video_says_it_cant_be_seen(tmp_path, settings):
     root = async_to_sync(bot.root_session)(user)
     clip = save_session_file(root, "clip.mp4", b"x" * 50, media_type="video/mp4")
     ctx = ToolContext(bot=bot, session=root, user=user)
-    # Not "too large": a video never reaches the model, whatever its size.
-    with pytest.raises(ValueError, match=r"clip.mp4 \(video/mp4\) can't be looked at"):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    # Not "too large": max_look_bytes is for files sent to the bot's own model.
+    with pytest.raises(
+        ValueError, match=r"needs GEMINI_API_KEY.*ergo_attachments_frames"
+    ):
         plugin.look(ctx, str(clip.id))
 
 
