@@ -190,8 +190,11 @@ model call, and its whole context, on every click. Two tools cut that down:
 - `ergo_browser_task` takes a goal and an optional "done when" check. A
   fast model (`driver_model`, by default the providers' `small` tier) drives
   the browser tools in its own loop, up to `driver_steps` calls (`model`
-  picks another driver for one task, from what `ergo_models_list` shows), and returns
-  `done`, `stopped` or `failed` with a short summary and the final page.
+  picks another driver for one task, from what `ergo_models_list` shows), in
+  a `browser:task` worker: the tool returns at once, the chat's worker card
+  shows each step as it happens and can stop it, and the report (`done`,
+  `stopped` or `failed`, a short summary, the step count and the start of
+  the final page) arrives in the chat as a message, which the bot answers.
   The bot makes one call instead of twenty. The driver stops and reports
   before a sign-in or captcha, and before paying, submitting, publishing,
   sending, saving or deleting anything the goal doesn't ask for in so many
