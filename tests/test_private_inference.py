@@ -20,6 +20,7 @@ from django.contrib.auth import get_user_model
 from pydantic import BaseModel
 
 from django_ergo.bots import agents
+from django_ergo.bots import model_choice
 from django_ergo.bots import routing
 from django_ergo.bots.definition import BotDefinition
 from django_ergo.bots.providers import Providers
@@ -1269,3 +1270,109 @@ def test_a_private_pool_bot_drives_browser_tasks_with_its_pool(found):
         "personal/glm"
     )
     assert browser("other").driver_model == "auto/small"
+
+
+# -- model choice for sub-agents and tasks (bots.model_choice) --------------------
+
+
+def test_models_list_shows_a_public_bot_its_tiers_and_routing_picks(found, monkeypatch):
+    monkeypatch.setattr(routing, "current_usage", dict)
+    monkeypatch.setattr(routing, "active_rules", lambda r: routing.RoutingRules())
+    found.routing.agents["small"] = [
+        routing.AgentChoice(
+            agent="claude", model="claude-haiku-5-5", provider="subscription"
+        )
+    ]
+    devbox = bots(found, devbox={})["devbox"]
+    listed = model_choice.available(devbox)
+    assert listed["model_tiers"][0] == {
+        "model": "auto/small",
+        "pick_now": "openai/gpt-6-luna",
+        "candidates": ["openai/gpt-6-luna", "openai/gpt-6-sol"],
+    }
+    small = next(t for t in listed["agent_tiers"] if t["tier"] == "small")
+    assert "claude-haiku-5-5" in small["pick_now"]
+    assert "personal" not in str(listed)
+    assert "accounts/fireworks" not in str(listed)
+    assert set(model_choice.available(devbox, "agent")) == {
+        "agent_tiers",
+        "how_to_pick",
+    }
+    with pytest.raises(ValueError, match="kind is"):
+        model_choice.available(devbox, "both")
+
+
+def test_models_list_shows_a_pool_bot_only_its_pool(found):
+    personal = bots(found, personal={})["personal"]
+    listed = model_choice.available(personal)
+    assert listed["private_pool"] == "personal"
+    assert [m["model"] for m in listed["models"]] == [
+        "personal/flash",
+        "personal/glm",
+        "personal/heavy",
+    ]
+    assert listed["agent_tiers"] == []
+    assert "openai" not in str(listed["models"])
+
+
+def test_a_public_bot_picks_public_tiers_and_models_only(found):
+    devbox = bots(found, devbox={})["devbox"]
+    check = model_choice.check
+    assert check(devbox, "", model_choice.MODEL) == ""
+    assert check(devbox, " auto/small ", model_choice.MODEL) == "auto/small"
+    assert check(devbox, "openai/gpt-6-sol", model_choice.MODEL) == "openai/gpt-6-sol"
+    for private in ("personal", "personal/heavy", KIMI):
+        with pytest.raises(PolicyError):
+            check(devbox, private, model_choice.MODEL)
+    with pytest.raises(ValueError, match="No model tier 'huge'"):
+        check(devbox, "auto/huge", model_choice.MODEL)
+    with pytest.raises(ValueError, match="Unknown model"):
+        check(devbox, "openai/gpt-1", model_choice.MODEL)
+    # Agent CLIs name models their own way; only private ones are refused.
+    assert check(devbox, "anthropic/claude-sonnet-5-5", model_choice.AGENT)
+    with pytest.raises(PolicyError, match="Coding agents can't use"):
+        check(devbox, "personal/heavy", model_choice.AGENT)
+
+
+def test_a_pool_bot_picks_only_inside_its_pool_and_starts_no_coding_agents(
+    found, monkeypatch
+):
+    personal = bots(found, personal={})["personal"]
+    check = model_choice.check
+    assert check(personal, "personal/glm", model_choice.MODEL) == "personal/glm"
+    assert check(personal, "personal", model_choice.MODEL) == "personal"
+    for public in ("auto/small", "openai/gpt-6-luna"):
+        with pytest.raises(PolicyError, match="keeps its work in the private pool"):
+            check(personal, public, model_choice.MODEL)
+    with pytest.raises(PolicyError, match="no member"):
+        check(personal, "personal/nope", model_choice.MODEL)
+    calls = []
+    monkeypatch.setattr(agents, "manager_for", lambda *a: calls.append(a))
+    ctx = SimpleNamespace(bot=personal, session=object())
+    for spec in (
+        agents.AgentSpec("brief", "path:/x", tier="small"),
+        agents.AgentSpec("brief", "path:/x", model="gpt-6-sol"),
+    ):
+        with pytest.raises(PolicyError, match="can't start them"):
+            agents.start(ctx, spec)
+    assert calls == []
+
+
+def test_a_browser_task_takes_a_model_checked_for_its_bot(found, monkeypatch):
+    def browser(name):
+        bot = Bot(
+            BotDefinition.from_dict({"name": name, "plugins": [{"name": "browser"}]})
+        )
+        registry = BotRegistry()
+        registry.providers = found
+        registry.add(bot)
+        return bot.plugin("browser")
+
+    for name, model in (("personal", "auto/small"), ("other", "personal/heavy")):
+        plugin = browser(name)
+        monkeypatch.setattr(
+            plugin.bot, "make_engine", lambda *a, **k: pytest.fail("engine built")
+        )
+        with pytest.raises(PolicyError):
+            plugin.task(SimpleNamespace(session=None), "read the page", model=model)
+    assert browser("other").skill_requires == ["models"]

@@ -31,7 +31,6 @@ from typing import TYPE_CHECKING
 from typing import Any
 
 from django_ergo.bots.plain_text import check_spacing
-from django_ergo.conversation.inference_policy import PolicyError
 
 if TYPE_CHECKING:
     from django_ergo.bots.runtime import Bot
@@ -187,7 +186,10 @@ def start(ctx: ToolContext, spec: AgentSpec, manager: str = "") -> Worker:
     if ctx.session is None:
         msg = "Agents belong to a chat"
         raise ValueError(msg)
-    _refuse_private(ctx.bot, spec.model)  # before any side effect
+    from django_ergo.bots.model_choice import AGENT
+    from django_ergo.bots.model_choice import check
+
+    spec.model = check(ctx.bot, spec.model, AGENT)  # before any side effect
     found = manager_for(ctx.bot, manager, ctx)
     choice = None
     if spec.tier:
@@ -195,7 +197,7 @@ def start(ctx: ToolContext, spec: AgentSpec, manager: str = "") -> Worker:
 
         choice = pick_agent(ctx.bot.providers, spec.tier)
         spec.agent, spec.model, spec.effort = choice.agent, choice.model, choice.effort
-        _refuse_private(ctx.bot, spec.model)
+        check(ctx.bot, spec.model, AGENT)
     spec.agent = spec.agent or found.default_agent
     if found.agents and spec.agent not in found.agents:
         msg = f"{found.name} runs {', '.join(found.agents)}, not {spec.agent!r}" + (
@@ -227,17 +229,6 @@ def start(ctx: ToolContext, spec: AgentSpec, manager: str = "") -> Worker:
         state=state,
         handle=handle,
     )
-
-
-def _refuse_private(bot: Bot, model: str) -> None:
-    """Coding agents never run on a private pool (or any Fireworks model):
-    their harnesses can't carry or enforce a private grant yet."""
-    if bot.providers.is_private(model):
-        msg = (
-            f"Coding agents can't use the private model {model!r}: private pools "
-            "are for allowlisted bots' own chats only"
-        )
-        raise PolicyError(msg)
 
 
 def _reply_queue(worker_id: str, question_id: str, answer: str) -> str:
@@ -421,7 +412,8 @@ hours. ergo_agent_start starts one on a self-contained brief: the target, the
 change, constraints, who owns what, and how to prove it's done. Pass a configured
 tier (small, medium, large, xlarge, or a custom name from providers.yaml) to let routing
 pick the agent and model by subscription pace, favouring unused quota near reset.
-Do not pin a provider unless the task requires it. The chat shows it as a
+Do not pin a provider unless the task requires it; ergo_models_list shows the
+tiers and what routing would pick now. The chat shows it as a
 worker; its questions and its final report arrive here as messages, so don't
 wait or poll. Answer a question with ergo_agent_reply; ergo_agent_stop stops one.
 """

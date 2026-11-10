@@ -93,7 +93,14 @@ def test_an_agent_asks_gets_an_answer_and_reports_back(tmp_path, workers):  # no
     from django_ergo.conversation.models import Worker
 
     bot, session, manager, kit = setup(tmp_path)
-    assert "agents" in {s.name for s in bot._skill_defs()}
+    defs = {s.name: s for s in bot._skill_defs()}
+    # Starting an agent brings the list of tiers it can pick from.
+    assert "models" in defs["agents"].requires
+    from django_ergo.bots.model_choice import models_toolkit
+    from django_ergo.bots.tools import ToolContext
+
+    ctx = ToolContext(bot=bot, session=session)
+    assert models_toolkit(bot, ctx).has_tool("ergo_models_list")
     assert all(
         kit.has_tool(name)
         for name in ("ergo_agent_start", "ergo_agent_reply", "ergo_agent_stop")
