@@ -1330,6 +1330,16 @@ class TelegramPlugin(BotPlugin):
             logger.info("Ignoring Telegram chat %s: no chat for it", chat_id)
             return
         texts = [m.get("text") or m.get("caption") or "" for m in messages]
+        replied = first.get("reply_to_message") or {}
+        if (
+            self.bot_id
+            and str((replied.get("from") or {}).get("id")) == self.bot_id
+            and texts[0]
+        ):
+            # So "delete this" can name the message (ergo_telegram_delete).
+            texts[0] = (
+                f"[Replying to your message {replied.get('message_id')}]\n{texts[0]}"
+            )
         media = [await self.attachments_for(m) for m in messages]
         attachments = [a for found, _ in media for a in found]
         texts.extend(note for _, missing in media for note in missing)
