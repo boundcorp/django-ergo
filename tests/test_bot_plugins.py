@@ -321,6 +321,8 @@ def test_bot_management_runs_configured_commands_in_the_draft(bot_repo, monkeypa
     # It runs the draft (not the checkout), without the server's secrets.
     assert plugin.run_command("check") == "check: exit 3\nok None"
     assert plugin.run_command("py", ["hello.py", "there"]) == "py: exit 0\nhi there"
+    # A model that sends one string gets it split like a shell would, not per character.
+    assert plugin.run_command("py", "hello.py there") == "py: exit 0\nhi there"
     with pytest.raises(ValueError, match="takes no arguments"):
         plugin.run_command("check", ["x"])
     with pytest.raises(ValueError, match="configured: check, py"):

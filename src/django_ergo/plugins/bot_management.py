@@ -63,6 +63,7 @@ import json
 import logging
 import os
 import re
+import shlex
 import subprocess
 import time
 from dataclasses import dataclass
@@ -302,6 +303,10 @@ class BotManagementPlugin(BotPlugin):
             names = ", ".join(sorted(self.run_commands)) or "none"
             msg = f"Unknown command {command!r}; configured: {names}"
             raise ValueError(msg)
+        if isinstance(args, str):
+            # A model that sends "tests/test_x.py" instead of ["tests/test_x.py"]
+            # would otherwise run one argument per character.
+            args = shlex.split(args)
         args = [str(a) for a in args or []]
         if args and not spec.args:
             msg = f"{command} takes no arguments"
