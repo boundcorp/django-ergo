@@ -95,6 +95,49 @@ def shared_file(row) -> dict:
     }
 
 
+def shared_with(session: ConversationSession, file_id: str) -> bool:
+    """Whether a thread message to ``session`` shared the file ``file_id``."""
+    shares = ThreadMessage.objects.filter(
+        recipient_session=session, metadata__has_key="attachments"
+    ).values_list("metadata", flat=True)
+    return any(
+        isinstance(item, dict) and str(item.get("id")) == file_id
+        for metadata in shares
+        for item in ((metadata or {}).get("attachments") or [])
+    )
+
+
+def not_shared_error(ref: str) -> ValueError:
+    return ValueError(
+        f"No file {ref!r} in this chat, and none with that id was shared with it. "
+        "Ask the chat that has it to share it here (ergo_thread_send with "
+        "attachments=[its id]); a file id quoted in a message's text isn't a share."
+    )
+
+
+def find_shareable_file(session: ConversationSession, ref: str):
+    """A file this chat may share on: its own (by id or filename), or one
+    shared with it by id (the file stays in its origin chat)."""
+    import uuid
+
+    from django_ergo.conversation.attachments import find_session_file
+    from django_ergo.conversation.models import ConversationAttachment
+
+    try:
+        return find_session_file(session, ref)
+    except ValueError as not_found:
+        try:
+            file_id = str(uuid.UUID(str(ref).strip()))
+        except ValueError:
+            raise not_found from None
+    row = ConversationAttachment.objects.filter(
+        id=file_id, session__user_id=session.user_id
+    ).first()
+    if row is None or not shared_with(session, file_id):
+        raise not_shared_error(ref)
+    return row
+
+
 def files_note(message: ThreadMessage) -> str:
     """The files shared with a message, for the recipient to open."""
     files = (message.metadata or {}).get("attachments") or []

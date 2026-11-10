@@ -193,7 +193,7 @@ archived" toggle.
 
 Ergonaut's Files panel lists the chat's own files and, under "Shared with this
 chat", files another chat shared with it (`ergo_thread_send` attachments,
-forwards and events). Those stay in the sender's chat, so they open and
+forwards and events; a chat passes a shared file on the same way, by id). Those stay in the sender's chat, so they open and
 download from here but are pinned or deleted there. Images and videos show a preview
 (`/api/attachments/<id>/thumbnail`: Pillow downscales images, ffmpeg grabs a
 video frame); the panel filters

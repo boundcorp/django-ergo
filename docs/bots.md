@@ -1392,7 +1392,10 @@ for a file explicitly shared with this chat. The ID alone also works; the
 optional `session_id` restricts every file to that source. Filenames resolve
 only in the current chat. Shared files stay in their source session and require
 the attachments plugin with `other_sessions: true` and the same session owner;
-unshared cross-session IDs are rejected.
+unshared cross-session IDs are rejected, including an ID only quoted in a
+message's text. A chat that received a share can pass it on: give its ID to
+`ergo_thread_send` (or `ergo_message_up`) `attachments`, and the next chat can open
+or upload it in turn.
 
 
 ### kubectl
