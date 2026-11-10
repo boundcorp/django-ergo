@@ -268,8 +268,12 @@ class BrowserPlugin(BotPlugin):
         def work() -> Any:
             with self._endpoint() as url, sync_playwright() as p:
                 try:
+                    # no_defaults: attaching must leave the user's Chrome as it
+                    # is. Playwright otherwise emulates light mode, no reduced
+                    # motion and focus on every page while connected, so a dark
+                    # page flips to light and back on every call.
                     browser = p.chromium.connect_over_cdp(
-                        url, timeout=self.timeout * 1000
+                        url, timeout=self.timeout * 1000, no_defaults=True
                     )
                 except Exception as exc:
                     where = self.cdp_url + (

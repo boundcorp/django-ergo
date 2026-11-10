@@ -2715,6 +2715,7 @@ def chrome(tmp_path):
             "--headless=new",
             "--no-sandbox",
             "--no-first-run",
+            "--force-dark-mode",  # the user's theme, which the bot must leave alone
             f"--remote-debugging-port={port}",
             f"--user-data-dir={tmp_path / 'chrome-profile'}",
             "about:blank",
@@ -2810,6 +2811,20 @@ def test_browser_snapshot_refs_are_numbered_as_the_next_call_sees_them():
     )
     assert REF.fullmatch("f4e17") and REF.fullmatch("e3")
     assert not REF.fullmatch("input")
+
+
+@pytest.mark.django_db
+def test_the_browser_leaves_the_pages_color_scheme_alone(tmp_path, chrome):
+    _, _, plugin = browser_bot(tmp_path, config=f"cdp_url: {chrome}, sessions: false")
+    ctx = type("Ctx", (), {"session": None})()
+    plugin.open(ctx, BROWSER_PAGE, new_tab=True)
+    dark = plugin._run(
+        lambda context: [
+            page.evaluate("matchMedia('(prefers-color-scheme: dark)').matches")
+            for page in context.pages
+        ]
+    )
+    assert dark and all(dark)  # Playwright's default would emulate light
 
 
 @pytest.mark.django_db
