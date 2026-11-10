@@ -11,6 +11,7 @@
         target_thread: Telegram # every chat goes into one shared thread with this title
         owner: lee              # who owns that thread (default: the first admin)
         passive_group_chats: [-1001234567890]  # opt in specific groups
+                                # (followed when Telegram upgrades one to a supergroup)
         replies: auto           # auto: each answer goes back to the chat; tool: the bot
                                 # sends with ergo_telegram_message when it has something to say
         photo_batch_wait: 0     # seconds to gather photos sent one by one into one turn
@@ -107,6 +108,7 @@ REPLAY_EVERY = 60  # seconds between looks for updates to replay
 KEEP_HANDLED = timedelta(days=7)  # handled updates are deleted after this
 KEEP_SENT = 50  # messages a conversation remembers sending, for deletion
 MAX_ATTEMPTS = 3  # tries for an update the database kept failing
+MIGRATIONS_KEY = "telegram_chat_migrations"  # old group id -> its supergroup id
 _current_job: contextvars.ContextVar = contextvars.ContextVar(
     "telegram_update_job", default=None
 )
@@ -288,6 +290,7 @@ class TelegramPlugin(BotPlugin):
         self._offset = 0
         self._username: str | None = None
         self.notify_delegations = bool(self.config.get("notify_delegations", True))
+        self._migrations_loaded = False
 
     @property
     def api(self):
@@ -803,6 +806,79 @@ class TelegramPlugin(BotPlugin):
             return bool(names & self.allowed_users)
         return any(str(i) in self.users for i in ids if i is not None)
 
+    # -- group upgrades --------------------------------------------------
+    # Telegram turns a group into a supergroup (new id, -100...) when it gains
+    # admin features. The old id stops receiving messages, so a passive group
+    # listed by its old id would silently stop being recorded. The upgrade's
+    # service messages name both ids; remember the new one in the shared
+    # thread's metadata so it survives restarts.
+
+    async def load_chat_migrations(self) -> None:
+        """Add supergroups that listed passive groups became (once per process)."""
+        if self._migrations_loaded or not self.passive_group_chats:
+            self._migrations_loaded = True
+            return
+        found = (
+            await self.bot.sessions()
+            .filter(metadata__telegram_thread=self.target_thread)
+            .order_by("created_at")
+            .values_list("metadata", flat=True)
+            .afirst()
+        )
+        for old, new in ((found or {}).get(MIGRATIONS_KEY) or {}).items():
+            if old in self.passive_group_chats:
+                self.passive_group_chats.add(str(new))
+        self._migrations_loaded = True
+
+    async def follow_migration(self, message: dict) -> bool:
+        """Handle a group-to-supergroup service message; True if it was one."""
+        chat_id = str((message.get("chat") or {}).get("id"))
+        if new := message.get("migrate_to_chat_id"):
+            old, new = chat_id, str(new)
+        elif old := message.get("migrate_from_chat_id"):
+            old, new = str(old), chat_id
+        else:
+            return False
+        from asgiref.sync import sync_to_async
+
+        if old not in self.passive_group_chats or new in self.passive_group_chats:
+            return True
+        self.passive_group_chats.add(new)
+        logger.warning(
+            "Telegram group %s became supergroup %s; recording it as passive. "
+            "Replace %s with %s in passive_group_chats.",
+            old,
+            new,
+            old,
+            new,
+        )
+        session = await self.session_for({}, {"id": int(new), "type": "supergroup"})
+        if session is None:
+            return True
+        await sync_to_async(self._save_migration)(session, old, new)
+        return True
+
+    @staticmethod
+    def _save_migration(session, old: str, new: str) -> None:
+        from django.db import transaction
+
+        from django_ergo.conversation.models import ConversationSession
+
+        with transaction.atomic():
+            locked = ConversationSession.objects.select_for_update().get(pk=session.pk)
+            metadata = dict(locked.metadata or {})
+            metadata[MIGRATIONS_KEY] = {
+                **(metadata.get(MIGRATIONS_KEY) or {}),
+                old: new,
+            }
+            link = metadata.get("telegram")
+            if isinstance(link, dict) and str(link.get("chat_id")) == old:
+                # Sends to the old id fail once the group is upgraded.
+                metadata["telegram"] = {**link, "chat_id": int(new)}
+            locked.metadata = metadata
+            locked.save(update_fields=["metadata"])
+            session.metadata = metadata
+
     def passive_chat(self, chat: dict) -> bool:
         return (
             chat.get("type") in {"group", "supergroup"}
@@ -912,6 +988,9 @@ class TelegramPlugin(BotPlugin):
         return attachments, missing
 
     async def handle_message(self, message: dict) -> None:
+        await self.load_chat_migrations()
+        if await self.follow_migration(message):
+            return
         # Keep opted-in group messages independent: batching can promote an
         # untagged observation into a tagged sender's active turn.
         if self.passive_chat(message["chat"]):
@@ -1315,6 +1394,7 @@ class TelegramPlugin(BotPlugin):
 
     async def handle_messages(self, messages: list[dict]) -> None:
         """Answer one or more messages (an album) as a single turn."""
+        await self.load_chat_migrations()
         first = messages[0]
         chat = first["chat"]
         chat_id = chat["id"]
@@ -1324,6 +1404,14 @@ class TelegramPlugin(BotPlugin):
         ):
             if self.passive_chat(chat):
                 await self.capture_passive(messages)
+            elif chat.get("type") in {"group", "supergroup"}:
+                # Say why, so a group missing from passive_group_chats shows up.
+                logger.info(
+                    "Ignoring Telegram message %s in group %s: not addressed to "
+                    "the bot and the group is not in passive_group_chats",
+                    first.get("message_id"),
+                    chat_id,
+                )
             return
         session = await self.session_for(sender, chat)
         if session is None:
