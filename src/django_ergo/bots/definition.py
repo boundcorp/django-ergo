@@ -27,6 +27,9 @@ bot.yaml::
       budget_tokens: 8000
       granularity: conversation
     orchestration: true                # may the bot delegate downward (default true; upward always works)
+    private: true                      # no other bot may list, message, read or open files of this bot's
+                                       # chats, its parent included (default false). It still messages the
+                                       # bots it may call, and chats it started may answer and ask back.
     timezone: America/Los_Angeles      # for the current time in context
     current_time: true                 # current time in context, send time on user messages
     todos: true                        # the built-in todo list tools in every chat (bots.todos)
@@ -165,6 +168,7 @@ class BotDefinition:
     budget_tokens: int = 8000
     granularity: Granularity = Granularity.CONVERSATION
     orchestration: bool = True
+    private: bool = False  # closed to other bots (registry.may_call, closed_to)
     timezone: str = ""
     current_time: bool = True
     todos: bool = True
@@ -250,6 +254,7 @@ class BotDefinition:
             budget_tokens=int(root.get("budget_tokens", 8000)),
             granularity=Granularity.parse(root.get("granularity")),
             orchestration=orchestration,
+            private=bool(data.get("private", False)),
             timezone=str(data.get("timezone") or ""),
             current_time=bool(data.get("current_time", True)),
             todos=bool(data.get("todos", True)),

@@ -1089,7 +1089,10 @@ class Bot:
         self, session: ConversationSession, session_id: str
     ) -> SessionSource | None:
         """A chat someone linked to (ergo_chat_history_open_link): any bot's chat
-        of the same person, which is what they can open in the web app."""
+        of the same person, which is what they can open in the web app. A chat
+        of a private bot opens only for that bot."""
+        from django_ergo.bots.registry import closed_to
+
         if session.user_id is None:
             return None
         linked = (
@@ -1097,7 +1100,9 @@ class Bot:
             .exclude(bot_name="")
             .first()
         )
-        return SessionSource(linked) if linked is not None else None
+        if linked is None or closed_to(self, linked):
+            return None
+        return SessionSource(linked)
 
     def skillset(self, session: ConversationSession) -> SkillSet:
         """The chat's skills for this turn (see bots.skillset)."""
