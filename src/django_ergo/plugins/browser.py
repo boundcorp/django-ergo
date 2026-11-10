@@ -106,6 +106,28 @@ if TYPE_CHECKING:
 
 TAB_ID_CHARS = 8
 WAIT_MAX_SECONDS = 300
+# The user scrolling, clicking or typing in a tab between the bot's calls this
+# many times within the window means they've taken it over.
+TAKEOVER_INPUTS = 3
+TAKEOVER_WINDOW = 300  # seconds
+TAKEN = "(taken over by the user)"
+# Count the user's input in the page: trusted wheel, mouse, key and touch
+# events while the bot isn't acting (it sets __ergoActing around its own
+# actions, whose CDP input is trusted too). Returns the count since the last
+# read and resets it; installs the listeners on a new document.
+INPUT_WATCH = """() => {
+  if (!window.__ergoInput) {
+    window.__ergoInput = {n: 0};
+    for (const type of ["wheel", "mousedown", "keydown", "touchstart"]) {
+      addEventListener(type, (e) => {
+        if (e.isTrusted && !window.__ergoActing) window.__ergoInput.n++;
+      }, {capture: true, passive: true});
+    }
+  }
+  const n = window.__ergoInput.n;
+  window.__ergoInput.n = 0;
+  return n;
+}"""
 REF = re.compile(r"(?:f\d+)?e\d+")
 REF_IN_SNAPSHOT = re.compile(r"\[ref=(f\d+)?(e\d+)\]")
 SESSION_FUNCTION = "browser:session"
@@ -120,9 +142,9 @@ Don't explain as you go.
 A person can watch and use this Chrome in {takeover}. When a page needs them \
 (a sign-in, two-factor code, captcha or consent screen), they may already be \
 on it: call ergo_browser_wait once (90 seconds) and carry on if the page moved \
-on. If a tool says a tab moved since your last look, the person is using it: \
-leave that tab and open what you need in a new one (ergo_browser_open with \
-new_tab).
+on. If a tool says the person moved or took over a tab, leave that tab and \
+open what you need in a new one (ergo_browser_open with new_tab); if it notes \
+they scrolled or clicked there, check the snapshot it returns before going on.
 
 Stop and report instead of acting when:
 - the page still needs a person after that wait;
@@ -175,6 +197,8 @@ class Use:
     current: str = ""
     opened: list[str] = field(default_factory=list)
     seen: dict[str, str] = field(default_factory=dict)
+    # Tab id -> when the bot found the user had used it since its last look.
+    interrupts: dict[str, list[float]] = field(default_factory=dict)
 
 
 class BrowserPlugin(BotPlugin):
@@ -196,9 +220,9 @@ class BrowserPlugin(BotPlugin):
         self.driver_model = str(self.config.get("driver_model") or "auto/small")
         self.driver_steps = int(self.config.get("driver_steps", 30))
         self._current: dict[str, str] = {}  # chat -> tab id, without sessions
-        self._seen: dict[
-            str, str
-        ] = {}  # tab id -> URL the bot last saw, without sessions
+        # Without sessions: tab id -> the URL the bot last saw, and interruptions.
+        self._seen: dict[str, str] = {}
+        self._interrupts: dict[str, list[float]] = {}
         self._lock = threading.Lock()
         key = hashlib.sha1(  # noqa: S324 — a file name, not security
             f"{self.ssh_host}|{self.cdp_url}".encode()
@@ -363,6 +387,7 @@ class BrowserPlugin(BotPlugin):
         page.wait_for_load_state()
         if use is not None:
             use.seen[tab_id] = page.url
+        self._inputs(page)  # what happened up to now is accounted for
         return {
             "tab": tab_id,
             "title": page.title(),
@@ -407,11 +432,18 @@ class BrowserPlugin(BotPlugin):
         """This chat's tab bookkeeping for one call, saved on the session."""
         key = self._key(ctx)
         if not self.sessions:
-            use = Use(current=self._current.get(key, ""), seen=dict(self._seen))
-            yield use
-            with self._lock:
-                self._current[key] = use.current
-                self._seen.update(use.seen)
+            use = Use(
+                current=self._current.get(key, ""),
+                seen=dict(self._seen),
+                interrupts=dict(self._interrupts),
+            )
+            try:
+                yield use
+            finally:
+                with self._lock:
+                    self._current[key] = use.current
+                    self._seen.update(use.seen)
+                    self._interrupts.update(use.interrupts)
             return
         worker = self.session()
         if worker is None:
@@ -421,6 +453,7 @@ class BrowserPlugin(BotPlugin):
         use = Use(
             current=(worker.state.get("current") or {}).get(key, ""),
             seen=dict(worker.state.get("seen") or {}),
+            interrupts=dict(worker.state.get("interrupts") or {}),
         )
         try:
             yield use
@@ -441,6 +474,10 @@ class BrowserPlugin(BotPlugin):
             state["current"] = {**(state.get("current") or {}), key: use.current}
             state["opened"] = [*(state.get("opened") or []), *use.opened]
             state["seen"] = {**(state.get("seen") or {}), **use.seen}
+            state["interrupts"] = {
+                **(state.get("interrupts") or {}),
+                **use.interrupts,
+            }
             state["used_at"] = time.time()
             worker.state = state
             worker.save(update_fields=["state", "updated_at"])
@@ -604,12 +641,20 @@ class BrowserPlugin(BotPlugin):
             def work(context: Any) -> dict:
                 tab_id, page = self._page(context, use, tab)
                 moved = self._moved(use, tab_id, page)
+                used = self._interrupted(use, tab_id, page)
                 state = self._state(tab_id, page, use)
-                if moved:
+                if moved == TAKEN:
+                    state["note"] = (
+                        "The user took this tab over. Carry on here only if they've "
+                        "handed it back; otherwise work in a new tab."
+                    )
+                elif moved:
                     state["note"] = (
                         f"This tab was at {moved} when you last looked; someone may be "
                         "using it. If they are, leave it to them and work in a new tab."
                     )
+                elif used:
+                    state["note"] = used
                 return state
 
             return self._run(work)
@@ -622,8 +667,41 @@ class BrowserPlugin(BotPlugin):
             return last
         return ""
 
-    def _check_not_moved(self, use: Use, tab_id: str, page: Any) -> None:
-        if moved := self._moved(use, tab_id, page):
+    @staticmethod
+    def _inputs(page: Any) -> int:
+        """The user's scrolls, clicks and keys in the page since the last read."""
+        try:
+            return int(page.evaluate(INPUT_WATCH) or 0)
+        except Exception:  # noqa: BLE001 — a page mid-navigation can't be read
+            return 0
+
+    def _interrupted(self, use: Use, tab_id: str, page: Any) -> str:
+        """Count it if the user used the tab since the bot's last look; a note if so."""
+        if not self._inputs(page):
+            return ""
+        now = time.time()
+        recent = [
+            t for t in use.interrupts.get(tab_id, []) if now - t < TAKEOVER_WINDOW
+        ]
+        use.interrupts[tab_id] = [*recent, now]
+        return (
+            f"The user scrolled, clicked or typed in this tab since your last look "
+            f"({len(recent) + 1} of {TAKEOVER_INPUTS} times in a few minutes; at "
+            f"{TAKEOVER_INPUTS} you'll be asked to move to a new tab). Check the "
+            "snapshot before going on."
+        )
+
+    def _check_tab(self, use: Use, tab_id: str, page: Any) -> str:
+        """Refuse to act in a tab the user has taken over; else a note, if any."""
+        moved = self._moved(use, tab_id, page)
+        if moved == TAKEN:
+            msg = (
+                f"The user has taken over tab {tab_id}. Leave it to them: open what "
+                "you need in a new tab (ergo_browser_open with new_tab), or take a "
+                "snapshot first if they've handed it back."
+            )
+            raise RuntimeError(msg)
+        if moved:
             msg = (
                 f"Tab {tab_id} moved from {moved} to {page.url} since your last look, "
                 "so the user may be using it. Leave it to them: open what you need in a "
@@ -631,15 +709,40 @@ class BrowserPlugin(BotPlugin):
                 "you mean to carry on in this one."
             )
             raise RuntimeError(msg)
+        note = self._interrupted(use, tab_id, page)
+        if len(use.interrupts.get(tab_id, [])) >= TAKEOVER_INPUTS:
+            use.interrupts[tab_id] = []
+            use.seen[tab_id] = TAKEN
+            msg = (
+                f"The user keeps scrolling, clicking or typing in tab {tab_id}, so "
+                "they've taken it over. Leave it to them: open what you need in a new "
+                "tab (ergo_browser_open with new_tab)."
+            )
+            raise RuntimeError(msg)
+        return note
+
+    @staticmethod
+    @contextlib.contextmanager
+    def _acting(page: Any) -> Iterator[None]:
+        """Mark the bot's own input, so the page doesn't count it as the user's."""
+        with contextlib.suppress(Exception):
+            page.evaluate("window.__ergoActing = true")
+        try:
+            yield
+        finally:
+            with contextlib.suppress(Exception):  # gone if the page navigated
+                page.evaluate("window.__ergoActing = false")
 
     def act(self, ctx: ToolContext, tab: str, action: Callable[[Any], None]) -> dict:
         with self._use(ctx) as use:
 
             def work(context: Any) -> dict:
                 tab_id, page = self._page(context, use, tab)
-                self._check_not_moved(use, tab_id, page)
-                action(page)
-                return self._state(tab_id, page, use)
+                note = self._check_tab(use, tab_id, page)
+                with self._acting(page):
+                    action(page)
+                state = self._state(tab_id, page, use)
+                return {**state, "note": note} if note else state
 
             return self._run(work)
 
@@ -671,6 +774,7 @@ class BrowserPlugin(BotPlugin):
                             )
                         else:
                             done = page.url != start
+                use.interrupts[tab_id] = []  # the user was asked to use it
                 return {**self._state(tab_id, page, use), "waited_until_done": done}
 
             return self._run(work)
@@ -706,17 +810,19 @@ class BrowserPlugin(BotPlugin):
 
             def work(context: Any) -> dict:
                 tab_id, page = self._page(context, use, tab)
-                self._check_not_moved(use, tab_id, page)
+                note = {"note": n} if (n := self._check_tab(use, tab_id, page)) else {}
                 for number, step in enumerate(steps, 1):
                     try:
-                        self._step(page, step)
+                        with self._acting(page):
+                            self._step(page, step)
                     except Exception as exc:  # noqa: BLE001 — reported with the page
                         return {
                             **self._state(tab_id, page, use),
+                            **note,
                             "done": number - 1,
                             "failed": {"step": number, "error": str(exc)[:500]},
                         }
-                return {**self._state(tab_id, page, use), "done": len(steps)}
+                return {**self._state(tab_id, page, use), **note, "done": len(steps)}
 
             return self._run(work)
 
@@ -857,9 +963,11 @@ class BrowserPlugin(BotPlugin):
                 "code, captcha or consent screen), say so in your reply, then call "
                 "ergo_browser_wait (60 to 180 seconds) so they can do it while you wait, and "
                 "carry on once the page moves on; if it doesn't, end your turn asking them "
-                "to tell you when it's done. If a tab moved since your last look (a tool "
-                "says so), the user is using it: leave it to them and open what you need in "
-                "a new tab with ergo_browser_open new_tab. Never ask for passwords or codes "
+                "to tell you when it's done. If a tool says the user moved or took over a "
+                "tab (they navigated it, or kept scrolling, clicking or typing in it), "
+                "leave it to them and open what you need in a new tab with "
+                "ergo_browser_open new_tab; if it notes they used the tab, check the "
+                "snapshot before going on. Never ask for passwords or codes "
                 "in chat.",
             )
         ]

@@ -2893,6 +2893,34 @@ def test_the_browser_leaves_a_tab_the_user_took_over(tmp_path, chrome):
     assert plugin.wait(ctx, seconds=1)["waited_until_done"] is False
 
 
+@pytest.mark.django_db
+def test_the_browser_moves_off_a_tab_the_user_keeps_using(tmp_path, chrome):
+    _, _, plugin = browser_bot(tmp_path, config=f"cdp_url: {chrome}, sessions: false")
+    ctx = type("Ctx", (), {"session": None})()
+    tab = plugin.open(ctx, BROWSER_PAGE, new_tab=True)["tab"]
+
+    def person_scrolls(context):
+        page = next(p for i, p in plugin._pages(context) if i == tab)
+        page.mouse.move(40, 40)
+        page.mouse.wheel(0, 200)
+        page.mouse.wheel(0, 200)  # one scroll is many wheel events
+
+    plugin._run(person_scrolls)
+    assert "1 of 3 times" in plugin.press(ctx, "Tab")["note"]
+    assert "note" not in plugin.press(ctx, "Tab")  # the bot's own keys don't count
+    plugin._run(person_scrolls)
+    assert (
+        "2 of 3 times" in plugin.batch(ctx, [{"action": "press", "key": "Tab"}])["note"]
+    )
+    plugin._run(person_scrolls)
+    with pytest.raises(RuntimeError, match="they've taken it over"):
+        plugin.press(ctx, "Tab")
+    with pytest.raises(RuntimeError, match="has taken over tab"):
+        plugin.click(ctx, "text=Go")
+    assert "took this tab over" in plugin.snapshot(ctx)["note"]
+    assert "note" not in plugin.press(ctx, "Tab")  # handed back after a look
+
+
 @pytest.mark.django_db(transaction=True)
 async def test_a_browser_task_hands_its_goal_to_a_driver_model(tmp_path, chrome):
     from django_ergo.conversation.models import StructuredCall

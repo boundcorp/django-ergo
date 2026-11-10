@@ -209,10 +209,15 @@ back and say so. If nothing changes, the bot ends its turn and asks. The
 task driver waits 90 seconds once before stopping. It never asks for
 passwords in chat.
 
-The bot remembers the URL it last saw in each tab. If a tab has gone
-somewhere else since, someone else is using it: clicks, typing, key presses
-and batches in that tab refuse to run and tell the bot to work in a new tab
-instead, and a snapshot carries a note. After a snapshot the bot may carry
-on in that tab if it means to.
+The bot remembers the URL it last saw in each tab, and the page counts the
+user's scrolls, clicks and key presses (trusted input while the bot isn't
+acting; the bot marks its own). A tab has been taken over when it has gone
+to another page since the bot's last look, or when the bot finds the user
+used it between its calls 3 times within 5 minutes. Clicks, typing, key
+presses and batches then refuse to run in that tab and tell the bot to work
+in a new one; the times before that, the result carries a note to check the
+page first. After a snapshot the bot may carry on in the tab if the user
+handed it back. `ergo_browser_wait` doesn't count, since there the bot asked
+the user to act.
 
 All options are in the [bot reference](bots.md#browser).
