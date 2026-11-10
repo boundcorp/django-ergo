@@ -907,6 +907,59 @@ async def test_telegram_passive_capture_is_opt_in_and_limited_to_listed_groups(
 
 
 @pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("side", ["old", "new"])
+async def test_telegram_passive_group_follows_supergroup_upgrade(tmp_path, side):
+    from django_ergo.conversation.models import MessageBlock
+
+    # Telegram sends migrate_to_chat_id in the old group and
+    # migrate_from_chat_id in the new supergroup; either one is enough.
+    await User.objects.acreate(username="cook")
+    bot, engine, plugin = passive_telegram_bot(tmp_path, messages="tags")
+    await plugin.handle_update(group_update(1, sender_id=111, text="before"))
+    session = await bot.sessions().aget(metadata__telegram_thread="Telegram")
+    session.metadata["telegram"] = {"chat_id": -100123, "message_id": 5}
+    await session.asave(update_fields=["metadata"])
+    upgrade = (
+        group_update(2, chat_id=-100123, migrate_to_chat_id=-100777)
+        if side == "old"
+        else group_update(2, chat_id=-100777, migrate_from_chat_id=-100123)
+    )
+    await plugin.handle_update(upgrade)
+    await plugin.handle_update(group_update(3, chat_id=-100777, text="youtu.be/x"))
+
+    texts = [
+        block.text
+        async for block in MessageBlock.objects.filter(
+            message__session=session
+        ).order_by("message__sequence")
+    ]
+    assert texts == ["before", "youtu.be/x"]
+    assert not engine._client.calls
+    await session.arefresh_from_db()
+    assert session.metadata["telegram"]["chat_id"] == -100777
+    assert session.metadata["telegram_chat_migrations"] == {"-100123": "-100777"}
+
+    # A restarted plugin still treats the supergroup as passive.
+    _, _, fresh = passive_telegram_bot(tmp_path / "again", messages="tags")
+    await fresh.handle_update(group_update(4, chat_id=-100777, text="after restart"))
+    assert await session.messages.acount() == 3
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_telegram_upgrade_of_an_unlisted_group_is_ignored(tmp_path):
+    await User.objects.acreate(username="cook")
+    bot, _, plugin = passive_telegram_bot(tmp_path)
+    await plugin.handle_update(
+        group_update(1, chat_id=-100999, migrate_to_chat_id=-100555)
+    )
+    await plugin.handle_update(group_update(2, chat_id=-100555, text="other group"))
+    assert "-100555" not in plugin.passive_group_chats
+    assert (
+        not await bot.sessions().filter(metadata__telegram_thread="Telegram").aexists()
+    )
+
+
+@pytest.mark.django_db(transaction=True)
 async def test_telegram_passive_updates_replay_once_in_order(tmp_path):
     await User.objects.acreate(username="cook")
     _, _, old = passive_telegram_bot(tmp_path / "before")

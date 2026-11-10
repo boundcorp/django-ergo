@@ -1753,6 +1753,16 @@ already-running bot's token. See the [Storytime operations handoff](telegram-sto
 for the concrete sender policy and deployment prerequisites; kitchen defaults
 remain unchanged.
 
+Telegram gives a group a new id (`-100...`) when it becomes a supergroup,
+which happens when it gains admin features such as message links. The
+plugin follows the upgrade's service message: the new id is recorded as
+passive (kept in the target thread's metadata, so it survives restarts), the
+chat used for replies moves to it, and a warning asks you to put the new id
+in `passive_group_chats`. An upgrade that happened before this was in place
+was missed, so list the supergroup's id yourself (a `t.me/c/<n>/...` message
+link means id `-100<n>`). Untagged messages from a group that is not listed
+are dropped, with an info-level log line saying so.
+
 In an opted-in group, messages that do not otherwise get a response are
 stored in the target thread as user messages, without starting a bot turn or
 changing the chat used for replies. They retain the real Telegram author and
