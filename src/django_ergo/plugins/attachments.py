@@ -4,6 +4,9 @@
       - name: attachments
         max_bytes: 5000000         # largest file the bot may write
         other_sessions: true       # may read files in the user's other sessions
+        video_model: gemini-flash-latest   # answers questions about videos
+        gemini_api_key_env: GEMINI_API_KEY
+        max_video_bytes: 2000000000        # largest video sent to Gemini
 
 Files come from three places: sent with a message, uploaded to the session
 (Ergonaut's Files panel), or written by the bot. Tools:
@@ -17,11 +20,16 @@ Files come from three places: sent with a message, uploaded to the session
 - ``ergo_attachments_create``: write a new text file into this session.
 - ``ergo_attachments_update``: replace the contents of a text file in this
   session.
-- ``ergo_attachments_look``: look at an image or PDF (or any file). An
-  image comes back in the tool result, so the bot sees it itself
-  (downscaled; see ``django_ergo.conversation.images``). Other files go to
-  the bot's own model as an attachment in a separate call (kind
-  ``attachment_look``) that answers the question about them.
+- ``ergo_attachments_look``: look at an image, PDF or video (or any file).
+  An image comes back in the tool result, so the bot sees it itself
+  (downscaled; see ``django_ergo.conversation.images``). A video goes to
+  Gemini, which watches it (picture and sound, optionally only from
+  ``start_seconds`` to ``end_seconds``) and answers the question; it needs
+  the Gemini key. Other files go to the bot's own model as an attachment in a
+  separate call (kind ``attachment_look``) that answers the question.
+- ``ergo_attachments_frames``: still frames from a video, evenly spaced or
+  at given seconds, which the bot sees itself and which are saved in the
+  chat. Needs ffmpeg, not Gemini (see ``django_ergo.conversation.video``).
 - ``ergo_attachments_archive``: archive files in this session, by id or all
   of them (optionally only those older than N days, or all but the latest
   K), to clear old files out of the bot's working set.
@@ -55,6 +63,7 @@ from django_ergo.conversation.attachments import read_text
 from django_ergo.conversation.attachments import replace_session_file
 from django_ergo.conversation.attachments import save_session_file
 from django_ergo.conversation.context import TextContextSource
+from django_ergo.conversation.video import is_video
 
 if TYPE_CHECKING:
     from django_ergo.bots.tools import ToolContext
@@ -65,6 +74,15 @@ if TYPE_CHECKING:
     from django_ergo.conversation.toolkit import Toolkit
 
 MAX_LISTED = 50
+# Frames per ergo_attachments_frames call: the newest round of tool results
+# carries at most this many images (images.ROUND_IMAGES_MAX).
+MAX_FRAMES = 8
+WATCH_PROMPT = (
+    "You are watching a video for another assistant that can't see video. "
+    "Answer its question accurately and concretely. Give timestamps (m:ss) for "
+    "what you describe, quote on-screen text and speech exactly, and mention the "
+    "audio (voiceover, music, sound effects) when it matters."
+)
 
 
 def describe_row(row: ConversationAttachment) -> dict:
@@ -103,6 +121,11 @@ class AttachmentsPlugin(BotPlugin):
         self.max_bytes = int(self.config.get("max_bytes", 5_000_000))
         self.other_sessions = bool(self.config.get("other_sessions", True))
         self.max_look_bytes = int(self.config.get("max_look_bytes", 20_000_000))
+        self.video_model = str(self.config.get("video_model") or "")
+        self.gemini_key_env = str(
+            self.config.get("gemini_api_key_env") or "GEMINI_API_KEY"
+        )
+        self.max_video_bytes = int(self.config.get("max_video_bytes", 2_000_000_000))
 
     # -- access --------------------------------------------------------------
 
@@ -193,12 +216,14 @@ class AttachmentsPlugin(BotPlugin):
         self._check_size(data)
         return describe_row(replace_session_file(row, data))
 
-    def look(
+    def look(  # noqa: PLR0913
         self,
         ctx: ToolContext,
         attachment_id: str,
         question: str = "",
         session_id: str = "",
+        start_seconds: float | None = None,
+        end_seconds: float | None = None,
     ) -> str | ToolResult:
         from asgiref.sync import async_to_sync
 
@@ -214,13 +239,14 @@ class AttachmentsPlugin(BotPlugin):
         if not row.file:
             msg = f"{row.filename} has no stored copy to look at"
             raise ValueError(msg)
+        if is_video(row.media_type, row.filename):
+            return self.watch(ctx, row, question, start_seconds, end_seconds)
         if not model_readable(row):
-            # A video or archive would reach the model as a text stand-in only.
+            # An archive would reach the model as a text stand-in only.
             msg = (
                 f"{row.filename} ({row.media_type or 'unknown type'}) can't be looked at: "
-                "the model only sees images, PDFs and text. Copy it somewhere a tool "
-                "can process it (for a video, extract frames or a transcript) and look "
-                "at those instead."
+                "the model only sees images, PDFs, videos and text. Copy it somewhere a "
+                "tool can process it and look at the results instead."
             )
             raise ValueError(msg)
         if (row.size or 0) > self.max_look_bytes:
@@ -266,6 +292,105 @@ class AttachmentsPlugin(BotPlugin):
             )
             raise ValueError(msg)
         return f"{row.filename}: {result.parsed}"
+
+    def watch(
+        self,
+        ctx: ToolContext,
+        row: ConversationAttachment,
+        question: str = "",
+        start_seconds: float | None = None,
+        end_seconds: float | None = None,
+    ) -> str:
+        """Ask Gemini about a video file."""
+        from django_ergo.conversation.video import VideoError
+        from django_ergo.conversation.video import ask_gemini
+        from django_ergo.conversation.video import local_path
+        from django_ergo.conversation.video import video_media_type
+
+        key = ctx.secret(self.gemini_key_env)
+        if not key:
+            msg = (
+                f"Watching {row.filename} needs {self.gemini_key_env}, which isn't set "
+                "here. Use ergo_attachments_frames to see still frames instead."
+            )
+            raise ValueError(msg)
+        if (row.size or 0) > self.max_video_bytes:
+            msg = f"{row.filename} is too large to watch ({row.size} bytes)"
+            raise ValueError(msg)
+        try:
+            with local_path(row) as path:
+                answer = ask_gemini(
+                    path,
+                    video_media_type(row.media_type, row.filename),
+                    question
+                    or "Describe this video in detail, scene by scene with timestamps, "
+                    "including any on-screen text, voiceover and music.",
+                    api_key=key,
+                    model=self.video_model,
+                    system=WATCH_PROMPT,
+                    start=start_seconds,
+                    end=end_seconds,
+                )
+        except VideoError as exc:
+            msg = f"Could not watch {row.filename}: {exc}"
+            raise ValueError(msg) from exc
+        span = ""
+        if start_seconds is not None or end_seconds is not None:
+            span = f" ({start_seconds or 0:g}s to {'end' if end_seconds is None else f'{end_seconds:g}s'})"
+        return f"{row.filename}{span}: {answer.text}\n\n[{answer.usage_line()}]"
+
+    def frames(  # noqa: PLR0913
+        self,
+        ctx: ToolContext,
+        attachment_id: str,
+        count: int = 6,
+        times: list[float] | None = None,
+        session_id: str = "",
+        width: int = 768,
+    ) -> ToolResult:
+        """Still frames from a video, as images the bot sees itself."""
+        from django_ergo.conversation.images import ToolImage
+        from django_ergo.conversation.images import ToolResult
+        from django_ergo.conversation.video import VideoError
+        from django_ergo.conversation.video import even_times
+        from django_ergo.conversation.video import extract_frames
+        from django_ergo.conversation.video import local_path
+        from django_ergo.conversation.video import probe
+        from django_ergo.conversation.video import timestamp
+
+        row = self.file_for(ctx, attachment_id, session_id)
+        if not is_video(row.media_type, row.filename):
+            msg = f"{row.filename} ({row.media_type}) isn't a video"
+            raise ValueError(msg)
+        width = max(160, min(int(width or 768), 1280))
+        try:
+            with local_path(row) as path:
+                info = probe(path)
+                if times:
+                    # The last frame can end well before the audio does.
+                    last = max(info.duration - 0.5, 0)
+                    wanted = sorted({min(round(float(t), 2), last) for t in times})
+                    wanted = wanted[:MAX_FRAMES]
+                else:
+                    wanted = even_times(
+                        info.duration, max(1, min(int(count or 6), MAX_FRAMES))
+                    )
+                shots = extract_frames(path, wanted, width)
+        except VideoError as exc:
+            msg = f"Could not get frames from {row.filename}: {exc}"
+            raise ValueError(msg) from exc
+        stem = row.filename.rsplit(".", 1)[0] or "video"
+        images = [
+            ToolImage(
+                data=jpeg,
+                media_type="image/jpeg",
+                name=f"{stem}@{at:06.2f}s.jpg",
+            )
+            for at, jpeg in shots
+        ]
+        lines = [f"{row.filename}: {info.describe()}. Frames at:"]
+        lines += [f"- {timestamp(at)} ({at:g}s)" for at, _ in shots]
+        return ToolResult("\n".join(lines), images)
 
     def archive(
         self,
@@ -370,8 +495,9 @@ class AttachmentsPlugin(BotPlugin):
                     "listed; ergo_attachments_list with include_archived shows them)"
                 )
             return (
-                "Read text with ergo_attachments_read, look at images and PDFs with "
-                "ergo_attachments_look; write with "
+                "Read text with ergo_attachments_read, look at images, PDFs and "
+                "videos with ergo_attachments_look (ergo_attachments_frames for "
+                "stills from a video); write with "
                 "ergo_attachments_create or ergo_attachments_update; clear old "
                 "files out of this list with ergo_attachments_archive.\n"
                 + "\n".join(lines)
@@ -458,10 +584,12 @@ class AttachmentsPlugin(BotPlugin):
             name="ergo_attachments_look",
             takes_context=True,
             description=(
-                "Look at an image or PDF (or any file) by id, or by filename in this "
-                "chat or another (session_id). You see an image yourself in the result; "
-                "for a PDF or other file, the question is answered for you, e.g. what a "
-                "receipt says."
+                "Look at an image, PDF or video (or any file) by id, or by filename in "
+                "this chat or another (session_id). You see an image yourself in the "
+                "result; for a PDF, video or other file, the question is answered for "
+                "you, e.g. what a receipt says or what happens in an ad and when. A "
+                "video is watched with its sound; start_seconds/end_seconds limit it "
+                "to part of the video."
             ),
             parameters={
                 "attachment_id": {
@@ -476,16 +604,72 @@ class AttachmentsPlugin(BotPlugin):
                     "type": "string",
                     "description": "What you want to know (default: describe it)",
                 },
+                "start_seconds": {
+                    "type": "number",
+                    "description": "Video only: watch from here (default: the start)",
+                },
+                "end_seconds": {
+                    "type": "number",
+                    "description": "Video only: watch up to here (default: the end)",
+                },
             },
             required=["attachment_id"],
         )
-        def look(
+        def look(  # noqa: PLR0913
             ctx: ToolContext,
             attachment_id: str,
             question: str = "",
             session_id: str = "",
+            start_seconds: float | None = None,
+            end_seconds: float | None = None,
         ) -> str | ToolResult:
-            return plugin.look(ctx, attachment_id, question, session_id)
+            return plugin.look(
+                ctx, attachment_id, question, session_id, start_seconds, end_seconds
+            )
+
+        @bot_tool(
+            name="ergo_attachments_frames",
+            takes_context=True,
+            description=(
+                "See still frames from a video yourself: evenly spaced (count) or at "
+                f"given seconds (times), up to {MAX_FRAMES}. The frames are saved in "
+                "this chat, so you can attach or refer to them. Use "
+                "ergo_attachments_look to have the whole video (with sound) watched."
+            ),
+            parameters={
+                "attachment_id": {
+                    "type": "string",
+                    "description": "Video file id or filename",
+                },
+                "session_id": {
+                    "type": "string",
+                    "description": "The chat a filename is in (default: this one)",
+                },
+                "count": {
+                    "type": "integer",
+                    "description": f"Evenly spaced frames (default 6, at most {MAX_FRAMES})",
+                },
+                "times": {
+                    "type": "array",
+                    "items": {"type": "number"},
+                    "description": "Seconds to take frames at, instead of count",
+                },
+                "width": {
+                    "type": "integer",
+                    "description": "Frame width in pixels (default 768)",
+                },
+            },
+            required=["attachment_id"],
+        )
+        def frames(  # noqa: PLR0913
+            ctx: ToolContext,
+            attachment_id: str,
+            count: int = 6,
+            times: list[float] | None = None,
+            session_id: str = "",
+            width: int = 768,
+        ) -> ToolResult:
+            return plugin.frames(ctx, attachment_id, count, times, session_id, width)
 
         @bot_tool(
             name="ergo_attachments_archive",
@@ -542,5 +726,14 @@ class AttachmentsPlugin(BotPlugin):
 
         return [
             fn.__bot_tool__
-            for fn in (list_files, read, create, update, look, archive, unarchive)
+            for fn in (
+                list_files,
+                read,
+                create,
+                update,
+                look,
+                frames,
+                archive,
+                unarchive,
+            )
         ]

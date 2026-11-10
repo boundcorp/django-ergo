@@ -37,7 +37,8 @@ Its `attachments` skill gives:
 | --- | --- |
 | `ergo_attachments_list` | files in this chat, or another of the person's chats |
 | `ergo_attachments_read` | a file's text (or a short description of a non-text file) |
-| `ergo_attachments_look(attachment_id, question)` | see an image or PDF: an image comes back in the tool result so the bot looks itself; other files go to the bot's model in a separate call that answers the question |
+| `ergo_attachments_look(attachment_id, question)` | see an image, PDF or video: an image comes back in the tool result so the bot looks itself; a video goes to Gemini (below); other files go to the bot's model in a separate call that answers the question |
+| `ergo_attachments_frames(attachment_id, count or times)` | still frames from a video (up to 8, evenly spaced or at given seconds), which the bot sees itself and which are saved in the chat |
 | `ergo_attachments_create`, `ergo_attachments_update` | write or replace a text file in this chat |
 | `ergo_attachments_archive`, `ergo_attachments_unarchive` | clear old files out of the working set (below) |
 
@@ -54,6 +55,40 @@ the newest round of tool calls just returned (up to 8); older ones
 become `[image omitted: name (id=...)]` and the bot can look again by id.
 Install the `images` extra (Pillow) so images are downscaled to 1024px
 first. Details are in [How many images a call carries](#how-many-images-a-call-carries).
+
+### Video
+
+Neither Claude nor OpenAI takes video, so the plugin gives a bot two ways
+to watch one:
+
+- **`ergo_attachments_look`** uploads the video to the Gemini Files API
+  (streamed from storage, never read into memory whole), asks Gemini the
+  bot's question with the picture and the soundtrack, and deletes the
+  upload. `start_seconds` and `end_seconds` limit it to part of the video,
+  so a long video needn't be cut first. The answer gives timestamps and
+  quotes on-screen text and speech. It needs `GEMINI_API_KEY` (a per-user
+  `GEMINI_API_KEY__<USERNAME>` wins). Gemini samples one frame a second, so
+  a 30-second ad is roughly 8k input tokens, about a cent on Flash.
+- **`ergo_attachments_frames`** takes JPEG stills with ffmpeg: `count`
+  evenly spaced frames, or frames at `times` (seconds). Each frame is a
+  separate ffmpeg run that seeks straight to its timestamp and decodes one
+  frame on one thread, scaled to `width` (default 768), so memory stays in
+  the tens of MB however long the video is. ffmpeg runs with the highest
+  OOM score, so if a pod runs out of memory anyway the kernel kills it, not
+  the worker. The frames are saved in the chat as bot files, ready to attach
+  to a brief or look at again.
+
+```yaml
+plugins:
+  - name: attachments
+    video_model: gemini-flash-latest  # any Gemini model that takes video
+    gemini_api_key_env: GEMINI_API_KEY
+    max_video_bytes: 2000000000       # the Files API limit
+```
+
+A video an agent job renders reaches these tools through
+`local_shell_attach`. The library calls are in
+`django_ergo.conversation.video` (`probe`, `extract_frames`, `ask_gemini`).
 
 ### Audio
 
