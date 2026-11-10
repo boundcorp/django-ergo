@@ -299,3 +299,75 @@ def test_upload_network_error_does_not_expose_token(monkeypatch):
     with pytest.raises(RuntimeError, match="upload failed") as exc:
         api._upload("sendDocument", "document", "file.txt", "text/plain", b"x", {})
     assert "secret-token" not in str(exc.value)
+
+
+class DeletingAPI(RecordingAPI):
+    def __init__(self):
+        super().__init__()
+        self.calls = []
+        self.next_id = 100
+
+    async def call(self, method, **params):
+        self.calls.append((method, params))
+        if method == "sendMessage":
+            self.next_id += 1
+            return {"message_id": self.next_id}
+        return True
+
+    async def upload(self, method, field, filename, media_type, data, **params):
+        await super().upload(method, field, filename, media_type, data, **params)
+        self.next_id += 1
+        return {"message_id": self.next_id}
+
+
+def _delete_setup(settings, tmp_path):
+    settings.MEDIA_ROOT = tmp_path
+    user = get_user_model().objects.create_user("lee")
+    session = ConversationSession.objects.create(
+        user=user,
+        bot_name="bot",
+        metadata={"telegram": {"chat_id": -123, "message_id": 7, "title": "Group"}},
+    )
+    plugin = TelegramPlugin(None, {})
+    plugin.on_load()
+    plugin.api = DeletingAPI()
+    toolkit = FunctionToolkit(plugin._tools(), ToolContext(session=session, user=user))
+    return session, plugin, toolkit
+
+
+@pytest.mark.django_db
+def test_delete_latest_sent_message(settings, tmp_path):
+    session, plugin, toolkit = _delete_setup(settings, tmp_path)
+    row = save_session_file(session, "clip.mp4", b"v", media_type="video/mp4")
+
+    assert "message 101" in toolkit.execute_tool(
+        "ergo_telegram_message", {"text": "hi"}
+    )
+    assert "message 102" in toolkit.execute_tool(
+        "ergo_telegram_file", {"attachment_id": str(row.id)}
+    )
+    result = toolkit.execute_tool("ergo_telegram_delete", {})
+
+    assert "Deleted message 102" in result
+    assert plugin.api.calls[-1] == (
+        "deleteMessage",
+        {"chat_id": -123, "message_id": 102},
+    )
+    assert [m["message_id"] for m in plugin.sent_messages(session)] == [101]
+    # The link Telegram's intake keeps is untouched.
+    session.refresh_from_db()
+    assert session.metadata["telegram"]["message_id"] == 7
+
+
+@pytest.mark.django_db
+def test_delete_by_id_and_refusals(settings, tmp_path):
+    session, plugin, toolkit = _delete_setup(settings, tmp_path)
+
+    assert "No message sent" in toolkit.execute_tool("ergo_telegram_delete", {})
+    with pytest.raises(ValueError, match="not one of yours"):
+        toolkit.execute_tool("ergo_telegram_delete", {"message_id": 7})
+    # An id sent before ids were remembered can still be named.
+    assert "Deleted message 55" in toolkit.execute_tool(
+        "ergo_telegram_delete", {"message_id": 55}
+    )
+    assert plugin.api.calls == [("deleteMessage", {"chat_id": -123, "message_id": 55})]

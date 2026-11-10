@@ -1735,6 +1735,15 @@ cannot be uploaded; uploads are limited to 50,000,000 bytes and inbound download
 to 20,000,000 bytes. Telegram can impose stricter limits. Approval prompts and
 errors reach the chat either way.
 
+Both send tools report the Telegram message id, and the conversation remembers
+the last 50 messages they sent (`telegram_sent` in its metadata).
+`ergo_telegram_delete(message_id)` deletes one of the bot's messages from the
+conversation's chat; without `message_id` it deletes the latest one sent. An id
+the bot sent before ids were remembered can still be named. Telegram allows a
+bot to delete its own messages for 48 hours in groups (longer in private chats).
+A Telegram message that replies to one of the bot's messages starts with
+`[Replying to your message N]`, so "delete this" can name it.
+
 **People.** The message's `author` is the Telegram user (`telegram_user`,
 their id and name), whichever chat it lands in, and the plugin keeps an
 `AuthorProfile` for each one with their username and profile photo

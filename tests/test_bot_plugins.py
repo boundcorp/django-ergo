@@ -1763,7 +1763,9 @@ async def test_telegram_auto_replies_and_mentions_only(tmp_path):
 
     await send(1, text="just chatting")
     await send(2, text="@kitchenbot what's for dinner?")
-    await send(3, text="thanks", reply_to_message={"from": {"id": 4242}})
+    await send(
+        3, text="thanks", reply_to_message={"message_id": 55, "from": {"id": 4242}}
+    )
     await send(4, chat={"id": 7, "type": "private"}, text="hi")
 
     assert [m["text"] for m in plugin.api.sent()] == [
@@ -1772,6 +1774,8 @@ async def test_telegram_auto_replies_and_mentions_only(tmp_path):
         "Private.",
     ]
     assert len(engine._client.calls) == 3
+    # A reply to the bot names the message it replies to.
+    assert "[Replying to your message 55]\\nthanks" in str(engine._client.calls[1])
 
 
 @pytest.mark.django_db(transaction=True)
