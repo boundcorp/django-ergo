@@ -236,6 +236,23 @@ def test_agents_use_subscriptions_only():
 
 
 @pytest.mark.django_db
+def test_an_agent_tier_picks_only_what_the_manager_runs():
+    data = yaml.safe_load(PROVIDERS)
+    data["agents"]["large"] = [
+        {"agent": "omp", "provider": "claude", "model": "anthropic/claude-opus-5-5"},
+        {"agent": "claude", "provider": "claude", "model": "claude-opus-5-5"},
+        {"agent": "codex", "provider": "chatgpt", "model": "gpt-6-sol"},
+    ]
+    providers = Providers.from_dict(data)
+    assert pick_agent(providers, "large", ("claude", "codex")).agent == "claude"
+    # Claude's five-hour window used up: the local manager falls back to Codex.
+    record_usage_windows("claude", {"five_hour": {"used": 100, "resets_at": soon()}})
+    assert pick_agent(providers, "large", ("claude", "codex")).agent == "codex"
+    with pytest.raises(ValueError, match="this manager runs kimi"):
+        pick_agent(providers, "large", ("kimi",))
+
+
+@pytest.mark.django_db
 def test_remote_agent_does_not_require_provider_cli_on_host():
     data = yaml.safe_load(PROVIDERS)
     data["providers"]["claude"]["config"]["command"] = "/nonexistent/claude"

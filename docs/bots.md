@@ -738,7 +738,9 @@ manager)` asks the manager to start the agent and starts a polling Worker,
   name's list, and custom names are supported. Chat `tiers.<name>` overrides
   are independent. Restart Ergonaut and its bot workers after editing
   providers.yaml (see [Routing by tier](building-bots.md#routing-by-tier)).
-  The manager must run the picked agent. `manager` is needed only when the
+  Routing picks only among the tier's candidates the manager runs (list
+  `claude` and `codex` candidates for `local_shell`, `omp` for Orca), so a
+  used-up subscription falls back to another one. `manager` is needed only when the
   chat has more than one.
 - Each check (`AgentManager.check`) passes new questions to the chat once,
   as a message naming the worker and question. `ergo_agent_reply(worker_id,

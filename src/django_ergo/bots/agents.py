@@ -195,7 +195,9 @@ def start(ctx: ToolContext, spec: AgentSpec, manager: str = "") -> Worker:
     if spec.tier:
         from django_ergo.bots.routing import pick_agent
 
-        choice = pick_agent(ctx.bot.providers, spec.tier)
+        # Only candidates this manager can run, so a Claude window that's used
+        # up falls back to another subscription the manager also runs.
+        choice = pick_agent(ctx.bot.providers, spec.tier, found.agents)
         spec.agent, spec.model, spec.effort = choice.agent, choice.model, choice.effort
         check(ctx.bot, spec.model, AGENT)
     spec.agent = spec.agent or found.default_agent
