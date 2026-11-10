@@ -167,6 +167,11 @@ def _codex(root: Path, cwd: str, since: datetime, until: datetime) -> dict[str, 
     return models
 
 
+# What local_shell calls in-process, where the job folders are.
+claude_usage = _claude
+codex_usage = _codex
+
+
 def _omp(root: Path, cwd: str, since: datetime, until: datetime) -> dict[str, dict]:
     models: dict[str, dict] = {}
     for path in (root / ".omp" / "agent" / "sessions").glob("**/*.jsonl"):

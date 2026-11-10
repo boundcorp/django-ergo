@@ -119,6 +119,14 @@ class AgentManager:
         shape), for workers that ran before it was recorded; None if unknown."""
         return None
 
+    def record_usage(
+        self, worker: Worker, handle: dict, *, dry_run: bool = False
+    ) -> dict[str, dict] | None:
+        """Read the agent's token usage now and save it as the worker's
+        ``AgentUsage`` rows (unless ``dry_run``), for workers whose usage was
+        missed; the totals per model, or None if this manager can't."""
+        return None
+
     def worker_handle(self, worker: Worker) -> dict | None:
         """The handle of a worker this manager started under another function name
         (a plugin's own older workers); None if it isn't one."""

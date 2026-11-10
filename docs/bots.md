@@ -1361,8 +1361,18 @@ date: files it lacks are copied in, and files still exactly as the template
 gave them (hashes in `.ergo/template.json`) get the template's new version;
 files the job changed are never overwritten. So a job made before a kit fix
 or a new helper still gets it. The report lists the
-files the run made or changed, with sizes and SHA-256 hashes, and Claude
-Code's token counts go to Costs.
+files the run made or changed, with sizes and SHA-256 hashes.
+
+Each job's token counts go to Costs and the chat's usage chart, for Claude
+Code and Codex alike: every 5 minutes while a run is going and again when it
+ends. They come from the agent's own session files (`~/.claude/projects`,
+`~/.codex/sessions`) for the job folder and the worker's time span, so every
+request is counted under its own model, sub-agents included. When those can't
+be read (an agent running as another user), the run transcripts are summed
+instead: Claude Code's `result` events (`modelUsage` per model) and Codex's
+`turn.completed` usage. Only the worker's own runs count, not a later fresh
+run in the same folder. `ergonaut manage agent_usage [--dry-run] [--session
+<id>]` reads usage again for workers whose counts were missed.
 
 Local Codex jobs default to the `workspace-write` sandbox with network
 access enabled globally, without changing the CLI's home configuration.
