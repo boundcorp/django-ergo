@@ -51,10 +51,30 @@ say({{"type": "result", "subtype": "success", "is_error": False, "result": text,
 """
 
 
+# A stand-in for `codex exec --json`: one turn with its token usage.
+FAKE_CODEX = """\
+#!{python}
+import json, sys
+argv = sys.argv[1:]
+def say(event):
+    print(json.dumps(event), flush=True)
+say({{"type": "thread.started", "thread_id": "t-1"}})
+say({{"type": "turn.started"}})
+say({{"type": "item.completed", "item": {{"type": "agent_message", "text": "Rendered"}}}})
+say({{"type": "turn.completed", "usage": {{"input_tokens": 1000,
+     "cached_input_tokens": 900, "output_tokens": 50}}}})
+with open(argv[argv.index("--output-last-message") + 1], "w") as f:
+    f.write("Rendered the cut")
+"""
+
+
 def yaml_for(tmp_path: Path) -> str:
     fake = tmp_path / "fake-claude"
     fake.write_text(FAKE_CLAUDE.format(python=sys.executable))
     fake.chmod(0o755)
+    codex = tmp_path / "fake-codex"
+    codex.write_text(FAKE_CODEX.format(python=sys.executable))
+    codex.chmod(0o755)
     template = tmp_path / "kit"
     (template / "renderers").mkdir(parents=True)
     (template / "renderers" / "render.py").write_text("print('render')\n")
@@ -66,7 +86,7 @@ def yaml_for(tmp_path: Path) -> str:
         root: {tmp_path / "jobs"}
         template: {template}
         agents: [claude, codex]
-        executables: {{claude: {fake}}}
+        executables: {{claude: {fake}, codex: {codex}}}
         secrets: [HIGGSFIELD_API_KEY]
         approve: false
         max_concurrent: 1
@@ -737,3 +757,183 @@ def test_an_agent_killed_for_memory_is_reported_and_its_supervisor_survives(tmp_
 
     check = plugin.check(Ctx(), {"dir": str(folder), "agent": "claude", "run": 1})
     assert check.status == "failed" and "out of memory" in check.error
+
+
+def test_transcript_usage_reads_claude_and_codex_runs():
+    from django_ergo.plugins.local_shell import transcript_usage
+
+    finished = [
+        {"type": "system", "subtype": "init", "model": "claude-opus"},
+        {
+            "type": "result",
+            "num_turns": 4,
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+            "modelUsage": {
+                "claude-opus": {
+                    "inputTokens": 10,
+                    "outputTokens": 20,
+                    "cacheReadInputTokens": 300,
+                    "cacheCreationInputTokens": 40,
+                },
+                "claude-haiku": {"inputTokens": 5, "outputTokens": 6},
+            },
+        },
+    ]
+    message = {"id": "m1", "model": "claude-opus", "usage": {"input_tokens": 7}}
+    running = [
+        {"type": "system", "subtype": "init", "model": "claude-opus"},
+        # stream-json repeats a message per content block: counted once
+        {"type": "assistant", "message": message},
+        {
+            "type": "assistant",
+            "message": {**message, "usage": {"input_tokens": 7, "output_tokens": 9}},
+        },
+    ]
+    usage = transcript_usage("claude", [finished, running], [{}, {}])
+    assert usage["claude-opus"] == {
+        "input": 17,
+        "cache_write": 40,
+        "cache_read": 300,
+        "output": 29,
+        "reasoning": 0,
+        "requests": 5,
+    }
+    assert usage["claude-haiku"]["output"] == 6
+
+    turn = {
+        "type": "turn.completed",
+        "usage": {
+            "input_tokens": 1000,
+            "cached_input_tokens": 900,
+            "output_tokens": 50,
+            "reasoning_output_tokens": 30,
+        },
+    }
+    usage = transcript_usage(
+        "codex",
+        [[turn], [turn]],
+        [{"argv": ["codex", "exec", "--model", "gpt-test", "do it"]}, {}],
+    )
+    assert usage["gpt-test"] == {
+        "input": 100,
+        "cache_write": 0,
+        "cache_read": 900,
+        "output": 50,
+        "reasoning": 30,
+        "requests": 1,
+    }
+    assert usage["codex"]["cache_read"] == 900  # no --model: the default model
+
+
+@pytest.mark.django_db(transaction=True)
+def test_codex_jobs_record_usage_and_prefer_its_session_files(
+    tmp_path,
+    workers,  # noqa: F811
+    monkeypatch,
+):
+    """Codex jobs used to record nothing, so a chat of Codex workers showed no
+    agent tokens at all."""
+
+    from django_ergo.bots import workers as w
+    from django_ergo.bots.agents import worker_of
+    from django_ergo.conversation.models import AgentUsage
+    from django_ergo.conversation.models import Worker
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    bot, plugin, ctx, kit = setup(tmp_path)
+    started = json.loads(
+        kit.execute_tool(
+            "ergo_agent_start",
+            {"brief": "Render the cut", "workspace": "cut", "agent": "codex"},
+        )
+    )
+    folder = tmp_path / "jobs" / "cut"
+    wait_for_exit(folder, 1)
+    assert w.run(started["id"], bot.registry) == "completed"
+    usage = AgentUsage.objects.get(worker_id=started["id"])
+    assert (usage.model, usage.agent, usage.input_tokens, usage.cache_read_tokens) == (
+        "codex",
+        "codex",
+        100,
+        900,
+    )
+
+    # Codex's own session file has every request, with its model: it wins.
+    worker = Worker.objects.get(pk=started["id"])
+    at = worker.created_at.isoformat()
+    sessions = tmp_path / "home" / ".codex" / "sessions" / "2026" / "11" / "10"
+    sessions.mkdir(parents=True)
+    rows = [
+        {"type": "session_meta", "payload": {"cwd": str(folder.resolve())}},
+        {"type": "turn_context", "payload": {"model": "gpt-6-codex"}},
+        {
+            "type": "event_msg",
+            "timestamp": at,
+            "payload": {
+                "type": "token_count",
+                "info": {
+                    "last_token_usage": {
+                        "input_tokens": 5000,
+                        "cached_input_tokens": 4000,
+                        "output_tokens": 70,
+                    }
+                },
+            },
+        },
+    ]
+    (sessions / "rollout-x-t-1.jsonl").write_text(
+        "\n".join(json.dumps(r) for r in rows)
+    )
+    manager, handle = worker_of(bot, worker)
+    assert (
+        manager.record_usage(worker, handle, dry_run=True)["gpt-6-codex"]["input"]
+        == 1000
+    )
+    assert AgentUsage.objects.get(worker=worker).model == "codex"  # dry run
+    manager.record_usage(worker, handle)
+    [usage] = AgentUsage.objects.filter(worker=worker)
+    assert (usage.model, usage.input_tokens, usage.cache_read_tokens) == (
+        "gpt-6-codex",
+        1000,
+        4000,
+    )
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_running_job_records_usage_as_it_goes(tmp_path, monkeypatch):
+    from django_ergo.conversation.models import AgentUsage
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    bot, plugin, ctx, kit = setup(tmp_path)
+    started = json.loads(
+        kit.execute_tool("ergo_agent_start", {"brief": "SLOW job", "workspace": "slow"})
+    )
+    from django_ergo.bots.workers import WorkerContext
+    from django_ergo.conversation.models import Worker
+
+    worker = Worker.objects.get(pk=started["id"])
+    folder = tmp_path / "jobs" / "slow"
+    transcript_path = folder / ".ergo" / "run-1.jsonl"
+    deadline = time.time() + 10
+    while not transcript_path.exists() or transcript_path.read_text().count("\n") < 2:
+        assert time.time() < deadline, "the job didn't start"
+        time.sleep(0.1)
+    with (folder / ".ergo" / "run-1.jsonl").open("a") as transcript:
+        message = {
+            "id": "m1",
+            "model": "claude-test",
+            "usage": {"input_tokens": 3, "output_tokens": 4},
+        }
+        transcript.write(json.dumps({"type": "assistant", "message": message}) + "\n")
+    wctx = WorkerContext(bot, worker)
+    handle = worker.args["handle"]
+    try:
+        assert plugin.check(wctx, handle).status == "running"
+        usage = AgentUsage.objects.get(worker=worker)
+        assert (usage.input_tokens, usage.output_tokens) == (3, 4)
+        # Not again until USAGE_SECONDS have passed.
+        AgentUsage.objects.all().delete()
+        plugin.check(wctx, handle)
+        assert not AgentUsage.objects.exists()
+    finally:
+        plugin.stop(handle)

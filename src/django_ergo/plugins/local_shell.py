@@ -66,6 +66,7 @@ import sys
 import time
 from datetime import UTC
 from datetime import datetime
+from datetime import timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -96,6 +97,7 @@ QUESTION = "NEEDS_INPUT:"
 # A run whose supervisor hasn't touched its heartbeat for this long is dead
 # (its pod restarted); the runner beats every few seconds.
 STALE_SECONDS = 90
+USAGE_SECONDS = 300  # how often a running job's token usage is stored
 # Variables that would move an agent CLI off its subscription onto API billing.
 NEVER_PASS = {
     "ANTHROPIC_API_KEY",
@@ -334,6 +336,115 @@ def codex_entries(events: list[dict]) -> list[dict]:
             detail = item.get("command") or item.get("path") or item.get("tool") or ""
             entries.append({"kind": "tool", "text": f"{kind} {detail}", "at": None})
     return entries
+
+
+def _usage_row(totals: dict[str, dict], model: str) -> dict:
+    return totals.setdefault(
+        model,
+        {
+            "input": 0,
+            "cache_write": 0,
+            "cache_read": 0,
+            "output": 0,
+            "reasoning": 0,
+            "requests": 0,
+        },
+    )
+
+
+def _claude_run_usage(totals: dict[str, dict], events: list[dict]) -> None:
+    model = next(
+        (
+            str(e["model"])
+            for e in events
+            if e.get("type") == "system" and e.get("model")
+        ),
+        "claude",
+    )
+    result = next(
+        (
+            e
+            for e in reversed(events)
+            if e.get("type") == "result" and isinstance(e.get("usage"), dict)
+        ),
+        None,
+    )
+    if result is not None:
+        turns = int(result.get("num_turns") or 1)
+        by_model = result.get("modelUsage")
+        if isinstance(by_model, dict) and by_model:
+            # Per model, sub-agents and side calls (Haiku) included.
+            for name, usage in by_model.items():
+                if not isinstance(usage, dict):
+                    continue
+                row = _usage_row(totals, str(name))
+                row["input"] += int(usage.get("inputTokens") or 0)
+                row["cache_write"] += int(usage.get("cacheCreationInputTokens") or 0)
+                row["cache_read"] += int(usage.get("cacheReadInputTokens") or 0)
+                row["output"] += int(usage.get("outputTokens") or 0)
+            _usage_row(totals, model)["requests"] += turns
+            return
+        usage = result["usage"]
+        row = _usage_row(totals, model)
+        row["input"] += int(usage.get("input_tokens") or 0)
+        row["cache_write"] += int(usage.get("cache_creation_input_tokens") or 0)
+        row["cache_read"] += int(usage.get("cache_read_input_tokens") or 0)
+        row["output"] += int(usage.get("output_tokens") or 0)
+        row["requests"] += turns
+        return
+    # No result yet (still running, or killed): the assistant messages so far.
+    # stream-json repeats a message once per content block; keep its largest usage.
+    messages: dict[str, tuple[str, dict]] = {}
+    for event in events:
+        message = event.get("message") if event.get("type") == "assistant" else None
+        if not isinstance(message, dict) or not isinstance(message.get("usage"), dict):
+            continue
+        key = str(message.get("id") or len(messages))
+        usage = message["usage"]
+        if key not in messages or sum(
+            int(v or 0) for v in usage.values() if isinstance(v, int | float)
+        ) > sum(
+            int(v or 0) for v in messages[key][1].values() if isinstance(v, int | float)
+        ):
+            messages[key] = (str(message.get("model") or model), usage)
+    for name, usage in messages.values():
+        row = _usage_row(totals, name)
+        row["input"] += int(usage.get("input_tokens") or 0)
+        row["cache_write"] += int(usage.get("cache_creation_input_tokens") or 0)
+        row["cache_read"] += int(usage.get("cache_read_input_tokens") or 0)
+        row["output"] += int(usage.get("output_tokens") or 0)
+        row["requests"] += 1
+
+
+def _codex_run_usage(totals: dict[str, dict], events: list[dict], spec: dict) -> None:
+    argv = [str(a) for a in spec.get("argv") or []]
+    model = argv[argv.index("--model") + 1] if "--model" in argv[:-1] else "codex"
+    for event in events:
+        usage = event.get("usage")
+        if event.get("type") != "turn.completed" or not isinstance(usage, dict):
+            continue
+        cached = int(usage.get("cached_input_tokens") or 0)
+        row = _usage_row(totals, model)
+        row["input"] += max(0, int(usage.get("input_tokens") or 0) - cached)
+        row["cache_read"] += cached
+        row["output"] += int(usage.get("output_tokens") or 0)
+        row["reasoning"] += int(usage.get("reasoning_output_tokens") or 0)
+        row["requests"] += 1
+
+
+def transcript_usage(
+    agent: str, transcripts: list[list[dict]], specs: list[dict]
+) -> dict[str, dict]:
+    """Token totals per model from a worker's run transcripts: Claude Code's
+    ``result`` events (``modelUsage`` when present), or its assistant messages
+    while a run is going; ``codex exec --json``'s ``turn.completed`` events."""
+    totals: dict[str, dict] = {}
+    for events, spec in zip(transcripts, specs, strict=False):
+        if agent == "claude":
+            _claude_run_usage(totals, events)
+        elif agent == "codex":
+            _codex_run_usage(totals, events, spec)
+    return {model: row for model, row in totals.items() if any(row.values())}
 
 
 class LocalShellError(ValueError):
@@ -599,53 +710,94 @@ class LocalShellPlugin(BotPlugin):
                     return str(event["session_id"])
         return ""
 
-    def record_usage(self, ctx, folder: Path, agent: str) -> None:
-        """Claude Code's token counts from every run's result events, for Costs."""
-        if agent != "claude" or ctx.session is None:
-            return
+    def usage(self, worker, handle: dict) -> tuple[str, dict[str, dict], datetime]:
+        """The agent's token totals per model for ``worker``'s own runs, read now.
+
+        The agent's own session files under ``~/.claude`` or ``~/.codex`` come
+        first: they hold every request (sub-agents too) with its model and time,
+        and grow while the run is going. When they can't be read (an agent
+        running as another user), the run transcripts are summed instead.
+        Returns the agent, the totals and the end of the worker's span.
+        """
         from django.utils import timezone
 
-        totals: dict[str, dict] = {}
-        for number in self.runs(folder):
-            events = self.transcript(folder, number)
-            model = next(
-                (
-                    str(e.get("model"))
-                    for e in events
-                    if e.get("type") == "system" and e.get("model")
-                ),
-                "claude",
-            )
-            for event in events:
-                if event.get("type") != "result" or not isinstance(
-                    event.get("usage"), dict
-                ):
-                    continue
-                usage = event["usage"]
-                row = totals.setdefault(
-                    model,
-                    {
-                        "input": 0,
-                        "cache_write": 0,
-                        "cache_read": 0,
-                        "output": 0,
-                        "requests": 0,
-                    },
-                )
-                row["input"] += int(usage.get("input_tokens") or 0)
-                row["cache_write"] += int(usage.get("cache_creation_input_tokens") or 0)
-                row["cache_read"] += int(usage.get("cache_read_input_tokens") or 0)
-                row["output"] += int(usage.get("output_tokens") or 0)
-                row["requests"] += int(event.get("num_turns") or 1)
-        record_agent_usage(
-            ctx.worker,
-            session=ctx.session,
-            source="local_shell",
-            agent=agent,
-            models=totals,
-            first_at=ctx.worker.created_at,
-            last_at=timezone.now(),
+        from django_ergo.conversation.history import as_aware
+        from django_ergo.conversation.history import db_timestamp
+        from django_ergo.conversation.history import parse_timestamp
+        from django_ergo.plugins import agent_usage_scan
+
+        folder = Path(handle["dir"])
+        runs, newer = self.own_runs(folder, handle)
+        specs = [self.run_state(folder, number)["spec"] for number in runs]
+        agent = str(
+            next((s.get("agent") for s in specs if s.get("agent")), None)
+            or handle.get("agent")
+            or "claude"
         )
+        until = as_aware(worker.completed_at or timezone.now())
+        if newer is not None:
+            started = self.run_state(folder, newer)["spec"].get("started_at")
+            if started:
+                until = min(until, datetime.fromtimestamp(float(started), UTC))
+        since = as_aware(worker.created_at) - timedelta(minutes=1)
+        scan = {
+            "claude": agent_usage_scan.claude_usage,
+            "codex": agent_usage_scan.codex_usage,
+        }
+        models: dict[str, dict] = {}
+        if agent in scan:
+            cwd = str(folder.resolve())
+            try:
+                models = scan[agent](Path.home(), cwd, since, until)
+            except OSError:
+                log.warning("Couldn't read %s session files for %s", agent, cwd)
+        for totals in models.values():
+            for key in ("first_at", "last_at"):
+                totals[key] = db_timestamp(parse_timestamp(totals.get(key)))
+        if not models:
+            models = transcript_usage(
+                agent, [self.transcript(folder, n) for n in runs], specs
+            )
+        return agent, models, db_timestamp(until)
+
+    def record_usage(self, ctx, handle: dict, number: int, *, settled: bool) -> None:
+        """Store the worker's agent usage for Costs and the chat's usage chart:
+        every ``USAGE_SECONDS`` while it runs, and once more when it settles."""
+        worker = getattr(ctx, "worker", None)
+        if worker is None or getattr(ctx, "session", None) is None:
+            return
+        now = time.time()
+        if settled:
+            # Once per settled run, not on every poll while a question waits.
+            if ctx.state.get("usage_settled") == number:
+                return
+            ctx.state["usage_settled"] = number
+        elif now - float(ctx.state.get("usage_at") or 0) < USAGE_SECONDS:
+            return
+        ctx.state["usage_at"] = now
+        try:
+            self.store_usage(worker, handle)
+        except Exception:  # noqa: BLE001 — usage is best effort
+            log.warning("Couldn't record usage for worker %s", worker.pk, exc_info=True)
+
+    def store_usage(
+        self, worker, handle: dict, *, dry_run: bool = False
+    ) -> dict[str, dict]:
+        """Read the worker's usage now and, unless ``dry_run``, save it (its rows
+        for models no longer seen are dropped). Returns the totals per model."""
+        agent, models, until = self.usage(worker, handle)
+        if models and not dry_run:
+            record_agent_usage(
+                worker,
+                session=worker.session,
+                source="local_shell",
+                agent=agent,
+                models=models,
+                first_at=worker.created_at,
+                last_at=until,
+                replace=True,
+            )
+        return models
 
     def own_runs(self, folder: Path, handle: dict) -> tuple[list[int], int | None]:
         """The runs that belong to this worker, and the fresh run that replaced it.
@@ -674,6 +826,14 @@ class LocalShellPlugin(BotPlugin):
             return AgentCheck("failed", error=f"Job {folder.name} has no runs")
         number = runs[-1]
         state = self.run_state(folder, number)
+        self.record_usage(
+            ctx,
+            handle,
+            number,
+            settled=newer is not None
+            or state["exit"] is not None
+            or not state["alive"],
+        )
         if newer is not None:
             # The folder's heartbeat is the newer run's now, so don't read it
             # as this run's, and don't show the newer run's transcript here.
@@ -696,10 +856,6 @@ class LocalShellPlugin(BotPlugin):
                 "failed",
                 error=f"Job {folder.name}'s run stopped without finishing: its supervisor died (Ergonaut restarted, or its pod ran out of memory)",
             )
-        try:
-            self.record_usage(ctx, folder, agent)
-        except Exception:  # noqa: BLE001 — usage is best effort
-            log.warning("Couldn't record usage for job %s", folder.name, exc_info=True)
         ended = state["exit"]
         text, agent_error = self.final_text(folder, number, agent, events)
         if ended.get("reason") == "killed":
@@ -1122,3 +1278,8 @@ class LocalShellAgents(AgentManager):
 
     def log(self, worker, handle: dict) -> dict | None:
         return self.plugin.worker_log(worker)
+
+    def record_usage(
+        self, worker, handle: dict, *, dry_run: bool = False
+    ) -> dict[str, dict] | None:
+        return self.plugin.store_usage(worker, handle, dry_run=dry_run)
