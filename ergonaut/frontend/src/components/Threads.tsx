@@ -118,17 +118,22 @@ const WORKER_STATUS: Record<Worker['status'], { label: string; tone: string }> =
   cancelled: { label: 'Cancelled', tone: 'text-muted' },
 }
 
-/** A worker this chat started (ergo_agent_start, orca_start_worker, ergo_worker_start): status, progress, what its
- * agent did last (with a stalled flag and its full log) and PRs. */
-export function WorkerCard({ worker }: { worker: Worker }) {
+/** Semantic outcome is distinct from the polling worker's lifecycle. */
+export function workerStatus(worker: Worker): { label: string; tone: string } {
   const needsNewRun =
+    worker.status === 'completed' &&
     worker.result != null &&
     typeof worker.result === 'object' &&
     'status' in worker.result &&
     worker.result.status === 'needs_new_run'
-  const status = needsNewRun
+  return needsNewRun
     ? { label: 'Needs new run', tone: 'text-warning' }
     : (WORKER_STATUS[worker.status] ?? WORKER_STATUS.queued)
+}
+
+/** A worker this chat started, including its semantic outcome and recent activity. */
+export function WorkerCard({ worker }: { worker: Worker }) {
+  const status = workerStatus(worker)
   return (
     <div className="w-full rounded-card border border-stroke bg-surface px-3 py-2 text-sm">
       <div className="flex items-center gap-2">

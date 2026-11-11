@@ -317,6 +317,52 @@ def test_dispatch_receipt_links_selection_without_claiming_billing(catalog, tmp_
     }
 
 
+@pytest.mark.django_db
+def test_receipt_uses_only_applicable_windows_and_safe_labels(catalog, monkeypatch):
+    import time
+
+    from django_ergo.conversation.usage_windows import record_usage_windows
+    from django_ergo.settings import api_settings
+
+    now = time.time()
+    record_usage_windows(
+        "anthropic",
+        {
+            "weekly": {"used": 10, "resets_at": now + 3600, "observed_at": now},
+            "weekly_fable": {
+                "used": 100,
+                "model": "fable",
+                "resets_at": now + 3600,
+                "observed_at": now,
+            },
+            "private-account-label": {
+                "used": 5,
+                "period_seconds": 604800,
+                "resets_at": now + 3600,
+                "observed_at": now - 3600,
+            },
+        },
+    )
+    receipt = {}
+    picked = pick_agent(Providers.from_dict(catalog), "medium", receipt=receipt)
+    assert picked.model == "claude-sonnet-5-5"
+    assert len(receipt["windows"]) == 2
+    assert {w["name"] for w in receipt["windows"]} == {"weekly", "other"}
+    assert "private-account-label" not in str(receipt)
+    assert next(w for w in receipt["windows"] if w["name"] == "other")["fresh"] is False
+
+    # Custom routing still sees the numeric contract; its choice isn't
+    # explained as a decision made by the built-in pace scorer.
+    def custom(candidates, usage, rules, current):
+        assert usage["anthropic"]["weekly_fable"] == 100
+        return candidates[-1]
+
+    monkeypatch.setattr(api_settings, "MODEL_ROUTER", custom)
+    receipt = {}
+    pick_agent(Providers.from_dict(catalog), "medium", receipt=receipt)
+    assert receipt["reason"] == "custom router; reason unavailable"
+
+
 def test_effort_defaults_to_medium_and_a_chat_can_change_it(catalog):
     from types import SimpleNamespace
 

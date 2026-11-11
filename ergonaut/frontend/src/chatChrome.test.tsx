@@ -3,10 +3,52 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { ModelLink, MobileSessionBar, SuggestionChips, ThreadOptions } from './components/ChatChrome'
 import { MemoryRouter } from 'react-router-dom'
-import type { Message } from './api'
+import type { Message, Worker } from './api'
 import { Transcript } from './components/Transcript'
 import { EffortSlider, modelLabel } from './components/ModelPicker'
 import { PinnedDashboard } from './pages/Chat'
+
+test('an exited question is actionable even in the collapsed worker disclosure', () => {
+  const worker: Worker = {
+    id: 'worker-question',
+    title: 'Prepare artifact',
+    function: 'agent:local',
+    status: 'completed',
+    progress: 'Needs a new run; the agent process has exited',
+    result: { status: 'needs_new_run', outputs: [{ path: 'artifact.txt' }] },
+    error: '',
+    created_at: '',
+    completed_at: null,
+  }
+  const html = renderToStaticMarkup(
+    createElement(
+      MemoryRouter,
+      null,
+      createElement(Transcript, {
+        calls: [],
+        workers: [worker],
+        messages: [
+          {
+            line: 1,
+            role: 'assistant',
+            timestamp: null,
+            blocks: [{ type: 'tool_use', id: 'start', name: 'ergo_agent_start', input: {} }],
+          },
+          {
+            line: 2,
+            role: 'user',
+            timestamp: null,
+            blocks: [{ type: 'tool_result', tool_use_id: 'start', content: { id: worker.id } }],
+          },
+        ],
+      }),
+    ),
+  )
+  const summary = html.match(/<summary\b[^>]*>[\s\S]*?<\/summary>/)?.[0]
+  expect(summary).toContain('Needs new run')
+  expect(summary).not.toContain('completed')
+  expect(html).not.toContain('text-success')
+})
 
 describe('MobileSessionBar', () => {
   test('renders the truncated title and live counts with aria-expanded', () => {

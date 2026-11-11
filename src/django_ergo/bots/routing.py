@@ -449,6 +449,7 @@ def pick_agent(
 
         now = time.time()
         windows = getattr(usage, "windows", {}).get(picked.provider, {})
+        applicable = applicable_usage(picked.provider, usage, picked.model)
         receipt.update(
             {
                 "source": "provider_usage",
@@ -456,12 +457,13 @@ def pick_agent(
                 "reason": (
                     "custom router; reason unavailable"
                     if getattr(api_settings, "MODEL_ROUTER", None)
-                    else pick_reason(
-                        picked.provider, usage, rules, picked.model
-                    ).partition(": ")[2]
+                    else "subscription pace routing"
+                    if any(_paced_windows(picked.provider, usage, picked.model, now))
+                    else "pace unavailable; capability/cost tie-break"
                 ),
                 "windows": [
                     {
+                        "name": name if name in WINDOW_NAMES else "other",
                         "used": w.get("used"),
                         "observed_at": w.get("observed_at"),
                         "resets_at": w.get("resets_at"),
@@ -469,7 +471,8 @@ def pick_agent(
                         "fresh": w.get("observed_at") is not None
                         and now - w["observed_at"] <= USAGE_STALE_SECONDS,
                     }
-                    for w in windows.values()
+                    for name, w in windows.items()
+                    if name in applicable
                 ],
             }
         )
