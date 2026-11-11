@@ -255,6 +255,68 @@ def test_custom_tier_can_start_agent_through_toolkit(
     )
 
 
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.usefixtures("workers")
+def test_dispatch_receipt_links_selection_without_claiming_billing(catalog, tmp_path):
+    import time
+
+    from django_ergo.conversation.models import Worker
+    from django_ergo.conversation.usage_windows import record_usage_windows
+    from tests.test_bot_agents import setup
+    from tests.test_bot_agents import start
+
+    bot, _, _, toolkit = setup(tmp_path)
+    registry = BotRegistry()
+    registry.providers = Providers.from_dict(catalog)
+    registry.add(bot)
+    now = time.time()
+    record_usage_windows(
+        "anthropic",
+        {
+            "weekly": {
+                "used": 5,
+                "resets_at": now + 3600,
+                "period_seconds": 604800,
+                "observed_at": now,
+                "credential": "must-not-appear",
+            }
+        },
+    )
+    started = start(toolkit, {"brief": "Work", "workspace": "site", "tier": "medium"})
+    receipt = Worker.objects.get(pk=started["id"]).state["dispatch_receipt"]
+    assert receipt["requested"]["tier"] == "medium"
+    assert receipt["selected"]["model"]
+    assert receipt["selection"]["windows"][0]["fresh"] is True
+    assert "must-not-appear" not in str(receipt)
+    assert receipt["launch_model"] is None and receipt["billing_mode"] == "unknown"
+    record_usage_windows(
+        "anthropic",
+        {"weekly": {"used": 5, "resets_at": now + 3600, "observed_at": now - 3600}},
+        full_snapshot=True,
+    )
+    stale: dict = {}
+    pick_agent(registry.providers, "medium", receipt=stale)
+    assert stale["windows"][0]["fresh"] is False
+    assert "pace unavailable" in stale["reason"]
+    pinned = start(
+        toolkit,
+        {
+            "brief": "Pinned work",
+            "workspace": "site",
+            "agent": "codex",
+            "model": "gpt-6-sol",
+            "effort": "high",
+        },
+    )
+    explicit = Worker.objects.get(pk=pinned["id"]).state["dispatch_receipt"]
+    assert explicit["requested"]["model"] == "gpt-6-sol"
+    assert explicit["selected"] == {
+        "agent": "codex",
+        "model": "gpt-6-sol",
+        "effort": "high",
+    }
+
+
 def test_effort_defaults_to_medium_and_a_chat_can_change_it(catalog):
     from types import SimpleNamespace
 

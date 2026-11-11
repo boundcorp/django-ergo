@@ -1588,9 +1588,44 @@ class OrcaAgents(AgentManager):
         return self.plugin.check(ctx, handle)
 
     def reply(self, ctx, handle: dict, question_id: str, text: str) -> str:
-        self.plugin.cli_json(
-            ["orchestration", "reply", "--id", question_id, "--body", text]
-        )
+        place = self.plugin.environment or "local"
+        saved = ((ctx.session.metadata or {}).get("orca") or {}).get(place) or {}
+        mailbox = saved.get("mailbox")
+        run = handle.get("run")
+        if not mailbox or not run or saved.get("run") != run:
+            msg = (
+                "The chat's Orca mailbox for this run is unavailable or has changed. "
+                "Reconcile the durable question in Orca before sending an answer; "
+                "do not impersonate the worker or resend an uncertain delivery."
+            )
+            raise OrcaError(msg)
+        try:
+            self.plugin.cli_json(
+                [
+                    "orchestration",
+                    "reply",
+                    "--id",
+                    question_id,
+                    "--body",
+                    text,
+                    "--run",
+                    run,
+                    "--from",
+                    mailbox,
+                ]
+            )
+        except subprocess.TimeoutExpired as exc:
+            msg = (
+                "Orca reply timed out; delivery is unknown. Reconcile the durable "
+                "question in Orca before any manual retry."
+            )
+            raise OrcaError(msg) from exc
+        except OrcaError as exc:
+            msg = (
+                f"{exc} Reconcile the durable question and mailbox authorization in "
+                "Orca before any manual retry."
+            )
+            raise OrcaError(msg, exc.code) from exc
         return f"Sent the answer to {question_id}."
 
     def stop(self, handle: dict) -> str:

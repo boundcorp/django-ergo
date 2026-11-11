@@ -397,7 +397,11 @@ def pick_model(providers: Providers, tier: str, current: str = "") -> str:
 
 
 def pick_agent(
-    providers: Providers, tier: str, agents: tuple[str, ...] = ()
+    providers: Providers,
+    tier: str,
+    agents: tuple[str, ...] = (),
+    *,
+    receipt: dict | None = None,
 ) -> AgentChoice:
     """A coding agent, model and effort for ``tier``, on a subscription only.
     ``agents`` (a manager's) keeps the candidates it can run; empty means any."""
@@ -428,16 +432,47 @@ def pick_agent(
             )
             raise ValueError(msg)
         candidates = runnable
+    usage = current_usage()
+    rules = active_rules(routing)
     picked = choose(
         candidates,
         lambda c: c.provider,
-        current_usage(),
-        active_rules(routing),
+        usage,
+        rules,
         model_of=lambda c: c.model,
     )
     if picked is None:
         msg = f"No safe subscription in the {tier!r} agents tier"
         raise ValueError(msg)
+    if receipt is not None:
+        from django_ergo.settings import api_settings
+
+        now = time.time()
+        windows = getattr(usage, "windows", {}).get(picked.provider, {})
+        receipt.update(
+            {
+                "source": "provider_usage",
+                "selected_at": now,
+                "reason": (
+                    "custom router; reason unavailable"
+                    if getattr(api_settings, "MODEL_ROUTER", None)
+                    else pick_reason(
+                        picked.provider, usage, rules, picked.model
+                    ).partition(": ")[2]
+                ),
+                "windows": [
+                    {
+                        "used": w.get("used"),
+                        "observed_at": w.get("observed_at"),
+                        "resets_at": w.get("resets_at"),
+                        "period_seconds": w.get("period_seconds"),
+                        "fresh": w.get("observed_at") is not None
+                        and now - w["observed_at"] <= USAGE_STALE_SECONDS,
+                    }
+                    for w in windows.values()
+                ],
+            }
+        )
     providers.check_public(picked.model, where=f"The {tier} agents tier")
     return picked
 

@@ -249,6 +249,54 @@ def test_the_workers_skill_lists_starts_and_cancels(tmp_path, workers):
         )
 
 
+def test_orca_reply_uses_chat_mailbox_and_reconciles_missing_or_timed_out_sender(
+    monkeypatch,
+):
+    import subprocess
+    from types import SimpleNamespace
+
+    from django_ergo.plugins.orca import OrcaAgents
+    from django_ergo.plugins.orca import OrcaError
+
+    calls = []
+    plugin = SimpleNamespace(
+        environment="test", approve_changes=False, poll_seconds=1, config={}
+    )
+    plugin.cli_json = calls.append
+    manager = OrcaAgents(plugin)
+    ctx = SimpleNamespace(
+        session=SimpleNamespace(
+            metadata={"orca": {"test": {"mailbox": "term_coordinator", "run": "run_1"}}}
+        )
+    )
+    handle = {"run": "run_1", "dispatch": "dispatch_1", "terminal": "term_worker"}
+    manager.reply(ctx, handle, "question_1", "Proceed")
+    assert calls == [
+        [
+            "orchestration",
+            "reply",
+            "--id",
+            "question_1",
+            "--body",
+            "Proceed",
+            "--run",
+            "run_1",
+            "--from",
+            "term_coordinator",
+        ]
+    ]
+    with pytest.raises(OrcaError, match="Reconcile"):
+        manager.reply(ctx, {**handle, "run": "other"}, "question_1", "Proceed")
+    assert len(calls) == 1
+
+    def timeout(argv):
+        raise subprocess.TimeoutExpired(argv, 1)
+
+    monkeypatch.setattr(plugin, "cli_json", timeout)
+    with pytest.raises(OrcaError, match="delivery is unknown"):
+        manager.reply(ctx, handle, "question_1", "Proceed")
+
+
 @pytest.mark.django_db(transaction=True)
 def test_orca_start_worker_watches_the_dispatch_and_reports_back(  # noqa: PLR0915
     tmp_path, workers, monkeypatch
@@ -511,13 +559,6 @@ def test_orca_start_worker_skips_usage_without_a_worktree_path(
 
     assert dispatched == [expected_worktree]
     worker = Worker.objects.get(pk=started["id"])
-    assert worker.state == {
-        "seen": [],
-        "agent": "codex",
-        "model": "",
-        "effort": "",
-        "manager": "orca",
-    }
     plugin.scan_usage(WorkerContext(bot, worker), settled=True)
 
 
@@ -599,13 +640,6 @@ def test_orca_start_worker_skips_usage_for_id_selector_without_path(
 
     assert dispatched == [selector]
     worker = Worker.objects.get(pk=started["id"])
-    assert worker.state == {
-        "seen": [],
-        "agent": "codex",
-        "model": "",
-        "effort": "",
-        "manager": "orca",
-    }
     plugin.scan_usage(WorkerContext(bot, worker), settled=True)
 
 

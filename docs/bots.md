@@ -753,6 +753,15 @@ question_id, answer)` queues the answer for the worker and returns without
   If delivery is interrupted, its outcome may be unknown: the worker reports
   this and keeps waiting rather than risk delivering the same answer twice.
   An operator must check the agent before intervening.
+  Orca replies use the chat's own mailbox and run; if that association is lost,
+  or delivery times out, reconcile the durable question in Orca before any
+  manual retry. A worker terminal is never used as the sender.
+- Agent worker descriptions include a `dispatch_receipt`: requested and selected
+  agent/model/effort, and the selected subscription's quota observations and
+  selection reason when tier routing provided them. Launch-effective model and
+  billing mode remain unknown unless independently reported. Worker step claims
+  count watcher steps, not model calls. Usage rows link observed models by worker;
+  list-price estimates are not billed amounts, and unpriced rows are excluded.
 - `ergo_agent_stop(worker_id)`, or cancelling the worker, calls the
   manager's `stop` and cancels the worker.
 - The worker card's log (`workers.log`) reads `AgentManager.log`. A check
@@ -1403,8 +1412,11 @@ everything it starts get the highest OOM score, so a job that runs its pod out
 of memory is killed instead of the Ergonaut process that launched it, and the
 worker fails saying so. A final message
 that starts `NEEDS_INPUT:` reaches the chat as a question; `ergo_agent_reply`
-resumes the same Claude session with the answer (Codex can't be resumed, so
-the bot starts a new run with the answer in the brief). A worker follows the
+resumes the same Claude session with the answer. An exited Codex run cannot be
+resumed: its worker finishes with `needs_new_run` and retains the question and
+outputs. Replies are rejected immediately. If authorized, start a new run
+explicitly with the answer, existing artifacts and constraints in the brief;
+no successor is started automatically. A worker follows the
 run it started and the runs that answered its questions; once another
 `ergo_agent_start` begins a fresh run in the same folder, the older worker
 closes (done, or failed if its run never finished) and stops repeating the

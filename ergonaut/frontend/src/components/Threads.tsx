@@ -121,7 +121,14 @@ const WORKER_STATUS: Record<Worker['status'], { label: string; tone: string }> =
 /** A worker this chat started (ergo_agent_start, orca_start_worker, ergo_worker_start): status, progress, what its
  * agent did last (with a stalled flag and its full log) and PRs. */
 export function WorkerCard({ worker }: { worker: Worker }) {
-  const status = WORKER_STATUS[worker.status] ?? WORKER_STATUS.queued
+  const needsNewRun =
+    worker.result != null &&
+    typeof worker.result === 'object' &&
+    'status' in worker.result &&
+    worker.result.status === 'needs_new_run'
+  const status = needsNewRun
+    ? { label: 'Needs new run', tone: 'text-warning' }
+    : (WORKER_STATUS[worker.status] ?? WORKER_STATUS.queued)
   return (
     <div className="w-full rounded-card border border-stroke bg-surface px-3 py-2 text-sm">
       <div className="flex items-center gap-2">
@@ -131,6 +138,11 @@ export function WorkerCard({ worker }: { worker: Worker }) {
           {worker.status === 'running' && <Spinner />}
           {status.label}
         </span>
+        {worker.step_claims != null && (
+          <span className="text-xs text-muted" title="Worker step claims include non-model checks">
+            {worker.step_claims} step claims
+          </span>
+        )}
       </div>
       {(worker.error || worker.progress || worker.activity) && (
         <div className="mt-1 flex items-center gap-2 text-xs text-muted">

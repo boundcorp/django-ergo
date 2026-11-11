@@ -349,6 +349,9 @@ class MessageHistoryToolkit(Toolkit):
         limit = _limit(arguments)
         start = arguments.get("start_line")
         end = arguments.get("end_line")
+        source_arg = (
+            f" source_id={source.info().source_id}" if len(self.sources) > 1 else ""
+        )
         visible = [m for m in source.messages() if is_visible(m, granularity)]
 
         if start is None and end is not None:
@@ -356,7 +359,9 @@ class MessageHistoryToolkit(Toolkit):
             page = before[-limit:]
             notes = []
             if len(before) > len(page):
-                notes.append(f"Earlier: ergo_chat_history_read end_line={page[0].line}")
+                notes.append(
+                    f"Earlier: ergo_chat_history_read end_line={page[0].line}{source_arg}"
+                )
         else:
             after = [
                 m
@@ -368,7 +373,7 @@ class MessageHistoryToolkit(Toolkit):
             notes = []
             if len(after) > len(page):
                 notes.append(
-                    f"More: ergo_chat_history_read start_line={after[len(page)].line}"
+                    f"More: ergo_chat_history_read start_line={after[len(page)].line}{source_arg}"
                 )
         body = self._render(page, granularity, include_source=len(self.sources) > 1)
         return "\n".join([body, *notes])
@@ -381,7 +386,12 @@ class MessageHistoryToolkit(Toolkit):
         page = visible[-limit:]
         body = self._render(page, granularity, include_source=len(self.sources) > 1)
         if len(visible) > len(page):
-            body += f"\nEarlier: ergo_chat_history_read end_line={page[0].line}"
+            source_arg = (
+                f" source_id={source.info().source_id}" if len(self.sources) > 1 else ""
+            )
+            body += (
+                f"\nEarlier: ergo_chat_history_read end_line={page[0].line}{source_arg}"
+            )
         return body
 
     def _around(self, arguments: dict) -> str:
