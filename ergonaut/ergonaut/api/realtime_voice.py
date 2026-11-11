@@ -279,7 +279,7 @@ def token(request, session_id: str):
 
     grant = api.VideoGrants(
         room_join=True,
-        room=f"voice-{session.id}",
+        room=f"{settings.REALTIME_VOICE_ROOM_PREFIX}{session.id}",
         can_publish=True,
         can_publish_sources=["microphone"],
         can_publish_data=False,
@@ -290,7 +290,9 @@ def token(request, session_id: str):
         .with_identity(f"user-{request.auth.pk}")
         .with_ttl(timedelta(minutes=5))
         .with_grants(grant)
-        .with_room_config(api.RoomConfiguration(agents=[api.RoomAgentDispatch(agent_name="ergo-voice")]))
+        .with_room_config(
+            api.RoomConfiguration(agents=[api.RoomAgentDispatch(agent_name=settings.REALTIME_VOICE_AGENT_NAME)])
+        )
     )
     return {"url": url, "token": access.to_jwt()}
 

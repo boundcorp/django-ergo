@@ -74,6 +74,8 @@ def test_token_is_scoped_to_voice_room(voice_setup, settings):
     settings.LIVEKIT_URL = "wss://example.invalid"
     settings.LIVEKIT_API_KEY = "test-key"
     settings.LIVEKIT_API_SECRET = "test-secret"
+    settings.REALTIME_VOICE_ROOM_PREFIX = "voice-isolated-test-"
+    settings.REALTIME_VOICE_AGENT_NAME = "ergo-voice-isolated-test"
     voice, url = create(client, chat)
     response = post(client, url + "/token", {})
     assert response.status_code == 200
@@ -82,7 +84,8 @@ def test_token_is_scoped_to_voice_room(voice_setup, settings):
     )
     assert claims["video"]["canPublishSources"] == ["microphone"]
     assert claims["video"]["canPublishData"] is False
-    assert claims["video"]["room"] == f"voice-{voice['id']}"
+    assert claims["video"]["room"] == f"voice-isolated-test-{voice['id']}"
+    assert claims["roomConfig"]["agents"][0]["agentName"] == "ergo-voice-isolated-test"
     assert claims["video"]["roomJoin"] is True
     assert claims["exp"] - claims["nbf"] <= 300
     assert post(client, url + "/end", {}).json()["status"] == "ended"

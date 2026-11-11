@@ -1,8 +1,8 @@
-"""Settings for the one capped live voice test (docs/realtime-voice.md, "Maximum cost of one live test").
+"""Settings for the proposed capped live voice test (docs/realtime-voice.md, "Conditional cost estimate").
 
 The project settings plus the delegation budget that section prices. Use it only for the isolated
 bridge, Django and worker of that test (``DJANGO_SETTINGS_MODULE=ergonaut.settings.voice_live_test``);
-the default settings leave background delegation off. Change a number here and the priced ceiling
+the default settings leave background delegation off. Change a number here and the estimate
 there no longer holds: recompute it first.
 """
 

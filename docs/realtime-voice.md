@@ -21,27 +21,31 @@ These are isolated development dependencies, not a lockfile for deployment. The 
 | Requirement | Current inspection | Purpose |
 | --- | --- | --- |
 | `REALTIME_VOICE_ENABLED` | off by default | Explicit local-only enablement |
-| `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` | missing locally and from Octo Ergonaut namespace secret keys | Hosted room, scoped token, agent registration |
-| `OPENAI_API_KEY` | locally present; Octo namespace secret key present | Direct GPT-Live; presence does not establish account/model eligibility |
-| Hosted LiveKit project | access not established; local CLI/config missing | Room and agent dispatch |
-| Local isolated PostgreSQL, Redis/worker and bot registry | must be configured for each isolated test | Django history and existing serialized background queue |
+| `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` | Encrypted local SOPS configuration, mode 600; decrypted into an isolated test process only | Hosted room, scoped token, agent registration |
+| `OPENAI_API_KEY` | Octo Ergonaut runtime key returned HTTP 200 for both model metadata endpoints; the local shell key returned 401 | Metadata access is not proof of inference entitlement or billing capacity |
+| Hosted LiveKit project | Existing Ergonaut project linked in the protected CLI profile; read-only rooms API succeeded | Shared project, not an isolated project |
+| Local isolated PostgreSQL, Redis/worker and bot registry | Disposable instance prepared under `/tmp/ergo-voice-isolated-e1cy2fyd`; see [progress](realtime-voice-progress.md) for lifetime and ownership | Django history and existing serialized background queue |
 
 Never print keys. Do not use production data or modify shared service configuration for this prototype. Room tokens expire in five minutes, are restricted to one voice room, and permit microphone publishing but not data publishing. User and chat ownership are checked by Django. Browser clients cannot write events, state, or delegations: those are bridge-only operations. A queued delegation is serialized under a session row lock; duplicate IDs reuse the same message. Results are sourced from the linked thread message, not model assertions. The UI reconnects to the same logical voice session. Assistant transcript labels indicate interrupted or unknown playback; generated text is not proof it was heard.
 
 ## Bounded paid-test proposal — approval required
 
-**Do not run until the coordinator approves the complete cost and setup plan.** Use an isolated, non-production Django database and worker, an authorized test account and one disposable LiveKit project. Configure the local browser/API and bridge to use the same database. A bridge process requires a fresh one-shot cap file and permits one provider WebSocket attempt, one admitted room job and 90 seconds of voice runtime; use an outer wall-clock kill as a second limit. For example, after prerequisites and explicit approval:
+**Do not run until the coordinator approves the complete cost and setup plan.** Use an isolated, non-production Django database, broker, worker, bot registry and test account; do not attach to existing `ergonaut up` services. The LiveKit project is shared, not disposable: approval must cover it and the conditional reserve. The isolated instance uses a random agent dispatch name and room prefix, distinct from `ergo-voice`. This makes accidental collision unlikely but does not prove that no external worker can register the same name. The bridge rejects other room prefixes before joining and uses `record=False` for SDK session recording; no shared project observability setting was changed.
+
+The following command reads the private disposable environment and obtains the existing SOPS and Octo runtime credentials in process memory. Without the flag it checks local routing, the pinned bot, one-shot cap and a locally signed room token, then exits without starting the bridge. It does not establish provider entitlement, shared allowance or external-worker isolation. The wrapper reads the Octo secret, so it is not an offline command; the underlying `ergonaut.realtime_voice_preflight` checks are offline once credentials are already in the environment.
 
 ```sh
-ERGO_VOICE_CALL_CAP_FILE="/tmp/ergo-voice-cap-$(date +%s)-$$" \
-REALTIME_VOICE_ENABLED=1 PYTHONPATH="$PWD/ergonaut:$PWD/src" \
-timeout --kill-after=5s 115s /path/to/isolated-bridge-venv/bin/python \
-  -m ergonaut.realtime_voice_bridge start
+source /tmp/ergo-voice-isolated-e1cy2fyd/environment.sh
+/tmp/ergo-voice-bridge/bin/python -m ergonaut.realtime_voice_local
+# Only after explicit approval and all gates below:
+/tmp/ergo-voice-bridge/bin/python -m ergonaut.realtime_voice_local --approve-paid
 ```
+
+The approved command first checks both OpenAI model metadata endpoints and the LiveKit rooms API, then creates a persistent exclusive launch marker and runs the bridge with an outer 115-second timeout. These read-only checks prove neither paid entitlement nor a hard spend limit. A second exclusive cap file is consumed on the first admitted job; one provider WebSocket attempt and 90 seconds of voice runtime are allowed. Neither marker should be removed for a retry without fresh approval.
 
 The bridge environment must already contain the pinned SDK packages and Django/Ergonaut runtime dependencies. Do not pass secrets on the command line. Start the browser and isolated Django separately; the bridge, that Django and its worker all run with `DJANGO_SETTINGS_MODULE=ergonaut.settings.voice_live_test`, which adds the delegation budget priced below (the bridge creates the delegation, the worker runs it under the budget the message carries). Background delegation is off under any settings that do not set `REALTIME_VOICE_DELEGATION_BUDGET`. The cap file remains after the run: do not remove it to retry without fresh approval. The bridge logs elapsed time to finalized assistant transcript and elapsed wall time plus an estimated voice charge; these are **not** provider-billed usage or verified first-audio latency. Reconcile provider and LiveKit dashboards separately; logs contain no transcript by design.
 
-Delegated work is held to a hard server-side budget (next section), so the cost of the whole test has a ceiling. [OpenAI's published rate](https://developers.openai.com/api/docs/models/gpt-live-1) for the voice session is $0.05/minute, billed per second: $0.075 for 90 seconds. The ceiling for voice plus capped delegation is **$0.08575**, derived under "Maximum cost of one live test". LiveKit transport is additional and not verified. No paid call was made.
+Delegated work has a server-side budget (next section), but its input estimator has not been validated against provider usage, so this is not a guaranteed full-stack maximum. The conditional 90-second direct-provider estimate is **$0.08575**; with a 115-second provider duration it is **$0.10659** rounded up, before taxes and any costs outside the listed assumptions. The free LiveKit Build allowance would cover transport if available, but this project's current plan and remaining allowance were not verified. No paid call was made.
 
 ## Delegation budget
 
@@ -78,22 +82,28 @@ REALTIME_VOICE_DELEGATION_BUDGET = {
 
 The chat the voice session belongs to must be a bot on the OpenAI API engine (`engine: {type: openai, ...}`) and `gpt-6-luna`; Ergonaut's default routing (`auto/<tier>` on the Claude and Codex subscriptions) is refused because a subscription CLI can't hold a request to a budget. The history tools read the user's stored chats; they change nothing. The delegation runs in the voice session's own chat, so its history is part of every request: a chat too large for 40,000 input tokens fails with the input limit instead of running, so use a fresh test chat.
 
-## Maximum cost of one live test
+## Conditional cost estimate for one live test
 
 Sources, read 2026-11-11: [GPT-Live-1 model page](https://developers.openai.com/api/docs/models/gpt-live-1) ("Voice sessions cost $0.05 per minute, billed per second", "not rounded up to the next whole minute", "Backend model and tool usage is billed separately"); [OpenAI pricing page](https://developers.openai.com/api/docs/pricing) (the GPT-Live row, and the `gpt-6-luna` Standard row); [GPT-6 Luna model page](https://developers.openai.com/api/docs/models/gpt-6-luna). The repository's own table (`django_ergo/pricing.py`) agrees with the Standard row.
 
-| Component | Rate | Quantity | Ceiling |
+| Component | Rate | Assumed quantity | Estimated cost |
 | --- | --- | --- | --- |
 | GPT-Live voice session | $0.05 per minute, per second | 90 s | $0.07500 |
 | Delegation input, `gpt-6-luna` | at most $0.25 per 1M (12-hour cache write, the highest input-side rate) | 40,000 tokens | $0.01000 |
 | Delegation output, `gpt-6-luna` | $0.50 per 1M | 1,500 tokens | $0.00075 |
 | **Total** | | | **$0.08575** |
 
-The rates for `gpt-6-luna`, Standard, prompts up to 272K tokens, per 1M tokens: input $0.10, cached input $0.01, 30-minute cache write $0.125, 12-hour cache write $0.25 (the pricing page; the model page lists only the $0.125 write), output $0.50. Pricing every input token at the $0.25 write rate cannot be exceeded and is not reachable here: the code sends no cache-retention parameter. At the uncached $0.10 rate the same caps cost $0.00475 for the delegation and $0.07975 in all; at the 30-minute write rate $0.00575 and $0.08075.
+The rates for `gpt-6-luna`, Standard, prompts up to 272K tokens, per 1M tokens: input $0.10, cached input $0.01, 30-minute cache write $0.125, 12-hour cache write $0.25 (the pricing page; the model page lists only the $0.125 write), output $0.50. The calculation prices every assumed input token at the highest listed short-context input-side rate; the code sends no cache-retention parameter. At the uncached $0.10 rate the same assumed quantities cost $0.00475 for delegation and $0.07975 in all; at the 30-minute write rate $0.00575 and $0.08075. The input estimator has not been validated against provider-reported usage; actual billed input can exceed the assumption.
 
-What this holds only under these conditions, all of which the code or the budget fixes: Standard processing (the engine sets no `service_tier`, so no Fast 2x, Flex or Batch), no regional endpoint (+10%), a prompt far under the 272K long-context surcharge (the input cap is 40,000), `reasoning_effort: none` because the engine forces it for GPT-6 with tools (output tokens, reasoning included, are capped at 1,500 anyway), and the engine on exactly `gpt-6-luna` (the budget's `model`). One delegation per voice session, so the delegation figure is for one budgeted request. If the backend model that is actually configured is not `gpt-6-luna`, this figure does not apply: no live Ergonaut configuration was read, only the library default and the `ergo-bots` bots that pin it.
+This estimate assumes Standard processing (the engine sets no `service_tier`), no regional endpoint (+10%), a prompt below the 272K long-context surcharge, `reasoning_effort: none`, and exactly `gpt-6-luna` (the budget's `model`). It assumes one delegation per voice session and provider-billed usage within the stated token and time quantities. The live bot registry's default is `auto/medium`, not this API model; use a fresh isolated bot pinned to `engine: {type: openai, config: {model: gpt-6-luna}}`, not the shared bot registry or a subscription CLI.
 
-Not included: LiveKit transport and any LiveKit plan charges (not verified), taxes, and voice seconds outside the 90-second runtime. The outer `timeout --kill-after=5s 115s` bounds a runaway to 115 s: $0.09583 for voice, so $0.10658 with the delegation ceiling.
+### LiveKit and conservative planning
+
+[LiveKit pricing](https://livekit.com/pricing) and [quotas](https://docs.livekit.io/deploy/admin/quotas-and-limits) list Build at $0/month, 5,000 WebRTC participant-minutes and 50 GB downstream per month. A locally hosted bridge counts as a WebRTC participant, so one user and one bridge connected for 90 seconds use approximately 3 participant-minutes, plus downstream media/data. The 1,000 hosted-agent minutes do not apply to this local bridge. Build allowances are shared across a user's free projects; after exhaustion new requests fail rather than incurring overages. Current project plan, remaining allowance and the effects of concurrent use are unknown: verify in the dashboard before approval. On Ship, WebRTC above allowance is $0.0005/participant-minute and downstream above allowance $0.12/GB; Ship itself starts at $50/month. Do not upgrade for this test.
+
+[Billing](https://docs.livekit.io/deploy/admin/billing) meters time in seconds with a 10-second WebRTC minimum and rounds individual transfers up to 0.01 GB. For a conditional Ship-overage illustration only, two participants at 115 seconds each cost $0.00192 rounded up; one rounded 0.01 GB transfer costs $0.00120, but the number and size of separately metered transfers are not established, so this is not a bandwidth ceiling. No recording, SIP, LiveKit-hosted agent or LiveKit Inference is intended; verify observability/audio upload is disabled before use, rather than assuming SDK defaults. Local compute and network are existing resources, not priced incremental cloud services.
+
+For approval planning, reserve **$0.15 plus taxes** for this single attempt, conditional on a confirmed Build plan with sufficient allowance, no optional paid services, no retries, provider duration at most 115 seconds and usage within the stated token limits. This is a planning reserve, **not an enforceable financial ceiling**: provider cleanup/billing time, input estimation, the provider's hidden overhead, and any already-running tool cannot be strictly bounded from these local controls. If any condition fails or costs cannot be monitored, do not run. Reconcile provider usage and LiveKit dashboard after the attempt; do not automatically retry.
 
 ## Rollout and known gaps
 

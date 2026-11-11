@@ -166,7 +166,7 @@ class Assistant(Agent):
 server = AgentServer()
 
 
-@server.rtc_session(agent_name="ergo-voice")
+@server.rtc_session(agent_name=settings.REALTIME_VOICE_AGENT_NAME)
 async def voice_session(ctx: agents.JobContext):
     global _job_claimed
     if _job_claimed or not getattr(settings, "REALTIME_VOICE_ENABLED", False):
@@ -183,16 +183,17 @@ async def voice_session(ctx: agents.JobContext):
         return
     os.close(fd)
     _job_claimed = True
-    await ctx.connect()
-    room = ctx.room.name
-    if not room.startswith("voice-"):
+    room = ctx.job.room.name
+    prefix = settings.REALTIME_VOICE_ROOM_PREFIX
+    if not prefix or not room.startswith(prefix):
         ctx.shutdown(reason="invalid room")
         return
-    voice_id = room.removeprefix("voice-")
+    voice_id = room.removeprefix(prefix)
     snapshot = await sync_to_async(bridge_state, thread_sensitive=True)(voice_id)
     if snapshot["status"] != "active":
         ctx.shutdown(reason="voice session is not active")
         return
+    await ctx.connect()
     started = time.monotonic()
     http_session = aiohttp.ClientSession()
     assistant = Assistant(voice_id, snapshot, http_session)
@@ -209,7 +210,7 @@ async def voice_session(ctx: agents.JobContext):
 
     try:
         async with asyncio.timeout(MAX_SECONDS):
-            await session.start(room=ctx.room, agent=assistant)
+            await session.start(room=ctx.room, agent=assistant, record=False)
             await asyncio.Event().wait()
     except TimeoutError:
         pass
