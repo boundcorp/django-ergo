@@ -12,15 +12,24 @@ from django.utils import timezone
 from ergonaut.apps.bots.models import RealtimeVoiceActivity, RealtimeVoiceSession
 
 _DECISION = re.compile(
-    r"\b(?:using|we(?:'ll| will) use|i(?:'ve| have) decided|we(?:'ve| have) decided|(?:i|we) choose|(?:i|we) chose)\b",
+    r"\b(?:using|we(?:'ll| will) use|i(?:'m| am) going with|"
+    r"i(?:'ve| have) decided|we(?:'ve| have) decided|(?:i|we) choose|(?:i|we) chose)\b",
     re.I,
 )
-_CONSTRAINT = re.compile(r"\b(?:missing|without|allergic to|cannot|can't|must not|do not|don't|no deployment)\b", re.I)
-_STEP = re.compile(r"\b(?:ready to|currently|current step|is complete)\b", re.I)
+_CONSTRAINT = re.compile(
+    r"\b(?:missing|without|allergic to|cannot|can't|must not|do not|don't|"
+    r"(?:i|we) (?:have|have got|'ve got) no|no deployment)\b",
+    re.I,
+)
+_STEP = re.compile(r"\b(?:ready to|currently|current step|is complete|has finished marinating)\b", re.I)
 _ACTIVITY = re.compile(
     r"^\s*(?:i|we) (?:just |have |already )?(?:started|began|flipped|turned|finished|completed|put|placed|added|removed)\b",
     re.I,
 )
+_COOKING_ACTION = re.compile(r"\b(?:chicken|pan|fry|frying|marinad|cook)", re.I)
+_COMPLETED = re.compile(r"\b(?:is complete|has finished marinating|finished marinating)\b", re.I)
+_NEGATION = re.compile(r"\b(?:not|never|didn't|did not|haven't|have not)\b", re.I)
+_QUESTION = re.compile(r"\?")
 
 
 def apply_user_event(session, event):
@@ -35,12 +44,20 @@ def apply_user_event(session, event):
                 if sentence not in values:
                     values.append(sentence[:1000])
                 state[key] = values[-50:]
-        if _STEP.search(sentence):
+        if _COMPLETED.search(sentence) and not _NEGATION.search(sentence) and not _QUESTION.search(sentence):
+            milestones = list(state.get("completed_steps", []))
+            if sentence not in milestones:
+                milestones.append(sentence[:1000])
+            state["completed_steps"] = milestones[-50:]
+        reported_action = (
+            _ACTIVITY.search(sentence) and not _NEGATION.search(sentence) and not _QUESTION.search(sentence)
+        )
+        if _STEP.search(sentence) or (reported_action and _COOKING_ACTION.search(sentence)):
             state["current_step"] = sentence[:1000]
     if state != session.state:
         session.state = state
         session.save(update_fields=["state"])
-    if _ACTIVITY.search(event.text):
+    if any(_ACTIVITY.search(s) and not _NEGATION.search(s) and not _QUESTION.search(s) for s in sentences):
         RealtimeVoiceActivity.objects.get_or_create(
             session=session, event=event, defaults={"description": event.text[:4000]}
         )

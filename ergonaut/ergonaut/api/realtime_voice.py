@@ -95,28 +95,6 @@ def bridge_state(voice_id):
     }
 
 
-def update_state(voice_id, state):
-    allowed = {key: state[key] for key in ("decisions", "constraints", "current_step") if key in state}
-    if any(
-        not isinstance(value, list)
-        or len(value) > 50
-        or any(not isinstance(item, str) or len(item) > 1000 for item in value)
-        for key, value in allowed.items()
-        if key in ("decisions", "constraints")
-    ):
-        raise ValueError("Invalid voice state")
-    if "current_step" in allowed and (
-        not isinstance(allowed["current_step"], str) or len(allowed["current_step"]) > 1000
-    ):
-        raise ValueError("Invalid voice state")
-    with transaction.atomic():
-        session = RealtimeVoiceSession.objects.select_for_update().get(pk=voice_id)
-        if session.status != "active":
-            raise ValueError("Voice session ended")
-        session.state = {**session.state, **allowed}
-        session.save(update_fields=["state"])
-
-
 def record_event(voice_id, event_id, kind, text, delivery="unknown", client_event_at=None, *, trusted_delivery=False):
     received_at = timezone.now()
     if (
@@ -163,6 +141,8 @@ def record_event(voice_id, event_id, kind, text, delivery="unknown", client_even
 
 def delegate(voice_id, event_id, text):
     """Atomically persist a deduplicated request in the existing thread-message queue."""
+    if not getattr(settings, "REALTIME_VOICE_UNBOUNDED_DELEGATION_ENABLED", False):
+        raise ValueError("Background delegation is disabled: no enforced spend cap")
     if not event_id or len(event_id) > 200 or not text.strip() or len(text) > 4000:
         raise ValueError("Invalid delegation")
     with transaction.atomic():
@@ -217,25 +197,6 @@ class CreateIn(Schema):
     chat_id: str
 
 
-class EventIn(Schema):
-    event_id: str
-    kind: str
-    text: str
-    delivery: str = "unknown"
-    client_event_at: datetime | None = None
-
-
-class DelegateIn(Schema):
-    event_id: str
-    text: str
-
-
-class StateIn(Schema):
-    decisions: list[str] | None = None
-    constraints: list[str] | None = None
-    current_step: str | None = None
-
-
 @router.get("/realtime-voice/config")
 def config(request):
     return {"enabled": getattr(settings, "REALTIME_VOICE_ENABLED", False)}
@@ -277,16 +238,6 @@ def voice_time(request, session_id: str, activity_id: str | None = None):
     return current_time(session.id, activity_id)
 
 
-@router.post("/realtime-voice/sessions/{session_id}/state")
-def set_state(request, session_id: str, data: StateIn):
-    session = owned_session(request.auth, session_id)
-    try:
-        update_state(session.id, data.model_dump(exclude_none=True))
-    except ValueError as exc:
-        raise HttpError(409, str(exc)) from exc
-    return session_out(session)
-
-
 @router.post("/realtime-voice/sessions/{session_id}/end")
 def end_session(request, session_id: str):
     session = owned_session(request.auth, session_id)
@@ -305,7 +256,14 @@ def token(request, session_id: str):
         raise HttpError(503, "Realtime voice is not configured")
     from livekit import api
 
-    grant = api.VideoGrants(room_join=True, room=f"voice-{session.id}", can_publish=True, can_subscribe=True)
+    grant = api.VideoGrants(
+        room_join=True,
+        room=f"voice-{session.id}",
+        can_publish=True,
+        can_publish_sources=["microphone"],
+        can_publish_data=False,
+        can_subscribe=True,
+    )
     access = (
         api.AccessToken(key, secret)
         .with_identity(f"user-{request.auth.pk}")
@@ -319,30 +277,3 @@ def token(request, session_id: str):
 @router.get("/realtime-voice/sessions/{session_id}/events")
 def events(request, session_id: str):
     return session_out(owned_session(request.auth, session_id))["events"]
-
-
-@router.post("/realtime-voice/sessions/{session_id}/events")
-def add_event(request, session_id: str, data: EventIn):
-    session = owned_session(request.auth, session_id)
-    if (
-        data.kind not in ("user", "user_transcript")
-        or data.delivery != "unknown"
-        or data.event_id.startswith("result:")
-    ):
-        raise HttpError(403, "Only user events may be submitted")
-    try:
-        return event_out(
-            record_event(session.id, data.event_id, data.kind, data.text, data.delivery, data.client_event_at)
-        )
-    except ValueError as exc:
-        raise HttpError(409, str(exc)) from exc
-
-
-@router.post("/realtime-voice/sessions/{session_id}/delegations")
-def add_delegation(request, session_id: str, data: DelegateIn):
-    session = owned_session(request.auth, session_id)
-    try:
-        message = delegate(session.id, data.event_id, data.text)
-    except ValueError as exc:
-        raise HttpError(409, str(exc)) from exc
-    return {"event_id": data.event_id, "message_id": str(message.id), "status": message.status}

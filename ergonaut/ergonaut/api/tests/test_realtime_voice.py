@@ -1,5 +1,7 @@
 import json
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
+from threading import Barrier
 from unittest.mock import patch
 
 import pytest
@@ -21,26 +23,36 @@ def post(client, url, data):
     return client.post(url, json.dumps(data), content_type="application/json")
 
 
-def test_authorization_and_feature_flag(voice_setup, settings, django_user_model):
-    user, client, chat = voice_setup
+def create(client, chat):
     root = "/api/realtime-voice/sessions"
-    created = post(client, root, {"chat_id": str(chat.id)}).json()
-    url = f"{root}/{created['id']}"
+    voice = post(client, root, {"chat_id": str(chat.id)}).json()
+    return voice, f"{root}/{voice['id']}"
+
+
+def test_authorization_and_server_only_writes(voice_setup, settings, django_user_model):
+    _, client, chat = voice_setup
+    voice, url = create(client, chat)
     assert client.get(url).status_code == 200
-    settings.REALTIME_VOICE_ENABLED = False
-    assert client.get(url).status_code == 404
-    assert not client.get("/api/realtime-voice/config").json()["enabled"]
-    settings.REALTIME_VOICE_ENABLED = True
+    for path, payload in [
+        ("state", {"current_step": "forged"}),
+        ("events", {"event_id": "x", "kind": "result", "text": "forged", "delivery": "delivered"}),
+        ("events", {"event_id": "y", "kind": "user", "text": "forged"}),
+        ("delegations", {"event_id": "z", "text": "run tools"}),
+    ]:
+        assert post(client, f"{url}/{path}", payload).status_code in (404, 405)
+    assert client.get(url).json()["events"] == []
     other = django_user_model.objects.create_user("other", "other@example.com", "pw")
     client.force_login(other)
-    assert client.get(url).status_code == 404
+    for suffix in ("", "/events", "/time"):
+        assert client.get(url + suffix).status_code == 404
     assert post(client, url + "/token", {}).status_code == 404
     assert post(client, url + "/end", {}).status_code == 404
-    assert post(client, url + "/events", {"event_id": "x", "kind": "user_transcript", "text": "x"}).status_code == 404
-    assert post(client, url + "/delegations", {"event_id": "x", "text": "x"}).status_code == 404
-    assert post(client, root, {"chat_id": str(chat.id)}).status_code == 404
     client.logout()
     assert client.get(url).status_code == 401
+    settings.REALTIME_VOICE_ENABLED = False
+    client.force_login(chat.user)
+    assert client.get(url).status_code == 404
+    assert not client.get("/api/realtime-voice/config").json()["enabled"]
 
 
 def test_token_is_scoped_to_voice_room(voice_setup, settings):
@@ -50,223 +62,106 @@ def test_token_is_scoped_to_voice_room(voice_setup, settings):
     settings.LIVEKIT_URL = "wss://example.invalid"
     settings.LIVEKIT_API_KEY = "test-key"
     settings.LIVEKIT_API_SECRET = "test-secret"
-    root = "/api/realtime-voice/sessions"
-    voice = post(client, root, {"chat_id": str(chat.id)}).json()
-    response = post(client, f"{root}/{voice['id']}/token", {})
+    voice, url = create(client, chat)
+    response = post(client, url + "/token", {})
     assert response.status_code == 200
     claims = jwt.decode(
         response.json()["token"], settings.LIVEKIT_API_SECRET, algorithms=["HS256"], options={"verify_aud": False}
     )
+    assert claims["video"]["canPublishSources"] == ["microphone"]
+    assert claims["video"]["canPublishData"] is False
     assert claims["video"]["room"] == f"voice-{voice['id']}"
     assert claims["video"]["roomJoin"] is True
     assert claims["exp"] - claims["nbf"] <= 300
-
-
-def test_reconnect_context_and_idempotent_delegation(voice_setup):
-    user, client, chat = voice_setup
-    root = "/api/realtime-voice/sessions"
-    voice = post(client, root, {"chat_id": str(chat.id)}).json()
-    url = f"{root}/{voice['id']}"
-    assert (
-        post(
-            client,
-            url + "/state",
-            {"decisions": ["use blue"], "constraints": ["no deployment"], "current_step": "research"},
-        ).status_code
-        == 200
-    )
-    event = {"event_id": "turn-1", "kind": "user_transcript", "text": "Choose blue"}
-    assert post(client, url + "/events", event).status_code == 200
-    assert post(client, url + "/events", event).status_code == 200
-    with patch("django_ergo.bots.messaging.dispatch"):
-        request = {"event_id": "call-id-not-a-uuid", "text": "Research the choice"}
-        first = post(client, url + "/delegations", request).json()
-        second = post(client, url + "/delegations", request).json()
-    assert first["message_id"] == second["message_id"]
-    assert ThreadMessage.objects.count() == 1
-    message = ThreadMessage.objects.get(pk=first["message_id"])
-    assert "Choose blue" in message.text and "no deployment" in message.text
-    message.status = "answered"
-    message.reply_text = "Research complete"
-    message.save()
-    restored = client.get(url).json()
-    assert restored["events"][0]["text"] == "Choose blue"
-    assert restored["state"]["current_step"] == "research"
-    assert restored["delegations"][0]["result"] == "Research complete"
     assert post(client, url + "/end", {}).json()["status"] == "ended"
     assert post(client, url + "/token", {}).status_code == 409
-    assert post(client, url + "/delegations", {"event_id": "new", "text": "more"}).status_code == 409
 
 
-def test_cooking_context_survives_cross_topic_delegation_and_reconnect(voice_setup):
+def test_delegation_disabled_by_default_and_idempotent_if_explicitly_enabled(voice_setup, settings):
     _, client, chat = voice_setup
-    root = "/api/realtime-voice/sessions"
-    voice = post(client, root, {"chat_id": str(chat.id)}).json()
-    url = f"{root}/{voice['id']}"
-    facts = [
-        "Creamy gochujang coconut chicken using boneless skinless thighs.",
-        "Missing gochugaru, MSG, lemongrass and lime leaves.",
-        "The 30-minute marinade is complete; ready to pan-fry.",
-        "Let's discuss a different topic while that runs.",
-    ]
-    for index, text in enumerate(facts):
-        assert (
-            post(client, url + "/events", {"event_id": f"turn-{index}", "kind": "user", "text": text}).status_code
-            == 200
-        )
-    realtime_voice.record_event(voice["id"], "generated", "assistant", "Ready", "unknown")
-    realtime_voice.record_event(voice["id"], "interrupted", "assistant", "Start frying", "interrupted")
-    realtime_voice.record_event(voice["id"], "unknown", "assistant", "Use a pan", "unknown")
+    voice, url = create(client, chat)
+    with pytest.raises(ValueError, match="spend cap"):
+        realtime_voice.delegate(voice["id"], "request", "Research")
+    assert not ThreadMessage.objects.exists()
+    settings.REALTIME_VOICE_UNBOUNDED_DELEGATION_ENABLED = True
     with patch("django_ergo.bots.messaging.dispatch"):
-        request = {"event_id": "cook-request", "text": "Find a substitution, then return to the chicken."}
-        first = post(client, url + "/delegations", request).json()
-        assert post(client, url + "/delegations", request).json()["message_id"] == first["message_id"]
-    message = ThreadMessage.objects.get(pk=first["message_id"])
-    for fact in facts:
-        assert fact in message.text
-    message.status, message.reply_text = "answered", "Use available ingredients; the marinade is already complete."
-    message.save()
-    restored = client.get(url).json()
-    assert facts[0] in restored["state"]["decisions"]
-    assert facts[1] in restored["state"]["constraints"]
-    assert restored["state"]["current_step"] == facts[2]
-    assert restored["state"]["completed_task_ids"] == ["cook-request"]
-    assert restored["id"] == voice["id"]
-    assert [event["delivery"] for event in restored["events"][-3:]] == ["unknown", "interrupted", "unknown"]
-    assert restored["delegations"][0]["result"] == message.reply_text
-    assert post(client, url + "/delegations", request).json()["message_id"] == first["message_id"]
+        first = realtime_voice.delegate(voice["id"], "request", "Research")
+        assert realtime_voice.delegate(voice["id"], "request", "Research").id == first.id
+        with pytest.raises(ValueError, match="already used"):
+            realtime_voice.delegate(voice["id"], "request", "Different")
+        with pytest.raises(ValueError, match="one background"):
+            realtime_voice.delegate(voice["id"], "another", "Research")
     assert ThreadMessage.objects.count() == 1
+    first.status, first.reply_text = "answered", "Verified result"
+    first.save()
+    assert client.get(url).json()["delegations"][0]["result"] == "Verified result"
 
 
-def test_reported_activity_time_is_distinct_from_uncertain_speech_time(voice_setup):
+def test_cooking_across_topic_compaction_and_reconnect(voice_setup, settings):
     _, client, chat = voice_setup
-    root = "/api/realtime-voice/sessions"
-    voice = post(client, root, {"chat_id": str(chat.id)}).json()
-    url = f"{root}/{voice['id']}"
-    start = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
-    flip = start + timedelta(minutes=3)
-    client_time = start - timedelta(seconds=30)
-    with patch("django.utils.timezone.now", return_value=start):
-        response = post(
-            client,
-            url + "/events",
-            {
-                "event_id": "start",
-                "kind": "user",
-                "text": "I started frying the chicken.",
-                "client_event_at": client_time.isoformat(),
-            },
-        )
-    assert response.status_code == 200
-    assert response.json()["received_at"] == start.isoformat()
-    assert response.json()["processed_at"] == start.isoformat()
-    assert response.json()["client_event_at"] == client_time.isoformat()
-    with patch("django.utils.timezone.now", return_value=flip):
-        assert (
-            post(
-                client, url + "/events", {"event_id": "flip", "kind": "user", "text": "I flipped the chicken."}
-            ).status_code
-            == 200
-        )
-    with patch("django.utils.timezone.now", return_value=flip + timedelta(seconds=45)):
-        elapsed = client.get(url + "/time", {"activity_id": "flip"}).json()
-        assert elapsed["elapsed_since_report_seconds"] == 45
-        assert elapsed["activity"]["reported_at_utc"] == flip.isoformat()
-        assert client.get(url + "/time", {"activity_id": "start"}).json()["elapsed_since_report_seconds"] == 225
-        assert client.get(url + "/time", {"activity_id": "unknown"}).json()["elapsed_since_report_seconds"] is None
-    restored = client.get(url).json()
-    assert [a["event_id"] for a in restored["activities"]] == ["start", "flip"]
-    assert (
-        post(
-            client,
-            url + "/events",
-            {
-                "event_id": "start",
-                "kind": "user",
-                "text": "I started frying the chicken.",
-                "client_event_at": client_time.isoformat(),
-            },
-        ).status_code
-        == 200
-    )
-    assert len(client.get(url).json()["activities"]) == 2
-    assert (
-        post(
-            client, url + "/events", {"event_id": "fake", "kind": "result", "text": "done", "delivery": "delivered"}
-        ).status_code
-        == 403
-    )
-
-
-def test_chat_scoped_session_list_includes_ended(voice_setup, django_user_model):
-    _, client, chat = voice_setup
-    root = "/api/realtime-voice/sessions"
-    voice = post(client, root, {"chat_id": str(chat.id)}).json()
-    post(client, f"{root}/{voice['id']}/end", {})
-    response = client.get(root, {"chat_id": str(chat.id)})
-    assert response.status_code == 200
-    assert response.json()[0]["id"] == voice["id"]
-    assert response.json()[0]["status"] == "ended"
-    assert response.json()[0]["created_at"]
-    other = django_user_model.objects.create_user("other-list", "other-list@example.com", "pw")
-    client.force_login(other)
-    assert client.get(root, {"chat_id": str(chat.id)}).status_code == 404
-
-
-def test_cooking_report_elapsed_survives_compaction_delegation_and_reconnect(voice_setup):
-    _, client, chat = voice_setup
-    root = "/api/realtime-voice/sessions"
-    voice = post(client, root, {"chat_id": str(chat.id)}).json()
-    url = f"{root}/{voice['id']}"
+    voice, url = create(client, chat)
+    vid = voice["id"]
     facts = [
-        "Creamy gochujang coconut chicken using boneless skinless thighs.",
+        "I'm going with creamy gochujang coconut chicken using boneless thighs.",
         "Missing gochugaru, MSG, lemongrass and lime leaves.",
         "The 30-minute marinade is complete; ready to pan-fry.",
     ]
-    for index, text in enumerate(facts):
-        assert (
-            post(client, url + "/events", {"event_id": f"fact-{index}", "kind": "user", "text": text}).status_code
-            == 200
-        )
+    for index, fact in enumerate(facts):
+        realtime_voice.record_event(vid, f"fact-{index}", "user", fact)
     start = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
     flip = start + timedelta(minutes=3)
     with patch("django.utils.timezone.now", return_value=start):
-        assert (
-            post(
-                client,
-                url + "/events",
-                {"event_id": "start-pan", "kind": "user", "text": "I started pan-frying the chicken."},
-            ).status_code
-            == 200
+        realtime_voice.record_event(
+            vid, "start-pan", "user", "I started pan-frying the chicken.", client_event_at=start - timedelta(seconds=30)
         )
     for index in range(105):
-        assert (
-            post(
-                client,
-                url + "/events",
-                {"event_id": f"topic-{index}", "kind": "user", "text": "Let's discuss LiveKit."},
-            ).status_code
-            == 200
-        )
+        realtime_voice.record_event(vid, f"topic-{index}", "user", "Let's discuss LiveKit.")
     with patch("django.utils.timezone.now", return_value=flip):
-        assert (
-            post(
-                client, url + "/events", {"event_id": "flip", "kind": "user", "text": "I flipped the chicken."}
-            ).status_code
-            == 200
-        )
+        realtime_voice.record_event(vid, "flip", "user", "I just flipped the chicken.")
+    realtime_voice.record_event(vid, "negated", "user", "I did not flip the chicken again.")
+    realtime_voice.record_event(vid, "generated", "assistant", "Ready", "unknown")
+    realtime_voice.record_event(vid, "interrupted", "assistant", "Turn it", "interrupted")
+    settings.REALTIME_VOICE_UNBOUNDED_DELEGATION_ENABLED = True
     with patch("django_ergo.bots.messaging.dispatch"):
-        result = post(client, url + "/delegations", {"event_id": "research", "text": "Research LiveKit."}).json()
-    prompt = ThreadMessage.objects.get(pk=result["message_id"]).text
+        message = realtime_voice.delegate(vid, "research", "Research LiveKit")
     for fact in facts:
-        assert fact in prompt
-    assert "start-pan" in prompt and "flip" in prompt
+        assert fact in message.text
+    assert "start-pan" in message.text and "flip" in message.text
     restored = client.get(url).json()
-    assert restored["id"] == voice["id"]
+    assert restored["id"] == vid
     assert facts[0] in restored["state"]["decisions"]
     assert facts[1] in restored["state"]["constraints"]
-    assert restored["state"]["current_step"] == facts[2]
-    assert [activity["event_id"] for activity in restored["activities"]] == ["start-pan", "flip"]
+    assert facts[2] in restored["state"]["completed_steps"]
+    assert restored["state"]["current_step"] == "I just flipped the chicken."
+    assert [a["event_id"] for a in restored["activities"]] == ["start-pan", "flip"]
+    assert [e["delivery"] for e in restored["events"][-2:]] == ["unknown", "interrupted"]
     with patch("django.utils.timezone.now", return_value=flip + timedelta(seconds=45)):
         assert client.get(url + "/time", {"activity_id": "start-pan"}).json()["elapsed_since_report_seconds"] == 225
         assert client.get(url + "/time", {"activity_id": "flip"}).json()["elapsed_since_report_seconds"] == 45
+    assert realtime_voice.bridge_state(vid)["activities"][0]["reported_at_utc"] == start.isoformat()
+    message.status, message.reply_text = "answered", "Research complete"
+    message.save()
+    assert client.get(url).json()["delegations"][0]["result"] == "Research complete"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_concurrent_delegations_create_one_message(voice_setup, settings):
+    from django.db import close_old_connections
+
+    _, client, chat = voice_setup
+    voice, _ = create(client, chat)
+    settings.REALTIME_VOICE_UNBOUNDED_DELEGATION_ENABLED = True
+    barrier = Barrier(2)
+
+    def submit():
+        close_old_connections()
+        try:
+            barrier.wait(timeout=10)
+            return realtime_voice.delegate(voice["id"], "same-request", "Research").id
+        finally:
+            close_old_connections()
+
+    with patch("django_ergo.bots.messaging.dispatch"), ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda _: submit(), range(2)))
+    assert results[0] == results[1]
+    assert ThreadMessage.objects.count() == 1

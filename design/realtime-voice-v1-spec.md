@@ -158,6 +158,10 @@ Provide authenticated operations to create/join/end/read sessions, obtain short-
 
 Validate chat access and participant membership for every operation. Scope room tokens to a single room and required media permissions. Keep OpenAI and LiveKit signing keys server-side. Rate-limit joins and session creation; bound concurrent sessions and provider retries.
 
+Prototype status: room tokens are scoped to the owning user's session and microphone publishing; the browser cannot write events, state, or delegation records. This does not yet provide join rate limits, session concurrency limits, or an independently verified hosted identity/transport boundary.
+
+Until a playback-correlated protocol is implemented, a durable completion is visible in the session card and is claimed for at most one spoken commentary attempt. This avoids deterministic reconnect loops at the cost of possibly losing an announcement after a crash. A claim is not playback confirmation, and playback confirmation would not prove human hearing.
+
 Use versioned control events with IDs and acknowledgements. Reconnect using authoritative state/version plus missing durable events; transient LiveKit delivery alone is insufficient for correctness.
 
 Prefer a single initiating human plus Ergonaut for the first vertical slice. Design identity and transcript schemas for multiple participants, but defer general multi-human conversation management, diarization of people sharing one mic, and speaker-specific voice permissions.

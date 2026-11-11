@@ -19,7 +19,7 @@ from livekit.agents import Agent, AgentServer, AgentSession, APIConnectOptions, 
 from livekit.plugins import openai, silero  # noqa: E402
 
 from ergonaut.api.realtime_voice import bridge_state, current_time, delegate, record_event  # noqa: E402
-from ergonaut.realtime_voice_outbox import completion_event  # noqa: E402
+from ergonaut.realtime_voice_outbox import claim_announcement, completion_event  # noqa: E402
 
 logger = logging.getLogger(__name__)
 MAX_SECONDS = 90
@@ -70,7 +70,8 @@ class Assistant(Agent):
                 "You are Ergonaut's conversational voice assistant. Preserve supplied "
                 "session context across topics. Delegate background work, say it is "
                 "underway, and keep listening. Report completion only when given a "
-                "verified result. Speech marked unknown or interrupted may not have been heard."
+                "verified result. On reconnect do not repeat a saved result unless asked. "
+                "Speech marked unknown or interrupted may not have been heard."
                 " For activity durations use only supplied server-calculated elapsed "
                 "time since the user reported the activity, not a claim that it happened. "
                 "Never invent times, durations, timers or reminders."
@@ -126,7 +127,13 @@ class Assistant(Agent):
         if not text:
             self.duplex_session.append_commentary("Please clarify the background request.", delegation_id=event.id)
             return
-        await sync_to_async(delegate, thread_sensitive=True)(self.voice_id, event.id, text)
+        try:
+            await sync_to_async(delegate, thread_sensitive=True)(self.voice_id, event.id, text)
+        except ValueError:
+            self.duplex_session.append_commentary(
+                "Background work is unavailable for this session.", delegation_id=event.id
+            )
+            return
         self.duplex_session.append_commentary(
             "The background request is queued. Continue the conversation while it runs.", delegation_id=event.id
         )
@@ -137,10 +144,10 @@ class Assistant(Agent):
             if key in self.announced:
                 continue
             event = await sync_to_async(completion_event, thread_sensitive=True)(self.voice_id, task)
-            if event is None or event.delivery == "delivered":
+            if event is None or not await sync_to_async(claim_announcement, thread_sensitive=True)(event):
                 continue
-            # A commentary submission is not a playback acknowledgement. Keep the
-            # durable record pending and retry on the next bridge connection.
+            # The durable claim is at-most-once, not proof of audio playback.
+            # The result remains available in the session even if this send fails.
             self.duplex_session.append_commentary(f"Verified background outcome for request {key}: {event.text[:1500]}")
             self.announced.add(key)
 

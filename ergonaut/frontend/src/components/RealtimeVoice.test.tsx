@@ -143,6 +143,8 @@ test('a single durable card shows the stage and transcript without claiming play
         events: [
           ...session.events,
           { event_id: 'event-2', kind: 'assistant', text: 'Working on it', delivery: 'unknown', created_at: '' },
+          { event_id: 'event-3', kind: 'assistant', text: 'Interrupted', delivery: 'interrupted', created_at: '' },
+          { event_id: 'event-4', kind: 'assistant', text: 'Played', delivery: 'delivered', created_at: '' },
         ],
       },
     }),
@@ -158,6 +160,8 @@ test('a single durable card shows the stage and transcript without claiming play
     'Hello',
     'Working on it',
     'playback unconfirmed',
+    '(interrupted)',
+    'playback confirmed; hearing not established',
   ]) {
     expect(html).toContain(text)
   }

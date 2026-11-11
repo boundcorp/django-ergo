@@ -19,6 +19,9 @@ export function VoiceSessionCard({ session }: { session: RealtimeVoiceSession })
         <p className="mt-1 text-muted">{state?.current_step || 'No current step recorded.'}</p>
         {!!state?.decisions?.length && <p className="mt-1">Decisions: {state.decisions.join('; ')}</p>}
         {!!state?.constraints?.length && <p className="mt-1">Constraints: {state.constraints.join('; ')}</p>}
+        {!!state?.completed_steps?.length && (
+          <p className="mt-1">Reported completed steps: {state.completed_steps.join('; ')}</p>
+        )}
         {(session.delegations ?? []).map(task => (
           <div key={task.event_id} className="mt-2 rounded-control border border-stroke p-2">
             <div>{task.text}</div>
@@ -38,7 +41,11 @@ export function VoiceSessionCard({ session }: { session: RealtimeVoiceSession })
               {event.kind === 'assistant' && (
                 <span className="text-muted">
                   {' '}
-                  ({event.delivery === 'interrupted' ? 'interrupted' : 'playback unconfirmed'})
+                  {event.delivery === 'interrupted'
+                    ? '(interrupted)'
+                    : event.delivery === 'delivered'
+                      ? '(playback confirmed; hearing not established)'
+                      : '(playback unconfirmed)'}
                 </span>
               )}
             </p>

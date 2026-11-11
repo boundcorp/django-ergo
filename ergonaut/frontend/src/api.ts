@@ -774,7 +774,13 @@ export type RealtimeVoiceSession = {
   status: string
   created_at?: string
   ended_at?: string | null
-  state?: { decisions?: string[]; constraints?: string[]; current_step?: string; pending_task_ids?: string[] }
+  state?: {
+    decisions?: string[]
+    constraints?: string[]
+    completed_steps?: string[]
+    current_step?: string
+    pending_task_ids?: string[]
+  }
   delegations?: { event_id: string; text: string; status: string; result: string; error: string }[]
   events: RealtimeVoiceEvent[]
 }

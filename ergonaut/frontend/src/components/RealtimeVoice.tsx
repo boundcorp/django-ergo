@@ -244,7 +244,11 @@ export function RealtimeVoice({
               {event.kind === 'assistant' && (
                 <span className="text-muted">
                   {' '}
-                  ({event.delivery === 'interrupted' ? 'interrupted' : 'playback unconfirmed'})
+                  {event.delivery === 'interrupted'
+                    ? '(interrupted)'
+                    : event.delivery === 'delivered'
+                      ? '(playback confirmed; hearing not established)'
+                      : '(playback unconfirmed)'}
                 </span>
               )}
             </p>
