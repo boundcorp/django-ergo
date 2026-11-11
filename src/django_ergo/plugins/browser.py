@@ -72,6 +72,7 @@ import concurrent.futures
 import contextlib
 import fcntl
 import hashlib
+import json
 import re
 import socket
 import subprocess
@@ -94,6 +95,7 @@ from django_ergo.bots.tools import BotTool
 from django_ergo.bots.tools import FunctionToolkit
 from django_ergo.bots.tools import bot_tool
 from django_ergo.conversation.context import TextContextSource
+from django_ergo.plugins._common import clip
 from django_ergo.plugins._common import trim
 from django_ergo.protected_env import scrubbed_env
 
@@ -111,6 +113,7 @@ TAB_ID_CHARS = 8
 WAIT_MAX_SECONDS = 300
 # The user scrolling, clicking or typing in a tab between the bot's calls this
 # many times within the window means they've taken it over.
+TASK_PAGE_CHARS = 3000  # of the final page in a browser task's report
 TAKEOVER_INPUTS = 3
 TAKEOVER_WINDOW = 300  # seconds
 TAKEN = "(taken over by the user)"
@@ -265,8 +268,12 @@ class BrowserPlugin(BotPlugin):
         def work() -> Any:
             with self._endpoint() as url, sync_playwright() as p:
                 try:
+                    # no_defaults: attaching must leave the user's Chrome as it
+                    # is. Playwright otherwise emulates light mode, no reduced
+                    # motion and focus on every page while connected, so a dark
+                    # page flips to light and back on every call.
                     browser = p.chromium.connect_over_cdp(
-                        url, timeout=self.timeout * 1000
+                        url, timeout=self.timeout * 1000, no_defaults=True
                     )
                 except Exception as exc:
                     where = self.cdp_url + (
@@ -613,7 +620,7 @@ class BrowserPlugin(BotPlugin):
         return ctx.again(self.poll_seconds, line)
 
     def worker_functions(self) -> dict[str, Callable]:
-        return {"session": self.watch}
+        return {"session": self.watch, "task": self.run_task}
 
     def _where(self) -> str:
         return self.ssh_host or urlsplit(self.cdp_url).netloc
@@ -870,32 +877,81 @@ class BrowserPlugin(BotPlugin):
         done_when: str = "",
         tab: str = "",
         model: str = "",
-    ) -> dict:
-        """Have ``model`` (default ``driver_model``) drive the browser toward
-        ``goal`` and report."""
-        from asgiref.sync import async_to_sync
-
+    ) -> str:
+        """Start a ``browser:task`` worker in which ``model`` (default
+        ``driver_model``) drives the browser toward ``goal``."""
         from django_ergo.bots.model_choice import MODEL
         from django_ergo.bots.model_choice import check
-        from django_ergo.conversation.structured import StructuredCallSpec
-        from django_ergo.conversation.structured import run_structured_call
 
         if not goal.strip():
             msg = "Say what the browser should get done."
             raise ValueError(msg)
         driver = check(self.bot, model, MODEL) or self.driver_model
+        if ctx.session is None:
+            msg = "A browser task belongs to a chat"
+            raise ValueError(msg)
         with self._use(ctx):
-            pass  # refuse before spending a model call when no session is open
-        request = f"Goal: {goal.strip()}"
-        if done_when.strip():
-            request += f"\nDone when: {done_when.strip()}"
+            pass  # refuse now, not in the background, when no session is open
+        worker = ctx.workers.start(
+            "browser:task",
+            title=f"Browser: {clip(goal.strip(), 80)}",
+            goal=goal.strip(),
+            done_when=done_when.strip(),
+            tab=tab,
+            model=driver,
+        )
+        return (
+            f"Started the browser task as worker {worker.pk}. Its report (done, stopped "
+            "or failed, with the page it ended on) arrives in this chat when it "
+            "finishes; leave the browser to it until then. ergo_worker_cancel stops it."
+        )
+
+    def run_task(
+        self,
+        ctx: WorkerContext,
+        goal: str,
+        done_when: str = "",
+        tab: str = "",
+        model: str = "",
+    ) -> dict:
+        """The ``browser:task`` worker: ``model`` (default ``driver_model``) drives
+        the browser in one structured call, each tool call shown as progress."""
+        from asgiref.sync import async_to_sync
+        from asgiref.sync import sync_to_async
+
+        from django_ergo.bots.tools import ToolContext
+        from django_ergo.conversation.structured import StructuredCallSpec
+        from django_ergo.conversation.structured import TurnSignal
+        from django_ergo.conversation.structured import run_structured_call
+
+        tools_ctx = ToolContext(bot=self.bot, session=ctx.session, user=ctx.user)
+        entries: list[dict] = []
+
+        class Watched(FunctionToolkit):
+            def execute_tool(self, tool_name: str, arguments: dict):
+                line = (
+                    f"{tool_name.removeprefix('ergo_browser_')} {json.dumps(arguments)}"
+                )
+                entries.append(
+                    {"kind": "tool", "text": clip(line, 300), "at": time.time()}
+                )
+                ctx.progress(clip(line, 200))
+                return super().execute_tool(tool_name, arguments)
+
+        class Stop:
+            async def check(self) -> TurnSignal:
+                return TurnSignal(stop=await sync_to_async(lambda: ctx.stopping)())
+
+        request = f"Goal: {goal}"
+        if done_when:
+            request += f"\nDone when: {done_when}"
         if tab:
             request += f"\nWork in tab {tab}."
         spec = StructuredCallSpec(
             kind="browser_task",
             system_prompt=DRIVER_PROMPT.format(takeover=self.takeover),
             response_model=TaskReport,
-            toolkits=[FunctionToolkit(self._tools(driving=True), ctx)],
+            toolkits=[Watched(self._tools(driving=True), tools_ctx)],
             max_turns=self.driver_steps,
             wrap_up=True,
         )
@@ -904,19 +960,26 @@ class BrowserPlugin(BotPlugin):
             spec,
             request,
             user=ctx.user,
-            engine=self.bot.make_engine(ctx.session, driver, purpose="browser"),
-            metadata={"session": str(ctx.session.pk) if ctx.session else ""},
+            engine=self.bot.make_engine(
+                ctx.session, model or self.driver_model, purpose="browser"
+            ),
+            control=Stop(),
+            metadata={"session": str(ctx.session.pk), "worker": str(ctx.worker.pk)},
         )
+        ctx.activity(entries[-20:], at=time.time(), source="browser")
         report = result.parsed
         out: dict = {
             "status": report.status if report else "failed",
             "summary": report.summary if report else (result.call.error or "no report"),
             "seconds": round(time.monotonic() - started, 1),
+            "steps": len(entries),
         }
         if report and report.needs:
             out["needs"] = report.needs
         with contextlib.suppress(RuntimeError, ValueError):
-            out["page"] = self.snapshot(ctx, tab)
+            page = self.snapshot(tools_ctx, tab)
+            # The report is a chat message: a short look, ergo_browser_snapshot for more.
+            out["page"] = {**page, "snapshot": trim(page["snapshot"], TASK_PAGE_CHARS)}
         return out
 
     def screenshot(
@@ -976,7 +1039,8 @@ class BrowserPlugin(BotPlugin):
                 "The ergo_browser_ tools drive a real Chrome that stays open between calls, "
                 "with the user's sign-ins. Browse with ergo_browser_task by default: give it "
                 "the goal once (search a site, fill a form, find and read pages, collect "
-                "links) and a fast model does the clicking and typing and reports back. "
+                "links) and a fast model does the clicking and typing in a worker, whose "
+                "report reaches the chat as a message when it's done. "
                 "Each click you make yourself costs a full model turn, so don't drive a "
                 "page step by step. Use ergo_browser_open and ergo_browser_snapshot to "
                 "look at a page, ergo_browser_batch for steps you already know, and the "
@@ -1216,7 +1280,11 @@ class BrowserPlugin(BotPlugin):
             description=(
                 "The default way to browse: hand the browser a goal and a fast model "
                 "drives it (opening pages, reading, clicking, typing) until the goal is "
-                "met, then reports with the final page. One call instead of one per click. It stops and says "
+                "met. It runs as a worker on the chat's worker card: this call returns at "
+                "once, and the report (with the final page) arrives in the chat as a "
+                "message when it's done, so end your turn or do other work meanwhile, "
+                "without touching the browser. One call instead of one per click. It "
+                "stops and says "
                 "so before sign-ins, payments, or submitting, saving, publishing or "
                 "deleting anything the goal doesn't ask for, so name those steps if you "
                 "want them done. Check its report against the page."
@@ -1247,7 +1315,7 @@ class BrowserPlugin(BotPlugin):
             done_when: str = "",
             tab: str = "",
             model: str = "",
-        ) -> dict:
+        ) -> str:
             return plugin.task(ctx, goal, done_when, tab, model)
 
         if driving:

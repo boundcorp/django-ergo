@@ -1569,8 +1569,9 @@ is open the bot has `ergo_browser_tabs`, `ergo_browser_open`,
 `ergo_browser_type` and `ergo_browser_press`, which also wait for approval
 with `approve_actions: true`, as do `ergo_browser_batch` (several steps in
 one call, one snapshot at the end) and `ergo_browser_task` (a goal handed
-to `driver_model`, which drives the other tools in its own loop and reports
-back; its `model` argument picks another driver for one task, checked as in
+to `driver_model`, which drives the other tools in its own loop in a
+`browser:task` worker and reports back in the chat; its `model` argument
+picks another driver for one task, checked as in
 [Model choice for tasks](#model-choice-for-tasks)). A bot in a private pool always drives with that pool (its
 default, or a `driver_model` of the pool such as `personal/flash`). Actions refuse to run in a tab the user has taken over (navigated
 since the bot last looked, or scrolled, clicked or typed in between 3 of

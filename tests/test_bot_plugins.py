@@ -2715,6 +2715,7 @@ def chrome(tmp_path):
             "--headless=new",
             "--no-sandbox",
             "--no-first-run",
+            "--force-dark-mode",  # the user's theme, which the bot must leave alone
             f"--remote-debugging-port={port}",
             f"--user-data-dir={tmp_path / 'chrome-profile'}",
             "about:blank",
@@ -2810,6 +2811,20 @@ def test_browser_snapshot_refs_are_numbered_as_the_next_call_sees_them():
     )
     assert REF.fullmatch("f4e17") and REF.fullmatch("e3")
     assert not REF.fullmatch("input")
+
+
+@pytest.mark.django_db
+def test_the_browser_leaves_the_pages_color_scheme_alone(tmp_path, chrome):
+    _, _, plugin = browser_bot(tmp_path, config=f"cdp_url: {chrome}, sessions: false")
+    ctx = type("Ctx", (), {"session": None})()
+    plugin.open(ctx, BROWSER_PAGE, new_tab=True)
+    dark = plugin._run(
+        lambda context: [
+            page.evaluate("matchMedia('(prefers-color-scheme: dark)').matches")
+            for page in context.pages
+        ]
+    )
+    assert dark and all(dark)  # Playwright's default would emulate light
 
 
 @pytest.mark.django_db
@@ -2976,9 +2991,12 @@ def test_the_browser_moves_off_a_tab_the_user_keeps_using(tmp_path, chrome):
     assert "note" not in plugin.press(ctx, "Tab")  # handed back after a look
 
 
+@pytest.mark.usefixtures("workers")
 @pytest.mark.django_db(transaction=True)
-async def test_a_browser_task_hands_its_goal_to_a_driver_model(tmp_path, chrome):
+async def test_a_browser_task_runs_its_driver_model_in_a_worker(tmp_path, chrome):
+    from django_ergo.bots import workers as w
     from django_ergo.conversation.models import StructuredCall
+    from django_ergo.conversation.models import Worker
 
     bot, engine, _ = browser_bot(
         tmp_path,
@@ -2987,7 +3005,8 @@ async def test_a_browser_task_hands_its_goal_to_a_driver_model(tmp_path, chrome)
             {"goal": "Search for tacos", "done_when": "the title says sent tacos"},
             tool_id="task",
         ),
-        # The driver's own loop, on the same fake client.
+        say("It's searching; I'll report back."),
+        # The worker's driver loop, on the same fake client.
         claude_tool(
             "ergo_browser_open", {"url": BROWSER_PAGE, "new_tab": True}, tool_id="d1"
         ),
@@ -3005,18 +3024,28 @@ async def test_a_browser_task_hands_its_goal_to_a_driver_model(tmp_path, chrome)
             {"status": "done", "summary": "Searched for tacos."},
             tool_id="d3",
         ),
-        say("Searched."),
         config=f"cdp_url: {chrome}, sessions: false, driver_model: auto/small",
     )
     user = await User.objects.acreate(username="surfer-user")
     root = await bot.root_session(user)
     done = await bot.ask(root, "Search for tacos")
-    assert done.text == "Searched."
+    assert done.text == "It's searching; I'll report back."
+    (started,) = _tool_results(engine)
+    assert started.startswith("Started the browser task as worker ")
 
-    (report,) = _tool_results(engine)
-    assert report["status"] == "done"
-    assert report["summary"] == "Searched for tacos."
-    assert report["page"]["title"] == "sent tacos"
+    worker = await Worker.objects.aget(function="browser:task")
+    assert worker.title == "Browser: Search for tacos"
+    assert await sync_to_async(w.run)(str(worker.pk), bot.registry) == "completed"
+    await worker.arefresh_from_db()
+    assert worker.result["status"] == "done"
+    assert worker.result["summary"] == "Searched for tacos."
+    assert worker.result["steps"] == 2
+    assert worker.result["page"]["title"] == "sent tacos"
+    assert worker.progress.startswith("batch ")
+    assert [e["text"].split()[0] for e in worker.state["activity"]["entries"]] == [
+        "open",
+        "batch",
+    ]
     call = await StructuredCall.objects.aget(kind="browser_task")
     assert "Goal: Search for tacos" in call.request
     assert "Done when: the title says sent tacos" in call.request
