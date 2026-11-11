@@ -10,6 +10,10 @@ cache reads and output, each priced at its own rate. Superusers see everyone's c
 hour (rolling hours ending now) for the sparkline in the chat header: its own
 structured calls, and separately the coding agents its workers ran.
 
+A call that ran for a chat without being one of its turns (a browser task's
+driver, a look at an attachment) has no session of its own but names the
+chat in ``metadata["session"]``; it counts for that chat and its bot.
+
 ``private`` breaks API-billed private pool spend (``private_pools`` in
 providers.yaml) down by pool, provider, exact model and bot, from the
 per-request ``InferenceRequest`` ledger. Those requests are already in the
@@ -18,14 +22,19 @@ totals above (their calls are priced exactly); this is the billing view.
 
 from __future__ import annotations
 
+import uuid
 from collections import defaultdict
 from datetime import timedelta
 
+from django.db.models import CharField, Q
+from django.db.models.fields.json import KeyTextTransform
+from django.db.models.functions import Cast
 from django.utils import timezone
 from django_ergo.conversation.chat_reply import CHAT_REPLY_KIND
 from django_ergo.conversation.models import (
     AgentUsage,
     AgentUsageEvent,
+    ConversationSession,
     InferenceOutcome,
     InferenceRequest,
     StructuredCall,
@@ -307,8 +316,39 @@ def _cache_hit(bucket: dict) -> float:
     return bucket["cache_read_tokens"] / denominator if denominator else 0.0
 
 
-def _add_session(by_session: dict[str, dict], call: StructuredCall, parts: dict | None) -> tuple[int, int]:
-    session = call.session
+def _for_chat(calls):
+    """Calls that are a chat's turns, or ran for it (``metadata["session"]``)."""
+    return calls.annotate(for_chat=KeyTextTransform("session", "metadata"))
+
+
+def _of_chats(calls, sessions):
+    """``calls`` (from ``_for_chat``) that belong to one of ``sessions``."""
+    ids = sessions.annotate(text_id=Cast("id", CharField())).values("text_id")
+    return calls.filter(Q(session__in=sessions) | Q(session__isnull=True, for_chat__in=ids))
+
+
+def _chat_of(calls: list[StructuredCall]) -> dict[str, ConversationSession]:
+    """The chats that calls without a session ran for, by id."""
+    ids = {call.for_chat for call in calls if call.session is None and getattr(call, "for_chat", "")}
+    found = ConversationSession.objects.filter(id__in=[i for i in ids if _is_uuid(i)])
+    return {str(session.id): session for session in found}
+
+
+def _is_uuid(value: str) -> bool:
+    try:
+        uuid.UUID(str(value))
+    except ValueError:
+        return False
+    return True
+
+
+def _add_session(
+    by_session: dict[str, dict],
+    call: StructuredCall,
+    parts: dict | None,
+    session: ConversationSession | None = None,
+) -> tuple[int, int]:
+    session = call.session or session
     if session is None:
         return 0, 0
     session_id = str(session.id)
@@ -516,9 +556,8 @@ def session_usage(request, session_id: str, hours: int = 6):
         return min(hours - 1, int((at - since) / hour))
 
     fields = [field for _, field, _ in PARTS]
-    for row in StructuredCall.objects.filter(session=session, created_at__gte=since, created_at__lte=until).values_list(
-        "created_at", *fields
-    ):
+    own = _of_chats(_for_chat(StructuredCall.objects.all()), ConversationSession.objects.filter(pk=session.pk))
+    for row in own.filter(created_at__gte=since, created_at__lte=until).values_list("created_at", *fields):
         thread[slot(row[0])] += sum(n or 0 for n in row[1:])
 
     events = AgentUsageEvent.objects.filter(
@@ -552,12 +591,13 @@ def session_usage(request, session_id: str, hours: int = 6):
 def costs(request, days: int = 30, bot: str = ""):
     days = max(1, min(days, 366))
     since = timezone.now() - timedelta(days=days)
-    calls = StructuredCall.objects.filter(created_at__gte=since).select_related("session")
+    calls = _for_chat(StructuredCall.objects.filter(created_at__gte=since).select_related("session"))
     if not request.auth.is_superuser:
         calls = calls.filter(user=request.auth)
     if bot:
-        calls = calls.filter(session__bot_name=bot)
+        calls = _of_chats(calls, ConversationSession.objects.filter(bot_name=bot))
     calls = list(calls.order_by("created_at"))
+    chats = _chat_of(calls)
     agent_rows = AgentUsage.objects.filter(last_at__gte=since, last_at__lte=timezone.now()).select_related(
         "worker", "session"
     )
@@ -584,7 +624,7 @@ def costs(request, days: int = 30, bot: str = ""):
         if parts is None:
             unpriced.add(call.model_name or "(unknown)")
         _add(total, call, parts)
-        main_count, subscription_count = _add_session(by_session, call, parts)
+        main_count, subscription_count = _add_session(by_session, call, parts, chats.get(call.for_chat or ""))
         main_tokens += main_count
         subscription_tokens += subscription_count
         if call.kind == "compaction":

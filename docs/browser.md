@@ -199,7 +199,8 @@ model call, and its whole context, on every click. Two tools cut that down:
   before a sign-in or captcha, and before paying, submitting, publishing,
   sending, saving or deleting anything the goal doesn't ask for in so many
   words, so the bot names those steps when it wants them done. Its run is
-  stored as a `browser_task` structured call. With `approve_actions` the
+  stored as a `browser_task` structured call, which Ergonaut's Costs page
+  counts for the chat that started it and its bot. With `approve_actions` the
   user approves the goal and the steps, not each action inside them.
 
 ### Working alongside a person
