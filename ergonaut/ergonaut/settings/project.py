@@ -37,6 +37,12 @@ ATTACHMENT_UPLOAD_MAX_BYTES = int(os.environ.get("ATTACHMENT_UPLOAD_MAX_BYTES", 
 VOICE_TRANSCRIPTION_TIMEOUT = float(os.environ.get("VOICE_TRANSCRIPTION_TIMEOUT", "30"))
 VOICE_TRANSCRIPTION_PER_MINUTE = int(os.environ.get("VOICE_TRANSCRIPTION_PER_MINUTE", "5"))
 VOICE_TRANSCRIPTION_PER_DAY = int(os.environ.get("VOICE_TRANSCRIPTION_PER_DAY", "100"))
+
+# Hosted realtime voice is independent of composer transcription and opt-in.
+REALTIME_VOICE_ENABLED = env_variable_truthy("REALTIME_VOICE_ENABLED")
+LIVEKIT_URL = os.environ.get("LIVEKIT_URL", "")
+LIVEKIT_API_KEY = os.environ.get("LIVEKIT_API_KEY", "")
+LIVEKIT_API_SECRET = os.environ.get("LIVEKIT_API_SECRET", "")
 ROOT_URLCONF = "ergonaut.settings.urls"
 
 

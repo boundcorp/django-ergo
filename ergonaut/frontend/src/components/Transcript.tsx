@@ -1,6 +1,16 @@
 import { Fragment, createContext, useContext, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import type { AttachmentFile, Block, Call, Compaction, Message, MessageIdentity, SentCard, Worker } from '../api'
+import type {
+  AttachmentFile,
+  Block,
+  Call,
+  Compaction,
+  Message,
+  MessageIdentity,
+  RealtimeVoiceSession,
+  SentCard,
+  Worker,
+} from '../api'
 import { api } from '../api'
 import { DirectoryContext } from './BotIcon'
 import Markdown from './Markdown'
@@ -13,6 +23,7 @@ import { eventSummary } from '../eventSummary'
 import { ContextPanel, CompactionDivider } from './ContextPanel'
 import { AttachmentView, MediaGallery, isAudio, resolveFiles } from './MediaGallery'
 import type { MediaItem } from './MediaGallery'
+import { VoiceSessionCard } from './VoiceSessionCard'
 
 export { AttachmentView, isAudio }
 
@@ -964,6 +975,7 @@ export function Transcript({
   compactions = [],
   sessionId = '',
   highlight = null,
+  voiceSessions = [],
 }: {
   messages: Message[]
   calls: Call[]
@@ -973,6 +985,7 @@ export function Transcript({
   complete?: boolean // every message is loaded (no older page)
   sent?: SentCard[] // requests this chat sent (thread cards)
   workers?: Worker[]
+  voiceSessions?: RealtimeVoiceSession[]
   highlight?: number | null // the line a link points at (#m-<line>)
 }) {
   const { sessions } = useContext(DirectoryContext)
@@ -992,6 +1005,17 @@ export function Transcript({
   const starts = new Map<number, Call>()
   for (const call of calls) if (call.first_sequence != null) starts.set(call.first_sequence, call)
   const made = placeFiles(messages, files, complete)
+  // Place each session once at its creation time, respecting the loaded transcript window.
+  const voiceBefore = new Map<number, RealtimeVoiceSession[]>()
+  const voiceAfter: RealtimeVoiceSession[] = []
+  const firstTime = messages.find(message => message.timestamp)?.timestamp
+  for (const voice of [...voiceSessions].sort((a, b) => (a.created_at ?? '').localeCompare(b.created_at ?? ''))) {
+    const created = voice.created_at ? Date.parse(voice.created_at) : NaN
+    if (!complete && firstTime && created < Date.parse(firstTime)) continue
+    const next = messages.find(message => message.timestamp && Date.parse(message.timestamp) > created)
+    if (next) voiceBefore.set(next.line, [...(voiceBefore.get(next.line) ?? []), voice])
+    else voiceAfter.push(voice)
+  }
   const delegated: Delegated = {
     cards: new Map(sent.map(c => [c.message_id, c])),
     workers: new Map(workers.map(w => [w.id, w])),
@@ -1020,50 +1044,57 @@ export function Transcript({
             <div className="flex flex-col">
               {made.has(-1) && <BotFiles files={made.get(-1)!} />}
               {messages.map(message => (
-                <div
-                  key={message.line}
-                  id={messageAnchor(message.line)}
-                  className={`empty:hidden ${toolsOnly(message) && !starts.has(message.line) ? 'mt-1.5' : 'mt-6'} ${highlight === message.line ? 'message-target' : ''}`}
-                >
-                  {starts.has(message.line) && <CallHeader call={starts.get(message.line)!} />}
-                  <MessageView message={message} results={results} pending={pending} replies={replies} />
-                  {sentFrom.has(message.line) && (
-                    <div className="mt-1 flex flex-wrap items-center justify-end gap-1.5 text-xs text-muted">
-                      ↪ Sent to
-                      {sentFrom.get(message.line)!.map(card => (
-                        <ThreadLink key={card.message_id} id={card.thread.id}>
-                          {card.thread.title}
-                        </ThreadLink>
+                <Fragment key={message.line}>
+                  {(voiceBefore.get(message.line) ?? []).map(voice => (
+                    <VoiceSessionCard key={voice.id} session={voice} />
+                  ))}
+                  <div
+                    id={messageAnchor(message.line)}
+                    className={`empty:hidden ${toolsOnly(message) && !starts.has(message.line) ? 'mt-1.5' : 'mt-6'} ${highlight === message.line ? 'message-target' : ''}`}
+                  >
+                    {starts.has(message.line) && <CallHeader call={starts.get(message.line)!} />}
+                    <MessageView message={message} results={results} pending={pending} replies={replies} />
+                    {sentFrom.has(message.line) && (
+                      <div className="mt-1 flex flex-wrap items-center justify-end gap-1.5 text-xs text-muted">
+                        ↪ Sent to
+                        {sentFrom.get(message.line)!.map(card => (
+                          <ThreadLink key={card.message_id} id={card.thread.id}>
+                            {card.thread.title}
+                          </ThreadLink>
+                        ))}
+                      </div>
+                    )}
+                    {made.has(message.line) && <BotFiles files={made.get(message.line)!} />}
+                    {message.role === 'assistant' &&
+                      (() => {
+                        const call = calls.find(
+                          c =>
+                            c.first_sequence != null &&
+                            c.first_sequence <= message.line &&
+                            (c.last_sequence ?? Infinity) >= message.line,
+                        )
+                        const last =
+                          call &&
+                          messages
+                            .filter(
+                              m =>
+                                m.role === 'assistant' &&
+                                m.line >= call.first_sequence! &&
+                                m.line <= (call.last_sequence ?? Infinity),
+                            )
+                            .slice(-1)[0]
+                        return call && last?.line === message.line ? <ContextPanel call={call} /> : null
+                      })()}
+                    {compactions
+                      .filter(c => c.upto_sequence === message.line)
+                      .map(c => (
+                        <CompactionDivider key={c.id} compaction={c} sessionId={sessionId} />
                       ))}
-                    </div>
-                  )}
-                  {made.has(message.line) && <BotFiles files={made.get(message.line)!} />}
-                  {message.role === 'assistant' &&
-                    (() => {
-                      const call = calls.find(
-                        c =>
-                          c.first_sequence != null &&
-                          c.first_sequence <= message.line &&
-                          (c.last_sequence ?? Infinity) >= message.line,
-                      )
-                      const last =
-                        call &&
-                        messages
-                          .filter(
-                            m =>
-                              m.role === 'assistant' &&
-                              m.line >= call.first_sequence! &&
-                              m.line <= (call.last_sequence ?? Infinity),
-                          )
-                          .slice(-1)[0]
-                      return call && last?.line === message.line ? <ContextPanel call={call} /> : null
-                    })()}
-                  {compactions
-                    .filter(c => c.upto_sequence === message.line)
-                    .map(c => (
-                      <CompactionDivider key={c.id} compaction={c} sessionId={sessionId} />
-                    ))}
-                </div>
+                  </div>
+                </Fragment>
+              ))}
+              {voiceAfter.map(voice => (
+                <VoiceSessionCard key={voice.id} session={voice} />
               ))}
             </div>
           </FoldContext.Provider>

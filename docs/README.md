@@ -16,6 +16,7 @@
 | [Browser control](browser.md)           | The `browser` plugin, a Chrome a person can sign in to, tunnels                                     |
 | [Bot reference](bots.md)                | Every bot.yaml key and official plugin option; private inference pools                              |
 | [Running Ergonaut](ergonaut.md)         | Commands, settings, the web app, reloading, containers, production, private inference               |
+| [Realtime voice prototype](realtime-voice.md) | Isolated hosted-room experiment, caps, setup and rollout blockers |
 | [Agent skills](agent-skills.md)         | Ergo's skills for Claude Code and Codex, the `ergonaut-remote` command and API keys                 |
 
 ## Library

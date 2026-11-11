@@ -8,6 +8,7 @@ import type {
   Message,
   Pin,
   PrLink,
+  RealtimeVoiceSession,
   SentCard,
   SessionDetail,
   Todo,
@@ -24,6 +25,7 @@ import Files from '../components/Files'
 import { DebugShortcut } from '../components/DebugShortcut'
 import { IllustrateDialog } from '../components/IllustrateDialog'
 import { ComposerVoice } from '../components/VoiceRecorder'
+import { RealtimeVoice } from '../components/RealtimeVoice'
 import Markdown from '../components/Markdown'
 import ModelPicker, { EffortSlider, modelLabel, useBotModels } from '../components/ModelPicker'
 import { PageViewer, Pins } from '../components/Pins'
@@ -88,6 +90,39 @@ export function PinnedDashboard({
 export function Chat({ onChange }: { onChange: () => void }) {
   const { id = '' } = useParams()
   const [detail, setDetail] = useState<SessionDetail | null>(null)
+  const [voiceSessions, setVoiceSessions] = useState<RealtimeVoiceSession[]>([])
+  useEffect(() => {
+    let alive = true
+    let timer: number | undefined
+    setVoiceSessions([])
+    const refresh = () => {
+      api
+        .realtimeVoiceSessions(id)
+        .then(sessions => {
+          if (alive) setVoiceSessions(sessions)
+        })
+        .catch(() => {})
+    }
+    api
+      .realtimeVoiceConfig()
+      .then(config => {
+        if (!alive || !config.enabled) return
+        refresh()
+        timer = window.setInterval(refresh, 3000)
+      })
+      .catch(() => {})
+    return () => {
+      alive = false
+      if (timer !== undefined) window.clearInterval(timer)
+    }
+  }, [id])
+  const updateVoiceSession = useCallback((session: RealtimeVoiceSession) => {
+    setVoiceSessions(current =>
+      current.some(item => item.id === session.id)
+        ? current.map(item => (item.id === session.id ? session : item))
+        : [...current, session],
+    )
+  }, [])
   const [text, setText] = useDraft(id)
   const [busy, setBusy] = useState(false)
   const [showTodos, setShowTodos] = usePersistedFlag('ergonaut.todos')
@@ -741,6 +776,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
             onCount={onPinCount}
           />
         </MobileSessionBar>
+        <RealtimeVoice key={id} sessionId={id} disabled={closed} onSession={updateVoiceSession} />
         <ActivityStrip requests={detail.requests ?? []} workers={detail.workers ?? []}>
           <Requests requests={detail.requests ?? []} onAnswered={load} />
           <Workers workers={detail.workers ?? []} />
@@ -778,6 +814,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
             sent={detail.sent}
             workers={detail.workers}
             highlight={target}
+            voiceSessions={voiceSessions}
           />
           {(detail.inbox ?? []).map(item => (
             <div key={item.id} className="mt-3 flex flex-col items-end">

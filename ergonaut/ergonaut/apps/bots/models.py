@@ -100,3 +100,51 @@ class VoiceRateLimit(models.Model):
     minute_count = models.PositiveIntegerField(default=0)
     day = models.BigIntegerField(default=0)
     day_count = models.PositiveIntegerField(default=0)
+
+
+class RealtimeVoiceSession(models.Model):
+    """A logical voice conversation, independent of transport reconnects."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    chat = models.ForeignKey("django_ergo.ConversationSession", on_delete=models.CASCADE, related_name="voice_sessions")
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="realtime_voice_sessions")
+    status = models.CharField(max_length=12, default="active")
+    state = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    ended_at = models.DateTimeField(null=True, blank=True)
+
+
+class RealtimeVoiceEvent(models.Model):
+    session = models.ForeignKey(RealtimeVoiceSession, on_delete=models.CASCADE, related_name="events")
+    event_id = models.CharField(max_length=200)
+    kind = models.CharField(max_length=40)
+    text = models.TextField()
+    delivery = models.CharField(max_length=20, default="unknown")
+    created_at = models.DateTimeField(auto_now_add=True)
+    received_at = models.DateTimeField(null=True, blank=True)
+    processed_at = models.DateTimeField(null=True, blank=True)
+    client_event_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["session", "event_id"], name="unique_realtime_voice_event")]
+
+
+class RealtimeVoiceActivity(models.Model):
+    """A user-reported action, anchored to when its report reached Django."""
+
+    session = models.ForeignKey(RealtimeVoiceSession, on_delete=models.CASCADE, related_name="activities")
+    event = models.OneToOneField(RealtimeVoiceEvent, on_delete=models.CASCADE, related_name="activity")
+    description = models.TextField()
+
+
+class RealtimeVoiceDelegation(models.Model):
+    session = models.ForeignKey(RealtimeVoiceSession, on_delete=models.CASCADE, related_name="delegations")
+    event_id = models.CharField(max_length=200)
+    text = models.TextField()
+    message = models.OneToOneField(
+        "django_ergo.ThreadMessage", on_delete=models.CASCADE, related_name="voice_delegation"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["session", "event_id"], name="unique_voice_delegation")]
