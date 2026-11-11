@@ -825,8 +825,8 @@ class OrcaPlugin(BotPlugin):
         title: str,
         model: str = "",
         effort: str = "",
-    ) -> tuple[str, str, dict]:
-        """Create the task and start its worker: (task id, run id, receipt)."""
+    ) -> tuple[str, str, str, dict]:
+        """Create the task and worker: task id, run id, owning mailbox, receipt."""
         mailbox, run_id = self.mailbox(ctx, worktree)
         task = self.cli_json(
             [
@@ -869,7 +869,7 @@ class OrcaPlugin(BotPlugin):
             if effort:
                 args += ["--effort", effort]
         receipt = self.cli_json(args)
-        return task_id, run_id, receipt
+        return task_id, run_id, mailbox, receipt
 
     def forget_mailbox(self, ctx: ToolContext) -> bool:
         """Drop the chat's saved mailbox and Run; returns whether there was one."""
@@ -917,7 +917,7 @@ class OrcaPlugin(BotPlugin):
         worktree, worktree_path = self.resolved_worktree(spec.workspace)
         args = (spec.brief, worktree, spec.agent, spec.title, spec.model, spec.effort)
         try:
-            task_id, run_id, receipt = self.dispatch(ctx, *args)
+            task_id, run_id, mailbox, receipt = self.dispatch(ctx, *args)
         except ValueError as exc:
             # The chat's saved mailbox terminal or Run is gone or unusable (its
             # worktree was removed, Orca restarted): make new ones and try once more.
@@ -925,7 +925,7 @@ class OrcaPlugin(BotPlugin):
             stale = code in STALE_MAILBOX or "selector_not_found" in str(exc)
             if not stale or not self.forget_mailbox(ctx):
                 raise
-            task_id, run_id, receipt = self.dispatch(ctx, *args)
+            task_id, run_id, mailbox, receipt = self.dispatch(ctx, *args)
         dispatch_id = _first_key(receipt, ("dispatchId", "dispatch_id"))
         if not dispatch_id:
             msg = f"worker-start gave no dispatch id: {json.dumps(receipt)[:400]}"
@@ -933,6 +933,7 @@ class OrcaPlugin(BotPlugin):
         return {
             "dispatch": dispatch_id,
             "run": run_id,
+            "mailbox": mailbox,
             "task": task_id,
             "worktree": worktree,
             "path": worktree_path or "",
@@ -1588,9 +1589,46 @@ class OrcaAgents(AgentManager):
         return self.plugin.check(ctx, handle)
 
     def reply(self, ctx, handle: dict, question_id: str, text: str) -> str:
-        self.plugin.cli_json(
-            ["orchestration", "reply", "--id", question_id, "--body", text]
-        )
+        place = self.plugin.environment or "local"
+        saved = ((ctx.session.metadata or {}).get("orca") or {}).get(place) or {}
+        run = handle.get("run")
+        mailbox = handle.get("mailbox")
+        if not mailbox and saved.get("run") == run:
+            mailbox = saved.get("mailbox")  # Older handles predate per-run ownership.
+        if not mailbox or not run:
+            msg = (
+                "The chat's Orca mailbox for this run is unavailable or has changed. "
+                "Reconcile the durable question in Orca before sending an answer; "
+                "do not impersonate the worker or resend an uncertain delivery."
+            )
+            raise OrcaError(msg)
+        try:
+            self.plugin.cli_json(
+                [
+                    "orchestration",
+                    "reply",
+                    "--id",
+                    question_id,
+                    "--body",
+                    text,
+                    "--run",
+                    run,
+                    "--from",
+                    mailbox,
+                ]
+            )
+        except subprocess.TimeoutExpired as exc:
+            msg = (
+                "Orca reply timed out; delivery is unknown. Reconcile the durable "
+                "question in Orca before any manual retry."
+            )
+            raise OrcaError(msg) from exc
+        except OrcaError as exc:
+            msg = (
+                f"{exc} Reconcile the durable question and mailbox authorization in "
+                "Orca before any manual retry."
+            )
+            raise OrcaError(msg, exc.code) from exc
         return f"Sent the answer to {question_id}."
 
     def stop(self, handle: dict) -> str:

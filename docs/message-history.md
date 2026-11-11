@@ -70,9 +70,10 @@ await run_conversation_turn(engine, session, message, extra_tools=[own_history])
 | `ergo_chat_history_search` | all words must match, searching full content including tool I/O, newest first |
 
 Every read takes `granularity`. Results end with the next call to make, for
-example `More: ergo_chat_history_read start_line=57`. `source_id` is optional when the
-toolkit holds a single source. Session sources re-read the database on each
-call, so a live session sees its own new messages.
+example `More: ergo_chat_history_read start_line=57`. When multiple sources are
+available, paging suggestions include the selected `source_id`; omitting it is
+still rejected as ambiguous. Session sources re-read the database on each
+call, so a live session sees its own new messages and its tail can move.
 
 `source_id` can also be a session id, a bare chat UUID, or a chat link
 (the message fragment is ignored when selecting a source).

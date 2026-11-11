@@ -566,6 +566,59 @@ def question_job(tmp_path):
     return plugin, folder, {"dir": str(folder), "agent": "claude"}
 
 
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("legacy_queued", [False, True])
+def test_exited_codex_question_needs_explicit_new_run(tmp_path, workers, legacy_queued):  # noqa: F811
+    from django_ergo.bots import workers as w
+    from django_ergo.conversation.models import ThreadMessage
+    from django_ergo.conversation.models import Worker
+
+    bot, plugin, _, kit = setup(tmp_path)
+    started = json.loads(
+        kit.execute_tool(
+            "ergo_agent_start",
+            {"brief": "Prepare files", "workspace": "job", "agent": "codex"},
+        )
+    )
+    folder = tmp_path / "jobs" / "job"
+    wait_for_exit(folder, 1)
+    (folder / "artifact.txt").write_text("preserved")
+    (folder / ".ergo" / "run-1.last.txt").write_text("NEEDS_INPUT: Continue?")
+    worker = Worker.objects.get(pk=started["id"])
+    if not legacy_queued:
+        with pytest.raises(ValueError, match="can't be resumed"):
+            kit.execute_tool(
+                "ergo_agent_reply",
+                {"worker_id": started["id"], "question_id": "job:1", "answer": "No"},
+            )
+        worker.refresh_from_db()
+        assert "_agent_replies" not in worker.args
+    if legacy_queued:
+        worker.state["seen"] = ["job:1"]
+        worker.args["_agent_replies"] = {"job:1": {"answer": "No", "status": "queued"}}
+        worker.save(update_fields=["state", "args"])
+    assert w.run(started["id"], bot.registry) == "completed"
+    worker.refresh_from_db()
+    assert worker.result["status"] == "needs_new_run"
+    assert worker.result["resume_supported"] is False
+    assert "exited" in worker.progress
+    assert (folder / "artifact.txt").read_text() == "preserved"
+    assert plugin.runs(folder) == [1]
+    if legacy_queued:
+        assert worker.args["_agent_replies"]["job:1"]["status"] == "failed"
+        assert any(
+            "can't be resumed" in m.text
+            for m in ThreadMessage.objects.filter(metadata__worker=started["id"])
+        )
+    with pytest.raises(ValueError, match="can't be resumed"):
+        kit.execute_tool(
+            "ergo_agent_reply",
+            {"worker_id": started["id"], "question_id": "job:1", "answer": "No"},
+        )
+    assert w.run(started["id"], bot.registry) == "completed"
+    assert Worker.objects.count() == 1
+
+
 def test_concurrent_replies_launch_only_once(tmp_path, monkeypatch):
     plugin, folder, handle = question_job(tmp_path)
     entered = Event()
@@ -705,7 +758,7 @@ def test_a_fresh_run_in_the_same_folder_closes_the_older_worker(tmp_path):
     assert "Run 2 has since started" in old.report["summary"]
     assert old.report["superseded_by_run"] == 2
     new = plugin.check(Ctx(), second)
-    assert new.status == "running"
+    assert new.status == "done" and new.report["status"] == "needs_new_run"
     assert [q.id for q in new.questions] == ["job:2"]
 
     # A run that answers this worker's question is still this worker's.

@@ -66,7 +66,9 @@ function bucketItem(bucket: CostBucket, extra: Partial<Item> = {}): Item {
     partCosts: PARTS.map(([part]) => bucket[`${part}_cost`]),
     cacheHit: input ? bucket.cache_read_tokens / input : 0,
     cost: bucket.cost,
-    unpriced: bucket.unpriced_calls ? `${bucket.unpriced_calls} calls with no price count as $0` : undefined,
+    unpriced: bucket.unpriced_calls
+      ? `${bucket.unpriced_calls} calls have no price and are omitted from the total`
+      : undefined,
     ...extra,
   }
 }
@@ -179,8 +181,8 @@ const EMPTY: Record<View, string> = {
 
 const NOTES: Partial<Record<View, string>> = {
   Projects:
-    'Agents run on subscriptions; cost is what their tokens would cost at list price. A project is every worktree of one git remote.',
-  Agents: 'Agents run on subscriptions; cost is what their tokens would cost at list price.',
+    'Agents are configured for subscription CLIs; billing is not verified. Cost is an API-equivalent estimate. A project is every worktree of one git remote.',
+  Agents: 'Agents are configured for subscription CLIs; billing is not verified. Cost is an API-equivalent estimate.',
 }
 
 function Stat({ label, value, note }: { label: string; value: string; note?: string }) {
@@ -188,7 +190,7 @@ function Stat({ label, value, note }: { label: string; value: string; note?: str
     <div className="min-w-0 bg-surface px-4 py-3">
       <div className="truncate text-xs font-medium text-muted">{label}</div>
       <div className="mt-0.5 font-display text-xl font-semibold tabular-nums sm:text-2xl">{value}</div>
-      {note && <div className="truncate text-xs text-muted">{note}</div>}
+      {note && <div className="text-xs text-muted">{note}</div>}
     </div>
   )
 }
@@ -416,7 +418,19 @@ export function Summary({ data }: { data: Costs }) {
         value={agents.headline.sessions.toLocaleString()}
         note={`${agents.headline.projects} project${agents.headline.projects === 1 ? '' : 's'} · ${tokens(agents.headline.tokens)} tokens`}
       />
-      <Stat label="Agent list price" value={money(agents.headline.cost)} note="on subscriptions" />
+      <Stat
+        label="Agent list price"
+        value={
+          agents.headline.priced_rows === 0 && (agents.headline.unpriced_rows ?? 0) > 0
+            ? 'Unknown'
+            : money(agents.headline.cost)
+        }
+        note={
+          agents.headline.priced_rows == null || agents.headline.unpriced_rows == null
+            ? 'Coverage and billed USD unknown'
+            : `${agents.headline.priced_rows} priced rows · ${agents.headline.unpriced_rows} unpriced · billed USD unknown`
+        }
+      />
     </div>
   )
 }
@@ -441,7 +455,7 @@ export function CostsBody({
       <Breakdown data={data} view={view} onView={onView} />
       {!!data.unpriced_models.length && (
         <p className="mt-3 text-xs text-warning">
-          * No price for {data.unpriced_models.join(', ')}; those calls count as $0. Add prices under
+          * No price for {data.unpriced_models.join(', ')}; those calls are omitted from the total. Add prices under
           DJANGO_ERGO["MODEL_PRICES"].
         </p>
       )}

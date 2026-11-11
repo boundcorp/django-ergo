@@ -152,6 +152,35 @@ def test_an_agent_asks_gets_an_answer_and_reports_back(tmp_path, workers):  # no
 
 
 @pytest.mark.django_db(transaction=True)
+@pytest.mark.usefixtures("workers")
+def test_cancel_during_terminal_agent_check_never_reports_success(
+    tmp_path, monkeypatch
+):
+    from django_ergo.bots import workers as w
+    from django_ergo.conversation.models import ThreadMessage
+    from django_ergo.conversation.models import Worker
+
+    bot, _, manager, kit = setup(tmp_path)
+    started = start(kit, {"brief": "Prepare an artifact", "workspace": "site"})
+
+    def check(ctx, handle):
+        w.cancel(ctx.worker)
+        return AgentCheck(
+            "done",
+            progress="Needs a new run",
+            report={"status": "needs_new_run", "outputs": ["artifact.txt"]},
+        )
+
+    monkeypatch.setattr(manager, "check", check)
+    assert w.run(started["id"], bot.registry) == "cancelled"
+    worker = Worker.objects.get(pk=started["id"])
+    assert worker.result is None
+    assert manager.stopped == ["job_1"]
+    assert manager.replies == []
+    assert not ThreadMessage.objects.filter(metadata__worker=started["id"]).exists()
+
+
+@pytest.mark.django_db(transaction=True)
 def test_slow_reply_does_not_block_tool_or_duplicate(tmp_path, workers):  # noqa: F811
     import threading
 
