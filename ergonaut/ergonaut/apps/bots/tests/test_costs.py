@@ -479,3 +479,34 @@ def test_session_usage_is_only_for_visible_chats(client):
         content_type="application/json",
     )
     assert client.get(f"/api/sessions/{chat.id}/usage").status_code == 404
+
+
+@pytest.mark.django_db
+def test_calls_that_ran_for_a_chat_count_for_it_and_its_bot(client, lee):
+    # A browser task's driver call has no session of its own; its metadata
+    # names the chat it ran for.
+    chat = ConversationSession.objects.create(user=lee, bot_name="personal", user_title="Vault")
+    other = ConversationSession.objects.create(user=lee, bot_name="devbox")
+    StructuredCall.objects.create(kind="chat_reply", session=chat, user=lee, model_name="m", input_tokens=100)
+    StructuredCall.objects.create(
+        kind="browser_task",
+        user=lee,
+        model_name="m",
+        input_tokens=900,
+        metadata={"session": str(chat.id), "worker": "w"},
+    )
+    StructuredCall.objects.create(kind="chat_reply", session=other, user=lee, model_name="m", input_tokens=50)
+    StructuredCall.objects.create(kind="compaction", user=lee, model_name="m", input_tokens=5)
+    StructuredCall.objects.create(kind="title", user=lee, model_name="m", metadata={"session": "not-a-uuid"})
+
+    personal = client.get("/api/costs?days=7&bot=personal").json()
+    assert {b["name"]: b["calls"] for b in personal["by_kind"]} == {"chat_reply": 1, "browser_task": 1}
+    (thread,) = personal["usage"]["threads"]
+    assert (thread["title"], thread["tokens"]) == ("Vault", 1000)
+
+    everyone = client.get("/api/costs?days=7").json()
+    assert everyone["total"]["calls"] == 5  # counted once
+    assert {row["title"]: row["tokens"] for row in everyone["usage"]["threads"]}["Vault"] == 1000
+
+    usage = client.get(f"/api/sessions/{chat.id}/usage?hours=1").json()
+    assert usage["thread_tokens"] == 1000
