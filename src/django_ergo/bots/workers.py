@@ -40,6 +40,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from typing import Any
 
+from django_ergo.conversation.budget import forbid
 from django_ergo.settings import api_settings
 
 if TYPE_CHECKING:
@@ -229,6 +230,7 @@ def start(  # noqa: PLR0913
     notify: bool = True,
     state: dict | None = None,
 ) -> Worker:
+    forbid("start a worker")
     from django_ergo.conversation.models import Worker
 
     if ":" not in function:

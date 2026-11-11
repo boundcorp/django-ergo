@@ -39,6 +39,10 @@ from django.utils import timezone
 
 from django_ergo.bots import archival
 from django_ergo.bots import wakes
+from django_ergo.conversation.budget import ERROR_CATEGORY as BUDGET_ERROR_CATEGORY
+from django_ergo.conversation.budget import NOT_RUN_PREFIX
+from django_ergo.conversation.budget import forbid
+from django_ergo.conversation.budget import from_metadata as budget_of
 from django_ergo.conversation.identity import attributed_text
 from django_ergo.conversation.identity import bot_identity
 from django_ergo.conversation.identity import session_label
@@ -172,6 +176,7 @@ def send(  # noqa: PLR0913
 
     ``depth``: the hops a message with no sender continues (a self-wake keeps
     the depth of the message its turn was answering)."""
+    forbid("send a thread message")
     if in_reply_to is not None:
         depth = in_reply_to.depth
     elif sender is not None:
@@ -383,12 +388,32 @@ def _run_turn(message: ThreadMessage, registry: BotRegistry | None) -> None:
     if bot is None:
         fail(message, f"Bot {recipient.bot_name!r} is not loaded")
         return
+    try:
+        budget = budget_of(message.metadata)
+    except ValueError as exc:
+        # Never fall back to an unbudgeted turn for a budget that can't be read.
+        fail(message, f"{NOT_RUN_PREFIX} its request budget is invalid ({exc}).")
+        return
+    if (
+        budget is not None
+        and budget.expires_at is not None
+        and timezone.now().timestamp() > budget.expires_at
+    ):
+        fail(
+            message,
+            f"{NOT_RUN_PREFIX} it waited too long to start under its request budget.",
+        )
+        return
     factory = api_settings.TURN_CONTROL
     control = factory(recipient, delegated=True) if factory else None
     try:
         archival.reopen(recipient)
         async_to_sync(bot.ask)(
-            recipient, turn_text(message), thread_message=message, control=control
+            recipient,
+            turn_text(message),
+            thread_message=message,
+            control=control,
+            **({"budget": budget} if budget is not None else {}),
         )
     except Exception as exc:
         logger.exception("Delivering thread message %s failed", message.id)
@@ -484,6 +509,11 @@ def _route_reply(bot: Bot, session: ConversationSession, result: TurnResult) -> 
     if result.needs_approval:
         message.status = ThreadMessageStatus.WAITING
         message.save(update_fields=["status", "updated_at"])
+        return
+    if result.reply is None and call.error_category == BUDGET_ERROR_CATEGORY:
+        # A budget limit ended the turn: the message fails with the real reason,
+        # not with "(no reply)" as if the model had answered.
+        fail(message, call.error)
         return
     if result.reply is not None:
         text = result.reply.as_message()

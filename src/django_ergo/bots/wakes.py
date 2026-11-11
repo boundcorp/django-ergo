@@ -48,6 +48,7 @@ from django.db import IntegrityError
 from django.db import transaction
 from django.utils import timezone
 
+from django_ergo.conversation.budget import forbid
 from django_ergo.conversation.models import ConversationSession
 from django_ergo.conversation.models import SessionMessage
 from django_ergo.conversation.models import ThreadMessage
@@ -210,6 +211,8 @@ def schedule(  # noqa: PLR0913
 ) -> Wake:
     """Schedule the chat's one pending wake; ValueError (for the model) when it
     breaks a limit."""
+    # A wake fires later as a message that starts a turn with no budget.
+    forbid("schedule a wake")
     now = now or timezone.now()
     note = (note or "").strip()
     if not note:

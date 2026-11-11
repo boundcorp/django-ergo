@@ -8,6 +8,8 @@ from typing import Any
 from django_ergo.conversation.adapters import ClaudeToolAdapter
 from django_ergo.conversation.attachments import attachments_by_sequence
 from django_ergo.conversation.attachments import claude_block
+from django_ergo.conversation.budget import enforce_request_limits
+from django_ergo.conversation.budget import with_deadline
 from django_ergo.conversation.compaction import apply_native_window
 from django_ergo.conversation.compaction import latest_compaction
 from django_ergo.conversation.compaction import render_summary_message
@@ -129,6 +131,7 @@ class ClaudeAPIEngine(StoredMessagesMixin, Engine):
 
     engine_type = "claude"
     transport_type = "api"
+    supports_request_limits = True
 
     def __init__(self, config: dict):
         self.context_window = int(
@@ -165,11 +168,20 @@ class ClaudeAPIEngine(StoredMessagesMixin, Engine):
 
     async def _create_message(self, **kwargs):
         """``messages.create`` on the client, re-checking the endpoint the
-        client actually sends to (covers a client swapped or mutated later)."""
+        client actually sends to (covers a client swapped or mutated later).
+
+        With ``request_limits`` (a budgeted turn) the request is refused if its
+        input could pass them, its ``max_tokens`` is cut to the output left, and
+        it is sent without retries and with the time left as its timeout."""
         client = self._get_client()
         assert_public_endpoint(
             getattr(client, "base_url", None), what="The Claude API engine"
         )
+        if self.request_limits is not None:
+            limits = self.request_limits
+            options = enforce_request_limits(limits, kwargs, "max_tokens")
+            client = client.with_options(**options)
+            return await with_deadline(limits, client.messages.create(**kwargs))
         return await client.messages.create(**kwargs)
 
     def get_tool_adapter(self) -> ClaudeToolAdapter:

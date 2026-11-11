@@ -7,6 +7,7 @@ from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 from django_ergo.bots import messaging
+from django_ergo.conversation.budget import TurnBudget, attach
 from ninja import Router, Schema
 from ninja.errors import HttpError
 
@@ -139,10 +140,27 @@ def record_event(voice_id, event_id, kind, text, delivery="unknown", client_even
         return event
 
 
+def delegation_budget():
+    """The hard per-request budget every voice delegation runs under.
+
+    ``REALTIME_VOICE_DELEGATION_BUDGET`` (a mapping, see ``TurnBudget.from_dict`` plus
+    ``start_within_seconds``) is required: with none, or an invalid one, delegation is off.
+    """
+    config = getattr(settings, "REALTIME_VOICE_DELEGATION_BUDGET", None)
+    if not config:
+        raise ValueError("Background delegation is disabled: no enforced request budget is configured")
+    config = dict(config)
+    start_within = config.pop("start_within_seconds", config.get("deadline_seconds"))
+    if isinstance(start_within, bool) or not isinstance(start_within, int | float) or start_within <= 0:
+        raise ValueError("Background delegation budget needs a positive start_within_seconds")
+    return TurnBudget.from_dict({**config, "expires_at": timezone.now().timestamp() + start_within})
+
+
 def delegate(voice_id, event_id, text):
-    """Atomically persist a deduplicated request in the existing thread-message queue."""
-    if not getattr(settings, "REALTIME_VOICE_UNBOUNDED_DELEGATION_ENABLED", False):
-        raise ValueError("Background delegation is disabled: no enforced spend cap")
+    """Atomically persist a deduplicated request in the existing thread-message queue.
+
+    The queued message carries its budget; ``messaging`` runs it only under that budget."""
+    budget = delegation_budget()
     if not event_id or len(event_id) > 200 or not text.strip() or len(text) > 4000:
         raise ValueError("Invalid delegation")
     with transaction.atomic():
@@ -172,7 +190,10 @@ def delegate(voice_id, event_id, text):
             + text
         )
         message = messaging.send(
-            None, session.chat, prompt, metadata={"voice_session_id": str(session.id), "voice_event_id": event_id}
+            None,
+            session.chat,
+            prompt,
+            metadata=attach({"voice_session_id": str(session.id), "voice_event_id": event_id}, budget),
         )
         RealtimeVoiceDelegation.objects.create(session=session, event_id=event_id, text=text, message=message)
         return message

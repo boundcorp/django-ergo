@@ -3,6 +3,7 @@
 import hashlib
 
 from django.db import transaction
+from django_ergo.conversation.budget import relayable
 
 from ergonaut.api.realtime_voice import record_event
 from ergonaut.apps.bots.models import RealtimeVoiceEvent
@@ -17,7 +18,11 @@ def completion_event(voice_id, task):
     if task["status"] == "answered":
         text = task["result"] or "The background request completed without a text result."
     elif task["status"] == "failed":
-        text = "The background request failed."
+        # Relay the reason only when this library wrote it (a budget limit names what was reached and
+        # used; a queue gate says nothing ran). Exception or model text is never read to the user.
+        reason = (task.get("error") or "").strip()
+        reason = reason if relayable(reason) else ""
+        text = f"The background request failed: {reason}" if reason else "The background request failed."
     else:
         return None
     event_id = "result:" + hashlib.sha256(task["event_id"].encode()).hexdigest()

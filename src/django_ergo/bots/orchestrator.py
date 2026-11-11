@@ -71,6 +71,7 @@ from django_ergo.bots.tools import BotTool
 from django_ergo.bots.tools import FunctionToolkit
 from django_ergo.bots.tools import bot_tool
 from django_ergo.conversation import roles
+from django_ergo.conversation.budget import forbid
 from django_ergo.conversation.identity import bot_identity
 from django_ergo.conversation.identity import django_user_identity
 from django_ergo.conversation.identity import session_origin
@@ -733,6 +734,7 @@ def _recipient(
     ctx: ToolContext, target: Bot, thread: str, title: str
 ) -> ConversationSession:
     """The chat ``thread`` names on ``target``: main, a named chat, "new" or an id."""
+    forbid("send a thread message")  # before it can create a thread to send to
     user = ctx.session.user
     if thread in roles.MAIN_NAMES or thread in target.definition.chats:
         recipient = async_to_sync(target.chat_session)(user, thread)
@@ -777,6 +779,8 @@ def _send(  # noqa: PLR0913
     ask: bool = False,
     interrupt: bool = False,
 ) -> dict:
+    # Before anything the send does first, such as stopping the recipient's turn.
+    forbid("send a thread message")
     check_spacing(message, "message")
     thread = (thread or "main").strip()
     starter = _is_starter(ctx.session, target.name, thread)

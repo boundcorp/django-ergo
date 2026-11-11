@@ -35,6 +35,7 @@ from typing import Any
 from asgiref.sync import async_to_sync
 
 from django_ergo.bots.tools import bot_task  # noqa: F401 — re-exported
+from django_ergo.conversation.budget import forbid
 from django_ergo.settings import api_settings
 
 if TYPE_CHECKING:
@@ -121,6 +122,7 @@ class BotTasks:
         return name
 
     def start(self, task: Callable | str, *args, **kwargs) -> TaskHandle:
+        forbid("start a background task")
         name = self._name(task)
         runner = api_settings.BOT_TASK_RUNNER
         if runner is None:

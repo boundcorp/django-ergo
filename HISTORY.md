@@ -4,6 +4,15 @@ This document tracks the major milestones and evolution of the Django Ergo proje
 
 ## Development Timeline
 
+### Opt-in hard budgets for a turn (November 2026)
+
+- A thread message can carry a budget (model turns, input and output tokens,
+  a deadline, allowed tools) that the turn runner enforces server-side: no
+  retries, compaction, routing, approvals, worker or agent starts or thread
+  sends, and a limit ends the turn as a truthful `failed` result. Turns
+  without a budget are unchanged. The realtime voice prototype's delegation
+  uses it in place of the unbounded queue.
+
 ### Direct messaging to parent chats (November 2026)
 
 - Chats with orchestration enabled may send or forward directly to any

@@ -1,13 +1,25 @@
 import json
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from threading import Barrier
 from unittest.mock import patch
 
 import pytest
+from django_ergo.conversation.budget import TurnBudget, from_metadata
 from django_ergo.conversation.models import ConversationSession, ThreadMessage
 
 from ergonaut.api import realtime_voice
+
+BUDGET = {
+    "max_turns": 4,
+    "max_input_tokens": 40_000,
+    "max_output_tokens": 1_500,
+    "deadline_seconds": 45,
+    "allowed_tools": ["ergo_chat_history_search"],
+    "model": "gpt-6-luna",
+    "start_within_seconds": 30,
+}
 
 
 @pytest.fixture
@@ -77,13 +89,17 @@ def test_token_is_scoped_to_voice_room(voice_setup, settings):
     assert post(client, url + "/token", {}).status_code == 409
 
 
-def test_delegation_disabled_by_default_and_idempotent_if_explicitly_enabled(voice_setup, settings):
+def test_delegation_is_off_without_a_valid_budget_and_idempotent_when_enabled(voice_setup, settings):
     _, client, chat = voice_setup
     voice, url = create(client, chat)
-    with pytest.raises(ValueError, match="spend cap"):
+    with pytest.raises(ValueError, match="no enforced request budget"):
         realtime_voice.delegate(voice["id"], "request", "Research")
+    for bad in ({**BUDGET, "unlimited": True}, {**BUDGET, "max_turns": 0}, {**BUDGET, "start_within_seconds": 0}):
+        settings.REALTIME_VOICE_DELEGATION_BUDGET = bad
+        with pytest.raises(ValueError, match=r"[Bb]udget|keys"):
+            realtime_voice.delegate(voice["id"], "request", "Research")
     assert not ThreadMessage.objects.exists()
-    settings.REALTIME_VOICE_UNBOUNDED_DELEGATION_ENABLED = True
+    settings.REALTIME_VOICE_DELEGATION_BUDGET = BUDGET
     with patch("django_ergo.bots.messaging.dispatch"):
         first = realtime_voice.delegate(voice["id"], "request", "Research")
         assert realtime_voice.delegate(voice["id"], "request", "Research").id == first.id
@@ -92,6 +108,11 @@ def test_delegation_disabled_by_default_and_idempotent_if_explicitly_enabled(voi
         with pytest.raises(ValueError, match="one background"):
             realtime_voice.delegate(voice["id"], "another", "Research")
     assert ThreadMessage.objects.count() == 1
+    # The budget travels with the queued message, with a start window of start_within_seconds.
+    carried = from_metadata(first.metadata)
+    expected = TurnBudget.from_dict({k: v for k, v in BUDGET.items() if k != "start_within_seconds"})
+    assert replace(carried, expires_at=None) == expected
+    assert 25 < carried.expires_at - first.created_at.timestamp() <= 30
     first.status, first.reply_text = "answered", "Verified result"
     first.save()
     assert client.get(url).json()["delegations"][0]["result"] == "Verified result"
@@ -121,7 +142,7 @@ def test_cooking_across_topic_compaction_and_reconnect(voice_setup, settings):
     realtime_voice.record_event(vid, "negated", "user", "I did not flip the chicken again.")
     realtime_voice.record_event(vid, "generated", "assistant", "Ready", "unknown")
     realtime_voice.record_event(vid, "interrupted", "assistant", "Turn it", "interrupted")
-    settings.REALTIME_VOICE_UNBOUNDED_DELEGATION_ENABLED = True
+    settings.REALTIME_VOICE_DELEGATION_BUDGET = BUDGET
     with patch("django_ergo.bots.messaging.dispatch"):
         message = realtime_voice.delegate(vid, "research", "Research LiveKit")
     for fact in facts:
@@ -150,7 +171,7 @@ def test_concurrent_delegations_create_one_message(voice_setup, settings):
 
     _, client, chat = voice_setup
     voice, _ = create(client, chat)
-    settings.REALTIME_VOICE_UNBOUNDED_DELEGATION_ENABLED = True
+    settings.REALTIME_VOICE_DELEGATION_BUDGET = BUDGET
     barrier = Barrier(2)
 
     def submit():
