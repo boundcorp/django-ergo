@@ -85,6 +85,12 @@ approval reentry, per-invocation side-effect claims and correlated updates. It
 retains one request and the 90-second voice cap. No source/policy rollout or
 real-owner normal task was performed during this investigation.
 
+Review handoff: [source #297](https://github.com/boundcorp/django-ergo/pull/297)
+and [scoped activation policy infra-octo #170](https://github.com/boundcorp/infra-octo/pull/170).
+The policy PR is deliberately held as draft until reviewed source is deployed
+and every old queue consumer has exited. Neither PR is an Android/hosted
+acceptance claim or permission for an automated paid test.
+
 ### Android route evidence and proven microphone callback defect
 
 Android handset and the already-selected OS headset route are user-provided

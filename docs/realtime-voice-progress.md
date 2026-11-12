@@ -18,6 +18,10 @@ Implemented and deployed in PR #293, building on standby:
 
 The successor adds an exact-chat/owner/bot authorization policy for normal originating-thread execution, separate from the priced API lookup. It is empty by default, cannot be granted by a browser or blanket flag, and requires a scoped JSON policy with an explicit approval reference. New sessions receive a matching durable grant only from that reviewed configuration. The proposed policy records Lee's 21:15:41 decision for the actual Boundcorp launch chat; no live policy was changed and no normal owner task was dispatched.
 
+Reviewable changes: [django-ergo #297](https://github.com/boundcorp/django-ergo/pull/297)
+and [infra-octo #170](https://github.com/boundcorp/infra-octo/pull/170). The policy
+is held as draft for the explicit source-first/old-consumer-exit activation gate.
+
 With a disposable offline policy, model-selected delegation uses the same real normal bot/queue/tools/context/approval paths, not invented voice tool schemas. One root request remains the limit; session and provider-ID claims prevent duplicate root dispatch, tool replay and stale approval reentry. Durable causal sends/replies and exact-thread worker reports are visible as separate status/result updates correlated to the original voice delegation. Normal approvals stay in the normal thread UI; speech is not approval. End/transport loss does not cancel accepted work, and ended-session polling persists late results without opening a provider.
 
 The Android follow-up fixes the proven reversed RTC mute callback arguments and adds user-triggered, local, non-identifying route diagnostics. Core call controls stay visible while the diagnostic/footer area scrolls. No forced speaker, Web Audio playback migration, capture-constraint change or physical routing claim was introduced.
