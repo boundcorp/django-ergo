@@ -342,6 +342,46 @@ def test_browse_a_bots_knowledge_base(client, cook, bot_folder, use_bots):
 
 
 @pytest.mark.django_db(transaction=True)
+def test_markdown_attachment_download_access_and_original_bytes(client, cook, settings, tmp_path):
+    from uuid import uuid4
+
+    from django_ergo.conversation.attachments import save_session_file
+    from django_ergo.conversation.models import ConversationSession, ThreadMessage
+
+    settings.MEDIA_ROOT = str(tmp_path / "media")
+    other = get_user_model().objects.create_user("other", "other@example.com", "pw")
+    here = ConversationSession.objects.create(user=cook, bot_name="kitchen", metadata={"bot_role": "thread"})
+    there = ConversationSession.objects.create(user=cook, bot_name="kitchen", metadata={"bot_role": "thread"})
+    private = ConversationSession.objects.create(user=other, bot_name="kitchen", metadata={"bot_role": "thread"})
+    original = b"# Caf\xc3\xa9\r\n\r\n<script>alert('x')</script>\n\n- **exact**\n"
+    own = save_session_file(here, "own.md", original, media_type="text/markdown", source="upload")
+    shared = save_session_file(there, "shared.md", original, media_type="text/markdown", source="bot")
+    hidden = save_session_file(private, "private.md", original, media_type="text/markdown", source="bot")
+    ThreadMessage.objects.create(
+        sender_session=there,
+        recipient_session=here,
+        text="Shared plan",
+        metadata={"attachments": [{"id": str(shared.id), "session": str(there.id)}]},
+    )
+
+    listed = client.get(f"/api/sessions/{here.id}/attachments").json()
+    assert any(item["id"] == str(shared.id) and item["shared_from"] for item in listed)
+    for row in (own, shared):
+        response = client.get(f"/api/attachments/{row.id}/download")
+        assert response.status_code == 200
+        assert response["Content-Type"] == "text/markdown"
+        assert "attachment" in response["Content-Disposition"]
+        assert b"".join(response.streaming_content) == original
+
+    assert client.get(f"/api/attachments/{hidden.id}/download").status_code == 404
+    assert client.get(f"/api/attachments/{uuid4()}/download").status_code == 404
+    own.file.storage.delete(own.file.name)
+    assert client.get(f"/api/attachments/{own.id}/download").status_code == 404
+    client.logout()
+    assert client.get(f"/api/attachments/{shared.id}/download").status_code == 401
+
+
+@pytest.mark.django_db(transaction=True)
 def test_upload_list_download_and_delete_session_files(client, cook, use_bots, settings, tmp_path):
     from django.core.files.base import ContentFile
     from django.core.files.uploadedfile import SimpleUploadedFile

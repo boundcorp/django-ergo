@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import type { AttachmentFile } from '../api'
 import { api } from '../api'
 import { PrChip } from './Threads'
+import { MarkdownAttachment } from './MarkdownAttachment'
 
 /** A file to show in the chat: sent with a message, made by the bot, or attached to a reply. */
 export type MediaItem = {
@@ -294,6 +295,12 @@ export function AttachmentView(props: MediaItem & { onOpen?: () => void }) {
         {open && <Lightbox items={[props]} start={0} onClose={() => setOpen(false)} />}
       </>
     )
+  if (
+    id &&
+    kind === 'other' &&
+    (/\.(md|markdown)$/i.test(label) || /^text\/markdown(?:\s*;|$)/i.test(props.media_type ?? ''))
+  )
+    return <MarkdownAttachment id={id} label={label} />
   return id ? (
     <a
       href={api.viewUrl(id)}

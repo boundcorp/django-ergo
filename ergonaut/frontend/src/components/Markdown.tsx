@@ -42,11 +42,48 @@ function Link({ href, children, ...props }: ComponentProps<'a'>) {
   )
 }
 
-/** Markdown (with GitHub tables, task lists and strikethrough). Raw HTML in the text is shown as text. */
-export default function Markdown({ text, className = '' }: { text: string; className?: string }) {
+// Documents can contain untrusted links. Reject browser-normalized network paths
+// and control characters as well as schemes other than the explicitly allowed ones.
+function documentUrl(url: string): string | undefined {
+  if (/[\u0000-\u0020\u007f\\]/.test(url) || url.startsWith('//')) return undefined
+  const scheme = /^([a-z][a-z\d+.-]*):/i.exec(url)
+  if (scheme && !/^(https?|mailto)$/i.test(scheme[1])) return undefined
+  return url
+}
+
+function DocumentLink({ href, children }: ComponentProps<'a'>) {
+  if (href === undefined) return <>{children}</>
+  const external = /^https?:/i.test(href)
+  return (
+    <a href={href} {...(external ? { target: '_blank', rel: 'noopener noreferrer' } : {})}>
+      {children}
+    </a>
+  )
+}
+
+function NoImage() {
+  return null
+}
+
+/** Markdown with GitHub tables, task lists and strikethrough. Raw HTML is shown as text. */
+export default function Markdown({
+  text,
+  className = '',
+  mode = 'chat',
+}: {
+  text: string
+  className?: string
+  mode?: 'chat' | 'document'
+}) {
+  const document = mode === 'document'
   return (
     <div className={`markdown ${className}`}>
-      <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRawAsText]} components={{ code: Code, a: Link }}>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        rehypePlugins={[rehypeRawAsText]}
+        urlTransform={document ? documentUrl : undefined}
+        components={document ? { code: Code, a: DocumentLink, img: NoImage } : { code: Code, a: Link }}
+      >
         {text}
       </ReactMarkdown>
     </div>

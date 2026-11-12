@@ -1,0 +1,105 @@
+.md-attachment-card {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  max-width: 100%;
+  padding: 0.75rem;
+  border: 1px solid var(--color-stroke);
+  border-radius: 0.75rem;
+  background: var(--color-raised);
+}
+.md-attachment-card button {
+  min-width: 0;
+  text-align: left;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.md-attachment-card small {
+  display: block;
+  color: var(--color-muted);
+  font-weight: 400;
+}
+.md-attachment-card a,
+.md-reader-actions a {
+  color: var(--color-accent);
+  text-decoration: underline;
+}
+.md-attachment-card a {
+  flex-shrink: 0;
+  font-size: 0.75rem;
+}
+.md-reader {
+  box-sizing: border-box;
+  width: min(54rem, calc(100% - 2rem));
+  max-width: none;
+  height: min(52rem, calc(100% - 2rem));
+  max-height: none;
+  padding: 0;
+  border: 1px solid var(--color-stroke);
+  border-radius: 0.75rem;
+  background: var(--color-surface);
+  color: var(--color-ink);
+}
+.md-reader::backdrop {
+  background: rgb(0 0 0 / 0.6);
+}
+.md-reader[open] {
+  display: flex;
+  flex-direction: column;
+}
+.md-reader-header,
+.md-reader-actions {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--color-stroke);
+}
+.md-reader-header h2 {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 1.1rem;
+  font-weight: 600;
+}
+.md-reader button {
+  border: 1px solid var(--color-stroke);
+  border-radius: 0.375rem;
+  padding: 0.4rem 0.65rem;
+}
+.md-reader button:focus-visible,
+.md-attachment-card :focus-visible,
+.md-reader a:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+.md-reader button:disabled {
+  opacity: 0.5;
+}
+.md-reader-actions {
+  flex-wrap: wrap;
+  font-size: 0.875rem;
+}
+.md-reader-content {
+  min-height: 0;
+  overflow: auto;
+  padding: 1rem 1.5rem;
+}
+.md-reader-content .markdown :is(th, td) {
+  white-space: nowrap;
+}
+.md-reader-content .markdown pre,
+.md-reader-content .markdown table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+}
+@media (max-width: 600px) {
+  .md-reader {
+    width: calc(100% - 1rem);
+    height: calc(100% - 1rem);
+  }
+  .md-reader-content {
+    padding: 1rem;
+  }
+}
