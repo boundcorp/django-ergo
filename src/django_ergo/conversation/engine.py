@@ -12,6 +12,8 @@ from typing import Any
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
+    from django_ergo.conversation.budget import RequestLimits
+
 
 @dataclass
 class EngineResponse:
@@ -82,6 +84,19 @@ class Engine(ABC):
     # When set (a tzinfo), each stored user message goes to the model with
     # the time it was sent, so the model can tell how long ago it was.
     message_timezone = None
+    # An engine that can hold each model request to a RequestLimits (a budgeted
+    # turn, see conversation.budget) says so; the turn runner sets
+    # ``request_limits`` around one request. Engines that can't (the
+    # subscription CLIs) make a budgeted turn fail before any request.
+    supports_request_limits: bool = False
+    request_limits: RequestLimits | None = None
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        # Not inherited: a subclass that swaps the transport (a CLI, a private
+        # endpoint) must hold requests to limits itself before it claims to.
+        if "supports_request_limits" not in cls.__dict__:
+            cls.supports_request_limits = False
 
     @abstractmethod
     async def start_session(self, session) -> str:

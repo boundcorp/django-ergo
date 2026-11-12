@@ -777,7 +777,42 @@ export type IllustrationJob = {
 
 export type ApiKey = { id: string; name: string; hint: string; created_at: string; last_used_at: string | null }
 
+export type RealtimeVoiceEvent = { event_id: string; kind: string; text: string; delivery: string; created_at: string }
+export type RealtimeVoiceSession = {
+  id: string
+  chat_id: string
+  status: string
+  created_at?: string
+  ended_at?: string | null
+  state?: {
+    decisions?: string[]
+    constraints?: string[]
+    completed_steps?: string[]
+    current_step?: string
+    pending_task_ids?: string[]
+    pending_delegation?: {
+      id: string
+      status: string
+      expires_at: string
+      fragments: { id: string; text: string }[]
+    }
+  }
+  delegations?: { event_id: string; text: string; status: string; result: string; error: string }[]
+  events: RealtimeVoiceEvent[]
+}
+
 export const api = {
+  realtimeVoiceConfig: () => request<{ enabled: boolean }>('GET', '/realtime-voice/config'),
+  realtimeVoiceSessions: (chatId: string) =>
+    request<RealtimeVoiceSession[]>('GET', `/realtime-voice/sessions?chat_id=${encodeURIComponent(chatId)}`),
+  startRealtimeVoice: (chatId: string) =>
+    request<RealtimeVoiceSession>('POST', '/realtime-voice/sessions', { chat_id: chatId }),
+  realtimeVoiceSession: (id: string) =>
+    request<RealtimeVoiceSession>('GET', `/realtime-voice/sessions/${encodeURIComponent(id)}`),
+  realtimeVoiceToken: (id: string) =>
+    request<{ url: string; token: string }>('POST', `/realtime-voice/sessions/${encodeURIComponent(id)}/token`),
+  endRealtimeVoice: (id: string) =>
+    request<RealtimeVoiceSession>('POST', `/realtime-voice/sessions/${encodeURIComponent(id)}/end`),
   apiKeys: () => request<ApiKey[]>('GET', '/auth/keys'),
   createApiKey: (name: string) => request<ApiKey & { key: string }>('POST', '/auth/keys', { name }),
   revokeApiKey: (id: string) => request<{ ok: boolean }>('DELETE', `/auth/keys/${id}`),

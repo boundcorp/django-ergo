@@ -59,6 +59,8 @@ from django_ergo.bots.tools import FunctionToolkit
 from django_ergo.bots.tools import ToolContext
 from django_ergo.bots.tools import load_tool_module
 from django_ergo.conversation import roles
+from django_ergo.conversation.budget import TurnBudget
+from django_ergo.conversation.budget import apply_budget
 from django_ergo.conversation.chat_reply import ChatReply
 from django_ergo.conversation.chat_reply import chat_reply_spec
 from django_ergo.conversation.context import ContextBuilder
@@ -1284,13 +1286,16 @@ class Bot:
     # -- turns -------------------------------------------------------------
 
     def reply_spec(
-        self, toolkits: list[Toolkit], session: ConversationSession | None = None
+        self,
+        toolkits: list[Toolkit],
+        session: ConversationSession | None = None,
+        budget: TurnBudget | None = None,
     ):
         spec = chat_reply_spec(toolkits, max_turns=self.definition.max_turns)
         # Toolkits pre-seed what every session should start knowing; window
         # sessions need user-defined seeds again on each turn.
         spec.pre_seed_each_turn = session is not None and self.is_window(session)
-        return spec
+        return spec if budget is None else apply_budget(spec, budget)
 
     async def ask(  # noqa: PLR0913
         self,
@@ -1301,6 +1306,7 @@ class Bot:
         thread_message: ThreadMessage | None = None,
         author: dict | None = None,
         control: TurnControl | None = None,
+        budget: TurnBudget | None = None,
     ) -> TurnResult:
         """Answer one message with a ChatReply. Plugins see before/after hooks.
 
@@ -1308,6 +1314,8 @@ class Bot:
         ``django_ergo.bots.messaging``) the reply is routed back to its sender.
         ``control`` steers or stops the turn between steps (see
         ``conversation.structured``).
+        ``budget`` holds the turn to a hard budget (``conversation.budget``):
+        its tools only, no approvals, no model routing, no compaction.
         ``author`` identifies the actual external sender; otherwise ordinary
         human text belongs to the session's Django user. Delegated messages
         carry their original author and origin separately from their raw body.
@@ -1329,9 +1337,10 @@ class Bot:
         for plugin in self.plugins:
             await _maybe_await(plugin.before_turn(session, message))
         toolkits, builder = await self._prepare(session, message)
-        await sync_to_async(self.route, thread_sensitive=True)(session)
+        if budget is None:  # routing may move the chat to another (priced) model
+            await sync_to_async(self.route, thread_sensitive=True)(session)
         outcome = await run_structured_call(
-            self.reply_spec(toolkits, session),
+            self.reply_spec(toolkits, session, budget),
             message,
             session=session,
             engine=self.make_engine(session),
@@ -1342,7 +1351,7 @@ class Bot:
             else None,
             attachments=attachments,
             context_builder=builder,
-            allow_approvals=True,
+            allow_approvals=budget is None,
             control=control,
             metadata=metadata,
         )

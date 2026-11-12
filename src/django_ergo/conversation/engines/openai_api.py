@@ -9,6 +9,8 @@ from typing import Any
 from django_ergo.conversation.adapters import OpenAIToolAdapter
 from django_ergo.conversation.attachments import attachments_by_sequence
 from django_ergo.conversation.attachments import openai_part
+from django_ergo.conversation.budget import enforce_request_limits
+from django_ergo.conversation.budget import with_deadline
 from django_ergo.conversation.compaction import apply_native_window
 from django_ergo.conversation.compaction import latest_compaction
 from django_ergo.conversation.compaction import render_summary_message
@@ -212,6 +214,7 @@ class OpenAIAPIEngine(StoredMessagesMixin, Engine):
     """Engine implementation using the OpenAI API SDK."""
 
     engine_type = "openai"
+    supports_request_limits = True
 
     def __init__(self, config: dict):
         self.config = config
@@ -267,11 +270,21 @@ class OpenAIAPIEngine(StoredMessagesMixin, Engine):
 
     async def _create_completion(self, kwargs: dict):
         """Every model request goes through here (session turns, tool
-        continuations, ``complete`` and ``generate``)."""
+        continuations, ``complete`` and ``generate``).
+
+        With ``request_limits`` (a budgeted turn) the request is refused if its
+        input could pass them, its output tokens (reasoning included) are cut
+        to what is left, and it is sent without retries and with the time left
+        as its timeout."""
         client = self._get_client()
         assert_public_endpoint(
             getattr(client, "base_url", ""), what="The OpenAI API engine"
         )
+        if self.request_limits is not None:
+            limits = self.request_limits
+            options = enforce_request_limits(limits, kwargs, "max_completion_tokens")
+            client = client.with_options(**options)
+            return await with_deadline(limits, client.chat.completions.create(**kwargs))
         return await client.chat.completions.create(**kwargs)
 
     def get_tool_adapter(self) -> OpenAIToolAdapter:

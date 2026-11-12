@@ -31,6 +31,7 @@ from typing import TYPE_CHECKING
 from typing import Any
 
 from django_ergo.bots.plain_text import check_spacing
+from django_ergo.conversation.budget import forbid
 
 if TYPE_CHECKING:
     from django_ergo.bots.runtime import Bot
@@ -188,6 +189,7 @@ def start(ctx: ToolContext, spec: AgentSpec, manager: str = "") -> Worker:
 
     With ``spec.tier``, the agent, model and effort come from providers.yaml's
     ``agents`` tiers, on the subscription with the best safe pace score."""
+    forbid("start an agent")
     if ctx.session is None:
         msg = "Agents belong to a chat"
         raise ValueError(msg)

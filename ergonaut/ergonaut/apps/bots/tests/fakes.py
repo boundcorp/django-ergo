@@ -11,13 +11,18 @@ from django_ergo.conversation.engines.claude_api import ClaudeAPIEngine
 _ids = itertools.count(1)
 
 
-def _usage():
-    return SimpleNamespace(input_tokens=10, output_tokens=5, cache_creation_input_tokens=0, cache_read_input_tokens=0)
+def _usage(input_tokens=10, output_tokens=5):
+    return SimpleNamespace(
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        cache_creation_input_tokens=0,
+        cache_read_input_tokens=0,
+    )
 
 
-def tool_call(name, tool_input):
+def tool_call(name, tool_input, *, input_tokens=10, output_tokens=5):
     block = SimpleNamespace(type="tool_use", id=f"toolu_{next(_ids)}", name=name, input=tool_input)
-    return SimpleNamespace(content=[block], stop_reason="tool_use", usage=_usage())
+    return SimpleNamespace(content=[block], stop_reason="tool_use", usage=_usage(input_tokens, output_tokens))
 
 
 def say(text, suggestions=None, kind="message", status=None):
@@ -31,7 +36,12 @@ class FakeClaude:
     def __init__(self, *responses):
         self.responses = list(responses)
         self.calls = []
+        self.options = []  # what with_options was given: a budgeted request is sent with some
         self.messages = self
+
+    def with_options(self, **options):
+        self.options.append(options)
+        return self
 
     async def create(self, **kwargs):
         self.calls.append(json.loads(json.dumps(kwargs, default=str)))

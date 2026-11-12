@@ -81,6 +81,13 @@ from pydantic import ValidationError
 
 from django_ergo.conversation.adapters import ClaudeToolAdapter
 from django_ergo.conversation.adapters import OpenAIToolAdapter
+from django_ergo.conversation.budget import ERROR_CATEGORY as BUDGET_ERROR_CATEGORY
+from django_ergo.conversation.budget import AllowlistToolkit
+from django_ergo.conversation.budget import BudgetExceeded
+from django_ergo.conversation.budget import BudgetMeter
+from django_ergo.conversation.budget import TurnBudget
+from django_ergo.conversation.budget import budgeted
+from django_ergo.conversation.budget import current_meter
 from django_ergo.conversation.compaction import maybe_compact
 from django_ergo.conversation.engine import SeededToolCall
 from django_ergo.conversation.identity import system_identity
@@ -231,6 +238,10 @@ class StructuredCallSpec:
     # response that ends in text instead of the output tool is taken as the
     # answer (stored as that tool call) rather than nudged to call the tool.
     text_output: Callable[[str], dict] | None = None
+    # An opt-in hard budget (see conversation.budget). None = the call runs as it
+    # always did. With one, the loop enforces turns, input and output tokens, a
+    # deadline and an allowlist of tools, never retries and never pauses for approval.
+    budget: TurnBudget | None = None
 
     def all_pre_seeds(self) -> list[PreSeedCall]:
         """The spec's own pre-seeds, then each toolkit's."""
@@ -712,9 +723,23 @@ def _stop(call: StructuredCall) -> None:
     call.error = STOPPED_NOTICE
 
 
-def _wrap_up_note(spec: StructuredCallSpec) -> str:
+_BUDGET_NOT_RUN = (
+    "Not run: the request budget was reached before this tool call could run. "
+    "Nothing happened."
+)
+
+
+def _budget_stop(
+    call: StructuredCall, meter: BudgetMeter, stop: BudgetExceeded
+) -> None:
+    """End a budgeted call at a limit: failed, with what was reached and used (not model-written)."""
+    meter.stopped = stop.limit
+    _fail(call, meter.explain(call, stop), BUDGET_ERROR_CATEGORY)
+
+
+def _wrap_up_note(spec: StructuredCallSpec, max_turns: int) -> str:
     return (
-        f"This is your last step for this turn ({spec.max_turns} steps used). "
+        f"This is your last step for this turn ({max_turns} steps used). "
         f"No other tools are available now. Call {spec.output_tool_name} with what "
         'you finished, what is left, and that the user can say "continue" to '
         "carry on."
@@ -741,6 +766,7 @@ class _Run:
     workflow: Any
     allow_approvals: bool
     control: TurnControl | None = None
+    meter: BudgetMeter | None = field(init=False, default=None)
 
     def __post_init__(self):
         spec = self.spec
@@ -751,6 +777,14 @@ class _Run:
         )
         self.toolkits = [*spec.toolkits, *([self.submit] if self.submit else [])]
         self.adapter = self.engine.get_tool_adapter()
+        if spec.budget is not None:
+            # The meter the ``budgeted`` wrapper started, so its clock began before the setup;
+            # a budgeted call never waits for a person: nothing could resume it under the budget.
+            self.meter = current_meter.get() or BudgetMeter(spec.budget)
+            self.meter.tools = next(
+                (t for t in spec.toolkits if isinstance(t, AllowlistToolkit)), None
+            )
+            self.allow_approvals = False
 
     @property
     def tool_schemas(self) -> list[dict] | None:
@@ -815,28 +849,40 @@ async def _loop(run: _Run) -> StructuredCallResult:
 
 
 async def _run_loop(run: _Run) -> StructuredCallResult:  # noqa: C901, PLR0912, PLR0915
-    call, spec, transcript = run.call, run.spec, run.transcript
+    call, spec, transcript, meter = run.call, run.spec, run.transcript, run.meter
+    max_turns = (
+        spec.max_turns if meter is None else min(spec.max_turns, meter.budget.max_turns)
+    )
     parsed = None
     approvals: list[PendingApproval] = []
     finished = False
-    while call.turns_used < spec.max_turns:
+    while call.turns_used < max_turns:
         if await run.steer():
             _stop(call)
             finished = True
             break
+        if meter is not None and (halted := meter.before_request(call, run.engine)):
+            _budget_stop(call, meter, halted)
+            finished = True
+            break
         call.turns_used += 1
         schemas, note = run.tool_schemas, ""
-        if (
-            spec.wrap_up
-            and run.submit is not None
-            and call.turns_used == spec.max_turns
-        ):
+        if spec.wrap_up and run.submit is not None and call.turns_used == max_turns:
             schemas = collect_toolkit_schemas([run.submit], run.adapter) or None
-            note = _wrap_up_note(spec)
+            note = _wrap_up_note(spec, max_turns)
         try:
-            events = await _with_retry(
-                lambda schemas=schemas, note=note: transcript.respond(schemas, note)
-            )
+            if meter is None:
+                events = await _with_retry(
+                    lambda schemas=schemas, note=note: transcript.respond(schemas, note)
+                )
+            else:  # no retry: a retried request is a second, unbudgeted request
+                events = await meter.respond(
+                    transcript, run.engine, call, schemas, note
+                )
+        except BudgetExceeded as e:
+            _budget_stop(call, meter, e)
+            finished = True
+            break
         except Exception as e:  # noqa: BLE001 — recorded on the row
             _fail(call, f"API call failed: {e}", _error_category(e))
             finished = True
@@ -869,6 +915,15 @@ async def _run_loop(run: _Run) -> StructuredCallResult:  # noqa: C901, PLR0912, 
             break
 
         tool_events = [e for e in events if e.event_type == "tool_use"]
+        if meter is not None and (over := meter.after_request(call)):
+            # A tool call the model made must be answered in the history even though it won't run.
+            if tool_events:
+                await transcript.append_tool_results(
+                    [(e.tool_use["id"], _BUDGET_NOT_RUN, True) for e in tool_events]
+                )
+            _budget_stop(call, meter, over)
+            finished = True
+            break
         if tool_events:
             results = []
             for event in tool_events:
@@ -935,6 +990,14 @@ async def _run_loop(run: _Run) -> StructuredCallResult:  # noqa: C901, PLR0912, 
             continue
 
         if stop in _MAX_TOKENS_STOPS:
+            if meter is not None:
+                left = max(
+                    meter.budget.max_output_tokens - (call.output_tokens or 0), 0
+                )
+                cut = f"the response was cut off at its output limit ({left} output tokens were left)"
+                _budget_stop(call, meter, BudgetExceeded(cut, limit="output_tokens"))
+                finished = True
+                break
             budget = getattr(transcript.engine, "max_tokens", None)
             limit = f" ({budget} tokens)" if budget is not None else ""
             _fail(
@@ -975,9 +1038,15 @@ async def _run_loop(run: _Run) -> StructuredCallResult:  # noqa: C901, PLR0912, 
         break
 
     if not finished:
-        call.status = StructuredCallStatus.TURN_LIMITED
-        call.error = f"No valid output after {spec.max_turns} turns"
+        if meter is not None:
+            reached = f"reached the limit of {max_turns} model turns"
+            _budget_stop(call, meter, BudgetExceeded(reached, limit="max_turns"))
+        else:
+            call.status = StructuredCallStatus.TURN_LIMITED
+            call.error = f"No valid output after {spec.max_turns} turns"
 
+    if meter is not None:
+        call.metadata = {**(call.metadata or {}), "budget": meter.summary(call)}
     await transcript.finish()
     call.error = call.error[:MAX_ERROR_CHARS]
     await call.asave()
@@ -1073,6 +1142,7 @@ async def _session_people(session: ConversationSession):
     return await sync_to_async(load, thread_sensitive=True)()
 
 
+@budgeted
 async def run_structured_call(  # noqa: PLR0913
     spec: StructuredCallSpec,
     message: str,
@@ -1098,12 +1168,17 @@ async def run_structured_call(  # noqa: PLR0913
     ``resume_structured_call`` continues it; otherwise such tools are
     refused. ``context_builder`` (sessions only) adds its context to every
     model call of this turn. ``control`` can steer or stop the call between
-    steps (see the module docstring).
+    steps (see the module docstring). A spec with a ``budget`` is held to it
+    (see ``conversation.budget``): no compaction, retries or approvals, only its
+    allowed tools, and each limit ends the call as ``failed`` (category ``budget``).
     """
     pre_seeds = await sync_to_async(spec.all_pre_seeds, thread_sensitive=True)()
     if session is not None:
         active = await _session_engine(spec, session, engine)
-        await maybe_compact(session, active, engine_factory=compaction_engine_factory)
+        if spec.budget is None:  # a summary is a model request outside the budget
+            await maybe_compact(
+                session, active, engine_factory=compaction_engine_factory
+            )
         from django_ergo.conversation.compaction import latest_compaction
 
         current = await sync_to_async(latest_compaction)(session)
@@ -1157,6 +1232,7 @@ async def run_structured_call(  # noqa: PLR0913
     return await _loop(run)
 
 
+@budgeted
 async def resume_structured_call(  # noqa: PLR0913
     spec: StructuredCallSpec,
     call: StructuredCall,

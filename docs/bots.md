@@ -952,6 +952,33 @@ queues a Celery task) or a background thread. Set `orchestration: false` for
 a bot that never delegates; it has no `orchestration` skill (it still
 answers messages sent to it, and can message upward, below).
 
+### Budgeted turns
+
+A thread message can carry a hard budget for the turn that answers it
+(`messaging.send(..., metadata=budget.attach({}, TurnBudget(...)))`, or
+`Bot.ask(..., budget=...)`). It is opt-in: a message without one runs exactly
+as above. The turn runner then holds the turn to a number of model turns,
+input and output tokens in total, a wall-clock deadline and a list of allowed
+tools (`django_ergo.conversation.budget`); it makes no retries (its own or the
+SDK's), no compaction and no model routing, never pauses for approval (a tool
+that needs one is refused), and refuses worker, agent and background-task
+starts and thread sends even from an allowed tool. Only the Claude and OpenAI
+API engines can hold a request to a budget; a subclass has to claim that
+itself, so the subscription CLIs refuse a budgeted turn before any request.
+When a limit is hit the call ends `failed` with `error_category` `budget`,
+the message ends `failed` with an error that says which limit, what was used
+and that there is no final answer, and `call.metadata["budget"]` keeps the
+numbers. A budget that can't be read, or whose start window passed while the
+chat was busy, fails the message ("Not run: ...") rather than running it
+unbudgeted. The realtime voice prototype is the user:
+[realtime-voice.md](realtime-voice.md) has the limits table and conditional
+cost estimate, not a provider-billing ceiling. Its client-delegation voice
+adapter has no function tools; provider signals open a pending request that
+the owner must review and explicitly confirm before a budgeted turn is queued.
+The session card distinguishes generated speech from
+durable submitted/queued/answered/failed work and explicitly reports when
+no background request or verified history result exists.
+
 ### Message identity
 
 Forwarded and cross-chat messages store the words separately from their

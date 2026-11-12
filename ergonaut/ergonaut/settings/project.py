@@ -37,6 +37,26 @@ ATTACHMENT_UPLOAD_MAX_BYTES = int(os.environ.get("ATTACHMENT_UPLOAD_MAX_BYTES", 
 VOICE_TRANSCRIPTION_TIMEOUT = float(os.environ.get("VOICE_TRANSCRIPTION_TIMEOUT", "30"))
 VOICE_TRANSCRIPTION_PER_MINUTE = int(os.environ.get("VOICE_TRANSCRIPTION_PER_MINUTE", "5"))
 VOICE_TRANSCRIPTION_PER_DAY = int(os.environ.get("VOICE_TRANSCRIPTION_PER_DAY", "100"))
+
+# Hosted realtime voice is independent of composer transcription and opt-in.
+# REALTIME_VOICE_ENABLED is the kill switch (web and bridge read it at startup);
+# REALTIME_VOICE_USERS lists the usernames (comma-separated, exact) who may use it.
+# An empty list allows nobody.
+REALTIME_VOICE_ENABLED = env_variable_truthy("REALTIME_VOICE_ENABLED")
+REALTIME_VOICE_USERS = {name.strip() for name in os.environ.get("REALTIME_VOICE_USERS", "").split(",") if name.strip()}
+REALTIME_VOICE_ROOM_PREFIX = os.environ.get("REALTIME_VOICE_ROOM_PREFIX", "voice-")
+REALTIME_VOICE_AGENT_NAME = os.environ.get("REALTIME_VOICE_AGENT_NAME", "ergo-voice")
+LIVEKIT_URL = os.environ.get("LIVEKIT_URL", "")
+LIVEKIT_API_KEY = os.environ.get("LIVEKIT_API_KEY", "")
+LIVEKIT_API_SECRET = os.environ.get("LIVEKIT_API_SECRET", "")
+# A voice delegation runs only under this hard per-request budget, enforced by the turn runner
+# (django_ergo.conversation.budget). None turns background delegation off. Keys: max_turns,
+# max_input_tokens, max_output_tokens, deadline_seconds, allowed_tools (read-only tool names),
+# model (the engine must be on exactly this one), start_within_seconds. Not an environment
+# switch: set it in a settings module reviewed together with its priced cost (docs/realtime-voice.md).
+REALTIME_VOICE_DELEGATION_BUDGET = None
+# Extra silence after Silero's own end-of-speech threshold, before background dispatch.
+REALTIME_VOICE_PAUSE_GRACE_SECONDS = 2.0
 ROOT_URLCONF = "ergonaut.settings.urls"
 
 
