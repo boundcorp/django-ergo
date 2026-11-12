@@ -4,6 +4,14 @@ This document tracks the major milestones and evolution of the Django Ergo proje
 
 ## Development Timeline
 
+### Runpod REST transport building block (November 2026)
+
+- Added a REST client with finite socket timeouts, injected credentials, sanitized
+  failures and Pod responses, and ownership/profile checks before deletion.
+  This is not a live rental controller: no real create, durable real-provider
+  ledger, independent real cleaner, or runner/export integration is provided.
+  No live execution is authorized; the existing cleanup CLI remains fake only.
+
 ### Offline GPU queue primitives (November 2026)
 
 - Added local SQLite queue primitives with immutable request identities,
