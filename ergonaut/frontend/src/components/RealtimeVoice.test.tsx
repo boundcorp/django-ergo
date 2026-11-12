@@ -166,3 +166,114 @@ test('a single durable card shows the stage and transcript without claiming play
     expect(html).toContain(text)
   }
 })
+
+test.each([{ delegations: undefined }, { delegations: [] }])(
+  'assistant history claims without delegation records remain unverified (%j)',
+  ({ delegations }) => {
+    act(() => {
+      root.render(
+        createElement(VoiceSessionCard, {
+          session: {
+            ...session,
+            delegations,
+            state: { current_step: 'History checked', completed_steps: ['History lookup'] },
+            events: [
+              {
+                event_id: 'claim',
+                kind: 'assistant',
+                text: 'I checked your history and found the answer.',
+                delivery: 'delivered',
+                created_at: '',
+              },
+            ],
+          },
+        }),
+      )
+    })
+    const background = container.querySelector('[aria-label="Background work"]')
+    expect(background?.textContent).toContain('No background request submitted; no verified history lookup result.')
+    expect(container.querySelector('[aria-label="Durable background result"]')).toBeNull()
+    expect(container.querySelector('[aria-label="Stage"]')?.textContent).toContain('reported, unverified')
+    const transcript = container.querySelector('details')
+    expect(transcript?.textContent).toContain('I checked your history and found the answer.')
+    expect(transcript?.textContent).toContain('Assistant speech is generated and unverified as work evidence.')
+    expect(transcript?.textContent).toContain('playback confirmed; hearing not established')
+  },
+)
+
+test('a queued delegation does not imply work started or expose a result as evidence', () => {
+  act(() => {
+    root.render(
+      createElement(VoiceSessionCard, {
+        session: {
+          ...session,
+          delegations: [
+            { event_id: 'task-1', text: 'Look up history', status: 'queued', result: 'Not an answer yet', error: '' },
+          ],
+        },
+      }),
+    )
+  })
+  const background = container.querySelector('[aria-label="Background work"]')
+  expect(background?.textContent).toContain('Look up history')
+  expect(background?.textContent).toContain('Queued — may not have started; no verified result.')
+  expect(background?.textContent).not.toContain('Not an answer yet')
+  expect(background?.textContent).not.toContain('No background request submitted')
+  expect(container.querySelector('[aria-label="Durable background result"]')).toBeNull()
+})
+
+test('only an answered durable delegation exposes its result as background evidence', () => {
+  act(() => {
+    root.render(
+      createElement(VoiceSessionCard, {
+        session: {
+          ...session,
+          delegations: [
+            {
+              event_id: 'task-1',
+              text: 'Look up history',
+              status: 'answered',
+              result: 'The previous discussion chose blue.',
+              error: '',
+            },
+          ],
+        },
+      }),
+    )
+  })
+  const background = container.querySelector('[aria-label="Background work"]')
+  expect(background?.textContent).toContain('Answered — durable background result recorded.')
+  expect(background?.querySelector('[aria-label="Durable background result"]')?.textContent).toBe(
+    'The previous discussion chose blue.',
+  )
+  expect(background?.textContent).not.toContain('No background request submitted')
+})
+
+test.each(['failed', 'error', 'answered'])(
+  'a delegation with status %s and an error is not result evidence',
+  status => {
+    act(() => {
+      root.render(
+        createElement(VoiceSessionCard, {
+          session: {
+            ...session,
+            delegations: [
+              {
+                event_id: 'task-1',
+                text: 'Look up history',
+                status,
+                result: 'An incomplete answer',
+                error: 'History lookup failed',
+              },
+            ],
+          },
+        }),
+      )
+    })
+    const background = container.querySelector('[aria-label="Background work"]')
+    expect(background?.textContent).toContain('Failed — no verified result.')
+    expect(background?.textContent).toContain('History lookup failed')
+    expect(background?.textContent).not.toContain('An incomplete answer')
+    expect(container.querySelector('[aria-label="Durable background result"]')).toBeNull()
+  },
+)

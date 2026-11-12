@@ -4,6 +4,15 @@ This document tracks the major milestones and evolution of the Django Ergo proje
 
 ## Development Timeline
 
+### Realtime voice client-delegation contract (November 2026)
+
+- Handle the SDK's opaque delegation signal with conversation context even
+  after its pending speech segment is finalized; correlate result commentary
+  with the original request ID and consume asynchronous callback failures.
+  UI/history now distinguish generated promises from durable work/results.
+  Actual-SDK offline coverage does not establish hosted model behavior;
+  both paid approvals remain consumed and no further live attempt is authorized.
+
 ### Realtime voice dispatch recovery (November 2026)
 
 - The isolated voice bridge pins the Redis broker transport and probes Celery
