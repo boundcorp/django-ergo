@@ -8,6 +8,9 @@ client configuration and commentary serialization are the actual 1.8.11 implemen
 # ruff: noqa: F811 -- imported pytest fixtures are intentional.
 
 import asyncio
+import shutil
+import subprocess
+from types import SimpleNamespace
 from unittest.mock import PropertyMock, patch
 
 import pytest
@@ -15,8 +18,11 @@ from asgiref.sync import async_to_sync, sync_to_async
 from django_ergo.bots import messaging, webhooks
 
 pytest.importorskip("livekit.plugins.openai.realtime.gpt_live_model")
-from livekit.agents import llm, utils
+from livekit import rtc
+from livekit.agents import AgentSession, llm, utils
 from livekit.agents.llm._realtime.gpt_live import GPTLiveSession
+from livekit.agents.voice.io import AudioInput
+from livekit.plugins import silero
 
 from ergonaut import realtime_voice_bridge as bridge
 from ergonaut.api import realtime_voice
@@ -66,7 +72,7 @@ async def bind(assistant, session):
 
 async def settle(assistant):
     if assistant.jobs:
-        await asyncio.gather(*assistant.jobs)
+        await asyncio.gather(*assistant.jobs, return_exceptions=True)
     await asyncio.sleep(0)  # run done callbacks
 
 
@@ -78,50 +84,56 @@ def drain(session):
 
 
 @pytest.mark.django_db(transaction=True)
-def test_sdk_delegation_waits_for_confirmation_and_correlates_durable_commentary(cooking, use_bots, held_messages):
+def test_sdk_delegation_assembles_resumed_speech_and_correlates_durable_commentary(cooking, use_bots, held_messages):
     chat, vid, other = cooking
     client = use_bots(tool_call("ergo_chat_history_sources", {}), say("The earlier report was pan-frying chicken."))
     snapshot = realtime_voice.bridge_state(vid)
 
     async def scenario():
         assistant = bridge.Assistant(vid, snapshot, None)
+        assistant.grace = 0.2
         sdk = offline_session(assistant)
         with patch.object(bridge.Assistant, "duplex_session", new_callable=PropertyMock, return_value=sdk):
             await bind(assistant, sdk)
             config = sdk._session_start_event().model_dump(exclude_none=True)
             assert config["session"]["delegation"] == {"type": "client"}
             await sdk._update_tools([])
-            # Signal occurs during the first sentence; SDK pauses can finalize individual
-            # fragments even while the speaker has more to say.
+            assistant.on_user_state(SimpleNamespace(new_state="speaking"))
             sdk._handle_event(
                 {"type": "session.input_transcript.delta", "delta": "Search my history. ", "start_ms": 0, "end_ms": 100}
             )
             wire = {"type": "session.delegation.created", "delegation": {"id": "offline-task", "target": "client"}}
             sdk._handle_event(wire)
             sdk._end_speech("user")
+            assistant.on_user_state(SimpleNamespace(new_state="listening"))
+            await asyncio.sleep(0.08)  # internal pause, shorter than the acoustic grace
+            assert not held_messages
+            assistant.on_user_state(SimpleNamespace(new_state="speaking"))
             sdk._handle_event(
                 {
                     "type": "session.input_transcript.delta",
-                    "delta": "Do not claim you checked before the result.",
+                    "delta": "Do not claim you checked",
                     "start_ms": 1000,
                     "end_ms": 1100,
                 }
             )
-            sdk._end_speech("user")
-            await settle(assistant)
-            pending = await sync_to_async(realtime_voice.bridge_state)(vid)
-            assert pending["delegations"] == []
-            assert [f["text"] for f in pending["state"]["pending_delegation"]["fragments"]] == [
-                "Search my history. ",
-                "Do not claim you checked before the result.",
-            ]
+            assistant.on_user_state(SimpleNamespace(new_state="listening"))
+            await asyncio.sleep(0.08)
             assert not held_messages
-            text = "Search my history. Do not claim you checked before the result."
-            await sync_to_async(realtime_voice.resolve_pending)(vid, "offline-task", text)
-            sdk._handle_event(wire)  # late duplicate cannot create a second request
+            # A late transcript tail must be drained and finalized, not dropped at VAD EOS.
+            sdk._handle_event(
+                {
+                    "type": "session.input_transcript.delta",
+                    "delta": " before the result.",
+                    "start_ms": 1100,
+                    "end_ms": 1200,
+                }
+            )
+            sdk._end_speech("user")
+            sdk._handle_event(wire)
             await settle(assistant)
             queued = await sync_to_async(realtime_voice.bridge_state)(vid)
-            assert queued["delegations"][0]["text"] == text
+            assert queued["delegations"][0]["text"] == "Search my history. Do not claim you checked before the result."
             assert len(held_messages) == 1
             await sync_to_async(messaging.deliver)(held_messages[0], registry=webhooks.get_registry())
             result = await sync_to_async(realtime_voice.bridge_state)(vid)
@@ -218,11 +230,127 @@ def test_saved_context_is_not_an_implicit_user_request_or_fulfilled_lookup(cooki
             sdk._handle_event(
                 {"type": "session.delegation.created", "delegation": {"id": "empty-context", "target": "client"}}
             )
-            await settle(assistant)
+            with patch.object(bridge, "PENDING_TIMEOUT_SECONDS", 0.1):
+                await settle(assistant)
             state = await sync_to_async(realtime_voice.bridge_state)(vid)
             assert state["delegations"] == []
-            assert state["state"]["pending_delegation"]["status"] == "awaiting_confirmation"
+            assert state["state"]["pending_delegation"]["status"] == "expired"
             assert state["state"]["pending_delegation"]["fragments"] == []
 
     async_to_sync(scenario)()
     assert held_messages == []
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("stop", [True, False])
+def test_stop_or_missing_final_never_dispatches(cooking, held_messages, stop):
+    _, vid, _ = cooking
+
+    async def scenario():
+        assistant = bridge.Assistant(vid, await sync_to_async(realtime_voice.bridge_state)(vid), None)
+        assistant.grace = 0.05
+        sdk = offline_session(assistant)
+        with patch.object(bridge.Assistant, "duplex_session", new_callable=PropertyMock, return_value=sdk):
+            await bind(assistant, sdk)
+            assistant.on_user_state(SimpleNamespace(new_state="speaking"))
+            sdk._handle_event(
+                {"type": "session.input_transcript.delta", "delta": "Search", "start_ms": 0, "end_ms": 100}
+            )
+            with patch.object(bridge, "PENDING_TIMEOUT_SECONDS", 0.3):
+                sdk._handle_event(
+                    {"type": "session.delegation.created", "delegation": {"id": "unfinished", "target": "client"}}
+                )
+                assistant.on_user_state(SimpleNamespace(new_state="listening"))
+                if stop:
+                    # Wait for durable signal before shutting the bridge down.
+                    async with asyncio.timeout(5):
+                        while not (await sync_to_async(realtime_voice.bridge_state)(vid))["state"].get(
+                            "pending_delegation"
+                        ):
+                            await asyncio.sleep(0.01)
+                    assistant.stop()
+                    await settle(assistant)
+                    await sync_to_async(realtime_voice.close_pending)(vid, "unfinished")
+                else:
+                    await settle(assistant)  # no SDK final, so the deadline must expire
+            state = await sync_to_async(realtime_voice.bridge_state)(vid)
+            assert state["state"]["pending_delegation"]["status"] == ("cancelled" if stop else "expired")
+            assert state["delegations"] == []
+
+    async_to_sync(scenario)()
+    assert not held_messages
+
+
+@pytest.mark.django_db(transaction=True)
+def test_real_session_audio_input_drives_silero_speech_states(cooking, held_messages):
+    if not shutil.which("ffmpeg"):
+        pytest.skip("ffmpeg with flite is required")
+    speech = subprocess.run(
+        [
+            "ffmpeg",
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "flite=text='Please search my earlier conversation for the pantry code'",
+            "-ar",
+            "16000",
+            "-ac",
+            "1",
+            "-f",
+            "s16le",
+            "pipe:1",
+        ],
+        check=True,
+        capture_output=True,
+    ).stdout
+
+    class Input(AudioInput):
+        def __init__(self):
+            super().__init__(label="synthetic PCM")
+            self.frames = asyncio.Queue()
+
+        async def __anext__(self):
+            return await self.frames.get()
+
+    async def parked_provider(self):
+        while not self._closing:
+            await asyncio.sleep(0.01)
+
+    async def scenario():
+        _, vid, _ = cooking
+        assistant = bridge.Assistant(vid, await sync_to_async(realtime_voice.bridge_state)(vid), None)
+        session = AgentSession(vad=silero.VAD.load())
+        audio = Input()
+        session.input.audio = audio
+        states = []
+        ended = asyncio.Event()
+
+        @session.on("user_state_changed")
+        def state_changed(event):
+            states.append(event.new_state)
+            assistant.on_user_state(event)
+            if "speaking" in states and event.new_state == "listening":
+                ended.set()
+
+        with patch.object(GPTLiveSession, "_main_task", parked_provider):
+            try:
+                await session.start(agent=assistant, record=False, session_host=False)
+                # Real AudioInput -> AgentSession -> AgentActivity -> AudioRecognition ->
+                # Silero ONNX, while GPT-Live's transport is parked.
+                pcm = speech + bytes(16000 * 2 * 2)
+                for offset in range(0, len(pcm) - 639, 640):
+                    audio.frames.put_nowait(rtc.AudioFrame(pcm[offset : offset + 640], 16000, 1, 320))
+                await asyncio.wait_for(ended.wait(), timeout=10)
+                assert "speaking" in states and assistant.heard_speech
+                assert not assistant.speaking and assistant.speech_ended_at is not None
+                assert not held_messages  # VAD alone is never a delegation
+            finally:
+                assistant.closing = True
+                if assistant.watcher:
+                    assistant.watcher.cancel()
+                    await asyncio.gather(assistant.watcher, return_exceptions=True)
+                await session.aclose()
+
+    async_to_sync(scenario)()

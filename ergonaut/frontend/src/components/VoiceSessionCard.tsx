@@ -27,7 +27,13 @@ export function VoiceSessionCard({ session }: { session: RealtimeVoiceSession })
       <div className="mt-3" aria-label="Background work">
         <strong>Background work</strong>
         {delegations.length === 0 && (
-          <p className="mt-1 text-muted">No background request submitted; no verified history lookup result.</p>
+          <p className="mt-1 text-muted">
+            {state?.pending_delegation?.status === 'collecting'
+              ? 'Collecting the spoken request; nothing submitted yet.'
+              : state?.pending_delegation?.status === 'expired' || state?.pending_delegation?.status === 'cancelled'
+                ? `Request ${state.pending_delegation.status}; nothing submitted.`
+                : 'No background request submitted; no verified history lookup result.'}
+          </p>
         )}
         {delegations.map(task => (
           <div key={task.event_id} className="mt-2 rounded-control border border-stroke p-2">

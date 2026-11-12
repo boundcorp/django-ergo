@@ -192,46 +192,40 @@ def test_concurrent_delegations_create_one_message(voice_setup, settings):
 
 
 @pytest.mark.parametrize("ending", ["cancel", "expire", "end", "bridge_shutdown"])
-def test_pending_confirmation_fails_closed(voice_setup, settings, ending):
+def test_pending_request_fails_closed(voice_setup, settings, ending):
     from django.utils import timezone
 
     _, client, chat = voice_setup
     settings.REALTIME_VOICE_DELEGATION_BUDGET = BUDGET
     voice, url = create(client, chat)
     realtime_voice.begin_pending(voice["id"], "request", {"segment": "partial"})
-    if ending == "cancel":
-        assert post(client, url + "/confirm-delegation", {"event_id": "request", "cancel": True}).status_code == 200
-    elif ending == "expire":
+    if ending == "expire":
         from ergonaut.apps.bots.models import RealtimeVoiceSession
 
         row = RealtimeVoiceSession.objects.get(pk=voice["id"])
         row.state["pending_delegation"]["expires_at"] = (timezone.now() - timedelta(seconds=1)).isoformat()
         row.save(update_fields=["state"])
         assert client.get(url).json()["state"]["pending_delegation"]["status"] == "expired"
-    elif ending == "bridge_shutdown":
-        realtime_voice.close_pending(voice["id"], "request")
-    else:
+    elif ending == "end":
         assert post(client, url + "/end", {}).status_code == 200
-    assert (
-        post(client, url + "/confirm-delegation", {"event_id": "request", "text": "Search history"}).status_code == 409
-    )
+    else:
+        realtime_voice.close_pending(voice["id"], "request")
+    with pytest.raises(ValueError, match="expired or unavailable"):
+        realtime_voice.resolve_pending(voice["id"], "request", "Search history")
     assert not ThreadMessage.objects.exists()
 
 
-def test_confirmation_requires_owned_live_signal_and_submits_once(voice_setup, settings, django_user_model):
-    owner, client, chat = voice_setup
+def test_only_server_recorded_live_signal_can_submit_once(voice_setup, settings):
+    _, client, chat = voice_setup
     settings.REALTIME_VOICE_DELEGATION_BUDGET = BUDGET
     voice, url = create(client, chat)
-    payload = {"event_id": "request", "text": "Search history; do not claim success early."}
-    assert post(client, url + "/confirm-delegation", payload).status_code == 409
+    text = "Search history; do not claim success early."
+    with pytest.raises(ValueError, match="expired or unavailable"):
+        realtime_voice.resolve_pending(voice["id"], "request", text)
     realtime_voice.begin_pending(voice["id"], "request", {})
-    other = django_user_model.objects.create_user("other-confirm", "other-confirm@example.com", "pw")
-    client.force_login(other)
-    assert post(client, url + "/confirm-delegation", payload).status_code == 404
-    client.force_login(owner)
+    assert post(client, url + "/confirm-delegation", {"event_id": "request", "text": text}).status_code == 404
     with patch("django_ergo.bots.messaging.dispatch"):
-        response = post(client, url + "/confirm-delegation", payload)
-        assert response.status_code == 200
-        assert response.json()["delegations"][0]["text"] == payload["text"]
-        assert post(client, url + "/confirm-delegation", payload).status_code == 409
+        realtime_voice.resolve_pending(voice["id"], "request", text)
+        with pytest.raises(ValueError, match="expired or unavailable"):
+            realtime_voice.resolve_pending(voice["id"], "request", text)
     assert ThreadMessage.objects.count() == 1

@@ -26,6 +26,7 @@ from ergonaut.api.realtime_voice import (  # noqa: E402
     close_pending,
     current_time,
     record_event,
+    resolve_pending,
     update_pending_fragment,
 )
 from ergonaut.realtime_voice_outbox import claim_announcement, completion_event  # noqa: E402
@@ -33,6 +34,16 @@ from ergonaut.realtime_voice_outbox import claim_announcement, completion_event 
 logger = logging.getLogger(__name__)
 MAX_SECONDS = 90
 _job_claimed = False
+TRANSCRIPT_DRAIN_SECONDS = 0.8
+PENDING_TIMEOUT_SECONDS = 60
+
+
+def pause_grace():
+    """Additional acoustic pause after Silero EOS; not a semantic completion guarantee."""
+    value = getattr(settings, "REALTIME_VOICE_PAUSE_GRACE_SECONDS", 2.0)
+    if isinstance(value, bool) or not isinstance(value, int | float) or not 0.5 <= value <= 10:
+        raise ValueError("REALTIME_VOICE_PAUSE_GRACE_SECONDS must be between 0.5 and 10")
+    return float(value)
 
 
 class OneConnection:
@@ -82,6 +93,14 @@ class Assistant(Agent):
         self.watcher = None
         self.fragments = {}
         self.pending_id = None
+        self.final_fragments = set()
+        self.speaking = False
+        self.heard_speech = False
+        self.speech_ended_at = None
+        self.transcript_changed_at = 0.0
+        self.changed = asyncio.Event()
+        self.closing = False
+        self.grace = pause_grace()
         super().__init__(
             instructions=(
                 "Maintain session context across topics. You are the voice interface, not the "
@@ -109,7 +128,15 @@ class Assistant(Agent):
             ),
         )
 
+    def stop(self):
+        self.closing = True
+        for job in tuple(self.jobs):
+            job.cancel()
+
     def spawn(self, coroutine, *, delegation_id=None):
+        if self.closing:
+            coroutine.close()
+            return
         task = asyncio.create_task(self.run_job(coroutine, delegation_id=delegation_id))
         self.jobs.add(task)
         task.add_done_callback(self.jobs.discard)
@@ -158,26 +185,77 @@ class Assistant(Agent):
 
     def on_transcription(self, event):
         self.fragments[event.item_id] = event.transcript
-        if self.pending_id:
+        if event.is_final:
+            self.final_fragments.add(event.item_id)
+        else:
+            self.final_fragments.discard(event.item_id)
+        self.transcript_changed_at = time.monotonic()
+        self.changed.set()
+        if self.pending_id and not self.closing:
             self.spawn(
                 sync_to_async(update_pending_fragment, thread_sensitive=True)(
                     self.voice_id, self.pending_id, event.item_id, event.transcript
                 )
             )
 
+    def on_user_state(self, event):
+        # With an explicitly supplied VAD, the SDK's recognition pipeline drives
+        # these states from its actual Silero audio stream, not GPT-Live segments.
+        if event.new_state == "speaking":
+            logger.info("voice vad_speech_started correlation=%s", self.correlation(self.pending_id))
+            if (
+                not self.pending_id
+                and self.speech_ended_at is not None
+                and time.monotonic() - self.speech_ended_at > self.grace
+            ):
+                self.fragments.clear()
+                self.final_fragments.clear()
+            self.speaking = True
+            self.heard_speech = True
+            self.speech_ended_at = None
+        elif event.new_state == "listening" and self.speaking:
+            self.speaking = False
+            self.speech_ended_at = time.monotonic()
+            logger.info("voice vad_speech_ended correlation=%s", self.correlation(self.pending_id))
+        self.changed.set()
+
     def on_delegation(self, event):
         logger.info("voice delegation_signal_received correlation=%s", self.correlation(event.id))
-        if self.pending_id:
+        if self.pending_id or self.closing:
             return
         self.pending_id = event.id
-        self.spawn(self.open_pending(event.id, dict(self.fragments)), delegation_id=event.id)
+        self.spawn(self.assemble_request(event.id, dict(self.fragments)), delegation_id=event.id)
 
-    async def open_pending(self, event_id, fragments):
+    async def assemble_request(self, event_id, fragments):
         await sync_to_async(begin_pending, thread_sensitive=True)(self.voice_id, event_id, fragments)
         self.duplex_session.append_thinking(
-            "Background delegation requires the user to review and explicitly confirm the complete request. "
-            "A transcription segment or pause is not confirmation."
+            "A background request is being assembled from speech; it is not submitted yet."
         )
+        deadline = time.monotonic() + PENDING_TIMEOUT_SECONDS
+        while not self.closing:
+            self.changed.clear()
+            now = time.monotonic()
+            if now >= deadline:
+                await sync_to_async(close_pending, thread_sensitive=True)(self.voice_id, event_id, "expired")
+                return
+            if self.heard_speech and not self.speaking and self.speech_ended_at is not None:
+                ready_at = max(
+                    self.speech_ended_at + self.grace,
+                    self.transcript_changed_at + TRANSCRIPT_DRAIN_SECONDS,
+                )
+                if now >= ready_at and self.fragments and self.final_fragments.issuperset(self.fragments):
+                    text = " ".join(part.strip() for part in self.fragments.values() if part.strip())
+                    if text and len(text) <= 4000:
+                        logger.info("voice delegation_boundary_ready correlation=%s", self.correlation(event_id))
+                        await sync_to_async(resolve_pending, thread_sensitive=True)(self.voice_id, event_id, text)
+                        return
+                wait = max(0.01, ready_at - now) if now < ready_at else deadline - now
+            else:
+                wait = deadline - now
+            try:
+                await asyncio.wait_for(self.changed.wait(), timeout=min(wait, deadline - now))
+            except TimeoutError:
+                pass
 
     async def persist_turn(self, item):
         delivery = "interrupted" if item.interrupted else "unknown"
@@ -267,6 +345,16 @@ async def voice_session(ctx: agents.JobContext):
     http_session = aiohttp.ClientSession()
     assistant = Assistant(voice_id, snapshot, http_session)
     session = AgentSession(vad=silero.VAD.load())
+    session_closed = asyncio.Event()
+
+    @session.on("close")
+    def on_close(_event):
+        assistant.stop()
+        session_closed.set()
+
+    @session.on("user_state_changed")
+    def on_user_state(event):
+        assistant.on_user_state(event)
 
     @session.on("conversation_item_added")
     def on_item(event):
@@ -280,10 +368,13 @@ async def voice_session(ctx: agents.JobContext):
     try:
         async with asyncio.timeout(MAX_SECONDS):
             await session.start(room=ctx.room, agent=assistant, record=False)
-            await asyncio.Event().wait()
+            await session_closed.wait()
     except TimeoutError:
         pass
     finally:
+        assistant.stop()
+        if assistant.jobs:
+            await asyncio.gather(*assistant.jobs, return_exceptions=True)
         await session.aclose()
         await http_session.close()
         if assistant.watcher:

@@ -51,6 +51,8 @@ LIVEKIT_API_SECRET = os.environ.get("LIVEKIT_API_SECRET", "")
 # model (the engine must be on exactly this one), start_within_seconds. Not an environment
 # switch: set it in a settings module reviewed together with its priced cost (docs/realtime-voice.md).
 REALTIME_VOICE_DELEGATION_BUDGET = None
+# Extra silence after Silero's own end-of-speech threshold, before background dispatch.
+REALTIME_VOICE_PAUSE_GRACE_SECONDS = 2.0
 ROOT_URLCONF = "ergonaut.settings.urls"
 
 

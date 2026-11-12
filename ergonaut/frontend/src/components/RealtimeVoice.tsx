@@ -21,8 +21,6 @@ export function RealtimeVoice({
   const [muted, setMuted] = useState(false)
   const [error, setError] = useState('')
   const [ending, setEnding] = useState(false)
-  const [requestText, setRequestText] = useState('')
-  const [confirming, setConfirming] = useState(false)
   const dialog = useRef<HTMLDialogElement>(null)
   const room = useRef<Room | null>(null)
   const audio = useRef<HTMLDivElement>(null)
@@ -194,23 +192,6 @@ export function RealtimeVoice({
     }
   }
 
-  async function confirmDelegation(cancel: boolean) {
-    const pending = voice?.state?.pending_delegation
-    if (!voice || !pending) return
-    setConfirming(true)
-    setError('')
-    try {
-      const updated = await api.confirmVoiceDelegation(voice.id, pending.id, requestText, cancel)
-      setVoice(updated)
-      onSession?.(updated)
-      setRequestText('')
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setConfirming(false)
-    }
-  }
-
   if (!enabled) return null
   return (
     <div className="px-4 py-2 sm:px-6">
@@ -278,46 +259,10 @@ export function RealtimeVoice({
             </p>
           )}
         </div>
-        {voice?.state?.pending_delegation?.status === 'awaiting_confirmation' && (
-          <div className="border-t border-stroke p-4">
-            <strong>Confirm background request</strong>
-            <p className="text-sm text-muted">
-              Transcription may omit words or split a single utterance. After finishing speaking, enter the complete
-              request and all constraints below; nothing is submitted until you confirm.
-            </p>
-            <p className="my-2 whitespace-pre-wrap text-sm">
-              Draft transcription:{' '}
-              {voice.state.pending_delegation.fragments.map(fragment => fragment.text).join(' ') || '(none yet)'}
-            </p>
-            <label className="block text-sm">
-              Complete request
-              <textarea
-                className="mt-1 w-full rounded-control border border-stroke bg-surface p-2"
-                value={requestText}
-                maxLength={4000}
-                onChange={event => setRequestText(event.target.value)}
-              />
-            </label>
-            <div className="mt-2 flex gap-2">
-              <button
-                type="button"
-                className="rounded-md border border-stroke px-3 py-2 text-sm disabled:opacity-50"
-                disabled={confirming || !requestText.trim()}
-                onClick={() => void confirmDelegation(false)}
-              >
-                Confirm and submit
-              </button>
-              <button
-                type="button"
-                className="rounded-md border border-stroke px-3 py-2 text-sm disabled:opacity-50"
-                disabled={confirming}
-                onClick={() => void confirmDelegation(true)}
-              >
-                Cancel request
-              </button>
-            </div>
-            <p className="text-sm text-muted">Confirmation expires after one minute.</p>
-          </div>
+        {voice?.state?.pending_delegation?.status === 'collecting' && (
+          <p className="border-t border-stroke p-4 text-sm" role="status">
+            Listening for the end of the background request; nothing submitted yet.
+          </p>
         )}
         {['cancelled', 'expired'].includes(voice?.state?.pending_delegation?.status ?? '') && (
           <p className="border-t border-stroke p-4 text-sm" role="status">
