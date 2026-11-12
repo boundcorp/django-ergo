@@ -111,7 +111,9 @@ function useVoiceOwner(): VoiceCallOwner {
   // Navigation slows observation, not the call; no overlapping session requests.
   const pendingWork = voice?.delegations?.some(task => ['queued', 'delivered'].includes(task.status)) ?? false
   useEffect(() => {
-    if (!voice || (voice.status !== 'active' && !pendingWork)) return
+    // Keep observing a viewed ended session: already-accepted final text may drain
+    // after End's response. Navigation stops this read-only observation unless work is pending.
+    if (!voice || (voice.status !== 'active' && !pendingWork && pathname !== `/s/${voice.chat_id}/voice`)) return
     let alive = true
     let timer: ReturnType<typeof setTimeout>
     const poll = async () => {
@@ -133,7 +135,9 @@ function useVoiceOwner(): VoiceCallOwner {
       if (alive)
         timer = setTimeout(
           poll,
-          document.visibilityState !== 'hidden' && pathname === `/s/${voice.chat_id}/voice` ? 750 : 3000,
+          voice.status === 'active' && document.visibilityState !== 'hidden' && pathname === `/s/${voice.chat_id}/voice`
+            ? 750
+            : 3000,
         )
     }
     timer = setTimeout(poll, 750)

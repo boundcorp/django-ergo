@@ -511,6 +511,23 @@ test('active page polling progressively replaces a draft without opening a trans
   expect(bubble?.textContent).toContain('Completed words')
   expect(container.querySelectorAll('[data-turn-id="progressive"]')).toHaveLength(1)
   expect(tokens).toBe(0)
+  // The bridge can finish an already-accepted turn after End's first snapshot.
+  api.endRealtimeVoice = async () => ({ ...session, status: 'ended', transcript: [] })
+  await act(async () => {
+    button('End call').click()
+  })
+  observed = {
+    ...session,
+    status: 'ended',
+    transcript: [{ ...draft, text: 'Final accepted before End', is_final: true }],
+  }
+  const finalWait = Promise.withResolvers<void>()
+  setTimeout(finalWait.resolve, 850)
+  await act(async () => {
+    await finalWait.promise
+  })
+  expect(container.querySelector('[data-turn-id="progressive"]')?.textContent).toContain('Final accepted before End')
+  expect(tokens).toBe(0)
 })
 
 test('a single durable card shows the stage and transcript without claiming playback', () => {
