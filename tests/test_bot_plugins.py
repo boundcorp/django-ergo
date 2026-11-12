@@ -3253,6 +3253,14 @@ def test_import_artifact_rejects_escape_secrets_wrong_type_and_oversize(
     ]:
         with pytest.raises(ValueError, match="."):
             plugin.import_file(ctx, host, str(path))
+    with pytest.raises(ValueError, match="normalized absolute"):
+        plugin.import_file(ctx, "local", f"{folder}/sub/../good.svg")
+    linked_root = tmp_path / "linked-root"
+    linked_root.symlink_to(folder, target_is_directory=True)
+    plugin.import_roots["local"] = str(linked_root)
+    with pytest.raises(ValueError, match="Couldn't read"):
+        plugin.import_file(ctx, "local", f"{linked_root}/good.svg")
+    plugin.import_roots["local"] = str(folder)
     made = plugin.import_file(ctx, "local", str(folder / "good.svg"))
     row = session.attachments.get(id=made["id"])
     assert row.media_type == "image/svg+xml"
