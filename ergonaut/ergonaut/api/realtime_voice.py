@@ -61,6 +61,15 @@ def event_out(event):
     }
 
 
+# A bridge job (one GPT-Live connection) lasts at most this long; the bridge enforces it.
+BRIDGE_JOB_SECONDS = 90
+
+
+def end_voice_session(voice_id):
+    """End an active session: Stop, or its bridge job finishing (timeout, disconnect, error)."""
+    RealtimeVoiceSession.objects.filter(pk=voice_id, status="active").update(status="ended", ended_at=timezone.now())
+
+
 def claim_bridge(voice_id):
     """Take an active session for one bridge job, once; False if it was taken, ended or isn't allowed.
 
@@ -375,7 +384,7 @@ def voice_time(request, session_id: str, activity_id: str | None = None):
 @router.post("/realtime-voice/sessions/{session_id}/end")
 def end_session(request, session_id: str):
     session = owned_session(request.auth, session_id)
-    RealtimeVoiceSession.objects.filter(pk=session.pk, status="active").update(status="ended", ended_at=timezone.now())
+    end_voice_session(session.pk)
     session.refresh_from_db()
     return session_out(session)
 
@@ -385,6 +394,12 @@ def token(request, session_id: str):
     session = owned_session(request.auth, session_id)
     if session.status != "active":
         raise HttpError(409, "Voice session ended")
+    if session.bridge_started_at:
+        # Its one bridge job already ran (or is running): a new room would get no agent. The bridge
+        # ends the session when the job ends; if it died first, end it here once the job is surely over.
+        if timezone.now() - session.bridge_started_at > timedelta(seconds=BRIDGE_JOB_SECONDS + 30):
+            end_voice_session(session.pk)
+        raise HttpError(409, "Voice session already connected; start a new one")
     url, key, secret = settings.LIVEKIT_URL, settings.LIVEKIT_API_KEY, settings.LIVEKIT_API_SECRET
     if not all((url, key, secret)):
         raise HttpError(503, "Realtime voice is not configured")

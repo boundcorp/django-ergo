@@ -21,11 +21,13 @@ from livekit.agents import Agent, AgentServer, AgentSession, APIConnectOptions, 
 from livekit.plugins import openai, silero  # noqa: E402
 
 from ergonaut.api.realtime_voice import (  # noqa: E402
+    BRIDGE_JOB_SECONDS,
     begin_pending,
     bridge_state,
     claim_bridge,
     close_pending,
     current_time,
+    end_voice_session,
     record_event,
     resolve_pending,
     update_pending_fragment,
@@ -33,7 +35,7 @@ from ergonaut.api.realtime_voice import (  # noqa: E402
 from ergonaut.realtime_voice_outbox import claim_announcement, completion_event  # noqa: E402
 
 logger = logging.getLogger(__name__)
-MAX_SECONDS = 90
+MAX_SECONDS = BRIDGE_JOB_SECONDS
 _job_claimed = False
 TRANSCRIPT_DRAIN_SECONDS = 0.8
 PENDING_TIMEOUT_SECONDS = 60
@@ -390,6 +392,9 @@ async def voice_session(ctx: agents.JobContext):
             await asyncio.gather(*assistant.jobs, return_exceptions=True)
         if assistant.pending_id:
             await sync_to_async(close_pending, thread_sensitive=True)(voice_id, assistant.pending_id)
+        # The session had its one job: end it, so the next Start makes a new session instead of
+        # reusing one no bridge will take again.
+        await sync_to_async(end_voice_session, thread_sensitive=True)(voice_id)
         seconds = time.monotonic() - started
         logger.info(
             "voice bridge session_seconds=%.3f max_seconds=%d voice_cost_upper_estimate_usd=%.4f",

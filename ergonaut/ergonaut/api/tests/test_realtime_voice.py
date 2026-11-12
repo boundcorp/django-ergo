@@ -98,6 +98,28 @@ def test_a_voice_session_gets_one_bridge_job(voice_setup, settings):
     assert not realtime_voice.claim_bridge(ended["id"])
 
 
+def test_a_claimed_session_gets_no_new_token_and_a_dead_bridge_job_ends_it(voice_setup, settings):
+    _, client, chat = voice_setup
+    settings.LIVEKIT_URL = "wss://example.invalid"
+    settings.LIVEKIT_API_KEY = "test-key"
+    settings.LIVEKIT_API_SECRET = "test-secret"
+    voice, url = create(client, chat)
+    assert realtime_voice.claim_bridge(voice["id"])
+    # The job is (or may still be) running: no second room, but the session stays.
+    assert post(client, url + "/token", {}).status_code == 409
+    assert client.get(url).json()["status"] == "active"
+    # A bridge that died without ending it: once the job is surely over, the session ends,
+    # so the next Start creates a new one instead of reusing it.
+    realtime_voice.RealtimeVoiceSession.objects.filter(pk=voice["id"]).update(
+        bridge_started_at=datetime.now(UTC) - timedelta(seconds=realtime_voice.BRIDGE_JOB_SECONDS + 31)
+    )
+    assert post(client, url + "/token", {}).status_code == 409
+    assert client.get(url).json()["status"] == "ended"
+    fresh, fresh_url = create(client, chat)
+    assert fresh["id"] != voice["id"]
+    assert post(client, fresh_url + "/token", {}).status_code == 200
+
+
 def test_token_is_scoped_to_voice_room(voice_setup, settings):
     jwt = pytest.importorskip("jwt")
     pytest.importorskip("livekit.api")
