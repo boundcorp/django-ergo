@@ -856,6 +856,38 @@ async def test_approval_pauses_and_resumes_standalone_call(user):
         await structured.resume_structured_call(spec, done.call, {}, engine=engine)
 
 
+@pytest.mark.parametrize("approve", [True, False])
+async def test_replayed_output_after_approval_completes_without_repeating_action(
+    user, approve
+):
+    toolkit = ApprovalToolkit()
+    reply = claude_tool("submit_output", VALID_PLAN, tool_id="reply")
+    action = claude_tool("delete_all", {"scope": "tmp"}, tool_id="action")
+    action.content.extend(reply.content)
+    engine = claude_engine(action, reply)
+    spec = StructuredCallSpec(
+        kind="planner", response_model=Plan, toolkits=[toolkit], max_turns=2
+    )
+    paused = await run_structured_call(
+        spec,
+        "Clean up",
+        user=user,
+        engine=engine,
+        allow_approvals=True,
+        metadata={"tool_execution_policy": "at_most_once"},
+    )
+    assert paused.status == StructuredCallStatus.AWAITING_APPROVAL
+    assert toolkit.ran == []
+    saved = await StructuredCall.objects.aget(pk=paused.call.pk)
+    done = await structured.resume_structured_call(
+        spec, saved, {"action": approve}, engine=engine
+    )
+    assert done.ok
+    assert done.call.response == VALID_PLAN
+    assert toolkit.ran == ([{"scope": "tmp"}] if approve else [])
+    assert done.call.turns_used == 2
+
+
 async def test_approval_tools_are_refused_without_allow_approvals(user):
     toolkit = ApprovalToolkit()
     engine = claude_engine(

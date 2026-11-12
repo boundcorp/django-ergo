@@ -1323,7 +1323,13 @@ class Bot:
         metadata = {}
         if thread_message is not None:
             metadata["thread_message"] = str(thread_message.id)
-            for key in ("voice_session_id", "voice_event_id"):
+            for key in (
+                "voice_session_id",
+                "voice_event_id",
+                "voice_execution_mode",
+                "tool_execution_policy",
+                "model_retry_policy",
+            ):
                 if key in (thread_message.metadata or {}):
                     metadata[key] = thread_message.metadata[key]
             author, provenance = await sync_to_async(

@@ -17,6 +17,7 @@ from django_ergo.conversation.engine import Completion
 from django_ergo.conversation.engine import Engine
 from django_ergo.conversation.engine import EngineResponse
 from django_ergo.conversation.engine import SeededToolCall
+from django_ergo.conversation.engine import automatic_request_retries
 from django_ergo.conversation.engine import session_system_prompt
 from django_ergo.conversation.identity import attributed_text
 from django_ergo.conversation.images import attachment_ref
@@ -182,6 +183,8 @@ class ClaudeAPIEngine(StoredMessagesMixin, Engine):
             options = enforce_request_limits(limits, kwargs, "max_tokens")
             client = client.with_options(**options)
             return await with_deadline(limits, client.messages.create(**kwargs))
+        if not automatic_request_retries.get() and self.transport_type == "api":
+            client = client.with_options(max_retries=0)
         return await client.messages.create(**kwargs)
 
     def get_tool_adapter(self) -> ClaudeToolAdapter:

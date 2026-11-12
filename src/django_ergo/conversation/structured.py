@@ -90,6 +90,7 @@ from django_ergo.conversation.budget import budgeted
 from django_ergo.conversation.budget import current_meter
 from django_ergo.conversation.compaction import maybe_compact
 from django_ergo.conversation.engine import SeededToolCall
+from django_ergo.conversation.engine import automatic_request_retries
 from django_ergo.conversation.identity import system_identity
 from django_ergo.conversation.images import is_ref
 from django_ergo.conversation.images import prepare_messages
@@ -106,6 +107,7 @@ from django_ergo.conversation.runtime import build_engine
 from django_ergo.conversation.runtime import get_default_engine_spec
 from django_ergo.conversation.tool_dispatch import collect_toolkit_schemas
 from django_ergo.conversation.tool_dispatch import dispatch_tool
+from django_ergo.conversation.tool_dispatch import dispatch_tool_once
 from django_ergo.conversation.tool_dispatch import find_toolkit
 from django_ergo.conversation.tool_dispatch import record_kb_usage
 from django_ergo.conversation.tool_dispatch import requires_approval
@@ -472,6 +474,8 @@ async def _with_retry(make_call):
     Neither transcript writes anything until the call succeeds, so a retry
     never duplicates history.
     """
+    if not automatic_request_retries.get():
+        return await make_call()
     attempt = 0
     while True:
         try:
@@ -795,10 +799,28 @@ class _Run:
     def needs_approval(self, name: str) -> bool:
         return requires_approval(name, self.toolkits)
 
-    async def run_tool(self, name: str, args: dict) -> tuple[Any, bool]:
-        return await sync_to_async(dispatch_tool, thread_sensitive=True)(
-            name, args, self.toolkits
+    async def run_tool(self, name: str, args: dict, tool_id: str) -> tuple[Any, bool]:
+        retry_token = automatic_request_retries.set(
+            automatic_request_retries.get()
+            and (self.call.metadata or {}).get("model_retry_policy") != "never"
         )
+        try:
+            # Output validation has no external effect and must repopulate the
+            # fresh submit toolkit's accepted value after approval continuation.
+            if (self.call.metadata or {}).get(
+                "tool_execution_policy"
+            ) == "at_most_once" and (
+                self.submit is None
+                or find_toolkit(self.toolkits, name) is not self.submit
+            ):
+                return await sync_to_async(dispatch_tool_once, thread_sensitive=True)(
+                    self.call, tool_id, name, args, self.toolkits
+                )
+            return await sync_to_async(dispatch_tool, thread_sensitive=True)(
+                name, args, self.toolkits
+            )
+        finally:
+            automatic_request_retries.reset(retry_token)
 
     async def approval_preview(self, name: str, args: dict) -> ApprovalPreview | None:
         toolkit = find_toolkit(self.toolkits, name)
@@ -833,6 +855,10 @@ current_call: ContextVar[StructuredCall | None] = ContextVar(
 async def _loop(run: _Run) -> StructuredCallResult:
     """Run the call to its end; a crash marks it FAILED instead of leaving it in progress."""
     token = current_call.set(run.call)
+    retry_token = automatic_request_retries.set(
+        automatic_request_retries.get()
+        and (run.call.metadata or {}).get("model_retry_policy") != "never"
+    )
     try:
         return await _run_loop(run)
     except BaseException as e:
@@ -846,6 +872,7 @@ async def _loop(run: _Run) -> StructuredCallResult:
         raise
     finally:
         current_call.reset(token)
+        automatic_request_retries.reset(retry_token)
 
 
 async def _run_loop(run: _Run) -> StructuredCallResult:  # noqa: C901, PLR0912, PLR0915
@@ -962,7 +989,7 @@ async def _run_loop(run: _Run) -> StructuredCallResult:  # noqa: C901, PLR0912, 
                         True,
                     )
                 else:
-                    result, is_error = await run.run_tool(name, args)
+                    result, is_error = await run.run_tool(name, args, tool_id)
                 results.append((tool_id, result, is_error))
             if results:
                 await transcript.append_tool_results(results)
@@ -1289,7 +1316,9 @@ async def resume_structured_call(  # noqa: PLR0913
     results = []
     for item in pending:
         if decisions.get(item["id"]) and not item.get("preview_error"):
-            result, is_error = await run.run_tool(item["name"], item["input"])
+            result, is_error = await run.run_tool(
+                item["name"], item["input"], item["id"]
+            )
         elif item.get("preview_error"):
             result, is_error = "The preview failed; the tool was not executed.", True
         else:

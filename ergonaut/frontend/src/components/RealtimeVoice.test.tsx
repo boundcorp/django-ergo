@@ -530,6 +530,65 @@ test('active page polling progressively replaces a draft without opening a trans
   expect(tokens).toBe(0)
 })
 
+test('normal approval-waiting child work stays observed after End and navigation without reopening voice', async () => {
+  let observed: RealtimeVoiceSession = {
+    ...session,
+    delegations: [{ event_id: 'original', text: 'Follow child', status: 'answered', result: 'Submitted', error: '' }],
+    thread_updates: [
+      {
+        event_id: 'original',
+        update_id: 'child:waiting',
+        chat_id: 'chat-1',
+        text: 'Existing child task',
+        status: 'waiting',
+        result: '',
+        error: '',
+      },
+    ],
+  }
+  let tokens = 0
+  api.realtimeVoiceSessions = async () => [observed]
+  api.realtimeVoiceSession = async () => observed
+  api.realtimeVoiceToken = async () => {
+    tokens++
+    throw new Error('No room authorized')
+  }
+  api.endRealtimeVoice = async () => (observed = { ...observed, status: 'ended' })
+  await mountVoice()
+  expect(container.textContent).toContain('Waiting for normal thread approval')
+  await act(async () => {
+    button('End call').click()
+  })
+  await act(async () => {
+    link('← Return to thread').click()
+  })
+  observed = {
+    ...observed,
+    thread_updates: [
+      {
+        event_id: 'original',
+        update_id: 'child:answered',
+        chat_id: 'chat-1',
+        text: 'Existing child task',
+        status: 'answered',
+        result: 'Durable child completion',
+        error: '',
+      },
+    ],
+  }
+  await act(async () => {
+    const { promise, resolve } = Promise.withResolvers<void>()
+    setTimeout(resolve, 850)
+    await promise
+  })
+  await act(async () => {
+    link('Voice fixture').click()
+  })
+  expect(container.textContent).toContain('Durable child completion')
+  expect(container.textContent).toContain('Call ended')
+  expect(tokens).toBe(0)
+})
+
 test('a single durable card shows the stage and transcript without claiming playback', () => {
   const html = renderToStaticMarkup(
     createElement(VoiceSessionCard, {

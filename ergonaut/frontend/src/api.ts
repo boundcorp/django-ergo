@@ -778,6 +778,17 @@ export type IllustrationJob = {
 export type ApiKey = { id: string; name: string; hint: string; created_at: string; last_used_at: string | null }
 
 export type RealtimeVoiceEvent = { event_id: string; kind: string; text: string; delivery: string; created_at: string }
+export type VoiceTaskUpdate = {
+  event_id: string
+  text: string
+  status: string
+  result: string
+  error: string
+  execution_mode?: 'read_only' | 'normal_thread'
+  update_id?: string
+  chat_id?: string
+  observation?: boolean
+}
 export type RealtimeVoiceSession = {
   id: string
   chat_id: string
@@ -800,6 +811,7 @@ export type RealtimeVoiceSession = {
     restriction: string
     reason?: string
     delegation_available: boolean | null
+    execution_mode?: 'read_only' | 'normal_thread'
     instructions?: string
     voice_event_ids?: string[]
   }
@@ -817,7 +829,8 @@ export type RealtimeVoiceSession = {
       fragments: { id: string; text: string }[]
     }
   }
-  delegations?: { event_id: string; text: string; status: string; result: string; error: string }[]
+  delegations?: VoiceTaskUpdate[]
+  thread_updates?: VoiceTaskUpdate[]
   events: RealtimeVoiceEvent[]
 }
 

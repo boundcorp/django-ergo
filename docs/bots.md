@@ -981,17 +981,23 @@ durable submitted/queued/answered/failed work and explicitly reports when
 no background request or verified history result exists.
 
 Voice is an interface to its exact launch thread, not a separate orchestrator
-or a global owner briefing. The draft follow-up restores that thread's bounded
+or a global owner briefing. PR #293 (deployed `06284d4`) restores that thread's bounded
 instructions, history/summary, decisions and attachment references; other
 threads, workers and approvals are read on demand through tools that the
 owning bot already offers. Budgeted voice is explicitly restricted, and a
 subscription/CLI launch thread cannot silently switch to an API model to run
-delegation. A separate API-engine profile retaining the same authorization
-needs review. Voice does not grant thread forwarding, approval actions or
-worker starts; all remain outside its read-only authorization. See the
-[phone diagnosis](realtime-voice-causal-review.md#hosted-phone-diagnosis--2026-11-12)
-and [device/continuity checklist](realtime-voice-progress.md#hosted-phone-acceptance-and-follow-ups--2026-11-12).
-The draft web entry is the originating thread's top-bar options → Voice call.
+delegation. The successor's **default-off** normal-thread execution policy is
+separate from the priced voice lookup: exact chat, owner, bot and a reviewed
+normal-task-cost approval reference are required in settings and in the durable
+session grant. It uses the existing normal bot engine/tools/context and action
+approval path, never voice-approved actions or globally granted tools. Accepted
+normal work uses durable provider-invocation claims; an uncertain external write
+is not automatically repeated. Causal thread updates retain the original voice
+delegation ID, including across reconnect and after End. No live policy is enabled
+by this source change; ordinary non-voice turns and budgeted-turn guards are unchanged.
+See the [current release and capability evidence](realtime-voice-causal-review.md#current-release-reconciliation--2026-11-12)
+and [acceptance gates](realtime-voice-progress.md#hosted-phone-acceptance-and-follow-ups--2026-11-12).
+The web entry is the originating thread's top-bar options → Voice call.
 Its dedicated page keeps one app-owned connection across in-tab navigation;
 End call stops voice, not submitted thread work. Progressive drafts are not
 normal chat history until finalized, and displayed SDK activity is an

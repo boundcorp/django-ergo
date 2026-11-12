@@ -40,7 +40,7 @@ from ergonaut.api.realtime_voice import (  # noqa: E402
     record_event,
     resolve_pending,
 )
-from ergonaut.realtime_voice_outbox import claim_announcement, completion_event  # noqa: E402
+from ergonaut.realtime_voice_outbox import claim_announcement, completion_event, thread_update_event  # noqa: E402
 
 logger = logging.getLogger(__name__)
 MAX_SECONDS = BRIDGE_JOB_SECONDS
@@ -105,6 +105,15 @@ def startup_context(snapshot):
                 role="user",
                 content=f"Verified background result for {task['event_id']}: {task['result'][:1500]}",
             )
+    for task in snapshot.get("thread_updates", [])[-10:]:
+        context.add_message(
+            id=f"thread-update:{task['update_id']}",
+            role="user",
+            content=(
+                f"Durable thread observation for {task['event_id']} (not proof voice started it): "
+                f"{task['status']}. {task['result'][:1000] if task['status'] == 'answered' else ''}"
+            ),
+        )
     return context
 
 
@@ -162,9 +171,9 @@ class Assistant(Agent):
                 " For activity durations use only supplied server-calculated elapsed "
                 "time since the user reported the activity, not a claim that it happened. "
                 "Never invent times, durations, timers or reminders."
-                " This is restricted read-only gpt-6-luna-only background mode. Never perform or promise writes, "
-                "thread forwarding/sends, worker starts or approvals. Startup briefing is stored context, "
-                "not a newly verified result. Explain delegation restrictions up front. "
+                " Startup briefing is stored context, not a newly verified result. "
+                "Explain the actual execution mode below. A voice utterance or delegation signal is never "
+                "an action approval; normal thread approval controls remain authoritative. "
                 + snapshot.get("briefing", {}).get(
                     "restriction", "Background delegation availability is not known; do not promise it."
                 )
@@ -543,18 +552,22 @@ class Assistant(Agent):
             )
 
     async def deliver_results(self, snapshot):
-        for task in snapshot["delegations"]:
-            key = task["event_id"]
+        for task in [*snapshot["delegations"], *snapshot.get("thread_updates", [])]:
+            normal = task.get("execution_mode") == "normal_thread" or "update_id" in task
+            key = task.get("update_id", f"{task['event_id']}:{task['status']}" if normal else task["event_id"])
             if key in self.announced:
                 continue
-            event = await sync_to_async(completion_event, thread_sensitive=True)(self.voice_id, task)
+            event = await sync_to_async(thread_update_event if normal else completion_event, thread_sensitive=True)(
+                self.voice_id, task
+            )
             if event is None or not await sync_to_async(claim_announcement, thread_sensitive=True)(event):
                 continue
             # Silent authoritative context precedes correlated commentary. Neither proves
             # transmission, playback, or that generated speech follows the context.
-            outcome = f"Verified background outcome for request {key}: {event.text[:1500]}"
+            label = "Durable task status" if event.kind == "task_status" else "Verified background outcome"
+            outcome = f"{label} for request {task['event_id']}: {event.text[:1500]}"
             self.duplex_session.append_thinking(outcome)
-            self.duplex_session.append_commentary(outcome, delegation_id=key)
+            self.duplex_session.append_commentary(outcome, delegation_id=task["event_id"])
             self.announced.add(key)
 
     async def watch_results(self):
@@ -569,6 +582,22 @@ class Assistant(Agent):
             except Exception as exc:
                 logger.error("voice result delivery failed exception_type=%s", type(exc).__name__)
             await asyncio.sleep(1)
+
+
+def watch_microphone(room, assistant, owner_identity):
+    """RTC mute and unsubscribe use different argument order; invalidate only the owner's mic."""
+
+    @room.on("track_muted")
+    def on_track_muted(participant, publication):
+        if participant.identity == owner_identity and publication.source == rtc.TrackSource.SOURCE_MICROPHONE:
+            assistant.vad_ready = False
+            assistant.invalidate_runtime(user_only=True)
+
+    @room.on("track_unsubscribed")
+    def on_track_unsubscribed(_track, publication, participant):
+        if participant.identity == owner_identity and publication.source == rtc.TrackSource.SOURCE_MICROPHONE:
+            assistant.vad_ready = False
+            assistant.invalidate_runtime(user_only=True)
 
 
 # One prewarmed job process (each loads Django and Silero), not one per CPU.
@@ -658,17 +687,7 @@ async def voice_session(ctx: agents.JobContext):
             assistant.invalidate_runtime()
             session_closed.set()
 
-    @ctx.room.on("track_muted")
-    def on_track_muted(publication, participant):
-        if participant.identity == owner_identity and publication.source == rtc.TrackSource.SOURCE_MICROPHONE:
-            assistant.vad_ready = False
-            assistant.invalidate_runtime(user_only=True)
-
-    @ctx.room.on("track_unsubscribed")
-    def on_track_unsubscribed(_track, publication, participant):
-        if participant.identity == owner_identity and publication.source == rtc.TrackSource.SOURCE_MICROPHONE:
-            assistant.vad_ready = False
-            assistant.invalidate_runtime(user_only=True)
+    watch_microphone(ctx.room, assistant, owner_identity)
 
     @session.on("close")
     def on_close(_event):

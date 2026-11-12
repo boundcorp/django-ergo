@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from abc import ABC
 from abc import abstractmethod
+from contextvars import ContextVar
 from dataclasses import dataclass
 from dataclasses import field
 from typing import TYPE_CHECKING
@@ -13,6 +14,12 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
     from django_ergo.conversation.budget import RequestLimits
+
+# A scoped request policy, independent of token budgets; nested provider calls inherit it.
+# CLI/provider-internal transport behavior is not a financial or network-attempt ceiling.
+automatic_request_retries: ContextVar[bool] = ContextVar(
+    "ergo_automatic_request_retries", default=True
+)
 
 
 @dataclass

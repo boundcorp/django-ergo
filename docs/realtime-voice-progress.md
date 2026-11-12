@@ -2,17 +2,67 @@
 
 ## Hosted phone acceptance and follow-ups — 2026-11-12
 
-Lee accepted **basic phone audio and conversation** on the hosted `75234dc` image. Bluetooth/output routing, launch-thread orchestration context/tools, standby/manual resume and the dedicated-page/progressive-transcript UX in draft #293 are **not deployed or device-accepted**. Historical synthetic-run caveats below remain relevant to boundaries and billing, but do not undo Lee's phone acceptance.
+Lee accepted **basic phone audio and conversation**, not Android Bluetooth/output routing or orchestrator capabilities. PR #293 first shipped as `06284d4` / image `5c0ba2e4` through infra-octo #167 at 20:13:34 UTC, with web ready at 20:23:13. A later unrelated auto-upgrade, infra-octo #168 at 21:02:40, moved all six current roles to **`09e5a6a` / `40d09a01`**, inheriting #293. Lee's dedicated-page observation is valid; previous “not deployed” statements described an older snapshot. See [time-separated evidence](realtime-voice-causal-review.md#current-release-reconciliation--2026-11-12).
 
-Read-only diagnosis: the actual phone voice session launched in `boundcorp`, not the linked `design` discussion. It received generic voice instructions and its own empty restore context, not the populated launch thread's instructions, messages, compactions or attachments. No delegation row, delegated message, structured call or budget-refusal outcome exists for that phone session. Its launch thread's routed model was a subscription/CLI model, incompatible with the pinned API request budget. See the [evidence and platform matrix](realtime-voice-causal-review.md#hosted-phone-diagnosis--2026-11-12).
+Two phone sessions must not be conflated. The 18:09 `boundcorp` session on `75234dc` lacked launch-thread context and submitted no delegation. The latest retained session, created **20:34:10 UTC** on PR #293, emitted a valid client delegation and reached its acoustic/transcript boundary, then failed engine validation before creating any message: its actual `CodexCLIEngine gpt-6.1-sol` cannot enforce the API-only voice budget. Bounded exact-thread context is now implemented, but the read-only profile is not normal Boundcorp orchestration.
 
-Lee clarified that voice must inherit **the exact launch thread**, not a global owner/project briefing. Cross-thread workers, approvals and thread status are on-demand only through that thread's existing authorized tools. Voice does not gain write permission, forwarding, approval authority, another delegation or extra runtime.
+Lee requires the **same authorized tools, identity, exact-thread context and normal action approvals as text**, with existing threads/workers followed while voice continues. A global owner briefing, a new assistant, read-only listings or a mandatory Send button do not satisfy that contract. At **21:15:41 UTC** Lee explicitly approved **normal originating-thread execution costs**; the coordinator relayed that scoped decision. The library stays off by default, with a reviewed exact-chat/owner/bot GitOps policy prepared for this approval. No extra voice runtime, provider reroute, action-approval bypass or paid automated test is authorized.
 
-Implemented in draft #293, building on standby:
+Implemented and deployed in PR #293, building on standby:
 
 - **Routing:** silent sink capability probe; truthful browser-applied output selector and optional native chooser; permission/ineffective-switch feedback, partial-switch rollback, device-loss fallback, fresh-track preparation, reconnect/standby-resume and listener teardown. Capture constraints and element playback are unchanged; unsupported phones get OS guidance, not a cosmetic Bluetooth toggle.
 - **Exact-thread interface:** bounded owning instructions and normal context sources, saved compaction, recent launch-thread history, decisions/task state and attachment references. Voice events persist once into that thread's history with identity/timestamps and assistant delivery uncertainty. Global overview is excluded; existing authorized read-only bot/thread/worker/history tools serve on-demand lookups. Actual engine/model preflight, bridge-published restricted-mode UI status and same-session/outbox correlation preserve limits. No forwarding, write path or subscription-engine reroute is enabled.
 - **Dedicated page/progressive text:** thread top-bar dropdown/mobile sheet opens `/s/:id/voice`, with exact identity/context and return navigation. A single app-level call owner survives SPA route/back/page unmount; a different thread cannot silently replace it. Explicit End call leaves submitted work alone. Stable SDK message IDs, coalesced bounded drafts and atomic final replacement prevent duplicate/reordered/disappearing turns; only finals enter normal history. Observed SDK state is timestamped and gated by live local transport, never guessed from queued work.
+
+### Successor implementation — normal costs approved; source/policy rollout not performed
+
+The successor adds an exact-chat/owner/bot authorization policy for normal originating-thread execution, separate from the priced API lookup. It is empty by default, cannot be granted by a browser or blanket flag, and requires a scoped JSON policy with an explicit approval reference. New sessions receive a matching durable grant only from that reviewed configuration. The proposed policy records Lee's 21:15:41 decision for the actual Boundcorp launch chat; no live policy was changed and no normal owner task was dispatched.
+
+Reviewable changes: [django-ergo #297](https://github.com/boundcorp/django-ergo/pull/297)
+and [infra-octo #170](https://github.com/boundcorp/infra-octo/pull/170). The policy
+is held as draft for the explicit source-first/old-consumer-exit activation gate.
+
+With a disposable offline policy, model-selected delegation uses the same real normal bot/queue/tools/context/approval paths, not invented voice tool schemas. One root request remains the limit; session and provider-ID claims prevent duplicate root dispatch, tool replay and stale approval reentry. Durable causal sends/replies and exact-thread worker reports are visible as separate status/result updates correlated to the original voice delegation. Normal approvals stay in the normal thread UI; speech is not approval. End/transport loss does not cancel accepted work, and ended-session polling persists late results without opening a provider.
+
+The Android follow-up fixes the proven reversed RTC mute callback arguments and adds user-triggered, local, non-identifying route diagnostics. Core call controls stay visible while the diagnostic/footer area scrolls. No forced speaker, Web Audio playback migration, capture-constraint change or physical routing claim was introduced.
+
+Observed successor verification:
+
+| Scenario | Observed result |
+| --- | --- |
+| Standalone disposable PostgreSQL + actual isolated Redis Unix socket + actual Celery solo worker | Scripted model made five requests; actual authorized thread send ran once after the existing normal approval endpoint; voice text persisted while waiting and while child work ran; End preserved child completion and normal parent follow-up. No live owner task, provider, room or microphone. |
+| Actual installed GPT-Live serialization, no transport | Six silent-context/commentary events correlated to the original delegation; a reconstructed assistant could not claim them a second time; durable result and populated thread context restored. |
+| Final full Ergonaut suite, isolated PostgreSQL | **338 passed, 6 skipped**, including authorized normal delegation, owner isolation, approval/denial/uncertain-write claims, duplicate/concurrent delivery, reconnect mode, no automatic retry and refusal after the original 90-second deadline. |
+| Library regression checks | Full suite **1,700 passed, 15 skipped** before the final retry-scope refinement; final **80 passed** across real-Codex/local-endpoint, budget and structured-call suites after that refinement. The actual CLI produced one request against a disposable local stand-in, not a real provider. |
+| Final frontend suite/build, changed Python style, migration drift | **288 passed**, TypeScript/Vite build passed, Ruff passed and no model migration changes. Existing React `act`, pytest configuration and Vite chunk-size warnings remain. |
+| Actual Chromium HTML element + LiveKit `RemoteAudioTrack`, synthetic silent source | Default sink applied before attachment; source track attached on fresh and reattached elements; disabled existing synthetic track reported honestly; zero capture/token/End calls. Not a physical Android/Bluetooth test. |
+| Actual dedicated page, mobile 390×844 and desktop 1280×900 | Click-triggered local snapshot, physical route unknown, no identifiers/capture/token/End calls; sticky call controls remain visible while diagnostics scroll, footer fits and no horizontal overflow. Screenshots `/tmp/omp-sshots-15cbb5c634f46a86.webp` (mobile), `/tmp/omp-sshots-15cbb5dcb4346a87.webp` (desktop). |
+
+The first standalone approval attempt was correctly refused for a non-admin fixture with admin-only default plugins. The successful isolated repeat used a disposable admin, not a permission bypass. A preliminary attempt to add mute coverage to the complex standby teardown fixture timed out; coverage was moved to the production microphone registration helper with the actual RTC emitter and real Assistant runtime, which passed. These are offline implementation checks, not hosted voice or Bluetooth acceptance.
+
+Independent successor review reproduced one blocking continuation defect:
+a provider response containing both an approval-required action and a valid
+structured reply cached the reply receipt before pausing. Repeating that reply
+ID after approval or denial lost the fresh output toolkit's acceptance state and
+exhausted the normal turn limit. The fix revalidates only the local output
+validator; external-action claims remain durable. Both regression cases failed
+before the fix. A disposable standalone normal-thread smoke then completed the
+same batched-action/repeated-reply path with one real thread send and four
+scripted requests, preserving the non-admin 403, stale-answer 409 and correlated
+child result after End. No provider, room, microphone or real-owner task ran.
+Asynchronous worker/task handoffs retain normal controls, not the scoped
+ThreadMessage receipt/retry policy.
+Independent library verification passed **82 tests** across the real-Codex/local
+stand-in, budget and structured-call suites; the two continuation regressions
+are included. Scoped frontend verification passed **34 tests**. Changed Python
+formatting and Ruff checks passed.
+
+A concurrent unrelated auto-upgrade, [infra-octo #169](https://github.com/boundcorp/infra-octo/pull/169),
+moved all six replacement roles to `dbf5ce7` / `3962d452` during this read-only
+review. Older `5c0ba2e4` and `40d09a01` celery/bot-tasks pods were still
+terminating. This is another release snapshot, not a PR #297 rollout or an
+old-consumer-exit proof; the normal policy remained absent and #170 stayed held.
+
 
 ### Offline verification of follow-ups
 
@@ -39,12 +89,12 @@ Dedicated-page evidence supersedes the modal screenshots for layout: `/tmp/omp-s
 2. Where the browser supports output sinks, select a permitted output and confirm the **applied** output label changes only after success. Listen on Bluetooth and system default separately; default is not a promise of speakerphone. Decline the output permission once and confirm honest error/phone-controlled guidance, not a false successful toggle.
 3. With a sink selected, disconnect/reconnect Bluetooth. Confirm the list updates, device loss falls back truthfully and audio remains usable. On a phone without selection, use its OS call/output picker; record whether Bluetooth offers call audio or only media audio.
 4. Start in a populated thread with a known current task/decision, summary and attachment reference. Ask about that task without restating it; verify voice uses the launch thread, not another bot's private chat. In restricted mode confirm the UI and spoken interface explain which lookups can run, or why this thread cannot delegate.
-5. In a separately authorized eligible `gpt-6-luna` API thread, request one read-only lookup; correlate its delegation ID, bounded call, same-session result and the launch thread's history. A recap or claim without a durable result is not a successful lookup. No write, forward, worker start or approval should run.
+5. Only after separate normal-task-cost approval and reviewed gate enablement, request one hands-free task in the actual Boundcorp launch thread. Verify the original delegation ID, same owner/context/real engine, actual registered status/send/manage handlers, normal approval/deny behavior, durable child progress/completion and no repeated external write on reconnect. Keep talking while work runs. API-only read lookups do not substitute for this criterion; a prompt promise or generated recap is not successful orchestration.
 6. If standby was separately enabled, request standby at a safe boundary, resume within the original deadline and verify the same applied output, task, decisions and results persist. Reopen/reconnect as allowed and check voice text appears exactly once in thread history. The 90 seconds still include standby; a second request/paid retry is not authorized.
 7. Enter voice from the originating thread's top-bar options on desktop and mobile. Confirm its bot, thread title and return link stay visible; navigating back within the app must not silently end the call or cancel delegated work. Explicit **End call** stops voice, not already-submitted background work. Check the continuing-call indicator away from the page; a second thread must not silently replace it.
 8. During a separately authorized device call, watch partial user/assistant speech update the same turn, then finalize without a second bubble. Scroll up manually while more text arrives: position must remain stable until choosing latest again. Compare displayed observed voice states with the actual SDK/microphone behavior; unknown state and queued work must not be relabeled “thinking” or “running.”
 
-**Release gate:** draft source changes need review, passing checks and explicit deployment approval for Ergonaut's image. Standby requires separate consistent web/bridge flag approval; any future profile/config change, write/forwarding path, paid test or microphone/room acceptance requires its own approval. This run makes no merge, deploy, restart, infra change, secret/config mutation, paid call or room join. Mocked sink tests prove state handling, not physical phone routing; scripted context tests do not prove hosted model behavior.
+**Release gate:** Lee's distinct normal-task-cost authorization is recorded, but source and exact-thread GitOps policy still require review and passing checks before announced rollout. Deploy source with policy absent first; verify every old task consumer has exited, including terminating pods, before policy activation and a quiet announced web/bridge reload. Do not activate across mixed-version consumers. No mandatory Send button or speech-as-approval behavior is accepted. Standby enablement and paid/provider/room/microphone tests remain separately scoped. This worker made no merge, rollout, restart, live infra/config/secret mutation or paid call; offline checks are not physical Android or hosted model acceptance.
 
 ## Current branch
 

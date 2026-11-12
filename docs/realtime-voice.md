@@ -2,7 +2,7 @@
 
 This is an **off-by-default prototype**, separate from composer dictation, enabled on Octo for one allowlisted account only (see "Hosted deployment"). Wake-word and a general Stage are out of scope. Django holds session state, finalized text and task references; LiveKit carries audio, not durable memory. No audio recordings are stored by this code.
 
-**Acceptance, 2026-11-12:** Lee accepted real phone audio and basic conversation. Bluetooth/output routing and launch-thread orchestration are not yet accepted. The current draft follow-up remains undeployed; [causal review](realtime-voice-causal-review.md#hosted-phone-diagnosis--2026-11-12) separates deployed evidence from platform hypotheses, and [progress](realtime-voice-progress.md#hosted-phone-acceptance-and-follow-ups--2026-11-12) contains the device/continuity acceptance checklist and deployment gates. Voice must be another interface to its **exact launch thread**, not a fresh assistant or a global project briefing; cross-thread work is on demand through that bot's existing authorization.
+**Acceptance, 2026-11-12:** Lee accepted phone audio/basic conversation, not Android Bluetooth or orchestration. PR #293 first shipped as `06284d4` / `5c0ba2e4`; latest observed release `09e5a6a` / `40d09a01` inherits its dedicated page and bounded launch-thread context. [Release evidence](realtime-voice-causal-review.md#current-release-reconciliation--2026-11-12) supersedes older undeployed statements. The latest phone delegation was engine-blocked before dispatch. Lee approved normal originating-thread execution costs at 21:15:41 UTC, preserving normal action approvals and the 90-second voice cap. The successor implements that exact-thread path with a scoped reviewed policy, not a new assistant, global grant or mandatory Send button; it has not been rolled out or device-accepted.
 
 ## Adapter and setup
 
@@ -72,7 +72,7 @@ When a limit is hit the call ends `failed` with `error_category` `budget`, the t
 
 Not covered, and why that is acceptable here: a tool that calls a provider or starts a subprocess itself (web search, bash, local shell, orca, kubectl) is held back only by the allowlist, so never allow one; plugin before/after-turn hooks and context sources run as for any turn (server code, not chosen by the model); a worker that dies mid-turn leaves its message `delivered` (never retried, since the claim is a one-way update, but also never reported as failed, so the voice session would show it pending until its 90 seconds end). A first request measured with the cooking scenario, the two history tools and `send_reply` was 6,621 bytes, so the estimator reads 7,621 against the 40,000 cap; a real chat adds its instructions, skill list and history, so measure a dry run of the actual test chat first.
 
-The reviewed draft profile is `ergonaut/settings/voice_live_test.py`; its three listing additions below are **not deployed**. The deployed `75234dc` profile allows only the two history tools.
+The PR #293 profile in `ergonaut/settings/voice_live_test.py` is deployed at `06284d4`, including the listing tools below. The earlier `75234dc` image allowed only the two history tools.
 
 ```python
 REALTIME_VOICE_DELEGATION_BUDGET = {
@@ -128,7 +128,7 @@ With the standby flag off, each logical voice session gets one bridge job, recor
 
 Delegation only runs in a chat whose bot is on the OpenAI API engine and `gpt-6-luna` (the budget's pinned model); in any other chat the request is not run and the session hears that it failed.
 
-### Output routing (draft, not deployed)
+### Output routing (PR #293 deployed; Android acceptance open)
 
 The UI probes a detached silent audio element without playing media or requesting microphone permission. A selector appears only after `setSinkId('')` succeeds and the element reports the default sink; a native `selectAudioOutput` button additionally requires that API. Selection awaits current playback elements and reads their applied sink IDs; failure restores the previous confirmed selection where possible, otherwise exposes unknown/mixed state. A chooser's returned device ID is applied separately; permission alone is not routing.
 
@@ -136,7 +136,9 @@ Remote audio stays on HTML audio elements (`webAudioMix=false`). A newly subscri
 
 Unsupported/blocked browsers show **output controlled by your phone/operating system** guidance, not a Bluetooth/speakerphone imitation. The selector confirms **browser state only**, not a physical speaker or hearing: current iOS WebRTC reports include false-success sink changes. System default is not synonymous with speakerphone. See the [platform matrix and citations](realtime-voice-causal-review.md#browser-and-bluetooth-restrictions); only Lee's real-device test can accept the route.
 
-### Launch-thread continuity and read-only orchestration (draft, not deployed)
+The follow-up adds **Collect route diagnostics** on the dedicated page. It reads browser family/major, platform/tab mode, sink capability and applied selection category, attached HTML element state, optional audio-session intent and the existing microphone track's non-identifying processing settings. It never requests capture, selects output or connects a room; it contains no device IDs/names and remains local to the page. Collect again after mute, reconnect, Bluetooth loss or changing the OS default. It reports physical route as **unknown**, including when `setSinkId` succeeds. Android communication routing while capture is open can differ from normal media playback; the already-selected OS headset is not evidence of user misconfiguration.
+
+### Launch-thread continuity and experimental read-only execution (PR #293 deployed)
 
 On initial bridge startup and each authorized resume, voice reuses the owning bot's normal `context_builder`, chat identity and configured sources. The global orchestration overview and duplicate native-history source are excluded: other private threads are not a startup briefing. Startup includes at most **8,000 characters of owning instructions** and **16,000 context characters**: bounded configured context, the stored compaction (up to 2,000 characters), recent 40 exact-thread messages within a bounded render budget, durable reported decisions/current step, this thread's task/approval status, and five attachment references (not file contents). No paid compaction or global scan is introduced. Truncation is explicit; older detail remains an authorized history lookup, not a claim that all historic/actionable content fits.
 
@@ -146,9 +148,84 @@ The bridge, not the web process, validates the actual selected engine/model and 
 
 Bot/thread/worker lookups use the existing authorized chat toolkit and budgeted same-thread message path. Thread listing supplies bounded pending-approval tool names/status, not arguments or approval actions. Cross-thread overview is excluded only for explicitly scoped voice delegation; ordinary bot turns are unchanged. The original delegation ID travels through message/call metadata and the same logical session's durable outbox; a result claim is still not proof of spoken playback.
 
-**Writes remain disabled:** no send/forward/approve/start tool enters the voice allowlist, and budget guards refuse those actions independently. Do not enable them by flag alone: a future design must preserve the user's existing approval/reentry semantics without running an unbudgeted resumed turn or spawning unbounded work. Subscription-backed threads receive launch context but cannot delegate under this profile; a separately reviewed API-engine voice profile preserving their identity/context and authorized read subset is needed. This draft does not create that route or change live bot configuration.
+**Implementation gap, not product contract:** automatic voice requests still cannot send/forward/start/approve; the experimental budget refuses those actions independently. Lee now requires normal authorized orchestration and action approvals. The actual Boundcorp `CodexCLIEngine` cannot enforce this API-only token budget; silently removing the budget or rerouting the bot would be unsafe. A normal exact-thread execution bridge needs durable per-request authorization separate from the bounded transport and truthful normal approval reentry, without blanket grants, duplicate dispatch or hidden spend increases. This follow-up does not change live bot configuration or claim that read-only listings satisfy that requirement.
 
-### Dedicated voice page and progressive text (draft, not deployed)
+### Default-off normal originating-thread execution (successor; not enabled live)
+
+`REALTIME_VOICE_THREAD_EXECUTION_AUTHORIZATIONS` defaults to `{}`. It is a
+reviewed **scoped JSON policy** supplied by settings or the same-named environment
+variable, not a blanket boolean/browser toggle and not permission to test on the
+real owner. Its mapping key is the exact launch-chat UUID; its value requires:
+
+| Field | Required authorization |
+| --- | --- |
+| `owner` | Exact authenticated username owning this chat. |
+| `bot` | Exact registered bot name already accessible to that owner. |
+| `normal_task_costs_approved` | Exactly `True`, separately authorizing existing normal-task execution costs rather than claiming the prototype's API-token price covers them. |
+| `approval_reference` | Nonempty reference to that reviewed authorization; recorded durably with the task. |
+
+Web and bridge must carry the same policy. Only a **new** owner-created voice
+session receives its exact-chat/owner/bot grant and authorization timestamp.
+Conversational restore state cannot inherit or mint one. The bridge rechecks
+the matching current policy and normal bot access before dispatch; revocation
+refuses new requests, not cancellation of already accepted normal work.
+No grant means the existing priced read-only path and its engine gate remain
+unchanged. No mandatory Send button or new callable GPT-Live tools are added.
+
+An authorized model-selected client delegation enters the **existing exact
+thread's normal message queue**, with its authenticated user identity, normal
+engine/context/registered tools and approval semantics. It does not reroute the
+bot or broaden its allowed targets. The transport still has its original
+90-second wall-clock deadline and one root request. The root and any normally
+authorized child work are governed by the bot's existing normal turn/task
+controls, **not** the 40,000/1,500-token API lookup estimate. Normal compaction,
+task tools and their downstream costs are therefore outside that experimental
+estimate; this is why an explicit separate cost-policy decision is required.
+The audited live Boundcorp bot has a normal **50-model-turn** limit; this is
+not the prototype's four-turn limit or a new financial ceiling. Lee approved
+normal originating-thread costs at **21:15:41 UTC**, but no real-owner normal
+task was run during this investigation.
+
+Submission is serialized by the session and unique delegation ID. Opted-in
+normal tasks record a durable claim for **each external-tool invocation ID
+within a structured call**, bound to the tool name and canonical argument hash,
+before running its actual handler. Duplicate IDs reuse the receipt; conflicting
+arguments are refused. A crash after claim has an unknown outcome and is never
+automatically replayed. A new ID is a new normal tool invocation, not a promise
+that an external API supports exactly-once effects. Existing approval checks
+happen **before** any handler claim; approval/denial and stale-answer protection
+use the normal thread endpoint, including its admin-only restrictions. Speech,
+a provider signal or status lookup cannot approve an action.
+The local structured-output validator has no external effect and is revalidated
+instead of cached, so a repeated final reply can complete after approval or denial.
+Automatic Ergo request retries and API-SDK retries are disabled for the scoped
+normal task, its normal approval continuation and causally delegated messages.
+Asynchronous `Worker`/`BotTasks` handoffs retain their existing normal controls;
+they do not inherit these invocation receipts or retry-policy metadata. This is
+not end-to-end retry suppression or exactly-once execution across worker tasks.
+The actual Codex CLI still owns its internal provider transport behavior; this
+is not a claim to count or financially bound hidden provider attempts, and no
+provider configuration or route is changed.
+
+Causal normal thread sends/replies retain the original session/delegation IDs.
+The bounded observer follows those durable rows and existing worker reports
+arriving in the launch thread; existing reports are labeled observations, not
+proof voice started that worker. Queued, delivered, waiting-for-approval and
+answered results are distinct. A same-session outbox transition can be claimed
+for commentary only once, with the original provider delegation ID; receipt
+does not establish playback. Reconnect restores bounded results without
+redispatching. Owner polling can persist late terminal outcomes after End,
+without a provider connection or a model request.
+
+**Current gate:** Lee's distinct cost-policy decision is approved and the exact
+Boundcorp policy is prepared for review. Source must roll out with policy absent
+first. Verify all old queue consumers have exited, not just desired deployment
+readiness, before activating the reviewed policy and announcing a quiet
+web/bridge reload. Code/config rollback prevents new dispatch but does not
+silently cancel accepted normal work. No normal capability or physical Android
+acceptance is claimed before that reviewed rollout and user acceptance.
+
+### Dedicated voice page and progressive text (PR #293 deployed; device acceptance open)
 
 Voice belongs to `/s/<launch-chat-id>/voice`, entered from that thread's top-bar options, not a modal or a new chat. The page keeps bot/thread identity, context and a return link visible. Merely opening the page must not activate a microphone: **Start call** and manual **Resume** are explicit. A single authenticated app-level call owner keeps an active call across ordinary in-app route/back navigation; leaving the voice page is not **End call**, and a different thread must not silently replace the active call. A continuing-call affordance must make background microphone/connection state visible. Browser/tab teardown cannot preserve a WebRTC connection; it is not the same guarantee as SPA navigation.
 

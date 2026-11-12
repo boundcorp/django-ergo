@@ -1,4 +1,5 @@
 import type { RealtimeVoiceSession } from '../api'
+import { Link } from 'react-router-dom'
 
 /** One durable entry per voice session; generated speech proves neither playback nor work. */
 export function VoiceSessionCard({ session }: { session: RealtimeVoiceSession }) {
@@ -54,6 +55,7 @@ export function VoiceSessionCard({ session }: { session: RealtimeVoiceSession })
 export function VoiceBackgroundWork({ session }: { session: RealtimeVoiceSession }) {
   const pending = session.state?.pending_delegation
   const delegations = session.delegations ?? []
+  const tasks = [...delegations, ...(session.thread_updates ?? [])]
   return (
     <div className="mt-3" aria-label="Background work">
       <strong>Background work · separate from voice SDK states</strong>
@@ -66,8 +68,8 @@ export function VoiceBackgroundWork({ session }: { session: RealtimeVoiceSession
               : 'No background request submitted; no verified history lookup result.'}
         </p>
       )}
-      {delegations.map(task => (
-        <div key={task.event_id} className="mt-2 rounded-control border border-stroke p-2">
+      {tasks.map(task => (
+        <div key={task.update_id ?? task.event_id} className="mt-2 rounded-control border border-stroke p-2">
           <div>{task.text}</div>
           <div className="text-muted">
             {task.error || task.status === 'failed' || task.status === 'error'
@@ -80,12 +82,19 @@ export function VoiceBackgroundWork({ session }: { session: RealtimeVoiceSession
                   ? 'Queued — may not have started; no verified result.'
                   : task.status === 'delivered'
                     ? 'Delivered to worker — no verified result yet.'
-                    : `Status: ${task.status || 'unknown'} — no verified result recorded.`}
+                    : task.status === 'waiting'
+                      ? 'Waiting for normal thread approval — no verified result yet.'
+                      : `Status: ${task.status || 'unknown'} — no verified result recorded.`}
           </div>
           {task.status === 'answered' && !task.error && task.result && (
             <p className="whitespace-pre-wrap" aria-label="Durable background result">
               {task.result}
             </p>
+          )}
+          {task.status === 'waiting' && (
+            <Link className="underline" to={`/s/${task.chat_id ?? session.chat_id}`}>
+              Review normal thread approval
+            </Link>
           )}
           {task.error && <p className="whitespace-pre-wrap text-danger">{task.error}</p>}
         </div>
