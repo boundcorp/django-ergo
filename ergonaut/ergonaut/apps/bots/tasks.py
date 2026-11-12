@@ -190,10 +190,17 @@ def clear_stop(session_id) -> None:
         client.delete(_stop_key(session_id))
 
 
-def push_message(session_id, text: str, attachment_ids: list[str] | None = None) -> str:
+def push_message(session_id, text: str, attachment_ids: list[str] | None = None, *, authenticated_user_id=None) -> str:
     """Queue a message for the session's turn. Returns its id (to unsend it)."""
     item_id = uuid.uuid4().hex
-    item = json.dumps({"id": item_id, "text": text, "attachment_ids": [str(a) for a in attachment_ids or []]})
+    item = json.dumps(
+        {
+            "id": item_id,
+            "text": text,
+            "attachment_ids": [str(a) for a in attachment_ids or []],
+            "authenticated_user_id": authenticated_user_id,
+        }
+    )
     client = redis_client()
     if client is None:
         with _local_guard:
@@ -304,7 +311,9 @@ class InboxControl:
         notify(session_id)
         if self.delegated:
             text = f"{self.DELEGATED_NOTE}\n\n{text}"
-        return TurnSignal(messages=[SteeringMessage(text, attachments or None)])
+        return TurnSignal(
+            messages=[SteeringMessage(text, attachments or None, author=authenticated_author(items, self.session))]
+        )
 
 
 def combine(items: list[dict]) -> tuple[str, list[str]]:
@@ -312,6 +321,16 @@ def combine(items: list[dict]) -> tuple[str, list[str]]:
     texts = [item["text"] for item in items if item.get("text")]
     attachment_ids = [a for item in items for a in item.get("attachment_ids") or []]
     return "\n\n".join(texts) or "(see the attached files)", attachment_ids
+
+
+def authenticated_author(items, session):
+    """Attribute a batch only when every item came from the same logged-in owner."""
+    from django_ergo.conversation.identity import django_user_identity
+
+    ids = {item.get("authenticated_user_id") for item in items}
+    if len(ids) != 1 or None in ids or ids != {str(session.user_id)}:
+        return None
+    return {**django_user_identity(session.user), "authenticated_by": "ergonaut_session"}
 
 
 def remove_uploads(rows) -> None:
@@ -470,7 +489,13 @@ def answer_inbox(session) -> None:
             bot = loaded_bot(session)
             attachments, uploads = take_uploads(session, attachment_ids)
             control = InboxControl(session)
-            async_to_sync(bot.ask)(session, message, attachments=attachments or None, control=control)
+            async_to_sync(bot.ask)(
+                session,
+                message,
+                attachments=attachments or None,
+                author=authenticated_author(items, session),
+                control=control,
+            )
             remove_uploads([*uploads, *control.uploads])
         except Exception as exc:
             logger.exception("Turn for session %s failed", session_id)
@@ -575,12 +600,19 @@ def queue_turn(
     return (not eager and result is not None) or (eager and turn_running(session_id))
 
 
-def queue_message(session_id, text: str, attachment_ids: list[str] | None = None, *, interrupt: bool = False) -> bool:
+def queue_message(
+    session_id,
+    text: str,
+    attachment_ids: list[str] | None = None,
+    *,
+    interrupt: bool = False,
+    authenticated_user_id=None,
+) -> bool:
     """Send a message: it steers the running turn, or starts one. ``interrupt`` stops the
     running turn first, so the message starts the next one. Returns as queue_turn does."""
     if interrupt:
         request_stop(session_id)
-    push_message(session_id, text, attachment_ids)
+    push_message(session_id, text, attachment_ids, authenticated_user_id=authenticated_user_id)
     return queue_turn(session_id)
 
 

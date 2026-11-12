@@ -324,6 +324,17 @@ class SkillSet(Toolkit):
         found = self.owner_of(tool_name)
         return bool(found and found[1].requires_approval(tool_name))
 
+    async def _autoapprove(
+        self, tool_name: str, arguments: dict, tool_id: str
+    ) -> bool | None:
+        found = self.owner_of(tool_name)
+        review = getattr(found[1], "_autoapprove", None) if found else None
+        return (
+            bool(await review(tool_name, arguments, tool_id))
+            if callable(review)
+            else None
+        )
+
     def approval_preview(self, tool_name: str, arguments: dict):
         found = self.owner_of(tool_name)
         return found[1].approval_preview(tool_name, arguments) if found else None

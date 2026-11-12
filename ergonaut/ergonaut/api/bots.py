@@ -1413,10 +1413,21 @@ async def send_message(request, session_id: str, data: MessageIn):
             raise HttpError(400, "Attach files uploaded to this session")
     if session.status == "completed" and (session.metadata or {}).get("bot_role") == "thread":
         await sync_to_async(archival.reopen)(session)  # a message brings an archived thread back
+
+    # API keys can be held by automation; only an interactive authenticated
+    # Django session supplies an initiating human principal for host review.
+    def session_principal():
+        if request.headers.get("Authorization"):
+            return None
+        user = request.user
+        return str(user.pk) if user.is_authenticated and user.pk == request.auth.pk else None
+
+    principal = await sync_to_async(session_principal, thread_sensitive=True)()
     queued = await sync_to_async(queue_message)(
         session.id,
         data.text or "(see the attached files)",
         data.attachment_ids,
+        authenticated_user_id=principal,
         interrupt=data.mode == "interrupt",
     )
     return await sync_to_async(latest_turn)(session, queued=queued)

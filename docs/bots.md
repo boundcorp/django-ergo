@@ -1586,6 +1586,51 @@ host as the user Ergonaut runs as. Output is stdout and stderr with the exit
 code, trimmed to its start and end when long. It is the whole machine, so
 keep `approve: true` unless you trust the bot with it.
 
+**Draft only — do not enable or deploy this reviewer.** Secret detection cannot
+guarantee arbitrary task text is safe to disclose, and the reviewed SSH path
+cannot be bound to the filesystem object the unsandboxed shell later reads.
+Release requires a decision on disclosure and execution-target guarantees.
+
+An optional reviewer can autoapprove a narrow set of routine read-only calls in
+explicitly named sessions while keeping `approve: true`:
+
+```yaml
+- name: bash
+  approve: true
+  root_only: false
+  reviewer_sessions: ["<session-uuid>"]
+  reviewer_hosts: [rigel] # SSH aliases eligible for reviewed reads
+  reviewer_roots: {rigel: /home/linked/artifacts, local: /home/dev/artifacts}
+```
+
+Only `pwd`, or nonrecursive `ls` and `stat` on exactly a configured directory
+root, without shell composition are eligible, locally or over an explicitly
+named SSH alias, and only in the configured default cwd. Pipes, redirections,
+substitutions, interpreters, writes, and other commands still require individual
+human approval. Every call is reviewed independently using its exact command and
+effective cwd, and only when the latest applicable user request has a verified
+interactive Ergonaut session principal who is currently an active superuser.
+An exact, source-verified forwarded user message also qualifies; forwarding
+notes, bots, tool results, files, Telegram, bearer API keys, legacy messages
+without authenticated provenance, and attachments do not authorize commands.
+After enabling this feature, a user must send or forward a fresh, complete task
+request from an authenticated browser session; old messages cannot acquire
+provenance retroactively.
+
+The reviewer chooses an available configured `small`-tier Codex CLI subscription,
+using the routing policy and an ephemeral, tool-less model call; it never
+falls back to a paid API. If no such subscription is available, or the response
+is uncertain, invalid, or late, human approval remains required. Likely
+credentials and known secret environment values are rejected before review,
+not logged; detection is heuristic and cannot identify every possible secret,
+so do not place secrets in commands or task messages. Audit logs contain a
+keyed tool-call fingerprint and a decision category, not raw commands or model
+text. This is not a sandbox: Bash still runs as the Ergonaut OS user with a
+scrubbed environment and login-shell startup files.
+
+Rollback: remove `reviewer_sessions`, `reviewer_hosts`, and `reviewer_roots`, and keep
+`approve: true`. Other sessions stay manually approved throughout.
+
 ### web_search
 
 ```yaml

@@ -41,6 +41,19 @@ if TYPE_CHECKING:
 from django_ergo.plugins._common import trim
 
 
+class _BashToolkit(FunctionToolkit):
+    def __init__(self, plugin, ctx):
+        super().__init__(plugin._tools(), ctx)  # noqa: SLF001 — toolkit belongs to this plugin
+        self.plugin = plugin
+
+    async def _autoapprove(self, name, arguments, tool_id):
+        from django_ergo.plugins.bash_review import review
+
+        return name == "ergo_bash_run" and await review(
+            self.context, self.plugin, tool_id, arguments
+        )
+
+
 class BashPlugin(BotPlugin):
     name = "bash"
     description = "Run shell commands on the host (each one approved)"
@@ -50,6 +63,17 @@ class BashPlugin(BotPlugin):
         self.approve = bool(self.config.get("approve", True))
         self.timeout = int(self.config.get("timeout", 120))
         self.root_only = bool(self.config.get("root_only", True))
+        sessions = self.config.get("reviewer_sessions") or []
+        hosts = self.config.get("reviewer_hosts") or []
+        roots = self.config.get("reviewer_roots") or {}
+        self.reviewer_sessions = (
+            frozenset(map(str, sessions)) if isinstance(sessions, list) else frozenset()
+        )
+        self.reviewer_hosts = list(map(str, hosts)) if isinstance(hosts, list) else []
+        self.reviewer_roots = dict(roots) if isinstance(roots, dict) else {}
+        if sessions and not self.approve:
+            msg = "Bash reviewer requires approve: true; refusing an unprotected configuration"
+            raise ValueError(msg)
 
     def run(self, command: str, cwd: str = "") -> str:
         if not command.strip():
@@ -79,16 +103,23 @@ class BashPlugin(BotPlugin):
     def toolkits(self, ctx: ToolContext) -> list[Toolkit]:
         if not self._applies(ctx):
             return []
+        if ctx.session and str(ctx.session.pk) in self.reviewer_sessions:
+            return [_BashToolkit(self, ctx)]
         return [FunctionToolkit(self._tools(), ctx)]
 
     def context_sources(self, ctx: ToolContext, message: str) -> list[ContextSource]:
         if not self._applies(ctx):
             return []
-        approval = (
-            "Each command waits for the user's approval, so say what it does and why."
-            if self.approve
-            else "Commands run without approval."
-        )
+        if (
+            self.approve
+            and ctx.session
+            and str(ctx.session.pk) in self.reviewer_sessions
+        ):
+            approval = "Routine authorized read-only commands may pass review; all others need the user's approval."
+        elif self.approve:
+            approval = "Each command waits for the user's approval, so say what it does and why."
+        else:
+            approval = "Commands run without approval."
         return [
             TextContextSource(
                 "Shell",

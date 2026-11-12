@@ -63,6 +63,7 @@ before every model call, so after a tool step's results are in::
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import logging
 import uuid
@@ -265,6 +266,7 @@ class SteeringMessage:
 
     text: str
     attachments: list[Attachment] | None = None
+    author: dict | None = None
 
 
 @dataclass
@@ -507,7 +509,9 @@ class _MemoryTranscript:
         self.call = call
         self.messages = list(history)
 
-    async def append_user(self, text: str, attachments=None, *, system=False) -> None:
+    async def append_user(
+        self, text: str, attachments=None, *, system=False, author=None
+    ) -> None:
         self.messages.append(self.engine.user_message(text, attachments))
 
     async def append_tool_exchange(self, calls: list[SeededToolCall]) -> None:
@@ -572,9 +576,15 @@ class _SessionTranscript:
     def _rows(self):
         return self.session.messages
 
-    async def append_user(self, text: str, attachments=None, *, system=False) -> None:
+    async def append_user(
+        self, text: str, attachments=None, *, system=False, author=None
+    ) -> None:
         # Ergo's own nudges are stored as authored by Ergo, not the chat's user.
-        identity = {"author": system_identity()} if system else {}
+        identity = (
+            {"author": system_identity() if system else author}
+            if system or author
+            else {}
+        )
         await self.engine.append_user_message(
             self.session, text, attachments, **identity
         )
@@ -771,6 +781,7 @@ class _Run:
     allow_approvals: bool
     control: TurnControl | None = None
     meter: BudgetMeter | None = field(init=False, default=None)
+    review_signal: TurnSignal | None = field(init=False, default=None)
 
     def __post_init__(self):
         spec = self.spec
@@ -798,6 +809,34 @@ class _Run:
 
     def needs_approval(self, name: str) -> bool:
         return requires_approval(name, self.toolkits)
+
+    async def autoapprove(self, name: str, args: dict, tool_id: str) -> bool:
+        toolkit = find_toolkit(self.toolkits, name)
+        reviewer = getattr(toolkit, "_autoapprove", None)
+        if not callable(reviewer):
+            return False
+        try:
+            original = copy.deepcopy(args)
+            allowed = await reviewer(name, copy.deepcopy(args), tool_id)
+            if allowed is None:
+                return False
+            if self.control is not None:
+                signal = await self.control.check()
+                if signal.stop or signal.messages:
+                    # The tool call must receive a result before any steering
+                    # message is appended to a provider transcript.
+                    self.review_signal = signal
+                    log.info(
+                        "Automatic review superseded by steering or stop: call=%s",
+                        self.call.pk,
+                    )
+                    return False
+            if allowed is not True or args != original:
+                return False
+            log.info("Automatic tool review accepted: call=%s", self.call.pk)
+            return True
+        except Exception:  # noqa: BLE001 — all reviewer failures require a person
+            return False
 
     async def run_tool(self, name: str, args: dict, tool_id: str) -> tuple[Any, bool]:
         retry_token = automatic_request_retries.set(
@@ -841,7 +880,9 @@ class _Run:
             return False
         signal = await self.control.check()
         for message in signal.messages:
-            await self.transcript.append_user(message.text, message.attachments)
+            await self.transcript.append_user(
+                message.text, message.attachments, author=message.author
+            )
         return signal.stop
 
 
@@ -953,7 +994,8 @@ async def _run_loop(run: _Run) -> StructuredCallResult:  # noqa: C901, PLR0912, 
             break
         if tool_events:
             results = []
-            for event in tool_events:
+            interrupted = False
+            for index, event in enumerate(tool_events):
                 name, args = run.adapter.parse_tool_call(event.tool_use)
                 tool_id = event.tool_use["id"]
                 if stop in _MAX_TOKENS_STOPS:
@@ -971,7 +1013,33 @@ async def _run_loop(run: _Run) -> StructuredCallResult:  # noqa: C901, PLR0912, 
                     # The engine couldn't parse the arguments: don't guess.
                     results.append((tool_id, _INVALID_TOOL_ARGUMENTS, True))
                     continue
-                if run.needs_approval(name):
+                needs_approval = run.needs_approval(name)
+                if (
+                    needs_approval
+                    and run.allow_approvals
+                    and await run.autoapprove(name, args, tool_id)
+                ):
+                    needs_approval = False
+                if run.review_signal is not None:
+                    signal, run.review_signal = run.review_signal, None
+                    notice = "Tool not run because the request changed or was stopped."
+                    results.extend((a.tool_use_id, notice, True) for a in approvals)
+                    approvals.clear()
+                    results.extend(
+                        (pending.tool_use["id"], notice, True)
+                        for pending in tool_events[index:]
+                    )
+                    await transcript.append_tool_results(results)
+                    for message in signal.messages:
+                        await transcript.append_user(
+                            message.text, message.attachments, author=message.author
+                        )
+                    if signal.stop:
+                        _stop(call)
+                        finished = True
+                    interrupted = True
+                    break
+                if needs_approval:
                     if run.allow_approvals:
                         preview = await run.approval_preview(name, args)
                         approvals.append(
@@ -991,6 +1059,10 @@ async def _run_loop(run: _Run) -> StructuredCallResult:  # noqa: C901, PLR0912, 
                 else:
                     result, is_error = await run.run_tool(name, args, tool_id)
                 results.append((tool_id, result, is_error))
+            if interrupted:
+                if finished:
+                    break
+                continue
             if results:
                 await transcript.append_tool_results(results)
             if approvals:
