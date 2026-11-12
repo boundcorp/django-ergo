@@ -154,24 +154,37 @@ def cancel_standby_close(voice_id, claim_id):
     ).update(standby_state="requested")
 
 
-def finish_standby_close(voice_id, claim_id):
-    """Publish standby only after all transport teardown succeeded."""
+def finish_standby_close(voice_id, claim_id, *, audio_uncertain=False):
+    """Publish standby after teardown, preserving uncertainty about boundary audio."""
     if not getattr(settings, "REALTIME_VOICE_STANDBY_ENABLED", False) or not getattr(
         settings, "REALTIME_VOICE_ENABLED", False
     ):
         return False
     now = timezone.now()
     field = get_user_model().USERNAME_FIELD
-    return bool(
-        RealtimeVoiceSession.objects.filter(
-            pk=voice_id,
-            status="active",
-            standby_state="closing",
-            bridge_claim_id=claim_id,
-            bridge_started_at__gt=now - timedelta(seconds=BRIDGE_JOB_SECONDS),
-            **{f"user__{field}__in": getattr(settings, "REALTIME_VOICE_USERS", set())},
-        ).update(standby_state="standby", standby_at=now)
-    )
+    with transaction.atomic():
+        session = (
+            RealtimeVoiceSession.objects.select_for_update()
+            .filter(
+                pk=voice_id,
+                status="active",
+                standby_state="closing",
+                bridge_claim_id=claim_id,
+                bridge_started_at__gt=now - timedelta(seconds=BRIDGE_JOB_SECONDS),
+                **{f"user__{field}__in": getattr(settings, "REALTIME_VOICE_USERS", set())},
+            )
+            .first()
+        )
+        if session is None:
+            return False
+        session.standby_state = "standby"
+        session.standby_at = now
+        fields = ["standby_state", "standby_at"]
+        if audio_uncertain:
+            session.state = {**session.state, "standby_audio_uncertain": True}
+            fields.append("state")
+        session.save(update_fields=fields)
+        return True
 
 
 def bridge_state(voice_id):
@@ -432,7 +445,7 @@ def session_out(session):
         "id": str(session.id),
         "chat_id": str(session.chat_id),
         "status": session.status,
-        "standby_state": "requested" if session.standby_state == "closing" else session.standby_state,
+        "standby_state": session.standby_state,
         "bridge_started_at": session.bridge_started_at.isoformat() if session.bridge_started_at else None,
         "standby_at": session.standby_at.isoformat() if session.standby_at else None,
         "resumed_at": session.resumed_at.isoformat() if session.resumed_at else None,

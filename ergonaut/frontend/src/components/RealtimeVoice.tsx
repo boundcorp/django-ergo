@@ -183,7 +183,11 @@ export function RealtimeVoice({
   }
 
   function close() {
-    if (standbyEnabled && (actionLock.current || (voice?.standby_state === 'requested' && room.current))) return
+    if (
+      standbyEnabled &&
+      (actionLock.current || (['requested', 'closing'].includes(voice?.standby_state ?? '') && room.current))
+    )
+      return
     disconnect()
     setOpen(false)
     dialog.current?.close()
@@ -286,13 +290,15 @@ export function RealtimeVoice({
               Voice room
             </h2>
             <p className="mt-1 text-sm text-muted" role="status">
-              {phase === 'connected'
-                ? 'Connected'
-                : phase === 'connecting'
-                  ? 'Connecting…'
-                  : phase === 'reconnecting'
-                    ? 'Reconnecting…'
-                    : 'Disconnected'}
+              {standbyEnabled && voice?.standby_state === 'closing'
+                ? 'Disconnecting…'
+                : phase === 'connected'
+                  ? 'Connected'
+                  : phase === 'connecting'
+                    ? 'Connecting…'
+                    : phase === 'reconnecting'
+                      ? 'Reconnecting…'
+                      : 'Disconnected'}
             </p>
             {standbyEnabled && voice?.status === 'active' && (
               <div className="mt-1 text-sm text-muted" role="status">
@@ -301,19 +307,27 @@ export function RealtimeVoice({
                 <p>
                   {voice.standby_state === 'requested'
                     ? 'Standby requested; waiting for the bridge to confirm it is safe.'
-                    : voice.standby_state === 'standby'
-                      ? 'In standby. Resume manually to reconnect.'
-                      : voice.standby_state === 'resuming'
-                        ? 'Resume requested; provider connection is not confirmed.'
-                        : voice.standby_state === 'live'
-                          ? 'Stay connected (default).'
-                          : 'Standby state unknown.'}
+                    : voice.standby_state === 'closing'
+                      ? 'Disconnecting; microphone input is becoming unavailable and speech may be cut off.'
+                      : voice.standby_state === 'standby'
+                        ? 'In standby. Resume manually to reconnect.'
+                        : voice.standby_state === 'resuming'
+                          ? 'Resume requested; provider connection is not confirmed.'
+                          : voice.standby_state === 'live'
+                            ? 'Stay connected (default).'
+                            : 'Standby state unknown.'}
                 </p>
+                {voice.state?.standby_audio_uncertain && (
+                  <p>
+                    Audio or transcript activity occurred while disconnecting; speech may have been cut off. Lost speech
+                    is unknown.
+                  </p>
+                )}
               </div>
             )}
             {standbyEnabled && voice?.status === 'ended' && (
               <p className="mt-1 text-sm text-muted" role="status">
-                {voice.standby_state === 'requested'
+                {['requested', 'closing'].includes(voice.standby_state ?? '')
                   ? 'Voice session ended before standby completed. Audio at the closing boundary may have been interrupted.'
                   : 'Voice session ended.'}
               </p>
@@ -321,7 +335,10 @@ export function RealtimeVoice({
           </div>
           <button
             type="button"
-            disabled={standbyEnabled && (!!action || (voice?.standby_state === 'requested' && !!room.current))}
+            disabled={
+              standbyEnabled &&
+              (!!action || (['requested', 'closing'].includes(voice?.standby_state ?? '') && !!room.current))
+            }
             onClick={close}
             className="ml-auto min-h-11 min-w-11 rounded-control text-muted hover:bg-raised"
             aria-label="Close voice room"
@@ -367,7 +384,7 @@ export function RealtimeVoice({
           {phase === 'connected' && (
             <button
               type="button"
-              disabled={standbyEnabled && (!!action || voice?.standby_state === 'requested')}
+              disabled={standbyEnabled && (!!action || ['requested', 'closing'].includes(voice?.standby_state ?? ''))}
               onClick={() => void toggleMute()}
               className="rounded-md border border-stroke px-3 py-2 text-sm"
             >

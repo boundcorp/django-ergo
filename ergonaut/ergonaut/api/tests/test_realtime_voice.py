@@ -296,7 +296,7 @@ def test_standby_is_flagged_owner_scoped_and_requires_confirmed_close(voice_setu
     assert post(client, url + "/standby", {}).json()["standby_state"] == "requested"
     assert post(client, url + "/resume", {}).status_code == 409
     assert realtime_voice.begin_standby_close(voice["id"], "a" * 32)
-    assert client.get(url).json()["standby_state"] == "requested"
+    assert client.get(url).json()["standby_state"] == "closing"
     assert post(client, url + "/resume", {}).status_code == 409
     other = django_user_model.objects.create_user("standby-other", password="pw")
     settings.REALTIME_VOICE_USERS.add(other.get_username())

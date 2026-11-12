@@ -207,6 +207,36 @@ test('a pending standby stays pending on opening without connecting or resuming'
   expect(container.textContent).not.toContain('Resume manually')
 })
 
+test('disconnecting warns about microphone input without offering resume', async () => {
+  api.realtimeVoiceConfig = async () => ({ enabled: true, standby_enabled: true })
+  api.realtimeVoiceSessions = async () => [{ ...session, standby_state: 'closing' }]
+  await act(async () => {
+    root.render(createElement(RealtimeVoice, { sessionId: 'chat-1', disabled: false }))
+  })
+  await act(async () => {
+    button('Voice room').click()
+  })
+  expect(container.textContent).toContain('Disconnecting')
+  expect(container.textContent).toContain('microphone input is becoming unavailable')
+  expect(container.textContent).toContain('speech may be cut off')
+  expect(container.textContent).not.toContain('Resume manually')
+})
+
+test('standby retains the boundary uncertainty and remains manually resumable', async () => {
+  api.realtimeVoiceConfig = async () => ({ enabled: true, standby_enabled: true })
+  api.realtimeVoiceSessions = async () => [
+    { ...session, standby_state: 'standby', state: { standby_audio_uncertain: true } },
+  ]
+  await act(async () => {
+    root.render(createElement(RealtimeVoice, { sessionId: 'chat-1', disabled: false }))
+  })
+  await act(async () => {
+    button('Voice room').click()
+  })
+  expect(container.textContent).toContain('Lost speech is unknown')
+  expect(button('Resume')).toBeTruthy()
+})
+
 test('an ended pending standby reports the unconfirmed boundary', async () => {
   api.realtimeVoiceConfig = async () => ({ enabled: true, standby_enabled: true })
   api.realtimeVoiceSessions = async () => [{ ...session, standby_state: 'requested' }]

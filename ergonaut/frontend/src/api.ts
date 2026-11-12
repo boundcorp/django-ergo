@@ -782,7 +782,7 @@ export type RealtimeVoiceSession = {
   id: string
   chat_id: string
   status: string
-  standby_state?: 'live' | 'requested' | 'standby' | 'resuming'
+  standby_state?: 'live' | 'requested' | 'closing' | 'standby' | 'resuming'
   created_at?: string
   ended_at?: string | null
   state?: {
@@ -791,6 +791,7 @@ export type RealtimeVoiceSession = {
     completed_steps?: string[]
     current_step?: string
     pending_task_ids?: string[]
+    standby_audio_uncertain?: boolean
     pending_delegation?: {
       id: string
       status: string

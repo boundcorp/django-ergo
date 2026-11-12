@@ -11,6 +11,7 @@ import asyncio
 import shutil
 import subprocess
 from datetime import UTC, datetime, timedelta
+from threading import Event as ThreadEvent
 from types import SimpleNamespace
 from unittest.mock import PropertyMock, patch
 
@@ -492,8 +493,8 @@ def test_disconnect_while_standby_waits_for_speech_is_terminal(cooking, settings
 
 
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.parametrize("late_speech", [False, True])
-def test_standby_waits_for_teardown_and_rejects_late_speech(cooking, settings, late_speech):
+@pytest.mark.parametrize("speech_timing", ["none", "before_commit", "during_close"])
+def test_standby_speech_races_and_teardown(cooking, settings, speech_timing):
     chat, vid, _ = cooking
     settings.REALTIME_VOICE_STANDBY_ENABLED = True
     settings.REALTIME_VOICE_USERS = {chat.user.get_username()}
@@ -532,6 +533,7 @@ def test_standby_waits_for_teardown_and_rejects_late_speech(cooking, settings, l
 
         async def start(self, *, agent, **_kwargs):
             self.agent = agent
+            agents.append(agent)
             agent.on_user_state(SimpleNamespace(new_state="speaking"))
             agent.on_transcription(SimpleNamespace(item_id="one", transcript="Finished", is_final=True))
             agent.on_user_state(SimpleNamespace(new_state="listening"))
@@ -542,13 +544,30 @@ def test_standby_waits_for_teardown_and_rejects_late_speech(cooking, settings, l
         async def aclose(self):
             closing.set()
             await allow_close.wait()
-            if late_speech:
+            if speech_timing == "during_close":
                 self.agent.on_user_state(SimpleNamespace(new_state="speaking"))
 
     async def scenario():
         nonlocal started, closing, allow_close
         started, closing, allow_close = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        race_detected = asyncio.Event()
+        release_reservation = ThreadEvent()
+        loop = asyncio.get_running_loop()
         room = Room()
+        original_reserve = bridge.begin_standby_close
+
+        def reserve(*args):
+            result = original_reserve(*args)
+            if result and speech_timing == "before_commit" and not release_reservation.is_set():
+
+                def detect_speech():
+                    agents[0].on_user_state(SimpleNamespace(new_state="speaking"))
+                    race_detected.set()
+                    release_reservation.set()
+
+                loop.call_soon_threadsafe(detect_speech)
+                assert release_reservation.wait(timeout=5)
+            return result
 
         class Context:
             job = SimpleNamespace(room=SimpleNamespace(name=f"{settings.REALTIME_VOICE_ROOM_PREFIX}{vid}"))
@@ -566,16 +585,27 @@ def test_standby_waits_for_teardown_and_rejects_late_speech(cooking, settings, l
             patch.object(bridge, "AgentSession", Session),
             patch.object(bridge.silero.VAD, "load", return_value=None),
             patch.object(realtime_voice, "get_bot", return_value=object()),
+            patch.object(bridge, "begin_standby_close", side_effect=reserve),
         ):
             task = asyncio.create_task(bridge.voice_session(Context()))
             await asyncio.wait_for(started.wait(), timeout=5)
             request = SimpleNamespace(auth=chat.user)
             await sync_to_async(realtime_voice.request_standby)(request, vid)
+            if speech_timing == "before_commit":
+                await asyncio.wait_for(race_detected.wait(), timeout=5)
+                async with asyncio.timeout(5):
+                    while (await sync_to_async(realtime_voice.bridge_state)(vid))["standby_state"] != "requested":
+                        await asyncio.sleep(0.01)
+                assert not closing.is_set()
+                room.handlers["participant_disconnected"](participant)
+                allow_close.set()
+                await asyncio.wait_for(task, timeout=5)
+                return
             await asyncio.wait_for(closing.wait(), timeout=5)
             state = await sync_to_async(realtime_voice.session_out)(
                 await sync_to_async(RealtimeVoiceSession.objects.get)(pk=vid)
             )
-            assert state["standby_state"] == "requested"
+            assert state["standby_state"] == "closing"
             assert not room.disconnected
             with pytest.raises(HttpError) as exc:
                 await sync_to_async(realtime_voice.resume_session)(request, vid)
@@ -584,8 +614,12 @@ def test_standby_waits_for_teardown_and_rejects_late_speech(cooking, settings, l
             await asyncio.wait_for(task, timeout=5)
             state = await sync_to_async(realtime_voice.bridge_state)(vid)
             assert room.disconnected
-            assert state["status"] == ("ended" if late_speech else "active")
-            assert (state["standby_state"] == "standby") is (not late_speech)
+            assert state["status"] == "active"
+            assert state["standby_state"] == "standby"
+            assert state["state"].get("standby_audio_uncertain", False) is (speech_timing == "during_close")
+            resumed = await sync_to_async(realtime_voice.resume_session)(request, vid)
+            assert resumed["standby_state"] == "resuming"
 
+    agents = []
     started = closing = allow_close = None
     async_to_sync(scenario)()

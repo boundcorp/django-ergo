@@ -524,9 +524,12 @@ async def voice_session(ctx: agents.JobContext):
             await ctx.room.disconnect()
             if assistant.pending_id:
                 await sync_to_async(close_pending, thread_sensitive=True)(voice_id, assistant.pending_id)
-            # A late speech, transcript, or delegation event invalidates the boundary.
-            if standby_requested and not unexpected_close and generation == assistant.activity_generation:
-                closed_cleanly = await sync_to_async(finish_standby_close, thread_sensitive=True)(voice_id, claim_id)
+            # Once teardown has started it cannot be reversed. Preserve the logical
+            # session, but remember that boundary audio may have been interrupted.
+            if standby_requested and not unexpected_close:
+                closed_cleanly = await sync_to_async(finish_standby_close, thread_sensitive=True)(
+                    voice_id, claim_id, audio_uncertain=generation != assistant.activity_generation
+                )
         finally:
             if not closed_cleanly:
                 await sync_to_async(end_bridge_session, thread_sensitive=True)(voice_id, claim_id)
