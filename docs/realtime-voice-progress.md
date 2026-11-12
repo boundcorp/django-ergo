@@ -43,6 +43,18 @@ native send, correlated child/reply and results after End all passed with
 scripted model transport. No provider, room, microphone or real-owner task ran.
 The actual installed browser `Room.startAudio()` also played a synthetic silent
 HTML stream and reported playback allowed while its room stayed disconnected.
+One scoped live native `ergo_thread_list` check also succeeded for only the
+exact launch UUID (limit one), inside a PostgreSQL **READ ONLY** transaction.
+Engine construction and native message/Celery dispatch were hard-failing
+guards, not mocked successful results. This established the actual read
+handler's accessibility without inference, task dispatch or production writes;
+it did not test hosted voice end-to-end.
+
+Current public frontend asset `/assets/index-Dn5F36IK.js` had SHA256
+`51c934ad586fdb20944bef33f21c248544452d26cde7955266607d738d981d07`;
+web and bridge both reported source `6b33f825`, with policy absent.
+This current served-bundle observation does not prove the handset's actual
+loaded bundle or browser/version during the retained call.
 
 Desktop/mobile thread options now share purpose groups: Conversation (voice,
 files), Model & reasoning, Thread data (export), and Thread lifecycle (resolve).
@@ -75,6 +87,18 @@ queue pods still had live Celery processes and self-matching preStop processes.
 Desired-ready replicas and an empty reserved queue cannot establish drain.
 Source-release notice is not policy-activation notice: a fresh heads-up and
 quiet window are required before a later web/bridge-only reload.
+
+Policy review found that GitHub's old merge preview still used the pre-171
+base and would reverse image pins if treated as a resulting tree. The held
+draft branch was updated from current main, without activation. Refreshed head
+`7c69a9a55402f63a881547ee278ed81f8d660174`, merge preview
+`b0d9a4e850c38d50809715c0ae2bccd4eddadd40`, incorporates actual infra main
+`1caa104293533c08a1978746a1fb1068406cb37a`; its complete resulting-tree delta
+is only the five-line exact authorization addition, with no deployment/image
+delta. Independent review approved these exact objects; Kustomize rendered
+successfully with the unchanged `ffa206f6` application pins and exact JSON scope.
+Never apply the stale policy checkout wholesale. Activation still requires
+fresh drain, revision/readiness/scope checks and the separate quiet notice.
 
 ## Hosted phone acceptance and follow-ups — 2026-11-12
 
