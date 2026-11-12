@@ -3,10 +3,25 @@
 import hashlib
 
 from django.db import transaction
+from django.utils import timezone
 from django_ergo.conversation.budget import relayable
 
-from ergonaut.api.realtime_voice import record_event
-from ergonaut.apps.bots.models import RealtimeVoiceEvent
+from ergonaut.apps.bots.models import RealtimeVoiceEvent, RealtimeVoiceSession
+
+
+def outbox_event(voice_id, event_id, kind, text):
+    """Server-derived outcomes survive transport End; never reopen or mutate conversational state."""
+    with transaction.atomic():
+        session = RealtimeVoiceSession.objects.select_for_update().get(pk=voice_id)
+        now = timezone.now()
+        event, _ = RealtimeVoiceEvent.objects.get_or_create(
+            session=session,
+            event_id=event_id,
+            defaults={"kind": kind, "text": text, "delivery": "unknown", "received_at": now, "processed_at": now},
+        )
+        if (event.kind, event.text) != (kind, text):
+            raise ValueError("Outbox event ID already used")
+        return event
 
 
 def completion_event(voice_id, task):
@@ -26,7 +41,25 @@ def completion_event(voice_id, task):
     else:
         return None
     event_id = "result:" + hashlib.sha256(task["event_id"].encode()).hexdigest()
-    return record_event(voice_id, event_id, "result", text[:4000], "unknown")
+    return outbox_event(voice_id, event_id, "result", text[:4000])
+
+
+def thread_update_event(voice_id, task):
+    """One durable receipt per observed task transition, distinct from an answered result."""
+    if task["status"] in ("answered", "failed"):
+        event = completion_event(voice_id, {**task, "event_id": task.get("update_id", task["event_id"])})
+        return event
+    labels = {
+        "queued": "Task queued; it may not have started.",
+        "delivered": "Task delivered; no final result yet.",
+        "waiting": "Task waiting for normal thread approval; voice has not approved any action.",
+    }
+    text = labels.get(task["status"])
+    if text is None:
+        return None
+    key = task.get("update_id", f"{task['event_id']}:{task['status']}")
+    event_id = "task-status:" + hashlib.sha256(key.encode()).hexdigest()
+    return outbox_event(voice_id, event_id, "task_status", text)
 
 
 def claim_announcement(event):

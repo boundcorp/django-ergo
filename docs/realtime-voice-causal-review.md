@@ -1,5 +1,124 @@
 # Realtime voice delegation: offline causal review
 
+## Current release reconciliation — 2026-11-12
+
+**PR #293 is deployed.** The prior `75234dc` evidence below described the earlier
+18:09 UTC call, not Lee's later dedicated-page test. Lee's report of seeing the
+new page is consistent with the deployment and retained session evidence.
+
+| Release evidence | Read-only observation |
+| --- | --- |
+| Application source/build | `06284d4358fa6c3d17e2ac181a8b9485328a0c1a` (PR #293 merge); [Ergonaut run 43295864949](https://github.com/boundcorp/django-ergo/actions/runs/43295864949) succeeded. |
+| GitOps pin | [infra-octo #167](https://github.com/boundcorp/infra-octo/pull/167), merged **20:13:34 UTC**, source pin commit `cd37e38806fa94470935cf593ef94d31d5925a23`, merge `9428406dd6a57df090fbd549eaca90f8d8aa8e7a`. |
+| Initial audit runtime image | Six replacement roles resolved to `sha256:5c0ba2e4a8bb12ff6b662c3ee4ec83320c8a8741550703c3ca9ba6d6943a83de`, each reporting `ERGONAUT_VERSION=06284d4358fa6c3d17e2ac181a8b9485328a0c1a`. This is the later phone call's release, not the final audit's latest release. |
+| Initial deployment revisions | `web=159`, `celery=163`, `bots=154`, `bot-tasks=162`, `beat=148`, `voice-bridge=2`; desired updated/ready replicas were present. Web progression completed **20:23:13 UTC**. Older terminating celery/bot-tasks pods still exposed `588993d3`: they were not the replacement release. |
+| Actual public frontend | `/s/587014b6-bba3-4b8b-aec8-d8b4f13b4d70/voice` serves `/assets/index-C5FPd5cF.js`, SHA256 `80be02170e627ee2f7764eb405a0a88f82db1a2908752e14ea8782de0a344767`, identical to that file in the live web image; the bundle contains `/s/:id/voice`. |
+| Subsequent unrelated auto-upgrade | [infra-octo #168](https://github.com/boundcorp/infra-octo/pull/168) merged **21:02:40 UTC**, pinning `09e5a6a8453697e777c2168516776259e519ce5c` / `sha256:40d09a01a5a8d2c2697775915cd678c2d0d64a3c200e9a67767655fb6e02b9a1` (PR #294, binary artifact delivery, inherits #293); [build 43304668336](https://github.com/boundcorp/django-ergo/actions/runs/43304668336) succeeded. All six current non-deleting roles' actual imageIDs and `ERGONAUT_VERSION` values match. The same public frontend bundle/hash remains in that image. |
+
+The final audit still finds terminating celery/bot-tasks pods on the previous
+`5c0ba2e4` release. **Ready desired replicas do not prove all old queue consumers
+have exited.** Normal execution must remain unconfigured through source rollout;
+verify old consumer exit before activating the reviewed scoped policy. Neither
+observed auto-upgrade was initiated by this worker.
+
+The runtime rollout did not require a new manually identified owner: the GitOps
+PR records the existing quiet-window auto-upgrader. No rollout was initiated by
+this investigation. Cache, CDN or stale-SPA skew are possible in general but
+**not established here**; the currently served bytes match the image. A retained
+access log is not proof of the exact URL or cached bytes on Lee's handset.
+
+### Latest phone session: orchestration actually attempted, then blocked
+
+Latest retained owner session `a9320316-5879-46d1-9d9e-ff62ecfebe7c` belongs to
+the same `boundcorp` launch chat `587014b6-bba3-4b8b-aec8-d8b4f13b4d70`.
+Created **20:34:10.107 UTC**, bridge claimed **20:34:12.123**, ended
+**20:34:43.585**. This is distinct from the earlier 18:09 call and consistent
+with Lee's subsequent report around 20:36; the report time is not the call time.
+
+The latest session has two user finals, one assistant final, one delegation
+signal and one bridge-action failure event, but **zero delegation rows/messages**.
+Retained bridge timestamps establish:
+
+1. Listener ready **20:34:13.198 UTC**.
+2. Valid client-target wire event **20:34:27.473**, application signal **27.474**,
+   payload-free correlation `f3daeed21b70ca13`.
+3. Speech/transcript boundary ready **20:34:28.270**.
+4. Callback failed with `ValueError` **20:34:28.308**; durable capability status
+   explicitly rejects subscription/CLI per-request limits.
+
+The actual engine resolves to **`CodexCLIEngine`, `gpt-6.1-sol`,
+`supports_request_limits=False`**. It is not an OpenAI API engine merely because
+the stored `engine_type` says `openai`. The registered launch-chat tools include
+normal history, `ergo_bot_list`, `ergo_thread_list/send/forward/stop/resolve`,
+`ergo_worker_list/cancel`, todos and wakes. These are real normal bot tools;
+none is made callable inside GPT-Live's client-delegation mode. PR #293 restores
+bounded exact-thread instructions/history/summary/state/attachment references,
+but its read-only `gpt-6-luna` delegation profile cannot invoke the actual routed
+engine. No task reached its model, tools, approval state or completion outbox.
+
+Read-only reconstruction of the **current** registered launch context measured
+**6,962 owning instruction characters** (below the 8,000 startup cap), five
+`TextContextSource`s rendering **1,962 characters** (below the 2,200 configured
+source slice), and the excluded `OverviewSource`. The launch thread currently
+has **2,929 normal messages, four compactions and 83 attachment references**;
+the latest session's two user finals and one assistant final each have a normal
+history row. Startup still takes only a bounded recent-history/summary slice,
+not all 2,929 messages. Exact provider-transmitted startup prompt bytes were not
+retained, so reconstruction is not a claim of a recovered wire payload.
+
+The actual bot's normal limit is **50 model turns**, not the experimental lookup's
+four. Normal child tasks/compaction/tools can have additional costs, and there
+is no claim that the prototype's dollar estimate bounds that work. The new
+settings policy is absent from the live image. Lee approved distinct normal
+originating-thread costs at **21:15:41 UTC**; source/policy review and a safe
+announced consumer cutover remain prerequisites.
+
+**Product acceptance failure:** the one-shot read-only profile is an experiment's
+spend guard, not the requested Boundcorp product contract. Voice needs the same
+authorized exact-thread orchestrator execution and normal action approvals as
+text. Do not fix this by changing the bot route, registering invented LiveKit
+tools, globally widening permissions, or removing the budget from automatic
+model-selected requests. CLI engines cannot enforce the existing token budget.
+The successor separates the bounded transport from a durable exact-chat/owner/bot
+normal-execution grant, carrying Lee's approval reference, real normal tools and
+approval reentry, per-invocation side-effect claims and correlated updates. It
+retains one request and the 90-second voice cap. No source/policy rollout or
+real-owner normal task was performed during this investigation.
+
+### Android route evidence and proven microphone callback defect
+
+Android handset and the already-selected OS headset route are user-provided
+facts. Browser/version/tab-versus-PWA remain unknown: the voice schema stores
+none, and **34 retained latest-window voice access lines** contain no browser
+tokens. No transcript text, raw device IDs or secrets were exported.
+
+The deployed playback path remains HTML audio elements, LiveKit 2.23.0
+`webAudioMix=false`, sink applied before remote track attachment. No forced
+speaker, Web Audio mixer or changed capture constraints was found. Capture
+defaults are default input, echo cancellation, auto gain, noise suppression and
+voice isolation. System-default sink selection does not establish the active
+Android communication route while capture is open.
+
+Current [MDN compatibility source](https://github.com/mdn/browser-compat-data/blob/main/api/HTMLMediaElement.json)
+marks **both Chrome Android and Firefox Android `setSinkId` unavailable**, linking
+[Chromium 41276355](https://crbug.com/41276355) and
+[Firefox 1473346](https://bugzil.la/1473346). This is a platform restriction,
+not proof of Lee's browser or the cause on his handset. Android distinguishes
+[Headset/Hands-Free and A2DP profiles](https://developer.android.com/develop/connectivity/bluetooth/profiles);
+the native [communication-device API](https://developer.android.com/reference/android/media/AudioManager#setCommunicationDevice(android.media.AudioDeviceInfo))
+is not exposed by an HTML sink selector. Do not blame the user's OS setup or
+claim an applied default/selected sink proves physical Bluetooth playback.
+
+An independent, proven defect appears at **20:34:39 UTC**: `track_muted` raised
+`AttributeError: RemoteTrackPublication has no attribute identity`. Installed RTC
+source emits **`(participant, publication)`**; the bridge handler reversed these
+arguments. This breaks microphone-state invalidation, not proof of a Bluetooth
+route cause. Correct the callback and retain real-SDK-emitter regression coverage.
+User-triggered route diagnostics should report element state and existing
+capture settings, browser family/major and platform, never device IDs/names;
+physical output remains **unknown** and no collection may open a microphone/room.
+
+
 ## Hosted phone diagnosis — 2026-11-12
 
 **Accepted:** Lee's real phone audio and basic conversation. **Not accepted:** Bluetooth/output routing, orchestrator context/tools, standby/resume, and the subsequently authorized dedicated-page/progressive-transcript UX. This supersedes historical statements below that the prototype was not hosted or that phone audio had not been tested. These follow-ups are draft-only; no merge, deployment, restart, room join, microphone session or inference is authorized in this investigation.

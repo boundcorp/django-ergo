@@ -863,8 +863,15 @@ def test_runtime_uses_framework_events_not_transcript_or_queue_and_invalidates_m
             }
         assistant.on_agent_state(AgentStateChangedEvent(old_state="idle", new_state="thinking", created_at=stamp - 1))
         assert assistant.runtime["agent_state"] == "speaking"  # late callback cannot regress observed state
+        room = rtc.Room()
+        bridge.watch_microphone(room, assistant, f"user-{chat.user_id}")
+        publication = SimpleNamespace(source=rtc.TrackSource.SOURCE_MICROPHONE)
+        room.emit("track_muted", SimpleNamespace(identity="different-owner"), publication)
+        assert assistant.runtime["user_state"] == "listening"
         assistant.microphone_live = lambda: False
-        assistant.invalidate_runtime(user_only=True)
+        # Actual SDK emitter order; reversed handlers log an exception and leave stale "listening".
+        room.emit("track_muted", SimpleNamespace(identity=f"user-{chat.user_id}"), publication)
+        assert not assistant.vad_ready
         assistant.on_user_state(
             UserStateChangedEvent(old_state="speaking", new_state="listening", created_at=stamp + 4)
         )

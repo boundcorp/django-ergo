@@ -10,12 +10,15 @@ import {
 } from 'react'
 import { Link, useLocation, useParams } from 'react-router-dom'
 import { Room, RoomEvent, Track } from 'livekit-client'
-import { api, type RealtimeVoiceSession, type SessionDetail } from '../api'
+import { api, type RealtimeVoiceSession, type SessionDetail, type VoiceTaskUpdate } from '../api'
 import { initialVoiceAudioOutput, VoiceAudioOutput, type VoiceAudioOutputState } from '../voiceAudioOutput'
 import { VoiceBackgroundWork } from './VoiceSessionCard'
+import { collectVoiceAudioDiagnostics, type VoiceAudioDiagnostics } from '../voiceAudioDiagnostics'
 
 type Phase = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'disconnected'
 const storageKey = (chatId: string) => `ergonaut.realtimeVoice.${chatId}`
+const taskPending = (task: VoiceTaskUpdate) =>
+  task.status === 'queued' || task.status === 'delivered' || task.status === 'waiting'
 
 type VoiceCallOwner = {
   enabled: boolean | null
@@ -36,6 +39,7 @@ type VoiceCallOwner = {
   changeStandby: (resume: boolean, retry?: boolean) => Promise<void>
   toggleMute: () => Promise<void>
   enableAudio: () => void
+  collectAudioDiagnostics: () => VoiceAudioDiagnostics
 }
 
 /** One owner per signed-in app. Route changes never tear down a live transport. */
@@ -109,7 +113,7 @@ function useVoiceOwner(): VoiceCallOwner {
 
   // Sequential, bounded polling: partial speech is useful only if it arrives promptly.
   // Navigation slows observation, not the call; no overlapping session requests.
-  const pendingWork = voice?.delegations?.some(task => ['queued', 'delivered'].includes(task.status)) ?? false
+  const pendingWork = voice?.delegations?.some(taskPending) || voice?.thread_updates?.some(taskPending)
   useEffect(() => {
     // Keep observing a viewed ended session: already-accepted final text may drain
     // after End's response. Navigation stops this read-only observation unless work is pending.
@@ -373,6 +377,11 @@ function useVoiceOwner(): VoiceCallOwner {
     void room.current?.startAudio().catch(e => setError(e instanceof Error ? e.message : String(e)))
   }
 
+  function collectAudioDiagnostics() {
+    const track = room.current?.localParticipant.getTrackPublication(Track.Source.Microphone)?.track?.mediaStreamTrack
+    return collectVoiceAudioDiagnostics(output, [...(audio.current?.querySelectorAll('audio') ?? [])], track)
+  }
+
   return {
     enabled,
     standbyEnabled,
@@ -392,6 +401,7 @@ function useVoiceOwner(): VoiceCallOwner {
     changeStandby,
     toggleMute,
     enableAudio,
+    collectAudioDiagnostics,
   }
 }
 
@@ -534,11 +544,13 @@ export function VoicePage() {
   const [existing, setExisting] = useState<RealtimeVoiceSession | null>(null)
   const [loadError, setLoadError] = useState('')
   const [loading, setLoading] = useState(true)
+  const [audioDiagnostics, setAudioDiagnostics] = useState<VoiceAudioDiagnostics | null>(null)
   const inspectRef = useRef(owner.inspect)
   inspectRef.current = owner.inspect
   useEffect(() => {
     let alive = true
     setDetail(null)
+    setAudioDiagnostics(null)
     setExisting(null)
     setLoadError('')
     setLoading(true)
@@ -662,7 +674,13 @@ export function VoicePage() {
               Last observed voice SDK · You: {runtime?.user_state || 'unknown'} · Assistant:{' '}
               {runtime?.agent_state || 'unknown'}
             </p>
-            {voice?.briefing?.restriction && <p>Restricted read-only mode.</p>}
+            {voice?.briefing?.restriction && (
+              <p>
+                {voice.briefing.execution_mode === 'normal_thread'
+                  ? 'Normal thread execution: task costs are separate from the 90-second voice limit. Normal action approvals still apply.'
+                  : 'Restricted read-only mode.'}
+              </p>
+            )}
             {voice?.briefing && voice.briefing.delegation_available !== true && (
               <p>{voice.briefing.reason || voice.briefing.restriction}</p>
             )}
@@ -687,7 +705,11 @@ export function VoicePage() {
             )}
             <details className="mt-1">
               <summary className="cursor-pointer text-muted">
-                {voice?.briefing?.restriction ? 'Restricted mode · call details' : 'Call details & observed status'}
+                {voice?.briefing?.execution_mode === 'normal_thread'
+                  ? 'Normal thread mode · call details'
+                  : voice?.briefing?.restriction
+                    ? 'Restricted mode · call details'
+                    : 'Call details & observed status'}
               </summary>
               {runtime?.observed_at && (
                 <p className="text-xs text-muted">
@@ -719,7 +741,7 @@ export function VoicePage() {
         </details>
       )}
       <footer className="max-h-[30dvh] min-h-0 shrink overflow-y-auto border-t border-stroke bg-surface px-4 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] sm:px-6">
-        <div className="flex flex-wrap gap-2 [&_button]:min-h-11 [&_button]:rounded-md [&_button]:border [&_button]:border-stroke [&_button]:px-3 [&_button]:py-2 [&_button]:text-sm [&_button]:disabled:opacity-50">
+        <div className="sticky top-0 z-10 flex flex-wrap gap-2 bg-surface [&_button]:min-h-11 [&_button]:rounded-md [&_button]:border [&_button]:border-stroke [&_button]:px-3 [&_button]:py-2 [&_button]:text-sm [&_button]:disabled:opacity-50">
           {(!voice || voice.status !== 'active') && (
             <button
               type="button"
@@ -839,6 +861,29 @@ export function VoicePage() {
               {output.message}
             </p>
           )}
+          <details className="mt-1 text-xs text-muted">
+            <summary className="cursor-pointer">Audio route diagnostics</summary>
+            <p className="mt-1">
+              Microphone capture can use a different communication route from media playback, even with system default
+              selected. Physical Bluetooth routing is unknown; diagnostics do not change your route.
+            </p>
+            <button
+              type="button"
+              className="my-1 min-h-11 rounded-md border border-stroke px-3"
+              onClick={() => setAudioDiagnostics(owner.collectAudioDiagnostics())}
+            >
+              Collect route diagnostics
+            </button>
+            <p>No capture, room connection, device names or device IDs. Snapshot changes only when collected again.</p>
+            {audioDiagnostics && (
+              <pre
+                className="mt-1 max-h-36 overflow-auto whitespace-pre-wrap break-words"
+                aria-label="Route diagnostic snapshot"
+              >
+                {JSON.stringify(audioDiagnostics, null, 2)}
+              </pre>
+            )}
+          </details>
           {!outputRouting.current ? (
             <p className="mt-1 text-xs text-muted">
               Audio output controls become available when you start or resume the call. Your phone/OS may control the

@@ -12,6 +12,7 @@ from django_ergo.bots.definition import BotDefinition
 from django_ergo.bots.providers import Providers
 from django_ergo.bots.registry import BotRegistry
 from django_ergo.bots.runtime import Bot
+from django_ergo.conversation.engine import automatic_request_retries
 from django_ergo.conversation.engines.codex_cli import CodexCLIEngine
 from django_ergo.conversation.engines.codex_cli import CodexClient
 from django_ergo.conversation.engines.codex_cli import CodexCLIError
@@ -201,6 +202,7 @@ async def test_real_codex_cli_makes_one_request(tmp_path):
     threading.Thread(target=server.serve_forever, daemon=True).start()
     home = tmp_path / "codex-home"
     home.mkdir()
+    retry_token = automatic_request_retries.set(False)
     try:
         engine = CodexCLIEngine(
             {
@@ -222,6 +224,7 @@ async def test_real_codex_cli_makes_one_request(tmp_path):
             HISTORY[1:], system="You are a kitchen bot.", tools=TOOLS
         )
     finally:
+        automatic_request_retries.reset(retry_token)
         server.shutdown()
 
     calls = [e.tool_use for e in completion.events if e.event_type == "tool_use"]

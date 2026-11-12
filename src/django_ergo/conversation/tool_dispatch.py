@@ -8,6 +8,7 @@ it raises goes back to the model as an error result.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from typing import TYPE_CHECKING
 from typing import Any
@@ -66,6 +67,64 @@ def dispatch_tool(name: str, args: dict, toolkits: list[Toolkit]) -> tuple[Any, 
         return json.dumps({"error": str(e), **e.fields}, ensure_ascii=False), True
     except Exception as e:  # noqa: BLE001 — any tool failure goes back to the model
         return str(e), True
+
+
+def dispatch_tool_once(
+    call, tool_id: str, name: str, args: dict, toolkits: list[Toolkit]
+) -> tuple[Any, bool]:
+    """Durably claim one provider invocation before side effects; never replay an uncertain write.
+
+    Opt-in by the caller, not a grant of tools or approval. Approval checks still
+    happen before dispatch. A crash after claim leaves an explicitly unknown outcome.
+    """
+    from django.db import transaction
+
+    from django_ergo.conversation.models import StructuredCall
+
+    signature = hashlib.sha256(
+        json.dumps([name, args], sort_keys=True, ensure_ascii=False).encode()
+    ).hexdigest()
+    with transaction.atomic():
+        row = StructuredCall.objects.select_for_update().get(pk=call.pk)
+        ledger = dict((row.metadata or {}).get("tool_invocations", {}))
+        prior = ledger.get(tool_id)
+        if prior:
+            if prior["signature"] != signature:
+                return (
+                    "Refused: this tool invocation ID was already used with different arguments.",
+                    True,
+                )
+            if prior["status"] == "completed":
+                return prior["result"], prior["is_error"]
+            return (
+                "Tool invocation already claimed; outcome unknown. Do not retry the external action automatically.",
+                True,
+            )
+        ledger[tool_id] = {"signature": signature, "status": "claimed"}
+        call.metadata = {**row.metadata, "tool_invocations": ledger}
+        row.metadata = call.metadata
+        row.save(update_fields=["metadata"])
+
+    result, is_error = dispatch_tool(name, args, toolkits)
+    # Replay uses the same normal tool-result representation where JSON supports it.
+    # Rich results retain a bounded textual receipt instead of replaying side effects.
+    try:
+        receipt = json.loads(json.dumps(result))
+    except (TypeError, ValueError):
+        receipt = str(result)
+    with transaction.atomic():
+        row = StructuredCall.objects.select_for_update().get(pk=call.pk)
+        ledger = dict((row.metadata or {}).get("tool_invocations", {}))
+        ledger[tool_id] = {
+            "signature": signature,
+            "status": "completed",
+            "result": receipt,
+            "is_error": is_error,
+        }
+        call.metadata = {**row.metadata, "tool_invocations": ledger}
+        row.metadata = call.metadata
+        row.save(update_fields=["metadata"])
+    return result, is_error
 
 
 async def record_kb_usage(

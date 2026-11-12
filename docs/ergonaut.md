@@ -26,6 +26,25 @@ work and write long content in smaller pieces: one file per call and documents
 in parts of about 2,000 words. An unfinished tool call was not saved or run.
 Resuming is manual, including after a repeated output-limit failure.
 
+## Realtime voice calls
+
+The originating thread's options → **Voice call** opens its dedicated page.
+Opening it does not capture a microphone; Start/Resume are explicit, and an
+active call survives in-tab navigation. End call stops voice, not accepted
+background work. The original 90-second deadline still applies.
+
+**Collect route diagnostics** is user-triggered and local: it reads existing
+element/capture state and redacted browser capabilities, never device IDs or
+names, and never opens capture/a room. Physical Bluetooth output stays unknown.
+The known handset is Android; browser-specific output restrictions and
+communication-versus-media routing must not be presented as user setup errors.
+
+Normal Boundcorp task execution is separate from the experimental API-only
+read budget. Its successor policy is default-off, exact-chat/owner/bot scoped,
+requires distinct reviewed normal-task-cost authorization, and preserves the
+existing normal action approval UI. Voice speech does not approve actions.
+See [release evidence, limits and policy contract](realtime-voice.md).
+
 ## Voice input
 
 In a chat or on the new-thread page, the microphone records only after you press

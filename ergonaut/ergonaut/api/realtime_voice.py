@@ -24,6 +24,12 @@ from ergonaut.api.auth import user_auth
 from ergonaut.api.bots import get_bot, uuid_or_404, visible_sessions
 from ergonaut.api.realtime_voice_state import apply_user_event, current_time
 from ergonaut.apps.bots.models import RealtimeVoiceDelegation, RealtimeVoiceEvent, RealtimeVoiceSession
+from ergonaut.realtime_voice_execution import (
+    NORMAL_RESTRICTION,
+    initial_state,
+    session_authorization,
+    thread_updates,
+)
 
 router = Router(tags=["realtime voice"], auth=user_auth)
 
@@ -324,6 +330,7 @@ def bridge_state(voice_id, *, include_briefing=True):
         "runtime": live.get("runtime", UNKNOWN_RUNTIME) if has_live_bridge else dict(UNKNOWN_RUNTIME),
         "activities": activities,
         "briefing": startup_briefing(session) if include_briefing else delegation_status(session),
+        "thread_updates": thread_updates(session, delegations),
         "delegations": [
             {
                 "event_id": d.event_id,
@@ -331,6 +338,7 @@ def bridge_state(voice_id, *, include_briefing=True):
                 "status": d.message.status,
                 "result": d.message.reply_text[:4000],
                 "error": d.message.error[:4000],
+                "execution_mode": (d.message.metadata or {}).get("voice_execution_mode", "read_only"),
             }
             for d in delegations
         ],
@@ -506,6 +514,15 @@ VOICE_RESTRICTION = (
 )
 
 
+def normal_target(session):
+    authorization = session_authorization(session)
+    if authorization:
+        if not voice_allowed(session.user):
+            raise ValueError("Normal thread execution is disabled for this owner.")
+        get_bot(session.chat.bot_name, session.user)  # normal registered bot access, not a global grant
+    return authorization
+
+
 def delegation_target(session, budget):
     """Check the actual selected chat, without changing its route or making a model call."""
     if session.chat.user_id != session.user_id:
@@ -548,25 +565,30 @@ def persisted_voice_event_ids(session):
 
 def delegation_status(session):
     """Lightweight web/polling status, independent of the web process's budget settings."""
+    restriction = NORMAL_RESTRICTION if (session.state or {}).get("normal_thread_authorization") else VOICE_RESTRICTION
     if session.status != "active":
         status = {
             "delegation_available": False,
-            "restriction": f"{VOICE_RESTRICTION} Background delegation unavailable: the voice session has ended.",
+            "restriction": f"{restriction} Background delegation unavailable: the voice session has ended.",
             "reason": "Background delegation unavailable: the voice session has ended.",
         }
     elif session.delegations.exists():
         status = {
             "delegation_available": False,
-            "restriction": f"{VOICE_RESTRICTION} This session's one background request is already used.",
+            "restriction": f"{restriction} This session's one background request is already used.",
             "reason": "This session's one background request is already used.",
         }
     else:
         status = (session.state or {}).get("voice_delegation") or {
             "delegation_available": None,
-            "restriction": f"{VOICE_RESTRICTION} Bridge has not validated delegation for this session.",
+            "restriction": f"{restriction} Bridge has not validated delegation for this session.",
             "reason": "Bridge has not validated delegation for this session.",
         }
-    return {"context": "", **status}
+    return {
+        "context": "",
+        "execution_mode": "normal_thread" if (session.state or {}).get("normal_thread_authorization") else "read_only",
+        **status,
+    }
 
 
 def startup_briefing(session):
@@ -626,14 +648,16 @@ def startup_briefing(session):
         "Cross-thread bots/workers/approvals and external PR state: not known; query only on demand "
         "through this chat's authorized read tools. Context may be truncated; use history tools for more."
     )
+    authorization = None
     try:
+        authorization = normal_target(session)
         if session.status != "active":
             raise ValueError("Background delegation unavailable: the voice session has ended.")
         if session.delegations.exists():
             raise ValueError(
                 "Background delegation unavailable: this session's one background request is already used."
             )
-        budget = delegation_target(session, delegation_budget())
+        budget = None if authorization else delegation_target(session, delegation_budget())
     except ValueError as exc:
         available, reason = False, str(exc)
     except Exception:  # noqa: BLE001 - configuration errors must not disclose credentials or fail session startup
@@ -642,17 +666,20 @@ def startup_briefing(session):
             "Background delegation unavailable: this chat's budgeted engine could not be validated.",
         )
     else:
-        available, reason = (
-            True,
-            "Background delegation is available. Offered read tools: "
+        available = True
+        reason = (
+            NORMAL_RESTRICTION
+            if authorization
+            else "Background delegation is available. Offered read tools: "
             + (", ".join(sorted(budget.allowed_tools)) or "none")
-            + ".",
+            + "."
         )
     briefing = {
         "context": context[:BRIEFING_CONTEXT_CHARS],
-        "restriction": f"{VOICE_RESTRICTION} {reason}",
+        "restriction": f"{NORMAL_RESTRICTION if authorization else VOICE_RESTRICTION} {reason}",
         "reason": reason,
         "delegation_available": available,
+        "execution_mode": "normal_thread" if authorization else "read_only",
         "instructions": instructions,
         "voice_event_ids": persisted_voice_event_ids(session),
     }
@@ -664,6 +691,7 @@ def startup_briefing(session):
             **locked.state,
             "voice_delegation": {
                 "delegation_available": available,
+                "execution_mode": briefing["execution_mode"],
                 "restriction": briefing["restriction"],
                 "reason": reason,
             },
@@ -732,10 +760,7 @@ def resolve_pending(voice_id, event_id, text):
 
 
 def delegate(voice_id, event_id, text):
-    """Atomically persist a deduplicated request in the existing thread-message queue.
-
-    The queued message carries its budget; ``messaging`` runs it only under that budget."""
-    budget = delegation_budget()
+    """Persist one idempotent exact-thread request under its separately authorized execution policy."""
     if not event_id or len(event_id) > 200 or not text.strip() or len(text) > 4000:
         raise ValueError("Invalid delegation")
     with transaction.atomic():
@@ -746,11 +771,12 @@ def delegate(voice_id, event_id, text):
                 raise ValueError("Delegation ID already used")
             return old.message
         if session.delegations.exists():
-            raise ValueError("This local voice slice permits one background request")
-        if session.status != "active":
-            raise ValueError("Voice session ended")
+            raise ValueError("This voice session permits one background request")
+        if session.status != "active" or deadline_expired(session):
+            raise ValueError("Voice session ended or deadline expired")
         try:
-            budget = delegation_target(session, budget)
+            authorization = normal_target(session)
+            budget = None if authorization else delegation_target(session, delegation_budget())
         except ValueError:
             raise
         except Exception as exc:
@@ -769,26 +795,31 @@ def delegate(voice_id, event_id, text):
                     "delegations": context["delegations"],
                     "launch_chat_id": context["chat_id"],
                     "owner_id": context["user_id"],
-                    "restriction": VOICE_RESTRICTION,
+                    "restriction": NORMAL_RESTRICTION if authorization else VOICE_RESTRICTION,
                 },
                 ensure_ascii=False,
             )
             + "\n\nCurrent delegated request:\n"
             + text
         )
-        message = messaging.send(
-            None,
-            session.chat,
-            prompt,
-            metadata=attach(
+        metadata = {
+            "voice_session_id": str(session.id),
+            "voice_event_id": event_id,
+            "message_author": django_user_identity(session.user),
+            "message_provenance": {"kind": "message", "voice_session_id": str(session.id)},
+        }
+        if authorization:
+            metadata.update(
                 {
-                    "voice_session_id": str(session.id),
-                    "voice_event_id": event_id,
-                    "context_policy": "current_chat_only",
-                },
-                budget,
-            ),
-        )
+                    "voice_execution_mode": "normal_thread",
+                    "tool_execution_policy": "at_most_once",
+                    "model_retry_policy": "never",
+                    "normal_thread_authorization": authorization,
+                }
+            )
+        else:
+            metadata = attach({**metadata, "context_policy": "current_chat_only"}, budget)
+        message = messaging.send(None, session.chat, prompt, metadata=metadata)
         RealtimeVoiceDelegation.objects.create(session=session, event_id=event_id, text=text, message=message)
     message.refresh_from_db()
     return message
@@ -804,6 +835,19 @@ def session_out(session):
         end_voice_session(session.id)
         session.refresh_from_db()
     state = bridge_state(session.id, include_briefing=False)
+    # Task completion is independent of a live provider. Owner polling can persist
+    # terminal receipts after End, without dispatching, approving or reopening voice.
+    from ergonaut.realtime_voice_outbox import completion_event, thread_update_event
+
+    observed_ids = {event["event_id"] for event in state["events"]}
+    for task in [*state["delegations"], *state["thread_updates"]]:
+        if task["status"] not in ("answered", "failed"):
+            continue
+        event = (thread_update_event if "update_id" in task else completion_event)(session.pk, task)
+        if event.event_id not in observed_ids:
+            state["events"].append(event_out(event))
+            observed_ids.add(event.event_id)
+    state["events"] = sorted(state["events"], key=lambda event: event["created_at"])[-100:]
     standby_seconds = None
     if session.standby_at:
         stop = (
@@ -828,6 +872,7 @@ def session_out(session):
         "runtime": state["runtime"],
         "state": state["state"],
         "delegations": state["delegations"],
+        "thread_updates": state["thread_updates"],
         "activities": state["activities"],
         "briefing": state["briefing"],
     }
@@ -865,9 +910,7 @@ def create_session(request, data: CreateIn):
     if chat.status == "completed":
         raise HttpError(409, "Chat is closed")
     return session_out(
-        RealtimeVoiceSession.objects.create(
-            chat=chat, user=request.auth, state=(chat.metadata or {}).get("voice_state", {})
-        )
+        RealtimeVoiceSession.objects.create(chat=chat, user=request.auth, state=initial_state(chat, request.auth))
     )
 
 
