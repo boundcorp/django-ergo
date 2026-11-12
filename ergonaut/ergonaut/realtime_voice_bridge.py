@@ -76,7 +76,18 @@ def startup_context(snapshot):
         role="user",
         content=f"Saved session state (reported context, NOT a history lookup result): {snapshot['state']}",
     )
+    if snapshot.get("briefing"):
+        context.add_message(
+            id="owner-startup-briefing",
+            role="user",
+            content=snapshot["briefing"]["context"],
+        )
+    # Persisted voice messages appear once via launch-thread history. Pre-cutover events
+    # without a thread-history row still use the bounded durable transcript fallback.
+    saved_ids = set(snapshot.get("briefing", {}).get("voice_event_ids", []))
     for event in snapshot["events"][-40:]:
+        if event["event_id"] in saved_ids:
+            continue
         if event["kind"] == "user":
             context.add_message(id=event["event_id"], role="user", content=event["text"][:2000])
         elif event["kind"] == "assistant":
@@ -116,8 +127,11 @@ class Assistant(Agent):
         self.grace = pause_grace()
         super().__init__(
             instructions=(
-                "Maintain session context across topics. You are the voice interface, not the "
-                "background assistant. To check stored conversation history or perform requested "
+                snapshot.get("briefing", {}).get("instructions", "")[:8000]
+                + "\n\nVoice-interface restrictions (override conflicting bot instructions):\n"
+                + "Maintain session context across topics. You are another interface to the exact launch thread, "
+                "not a fresh assistant. Follow its supplied owning bot instructions within the restrictions below. "
+                "To check stored conversation history or perform requested "
                 "background work, delegate to the client background assistant using client delegation. "
                 "There are no callable voice tools. Never substitute a recap of this conversation "
                 "for an actual history lookup. Saved state and server time context are not lookup results. "
@@ -130,6 +144,12 @@ class Assistant(Agent):
                 " For activity durations use only supplied server-calculated elapsed "
                 "time since the user reported the activity, not a claim that it happened. "
                 "Never invent times, durations, timers or reminders."
+                " This is restricted read-only gpt-6-luna-only background mode. Never perform or promise writes, "
+                "thread forwarding/sends, worker starts or approvals. Startup briefing is stored context, "
+                "not a newly verified result. Explain delegation restrictions up front. "
+                + snapshot.get("briefing", {}).get(
+                    "restriction", "Background delegation availability is not known; do not promise it."
+                )
             ),
             chat_ctx=startup_context(snapshot),
             llm=openai.realtime.GPTLiveModel(
@@ -313,7 +333,7 @@ class Assistant(Agent):
         # Generated speech is always unverified; do not append a delayed no-result status
         # after a result may already have arrived.
         if item.role == "user":
-            snapshot = await sync_to_async(bridge_state, thread_sensitive=True)(self.voice_id)
+            snapshot = await sync_to_async(bridge_state, thread_sensitive=True)(self.voice_id, include_briefing=False)
             activities = snapshot["activities"][-3:]
             clock = await sync_to_async(current_time, thread_sensitive=True)(self.voice_id)
             elapsed = []
@@ -349,7 +369,9 @@ class Assistant(Agent):
     async def watch_results(self):
         while True:
             try:
-                snapshot = await sync_to_async(bridge_state, thread_sensitive=True)(self.voice_id)
+                snapshot = await sync_to_async(bridge_state, thread_sensitive=True)(
+                    self.voice_id, include_briefing=False
+                )
                 if snapshot["status"] != "active":
                     return
                 await self.deliver_results(snapshot)
@@ -394,7 +416,7 @@ async def voice_session(ctx: agents.JobContext):
         return
     http_session = None
     try:
-        snapshot = await sync_to_async(bridge_state, thread_sensitive=True)(voice_id)
+        snapshot = await sync_to_async(bridge_state, thread_sensitive=True)(voice_id, include_briefing=True)
         await ctx.connect()
         started = time.monotonic()
         http_session = aiohttp.ClientSession()
@@ -480,7 +502,7 @@ async def voice_session(ctx: agents.JobContext):
         async with asyncio.timeout(remaining):
             await session.start(room=ctx.room, agent=assistant, record=False)
             while not session_closed.is_set():
-                snapshot = await sync_to_async(bridge_state, thread_sensitive=True)(voice_id)
+                snapshot = await sync_to_async(bridge_state, thread_sensitive=True)(voice_id, include_briefing=False)
                 if snapshot["status"] != "active":
                     break
                 if (

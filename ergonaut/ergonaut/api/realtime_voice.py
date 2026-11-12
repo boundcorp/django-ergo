@@ -2,14 +2,21 @@
 
 import json
 import uuid
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
+from asgiref.sync import async_to_sync
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.utils import timezone
 from django_ergo.bots import messaging
 from django_ergo.conversation.budget import TurnBudget, attach
+from django_ergo.conversation.context import MessageContextSource
+from django_ergo.conversation.history import SessionSource
+from django_ergo.conversation.identity import bot_identity, django_user_identity
+from django_ergo.conversation.messages import add_message
+from django_ergo.conversation.models import ConversationSession
 from ninja import Router, Schema
 from ninja.errors import HttpError
 
@@ -187,9 +194,9 @@ def finish_standby_close(voice_id, claim_id, *, audio_uncertain=False):
         return True
 
 
-def bridge_state(voice_id):
-    """Bounded recent transcript plus durable work and explicit state for reconnect."""
-    session = RealtimeVoiceSession.objects.get(pk=voice_id)
+def bridge_state(voice_id, *, include_briefing=True):
+    """Durable snapshot; only bridge startup/reconnect should render the full briefing."""
+    session = RealtimeVoiceSession.objects.select_related("chat", "user").get(pk=voice_id)
     events = list(session.events.order_by("-id")[:100])
     delegations = list(session.delegations.select_related("message").order_by("-id")[:100])
     delegations.reverse()
@@ -227,6 +234,7 @@ def bridge_state(voice_id):
         "state": state,
         "events": [event_out(e) for e in reversed(events)],
         "activities": activities,
+        "briefing": startup_briefing(session) if include_briefing else delegation_status(session),
         "delegations": [
             {
                 "event_id": d.event_id,
@@ -238,6 +246,50 @@ def bridge_state(voice_id):
             for d in delegations
         ],
     }
+
+
+def persist_thread_event(session, event):
+    """Write a finalized voice event once to the same thread, preserving delivery uncertainty."""
+    if event.kind not in ("user", "user_transcript", "assistant"):
+        return
+    chat = ConversationSession.objects.select_for_update().select_related("user").get(pk=session.chat_id)
+    if chat.user_id != session.user_id:
+        raise ValueError("Voice session owner does not own the launch chat")
+    provenance = {
+        "kind": "message",
+        "voice_session_id": str(session.id),
+        "voice_event_id": event.event_id,
+        "voice_delivery": event.delivery,
+        "reported_at": (event.client_event_at or event.received_at).isoformat(),
+    }
+    text = event.text
+    role = "assistant" if event.kind == "assistant" else "user"
+    if role == "assistant":
+        text = f"[Generated voice speech; delivery {event.delivery}] {text}"
+    message = chat.messages.filter(
+        provenance__voice_session_id=str(session.id), provenance__voice_event_id=event.event_id
+    ).first()
+    if message:
+        message.provenance = provenance
+        message.save(update_fields=["provenance"])
+        message.content_blocks.filter(block_type="text").update(text=text)
+    else:
+        message = async_to_sync(add_message)(
+            chat,
+            role,
+            [{"block_type": "text", "text": text}],
+            author=bot_identity(chat) if role == "assistant" else django_user_identity(chat.user),
+            provenance=provenance,
+        )
+        chat.messages.filter(pk=message.pk).update(created_at=event.received_at)
+    if role == "user":
+        prior = (chat.metadata or {}).get("voice_state", {})
+        state = {"current_step": session.state.get("current_step") or prior.get("current_step", "")}
+        for key in ("decisions", "constraints", "completed_steps"):
+            values = list(dict.fromkeys([*prior.get(key, []), *session.state.get(key, [])]))
+            state[key] = values[-10:]
+        chat.metadata = {**(chat.metadata or {}), "voice_state": state}
+        chat.save(update_fields=["metadata", "updated_at"])
 
 
 def record_event(voice_id, event_id, kind, text, delivery="unknown", client_event_at=None, *, trusted_delivery=False):
@@ -266,6 +318,7 @@ def record_event(voice_id, event_id, kind, text, delivery="unknown", client_even
                     raise ValueError("Event ID already used")
                 old.delivery = delivery
                 old.save(update_fields=["delivery"])
+                persist_thread_event(session, old)
             return old
         if session.status != "active":
             raise ValueError("Voice session ended")
@@ -281,6 +334,7 @@ def record_event(voice_id, event_id, kind, text, delivery="unknown", client_even
         )
         if kind in ("user", "user_transcript"):
             apply_user_event(session, event)
+        persist_thread_event(session, event)
         return event
 
 
@@ -298,6 +352,186 @@ def delegation_budget():
     if isinstance(start_within, bool) or not isinstance(start_within, int | float) or start_within <= 0:
         raise ValueError("Background delegation budget needs a positive start_within_seconds")
     return TurnBudget.from_dict({**config, "expires_at": timezone.now().timestamp() + start_within})
+
+
+# A configured budget can narrow this ceiling, never authorize writes or new inference.
+VOICE_MODEL = "gpt-6-luna"
+VOICE_READ_TOOLS = frozenset(
+    {
+        "ergo_chat_history_sources",
+        "ergo_chat_history_read",
+        "ergo_chat_history_search",
+        "ergo_bot_list",
+        "ergo_thread_list",
+        "ergo_worker_list",
+    }
+)
+BRIEFING_CONTEXT_CHARS = 16000
+VOICE_RESTRICTION = (
+    "Restricted read-only mode: one budgeted gpt-6-luna request at most; no retries, writes, "
+    "worker starts, thread forwarding/sends, or approvals. Only this chat's authorized read tools are available."
+)
+
+
+def delegation_target(session, budget):
+    """Check the actual selected chat, without changing its route or making a model call."""
+    if session.chat.user_id != session.user_id:
+        raise ValueError("Background delegation unavailable: the selected chat is not owned by this user.")
+    if budget.model != VOICE_MODEL:
+        raise ValueError("Background delegation unavailable: the request budget must pin gpt-6-luna.")
+    if budget.allowed_tools - VOICE_READ_TOOLS:
+        raise ValueError("Background delegation unavailable: the budget contains tools outside the read-only ceiling.")
+    bot = get_bot(session.chat.bot_name, session.user)
+    engine = bot.make_engine(session.chat)
+    if not getattr(engine, "supports_request_limits", False):
+        raise ValueError(
+            "Background delegation unavailable: this chat's engine cannot enforce per-request limits "
+            "(subscription/CLI routes are not supported). A dedicated budgeted API-engine profile "
+            "preserving this thread is required."
+        )
+    if getattr(engine, "model", "") != VOICE_MODEL:
+        raise ValueError(
+            "Background delegation unavailable: this chat is not on the pinned gpt-6-luna model. "
+            "A dedicated budgeted API-engine profile preserving this thread is required; voice will not reroute it."
+        )
+    # Only tools already offered by this chat survive; do not load skills or persist metadata.
+    skills = bot.skillset(session.chat)
+    offered = {
+        name
+        for skill in skills.active
+        for name in set(skills.tool_names(skill)) & budget.allowed_tools
+        if not skills.requires_approval(name)
+    }
+    return replace(budget, allowed_tools=budget.allowed_tools & offered)
+
+
+def persisted_voice_event_ids(session):
+    return list(
+        session.chat.messages.filter(provenance__voice_session_id=str(session.id))
+        .order_by("-sequence")
+        .values_list("provenance__voice_event_id", flat=True)[:100]
+    )
+
+
+def delegation_status(session):
+    """Lightweight web/polling status, independent of the web process's budget settings."""
+    if session.status != "active":
+        status = {
+            "delegation_available": False,
+            "restriction": f"{VOICE_RESTRICTION} Background delegation unavailable: the voice session has ended.",
+        }
+    elif session.delegations.exists():
+        status = {
+            "delegation_available": False,
+            "restriction": f"{VOICE_RESTRICTION} This session's one background request is already used.",
+        }
+    else:
+        status = (session.state or {}).get("voice_delegation") or {
+            "delegation_available": None,
+            "restriction": f"{VOICE_RESTRICTION} Bridge has not validated delegation for this session.",
+        }
+    return {"context": "", **status}
+
+
+def startup_briefing(session):
+    """The exact launch chat's bounded normal context, never a global work briefing."""
+    instructions = ""
+    context = (
+        f"Stored launch-thread context, NOT lookup results. Voice continues this same thread.\n"
+        f"User: {session.user.get_username()[:160]}. Bot: {session.chat.bot_name[:160]}. "
+        f"Chat: {session.chat_id}.\n"
+    )
+    if session.chat.user_id != session.user_id:
+        raise ValueError("Voice session owner does not own the launch chat")
+    try:
+        bot = get_bot(session.chat.bot_name, session.user)
+        skills = bot.skillset(session.chat)
+        builder = bot.context_builder(session.chat, "", skills, incoming=False)
+        # The ordinary builder supplies identity, skills and the chat's configured sources.
+        # Native history is supplied once below; the global orchestration overview is on-demand only.
+        from django_ergo.bots.overview import OverviewSource
+
+        builder.sources = [
+            source for source in builder.sources if not isinstance(source, OverviewSource | MessageContextSource)
+        ]
+        builder.budget_tokens = min(builder.budget_tokens, 500)
+        instructions = (
+            session.chat.system_prompt
+            if (session.chat.metadata or {}).get("custom_instructions")
+            else bot.instructions_for(bot.chat_name(session.chat))
+        )
+        instructions = instructions[:8000]
+        context += builder.build().text[:2200] + "\n"
+    except Exception:  # noqa: BLE001 - a broken configured source must not erase saved launch-thread history
+        context += "Configured bot context: not known; could not render this chat's context.\n"
+    summary = session.chat.compactions.order_by("-created_at").first()
+    if summary:
+        context += "Durable compaction summary (bounded):\n" + summary.summary[:2000] + "\n"
+    history = MessageContextSource(
+        SessionSource(session.chat, last_rows=40),
+        max_messages=40,
+        granularity="conversation",
+        title="Recent messages in this launch thread (including finalized voice)",
+    ).render(1750)
+    if history:
+        context += history.render()[:7200] + "\n"
+    state = (session.chat.metadata or {}).get("voice_state", {})
+    context += "Durable reported decisions/current task:\n" + json.dumps(state, ensure_ascii=False)[:1500] + "\n"
+    context += (
+        f"This thread's open task state: "
+        f"{session.chat.workers.filter(status__in=('queued', 'running')).count()} queued/running workers; "
+        f"pending approval: {session.chat.structured_calls.filter(messaging.awaiting_approval()).exists()}; "
+        f"running turn: {session.chat.structured_calls.filter(messaging.running_turn()).exists()}.\n"
+    )
+    attachments = list(session.chat.attachments.order_by("-updated_at").values("id", "filename", "kind")[:5])
+    context += "This thread's attachment references (not file contents):\n"
+    context += json.dumps(attachments, default=str, ensure_ascii=False)[:1000] + "\n"
+    context += (
+        "Cross-thread bots/workers/approvals and external PR state: not known; query only on demand "
+        "through this chat's authorized read tools. Context may be truncated; use history tools for more."
+    )
+    try:
+        if session.status != "active":
+            raise ValueError("Background delegation unavailable: the voice session has ended.")
+        if session.delegations.exists():
+            raise ValueError(
+                "Background delegation unavailable: this session's one background request is already used."
+            )
+        budget = delegation_target(session, delegation_budget())
+    except ValueError as exc:
+        available, reason = False, str(exc)
+    except Exception:  # noqa: BLE001 - configuration errors must not disclose credentials or fail session startup
+        available, reason = (
+            False,
+            "Background delegation unavailable: this chat's budgeted engine could not be validated.",
+        )
+    else:
+        available, reason = (
+            True,
+            "Background delegation is available. Offered read tools: "
+            + (", ".join(sorted(budget.allowed_tools)) or "none")
+            + ".",
+        )
+    briefing = {
+        "context": context[:BRIEFING_CONTEXT_CHARS],
+        "restriction": f"{VOICE_RESTRICTION} {reason}",
+        "delegation_available": available,
+        "instructions": instructions,
+        "voice_event_ids": persisted_voice_event_ids(session),
+    }
+    # Only bridge settings establish capability; the web process has no budget.
+    # Persist sanitized status, never the thread's instructions or rendered context.
+    with transaction.atomic():
+        locked = RealtimeVoiceSession.objects.select_for_update().get(pk=session.id)
+        locked.state = {
+            **locked.state,
+            "voice_delegation": {
+                "delegation_available": available,
+                "restriction": briefing["restriction"],
+            },
+        }
+        locked.save(update_fields=["state"])
+    return briefing
 
 
 PENDING_SECONDS = 60
@@ -387,7 +621,7 @@ def delegate(voice_id, event_id, text):
     if not event_id or len(event_id) > 200 or not text.strip() or len(text) > 4000:
         raise ValueError("Invalid delegation")
     with transaction.atomic():
-        session = RealtimeVoiceSession.objects.select_for_update().select_related("chat").get(pk=voice_id)
+        session = RealtimeVoiceSession.objects.select_for_update().select_related("chat", "user").get(pk=voice_id)
         old = session.delegations.select_related("message").filter(event_id=event_id).first()
         if old:
             if old.text != text:
@@ -397,15 +631,27 @@ def delegate(voice_id, event_id, text):
             raise ValueError("This local voice slice permits one background request")
         if session.status != "active":
             raise ValueError("Voice session ended")
-        context = bridge_state(session.id)
+        try:
+            budget = delegation_target(session, budget)
+        except ValueError:
+            raise
+        except Exception as exc:
+            raise ValueError(
+                "Background delegation unavailable: this chat's budgeted engine could not be validated."
+            ) from exc
+        context = bridge_state(session.id, include_briefing=False)
+        saved_ids = set(persisted_voice_event_ids(session))
         prompt = (
             "Voice session context (assistant speech delivery may be unknown or interrupted):\n"
             + json.dumps(
                 {
                     "state": context["state"],
-                    "events": context["events"],
+                    "events": [event for event in context["events"] if event["event_id"] not in saved_ids],
                     "activities": context["activities"],
                     "delegations": context["delegations"],
+                    "launch_chat_id": context["chat_id"],
+                    "owner_id": context["user_id"],
+                    "restriction": VOICE_RESTRICTION,
                 },
                 ensure_ascii=False,
             )
@@ -416,7 +662,14 @@ def delegate(voice_id, event_id, text):
             None,
             session.chat,
             prompt,
-            metadata=attach({"voice_session_id": str(session.id), "voice_event_id": event_id}, budget),
+            metadata=attach(
+                {
+                    "voice_session_id": str(session.id),
+                    "voice_event_id": event_id,
+                    "context_policy": "current_chat_only",
+                },
+                budget,
+            ),
         )
         RealtimeVoiceDelegation.objects.create(session=session, event_id=event_id, text=text, message=message)
     message.refresh_from_db()
@@ -432,7 +685,7 @@ def session_out(session):
     ):
         end_voice_session(session.id)
         session.refresh_from_db()
-    state = bridge_state(session.id)
+    state = bridge_state(session.id, include_briefing=False)
     standby_seconds = None
     if session.standby_at:
         stop = (
@@ -456,6 +709,7 @@ def session_out(session):
         "state": state["state"],
         "delegations": state["delegations"],
         "activities": state["activities"],
+        "briefing": state["briefing"],
     }
 
 
@@ -490,7 +744,11 @@ def create_session(request, data: CreateIn):
     get_bot(chat.bot_name, request.auth)
     if chat.status == "completed":
         raise HttpError(409, "Chat is closed")
-    return session_out(RealtimeVoiceSession.objects.create(chat=chat, user=request.auth))
+    return session_out(
+        RealtimeVoiceSession.objects.create(
+            chat=chat, user=request.auth, state=(chat.metadata or {}).get("voice_state", {})
+        )
+    )
 
 
 @router.get("/realtime-voice/sessions/{session_id}")

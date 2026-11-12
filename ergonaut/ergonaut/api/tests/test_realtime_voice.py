@@ -3,6 +3,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from threading import Barrier
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -27,7 +28,16 @@ def voice_setup(test_user, settings, monkeypatch):
     user, client = test_user
     settings.REALTIME_VOICE_ENABLED = True
     settings.REALTIME_VOICE_USERS = {user.get_username()}
-    monkeypatch.setattr(realtime_voice, "get_bot", lambda *args: object())
+    skills = SimpleNamespace(
+        active=["history"],
+        tool_names=lambda _: ["ergo_chat_history_search"],
+        requires_approval=lambda _: False,
+    )
+    bot = SimpleNamespace(
+        make_engine=lambda _: SimpleNamespace(supports_request_limits=True, model="gpt-6-luna"),
+        skillset=lambda _: skills,
+    )
+    monkeypatch.setattr(realtime_voice, "get_bot", lambda *args: bot)
     chat = ConversationSession.objects.create(user=user, bot_name="test", engine_type="openai")
     return user, client, chat
 
@@ -407,3 +417,15 @@ def test_concurrent_resume_and_bridge_claim_are_one_shot(voice_setup, settings):
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         assert sorted(pool.map(claim, (1, 2))) == [False, True]
+
+
+def test_voice_decisions_seed_the_next_interface_to_the_same_thread(voice_setup):
+    _, client, chat = voice_setup
+    voice, url = create(client, chat)
+    realtime_voice.record_event(voice["id"], "decision", "user", "We will use coconut milk.")
+    assert post(client, url + "/end", {}).status_code == 200
+    fresh, _ = create(client, chat)
+    assert fresh["id"] != voice["id"]
+    assert fresh["state"]["decisions"] == ["We will use coconut milk."]
+    assert "We will use coconut milk." in realtime_voice.bridge_state(fresh["id"])["briefing"]["context"]
+    assert chat.messages.filter(provenance__voice_event_id="decision").count() == 1

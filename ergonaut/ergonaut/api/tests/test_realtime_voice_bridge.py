@@ -623,3 +623,47 @@ def test_standby_speech_races_and_teardown(cooking, settings, speech_timing):
     agents = []
     started = closing = allow_close = None
     async_to_sync(scenario)()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_launch_thread_history_survives_standby_without_duplicate_provider_transcript(cooking, settings):
+    chat, vid, _ = cooking
+    settings.REALTIME_VOICE_USERS = {chat.user.get_username()}
+    settings.REALTIME_VOICE_STANDBY_ENABLED = True
+    realtime_voice.record_event(vid, "continuity-marker", "user", "The pan is warm now.")
+    assert realtime_voice.claim_bridge(vid, "initial")
+    request = SimpleNamespace(auth=chat.user)
+    realtime_voice.request_standby(request, vid)
+    assert realtime_voice.begin_standby_close(vid, "initial")
+    assert realtime_voice.finish_standby_close(vid, "initial")
+    original_deadline = realtime_voice.bridge_state(vid)["bridge_started_at"]
+    realtime_voice.resume_session(request, vid)
+    assert realtime_voice.claim_bridge(vid, "resumed")
+    snapshot = realtime_voice.bridge_state(vid)
+    assert snapshot["chat_id"] == str(chat.id)
+    assert snapshot["bridge_started_at"] == original_deadline
+    assert "continuity-marker" in snapshot["briefing"]["voice_event_ids"]
+    restored = bridge.startup_context(snapshot)
+    text = "\n".join(item.text_content for item in restored.items if isinstance(item, llm.ChatMessage))
+    assert text.count("The pan is warm now.") == 1
+    assert not any(item.id == "continuity-marker" for item in restored.items)
+
+    async def instructions():
+        assistant = bridge.Assistant(vid, snapshot, None)
+        assert "exact launch thread" in assistant.instructions
+        assert "Restricted read-only mode" in assistant.instructions
+        assert "gpt-6-luna" in assistant.instructions
+        assert "thread forwarding/sends" in assistant.instructions
+
+    async_to_sync(instructions)()
+
+
+def test_old_unpersisted_voice_events_are_not_lost_when_thread_context_is_available():
+    snapshot = {
+        "state": {},
+        "events": [{"event_id": "old-event", "kind": "user", "text": "Earlier voice text."}],
+        "delegations": [],
+        "briefing": {"context": "Exact launch context.", "voice_event_ids": []},
+    }
+    restored = bridge.startup_context(snapshot)
+    assert any(item.id == "old-event" for item in restored.items)
