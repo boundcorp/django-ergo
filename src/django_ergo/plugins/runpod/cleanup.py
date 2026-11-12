@@ -20,6 +20,7 @@ import time
 from dataclasses import asdict
 from pathlib import Path
 
+from .budget import MAX_RENTAL_SECONDS
 from .experiment import Experiment
 from .transport import FixtureRunpodREST
 from .transport import Ownership
@@ -54,12 +55,42 @@ class RESTCleanup:
         """Bind cleanup-only ownership; this cannot establish storage absence."""
         self._configure(ownership, None)
 
-    def configure_create(self, *, account, image, container_disk_gb, gpu_type):
-        """Bind the exact fixture request, including explicit zero optional storage."""
+    def configure_create(
+        self, *, account, image, container_disk_gb, gpu_type, data_center_ids
+    ):
+        """Bind a digest, explicit location allowlist and existing absolute clock.
+
+        This remains an offline fixture profile, not permission for a live create.
+        Omitting networkVolumeId (and any template) deliberately attaches none.
+        """
+        if not isinstance(image, str) or not re.fullmatch(
+            r"[^@\s]+@sha256:[0-9a-f]{64}", image
+        ):
+            msg = "digest-pinned image required"
+            raise ValueError(msg)
+        if (
+            not isinstance(data_center_ids, list | tuple)
+            or not data_center_ids
+            or any(
+                not isinstance(value, str)
+                or not re.fullmatch(r"[A-Z0-9]+(?:-[A-Z0-9]+)+", value)
+                for value in data_center_ids
+            )
+            or len(set(data_center_ids)) != len(data_center_ids)
+        ):
+            msg = "explicit nonempty data-center allowlist required"
+            raise ValueError(msg)
         if not isinstance(gpu_type, str) or not gpu_type:
             msg = "GPU type required"
             raise ValueError(msg)
-        attempt = self.experiment.status()["marker"]
+        state = self.experiment.status()
+        created, deadline = state["created"], state["deadline"]
+        self.experiment._time(created)
+        self.experiment._time(deadline)
+        if not 0 < deadline - created <= MAX_RENTAL_SECONDS:
+            msg = "absolute deadline must be within one hour of reservation"
+            raise ValueError(msg)
+        attempt = state["marker"]
         body = {
             "name": "ergo-" + attempt,
             "computeType": "GPU",
@@ -69,7 +100,12 @@ class RESTCleanup:
             "imageName": image,
             "containerDiskInGb": container_disk_gb,
             "volumeInGb": 0,
-            "env": {"ERGO_ATTEMPT_ID": attempt},
+            "dataCenterIds": list(data_center_ids),
+            "dataCenterPriority": "custom",
+            "env": {
+                "ERGO_ATTEMPT_ID": attempt,
+                "ERGO_DEADLINE": str(deadline),
+            },
         }
         fingerprint = hashlib.sha256(
             json.dumps(

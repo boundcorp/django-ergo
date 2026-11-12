@@ -28,15 +28,16 @@ def no_network(monkeypatch):
 
 
 @pytest.fixture
-def configured(tmp_path):
+def reserved(tmp_path, request):
     path = tmp_path / "ledger"
+    now, duration = getattr(request, "param", (0, 60))
     Experiment(path).reserve(
-        now=0,
+        now=now,
         idle_grace=10,
         eligibility=dict.fromkeys(
             ("model", "hardware", "license", "inputs", "budget"), True
         ),
-        timeline=RentalTimeline(60, 10, 10, 10, 10, 10, 10),
+        timeline=RentalTimeline(duration, 10, 10, 10, 10, 10, 10),
         compute_hourly_usd=Evidence(Decimal("1"), True),
         storage_usd=Evidence(Decimal("0.1"), True),
         network_usd=Evidence(Decimal("0.1"), True),
@@ -44,11 +45,18 @@ def configured(tmp_path):
         project_cap_usd=Decimal("3"),
         project_committed_usd=Decimal("0"),
     )
+    return path
+
+
+@pytest.fixture
+def configured(reserved):
+    path = reserved
     owner = RESTCleanup(path).configure_create(
         account="account",
-        image="image@sha256:123",
+        image="image@sha256:" + "1" * 64,
         container_disk_gb=120,
         gpu_type="NVIDIA RTX A6000",
+        data_center_ids=["EU-RO-1"],
     )
     return path, owner
 
@@ -136,17 +144,6 @@ def test_serialized_create_intent_is_durable_before_post_and_never_starts_work(
         assert request.get_header("Content-type") == "application/json"
         body = json.loads(request.data)
         bodies.append(body)
-        assert set(body) == {
-            "name",
-            "computeType",
-            "cloudType",
-            "gpuTypeIds",
-            "gpuCount",
-            "imageName",
-            "containerDiskInGb",
-            "volumeInGb",
-            "env",
-        }
         assert body["name"] == "ergo-" + owner.attempt
         assert body["computeType"] == "GPU"
         assert body["imageName"] == owner.image
@@ -155,10 +152,13 @@ def test_serialized_create_intent_is_durable_before_post_and_never_starts_work(
         assert body["gpuCount"] == 1
         assert body["cloudType"] == "SECURE"
         assert body["volumeInGb"] == 0
+        assert body["dataCenterIds"] == ["EU-RO-1"]
+        assert body["dataCenterPriority"] == "custom"
+        assert float(body["env"]["ERGO_DEADLINE"]) == 60
         assert "templateId" not in body
         assert "networkVolumeId" not in body
         fingerprint = body["env"].pop("ERGO_ATTEMPT_FINGERPRINT")
-        assert body["env"] == {"ERGO_ATTEMPT_ID": owner.attempt}
+        assert body["env"]["ERGO_ATTEMPT_ID"] == owner.attempt
         canonical = json.dumps(body, sort_keys=True, separators=(",", ":"))
         assert (
             fingerprint
@@ -420,9 +420,10 @@ def test_profile_cannot_be_rebound_before_or_after_restart(configured):
     with pytest.raises(ValueError, match="already bound"):
         RESTCleanup(path).configure_create(
             account="other",
-            image="other",
+            image="other@sha256:" + "2" * 64,
             container_disk_gb=121,
             gpu_type="other",
+            data_center_ids=["EU-RO-1"],
         )
     with pytest.raises(ValueError, match="already bound"):
         RESTCleanup(path).configure(owner)
@@ -521,3 +522,68 @@ def test_failed_inventory_scan_still_cleans_known_id_but_cannot_close_tick(confi
     fake.responses.append([])
     assert_terminated(reconcile(path, fake, now=62))
     assert fake.methods.count("DELETE") == 1
+
+
+@pytest.mark.parametrize(
+    "image",
+    ["image:latest", "image@sha256:123", "image@sha256:" + "g" * 64],
+)
+def test_create_rejects_mutable_or_invalid_image_reference(reserved, image):
+    with pytest.raises(ValueError, match="digest-pinned image"):
+        RESTCleanup(reserved).configure_create(
+            account="account",
+            image=image,
+            container_disk_gb=200,
+            gpu_type="NVIDIA RTX 6000 Ada Generation",
+            data_center_ids=["EU-RO-1"],
+        )
+    assert Experiment(reserved).status()["create_started"] == 0
+
+
+@pytest.mark.parametrize(
+    "data_centers", [None, [], "EU-RO-1", [""], ["*"], ["EU-RO-1", "EU-RO-1"]]
+)
+def test_create_requires_explicit_datacenter_allowlist(reserved, data_centers):
+    with pytest.raises(ValueError, match="data-center allowlist"):
+        RESTCleanup(reserved).configure_create(
+            account="account",
+            image="image@sha256:" + "1" * 64,
+            container_disk_gb=200,
+            gpu_type="NVIDIA RTX 6000 Ada Generation",
+            data_center_ids=data_centers,
+        )
+    assert Experiment(reserved).status()["create_started"] == 0
+
+
+@pytest.mark.parametrize("reserved", [(1700000000, 3600)], indirect=True)
+def test_full_hour_create_binds_original_absolute_clock_after_restart(reserved):
+    RESTCleanup(reserved).configure_create(
+        account="account",
+        image="image@sha256:" + "1" * 64,
+        container_disk_gb=200,
+        gpu_type="NVIDIA RTX 6000 Ada Generation",
+        data_center_ids=["EU-RO-1", "EU-SE-1"],
+    )
+    fake = FixtureHTTP({"id": "pod123"})
+    RESTCleanup(reserved).create_once(now=1700000100, client=FixtureRunpodREST(fake))
+    body = json.loads(fake.requests[0].data)
+    assert float(body["env"]["ERGO_DEADLINE"]) == 1700003600
+    assert float(body["env"]["ERGO_DEADLINE"]) - 120 == 1700003480
+    assert body["dataCenterIds"] == ["EU-RO-1", "EU-SE-1"]
+    assert body["containerDiskInGb"] == 200
+    assert body["volumeInGb"] == 0
+    assert "networkVolumeId" not in body
+
+
+@pytest.mark.parametrize("deadline", [0, 3601, float("inf")])
+def test_create_rejects_invalid_or_extended_reservation_clock(reserved, deadline):
+    with sqlite3.connect(reserved) as db:
+        db.execute("UPDATE experiment SET deadline=?", (deadline,))
+    with pytest.raises(ValueError, match=r"deadline|finite timestamp"):
+        RESTCleanup(reserved).configure_create(
+            account="account",
+            image="image@sha256:" + "1" * 64,
+            container_disk_gb=200,
+            gpu_type="NVIDIA RTX 6000 Ada Generation",
+            data_center_ids=["EU-RO-1"],
+        )

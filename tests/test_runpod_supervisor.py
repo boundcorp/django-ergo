@@ -52,9 +52,10 @@ def prepared(tmp_path):
     )
     owner = RESTCleanup(path).configure_create(
         account="account",
-        image="image@sha256:123",
+        image="image@sha256:" + "1" * 64,
         container_disk_gb=120,
         gpu_type="NVIDIA RTX A6000",
+        data_center_ids=["EU-RO-1"],
     )
     return path, owner
 

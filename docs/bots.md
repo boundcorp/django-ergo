@@ -1258,6 +1258,9 @@ image-conditioned worker and independently supervised cleanup preparation.
 See [Offline Runpod bridge](plugins.md#offline-runpod-bridge),
 [H3 runner](runpod-h3.md), and [cleaner supervision](runpod-cleaner.md).
 No rental, deployment or chapter execution is enabled by bot configuration.
+Fixture create profiles require a full image digest, explicit datacenter
+allowlist, the reservation's absolute ≤1h deadline and zero optional/network
+volumes; they do not enable a live-create credential path.
 
 ### ergo_kb
 

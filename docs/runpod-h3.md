@@ -85,11 +85,10 @@ wrong-canvas, malformed or non-video result fails; fake MP4 is never success.
 
 Prerequisites: existing account-bound REST ledger and actual resource receipt;
 sole approved launch supervisor; prepared image digest; explicit quote admitted
-through `budget.admit_rental`; previously requested operator/deployment/use
-arrangement; stable off-Pod ledger/export filesystem; authorized tunnel to the
-Pod's **loopback** port30010. No public ingress is required. The existing bridge
-still intentionally has no live-create credential path; `create_once` only
-accepts the in-memory fixture transport. These commands do not create a Pod.
+through `budget.admit_rental`; stable off-Pod ledger/export filesystem; authorized
+tunnel to the Pod's **loopback** port30010. No public model ingress is required.
+The bridge still has no live-create credential path; `create_once` only accepts
+the in-memory fixture transport. These commands do not create a Pod.
 
 Use the already-injected scoped credential environment-variable **name**, not
 a secret value, for `$SCOPED_CALLBACK_ENV`. Establish cleaner freshness before
@@ -184,10 +183,23 @@ deadline enforcement can legitimately yield a hashed partial manifest.
 - [Public pinned CUDA base digest](https://hub.docker.com/v2/repositories/nvidia/cuda/tags/13.0.0-cudnn-devel-ubuntu24.04).
 
 Engineering launch checklist: build/record final image and dependency snapshot;
-read accepted live quote/profile; bind deadline/image/200GBdisk/zero volumes and
-same scoped callback to the existing ledger; verify separately supervised
-cleaner freshness and tunnel; record cold timing evidence; run only this six-shot
-batch; inspect retained defects and partial/complete manifest; continue cleanup
-until compute+storage absence. One consolidated outstanding human detail is the
-already-requested actual operator/deployment/use arrangement; Mexico partner
-ownership is accepted and no generic ownership/license re-investigation is needed.
+read accepted live quote/profile; retain the same scoped callback and existing
+ledger; verify independently supervised cleaner freshness and tunnel; record cold
+timings; run only this six-shot batch; inspect retained defects and partial/complete
+manifest; continue cleanup until compute+storage absence.
+
+`RESTCleanup.configure_create` requires a named `@sha256:` image reference with
+a full 64-hex digest and an explicit nonempty `data_center_ids` allowlist. It
+fingerprints those selected locations (`dataCenterIds`, custom order), the
+existing ledger's absolute `ERGO_DEADLINE` (at most reservation+3600s), GPU, disk
+and zero optional volume. Network volumes and templates are deliberately omitted;
+no provider default location or storage attachment is allowed. The launcher's
+deadline−120s cutoff means work ends by minute58 of a full-hour reservation,
+including startup; a restart never renews it. These are fixture-payload controls,
+not evidence of actual placement or a live provider TTL.
+
+Operator update: Lee confirmed at22:42 that operation/video use is in permitted
+countries; at22:43 the LEGAL TEAM owns review. The prior pending operator/use
+question is closed, not a new engineering approval gate or a legal-clearance
+claim. Select the actual permitted datacenter allowlist before any separately
+authorized launch; this preparation performs no rental or legal investigation.

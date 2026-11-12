@@ -36,9 +36,11 @@ Live on rigel from `~/p/boundcorp/django-ergo`, bots from `boundcorp/ergo-bots`.
 - [ ] **GPU execution**: live create remains deliberately disabled. For the
   single supervised pilot, build/record the image, admit an actual quote with
   storage/margin, retain the existing scoped credential binding and independent
-  cleaner, resolve the already-requested operator/deployment/use arrangement,
-  and measure cold conditioned fit under the unchanged ≤1h deadline. The ≤$3
-  estimate is not a zero-overrun guarantee gate. Full multi-user bot execution
+  cleaner, and measure cold conditioned fit under the unchanged ≤1h deadline.
+  Fixture profiles now bind a full image digest, explicit datacenter allowlist,
+  the original absolute deadline and zero optional/network volumes. Lee confirmed
+  permitted-country operation/use; the LEGAL TEAM owns review, not engineering.
+  The ≤$3 estimate is not a zero-overrun guarantee gate. Full multi-user bot execution
   still needs native Worker/shared-ledger and atomic global/project reservations;
   those are not prerequisites to this bounded local preparation.
 

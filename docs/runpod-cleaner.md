@@ -5,8 +5,9 @@ paid model calls. The runner does not create a Pod. Use the same existing SQLite
 experiment ledger, REST ownership profile, resource receipts, and explicitly
 selected scoped credential callback as the worker/recovery flow. No installation,
 credential relocation, new account selection, service deployment, or restart is
-needed. Mexico project ownership is accepted; the previously requested
-operator/deployment/use detail remains pending, not a new license investigation.
+needed. Lee confirmed operation/video use in permitted countries at22:42;
+the LEGAL TEAM owns review at22:43. No pending legal question is assigned to
+engineering, and this is not a legal-clearance claim.
 
 ## Two independently running processes
 
