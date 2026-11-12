@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Room, RoomEvent, Track } from 'livekit-client'
 import { api, type RealtimeVoiceSession } from '../api'
+import { initialVoiceAudioOutput, VoiceAudioOutput } from '../voiceAudioOutput'
 
 type Phase = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'disconnected'
 
@@ -24,6 +25,8 @@ export function RealtimeVoice({
   const [error, setError] = useState('')
   const [ending, setEnding] = useState(false)
   const [action, setAction] = useState<'standby' | 'resume' | 'end' | null>(null)
+  const [output, setOutput] = useState(initialVoiceAudioOutput)
+  const outputRouting = useRef<VoiceAudioOutput | null>(null)
   const dialog = useRef<HTMLDialogElement>(null)
   const room = useRef<Room | null>(null)
   const audio = useRef<HTMLDivElement>(null)
@@ -54,6 +57,7 @@ export function RealtimeVoice({
     room.current = null
     if (current) void current.disconnect()
     audio.current?.replaceChildren()
+    outputRouting.current?.clearTracks()
     setPhase('disconnected')
     setMuted(false)
     setMicrophone('unknown')
@@ -65,6 +69,7 @@ export function RealtimeVoice({
       const current = room.current
       room.current = null
       if (current) void current.disconnect()
+      outputRouting.current?.dispose()
     },
     [],
   )
@@ -134,11 +139,43 @@ export function RealtimeVoice({
       if (attempt !== generation.current) return
       const current = new Room()
       room.current = current
+      const subscribedAudio = new Map<Track, HTMLMediaElement>()
       current.on(RoomEvent.TrackSubscribed, track => {
-        if (track.kind === Track.Kind.Audio && audio.current) audio.current.appendChild(track.attach())
+        if (room.current !== current || attempt !== generation.current) return
+        if (track.kind === Track.Kind.Audio && audio.current) {
+          const element = document.createElement('audio')
+          const routing = outputRouting.current
+          subscribedAudio.set(track, element)
+          // Apply the sink before LiveKit attaches/plays the remote stream, so
+          // a new track doesn't briefly play through the system default.
+          void (routing?.attach(element) ?? Promise.resolve())
+            .then(() => {
+              if (
+                room.current !== current ||
+                attempt !== generation.current ||
+                subscribedAudio.get(track) !== element ||
+                !audio.current
+              ) {
+                routing?.detach(element)
+                return
+              }
+              audio.current.appendChild(track.attach(element))
+            })
+            .catch(e => {
+              routing?.detach(element)
+              if (room.current === current) setError(e instanceof Error ? e.message : String(e))
+            })
+        }
       })
       current.on(RoomEvent.TrackUnsubscribed, track => {
-        track.detach().forEach(element => element.remove())
+        if (room.current !== current || attempt !== generation.current) return
+        const element = subscribedAudio.get(track)
+        subscribedAudio.delete(track)
+        if (element) outputRouting.current?.detach(element)
+        track.detach().forEach(element => {
+          outputRouting.current?.detach(element)
+          element.remove()
+        })
       })
       current.on(RoomEvent.Reconnecting, () => {
         if (room.current === current) {
@@ -147,12 +184,16 @@ export function RealtimeVoice({
         }
       })
       current.on(RoomEvent.Reconnected, () => {
-        if (room.current === current) setPhase('connected')
+        if (room.current === current) {
+          setPhase('connected')
+          void outputRouting.current?.refresh()
+        }
       })
       current.on(RoomEvent.Disconnected, () => {
         if (room.current === current) {
           room.current = null
           audio.current?.replaceChildren()
+          outputRouting.current?.clearTracks()
           setPhase('disconnected')
           setMicrophone('unknown')
         }
@@ -169,6 +210,7 @@ export function RealtimeVoice({
       }
       setMicrophone('enabled')
       setPhase('connected')
+      void outputRouting.current?.refresh()
     } catch (e) {
       if (attempt !== generation.current) return
       disconnect()
@@ -177,6 +219,11 @@ export function RealtimeVoice({
   }
 
   function show() {
+    if (!outputRouting.current) {
+      setOutput(initialVoiceAudioOutput)
+      outputRouting.current = new VoiceAudioOutput(document.createElement('audio'), navigator.mediaDevices, setOutput)
+      void outputRouting.current.initialize()
+    }
     setOpen(true)
     dialog.current?.showModal()
     void connect()
@@ -189,6 +236,8 @@ export function RealtimeVoice({
     )
       return
     disconnect()
+    outputRouting.current?.dispose()
+    outputRouting.current = null
     setOpen(false)
     dialog.current?.close()
   }
@@ -289,6 +338,11 @@ export function RealtimeVoice({
             <h2 id="realtime-voice-title" className="font-display text-xl font-bold">
               Voice room
             </h2>
+            {voice?.briefing?.restriction && (
+              <p className="mt-2 text-sm text-ink" role="status">
+                {voice.briefing.restriction}
+              </p>
+            )}
             <p className="mt-1 text-sm text-muted" role="status">
               {standbyEnabled && voice?.standby_state === 'closing'
                 ? 'Disconnecting…'
@@ -346,6 +400,59 @@ export function RealtimeVoice({
             ×
           </button>
         </div>
+        <section className="border-b border-stroke p-4 text-sm" aria-label="Audio output">
+          {output.support === 'available' && (
+            <div className="flex flex-wrap items-center gap-2">
+              <label htmlFor="voice-audio-output">Audio output</label>
+              <select
+                id="voice-audio-output"
+                value={output.applied ?? '__unknown__'}
+                disabled={output.busy}
+                onChange={event => void outputRouting.current?.select(event.target.value)}
+                className="min-h-11 max-w-full rounded-md border border-stroke bg-surface px-2"
+              >
+                <option value="">System default (phone/OS controlled)</option>
+                {output.applied === null && <option value="__unknown__">Output unknown</option>}
+                {output.applied && !output.devices.some(device => device.deviceId === output.applied) && (
+                  <option value={output.applied}>Previously selected output (availability unknown)</option>
+                )}
+                {output.devices.map(device => (
+                  <option key={device.deviceId} value={device.deviceId}>
+                    {device.label}
+                  </option>
+                ))}
+              </select>
+              {output.chooser && (
+                <button
+                  type="button"
+                  disabled={output.busy}
+                  onClick={() => void outputRouting.current?.choose()}
+                  className="min-h-11 rounded-md border border-stroke px-3 py-2 disabled:opacity-50"
+                >
+                  Choose another output
+                </button>
+              )}
+              <button
+                type="button"
+                disabled={output.busy}
+                onClick={() => void outputRouting.current?.refresh()}
+                className="min-h-11 rounded-md border border-stroke px-3 py-2 disabled:opacity-50"
+              >
+                Refresh outputs
+              </button>
+            </div>
+          )}
+          <div role="status" className="mt-1 text-muted">
+            {output.support === 'available' && (
+              <p>
+                {output.busy ? 'Applying/checking browser output… ' : ''}
+                Browser selection only; hearing and the physical audio route are not confirmed. Microphone control is
+                separate. If an output is missing, use your phone or operating system audio route controls.
+              </p>
+            )}
+            {output.message && <p>{output.message}</p>}
+          </div>
+        </section>
         <div className="max-h-[50dvh] overflow-y-auto p-4" aria-live="polite">
           {voice?.events.map(event => (
             <p key={event.event_id} className="mb-3 text-sm">

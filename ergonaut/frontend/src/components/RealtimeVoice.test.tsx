@@ -1,8 +1,9 @@
-import { afterEach, beforeEach, expect, test } from 'bun:test'
+import { afterEach, beforeEach, expect, spyOn, test } from 'bun:test'
 import { act, createElement } from 'react'
 import type { createRoot as CreateRoot, Root } from 'react-dom/client'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { Window } from 'happy-dom'
+import { LocalParticipant, Room, RoomEvent, Track } from 'livekit-client'
 import { api, type RealtimeVoiceSession } from '../api'
 import { RealtimeVoice } from './RealtimeVoice'
 import { VoiceSessionCard } from './VoiceSessionCard'
@@ -27,6 +28,8 @@ let window: Window
 let root: Root
 let container: HTMLDivElement
 let createRoot: typeof CreateRoot
+let restoreOutputs = () => {}
+const restoreRoomMocks: (() => void)[] = []
 
 function button(label: string) {
   const found = [...container.querySelectorAll('button')].find(item => item.textContent?.trim() === label)
@@ -70,6 +73,9 @@ afterEach(() => {
   api.endRealtimeVoice = original.end
   api.standbyRealtimeVoice = original.standby
   api.resumeRealtimeVoice = original.resume
+  restoreOutputs()
+  restoreOutputs = () => {}
+  restoreRoomMocks.splice(0).forEach(restore => restore())
   window.happyDOM.close()
 })
 
@@ -428,3 +434,268 @@ test.each(['failed', 'error', 'answered'])(
     expect(container.querySelector('[aria-label="Durable background result"]')).toBeNull()
   },
 )
+
+// These fixtures are silent: neither output detection nor a rejected token
+// constructs a room, plays media or requests a microphone.
+function installOutputs() {
+  const prototype = window.HTMLMediaElement.prototype
+  const previousSink = Object.getOwnPropertyDescriptor(prototype, 'sinkId')
+  const previousMethod = Object.getOwnPropertyDescriptor(prototype, 'setSinkId')
+  const previousDevices = Object.getOwnPropertyDescriptor(window.navigator, 'mediaDevices')
+  const sinks = new WeakMap<object, string>()
+  const listeners = new Set<() => void>()
+  const routing = {
+    rejected: null as string | null,
+    captures: 0,
+    outputs: [
+      { kind: 'audiooutput', deviceId: 'bluetooth', label: 'Bluetooth headset' },
+      { kind: 'audiooutput', deviceId: 'speaker', label: 'Speakers' },
+    ],
+    async enumerateDevices() {
+      return routing.outputs
+    },
+    async getUserMedia() {
+      routing.captures++
+      throw new Error('No capture allowed')
+    },
+    addEventListener(_event: string, listener: () => void) {
+      listeners.add(listener)
+    },
+    removeEventListener(_event: string, listener: () => void) {
+      listeners.delete(listener)
+    },
+    change() {
+      listeners.forEach(listener => listener())
+    },
+    listeners,
+  }
+  Object.defineProperties(prototype, {
+    sinkId: {
+      configurable: true,
+      get() {
+        return sinks.get(this) ?? ''
+      },
+    },
+    setSinkId: {
+      configurable: true,
+      async value(deviceId: string) {
+        if (routing.rejected === deviceId) throw new DOMException('Blocked', 'NotAllowedError')
+        sinks.set(this, deviceId)
+      },
+    },
+  })
+  Object.defineProperty(window.navigator, 'mediaDevices', { configurable: true, value: routing })
+  restoreOutputs = () => {
+    if (previousSink) Object.defineProperty(prototype, 'sinkId', previousSink)
+    else Reflect.deleteProperty(prototype, 'sinkId')
+    if (previousMethod) Object.defineProperty(prototype, 'setSinkId', previousMethod)
+    else Reflect.deleteProperty(prototype, 'setSinkId')
+    if (previousDevices) Object.defineProperty(window.navigator, 'mediaDevices', previousDevices)
+    else Reflect.deleteProperty(window.navigator, 'mediaDevices')
+  }
+  return routing
+}
+
+async function openOutputPanel() {
+  api.realtimeVoiceConfig = async () => ({ enabled: true })
+  api.realtimeVoiceSessions = async () => [session]
+  api.realtimeVoiceToken = async () => {
+    throw new Error('No room connection in this fixture')
+  }
+  await act(async () => {
+    root.render(createElement(RealtimeVoice, { sessionId: 'chat-1', disabled: false }))
+  })
+  await act(async () => {
+    button('Voice room').click()
+  })
+}
+
+test('unsupported/unknown browser APIs show OS guidance instead of a cosmetic output toggle', async () => {
+  const routing = installOutputs()
+  Object.defineProperty(window.HTMLMediaElement.prototype, 'setSinkId', { configurable: true, value: undefined })
+  await openOutputPanel()
+  expect(container.querySelector('select')).toBeNull()
+  expect(container.textContent).toContain('phone or operating system')
+  expect(container.textContent).toContain('cannot confirm the physical route')
+  expect(routing.captures).toBe(0)
+})
+
+test('the real selector shows the applied device and preserves it after permission rejection', async () => {
+  const routing = installOutputs()
+  await openOutputPanel()
+  const select = container.querySelector('select')!
+  expect(select.value).toBe('')
+  expect(select.textContent).toContain('Bluetooth headset')
+  await act(async () => {
+    select.value = 'bluetooth'
+    select.dispatchEvent(new window.Event('change', { bubbles: true }))
+  })
+  expect(select.value).toBe('bluetooth')
+  routing.rejected = 'speaker'
+  await act(async () => {
+    select.value = 'speaker'
+    select.dispatchEvent(new window.Event('change', { bubbles: true }))
+  })
+  expect(select.value).toBe('bluetooth')
+  expect(container.textContent).toContain('permission was denied or blocked')
+  expect(container.textContent).toContain('hearing and the physical audio route are not confirmed')
+  expect(container.textContent).toContain('Microphone control is separate')
+  expect(routing.captures).toBe(0)
+})
+
+test('a denied capability probe hides the selector and remains phone-controlled', async () => {
+  const routing = installOutputs()
+  routing.rejected = ''
+  await openOutputPanel()
+  expect(container.querySelector('select')).toBeNull()
+  expect(container.textContent).toContain('permission was denied or blocked')
+  expect(container.textContent).toContain('phone or operating system')
+  expect(routing.captures).toBe(0)
+})
+
+test('device loss updates the selector, close tears down listeners, and reopening starts at default', async () => {
+  const routing = installOutputs()
+  await openOutputPanel()
+  await act(async () => {
+    const select = container.querySelector('select')!
+    select.value = 'bluetooth'
+    select.dispatchEvent(new window.Event('change', { bubbles: true }))
+  })
+  expect(routing.listeners.size).toBe(1)
+  await act(async () => {
+    routing.outputs = []
+    routing.change()
+  })
+  expect(container.querySelector('select')?.value).toBe('')
+  expect(container.textContent).toContain('no longer available')
+  await act(async () => {
+    ;(container.querySelector('[aria-label="Close voice room"]') as HTMLButtonElement).click()
+  })
+  expect(routing.listeners.size).toBe(0)
+  await act(async () => {
+    button('Voice room').click()
+  })
+  expect(container.querySelector('select')?.value).toBe('')
+  expect(routing.listeners.size).toBe(1)
+  expect(routing.captures).toBe(0)
+})
+
+test('optional restricted-mode briefing is upfront even when the voice token is unavailable', async () => {
+  installOutputs()
+  api.realtimeVoiceConfig = async () => ({ enabled: true })
+  const restriction = 'Restricted mode: one read-only gpt-6-luna background request; no write actions.'
+  api.realtimeVoiceSessions = async () => [
+    { ...session, briefing: { context: 'Current thread', restriction, delegation_available: true } },
+  ]
+  api.realtimeVoiceToken = async () => {
+    throw new Error('Token unavailable')
+  }
+  await act(async () => {
+    root.render(createElement(RealtimeVoice, { sessionId: 'chat-1', disabled: false }))
+  })
+  await act(async () => {
+    button('Voice room').click()
+  })
+  const dialog = container.querySelector('dialog')!
+  expect(dialog.querySelector('[role="status"]')?.textContent).toBe(restriction)
+  expect(dialog.textContent!.indexOf(restriction)).toBeLessThan(dialog.textContent!.indexOf('Hello'))
+})
+
+test('mocked room events reapply outputs through reconnect and new-room standby resume without capture', async () => {
+  const routing = installOutputs()
+  const rooms: Room[] = []
+  const originalOn = Room.prototype.on
+  // connect/disconnect are instance fields in LiveKit 2.23.0. Replace them
+  // when the component registers its first handler, before it can connect.
+  const observe = spyOn(Room.prototype, 'on').mockImplementation(function (this: Room, event, listener) {
+    if (event === RoomEvent.TrackSubscribed) {
+      this.connect = async () => {
+        rooms.push(this)
+      }
+      this.disconnect = async () => {}
+    }
+    return originalOn.call(this, event, listener)
+  })
+  const microphone = spyOn(LocalParticipant.prototype, 'setMicrophoneEnabled').mockResolvedValue(undefined)
+  restoreRoomMocks.push(
+    () => observe.mockRestore(),
+    () => microphone.mockRestore(),
+  )
+  api.realtimeVoiceConfig = async () => ({ enabled: true, standby_enabled: true })
+  const live = { ...session, standby_state: 'live' as const }
+  api.realtimeVoiceSessions = async () => [live]
+  api.realtimeVoiceSession = async () => live
+  api.realtimeVoiceToken = async () => ({ url: 'wss://never-joined.invalid', token: 'not-a-real-token' })
+  api.standbyRealtimeVoice = async () => ({ ...live, standby_state: 'standby' })
+  api.resumeRealtimeVoice = async () => ({ ...live, standby_state: 'resuming' })
+  await act(async () => {
+    root.render(createElement(RealtimeVoice, { sessionId: 'chat-1', disabled: false }))
+  })
+  await act(async () => {
+    button('Voice room').click()
+  })
+  expect(rooms).toHaveLength(1)
+  let firstAudio: HTMLMediaElement
+  const firstTrack = {
+    kind: Track.Kind.Audio,
+    attach(element: HTMLMediaElement) {
+      firstAudio = element
+      return element
+    },
+    detach: () => (firstAudio ? [firstAudio] : []),
+  }
+  await act(async () => {
+    rooms[0].emit(RoomEvent.TrackSubscribed, firstTrack)
+    const select = container.querySelector('select')!
+    select.value = 'bluetooth'
+    select.dispatchEvent(new window.Event('change', { bubbles: true }))
+  })
+  expect(firstAudio.sinkId).toBe('bluetooth')
+  await act(async () => {
+    rooms[0].emit(RoomEvent.Reconnecting)
+    await firstAudio.setSinkId('')
+    rooms[0].emit(RoomEvent.Reconnected)
+  })
+  expect(firstAudio.sinkId).toBe('bluetooth')
+  await act(async () => {
+    button('Standby while waiting').click()
+  })
+  expect(firstAudio.isConnected).toBe(false)
+  await act(async () => {
+    button('Resume').click()
+  })
+  expect(rooms).toHaveLength(2)
+  let secondAudio: HTMLMediaElement
+  const secondTrack = {
+    kind: Track.Kind.Audio,
+    attach(element: HTMLMediaElement) {
+      expect(element.sinkId).toBe('bluetooth') // routed before any stream is attached/played
+      secondAudio = element
+      return element
+    },
+    detach: () => (secondAudio ? [secondAudio] : []),
+  }
+  await act(async () => {
+    rooms[1].emit(RoomEvent.TrackSubscribed, secondTrack)
+    rooms[0].emit(RoomEvent.TrackSubscribed, firstTrack) // an obsolete room must not attach playback
+  })
+  expect(secondAudio.sinkId).toBe('bluetooth')
+  expect(firstAudio.isConnected).toBe(false)
+  expect(container.querySelector('select')?.value).toBe('bluetooth')
+  expect(microphone).toHaveBeenCalledTimes(2) // only the existing explicit connect/resume path
+  let cancelledAttachments = 0
+  const cancelledTrack = {
+    kind: Track.Kind.Audio,
+    attach(element: HTMLMediaElement) {
+      cancelledAttachments++
+      return element
+    },
+    detach: () => [],
+  }
+  await act(async () => {
+    rooms[1].emit(RoomEvent.TrackSubscribed, cancelledTrack)
+    rooms[1].emit(RoomEvent.TrackUnsubscribed, cancelledTrack)
+  })
+  expect(cancelledAttachments).toBe(0)
+  expect(routing.captures).toBe(0)
+})

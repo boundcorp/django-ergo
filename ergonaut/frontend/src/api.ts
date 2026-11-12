@@ -785,6 +785,13 @@ export type RealtimeVoiceSession = {
   standby_state?: 'live' | 'requested' | 'closing' | 'standby' | 'resuming'
   created_at?: string
   ended_at?: string | null
+  briefing?: {
+    context: string
+    restriction: string
+    delegation_available: boolean | null
+    instructions?: string
+    voice_event_ids?: string[]
+  }
   state?: {
     decisions?: string[]
     constraints?: string[]
