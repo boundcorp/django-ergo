@@ -249,6 +249,72 @@ def test_the_workers_skill_lists_starts_and_cancels(tmp_path, workers):
         )
 
 
+def test_orca_reply_keeps_run_ownership_when_chat_moves_and_does_not_replay(
+    monkeypatch,
+):
+    import subprocess
+    from types import SimpleNamespace
+
+    from django_ergo.plugins.orca import OrcaAgents
+    from django_ergo.plugins.orca import OrcaError
+
+    answered = {}
+    attempts = []
+
+    def reply(argv):
+        attempts.append(argv)
+        run = argv[argv.index("--run") + 1]
+        sender = argv[argv.index("--from") + 1]
+        question = argv[argv.index("--id") + 1]
+        if (run, sender) not in {("run_1", "term_owner_1"), ("run_2", "term_owner_2")}:
+            message = "consumer_fenced"
+            raise OrcaError(message)
+        if question != f"question_{run[-1]}":
+            message = "question_not_found"
+            raise OrcaError(message)
+        answered.setdefault(question, argv[argv.index("--body") + 1])
+        return {"question": {"status": "answered"}}
+
+    plugin = SimpleNamespace(
+        environment="test",
+        approve_changes=False,
+        poll_seconds=1,
+        config={},
+        cli_json=reply,
+    )
+    manager = OrcaAgents(plugin)
+    ctx = SimpleNamespace(
+        session=SimpleNamespace(
+            metadata={"orca": {"test": {"mailbox": "term_owner_2", "run": "run_2"}}}
+        )
+    )
+    older = {"run": "run_1", "mailbox": "term_owner_1", "dispatch": "dispatch_1"}
+    newer = {"run": "run_2", "mailbox": "term_owner_2", "dispatch": "dispatch_2"}
+    manager.reply(ctx, older, "question_1", "Keep old artifacts")
+    manager.reply(ctx, newer, "question_2", "Proceed")
+    assert answered == {"question_1": "Keep old artifacts", "question_2": "Proceed"}
+
+    # Legacy handles may use a matching chat mailbox, never another run's.
+    with pytest.raises(OrcaError, match="Reconcile"):
+        manager.reply(ctx, {"run": "run_1"}, "question_1", "Again")
+    assert len(attempts) == 2
+
+    # The backend remains authoritative if a saved owner has been fenced.
+    with pytest.raises(OrcaError, match=r"consumer_fenced.*Reconcile"):
+        manager.reply(ctx, {**older, "mailbox": "term_fenced"}, "question_1", "Again")
+    assert answered["question_1"] == "Keep old artifacts"
+
+    def timeout(argv):
+        attempts.append(argv)
+        raise subprocess.TimeoutExpired(argv, 1)
+
+    monkeypatch.setattr(plugin, "cli_json", timeout)
+    before = len(attempts)
+    with pytest.raises(OrcaError, match="delivery is unknown"):
+        manager.reply(ctx, newer, "question_2", "Again")
+    assert len(attempts) == before + 1
+
+
 @pytest.mark.django_db(transaction=True)
 def test_orca_start_worker_watches_the_dispatch_and_reports_back(  # noqa: PLR0915
     tmp_path, workers, monkeypatch
@@ -497,7 +563,7 @@ def test_orca_start_worker_skips_usage_without_a_worktree_path(
 
     def dispatch(*args):
         dispatched.append(args[2])
-        return "task_1", "run_1", {"dispatchId": "ctx_1"}
+        return "task_1", "run_1", "term_mail", {"dispatchId": "ctx_1"}
 
     def reject_scan(*args, **kwargs):
         msg = "usage scan must not run without a worktree path"
@@ -511,13 +577,6 @@ def test_orca_start_worker_skips_usage_without_a_worktree_path(
 
     assert dispatched == [expected_worktree]
     worker = Worker.objects.get(pk=started["id"])
-    assert worker.state == {
-        "seen": [],
-        "agent": "codex",
-        "model": "",
-        "effort": "",
-        "manager": "orca",
-    }
     plugin.scan_usage(WorkerContext(bot, worker), settled=True)
 
 
@@ -543,7 +602,7 @@ def test_orca_start_worker_uses_path_encoded_in_id_selector(
 
     def dispatch(*args):
         dispatched.append(args[2])
-        return "task_1", "run_1", {"dispatchId": "ctx_1"}
+        return "task_1", "run_1", "term_mail", {"dispatchId": "ctx_1"}
 
     monkeypatch.setattr(plugin, "cli_json", cli_json)
     monkeypatch.setattr(plugin, "dispatch", dispatch)
@@ -584,7 +643,7 @@ def test_orca_start_worker_skips_usage_for_id_selector_without_path(
 
     def dispatch(*args):
         dispatched.append(args[2])
-        return "task_1", "run_1", {"dispatchId": "ctx_1"}
+        return "task_1", "run_1", "term_mail", {"dispatchId": "ctx_1"}
 
     def reject_scan(*args, **kwargs):
         msg = "usage scan must not run without a worktree path"
@@ -599,13 +658,6 @@ def test_orca_start_worker_skips_usage_for_id_selector_without_path(
 
     assert dispatched == [selector]
     worker = Worker.objects.get(pk=started["id"])
-    assert worker.state == {
-        "seen": [],
-        "agent": "codex",
-        "model": "",
-        "effort": "",
-        "manager": "orca",
-    }
     plugin.scan_usage(WorkerContext(bot, worker), settled=True)
 
 

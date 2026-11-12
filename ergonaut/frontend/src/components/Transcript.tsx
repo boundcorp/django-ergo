@@ -14,7 +14,7 @@ import type {
 import { api } from '../api'
 import { DirectoryContext } from './BotIcon'
 import Markdown from './Markdown'
-import { ThreadCard, ThreadLink, WorkerCard, linkThreads } from './Threads'
+import { ThreadCard, ThreadLink, WorkerCard, workerStatus, linkThreads } from './Threads'
 import { ToolCard, copyText } from './ToolCard'
 import { pretty, resultText } from '../toolFormat'
 import { clock } from '../time'
@@ -363,12 +363,13 @@ function ToolCall({ use, result, pending }: { use: ToolUse; result?: ToolResult;
   if (data && WORKER_TOOLS.has(use.name)) {
     const worker = workers.get(String(data.id ?? '')) ?? (data.title && data.status ? (data as Worker) : null)
     if (worker) {
+      const status = workerStatus(worker)
       return (
         <details className="w-full rounded-card border border-stroke bg-surface text-sm">
           <summary className="flex cursor-pointer items-center gap-2 px-3 py-2">
             <span aria-hidden="true">⚙</span>
             <span className="min-w-0 flex-1 truncate font-medium">{worker.title}</span>
-            <span className="shrink-0 text-xs capitalize text-muted">{worker.status}</span>
+            <span className={`shrink-0 text-xs ${status.tone}`}>{status.label}</span>
           </summary>
           <WorkerCard worker={worker} />
         </details>

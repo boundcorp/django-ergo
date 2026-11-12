@@ -559,6 +559,8 @@ def describe(worker: Worker) -> dict:
         "progress": worker.progress,
         "result": worker.result,
         "error": worker.error,
+        "step_claims": worker.polls,
+        "dispatch_receipt": (worker.state or {}).get("dispatch_receipt"),
         "created_at": worker.created_at.isoformat(timespec="seconds"),
         "completed_at": worker.completed_at.isoformat(timespec="seconds")
         if worker.completed_at

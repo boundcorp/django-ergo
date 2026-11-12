@@ -64,6 +64,8 @@ class AgentQuestion:
     body: str
     subject: str = ""
     kind: str = "question"  # or "escalation"
+    reply_supported: bool = True
+    action: str = ""
 
 
 @dataclass
@@ -106,6 +108,9 @@ class AgentManager:
         """Answer one of the agent's questions."""
         msg = f"{self.name} agents can't be answered from here"
         raise ValueError(msg)
+
+    def validate_reply(self, handle: dict, question_id: str) -> None:
+        """Reject an unsupported reply before it is queued, without side effects."""
 
     def stop(self, handle: dict) -> str:
         """Stop the agent (the worker was cancelled). Returns what happened."""
@@ -191,6 +196,13 @@ def start(ctx: ToolContext, spec: AgentSpec, manager: str = "") -> Worker:
     from django_ergo.bots.model_choice import AGENT
     from django_ergo.bots.model_choice import check
 
+    requested = {
+        "tier": spec.tier,
+        "agent": spec.agent,
+        "model": spec.model,
+        "effort": spec.effort,
+    }
+    routing_receipt: dict = {}
     spec.model = check(ctx.bot, spec.model, AGENT)  # before any side effect
     found = manager_for(ctx.bot, manager, ctx)
     choice = None
@@ -199,7 +211,9 @@ def start(ctx: ToolContext, spec: AgentSpec, manager: str = "") -> Worker:
 
         # Only candidates this manager can run, so a Claude window that's used
         # up falls back to another subscription the manager also runs.
-        choice = pick_agent(ctx.bot.providers, spec.tier, found.agents)
+        choice = pick_agent(
+            ctx.bot.providers, spec.tier, found.agents, receipt=routing_receipt
+        )
         spec.agent, spec.model, spec.effort = choice.agent, choice.model, choice.effort
         check(ctx.bot, spec.model, AGENT)
     spec.agent = spec.agent or found.default_agent
@@ -226,6 +240,21 @@ def start(ctx: ToolContext, spec: AgentSpec, manager: str = "") -> Worker:
         "effort": spec.effort,
         "manager": found.name,
         "seen": [],
+        "dispatch_receipt": {
+            "requested": requested,
+            "selected": {
+                "agent": spec.agent,
+                "model": spec.model,
+                "effort": spec.effort,
+            },
+            "selection": routing_receipt
+            if choice is not None
+            else {"reason": "explicit or manager default"},
+            "launch_model": None,
+            "launch_model_provenance": "not reported by manager",
+            "billing_mode": "unknown",
+            "billing_mode_provenance": "not independently verified",
+        },
     }
     return ctx.workers.start(
         f"agent:{found.name}",
@@ -369,10 +398,14 @@ def watch(ctx: WorkerContext, manager: AgentManager, handle: dict):
         _save_seen(ctx.worker.pk, seen)
     for question in new:
         subject = f": {question.subject}" if question.subject else ""
-        ctx.tell(
-            f"The agent sent a {question.kind}{subject}\n\n{question.body}\n\n"
+        action = (
             f"Answer it with ergo_agent_reply (worker_id {ctx.worker.pk}, "
             f"question_id {question.id})."
+            if question.reply_supported
+            else question.action
+        )
+        ctx.tell(
+            f"The agent sent a {question.kind}{subject}\n\n{question.body}\n\n{action}"
         )
     ctx.state["seen"] = sorted(seen)
     if ctx.stopping:
@@ -381,6 +414,8 @@ def watch(ctx: WorkerContext, manager: AgentManager, handle: dict):
         except Exception as exc:  # noqa: BLE001 — cancelled either way
             ctx.progress(f"Couldn't stop it: {exc}")
         return None
+    if check.progress and check.status != "running":
+        ctx.progress(check.progress)
     if check.status == "done":
         return check.report
     if check.status == "failed":
@@ -525,8 +560,9 @@ def agent_toolkit(bot: Bot, ctx: ToolContext):
     def reply_agent(
         ctx: ToolContext, worker_id: str, question_id: str, answer: str
     ) -> str:
-        worker, _, _ = find(worker_id)
+        worker, manager, handle = find(worker_id)
         check_spacing(answer, "answer")
+        manager.validate_reply(handle, question_id)
         return _reply_queue(str(worker.pk), question_id, answer)
 
     @bot_tool(

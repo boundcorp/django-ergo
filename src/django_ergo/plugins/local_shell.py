@@ -883,6 +883,34 @@ class LocalShellPlugin(BotPlugin):
             )
         if text.lstrip().startswith(QUESTION):
             body = text.lstrip()[len(QUESTION) :].strip()
+            if agent != "claude":
+                action = (
+                    "This run has exited and cannot be resumed. If authorized, start a "
+                    "new run with the answer, existing artifacts and constraints in its brief."
+                )
+                return AgentCheck(
+                    "done",
+                    progress="Needs a new run; the agent process has exited",
+                    questions=[
+                        AgentQuestion(
+                            id=f"{folder.name}:{number}",
+                            body=body,
+                            reply_supported=False,
+                            action=action,
+                        )
+                    ],
+                    report={
+                        "job": folder.name,
+                        "folder": str(folder),
+                        "summary": text.strip(),
+                        "status": "needs_new_run",
+                        "resume_supported": False,
+                        "action": action,
+                        "outputs": self.outputs(
+                            folder, state["spec"].get("before") or {}
+                        ),
+                    },
+                )
             return AgentCheck(
                 "running",
                 progress="waiting for an answer",
@@ -1269,6 +1297,16 @@ class LocalShellAgents(AgentManager):
 
     def check(self, ctx, handle: dict) -> AgentCheck:
         return self.plugin.check(ctx, handle)
+
+    def validate_reply(self, handle: dict, question_id: str) -> None:
+        folder = Path(handle["dir"])
+        runs, _ = self.plugin.own_runs(folder, handle)
+        if runs and question_id == f"{folder.name}:{runs[-1]}":
+            state = self.plugin.run_state(folder, runs[-1])
+            agent = str(state["spec"].get("agent") or handle.get("agent") or "claude")
+            if agent != "claude":
+                msg = "Codex jobs can't be resumed here; start a new run with the answer, existing artifacts and constraints in the brief"
+                raise LocalShellError(msg)
 
     def reply(self, ctx, handle: dict, question_id: str, text: str) -> str:
         return self.plugin.reply(ctx, handle, question_id, text)

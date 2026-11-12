@@ -286,6 +286,24 @@ def test_toolkit_requires_source_when_ambiguous(toolkit):
         toolkit.execute_tool("ergo_chat_history_tail", {"source_id": "nope"})
 
 
+def test_multisource_paging_cursor_keeps_selected_source(toolkit):
+    page = toolkit.execute_tool(
+        "ergo_chat_history_read",
+        {"source_id": "claude:abc", "limit": 1, "granularity": "reasoning"},
+    )
+    cursor = dict(part.split("=", 1) for part in page.splitlines()[-1].split()[2:])
+    next_page = toolkit.execute_tool(
+        "ergo_chat_history_read", {**cursor, "limit": 1, "granularity": "reasoning"}
+    )
+    assert "[claude:abc L2 " in next_page
+    tail = toolkit.execute_tool(
+        "ergo_chat_history_tail", {"source_id": "claude:abc", "limit": 1}
+    )
+    cursor = dict(part.split("=", 1) for part in tail.splitlines()[-1].split()[2:])
+    previous = toolkit.execute_tool("ergo_chat_history_read", {**cursor, "limit": 1})
+    assert "[claude:abc L1 " in previous
+
+
 def test_read_pages_forward_and_backward(claude_file):
     toolkit = MessageHistoryToolkit([ClaudeCodeSource(claude_file)])
 

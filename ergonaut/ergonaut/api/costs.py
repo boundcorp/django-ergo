@@ -111,6 +111,9 @@ class AgentHeadline(Schema):
     cache_hit: float
     projects: int = 0
     cost: float = 0.0  # API-equivalent list price; agents run on subscriptions
+    priced_rows: int = 0
+    unpriced_rows: int = 0
+    billed_usd: float | None = None  # The usage aggregate is not an invoice.
 
 
 class AgentUsageRow(Schema):
@@ -512,6 +515,9 @@ def _agents(rows: list[AgentUsage]) -> dict:
             "cache_hit": _hit(total),
             "projects": sum(1 for group in by_project if group["key"]),
             "cost": sum(row["cost"] for row in output),
+            "priced_rows": sum(row["priced"] for row in output),
+            "unpriced_rows": sum(not row["priced"] for row in output),
+            "billed_usd": None,
         },
         "rows": output,
         "by_project": by_project,

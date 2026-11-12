@@ -275,13 +275,11 @@ def test_agent_usage_has_its_own_scoped_and_filtered_costs_block(client):
 
     agents = client.get("/api/costs?bot=kitchen").json()["agents"]
 
-    assert agents["headline"] == {
-        "sessions": 1,
-        "tokens": 35,
-        "cache_hit": pytest.approx(5 / 15),
-        "projects": 0,
-        "cost": 0.0,
-    }
+    assert agents["headline"]["sessions"] == 1
+    assert agents["headline"]["tokens"] == 35
+    assert agents["headline"]["cache_hit"] == pytest.approx(5 / 15)
+    assert agents["headline"]["unpriced_rows"] == 1
+    assert agents["headline"]["billed_usd"] is None
     assert agents["rows"] == [
         {
             "worker_id": str(Worker.objects.get(title="Fix recipe").id),
@@ -350,6 +348,9 @@ def test_agent_usage_by_project_with_list_price_estimates(client, lee):
 
     assert agents["headline"]["projects"] == 2
     assert agents["headline"]["cost"] == pytest.approx(36)
+    assert agents["headline"]["priced_rows"] == 3
+    assert agents["headline"]["unpriced_rows"] == 1
+    assert agents["headline"]["billed_usd"] is None
     by_project = {p["name"]: p for p in agents["by_project"]}
     assert [p["name"] for p in agents["by_project"]] == ["holyword", "meditate", "(no project recorded)"]
     assert by_project["holyword"]["workers"] == 2

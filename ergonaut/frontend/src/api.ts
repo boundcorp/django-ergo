@@ -318,7 +318,16 @@ export type Costs = {
     threads: UsageThread[]
   }
   agents: {
-    headline: { sessions: number; tokens: number; cache_hit: number; projects: number; cost: number }
+    headline: {
+      sessions: number
+      tokens: number
+      cache_hit: number
+      projects: number
+      cost: number
+      priced_rows?: number
+      unpriced_rows?: number
+      billed_usd?: number | null
+    }
     rows: AgentUsage[]
     by_project: AgentProject[]
   }
@@ -589,6 +598,7 @@ export type Worker = {
   progress: string
   result: unknown
   error: string
+  step_claims?: number // worker step claims, not model calls
   created_at: string
   completed_at: string | null
   prs?: PrLink[] // pull requests its result links

@@ -255,6 +255,114 @@ def test_custom_tier_can_start_agent_through_toolkit(
     )
 
 
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.usefixtures("workers")
+def test_dispatch_receipt_links_selection_without_claiming_billing(catalog, tmp_path):
+    import time
+
+    from django_ergo.conversation.models import Worker
+    from django_ergo.conversation.usage_windows import record_usage_windows
+    from tests.test_bot_agents import setup
+    from tests.test_bot_agents import start
+
+    bot, _, _, toolkit = setup(tmp_path)
+    registry = BotRegistry()
+    registry.providers = Providers.from_dict(catalog)
+    registry.add(bot)
+    now = time.time()
+    record_usage_windows(
+        "anthropic",
+        {
+            "weekly": {
+                "used": 5,
+                "resets_at": now + 3600,
+                "period_seconds": 604800,
+                "observed_at": now,
+                "credential": "must-not-appear",
+            }
+        },
+    )
+    started = start(toolkit, {"brief": "Work", "workspace": "site", "tier": "medium"})
+    receipt = Worker.objects.get(pk=started["id"]).state["dispatch_receipt"]
+    assert receipt["requested"]["tier"] == "medium"
+    assert receipt["selected"]["model"]
+    assert receipt["selection"]["windows"][0]["fresh"] is True
+    assert "must-not-appear" not in str(receipt)
+    assert receipt["launch_model"] is None and receipt["billing_mode"] == "unknown"
+    record_usage_windows(
+        "anthropic",
+        {"weekly": {"used": 5, "resets_at": now + 3600, "observed_at": now - 3600}},
+        full_snapshot=True,
+    )
+    stale: dict = {}
+    pick_agent(registry.providers, "medium", receipt=stale)
+    assert stale["windows"][0]["fresh"] is False
+    assert "pace unavailable" in stale["reason"]
+    pinned = start(
+        toolkit,
+        {
+            "brief": "Pinned work",
+            "workspace": "site",
+            "agent": "codex",
+            "model": "gpt-6-sol",
+            "effort": "high",
+        },
+    )
+    explicit = Worker.objects.get(pk=pinned["id"]).state["dispatch_receipt"]
+    assert explicit["requested"]["model"] == "gpt-6-sol"
+    assert explicit["selected"] == {
+        "agent": "codex",
+        "model": "gpt-6-sol",
+        "effort": "high",
+    }
+
+
+@pytest.mark.django_db
+def test_receipt_uses_only_applicable_windows_and_safe_labels(catalog, monkeypatch):
+    import time
+
+    from django_ergo.conversation.usage_windows import record_usage_windows
+    from django_ergo.settings import api_settings
+
+    now = time.time()
+    record_usage_windows(
+        "anthropic",
+        {
+            "weekly": {"used": 10, "resets_at": now + 3600, "observed_at": now},
+            "weekly_fable": {
+                "used": 100,
+                "model": "fable",
+                "resets_at": now + 3600,
+                "observed_at": now,
+            },
+            "private-account-label": {
+                "used": 5,
+                "period_seconds": 604800,
+                "resets_at": now + 3600,
+                "observed_at": now - 3600,
+            },
+        },
+    )
+    receipt = {}
+    picked = pick_agent(Providers.from_dict(catalog), "medium", receipt=receipt)
+    assert picked.model == "claude-sonnet-5-5"
+    assert len(receipt["windows"]) == 2
+    assert {w["name"] for w in receipt["windows"]} == {"weekly", "other"}
+    assert "private-account-label" not in str(receipt)
+    assert next(w for w in receipt["windows"] if w["name"] == "other")["fresh"] is False
+
+    # Custom routing still sees the numeric contract; its choice isn't
+    # explained as a decision made by the built-in pace scorer.
+    def custom(candidates, usage, rules, current):
+        assert usage["anthropic"]["weekly_fable"] == 100
+        return candidates[-1]
+
+    monkeypatch.setattr(api_settings, "MODEL_ROUTER", custom)
+    receipt = {}
+    pick_agent(Providers.from_dict(catalog), "medium", receipt=receipt)
+    assert receipt["reason"] == "custom router; reason unavailable"
+
+
 def test_effort_defaults_to_medium_and_a_chat_can_change_it(catalog):
     from types import SimpleNamespace
 

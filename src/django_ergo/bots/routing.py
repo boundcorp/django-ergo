@@ -397,7 +397,11 @@ def pick_model(providers: Providers, tier: str, current: str = "") -> str:
 
 
 def pick_agent(
-    providers: Providers, tier: str, agents: tuple[str, ...] = ()
+    providers: Providers,
+    tier: str,
+    agents: tuple[str, ...] = (),
+    *,
+    receipt: dict | None = None,
 ) -> AgentChoice:
     """A coding agent, model and effort for ``tier``, on a subscription only.
     ``agents`` (a manager's) keeps the candidates it can run; empty means any."""
@@ -428,16 +432,50 @@ def pick_agent(
             )
             raise ValueError(msg)
         candidates = runnable
+    usage = current_usage()
+    rules = active_rules(routing)
     picked = choose(
         candidates,
         lambda c: c.provider,
-        current_usage(),
-        active_rules(routing),
+        usage,
+        rules,
         model_of=lambda c: c.model,
     )
     if picked is None:
         msg = f"No safe subscription in the {tier!r} agents tier"
         raise ValueError(msg)
+    if receipt is not None:
+        from django_ergo.settings import api_settings
+
+        now = time.time()
+        windows = getattr(usage, "windows", {}).get(picked.provider, {})
+        applicable = applicable_usage(picked.provider, usage, picked.model)
+        receipt.update(
+            {
+                "source": "provider_usage",
+                "selected_at": now,
+                "reason": (
+                    "custom router; reason unavailable"
+                    if getattr(api_settings, "MODEL_ROUTER", None)
+                    else "subscription pace routing"
+                    if any(_paced_windows(picked.provider, usage, picked.model, now))
+                    else "pace unavailable; capability/cost tie-break"
+                ),
+                "windows": [
+                    {
+                        "name": name if name in WINDOW_NAMES else "other",
+                        "used": w.get("used"),
+                        "observed_at": w.get("observed_at"),
+                        "resets_at": w.get("resets_at"),
+                        "period_seconds": w.get("period_seconds"),
+                        "fresh": w.get("observed_at") is not None
+                        and now - w["observed_at"] <= USAGE_STALE_SECONDS,
+                    }
+                    for name, w in windows.items()
+                    if name in applicable
+                ],
+            }
+        )
     providers.check_public(picked.model, where=f"The {tier} agents tier")
     return picked
 

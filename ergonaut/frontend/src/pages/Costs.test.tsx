@@ -3,7 +3,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router-dom'
 import type { AgentUsage, CostBucket, Costs } from '../api'
-import { CostsBody, itemsFor, projectItems } from './Costs'
+import { CostsBody, Summary, itemsFor, projectItems } from './Costs'
 
 const bucket = (name: string, calls = 1): CostBucket => ({
   name,
@@ -107,6 +107,21 @@ describe('Costs breakdown', () => {
     expect(itemsFor('Agents', data)[0].sub).toBe('holyword · codex · gpt-6-sol · completed')
     const [chat] = itemsFor('Call types', data)
     expect(chat.children?.map(child => child.name)).toEqual(['devbox'])
+  })
+
+  test('distinguishes unknown and partial agent estimates from billed spend', () => {
+    const headline = { ...data.agents.headline, cost: 0, priced_rows: 0, unpriced_rows: 1, billed_usd: null }
+    const html = renderToStaticMarkup(
+      createElement(Summary, { data: { ...data, agents: { ...data.agents, headline } } }),
+    )
+    expect(html).toContain('Unknown')
+    expect(html).toContain('0 priced rows · 1 unpriced · billed USD unknown')
+    const partial = { ...headline, cost: 1, priced_rows: 1 }
+    const partialHtml = renderToStaticMarkup(
+      createElement(Summary, { data: { ...data, agents: { ...data.agents, headline: partial } } }),
+    )
+    expect(partialHtml).toContain('$1.00')
+    expect(partialHtml).toContain('1 priced rows · 1 unpriced · billed USD unknown')
   })
 
   test('renders the summary and the chosen tab', () => {
