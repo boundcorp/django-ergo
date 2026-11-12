@@ -26,15 +26,19 @@ describe('document Markdown', () => {
     expect(html).toContain('&lt;script&gt;')
   })
 
-  test('allows relative, fragment, HTTP(S), and mailto links', () => {
+  test('isolates fragment links, disables paths, and opens absolute links separately', () => {
     const html = renderDocument(
-      '[relative](../guide) [fragment](#section) [http](http://example.com) [https](https://example.com) [mail](mailto:a@example.com)',
+      '# Section\n\n# Section\n\n[relative](../guide) [chat](/s/123) [fragment](#section-1) [http](http://example.com) [https](https://example.com) [mail](mailto:a@example.com)',
     )
-    expect(html).toContain('href="../guide"')
-    expect(html).toContain('href="#section"')
+    expect(html).toContain('id="section"')
+    expect(html).toContain('id="section-1"')
+    expect(html).not.toContain('href="../guide"')
+    expect(html).not.toContain('href="/s/123"')
+    expect(html).toContain('relative (unsupported relative link)')
+    expect(html).toContain('href="#section-1"')
     expect(html).toContain('href="http://example.com" target="_blank" rel="noopener noreferrer"')
     expect(html).toContain('href="https://example.com" target="_blank" rel="noopener noreferrer"')
-    expect(html).toContain('href="mailto:a@example.com"')
+    expect(html).toContain('href="mailto:a@example.com" target="_blank" rel="noopener noreferrer"')
   })
 
   test('rejects protocol-relative and unsafe schemes', () => {

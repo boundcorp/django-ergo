@@ -6,10 +6,13 @@ import './MarkdownAttachment.css'
 
 const MAX_SOURCE_BYTES = 500_000
 
-async function readSource(response: Response): Promise<string> {
+async function readSource(response: Response, controller: AbortController): Promise<string> {
   if (!response.ok) throw new Error('Could not load this document.')
   const length = Number(response.headers.get('content-length'))
-  if (length > MAX_SOURCE_BYTES) throw new Error('Document is too large to read here. Download the original instead.')
+  if (length > MAX_SOURCE_BYTES) {
+    controller.abort()
+    throw new Error('Document is too large to read here. Download the original instead.')
+  }
   if (!response.body) throw new Error('Could not read this document. Download the original instead.')
   const reader = response.body.getReader()
   const decoder = new TextDecoder('utf-8', { ignoreBOM: true })
@@ -70,7 +73,7 @@ function Reader({ id, label, onClose }: { id: string; label: string; onClose: ()
     let active = true
     dialog.current?.showModal()
     fetch(api.downloadUrl(id), { signal: controller.signal, credentials: 'same-origin' })
-      .then(readSource)
+      .then(response => readSource(response, controller))
       .then(text => {
         if (active) setSource(text)
       })

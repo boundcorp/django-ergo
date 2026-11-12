@@ -121,6 +121,25 @@ describe('Markdown attachments', () => {
     expect(win.document.querySelector('dialog a')?.getAttribute('href')).toBe('/api/attachments/one/download')
   })
 
+  test('aborts a delayed oversized response as soon as headers arrive', async () => {
+    let signal: AbortSignal | undefined
+    let aborted = false
+    globalThis.fetch = (async (_url, options) => {
+      signal = options?.signal ?? undefined
+      signal?.addEventListener('abort', () => {
+        aborted = true
+      })
+      const body = new ReadableStream<Uint8Array>({ pull: () => new Promise(() => {}) })
+      return new Response(body, { headers: { 'Content-Length': '500001' } })
+    }) as typeof fetch
+    act(() => root.render(createElement(AttachmentView, { id: 'one', label: 'large.md' })))
+    await click('Read large.md')
+    expect(win.document.querySelector('[role=alert]')?.textContent).toContain('too large')
+    expect(signal?.aborted).toBe(true)
+    expect(aborted).toBe(true)
+    expect(win.document.querySelector('dialog')?.open).toBe(true)
+  })
+
   test('does not replace reopened content with a late response', async () => {
     const pending = Promise.withResolvers<Response>()
     let calls = 0

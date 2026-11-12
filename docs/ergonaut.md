@@ -33,8 +33,12 @@ the document without leaving the conversation; Escape or Close returns to chat.
 The reader offers **Copy raw source** and **Download original**. It fetches the
 existing authenticated download only when opened, and limits the reader to
 500,000 bytes; larger files can still be downloaded. Images are not loaded,
-raw HTML is shown as text, and unsafe links are disabled. Downloading always
-uses the original file and the existing attachment access controls.
+raw HTML is shown as text, and unsafe links are disabled. Fragment links scroll
+within the reader to headings: lowercase heading text becomes an ID with
+punctuation removed, spaces replaced by hyphens, and duplicate IDs suffixed
+`-1`, `-2`, and so on. Relative and root-relative links are marked unsupported;
+absolute HTTP, HTTPS, and mail links open separately. Downloading always uses
+the original file and the existing attachment access controls.
 
 ## Realtime voice calls
 

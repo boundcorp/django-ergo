@@ -363,9 +363,16 @@ def test_markdown_attachment_download_access_and_original_bytes(client, cook, se
         text="Shared plan",
         metadata={"attachments": [{"id": str(shared.id), "session": str(there.id)}]},
     )
+    ThreadMessage.objects.create(
+        sender_session=private,
+        recipient_session=here,
+        text="Inaccessible plan",
+        metadata={"attachments": [{"id": str(hidden.id), "session": str(private.id)}]},
+    )
 
     listed = client.get(f"/api/sessions/{here.id}/attachments").json()
     assert any(item["id"] == str(shared.id) and item["shared_from"] for item in listed)
+    assert all(item["id"] != str(hidden.id) for item in listed)
     for row in (own, shared):
         response = client.get(f"/api/attachments/{row.id}/download")
         assert response.status_code == 200
