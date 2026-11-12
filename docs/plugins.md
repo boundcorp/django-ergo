@@ -58,6 +58,86 @@ redacted server-side preview for supported changes. In Ergonaut only admins
 can approve their tools. Every option is in the
 [bot reference](bots.md#official-plugins).
 
+## Offline Runpod bridge
+
+`django_ergo.plugins.runpod` contains local queue/experiment building blocks
+and a narrow, single-test REST create/recovery bridge, **not** an enabled bot
+plugin, deployed rental controller or generation runner. It adds no bot.yaml
+configuration. The cleanup command remains dry-run by default:
+
+```bash
+python -m django_ergo.plugins.runpod.cleanup LEDGER
+```
+
+Run the no-network create/recovery fixtures locally:
+
+```bash
+PYTHONPATH=src pytest -q tests/test_runpod_create.py tests/test_runpod_cleanup.py tests/test_runpod_transport.py
+```
+
+`RESTCleanup.configure_create` binds an immutable account, attempt and exact
+request profile: one GPU, SECURE cloud, an image and container disk, explicit
+`volumeInGb: 0`, no template and no network/global-volume option. Its SHA256
+fingerprint covers the canonical request before adding
+`ERGO_ATTEMPT_FINGERPRINT`. Ownership checks require the account, attempt,
+fingerprint and matching profile; a nonunique Pod name never authorizes deletion.
+The existing `configure(Ownership)` path is cleanup-only, without a create body.
+
+`create_once` without a client is a dry run: no POST or create intent.
+Only the injected-opener `FixtureRunpodREST` client can exercise create, using
+fixed-origin HTTP serialization and a fixed fake credential, not a live-create
+credential path. The ledger durably records `create_unknown`/`create_started`
+before the one POST. A timeout, restart, empty response or failed receipt write
+does not authorize replay; a subsequent create attempt is rejected. A valid
+returned ID is only a receipt, never evidence of running or generation.
+
+Each reconciliation tick performs one list scan and at most ten resource
+actions. Later scans can discover owned resources after an uncertain create,
+but repeated list absence never makes that unknown create clean. A known-ID
+GET 404 establishes compute absence; DELETE 404 is ambiguous and needs a later
+GET 404. Deletion timeouts retain pending state for retry. Bounds cover request
+count, response size and per-socket timeout, not an absolute DNS/callback/stream
+deadline; no deployed scheduler freshness or provider billing bound is proved.
+
+### Public API evidence and remaining uncertainty
+
+- [List Pods](https://docs.runpod.io/api-reference/pods/GET/pods) and
+  [Get Pod](https://docs.runpod.io/api-reference/pods/GET/pods/podId) document
+  `consumerUserId` as the renting user, plus `env`, `id`, `image`, `volumeInGb`
+  and `networkVolume`; reads request `includeNetworkVolume=true`. Names are
+  not unique. These are documented fields, not undocumented ownership guesses.
+  The schemas leave fields optional and do not establish strong list
+  consistency or guarantee that no network volume is represented by explicit
+  null. Missing ownership evidence cannot be substituted with a name.
+- [Create Pod](https://docs.runpod.io/api-reference/pods/POST/pods) documents
+  a 201 Pod response, `imageName`, `gpuTypeIds`, `gpuCount`, `env`, optional
+  `networkVolumeId`/`templateId`, and a default `volumeInGb` of 20; the strict
+  request explicitly overrides that default with zero.
+- [Delete Pod](https://docs.runpod.io/api-reference/pods/DELETE/pods/podId)
+  documents 204 success, 400 and 401, **not** DELETE 404 as successful deletion.
+- [Storage types](https://docs.runpod.io/pods/storage/types) distinguish ephemeral
+  container storage and Pod-deleted volume disks from independently persistent
+  network/global volumes, with network storage attached at creation. Only the
+  immutable strict no-volume create profile, an ownership-checked Pod and a
+  later GET 404 permit storage absence to be concluded. That profile accepts
+  an omitted or null `networkVolume` only alongside integer-zero `volumeInGb`
+  and exact account/environment/image/disk checks: this relies on the request's
+  absence of attachment options, not a guaranteed null response. Legacy
+  cleanup-only configuration still requires explicit null for its profile
+  check; legacy or otherwise insufficient storage evidence remains
+  `storage_unverified`. This profile proves what this bridge requested, not the
+  absence of later out-of-band global-volume attachments; those need separate
+  evidence and must remain unresolved if external changes are possible.
+
+Live eligibility gates remain false. No live create, deployment, model download
+or generation is enabled. Existing `--execute --credential-env NAME` permits
+cleanup-only REST operations under separate authorization; it was not exercised
+against Runpod. Fixture openers must be in-memory fakes, not live HTTP openers.
+Real launch still requires budget and account authorization, an independent
+cleanup scheduler, and a model/runner contract—not discovery of supposedly
+absent documented response fields. Local estimates do not guarantee a hard
+provider spending ceiling. Existing bot configurations and backlog are unchanged.
+
 ## Writing a plugin
 
 ```python

@@ -14,6 +14,7 @@ from django_ergo.plugins.runpod.budget import Evidence
 from django_ergo.plugins.runpod.budget import RentalTimeline
 from django_ergo.plugins.runpod.cleanup import RESTCleanup
 from django_ergo.plugins.runpod.experiment import Experiment
+from django_ergo.plugins.runpod.transport import FixtureRunpodREST
 from django_ergo.plugins.runpod.transport import Ownership
 from django_ergo.plugins.runpod.transport import RunpodREST
 
@@ -28,7 +29,7 @@ def no_network(monkeypatch):
     monkeypatch.setattr(socket, "create_connection", deny)
 
 
-def make_ledger(path):
+def make_ledger(path, *, begin_create=True):
     experiment = Experiment(path)
     state = experiment.reserve(
         now=0,
@@ -48,7 +49,8 @@ def make_ledger(path):
         "account", state["marker"], "fingerprint", "image@sha256:123", 120
     )
     RESTCleanup(path).configure(owner)
-    experiment.begin_create(now=1)
+    if begin_create:
+        experiment.begin_create(now=1)
     return experiment, owner
 
 
@@ -126,6 +128,31 @@ def test_foreign_receipt_is_never_deleted(tmp_path):
     assert fake.methods == ["GET", "GET"]
 
 
+def test_legacy_missing_optional_network_volume_does_not_authorize_delete(tmp_path):
+    path = tmp_path / "ledger"
+    experiment, owner = make_ledger(path)
+    experiment.receipt("pod123")
+    resource = pod(owner)
+    del resource["networkVolume"]
+    fake = FakeHTTP([], resource)
+    state = tick(path, fake)
+    assert state["cleanup_error"] == "ownership_unverified"
+    assert state["outcome"] is None
+    assert fake.methods == ["GET", "GET"]
+
+
+def test_cleanup_only_profile_cannot_create_or_record_create_intent(tmp_path):
+    path = tmp_path / "ledger"
+    experiment, _ = make_ledger(path, begin_create=False)
+    fake = FakeHTTP()
+    with pytest.raises(ValueError, match="create profile not configured"):
+        RESTCleanup(path).create_once(now=1, client=FixtureRunpodREST(fake))
+    state = experiment.status()
+    assert state["phase"] == "reserved"
+    assert state["create_started"] == 0
+    assert fake.methods == []
+
+
 def test_uncertain_reads_and_empty_inventory_never_prove_absence(tmp_path):
     path = tmp_path / "ledger"
     experiment, _ = make_ledger(path)
@@ -189,6 +216,10 @@ def test_dry_run_command_expires_worker_without_credentials_or_network(tmp_path)
     assert state["stop_reason"] == "deadline"
     assert state["cleanup_error"] == "dry_run"
     assert state["outcome"] is None
+    assert state["live_eligibility"] == dict.fromkeys(
+        ("model", "hardware", "license", "inputs", "budget", "account", "launch"),
+        False,
+    )
     with pytest.raises(ValueError, match="REST cleanup"):
         experiment.reconcile_once(now=100)
 

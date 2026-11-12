@@ -4,15 +4,22 @@ This document tracks the major milestones and evolution of the Django Ergo proje
 
 ## Development Timeline
 
-### Runpod REST transport building block (November 2026)
+### Runpod offline create/recovery bridge (November 2026)
 
-- Added a REST client with finite socket timeouts, injected credentials, sanitized
-  failures and Pod responses, and ownership/profile checks before deletion.
-  This is not a live rental controller: no real create, runner/export
-  integration, or deployed cleanup scheduler is provided. REST cleanup has a
-  separate dry-run-by-default ledger command; ownership response fields and
-  storage deletion semantics remain unverified, so liability stays unresolved.
-  No live execution is authorized; the original experiment CLI remains fake.
+- Added a bounded, fixture-only REST create/recovery bridge for one local test,
+  not a live plugin or rental runner. Its immutable account, attempt and request
+  fingerprint bind ownership; names alone never authorize deletion. Create
+  uncertainty is durable before the single POST and is never replayed after a
+  timeout or restart. Later cleanup scans can find late resources; absence from
+  a list never proves an unknown create clean.
+- Public Runpod docs do describe renting-account, environment and storage fields;
+  optional/null semantics and list consistency remain unknown. Known-ID GET 404
+  and ambiguous DELETE 404 are distinct, and storage liability is resolved only
+  with sufficient evidence for the strict no-volume profile. See the
+  [bridge limits and API sources](docs/plugins.md#offline-runpod-bridge).
+  `python -m django_ergo.plugins.runpod.cleanup LEDGER` remains dry-run by
+  default. No live-create credential path, generation or live eligibility is
+  enabled; no live verification or provider spending ceiling is claimed.
 
 ### Offline GPU queue primitives (November 2026)
 

@@ -1,8 +1,8 @@
-"""Independent, conservative REST cleanup for a single local experiment ledger.
+"""Bounded single-intent recovery and independently invocable REST cleanup.
 
-This module does not authorize or perform a create. Provider ownership fields and
-storage deletion semantics have not been verified against an authoritative API
-contract; unmatched resources and storage liability remain unresolved.
+Create is fixture-only; the command defaults to dry-run and cannot launch Pods.
+Inventory absence never resolves an unknown create. Known-ID GET 404 is separate
+from storage evidence and from ambiguous mutating request failures.
 """
 
 # This ledger adapter intentionally shares Experiment's transaction primitives.
@@ -11,6 +11,7 @@ contract; unmatched resources and storage liability remain unresolved.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -20,23 +21,67 @@ from dataclasses import asdict
 from pathlib import Path
 
 from .experiment import Experiment
+from .transport import FixtureRunpodREST
 from .transport import Ownership
 from .transport import OwnershipError
 from .transport import ProviderError
 from .transport import RunpodREST
 
 
+def _pod_id(value):
+    return isinstance(value, str) and value.isascii() and value.isalnum()
+
+
 class RESTCleanup:
-    """Bridge a reserved experiment to REST; a sole supervisor invokes ticks."""
+    """Bridge one local ledger; an external supervisor must schedule each tick."""
 
     def __init__(self, path):
         if not Path(path).is_file():
             msg = "existing ledger required"
             raise ValueError(msg)
         self.experiment = Experiment(path)
+        with self.experiment._tx() as db:
+            db.executescript("""
+                CREATE TABLE IF NOT EXISTS rest_create_profile (
+                    id INTEGER PRIMARY KEY CHECK(id=1), body TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS rest_storage_proofs (
+                    resource_id TEXT PRIMARY KEY
+                );
+            """)
 
     def configure(self, ownership):
-        """Permanently bind ownership before any create intent is recorded."""
+        """Bind cleanup-only ownership; this cannot establish storage absence."""
+        self._configure(ownership, None)
+
+    def configure_create(self, *, account, image, container_disk_gb, gpu_type):
+        """Bind the exact fixture request, including explicit zero optional storage."""
+        if not isinstance(gpu_type, str) or not gpu_type:
+            msg = "GPU type required"
+            raise ValueError(msg)
+        attempt = self.experiment.status()["marker"]
+        body = {
+            "name": "ergo-" + attempt,
+            "computeType": "GPU",
+            "cloudType": "SECURE",
+            "gpuTypeIds": [gpu_type],
+            "gpuCount": 1,
+            "imageName": image,
+            "containerDiskInGb": container_disk_gb,
+            "volumeInGb": 0,
+            "env": {"ERGO_ATTEMPT_ID": attempt},
+        }
+        fingerprint = hashlib.sha256(
+            json.dumps(
+                body, sort_keys=True, separators=(",", ":"), allow_nan=False
+            ).encode()
+        ).hexdigest()
+        ownership = Ownership(account, attempt, fingerprint, image, container_disk_gb)
+        body["env"]["ERGO_ATTEMPT_FINGERPRINT"] = fingerprint
+        self._configure(ownership, body)
+        return ownership
+
+    def _configure(self, ownership, body):
         if not isinstance(ownership, Ownership):
             msg = "ownership profile required"
             raise TypeError(msg)
@@ -61,6 +106,11 @@ class RESTCleanup:
                 "INSERT INTO rest_profile VALUES (1, ?)",
                 (json.dumps(asdict(ownership), sort_keys=True),),
             )
+            if body is not None:
+                db.execute(
+                    "INSERT INTO rest_create_profile VALUES (1, ?)",
+                    (json.dumps(body, sort_keys=True),),
+                )
 
     def _profile(self, db):
         try:
@@ -73,18 +123,124 @@ class RESTCleanup:
             raise ValueError(msg)
         return Ownership(**json.loads(row["profile"]))
 
-    def reconcile_once(self, *, now, client=None):  # noqa: C901, PLR0912
-        """Persist stop first, then use REST only if a client was explicitly supplied.
+    def create_once(self, *, now, client=None):
+        """One fixture POST at most; commit uncertainty before invoking the opener.
 
-        An empty inventory is never proof that an ambiguous create failed. A Pod
-        404 confirms compute absence only; storage semantics are not established.
+        A process loss before send may leave no Pod. That uncertainty is deliberate:
+        restart never replays the create. No live credential/client is accepted.
         """
+        self.experiment._time(now)
+        if client is not None and not isinstance(client, FixtureRunpodREST):
+            msg = "create requires an offline fixture client; live create disabled"
+            raise ValueError(msg)
+        with self.experiment._tx() as db:
+            self._profile(db)
+            request = db.execute(
+                "SELECT body FROM rest_create_profile WHERE id=1"
+            ).fetchone()
+            if request is None:
+                msg = "create profile not configured"
+                raise ValueError(msg)
+            row = self.experiment._expire(db, self.experiment._row(db), now)
+            if row["create_started"]:
+                msg = "create already attempted; inspect instead of replay"
+                raise ValueError(msg)
+            if client is None or row["stop_reason"]:
+                return dict(row)
+            if row["phase"] != "reserved":
+                msg = "create requires reserved intent"
+                raise ValueError(msg)
+            db.execute(
+                "UPDATE experiment SET phase='create_unknown', create_started=1 WHERE id=1"
+            )
+            body = json.loads(request["body"])
+        try:
+            pod = client.create_pod(body)
+            if not _pod_id(pod.get("id")):
+                msg = "invalid provider create response"
+                raise ProviderError(msg)  # noqa: TRY301
+            self.experiment.receipt(pod["id"])
+        except ProviderError:
+            with self.experiment._tx() as db:
+                db.execute(
+                    "UPDATE experiment SET cleanup_error='provider_request_failed' WHERE id=1"
+                )
+        return self.experiment.status()
+
+    def _remember(self, db, pod, profile, request_bound, *, verified_read=False):
+        resource_id = pod.get("id")
+        if not _pod_id(resource_id) or not profile.matches(
+            pod, request_bound=request_bound
+        ):
+            return False
+        db.execute(
+            "INSERT INTO rest_resources(resource_id) VALUES (?) ON CONFLICT(resource_id) DO UPDATE SET compute_absent=0",
+            (resource_id,),
+        )
+        if request_bound and verified_read:
+            # Request has no template/network/global volume option. Network volumes
+            # attach at create and persist independently; Pod disks die with the Pod.
+            db.execute(
+                "INSERT OR IGNORE INTO rest_storage_proofs VALUES (?)", (resource_id,)
+            )
+        return True
+
+    def _clean_resource(self, resource_id, client, profile, request_bound):
+        try:
+            pod = client.get_pod(resource_id)
+            if pod is not None:
+                with self.experiment._tx() as db:
+                    if not self._remember(
+                        db, pod, profile, request_bound, verified_read=True
+                    ):
+                        db.execute(
+                            "DELETE FROM rest_storage_proofs WHERE resource_id=?",
+                            (resource_id,),
+                        )
+                        return "ownership_unverified"
+                client.terminate_owned(
+                    resource_id, profile, request_bound=request_bound
+                )
+                pod = client.get_pod(resource_id)
+            if pod is not None:
+                with self.experiment._tx() as db:
+                    if not self._remember(
+                        db, pod, profile, request_bound, verified_read=True
+                    ):
+                        db.execute(
+                            "DELETE FROM rest_storage_proofs WHERE resource_id=?",
+                            (resource_id,),
+                        )
+                        return "ownership_unverified"
+                return "compute_cleanup_pending"
+            with self.experiment._tx() as db:
+                db.execute(
+                    "UPDATE rest_resources SET compute_absent=1 WHERE resource_id=?",
+                    (resource_id,),
+                )
+        except OwnershipError:
+            with self.experiment._tx() as db:
+                db.execute(
+                    "DELETE FROM rest_storage_proofs WHERE resource_id=?",
+                    (resource_id,),
+                )
+            return "ownership_unverified"
+        except (ProviderError, ValueError):
+            return "provider_request_failed"
+        return None
+
+    def reconcile_once(self, *, now, client=None):  # noqa: C901
+        """One inventory scan, at most ten known-ID cleanup actions, no create replay."""
         self.experiment._time(now)
         with self.experiment._tx() as db:
             profile = self._profile(db)
             row = self.experiment._expire(db, self.experiment._row(db), now)
             if not row["stop_reason"]:
                 return dict(row)
+            request_bound = (
+                db.execute("SELECT 1 FROM rest_create_profile WHERE id=1").fetchone()
+                is not None
+            )
             db.execute(
                 "UPDATE experiment SET phase='cleanup_pending', outcome=NULL, cleanup_error=?, cleanup_attempts=cleanup_attempts+1 WHERE id=1",
                 ("dry_run" if client is None else "cleanup_pending",),
@@ -95,69 +251,50 @@ class RESTCleanup:
         if client is None:
             return self.experiment.status()
 
+        error = None
         try:
             pods = client.list_pods()
-            with self.experiment._tx() as db:
-                for pod in pods:
-                    resource_id = pod.get("id")
-                    if (
-                        profile.matches(pod)
-                        and isinstance(resource_id, str)
-                        and resource_id.isascii()
-                        and resource_id.isalnum()
-                    ):
-                        db.execute(
-                            "INSERT INTO rest_resources(resource_id) VALUES (?) ON CONFLICT(resource_id) DO UPDATE SET compute_absent=0",
-                            (resource_id,),
-                        )
-                cursor = db.execute(
-                    "SELECT cleanup_cursor FROM experiment WHERE id=1"
-                ).fetchone()[0]
-                sql = "SELECT resource_id FROM rest_resources WHERE compute_absent=0 AND resource_id>? ORDER BY resource_id LIMIT 10"
-                resources = db.execute(sql, (cursor,)).fetchall()
-                if not resources:
-                    resources = db.execute(sql, ("",)).fetchall()
-                if resources:
-                    db.execute(
-                        "UPDATE experiment SET cleanup_cursor=? WHERE id=1",
-                        (resources[-1]["resource_id"],),
-                    )
-            error = "storage_unverified" if resources else "create_unknown"
-            for resource in resources:
-                resource_id = resource["resource_id"]
-                try:
-                    pod = client.get_pod(resource_id)
-                    if pod is not None:
-                        if not profile.matches(pod):
-                            error = "ownership_unverified"
-                            continue
-                        client.terminate_owned(resource_id, profile)
-                        pod = client.get_pod(resource_id)
-                    if pod is None:
-                        with self.experiment._tx() as db:
-                            db.execute(
-                                "UPDATE rest_resources SET compute_absent=1 WHERE resource_id=?",
-                                (resource_id,),
-                            )
-                    else:
-                        error = "compute_cleanup_pending"
-                except OwnershipError:
-                    error = "ownership_unverified"
-                except (ProviderError, ValueError):
-                    error = "provider_request_failed"
-            with self.experiment._tx() as db:
-                if (
-                    db.execute(
-                        "SELECT 1 FROM rest_resources WHERE compute_absent=1 LIMIT 1"
-                    ).fetchone()
-                    and error == "create_unknown"
-                ):
-                    error = "storage_unverified"
-                db.execute("UPDATE experiment SET cleanup_error=? WHERE id=1", (error,))
         except ProviderError:
-            with self.experiment._tx() as db:
+            pods = []
+            error = "provider_request_failed"
+        with self.experiment._tx() as db:
+            for pod in pods:
+                self._remember(db, pod, profile, request_bound)
+            cursor = self.experiment._row(db)["cleanup_cursor"]
+            sql = "SELECT resource_id FROM rest_resources WHERE compute_absent=0 AND resource_id>? ORDER BY resource_id LIMIT 10"
+            resources = db.execute(sql, (cursor,)).fetchall()
+            if not resources:
+                resources = db.execute(sql, ("",)).fetchall()
+            if resources:
                 db.execute(
-                    "UPDATE experiment SET cleanup_error='provider_request_failed' WHERE id=1"
+                    "UPDATE experiment SET cleanup_cursor=? WHERE id=1",
+                    (resources[-1]["resource_id"],),
+                )
+        for resource in resources:
+            result = self._clean_resource(
+                resource["resource_id"], client, profile, request_bound
+            )
+            error = error or result
+        with self.experiment._tx() as db:
+            known = db.execute("SELECT 1 FROM rest_resources LIMIT 1").fetchone()
+            pending = db.execute(
+                "SELECT 1 FROM rest_resources WHERE compute_absent=0 LIMIT 1"
+            ).fetchone()
+            storage_unknown = db.execute(
+                "SELECT 1 FROM rest_resources r LEFT JOIN rest_storage_proofs p USING(resource_id) WHERE p.resource_id IS NULL LIMIT 1"
+            ).fetchone()
+            if not known and row["create_started"]:
+                error = error or "create_unknown"
+            if pending:
+                error = error or "compute_cleanup_pending"
+            if storage_unknown:
+                error = error or "storage_unverified"
+            if error:
+                db.execute("UPDATE experiment SET cleanup_error=? WHERE id=1", (error,))
+            else:
+                db.execute(
+                    "UPDATE experiment SET phase='terminated', outcome=?, cleanup_error=NULL WHERE id=1",
+                    (row["stop_reason"],),
                 )
         return self.experiment.status()
 
@@ -168,7 +305,9 @@ def main(argv=None):
     )
     parser.add_argument("database")
     parser.add_argument(
-        "--execute", action="store_true", help="allow REST cleanup requests"
+        "--execute",
+        action="store_true",
+        help="allow REST cleanup requests, never create",
     )
     parser.add_argument(
         "--credential-env",
@@ -190,21 +329,21 @@ def main(argv=None):
             else None
         )
         state = cleaner.reconcile_once(now=time.time(), client=client)
-        print(  # noqa: T201
-            json.dumps(
-                {
-                    key: state[key]
-                    for key in (
-                        "phase",
-                        "stop_reason",
-                        "outcome",
-                        "cleanup_error",
-                        "cleanup_attempts",
-                    )
-                },
-                sort_keys=True,
+        report = {
+            key: state[key]
+            for key in (
+                "phase",
+                "stop_reason",
+                "outcome",
+                "cleanup_error",
+                "cleanup_attempts",
             )
+        }
+        report["live_eligibility"] = dict.fromkeys(
+            ("model", "hardware", "license", "inputs", "budget", "account", "launch"),
+            False,
         )
+        print(json.dumps(report, sort_keys=True))  # noqa: T201
     except (ValueError, sqlite3.Error):
         parser.exit(2, "invalid or unconfigured ledger\n")
 

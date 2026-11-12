@@ -56,8 +56,8 @@ class Ownership:
             msg = "invalid ownership profile"
             raise ValueError(msg)
 
-    def matches(self, pod):
-        """Require every returned field; a nonunique Pod name is not ownership."""
+    def matches(self, pod, *, request_bound=False):
+        """Bind account and attempt, never name; missing storage needs request proof."""
         if not isinstance(pod, dict) or not isinstance(pod.get("env"), dict):
             return False
         env = pod["env"]
@@ -66,10 +66,12 @@ class Ownership:
             and env.get("ERGO_ATTEMPT_ID") == self.attempt
             and env.get("ERGO_ATTEMPT_FINGERPRINT") == self.fingerprint
             and pod.get("image") == self.image
-            and pod.get("containerDiskInGb") == self.container_disk_gb
-            and pod.get("volumeInGb") == 0
-            and "networkVolume" in pod
-            and pod["networkVolume"] is None
+            and type(pod.get("containerDiskInGb")) is int
+            and pod["containerDiskInGb"] == self.container_disk_gb
+            and type(pod.get("volumeInGb")) is int
+            and pod["volumeInGb"] == 0
+            and (request_bound or "networkVolume" in pod)
+            and pod.get("networkVolume") is None
         )
 
 
@@ -171,7 +173,7 @@ class RunpodREST:
             raise ProviderError(msg)
         return _safe_pod(result)
 
-    def terminate_owned(self, pod_id, ownership):
+    def terminate_owned(self, pod_id, ownership, *, request_bound=False):
         """Re-read exact ownership before DELETE; caller must separately read back.
 
         A successful delete request is not proof of termination or storage removal.
@@ -181,7 +183,28 @@ class RunpodREST:
             msg = "ownership profile required"
             raise TypeError(msg)
         pod = self.get_pod(pod_id)
-        if pod is None or not ownership.matches(pod):
+        if pod is None or not ownership.matches(pod, request_bound=request_bound):
             msg = "ownership or storage profile unverified"
             raise OwnershipError(msg)
         self._request("DELETE", "/pods/" + quote(pod_id, safe=""))
+
+
+class FixtureRunpodREST(RunpodREST):
+    """Exercise POST serialization with a supplied offline opener, never credentials.
+
+    This is a fixture harness, not a sandbox for untrusted openers. Callers must
+    supply an in-memory fake; no live create API or command is provided.
+    """
+
+    def __init__(self, opener):
+        if opener is None:
+            msg = "offline fixture opener required"
+            raise ValueError(msg)
+        super().__init__(lambda: "offline-fixture", opener=opener)
+
+    def create_pod(self, body):
+        result = self._request("POST", "/pods", body=body)
+        if not isinstance(result, dict):
+            msg = "invalid provider create response"
+            raise ProviderError(msg)
+        return _safe_pod(result)

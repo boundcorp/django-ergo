@@ -1252,6 +1252,11 @@ Ergo's own plugins live in `django_ergo.plugins`, one module each, and bot.yaml
 names them by short name. Tools that belong to one bot (like a kitchen bot's
 Tandoor tools) go in that bot folder's `tools/` instead.
 
+The `runpod` module is not an enabled bot plugin or a bot.yaml option: it holds
+offline primitives and a bounded fixture-only create/recovery bridge. See
+[Offline Runpod bridge](plugins.md#offline-runpod-bridge) for its dry-run cleanup
+command, ownership/storage evidence and disabled live eligibility.
+
 ### ergo_kb
 
 ```yaml
