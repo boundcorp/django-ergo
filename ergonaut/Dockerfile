@@ -63,6 +63,21 @@ RUN uv venv /app/.venv \
     && uv pip install --no-cache-dir -r requirements.freeze.txt
 
 #
+# Voice Bridge Dependencies Stage
+# Realtime voice bridge environment: the same pinned packages, except the bridge's
+# LiveKit agents need OpenAI SDK 3 (and newer redis/Pillow), which Ergo's own
+# environment can't take. The voice-bridge Deployment runs
+# /app/.voice-venv/bin/python -m ergonaut.realtime_voice_bridge start; nothing
+# else uses it.
+FROM deps AS voice-deps
+
+COPY ergonaut/realtime-voice-requirements.txt /app/
+RUN grep -vE '^(openai|redis|pillow)==' requirements.freeze.txt > /tmp/voice-base.txt \
+    && uv venv /app/.voice-venv \
+    && uv pip install --python /app/.voice-venv/bin/python --no-cache-dir \
+        -r /tmp/voice-base.txt -r realtime-voice-requirements.txt
+
+#
 # Developer Stage
 FROM base AS dev
 
@@ -189,13 +204,16 @@ WORKDIR /app
 RUN mkdir -p /app/static/uploads && chmod 777 /app/static/uploads
 
 COPY --from=deps /app/.venv /app/.venv
+COPY --from=voice-deps /app/.voice-venv /app/.voice-venv
 COPY --from=frontend /app/frontend/dist /app/frontend/dist
 
 # Ergo, from this repo. Its dependencies are already in the virtualenv except
 # the few Ergonaut doesn't pin, which this pulls in (pure Python wheels).
 COPY pyproject.toml setup.py README.md HISTORY.md /ergo/
 COPY src/ /ergo/src/
-RUN uv pip install --no-cache-dir "/ergo[legacy,bots,browser,images]" && rm -rf /ergo
+RUN uv pip install --no-cache-dir "/ergo[legacy,bots,browser,images]" \
+    && uv pip install --python /app/.voice-venv/bin/python --no-cache-dir --no-deps /ergo \
+    && rm -rf /ergo
 
 COPY ergonaut/pyproject.toml ergonaut/README.md ergonaut/manage.py /app/
 COPY ergonaut/infra/ /app/infra

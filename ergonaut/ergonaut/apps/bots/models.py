@@ -112,6 +112,8 @@ class RealtimeVoiceSession(models.Model):
     state = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     ended_at = models.DateTimeField(null=True, blank=True)
+    # Set once, when a bridge job takes the session: one provider connection per logical session.
+    bridge_started_at = models.DateTimeField(null=True, blank=True)
 
 
 class RealtimeVoiceEvent(models.Model):

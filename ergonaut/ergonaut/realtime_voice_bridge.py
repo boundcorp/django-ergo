@@ -23,6 +23,7 @@ from livekit.plugins import openai, silero  # noqa: E402
 from ergonaut.api.realtime_voice import (  # noqa: E402
     begin_pending,
     bridge_state,
+    claim_bridge,
     close_pending,
     current_time,
     record_event,
@@ -310,7 +311,8 @@ class Assistant(Agent):
             await asyncio.sleep(1)
 
 
-server = AgentServer()
+# One prewarmed job process (each loads Django and Silero), not one per CPU.
+server = AgentServer(num_idle_processes=1)
 
 
 @server.rtc_session(agent_name=settings.REALTIME_VOICE_AGENT_NAME)
@@ -319,27 +321,31 @@ async def voice_session(ctx: agents.JobContext):
     if _job_claimed or not getattr(settings, "REALTIME_VOICE_ENABLED", False):
         ctx.shutdown(reason="voice disabled or local one-job limit reached")
         return
+    # The local paid-test harness also caps the whole bridge launch at one job.
     cap_file = os.environ.get("ERGO_VOICE_CALL_CAP_FILE")
-    if not cap_file:
-        ctx.shutdown(reason="a unique one-shot call cap file is required")
-        return
-    try:
-        fd = os.open(cap_file, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-    except OSError:
-        ctx.shutdown(reason="one-shot call cap already used or unavailable")
-        return
-    os.close(fd)
-    _job_claimed = True
+    if cap_file:
+        try:
+            fd = os.open(cap_file, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        except OSError:
+            ctx.shutdown(reason="one-shot call cap already used or unavailable")
+            return
+        os.close(fd)
+        _job_claimed = True
     room = ctx.job.room.name
     prefix = settings.REALTIME_VOICE_ROOM_PREFIX
     if not prefix or not room.startswith(prefix):
         ctx.shutdown(reason="invalid room")
         return
-    voice_id = room.removeprefix(prefix)
-    snapshot = await sync_to_async(bridge_state, thread_sensitive=True)(voice_id)
-    if snapshot["status"] != "active":
-        ctx.shutdown(reason="voice session is not active")
+    try:
+        voice_id = str(uuid.UUID(room.removeprefix(prefix)))
+    except ValueError:
+        ctx.shutdown(reason="invalid room")
         return
+    # One job, so one provider connection, per logical voice session; only for allowed users.
+    if not await sync_to_async(claim_bridge, thread_sensitive=True)(voice_id):
+        ctx.shutdown(reason="voice session not active, already connected once, or not allowed")
+        return
+    snapshot = await sync_to_async(bridge_state, thread_sensitive=True)(voice_id)
     await ctx.connect()
     started = time.monotonic()
     http_session = aiohttp.ClientSession()

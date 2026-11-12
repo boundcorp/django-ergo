@@ -26,6 +26,7 @@ BUDGET = {
 def voice_setup(test_user, settings, monkeypatch):
     user, client = test_user
     settings.REALTIME_VOICE_ENABLED = True
+    settings.REALTIME_VOICE_USERS = {user.get_username()}
     monkeypatch.setattr(realtime_voice, "get_bot", lambda *args: object())
     chat = ConversationSession.objects.create(user=user, bot_name="test", engine_type="openai")
     return user, client, chat
@@ -65,6 +66,36 @@ def test_authorization_and_server_only_writes(voice_setup, settings, django_user
     client.force_login(chat.user)
     assert client.get(url).status_code == 404
     assert not client.get("/api/realtime-voice/config").json()["enabled"]
+
+
+def test_only_allowlisted_users_get_voice_or_a_token(voice_setup, settings):
+    _, client, chat = voice_setup
+    settings.LIVEKIT_URL = "wss://example.invalid"
+    settings.LIVEKIT_API_KEY = "test-key"
+    settings.LIVEKIT_API_SECRET = "test-secret"
+    voice, url = create(client, chat)
+    assert client.get("/api/realtime-voice/config").json()["enabled"]
+    # Off the allowlist, even the owner of the chat and the voice session is refused.
+    settings.REALTIME_VOICE_USERS = {"someone-else"}
+    assert not client.get("/api/realtime-voice/config").json()["enabled"]
+    assert post(client, url + "/token", {}).status_code == 404
+    assert post(client, "/api/realtime-voice/sessions", {"chat_id": str(chat.id)}).status_code == 404
+    assert not realtime_voice.claim_bridge(voice["id"])
+    settings.REALTIME_VOICE_USERS = set()
+    assert not client.get("/api/realtime-voice/config").json()["enabled"]
+
+
+def test_a_voice_session_gets_one_bridge_job(voice_setup, settings):
+    _, client, chat = voice_setup
+    voice, url = create(client, chat)
+    settings.REALTIME_VOICE_ENABLED = False
+    assert not realtime_voice.claim_bridge(voice["id"])  # the kill switch
+    settings.REALTIME_VOICE_ENABLED = True
+    assert realtime_voice.claim_bridge(voice["id"])
+    assert not realtime_voice.claim_bridge(voice["id"])  # a second dispatch for the same session
+    ended, _ = create(client, chat)
+    post(client, f"/api/realtime-voice/sessions/{ended['id']}/end", {})
+    assert not realtime_voice.claim_bridge(ended["id"])
 
 
 def test_token_is_scoped_to_voice_room(voice_setup, settings):

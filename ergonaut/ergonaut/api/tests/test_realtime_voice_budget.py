@@ -137,7 +137,8 @@ def test_unavailable_broker_fails_delegation_and_reports_it_in_the_same_session(
     # Keep the port reserved without listening so the broker connection is refused.
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
-        app = Celery("voice-unavailable", broker=f"redis://127.0.0.1:{sock.getsockname()[1]}/0")
+        # Not the current app: shared tasks in later tests would publish to this dead broker.
+        app = Celery("voice-unavailable", broker=f"redis://127.0.0.1:{sock.getsockname()[1]}/0", set_as_current=False)
         settings.DJANGO_ERGO = {
             **settings.DJANGO_ERGO,
             "THREAD_MESSAGE_RUNNER": lambda message_id: app.send_task("test.deliver", args=[message_id], retry=False),

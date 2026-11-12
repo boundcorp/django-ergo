@@ -4,6 +4,7 @@ import json
 from datetime import UTC, datetime, timedelta
 
 from django.conf import settings
+from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.utils import timezone
 from django_ergo.bots import messaging
@@ -19,13 +20,20 @@ from ergonaut.apps.bots.models import RealtimeVoiceDelegation, RealtimeVoiceEven
 router = Router(tags=["realtime voice"], auth=user_auth)
 
 
-def require_enabled():
-    if not getattr(settings, "REALTIME_VOICE_ENABLED", False):
+def voice_allowed(user):
+    """The kill switch is on and the user is on the REALTIME_VOICE_USERS allowlist."""
+    return bool(getattr(settings, "REALTIME_VOICE_ENABLED", False)) and user.get_username() in getattr(
+        settings, "REALTIME_VOICE_USERS", set()
+    )
+
+
+def require_enabled(user):
+    if not voice_allowed(user):
         raise HttpError(404, "Realtime voice is disabled")
 
 
 def owned_session(user, session_id):
-    require_enabled()
+    require_enabled(user)
     row = (
         RealtimeVoiceSession.objects.select_related("chat")
         .filter(id=uuid_or_404(session_id), user=user, chat__in=visible_sessions(user))
@@ -51,6 +59,25 @@ def event_out(event):
         "processed_at": iso(event.processed_at),
         "client_event_at": iso(event.client_event_at),
     }
+
+
+def claim_bridge(voice_id):
+    """Take an active session for one bridge job, once; False if it was taken, ended or isn't allowed.
+
+    This is the one-provider-connection-per-session limit: a later dispatch for the same
+    session (a new room after the first job ended) is refused rather than reconnected.
+    """
+    if not getattr(settings, "REALTIME_VOICE_ENABLED", False):
+        return False
+    field = get_user_model().USERNAME_FIELD
+    return bool(
+        RealtimeVoiceSession.objects.filter(
+            pk=voice_id,
+            status="active",
+            bridge_started_at__isnull=True,
+            **{f"user__{field}__in": getattr(settings, "REALTIME_VOICE_USERS", set())},
+        ).update(bridge_started_at=timezone.now())
+    )
 
 
 def bridge_state(voice_id):
@@ -306,12 +333,12 @@ class CreateIn(Schema):
 
 @router.get("/realtime-voice/config")
 def config(request):
-    return {"enabled": getattr(settings, "REALTIME_VOICE_ENABLED", False)}
+    return {"enabled": voice_allowed(request.auth)}
 
 
 @router.get("/realtime-voice/sessions")
 def list_voice_sessions(request, chat_id: str):
-    require_enabled()
+    require_enabled(request.auth)
     chat = visible_sessions(request.auth).filter(id=uuid_or_404(chat_id), user=request.auth).first()
     if chat is None:
         raise HttpError(404, "No such chat")
@@ -324,7 +351,7 @@ def list_voice_sessions(request, chat_id: str):
 
 @router.post("/realtime-voice/sessions")
 def create_session(request, data: CreateIn):
-    require_enabled()
+    require_enabled(request.auth)
     chat = visible_sessions(request.auth).filter(id=uuid_or_404(data.chat_id)).first()
     if chat is None or chat.user_id != request.auth.pk:
         raise HttpError(404, "No such chat")

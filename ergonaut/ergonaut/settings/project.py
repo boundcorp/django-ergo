@@ -39,7 +39,11 @@ VOICE_TRANSCRIPTION_PER_MINUTE = int(os.environ.get("VOICE_TRANSCRIPTION_PER_MIN
 VOICE_TRANSCRIPTION_PER_DAY = int(os.environ.get("VOICE_TRANSCRIPTION_PER_DAY", "100"))
 
 # Hosted realtime voice is independent of composer transcription and opt-in.
+# REALTIME_VOICE_ENABLED is the kill switch (web and bridge read it at startup);
+# REALTIME_VOICE_USERS lists the usernames (comma-separated, exact) who may use it.
+# An empty list allows nobody.
 REALTIME_VOICE_ENABLED = env_variable_truthy("REALTIME_VOICE_ENABLED")
+REALTIME_VOICE_USERS = {name.strip() for name in os.environ.get("REALTIME_VOICE_USERS", "").split(",") if name.strip()}
 REALTIME_VOICE_ROOM_PREFIX = os.environ.get("REALTIME_VOICE_ROOM_PREFIX", "voice-")
 REALTIME_VOICE_AGENT_NAME = os.environ.get("REALTIME_VOICE_AGENT_NAME", "ergo-voice")
 LIVEKIT_URL = os.environ.get("LIVEKIT_URL", "")

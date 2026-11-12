@@ -31,7 +31,7 @@ def check_broker(url):
     from kombu.transport import redis as redis_transport
 
     require(redis_transport.redis is not None, "Redis transport dependency missing")
-    app = Celery("voice-broker-probe", broker=url)
+    app = Celery("voice-broker-probe", broker=url, set_as_current=False)
     queue_name = f"voice-preflight-{uuid4().hex}"
     try:
         app.send_task("voice.preflight.noop", args=["probe"], queue=queue_name, retry=False)
