@@ -2,7 +2,7 @@
 
 This is an **off-by-default prototype**, separate from composer dictation, enabled on Octo for one allowlisted account only (see "Hosted deployment"). Wake-word and a general Stage are out of scope. Django holds session state, finalized text and task references; LiveKit carries audio, not durable memory. No audio recordings are stored by this code.
 
-**Acceptance, 2026-11-12:** Lee accepted phone audio/basic conversation, not Android Bluetooth or orchestration. PR #293 first shipped as `06284d4` / `5c0ba2e4`; latest observed release `09e5a6a` / `40d09a01` inherits its dedicated page and bounded launch-thread context. [Release evidence](realtime-voice-causal-review.md#current-release-reconciliation--2026-11-12) supersedes older undeployed statements. The latest phone delegation was engine-blocked before dispatch. Lee approved normal originating-thread execution costs at 21:15:41 UTC, preserving normal action approvals and the 90-second voice cap. The successor implements that exact-thread path with a scoped reviewed policy, not a new assistant, global grant or mandatory Send button; it has not been rolled out or device-accepted.
+**Acceptance, 2026-11-12:** Lee accepted phone audio/basic conversation, not Android Bluetooth or orchestration. Source PR #297 is live as `6b33f825` / `ffa206f6` through infra-octo #171; source rollout did not activate the exact-thread policy. The newest 22:46 call had no normal grant, emitted a client signal and reached its boundary, then failed before any durable delegation. Its persisted read-only mode was unavailable on the existing CLI engine. Lee approved normal originating-thread execution costs at 21:15:41 UTC, preserving normal approvals and the 90-second cap; policy #170 remains held until all old consumers naturally exit and a fresh announced web/bridge reload is safe. See [current evidence](realtime-voice-progress.md#continuation--newest-live-session-and-ux-2026-11-12). Android output remains physically unknown.
 
 ## Adapter and setup
 
@@ -228,6 +228,22 @@ acceptance is claimed before that reviewed rollout and user acceptance.
 ### Dedicated voice page and progressive text (PR #293 deployed; device acceptance open)
 
 Voice belongs to `/s/<launch-chat-id>/voice`, entered from that thread's top-bar options, not a modal or a new chat. The page keeps bot/thread identity, context and a return link visible. Merely opening the page must not activate a microphone: **Start call** and manual **Resume** are explicit. A single authenticated app-level call owner keeps an active call across ordinary in-app route/back navigation; leaving the voice page is not **End call**, and a different thread must not silently replace the active call. A continuing-call affordance must make background microphone/connection state visible. Browser/tab teardown cannot preserve a WebRTC connection; it is not the same guarantee as SPA navigation.
+
+Thread options use the same purpose groups on desktop and mobile: Conversation
+(voice and files), Model & reasoning, Thread data (JSON export), and Thread
+lifecycle (resolve, which a new message can reopen). Rename and pinned material
+remain in the thread details. The mobile dialog contains keyboard focus and
+returns it on Escape; the desktop panel focuses its first action and returns
+focus to Options on Escape.
+
+**Enable sound** appears only when the connected room's SDK reports blocked
+playback. It unlocks playback on the existing call; it does not join a room,
+request microphone permission, unmute capture, or confirm physical hearing.
+Start call connects the room and enables the microphone; Mute/Unmute controls
+capture separately. IDs, transport/provider state, browser playback details,
+output configuration, route snapshots and runtime events are under
+**Diagnostics**. Callback status, unavailable tools, failed work and approval
+links remain outside the diagnostic disclosure; speech is not action approval.
 
 **End call** stops the logical voice session/transport, not previously submitted thread work. It must not send thread cancellation, stop a worker or retract an outbox result. Standby, microphone mute and audio output remain separate controls. An ended call's finalized text/results stay readable.
 While the ended session remains on its voice page, lightweight read-only observation continues at the slower three-second interval so a final already accepted by the bridge can appear after End's first response. Navigating away stops that ended-session observation unless delegated work remains pending; it never reopens a provider or requests another microphone session.

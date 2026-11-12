@@ -63,6 +63,24 @@ function exportJson(detail: SessionDetail) {
   setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
+function OptionIcon({ path }: { path: string }) {
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 24 24"
+      width="20"
+      height="20"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.7"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d={path} />
+    </svg>
+  )
+}
+
 /** Whether a user message with this text was stored after ``line``. */
 function stored(messages: Message[], text: string, line: number): boolean {
   const needle = JSON.stringify(text).slice(1, -1)
@@ -598,6 +616,87 @@ export function Chat({ onChange }: { onChange: () => void }) {
   // Show a queued message until the worker has stored it.
   const echo = pending?.text && !stored(detail.messages, pending.text, pending.line) ? pending.text : ''
 
+  const closeOptions = () => {
+    setMenuOpen(false)
+    setSheetOpen(false)
+  }
+  const threadOptions = (
+    <div className="thread-option-groups">
+      <section aria-label="Conversation">
+        <h3>Conversation</h3>
+        <Link to={`/s/${id}/voice`} onClick={closeOptions} className="thread-option-action">
+          <OptionIcon path="M9 5a3 3 0 0 1 6 0v6a3 3 0 0 1-6 0V5Zm-3 6a6 6 0 0 0 12 0M12 17v5m-4 0h8" />
+          <span>
+            Voice call<small>Talk in this thread; start the microphone on the voice page.</small>
+          </span>
+        </Link>
+        <button
+          type="button"
+          className="thread-option-action"
+          aria-expanded={showFiles}
+          aria-controls={showFiles ? 'chat-files' : undefined}
+          onClick={() => {
+            toggleFiles(!showFiles)
+            closeOptions()
+          }}
+        >
+          <OptionIcon path="M6 3h8l4 4v14H6V3Zm8 0v5h4M9 12h6m-6 4h6" />
+          <span>
+            {showFiles ? 'Hide files' : 'Files'}
+            <small>Attachments and shared materials</small>
+          </span>
+        </button>
+      </section>
+      {models && (
+        <section aria-label="Model and reasoning">
+          <h3>Model & reasoning</h3>
+          <div className="flex flex-col gap-2">
+            <ModelPicker models={models} value={detail.session.model ?? ''} onPick={pickModel} large />
+            <EffortSlider value={detail.session.effort ?? ''} onPick={pickEffort} />
+          </div>
+        </section>
+      )}
+      <section aria-label="Thread data">
+        <h3>Thread data</h3>
+        <button
+          type="button"
+          className="thread-option-action"
+          onClick={() => {
+            exportJson(detail)
+            closeOptions()
+          }}
+        >
+          <OptionIcon path="M12 3v12m-5-5 5 5 5-5M5 16v5h14v-5" />
+          <span>
+            Export JSON<small>Download this conversation</small>
+          </span>
+        </button>
+      </section>
+      {detail.session.role === 'thread' && (
+        <section aria-label="Thread lifecycle">
+          <h3>Thread lifecycle</h3>
+          <button
+            type="button"
+            className="thread-option-action"
+            disabled={archived || busy}
+            onClick={async () => {
+              await api.close(id).catch(e => setError(String(e.message ?? e)))
+              closeOptions()
+              await load()
+              onChange()
+            }}
+          >
+            <OptionIcon path="m7 12 3 3 7-7M21 12a9 9 0 1 1-9-9" />
+            <span>
+              {archived ? 'Resolved' : 'Resolve thread'}
+              <small>A new message reopens a resolved thread.</small>
+            </span>
+          </button>
+        </section>
+      )}
+    </div>
+  )
+
   return (
     <div className="chat-session relative flex h-full">
       <div className="flex min-w-0 flex-1 flex-col">
@@ -631,46 +730,8 @@ export function Chat({ onChange }: { onChange: () => void }) {
             <div className="ml-auto flex flex-wrap items-center gap-3">
               {usage && <UsageBars usage={usage} />}
               <ThreadOptions open={menuOpen} onOpenChange={setMenuOpen}>
-                <Link
-                  to={`/s/${id}/voice`}
-                  onClick={() => setMenuOpen(false)}
-                  className="mb-3 flex min-h-11 items-center rounded-md border border-stroke px-3 text-sm"
-                >
-                  Voice call
-                </Link>
-                {models && (
-                  <div className="flex flex-col gap-2">
-                    <ModelPicker models={models} value={detail.session.model ?? ''} onPick={pickModel} large />
-                    <EffortSlider value={detail.session.effort ?? ''} onPick={pickEffort} />
-                  </div>
-                )}
+                {threadOptions}
               </ThreadOptions>
-              {detail.session.role === 'thread' && (
-                <button
-                  className="rounded-md border border-zinc-300 px-2 py-0.5 text-xs text-zinc-600 disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-400"
-                  disabled={archived || busy}
-                  title={archived ? 'Resolved; a new message reopens it' : 'Mark this thread resolved'}
-                  onClick={async () => {
-                    await api.close(id).catch(e => setError(String(e.message ?? e)))
-                    await load()
-                    onChange()
-                  }}
-                >
-                  {archived ? 'Resolved' : 'Resolve'}
-                </button>
-              )}
-              <button
-                type="button"
-                aria-expanded={showFiles}
-                aria-controls={showFiles ? 'chat-files' : undefined}
-                className={`rounded-md border px-2 py-0.5 text-xs ${showFiles ? 'border-indigo-400 text-indigo-700 dark:text-indigo-300' : 'border-zinc-300 text-zinc-600 dark:border-zinc-700 dark:text-zinc-400'}`}
-                onClick={() => toggleFiles(!showFiles)}
-              >
-                📎 Files
-              </button>
-              <button className="text-xs text-zinc-500 underline" onClick={() => exportJson(detail)}>
-                Export JSON
-              </button>
             </div>
           </header>
           <Pins
@@ -687,14 +748,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
           titleEditor={<SessionTitle key={id} title={detail.session.title} onSave={renameSession} mobile />}
           open={sheetOpen}
           onOpenChange={setSheetOpen}
-          options={
-            models && (
-              <div className="flex flex-col gap-2">
-                <ModelPicker models={models} value={detail.session.model ?? ''} onPick={pickModel} large />
-                <EffortSlider value={detail.session.effort ?? ''} onPick={pickEffort} />
-              </div>
-            )
-          }
+          options={threadOptions}
           summary={summary}
           meta={
             <>
@@ -724,48 +778,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
               </div>
             ) : null
           }
-          actions={
-            <>
-              <Link to={`/s/${id}/voice`} onClick={() => setSheetOpen(false)}>
-                Voice call
-              </Link>
-              {detail.session.role === 'thread' && (
-                <button
-                  type="button"
-                  disabled={archived || busy}
-                  title={archived ? 'Resolved; a new message reopens it' : 'Mark this thread resolved'}
-                  onClick={async () => {
-                    await api.close(id).catch(e => setError(String(e.message ?? e)))
-                    document.querySelector<HTMLDialogElement>('#chat-session-sheet')?.close()
-                    await load()
-                    onChange()
-                  }}
-                >
-                  {archived ? 'Resolved' : 'Resolve'}
-                </button>
-              )}
-              <button
-                type="button"
-                aria-expanded={showFiles}
-                aria-controls={showFiles ? 'chat-files' : undefined}
-                onClick={() => {
-                  toggleFiles(!showFiles)
-                  document.querySelector<HTMLDialogElement>('#chat-session-sheet')?.close()
-                }}
-              >
-                Files
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  exportJson(detail)
-                  document.querySelector<HTMLDialogElement>('#chat-session-sheet')?.close()
-                }}
-              >
-                Export JSON
-              </button>
-            </>
-          }
+          actions={null}
         >
           <Pins
             sessionId={id}

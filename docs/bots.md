@@ -1002,6 +1002,12 @@ Its dedicated page keeps one app-owned connection across in-tab navigation;
 End call stops voice, not submitted thread work. Progressive drafts are not
 normal chat history until finalized, and displayed SDK activity is an
 observation, not proof of playback or background execution.
+Thread options share desktop/mobile purpose groups for conversation actions,
+model/reasoning, export and reversible thread resolution. The voice page keeps
+conversation, observed activity, capture controls and actionable failures/
+approvals visible; identifiers, transport/provider details, route configuration
+and runtime events are collapsed under Diagnostics. Enable sound is a blocked
+playback unlock on the existing room, not another join or microphone start.
 
 ### Message identity
 

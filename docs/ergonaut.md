@@ -32,6 +32,17 @@ The originating thread's options → **Voice call** opens its dedicated page.
 Opening it does not capture a microphone; Start/Resume are explicit, and an
 active call survives in-tab navigation. End call stops voice, not accepted
 background work. The original 90-second deadline still applies.
+The desktop panel and mobile drawer group Conversation (voice/files),
+Model & reasoning, Thread data (export) and Thread lifecycle (resolve).
+Resolve is reversible by sending a new message; rename and pins remain in
+thread details. Keyboard focus enters the panel/dialog and Escape returns it.
+
+Start call joins voice and requests microphone access. **Enable sound** is
+different: it appears only for SDK-reported blocked playback and unlocks sound
+on the existing call without joining again or changing capture. Mute/Unmute
+controls the microphone separately. The conversation and actionable failures/
+normal approval links remain upfront; IDs, transport/provider/playback details,
+route settings and runtime events are under **Diagnostics**.
 
 **Collect route diagnostics** is user-triggered and local: it reads existing
 element/capture state and redacted browser capabilities, never device IDs or
