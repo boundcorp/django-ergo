@@ -980,6 +980,18 @@ The session card distinguishes generated speech from
 durable submitted/queued/answered/failed work and explicitly reports when
 no background request or verified history result exists.
 
+Voice is an interface to its exact launch thread, not a separate orchestrator
+or a global owner briefing. The draft follow-up restores that thread's bounded
+instructions, history/summary, decisions and attachment references; other
+threads, workers and approvals are read on demand through tools that the
+owning bot already offers. Budgeted voice is explicitly restricted, and a
+subscription/CLI launch thread cannot silently switch to an API model to run
+delegation. A separate API-engine profile retaining the same authorization
+needs review. Voice does not grant thread forwarding, approval actions or
+worker starts; all remain outside its read-only authorization. See the
+[phone diagnosis](realtime-voice-causal-review.md#hosted-phone-diagnosis--2026-11-12)
+and [device/continuity checklist](realtime-voice-progress.md#hosted-phone-acceptance-and-follow-ups--2026-11-12).
+
 ### Message identity
 
 Forwarded and cross-chat messages store the words separately from their
