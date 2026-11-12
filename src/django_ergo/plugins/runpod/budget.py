@@ -16,9 +16,10 @@ MAX_RENTAL_SECONDS = 3600
 
 @dataclass(frozen=True)
 class Evidence:
-    """An independently verified nonnegative USD amount, or USD/hour rate.
+    """A verified quote/estimated allowance in USD, or an hourly rate.
 
-    Zero is valid only when it too is verified; unknown is represented by None.
+    Verification concerns the estimate's evidence, not a provider-failure billing
+    guarantee. Zero needs evidence; unknown is represented by None.
     """
 
     amount: Decimal | None
@@ -76,11 +77,12 @@ def admit_rental(  # noqa: PLR0911, PLR0913
     project_cap_usd: Decimal,
     project_committed_usd: Decimal,
 ) -> Admission:
-    """Evaluate a single rental against the $3 hard limit and project cap.
+    """Evaluate a single intended rental estimate against $3 and the project cap.
 
-    The verified compute rate applies to the entire absolute rental interval;
-    storage, network, and fees are separately verified upper bounds for that
-    interval. project_committed_usd includes existing actual charges and all
+    The verified compute quote applies to the entire authorized rental interval;
+    storage, network, and fees are separately evidenced estimated allowances for
+    that interval. Provider failure exposure is not a zero-overrun admission gate.
+    project_committed_usd includes existing actual charges and all
     outstanding reservations, without double-counting reconciled reservations.
     The caller must atomically reserve the returned amount with other project
     admissions; this pure function cannot prevent concurrent overspending.

@@ -60,10 +60,11 @@ can approve their tools. Every option is in the
 
 ## Offline Runpod bridge
 
-`django_ergo.plugins.runpod` contains local queue/experiment building blocks
-and a narrow, single-test REST create/recovery bridge, **not** an enabled bot
-plugin, deployed rental controller or generation runner. It adds no bot.yaml
-configuration. The cleanup command remains dry-run by default:
+`django_ergo.plugins.runpod` contains local queue/experiment building blocks,
+a narrow fixture-only REST create/recovery bridge, an explicit image-conditioned
+H3 pilot worker, and independent cleaner supervision. It is **not** an enabled
+bot plugin or deployed rental controller and adds no bot.yaml configuration.
+The cleanup command remains dry-run by default:
 
 ```bash
 python -m django_ergo.plugins.runpod.cleanup LEDGER
@@ -96,8 +97,9 @@ actions. Later scans can discover owned resources after an uncertain create,
 but repeated list absence never makes that unknown create clean. A known-ID
 GET 404 establishes compute absence; DELETE 404 is ambiguous and needs a later
 GET 404. Deletion timeouts retain pending state for retry. Bounds cover request
-count, response size and per-socket timeout, not an absolute DNS/callback/stream
-deadline; no deployed scheduler freshness or provider billing bound is proved.
+count, response size and per-socket timeout. The optional independent supervisor
+bounds each cleanup child process and gates the worker on heartbeat freshness;
+no scheduler has been installed or provider billing guarantee proved.
 
 ### Public API evidence and remaining uncertainty
 
@@ -129,14 +131,21 @@ deadline; no deployed scheduler freshness or provider billing bound is proved.
   absence of later out-of-band global-volume attachments; those need separate
   evidence and must remain unresolved if external changes are possible.
 
-Live eligibility gates remain false. No live create, deployment, model download
-or generation is enabled. Existing `--execute --credential-env NAME` permits
-cleanup-only REST operations under separate authorization; it was not exercised
-against Runpod. Fixture openers must be in-memory fakes, not live HTTP openers.
-Real launch still requires budget and account authorization, an independent
-cleanup scheduler, and a model/runner contract—not discovery of supposedly
-absent documented response fields. Local estimates do not guarantee a hard
-provider spending ceiling. Existing bot configurations and backlog are unchanged.
+Live-create eligibility remains disabled: `create_once` still only accepts
+in-memory fixture openers, not live HTTP. Explicit `--execute --credential-env
+NAME` permits cleanup-only REST operations with the existing scoped callback;
+it was not exercised against Runpod.
+
+The [frozen H3 worker guide](runpod-h3.md) gives the executable validation and
+six-shot inference commands, pinned FL2VA image-conditioning schema, frame
+lattice/29-second PCM-preserving export, concrete host/price estimate, and
+remaining unmeasured conditioned-fit/startup limits. The
+[independent cleaner guide](runpod-cleaner.md) provides two-process supervision,
+freshness gates and killed-worker fixture evidence. These are local preparation,
+not a deployment or paid-call authorization. The $3 plan is an evidenced estimate
+with margin and an immutable ≤1-hour deadline, **not** a zero-overrun guarantee
+gate. Single-create/no-replay and cleanup retries remain required. Existing bot
+configurations and chapter readiness remain unchanged.
 
 ## Writing a plugin
 

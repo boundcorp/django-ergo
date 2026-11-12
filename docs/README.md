@@ -37,5 +37,7 @@
 - [Development](development.md): setup, tests, lint, CI, conventions
 - [Git releases](git-release.md): installing from a reviewed commit
 - [TODO.md](../TODO.md): the current backlog
+- [Frozen H3 runner](runpod-h3.md) and [Runpod cleaner preparation](runpod-cleaner.md):
+  explicit six-shot commands, image/checkpoint/schema, exports, estimates and independent supervision
 - [archive/](archive/README.md): earlier plans, specs and status documents, kept for history
 - [preservation/](preservation/2026-09-10/README.md): byte-identical historical evidence

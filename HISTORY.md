@@ -4,6 +4,23 @@ This document tracks the major milestones and evolution of the Django Ergo proje
 
 ## Development Timeline
 
+### Frozen H3 runner and independent cleaner preparation (November 2026)
+
+- Added the explicit six-shot image-conditioned FL2VA worker with pinned source
+  and checkpoint, historical prompt/version and archive validation, durable
+  submission tombstones/no replay, native/conformed artifact hashes, ordered
+  partial manifests, and a 696-frame/29-second PCM-verified export. Chapter
+  planning inputs remain non-executable.
+- Added a pinned-base image recipe and deadline-bound model entrypoint, plus
+  separately runnable cleaner supervision/freshness gating and a supervision
+  configuration. All are preparation; no image build, model download, GPU run,
+  provider mutation, secret relocation or service deployment was performed.
+- The ≤$3 estimate retains margin, single intent, early shutdown and hard
+  one-hour deadline; a provider-failure zero-overrun guarantee is not an
+  admission gate. Published warmed T2VA fit is not conditioned-run evidence.
+  See [runner commands and limits](docs/runpod-h3.md) and
+  [cleaner preparation](docs/runpod-cleaner.md).
+
 ### Runpod offline create/recovery bridge (November 2026)
 
 - Added a bounded, fixture-only REST create/recovery bridge for one local test,

@@ -28,15 +28,19 @@ Live on rigel from `~/p/boundcorp/django-ergo`, bots from `boundcorp/ergo-bots`.
 
 ### Next
 
-- [ ] **GPU execution**: offline queue, pricing and manifest primitives and a
-  SQLite singleton ledger with fake-provider cleanup are not live execution.
-  Before enabling a rental, implement an authorized native Worker and durable
-  shared resource ledger, atomic project/global reservations, real provider
-  ownership and uncertain-create reconciliation, a deployed independent
-  deadline/idle cleanup scheduler, durable artifact publication, and an approved
-  runner/model/input/license gate. Verify provider pricing and termination
-  semantics; local caps and timers cannot guarantee a financial ceiling if
-  termination fails.
+- [x] **Supervised H3 pilot preparation**: pinned six-shot image-conditioned
+  FL2VA runner, immutable archive/prompt versions and submission tombstones,
+  PCM-verified 29s export/partial manifests, independently supervised cleaner
+  freshness and deadline fixtures. See [runner](docs/runpod-h3.md) and
+  [cleaner](docs/runpod-cleaner.md). No deployment, model/GPU run or live rental.
+- [ ] **GPU execution**: live create remains deliberately disabled. For the
+  single supervised pilot, build/record the image, admit an actual quote with
+  storage/margin, retain the existing scoped credential binding and independent
+  cleaner, resolve the already-requested operator/deployment/use arrangement,
+  and measure cold conditioned fit under the unchanged ≤1h deadline. The ≤$3
+  estimate is not a zero-overrun guarantee gate. Full multi-user bot execution
+  still needs native Worker/shared-ledger and atomic global/project reservations;
+  those are not prerequisites to this bounded local preparation.
 
 - [ ] **Realtime voice prototype**: offline hands-free model-selected delegation now waits for Python Silero speech end, pause grace and transcript drain; the third isolated attempt proved a real owner-scoped history result. Deployed on Octo for Lee's account only (`REALTIME_VOICE_USERS`, kill switch `REALTIME_VOICE_ENABLED`, `voice-bridge` Deployment) for his own testing. Hosted boundary/transcription correctness, hands-free delegation, spoken truthfulness, browser playback, interruption/reconnect, billing reconciliation and retention review remain open. Wake-word detection is deferred and not implemented. See `docs/realtime-voice-progress.md`.
 
