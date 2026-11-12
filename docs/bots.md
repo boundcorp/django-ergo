@@ -1003,7 +1003,8 @@ End call stops voice, not submitted thread work. Progressive drafts are not
 normal chat history until finalized, and displayed SDK activity is an
 observation, not proof of playback or background execution.
 Thread options share desktop/mobile purpose groups for conversation actions,
-model/reasoning, export and reversible thread resolution. The voice page keeps
+model/reasoning, export and worker-stopping thread resolution. Resolve warns
+that reopening the thread does not resume cancelled work. The voice page keeps
 conversation, observed activity, capture controls and actionable failures/
 approvals visible; identifiers, transport/provider details, route configuration
 and runtime events are collapsed under Diagnostics. Enable sound is a blocked

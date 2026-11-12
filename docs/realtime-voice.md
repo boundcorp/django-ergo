@@ -2,7 +2,7 @@
 
 This is an **off-by-default prototype**, separate from composer dictation, enabled on Octo for one allowlisted account only (see "Hosted deployment"). Wake-word and a general Stage are out of scope. Django holds session state, finalized text and task references; LiveKit carries audio, not durable memory. No audio recordings are stored by this code.
 
-**Acceptance, 2026-11-12:** Lee accepted phone audio/basic conversation, not Android Bluetooth or orchestration. Source PR #297 is live as `6b33f825` / `ffa206f6` through infra-octo #171; source rollout did not activate the exact-thread policy. The newest 22:46 call had no normal grant, emitted a client signal and reached its boundary, then failed before any durable delegation. Its persisted read-only mode was unavailable on the existing CLI engine. Lee approved normal originating-thread execution costs at 21:15:41 UTC, preserving normal approvals and the 90-second cap; policy #170 remains held until all old consumers naturally exit and a fresh announced web/bridge reload is safe. See [current evidence](realtime-voice-progress.md#continuation--newest-live-session-and-ux-2026-11-12). Android output remains physically unknown.
+**Acceptance, 2026-11-12:** Lee accepted phone audio/basic conversation, not Android Bluetooth or orchestration. Source PR #297 is live as `6b33f825` / `ffa206f6` through infra-octo #171. After all old consumers exited and a fresh acknowledged quiet window, exact scoped policy #170 merged at 23:34:50 (`eff442d9`) and matching web/bridge configuration was verified at 23:38:39. Only new logical sessions can receive the normal-thread grant; the newest retained 22:46 call stays ungranted and had failed before durable delegation. Normal task costs were approved at 21:15:41; normal approvals, one root request and the 90-second voice cap remain. No hosted normal-task/provider test ran, and Android output remains physically unknown. [Current evidence](realtime-voice-progress.md#continuation--newest-live-session-and-ux-2026-11-12) separates policy activation from the UX frontend release.
 
 ## Adapter and setup
 
@@ -148,9 +148,9 @@ The bridge, not the web process, validates the actual selected engine/model and 
 
 Bot/thread/worker lookups use the existing authorized chat toolkit and budgeted same-thread message path. Thread listing supplies bounded pending-approval tool names/status, not arguments or approval actions. Cross-thread overview is excluded only for explicitly scoped voice delegation; ordinary bot turns are unchanged. The original delegation ID travels through message/call metadata and the same logical session's durable outbox; a result claim is still not proof of spoken playback.
 
-**Implementation gap, not product contract:** automatic voice requests still cannot send/forward/start/approve; the experimental budget refuses those actions independently. Lee now requires normal authorized orchestration and action approvals. The actual Boundcorp `CodexCLIEngine` cannot enforce this API-only token budget; silently removing the budget or rerouting the bot would be unsafe. A normal exact-thread execution bridge needs durable per-request authorization separate from the bounded transport and truthful normal approval reentry, without blanket grants, duplicate dispatch or hidden spend increases. This follow-up does not change live bot configuration or claim that read-only listings satisfy that requirement.
+**Experimental-profile restriction, not the normal-thread contract:** read-only budgeted requests cannot send/forward/start/approve; the budget refuses those actions independently. The actual Boundcorp CLI engine cannot enforce that API-only token budget, and voice never silently reroutes it. The separately reviewed scoped normal-thread policy below supplies the authorized orchestration path with normal approvals and costs; read-only listings are not a substitute for that path or hosted acceptance.
 
-### Default-off normal originating-thread execution (successor; not enabled live)
+### Default-off normal originating-thread execution (enabled only for the reviewed Octo scope)
 
 `REALTIME_VOICE_THREAD_EXECUTION_AUTHORIZATIONS` defaults to `{}`. It is a
 reviewed **scoped JSON policy** supplied by settings or the same-named environment
@@ -217,13 +217,14 @@ does not establish playback. Reconnect restores bounded results without
 redispatching. Owner polling can persist late terminal outcomes after End,
 without a provider connection or a model request.
 
-**Current gate:** Lee's distinct cost-policy decision is approved and the exact
-Boundcorp policy is prepared for review. Source must roll out with policy absent
-first. Verify all old queue consumers have exited, not just desired deployment
-readiness, before activating the reviewed policy and announcing a quiet
-web/bridge reload. Code/config rollback prevents new dispatch but does not
-silently cancel accepted normal work. No normal capability or physical Android
-acceptance is claimed before that reviewed rollout and user acceptance.
+**Deployment gate satisfied, 23:38:39 UTC:** source #297 was deployed with policy
+absent first; all old queue consumers exited before exact policy #170 merged.
+A fresh policy-specific notice and quiet window preceded the web/bridge-only
+reload. Both web replicas and bridge passed no-inference READ ONLY grant/scope
+checks, including old-session no-upgrade and other owner/thread/bot denial.
+Default remains off outside that exact reviewed scope. Code/config revocation
+prevents new dispatch, not accepted work; hosted orchestration and physical
+Android acceptance still require the user's actual observation.
 
 ### Dedicated voice page and progressive text (PR #293 deployed; device acceptance open)
 
@@ -231,8 +232,9 @@ Voice belongs to `/s/<launch-chat-id>/voice`, entered from that thread's top-bar
 
 Thread options use the same purpose groups on desktop and mobile: Conversation
 (voice and files), Model & reasoning, Thread data (JSON export), and Thread
-lifecycle (resolve, which a new message can reopen). Rename and pinned material
-remain in the thread details. The mobile dialog contains keyboard focus and
+lifecycle. Resolve is danger-styled: it archives the thread and stops queued/
+running workers and their agents. A new message reopens the thread, not cancelled
+work. Rename and pinned material remain in thread details. The mobile dialog contains keyboard focus and
 returns it on Escape; the desktop panel focuses its first action and returns
 focus to Options on Escape.
 

@@ -677,7 +677,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
           <h3>Thread lifecycle</h3>
           <button
             type="button"
-            className="thread-option-action"
+            className="thread-option-action thread-option-danger"
             disabled={archived || busy}
             onClick={async () => {
               await api.close(id).catch(e => setError(String(e.message ?? e)))
@@ -689,7 +689,10 @@ export function Chat({ onChange }: { onChange: () => void }) {
             <OptionIcon path="m7 12 3 3 7-7M21 12a9 9 0 1 1-9-9" />
             <span>
               {archived ? 'Resolved' : 'Resolve thread'}
-              <small>A new message reopens a resolved thread.</small>
+              <small>
+                Archives this thread and stops its queued/running workers. New messages reopen the thread, not cancelled
+                work.
+              </small>
             </span>
           </button>
         </section>

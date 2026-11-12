@@ -34,8 +34,10 @@ active call survives in-tab navigation. End call stops voice, not accepted
 background work. The original 90-second deadline still applies.
 The desktop panel and mobile drawer group Conversation (voice/files),
 Model & reasoning, Thread data (export) and Thread lifecycle (resolve).
-Resolve is reversible by sending a new message; rename and pins remain in
-thread details. Keyboard focus enters the panel/dialog and Escape returns it.
+Resolve archives the thread and stops queued/running workers and their agents;
+a new message reopens the thread, not cancelled work. It is separated and
+danger-styled. Rename and pins remain in thread details. Keyboard focus enters
+the panel/dialog and Escape returns it.
 
 Start call joins voice and requests microphone access. **Enable sound** is
 different: it appears only for SDK-reported blocked playback and unlocks sound
