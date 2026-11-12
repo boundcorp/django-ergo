@@ -4,9 +4,11 @@ import type { createRoot as CreateRoot, Root } from 'react-dom/client'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { Window } from 'happy-dom'
 import { LocalParticipant, Room, RoomEvent, Track } from 'livekit-client'
-import { api, type RealtimeVoiceSession } from '../api'
-import { RealtimeVoice } from './RealtimeVoice'
+import { Link, MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom'
+import { api, type RealtimeVoiceSession, type SessionDetail } from '../api'
+import { ActiveVoiceCall, VoiceCallProvider, VoicePage, VoiceTranscript } from './RealtimeVoice'
 import { VoiceSessionCard } from './VoiceSessionCard'
+import { Chat } from '../pages/Chat'
 
 const original = {
   config: api.realtimeVoiceConfig,
@@ -17,12 +19,33 @@ const original = {
   end: api.endRealtimeVoice,
   standby: api.standbyRealtimeVoice,
   resume: api.resumeRealtimeVoice,
+  detail: api.session,
+  models: api.models,
+  attachments: api.attachments,
+  pins: api.pins,
 }
 const session: RealtimeVoiceSession = {
   id: 'voice-1',
   chat_id: 'chat-1',
   status: 'active',
   events: [{ event_id: 'event-1', kind: 'user', text: 'Hello', delivery: 'unknown', created_at: '' }],
+}
+function thread(id = 'chat-1'): SessionDetail {
+  return {
+    session: {
+      id,
+      bot: 'helper',
+      title: `Exact title ${id}`,
+      role: 'thread',
+      status: 'active',
+      username: 'owner',
+      parent_id: null,
+      created_at: '2026-01-01T00:00:00Z',
+      updated_at: '2026-01-01T00:00:00Z',
+    },
+    messages: [],
+    calls: [],
+  }
 }
 let window: Window
 let root: Root
@@ -36,6 +59,40 @@ function button(label: string) {
   if (!found) throw new Error(`Missing ${label} button`)
   return found
 }
+function link(label: string) {
+  const found = [...container.querySelectorAll('a')].find(item => item.textContent?.trim() === label)
+  if (!found) throw new Error(`Missing ${label} link`)
+  return found
+}
+function Navigation() {
+  const navigate = useNavigate()
+  return (
+    <nav>
+      <Link to="/s/chat-1/voice">Voice fixture</Link>
+      <Link to="/s/chat-2/voice">Other thread voice</Link>
+      <button onClick={() => navigate(-1)}>Browser back</button>
+    </nav>
+  )
+}
+function VoiceHarness({ initial = '/s/chat-1/voice', realChat = false }: { initial?: string; realChat?: boolean }) {
+  return (
+    <MemoryRouter initialEntries={[initial]}>
+      <VoiceCallProvider>
+        <Navigation />
+        <ActiveVoiceCall />
+        <Routes>
+          <Route path="/s/:id/voice" element={<VoicePage />} />
+          <Route path="/s/:id" element={realChat ? <Chat onChange={() => {}} /> : <p>Thread view</p>} />
+        </Routes>
+      </VoiceCallProvider>
+    </MemoryRouter>
+  )
+}
+async function mountVoice() {
+  await act(async () => {
+    root.render(<VoiceHarness />)
+  })
+}
 
 beforeEach(async () => {
   window = new Window({ url: 'http://localhost' })
@@ -44,23 +101,49 @@ beforeEach(async () => {
     document: window.document,
     navigator: window.navigator,
     sessionStorage: window.sessionStorage,
+    localStorage: window.localStorage,
     HTMLElement: window.HTMLElement,
     HTMLDialogElement: window.HTMLDialogElement,
     Event: window.Event,
     MouseEvent: window.MouseEvent,
+    Node: window.Node,
+    EventSource: class {
+      close() {}
+    },
+    ResizeObserver: class {
+      observe() {}
+      disconnect() {}
+    },
     IS_REACT_ACT_ENVIRONMENT: true,
   })
+  window.matchMedia = (() => ({
+    matches: false,
+    addEventListener() {},
+    removeEventListener() {},
+  })) as typeof window.matchMedia
+  window.HTMLElement.prototype.scrollTo = function () {}
   window.HTMLDialogElement.prototype.showModal = function () {
     this.open = true
   }
   window.HTMLDialogElement.prototype.close = function () {
     this.open = false
   }
-  // React DOM captures the document at initialization, after Happy DOM is installed.
+  // React DOM captures document at module initialization, after this test installs Happy DOM.
   createRoot = (await import('react-dom/client')).createRoot
   container = window.document.createElement('div')
   window.document.body.append(container)
   root = createRoot(container)
+  api.realtimeVoiceConfig = async () => ({ enabled: true, standby_enabled: true })
+  api.realtimeVoiceSessions = async id => (id === 'chat-1' ? [session] : [])
+  api.realtimeVoiceSession = async () => session
+  api.startRealtimeVoice = async () => session
+  api.realtimeVoiceToken = async () => {
+    throw new Error('Token unavailable')
+  }
+  api.session = async id => thread(id)
+  api.models = async () => ({ models: [], default: '', default_engine_type: '' })
+  api.attachments = async () => []
+  api.pins = async () => []
 })
 
 afterEach(() => {
@@ -73,116 +156,213 @@ afterEach(() => {
   api.endRealtimeVoice = original.end
   api.standbyRealtimeVoice = original.standby
   api.resumeRealtimeVoice = original.resume
+  api.session = original.detail
+  api.models = original.models
+  api.attachments = original.attachments
+  api.pins = original.pins
   restoreOutputs()
   restoreOutputs = () => {}
   restoreRoomMocks.splice(0).forEach(restore => restore())
   window.happyDOM.close()
 })
 
-test('voice room is hidden when disabled', async () => {
-  api.realtimeVoiceConfig = async () => ({ enabled: false })
-  await act(async () => {
-    root.render(createElement(RealtimeVoice, { sessionId: 'chat-1', disabled: false }))
-  })
-  expect(container.querySelector('button')).toBeNull()
-})
-
-test('reopens a saved room, shows durable transcript and ends it', async () => {
-  api.realtimeVoiceConfig = async () => ({ enabled: true })
+test('page loads exact thread identity and context without starting a call or requesting a token', async () => {
   let starts = 0
+  let tokens = 0
   api.startRealtimeVoice = async () => {
     starts++
     return session
   }
-  api.realtimeVoiceSession = async id => {
-    expect(id).toBe('voice-1')
+  api.realtimeVoiceToken = async () => {
+    tokens++
+    throw new Error('No transport')
+  }
+  await mountVoice()
+  expect(container.textContent).toContain('helper')
+  expect(container.textContent).toContain('Exact title chat-1')
+  expect(container.textContent).toContain('ID: chat-1')
+  expect(container.textContent).toContain('Owner: owner')
+  expect(container.textContent).toContain('selected thread')
+  expect(starts).toBe(0)
+  expect(tokens).toBe(0)
+  expect(container.querySelector('[aria-label="Audio output"]')?.textContent).not.toContain(
+    'Checking browser audio output controls',
+  )
+  expect(container.querySelector('[aria-label="Audio output"]')?.textContent).toContain(
+    'become available when you start or resume',
+  )
+  expect(container.querySelector('dialog')).toBeNull()
+  expect(link('← Return to thread').getAttribute('href')).toBe('/s/chat-1')
+})
+
+test('restricted page is honest and cannot start a microphone', async () => {
+  api.realtimeVoiceConfig = async () => ({ enabled: false })
+  api.realtimeVoiceSessions = async () => []
+  await mountVoice()
+  expect(button('Start call').disabled).toBe(true)
+  expect(container.textContent).toContain('unavailable or restricted')
+})
+
+test('unsupported delegation reasons and closing-boundary warnings are visible without opening details', async () => {
+  const unavailable = 'This thread uses a subscription engine that cannot enforce the request budget.'
+  api.realtimeVoiceSessions = async () => [
+    {
+      ...session,
+      standby_state: 'closing',
+      briefing: {
+        context: '',
+        restriction: `Restricted read-only mode. ${unavailable}`,
+        reason: unavailable,
+        delegation_available: false,
+      },
+    },
+  ]
+  await mountVoice()
+  const reason = [...container.querySelectorAll('p')].find(node => node.textContent === unavailable)
+  expect(reason).toBeDefined()
+  expect(reason?.closest('details:not([open])')).toBeNull()
+  const warning = [...container.querySelectorAll('p')].find(node => node.textContent?.includes('speech may be cut off'))
+  expect(warning).toBeDefined()
+  expect(warning?.closest('details:not([open])')).toBeNull()
+  expect(container.textContent).toContain('Disconnecting')
+})
+
+test('mismatched selected thread cannot start a call', async () => {
+  api.session = async () => thread('somebody-else')
+  await mountVoice()
+  expect(container.textContent).toContain('identity does not match')
+  expect(button('Start call').disabled).toBe(true)
+})
+
+test('saved room reconnect requires a user gesture and explicit end removes storage', async () => {
+  let starts = 0
+  const stop = spyOn(api, 'stop').mockRejectedValue(new Error('Thread stop must not be called'))
+  restoreRoomMocks.push(() => stop.mockRestore())
+  api.startRealtimeVoice = async () => {
+    starts++
     return session
   }
-  api.realtimeVoiceToken = async () => {
-    throw new Error('Token unavailable')
-  }
+  api.realtimeVoiceSessions = async () => []
   api.endRealtimeVoice = async () => ({ ...session, status: 'ended' })
   window.sessionStorage.setItem('ergonaut.realtimeVoice.chat-1', 'voice-1')
+  await mountVoice()
   await act(async () => {
-    root.render(createElement(RealtimeVoice, { sessionId: 'chat-1', disabled: false }))
-  })
-  await act(async () => {
-    button('Voice room').click()
+    button('Start call').click()
   })
   expect(starts).toBe(0)
   expect(container.textContent).toContain('Hello')
   expect(container.textContent).toContain('Token unavailable')
   await act(async () => {
-    button('End room').click()
+    button('End call').click()
   })
   expect(window.sessionStorage.getItem('ergonaut.realtimeVoice.chat-1')).toBeNull()
+  expect(stop).not.toHaveBeenCalled()
+  expect(container.textContent).toContain('background work continues')
 })
 
-test('reconnects to a durable active session without browser storage', async () => {
-  api.realtimeVoiceConfig = async () => ({ enabled: true })
+test('route/back/page unmount preserves the logical call and blocks implicit cross-thread replacement', async () => {
+  let ends = 0
   let starts = 0
+  let tokens = 0
+  api.endRealtimeVoice = async () => {
+    ends++
+    return { ...session, status: 'ended' }
+  }
   api.startRealtimeVoice = async () => {
     starts++
     return session
   }
-  api.realtimeVoiceSession = async () => session
-  api.realtimeVoiceSessions = async () => [session]
   api.realtimeVoiceToken = async () => {
-    throw new Error('Token unavailable')
+    tokens++
+    throw new Error('No transport fixture')
   }
+  await mountVoice()
   await act(async () => {
-    root.render(createElement(RealtimeVoice, { sessionId: 'chat-1', disabled: false }))
+    button('Start call').click()
   })
   await act(async () => {
-    button('Voice room').click()
+    link('← Return to thread').click()
   })
+  expect(container.textContent).toContain('Thread view')
+  expect(link('Return to voice call').getAttribute('href')).toBe('/s/chat-1/voice')
+  expect(container.querySelector('[aria-label="Active voice session"]')?.textContent).toContain(
+    'Voice session retained · disconnected',
+  )
+  expect(container.querySelector('[aria-label="Active voice session"]')?.textContent).not.toContain(
+    'Voice call continues',
+  )
+  await act(async () => {
+    button('Browser back').click()
+  })
+  expect(container.textContent).toContain('Exact title chat-1')
+  await act(async () => {
+    link('Other thread voice').click()
+  })
+  expect(container.textContent).toContain('already active in thread chat-1')
+  expect(button('Start call').disabled).toBe(true)
+  expect(ends).toBe(0)
   expect(starts).toBe(0)
-  expect(container.textContent).toContain('Hello')
+  expect(tokens).toBe(1)
 })
 
-test('standby controls are absent when the flag is disabled', async () => {
-  api.realtimeVoiceConfig = async () => ({ enabled: true, standby_enabled: false })
-  api.realtimeVoiceSessions = async () => [{ ...session, standby_state: 'standby' }]
+test('topbar dropdown and mobile options enter the dedicated page, never the composer', async () => {
+  await act(async () => {
+    root.render(<VoiceHarness initial="/s/chat-1" realChat />)
+  })
+  expect(container.querySelector('.chat-transcript')).not.toBeNull()
+  expect(container.querySelector('.chat-options a')).toBeNull()
+  await act(async () => {
+    ;(container.querySelector('[data-options-button]') as HTMLButtonElement).click()
+  })
+  const desktop = container.querySelector('.chat-options a') as HTMLAnchorElement
+  expect(desktop.textContent).toContain('Voice call')
+  expect(desktop.getAttribute('href')).toBe('/s/chat-1/voice')
+  const mobile = container.querySelector('.chat-sheet-actions a') as HTMLAnchorElement
+  expect(mobile.getAttribute('href')).toBe('/s/chat-1/voice')
+  expect(container.querySelector('.chat-composer a[href$="/voice"]')).toBeNull()
+  await act(async () => {
+    desktop.click()
+  })
+  expect(container.querySelector('h1')?.textContent).toBe('Exact title chat-1')
+  expect(container.querySelector('.chat-transcript')).toBeNull()
+})
+
+test('mobile options sheet navigates to voice without starting capture', async () => {
   let tokens = 0
   api.realtimeVoiceToken = async () => {
     tokens++
-    throw new Error('Token unavailable')
+    throw new Error('No transport')
   }
   await act(async () => {
-    root.render(createElement(RealtimeVoice, { sessionId: 'chat-1', disabled: false }))
+    root.render(<VoiceHarness initial="/s/chat-1" realChat />)
   })
   await act(async () => {
-    button('Voice room').click()
+    ;(container.querySelector('.chat-mobile-summary') as HTMLButtonElement).click()
   })
-  expect(tokens).toBe(1)
-  expect(container.textContent).not.toContain('Resume manually')
-  expect(container.textContent).not.toContain('Standby while waiting')
-  expect(container.textContent).toContain('Reconnect')
+  expect(container.querySelector('dialog')?.open).toBe(true)
+  await act(async () => {
+    ;(container.querySelector('.chat-sheet-actions a') as HTMLAnchorElement).click()
+  })
+  expect(container.querySelector('h1')?.textContent).toBe('Exact title chat-1')
+  expect(container.querySelector('dialog')).toBeNull()
+  expect(tokens).toBe(0)
 })
 
-test('opening a standby room never resumes or requests a token', async () => {
-  api.realtimeVoiceConfig = async () => ({ enabled: true, standby_enabled: true })
-  const standby = { ...session, standby_state: 'standby' as const }
-  api.realtimeVoiceSessions = async () => [standby]
+test('standby page never resumes or requests a token until Resume', async () => {
+  api.realtimeVoiceSessions = async () => [{ ...session, standby_state: 'standby' }]
   let resumes = 0
   let tokens = 0
   api.resumeRealtimeVoice = async () => {
     resumes++
-    return { ...standby, standby_state: 'resuming' }
+    return { ...session, standby_state: 'resuming' }
   }
   api.realtimeVoiceToken = async () => {
     tokens++
     throw new Error('Token unavailable')
   }
-  await act(async () => {
-    root.render(createElement(RealtimeVoice, { sessionId: 'chat-1', disabled: false }))
-  })
-  await act(async () => {
-    button('Voice room').click()
-  })
+  await mountVoice()
   expect(resumes).toBe(0)
   expect(tokens).toBe(0)
-  expect(container.textContent).toContain('Microphone: unknown')
   expect(container.textContent).toContain('Provider: closed')
   expect(container.textContent).toContain('Resume manually')
   await act(async () => {
@@ -190,78 +370,28 @@ test('opening a standby room never resumes or requests a token', async () => {
   })
   expect(resumes).toBe(1)
   expect(tokens).toBe(1)
-  expect(container.textContent).toContain('Token unavailable')
   expect(container.textContent).toContain('Provider: unknown')
 })
 
-test('a pending standby stays pending on opening without connecting or resuming', async () => {
-  api.realtimeVoiceConfig = async () => ({ enabled: true, standby_enabled: true })
-  api.realtimeVoiceSessions = async () => [{ ...session, standby_state: 'requested' }]
-  let tokens = 0
-  api.realtimeVoiceToken = async () => {
-    tokens++
-    throw new Error('unexpected')
-  }
-  await act(async () => {
-    root.render(createElement(RealtimeVoice, { sessionId: 'chat-1', disabled: false }))
-  })
-  await act(async () => {
-    button('Voice room').click()
-  })
-  expect(tokens).toBe(0)
-  expect(container.textContent).toContain('waiting for the bridge')
-  expect(container.textContent).not.toContain('Resume manually')
+test.each(['requested', 'closing'] as const)('pending standby %s does not connect or resume', async state => {
+  api.realtimeVoiceSessions = async () => [{ ...session, standby_state: state }]
+  await mountVoice()
+  expect([...container.querySelectorAll('button')].some(node => node.textContent === 'Resume')).toBe(false)
 })
 
-test('disconnecting warns about microphone input without offering resume', async () => {
-  api.realtimeVoiceConfig = async () => ({ enabled: true, standby_enabled: true })
-  api.realtimeVoiceSessions = async () => [{ ...session, standby_state: 'closing' }]
-  await act(async () => {
-    root.render(createElement(RealtimeVoice, { sessionId: 'chat-1', disabled: false }))
-  })
-  await act(async () => {
-    button('Voice room').click()
-  })
-  expect(container.textContent).toContain('Disconnecting')
-  expect(container.textContent).toContain('microphone input is becoming unavailable')
-  expect(container.textContent).toContain('speech may be cut off')
-  expect(container.textContent).not.toContain('Resume manually')
-})
-
-test('standby retains the boundary uncertainty and remains manually resumable', async () => {
-  api.realtimeVoiceConfig = async () => ({ enabled: true, standby_enabled: true })
+test('standby preserves boundary uncertainty and explicit end reports the unconfirmed boundary', async () => {
   api.realtimeVoiceSessions = async () => [
-    { ...session, standby_state: 'standby', state: { standby_audio_uncertain: true } },
+    { ...session, standby_state: 'requested', state: { standby_audio_uncertain: true } },
   ]
-  await act(async () => {
-    root.render(createElement(RealtimeVoice, { sessionId: 'chat-1', disabled: false }))
-  })
-  await act(async () => {
-    button('Voice room').click()
-  })
-  expect(container.textContent).toContain('Lost speech is unknown')
-  expect(button('Resume')).toBeTruthy()
-})
-
-test('an ended pending standby reports the unconfirmed boundary', async () => {
-  api.realtimeVoiceConfig = async () => ({ enabled: true, standby_enabled: true })
-  api.realtimeVoiceSessions = async () => [{ ...session, standby_state: 'requested' }]
   api.endRealtimeVoice = async () => ({ ...session, status: 'ended', standby_state: 'requested' })
+  await mountVoice()
   await act(async () => {
-    root.render(createElement(RealtimeVoice, { sessionId: 'chat-1', disabled: false }))
-  })
-  await act(async () => {
-    button('Voice room').click()
-  })
-  await act(async () => {
-    button('End room').click()
+    button('End call').click()
   })
   expect(container.textContent).toContain('ended before standby completed')
-  expect(container.textContent).toContain('may have been interrupted')
 })
 
 test('resume is single flight and a refused resume remains in standby', async () => {
-  api.realtimeVoiceConfig = async () => ({ enabled: true, standby_enabled: true })
   api.realtimeVoiceSessions = async () => [{ ...session, standby_state: 'standby' }]
   const { promise, reject } = Promise.withResolvers<RealtimeVoiceSession>()
   let calls = 0
@@ -269,12 +399,7 @@ test('resume is single flight and a refused resume remains in standby', async ()
     calls++
     return promise
   }
-  await act(async () => {
-    root.render(createElement(RealtimeVoice, { sessionId: 'chat-1', disabled: false }))
-  })
-  await act(async () => {
-    button('Voice room').click()
-  })
+  await mountVoice()
   await act(async () => {
     button('Resume').click()
     button('Resume').click()
@@ -285,6 +410,107 @@ test('resume is single flight and a refused resume remains in standby', async ()
   })
   expect(container.textContent).toContain('Not safe')
   expect(container.textContent).toContain('In standby')
+})
+
+test('observed SDK states stay separate from queued work and absent SDK observations remain unknown', async () => {
+  api.realtimeVoiceSessions = async () => [
+    { ...session, delegations: [{ event_id: 'task', text: 'Lookup', status: 'queued', result: '', error: '' }] },
+  ]
+  await mountVoice()
+  expect(container.textContent).toContain('You: unknown · Assistant: unknown')
+  expect(container.textContent).toContain('Queued — may not have started')
+  expect(container.textContent).not.toContain('Assistant: thinking')
+})
+
+test('SDK labels without an observation timestamp cannot claim speaking or thinking', async () => {
+  api.realtimeVoiceSessions = async () => [
+    { ...session, runtime: { user_state: 'speaking', agent_state: 'thinking', observed_at: null } },
+  ]
+  await mountVoice()
+  expect(container.textContent).toContain('You: unknown · Assistant: unknown')
+})
+
+test('disconnected transport cannot present old SDK observations as current activity', async () => {
+  api.realtimeVoiceSessions = async () => [
+    { ...session, runtime: { user_state: 'listening', agent_state: 'speaking', observed_at: '2026-01-01T00:00:00Z' } },
+  ]
+  await mountVoice()
+  expect(container.textContent).toContain('Last observed voice SDK · You: unknown · Assistant: unknown')
+})
+
+test('partial and final update the same bubble; manual scroll stays put until jump to latest', async () => {
+  const draft = {
+    turn_id: 'turn-1',
+    role: 'assistant' as const,
+    text: ' First words ',
+    is_final: false,
+    delivery: 'unknown',
+    created_at: '',
+  }
+  await act(async () => {
+    root.render(<VoiceTranscript voice={{ ...session, transcript: [draft] }} />)
+  })
+  const bubble = container.querySelector('[data-turn-id="turn-1"]')!
+  const scroller = container.querySelector('[data-voice-transcript]') as HTMLDivElement
+  Object.defineProperties(scroller, {
+    scrollHeight: { configurable: true, value: 1200 },
+    clientHeight: { configurable: true, value: 300 },
+  })
+  scroller.scrollTop = 100
+  act(() => {
+    scroller.dispatchEvent(new window.Event('scroll'))
+  })
+  await act(async () => {
+    root.render(
+      <VoiceTranscript
+        voice={{ ...session, transcript: [{ ...draft, text: 'First words completed.', is_final: true }, draft] }}
+      />,
+    )
+  })
+  expect(container.querySelector('[data-turn-id="turn-1"]')).toBe(bubble)
+  expect(container.querySelectorAll('[data-turn-id]')).toHaveLength(1)
+  expect(bubble.textContent).toContain('First words completed.')
+  expect(bubble.getAttribute('data-final')).toBe('true')
+  expect(scroller.scrollTop).toBe(100)
+  await act(async () => {
+    button('Jump to latest').click()
+  })
+  expect(scroller.scrollTop).toBe(1200)
+  await act(async () => {
+    root.render(<VoiceTranscript voice={{ ...session, transcript: [{ ...draft, text: 'Another partial' }] }} />)
+  })
+  expect(scroller.scrollTop).toBe(1200)
+})
+
+test('active page polling progressively replaces a draft without opening a transport', async () => {
+  const draft = {
+    turn_id: 'progressive',
+    role: 'assistant' as const,
+    text: 'Working words',
+    is_final: false,
+    delivery: 'unknown',
+    created_at: '',
+  }
+  let observed: RealtimeVoiceSession = { ...session, transcript: [draft] }
+  let tokens = 0
+  api.realtimeVoiceSessions = async () => [observed]
+  api.realtimeVoiceSession = async () => observed
+  api.realtimeVoiceToken = async () => {
+    tokens++
+    throw new Error('No transport')
+  }
+  await mountVoice()
+  const bubble = container.querySelector('[data-turn-id="progressive"]')
+  observed = { ...session, transcript: [{ ...draft, text: 'Completed words', is_final: true }] }
+  const { promise, resolve } = Promise.withResolvers<void>()
+  setTimeout(resolve, 850)
+  await act(async () => {
+    await promise
+  })
+  expect(container.querySelector('[data-turn-id="progressive"]')).toBe(bubble)
+  expect(bubble?.textContent).toContain('Completed words')
+  expect(container.querySelectorAll('[data-turn-id="progressive"]')).toHaveLength(1)
+  expect(tokens).toBe(0)
 })
 
 test('a single durable card shows the stage and transcript without claiming playback', () => {
@@ -502,11 +728,9 @@ async function openOutputPanel() {
   api.realtimeVoiceToken = async () => {
     throw new Error('No room connection in this fixture')
   }
+  await mountVoice()
   await act(async () => {
-    root.render(createElement(RealtimeVoice, { sessionId: 'chat-1', disabled: false }))
-  })
-  await act(async () => {
-    button('Voice room').click()
+    button('Start call').click()
   })
 }
 
@@ -553,7 +777,7 @@ test('a denied capability probe hides the selector and remains phone-controlled'
   expect(routing.captures).toBe(0)
 })
 
-test('device loss updates the selector, close tears down listeners, and reopening starts at default', async () => {
+test('device loss updates outputs and navigation keeps the app-owned routing listeners', async () => {
   const routing = installOutputs()
   await openOutputPanel()
   await act(async () => {
@@ -569,11 +793,11 @@ test('device loss updates the selector, close tears down listeners, and reopenin
   expect(container.querySelector('select')?.value).toBe('')
   expect(container.textContent).toContain('no longer available')
   await act(async () => {
-    ;(container.querySelector('[aria-label="Close voice room"]') as HTMLButtonElement).click()
+    link('← Return to thread').click()
   })
-  expect(routing.listeners.size).toBe(0)
+  expect(routing.listeners.size).toBe(1)
   await act(async () => {
-    button('Voice room').click()
+    link('Return to voice call').click()
   })
   expect(container.querySelector('select')?.value).toBe('')
   expect(routing.listeners.size).toBe(1)
@@ -590,20 +814,23 @@ test('optional restricted-mode briefing is upfront even when the voice token is 
   api.realtimeVoiceToken = async () => {
     throw new Error('Token unavailable')
   }
+  await mountVoice()
   await act(async () => {
-    root.render(createElement(RealtimeVoice, { sessionId: 'chat-1', disabled: false }))
+    button('Start call').click()
   })
-  await act(async () => {
-    button('Voice room').click()
-  })
-  const dialog = container.querySelector('dialog')!
-  expect(dialog.querySelector('[role="status"]')?.textContent).toBe(restriction)
-  expect(dialog.textContent!.indexOf(restriction)).toBeLessThan(dialog.textContent!.indexOf('Hello'))
+  expect(container.querySelector('[role="status"]')?.textContent).toContain(restriction)
+  expect(container.textContent!.indexOf(restriction)).toBeLessThan(container.textContent!.indexOf('Hello'))
 })
 
 test('mocked room events reapply outputs through reconnect and new-room standby resume without capture', async () => {
   const routing = installOutputs()
   const rooms: Room[] = []
+  let disconnects = 0
+  let ends = 0
+  api.endRealtimeVoice = async () => {
+    ends++
+    return { ...session, status: 'ended' }
+  }
   const originalOn = Room.prototype.on
   // connect/disconnect are instance fields in LiveKit 2.23.0. Replace them
   // when the component registers its first handler, before it can connect.
@@ -612,7 +839,9 @@ test('mocked room events reapply outputs through reconnect and new-room standby 
       this.connect = async () => {
         rooms.push(this)
       }
-      this.disconnect = async () => {}
+      this.disconnect = async () => {
+        disconnects++
+      }
     }
     return originalOn.call(this, event, listener)
   })
@@ -622,19 +851,36 @@ test('mocked room events reapply outputs through reconnect and new-room standby 
     () => microphone.mockRestore(),
   )
   api.realtimeVoiceConfig = async () => ({ enabled: true, standby_enabled: true })
-  const live = { ...session, standby_state: 'live' as const }
+  const live = {
+    ...session,
+    standby_state: 'live' as const,
+    runtime: { user_state: 'listening', agent_state: 'speaking', observed_at: '2026-01-01T00:00:00Z' },
+  }
   api.realtimeVoiceSessions = async () => [live]
   api.realtimeVoiceSession = async () => live
   api.realtimeVoiceToken = async () => ({ url: 'wss://never-joined.invalid', token: 'not-a-real-token' })
   api.standbyRealtimeVoice = async () => ({ ...live, standby_state: 'standby' })
   api.resumeRealtimeVoice = async () => ({ ...live, standby_state: 'resuming' })
+  await mountVoice()
   await act(async () => {
-    root.render(createElement(RealtimeVoice, { sessionId: 'chat-1', disabled: false }))
-  })
-  await act(async () => {
-    button('Voice room').click()
+    button('Start call').click()
   })
   expect(rooms).toHaveLength(1)
+  expect(container.textContent).toContain('Last observed voice SDK · You: listening · Assistant: speaking')
+  expect(container.textContent).toContain('not a bridge heartbeat')
+  await act(async () => {
+    link('← Return to thread').click()
+  })
+  expect(disconnects).toBe(0)
+  expect(ends).toBe(0)
+  expect(container.querySelector('[aria-label="Active voice session"]')?.textContent).toContain(
+    'Voice call continues · Microphone: enabled',
+  )
+  await act(async () => {
+    button('Browser back').click()
+  })
+  expect(rooms).toHaveLength(1)
+  expect(microphone).toHaveBeenCalledTimes(1)
   let firstAudio: HTMLMediaElement
   const firstTrack = {
     kind: Track.Kind.Audio,

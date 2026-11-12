@@ -429,3 +429,126 @@ def test_voice_decisions_seed_the_next_interface_to_the_same_thread(voice_setup)
     assert fresh["state"]["decisions"] == ["We will use coconut milk."]
     assert "We will use coconut milk." in realtime_voice.bridge_state(fresh["id"])["briefing"]["context"]
     assert chat.messages.filter(provenance__voice_event_id="decision").count() == 1
+
+
+def draft(turn_id, role="user", text="Partial transcript"):
+    return {
+        "turn_id": turn_id,
+        "role": role,
+        "text": text,
+        "is_final": False,
+        "delivery": "unknown",
+        "created_at": datetime.now(UTC).isoformat(),
+    }
+
+
+def test_progressive_transcript_is_owner_scoped_bounded_and_finalized_only(voice_setup, django_user_model):
+    user, client, chat = voice_setup
+    voice, url = create(client, chat)
+    vid = voice["id"]
+    assert voice["transcript"] == []
+    assert voice["runtime"] == realtime_voice.UNKNOWN_RUNTIME
+    assert realtime_voice.claim_bridge(vid, "claim")
+    drafts = [draft(f"turn-{i}", text="x" * 5000) for i in range(8)]
+    runtime = {"user_state": "listening", "agent_state": "thinking", "observed_at": datetime.now(UTC).isoformat()}
+    assert realtime_voice.publish_live_state(vid, "claim", drafts, runtime)
+    current = client.get(url).json()
+    assert len(current["transcript"]) == 4
+    assert all(len(turn["text"]) == 4000 and not turn["is_final"] for turn in current["transcript"])
+    assert current["events"] == []
+    assert current["runtime"] == runtime
+    assert realtime_voice.LIVE_STATE_KEY not in current["state"]
+    assert not chat.messages.exists()
+    realtime_voice.record_event(vid, "turn-7", "user", "Final transcript", bridge_claim_id="claim")
+    # A stale coalesced publication cannot recreate a draft after the final.
+    assert realtime_voice.publish_live_state(vid, "claim", drafts, runtime)
+    current = client.get(url).json()
+    [final] = [turn for turn in current["transcript"] if turn["turn_id"] == "turn-7"]
+    assert final["is_final"] and final["event_id"] == "turn-7" and final["text"] == "Final transcript"
+    assert datetime.fromisoformat(final["created_at"]).tzinfo
+    assert chat.messages.count() == 1
+    assert len(current["events"]) == 1
+    other = django_user_model.objects.create_user("progressive-other", password="pw")
+    client.force_login(other)
+    assert client.get(url).status_code == 404
+    assert client.get(url + "/events").status_code == 404
+    client.force_login(user)
+    for path in ("transcript", "runtime"):
+        assert post(client, f"{url}/{path}", {"text": "forged", "agent_state": "speaking"}).status_code == 404
+
+
+def test_live_state_and_final_callbacks_are_claim_scoped_across_standby_stop_and_deadline(voice_setup, settings):
+    _, client, chat = voice_setup
+    settings.REALTIME_VOICE_STANDBY_ENABLED = True
+    voice, url = create(client, chat)
+    vid = voice["id"]
+    runtime = {"user_state": "listening", "agent_state": "speaking", "observed_at": datetime.now(UTC).isoformat()}
+    assert realtime_voice.claim_bridge(vid, "first")
+    assert realtime_voice.publish_live_state(vid, "first", [draft("draft")], runtime)
+    assert post(client, url + "/standby", {}).status_code == 200
+    assert realtime_voice.begin_standby_close(vid, "first")
+    assert client.get(url).json()["runtime"] == realtime_voice.UNKNOWN_RUNTIME
+    assert not realtime_voice.publish_live_state(vid, "first", [draft("late")], runtime)
+    assert realtime_voice.finish_standby_close(vid, "first")
+    assert client.get(url).json()["transcript"] == []
+    assert post(client, url + "/resume", {}).json()["runtime"] == realtime_voice.UNKNOWN_RUNTIME
+    assert realtime_voice.claim_bridge(vid, "second")
+    assert not realtime_voice.publish_live_state(vid, "first", [draft("late")], runtime)
+    assert realtime_voice.record_event(vid, "stale-final", "assistant", "Old callback", bridge_claim_id="first") is None
+    assert realtime_voice.publish_live_state(vid, "second", [draft("new")], runtime)
+    accepted_at = datetime.now(UTC)
+    assert post(client, url + "/end", {}).json()["runtime"] == realtime_voice.UNKNOWN_RUNTIME
+    # A final received before Stop is drained once, but later callbacks are rejected.
+    assert realtime_voice.record_event(
+        vid, "accepted", "assistant", "Accepted before stop", bridge_claim_id="second", received_at=accepted_at
+    )
+    assert realtime_voice.record_event(vid, "after", "assistant", "Too late", bridge_claim_id="second") is None
+    assert not realtime_voice.publish_live_state(vid, "second", [draft("after")], runtime)
+    ended = client.get(url).json()
+    assert ended["runtime"] == realtime_voice.UNKNOWN_RUNTIME
+    assert [(turn["turn_id"], turn["is_final"]) for turn in ended["transcript"]] == [("accepted", True)]
+    assert chat.messages.count() == 1
+    fresh, fresh_url = create(client, chat)
+    assert fresh["transcript"] == [] and fresh["runtime"] == realtime_voice.UNKNOWN_RUNTIME
+    assert realtime_voice.claim_bridge(fresh["id"], "deadline")
+    realtime_voice.RealtimeVoiceSession.objects.filter(pk=fresh["id"]).update(
+        bridge_started_at=datetime.now(UTC) - timedelta(seconds=realtime_voice.BRIDGE_JOB_SECONDS)
+    )
+    assert not realtime_voice.publish_live_state(fresh["id"], "deadline", [draft("expired")], runtime)
+    assert (
+        realtime_voice.record_event(fresh["id"], "expired", "assistant", "Expired", bridge_claim_id="deadline") is None
+    )
+    assert client.get(fresh_url).json()["runtime"] == realtime_voice.UNKNOWN_RUNTIME
+
+
+def test_transcript_keeps_only_last_hundred_final_events_and_never_duplicates(voice_setup):
+    _, client, chat = voice_setup
+    voice, url = create(client, chat)
+    vid = voice["id"]
+    for index in range(105):
+        realtime_voice.record_event(vid, str(index), "assistant", f"Final {index}", "interrupted")
+    realtime_voice.record_event(vid, "104", "assistant", "Final 104", "interrupted")
+    current = client.get(url).json()
+    assert len(current["events"]) == len(current["transcript"]) == 100
+    assert len({turn["turn_id"] for turn in current["transcript"]}) == 100
+    assert all(turn["is_final"] and turn["delivery"] == "interrupted" for turn in current["transcript"])
+    assert chat.messages.count() == 105
+
+
+@pytest.mark.parametrize("restriction", ["kill_switch", "allowlist"])
+def test_live_publisher_and_late_finals_obey_voice_access_switches(voice_setup, settings, restriction):
+    _, client, chat = voice_setup
+    voice, url = create(client, chat)
+    vid = voice["id"]
+    assert realtime_voice.claim_bridge(vid, "restricted")
+    if restriction == "kill_switch":
+        settings.REALTIME_VOICE_ENABLED = False
+    else:
+        settings.REALTIME_VOICE_USERS = set()
+    assert not realtime_voice.publish_live_state(
+        vid, "restricted", [draft("forbidden")], dict(realtime_voice.UNKNOWN_RUNTIME)
+    )
+    assert realtime_voice.record_event(vid, "forbidden", "user", "Forbidden", bridge_claim_id="restricted") is None
+    assert client.get(url).status_code == 404
+    assert not chat.messages.exists()
+    assert not realtime_voice.RealtimeVoiceSession.objects.get(pk=vid).events.exists()

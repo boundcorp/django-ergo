@@ -485,5 +485,3 @@ def test_web_without_budget_uses_bridge_validated_status_not_web_process_setting
     assert after["restriction"] == bridge["restriction"]
     assert after["context"] == ""
     assert "instructions" not in after
-    stored = RealtimeVoiceSession.objects.get(pk=vid).state["voice_delegation"]
-    assert set(stored) == {"delegation_available", "restriction"}

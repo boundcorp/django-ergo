@@ -25,7 +25,6 @@ import Files from '../components/Files'
 import { DebugShortcut } from '../components/DebugShortcut'
 import { IllustrateDialog } from '../components/IllustrateDialog'
 import { ComposerVoice } from '../components/VoiceRecorder'
-import { RealtimeVoice } from '../components/RealtimeVoice'
 import Markdown from '../components/Markdown'
 import ModelPicker, { EffortSlider, modelLabel, useBotModels } from '../components/ModelPicker'
 import { PageViewer, Pins } from '../components/Pins'
@@ -116,13 +115,6 @@ export function Chat({ onChange }: { onChange: () => void }) {
       if (timer !== undefined) window.clearInterval(timer)
     }
   }, [id])
-  const updateVoiceSession = useCallback((session: RealtimeVoiceSession) => {
-    setVoiceSessions(current =>
-      current.some(item => item.id === session.id)
-        ? current.map(item => (item.id === session.id ? session : item))
-        : [...current, session],
-    )
-  }, [])
   const [text, setText] = useDraft(id)
   const [busy, setBusy] = useState(false)
   const [showTodos, setShowTodos] = usePersistedFlag('ergonaut.todos')
@@ -638,14 +630,21 @@ export function Chat({ onChange }: { onChange: () => void }) {
             </div>
             <div className="ml-auto flex flex-wrap items-center gap-3">
               {usage && <UsageBars usage={usage} />}
-              {models && (
-                <ThreadOptions open={menuOpen} onOpenChange={setMenuOpen}>
+              <ThreadOptions open={menuOpen} onOpenChange={setMenuOpen}>
+                <Link
+                  to={`/s/${id}/voice`}
+                  onClick={() => setMenuOpen(false)}
+                  className="mb-3 flex min-h-11 items-center rounded-md border border-stroke px-3 text-sm"
+                >
+                  Voice call
+                </Link>
+                {models && (
                   <div className="flex flex-col gap-2">
                     <ModelPicker models={models} value={detail.session.model ?? ''} onPick={pickModel} large />
                     <EffortSlider value={detail.session.effort ?? ''} onPick={pickEffort} />
                   </div>
-                </ThreadOptions>
-              )}
+                )}
+              </ThreadOptions>
               {detail.session.role === 'thread' && (
                 <button
                   className="rounded-md border border-zinc-300 px-2 py-0.5 text-xs text-zinc-600 disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-400"
@@ -727,6 +726,9 @@ export function Chat({ onChange }: { onChange: () => void }) {
           }
           actions={
             <>
+              <Link to={`/s/${id}/voice`} onClick={() => setSheetOpen(false)}>
+                Voice call
+              </Link>
               {detail.session.role === 'thread' && (
                 <button
                   type="button"
@@ -776,7 +778,6 @@ export function Chat({ onChange }: { onChange: () => void }) {
             onCount={onPinCount}
           />
         </MobileSessionBar>
-        <RealtimeVoice key={id} sessionId={id} disabled={closed} onSession={updateVoiceSession} />
         <ActivityStrip requests={detail.requests ?? []} workers={detail.workers ?? []}>
           <Requests requests={detail.requests ?? []} onAnswered={load} />
           <Workers workers={detail.workers ?? []} />

@@ -24,6 +24,8 @@ pytest.importorskip("livekit.plugins.openai.realtime.gpt_live_model")
 from livekit import rtc
 from livekit.agents import AgentSession, llm, utils
 from livekit.agents.llm._realtime.gpt_live import GPTLiveSession
+from livekit.agents.llm.duplex_adapter import AdaptiveNoiseGate, _DuplexRealtimeSession
+from livekit.agents.voice.events import AgentStateChangedEvent, UserStateChangedEvent
 from livekit.agents.voice.io import AudioInput
 from livekit.plugins import silero
 
@@ -53,6 +55,7 @@ def offline_session(assistant):
     session._history = assistant.chat_ctx.copy()
     session._speech = {}
     session._msg_ch = utils.aio.Chan()
+    session._audio_ch = utils.aio.Chan()
     session._tools = llm.ToolContext.empty()
     session._session_start_sent = False
 
@@ -76,6 +79,10 @@ async def bind(assistant, session):
 async def settle(assistant):
     if assistant.jobs:
         await asyncio.gather(*assistant.jobs, return_exceptions=True)
+    if assistant.final_jobs:
+        await asyncio.gather(*assistant.final_jobs, return_exceptions=True)
+    if assistant.publisher:
+        await asyncio.gather(assistant.publisher, return_exceptions=True)
     await asyncio.sleep(0)  # run done callbacks
 
 
@@ -359,33 +366,41 @@ def test_real_session_audio_input_drives_silero_speech_states(cooking, held_mess
     async_to_sync(scenario)()
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 def test_standby_requires_observed_vad_end_and_final_drained_transcript(cooking):
     _, vid, _ = cooking
     snapshot = realtime_voice.bridge_state(vid)
-    assistant = bridge.Assistant(vid, snapshot, None)
-    assistant.grace = 1.0
-    with patch.object(bridge.time, "monotonic", return_value=100.0) as clock:
-        assistant.on_user_state(SimpleNamespace(new_state="listening"))
-        assert not assistant.safe_to_standby(snapshot)  # silence is not proof of working VAD
-        assistant.on_user_state(SimpleNamespace(new_state="speaking"))
-        assert not assistant.safe_to_standby(snapshot)
-        assistant.fragments["speech"] = "Partial"
-        assistant.transcript_changed_at = 100.0
-        assistant.on_user_state(SimpleNamespace(new_state="listening"))
-        clock.return_value = 102.0
-        assert not assistant.safe_to_standby(snapshot)
-        assistant.final_fragments.add("speech")
-        snapshot["state"]["pending_delegation"] = {"status": "collecting"}
-        assert not assistant.safe_to_standby(snapshot)
-        snapshot["state"]["pending_delegation"]["status"] = "submitted"
-        assert assistant.safe_to_standby(snapshot)
-        assistant.on_user_state(SimpleNamespace(new_state="speaking"))
-        assert not assistant.safe_to_standby(snapshot)
-        assistant.on_user_state(SimpleNamespace(new_state="listening"))
-        assistant.on_user_state(SimpleNamespace(new_state="away"))
-        clock.return_value = 104.0
-        assert not assistant.safe_to_standby(snapshot)
+
+    async def scenario():
+        assistant = bridge.Assistant(vid, snapshot, None)
+        assistant.grace = 1.0
+        try:
+            with patch.object(bridge.time, "monotonic", return_value=100.0) as clock:
+                assistant.on_user_state(SimpleNamespace(new_state="listening"))
+                assert not assistant.safe_to_standby(snapshot)  # silence is not proof of working VAD
+                assistant.on_user_state(SimpleNamespace(new_state="speaking"))
+                assert not assistant.safe_to_standby(snapshot)
+                assistant.fragments["speech"] = "Partial"
+                assistant.transcript_changed_at = 100.0
+                assistant.on_user_state(SimpleNamespace(new_state="listening"))
+                clock.return_value = 102.0
+                assert not assistant.safe_to_standby(snapshot)
+                assistant.final_fragments.add("speech")
+                snapshot["state"]["pending_delegation"] = {"status": "collecting"}
+                assert not assistant.safe_to_standby(snapshot)
+                snapshot["state"]["pending_delegation"]["status"] = "submitted"
+                assert assistant.safe_to_standby(snapshot)
+                assistant.on_user_state(SimpleNamespace(new_state="speaking"))
+                assert not assistant.safe_to_standby(snapshot)
+                assistant.on_user_state(SimpleNamespace(new_state="listening"))
+                assistant.on_user_state(SimpleNamespace(new_state="away"))
+                clock.return_value = 104.0
+                assert not assistant.safe_to_standby(snapshot)
+        finally:
+            assistant.stop()
+            await assistant.finish_live()
+
+    async_to_sync(scenario)()
 
 
 @pytest.mark.django_db
@@ -667,3 +682,317 @@ def test_old_unpersisted_voice_events_are_not_lost_when_thread_context_is_availa
     }
     restored = bridge.startup_context(snapshot)
     assert any(item.id == "old-event" for item in restored.items)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_sdk_identified_generation_stream_correlates_partial_interrupted_and_late_final(cooking, settings):
+    chat, vid, other = cooking
+    settings.REALTIME_VOICE_USERS = {chat.user.get_username()}
+    assert realtime_voice.claim_bridge(vid, "progressive")
+    snapshot = realtime_voice.bridge_state(vid)
+    baseline = chat.messages.count()
+
+    async def scenario():
+        assistant = bridge.Assistant(vid, snapshot, None, claim_id="progressive")
+        sdk = offline_session(assistant)
+        adapter = _DuplexRealtimeSession(assistant.llm, sdk, AdaptiveNoiseGate(), audio_timeout=1)
+        generations = []
+        adapter.on("generation_created", generations.append)
+        with (
+            patch.object(bridge.Assistant, "duplex_session", new_callable=PropertyMock, return_value=sdk),
+            patch.object(bridge.Assistant, "realtime_llm_session", new_callable=PropertyMock, return_value=adapter),
+        ):
+            try:
+                await bind(assistant, sdk)
+                # Raw SDK transcript deltas lack IDs. Do not guess a bubble or audio delivery.
+                sdk._handle_event(
+                    {"type": "session.output_transcript.delta", "delta": "First ", "start_ms": 0, "end_ms": 100}
+                )
+                sdk._handle_event(
+                    {"type": "session.output_transcript.delta", "delta": "answer.", "start_ms": 100, "end_ms": 200}
+                )
+                assert not assistant.partials
+                # The installed adapter creates a real, identified late-text generation.
+                adapter._emit_as_text(2)
+                generation = generations.pop()
+                async for message in generation.message_stream:
+                    turn_id = message.message_id
+                    stream = message.text_stream.__aiter__()
+                    first = await anext(stream)
+                    assert str(first) == "First "
+                    await assistant.flush_live()
+                    partial = await sync_to_async(realtime_voice.bridge_state)(vid, include_briefing=False)
+                    [draft] = [t for t in partial["transcript"] if t["turn_id"] == turn_id]
+                    assert not draft["is_final"] and draft["text"] == "First "
+                    assert draft["delivery"] == "unknown"
+                    assert not any(e["event_id"] == turn_id for e in partial["events"])
+                    assert await sync_to_async(chat.messages.count)() == baseline
+                    assert str(await anext(stream)) == "answer."
+                    with pytest.raises(StopAsyncIteration):
+                        await anext(stream)
+                    await assistant.flush_live()
+                item = llm.ChatMessage(id=turn_id, role="assistant", content=["First"], interrupted=True)
+                assistant.queue_turn(item)
+                assistant.queue_turn(item)  # duplicate framework final before the worker runs
+                await settle(assistant)
+                assistant.update_partial(turn_id, "assistant", "Late unfinalized suffix")
+                await assistant.flush_live()
+                result = await sync_to_async(realtime_voice.bridge_state)(vid, include_briefing=False)
+                [final] = [t for t in result["transcript"] if t["turn_id"] == turn_id]
+                assert final["is_final"] and final["event_id"] == turn_id
+                assert final["text"] == "First" and final["delivery"] == "interrupted"
+                assert await sync_to_async(chat.messages.filter(provenance__voice_event_id=turn_id).count)() == 1
+                assert sum(e["event_id"] == turn_id for e in result["events"]) == 1
+                sdk._handle_event(
+                    {"type": "session.input_transcript.delta", "delta": "A question", "start_ms": 300, "end_ms": 400}
+                )
+                user_id = sdk._speech["user"].message_id
+                await assistant.flush_live()
+                alternating = await sync_to_async(realtime_voice.bridge_state)(vid, include_briefing=False)
+                [user_turn] = [t for t in alternating["transcript"] if t["turn_id"] == user_id]
+                assert user_turn["role"] == "user" and not user_turn["is_final"]
+                sdk._end_speech("user")
+                assistant.queue_turn(llm.ChatMessage(id=user_id, role="user", content=["A question"]))
+                await settle(assistant)
+                alternating = await sync_to_async(realtime_voice.bridge_state)(vid, include_briefing=False)
+                [user_turn] = [t for t in alternating["transcript"] if t["turn_id"] == user_id]
+                assert user_turn["is_final"] and user_turn["text"] == "A question"
+                # Later words create another adapter ID, never attach by text-prefix heuristics.
+                sdk._handle_event(
+                    {"type": "session.output_transcript.delta", "delta": "Next", "start_ms": 1000, "end_ms": 1100}
+                )
+                adapter._emit_as_text(1)
+                async for message in generations.pop().message_stream:
+                    assert message.message_id != turn_id
+                    async for _ in message.text_stream:
+                        pass
+                await assistant.flush_live()
+                result = await sync_to_async(realtime_voice.bridge_state)(vid, include_briefing=False)
+                assert any(not t["is_final"] and t["text"] == "Next" for t in result["transcript"])
+                assert not any(e["kind"] == "result" for e in result["events"])
+            finally:
+                assistant.stop()
+                await utils.aio.cancel_and_wait(adapter._segment_atask)
+                await assistant.finish_live()
+        untouched = await sync_to_async(realtime_voice.bridge_state)(other, include_briefing=False)
+        assert untouched["transcript"] == [] and untouched["runtime"] == realtime_voice.UNKNOWN_RUNTIME
+
+    async_to_sync(scenario)()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_sdk_user_drafts_coalesce_and_final_flush_survives_stop_without_history_drafts(cooking, settings):
+    chat, vid, _ = cooking
+    settings.REALTIME_VOICE_USERS = {chat.user.get_username()}
+    assert realtime_voice.claim_bridge(vid, "coalesced")
+    snapshot = realtime_voice.bridge_state(vid)
+    baseline = chat.messages.count()
+
+    async def scenario():
+        assistant = bridge.Assistant(vid, snapshot, None, claim_id="coalesced")
+        sdk = offline_session(assistant)
+        with patch.object(bridge.Assistant, "duplex_session", new_callable=PropertyMock, return_value=sdk):
+            await bind(assistant, sdk)
+            assistant.pending_id = "pending"
+            await sync_to_async(realtime_voice.begin_pending)(vid, "pending", {})
+            with patch.object(bridge, "publish_live_state", wraps=realtime_voice.publish_live_state) as publish:
+                for index in range(200):
+                    sdk._handle_event(
+                        {
+                            "type": "session.input_transcript.delta",
+                            "delta": "x",
+                            "start_ms": index * 10,
+                            "end_ms": (index + 1) * 10,
+                        }
+                    )
+                turn_id = sdk._speech["user"].message_id
+                assert publish.call_count == 0
+                await assistant.flush_live()
+                assert publish.call_count == 1
+                partial = await sync_to_async(realtime_voice.bridge_state)(vid, include_briefing=False)
+                [draft] = [t for t in partial["transcript"] if t["turn_id"] == turn_id]
+                assert not draft["is_final"] and draft["text"] == "x" * 200
+                assert partial["state"]["pending_delegation"]["fragments"] == [{"id": turn_id, "text": "x" * 200}]
+                assert await sync_to_async(chat.messages.count)() == baseline
+                sdk._end_speech("user")
+                # The framework's conversation_item_added is the sole final-record path.
+                item = llm.ChatMessage(id=turn_id, role="user", content=["x" * 200])
+                assistant.queue_turn(item)
+                assistant.queue_turn(item)
+                assistant.stop()  # queued final is not one of the cancelled assembly jobs
+                assistant.on_transcription(SimpleNamespace(item_id=turn_id, transcript="late", is_final=False))
+                await assistant.finish_live()
+                assert publish.call_count <= 3
+            final = await sync_to_async(realtime_voice.bridge_state)(vid, include_briefing=False)
+            [turn] = [t for t in final["transcript"] if t["turn_id"] == turn_id]
+            assert turn["is_final"] and turn["text"] == "x" * 200
+            assert turn["event_id"] == turn_id
+            assert final["runtime"] == realtime_voice.UNKNOWN_RUNTIME
+            assert not any(not t["is_final"] for t in final["transcript"])
+            assert await sync_to_async(chat.messages.count)() == baseline + 1
+            assert not final["delegations"]
+
+    async_to_sync(scenario)()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_runtime_uses_framework_events_not_transcript_or_queue_and_invalidates_microphone(cooking, settings):
+    chat, vid, _ = cooking
+    settings.REALTIME_VOICE_USERS = {chat.user.get_username()}
+    assert realtime_voice.claim_bridge(vid, "runtime")
+    snapshot = realtime_voice.bridge_state(vid)
+
+    async def scenario():
+        assistant = bridge.Assistant(vid, snapshot, None, claim_id="runtime")
+        stamp = datetime.now(UTC).timestamp()
+        assistant.update_partial("generated", "assistant", "Thinking aloud is not a runtime observation")
+        await assistant.flush_live()
+        state = await sync_to_async(realtime_voice.bridge_state)(vid, include_briefing=False)
+        assert state["runtime"] == realtime_voice.UNKNOWN_RUNTIME
+        assistant.on_user_state(UserStateChangedEvent(old_state="speaking", new_state="listening", created_at=stamp))
+        for index, agent_state in enumerate(("listening", "thinking", "speaking")):
+            assistant.on_agent_state(
+                AgentStateChangedEvent(old_state="idle", new_state=agent_state, created_at=stamp + index + 1)
+            )
+            await assistant.flush_live()
+            state = await sync_to_async(realtime_voice.bridge_state)(vid, include_briefing=False)
+            assert state["runtime"] == {
+                "user_state": "listening",
+                "agent_state": agent_state,
+                "observed_at": datetime.fromtimestamp(stamp + index + 1, UTC).isoformat(),
+            }
+        assistant.on_agent_state(AgentStateChangedEvent(old_state="idle", new_state="thinking", created_at=stamp - 1))
+        assert assistant.runtime["agent_state"] == "speaking"  # late callback cannot regress observed state
+        assistant.microphone_live = lambda: False
+        assistant.invalidate_runtime(user_only=True)
+        assistant.on_user_state(
+            UserStateChangedEvent(old_state="speaking", new_state="listening", created_at=stamp + 4)
+        )
+        await assistant.flush_live()
+        state = await sync_to_async(realtime_voice.bridge_state)(vid, include_briefing=False)
+        assert state["runtime"]["user_state"] == "unknown"
+        assistant.stop()
+        assistant.on_agent_state(AgentStateChangedEvent(old_state="speaking", new_state="listening"))
+        await assistant.finish_live()
+        state = await sync_to_async(realtime_voice.bridge_state)(vid, include_briefing=False)
+        assert state["runtime"] == realtime_voice.UNKNOWN_RUNTIME
+        assert not any(not turn["is_final"] for turn in state["transcript"])
+
+    async_to_sync(scenario)()
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("publish_drafts", [False, True])
+def test_opposite_order_finals_preserve_first_observed_turn_order_and_timestamps(cooking, settings, publish_drafts):
+    chat, vid, _ = cooking
+    settings.REALTIME_VOICE_USERS = {chat.user.get_username()}
+    assert realtime_voice.claim_bridge(vid, "ordered")
+    snapshot = realtime_voice.bridge_state(vid)
+    started = datetime.now(UTC) - timedelta(seconds=2)
+    expected = [
+        ("user-overlap", started.isoformat()),
+        ("assistant-overlap", (started + timedelta(seconds=1)).isoformat()),
+    ]
+
+    async def scenario():
+        assistant = bridge.Assistant(vid, snapshot, None, claim_id="ordered")
+        sdk = offline_session(assistant)
+        with patch.object(bridge.Assistant, "duplex_session", new_callable=PropertyMock, return_value=sdk):
+            try:
+                with patch.object(bridge, "datetime", wraps=datetime) as clock:
+                    clock.now.side_effect = [started, started + timedelta(seconds=1)]
+                    assistant.update_partial("user-overlap", "user", "Question draft")
+                    assistant.update_partial("assistant-overlap", "assistant", "Answer draft")
+                # Deterministically exercise a final before the first timer flush.
+                assistant.publisher.cancel()
+                await asyncio.gather(assistant.publisher, return_exceptions=True)
+                if publish_drafts:
+                    await assistant.flush_live()
+                before = await sync_to_async(realtime_voice.bridge_state)(vid, include_briefing=False)
+                overlapping = [turn for turn in before["transcript"] if turn["turn_id"] in dict(expected)]
+                assert [(turn["turn_id"], turn["created_at"]) for turn in overlapping] == (
+                    expected if publish_drafts else []
+                )
+                # The later-starting assistant final arrives first, potentially before
+                # the coalescer ever persisted either draft.
+                assistant.queue_turn(
+                    llm.ChatMessage(id="assistant-overlap", role="assistant", content=["Answer final"])
+                )
+                await settle(assistant)
+                intermediate = await sync_to_async(realtime_voice.bridge_state)(vid, include_briefing=False)
+                overlapping = [turn for turn in intermediate["transcript"] if turn["turn_id"] in dict(expected)]
+                assert [(turn["turn_id"], turn["created_at"]) for turn in overlapping] == expected
+                assert [turn["is_final"] for turn in overlapping] == [False, True]
+                assistant.queue_turn(llm.ChatMessage(id="user-overlap", role="user", content=["Question final"]))
+                await settle(assistant)
+                final = await sync_to_async(realtime_voice.bridge_state)(vid, include_briefing=False)
+                overlapping = [turn for turn in final["transcript"] if turn["turn_id"] in dict(expected)]
+                assert [(turn["turn_id"], turn["created_at"]) for turn in overlapping] == expected
+                assert all(turn["is_final"] for turn in overlapping)
+                assert len({turn["turn_id"] for turn in overlapping}) == 2
+                evidence = [event for event in final["events"] if event["event_id"] in dict(expected)]
+                assert [event["event_id"] for event in evidence] == ["assistant-overlap", "user-overlap"]
+                assert all(
+                    datetime.fromisoformat(event["received_at"]) > datetime.fromisoformat(event["created_at"])
+                    for event in evidence
+                )
+            finally:
+                assistant.stop()
+                await assistant.finish_live()
+
+    async_to_sync(scenario)()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_delayed_final_write_never_removes_visible_draft_before_atomic_final_replacement(cooking, settings):
+    chat, vid, _ = cooking
+    settings.REALTIME_VOICE_USERS = {chat.user.get_username()}
+    assert realtime_voice.claim_bridge(vid, "delayed-final")
+    snapshot = realtime_voice.bridge_state(vid)
+
+    async def scenario():
+        assistant = bridge.Assistant(vid, snapshot, None, claim_id="delayed-final")
+        entered = asyncio.Event()
+        release = asyncio.Event()
+        original_adapter = bridge.sync_to_async
+
+        def delay_final(function, *args, **kwargs):
+            if function is bridge.record_event:
+
+                async def delayed(*call_args, **call_kwargs):
+                    entered.set()
+                    await release.wait()
+                    return await original_adapter(function, *args, **kwargs)(*call_args, **call_kwargs)
+
+                return delayed
+            return original_adapter(function, *args, **kwargs)
+
+        try:
+            assistant.update_partial("delayed", "assistant", "Visible draft")
+            await assistant.flush_live()
+            first = await sync_to_async(realtime_voice.bridge_state)(vid, include_briefing=False)
+            [original] = [turn for turn in first["transcript"] if turn["turn_id"] == "delayed"]
+            with patch.object(bridge, "sync_to_async", side_effect=delay_final):
+                assistant.queue_turn(llm.ChatMessage(id="delayed", role="assistant", content=["Authoritative final"]))
+                await asyncio.wait_for(entered.wait(), timeout=5)
+                # A runtime event makes the coalescer flush while the final write is
+                # still waiting outside the transaction; the old bubble must remain.
+                assistant.on_agent_state(AgentStateChangedEvent(old_state="speaking", new_state="listening"))
+                await assistant.flush_live()
+                pending = await sync_to_async(realtime_voice.bridge_state)(vid, include_briefing=False)
+                [visible] = [turn for turn in pending["transcript"] if turn["turn_id"] == "delayed"]
+                assert visible == original and not visible["is_final"]
+                assert not any(event["event_id"] == "delayed" for event in pending["events"])
+                release.set()
+                await settle(assistant)
+            final = await sync_to_async(realtime_voice.bridge_state)(vid, include_briefing=False)
+            [visible] = [turn for turn in final["transcript"] if turn["turn_id"] == "delayed"]
+            assert visible["is_final"] and visible["text"] == "Authoritative final"
+            assert visible["created_at"] == original["created_at"]
+            assert sum(event["event_id"] == "delayed" for event in final["events"]) == 1
+        finally:
+            release.set()
+            assistant.stop()
+            await assistant.finish_live()
+
+    async_to_sync(scenario)()

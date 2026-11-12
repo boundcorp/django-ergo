@@ -23,6 +23,10 @@ export function topbarLocation(pathname: string, sessions: Session[] = []): Loca
     const crumbs: Crumb[] = [{ label: session.bot, to: `/bots/${session.bot}` }]
     const parent = session.parent_id && sessions.find(s => s.id === session.parent_id)
     if (parent && parent.title) crumbs.push({ label: parent.title, to: `/s/${parent.id}` })
+    if (path === `/s/${chat[1]}/voice`) {
+      crumbs.push({ label: session.title || 'Main chat', to: `/s/${session.id}` })
+      return { crumbs, title: 'Voice call' }
+    }
     return { crumbs, title: session.title || 'Main chat' }
   }
   const bot = /^\/bots\/([^/]+)(\/.*)?$/.exec(path)

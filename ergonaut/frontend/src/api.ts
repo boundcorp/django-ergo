@@ -782,12 +782,23 @@ export type RealtimeVoiceSession = {
   id: string
   chat_id: string
   status: string
+  transcript?: {
+    turn_id: string
+    event_id?: string
+    role: 'user' | 'assistant'
+    text: string
+    is_final: boolean
+    delivery: string
+    created_at: string
+  }[]
+  runtime?: { user_state: string; agent_state: string; observed_at: string | null }
   standby_state?: 'live' | 'requested' | 'closing' | 'standby' | 'resuming'
   created_at?: string
   ended_at?: string | null
   briefing?: {
     context: string
     restriction: string
+    reason?: string
     delegation_available: boolean | null
     instructions?: string
     voice_event_ids?: string[]

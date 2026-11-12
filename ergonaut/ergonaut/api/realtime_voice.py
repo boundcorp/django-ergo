@@ -81,17 +81,78 @@ def event_out(event):
 # A bridge job (one GPT-Live connection) lasts at most this long; the bridge enforces it.
 BRIDGE_JOB_SECONDS = 90
 
+LIVE_STATE_KEY = "_voice_live"
+MAX_PARTIAL_TURNS = 4
+MAX_TRANSCRIPT_CHARS = 4000
+UNKNOWN_RUNTIME = {"user_state": "unknown", "agent_state": "unknown", "observed_at": None}
+
+
+def clear_live_state(session):
+    session.state = {key: value for key, value in session.state.items() if key != LIVE_STATE_KEY}
+
+
+def publish_live_state(voice_id, claim_id, partials, runtime, pending_id=None, fragments=None):
+    """Coalesced, claim-scoped transient text; never normal thread history or delivery evidence."""
+    with transaction.atomic():
+        session = RealtimeVoiceSession.objects.select_for_update().select_related("user").get(pk=voice_id)
+        if (
+            not voice_allowed(session.user)
+            or not claim_id
+            or not session.bridge_started_at
+            or session.status != "active"
+            or session.bridge_claim_id != claim_id
+            or session.standby_state not in ("live", "requested")
+            or deadline_expired(session)
+        ):
+            return False
+        partials = partials[-MAX_PARTIAL_TURNS:]
+        final_ids = set(
+            session.events.filter(event_id__in=[p["turn_id"] for p in partials]).values_list("event_id", flat=True)
+        )
+        drafts = [
+            {**p, "text": p["text"][:MAX_TRANSCRIPT_CHARS]}
+            for p in partials
+            if p["turn_id"] not in final_ids
+            and p["role"] in ("user", "assistant")
+            and p["text"]
+            and 0 < len(p["turn_id"]) <= 200
+        ]
+        state = {**session.state, LIVE_STATE_KEY: {"claim_id": claim_id, "partials": drafts, "runtime": dict(runtime)}}
+        pending = state.get("pending_delegation")
+        if pending_id and pending and pending["id"] == pending_id and pending["status"] == "collecting":
+            state["pending_delegation"] = {
+                **pending,
+                "fragments": [{"id": key, "text": value} for key, value in (fragments or {}).items()],
+            }
+        if state != session.state:
+            session.state = state
+            session.save(update_fields=["state"])
+        return True
+
 
 def end_voice_session(voice_id):
     """End an active session: Stop, or its bridge job finishing (timeout, disconnect, error)."""
-    RealtimeVoiceSession.objects.filter(pk=voice_id, status="active").update(status="ended", ended_at=timezone.now())
+    with transaction.atomic():
+        session = RealtimeVoiceSession.objects.select_for_update().filter(pk=voice_id, status="active").first()
+        if session:
+            clear_live_state(session)
+            session.status, session.ended_at = "ended", timezone.now()
+            session.save(update_fields=["state", "status", "ended_at"])
 
 
 def end_bridge_session(voice_id, claim_id):
     """A stale job cannot end standby or a later bridge's claim."""
-    RealtimeVoiceSession.objects.filter(pk=voice_id, status="active", bridge_claim_id=claim_id).exclude(
-        standby_state__in=("standby", "resuming")
-    ).update(status="ended", ended_at=timezone.now())
+    with transaction.atomic():
+        session = (
+            RealtimeVoiceSession.objects.select_for_update()
+            .filter(pk=voice_id, status="active", bridge_claim_id=claim_id)
+            .exclude(standby_state__in=("standby", "resuming"))
+            .first()
+        )
+        if session:
+            clear_live_state(session)
+            session.status, session.ended_at = "ended", timezone.now()
+            session.save(update_fields=["state", "status", "ended_at"])
 
 
 def deadline_expired(session, now=None):
@@ -122,17 +183,19 @@ def claim_bridge(voice_id, claim_id=None):
         if deadline_expired(session, now):
             session.status = "ended"
             session.ended_at = now
-            session.save(update_fields=["status", "ended_at"])
+            clear_live_state(session)
+            session.save(update_fields=["state", "status", "ended_at"])
             return False
         session.bridge_claim_id = claim_id or uuid.uuid4().hex
+        clear_live_state(session)
         if session.bridge_started_at is None:
             session.bridge_started_at = now
-            session.save(update_fields=["bridge_started_at", "bridge_claim_id"])
+            session.save(update_fields=["state", "bridge_started_at", "bridge_claim_id"])
             return True
         if not standby_allowed(session.user) or session.standby_state != "resuming":
             return False
         session.standby_state = "live"
-        session.save(update_fields=["standby_state", "bridge_claim_id"])
+        session.save(update_fields=["state", "standby_state", "bridge_claim_id"])
         return True
 
 
@@ -186,11 +249,10 @@ def finish_standby_close(voice_id, claim_id, *, audio_uncertain=False):
             return False
         session.standby_state = "standby"
         session.standby_at = now
-        fields = ["standby_state", "standby_at"]
+        clear_live_state(session)
         if audio_uncertain:
             session.state = {**session.state, "standby_audio_uncertain": True}
-            fields.append("state")
-        session.save(update_fields=fields)
+        session.save(update_fields=["state", "standby_state", "standby_at"])
         return True
 
 
@@ -201,6 +263,31 @@ def bridge_state(voice_id, *, include_briefing=True):
     delegations = list(session.delegations.select_related("message").order_by("-id")[:100])
     delegations.reverse()
     state = {"decisions": [], "constraints": [], "current_step": "", **session.state}
+    live = state.pop(LIVE_STATE_KEY, {})
+    has_live_bridge = (
+        session.status == "active"
+        and bool(session.bridge_started_at and session.bridge_claim_id)
+        and session.standby_state in ("live", "requested")
+        and live.get("claim_id") == session.bridge_claim_id
+        and not deadline_expired(session)
+    )
+    transcript = [
+        {
+            "turn_id": e.event_id,
+            "event_id": e.event_id,
+            "role": "assistant" if e.kind == "assistant" else "user",
+            "text": e.text,
+            "is_final": True,
+            "delivery": e.delivery,
+            "created_at": e.created_at.astimezone(UTC).isoformat(),
+        }
+        for e in reversed(events)
+        if e.kind in ("user", "user_transcript", "assistant")
+    ]
+    if has_live_bridge:
+        final_ids = {e.event_id for e in events}
+        transcript.extend(p for p in live.get("partials", []) if p["turn_id"] not in final_ids)
+    transcript.sort(key=lambda turn: turn["created_at"])
     pending = state.get("pending_delegation")
     if pending and pending["status"] == "collecting":
         if session.status != "active":
@@ -233,6 +320,8 @@ def bridge_state(voice_id, *, include_briefing=True):
         "resumed_at": session.resumed_at.isoformat() if session.resumed_at else None,
         "state": state,
         "events": [event_out(e) for e in reversed(events)],
+        "transcript": transcript,
+        "runtime": live.get("runtime", UNKNOWN_RUNTIME) if has_live_bridge else dict(UNKNOWN_RUNTIME),
         "activities": activities,
         "briefing": startup_briefing(session) if include_briefing else delegation_status(session),
         "delegations": [
@@ -292,8 +381,20 @@ def persist_thread_event(session, event):
         chat.save(update_fields=["metadata", "updated_at"])
 
 
-def record_event(voice_id, event_id, kind, text, delivery="unknown", client_event_at=None, *, trusted_delivery=False):
-    received_at = timezone.now()
+def record_event(
+    voice_id,
+    event_id,
+    kind,
+    text,
+    delivery="unknown",
+    client_event_at=None,
+    *,
+    trusted_delivery=False,
+    bridge_claim_id=None,
+    received_at=None,
+    turn_started_at=None,
+):
+    received_at = received_at or timezone.now()
     if (
         not event_id
         or len(event_id) > 200
@@ -307,9 +408,36 @@ def record_event(voice_id, event_id, kind, text, delivery="unknown", client_even
         not isinstance(client_event_at, datetime) or timezone.is_naive(client_event_at)
     ):
         raise ValueError("Client event time must include a timezone")
+    if turn_started_at is not None and (
+        not isinstance(turn_started_at, datetime) or timezone.is_naive(turn_started_at)
+    ):
+        raise ValueError("Turn start time must include a timezone")
     with transaction.atomic():
         session = RealtimeVoiceSession.objects.select_for_update().get(pk=voice_id)
+        if bridge_claim_id is not None:
+            # An accepted final may flush after Stop, but callbacks from an old claim
+            # or after the deadline cannot resurrect a session or change its history.
+            if (
+                session.bridge_claim_id != bridge_claim_id
+                or not bridge_claim_id
+                or not session.bridge_started_at
+                or not voice_allowed(session.user)
+                or deadline_expired(session, received_at)
+                or session.standby_state in ("standby", "resuming")
+                or (session.status != "active" and (not session.ended_at or received_at > session.ended_at))
+            ):
+                return None
         old = session.events.filter(event_id=event_id).first()
+        live = session.state.get(LIVE_STATE_KEY)
+        draft = next((p for p in (live or {}).get("partials", []) if p["turn_id"] == event_id), None)
+        if draft:
+            # Server-observed first text, not final receipt or evidence of playback.
+            turn_started_at = datetime.fromisoformat(draft["created_at"])
+            session.state = {
+                **session.state,
+                LIVE_STATE_KEY: {**live, "partials": [p for p in live["partials"] if p["turn_id"] != event_id]},
+            }
+            session.save(update_fields=["state"])
         if old:
             if (old.kind, old.text, old.client_event_at) != (kind, text, client_event_at):
                 raise ValueError("Event ID already used")
@@ -320,7 +448,7 @@ def record_event(voice_id, event_id, kind, text, delivery="unknown", client_even
                 old.save(update_fields=["delivery"])
                 persist_thread_event(session, old)
             return old
-        if session.status != "active":
+        if session.status != "active" and bridge_claim_id is None:
             raise ValueError("Voice session ended")
         event = RealtimeVoiceEvent.objects.create(
             session=session,
@@ -332,6 +460,11 @@ def record_event(voice_id, event_id, kind, text, delivery="unknown", client_even
             processed_at=timezone.now(),
             client_event_at=client_event_at,
         )
+        if turn_started_at is not None and kind in ("user", "user_transcript", "assistant"):
+            # auto_now_add records final receipt by default. Preserve a published
+            # draft's sort timestamp while received_at/processed_at retain final evidence.
+            event.created_at = turn_started_at
+            event.save(update_fields=["created_at"])
         if kind in ("user", "user_transcript"):
             apply_user_event(session, event)
         persist_thread_event(session, event)
@@ -419,16 +552,19 @@ def delegation_status(session):
         status = {
             "delegation_available": False,
             "restriction": f"{VOICE_RESTRICTION} Background delegation unavailable: the voice session has ended.",
+            "reason": "Background delegation unavailable: the voice session has ended.",
         }
     elif session.delegations.exists():
         status = {
             "delegation_available": False,
             "restriction": f"{VOICE_RESTRICTION} This session's one background request is already used.",
+            "reason": "This session's one background request is already used.",
         }
     else:
         status = (session.state or {}).get("voice_delegation") or {
             "delegation_available": None,
             "restriction": f"{VOICE_RESTRICTION} Bridge has not validated delegation for this session.",
+            "reason": "Bridge has not validated delegation for this session.",
         }
     return {"context": "", **status}
 
@@ -515,6 +651,7 @@ def startup_briefing(session):
     briefing = {
         "context": context[:BRIEFING_CONTEXT_CHARS],
         "restriction": f"{VOICE_RESTRICTION} {reason}",
+        "reason": reason,
         "delegation_available": available,
         "instructions": instructions,
         "voice_event_ids": persisted_voice_event_ids(session),
@@ -528,6 +665,7 @@ def startup_briefing(session):
             "voice_delegation": {
                 "delegation_available": available,
                 "restriction": briefing["restriction"],
+                "reason": reason,
             },
         }
         locked.save(update_fields=["state"])
@@ -555,26 +693,6 @@ def begin_pending(voice_id, event_id, fragments):
         session.state = state
         session.save(update_fields=["state"])
         record_event(voice_id, f"signal:{event_id}", "delegation_signal", "Client delegation signal received.")
-
-
-def update_pending_fragment(voice_id, event_id, item_id, text):
-    with transaction.atomic():
-        session = RealtimeVoiceSession.objects.select_for_update().get(pk=voice_id)
-        state = dict(session.state)
-        pending = state.get("pending_delegation")
-        if not pending or pending["id"] != event_id or pending["status"] != "collecting" or session.status != "active":
-            return
-        fragments = list(pending["fragments"])
-        for fragment in fragments:
-            if fragment["id"] == item_id:
-                fragment["text"] = text
-                break
-        else:
-            fragments.append({"id": item_id, "text": text})
-        pending["fragments"] = fragments
-        state["pending_delegation"] = pending
-        session.state = state
-        session.save(update_fields=["state"])
 
 
 def close_pending(voice_id, event_id, status="cancelled"):
@@ -706,6 +824,8 @@ def session_out(session):
         "created_at": session.created_at.isoformat(),
         "ended_at": session.ended_at.isoformat() if session.ended_at else None,
         "events": state["events"],
+        "transcript": state["transcript"],
+        "runtime": state["runtime"],
         "state": state["state"],
         "delegations": state["delegations"],
         "activities": state["activities"],

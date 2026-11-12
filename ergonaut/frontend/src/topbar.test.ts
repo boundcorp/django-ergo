@@ -35,6 +35,16 @@ describe('topbarLocation', () => {
     expect(topbarLocation('/s/unknown', [parent]).title).toBe('Conversation')
   })
 
+  test('voice page keeps an explicit originating-thread breadcrumb', () => {
+    expect(topbarLocation('/s/s1/voice', [session()])).toEqual({
+      crumbs: [
+        { label: 'kitchen', to: '/bots/kitchen' },
+        { label: 'Plan the week', to: '/s/s1' },
+      ],
+      title: 'Voice call',
+    })
+  })
+
   test('bot pages and account pages', () => {
     expect(topbarLocation('/bots/kitchen')).toEqual({ crumbs: [{ label: 'Bots' }], title: 'kitchen' })
     expect(topbarLocation('/bots/kitchen/kb').title).toBe('Memory')

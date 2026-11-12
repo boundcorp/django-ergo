@@ -24,6 +24,9 @@ from livekit.plugins import openai, silero  # noqa: E402
 
 from ergonaut.api.realtime_voice import (  # noqa: E402
     BRIDGE_JOB_SECONDS,
+    MAX_PARTIAL_TURNS,
+    MAX_TRANSCRIPT_CHARS,
+    UNKNOWN_RUNTIME,
     begin_pending,
     begin_standby_close,
     bridge_state,
@@ -33,9 +36,9 @@ from ergonaut.api.realtime_voice import (  # noqa: E402
     current_time,
     end_bridge_session,
     finish_standby_close,
+    publish_live_state,
     record_event,
     resolve_pending,
-    update_pending_fragment,
 )
 from ergonaut.realtime_voice_outbox import claim_announcement, completion_event  # noqa: E402
 
@@ -44,6 +47,7 @@ MAX_SECONDS = BRIDGE_JOB_SECONDS
 _job_claimed = False
 TRANSCRIPT_DRAIN_SECONDS = 0.8
 PENDING_TIMEOUT_SECONDS = 60
+LIVE_PUBLISH_SECONDS = 0.25
 
 
 def pause_grace():
@@ -105,12 +109,26 @@ def startup_context(snapshot):
 
 
 class Assistant(Agent):
-    def __init__(self, voice_id, snapshot, http_session):
+    def __init__(self, voice_id, snapshot, http_session, *, claim_id=None):
         self.voice_id = voice_id
         self.announced = set()
+        self.claim_id = claim_id
+        self.partials = {}
+        self.finished_turns = {}
+        self.final_jobs = set()
+        self.finalizing = set()
+        self.accept_finals = True
+        self.live_finished = False
+        self.runtime = dict(UNKNOWN_RUNTIME)
+        self.runtime_available = True
+        self.runtime_times = {}
+        self.microphone_live = None
+        self.publisher = None
+        self.live_dirty = False
         self.jobs = set()
         self.watcher = None
         self.fragments = {}
+        self.fragments_overflow = False
         self.pending_id = None
         self.final_fragments = set()
         self.speaking = False
@@ -163,6 +181,7 @@ class Assistant(Agent):
 
     def stop(self):
         self.closing = True
+        self.invalidate_runtime()
         for job in tuple(self.jobs):
             job.cancel()
 
@@ -180,6 +199,8 @@ class Assistant(Agent):
         except Exception as exc:
             # Consume async callback exceptions without logging payloads, credentials or transcripts.
             logger.error("voice bridge callback failed exception_type=%s", type(exc).__name__)
+            if self.closing:
+                return
             notice = "A voice bridge action could not be confirmed. Check the durable background status."
             try:
                 await sync_to_async(record_event, thread_sensitive=True)(
@@ -189,11 +210,136 @@ class Assistant(Agent):
             except Exception as notice_exc:
                 logger.error("voice bridge status failed exception_type=%s", type(notice_exc).__name__)
 
+    def queue_live(self):
+        self.live_dirty = True
+        if self.publisher is None or self.publisher.done():
+            self.publisher = asyncio.create_task(self.publish_updates())
+
+    async def publish_updates(self):
+        try:
+            while self.live_dirty:
+                await asyncio.sleep(LIVE_PUBLISH_SECONDS)
+                await self.flush_live()
+        except Exception as exc:
+            # No per-token retries or transcript-bearing error messages.
+            logger.error("voice live state failed exception_type=%s", type(exc).__name__)
+
+    async def flush_live(self):
+        if not self.live_dirty:
+            return
+        self.live_dirty = False
+        await sync_to_async(publish_live_state, thread_sensitive=True)(
+            self.voice_id,
+            self.claim_id,
+            [dict(p) for p in self.partials.values()],
+            dict(self.runtime),
+            self.pending_id,
+            dict(self.fragments),
+        )
+
+    def update_partial(self, turn_id, role, text):
+        if self.closing or turn_id in self.finished_turns or not turn_id or len(turn_id) > 200:
+            return
+        prior = self.partials.get(turn_id)
+        self.partials[turn_id] = {
+            "turn_id": turn_id,
+            "role": role,
+            "text": text[:MAX_TRANSCRIPT_CHARS],
+            "is_final": False,
+            "delivery": "unknown",
+            "created_at": prior["created_at"] if prior else datetime.now(UTC).isoformat(),
+        }
+        while len(self.partials) > MAX_PARTIAL_TURNS:
+            self.partials.pop(next(iter(self.partials)))
+        self.queue_live()
+
+    def observe_runtime(self, role, event):
+        if self.closing or not self.runtime_available:
+            return
+        allowed = (
+            ("speaking", "listening", "away")
+            if role == "user"
+            else ("initializing", "idle", "listening", "thinking", "speaking")
+        )
+        stamp = getattr(event, "created_at", None)
+        if not isinstance(stamp, int | float) or not math.isfinite(stamp):
+            stamp = datetime.now(UTC).timestamp()
+        if stamp < self.runtime_times.get(role, 0):
+            return
+        self.runtime_times[role] = stamp
+        state = event.new_state if event.new_state in allowed else "unknown"
+        if role == "user" and self.microphone_live and not self.microphone_live():
+            state = "unknown"
+        self.runtime[f"{role}_state"] = state
+        self.runtime["observed_at"] = datetime.fromtimestamp(max(self.runtime_times.values()), UTC).isoformat()
+        self.queue_live()
+
+    def invalidate_runtime(self, *, user_only=False):
+        if user_only:
+            self.runtime = {**self.runtime, "user_state": "unknown", "observed_at": None}
+        else:
+            self.runtime = dict(UNKNOWN_RUNTIME)
+            self.runtime_available = False
+        self.queue_live()
+
+    def on_agent_state(self, event):
+        self.observe_runtime("agent", event)
+
+    def on_generation(self, event):
+        # Raw duplex transcript_delta has no message ID. The pinned SDK adapter
+        # assigns IDs only after splitting audio bursts and late text generations.
+        # Observe its identified text stream inline, without consuming it twice or
+        # claiming that generated text/audio was played.
+        if not self.closing:
+            event.message_stream = self.observe_messages(event.message_stream)
+
+    async def observe_messages(self, messages):
+        async for message in messages:
+            message.text_stream = self.observe_text(message.message_id, message.text_stream)
+            yield message
+
+    async def observe_text(self, turn_id, stream):
+        text = ""
+        async for delta in stream:
+            text = (text + delta)[:MAX_TRANSCRIPT_CHARS]
+            self.update_partial(turn_id, "assistant", text)
+            yield delta  # Preserve SDK TimedString and synchronizer behavior verbatim.
+
+    def queue_turn(self, item):
+        if not self.accept_finals or item.id in self.finished_turns or item.id in self.finalizing:
+            return
+        self.finalizing.add(item.id)
+        # Finals use a separate drain set: Stop cancels request assembly, never
+        # a final already accepted from the SDK.
+        task = asyncio.create_task(self.run_job(self.persist_turn(item, accepted_at=datetime.now(UTC))))
+        self.final_jobs.add(task)
+        task.add_done_callback(self.final_jobs.discard)
+        task.add_done_callback(lambda _: self.finalizing.discard(item.id))
+
+    async def finish_live(self):
+        if self.live_finished:
+            return
+        self.accept_finals = False
+        if self.final_jobs:
+            await asyncio.gather(*self.final_jobs, return_exceptions=True)
+        self.partials.clear()
+        self.invalidate_runtime()
+        if self.publisher:
+            await asyncio.gather(self.publisher, return_exceptions=True)
+        await self.flush_live()
+        self.live_finished = True
+
     async def on_enter(self):
         self.duplex_session.on("delegation_created", self.on_delegation)
         self.duplex_session.on("input_audio_transcription_completed", self.on_transcription)
         self.duplex_session.on("openai_server_event_received", self.on_protocol_event)
         self.duplex_session.on("openai_client_event_queued", self.on_client_event)
+        try:
+            self.realtime_llm_session.on("generation_created", self.on_generation)
+        except RuntimeError:
+            # Without the adapter's identified stream, assistant drafts stay unknown.
+            # Final conversation_item_added remains authoritative.
+            pass
         logger.info("voice delegation_listener_ready")
         self.watcher = asyncio.create_task(self.watch_results())
 
@@ -229,22 +375,29 @@ class Assistant(Agent):
             logger.info("voice commentary_queued correlation=%s", self.correlation(event.get("delegation_id")))
 
     def on_transcription(self, event):
+        if self.closing or event.item_id in self.finished_turns:
+            if self.closing:
+                self.activity_generation += 1
+            return
         self.activity_generation += 1
-        self.fragments[event.item_id] = event.transcript
-        if event.is_final:
+        if (event.item_id not in self.fragments and len(self.fragments) >= 100) or len(event.transcript) > 4000:
+            self.fragments_overflow = True
+        if event.item_id in self.fragments or len(self.fragments) < 100:
+            self.fragments[event.item_id] = event.transcript[:MAX_TRANSCRIPT_CHARS]
+        if event.is_final and event.item_id in self.fragments:
             self.final_fragments.add(event.item_id)
         else:
             self.final_fragments.discard(event.item_id)
+        self.update_partial(event.item_id, "user", event.transcript)
         self.transcript_changed_at = time.monotonic()
         self.changed.set()
-        if self.pending_id and not self.closing:
-            self.spawn(
-                sync_to_async(update_pending_fragment, thread_sensitive=True)(
-                    self.voice_id, self.pending_id, event.item_id, event.transcript
-                )
-            )
 
     def on_user_state(self, event):
+        if self.closing:
+            if event.new_state == "speaking":
+                self.activity_generation += 1
+            return
+        self.observe_runtime("user", event)
         # With an explicitly supplied VAD, the SDK's recognition pipeline drives
         # these states from its actual Silero audio stream, not GPT-Live segments.
         if event.new_state == "speaking":
@@ -258,6 +411,7 @@ class Assistant(Agent):
             ):
                 self.fragments.clear()
                 self.final_fragments.clear()
+                self.fragments_overflow = False
             self.speaking = True
             self.heard_speech = True
             self.speech_ended_at = None
@@ -280,6 +434,7 @@ class Assistant(Agent):
             and time.monotonic() - self.speech_ended_at >= self.grace
             and time.monotonic() - self.transcript_changed_at >= TRANSCRIPT_DRAIN_SECONDS
             and bool(self.fragments)
+            and not self.fragments_overflow
             and self.final_fragments.issuperset(self.fragments)
             and pending.get("status") != "collecting"
             and not self.jobs
@@ -311,7 +466,12 @@ class Assistant(Agent):
                     self.speech_ended_at + self.grace,
                     self.transcript_changed_at + TRANSCRIPT_DRAIN_SECONDS,
                 )
-                if now >= ready_at and self.fragments and self.final_fragments.issuperset(self.fragments):
+                if (
+                    now >= ready_at
+                    and self.fragments
+                    and not self.fragments_overflow
+                    and self.final_fragments.issuperset(self.fragments)
+                ):
                     text = " ".join(part.strip() for part in self.fragments.values() if part.strip())
                     if text and len(text) <= 4000:
                         logger.info("voice delegation_boundary_ready correlation=%s", self.correlation(event_id))
@@ -325,11 +485,42 @@ class Assistant(Agent):
             except TimeoutError:
                 pass
 
-    async def persist_turn(self, item):
+    async def persist_turn(self, item, *, accepted_at=None):
+        if item.id in self.finished_turns:
+            return
+        self.finished_turns[item.id] = None
+        while len(self.finished_turns) > 100:
+            self.finished_turns.pop(next(iter(self.finished_turns)))
+        draft = self.partials.get(item.id)
+        if not item.text_content:
+            # An authoritative empty/interrupted turn discards its draft, not history.
+            self.partials.pop(item.id, None)
+            self.queue_live()
+            return
         delivery = "interrupted" if item.interrupted else "unknown"
-        await sync_to_async(record_event, thread_sensitive=True)(
-            self.voice_id, item.id, item.role, item.text_content, delivery
-        )
+        try:
+            event = await sync_to_async(record_event, thread_sensitive=True)(
+                self.voice_id,
+                item.id,
+                item.role,
+                item.text_content[:MAX_TRANSCRIPT_CHARS],
+                delivery,
+                bridge_claim_id=self.claim_id,
+                received_at=accepted_at,
+                turn_started_at=datetime.fromisoformat(draft["created_at"]) if draft else None,
+            )
+        except Exception as exc:
+            logger.error("voice final transcript failed exception_type=%s", type(exc).__name__)
+            return
+        if event is None:
+            return
+        # The server transaction already replaced the published draft with its final.
+        # Keep local text until that succeeds so concurrent coalesced flushes cannot
+        # expose a disappearing/reappearing turn while the final write is delayed.
+        self.partials.pop(item.id, None)
+        self.queue_live()
+        if self.closing:
+            return
         # Generated speech is always unverified; do not append a delayed no-result status
         # after a result may already have arrived.
         if item.role == "user":
@@ -420,7 +611,7 @@ async def voice_session(ctx: agents.JobContext):
         await ctx.connect()
         started = time.monotonic()
         http_session = aiohttp.ClientSession()
-        assistant = Assistant(voice_id, snapshot, http_session)
+        assistant = Assistant(voice_id, snapshot, http_session, claim_id=claim_id)
         session = AgentSession(vad=silero.VAD.load())
     except BaseException:
         if http_session is not None:
@@ -447,12 +638,15 @@ async def voice_session(ctx: agents.JobContext):
             )
         )
 
+    assistant.microphone_live = microphone_live
+
     @ctx.room.on("participant_disconnected")
     def on_participant_disconnected(participant):
         nonlocal unexpected_close
         if participant.identity == owner_identity and not teardown_room:
             unexpected_close = True
             assistant.vad_ready = False
+            assistant.invalidate_runtime()
             session_closed.set()
 
     @ctx.room.on("disconnected")
@@ -461,17 +655,20 @@ async def voice_session(ctx: agents.JobContext):
         if not teardown_room:
             unexpected_close = True
             assistant.vad_ready = False
+            assistant.invalidate_runtime()
             session_closed.set()
 
     @ctx.room.on("track_muted")
     def on_track_muted(publication, participant):
         if participant.identity == owner_identity and publication.source == rtc.TrackSource.SOURCE_MICROPHONE:
             assistant.vad_ready = False
+            assistant.invalidate_runtime(user_only=True)
 
     @ctx.room.on("track_unsubscribed")
     def on_track_unsubscribed(_track, publication, participant):
         if participant.identity == owner_identity and publication.source == rtc.TrackSource.SOURCE_MICROPHONE:
             assistant.vad_ready = False
+            assistant.invalidate_runtime(user_only=True)
 
     @session.on("close")
     def on_close(_event):
@@ -485,14 +682,18 @@ async def voice_session(ctx: agents.JobContext):
     def on_user_state(event):
         assistant.on_user_state(event)
 
+    @session.on("agent_state_changed")
+    def on_agent_state(event):
+        assistant.on_agent_state(event)
+
     @session.on("conversation_item_added")
     def on_item(event):
         item = event.item
-        if not isinstance(item, llm.ChatMessage) or item.role not in ("user", "assistant") or not item.text_content:
+        if not isinstance(item, llm.ChatMessage) or item.role not in ("user", "assistant"):
             return
         if item.role == "assistant":
             logger.info("voice first_or_subsequent_assistant_turn_seconds=%.3f", time.monotonic() - started)
-        assistant.spawn(assistant.persist_turn(item))
+        assistant.queue_turn(item)
 
     standby_requested = False
     generation = None
@@ -541,6 +742,7 @@ async def voice_session(ctx: agents.JobContext):
                 await asyncio.gather(*assistant.jobs, return_exceptions=True)
             teardown_session = True
             await session.aclose()
+            await assistant.finish_live()
             await http_session.close()
             teardown_room = True
             await ctx.room.disconnect()
@@ -553,6 +755,7 @@ async def voice_session(ctx: agents.JobContext):
                     voice_id, claim_id, audio_uncertain=generation != assistant.activity_generation
                 )
         finally:
+            await assistant.finish_live()
             if not closed_cleanly:
                 await sync_to_async(end_bridge_session, thread_sensitive=True)(voice_id, claim_id)
             seconds = time.monotonic() - started
