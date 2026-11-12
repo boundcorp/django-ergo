@@ -187,17 +187,22 @@ normal originating-thread costs at **21:15:41 UTC**, but no real-owner normal
 task was run during this investigation.
 
 Submission is serialized by the session and unique delegation ID. Opted-in
-normal tasks record a durable claim for **each structured-call/provider-tool
-invocation ID**, bound to the tool name and canonical argument hash, before
-running its actual handler. Duplicate IDs reuse the receipt; conflicting
+normal tasks record a durable claim for **each external-tool invocation ID
+within a structured call**, bound to the tool name and canonical argument hash,
+before running its actual handler. Duplicate IDs reuse the receipt; conflicting
 arguments are refused. A crash after claim has an unknown outcome and is never
 automatically replayed. A new ID is a new normal tool invocation, not a promise
 that an external API supports exactly-once effects. Existing approval checks
 happen **before** any handler claim; approval/denial and stale-answer protection
 use the normal thread endpoint, including its admin-only restrictions. Speech,
 a provider signal or status lookup cannot approve an action.
+The local structured-output validator has no external effect and is revalidated
+instead of cached, so a repeated final reply can complete after approval or denial.
 Automatic Ergo request retries and API-SDK retries are disabled for the scoped
 normal task, its normal approval continuation and causally delegated messages.
+Asynchronous `Worker`/`BotTasks` handoffs retain their existing normal controls;
+they do not inherit these invocation receipts or retry-policy metadata. This is
+not end-to-end retry suppression or exactly-once execution across worker tasks.
 The actual Codex CLI still owns its internal provider transport behavior; this
 is not a claim to count or financially bound hidden provider attempts, and no
 provider configuration or route is changed.

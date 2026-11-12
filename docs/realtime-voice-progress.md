@@ -40,6 +40,29 @@ Observed successor verification:
 
 The first standalone approval attempt was correctly refused for a non-admin fixture with admin-only default plugins. The successful isolated repeat used a disposable admin, not a permission bypass. A preliminary attempt to add mute coverage to the complex standby teardown fixture timed out; coverage was moved to the production microphone registration helper with the actual RTC emitter and real Assistant runtime, which passed. These are offline implementation checks, not hosted voice or Bluetooth acceptance.
 
+Independent successor review reproduced one blocking continuation defect:
+a provider response containing both an approval-required action and a valid
+structured reply cached the reply receipt before pausing. Repeating that reply
+ID after approval or denial lost the fresh output toolkit's acceptance state and
+exhausted the normal turn limit. The fix revalidates only the local output
+validator; external-action claims remain durable. Both regression cases failed
+before the fix. A disposable standalone normal-thread smoke then completed the
+same batched-action/repeated-reply path with one real thread send and four
+scripted requests, preserving the non-admin 403, stale-answer 409 and correlated
+child result after End. No provider, room, microphone or real-owner task ran.
+Asynchronous worker/task handoffs retain normal controls, not the scoped
+ThreadMessage receipt/retry policy.
+Independent library verification passed **82 tests** across the real-Codex/local
+stand-in, budget and structured-call suites; the two continuation regressions
+are included. Scoped frontend verification passed **34 tests**. Changed Python
+formatting and Ruff checks passed.
+
+A concurrent unrelated auto-upgrade, [infra-octo #169](https://github.com/boundcorp/infra-octo/pull/169),
+moved all six replacement roles to `dbf5ce7` / `3962d452` during this read-only
+review. Older `5c0ba2e4` and `40d09a01` celery/bot-tasks pods were still
+terminating. This is another release snapshot, not a PR #297 rollout or an
+old-consumer-exit proof; the normal policy remained absent and #170 stayed held.
+
 
 ### Offline verification of follow-ups
 

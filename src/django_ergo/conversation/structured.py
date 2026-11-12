@@ -805,9 +805,14 @@ class _Run:
             and (self.call.metadata or {}).get("model_retry_policy") != "never"
         )
         try:
+            # Output validation has no external effect and must repopulate the
+            # fresh submit toolkit's accepted value after approval continuation.
             if (self.call.metadata or {}).get(
                 "tool_execution_policy"
-            ) == "at_most_once":
+            ) == "at_most_once" and (
+                self.submit is None
+                or find_toolkit(self.toolkits, name) is not self.submit
+            ):
                 return await sync_to_async(dispatch_tool_once, thread_sensitive=True)(
                     self.call, tool_id, name, args, self.toolkits
                 )
