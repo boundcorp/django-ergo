@@ -3,9 +3,11 @@
 import asyncio
 import hashlib
 import logging
+import math
 import os
 import time
 import uuid
+from datetime import UTC, datetime
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "ergonaut.settings")
 
@@ -16,18 +18,21 @@ django.setup()
 import aiohttp  # noqa: E402
 from asgiref.sync import sync_to_async  # noqa: E402
 from django.conf import settings  # noqa: E402
-from livekit import agents  # noqa: E402
+from livekit import agents, rtc  # noqa: E402
 from livekit.agents import Agent, AgentServer, AgentSession, APIConnectOptions, llm  # noqa: E402
 from livekit.plugins import openai, silero  # noqa: E402
 
 from ergonaut.api.realtime_voice import (  # noqa: E402
     BRIDGE_JOB_SECONDS,
     begin_pending,
+    begin_standby_close,
     bridge_state,
+    cancel_standby_close,
     claim_bridge,
     close_pending,
     current_time,
-    end_voice_session,
+    end_bridge_session,
+    finish_standby_close,
     record_event,
     resolve_pending,
     update_pending_fragment,
@@ -103,6 +108,11 @@ class Assistant(Agent):
         self.transcript_changed_at = 0.0
         self.changed = asyncio.Event()
         self.closing = False
+        self.vad_ready = False
+        self.activity_generation = 0
+        self.provider_usage_seconds = None
+        self.resumed_at = datetime.fromisoformat(snapshot["resumed_at"]) if snapshot.get("resumed_at") else None
+        self.reconnect_latency_seconds = None
         self.grace = pause_grace()
         super().__init__(
             instructions=(
@@ -168,6 +178,18 @@ class Assistant(Agent):
         self.watcher = asyncio.create_task(self.watch_results())
 
     def on_protocol_event(self, event):
+        if event.get("type") == "session.started" and self.resumed_at and self.reconnect_latency_seconds is None:
+            self.reconnect_latency_seconds = max(0.0, (datetime.now(UTC) - self.resumed_at).total_seconds())
+        if event.get("type") in ("session.usage.updated", "session.closed"):
+            usage = event.get("usage")
+            seconds = usage.get("seconds") if isinstance(usage, dict) else None
+            if (
+                isinstance(seconds, int | float)
+                and not isinstance(seconds, bool)
+                and math.isfinite(seconds)
+                and seconds >= 0
+            ):
+                self.provider_usage_seconds = seconds
         if event.get("type") == "session.delegation.created":
             metadata = event.get("delegation") or {}
             delegation_id = metadata.get("id")
@@ -187,6 +209,7 @@ class Assistant(Agent):
             logger.info("voice commentary_queued correlation=%s", self.correlation(event.get("delegation_id")))
 
     def on_transcription(self, event):
+        self.activity_generation += 1
         self.fragments[event.item_id] = event.transcript
         if event.is_final:
             self.final_fragments.add(event.item_id)
@@ -205,6 +228,8 @@ class Assistant(Agent):
         # With an explicitly supplied VAD, the SDK's recognition pipeline drives
         # these states from its actual Silero audio stream, not GPT-Live segments.
         if event.new_state == "speaking":
+            self.activity_generation += 1
+            self.vad_ready = True
             logger.info("voice vad_speech_started correlation=%s", self.correlation(self.pending_id))
             if (
                 not self.pending_id
@@ -220,9 +245,29 @@ class Assistant(Agent):
             self.speaking = False
             self.speech_ended_at = time.monotonic()
             logger.info("voice vad_speech_ended correlation=%s", self.correlation(self.pending_id))
+        elif event.new_state != "listening":
+            self.vad_ready = False
         self.changed.set()
 
+    def safe_to_standby(self, snapshot):
+        # Listening alone is not evidence that audio or VAD has ever been operational.
+        pending = snapshot["state"].get("pending_delegation") or {}
+        return (
+            self.heard_speech
+            and self.vad_ready
+            and not self.speaking
+            and self.speech_ended_at is not None
+            and time.monotonic() - self.speech_ended_at >= self.grace
+            and time.monotonic() - self.transcript_changed_at >= TRANSCRIPT_DRAIN_SECONDS
+            and bool(self.fragments)
+            and self.final_fragments.issuperset(self.fragments)
+            and pending.get("status") != "collecting"
+            and not self.jobs
+            and not self.closing
+        )
+
     def on_delegation(self, event):
+        self.activity_generation += 1
         logger.info("voice delegation_signal_received correlation=%s", self.correlation(event.id))
         if self.pending_id or self.closing:
             return
@@ -343,20 +388,74 @@ async def voice_session(ctx: agents.JobContext):
     except ValueError:
         ctx.shutdown(reason="invalid room")
         return
-    # One job, so one provider connection, per logical voice session; only for allowed users.
-    if not await sync_to_async(claim_bridge, thread_sensitive=True)(voice_id):
-        ctx.shutdown(reason="voice session not active, already connected once, or not allowed")
+    claim_id = uuid.uuid4().hex
+    if not await sync_to_async(claim_bridge, thread_sensitive=True)(voice_id, claim_id):
+        ctx.shutdown(reason="voice session not active, already claimed, or not allowed")
         return
-    snapshot = await sync_to_async(bridge_state, thread_sensitive=True)(voice_id)
-    await ctx.connect()
-    started = time.monotonic()
-    http_session = aiohttp.ClientSession()
-    assistant = Assistant(voice_id, snapshot, http_session)
-    session = AgentSession(vad=silero.VAD.load())
+    http_session = None
+    try:
+        snapshot = await sync_to_async(bridge_state, thread_sensitive=True)(voice_id)
+        await ctx.connect()
+        started = time.monotonic()
+        http_session = aiohttp.ClientSession()
+        assistant = Assistant(voice_id, snapshot, http_session)
+        session = AgentSession(vad=silero.VAD.load())
+    except BaseException:
+        if http_session is not None:
+            await http_session.close()
+        await sync_to_async(end_bridge_session, thread_sensitive=True)(voice_id, claim_id)
+        ctx.shutdown(reason="voice initialization failed")
+        raise
     session_closed = asyncio.Event()
+    owner_identity = f"user-{snapshot['user_id']}"
+    teardown_session = False
+    teardown_room = False
+    unexpected_close = False
+
+    def microphone_live():
+        participant = ctx.room.remote_participants.get(owner_identity)
+        return bool(
+            participant
+            and any(
+                publication.source == rtc.TrackSource.SOURCE_MICROPHONE
+                and publication.subscribed
+                and publication.track is not None
+                and not publication.muted
+                for publication in participant.track_publications.values()
+            )
+        )
+
+    @ctx.room.on("participant_disconnected")
+    def on_participant_disconnected(participant):
+        nonlocal unexpected_close
+        if participant.identity == owner_identity and not teardown_room:
+            unexpected_close = True
+            assistant.vad_ready = False
+            session_closed.set()
+
+    @ctx.room.on("disconnected")
+    def on_room_disconnected(*_args):
+        nonlocal unexpected_close
+        if not teardown_room:
+            unexpected_close = True
+            assistant.vad_ready = False
+            session_closed.set()
+
+    @ctx.room.on("track_muted")
+    def on_track_muted(publication, participant):
+        if participant.identity == owner_identity and publication.source == rtc.TrackSource.SOURCE_MICROPHONE:
+            assistant.vad_ready = False
+
+    @ctx.room.on("track_unsubscribed")
+    def on_track_unsubscribed(_track, publication, participant):
+        if participant.identity == owner_identity and publication.source == rtc.TrackSource.SOURCE_MICROPHONE:
+            assistant.vad_ready = False
 
     @session.on("close")
     def on_close(_event):
+        nonlocal unexpected_close
+        if not teardown_session:
+            unexpected_close = True
         assistant.stop()
         session_closed.set()
 
@@ -373,36 +472,72 @@ async def voice_session(ctx: agents.JobContext):
             logger.info("voice first_or_subsequent_assistant_turn_seconds=%.3f", time.monotonic() - started)
         assistant.spawn(assistant.persist_turn(item))
 
+    standby_requested = False
+    generation = None
     try:
-        async with asyncio.timeout(MAX_SECONDS):
+        deadline = datetime.fromisoformat(snapshot["bridge_started_at"])
+        remaining = max(0, (deadline - datetime.now(UTC)).total_seconds() + MAX_SECONDS)
+        async with asyncio.timeout(remaining):
             await session.start(room=ctx.room, agent=assistant, record=False)
-            await session_closed.wait()
+            while not session_closed.is_set():
+                snapshot = await sync_to_async(bridge_state, thread_sensitive=True)(voice_id)
+                if snapshot["status"] != "active":
+                    break
+                if (
+                    snapshot["standby_state"] == "requested"
+                    and microphone_live()
+                    and assistant.safe_to_standby(snapshot)
+                ):
+                    generation = assistant.activity_generation
+                    reserved = await sync_to_async(begin_standby_close, thread_sensitive=True)(voice_id, claim_id)
+                    if reserved:
+                        # A speech callback or a disconnect may have raced the database claim.
+                        if (
+                            not session_closed.is_set()
+                            and not unexpected_close
+                            and microphone_live()
+                            and generation == assistant.activity_generation
+                            and assistant.safe_to_standby(snapshot)
+                        ):
+                            standby_requested = True
+                            break
+                        await sync_to_async(cancel_standby_close, thread_sensitive=True)(voice_id, claim_id)
+                try:
+                    await asyncio.wait_for(session_closed.wait(), timeout=0.2)
+                except TimeoutError:
+                    pass
     except TimeoutError:
         pass
     finally:
-        assistant.stop()
-        if assistant.jobs:
-            await asyncio.gather(*assistant.jobs, return_exceptions=True)
-        await session.aclose()
-        await http_session.close()
-        if assistant.watcher:
-            assistant.watcher.cancel()
-            await asyncio.gather(assistant.watcher, return_exceptions=True)
-        if assistant.jobs:
-            await asyncio.gather(*assistant.jobs, return_exceptions=True)
-        if assistant.pending_id:
-            await sync_to_async(close_pending, thread_sensitive=True)(voice_id, assistant.pending_id)
-        # The session had its one job: end it, so the next Start makes a new session instead of
-        # reusing one no bridge will take again.
-        await sync_to_async(end_voice_session, thread_sensitive=True)(voice_id)
-        seconds = time.monotonic() - started
-        logger.info(
-            "voice bridge session_seconds=%.3f max_seconds=%d voice_cost_upper_estimate_usd=%.4f",
-            seconds,
-            MAX_SECONDS,
-            seconds * 0.05 / 60,
-        )
-        ctx.shutdown(reason="local voice duration limit")
+        closed_cleanly = False
+        try:
+            assistant.stop()
+            if assistant.watcher:
+                assistant.watcher.cancel()
+                await asyncio.gather(assistant.watcher, return_exceptions=True)
+            if assistant.jobs:
+                await asyncio.gather(*assistant.jobs, return_exceptions=True)
+            teardown_session = True
+            await session.aclose()
+            await http_session.close()
+            teardown_room = True
+            await ctx.room.disconnect()
+            if assistant.pending_id:
+                await sync_to_async(close_pending, thread_sensitive=True)(voice_id, assistant.pending_id)
+            # A late speech, transcript, or delegation event invalidates the boundary.
+            if standby_requested and not unexpected_close and generation == assistant.activity_generation:
+                closed_cleanly = await sync_to_async(finish_standby_close, thread_sensitive=True)(voice_id, claim_id)
+        finally:
+            if not closed_cleanly:
+                await sync_to_async(end_bridge_session, thread_sensitive=True)(voice_id, claim_id)
+            seconds = time.monotonic() - started
+            logger.info(
+                "voice bridge wall_seconds=%.3f provider_usage_seconds=%s reconnect_latency_seconds=%s",
+                seconds,
+                assistant.provider_usage_seconds,
+                assistant.reconnect_latency_seconds,
+            )
+            ctx.shutdown(reason="voice bridge closed")
 
 
 if __name__ == "__main__":

@@ -1,6 +1,7 @@
 """Authenticated realtime voice sessions and durable bridge state."""
 
 import json
+import uuid
 from datetime import UTC, datetime, timedelta
 
 from django.conf import settings
@@ -25,6 +26,15 @@ def voice_allowed(user):
     return bool(getattr(settings, "REALTIME_VOICE_ENABLED", False)) and user.get_username() in getattr(
         settings, "REALTIME_VOICE_USERS", set()
     )
+
+
+def standby_allowed(user):
+    return voice_allowed(user) and bool(getattr(settings, "REALTIME_VOICE_STANDBY_ENABLED", False))
+
+
+def require_standby(user):
+    if not standby_allowed(user):
+        raise HttpError(404, "Realtime voice standby is disabled")
 
 
 def require_enabled(user):
@@ -70,22 +80,97 @@ def end_voice_session(voice_id):
     RealtimeVoiceSession.objects.filter(pk=voice_id, status="active").update(status="ended", ended_at=timezone.now())
 
 
-def claim_bridge(voice_id):
-    """Take an active session for one bridge job, once; False if it was taken, ended or isn't allowed.
+def end_bridge_session(voice_id, claim_id):
+    """A stale job cannot end standby or a later bridge's claim."""
+    RealtimeVoiceSession.objects.filter(pk=voice_id, status="active", bridge_claim_id=claim_id).exclude(
+        standby_state__in=("standby", "resuming")
+    ).update(status="ended", ended_at=timezone.now())
 
-    This is the one-provider-connection-per-session limit: a later dispatch for the same
-    session (a new room after the first job ended) is refused rather than reconnected.
-    """
+
+def deadline_expired(session, now=None):
+    return bool(
+        session.bridge_started_at
+        and (now or timezone.now()) >= session.bridge_started_at + timedelta(seconds=BRIDGE_JOB_SECONDS)
+    )
+
+
+def claim_bridge(voice_id, claim_id=None):
+    """Atomically claim the initial job or one explicitly resumed job."""
     if not getattr(settings, "REALTIME_VOICE_ENABLED", False):
+        return False
+    field = get_user_model().USERNAME_FIELD
+    with transaction.atomic():
+        session = (
+            RealtimeVoiceSession.objects.select_for_update()
+            .filter(
+                pk=voice_id,
+                status="active",
+                **{f"user__{field}__in": getattr(settings, "REALTIME_VOICE_USERS", set())},
+            )
+            .first()
+        )
+        if session is None:
+            return False
+        now = timezone.now()
+        if deadline_expired(session, now):
+            session.status = "ended"
+            session.ended_at = now
+            session.save(update_fields=["status", "ended_at"])
+            return False
+        session.bridge_claim_id = claim_id or uuid.uuid4().hex
+        if session.bridge_started_at is None:
+            session.bridge_started_at = now
+            session.save(update_fields=["bridge_started_at", "bridge_claim_id"])
+            return True
+        if not standby_allowed(session.user) or session.standby_state != "resuming":
+            return False
+        session.standby_state = "live"
+        session.save(update_fields=["standby_state", "bridge_claim_id"])
+        return True
+
+
+def begin_standby_close(voice_id, claim_id):
+    """Reserve teardown; only the running bridge may acknowledge the request."""
+    if not getattr(settings, "REALTIME_VOICE_STANDBY_ENABLED", False) or not getattr(
+        settings, "REALTIME_VOICE_ENABLED", False
+    ):
         return False
     field = get_user_model().USERNAME_FIELD
     return bool(
         RealtimeVoiceSession.objects.filter(
             pk=voice_id,
             status="active",
-            bridge_started_at__isnull=True,
+            standby_state="requested",
+            bridge_claim_id=claim_id,
+            bridge_started_at__gt=timezone.now() - timedelta(seconds=BRIDGE_JOB_SECONDS),
             **{f"user__{field}__in": getattr(settings, "REALTIME_VOICE_USERS", set())},
-        ).update(bridge_started_at=timezone.now())
+        ).update(standby_state="closing")
+    )
+
+
+def cancel_standby_close(voice_id, claim_id):
+    RealtimeVoiceSession.objects.filter(
+        pk=voice_id, status="active", standby_state="closing", bridge_claim_id=claim_id
+    ).update(standby_state="requested")
+
+
+def finish_standby_close(voice_id, claim_id):
+    """Publish standby only after all transport teardown succeeded."""
+    if not getattr(settings, "REALTIME_VOICE_STANDBY_ENABLED", False) or not getattr(
+        settings, "REALTIME_VOICE_ENABLED", False
+    ):
+        return False
+    now = timezone.now()
+    field = get_user_model().USERNAME_FIELD
+    return bool(
+        RealtimeVoiceSession.objects.filter(
+            pk=voice_id,
+            status="active",
+            standby_state="closing",
+            bridge_claim_id=claim_id,
+            bridge_started_at__gt=now - timedelta(seconds=BRIDGE_JOB_SECONDS),
+            **{f"user__{field}__in": getattr(settings, "REALTIME_VOICE_USERS", set())},
+        ).update(standby_state="standby", standby_at=now)
     )
 
 
@@ -121,7 +206,11 @@ def bridge_state(voice_id):
     return {
         "session_id": str(session.id),
         "chat_id": str(session.chat_id),
+        "user_id": str(session.user_id),
         "status": session.status,
+        "standby_state": session.standby_state,
+        "bridge_started_at": session.bridge_started_at.isoformat() if session.bridge_started_at else None,
+        "resumed_at": session.resumed_at.isoformat() if session.resumed_at else None,
         "state": state,
         "events": [event_out(e) for e in reversed(events)],
         "activities": activities,
@@ -322,11 +411,32 @@ def delegate(voice_id, event_id, text):
 
 
 def session_out(session):
+    session.refresh_from_db()
+    if (
+        (standby_allowed(session.user) or session.standby_state != "live")
+        and session.status == "active"
+        and deadline_expired(session)
+    ):
+        end_voice_session(session.id)
+        session.refresh_from_db()
     state = bridge_state(session.id)
+    standby_seconds = None
+    if session.standby_at:
+        stop = (
+            session.resumed_at
+            if session.resumed_at and session.resumed_at >= session.standby_at
+            else session.ended_at or timezone.now()
+        )
+        standby_seconds = max(0.0, (stop - session.standby_at).total_seconds())
     return {
         "id": str(session.id),
         "chat_id": str(session.chat_id),
         "status": session.status,
+        "standby_state": "requested" if session.standby_state == "closing" else session.standby_state,
+        "bridge_started_at": session.bridge_started_at.isoformat() if session.bridge_started_at else None,
+        "standby_at": session.standby_at.isoformat() if session.standby_at else None,
+        "resumed_at": session.resumed_at.isoformat() if session.resumed_at else None,
+        "standby_seconds": standby_seconds,
         "created_at": session.created_at.isoformat(),
         "ended_at": session.ended_at.isoformat() if session.ended_at else None,
         "events": state["events"],
@@ -342,7 +452,7 @@ class CreateIn(Schema):
 
 @router.get("/realtime-voice/config")
 def config(request):
-    return {"enabled": voice_allowed(request.auth)}
+    return {"enabled": voice_allowed(request.auth), "standby_enabled": standby_allowed(request.auth)}
 
 
 @router.get("/realtime-voice/sessions")
@@ -389,17 +499,55 @@ def end_session(request, session_id: str):
     return session_out(session)
 
 
+@router.post("/realtime-voice/sessions/{session_id}/standby")
+def request_standby(request, session_id: str):
+    session = owned_session(request.auth, session_id)
+    require_standby(request.auth)
+    now = timezone.now()
+    updated = RealtimeVoiceSession.objects.filter(
+        pk=session.pk,
+        status="active",
+        standby_state="live",
+        bridge_started_at__gt=now - timedelta(seconds=BRIDGE_JOB_SECONDS),
+    ).update(standby_state="requested")
+    if not updated:
+        if deadline_expired(session, now):
+            end_voice_session(session.pk)
+        raise HttpError(409, "Standby unavailable")
+    return session_out(session)
+
+
+@router.post("/realtime-voice/sessions/{session_id}/resume")
+def resume_session(request, session_id: str):
+    session = owned_session(request.auth, session_id)
+    require_standby(request.auth)
+    now = timezone.now()
+    updated = RealtimeVoiceSession.objects.filter(
+        pk=session.pk,
+        status="active",
+        standby_state="standby",
+        bridge_started_at__gt=now - timedelta(seconds=BRIDGE_JOB_SECONDS),
+    ).update(standby_state="resuming", resumed_at=now)
+    if not updated:
+        if deadline_expired(session, now):
+            end_voice_session(session.pk)
+        raise HttpError(409, "Resume unavailable")
+    return session_out(session)
+
+
 @router.post("/realtime-voice/sessions/{session_id}/token")
 def token(request, session_id: str):
     session = owned_session(request.auth, session_id)
     if session.status != "active":
         raise HttpError(409, "Voice session ended")
     if session.bridge_started_at:
-        # Its one bridge job already ran (or is running): a new room would get no agent. The bridge
-        # ends the session when the job ends; if it died first, end it here once the job is surely over.
-        if timezone.now() - session.bridge_started_at > timedelta(seconds=BRIDGE_JOB_SECONDS + 30):
+        if standby_allowed(request.auth) and deadline_expired(session):
             end_voice_session(session.pk)
-        raise HttpError(409, "Voice session already connected; start a new one")
+            raise HttpError(409, "Voice session expired")
+        if not standby_allowed(request.auth) or session.standby_state != "resuming":
+            if timezone.now() - session.bridge_started_at > timedelta(seconds=BRIDGE_JOB_SECONDS + 30):
+                end_voice_session(session.pk)
+            raise HttpError(409, "Voice session already connected; start a new one")
     url, key, secret = settings.LIVEKIT_URL, settings.LIVEKIT_API_KEY, settings.LIVEKIT_API_SECRET
     if not all((url, key, secret)):
         raise HttpError(503, "Realtime voice is not configured")

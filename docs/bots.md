@@ -974,7 +974,8 @@ unbudgeted. The realtime voice prototype is the user:
 [realtime-voice.md](realtime-voice.md) has the limits table and conditional
 cost estimate, not a provider-billing ceiling. Its client-delegation voice
 adapter has no function tools; provider signals open a pending request that
-the owner must review and explicitly confirm before a budgeted turn is queued.
+is queued after a detected speech boundary, pause grace and transcript drain.
+This is not a guarantee that speech or transcription is complete.
 The session card distinguishes generated speech from
 durable submitted/queued/answered/failed work and explicitly reports when
 no background request or verified history result exists.

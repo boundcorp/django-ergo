@@ -282,3 +282,128 @@ def test_only_server_recorded_live_signal_can_submit_once(voice_setup, settings)
         with pytest.raises(ValueError, match="expired or unavailable"):
             realtime_voice.resolve_pending(voice["id"], "request", text)
     assert ThreadMessage.objects.count() == 1
+
+
+def test_standby_is_flagged_owner_scoped_and_requires_confirmed_close(voice_setup, settings, django_user_model):
+    user, client, chat = voice_setup
+    voice, url = create(client, chat)
+    assert not client.get("/api/realtime-voice/config").json()["standby_enabled"]
+    assert post(client, url + "/standby", {}).status_code == 404
+    settings.REALTIME_VOICE_STANDBY_ENABLED = True
+    assert client.get("/api/realtime-voice/config").json()["standby_enabled"]
+    assert post(client, url + "/standby", {}).status_code == 409  # no bridge
+    assert realtime_voice.claim_bridge(voice["id"], "a" * 32)
+    assert post(client, url + "/standby", {}).json()["standby_state"] == "requested"
+    assert post(client, url + "/resume", {}).status_code == 409
+    assert realtime_voice.begin_standby_close(voice["id"], "a" * 32)
+    assert client.get(url).json()["standby_state"] == "requested"
+    assert post(client, url + "/resume", {}).status_code == 409
+    other = django_user_model.objects.create_user("standby-other", password="pw")
+    settings.REALTIME_VOICE_USERS.add(other.get_username())
+    client.force_login(other)
+    assert post(client, url + "/resume", {}).status_code == 404
+    assert post(client, url + "/standby", {}).status_code == 404
+    client.force_login(user)
+    assert realtime_voice.finish_standby_close(voice["id"], "a" * 32)
+    realtime_voice.end_bridge_session(voice["id"], "a" * 32)  # late/cancelled cleanup after publication
+    assert client.get(url).json()["status"] == "active"
+    assert client.get(url).json()["standby_state"] == "standby"
+    assert post(client, url + "/resume", {}).json()["standby_state"] == "resuming"
+    assert post(client, url + "/resume", {}).status_code == 409
+    assert realtime_voice.claim_bridge(voice["id"], "b" * 32)
+    assert not realtime_voice.claim_bridge(voice["id"], "c" * 32)
+    realtime_voice.end_bridge_session(voice["id"], "a" * 32)
+    assert client.get(url).json()["status"] == "active"
+    realtime_voice.end_bridge_session(voice["id"], "b" * 32)
+    assert client.get(url).json()["status"] == "ended"
+
+
+def test_end_and_expiry_beat_standby_cleanup_and_preserve_late_result(voice_setup, settings):
+    from ergonaut.realtime_voice_outbox import claim_announcement, completion_event
+
+    _, client, chat = voice_setup
+    settings.REALTIME_VOICE_STANDBY_ENABLED = True
+    settings.REALTIME_VOICE_DELEGATION_BUDGET = BUDGET
+    voice, url = create(client, chat)
+    vid = voice["id"]
+    assert realtime_voice.claim_bridge(vid, "a" * 32)
+    original = realtime_voice.RealtimeVoiceSession.objects.get(pk=vid).bridge_started_at
+    with patch("django_ergo.bots.messaging.dispatch"):
+        message = realtime_voice.delegate(vid, "task", "Research")
+    assert post(client, url + "/standby", {}).status_code == 200
+    assert realtime_voice.begin_standby_close(vid, "a" * 32)
+    assert realtime_voice.finish_standby_close(vid, "a" * 32)
+    message.status, message.reply_text = "answered", "Late result"
+    message.save()
+    task = realtime_voice.bridge_state(vid)["delegations"][0]
+    event = completion_event(vid, task)
+    assert claim_announcement(event)
+    assert post(client, url + "/resume", {}).status_code == 200
+    assert realtime_voice.claim_bridge(vid, "b" * 32)
+    assert realtime_voice.RealtimeVoiceSession.objects.get(pk=vid).bridge_started_at == original
+    assert not claim_announcement(completion_event(vid, task))
+    with pytest.raises(ValueError, match="one background request"):
+        realtime_voice.delegate(vid, "another", "Again")
+    assert post(client, url + "/standby", {}).status_code == 200
+    assert realtime_voice.begin_standby_close(vid, "b" * 32)
+    assert post(client, url + "/end", {}).json()["status"] == "ended"
+    assert not realtime_voice.finish_standby_close(vid, "b" * 32)
+    assert post(client, url + "/resume", {}).status_code == 409
+    assert client.get(url).json()["delegations"][0]["result"] == "Late result"
+
+    fresh, fresh_url = create(client, chat)
+    assert realtime_voice.claim_bridge(fresh["id"], "d" * 32)
+    assert post(client, fresh_url + "/standby", {}).status_code == 200
+    assert realtime_voice.begin_standby_close(fresh["id"], "d" * 32)
+    assert realtime_voice.finish_standby_close(fresh["id"], "d" * 32)
+    realtime_voice.RealtimeVoiceSession.objects.filter(pk=fresh["id"]).update(
+        bridge_started_at=datetime.now(UTC) - timedelta(seconds=90)
+    )
+    assert client.get(fresh_url).json()["status"] == "ended"
+    assert post(client, fresh_url + "/resume", {}).status_code == 409
+
+
+@pytest.mark.django_db(transaction=True)
+def test_concurrent_resume_and_bridge_claim_are_one_shot(voice_setup, settings):
+    from types import SimpleNamespace
+
+    from django.db import close_old_connections
+    from ninja.errors import HttpError
+
+    user, client, chat = voice_setup
+    settings.REALTIME_VOICE_STANDBY_ENABLED = True
+    voice, url = create(client, chat)
+    vid = voice["id"]
+    assert realtime_voice.claim_bridge(vid, "a" * 32)
+    assert post(client, url + "/standby", {}).status_code == 200
+    assert realtime_voice.begin_standby_close(vid, "a" * 32)
+    assert realtime_voice.finish_standby_close(vid, "a" * 32)
+    barrier = Barrier(2)
+
+    def resume(_):
+        close_old_connections()
+        try:
+            barrier.wait(timeout=10)
+            try:
+                realtime_voice.resume_session(SimpleNamespace(auth=user), vid)
+                return True
+            except HttpError as exc:
+                assert exc.status_code == 409
+                return False
+        finally:
+            close_old_connections()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        assert sorted(pool.map(resume, range(2))) == [False, True]
+    barrier = Barrier(2)
+
+    def claim(index):
+        close_old_connections()
+        try:
+            barrier.wait(timeout=10)
+            return realtime_voice.claim_bridge(vid, str(index) * 32)
+        finally:
+            close_old_connections()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        assert sorted(pool.map(claim, (1, 2))) == [False, True]

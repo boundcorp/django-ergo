@@ -15,16 +15,21 @@ export function RealtimeVoice({
   onSession?: (session: RealtimeVoiceSession) => void
 }) {
   const [enabled, setEnabled] = useState(false)
+  const [standbyEnabled, setStandbyEnabled] = useState(false)
   const [open, setOpen] = useState(false)
   const [voice, setVoice] = useState<RealtimeVoiceSession | null>(null)
   const [phase, setPhase] = useState<Phase>('idle')
   const [muted, setMuted] = useState(false)
+  const [microphone, setMicrophone] = useState<'enabled' | 'disabled' | 'unknown'>('unknown')
   const [error, setError] = useState('')
   const [ending, setEnding] = useState(false)
+  const [action, setAction] = useState<'standby' | 'resume' | 'end' | null>(null)
   const dialog = useRef<HTMLDialogElement>(null)
   const room = useRef<Room | null>(null)
   const audio = useRef<HTMLDivElement>(null)
   const generation = useRef(0)
+  const actionLock = useRef(false)
+  const revision = useRef(0)
   const storageKey = `ergonaut.realtimeVoice.${sessionId}`
 
   useEffect(() => {
@@ -32,7 +37,10 @@ export function RealtimeVoice({
     api
       .realtimeVoiceConfig()
       .then(config => {
-        if (alive) setEnabled(config.enabled)
+        if (alive) {
+          setEnabled(config.enabled)
+          setStandbyEnabled(config.standby_enabled === true)
+        }
       })
       .catch(() => {})
     return () => {
@@ -48,6 +56,7 @@ export function RealtimeVoice({
     audio.current?.replaceChildren()
     setPhase('disconnected')
     setMuted(false)
+    setMicrophone('unknown')
   }
 
   useEffect(
@@ -64,10 +73,11 @@ export function RealtimeVoice({
     if (!open || !voice || voice.status !== 'active') return
     let alive = true
     const timer = window.setInterval(() => {
+      const observedRevision = ++revision.current
       api
         .realtimeVoiceSession(voice.id)
         .then(session => {
-          if (alive) {
+          if (alive && observedRevision === revision.current && !actionLock.current) {
             setVoice(session)
             onSession?.(session)
           }
@@ -86,14 +96,18 @@ export function RealtimeVoice({
       if (room.current) disconnect()
     }
   }, [open, voice?.status, storageKey])
-  async function connect() {
+  useEffect(() => {
+    if (standbyEnabled && voice?.standby_state === 'standby' && room.current) disconnect()
+  }, [standbyEnabled, voice?.standby_state])
+
+  async function connect(resumed?: RealtimeVoiceSession) {
     const attempt = ++generation.current
     setError('')
     setPhase('connecting')
     try {
-      let session: RealtimeVoiceSession | null = null
+      let session: RealtimeVoiceSession | null = resumed ?? null
       const saved = sessionStorage.getItem(storageKey)
-      if (saved) {
+      if (!session && saved) {
         session = await api.realtimeVoiceSession(saved)
         if (session.status !== 'active') {
           sessionStorage.removeItem(storageKey)
@@ -112,6 +126,10 @@ export function RealtimeVoice({
       if (attempt !== generation.current) return
       onSession?.(session)
       setVoice(session)
+      if (standbyEnabled && !resumed && session.standby_state && session.standby_state !== 'live') {
+        setPhase('disconnected')
+        return
+      }
       const credentials = await api.realtimeVoiceToken(session.id)
       if (attempt !== generation.current) return
       const current = new Room()
@@ -123,7 +141,10 @@ export function RealtimeVoice({
         track.detach().forEach(element => element.remove())
       })
       current.on(RoomEvent.Reconnecting, () => {
-        if (room.current === current) setPhase('reconnecting')
+        if (room.current === current) {
+          setPhase('reconnecting')
+          setMicrophone('unknown')
+        }
       })
       current.on(RoomEvent.Reconnected, () => {
         if (room.current === current) setPhase('connected')
@@ -133,6 +154,7 @@ export function RealtimeVoice({
           room.current = null
           audio.current?.replaceChildren()
           setPhase('disconnected')
+          setMicrophone('unknown')
         }
       })
       await current.connect(credentials.url, credentials.token)
@@ -145,6 +167,7 @@ export function RealtimeVoice({
         void current.disconnect()
         return
       }
+      setMicrophone('enabled')
       setPhase('connected')
     } catch (e) {
       if (attempt !== generation.current) return
@@ -160,13 +183,17 @@ export function RealtimeVoice({
   }
 
   function close() {
+    if (standbyEnabled && (actionLock.current || (voice?.standby_state === 'requested' && room.current))) return
     disconnect()
     setOpen(false)
     dialog.current?.close()
   }
 
   async function end() {
-    if (!voice) return
+    if (!voice || actionLock.current) return
+    actionLock.current = true
+    revision.current++
+    setAction('end')
     setEnding(true)
     setError('')
     try {
@@ -178,15 +205,56 @@ export function RealtimeVoice({
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
+      revision.current++
+      actionLock.current = false
+      setAction(null)
       setEnding(false)
     }
   }
 
-  async function toggleMute() {
-    if (!room.current) return
+  async function changeStandby(resume: boolean) {
+    if (!voice || actionLock.current) return
+    actionLock.current = true
+    revision.current++
+    setAction(resume ? 'resume' : 'standby')
+    setError('')
     try {
-      await room.current.localParticipant.setMicrophoneEnabled(muted)
+      const session = resume ? await api.resumeRealtimeVoice(voice.id) : await api.standbyRealtimeVoice(voice.id)
+      setVoice(session)
+      onSession?.(session)
+      if (resume) await connect(session)
+      else if (session.standby_state === 'standby' && room.current) disconnect()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      revision.current++
+      actionLock.current = false
+      setAction(null)
+    }
+  }
+
+  async function retryResume() {
+    if (!voice || actionLock.current) return
+    actionLock.current = true
+    revision.current++
+    setAction('resume')
+    try {
+      await connect(voice)
+    } finally {
+      revision.current++
+      actionLock.current = false
+      setAction(null)
+    }
+  }
+
+  async function toggleMute() {
+    const current = room.current
+    if (!current) return
+    try {
+      await current.localParticipant.setMicrophoneEnabled(muted)
+      if (room.current !== current) return
       setMuted(!muted)
+      setMicrophone(muted ? 'enabled' : 'disabled')
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     }
@@ -226,9 +294,34 @@ export function RealtimeVoice({
                     ? 'Reconnecting…'
                     : 'Disconnected'}
             </p>
+            {standbyEnabled && voice?.status === 'active' && (
+              <div className="mt-1 text-sm text-muted" role="status">
+                <p>Microphone: {microphone}</p>
+                <p>Provider: {voice.standby_state === 'standby' ? 'closed' : 'unknown'}</p>
+                <p>
+                  {voice.standby_state === 'requested'
+                    ? 'Standby requested; waiting for the bridge to confirm it is safe.'
+                    : voice.standby_state === 'standby'
+                      ? 'In standby. Resume manually to reconnect.'
+                      : voice.standby_state === 'resuming'
+                        ? 'Resume requested; provider connection is not confirmed.'
+                        : voice.standby_state === 'live'
+                          ? 'Stay connected (default).'
+                          : 'Standby state unknown.'}
+                </p>
+              </div>
+            )}
+            {standbyEnabled && voice?.status === 'ended' && (
+              <p className="mt-1 text-sm text-muted" role="status">
+                {voice.standby_state === 'requested'
+                  ? 'Voice session ended before standby completed. Audio at the closing boundary may have been interrupted.'
+                  : 'Voice session ended.'}
+              </p>
+            )}
           </div>
           <button
             type="button"
+            disabled={standbyEnabled && (!!action || (voice?.standby_state === 'requested' && !!room.current))}
             onClick={close}
             className="ml-auto min-h-11 min-w-11 rounded-control text-muted hover:bg-raised"
             aria-label="Close voice room"
@@ -274,6 +367,7 @@ export function RealtimeVoice({
           {phase === 'connected' && (
             <button
               type="button"
+              disabled={standbyEnabled && (!!action || voice?.standby_state === 'requested')}
               onClick={() => void toggleMute()}
               className="rounded-md border border-stroke px-3 py-2 text-sm"
             >
@@ -291,7 +385,7 @@ export function RealtimeVoice({
               Enable audio
             </button>
           )}
-          {phase === 'disconnected' && (
+          {phase === 'disconnected' && (!standbyEnabled || !voice?.standby_state || voice.standby_state === 'live') && (
             <button
               type="button"
               onClick={() => void connect()}
@@ -300,10 +394,43 @@ export function RealtimeVoice({
               Reconnect
             </button>
           )}
+          {standbyEnabled && voice?.status === 'active' && phase === 'connected' && voice.standby_state === 'live' && (
+            <button
+              type="button"
+              disabled={!!action}
+              onClick={() => void changeStandby(false)}
+              className="rounded-md border border-stroke px-3 py-2 text-sm disabled:opacity-50"
+            >
+              Standby while waiting
+            </button>
+          )}
+          {standbyEnabled && voice?.status === 'active' && voice.standby_state === 'standby' && (
+            <button
+              type="button"
+              disabled={!!action}
+              onClick={() => void changeStandby(true)}
+              className="rounded-md border border-stroke px-3 py-2 text-sm disabled:opacity-50"
+            >
+              Resume
+            </button>
+          )}
+          {standbyEnabled &&
+            voice?.status === 'active' &&
+            voice.standby_state === 'resuming' &&
+            phase === 'disconnected' && (
+              <button
+                type="button"
+                disabled={!!action}
+                onClick={() => void retryResume()}
+                className="rounded-md border border-stroke px-3 py-2 text-sm disabled:opacity-50"
+              >
+                Resume connection
+              </button>
+            )}
           {voice?.status === 'active' && (
             <button
               type="button"
-              disabled={ending}
+              disabled={ending || (standbyEnabled && !!action)}
               onClick={() => void end()}
               className="rounded-md border border-stroke px-3 py-2 text-sm disabled:opacity-50"
             >

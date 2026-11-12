@@ -14,6 +14,8 @@ const original = {
   session: api.realtimeVoiceSession,
   token: api.realtimeVoiceToken,
   end: api.endRealtimeVoice,
+  standby: api.standbyRealtimeVoice,
+  resume: api.resumeRealtimeVoice,
 }
 const session: RealtimeVoiceSession = {
   id: 'voice-1',
@@ -66,6 +68,8 @@ afterEach(() => {
   api.realtimeVoiceSession = original.session
   api.realtimeVoiceToken = original.token
   api.endRealtimeVoice = original.end
+  api.standbyRealtimeVoice = original.standby
+  api.resumeRealtimeVoice = original.resume
   window.happyDOM.close()
 })
 
@@ -128,6 +132,123 @@ test('reconnects to a durable active session without browser storage', async () 
   })
   expect(starts).toBe(0)
   expect(container.textContent).toContain('Hello')
+})
+
+test('standby controls are absent when the flag is disabled', async () => {
+  api.realtimeVoiceConfig = async () => ({ enabled: true, standby_enabled: false })
+  api.realtimeVoiceSessions = async () => [{ ...session, standby_state: 'standby' }]
+  let tokens = 0
+  api.realtimeVoiceToken = async () => {
+    tokens++
+    throw new Error('Token unavailable')
+  }
+  await act(async () => {
+    root.render(createElement(RealtimeVoice, { sessionId: 'chat-1', disabled: false }))
+  })
+  await act(async () => {
+    button('Voice room').click()
+  })
+  expect(tokens).toBe(1)
+  expect(container.textContent).not.toContain('Resume manually')
+  expect(container.textContent).not.toContain('Standby while waiting')
+  expect(container.textContent).toContain('Reconnect')
+})
+
+test('opening a standby room never resumes or requests a token', async () => {
+  api.realtimeVoiceConfig = async () => ({ enabled: true, standby_enabled: true })
+  const standby = { ...session, standby_state: 'standby' as const }
+  api.realtimeVoiceSessions = async () => [standby]
+  let resumes = 0
+  let tokens = 0
+  api.resumeRealtimeVoice = async () => {
+    resumes++
+    return { ...standby, standby_state: 'resuming' }
+  }
+  api.realtimeVoiceToken = async () => {
+    tokens++
+    throw new Error('Token unavailable')
+  }
+  await act(async () => {
+    root.render(createElement(RealtimeVoice, { sessionId: 'chat-1', disabled: false }))
+  })
+  await act(async () => {
+    button('Voice room').click()
+  })
+  expect(resumes).toBe(0)
+  expect(tokens).toBe(0)
+  expect(container.textContent).toContain('Microphone: unknown')
+  expect(container.textContent).toContain('Provider: closed')
+  expect(container.textContent).toContain('Resume manually')
+  await act(async () => {
+    button('Resume').click()
+  })
+  expect(resumes).toBe(1)
+  expect(tokens).toBe(1)
+  expect(container.textContent).toContain('Token unavailable')
+  expect(container.textContent).toContain('Provider: unknown')
+})
+
+test('a pending standby stays pending on opening without connecting or resuming', async () => {
+  api.realtimeVoiceConfig = async () => ({ enabled: true, standby_enabled: true })
+  api.realtimeVoiceSessions = async () => [{ ...session, standby_state: 'requested' }]
+  let tokens = 0
+  api.realtimeVoiceToken = async () => {
+    tokens++
+    throw new Error('unexpected')
+  }
+  await act(async () => {
+    root.render(createElement(RealtimeVoice, { sessionId: 'chat-1', disabled: false }))
+  })
+  await act(async () => {
+    button('Voice room').click()
+  })
+  expect(tokens).toBe(0)
+  expect(container.textContent).toContain('waiting for the bridge')
+  expect(container.textContent).not.toContain('Resume manually')
+})
+
+test('an ended pending standby reports the unconfirmed boundary', async () => {
+  api.realtimeVoiceConfig = async () => ({ enabled: true, standby_enabled: true })
+  api.realtimeVoiceSessions = async () => [{ ...session, standby_state: 'requested' }]
+  api.endRealtimeVoice = async () => ({ ...session, status: 'ended', standby_state: 'requested' })
+  await act(async () => {
+    root.render(createElement(RealtimeVoice, { sessionId: 'chat-1', disabled: false }))
+  })
+  await act(async () => {
+    button('Voice room').click()
+  })
+  await act(async () => {
+    button('End room').click()
+  })
+  expect(container.textContent).toContain('ended before standby completed')
+  expect(container.textContent).toContain('may have been interrupted')
+})
+
+test('resume is single flight and a refused resume remains in standby', async () => {
+  api.realtimeVoiceConfig = async () => ({ enabled: true, standby_enabled: true })
+  api.realtimeVoiceSessions = async () => [{ ...session, standby_state: 'standby' }]
+  const { promise, reject } = Promise.withResolvers<RealtimeVoiceSession>()
+  let calls = 0
+  api.resumeRealtimeVoice = () => {
+    calls++
+    return promise
+  }
+  await act(async () => {
+    root.render(createElement(RealtimeVoice, { sessionId: 'chat-1', disabled: false }))
+  })
+  await act(async () => {
+    button('Voice room').click()
+  })
+  await act(async () => {
+    button('Resume').click()
+    button('Resume').click()
+  })
+  expect(calls).toBe(1)
+  await act(async () => {
+    reject(new Error('Not safe'))
+  })
+  expect(container.textContent).toContain('Not safe')
+  expect(container.textContent).toContain('In standby')
 })
 
 test('a single durable card shows the stage and transcript without claiming playback', () => {

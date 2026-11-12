@@ -29,6 +29,7 @@ Live on rigel from `~/p/boundcorp/django-ergo`, bots from `boundcorp/ergo-bots`.
 ### Next
 
 - [ ] **Realtime voice prototype**: offline hands-free model-selected delegation now waits for Python Silero speech end, pause grace and transcript drain; the third isolated attempt proved a real owner-scoped history result. Deployed on Octo for Lee's account only (`REALTIME_VOICE_USERS`, kill switch `REALTIME_VOICE_ENABLED`, `voice-bridge` Deployment) for his own testing. Hosted boundary/transcription correctness, hands-free delegation, spoken truthfulness, browser playback, interruption/reconnect, billing reconciliation and retention review remain open. Wake-word detection is deferred and not implemented. See `docs/realtime-voice-progress.md`.
+  Explicit standby and manual resume are flag-gated and offline-only on this branch; live speech-boundary, reconnect and provider-usage behavior still need separately authorized verification. The original 90-second wall-clock cap includes standby.
 
 - [x] **Docs** (PR #69; OpenAI made the default in examples and docs in a follow-up): full README; guides for getting started, building bots, skills, tools, plugins, memory and KBs, data tables, attachments, schedules, running Ergonaut, development; 2025 planning docs and old specs moved to `docs/archive/`.
 - [x] **Skills unified + named chats** (PR #33, merged): lazy skills (load/unload, always per chat, requires), main replaces root, named chats in bot.yaml, schedule targets.

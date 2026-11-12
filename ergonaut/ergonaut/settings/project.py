@@ -43,6 +43,7 @@ VOICE_TRANSCRIPTION_PER_DAY = int(os.environ.get("VOICE_TRANSCRIPTION_PER_DAY", 
 # REALTIME_VOICE_USERS lists the usernames (comma-separated, exact) who may use it.
 # An empty list allows nobody.
 REALTIME_VOICE_ENABLED = env_variable_truthy("REALTIME_VOICE_ENABLED")
+REALTIME_VOICE_STANDBY_ENABLED = env_variable_truthy("REALTIME_VOICE_STANDBY_ENABLED")
 REALTIME_VOICE_USERS = {name.strip() for name in os.environ.get("REALTIME_VOICE_USERS", "").split(",") if name.strip()}
 REALTIME_VOICE_ROOM_PREFIX = os.environ.get("REALTIME_VOICE_ROOM_PREFIX", "voice-")
 REALTIME_VOICE_AGENT_NAME = os.environ.get("REALTIME_VOICE_AGENT_NAME", "ergo-voice")

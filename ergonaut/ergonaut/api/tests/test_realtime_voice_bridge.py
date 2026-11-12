@@ -10,12 +10,14 @@ client configuration and commentary serialization are the actual 1.8.11 implemen
 import asyncio
 import shutil
 import subprocess
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import PropertyMock, patch
 
 import pytest
 from asgiref.sync import async_to_sync, sync_to_async
 from django_ergo.bots import messaging, webhooks
+from ninja.errors import HttpError
 
 pytest.importorskip("livekit.plugins.openai.realtime.gpt_live_model")
 from livekit import rtc
@@ -353,4 +355,237 @@ def test_real_session_audio_input_drives_silero_speech_states(cooking, held_mess
                     await asyncio.gather(assistant.watcher, return_exceptions=True)
                 await session.aclose()
 
+    async_to_sync(scenario)()
+
+
+@pytest.mark.django_db
+def test_standby_requires_observed_vad_end_and_final_drained_transcript(cooking):
+    _, vid, _ = cooking
+    snapshot = realtime_voice.bridge_state(vid)
+    assistant = bridge.Assistant(vid, snapshot, None)
+    assistant.grace = 1.0
+    with patch.object(bridge.time, "monotonic", return_value=100.0) as clock:
+        assistant.on_user_state(SimpleNamespace(new_state="listening"))
+        assert not assistant.safe_to_standby(snapshot)  # silence is not proof of working VAD
+        assistant.on_user_state(SimpleNamespace(new_state="speaking"))
+        assert not assistant.safe_to_standby(snapshot)
+        assistant.fragments["speech"] = "Partial"
+        assistant.transcript_changed_at = 100.0
+        assistant.on_user_state(SimpleNamespace(new_state="listening"))
+        clock.return_value = 102.0
+        assert not assistant.safe_to_standby(snapshot)
+        assistant.final_fragments.add("speech")
+        snapshot["state"]["pending_delegation"] = {"status": "collecting"}
+        assert not assistant.safe_to_standby(snapshot)
+        snapshot["state"]["pending_delegation"]["status"] = "submitted"
+        assert assistant.safe_to_standby(snapshot)
+        assistant.on_user_state(SimpleNamespace(new_state="speaking"))
+        assert not assistant.safe_to_standby(snapshot)
+        assistant.on_user_state(SimpleNamespace(new_state="listening"))
+        assistant.on_user_state(SimpleNamespace(new_state="away"))
+        clock.return_value = 104.0
+        assert not assistant.safe_to_standby(snapshot)
+
+
+@pytest.mark.django_db
+def test_provider_usage_is_only_recorded_when_explicit_and_numeric(cooking):
+    _, vid, _ = cooking
+    assistant = bridge.Assistant(vid, realtime_voice.bridge_state(vid), None)
+    assistant.on_protocol_event({"type": "session.usage.updated"})
+    assistant.on_protocol_event({"type": "session.closed", "usage": {"seconds": "12"}})
+    assert assistant.provider_usage_seconds is None
+    assistant.on_protocol_event({"type": "session.usage.updated", "usage": {"seconds": 2.5}})
+    assistant.on_protocol_event({"type": "session.closed", "usage": {"seconds": 3.75}})
+    assert assistant.provider_usage_seconds == 3.75
+
+
+@pytest.mark.django_db
+def test_reconnect_latency_requires_provider_session_started(cooking):
+    _, vid, _ = cooking
+    snapshot = realtime_voice.bridge_state(vid)
+    now = datetime.now(UTC)
+    snapshot["resumed_at"] = (now - timedelta(seconds=2)).isoformat()
+    assistant = bridge.Assistant(vid, snapshot, None)
+    assistant.on_protocol_event({"type": "session.usage.updated", "usage": {"seconds": 1}})
+    assert assistant.reconnect_latency_seconds is None
+    with patch.object(bridge, "datetime", wraps=datetime) as clock:
+        clock.now.return_value = now
+        assistant.on_protocol_event({"type": "session.started"})
+    assert assistant.reconnect_latency_seconds == 2
+
+
+@pytest.mark.django_db(transaction=True)
+def test_disconnect_while_standby_waits_for_speech_is_terminal(cooking, settings):
+    chat, vid, _ = cooking
+    settings.REALTIME_VOICE_STANDBY_ENABLED = True
+    settings.REALTIME_VOICE_USERS = {chat.user.get_username()}
+    participant = SimpleNamespace(identity=f"user-{chat.user_id}", track_publications={})
+
+    class Room:
+        def __init__(self):
+            self.handlers = {}
+            self.remote_participants = {participant.identity: participant}
+
+        def on(self, name):
+            def register(handler):
+                self.handlers[name] = handler
+                return handler
+
+            return register
+
+        async def disconnect(self):
+            self.handlers["disconnected"]()
+
+    class Session:
+        def __init__(self, **_kwargs):
+            self.handlers = {}
+
+        def on(self, name):
+            def register(handler):
+                self.handlers[name] = handler
+                return handler
+
+            return register
+
+        async def start(self, *, agent, **_kwargs):
+            agent.on_user_state(SimpleNamespace(new_state="speaking"))
+            started.set()
+
+        async def aclose(self):
+            pass
+
+    async def scenario():
+        nonlocal started
+        started = asyncio.Event()
+        room = Room()
+
+        class Context:
+            job = SimpleNamespace(room=SimpleNamespace(name=f"{settings.REALTIME_VOICE_ROOM_PREFIX}{vid}"))
+
+            def __init__(self):
+                self.room = room
+
+            async def connect(self):
+                pass
+
+            def shutdown(self, *, reason):
+                self.reason = reason
+
+        with (
+            patch.object(bridge, "AgentSession", Session),
+            patch.object(bridge.silero.VAD, "load", return_value=None),
+            patch.object(realtime_voice, "get_bot", return_value=object()),
+        ):
+            task = asyncio.create_task(bridge.voice_session(Context()))
+            await asyncio.wait_for(started.wait(), timeout=5)
+            request = SimpleNamespace(auth=chat.user)
+            result = await sync_to_async(realtime_voice.request_standby)(request, vid)
+            assert result["standby_state"] == "requested"
+            room.handlers["participant_disconnected"](participant)
+            await asyncio.wait_for(task, timeout=5)
+            state = await sync_to_async(realtime_voice.bridge_state)(vid)
+            assert state["status"] == "ended"
+            assert state["standby_state"] != "standby"
+
+    started = None
+    async_to_sync(scenario)()
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("late_speech", [False, True])
+def test_standby_waits_for_teardown_and_rejects_late_speech(cooking, settings, late_speech):
+    chat, vid, _ = cooking
+    settings.REALTIME_VOICE_STANDBY_ENABLED = True
+    settings.REALTIME_VOICE_USERS = {chat.user.get_username()}
+    publication = SimpleNamespace(
+        source=rtc.TrackSource.SOURCE_MICROPHONE, subscribed=True, track=object(), muted=False
+    )
+    participant = SimpleNamespace(identity=f"user-{chat.user_id}", track_publications={"mic": publication})
+
+    class Room:
+        def __init__(self):
+            self.handlers = {}
+            self.remote_participants = {participant.identity: participant}
+            self.disconnected = False
+
+        def on(self, name):
+            def register(handler):
+                self.handlers[name] = handler
+                return handler
+
+            return register
+
+        async def disconnect(self):
+            self.disconnected = True
+            self.handlers["disconnected"]()
+
+    class Session:
+        def __init__(self, **_kwargs):
+            self.handlers = {}
+
+        def on(self, name):
+            def register(handler):
+                self.handlers[name] = handler
+                return handler
+
+            return register
+
+        async def start(self, *, agent, **_kwargs):
+            self.agent = agent
+            agent.on_user_state(SimpleNamespace(new_state="speaking"))
+            agent.on_transcription(SimpleNamespace(item_id="one", transcript="Finished", is_final=True))
+            agent.on_user_state(SimpleNamespace(new_state="listening"))
+            agent.speech_ended_at -= agent.grace + 1
+            agent.transcript_changed_at -= bridge.TRANSCRIPT_DRAIN_SECONDS + 1
+            started.set()
+
+        async def aclose(self):
+            closing.set()
+            await allow_close.wait()
+            if late_speech:
+                self.agent.on_user_state(SimpleNamespace(new_state="speaking"))
+
+    async def scenario():
+        nonlocal started, closing, allow_close
+        started, closing, allow_close = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        room = Room()
+
+        class Context:
+            job = SimpleNamespace(room=SimpleNamespace(name=f"{settings.REALTIME_VOICE_ROOM_PREFIX}{vid}"))
+
+            def __init__(self):
+                self.room = room
+
+            async def connect(self):
+                pass
+
+            def shutdown(self, *, reason):
+                self.reason = reason
+
+        with (
+            patch.object(bridge, "AgentSession", Session),
+            patch.object(bridge.silero.VAD, "load", return_value=None),
+            patch.object(realtime_voice, "get_bot", return_value=object()),
+        ):
+            task = asyncio.create_task(bridge.voice_session(Context()))
+            await asyncio.wait_for(started.wait(), timeout=5)
+            request = SimpleNamespace(auth=chat.user)
+            await sync_to_async(realtime_voice.request_standby)(request, vid)
+            await asyncio.wait_for(closing.wait(), timeout=5)
+            state = await sync_to_async(realtime_voice.session_out)(
+                await sync_to_async(RealtimeVoiceSession.objects.get)(pk=vid)
+            )
+            assert state["standby_state"] == "requested"
+            assert not room.disconnected
+            with pytest.raises(HttpError) as exc:
+                await sync_to_async(realtime_voice.resume_session)(request, vid)
+            assert exc.value.status_code == 409
+            allow_close.set()
+            await asyncio.wait_for(task, timeout=5)
+            state = await sync_to_async(realtime_voice.bridge_state)(vid)
+            assert room.disconnected
+            assert state["status"] == ("ended" if late_speech else "active")
+            assert (state["standby_state"] == "standby") is (not late_speech)
+
+    started = closing = allow_close = None
     async_to_sync(scenario)()
