@@ -1,5 +1,60 @@
 # Realtime voice delegation: offline causal review
 
+## Hosted phone diagnosis — 2026-11-12
+
+**Accepted:** Lee's real phone audio and basic conversation. **Not accepted:** Bluetooth/output routing, orchestrator context/tools, standby/resume, and the subsequently authorized dedicated-page/progressive-transcript UX. This supersedes historical statements below that the prototype was not hosted or that phone audio had not been tested. These follow-ups are draft-only; no merge, deployment, restart, room join, microphone session or inference is authorized in this investigation.
+
+### Actual session and evidence boundary
+
+Read-only Octo inspection confirmed that `web` and `voice-bridge` use image `sha256:588993d3ed4f695227b3676e08f701441fe50fded8df9e0b4349d3a2759f50d4` (source `75234dc`). The bridge command uses `/app/.voice-venv/bin/python -m ergonaut.realtime_voice_bridge start`. `envcheck` passed both cluster readiness checks and the documented SSH routes before inspection. Production ORM inspection ran inside `SET TRANSACTION READ ONLY`; no transcript text or credentials were needed.
+
+The design discussion link (`3ae8f30a-1fc6-48cd-ab78-2fa7ed6c77ea`, bot `design`) is **not the phone session's launch chat**. The only voice session for that owner on November 12 was `b9248989-db55-43bc-b714-5199fe6c5970`, created at **18:09:21.514 UTC**, bridge claimed at **18:09:23.161 UTC**, ended at **18:10:11.719 UTC**. Its launch chat was `587014b6-bba3-4b8b-aec8-d8b4f13b4d70`, bot `boundcorp`, stored `engine_type=openai`, `transport_type=cli`, empty model override. A stored engine label is not proof of a budget-capable API engine: the resolved engine and model must be checked.
+
+Before voice began, the launch `boundcorp` thread already held **6,962 instruction characters, 2,874 normal messages, four compactions and 83 attachment references**; its stored routed model was `chatgpt/gpt-6.1-sol` (subscription/CLI, not the budget's API `gpt-6-luna`). The separate design chat held 5,398 instruction characters, 1,731 messages, one compaction and 40 attachments. Counts are metadata, not claims that every item fits any one model request. None of that populated thread context was restored into the deployed GPT-Live startup.
+
+That session has **eight user events, four assistant events, empty compact state, zero delegation rows and zero structured calls during the session**. Retained bridge logs show the delegation listener ready, VAD speech boundaries and four finalized assistant turns, but no wire-delegation, application-delegation, boundary-ready or commentary-correlated result event. Bridge elapsed runtime was **49.153 seconds**, below the 90-second limit; that log's cost estimate is not billing evidence. There is no message status, `stopped_by` or refused-tool record to diagnose: **no background request was submitted**, rather than a submitted request failing its budget. Absence of retained wire events does not establish why the model never delegated.
+
+### Playback path
+
+At `75234dc`, `RealtimeVoice.tsx` constructs `new Room()`, appends each subscribed remote audio track's `track.attach()` element, and enables the default microphone. The locked and installed frontend SDK is **`livekit-client` 2.23.0**. Its `roomOptionDefaults.webAudioMix` is **false**: playback is through attached **HTML audio elements**, not an application-created AudioContext mixer. There is no output selection, sink ID or explicit audio-session category in this version. Microphone defaults request default input, echo cancellation, automatic gain control, noise suppression and voice isolation. These are capture constraints, not a Bluetooth output selector.
+
+The voice models store neither user agent nor physical output route. The retained web logs contain 68 voice endpoint access lines, with no browser/user-agent tokens; the bridge logs do not identify the handset/browser or Bluetooth profile. **Phone model, OS/browser version, installed-PWA versus browser tab, headset model and whether it supports call audio/HFP remain unknown.** Ask Lee for those details and the phone's selected call/media output while the microphone is active. His reported phone-speaker playback is accepted evidence; it does not identify its cause.
+
+`Room.switchActiveDevice('audiooutput', id)` is a real SDK API, not a hardware Bluetooth switch. With the default element playback it applies sinks to subscribed tracks; with `webAudioMix` it needs the AudioContext sink API as well. Switching to Web Audio therefore does not repair a platform without output selection. Retain the current element playback rather than introduce a second, less compatible path.
+
+### Browser and Bluetooth restrictions
+
+| Platform | Output selection | Consequence |
+| --- | --- | --- |
+| Desktop Chromium | `HTMLMediaElement.setSinkId` supported; chooser API not generally implemented | Offer only exposed/permitted `audiooutput` entries; await switching and read the applied sink. |
+| Desktop Firefox 116+ | `setSinkId` and `selectAudioOutput` | Native chooser requires a user gesture; permission is not proof playback was heard. |
+| Safari on macOS 18.4+ | Apple explicitly added Speaker Selection on **macOS** | Feature-detect; do not generalize desktop support to an iPhone. |
+| iOS Safari / WebKit | No dependable phone speaker-selection API established by Apple's release notes | OS controls the route unless the actual runtime successfully applies a sink; give phone output-picker guidance, not a fake toggle. |
+| Android Chrome | Current compatibility data marks element `setSinkId` unavailable; no chooser API | OS/call-audio routing; feature detection remains authoritative for future releases. `devicechange` support alone does not confer routing support. |
+
+Sources: [MDN `setSinkId`](https://developer.mozilla.org/en-US/docs/Web/API/HTMLMediaElement/setSinkId), [output chooser](https://developer.mozilla.org/en-US/docs/Web/API/MediaDevices/selectAudioOutput), [enumeration](https://developer.mozilla.org/en-US/docs/Web/API/MediaDevices/enumerateDevices), [device changes](https://developer.mozilla.org/en-US/docs/Web/API/MediaDevices/devicechange_event), [browser compatibility data](https://github.com/mdn/browser-compat-data/blob/main/api/HTMLMediaElement.json), [chooser compatibility](https://github.com/mdn/browser-compat-data/blob/main/api/MediaDevices.json), [Apple Safari 18.4 release notes](https://developer.apple.com/documentation/safari-release-notes/safari-18_4-release-notes), and [LiveKit 2.23.0 Room implementation](https://github.com/livekit/client-sdk-js/blob/v2.23.0/src/room/Room.ts). Compatibility data's Safari-iOS mirror is not independent proof of phone routing; Apple's release note explicitly scopes the addition to macOS.
+
+The output APIs require HTTPS and may be blocked by the `speaker-selection` Permissions Policy. Enumeration can omit devices or labels without permission. A chooser grants permission, not playback; `setSinkId` can reject for permission, device loss or switching failure. Device IDs are browser-scoped, not stable hardware identities. `devicechange` needs re-enumeration; a missing device should fall back to system default without claiming that default means speakerphone.
+
+Newer iOS behavior must not be reduced to an obsolete blanket “no `setSinkId`” claim: [WebKit report 320087](https://bugs.webkit.org/show_bug.cgi?id=320087) describes iPhone 15 / iOS 26.5 accepting a sink and updating `sinkId` while a single-track remote WebRTC stream stays on the old physical route. This is a vendor bug report, not our reproduction or Lee's identified device. The UI can truthfully confirm **browser-applied sink state**, not which speaker a human heard; retain OS guidance and a device acceptance gate even when the browser promise resolves. Do not duplicate remote tracks as an unverified workaround.
+
+[Apple documents A2DP](https://developer.apple.com/documentation/avfaudio/avaudiosession/categoryoptions-swift.struct/allowbluetootha2dp) as stereo **output-only**, while HFP supports call input/output and takes precedence when both profiles are allowed. Microphone capture can cause a communication/`play-and-record` session, changing eligible routes and making a media-only A2DP connection insufficient. [WebKit report 295889](https://bugs.webkit.org/show_bug.cgi?id=295889) records microphone capture shifting playback to the earpiece and not restoring the speaker; it demonstrates a platform failure mode, **not Lee's device diagnosis**. The [Audio Session API](https://developer.mozilla.org/en-US/docs/Web/API/AudioSession/type) describes category intent, not a chosen physical sink. Turning off echo cancellation or forcing `playback` during duplex capture would risk feedback/capture regressions without proving a Bluetooth fix; no such change is justified by the retained evidence.
+
+### Why it was not the orchestrator
+
+`75234dc` isolates GPT-Live from the **launch thread's model context**, even though the durable voice session holds the correct chat foreign key. Startup supplies only voice compact state, at most 40 finalized voice events and already-answered voice delegations. On this phone test, those were initially empty. Per-user-turn silent context supplies server UTC and elapsed time for up to three user-reported activities, not project results.
+
+In contrast, a normal bot turn uses `Bot._prepare` / `Bot.context_builder`, current bot/chat instructions, chat identity, skill instructions and authorized toolkits, configured context sources and recent-message policy, plus the engine's conversation history/compaction and attachments. None of the launch thread's bot instructions, recent normal messages, durable compaction, attachment references, task state or tool definitions was supplied to GPT-Live by the deployed startup path. It receives generic voice-interface instructions and **no callable voice tools** by design.
+
+Tool availability, routing, context and behavior are separate defects/constraints:
+
+- **Tools:** deployed budget allows only `ergo_chat_history_read` and `ergo_chat_history_search`, not bot/thread/worker/approval management. Existing budget guards prohibit writes, approvals, workers, sends and retries.
+- **Routing:** client delegation would create a message in the **same launch chat**, not discover or switch to a different orchestrator. A resolved subscription/CLI engine cannot satisfy request limits; pinned `gpt-6-luna` remains required. No routing happened in the phone test.
+- **Context:** voice's own empty restore state is not the populated launch thread. Even a successful read-only history lookup would not automatically carry the full orchestrator identity or current-work overview.
+- **Model behavior:** no delegation was observed. Instructions cannot guarantee provider delegation or truthful speech; this test does not establish whether an authorized lookup would have helped.
+
+The approved next slice inherits the exact launch thread, not a global owner briefing. Cross-thread status is on demand through that thread's already-authorized read-only tools. A safe future route for a subscription-backed launch thread is an explicitly reviewed budgeted API-engine profile reusing its identity/context and only its authorized read-only tool subset; silently replacing its engine or widening its permissions is not authorized. Forwarding to another owner thread is a write and remains disabled pending a separately reviewed authorization/approval design.
+
 ## Hands-free offline correction — no fourth attempt
 
 Lee clarified that the live agent should choose delegation while the user speaks naturally; the mandatory typed confirmation at `4879414` was temporary and has been removed. Python wake-word detection was deferred and is not implemented. The model's client-delegation event remains the only trigger for a task; no fake tool is registered.

@@ -5,6 +5,7 @@ import type { Bot, Session, SidebarPin, User, Worker } from './api'
 import { ApiError, api } from './api'
 import { Sidebar } from './components/Sidebar'
 import { Chat } from './pages/Chat'
+import { ActiveVoiceCall, VoiceCallProvider, VoicePage } from './components/RealtimeVoice'
 import { Login } from './pages/Login'
 import { Sessions } from './pages/Sessions'
 import { BotPage } from './pages/BotPage'
@@ -106,27 +107,29 @@ function App() {
   return (
     <BrowserRouter>
       <DirectoryContext.Provider value={{ bots, sessions }}>
-        <Routes>
-          {/* The full-screen page viewer has no sidebar or top bar. */}
-          <Route path="/pages/view" element={<PageView />} />
-          <Route
-            path="*"
-            element={
-              <Shell
-                user={user}
-                bots={bots}
-                sessions={sessions}
-                pins={pins}
-                botErrors={botErrors}
-                workers={workers}
-                workerState={workerState}
-                refresh={refresh}
-                directoryState={directoryState}
-                onSignOut={() => api.logout().finally(() => setUser(null))}
-              />
-            }
-          />
-        </Routes>
+        <VoiceCallProvider>
+          <Routes>
+            {/* The full-screen page viewer has no sidebar or top bar. */}
+            <Route path="/pages/view" element={<PageView />} />
+            <Route
+              path="*"
+              element={
+                <Shell
+                  user={user}
+                  bots={bots}
+                  sessions={sessions}
+                  pins={pins}
+                  botErrors={botErrors}
+                  workers={workers}
+                  workerState={workerState}
+                  refresh={refresh}
+                  directoryState={directoryState}
+                  onSignOut={() => api.logout().finally(() => setUser(null))}
+                />
+              }
+            />
+          </Routes>
+        </VoiceCallProvider>
       </DirectoryContext.Provider>
     </BrowserRouter>
   )
@@ -259,6 +262,7 @@ function Shell({
             <AccountMenu user={user} onSignOut={onSignOut} />
           </div>
         </div>
+        <ActiveVoiceCall />
         <div className="min-h-0 flex-1 overflow-hidden">
           <PageErrorBoundary key={pathname}>
             <Routes>
@@ -289,6 +293,7 @@ function Shell({
                 }
               />
               <Route path="/s/:id" element={<ChatRoute onChange={refresh} />} />
+              <Route path="/s/:id/voice" element={<VoicePage />} />
               <Route path="/sessions" element={<Sessions bots={bots} />} />
               <Route path="/costs" element={<CostsPage />} />
               <Route path="/routing" element={<RoutingPage />} />

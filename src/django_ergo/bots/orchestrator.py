@@ -437,6 +437,20 @@ def _row(session: ConversationSession, current: ConversationSession) -> dict:
         "open_requests": open_requests,
     }
     row.update(_session_metadata(session))
+    status = thread_status(session)
+    row.update(
+        state=status["state"],
+        workers_running=status["workers_running"],
+        pending_approval=status["state"] == "waiting_for_approval",
+    )
+    pending_calls = session.structured_calls.filter(
+        messaging.awaiting_approval()
+    ).values_list("metadata", flat=True)[:5]
+    row["pending_approval_tools"] = [
+        str(approval.get("name") or "")[:120]
+        for metadata in pending_calls
+        for approval in (metadata or {}).get("pending_approvals", [])[:5]
+    ][:5]
     if meta.get("started_by_label"):
         row["started_by"] = meta["started_by_label"]
     if session.id == current.id:

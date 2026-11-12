@@ -1,5 +1,51 @@
 # Realtime voice progress
 
+## Hosted phone acceptance and follow-ups — 2026-11-12
+
+Lee accepted **basic phone audio and conversation** on the hosted `75234dc` image. Bluetooth/output routing, launch-thread orchestration context/tools, standby/manual resume and the dedicated-page/progressive-transcript UX in draft #293 are **not deployed or device-accepted**. Historical synthetic-run caveats below remain relevant to boundaries and billing, but do not undo Lee's phone acceptance.
+
+Read-only diagnosis: the actual phone voice session launched in `boundcorp`, not the linked `design` discussion. It received generic voice instructions and its own empty restore context, not the populated launch thread's instructions, messages, compactions or attachments. No delegation row, delegated message, structured call or budget-refusal outcome exists for that phone session. Its launch thread's routed model was a subscription/CLI model, incompatible with the pinned API request budget. See the [evidence and platform matrix](realtime-voice-causal-review.md#hosted-phone-diagnosis--2026-11-12).
+
+Lee clarified that voice must inherit **the exact launch thread**, not a global owner/project briefing. Cross-thread workers, approvals and thread status are on-demand only through that thread's existing authorized tools. Voice does not gain write permission, forwarding, approval authority, another delegation or extra runtime.
+
+Implemented in draft #293, building on standby:
+
+- **Routing:** silent sink capability probe; truthful browser-applied output selector and optional native chooser; permission/ineffective-switch feedback, partial-switch rollback, device-loss fallback, fresh-track preparation, reconnect/standby-resume and listener teardown. Capture constraints and element playback are unchanged; unsupported phones get OS guidance, not a cosmetic Bluetooth toggle.
+- **Exact-thread interface:** bounded owning instructions and normal context sources, saved compaction, recent launch-thread history, decisions/task state and attachment references. Voice events persist once into that thread's history with identity/timestamps and assistant delivery uncertainty. Global overview is excluded; existing authorized read-only bot/thread/worker/history tools serve on-demand lookups. Actual engine/model preflight, bridge-published restricted-mode UI status and same-session/outbox correlation preserve limits. No forwarding, write path or subscription-engine reroute is enabled.
+- **Dedicated page/progressive text:** thread top-bar dropdown/mobile sheet opens `/s/:id/voice`, with exact identity/context and return navigation. A single app-level call owner survives SPA route/back/page unmount; a different thread cannot silently replace it. Explicit End call leaves submitted work alone. Stable SDK message IDs, coalesced bounded drafts and atomic final replacement prevent duplicate/reordered/disappearing turns; only finals enter normal history. Observed SDK state is timestamped and gated by live local transport, never guessed from queued work.
+
+### Offline verification of follow-ups
+
+| Check | Observed result |
+| --- | --- |
+| Full Ergonaut suite, isolated local `DATA_DIR` | **330 passed, 6 skipped**, including progressive SDK/correlation/lifecycle tests; scripted models only. |
+| Full library suite, `ERGO_TEST_ISOLATED=1` | **1,700 passed, 15 skipped**, including budget/orchestration regressions. |
+| Full frontend suite | **286 passed, 0 failed**, including routing, navigation, progressive transcript, scroll and visible safety messaging. Existing React `act` warnings remain. |
+| Production frontend build | Passed TypeScript and Vite; existing >500 kB chunk warning remains. |
+| Changed Python Ruff and formatting; migration drift | Passed; no model migrations generated. |
+| Disposable standalone runtime (not pytest) | Populated-thread task/summary restored, user/assistant voice text persisted idempotently, two-turn scripted history read answered under budget, same-session outbox claimed once with original delegation ID, reconnect context retained. No provider/room connection. |
+| Chromium earlier modal routing fixture (surface superseded by dedicated page) | Selected mock headset, observed device-loss default fallback, removed sink API and observed no selector plus phone guidance; no microphone or room. |
+| Chromium actual App/Chat/voice page: desktop 1280×900 and mobile 390×844 | Top-bar/mobile-options entry, exact identity/context, same DOM bubble across partial/final, manual scroll preserved and jump to latest, return navigation with zero End/stop/token/capture calls. Explicit End incremented only the voice-end counter; background stayed queued. |
+| Standalone progressive runtime reproduction and correction | Opposite-order overlapping finals initially reordered turns; after correction IDs, order and first-observed timestamps stayed stable. Drafts never entered thread history, final rows appeared once, End reset live state without deleting finalized text. |
+| Late final after End regression | Reproduced a finalized turn missing from the ended page after End's first response; the viewed ended session now continues slow read-only observation, and the same regression passes without opening transport. |
+
+Browser screenshots: `/tmp/omp-sshots-15cb8fb07d03dda0.webp` (selected), `/tmp/omp-sshots-15cb8fc06a43dda1.webp` (loss/fallback), `/tmp/omp-sshots-15cb8fc0c283dda2.webp` (unsupported). Temporary fixture files/scripts and the Vite service were removed/stopped after proof. These are browser-state and scripted application checks, **not physical Bluetooth routing or hosted semantic acceptance**.
+
+Dedicated-page evidence supersedes the modal screenshots for layout: `/tmp/omp-sshots-15cb98f9daf1c163.webp` (desktop), `/tmp/omp-sshots-15cb98f94dd87f75.webp` (mobile), `/tmp/omp-sshots-15cb9953aa587f76.webp` (mobile thread-options entry). Actual mobile measurement after fixing clipping: transcript **279 px** tall, footer bottom **836 px** within an **844 px** viewport. Long context/limits and background details are collapsible, but restricted mode/unavailable reasons, closing-boundary warnings and routing failures remain upfront. The fixture made no room/microphone calls; scripts, temporary entries and Vite service were removed/stopped.
+
+### Device acceptance checklist — Lee, after approved rollout only
+
+1. Record handset, OS/browser version, tab/PWA mode and Bluetooth headset model, including call-audio/HFP support. Connect Bluetooth before opening voice. Check the phone's actual call/media output while the microphone is active.
+2. Where the browser supports output sinks, select a permitted output and confirm the **applied** output label changes only after success. Listen on Bluetooth and system default separately; default is not a promise of speakerphone. Decline the output permission once and confirm honest error/phone-controlled guidance, not a false successful toggle.
+3. With a sink selected, disconnect/reconnect Bluetooth. Confirm the list updates, device loss falls back truthfully and audio remains usable. On a phone without selection, use its OS call/output picker; record whether Bluetooth offers call audio or only media audio.
+4. Start in a populated thread with a known current task/decision, summary and attachment reference. Ask about that task without restating it; verify voice uses the launch thread, not another bot's private chat. In restricted mode confirm the UI and spoken interface explain which lookups can run, or why this thread cannot delegate.
+5. In a separately authorized eligible `gpt-6-luna` API thread, request one read-only lookup; correlate its delegation ID, bounded call, same-session result and the launch thread's history. A recap or claim without a durable result is not a successful lookup. No write, forward, worker start or approval should run.
+6. If standby was separately enabled, request standby at a safe boundary, resume within the original deadline and verify the same applied output, task, decisions and results persist. Reopen/reconnect as allowed and check voice text appears exactly once in thread history. The 90 seconds still include standby; a second request/paid retry is not authorized.
+7. Enter voice from the originating thread's top-bar options on desktop and mobile. Confirm its bot, thread title and return link stay visible; navigating back within the app must not silently end the call or cancel delegated work. Explicit **End call** stops voice, not already-submitted background work. Check the continuing-call indicator away from the page; a second thread must not silently replace it.
+8. During a separately authorized device call, watch partial user/assistant speech update the same turn, then finalize without a second bubble. Scroll up manually while more text arrives: position must remain stable until choosing latest again. Compare displayed observed voice states with the actual SDK/microphone behavior; unknown state and queued work must not be relabeled “thinking” or “running.”
+
+**Release gate:** draft source changes need review, passing checks and explicit deployment approval for Ergonaut's image. Standby requires separate consistent web/bridge flag approval; any future profile/config change, write/forwarding path, paid test or microphone/room acceptance requires its own approval. This run makes no merge, deploy, restart, infra change, secret/config mutation, paid call or room join. Mocked sink tests prove state handling, not physical phone routing; scripted context tests do not prove hosted model behavior.
+
 ## Current branch
 
 The off-by-default prototype uses Django-owned logical sessions, finalized events, bounded extractive compact state and reported-activity anchors, stable delegation IDs, a durable completion outbox, a single chat card per voice session and a minimal Stage. User speech times supplied by a client are separate and have unknown clock error. Elapsed time is calculated since server receipt of the user's report, not since a verified physical action. The rules are not a semantic summarizer; unmatched statements can fall outside the bounded transcript window. The model's actual live use of silent time context remains unverified.

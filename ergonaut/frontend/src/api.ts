@@ -782,14 +782,34 @@ export type RealtimeVoiceSession = {
   id: string
   chat_id: string
   status: string
+  transcript?: {
+    turn_id: string
+    event_id?: string
+    role: 'user' | 'assistant'
+    text: string
+    is_final: boolean
+    delivery: string
+    created_at: string
+  }[]
+  runtime?: { user_state: string; agent_state: string; observed_at: string | null }
+  standby_state?: 'live' | 'requested' | 'closing' | 'standby' | 'resuming'
   created_at?: string
   ended_at?: string | null
+  briefing?: {
+    context: string
+    restriction: string
+    reason?: string
+    delegation_available: boolean | null
+    instructions?: string
+    voice_event_ids?: string[]
+  }
   state?: {
     decisions?: string[]
     constraints?: string[]
     completed_steps?: string[]
     current_step?: string
     pending_task_ids?: string[]
+    standby_audio_uncertain?: boolean
     pending_delegation?: {
       id: string
       status: string
@@ -802,7 +822,7 @@ export type RealtimeVoiceSession = {
 }
 
 export const api = {
-  realtimeVoiceConfig: () => request<{ enabled: boolean }>('GET', '/realtime-voice/config'),
+  realtimeVoiceConfig: () => request<{ enabled: boolean; standby_enabled?: boolean }>('GET', '/realtime-voice/config'),
   realtimeVoiceSessions: (chatId: string) =>
     request<RealtimeVoiceSession[]>('GET', `/realtime-voice/sessions?chat_id=${encodeURIComponent(chatId)}`),
   startRealtimeVoice: (chatId: string) =>
@@ -811,6 +831,10 @@ export const api = {
     request<RealtimeVoiceSession>('GET', `/realtime-voice/sessions/${encodeURIComponent(id)}`),
   realtimeVoiceToken: (id: string) =>
     request<{ url: string; token: string }>('POST', `/realtime-voice/sessions/${encodeURIComponent(id)}/token`),
+  standbyRealtimeVoice: (id: string) =>
+    request<RealtimeVoiceSession>('POST', `/realtime-voice/sessions/${encodeURIComponent(id)}/standby`),
+  resumeRealtimeVoice: (id: string) =>
+    request<RealtimeVoiceSession>('POST', `/realtime-voice/sessions/${encodeURIComponent(id)}/resume`),
   endRealtimeVoice: (id: string) =>
     request<RealtimeVoiceSession>('POST', `/realtime-voice/sessions/${encodeURIComponent(id)}/end`),
   apiKeys: () => request<ApiKey[]>('GET', '/auth/keys'),
