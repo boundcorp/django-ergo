@@ -780,6 +780,12 @@ export type RealtimeVoiceSession = {
     completed_steps?: string[]
     current_step?: string
     pending_task_ids?: string[]
+    pending_delegation?: {
+      id: string
+      status: string
+      expires_at: string
+      fragments: { id: string; text: string }[]
+    }
   }
   delegations?: { event_id: string; text: string; status: string; result: string; error: string }[]
   events: RealtimeVoiceEvent[]
@@ -797,6 +803,12 @@ export const api = {
     request<{ url: string; token: string }>('POST', `/realtime-voice/sessions/${encodeURIComponent(id)}/token`),
   endRealtimeVoice: (id: string) =>
     request<RealtimeVoiceSession>('POST', `/realtime-voice/sessions/${encodeURIComponent(id)}/end`),
+  confirmVoiceDelegation: (id: string, eventId: string, text: string, cancel = false) =>
+    request<RealtimeVoiceSession>('POST', `/realtime-voice/sessions/${encodeURIComponent(id)}/confirm-delegation`, {
+      event_id: eventId,
+      text,
+      cancel,
+    }),
   apiKeys: () => request<ApiKey[]>('GET', '/auth/keys'),
   createApiKey: (name: string) => request<ApiKey & { key: string }>('POST', '/auth/keys', { name }),
   revokeApiKey: (id: string) => request<{ ok: boolean }>('DELETE', `/auth/keys/${id}`),

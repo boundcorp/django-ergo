@@ -60,6 +60,12 @@ def bridge_state(voice_id):
     delegations = list(session.delegations.select_related("message").order_by("-id")[:100])
     delegations.reverse()
     state = {"decisions": [], "constraints": [], "current_step": "", **session.state}
+    pending = state.get("pending_delegation")
+    if pending and pending["status"] == "awaiting_confirmation":
+        if session.status != "active":
+            state["pending_delegation"] = {**pending, "status": "cancelled"}
+        elif timezone.now() >= datetime.fromisoformat(pending["expires_at"]):
+            state["pending_delegation"] = {**pending, "status": "expired"}
     state["pending_task_ids"] = list(
         session.delegations.filter(message__status__in=("queued", "delivered", "waiting"))
         .order_by("-id")
@@ -156,6 +162,91 @@ def delegation_budget():
     return TurnBudget.from_dict({**config, "expires_at": timezone.now().timestamp() + start_within})
 
 
+PENDING_SECONDS = 60
+
+
+def begin_pending(voice_id, event_id, fragments):
+    """Record one client signal; transcription segments are drafts, not turn boundaries."""
+    if not event_id or len(event_id) > 180:
+        raise ValueError("Invalid delegation ID")
+    with transaction.atomic():
+        session = RealtimeVoiceSession.objects.select_for_update().get(pk=voice_id)
+        state = dict(session.state)
+        if session.status != "active" or state.get("pending_delegation") or session.delegations.exists():
+            return
+        state["pending_delegation"] = {
+            "id": event_id,
+            "status": "awaiting_confirmation",
+            "expires_at": (timezone.now() + timedelta(seconds=PENDING_SECONDS)).isoformat(),
+            "fragments": [{"id": key, "text": value} for key, value in fragments.items()],
+        }
+        session.state = state
+        session.save(update_fields=["state"])
+        record_event(voice_id, f"signal:{event_id}", "delegation_signal", "Client delegation signal received.")
+
+
+def update_pending_fragment(voice_id, event_id, item_id, text):
+    with transaction.atomic():
+        session = RealtimeVoiceSession.objects.select_for_update().get(pk=voice_id)
+        state = dict(session.state)
+        pending = state.get("pending_delegation")
+        if (
+            not pending
+            or pending["id"] != event_id
+            or pending["status"] != "awaiting_confirmation"
+            or session.status != "active"
+        ):
+            return
+        fragments = list(pending["fragments"])
+        for fragment in fragments:
+            if fragment["id"] == item_id:
+                fragment["text"] = text
+                break
+        else:
+            fragments.append({"id": item_id, "text": text})
+        pending["fragments"] = fragments
+        state["pending_delegation"] = pending
+        session.state = state
+        session.save(update_fields=["state"])
+
+
+def close_pending(voice_id, event_id):
+    """Bridge shutdown cancels unconfirmed work; never cancel submitted work."""
+    with transaction.atomic():
+        session = RealtimeVoiceSession.objects.select_for_update().get(pk=voice_id)
+        state = dict(session.state)
+        pending = state.get("pending_delegation")
+        if pending and pending["id"] == event_id and pending["status"] == "awaiting_confirmation":
+            pending["status"] = "cancelled"
+            state["pending_delegation"] = pending
+            session.state = state
+            session.save(update_fields=["state"])
+
+
+def resolve_pending(voice_id, event_id, text, cancel=False):
+    """Only explicit owner confirmation submits; timeout, end and cancellation fail closed."""
+    with transaction.atomic():
+        session = RealtimeVoiceSession.objects.select_for_update().get(pk=voice_id)
+        state = dict(session.state)
+        pending = state.get("pending_delegation")
+        if (
+            session.status != "active"
+            or not pending
+            or pending["id"] != event_id
+            or pending["status"] != "awaiting_confirmation"
+            or timezone.now() >= datetime.fromisoformat(pending["expires_at"])
+        ):
+            raise ValueError("Confirmation expired or unavailable")
+        if not cancel:
+            if not text.strip() or len(text) > 4000:
+                raise ValueError("Enter a complete request of at most 4000 characters")
+            delegate(voice_id, event_id, text.strip())
+        pending["status"] = "cancelled" if cancel else "submitted"
+        state["pending_delegation"] = pending
+        session.state = state
+        session.save(update_fields=["state"])
+
+
 def delegate(voice_id, event_id, text):
     """Atomically persist a deduplicated request in the existing thread-message queue.
 
@@ -219,6 +310,12 @@ class CreateIn(Schema):
     chat_id: str
 
 
+class ConfirmDelegationIn(Schema):
+    event_id: str
+    text: str = ""
+    cancel: bool = False
+
+
 @router.get("/realtime-voice/config")
 def config(request):
     return {"enabled": getattr(settings, "REALTIME_VOICE_ENABLED", False)}
@@ -252,6 +349,16 @@ def create_session(request, data: CreateIn):
 @router.get("/realtime-voice/sessions/{session_id}")
 def get_voice_session(request, session_id: str):
     return session_out(owned_session(request.auth, session_id))
+
+
+@router.post("/realtime-voice/sessions/{session_id}/confirm-delegation")
+def confirm_delegation(request, session_id: str, data: ConfirmDelegationIn):
+    session = owned_session(request.auth, session_id)
+    try:
+        resolve_pending(session.id, data.event_id, data.text, data.cancel)
+    except ValueError as exc:
+        raise HttpError(409, str(exc)) from exc
+    return session_out(session)
 
 
 @router.get("/realtime-voice/sessions/{session_id}/time")

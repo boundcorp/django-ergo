@@ -28,9 +28,22 @@ The completed structured call reported `gpt-6-luna`, two turns, 68 output tokens
 
 The third root is `/tmp/ergo-voice-isolated-ek_ix1as`; logs contain identifiers and must not be published raw. Payload-free correlation metadata was added to the wire/signal and SDK commentary-queued logs before launch. Both previous roots and their markers/messages remain untouched; all three launch/call marker pairs remain, and the third delivery queue is empty. An immediate read-only room list briefly showed one remaining participant; a subsequent read-only list showed zero matching rooms. The 29 targeted offline backend cases passed after the metadata change, and Ruff passed. No additional paid attempt is authorized by this result.
 
+## Offline correction after the third attempt
+
+The installed SDK's `gpt_live.py:880-891` closes a user segment on a timestamp gap, and `:1159-1164` closes it after audio has been pushed without a new transcript fragment; `_end_speech` emits a final transcript and `input_speech_stopped`, including on SDK shutdown (`:660-661`). Those are SDK segment boundaries, not proof that the speaker finished the entire instruction. The third trace also shows that final fragments can omit words. No silence timer, SDK `is_final`, or model delegation signal is therefore accepted as a complete request.
+
+The bridge records the first client signal and ordered transcript drafts in the voice session. The owner must finish speaking, enter the **complete** request and constraints, and explicitly confirm it in the voice panel within 60 seconds. The owner's text, not a supposedly complete SDK transcript, becomes the one budgeted request. The server serializes confirmation and cancellation against session end; expiry, cancellation, bridge shutdown and session end do not dispatch. Repeated signals do not create a second request; no paid retry or second provider connection is added. The draft is assistance only, not guaranteed transcription, and no automatic speech-end dispatch is claimed.
+
+For a durable outcome the bridge now queues authoritative silent context before same-ID commentary and no longer queues the old submitted/may-not-have-started commentary or delayed no-result speech status. This prevents those server-authored stale notices; it cannot guarantee the model's generated words, transmission, playback or hearing.
+
+Offline proof: the installed-SDK parser regression feeds early signal, a final segment, a late constraint in another final segment, explicit owner confirmation, and a duplicate signal; the single queued request contains the constraint and the scripted bounded two-turn result is injected as thinking before correlated commentary. Owner authorization, cancellation, expiry, session end and bridge-shutdown cancellation are covered separately. A local Chromium fixture displayed the actual confirmation panel, entered a complete constrained request and observed the form close after a simulated confirmation; no room or model was connected. Earlier artifact roots remain `/tmp/ergo-voice-isolated-e1cy2fyd`, `/tmp/ergo-voice-isolated-dy_xdck4`, and `/tmp/ergo-voice-isolated-ek_ix1as`; do not publish raw logs, reuse markers or replay messages.
+
+The targeted backend run, frontend build and frontend suite are reported in [progress](realtime-voice-progress.md). This correction has not been tested against hosted audio; browser playback, interruption, reconnect, model truthfulness and provider billing remain open. No fourth inference, room join, replay, credential rotation, merge, deployment or shared restart was authorized.
+
+
 ## Historical offline review and earlier authorization state
 
-## Conclusion and authorization
+## Historical conclusion and authorization after attempt two
 
 Two paid approvals are consumed. **No third inference, room join, replay or new room link is authorized.** This review made no provider call or room join, changed no credential or isolated SDK installation, and did not modify either attempt's database, queued messages or markers. Ergonaut remains disabled, draft and not ready to merge or deploy.
 
@@ -72,7 +85,9 @@ At revision `8e5c318`, `realtime_voice_bridge.py:69-78` constrained status claim
 
 Startup restored saved state and finalized transcript; only answered linked messages were labeled verified background results. Per-user-turn `append_thinking` contained server UTC and activity elapsed times, not tool results. In attempt two, startup was empty and state remained `{}`. There is **no evidence that actual history results were injected as already fulfilled**. Silent context can still influence model semantics, which cannot be established offline. The fix explicitly labels saved state/time as non-result context and excludes saved-state/result wrappers from request extraction.
 
-## Minimal fix and invariant
+## Historical fix and invariant before attempt three
+
+These pre-third-attempt implementation details are retained as historical evidence and are superseded by the offline correction above.
 
 - `ergonaut/ergonaut/realtime_voice_bridge.py:44-100`: clarify client delegation instructions; identify saved context separately from real user messages and verified outcomes. Leave voice tools empty and keep `max_retry=0`, one provider connection and existing runtime/one-shot caps.
 - `:102-139`: consume async callback exceptions; log only exception class, persist a library-authored unconfirmed-action status and attempt truthful commentary. Add payload-free listener-ready, wire-delegation ID/target booleans and application-signal logs. Persist receipt of the application signal before queue work. No retry or fallback dispatch.
@@ -83,7 +98,7 @@ Startup restored saved state and finalized transcript; only answered linked mess
 
 A signal is not a task execution; a queued message is not running; assistant promises are not successful work; only the linked durable outcome is result evidence. An answered background result still does not independently prove which tool the model used: structured-call/tool records are needed for the live history-lookup acceptance check.
 
-## Exercised offline verification
+## Historical offline verification before attempt three
 
 | Command/scenario | Actual result |
 | --- | --- |
@@ -103,11 +118,11 @@ The permanent tests bypass only SDK network-task construction and the framework 
 
 This is an acceptance procedure, **not authorization or a runnable launch command**. Do not source either historical environment or reuse a consumed marker.
 
-1. Obtain explicit approval covering a new single paid voice connection, at most one bounded delegation, the shared project/remaining allowance and reconciled or explicitly accepted unknown billing. Confirm one-shot/runtime limits, no retries and a fresh isolated DB/broker/worker/account/bot/chat/session/dispatch/prefix/markers. Keep both prior roots untouched. Existing protected credentials and SDK3 installation stay unchanged.
+1. Obtain explicit approval covering a new single paid voice connection, at most one bounded delegation, the shared project/remaining allowance and reconciled or explicitly accepted unknown billing. Confirm one-shot/runtime limits, no retries and a fresh isolated DB/broker/worker/account/bot/chat/session/dispatch/prefix/markers. Keep all three prior roots untouched. Existing protected credentials and SDK3 installation stay unchanged.
 2. Prepare deterministic, owner-scoped stored history with a non-sensitive unique fact, for example `offline acceptance pantry code: violet-ladle`, in an earlier chat accessible to the allowed history tools. Keep that answer OUT of voice startup state/transcript, speech and injected time context. Verify the fresh voice session has no delegation or result and that the actual Celery task can be published/consumed harmlessly before a worker starts.
 3. Start only the separately approved isolated worker/bridge/client. Before publishing speech, require `voice delegation_listener_ready`; retain payload-free `voice delegation_wire_received` and `voice delegation_signal_received` records with UTC timestamps. Keep `record=False`; do not change project observability.
 4. Speak once, naturally and unambiguously: **“Ask the background assistant to search my earlier conversation history for my pantry code and report the code. Do not answer from this conversation or say you checked before its result arrives.”** Do not retry or rephrase within the approval if delegation is absent.
-5. Correlate: wire event with valid ID/client target → application signal → durable `delegation_signal` → exactly one delegation/message in this voice chat → real Celery receipt → structured call using the pinned bounded model → actual allowed history search/read tool calls → answer containing the seeded fact → same-session durable result → commentary using the SAME delegation ID. Record timestamps/latency and budget metadata; speech promises alone fail acceptance.
+5. After speech ends, inspect the pending draft and explicitly enter and confirm the complete request including the late constraint. Verify that no task was sent before confirmation. Correlate: wire event with valid ID/client target → application signal → durable `delegation_signal` → owner confirmation → exactly one delegation/message in this voice chat → real Celery receipt → structured call using the pinned bounded model → actual allowed history search/read tool calls → answer containing the seeded fact → same-session durable result → silent context and commentary using the SAME delegation ID. Record timestamps/latency and budget metadata; speech promises alone fail acceptance.
 6. If no valid event arrives, no request must be auto-dispatched. The UI/history must show no submitted request/no verified result, and any generated “I checked” claim is a failed semantic acceptance even with the unverified label. Preserve evidence, stop at the cap and report upstream/model behavior as unresolved; do not spend another attempt automatically.
 7. Stop only owned isolated processes; retain consumed markers and any queued messages, perform approved read-only room absence and billing checks, and report actual usage or its absence. Browser hearing/playback, interruption/reconnect and migration/retention remain separate gates; do not infer them from synthetic track receipt.
 

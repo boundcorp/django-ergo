@@ -20,7 +20,14 @@ from livekit import agents  # noqa: E402
 from livekit.agents import Agent, AgentServer, AgentSession, APIConnectOptions, llm  # noqa: E402
 from livekit.plugins import openai, silero  # noqa: E402
 
-from ergonaut.api.realtime_voice import bridge_state, current_time, delegate, record_event  # noqa: E402
+from ergonaut.api.realtime_voice import (  # noqa: E402
+    begin_pending,
+    bridge_state,
+    close_pending,
+    current_time,
+    record_event,
+    update_pending_fragment,
+)
 from ergonaut.realtime_voice_outbox import claim_announcement, completion_event  # noqa: E402
 
 logger = logging.getLogger(__name__)
@@ -73,6 +80,8 @@ class Assistant(Agent):
         self.announced = set()
         self.jobs = set()
         self.watcher = None
+        self.fragments = {}
+        self.pending_id = None
         super().__init__(
             instructions=(
                 "Maintain session context across topics. You are the voice interface, not the "
@@ -111,7 +120,7 @@ class Assistant(Agent):
         except Exception as exc:
             # Consume async callback exceptions without logging payloads, credentials or transcripts.
             logger.error("voice bridge callback failed exception_type=%s", type(exc).__name__)
-            notice = "A voice bridge action could not be confirmed. No successful background work is established."
+            notice = "A voice bridge action could not be confirmed. Check the durable background status."
             try:
                 await sync_to_async(record_event, thread_sensitive=True)(
                     self.voice_id, f"bridge-error:{uuid.uuid4().hex}", "background_status", notice
@@ -122,6 +131,7 @@ class Assistant(Agent):
 
     async def on_enter(self):
         self.duplex_session.on("delegation_created", self.on_delegation)
+        self.duplex_session.on("input_audio_transcription_completed", self.on_transcription)
         self.duplex_session.on("openai_server_event_received", self.on_protocol_event)
         self.duplex_session.on("openai_client_event_queued", self.on_client_event)
         logger.info("voice delegation_listener_ready")
@@ -146,24 +156,36 @@ class Assistant(Agent):
         if event.get("type") == "session.commentary.append":
             logger.info("voice commentary_queued correlation=%s", self.correlation(event.get("delegation_id")))
 
+    def on_transcription(self, event):
+        self.fragments[event.item_id] = event.transcript
+        if self.pending_id:
+            self.spawn(
+                sync_to_async(update_pending_fragment, thread_sensitive=True)(
+                    self.voice_id, self.pending_id, event.item_id, event.transcript
+                )
+            )
+
     def on_delegation(self, event):
         logger.info("voice delegation_signal_received correlation=%s", self.correlation(event.id))
-        self.spawn(self.queue_delegation(event), delegation_id=event.id)
+        if self.pending_id:
+            return
+        self.pending_id = event.id
+        self.spawn(self.open_pending(event.id, dict(self.fragments)), delegation_id=event.id)
+
+    async def open_pending(self, event_id, fragments):
+        await sync_to_async(begin_pending, thread_sensitive=True)(self.voice_id, event_id, fragments)
+        self.duplex_session.append_thinking(
+            "Background delegation requires the user to review and explicitly confirm the complete request. "
+            "A transcription segment or pause is not confirmation."
+        )
 
     async def persist_turn(self, item):
         delivery = "interrupted" if item.interrupted else "unknown"
         await sync_to_async(record_event, thread_sensitive=True)(
             self.voice_id, item.id, item.role, item.text_content, delivery
         )
-        if item.role == "assistant":
-            snapshot = await sync_to_async(bridge_state, thread_sensitive=True)(self.voice_id)
-            if not any(task["status"] == "answered" and task["result"] for task in snapshot["delegations"]):
-                await sync_to_async(record_event, thread_sensitive=True)(
-                    self.voice_id,
-                    f"work-status:{item.id}",
-                    "background_status",
-                    "No verified background result exists for this speech. Assistant claims are not lookup evidence.",
-                )
+        # Generated speech is always unverified; do not append a delayed no-result status
+        # after a result may already have arrived.
         if item.role == "user":
             snapshot = await sync_to_async(bridge_state, thread_sensitive=True)(self.voice_id)
             activities = snapshot["activities"][-3:]
@@ -183,57 +205,6 @@ class Assistant(Agent):
                 f"(not proof of physical activity): {elapsed}"
             )
 
-    async def queue_delegation(self, event):
-        # SDK client delegation carries an opaque ID, NOT a task/tool call. pending_transcript
-        # is only the still-open speech segment and may be empty after speech ends.
-        await sync_to_async(record_event, thread_sensitive=True)(
-            self.voice_id, f"signal:{event.id}", "delegation_signal", "Client delegation signal received."
-        )
-        texts = [
-            item.text_content
-            for item in self.chat_ctx.items[-40:]
-            if (
-                isinstance(item, llm.ChatMessage)
-                and item.role == "user"
-                and item.text_content
-                and item.id != "saved-voice-state"
-                and not item.id.startswith("verified-result:")
-            )
-        ]
-        pending = (event.pending_transcript or "").strip()
-        if pending and (not texts or texts[-1].strip() != pending):
-            texts.append(pending)
-        text = "\n".join(texts)[-4000:].strip()
-        if not text:
-            await sync_to_async(record_event, thread_sensitive=True)(
-                self.voice_id,
-                f"submission:{event.id}",
-                "background_status",
-                "No background request submitted: the delegation signal contained no user context.",
-            )
-            self.duplex_session.append_commentary("Please clarify the background request.", delegation_id=event.id)
-            return
-        try:
-            message = await sync_to_async(delegate, thread_sensitive=True)(self.voice_id, event.id, text)
-        except ValueError:
-            await sync_to_async(record_event, thread_sensitive=True)(
-                self.voice_id,
-                f"submission:{event.id}",
-                "background_status",
-                "Background submission was refused; no successful background work is established.",
-            )
-            self.duplex_session.append_commentary(
-                "Background work is unavailable for this session. No successful lookup is established.",
-                delegation_id=event.id,
-            )
-            return
-        if message.status == "failed":
-            # The watcher records and announces the failure through the outbox.
-            return
-        self.duplex_session.append_commentary(
-            "The background request was submitted; it may not have started yet.", delegation_id=event.id
-        )
-
     async def deliver_results(self, snapshot):
         for task in snapshot["delegations"]:
             key = task["event_id"]
@@ -242,11 +213,11 @@ class Assistant(Agent):
             event = await sync_to_async(completion_event, thread_sensitive=True)(self.voice_id, task)
             if event is None or not await sync_to_async(claim_announcement, thread_sensitive=True)(event):
                 continue
-            # The durable claim is at-most-once, not proof of audio playback.
-            # The result remains available in the session even if this send fails.
-            self.duplex_session.append_commentary(
-                f"Verified background outcome for request {key}: {event.text[:1500]}", delegation_id=key
-            )
+            # Silent authoritative context precedes correlated commentary. Neither proves
+            # transmission, playback, or that generated speech follows the context.
+            outcome = f"Verified background outcome for request {key}: {event.text[:1500]}"
+            self.duplex_session.append_thinking(outcome)
+            self.duplex_session.append_commentary(outcome, delegation_id=key)
             self.announced.add(key)
 
     async def watch_results(self):
@@ -320,6 +291,8 @@ async def voice_session(ctx: agents.JobContext):
             await asyncio.gather(assistant.watcher, return_exceptions=True)
         if assistant.jobs:
             await asyncio.gather(*assistant.jobs, return_exceptions=True)
+        if assistant.pending_id:
+            await sync_to_async(close_pending, thread_sensitive=True)(voice_id, assistant.pending_id)
         seconds = time.monotonic() - started
         logger.info(
             "voice bridge session_seconds=%.3f max_seconds=%d voice_cost_upper_estimate_usd=%.4f",

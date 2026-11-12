@@ -78,10 +78,7 @@ def drain(session):
 
 
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.parametrize("finalized", [False, True])
-def test_sdk_delegation_runs_bounded_work_and_correlates_durable_commentary(
-    cooking, use_bots, held_messages, finalized
-):
+def test_sdk_delegation_waits_for_confirmation_and_correlates_durable_commentary(cooking, use_bots, held_messages):
     chat, vid, other = cooking
     client = use_bots(tool_call("ergo_chat_history_sources", {}), say("The earlier report was pan-frying chicken."))
     snapshot = realtime_voice.bridge_state(vid)
@@ -94,33 +91,50 @@ def test_sdk_delegation_runs_bounded_work_and_correlates_durable_commentary(
             config = sdk._session_start_event().model_dump(exclude_none=True)
             assert config["session"]["delegation"] == {"type": "client"}
             await sdk._update_tools([])
-            for start, text in [
-                (0, "Please delegate a read-only history check. "),
-                (100, "What did I report earlier?"),
-            ]:
-                sdk._handle_event(
-                    {"type": "session.input_transcript.delta", "delta": text, "start_ms": start, "end_ms": start + 100}
-                )
-            if finalized:
-                sdk._end_speech("user")  # pending_transcript is now legitimately empty
+            # Signal occurs during the first sentence; SDK pauses can finalize individual
+            # fragments even while the speaker has more to say.
             sdk._handle_event(
-                {"type": "session.delegation.created", "delegation": {"id": "offline-task", "target": "client"}}
+                {"type": "session.input_transcript.delta", "delta": "Search my history. ", "start_ms": 0, "end_ms": 100}
             )
+            wire = {"type": "session.delegation.created", "delegation": {"id": "offline-task", "target": "client"}}
+            sdk._handle_event(wire)
+            sdk._end_speech("user")
+            sdk._handle_event(
+                {
+                    "type": "session.input_transcript.delta",
+                    "delta": "Do not claim you checked before the result.",
+                    "start_ms": 1000,
+                    "end_ms": 1100,
+                }
+            )
+            sdk._end_speech("user")
+            await settle(assistant)
+            pending = await sync_to_async(realtime_voice.bridge_state)(vid)
+            assert pending["delegations"] == []
+            assert [f["text"] for f in pending["state"]["pending_delegation"]["fragments"]] == [
+                "Search my history. ",
+                "Do not claim you checked before the result.",
+            ]
+            assert not held_messages
+            text = "Search my history. Do not claim you checked before the result."
+            await sync_to_async(realtime_voice.resolve_pending)(vid, "offline-task", text)
+            sdk._handle_event(wire)  # late duplicate cannot create a second request
             await settle(assistant)
             queued = await sync_to_async(realtime_voice.bridge_state)(vid)
-            assert queued["delegations"][0]["status"] == "queued"
-            assert "Please delegate a read-only history check." in queued["delegations"][0]["text"]
-            assert "What did I report earlier?" in queued["delegations"][0]["text"]
+            assert queued["delegations"][0]["text"] == text
             assert len(held_messages) == 1
             await sync_to_async(messaging.deliver)(held_messages[0], registry=webhooks.get_registry())
             result = await sync_to_async(realtime_voice.bridge_state)(vid)
             await assistant.deliver_results(result)
             await assistant.deliver_results(result)  # reconnect/poll duplicate cannot announce twice
-            commentary = [e for e in drain(sdk) if e["type"] == "session.commentary.append"]
-            outcomes = [e for e in commentary if "Verified background outcome" in e["content"]]
-            assert len(outcomes) == 1
-            assert outcomes[0]["delegation_id"] == "offline-task"
-            assert "The earlier report was pan-frying chicken." in outcomes[0]["content"]
+            await assistant.persist_turn(llm.ChatMessage(role="assistant", content=["Delayed speech."]))
+            events = drain(sdk)
+            outcomes = [e for e in events if "Verified background outcome" in e.get("content", "")]
+            assert [e["type"] for e in outcomes] == ["session.thinking.append", "session.commentary.append"]
+            assert outcomes[1]["delegation_id"] == "offline-task"
+            assert "The earlier report was pan-frying chicken." in outcomes[1]["content"]
+            latest = await sync_to_async(realtime_voice.bridge_state)(vid)
+            assert not any("No verified background result" in e["text"] for e in latest["events"])
 
     async_to_sync(scenario)()
     task = realtime_voice.bridge_state(vid)["delegations"][0]
@@ -151,10 +165,6 @@ def test_no_client_signal_cannot_establish_background_success(cooking, held_mess
             state = await sync_to_async(realtime_voice.bridge_state)(vid)
             assert state["delegations"] == []
             assert not any(event["kind"] == "result" for event in state["events"])
-            assert any(
-                event["kind"] == "background_status" and "No verified background result" in event["text"]
-                for event in state["events"]
-            )
             assert not any("Verified background outcome" in event.get("content", "") for event in drain(sdk))
 
     async_to_sync(scenario)()
@@ -172,21 +182,19 @@ def test_callback_exception_is_consumed_and_durable_without_leaking_error(cookin
         with patch.object(bridge.Assistant, "duplex_session", new_callable=PropertyMock, return_value=sdk):
             await bind(assistant, sdk)
             sdk._history.add_message(role="user", content="Check history.")
-            with patch.object(bridge, "delegate", side_effect=RuntimeError("sensitive-provider-detail")):
+            with patch.object(bridge, "begin_pending", side_effect=RuntimeError("sensitive-provider-detail")):
                 sdk._handle_event(
                     {"type": "session.delegation.created", "delegation": {"id": "offline-error", "target": "client"}}
                 )
                 await settle(assistant)
             state = await sync_to_async(realtime_voice.bridge_state)(vid)
-            assert any(event["kind"] == "delegation_signal" for event in state["events"])
             assert any(
                 event["kind"] == "background_status" and "could not be confirmed" in event["text"]
                 for event in state["events"]
             )
             commentary = drain(sdk)
             assert any(
-                "No successful background work is established" in event["content"]
-                and event["delegation_id"] == "offline-error"
+                "Check the durable background status" in event["content"] and event["delegation_id"] == "offline-error"
                 for event in commentary
             )
             assert "sensitive-provider-detail" not in str(state) + str(commentary)
@@ -213,8 +221,8 @@ def test_saved_context_is_not_an_implicit_user_request_or_fulfilled_lookup(cooki
             await settle(assistant)
             state = await sync_to_async(realtime_voice.bridge_state)(vid)
             assert state["delegations"] == []
-            assert any("no user context" in event["text"] for event in state["events"])
-            assert drain(sdk)[0]["content"] == "Please clarify the background request."
+            assert state["state"]["pending_delegation"]["status"] == "awaiting_confirmation"
+            assert state["state"]["pending_delegation"]["fragments"] == []
 
     async_to_sync(scenario)()
     assert held_messages == []

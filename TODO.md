@@ -28,6 +28,8 @@ Live on rigel from `~/p/boundcorp/django-ergo`, bots from `boundcorp/ergo-bots`.
 
 ### Next
 
+- [ ] **Realtime voice prototype**: offline pending-delegation confirmation now fails closed on incomplete speech; the third isolated attempt proved a real owner-scoped history result. Hosted confirmation, browser playback, interruption/reconnect, billing reconciliation and retention/deployment review remain open; no fourth paid attempt is authorized. See `docs/realtime-voice-progress.md`.
+
 - [x] **Docs** (PR #69; OpenAI made the default in examples and docs in a follow-up): full README; guides for getting started, building bots, skills, tools, plugins, memory and KBs, data tables, attachments, schedules, running Ergonaut, development; 2025 planning docs and old specs moved to `docs/archive/`.
 - [x] **Skills unified + named chats** (PR #33, merged): lazy skills (load/unload, always per chat, requires), main replaces root, named chats in bot.yaml, schedule targets.
 - [x] **Skill library + skillbuilder**: Ergo ships reusable skill folders (`bots/skill_library/`) a bot includes by name (`skills.include`, chat skills or `requires`); skills declare the plugins they need (`plugins:` front matter, conflicting bot.yaml settings fail the load); `@bot_tool(seed=True)`. First library skill: `skillbuilder` (config_repo in PR mode plus a guide to tools, workers, attachments, seeding, tables, schedules and .jhtml pages).
