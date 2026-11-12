@@ -3,6 +3,7 @@
     plugins:
       - name: attachments
         max_bytes: 5000000         # largest file the bot may write
+        import_roots: {}           # optional: host alias -> absolute artifact directory
         other_sessions: true       # may read files in the user's other sessions
         video_model: gemini-flash-latest   # answers questions about videos
         gemini_api_key_env: GEMINI_API_KEY
@@ -18,6 +19,7 @@ Files come from three places: sent with a message, uploaded to the session
   this chat or another (``session_id``), e.g. files another chat shared with
   a message (see ``django_ergo.bots.orchestrator``).
 - ``ergo_attachments_create``: write a new text file into this session.
+- ``ergo_attachments_import``: with approval, copy an allowed host artifact into this chat.
 - ``ergo_attachments_update``: replace the contents of a text file in this
   session.
 - ``ergo_attachments_look``: look at an image, PDF or video (or any file).
@@ -47,8 +49,11 @@ files, so the model knows when something was uploaded.
 
 from __future__ import annotations
 
+import posixpath
+import re
 import uuid
 from datetime import timedelta
+from pathlib import PurePosixPath
 from typing import TYPE_CHECKING
 
 from django.utils import timezone
@@ -66,6 +71,7 @@ from django_ergo.conversation.attachments import replace_session_file
 from django_ergo.conversation.attachments import save_session_file
 from django_ergo.conversation.context import TextContextSource
 from django_ergo.conversation.video import is_video
+from django_ergo.plugins._common import fetch_file
 
 if TYPE_CHECKING:
     from django_ergo.bots.tools import ToolContext
@@ -115,6 +121,54 @@ def _checked_ids(attachment_ids: list[str]) -> list[str]:
     return ids
 
 
+def _artifact_media_type(filename: str, data: bytes) -> str:
+    """Validate common visual formats; unknown binaries remain downloads."""
+    import io
+    import xml.etree.ElementTree as ET
+
+    suffix = PurePosixPath(filename).suffix.lower()
+    if suffix == ".svg":
+        try:
+            text = data.decode("utf-8")
+            if "<!doctype" in text.lower() or "<!entity" in text.lower():
+                msg = "SVG document types and entities are not allowed"
+                raise ValueError(msg)
+            root = ET.fromstring(text)  # noqa: S314 — DTDs and entities rejected above
+        except (UnicodeDecodeError, ET.ParseError) as exc:
+            msg = "Invalid SVG"
+            raise ValueError(msg) from exc
+        if root.tag not in ("svg", "{http://www.w3.org/2000/svg}svg"):
+            msg = "Invalid SVG root"
+            raise ValueError(msg)
+        return "image/svg+xml"
+    formats = {
+        ".png": ("PNG", "image/png"),
+        ".jpg": ("JPEG", "image/jpeg"),
+        ".jpeg": ("JPEG", "image/jpeg"),
+        ".gif": ("GIF", "image/gif"),
+        ".webp": ("WEBP", "image/webp"),
+    }
+    if suffix in formats:
+        from PIL import Image
+
+        try:
+            with Image.open(io.BytesIO(data)) as image:
+                if image.format != formats[suffix][0]:
+                    msg = "Image type does not match filename"
+                    raise ValueError(msg)
+                image.verify()
+        except (OSError, SyntaxError) as exc:
+            msg = "Invalid image"
+            raise ValueError(msg) from exc
+        return formats[suffix][1]
+    if suffix == ".pdf":
+        if not data.startswith(b"%PDF-"):
+            msg = "Invalid PDF"
+            raise ValueError(msg)
+        return "application/pdf"
+    return "application/octet-stream"
+
+
 class AttachmentsPlugin(BotPlugin):
     name = "attachments"
     description = "Read, look at and write files in chats (images and PDFs too)"
@@ -128,6 +182,7 @@ class AttachmentsPlugin(BotPlugin):
             self.config.get("gemini_api_key_env") or "GEMINI_API_KEY"
         )
         self.max_video_bytes = int(self.config.get("max_video_bytes", 2_000_000_000))
+        self.import_roots = dict(self.config.get("import_roots") or {})
 
     # -- access --------------------------------------------------------------
 
@@ -208,6 +263,42 @@ class AttachmentsPlugin(BotPlugin):
             row.delete()
             msg = f"Only text files can be written ({row.media_type} is not text)"
             raise ValueError(msg)
+        return describe_row(row)
+
+    def import_file(self, ctx: ToolContext, host: str, path: str) -> dict:
+        """Copy one approved artifact without returning its bytes to the model."""
+        if ctx.session is None:
+            msg = "Attachments need a chat"
+            raise ValueError(msg)
+        if (
+            host not in self.import_roots
+            or not re.fullmatch(r"[A-Za-z0-9._-]+", host)
+            or host.startswith("-")
+        ):
+            msg = "Host is not configured for artifact imports"
+            raise ValueError(msg)
+        root = self.import_roots[host]
+        if (
+            not isinstance(root, str)
+            or not root.startswith("/")
+            or not path.startswith("/")
+        ):
+            msg = "Artifact root and path must be absolute"
+            raise ValueError(msg)
+        resolved, data = fetch_file(
+            posixpath.normpath(root),
+            path,
+            host="" if host == "local" else host,
+            limit=self.max_bytes,
+            timeout=120,
+            scope="configured artifact root",
+            secure=True,
+        )
+        filename = PurePosixPath(resolved).name
+        media_type = _artifact_media_type(filename, data)
+        row = save_session_file(
+            ctx.session, filename, data, media_type=media_type, source="bot"
+        )
         return describe_row(row)
 
     def update(self, ctx: ToolContext, attachment_id: str, content: str) -> dict:
@@ -511,7 +602,7 @@ class AttachmentsPlugin(BotPlugin):
 
         return [TextContextSource("Files in this chat", listing)]
 
-    def _tools(self) -> list[BotTool]:
+    def _tools(self) -> list[BotTool]:  # noqa: C901 — registers the plugin's tools
         plugin = self
 
         @bot_tool(
@@ -580,6 +671,23 @@ class AttachmentsPlugin(BotPlugin):
             ctx: ToolContext, filename: str, content: str, media_type: str = ""
         ) -> dict:
             return plugin.create(ctx, filename, content, media_type)
+
+        @bot_tool(
+            name="ergo_attachments_import",
+            takes_context=True,
+            requires_approval=True,
+            description="Copy an artifact from an explicitly configured host and directory into this chat; asks for approval.",
+            parameters={
+                "host": {
+                    "type": "string",
+                    "description": "Configured host alias, or local",
+                },
+                "path": {"type": "string", "description": "Absolute artifact path"},
+            },
+            required=["host", "path"],
+        )
+        def import_file(ctx: ToolContext, host: str, path: str) -> dict:
+            return plugin.import_file(ctx, host, path)
 
         @bot_tool(name="ergo_attachments_update", takes_context=True)
         def update(ctx: ToolContext, attachment_id: str, content: str) -> dict:
@@ -730,7 +838,7 @@ class AttachmentsPlugin(BotPlugin):
         def unarchive(ctx: ToolContext, attachment_ids: list[str]) -> dict:
             return plugin.unarchive(ctx, attachment_ids)
 
-        return [
+        tools = [
             fn.__bot_tool__
             for fn in (
                 list_files,
@@ -743,3 +851,6 @@ class AttachmentsPlugin(BotPlugin):
                 unarchive,
             )
         ]
+        if plugin.import_roots:
+            tools.append(import_file.__bot_tool__)
+        return tools

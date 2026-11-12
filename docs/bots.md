@@ -1655,6 +1655,8 @@ Setting up Chrome and SSH: [Browser control](browser.md).
 ```yaml
 - name: attachments
   max_bytes: 5000000 # largest file the bot may write
+  # Optional, off by default; absolute artifact roots on configured SSH aliases.
+  import_roots: {rigel: /home/linked/artifacts}
   max_look_bytes: 20000000 # largest file ergo_attachments_look sends to the model
   other_sessions: true # may read files in the user's other sessions
   video_model: gemini-flash-latest # watches videos for ergo_attachments_look
@@ -1669,6 +1671,16 @@ gets `ergo_attachments_list`, `ergo_attachments_read`,
 `ergo_attachments_create` and `ergo_attachments_update`. It writes text
 files only in its own session, reads files in the same user's other
 sessions, and sees the session's file list in every turn's context.
+When `import_roots` is configured, `ergo_attachments_import(host, path)` asks
+for approval, then copies one file from the configured absolute root on the
+named SSH host (`local` means this host) into this chat. It rejects paths
+outside the root, secret-looking filenames, oversized files and malformed
+common image/PDF formats. The original is unchanged; only metadata, not file
+bytes or base64, is returned to the bot. Imported files are visible in the
+chat and downloadable. The source host needs Python 3 and a POSIX filesystem
+with `O_NOFOLLOW`; path components are opened without following swapped
+symlinks. Grant roots narrowly: the host account's file access is not an OS
+sandbox, and a source file can change between approval and reading.
 `ergo_attachments_look(attachment_id, question)` lets it see an image or PDF.
 An image comes back in the tool result, so the bot looks at it itself. A PDF
 or other file goes to the bot's own model as an attachment in a separate call

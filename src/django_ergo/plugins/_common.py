@@ -39,6 +39,99 @@ def is_secret(name: str) -> bool:
     )
 
 
+def fetch_file(  # noqa: PLR0913
+    root: str,
+    path: str,
+    *,
+    host: str,
+    limit: int,
+    timeout: int,
+    scope: str = "worktree",
+    secure: bool = False,
+) -> tuple[str, bytes]:
+    """Read a bounded file under a configured local or SSH root."""
+    import posixpath
+    import shlex
+    import subprocess
+
+    from django_ergo.protected_env import scrubbed_env
+
+    target = posixpath.normpath(
+        path if path.startswith("/") else posixpath.join(root, path)
+    )
+    if not target.startswith(root.rstrip("/") + "/"):
+        msg = f"{path} is outside the {scope}"
+        raise ValueError(msg)
+    if is_secret(posixpath.basename(target)):
+        msg = f"{posixpath.basename(target)} looks like a secret; it can't be attached"
+        raise ValueError(msg)
+    if secure:
+        # Open each canonical path component without following symlinks. This
+        # prevents a renamed symlink between containment validation and read.
+        reader = """
+import os, stat, sys
+root = os.path.realpath(sys.argv[1], strict=True)
+path = os.path.realpath(sys.argv[2], strict=True)
+limit = int(sys.argv[3])
+if os.path.commonpath((root, path)) != root or path == root:
+    sys.exit("outside the configured artifact root")
+name = os.path.basename(path).lower()
+if (name.startswith((".env", "id_rsa", "id_ed25519")) or name.endswith((".pem", ".key", ".p12", ".pfx"))
+        or "secret" in name or "credential" in name):
+    sys.exit("secret-looking file")
+parts = path.strip("/").split("/")
+fd = os.open("/", os.O_RDONLY | os.O_DIRECTORY)
+try:
+    for part in parts[:-1]:
+        new = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+        os.close(fd)
+        fd = new
+    file_fd = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
+    with os.fdopen(file_fd, "rb") as f:
+        if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+            sys.exit("not a file")
+        sys.stdout.buffer.write(os.fsencode(path) + b"\\0")
+        sys.stdout.buffer.write(f.read(limit + 1))
+finally:
+    os.close(fd)
+"""
+        script = " ".join(
+            [
+                "python3",
+                "-c",
+                shlex.quote(reader),
+                shlex.quote(root),
+                shlex.quote(target),
+                str(limit),
+            ]
+        )
+    else:
+        script = (
+            f"set -e; r=$(realpath -e -- {shlex.quote(root)}); f=$(realpath -e -- {shlex.quote(target)}); "
+            f'case "$f" in "$r"/*) ;; *) echo "outside the {scope}" >&2; exit 3;; esac; '
+            'test -f "$f" || { echo "not a file" >&2; exit 4; }; '
+            f'printf "%s\\0" "$f"; head -c {limit + 1} -- "$f"'
+        )
+    argv = (
+        ["ssh", "-o", "BatchMode=yes", host, script] if host else ["sh", "-c", script]
+    )
+    proc = subprocess.run(  # noqa: S603 — fixed script, quoted paths and configured host
+        argv, capture_output=True, timeout=timeout, check=False, env=scrubbed_env()
+    )
+    if proc.returncode:
+        msg = f"Couldn't read {path}: {proc.stderr.decode(errors='replace').strip()[:300]}"
+        raise ValueError(msg)
+    resolved, separator, data = proc.stdout.partition(b"\0")
+    if not separator or len(data) > limit:
+        msg = f"File is invalid or larger than {limit} bytes"
+        raise ValueError(msg)
+    resolved_path = resolved.decode(errors="strict")
+    if is_secret(posixpath.basename(resolved_path)):
+        msg = f"{path} points at a secret-looking file; it can't be attached"
+        raise ValueError(msg)
+    return resolved_path, data
+
+
 def record_agent_usage(  # noqa: PLR0913
     worker,
     *,

@@ -567,6 +567,47 @@ def test_files_sent_with_a_message_reach_the_model(client, cook, use_bots, setti
 
 
 @pytest.mark.django_db(transaction=True)
+def test_artwork_upload_send_and_download(client, cook, use_bots, settings, tmp_path):
+    from io import BytesIO
+
+    from django.core.files.uploadedfile import SimpleUploadedFile
+    from django_ergo.conversation.models import ConversationSession
+    from PIL import Image
+
+    settings.MEDIA_ROOT = str(tmp_path / "media")
+    use_bots(say("Attached."))
+    session_id = post(client, "/api/bots/kitchen/root").json()["id"]
+    picture = BytesIO()
+    Image.new("RGB", (2, 2), "green").save(picture, format="PNG")
+    artifacts = {
+        "preview.png": (picture.getvalue(), "image/png"),
+        "artwork.svg": (b'<svg xmlns="http://www.w3.org/2000/svg"/>', "image/svg+xml"),
+    }
+    ids = []
+    for name, (data, mime) in artifacts.items():
+        result = client.post(
+            f"/api/sessions/{session_id}/attachments",
+            {"file": SimpleUploadedFile(name, data, content_type=mime)},
+        )
+        assert result.status_code == 200
+        ids.append(result.json()["id"])
+    sent = post(client, f"/api/sessions/{session_id}/messages", {"text": "Deliverables", "attachment_ids": ids})
+    assert sent.status_code == 200
+    rows = ConversationSession.objects.get(id=session_id).attachments
+    for name, (data, mime) in artifacts.items():
+        row = rows.get(filename=name)
+        assert row.message_sequence is not None
+        assert row.media_type == mime
+        response = client.get(f"/api/attachments/{row.id}/download?inline=true")
+        assert response["Content-Type"] == mime
+        assert b"".join(response.streaming_content) == data
+        if name.endswith(".svg"):
+            assert response["Content-Security-Policy"].startswith("sandbox")
+            download = client.get(f"/api/attachments/{row.id}/download")
+            assert "attachment" in download["Content-Disposition"]
+
+
+@pytest.mark.django_db(transaction=True)
 def test_sessions_show_delegated_requests(client, cook, use_bots):
     from django_ergo.conversation.models import ConversationSession, ThreadMessage
 

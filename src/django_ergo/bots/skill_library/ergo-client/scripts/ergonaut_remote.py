@@ -27,6 +27,7 @@ import argparse
 import contextlib
 import contextvars
 import json
+import mimetypes
 import os
 import re
 import sys
@@ -34,6 +35,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from pathlib import Path
 
 CONFIG = Path(
@@ -152,6 +154,58 @@ class Client:
     def post(self, path, body=None):
         return self.call("POST", path, body if body is not None else {})
 
+    def upload(self, session_id: str, path: str) -> dict:
+        """Upload a local file as multipart without putting its bytes in chat."""
+        file = Path(path)
+        if not file.is_file():
+            raise ValueError(f"Not a file: {file}")
+        if file.stat().st_size > 200 * 1024 * 1024:
+            raise ValueError("File exceeds the 200 MiB client limit")
+        data = file.read_bytes()
+        if len(data) > 200 * 1024 * 1024:
+            raise ValueError("File exceeds the 200 MiB client limit")
+        name = file.name
+        if any(c in name for c in '\r\n"'):
+            raise ValueError("Filename contains unsafe multipart characters")
+        mime = mimetypes.guess_type(name)[0] or "application/octet-stream"
+        if mime == "image/png" and not data.startswith(b"\x89PNG\r\n\x1a\n"):
+            raise ValueError("Invalid PNG")
+        if mime == "image/svg+xml":
+            import xml.etree.ElementTree as ET
+
+            try:
+                text = data.decode("utf-8")
+                if "<!doctype" in text.lower() or "<!entity" in text.lower():
+                    raise ValueError("SVG document types and entities are not allowed")
+                root = ET.fromstring(text)  # noqa: S314 — DTDs and entities rejected above
+                if root.tag not in ("svg", "{http://www.w3.org/2000/svg}svg"):
+                    raise ValueError("Invalid SVG root")
+            except (UnicodeDecodeError, ET.ParseError) as exc:
+                raise ValueError("Invalid SVG") from exc
+        boundary = uuid.uuid4().hex
+        body = (
+            (
+                f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="{name}"\r\n'
+                f"Content-Type: {mime}\r\n\r\n"
+            ).encode()
+            + data
+            + f"\r\n--{boundary}--\r\n".encode()
+        )
+        request = urllib.request.Request(
+            f"{self.url}/api/sessions/{session_id}/attachments",
+            data=body,
+            method="POST",
+        )
+        request.add_header("Authorization", f"Bearer {self.key}")
+        request.add_header("Content-Type", f"multipart/form-data; boundary={boundary}")
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                return json.loads(response.read())
+        except urllib.error.HTTPError as exc:
+            raise ApiError(exc.code, "Attachment upload failed") from None
+        except urllib.error.URLError as exc:
+            raise ApiError(0, f"can't reach {self.url}: {exc.reason}") from None
+
 
 # -- the conversation helpers the commands share ------------------------------------
 
@@ -218,9 +272,16 @@ def print_reply(call: dict, session_id: str) -> None:
 
 def send_and_maybe_wait(client: Client, session_id: str, text: str, args) -> int:
     before = snapshot(client, session_id) if args.wait else {}
+    attachment_ids = [
+        client.upload(session_id, path)["id"] for path in getattr(args, "attach", [])
+    ]
     turn = client.post(
         f"/sessions/{session_id}/messages",
-        {"text": text, "mode": "interrupt" if args.interrupt else "send"},
+        {
+            "text": text,
+            "mode": "interrupt" if args.interrupt else "send",
+            "attachment_ids": attachment_ids,
+        },
     )
     if not args.wait:
         if args.json:
@@ -660,6 +721,13 @@ def parser() -> argparse.ArgumentParser:
     c.add_argument("session", help="session id (or prefix), or BOT / BOT:CHAT")
     c.add_argument("message")
     c.add_argument(
+        "--attach",
+        action="append",
+        default=[],
+        metavar="FILE",
+        help="upload a local file and attach it to this message (repeatable)",
+    )
+    c.add_argument(
         "--interrupt", action="store_true", help="stop the running turn first"
     )
     waits(c)
@@ -725,7 +793,7 @@ def main(argv: list[str] | None = None) -> int:
             return args.func(args)
         url, key = server(args.server, link=getattr(args, "session", "") or "")
         return args.func(Client(url, key), args)
-    except ApiError as e:
+    except (ApiError, ValueError, OSError) as e:
         echo(f"ergo: {e}", file=sys.stderr)
         return 1
     except KeyboardInterrupt:
