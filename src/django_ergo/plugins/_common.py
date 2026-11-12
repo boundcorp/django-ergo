@@ -56,6 +56,15 @@ def fetch_file(  # noqa: PLR0913
 
     from django_ergo.protected_env import scrubbed_env
 
+    if secure and (
+        not root.startswith("/")
+        or not path.startswith("/")
+        or posixpath.normpath(root) != root
+        or posixpath.normpath(path) != path
+    ):
+        msg = "Artifact root and path must be normalized absolute paths"
+        raise ValueError(msg)
+
     target = posixpath.normpath(
         path if path.startswith("/") else posixpath.join(root, path)
     )
@@ -66,12 +75,12 @@ def fetch_file(  # noqa: PLR0913
         msg = f"{posixpath.basename(target)} looks like a secret; it can't be attached"
         raise ValueError(msg)
     if secure:
-        # Open each canonical path component without following symlinks. This
-        # prevents a renamed symlink between containment validation and read.
+        # Open the configured path itself without following any symlink,
+        # including a replaced root or an ancestor of that root.
         reader = """
 import os, stat, sys
-root = os.path.realpath(sys.argv[1], strict=True)
-path = os.path.realpath(sys.argv[2], strict=True)
+root = sys.argv[1]
+path = sys.argv[2]
 limit = int(sys.argv[3])
 if os.path.commonpath((root, path)) != root or path == root:
     sys.exit("outside the configured artifact root")

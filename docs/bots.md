@@ -1678,9 +1678,10 @@ outside the root, secret-looking filenames, oversized files and malformed
 common image/PDF formats. The original is unchanged; only metadata, not file
 bytes or base64, is returned to the bot. Imported files are visible in the
 chat and downloadable. The source host needs Python 3 and a POSIX filesystem
-with `O_NOFOLLOW`; path components are opened without following swapped
-symlinks. Grant roots narrowly: the host account's file access is not an OS
-sandbox, and a source file can change between approval and reading.
+with `O_NOFOLLOW`. Imports reject symlinks in any path component, including
+the configured root and its ancestors, and reject non-normalized paths.
+Grant roots narrowly: the host account's file access is not an OS sandbox,
+and a source file can change between approval and reading.
 `ergo_attachments_look(attachment_id, question)` lets it see an image or PDF.
 An image comes back in the tool result, so the bot looks at it itself. A PDF
 or other file goes to the bot's own model as an attachment in a separate call
