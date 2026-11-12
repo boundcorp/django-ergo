@@ -1,5 +1,35 @@
 # Realtime voice delegation: offline causal review
 
+## Third authorized live acceptance — 2026-11-12 UTC
+
+Lee approved exactly one third attempt, with the same one-connection, 90-second and bounded-delegation limits. It produced **one real, bounded, same-session history lookup and durable result**; the synthetic participant received assistant audio, not browser playback or evidence of human hearing. No fourth attempt, retry, shared deployment, project-privacy change or production mutation was made. The prototype remains disabled and not ready to merge or deploy.
+
+Preflight used a fresh isolated PostgreSQL database, Redis broker, solo Celery worker, user, bot, voice chat, dispatch, room prefix and one-shot markers. The actual Django delivery task was published, consumed and acknowledged on the empty isolated broker before starting the worker; afterward its process environment, routes, empty queue and exact `gpt-6-luna` 4-turn / 40,000-input / 1,500-output / 45-second budget were checked. LiveKit Agents 1.8.11 and OpenAI 3.49.0 were isolated; both model metadata endpoints returned 200 with the exact IDs. The same protected SOPS LiveKit configuration and Octo runtime OpenAI key were used without printing credentials; the prior shell key's 401 remains the reason for the runtime key.
+
+A unique non-sensitive pantry code was stored in a separate owner-and-bot-scoped conversation before the voice connection. The actual allowed `ergo_chat_history_search` returned that fact and excluded another user's test conversation; the fresh voice snapshot contained no fact, events or delegation. The fact was not injected into startup voice context, synthetic speech or time context. `AgentSession.start(..., record=False)` was checked in the actual bridge; hosted job metadata still advertised recording enabled, and hosted storage was not independently audited. Project observability was not changed.
+
+| UTC event | Observed evidence |
+| --- | --- |
+| 01:20:02.864 | Synthetic participant connected; microphone track initially carried silence. |
+| 01:20:03.441 | Delegation listener ready; the supervisor gated speech on this log and audio subscription. |
+| 01:20:04.607–01:20:15.613 | One synthetic spoken request, with no rephrase or retry. |
+| 01:20:10.583 | First non-silent remote frame, 5.977 s after speech began and 5.030 s **before it ended**; 6,001 frames in total. This includes an early acknowledgement, not necessarily the answer. |
+| 01:20:11.893–11.895 | Valid-ID/client-target wire delegation and application signal, with matching payload-free correlation. |
+| 01:20:11.900–11.918 | Durable signal and exactly one same-chat delegation/message. |
+| 01:20:12.117–16.308 | Isolated Celery received and completed the real delivery task in 4.190 s. |
+| 01:20:14.751–14.785 | Structured `ergo_chat_history_search` called with `pantry code`; its result included the seeded earlier owner-scoped source and fact. |
+| 01:20:16.667–16.672 | Same-session durable answered outbox event and queued commentary with the **same delegation correlation**, 4.773 s and 4.779 s after the wire event. The outbox claim and SDK queued hook do not prove transmission or playback. |
+| 01:20:28.997 | Persisted generated assistant transcript reported the matching code; delivery remains unknown. |
+| 01:21:03.619 | Synthetic participant disconnected; supervisor stopped owned bridge and client at 73.444 s. The isolated worker was stopped separately. |
+
+The completed structured call reported `gpt-6-luna`, two turns, 68 output tokens, six uncached input tokens and 1,710 cache-read input tokens in its recorded fields; the budget ledger separately reported 3,710 input tokens, 68 output tokens and 3.993 seconds. Its recorded $0.00030095 is an internal estimate, not a provider bill. OpenAI organization usage and costs endpoints returned HTTP 403 before and after the run. Actual billed voice duration, exact cost and LiveKit charges remain unknown; $0.15 plus tax was a conditional planning reserve, not a financial cap, and the shared allowance was unknown and accepted.
+
+**Semantic/context limits remain:** delegation arrived while the user was still speaking. The submitted context contained the complete first sentence through “report the code” but not the later sentence prohibiting premature claims; persisted final fragments also did not retain that sentence in full. The model first generated “Sure”; after the durable answer existed, another generated transcript said the request “may not have started yet” and “I don't have a result yet” before continuing “I found it.” This stale, self-contradictory status is not evidence of a false pre-result “checked” claim in this run, but it is a real sequencing/truthfulness defect. Neither the cause of the missing transcript words nor the model's choice to delegate mid-utterance is established. No claim is made that the final spoken code was heard.
+
+The third root is `/tmp/ergo-voice-isolated-ek_ix1as`; logs contain identifiers and must not be published raw. Payload-free correlation metadata was added to the wire/signal and SDK commentary-queued logs before launch. Both previous roots and their markers/messages remain untouched; all three launch/call marker pairs remain, and the third delivery queue is empty. An immediate read-only room list briefly showed one remaining participant; a subsequent read-only list showed zero matching rooms. The 29 targeted offline backend cases passed after the metadata change, and Ruff passed. No additional paid attempt is authorized by this result.
+
+## Historical offline review and earlier authorization state
+
 ## Conclusion and authorization
 
 Two paid approvals are consumed. **No third inference, room join, replay or new room link is authorized.** This review made no provider call or room join, changed no credential or isolated SDK installation, and did not modify either attempt's database, queued messages or markers. Ergonaut remains disabled, draft and not ready to merge or deploy.

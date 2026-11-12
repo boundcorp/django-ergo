@@ -1,6 +1,7 @@
 """Isolated LiveKit GPT-Live worker for an explicitly enabled local voice slice."""
 
 import asyncio
+import hashlib
 import logging
 import os
 import time
@@ -122,20 +123,31 @@ class Assistant(Agent):
     async def on_enter(self):
         self.duplex_session.on("delegation_created", self.on_delegation)
         self.duplex_session.on("openai_server_event_received", self.on_protocol_event)
+        self.duplex_session.on("openai_client_event_queued", self.on_client_event)
         logger.info("voice delegation_listener_ready")
         self.watcher = asyncio.create_task(self.watch_results())
 
     def on_protocol_event(self, event):
         if event.get("type") == "session.delegation.created":
             metadata = event.get("delegation") or {}
+            delegation_id = metadata.get("id")
             logger.info(
-                "voice delegation_wire_received has_id=%s client_target=%s",
-                bool(metadata.get("id")),
+                "voice delegation_wire_received has_id=%s client_target=%s correlation=%s",
+                bool(delegation_id),
                 metadata.get("target") == "client",
+                self.correlation(delegation_id),
             )
 
+    @staticmethod
+    def correlation(delegation_id):
+        return hashlib.sha256(delegation_id.encode()).hexdigest()[:16] if isinstance(delegation_id, str) else "none"
+
+    def on_client_event(self, event):
+        if event.get("type") == "session.commentary.append":
+            logger.info("voice commentary_queued correlation=%s", self.correlation(event.get("delegation_id")))
+
     def on_delegation(self, event):
-        logger.info("voice delegation_signal_received")
+        logger.info("voice delegation_signal_received correlation=%s", self.correlation(event.id))
         self.spawn(self.queue_delegation(event), delegation_id=event.id)
 
     async def persist_turn(self, item):
