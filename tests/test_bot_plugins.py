@@ -3183,6 +3183,83 @@ def files_bot(tmp_path, *responses, config="max_bytes: 100"):
 
 
 @pytest.mark.django_db(transaction=True)
+async def test_import_artifact_requires_approval_and_preserves_png(tmp_path, settings):
+    from io import BytesIO
+
+    from PIL import Image
+
+    settings.MEDIA_ROOT = str(tmp_path / "media")
+    folder = tmp_path / "art"
+    folder.mkdir()
+    image = BytesIO()
+    Image.new("RGB", (2, 2), "green").save(image, format="PNG")
+    data = image.getvalue()
+    artifact = folder / "preview.png"
+    artifact.write_bytes(data)
+    bot, _, _ = files_bot(
+        tmp_path,
+        claude_tool(
+            "ergo_attachments_import",
+            {"host": "local", "path": str(artifact)},
+            tool_id="import1",
+        ),
+        say("Attached."),
+        config=f"max_bytes: 1000, import_roots: {{local: '{folder}'}}",
+    )
+    user = await User.objects.acreate(username="artifact-user")
+    session = await bot.root_session(user)
+    paused = await bot.ask(session, "Attach the preview")
+    assert [a.tool_name for a in paused.approvals] == ["ergo_attachments_import"]
+    assert await session.attachments.acount() == 0
+    done = await bot.resume(session, {"import1": True})
+    assert done.text == "Attached."
+    row = await session.attachments.aget()
+    assert row.media_type == "image/png"
+    assert row.file.read() == data
+    assert artifact.read_bytes() == data
+
+
+@pytest.mark.django_db
+def test_import_artifact_rejects_escape_secrets_wrong_type_and_oversize(
+    tmp_path, settings
+):
+    from django_ergo.bots.tools import ToolContext
+
+    settings.MEDIA_ROOT = str(tmp_path / "media")
+    folder = tmp_path / "art"
+    folder.mkdir()
+    outside = tmp_path / "outside.png"
+    outside.write_bytes(b"not an image")
+    (folder / "link.png").symlink_to(outside)
+    (folder / ".env").write_text("private")
+    (folder / "hidden.bin").symlink_to(folder / ".env")
+    (folder / "bad.png").write_bytes(b"not an image")
+    (folder / "big.bin").write_bytes(b"x" * 101)
+    (folder / "good.svg").write_text('<svg xmlns="http://www.w3.org/2000/svg"/>')
+    bot, _, plugin = files_bot(
+        tmp_path, config=f"max_bytes: 100, import_roots: {{local: '{folder}'}}"
+    )
+    user = User.objects.create(username="artifact-owner")
+    session = ConversationSession.objects.create(user=user, bot_name="filer")
+    ctx = ToolContext(bot=bot, session=session, user=user)
+    for host, path in [
+        ("unknown", folder / "good.svg"),
+        ("local", outside),
+        ("local", folder / "link.png"),
+        ("local", folder / ".env"),
+        ("local", folder / "hidden.bin"),
+        ("local", folder / "bad.png"),
+        ("local", folder / "big.bin"),
+    ]:
+        with pytest.raises(ValueError, match="."):
+            plugin.import_file(ctx, host, str(path))
+    made = plugin.import_file(ctx, "local", str(folder / "good.svg"))
+    row = session.attachments.get(id=made["id"])
+    assert row.media_type == "image/svg+xml"
+    assert row.file.read() == (folder / "good.svg").read_bytes()
+
+
+@pytest.mark.django_db(transaction=True)
 async def test_bot_writes_and_reads_files_in_its_session(tmp_path, settings):
     from asgiref.sync import sync_to_async
 
