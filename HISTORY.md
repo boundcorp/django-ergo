@@ -8,9 +8,11 @@ This document tracks the major milestones and evolution of the Django Ergo proje
 
 - Added a REST client with finite socket timeouts, injected credentials, sanitized
   failures and Pod responses, and ownership/profile checks before deletion.
-  This is not a live rental controller: no real create, durable real-provider
-  ledger, independent real cleaner, or runner/export integration is provided.
-  No live execution is authorized; the existing cleanup CLI remains fake only.
+  This is not a live rental controller: no real create, runner/export
+  integration, or deployed cleanup scheduler is provided. REST cleanup has a
+  separate dry-run-by-default ledger command; ownership response fields and
+  storage deletion semantics remain unverified, so liability stays unresolved.
+  No live execution is authorized; the original experiment CLI remains fake.
 
 ### Offline GPU queue primitives (November 2026)
 

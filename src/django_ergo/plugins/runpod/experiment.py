@@ -206,6 +206,12 @@ class Experiment:
             raise ValueError(msg)
         self._send_capability = None
         with self._tx() as db:
+            if db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='rest_profile'"
+            ).fetchone():
+                msg = "fake create is unavailable for a REST ledger"
+                raise ValueError(msg)
+        with self._tx() as db:
             row = self._running(db, now)
             if row is None:
                 return None
@@ -392,6 +398,11 @@ class Experiment:
         """
         self._time(now)
         with self._tx() as db:
+            if db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='rest_profile'"
+            ).fetchone():
+                msg = "use REST cleanup for a REST ledger"
+                raise ValueError(msg)
             row = self._expire(db, self._row(db), now)
             if not row["stop_reason"]:
                 return dict(row)

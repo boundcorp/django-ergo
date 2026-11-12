@@ -20,6 +20,7 @@ from urllib.request import build_opener
 _BASE = "https://rest.runpod.io/v1"
 _MAX_RESPONSE = 2 * 1024 * 1024
 _MAX_TIMEOUT = 30
+_NOT_FOUND = object()
 
 
 class ProviderError(Exception):
@@ -140,7 +141,7 @@ class RunpodREST:
             return json.loads(payload) if payload else None
         except HTTPError as exc:
             if absent_ok and exc.code == HTTPStatus.NOT_FOUND:
-                return None
+                return _NOT_FOUND
             msg = "provider HTTP request failed"
             raise ProviderError(msg) from None
         except Exception:  # noqa: BLE001 -- credential and HTTP errors may contain secrets
@@ -163,12 +164,12 @@ class RunpodREST:
             "/pods/" + quote(pod_id, safe="") + "?includeNetworkVolume=true",
             absent_ok=True,
         )
-        if result is not None and (
-            not isinstance(result, dict) or result.get("id") != pod_id
-        ):
+        if result is _NOT_FOUND:
+            return None
+        if not isinstance(result, dict) or result.get("id") != pod_id:
             msg = "invalid provider response"
             raise ProviderError(msg)
-        return None if result is None else _safe_pod(result)
+        return _safe_pod(result)
 
     def terminate_owned(self, pod_id, ownership):
         """Re-read exact ownership before DELETE; caller must separately read back.
