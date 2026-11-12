@@ -4,6 +4,24 @@ This document tracks the major milestones and evolution of the Django Ergo proje
 
 ## Development Timeline
 
+### Offline GPU queue primitives (November 2026)
+
+- Added local SQLite queue primitives with immutable request identities,
+  serial claims, lease fencing, phase-local correction priority and inspection
+  of uncertain runner submissions; corrections cannot change their original
+  phase or bypass earlier queued test/chapter work. Added pure cost-estimation and ordered artifact-metadata
+  helpers. Added a separate singleton experiment ledger with a local fake
+  provider, durable fake exports and an independently invocable cleanup tick.
+  These are offline components, not a Runpod plugin or live rental controller:
+  no real provider calls, shared budget authorization, native Worker integration
+  or deployed independent scheduler exist. A local estimate cannot guarantee
+  a provider billing ceiling.
+  For local simulations, invoke `python -m django_ergo.plugins.runpod.experiment
+  /path/to/ledger.sqlite` as a separate process for each cleanup tick. The fake
+  provider shares the local SQLite file; clocks, eligibility and activity are
+  trusted simulator inputs, and the caller must schedule ticks and determine
+  which outputs are complete. SQLite does not provide a distributed ledger.
+
 ### Realtime voice client-delegation contract (November 2026)
 
 - Handle the SDK's opaque delegation signal with conversation context even

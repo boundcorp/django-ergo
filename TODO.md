@@ -28,6 +28,16 @@ Live on rigel from `~/p/boundcorp/django-ergo`, bots from `boundcorp/ergo-bots`.
 
 ### Next
 
+- [ ] **GPU execution**: offline queue, pricing and manifest primitives and a
+  SQLite singleton ledger with fake-provider cleanup are not live execution.
+  Before enabling a rental, implement an authorized native Worker and durable
+  shared resource ledger, atomic project/global reservations, real provider
+  ownership and uncertain-create reconciliation, a deployed independent
+  deadline/idle cleanup scheduler, durable artifact publication, and an approved
+  runner/model/input/license gate. Verify provider pricing and termination
+  semantics; local caps and timers cannot guarantee a financial ceiling if
+  termination fails.
+
 - [ ] **Realtime voice prototype**: offline hands-free model-selected delegation now waits for Python Silero speech end, pause grace and transcript drain; the third isolated attempt proved a real owner-scoped history result. Deployed on Octo for Lee's account only (`REALTIME_VOICE_USERS`, kill switch `REALTIME_VOICE_ENABLED`, `voice-bridge` Deployment) for his own testing. Hosted boundary/transcription correctness, hands-free delegation, spoken truthfulness, browser playback, interruption/reconnect, billing reconciliation and retention review remain open. Wake-word detection is deferred and not implemented. See `docs/realtime-voice-progress.md`.
 
 - [x] **Docs** (PR #69; OpenAI made the default in examples and docs in a follow-up): full README; guides for getting started, building bots, skills, tools, plugins, memory and KBs, data tables, attachments, schedules, running Ergonaut, development; 2025 planning docs and old specs moved to `docs/archive/`.
