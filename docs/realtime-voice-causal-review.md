@@ -2,7 +2,7 @@
 
 ## Hosted phone diagnosis — 2026-11-12
 
-**Accepted:** Lee's real phone audio and basic conversation. **Not accepted:** Bluetooth/output routing, orchestrator context/tools, and standby/resume. This supersedes historical statements below that the prototype was not hosted or that phone audio had not been tested. The two follow-ups are draft-only; no merge, deployment, restart, room join, microphone session or inference is authorized in this investigation.
+**Accepted:** Lee's real phone audio and basic conversation. **Not accepted:** Bluetooth/output routing, orchestrator context/tools, standby/resume, and the subsequently authorized dedicated-page/progressive-transcript UX. This supersedes historical statements below that the prototype was not hosted or that phone audio had not been tested. These follow-ups are draft-only; no merge, deployment, restart, room join, microphone session or inference is authorized in this investigation.
 
 ### Actual session and evidence boundary
 

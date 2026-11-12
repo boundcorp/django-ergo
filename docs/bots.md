@@ -991,6 +991,11 @@ needs review. Voice does not grant thread forwarding, approval actions or
 worker starts; all remain outside its read-only authorization. See the
 [phone diagnosis](realtime-voice-causal-review.md#hosted-phone-diagnosis--2026-11-12)
 and [device/continuity checklist](realtime-voice-progress.md#hosted-phone-acceptance-and-follow-ups--2026-11-12).
+The draft web entry is the originating thread's top-bar options → Voice call.
+Its dedicated page keeps one app-owned connection across in-tab navigation;
+End call stops voice, not submitted thread work. Progressive drafts are not
+normal chat history until finalized, and displayed SDK activity is an
+observation, not proof of playback or background execution.
 
 ### Message identity
 
