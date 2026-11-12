@@ -12,6 +12,7 @@ import subprocess
 import sys
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
+from uuid import uuid4
 
 import jwt
 import requests
@@ -22,6 +23,29 @@ from livekit import api
 def require(condition, message):
     if not condition:
         raise ValueError(message)
+
+
+def check_broker(url):
+    """Publish and consume a harmless probe on a unique queue; no worker is involved."""
+    from celery import Celery
+    from kombu.transport import redis as redis_transport
+
+    require(redis_transport.redis is not None, "Redis transport dependency missing")
+    app = Celery("voice-broker-probe", broker=url)
+    queue_name = f"voice-preflight-{uuid4().hex}"
+    try:
+        app.send_task("voice.preflight.noop", args=["probe"], queue=queue_name, retry=False)
+        with app.connection_for_read() as connection:
+            queue = connection.SimpleQueue(queue_name)
+            try:
+                message = queue.get(block=False)
+                require(message.payload[0] == ["probe"], "broker probe payload mismatch")
+                message.ack()
+            finally:
+                queue.close()
+                connection.default_channel.queue_delete(queue=queue_name)
+    finally:
+        app.close()
 
 
 def preflight():
@@ -45,6 +69,7 @@ def preflight():
     require(
         broker.scheme == "redis" and broker.hostname == "127.0.0.1" and broker.port is not None, "invalid broker route"
     )
+    check_broker(os.environ["CELERY_BROKER_URL"])
     require(Path(os.environ.get("ERGONAUT_BOTS", "/nonexistent")).resolve() == root / "bot", "invalid bot route")
     bot = yaml.safe_load((root / "bot" / "bot.yaml").read_text())
     require(bot.get("engine") == {"type": "openai", "config": {"model": "gpt-6-luna"}}, "wrong bot engine or model")

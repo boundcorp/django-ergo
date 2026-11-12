@@ -2,10 +2,12 @@
 the request runs through the queue and turn runner under its budget, and its truthful outcome returns
 to the same voice session through the durable outbox."""
 
+import socket
 from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
 import pytest
+from celery import Celery
 from django_ergo.bots import messaging, webhooks
 from django_ergo.conversation.models import ConversationSession
 
@@ -127,6 +129,32 @@ def test_a_failure_that_is_not_the_librarys_own_text_is_not_read_to_the_user(coo
     event = completion_event(vid, outcome(vid))
 
     assert event.text == "The background request failed."
+
+
+@pytest.mark.django_db(transaction=True)
+def test_unavailable_broker_fails_delegation_and_reports_it_in_the_same_session(cooking, settings):
+    _, vid, other = cooking
+    # Keep the port reserved without listening so the broker connection is refused.
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        app = Celery("voice-unavailable", broker=f"redis://127.0.0.1:{sock.getsockname()[1]}/0")
+        settings.DJANGO_ERGO = {
+            **settings.DJANGO_ERGO,
+            "THREAD_MESSAGE_RUNNER": lambda message_id: app.send_task("test.deliver", args=[message_id], retry=False),
+        }
+        try:
+            message = realtime_voice.delegate(vid, "unavailable", "Check the background request")
+        finally:
+            app.close()
+    assert message.status == "failed"
+    assert message.error == "Not run: the background request could not be dispatched."
+    task = outcome(vid)
+    assert task["status"] == "failed"
+    event = completion_event(vid, task)
+    assert event.text == "The background request failed: Not run: the background request could not be dispatched."
+    assert claim_announcement(event)
+    assert not claim_announcement(event)
+    assert not RealtimeVoiceSession.objects.get(pk=other).events.exists()
 
 
 @pytest.mark.django_db(transaction=True)

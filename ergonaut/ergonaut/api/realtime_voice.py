@@ -196,7 +196,8 @@ def delegate(voice_id, event_id, text):
             metadata=attach({"voice_session_id": str(session.id), "voice_event_id": event_id}, budget),
         )
         RealtimeVoiceDelegation.objects.create(session=session, event_id=event_id, text=text, message=message)
-        return message
+    message.refresh_from_db()
+    return message
 
 
 def session_out(session):

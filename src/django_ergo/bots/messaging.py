@@ -263,7 +263,24 @@ def current_thread_message(session: ConversationSession) -> ThreadMessage | None
 def dispatch(message_id: str, registry: BotRegistry | None = None) -> None:
     runner = api_settings.THREAD_MESSAGE_RUNNER
     if runner is not None:
-        runner(message_id)
+        try:
+            runner(message_id)
+        except Exception:
+            # A publish can fail after the message transaction committed. A
+            # conditional transition prevents a worker which already claimed
+            # the message from being mistaken for work that did not start.
+            failed = ThreadMessage.objects.filter(
+                id=message_id,
+                status=ThreadMessageStatus.QUEUED,
+                metadata__has_key="voice_session_id",
+            ).update(
+                status=ThreadMessageStatus.FAILED,
+                error=f"{NOT_RUN_PREFIX} the background request could not be dispatched.",
+                updated_at=timezone.now(),
+            )
+            if not failed:
+                raise
+            logger.exception("Dispatching voice thread message %s failed", message_id)
         return
     start_daemon(
         deliver, message_id, registry, name=f"ergo-thread-message-{message_id}"

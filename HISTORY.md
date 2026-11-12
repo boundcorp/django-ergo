@@ -4,6 +4,12 @@ This document tracks the major milestones and evolution of the Django Ergo proje
 
 ## Development Timeline
 
+### Realtime voice dispatch recovery (November 2026)
+
+- The isolated voice bridge pins the Redis broker transport and probes Celery
+  enqueue/consume offline. A failed voice dispatch is recorded as not run
+  and delivered through the voice result outbox, without an automatic retry.
+
 ### Opt-in hard budgets for a turn (November 2026)
 
 - A thread message can carry a budget (model turns, input and output tokens,

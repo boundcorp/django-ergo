@@ -67,11 +67,11 @@ class Assistant(Agent):
         self.watcher = None
         super().__init__(
             instructions=(
-                "You are Ergonaut's conversational voice assistant. Preserve supplied "
-                "session context across topics. Delegate background work, say it is "
-                "underway, and keep listening. Report completion only when given a "
-                "verified result. On reconnect do not repeat a saved result unless asked. "
-                "Speech marked unknown or interrupted may not have been heard."
+                "session context across topics. Never say background work is running "
+                "unless its verified status says so. A queued request may not have started. "
+                "Report completion only when given a verified result. On reconnect do "
+                "not repeat a saved result unless asked. Speech marked unknown or "
+                "interrupted may not have been heard."
                 " For activity durations use only supplied server-calculated elapsed "
                 "time since the user reported the activity, not a claim that it happened. "
                 "Never invent times, durations, timers or reminders."
@@ -128,14 +128,17 @@ class Assistant(Agent):
             self.duplex_session.append_commentary("Please clarify the background request.", delegation_id=event.id)
             return
         try:
-            await sync_to_async(delegate, thread_sensitive=True)(self.voice_id, event.id, text)
+            message = await sync_to_async(delegate, thread_sensitive=True)(self.voice_id, event.id, text)
         except ValueError:
             self.duplex_session.append_commentary(
                 "Background work is unavailable for this session.", delegation_id=event.id
             )
             return
+        if message.status == "failed":
+            # The watcher records and announces the failure through the outbox.
+            return
         self.duplex_session.append_commentary(
-            "The background request is queued. Continue the conversation while it runs.", delegation_id=event.id
+            "The background request was submitted; it may not have started yet.", delegation_id=event.id
         )
 
     async def deliver_results(self, snapshot):
