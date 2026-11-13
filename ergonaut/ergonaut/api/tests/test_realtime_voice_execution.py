@@ -405,7 +405,15 @@ def test_unlimited_policy_upgrades_only_matching_existing_three_request_grants(n
     policy["unlimited_intentional_requests"] = True
     assert request_capacity(voice)["limit"] == 0
     policy["unlimited_approval_reference"] = "offline-unlimited"
+    assert request_capacity(voice)["limit"] == 3  # Read-only polling cannot grant new authority.
+    assert realtime_voice.claim_bridge(voice.pk, "offline-upgrade")
     assert request_capacity(voice)["limit"] is None
     assert request_capacity(old_one)["limit"] == 0
+    policy["unlimited_approval_reference"] = "different-reference"
+    assert request_capacity(voice)["limit"] == 0
+    policy["unlimited_approval_reference"] = "offline-unlimited"
+    del policy["unlimited_intentional_requests"]
+    assert request_capacity(voice)["limit"] == 0
+    policy["unlimited_intentional_requests"] = True
     policy["owner"] = "someone-else"
     assert request_capacity(voice)["limit"] == 0

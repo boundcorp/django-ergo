@@ -73,21 +73,37 @@ def configured_authorization(chat, user):
 
 
 def session_authorization(session):
-    grant = (session.state or {}).get("normal_thread_authorization")
+    # Read the durable grant even if the caller holds a stale session object.
+    state = type(session).objects.values_list("state", flat=True).get(pk=session.pk) or {}
+    grant = state.get("normal_thread_authorization")
     if not grant:
         return None
     expected = configured_authorization(session.chat, session.user)
     if not expected:
         raise ValueError("Normal thread execution authorization was revoked or no longer matches this session.")
-    # The explicit new policy upgrades only an already matching three-request grant.
-    # Other policy edits, including revocations, continue to invalidate the grant.
     upgraded_keys = {"unlimited_intentional_requests", "unlimited_approval_reference"}
     if any(grant.get(key) != value for key, value in expected.items() if key not in upgraded_keys) or (
         grant.get("unlimited_intentional_requests")
         and any(grant.get(key) != expected.get(key) for key in upgraded_keys)
     ):
         raise ValueError("Normal thread execution authorization was revoked or no longer matches this session.")
+    if not grant.get("unlimited_intentional_requests"):
+        return {key: value for key, value in expected.items() if key not in upgraded_keys}
     return expected
+
+
+def pin_unlimited_authorization(session):
+    """Pin an explicit upgrade on a bridge claim; the caller holds the session row lock."""
+    grant = session_authorization(session)
+    expected = configured_authorization(session.chat, session.user) if grant else None
+    if expected and expected.get("unlimited_intentional_requests") and not grant.get("unlimited_intentional_requests"):
+        state = dict(session.state)
+        state["normal_thread_authorization"] = {
+            **state["normal_thread_authorization"],
+            "unlimited_intentional_requests": True,
+            "unlimited_approval_reference": expected["unlimited_approval_reference"],
+        }
+        session.state = state
 
 
 def initial_state(chat, user):

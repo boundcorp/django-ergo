@@ -249,11 +249,18 @@ retain the existing three-request fields and add
 Deploy compatible source to all web and bridge consumers before enabling the
 policy; coordinate any reload separately. Existing processes keep their loaded
 environment and cannot change an already running old-code bridge. A matching
-durable three-request grant is upgraded when served by the new policy and code;
-no database migration is required. Rollback the policy first, then return to
+durable three-request grant is upgraded and pinned on the next eligible bridge
+claim under the new policy and code; polling alone does not upgrade it. No database
+migration is required. Rollback the policy first, then return to
 the prior source after compatible consumers are drained. Already accepted tasks
 continue under normal controls; active unlimited grants fail closed on policy
 removal rather than being silently downgraded.
+
+An incomplete speech collection is a transport failure, not a spent allowance.
+On that provider connection the bridge refuses further delegation after collection
+expiry: a late uncorrelated transcript cannot safely be distinguished from new
+speech. Continue in the owning text thread, or reconnect through standby when
+available; a new input connection retains the original logical-call deadline.
 
 An authorized model-selected client delegation enters the **existing exact
 thread's normal message queue**, with its authenticated user identity, normal

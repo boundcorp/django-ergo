@@ -182,6 +182,7 @@ class Assistant(Agent):
         self.heard_speech = False
         self.speech_generation = 0
         self.delegated_speech_generation = 0
+        self.input_tainted = False
         self.speech_ended_at = None
         self.transcript_changed_at = 0.0
         self.changed = asyncio.Event()
@@ -621,9 +622,15 @@ class Assistant(Agent):
         logger.info("voice delegation_signal_received correlation=%s", self.correlation(event.id))
         if self.closing or event.id in self.seen_requests:
             return
-        if self.capacity["limit"] is None and (
-            self.speech_generation == self.delegated_speech_generation or (not self.speaking and not self.fragments)
-        ):
+        if self.input_tainted:
+            self.seen_requests.add(event.id)
+            self.duplex_session.append_commentary(
+                "An earlier speech transcription did not finish. New background work cannot safely be submitted "
+                "on this connection; continue in the owning text thread or reconnect if standby is available.",
+                delegation_id=event.id,
+            )
+            return
+        if self.capacity["limit"] is None and self.speech_generation == self.delegated_speech_generation:
             self.seen_requests.add(event.id)
             self.duplex_session.append_commentary(
                 "No new spoken request was received; do not start another task without the user's request.",
@@ -663,6 +670,15 @@ class Assistant(Agent):
             self.changed.clear()
             now = time.monotonic()
             if now >= deadline:
+                if self.capacity["limit"] is None:
+                    # Unknown late transcript IDs cannot be separated from the next utterance.
+                    # Keep this provider input epoch fail-closed until it is replaced.
+                    self.input_tainted = True
+                self.delegated_speech_generation = self.speech_generation
+                self.consumed_fragments.update(self.fragments)
+                self.fragments.clear()
+                self.final_fragments.clear()
+                self.fragments_overflow = False
                 await sync_to_async(close_pending, thread_sensitive=True)(self.voice_id, event_id, "expired")
                 self.pending_id = None
                 self.duplex_session.append_commentary(REQUEST_NOT_SUBMITTED, delegation_id=event_id)

@@ -1342,6 +1342,7 @@ def test_unlimited_policy_accepts_five_fresh_speech_requests_before_results(cook
     row.state = {**row.state, **initial_state(chat, chat.user)}
     row.save(update_fields=["state"])
     policy.update(unlimited_intentional_requests=True, unlimited_approval_reference="offline-explicit-new-policy")
+    assert realtime_voice.claim_bridge(vid, "offline-unlimited")
     use_bots(*(say(f"Verified offline result {i}.") for i in range(5)))
 
     async def scenario():
@@ -1409,3 +1410,74 @@ def test_unlimited_policy_accepts_five_fresh_speech_requests_before_results(cook
 
     async_to_sync(scenario)()
     assert not RealtimeVoiceSession.objects.get(pk=other).delegations.exists()
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("expires", [False, True])
+def test_unlimited_collection_handles_late_transcripts_without_replaying_expired_speech(
+    cooking, settings, held_messages, expires
+):
+    from ergonaut.realtime_voice_execution import initial_state
+
+    chat, vid, _ = cooking
+    settings.REALTIME_VOICE_THREAD_EXECUTION_AUTHORIZATIONS = {
+        str(chat.pk): {
+            "owner": chat.user.get_username(),
+            "bot": chat.bot_name,
+            "normal_task_costs_approved": True,
+            "approval_reference": "offline-root",
+            "max_requests": 3,
+            "followup_costs_approved": True,
+            "followup_approval_reference": "offline-three",
+            "unlimited_intentional_requests": True,
+            "unlimited_approval_reference": "offline-unlimited",
+        }
+    }
+    row = RealtimeVoiceSession.objects.get(pk=vid)
+    row.state = initial_state(chat, chat.user)
+    row.save(update_fields=["state"])
+
+    async def scenario():
+        assistant = bridge.Assistant(vid, await sync_to_async(realtime_voice.bridge_state)(vid), None)
+        assistant.grace = 0.01
+        sdk = offline_session(assistant)
+        with patch.object(bridge.Assistant, "duplex_session", new_callable=PropertyMock, return_value=sdk):
+            await bind(assistant, sdk)
+            assistant.on_user_state(SimpleNamespace(new_state="speaking"))
+            assistant.on_user_state(SimpleNamespace(new_state="listening"))
+            with patch.object(bridge, "PENDING_TIMEOUT_SECONDS", 0.05 if expires else 5):
+                sdk._handle_event(
+                    {
+                        "type": "session.delegation.created",
+                        "delegation": {"id": "late", "target": "client"},
+                    }
+                )
+                if expires:
+                    await settle(assistant)
+                    assert assistant.input_tainted
+                    assistant.on_user_state(SimpleNamespace(new_state="speaking"))
+                    assistant.on_user_state(SimpleNamespace(new_state="listening"))
+                else:
+                    await asyncio.sleep(0.02)
+                sdk._handle_event(
+                    {
+                        "type": "session.input_transcript.delta",
+                        "delta": "Start the requested offline task.",
+                        "start_ms": 0,
+                        "end_ms": 1000,
+                    }
+                )
+                sdk._end_speech("user")
+                if expires:
+                    sdk._handle_event(
+                        {
+                            "type": "session.delegation.created",
+                            "delegation": {"id": "late-replay", "target": "client"},
+                        }
+                    )
+                await settle(assistant)
+            assert len(held_messages) == (0 if expires else 1)
+            if expires:
+                assert any("transcription did not finish" in e.get("content", "") for e in drain(sdk))
+
+    async_to_sync(scenario)()

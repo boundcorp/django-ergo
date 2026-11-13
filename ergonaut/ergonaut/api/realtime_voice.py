@@ -29,6 +29,7 @@ from ergonaut.apps.bots.models import RealtimeVoiceDelegation, RealtimeVoiceEven
 from ergonaut.realtime_voice_execution import (
     NORMAL_RESTRICTION,
     initial_state,
+    pin_unlimited_authorization,
     request_capacity,
     session_authorization,
     thread_updates,
@@ -195,14 +196,20 @@ def claim_bridge(voice_id, claim_id=None):
             clear_live_state(session)
             session.save(update_fields=["state", "status", "ended_at"])
             return False
+        if session.bridge_started_at is not None and (
+            not standby_allowed(session.user) or session.standby_state != "resuming"
+        ):
+            return False
+        try:
+            pin_unlimited_authorization(session)
+        except ValueError:
+            pass  # A revoked grant disables delegation, not the voice conversation.
         session.bridge_claim_id = claim_id or uuid.uuid4().hex
         clear_live_state(session)
         if session.bridge_started_at is None:
             session.bridge_started_at = now
             session.save(update_fields=["state", "bridge_started_at", "bridge_claim_id"])
             return True
-        if not standby_allowed(session.user) or session.standby_state != "resuming":
-            return False
         session.standby_state = "live"
         session.save(update_fields=["state", "standby_state", "bridge_claim_id"])
         return True
@@ -813,8 +820,8 @@ def begin_pending(voice_id, event_id, fragments):
         raise ValueError("Invalid delegation ID")
     with transaction.atomic():
         session = RealtimeVoiceSession.objects.select_for_update().select_related("chat", "user").get(pk=voice_id)
-        state = dict(session.state)
         capacity = request_capacity(session)
+        state = dict(session.state)
         if (
             session.status != "active"
             or deadline_expired(session)
