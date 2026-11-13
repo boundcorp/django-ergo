@@ -26,6 +26,7 @@
 | ------------------------------------------------------------- | ------------------------------------------------------------------------- |
 | [Structured calls](structured-calls.md)                       | `StructuredCall`, typed responses with tools, revisions                   |
 | [Lifecycle events](lifecycle-events.md)                       | Opt-in event ledger, evidence reports, retention and rollout              |
+| [Cost ledger](cost-ledger.md)                                 | Passive economic observations, idempotency, settlement projections and adapter coverage |
 | [Compaction](compaction.md)                                   | Session compaction modes and summaries                                    |
 | [Context builder and window chats](context-builder.md)        | Budgeted context blocks; chats with a fixed-size window                   |
 | [Message history](message-history.md)                         | Reading sessions and Claude Code / Codex transcripts; the history toolkit |
