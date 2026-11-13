@@ -34,6 +34,9 @@ Live on rigel from `~/p/boundcorp/django-ergo`, bots from `boundcorp/ergo-bots`.
   ledger; independent maintenance queue/command, cancel/orphan/deadline cleanup,
   no uncertain-create replay and idempotent partial attachments. See
   [host installation and single-host storage boundary](docs/runpod.md).
+- [x] **Explicit quoted H3 hardware**: host profiles bind the GPU type into
+  create ownership and the pre-download CUDA/VRAM check; suitable NVIDIA
+  alternatives are not blocked by an incidental exact-Ada default.
 - [x] **Supervised H3 pilot preparation**: pinned six-shot image-conditioned
   FL2VA runner, immutable archive/prompt versions and submission tombstones,
   PCM-verified 29s export/partial manifests, independently supervised cleaner

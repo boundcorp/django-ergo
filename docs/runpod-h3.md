@@ -233,7 +233,9 @@ daemonization before publishing the host key. Forwarding is restricted to `127.0
 authenticated command execution are available. A fresh host private key is
 generated **inside** the ephemeral rental; it is not the controller private key.
 Before any checkpoint download, the wrapper records effective RAM/disk/VRAM and
-rejects a non-Ada-48GB GPU or driver older than major580. The NVIDIA
+rejects a GPU different from the explicit quoted `gpu_type`, less than48GB
+VRAM, or a driver older than major580. A10080GB is supported by the pinned
+Torch CUDA build's SM80 code; that is not measured H3 fit or throughput. The NVIDIA
 [CUDA13 compatibility table](https://docs.nvidia.com/deploy/cuda-compatibility/minor-version-compatibility.html)
 requires driver580 or later. The bound request requires `minRAMPerGPU=167` and
 `minVCPUPerGPU=10`. The live v1 schema's CUDA enum stops at13.0 while current

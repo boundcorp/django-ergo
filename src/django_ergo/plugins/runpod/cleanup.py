@@ -137,7 +137,7 @@ class RESTCleanup:
             },
         }
         if ssh_public_key is not None:
-            access = create_access(ssh_public_key)
+            access = create_access(ssh_public_key, gpu_type)
             body["env"].update(access.pop("env"))
             body.update(access)
         if quoted_hourly_usd is not None:

@@ -27,7 +27,6 @@ from .supervisor import CleanerSupervision
 from .transport import FixtureRunpodREST
 from .transport import RunpodREST
 
-GPU = "NVIDIA RTX 6000 Ada Generation"
 DISK_GB = 200
 
 
@@ -72,7 +71,7 @@ def prepare(path, config, *, now):
         account=config["account"],
         image=config["image"],
         container_disk_gb=DISK_GB,
-        gpu_type=GPU,
+        gpu_type=config["gpu_type"],
         data_center_ids=config["data_center_ids"],
         quoted_hourly_usd=config["pricing"]["compute_hourly_usd"]["amount"],
         ssh_public_key=config.get("ssh_public_key"),

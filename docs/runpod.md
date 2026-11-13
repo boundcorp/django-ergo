@@ -102,6 +102,7 @@ RUNPOD_ACCOUNTS = {
                     "live_execute": True,
                     "account": "provider-consumer-user-id",
                     "image": "registry.octo.boundcorp.net/ergo-h3-experiment/h3-runtime@sha256:7b08f5d6b56988afeab528c9524ded9052a6739df0899768294134afe1453f8b",
+                    "gpu_type": "NVIDIA A100-SXM4-80GB",  # bind the genuinely quoted GPU
                     "data_center_ids": ["EU-RO-1"],  # verify permitted actual capacity
                     "idle_grace": 120,
                     "eligibility": {"model": True, "hardware": True, "license": "delegated", "inputs": True, "budget": True},
@@ -140,10 +141,14 @@ shell tools running as the same UID on the same writable volume.
 
 The example numbers are a plan, not current quotes or a billing guarantee.
 Admission includes prior commitments and all recorded reservations under an
-account row lock. Native preparation pins one RTX 6000 Ada, one GPU, at least
-167 GB RAM and 10 vCPU, 200 GB container disk, zero optional volume and no network
-volume; it reuses the existing reviewed create request. A generic GPU catalog's
-smaller minimum RAM is not evidence this exact profile is available. The observed `costPerHr` must be present and
+account row lock. Native preparation pins the operator's explicit `gpu_type`,
+one GPU, at least167GB RAM and10vCPU,200GB container disk, zero optional volume
+and no network volume; it reuses the existing reviewed create request. Before
+model download the SSH bootstrap verifies the exact quoted NVIDIA GPU,
+at least48GB VRAM and a CUDA13-capable driver. The preserved runtime includes
+Ampere SM80 code, so A10080GB is an alternative, not a model substitution or
+evidence of conditioned fit. A generic GPU catalog's smaller minimum RAM is not
+evidence the requested profile is available. The observed `costPerHr` must be present and
 not exceed the approved quote before model work. Storage/ancillary evidence is
 still independently required. Failed provider termination can exceed estimates;
 no impossible zero-overrun guarantee is imposed as an admission gate.
