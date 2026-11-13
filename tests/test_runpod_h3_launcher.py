@@ -177,3 +177,21 @@ def test_ready_service_exit_also_fails_without_restart(tmp_path, monkeypatch):
     timing = json.loads((tmp_path / "h3-timings.json").read_text())
     assert timing["startup_seconds"] is not None
     assert spawn.call_count == 2
+
+
+def test_bounded_stderr_tail_keeps_traceback_and_redacts_hf_credentials(
+    tmp_path, monkeypatch
+):
+    module = launcher()
+    token = "hf_private_fixture_token"
+    monkeypatch.setenv("HF_TOKEN", token)
+    path = tmp_path / "stderr.log"
+    trace = (
+        f"Traceback (most recent call last):\nRuntimeError: bad checkpoint {token}\n"
+    )
+    path.write_text("old noise" * module.STDERR_LIMIT + "\n" + trace)
+    tail = module._stderr_tail(path)
+    assert tail == trace.replace(token, "[REDACTED]")
+    assert len(tail.encode()) <= module.STDERR_LIMIT
+    path.unlink()
+    assert module._stderr_tail(path) == ""

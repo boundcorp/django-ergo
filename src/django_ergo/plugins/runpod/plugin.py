@@ -128,9 +128,7 @@ class RunpodPlugin(BotPlugin):
                     )
                     ctx.progress(progress)
         except Exception as exc:  # noqa: BLE001 — raw provider errors may contain capabilities
-            job.error = type(exc).__name__
-            job.save(update_fields=["error"])
-            native.stop(job, "failed")
+            native.fail(job, exc)
         finally:
             # Not an unconditional teardown on Again: only durable terminal intent.
             if experiment.status()["stop_reason"]:

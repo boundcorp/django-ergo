@@ -293,7 +293,11 @@ cleanup close it; a remote watchdog bounds it to the original work cutoff.
 The Worker's SSH commands receive a minimal environment, not provider credentials.
 Provider log SSE reads have a total request budget (including partial/trickling
 lines), not only an idle timeout. A fingerprint-bound launcher failure marker
-fails the Worker promptly instead of waiting for the startup deadline. See
+fails the Worker promptly instead of waiting for the startup deadline. Before
+cleanup it exports the authenticated failure state as `launcher-failure.json`,
+including observed timings and a bounded, HF-token-redacted model stderr tail.
+Collection retains that diagnostic after provider logs disappear; a diagnostic
+write error never prevents stop or independent cleanup. See
 [authenticated access and CPU proof](runpod-h3.md#authenticated-access-without-rebuilding-the-preserved-image).
 Keep policy disabled until the access path and the hardware envelope are
 verified. Model readiness waits only within the original startup/download
