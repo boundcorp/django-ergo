@@ -158,6 +158,10 @@ def main():  # noqa: C901, PLR0912, PLR0915 — ordered download/startup/serve l
                 # Registry validates this index before variant handling. Passing
                 # --model-variant would append FL2VA a second time in _load_config.
                 str(model / "FL2VA"),
+                # Use the pinned loader's explicit partition path. Its generic
+                # completeness check misses video_vae/source/model.safetensors.
+                "--model-subfolder",
+                ".",
                 "--num-gpus",
                 "1",
                 "--tp-size",

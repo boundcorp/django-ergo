@@ -87,8 +87,8 @@ second rental, generation retry, or top-up.
 Download `MiniMaxAI/MiniMax-H3` at
 `42ed227ee7df40d41602854ae760620d6eb651fe` with the single HF filter
 `--include 'FL2VA/*' --local-dir /workspace/model`, then serve
-`--model-path /workspace/model/FL2VA` **without** `--model-variant` or
-`--model-subfolder`. The partition's index already names `MiniMaxH3Pipeline` and
+`--model-path /workspace/model/FL2VA --model-subfolder .`, **without**
+`--model-variant`. The partition's index already names `MiniMaxH3Pipeline` and
 declares `_minimax_h3.partition: "fl2va"`.
 
 The repo-root index uses three-element modular descriptors. Pinned SGLang's
@@ -104,9 +104,28 @@ is missing from the download.
 Simply changing the path while retaining `--model-variant fl2va` is also wrong:
 [H3 sets the subfolder to `FL2VA`](https://github.com/sgl-project/sglang/blob/2511743bd784e69e5a81ca3d926a000711dae4ab/python/sglang/multimodal_gen/runtime/pipelines/minimax_h3_pipeline.py#L87-L103),
 and [the base loader appends it](https://github.com/sgl-project/sglang/blob/2511743bd784e69e5a81ca3d926a000711dae4ab/python/sglang/multimodal_gen/runtime/pipelines_core/composed_pipeline_base.py#L173-L206),
-yielding `FL2VA/FL2VA`. With no variant override, the partition-local index is
-validated and [all component paths resolve beneath that directory](https://github.com/sgl-project/sglang/blob/2511743bd784e69e5a81ca3d926a000711dae4ab/python/sglang/multimodal_gen/runtime/pipelines_core/composed_pipeline_base.py#L349-L361).
-CPU source/tree validation proves these paths, not weight loading or GPU fit.
+yielding `FL2VA/FL2VA`.
+
+The explicit `--model-subfolder .` is also required at this pin. Without it,
+the base loader calls `maybe_download_model(..., force_diffusers_model=True)`.
+Its generic completeness check only globs weight files directly inside each
+component, but the real video VAE is
+`FL2VA/video_vae/source/model.safetensors`. A complete 81-file download is
+therefore misclassified as incomplete; the loader tries to download the absolute
+local path as a Hub repository ID and raises `HFValidationError`.
+The dot selects the already-local partition through the loader's supported
+explicit-subfolder branch, retaining normal index/component validation without
+moving weights, duplicating the 10.4GB VAE or adding a compatibility symlink.
+The H3-specific VAE selector already chooses `source/model.safetensors`.
+
+The same nested-VAE issue was independently identified by the Serverless
+experiment, which used a root-level VAE symlink. The native launcher instead uses
+the existing explicit-subfolder API; the frozen model and runtime are unchanged.
+An offline smoke in the actual preserved image reproduced the old failure and
+resolved all six component directories plus the nested VAE weight path with the
+new arguments. The permanent CPU regression uses the pinned public 81-file
+layout and the pinned loader's local validation functions. These checks prove
+path/config resolution, **not tensor loading, GPU fit or successful generation**.
 
 ## Repeatable image builds and different models
 

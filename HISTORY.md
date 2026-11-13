@@ -4,6 +4,15 @@ This document tracks the major milestones and evolution of the Django Ergo proje
 
 ## Development Timeline
 
+### Pinned H3 nested video-VAE layout (November 2026)
+
+- Serve the downloaded FL2VA partition with explicit `--model-subfolder .`.
+  This uses the pinned loader's supported local-partition branch instead of its
+  generic completeness check, which misses `video_vae/source/model.safetensors`.
+- Preserve the immutable image/model and avoid duplicate weights or filesystem
+  aliases. Regression uses the real frozen public layout; actual-image CPU
+  smoke verifies all six component paths, not tensor loading or GPU fit.
+
 ### Versioned Orca coordinator instructions (November 2026)
 
 - Added chat-scoped follow-up tools with durable versions, explicit supersession
