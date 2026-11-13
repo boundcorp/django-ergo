@@ -41,6 +41,13 @@ test('route observations exclude hardware identifiers and do not request capture
       [audio as unknown as HTMLMediaElement],
       track,
     )
+    Object.defineProperty(window.navigator, 'userAgent', {
+      configurable: true,
+      value: 'Mozilla/5.0 (Linux; Android 16) AppleWebKit/537.36 Chrome/141.0.0.0 Mobile Safari/537.36',
+    })
+    const browserSnapshot = collectVoiceAudioDiagnostics(initialVoiceAudioOutput, [])
+    expect(browserSnapshot.browser).toBe('chromium')
+    expect(browserSnapshot.browser_major).toBe('141')
     expect(snapshot.applied_sink).toBe('selected')
     expect(snapshot.physical_route).toBe('unknown')
     expect(snapshot.microphone_enabled).toBe(false)

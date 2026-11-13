@@ -3,7 +3,7 @@ import { act, createElement } from 'react'
 import type { createRoot as CreateRoot, Root } from 'react-dom/client'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { Window } from 'happy-dom'
-import { LocalParticipant, RemoteAudioTrack, Room, RoomEvent, Track, TrackEvent } from 'livekit-client'
+import { LocalAudioTrack, LocalParticipant, RemoteAudioTrack, Room, RoomEvent, Track, TrackEvent } from 'livekit-client'
 import { Link, MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom'
 import { api, type ClientAudioReport, type RealtimeVoiceSession, type SessionDetail } from '../api'
 import { ActiveVoiceCall, VoiceCallProvider, VoicePage, VoiceTranscript } from './RealtimeVoice'
@@ -933,7 +933,7 @@ test('mocked room events reapply outputs through reconnect and new-room standby 
   expect(disconnects).toBe(0)
   expect(ends).toBe(0)
   expect(container.querySelector('[aria-label="Active voice session"]')?.textContent).toContain(
-    'Voice call continues · Microphone: enabled',
+    'Voice call continues · Microphone: disabled',
   )
   await act(async () => {
     button('Browser back').click()
@@ -1034,7 +1034,7 @@ function assistantTrack(sid = 'TR_assistant') {
   return track
 }
 
-async function connectCall() {
+async function connectCall(initialMicrophoneError?: Error) {
   const rooms: Room[] = []
   const originalOn = Room.prototype.on
   const observe = spyOn(Room.prototype, 'on').mockImplementation(function (this: Room, event, listener) {
@@ -1047,6 +1047,7 @@ async function connectCall() {
     return originalOn.call(this, event, listener)
   })
   const microphone = spyOn(LocalParticipant.prototype, 'setMicrophoneEnabled').mockResolvedValue(undefined)
+  if (initialMicrophoneError) microphone.mockRejectedValueOnce(initialMicrophoneError)
   restoreRoomMocks.push(
     () => observe.mockRestore(),
     () => microphone.mockRestore(),
@@ -1205,4 +1206,139 @@ test('rising inbound audio energy is reported once and explains volume when play
   await pause(1100)
   expect(samples).toBe(sampled) // polling stops once arrival is known
   expect(statuses().filter(status => status === 'audio_arriving')).toHaveLength(1)
+})
+
+test('local microphone ended event clears enabled UI and reconnect observes the current live track', async () => {
+  const previousStream = globalThis.MediaStream
+  class SyntheticStream {
+    constructor(private tracks: MediaStreamTrack[]) {}
+    getTracks() {
+      return this.tracks
+    }
+    getAudioTracks() {
+      return this.tracks
+    }
+  }
+  Object.assign(globalThis, { MediaStream: SyntheticStream })
+  restoreRoomMocks.push(() => {
+    globalThis.MediaStream = previousStream
+  })
+  const native = Object.assign(new window.EventTarget(), {
+    id: 'synthetic-input',
+    kind: 'audio',
+    enabled: true,
+    muted: false,
+    readyState: 'live',
+    getConstraints: () => ({}),
+    getSettings: () => ({}),
+    stop() {},
+  })
+  const track = new LocalAudioTrack(native as unknown as MediaStreamTrack)
+  track.source = Track.Source.Microphone
+  const publication = { source: Track.Source.Microphone, track, isMuted: false }
+  const rooms: Room[] = []
+  const originalOn = Room.prototype.on
+  const observe = spyOn(Room.prototype, 'on').mockImplementation(function (this: Room, event, listener) {
+    this.connect = async () => {
+      rooms.push(this)
+    }
+    this.disconnect = async () => {}
+    return originalOn.call(this, event, listener)
+  })
+  const microphone = spyOn(LocalParticipant.prototype, 'setMicrophoneEnabled').mockResolvedValue(undefined)
+  const getPublication = spyOn(LocalParticipant.prototype, 'getTrackPublication').mockImplementation(source =>
+    source === Track.Source.Microphone ? (publication as never) : undefined,
+  )
+  restoreRoomMocks.push(
+    () => observe.mockRestore(),
+    () => microphone.mockRestore(),
+    () => getPublication.mockRestore(),
+  )
+  api.realtimeVoiceToken = async () => ({ url: 'wss://never-joined.invalid', token: 'synthetic-token' })
+  await mountVoice()
+  await act(async () => {
+    button('Start call').click()
+  })
+  expect(container.textContent).toContain('Microphone: enabled')
+  await act(async () => {
+    native.readyState = 'ended'
+    native.dispatchEvent(new window.Event('ended'))
+  })
+  expect(container.textContent).toContain('Microphone: disabled')
+  expect(container.textContent).not.toContain('Microphone: enabled')
+  await act(async () => {
+    native.readyState = 'live'
+    track.emit(TrackEvent.Restarted, track)
+    rooms[0].emit(RoomEvent.Reconnecting)
+    rooms[0].emit(RoomEvent.Reconnected)
+  })
+  expect(container.textContent).toContain('Microphone: enabled')
+  await act(async () => {
+    await track.mute()
+  })
+  expect(container.textContent).toContain('Microphone: disabled')
+  await act(async () => {
+    await track.unmute()
+  })
+  expect(container.textContent).toContain('Microphone: enabled')
+  await act(async () => {
+    rooms[0].emit(RoomEvent.LocalTrackUnpublished, publication as never, rooms[0].localParticipant)
+  })
+  expect(container.textContent).toContain('Microphone: disabled')
+  expect(microphone).toHaveBeenCalledTimes(1)
+  expect(rooms).toHaveLength(1)
+})
+
+test('permission failure keeps current call and explicit recovery uses same participant without a token or telemetry', async () => {
+  const current = await connectCall(Object.assign(new Error('PRIVATE DEVICE DETAILS'), { name: 'NotAllowedError' }))
+  expect(container.textContent).toContain('Microphone permission was denied')
+  expect(container.textContent).not.toContain('PRIVATE DEVICE DETAILS')
+  expect(container.textContent).toContain('Connected')
+  expect(container.textContent).toContain('Browser capture: absent')
+  let tokens = 0
+  api.realtimeVoiceToken = async () => {
+    tokens++
+    throw new Error('Recovery must not request another token')
+  }
+  const reportCount = reports.length
+  const publicationListeners = current.listenerCount(RoomEvent.LocalTrackPublished)
+  await act(async () => {
+    button('Recover microphone').click()
+  })
+  expect(tokens).toBe(0)
+  expect(container.textContent).not.toContain('Microphone permission was denied')
+  expect(container.textContent).toContain('Browser capture: absent')
+  expect(container.textContent).not.toContain('Microphone: enabled')
+  expect(current.listenerCount(RoomEvent.LocalTrackPublished)).toBe(publicationListeners)
+  expect(reports).toHaveLength(reportCount)
+  await act(async () => {
+    button('Mute').click()
+  })
+  expect(button('Recover microphone').disabled).toBe(true)
+  await act(async () => {
+    current.emit(RoomEvent.Reconnected)
+  })
+  expect(button('Unmute').getAttribute('aria-pressed')).toBe('true')
+  expect(button('Recover microphone').disabled).toBe(true)
+})
+
+test('pending microphone recovery disables mute controls so intentional mute cannot race restart', async () => {
+  const current = await connectCall()
+  const pending = Promise.withResolvers<undefined>()
+  current.localParticipant.setMicrophoneEnabled = () => pending.promise
+  await act(async () => {
+    button('Recover microphone').click()
+  })
+  expect(button('Mute').disabled).toBe(true)
+  expect(button('Recovering microphone…').disabled).toBe(true)
+  await act(async () => {
+    button('Mute').click()
+  })
+  expect(button('Mute').getAttribute('aria-pressed')).toBe('false')
+  await act(async () => {
+    pending.resolve()
+    await pending.promise
+  })
+  expect(button('Mute').disabled).toBe(false)
+  expect(button('Mute').getAttribute('aria-pressed')).toBe('false')
 })

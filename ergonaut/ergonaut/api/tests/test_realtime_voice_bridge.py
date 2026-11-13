@@ -22,7 +22,7 @@ from ninja.errors import HttpError
 
 pytest.importorskip("livekit.plugins.openai.realtime.gpt_live_model")
 from livekit import rtc
-from livekit.agents import AgentSession, llm, utils
+from livekit.agents import AgentSession, APIConnectionError, llm, utils
 from livekit.agents.llm._realtime.gpt_live import GPTLiveSession
 from livekit.agents.llm.duplex_adapter import AdaptiveNoiseGate, _DuplexRealtimeSession
 from livekit.agents.voice.events import AgentStateChangedEvent, UserStateChangedEvent
@@ -50,6 +50,7 @@ def offline_key(monkeypatch):
 def offline_session(assistant):
     session = GPTLiveSession.__new__(GPTLiveSession)
     llm.DuplexSession.__init__(session, assistant.llm.duplex_model)
+    session._live_model = assistant.llm.duplex_model
     session._opts = assistant.llm.duplex_model._opts
     session._instructions = assistant.instructions
     session._history = assistant.chat_ctx.copy()
@@ -364,6 +365,94 @@ def test_bridge_audio_evidence_is_recorded_once_and_frames_pass_through_unchange
 
 
 @pytest.mark.django_db(transaction=True)
+def test_input_evidence_uses_real_sdk_wire_boundaries_and_is_bounded_and_sanitized(cooking, settings, held_messages):
+    chat, vid, other = cooking
+    settings.REALTIME_VOICE_USERS = {chat.user.get_username()}
+    claim = "offline-input"
+    assert realtime_voice.claim_bridge(vid, claim)
+    snapshot = realtime_voice.bridge_state(vid)
+
+    class UnavailableSocket:
+        async def send_str(self, _payload):
+            raise ConnectionError("private-provider-error")
+
+    async def scenario():
+        assistant = bridge.Assistant(vid, snapshot, None, claim_id=claim)
+        sdk = offline_session(assistant)
+        sdk._session_started_fut = asyncio.get_running_loop().create_future()
+        sdk._session_id = None
+        with patch.object(bridge.Assistant, "duplex_session", new_callable=PropertyMock, return_value=sdk):
+            await bind(assistant, sdk)
+            assert sdk._session_start_event().model_dump(exclude_none=True)["session"]["delegation"] == {
+                "type": "client"
+            }
+            sdk._handle_event({"type": "session.input_transcript.delta", "delta": " \t", "start_ms": 0, "end_ms": 10})
+            await settle(assistant)
+            assert not assistant.input_noted  # whitespace is not provider transcription evidence
+            started = {"type": "session.started", "session": {"id": "private-provider-session"}}
+            for _ in range(2):
+                # The actual receive loop emits the raw event before invoking its parser.
+                sdk.emit("openai_server_event_received", started)
+                sdk._handle_event(started)
+                sdk._handle_event(
+                    {
+                        "type": "session.input_transcript.delta",
+                        "delta": "private-spoken-text",
+                        "start_ms": 10,
+                        "end_ms": 20,
+                    }
+                )
+                with pytest.raises(APIConnectionError, match="GPT-Live send failed"):
+                    await sdk._ws_send(
+                        UnavailableSocket(),
+                        {"type": "session.input_audio.append", "audio": "private-audio-payload"},
+                    )
+                # The provider send failed after the SDK's queued callback. It does
+                # not establish remote receipt or start another connection.
+                sdk._emit_error(RuntimeError("private-provider-error"), recoverable=False)
+                sdk.emit("openai_server_event_received", {"type": "error", "error": "private-wire-error"})
+            await settle(assistant)
+            evidence = [
+                event
+                for event in (await sync_to_async(realtime_voice.bridge_state)(vid))["events"]
+                if event["kind"] == "bridge_input"
+            ]
+            expected = {"provider_started", "transcribed", "forwarded", "provider_error"}
+            assert {event["event_id"] for event in evidence} == {f"bridge-input:{stage}:{claim}" for stage in expected}
+            assert len(evidence) == len(expected)
+            assert {event["text"] for event in evidence} == {bridge.BRIDGE_INPUT_EVENTS[stage] for stage in expected}
+            assert all(event["delivery"] == "unknown" for event in evidence)
+            assert "private-" not in str(evidence)
+            assert assistant.llm.duplex_model._opts.conn_options.max_retry == 0
+            assert not assistant.heard_speech and not held_messages
+            # A second observer of the same claim cannot duplicate durable stages.
+            replay = bridge.Assistant(vid, snapshot, None, claim_id=claim)
+            for stage in expected:
+                replay.note_input(stage)
+            await settle(replay)
+            await assistant.on_exit()
+            assert assistant.input_error_session is None
+            assistant.input_noted.discard("provider_error")
+            sdk._emit_error(RuntimeError("private-late-error"), recoverable=False)
+            assert "provider_error" not in assistant.input_noted
+            assistant.stop()
+            assistant.note_input("speech")
+            assert "speech" not in assistant.input_noted
+            await assistant.finish_live()
+            await replay.finish_live()
+        stale = bridge.Assistant(vid, snapshot, None, claim_id="old-claim")
+        stale.note_input("speech")
+        await settle(stale)
+        await stale.finish_live()
+
+    async_to_sync(scenario)()
+    evidence = RealtimeVoiceSession.objects.get(pk=vid).events.filter(kind="bridge_input")
+    assert evidence.count() == 4
+    assert not RealtimeVoiceSession.objects.get(pk=other).events.exists()
+    assert held_messages == []
+
+
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("stop", [True, False])
 def test_stop_or_missing_final_never_dispatches(cooking, held_messages, stop):
     _, vid, _ = cooking
@@ -404,7 +493,8 @@ def test_stop_or_missing_final_never_dispatches(cooking, held_messages, stop):
 
 
 @pytest.mark.django_db(transaction=True)
-def test_real_session_audio_input_drives_silero_speech_states(cooking, held_messages):
+@pytest.mark.parametrize("spoken", [False, True])
+def test_real_session_audio_input_drives_silero_speech_states(cooking, settings, held_messages, spoken):
     if not shutil.which("ffmpeg"):
         pytest.skip("ffmpeg with flite is required")
     speech = subprocess.run(
@@ -427,6 +517,9 @@ def test_real_session_audio_input_drives_silero_speech_states(cooking, held_mess
         check=True,
         capture_output=True,
     ).stdout
+    chat, vid, _ = cooking
+    settings.REALTIME_VOICE_USERS = {chat.user.get_username()}
+    assert realtime_voice.claim_bridge(vid, "synthetic-input")
 
     class Input(AudioInput):
         def __init__(self):
@@ -441,13 +534,26 @@ def test_real_session_audio_input_drives_silero_speech_states(cooking, held_mess
             await asyncio.sleep(0.01)
 
     async def scenario():
-        _, vid, _ = cooking
-        assistant = bridge.Assistant(vid, await sync_to_async(realtime_voice.bridge_state)(vid), None)
-        session = AgentSession(vad=silero.VAD.load())
+        assistant = bridge.Assistant(
+            vid, await sync_to_async(realtime_voice.bridge_state)(vid), None, claim_id="synthetic-input"
+        )
+        vad = silero.VAD.load()
+        session = AgentSession(vad=vad)
         audio = Input()
         session.input.audio = audio
         states = []
         ended = asyncio.Event()
+        inferred = asyncio.Event()
+        submitted, forwarded = [], []
+        original_push_audio = GPTLiveSession.push_audio
+
+        def push_audio(sdk, frame):
+            forwarded.append(frame)
+            original_push_audio(sdk, frame)
+
+        @vad.on("metrics_collected")
+        def on_inference(_event):
+            inferred.set()
 
         @session.on("user_state_changed")
         def state_changed(event):
@@ -456,17 +562,47 @@ def test_real_session_audio_input_drives_silero_speech_states(cooking, held_mess
             if "speaking" in states and event.new_state == "listening":
                 ended.set()
 
-        with patch.object(GPTLiveSession, "_main_task", parked_provider):
+        with (
+            patch.object(GPTLiveSession, "_main_task", parked_provider),
+            patch.object(GPTLiveSession, "push_audio", push_audio),
+        ):
             try:
                 await session.start(agent=assistant, record=False, session_host=False)
                 # Real AudioInput -> AgentSession -> AgentActivity -> AudioRecognition ->
                 # Silero ONNX, while GPT-Live's transport is parked.
-                pcm = speech + bytes(16000 * 2 * 2)
+                pcm = (speech if spoken else b"") + bytes(16000 * 2 * 2)
                 for offset in range(0, len(pcm) - 639, 640):
-                    audio.frames.put_nowait(rtc.AudioFrame(pcm[offset : offset + 640], 16000, 1, 320))
-                await asyncio.wait_for(ended.wait(), timeout=10)
-                assert "speaking" in states and assistant.heard_speech
-                assert not assistant.speaking and assistant.speech_ended_at is not None
+                    frame = rtc.AudioFrame(pcm[offset : offset + 640], 16000, 1, 320)
+                    submitted.append(frame)
+                    audio.frames.put_nowait(frame)
+                await asyncio.wait_for(inferred.wait(), timeout=10)
+                if spoken:
+                    await asyncio.wait_for(ended.wait(), timeout=10)
+                    assert "speaking" in states and assistant.heard_speech
+                    assert not assistant.speaking and assistant.speech_ended_at is not None
+                else:
+                    assert "speaking" not in states and not assistant.heard_speech
+                async with asyncio.timeout(10):
+                    while len(forwarded) < len(submitted):
+                        await asyncio.sleep(0.01)
+                assert len(forwarded) == len(submitted)
+                assert all(actual is original for actual, original in zip(forwarded, submitted, strict=True))
+                # The real SDK resampled/serialized these exact input frames into
+                # its client queue, but the parked transport never attempted a send.
+                queued = drain(assistant.duplex_session)
+                assert any(event["type"] == "session.input_audio.append" and event["audio"] for event in queued)
+                await settle(assistant)
+                evidence = [
+                    event
+                    for event in (await sync_to_async(realtime_voice.bridge_state)(vid))["events"]
+                    if event["kind"] == "bridge_input"
+                ]
+                assert [event["event_id"] for event in evidence] == (
+                    ["bridge-input:speech:synthetic-input"] if spoken else []
+                )
+                assert [event["text"] for event in evidence] == (
+                    [bridge.BRIDGE_INPUT_EVENTS["speech"]] if spoken else []
+                )
                 assert not held_messages  # VAD alone is never a delegation
             finally:
                 assistant.closing = True
@@ -474,6 +610,7 @@ def test_real_session_audio_input_drives_silero_speech_states(cooking, held_mess
                     assistant.watcher.cancel()
                     await asyncio.gather(assistant.watcher, return_exceptions=True)
                 await session.aclose()
+                await assistant.finish_live()
 
     async_to_sync(scenario)()
 

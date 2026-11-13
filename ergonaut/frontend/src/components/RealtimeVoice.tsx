@@ -20,6 +20,13 @@ import {
 import { initialVoiceAudioOutput, VoiceAudioOutput, type VoiceAudioOutputState } from '../voiceAudioOutput'
 import { VoiceBackgroundWork } from './VoiceSessionCard'
 import { collectVoiceAudioDiagnostics, type VoiceAudioDiagnostics } from '../voiceAudioDiagnostics'
+import {
+  bridgeInputEvidence,
+  initialVoiceAudioInput,
+  inputErrorMessage,
+  VoiceAudioInput,
+  type VoiceAudioInputState,
+} from '../voiceAudioInput'
 
 type Phase = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'disconnected'
 const storageKey = (chatId: string) => `ergonaut.realtimeVoice.${chatId}`
@@ -78,6 +85,9 @@ type VoiceCallOwner = {
   phase: Phase
   muted: boolean
   microphone: 'enabled' | 'disabled' | 'unknown'
+  input: VoiceAudioInputState
+  recoverMicrophone: () => Promise<void>
+  probeMicrophone: () => void
   audioPlayback: AudioPlayback
   audioArriving: boolean
   unplayedTurn: boolean
@@ -104,7 +114,14 @@ function useVoiceOwner(): VoiceCallOwner {
   const voiceRef = useRef<RealtimeVoiceSession | null>(null)
   const [phase, setPhase] = useState<Phase>('idle')
   const [muted, setMuted] = useState(false)
-  const [microphone, setMicrophone] = useState<'enabled' | 'disabled' | 'unknown'>('unknown')
+  const [input, setInput] = useState(initialVoiceAudioInput)
+  const inputObserver = useRef<VoiceAudioInput | null>(null)
+  const microphone =
+    input.capture === 'live' && input.publication === 'published'
+      ? 'enabled'
+      : input.capture === 'unknown'
+        ? 'unknown'
+        : 'disabled'
   const [audioPlayback, setAudioPlayback] = useState<AudioPlayback>('none')
   const [audioArriving, setAudioArriving] = useState(false)
   // Final assistant turns already known when this connection went live; later ones were spoken to it.
@@ -218,12 +235,14 @@ function useVoiceOwner(): VoiceCallOwner {
     generation.current++
     const current = room.current
     room.current = null
+    inputObserver.current?.dispose()
+    inputObserver.current = null
     if (current) void current.disconnect()
     audio.current?.replaceChildren()
     outputRouting.current?.clearTracks()
     setPhase('disconnected')
     setMuted(false)
-    setMicrophone('unknown')
+    setInput(initialVoiceAudioInput)
     endCall()
   }
 
@@ -232,6 +251,7 @@ function useVoiceOwner(): VoiceCallOwner {
       generation.current++
       const current = room.current
       room.current = null
+      inputObserver.current?.dispose()
       if (current) void current.disconnect()
       outputRouting.current?.dispose()
       if (call.current) clearInterval(call.current.poll)
@@ -334,6 +354,11 @@ function useVoiceOwner(): VoiceCallOwner {
       if (attempt !== generation.current) return
       const current = new Room()
       room.current = current
+      inputObserver.current?.dispose()
+      inputObserver.current = new VoiceAudioInput(current, navigator.mediaDevices, next => {
+        if (room.current === current && attempt === generation.current && voiceRef.current?.status === 'active')
+          setInput(next)
+      })
       if (call.current) clearInterval(call.current.poll)
       const target: CallAudio = {
         room: current,
@@ -416,12 +441,12 @@ function useVoiceOwner(): VoiceCallOwner {
       current.on(RoomEvent.Reconnecting, () => {
         if (room.current === current) {
           setPhase('reconnecting')
-          setMicrophone('unknown')
         }
       })
       current.on(RoomEvent.Reconnected, () => {
         if (room.current === current) {
           setPhase('connected')
+          inputObserver.current?.refresh()
           if (!current.canPlaybackAudio) playbackProblem(target, { name: 'NotAllowedError' })
           else refreshPlayback(target)
           void outputRouting.current?.refresh()
@@ -429,26 +454,35 @@ function useVoiceOwner(): VoiceCallOwner {
       })
       current.on(RoomEvent.Disconnected, () => {
         if (room.current === current) {
+          inputObserver.current?.dispose()
+          inputObserver.current = null
           room.current = null
           audio.current?.replaceChildren()
           outputRouting.current?.clearTracks()
           setPhase('disconnected')
-          setMicrophone('unknown')
+          setInput(initialVoiceAudioInput)
           endCall()
         }
       })
       await current.connect(credentials.url, credentials.token)
-      if (attempt !== generation.current) {
+      if (attempt !== generation.current || room.current !== current || voiceRef.current?.status !== 'active') {
         void current.disconnect()
         return
       }
-      await current.localParticipant.setMicrophoneEnabled(true)
-      if (attempt !== generation.current) {
+      try {
+        const publication = await current.localParticipant.setMicrophoneEnabled(true)
+        if (room.current !== current || attempt !== generation.current || voiceRef.current?.status !== 'active')
+          publication?.track?.stop()
+      } catch (error) {
+        // Permission/capture failure does not end or recreate the room, or reset its original deadline.
+        if (room.current === current && attempt === generation.current) inputObserver.current?.failed(error)
+      }
+      if (attempt !== generation.current || room.current !== current || voiceRef.current?.status !== 'active') {
         void current.disconnect()
         return
       }
       setMuted(false)
-      setMicrophone('enabled')
+      inputObserver.current?.refresh()
       setPhase('connected')
       setKnownTurns(new Set(finalAssistantTurns(voiceRef.current)))
       target.live = true
@@ -545,10 +579,23 @@ function useVoiceOwner(): VoiceCallOwner {
       await current.localParticipant.setMicrophoneEnabled(muted)
       if (room.current !== current) return
       setMuted(!muted)
-      setMicrophone(muted ? 'enabled' : 'disabled')
+      inputObserver.current?.refresh()
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      if (room.current === current) inputObserver.current?.failed(e)
     }
+  }
+
+  async function recoverMicrophone() {
+    const current = room.current
+    const observer = inputObserver.current
+    if (!current || !observer || phase !== 'connected' || voiceRef.current?.status !== 'active' || actionLock.current)
+      return
+    await observer.recover(muted)
+  }
+
+  function probeMicrophone() {
+    if (room.current && voiceRef.current?.status === 'active' && phase === 'connected' && !muted)
+      inputObserver.current?.probe()
   }
 
   function enableAudio() {
@@ -587,7 +634,7 @@ function useVoiceOwner(): VoiceCallOwner {
 
   function collectAudioDiagnostics() {
     const track = room.current?.localParticipant.getTrackPublication(Track.Source.Microphone)?.track?.mediaStreamTrack
-    return collectVoiceAudioDiagnostics(output, [...(audio.current?.querySelectorAll('audio') ?? [])], track)
+    return collectVoiceAudioDiagnostics(output, [...(audio.current?.querySelectorAll('audio') ?? [])], track, input)
   }
 
   return {
@@ -597,6 +644,9 @@ function useVoiceOwner(): VoiceCallOwner {
     phase,
     muted,
     microphone,
+    input,
+    recoverMicrophone,
+    probeMicrophone,
     audioPlayback,
     audioArriving,
     unplayedTurn,
@@ -787,6 +837,7 @@ export function VoicePage() {
   }, [id])
   const owns = owner.voice?.chat_id === id
   const voice = owns ? owner.voice : existing?.chat_id === id ? existing : null
+  const bridgeInput = bridgeInputEvidence(voice?.events ?? [])
   const blocked = owner.voice?.status === 'active' && !owns
   const closed = detail?.session.status === 'completed' && detail.session.role !== 'thread'
   const pending = ['requested', 'closing'].includes(voice?.standby_state ?? '')
@@ -878,6 +929,21 @@ export function VoicePage() {
               · Microphone: {owns ? microphone : 'unknown'}
             </p>
             <p>
+              Browser capture: {owns ? owner.input.capture : 'unknown'} · Microphone publication:{' '}
+              {owns ? owner.input.publication : 'unknown'}. Published does not prove bridge or provider receipt.
+            </p>
+            <p>
+              Bridge Silero speech: {bridgeInput.speech ? 'observed' : 'not observed'} · Provider send queue:{' '}
+              {bridgeInput.forwarded ? 'observed (not remote receipt)' : 'not observed'} · Provider session:{' '}
+              {bridgeInput.provider_started ? 'started (not input receipt)' : 'start not observed'} · Transcript:{' '}
+              {bridgeInput.transcribed ? 'observed' : 'not observed'}.
+            </p>
+            {bridgeInput.provider_error && (
+              <p>Provider error observed; input receipt is not established by that event.</p>
+            )}
+            <p>Live/enabled capture does not prove nonzero input. Hardware input source is unverified.</p>
+            {owns && owner.input.error !== 'none' && <p role="alert">{inputErrorMessage(owner.input.error)}</p>}
+            <p>
               Last observed voice SDK · You: {runtime?.user_state || 'unknown'} · Assistant:{' '}
               {runtime?.agent_state || 'unknown'}
             </p>
@@ -963,11 +1029,18 @@ export function VoicePage() {
                 <>
                   <button
                     type="button"
-                    disabled={!!action || (standbyEnabled && pending)}
+                    disabled={!!action || owner.input.recovering || (standbyEnabled && pending)}
                     aria-pressed={muted}
                     onClick={() => void owner.toggleMute()}
                   >
                     {muted ? 'Unmute' : 'Mute'}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!!action || muted || owner.input.recovering || (standbyEnabled && pending)}
+                    onClick={() => void owner.recoverMicrophone()}
+                  >
+                    {owner.input.recovering ? 'Recovering microphone…' : 'Recover microphone'}
                   </button>
                   {audioPlayback !== 'playing' && (
                     <button type="button" onClick={owner.enableAudio} aria-describedby="voice-playback-help">
@@ -1129,6 +1202,30 @@ export function VoicePage() {
               Microphone capture can use a different communication route from media playback, even with system default
               selected. Physical Bluetooth routing is unknown; diagnostics do not change your route.
             </p>
+            <h2 className="mt-3 font-semibold">Local input check</h2>
+            <p>
+              Recovery requests microphone access on this existing call; it may prompt for permission. It does not
+              create another room or extend the call deadline. Unmute intentionally muted input yourself first.
+            </p>
+            <button
+              type="button"
+              className="my-1 min-h-11 rounded-md border border-stroke px-3"
+              disabled={
+                !owns ||
+                phase !== 'connected' ||
+                muted ||
+                owner.input.capture !== 'live' ||
+                owner.input.probe === 'sampling'
+              }
+              onClick={owner.probeMicrophone}
+            >
+              Check existing microphone locally
+            </button>
+            <p>
+              Local input check: {owns ? owner.input.probe : 'not-observed'}. Checks one second of the existing track
+              only; no new capture, audio playback, recording, device identifiers or upload. Nonzero samples do not
+              identify the hardware source or prove provider receipt.
+            </p>
             <button
               type="button"
               className="my-1 min-h-11 rounded-md border border-stroke px-3"
@@ -1137,6 +1234,10 @@ export function VoicePage() {
               Collect route diagnostics
             </button>
             <p>No capture, room connection, device names or device IDs. Snapshot changes only when collected again.</p>
+            <p>
+              Browser family/version reflects the Chromium engine when applicable; it does not identify Brave or its
+              official release version.
+            </p>
             {audioDiagnostics && (
               <pre
                 className="mt-1 max-h-36 overflow-auto whitespace-pre-wrap break-words"
@@ -1161,8 +1262,8 @@ export function VoicePage() {
             </div>
             <p className="mt-2">
               Browser selection only; hearing and the physical audio route are not confirmed. If an output is missing,
-              use your phone or operating system audio controls. Microphone access starts only after Start call or
-              Resume.
+              use your phone or operating system audio controls. Microphone access starts only after Start call, Resume,
+              Unmute or Recover microphone.
             </p>
           </details>
         </section>

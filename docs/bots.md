@@ -1045,6 +1045,14 @@ approvals visible; identifiers, transport/provider details, route configuration
 and runtime events are collapsed under Diagnostics. Enable sound unlocks
 playback on the existing room (not another join or microphone start) and stays
 visible until the browser confirms the assistant's audio is playing.
+Microphone state observes the existing capture track and publication instead of
+assuming a successful enable remains live. Device changes do not automatically
+capture or unmute. Explicit Recover microphone requests capture on the same
+room without resetting its deadline; a click-only local existing-track probe
+records/uploads nothing. Capture, publication, Silero speech, pre-send queueing
+and provider transcription are separate evidence boundaries; none identifies
+phone/headset hardware or proves remote receipt by itself. See
+[microphone diagnostics and recovery](realtime-voice.md#microphone-input-evidence-and-explicit-recovery).
 
 ### Message identity
 
