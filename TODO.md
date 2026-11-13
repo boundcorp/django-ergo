@@ -54,6 +54,10 @@ Live on rigel from `~/p/boundcorp/django-ergo`, bots from `boundcorp/ergo-bots`.
 - [x] **Retain native H3 failure evidence**: private model stderr, bounded
   redacted failure state and timings, and immutable off-Pod diagnostic collection
   before teardown; diagnostic storage errors never prevent rental cleanup.
+- [x] **H3 nested video-VAE layout and Python headers**: launcher symlink for
+  `video_vae/source/model.safetensors` (real-GPU READY in the Serverless test),
+  and a thin `python3.12-dev` image layer for Triton's `cuda_utils` build;
+  actual-image CPU proofs, no weights.
 - [x] **Supervised H3 pilot preparation**: pinned six-shot image-conditioned
   FL2VA runner, immutable archive/prompt versions and submission tombstones,
   PCM-verified 29s export/partial manifests, independently supervised cleaner

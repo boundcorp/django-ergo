@@ -109,7 +109,7 @@ RUNPOD_ACCOUNTS = {
                     "mode": "live",
                     "live_execute": True,
                     "account": "provider-consumer-user-id",
-                    "image": "registry.octo.boundcorp.net/ergo-h3-experiment/h3-runtime@sha256:7b08f5d6b56988afeab528c9524ded9052a6739df0899768294134afe1453f8b",
+                    "image": "ghcr.io/boundcorp/ergo-h3-runtime@sha256:04b69208ac477452cf982b17e3e1eaacc2e84bf9cd824923f2c92fca472b51d9",
                     "hardware": {
                         # Ordered preference; the first in-stock one inside the envelope wins.
                         "gpus": ["NVIDIA A100-SXM4-80GB", "NVIDIA H100 80GB HBM3"],

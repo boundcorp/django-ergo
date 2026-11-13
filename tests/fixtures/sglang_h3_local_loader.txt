@@ -1,0 +1,199 @@
+# SPDX-License-Identifier: Apache-2.0
+# Verbatim stdlib-only consumer functions from sgl-project/sglang at
+# 2511743bd784e69e5a81ca3d926a000711dae4ab:
+# python/sglang/multimodal_gen/runtime/utils/hf_diffusers_utils.py
+# python/sglang/multimodal_gen/runtime/pipelines_core/composed_pipeline_base.py
+# Kept as a frozen test fixture so the dependency boundary runs without Torch,
+# model weights, network access or an installed SGLang. The test supplies only
+# the external download boundary; these local validation/path rules are intact.
+from __future__ import annotations
+
+import glob
+import json
+import logging
+import os
+from typing import Any, cast
+
+logger = logging.getLogger(__name__)
+_NON_WEIGHT_DIFFUSERS_COMPONENT_HINTS = (
+    "tokenizer", "scheduler", "processor", "feature_extractor",
+)
+_WEIGHT_FILE_PATTERNS = ("*.safetensors", "*.bin", "*.pt", "*.pth", "*.ckpt")
+
+def _is_diffusers_component_entry(value: Any) -> bool:
+    return (
+        isinstance(value, (list, tuple))
+        and len(value) == 2
+        and all(item is None or isinstance(item, str) for item in value)
+    )
+
+def _is_weight_bearing_diffusers_component(key: str, value: Any) -> bool:
+    if (
+        key.startswith("_")
+        or not _is_diffusers_component_entry(value)
+        or not any(item is not None for item in value)
+    ):
+        return False
+
+    key_lower = key.lower()
+    return not any(hint in key_lower for hint in _NON_WEIGHT_DIFFUSERS_COMPONENT_HINTS)
+
+def _get_declared_weight_component_dirs(model_path: str) -> list[str]:
+    model_index_path = os.path.join(model_path, "model_index.json")
+    if not os.path.exists(model_index_path):
+        return []
+
+    try:
+        with open(model_index_path) as f:
+            model_index = json.load(f)
+    except Exception as exc:
+        logger.warning(
+            "Failed to read model_index.json at %s: %s", model_index_path, exc
+        )
+        return []
+
+    return [
+        key
+        for key, value in model_index.items()
+        if _is_weight_bearing_diffusers_component(key, value)
+    ]
+
+def _has_local_weight_files(component_path: str) -> bool:
+    return any(
+        glob.glob(os.path.join(component_path, pattern))
+        for pattern in _WEIGHT_FILE_PATTERNS
+    )
+
+def _get_missing_declared_weight_components(model_path: str) -> list[str]:
+    missing_files = []
+    for component_dir in _get_declared_weight_component_dirs(model_path):
+        component_path = os.path.join(model_path, component_dir)
+        if not os.path.isdir(component_path):
+            missing_files.append(f"{component_dir}/")
+        elif not _has_local_weight_files(component_path):
+            missing_files.append(f"{component_dir}/<weights>")
+    return missing_files
+
+def _verify_diffusers_model_complete(path: str) -> bool:
+    """Check if a diffusers model directory has all required component subdirectories."""
+    config_path = os.path.join(path, "model_index.json")
+    if not os.path.exists(config_path):
+        return False
+
+    try:
+        with open(config_path) as config_file:
+            model_index = json.load(config_file)
+    except Exception as exc:
+        logger.warning("Failed to read model_index.json at %s: %s", config_path, exc)
+        return False
+
+    component_keys = [
+        key
+        for key, value in model_index.items()
+        if _is_diffusers_component_entry(value)
+        and any(item is not None for item in value)
+    ]
+    if component_keys:
+        return all(
+            os.path.exists(os.path.join(path, key)) for key in component_keys
+        ) and not _get_missing_declared_weight_components(path)
+
+    return os.path.exists(os.path.join(path, "transformer")) and os.path.exists(
+        os.path.join(path, "vae")
+    )
+
+def verify_model_config_and_directory(model_path: str) -> dict[str, Any]:
+    """
+    Verify that the model directory contains a valid diffusers configuration.
+
+    Args:
+        model_path: Path to the model directory
+
+    Returns:
+        The loaded model configuration as a dictionary
+    """
+
+    # Check for model_index.json which is required for diffusers models
+    config_path = os.path.join(model_path, "model_index.json")
+    if not os.path.exists(config_path):
+        raise ValueError(
+            f"Model directory {model_path} does not contain model_index.json. "
+            "Only HuggingFace diffusers format is supported."
+        )
+
+    # Load the config
+    with open(config_path) as f:
+        config = json.load(f)
+
+    # Verify diffusers version exists
+    if "_diffusers_version" not in config:
+        raise ValueError("model_index.json does not contain _diffusers_version")
+
+    logger.info("Diffusers version: %s", config["_diffusers_version"])
+
+    component_keys = [
+        key
+        for key, value in config.items()
+        if isinstance(value, (list, tuple))
+        and len(value) == 2
+        and all(isinstance(item, str) for item in value)
+    ]
+    if component_keys:
+        missing_components = [
+            component_key
+            for component_key in component_keys
+            if not os.path.exists(os.path.join(model_path, component_key))
+        ]
+        if missing_components:
+            missing_str = ", ".join(missing_components)
+            raise ValueError(
+                f"Model directory {model_path} is missing required component "
+                f"directories: {missing_str}."
+            )
+    else:
+        transformer_dir = os.path.join(model_path, "transformer")
+        vae_dir = os.path.join(model_path, "vae")
+        if not os.path.exists(transformer_dir):
+            raise ValueError(
+                f"Model directory {model_path} does not contain a transformer/ directory."
+            )
+        if not os.path.exists(vae_dir):
+            raise ValueError(
+                f"Model directory {model_path} does not contain a vae/ directory."
+            )
+    return cast(dict[str, Any], config)
+
+def _load_config(self) -> dict[str, Any]:
+        model_subfolder = self.server_args.model_subfolder
+        if model_subfolder is None and not os.path.isfile(
+            os.path.join(self.model_path, "model_index.json")
+        ):
+            model_subfolder = self.default_model_subfolder
+
+        if model_subfolder is None:
+            model_path = maybe_download_model(
+                self.model_path,
+                force_diffusers_model=True,
+                revision=self.server_args.revision,
+            )
+        else:
+            model_subfolder = os.path.normpath(model_subfolder)
+            if (
+                os.path.isabs(model_subfolder)
+                or model_subfolder == ".."
+                or model_subfolder.startswith(f"..{os.sep}")
+            ):
+                raise ValueError(
+                    f"model_subfolder must stay inside the model repository: {model_subfolder!r}"
+                )
+            model_root = maybe_download_model(
+                self.model_path,
+                allow_patterns=[f"{model_subfolder}/**"],
+                revision=self.server_args.revision,
+            )
+            model_path = os.path.join(model_root, model_subfolder)
+
+        self.model_path = model_path
+        logger.info("Model path: %s", model_path)
+        config = verify_model_config_and_directory(model_path)
+        return cast(dict[str, Any], config)
