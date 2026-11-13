@@ -14,10 +14,9 @@ A call that ran for a chat without being one of its turns (a browser task's
 driver, a look at an attachment) has no session of its own but names the
 chat in ``metadata["session"]``; it counts for that chat and its bot.
 
-``private`` breaks API-billed private pool spend (``private_pools`` in
+``private`` breaks recorded private pool API spend (``private_pools`` in
 providers.yaml) down by pool, provider, exact model and bot, from the
-per-request ``InferenceRequest`` ledger. Those requests are already in the
-totals above (their calls are priced exactly); this is the billing view.
+per-request ``InferenceRequest`` ledger. It is not a reconciled invoice.
 """
 
 from __future__ import annotations
@@ -426,7 +425,9 @@ AGENT_PARTS = ("input", "cache_write", "cache_read", "output")
 
 
 def _agent_cost(usage: AgentUsage) -> float | None:
-    """What the agent's tokens would cost at the model's list price, or None if unpriced."""
+    """Estimate agent token cost, or None if token data or model price is missing."""
+    if not any(getattr(usage, f"{part}_tokens") for part in AGENT_PARTS):
+        return None
     price = price_for(usage.model)
     if price is None:
         return None
@@ -561,7 +562,7 @@ class EstimateScope(Schema):
     priced_tokens: int
     unpriced_tokens: int
     unpriced_models: list[str]
-    no_usage_rows: int  # rows with no tokens recorded at all
+    no_usage_rows: int  # rows with no token data; usage and cost are unknown
     exact_window: bool  # False: rows are lifetime totals selected by activity in the window
     spillover_rows: int = 0  # lifetime rows that began before ``since``
     spillover_tokens: int = 0
@@ -579,20 +580,19 @@ class EstimateOut(Schema):
 
 
 def _list_parts(call: StructuredCall) -> dict[str, float] | None:
-    """A call's list-price cost by part, also for subscription (CLI) calls that bill $0.
-    Recorded per-request costs of API calls are list prices already. None if unpriced."""
-    if call.session and call.session.transport_type == "cli" and call.kind != "voice_transcription":
-        price = price_for(call.model_name)
-        if price is None:
-            return None
-        return price.parts(
-            call.input_tokens,
-            call.output_tokens,
-            call.cache_creation_input_tokens,
-            call.cache_read_input_tokens,
-            one_request=False,
-        )
-    return call_cost_parts(call)
+    """Estimate aggregated tokens using model-table rates, never recorded cost provenance."""
+    if call.kind == "voice_transcription":
+        return None  # Its pricing is not token-based.
+    price = price_for(call.model_name)
+    if price is None:
+        return None
+    return price.parts(
+        call.input_tokens,
+        call.output_tokens,
+        call.cache_creation_input_tokens,
+        call.cache_read_input_tokens,
+        one_request=False,
+    )
 
 
 def _scope() -> dict:
@@ -623,6 +623,7 @@ def _scope_add(scope: dict, counts: dict[str, int], parts: dict[str, float] | No
         scope[f"{part}_tokens"] += counts[part]
     if not tokens:
         scope["no_usage_rows"] += 1
+        return
     if parts is None:
         scope["unpriced_rows"] += 1
         scope["unpriced_tokens"] += tokens
@@ -687,7 +688,7 @@ def _estimate(calls: list[StructuredCall], usages: list[AgentUsage], since) -> d
             agents["spillover_tokens"] += sum(counts.values())
     combined = _merge_scopes(bot, agents)
     return {
-        "basis": "API list-price equivalent from recorded or model-table prices; not an invoice or subscription quota",
+        "basis": "Model-table token estimate; aggregated totals omit per-request surcharges, billed amounts unknown",
         "bot": _scope_out(bot, True),
         "agents": _scope_out(agents, False),
         "combined": _scope_out(combined, agents["rows"] == 0),
@@ -766,7 +767,7 @@ def session_usage(request, session_id: str, hours: int = 6):
 @router.get("/costs", response=CostsOut)
 def costs(request, days: int = 30, bot: str = ""):
     days = max(1, min(days, 366))
-    until = timezone.now()
+    until = timezone.now().astimezone(UTC)
     # Calendar-aligned UTC window: `days` UTC dates ending with today's partial day, so the
     # day series and the totals cover exactly the same instants.
     since = (until - timedelta(days=days - 1)).replace(hour=0, minute=0, second=0, microsecond=0)

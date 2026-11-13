@@ -554,7 +554,7 @@ def test_estimate_prices_subscription_bot_calls_and_agents_at_list_and_reports_c
     assert bot["list_cost"] == pytest.approx(29.8)  # the CLI call counts at list price
     assert bot["output_cost"] == pytest.approx(20)
     assert bot["cache_write_cost"] == pytest.approx(5)
-    assert (bot["unpriced_rows"], bot["priced_rows"], bot["no_usage_rows"]) == (1, 3, 1)
+    assert (bot["unpriced_rows"], bot["priced_rows"], bot["no_usage_rows"]) == (1, 2, 1)
     assert bot["unpriced_tokens"] == 10
     assert bot["unpriced_models"] == ["mystery"]
     assert bot["exact_window"] is True
@@ -625,3 +625,54 @@ def test_agent_rows_outside_the_window_are_dropped_and_spillover_is_flagged(clie
     assert set(rows) == {"gpt-6-sol", "gpt-6-luna"}
     assert rows["gpt-6-sol"]["spillover"] is False
     assert rows["gpt-6-luna"]["spillover"] is True
+
+
+@pytest.mark.django_db
+def test_estimate_uses_table_not_recorded_cost_and_missing_tokens_are_unknown(client, lee):
+    StructuredCall.objects.create(
+        user=lee,
+        kind="title",
+        model_name="gpt-6-sol",
+        input_tokens=1_000_000,
+        cost_usd=99,
+        metadata={"cost_parts": {"input": 99}},
+    )
+    StructuredCall.objects.create(user=lee, kind="title", model_name="gpt-6-sol")
+    session = ConversationSession.objects.create(user=lee, bot_name="helper", engine_type="claude")
+    AgentUsage.objects.create(
+        session=session,
+        bot_name="helper",
+        agent="codex",
+        model="gpt-6-sol",
+        requests=1,
+        last_at=timezone.now(),
+    )
+    response = client.get("/api/costs")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total"]["cost"] == pytest.approx(99)
+    bot = data["estimate"]["bot"]
+    assert bot["list_cost"] == pytest.approx(2)
+    assert (bot["priced_rows"], bot["unpriced_rows"], bot["no_usage_rows"]) == (1, 0, 1)
+    assert "per-request surcharges" in data["estimate"]["basis"]
+    assert data["estimate"]["agents"]["no_usage_rows"] == 1
+    assert data["agents"]["headline"]["priced_rows"] == 0
+    assert data["agents"]["rows"][0]["priced"] is False
+
+
+@pytest.mark.django_db
+def test_costs_window_normalizes_non_utc_now_and_serializes_schema(client, lee, settings):
+    from datetime import UTC, datetime
+    from datetime import timezone as dt_timezone
+    from unittest.mock import patch
+
+    settings.TIME_ZONE = "America/Los_Angeles"
+    now = datetime(2026, 11, 13, 18, 30, tzinfo=dt_timezone(timedelta(hours=-8)))
+    with patch("ergonaut.api.costs.timezone.now", return_value=now):
+        response = client.get("/api/costs?days=2")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["since"] == datetime(2026, 11, 13, tzinfo=UTC).isoformat()
+    assert data["until"] == now.astimezone(UTC).isoformat()
+    assert [day["date"] for day in data["by_day"]] == ["2026-11-13", "2026-11-14"]
+    assert data["estimate"]["bot"]["rows"] == 0

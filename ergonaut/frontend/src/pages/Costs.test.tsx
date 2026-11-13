@@ -177,8 +177,10 @@ describe('List-price estimate', () => {
     expect(html).toContain('100 uncached in')
     expect(html).toContain('80% cache hit (800 reads / 1k = uncached input + writes + reads; output excluded)')
     expect(html).toContain('out $1.00')
-    expect(html).toContain('not an invoice or subscription quota')
-    expect(html).toContain('2026-11-07 to 2026-11-13 UTC')
+    expect(html).toContain('not a verified bill')
+    expect(html).toContain('unknown without reconciliation')
+    expect(html).toContain('per-request long-context rates')
+    expect(html).toContain('2026-11-07T00:00:00+00:00 to 2026-11-13T12:00:00+00:00 (UTC)')
   })
 
   test('unpriced rows are unknown or a lower bound, never silently zero', () => {
@@ -207,8 +209,14 @@ describe('List-price estimate', () => {
     })
     const html = render(withEstimate(empty, empty, empty))
     expect(html).toContain('no cache denominator recorded')
-    expect(html).toContain('2 rows recorded no token usage')
+    expect(html).toContain('2 rows have no token data; usage and cost unknown')
     expect(html).not.toContain('0% cache hit')
+  })
+
+  test('missing token data cannot produce a known zero estimate', () => {
+    const missing = scope({ priced_rows: 0, unpriced_rows: 0, no_usage_rows: 1, list_cost: 0 })
+    const html = render(withEstimate(missing, missing, missing))
+    expect(html.match(/Unknown/g)?.length).toBe(3)
   })
 
   test('agent lifetime spillover is labelled, bot window is exact', () => {

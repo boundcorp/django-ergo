@@ -99,7 +99,7 @@ function agentItem(row: AgentUsage, withProject = true): Item {
     parts: partsOf(row),
     cacheHit: row.cache_hit,
     cost: row.cost,
-    unpriced: row.priced ? undefined : `No list price for ${row.model}`,
+    unpriced: row.priced ? undefined : row.tokens ? `No list price for ${row.model}` : 'No token data; cost unknown',
   }
 }
 
@@ -120,7 +120,9 @@ export function projectItems(data: Costs): Item[] {
       parts: partsOf(project),
       cacheHit: project.cache_hit,
       cost: project.cost,
-      unpriced: project.unpriced_models.length ? `No list price for ${project.unpriced_models.join(', ')}` : undefined,
+      unpriced: project.unpriced_models.length
+        ? `Missing price or token data: ${project.unpriced_models.join(', ')}`
+        : undefined,
       children: data.agents.rows.filter(row => row.project_key === project.key).map(row => agentItem(row, false)),
     }
   })
@@ -442,7 +444,8 @@ function utcDay(value?: string | null) {
 }
 
 function EstimateCard({ title, scope }: { title: string; scope: EstimateScope }) {
-  const unknown = scope.priced_rows === 0 && scope.unpriced_rows > 0
+  const incomplete = scope.unpriced_rows > 0 || scope.no_usage_rows > 0
+  const unknown = scope.priced_rows === 0 && incomplete
   const hit =
     scope.cache_hit === null
       ? 'no cache denominator recorded'
@@ -451,7 +454,7 @@ function EstimateCard({ title, scope }: { title: string; scope: EstimateScope })
     <div className="min-w-0 bg-surface px-4 py-3" aria-label={`${title} list-price estimate`}>
       <div className="text-xs font-medium text-muted">{title}</div>
       <div className="mt-0.5 font-display text-xl font-semibold tabular-nums">
-        {unknown ? 'Unknown' : `${money(scope.list_cost)}${scope.unpriced_rows ? '+' : ''}`}
+        {unknown ? 'Unknown' : `${money(scope.list_cost)}${incomplete ? '+' : ''}`}
       </div>
       <div className="text-xs text-muted">
         {scope.priced_rows} priced · {scope.unpriced_rows} unpriced rows
@@ -468,7 +471,9 @@ function EstimateCard({ title, scope }: { title: string; scope: EstimateScope })
       </div>
       <div className="text-xs text-muted">{hit}</div>
       {scope.no_usage_rows > 0 && (
-        <div className="text-xs text-warning">{scope.no_usage_rows} rows recorded no token usage</div>
+        <div className="text-xs text-warning">
+          {scope.no_usage_rows} rows have no token data; usage and cost unknown
+        </div>
       )}
       {!scope.exact_window && (
         <div className="text-xs text-warning">
@@ -491,10 +496,12 @@ export function Estimate({ data }: { data: Costs }) {
         <EstimateCard title="Combined (list price)" scope={estimate.combined} />
       </div>
       <p className="mt-2 text-xs text-muted">
-        API list-price equivalent for the same tokens, including subscription traffic; unpriced rows are left out, not
-        counted as $0. It is not an invoice or subscription quota, and Bot spend above is what Ergo bills (subscription
-        calls $0). A high cache hit rate does not mean a matching saving: writes and output are priced separately.
-        Window: {utcDay(data.since)} to {utcDay(data.until)} UTC.
+        Model-table estimates include subscription traffic. Unpriced rows and rows with no token data are omitted, not
+        counted as $0. Aggregated bot and agent tokens cannot account for per-request long-context rates. Bot spend
+        above is recorded or estimated API spend excluding subscriptions, not a verified bill; actual billed amounts are
+        unknown without reconciliation. These estimates are not an invoice or subscription quota. A high cache hit rate
+        does not imply matching savings: writes and output are priced separately. Window: {data.since || 'unknown'} to{' '}
+        {data.until || 'unknown'} (UTC).
       </p>
     </section>
   )
@@ -526,8 +533,8 @@ export function CostsBody({
         </p>
       )}
       <p className="mt-2 text-xs text-muted">
-        Costs are estimates from token counts and list prices, each part at the model's own rate; days are UTC. Hover a
-        bar for its token mix and what each part cost.
+        Bot spend uses recorded API costs where available, otherwise model-table estimates; billed amounts are unknown.
+        Hover a bar for its token mix and cost breakdown.
       </p>
     </div>
   )
@@ -605,7 +612,10 @@ export function CostsPage() {
               </option>
             ))}
           </select>
-          <div className="flex gap-0.5 rounded-control border border-stroke bg-surface p-0.5" aria-label="Period">
+          <div
+            className="flex gap-0.5 rounded-control border border-stroke bg-surface p-0.5"
+            aria-label="Last N UTC dates including partial today"
+          >
             {RANGES.map(r => (
               <button
                 key={r}
@@ -614,7 +624,7 @@ export function CostsPage() {
                 aria-pressed={r === days}
                 className={`rounded-control px-3 py-1 text-sm ${r === days ? 'bg-accent font-semibold text-canvas' : 'text-muted hover:bg-raised'}`}
               >
-                {r}d
+                Last {r} UTC dates (including partial today)
               </button>
             ))}
           </div>
