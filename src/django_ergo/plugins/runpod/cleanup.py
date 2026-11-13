@@ -264,7 +264,8 @@ class RESTCleanup:
         leaves the create uncertain: it is reconciled, never retried.
         """
         try:
-            pods = client.list_pods()
+            # Proving nothing was created is ownership reconciliation: reserve.
+            pods = client.list_pods(priority=True)
         except ProviderError:
             pods = None
         with self.experiment._tx() as db:
@@ -306,6 +307,12 @@ class RESTCleanup:
             from .supervisor import CleanerSupervision
 
             CleanerSupervision(self.experiment.path).require_fresh(now=now)
+        if client is not None:
+            # Charge the POST to the shared request budget before committing
+            # uncertainty. A refusal here provably sent nothing: the bind stays
+            # unsent (retired by the next launch step) and RateLimitError
+            # propagates to the caller as a wait, never as an uncertain create.
+            client.reserve()
         with self.experiment._tx() as db:
             self._profile(db)
             request = db.execute(

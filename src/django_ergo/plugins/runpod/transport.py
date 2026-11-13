@@ -230,6 +230,14 @@ class RunpodREST:
             with suppress(Exception):
                 self._budget.observe(headers, status)
 
+    def reserve(self):
+        """Charge an unrepeatable send (create) before the caller commits to it.
+
+        Raises RateLimitError having sent nothing; ``create_pod`` then makes its
+        request without charging the budget a second time.
+        """
+        self._spend()
+
     def _token(self):
         token = self._credential()
         if not isinstance(token, str) or not token or "\n" in token or "\r" in token:
@@ -254,8 +262,10 @@ class RunpodREST:
         capacity=False,
         base=_BASE,
         priority=False,
+        spend=True,
     ):
-        self._spend(priority=priority)
+        if spend:
+            self._spend(priority=priority)
         try:
             token = self._token()
             data = None if body is None else json.dumps(body, allow_nan=False).encode()
@@ -423,7 +433,8 @@ class RunpodREST:
         return gpus
 
     def create_pod(self, body):
-        result = self._request("POST", "/pods", body=body, capacity=True)
+        # Charged by reserve() before create_once commits uncertainty.
+        result = self._request("POST", "/pods", body=body, capacity=True, spend=False)
         if not isinstance(result, dict):
             msg = "invalid provider create response"
             raise ProviderError(msg)

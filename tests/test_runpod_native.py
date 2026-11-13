@@ -1081,6 +1081,31 @@ def test_uncertain_create_is_reconciled_never_retried_elsewhere(setup, failure):
     assert setup.provider.deletes == ["pod123"]
 
 
+def test_budget_refusal_at_create_sends_nothing_and_waits(setup, monkeypatch):
+    message = "provider request budget exhausted"
+    refusals = [RateLimitError(message, 30)]
+    real = FixtureRunpodREST.reserve
+
+    def reserve(client):
+        if refusals:
+            raise refusals.pop()
+        return real(client)
+
+    monkeypatch.setattr(FixtureRunpodREST, "reserve", reserve)
+    job = begin(setup)
+    assert drive(setup, job) == "running"
+    assert setup.provider.posts == 0
+    status, history = attempts(setup, job)
+    assert history == [("EU-RO-1", "deferred")]
+    assert status["create_started"] == 0
+    assert "create deferred" in Worker.objects.get(pk=job.worker_id).progress
+    # The next stock poll retires the unsent bind and creates exactly once.
+    age_stock_watch(job, 120, first=1)
+    assert drive(setup, job) == "running"
+    assert setup.provider.posts == 1
+    assert attempts(setup, job)[1][-1] == ("EU-RO-1", "created")
+
+
 def test_rate_limited_delete_stays_pending_and_maintenance_retries_it(setup):
     job = begin(setup)
     assert drive(setup, job) == "running"
