@@ -145,9 +145,9 @@ baseline = {
 }
 Path("/workspace/h3-resource-baseline.json").write_text(json.dumps(baseline))
 print("ERGO_H3_RESOURCE_BASELINE " + json.dumps(baseline), flush=True)
-if (name != "NVIDIA RTX 6000 Ada Generation" or int(driver.split(".")[0]) < 580
+if (name != os.environ.pop("ERGO_GPU_TYPE") or int(driver.split(".")[0]) < 580
         or int(vram) < 45000):
-    raise ValueError("reviewed Ada 48GB and CUDA 13 driver required before model download")
+    raise ValueError("quoted NVIDIA GPU, at least 48GB VRAM and CUDA 13 driver required before model download")
 # exec keeps the same PID and absolute alarm; the original launcher installs its
 # own handler and resets that alarm to the SAME cutoff, never a new duration.
 os.execv("/opt/venv/bin/python", ["python", "/opt/h3-launch.py"])
@@ -172,12 +172,18 @@ def public_key(value):
     return " ".join(fields[:2])
 
 
-def create_access(key):
-    """Fixed request fields; only the reviewed public client key is variable."""
+def create_access(key, gpu_type):
+    """Bind the quoted NVIDIA GPU and public client key before fingerprinting."""
+    if not isinstance(gpu_type, str) or not gpu_type.startswith("NVIDIA "):
+        msg = "NVIDIA CUDA GPU type required"
+        raise ValueError(msg)
     return {
         "dockerEntrypoint": ["python", "-c", SSH_BOOTSTRAP],
         "dockerStartCmd": [],
         "ports": ["22/tcp"],
         "supportPublicIp": True,
-        "env": {"ERGO_SSH_PUBLIC_KEY": public_key(key)},
+        "env": {
+            "ERGO_SSH_PUBLIC_KEY": public_key(key),
+            "ERGO_GPU_TYPE": gpu_type,
+        },
     }

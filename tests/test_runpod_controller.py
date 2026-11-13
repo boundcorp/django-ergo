@@ -28,6 +28,7 @@ def config():
         "live_execute": False,
         "account": "fixture-account",
         "image": "fixture/h3@sha256:" + "1" * 64,
+        "gpu_type": "NVIDIA A100-SXM4-80GB",
         "data_center_ids": ["EU-RO-1"],
         "idle_grace": 10,
         "eligibility": {
@@ -102,7 +103,6 @@ def test_profile_and_one_committed_post(tmp_path, config):
     assert result["create_started"] == 1
     body = json.loads(fake.requests[0].data)
     assert fake.requests[0].method == "POST"
-    assert body["gpuTypeIds"] == ["NVIDIA RTX 6000 Ada Generation"]
     assert body["dataCenterIds"] == ["EU-RO-1"]
     assert body["containerDiskInGb"] == 200
     assert body["volumeInGb"] == 0

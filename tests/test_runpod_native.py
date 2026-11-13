@@ -232,6 +232,35 @@ def test_native_start_is_committed_idempotent_and_scoped(setup):
         invoke(setup, "start", profile="h3_frozen", request_key="approved-comparison")
 
 
+@pytest.mark.parametrize("created", [False, True])
+def test_terminal_reservation_release_requires_proven_no_create(setup, created):
+    job = begin(setup)
+    if created:
+        drive(setup, job)
+    native.stop(job, "failed")
+    independent_tick(job)
+    job.refresh_from_db()
+    assert job.cleanup_complete
+    assert job.reservation_usd == Decimal("1.23")
+    with pytest.raises(ValueError, match="lifetime rental"):
+        invoke(setup, "start", profile="h3_frozen", request_key="new-approval")
+    setup.policy["max_rentals"] = 2
+    pricing = setup.policy["profiles"]["h3_frozen"]["config"]["pricing"]
+    pricing["compute_hourly_usd"]["amount"] = "2.19"
+    if created:
+        with pytest.raises(ValueError, match="project cap exceeded"):
+            invoke(setup, "start", profile="h3_frozen", request_key="new-approval")
+        assert RunpodJob.objects.count() == 1
+    else:
+        result = invoke(setup, "start", profile="h3_frozen", request_key="new-approval")
+        assert result["reservation_usd"] == "2.22"
+        assert RunpodJob.objects.count() == 2
+        assert setup.provider.posts == 0
+    job.refresh_from_db()
+    assert job.reservation_usd == Decimal("1.23")
+    assert Experiment(job.ledger_path).status()["phase"] == "terminated"
+
+
 @pytest.mark.parametrize("gate", ["principal", "bot", "budget", "price", "maintenance"])
 def test_admission_denies_before_provider_or_worker(setup, gate):
     if gate == "principal":

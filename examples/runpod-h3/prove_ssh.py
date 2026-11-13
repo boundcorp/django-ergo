@@ -106,6 +106,8 @@ def main():  # noqa: C901, PLR0912, PLR0915 -- ordered disposable transport proo
                 "ERGO_SSH_PUBLIC_KEY="
                 + public_key(key.with_suffix(".pub").read_text().strip()),
                 "--env",
+                "ERGO_GPU_TYPE=NVIDIA RTX 6000 Ada Generation",
+                "--env",
                 "PATH=/tmp/ergo-ssh-proof:" + original_path,
                 "--entrypoint",
                 "python",

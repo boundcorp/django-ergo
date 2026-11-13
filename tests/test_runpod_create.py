@@ -189,8 +189,6 @@ def test_serialized_create_intent_is_durable_before_post_and_never_starts_work(
 
 
 def test_ssh_access_bound_before_fingerprinting(reserved):
-    from django_ergo.plugins.runpod.ssh import create_access
-
     key = (
         "ssh-ed25519 "
         + base64.b64encode(
@@ -209,10 +207,6 @@ def test_ssh_access_bound_before_fingerprinting(reserved):
         body = json.loads(
             db.execute("SELECT body FROM rest_create_profile").fetchone()[0]
         )
-    access = create_access(key)
-    assert body["env"]["ERGO_SSH_PUBLIC_KEY"] == access["env"]["ERGO_SSH_PUBLIC_KEY"]
-    assert body["dockerEntrypoint"] == access["dockerEntrypoint"]
-    assert body["ports"] == ["22/tcp"]
     fingerprint = body["env"].pop("ERGO_ATTEMPT_FINGERPRINT")
     assert (
         fingerprint

@@ -143,6 +143,18 @@ def profiles(account, selected, ctx):
     return result
 
 
+def _committed_reservations(jobs):
+    committed = jobs.aggregate(total=Sum("reservation_usd"))["total"] or Decimal(0)
+    # Never-created terminal attempts have no provider liability. Their original
+    # reservation and lifetime count remain immutable; created/unknown attempts
+    # stay reserved after cleanup until billing review.
+    for completed in jobs.filter(cleanup_complete=True):
+        state = Experiment(completed.ledger_path).status()
+        if state["phase"] == "terminated" and state["create_started"] == 0:
+            committed -= completed.reservation_usd
+    return committed
+
+
 def _admission_config(binding, policy, definition):
     """Validate and price a new intent while the account admission lock is held."""
     now = time.time()
@@ -174,7 +186,7 @@ def _admission_config(binding, policy, definition):
     if jobs.filter(cleanup_complete=False).count() >= policy.get("max_concurrent", 1):
         msg = "RunPod unresolved rental concurrency limit reached"
         raise ValueError(msg)
-    committed = jobs.aggregate(total=Sum("reservation_usd"))["total"] or Decimal(0)
+    committed = _committed_reservations(jobs)
     config = json.loads(json.dumps(definition["config"]))
     config["pricing"]["project_committed_usd"] = str(
         committed + Decimal(policy.get("prior_committed_usd", "0"))
