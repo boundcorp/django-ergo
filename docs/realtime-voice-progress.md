@@ -1,5 +1,45 @@
 # Realtime voice progress
 
+## Android Brave input follow-up — 2026-11-13
+
+Latest route-correlated call: **15:51:15–15:51:52 UTC**, on inspected source
+`3c840afa` / image `c7b5a183`; the public frontend matches the image. This is not
+the historical #299 output-only investigation. Three bridge Silero start/end
+pairs prove incoming audio reached recognition, but no user/assistant finals or
+delegations were retained. The explicit End preceded the 90-second cap.
+The separate completed composer transcription at 15:52:28 used the same owner/
+thread. [Sanitized pipeline evidence and gaps](realtime-voice-causal-review.md#android-brave-input-audit--2026-11-13).
+
+Lee confirmed attempting both physical phone and headset microphones. Actual
+browser capture-device switching, Brave version/tab mode, intelligible provider
+input and physical Bluetooth communication routing remain unknown. No user/
+browser fault or provider-forwarding root cause is established.
+
+Reviewable source correction: actual native/SDK capture and publication
+observation replaces optimistic enabled state, with explicit permission/error
+recovery on the same room, devicechange invalidation without capture/unmute,
+and a click-only one-second existing-track local PCM probe. Late capture
+completion after End is stopped. Fixed-text `bridge_input` events distinguish
+Silero speech, provider startup, pre-send queueing, nonempty transcription and
+generic errors; queueing is never called remote receipt. No raw-frame hook is
+invented. Normal execution policy/approvals/costs and transport caps are unchanged.
+
+Observed offline verification:
+
+| Check | Result |
+| --- | --- |
+| Failing-before actual component regression | Native ended track incorrectly remained enabled. |
+| Full frontend suite | **316 passed**, including ended/muted/unpublished/reconnect, permission recovery, late-capture teardown, intentional-mute race, devicechange and local synthetic PCM. Existing React `act` warnings remain. |
+| Targeted installed-SDK/API/normal-execution regressions | **60 passed**; zero-retry/scoped approvals preserved. Initial new fixture lacked the SDK model field needed by its actual error handler; fixed fixture, not production semantics. |
+| Standalone actual AgentSession/Silero + SDK, disposable database | Synthetic PCM produced speech and **56 local serialized audio-send events**; durable speech/forwarded/transcribed stages, no payload leakage, **zero external connections/rooms/capture**. An initial disposable harness parked shutdown forever; corrected harness shutdown, not application code. |
+| Actual Chromium mobile page + real synthetic LocalAudioTrack | Explicit local probe observed nonzero PCM; ending its native track displayed disabled; snapshot omitted device identifiers. **Zero capture/upload calls**, one stubbed token/connect, no actual room. |
+| TypeScript/Vite and changed Python Ruff | Passed; existing Vite >500 kB chunk warning remains. |
+
+These are offline application checks, not real Android/Brave/headset/provider
+acceptance. The change is a diagnostic branch/draft PR only: no merge,
+deployment, restart, live policy/config/secret mutation, provider/room/hardware
+microphone or real-owner task test. Historical markers/raw data are preserved.
+
 ## First normal-thread call — 2026-11-13 02:10 UTC
 
 Voice session `088f761f-fcba-4907-8eb1-c8e39939247a` on the Boundcorp main

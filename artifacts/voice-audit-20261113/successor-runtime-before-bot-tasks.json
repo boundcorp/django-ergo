@@ -1,0 +1,53 @@
+{
+  "observed_at": "2026-11-13T17:23:30.716233+00:00",
+  "source": "3f4c73384f64a57d60015859ed2abdac49c982d6",
+  "read_only": true,
+  "active_voice_sessions": 0,
+  "active_workers_by_function": {
+    "agent:orca": 4
+  },
+  "active_worker_statuses": {
+    "running": 4
+  },
+  "in_progress_calls": 0,
+  "pending_thread_messages": {
+    "delivered": 13,
+    "waiting": 5
+  },
+  "runpod_jobs_requiring_cleanup": 0,
+  "observed_runpod_worker": [
+    {
+      "status": "failed",
+      "step_started_at": null,
+      "updated_at": "2026-11-13 17:12:13.590179+00:00"
+    }
+  ],
+  "bridge_job_seconds": 90,
+  "voice_enabled": true,
+  "voice_allowlist_count": 1,
+  "scoped_policy_count": 1,
+  "scoped_policy_sha256": "0e9324b79d19157857e5f16ba9accba4d2269cd2e4050d7859141c23ff13f259",
+  "runpod_policy_sha256": "2ed5309c39df809028b10ef1c7f8ea0eff51aceb2eae6e0b8de0ccd4ef04688e",
+  "unsaved_grant_checks": [
+    {
+      "configured": true,
+      "unsaved_session_accepts": true,
+      "max_root_requests": 1,
+      "ungranted_not_upgraded": true,
+      "other_thread_denied": true
+    }
+  ],
+  "observed_runpod_job": [
+    {
+      "cleanup_complete": true,
+      "deadline": 1794592574.140974
+    }
+  ],
+  "native_ledger_readonly": {
+    "phase": "terminated",
+    "cleanup_error_present": 0,
+    "deadline": 1794592574.140974
+  },
+  "local_tunnel_alive": false,
+  "local_tunnel_state_present": false
+}

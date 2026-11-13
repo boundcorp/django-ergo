@@ -1,0 +1,36 @@
+{
+  "observed_date": "2026-11-13",
+  "openai_existing_runtime_key": [
+    {
+      "endpoint": "usage/completions",
+      "http": 403
+    },
+    {
+      "endpoint": "usage/audio_transcriptions",
+      "http": 403
+    },
+    {
+      "endpoint": "usage/audio_speeches",
+      "http": 403
+    },
+    {
+      "endpoint": "costs",
+      "http": 403
+    }
+  ],
+  "livekit_existing_profile": {
+    "active_rooms_read": "succeeded; 0 rooms",
+    "analytics_attempt": "API-key analytics requires Scale plan or higher",
+    "stored_user_session_token": false,
+    "dashboard": "sign-in page; no authenticated billing session",
+    "plan": null,
+    "remaining_included_allowance": null,
+    "invoice_charged_usd": null
+  },
+  "coverage": {
+    "production_total": 5,
+    "owner_scoped_export_total": 5,
+    "preserved_isolated_attempts": 3,
+    "source_now": "3c840afa507a8600797826bf97491d990a09b109"
+  }
+}

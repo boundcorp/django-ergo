@@ -2,7 +2,20 @@
 
 This is an **off-by-default prototype**, separate from composer dictation, enabled on Octo for one allowlisted account only (see "Hosted deployment"). Wake-word and a general Stage are out of scope. Django holds session state, finalized text and task references; LiveKit carries audio, not durable memory. No audio recordings are stored by this code.
 
-**Acceptance, 2026-11-12:** Lee accepted phone audio/basic conversation, not Android Bluetooth or orchestration. Source PR #297 is live as `6b33f825` / `ffa206f6` through infra-octo #171. After all old consumers exited and a fresh acknowledged quiet window, exact scoped policy #170 merged at 23:34:50 (`eff442d9`) and matching web/bridge configuration was verified at 23:38:39. Only new logical sessions can receive the normal-thread grant; the newest retained 22:46 call stays ungranted and had failed before durable delegation. Normal task costs were approved at 21:15:41; normal approvals, one root request and the 90-second voice cap remain. No hosted normal-task/provider test ran, and Android output remains physically unknown. [Current evidence](realtime-voice-progress.md#continuation--newest-live-session-and-ux-2026-11-12) separates policy activation from the UX frontend release.
+**Historical acceptance/release checkpoint, 2026-11-12:** Lee accepted phone audio/basic conversation, not Android Bluetooth or orchestration. Source PR #297 was live as `6b33f825` / `ffa206f6` through infra-octo #171. After all old consumers exited and a fresh acknowledged quiet window, exact scoped policy #170 merged at 23:34:50 (`eff442d9`) and matching web/bridge configuration was verified at 23:38:39. Only new logical sessions could receive the normal-thread grant; the then-newest retained 22:46 call stayed ungranted and had failed before durable delegation. Normal task costs were approved at 21:15:41; normal approvals, one root request and the 90-second voice cap remain. No hosted normal-task/provider test ran at that checkpoint, and Android output remained physically unknown. [Historical policy evidence](realtime-voice-progress.md#continuation--newest-live-session-and-ux-2026-11-12) separates policy activation from the UX frontend release.
+
+**Current investigation, 2026-11-13:** the latest correlated Android Brave input
+call reached Silero but retained no provider transcript. Phone-versus-headset
+capture and physical routing remain unverified. The
+[latest input audit](realtime-voice-causal-review.md#android-brave-input-audit--2026-11-13)
+reconciles current source `3c840afa`, the actual frontend/bridge and evidence gaps;
+this diagnostic patch is not a deployment or real-device acceptance claim.
+
+The [all-session usage audit and separate draft315 safety review](realtime-voice-audit-20261113.md)
+enumerates all five production calls and three preserved paid attempts, with
+UNKNOWN billing/allowance boundaries and a reusable owner/time-filtered
+`voice_audit` READ ONLY metadata export. The completed 02:10 backend call records
+`claude-opus-5-5`, not the earlier reconstructed Codex route.
 
 ## Adapter and setup
 
@@ -137,6 +150,57 @@ Remote audio stays on HTML audio elements (`webAudioMix=false`). A newly subscri
 Unsupported/blocked browsers show **output controlled by your phone/operating system** guidance, not a Bluetooth/speakerphone imitation. The selector confirms **browser state only**, not a physical speaker or hearing: current iOS WebRTC reports include false-success sink changes. System default is not synonymous with speakerphone. See the [platform matrix and citations](realtime-voice-causal-review.md#browser-and-bluetooth-restrictions); only Lee's real-device test can accept the route.
 
 The follow-up adds **Collect route diagnostics** on the dedicated page. It reads browser family/major, platform/tab mode, sink capability and applied selection category, attached HTML element state, optional audio-session intent and the existing microphone track's non-identifying processing settings. It never requests capture, selects output or connects a room; it contains no device IDs/names and remains local to the page. Collect again after mute, reconnect, Bluetooth loss or changing the OS default. It reports physical route as **unknown**, including when `setSinkId` succeeds. Android communication routing while capture is open can differ from normal media playback; the already-selected OS headset is not evidence of user misconfiguration.
+
+### Microphone input evidence and explicit recovery
+
+The November 13 input investigation is separate from the earlier output problem.
+The latest correlated realtime call reached bridge Silero three times, but retained
+no provider transcript or generated assistant audio. It ended explicitly after
+34.438 seconds, not at the 90-second cap. A separate successful composer
+`gpt-transcribe` request followed on the same owner/thread. Neither observation
+establishes the actual phone/headset microphone, intelligibility or a Brave defect.
+See the [current input audit](realtime-voice-causal-review.md#android-brave-input-audit--2026-11-13).
+
+The page observes the existing native microphone track and LiveKit publication,
+including ended/muted/unpublished/upstream-paused state and reconnect. It no
+longer leaves an ended track labeled enabled. These browser states do not prove
+nonzero audio, remote receipt or transcription. Device changes only refresh
+observations and invalidate the local probe; they never select hardware,
+restart capture or unmute. Hardware input source remains **unverified**.
+
+**Recover microphone** is an explicit user action on the existing room: it
+restarts the existing SDK track, or requests microphone permission/capture if no
+track exists. A failed initial capture keeps the existing room and original
+deadline, with a visible sanitized permission/missing/busy/capture error; it
+does not automatically reconnect or retry. Recovery is disabled for intentional
+mute, pending mute/unmute and while another recovery is pending. An SDK-muted
+track is restored only by the explicit recovery action while it still belongs
+to the current microphone publication. End/disconnect or lost publication
+ownership stops late returned capture, including across restart and unmute.
+Successful Unmute clears a prior capture error only after live publication is
+observed. Microphone actions are serialized per room; application reconnect/
+device callbacks never request capture. LiveKit's existing SDK-managed full
+reconnect may reacquire previously permitted tracks. Normal task/action
+approvals and costs are unchanged.
+
+**Check existing microphone locally**, under Diagnostics, examines at most one
+second of the existing track through an isolated analyser. It requests no new
+capture, connects no output, records/uploads no audio and sends no provider
+request. Nonzero samples mean only nonzero local PCM, not speech, a particular
+microphone or provider receipt. A suspended/failed analyser reports unavailable,
+not silence. The local route snapshot now includes capture/publication/error/
+probe state; no device identifiers or names are added.
+
+Bounded durable `bridge_input` events distinguish actual Silero speech,
+provider session start, input queued immediately before a WebSocket send,
+nonempty provider transcription and a generic provider error. The send event
+fires **before** `send_str` succeeds, so it is not remote receipt. Missing stages
+mean **not observed**, not proof of failure. The pinned SDK exposes no public
+raw-frame observation hook; no private input pump is replaced to invent one.
+Each stage has fixed text and at most one event per bridge claim, with no
+transcript/audio/error payload. Android/Brave phone-versus-headset input and
+physical Bluetooth communication routing still require authorized real-device
+proof; automated checks here use synthetic PCM only.
 
 ### Launch-thread continuity and experimental read-only execution (PR #293 deployed)
 

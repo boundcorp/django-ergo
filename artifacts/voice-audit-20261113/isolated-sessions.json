@@ -1,0 +1,161 @@
+[
+  {
+    "source": "ergo-voice-isolated-e1cy2fyd",
+    "sessions": [
+      {
+        "created_at": "2026-11-11 23:33:47.367387+00:00",
+        "ended_at": null,
+        "status": "active",
+        "session_ref": "5c51efd323b55d94",
+        "thread_ref": "9016293ff3e8d474",
+        "events": [
+          {
+            "kind": "user",
+            "created_at": "2026-11-11 23:54:19.102193+00:00",
+            "delivery": "unknown"
+          },
+          {
+            "kind": "user",
+            "created_at": "2026-11-11 23:54:21.911691+00:00",
+            "delivery": "unknown"
+          },
+          {
+            "kind": "assistant",
+            "created_at": "2026-11-11 23:54:24.759257+00:00",
+            "delivery": "unknown"
+          }
+        ],
+        "delegations": [
+          {
+            "created_at": "2026-11-11 23:54:21.152433+00:00",
+            "message__status": "queued",
+            "message__updated_at": "2026-11-11 23:54:21.149394+00:00"
+          }
+        ],
+        "calls_in_exact_isolated_thread": []
+      }
+    ]
+  },
+  {
+    "source": "ergo-voice-isolated-dy_xdck4",
+    "sessions": [
+      {
+        "created_at": "2026-11-12 00:14:48.857592+00:00",
+        "ended_at": null,
+        "status": "active",
+        "session_ref": "90e49a0cc27db444",
+        "thread_ref": "2d07eb04cbb9d893",
+        "events": [
+          {
+            "kind": "user",
+            "created_at": "2026-11-12 00:16:24.210177+00:00",
+            "delivery": "unknown"
+          },
+          {
+            "kind": "user",
+            "created_at": "2026-11-12 00:16:27.806033+00:00",
+            "delivery": "unknown"
+          },
+          {
+            "kind": "user",
+            "created_at": "2026-11-12 00:16:30.958445+00:00",
+            "delivery": "unknown"
+          },
+          {
+            "kind": "assistant",
+            "created_at": "2026-11-12 00:16:39.423526+00:00",
+            "delivery": "unknown"
+          }
+        ],
+        "delegations": [],
+        "calls_in_exact_isolated_thread": []
+      }
+    ]
+  },
+  {
+    "source": "ergo-voice-isolated-ek_ix1as",
+    "sessions": [
+      {
+        "created_at": "2026-11-12 01:18:33.669196+00:00",
+        "ended_at": null,
+        "status": "active",
+        "session_ref": "8a29fe0fccc8a124",
+        "thread_ref": "f114d2e3141e5fb5",
+        "events": [
+          {
+            "kind": "user",
+            "created_at": "2026-11-12 01:20:09.301677+00:00",
+            "delivery": "unknown"
+          },
+          {
+            "kind": "assistant",
+            "created_at": "2026-11-12 01:20:11.849993+00:00",
+            "delivery": "unknown"
+          },
+          {
+            "kind": "background_status",
+            "created_at": "2026-11-12 01:20:11.861903+00:00",
+            "delivery": "unknown"
+          },
+          {
+            "kind": "delegation_signal",
+            "created_at": "2026-11-12 01:20:11.900386+00:00",
+            "delivery": "unknown"
+          },
+          {
+            "kind": "user",
+            "created_at": "2026-11-12 01:20:12.497349+00:00",
+            "delivery": "unknown"
+          },
+          {
+            "kind": "result",
+            "created_at": "2026-11-12 01:20:16.666751+00:00",
+            "delivery": "announcement_claimed"
+          },
+          {
+            "kind": "user",
+            "created_at": "2026-11-12 01:20:17.094390+00:00",
+            "delivery": "unknown"
+          },
+          {
+            "kind": "user",
+            "created_at": "2026-11-12 01:20:17.896874+00:00",
+            "delivery": "unknown"
+          },
+          {
+            "kind": "assistant",
+            "created_at": "2026-11-12 01:20:20.725509+00:00",
+            "delivery": "unknown"
+          },
+          {
+            "kind": "assistant",
+            "created_at": "2026-11-12 01:20:28.996563+00:00",
+            "delivery": "unknown"
+          }
+        ],
+        "delegations": [
+          {
+            "created_at": "2026-11-12 01:20:11.918263+00:00",
+            "message__status": "answered",
+            "message__updated_at": "2026-11-12 01:20:16.292589+00:00"
+          }
+        ],
+        "calls_in_exact_isolated_thread": [
+          {
+            "created_at": "2026-11-12 01:20:12.301511+00:00",
+            "updated_at": "2026-11-12 01:20:16.287918+00:00",
+            "status": "completed",
+            "model_name": "gpt-6-luna",
+            "engine_type": "openai",
+            "turns_used": 2,
+            "input_tokens": 6,
+            "cache_read_input_tokens": 1710,
+            "cache_creation_input_tokens": 1994,
+            "output_tokens": 68,
+            "cost_usd": "0.00030095"
+          }
+        ]
+      }
+    ]
+  }
+]

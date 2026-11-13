@@ -1,0 +1,434 @@
+{
+  "schema_version": 1,
+  "observed_at": "2026-11-13T16:35:38.466134+00:00",
+  "source": "owner-scoped PostgreSQL READ ONLY snapshot",
+  "window": {
+    "created_since_inclusive": null,
+    "created_until_exclusive": null
+  },
+  "unknown": "null; zero stored call tokens may be ledger defaults, not proof of zero provider use",
+  "sessions": [
+    {
+      "session_ref": "e9a1a065de4bbe46",
+      "thread_ref": "b7ca39c8c2ca40dc",
+      "created_at": "2026-11-12T18:09:21.514124+00:00",
+      "bridge_started_at": "2026-11-12T18:09:23.160757+00:00",
+      "ended_at": "2026-11-12T18:10:11.719292+00:00",
+      "status": "ended",
+      "created_to_ended_seconds": 50.205168,
+      "standby_state": "live",
+      "standby_at": null,
+      "resumed_at": null,
+      "events": [
+        {
+          "kind": "user",
+          "delivery": "unknown",
+          "created_at": "2026-11-12T18:09:31.933524+00:00",
+          "received_at": "2026-11-12T18:09:31.927597+00:00",
+          "processed_at": "2026-11-12T18:09:31.933012+00:00"
+        },
+        {
+          "kind": "assistant",
+          "delivery": "unknown",
+          "created_at": "2026-11-12T18:09:34.564208+00:00",
+          "received_at": "2026-11-12T18:09:34.559857+00:00",
+          "processed_at": "2026-11-12T18:09:34.563907+00:00"
+        },
+        {
+          "kind": "user",
+          "delivery": "unknown",
+          "created_at": "2026-11-12T18:09:43.181295+00:00",
+          "received_at": "2026-11-12T18:09:43.174632+00:00",
+          "processed_at": "2026-11-12T18:09:43.180932+00:00"
+        },
+        {
+          "kind": "user",
+          "delivery": "unknown",
+          "created_at": "2026-11-12T18:09:43.980350+00:00",
+          "received_at": "2026-11-12T18:09:43.973114+00:00",
+          "processed_at": "2026-11-12T18:09:43.979695+00:00"
+        },
+        {
+          "kind": "user",
+          "delivery": "unknown",
+          "created_at": "2026-11-12T18:09:47.730850+00:00",
+          "received_at": "2026-11-12T18:09:47.724461+00:00",
+          "processed_at": "2026-11-12T18:09:47.730571+00:00"
+        },
+        {
+          "kind": "user",
+          "delivery": "unknown",
+          "created_at": "2026-11-12T18:09:48.582641+00:00",
+          "received_at": "2026-11-12T18:09:48.573695+00:00",
+          "processed_at": "2026-11-12T18:09:48.582122+00:00"
+        },
+        {
+          "kind": "user",
+          "delivery": "unknown",
+          "created_at": "2026-11-12T18:09:51.336339+00:00",
+          "received_at": "2026-11-12T18:09:51.325168+00:00",
+          "processed_at": "2026-11-12T18:09:51.335857+00:00"
+        },
+        {
+          "kind": "user",
+          "delivery": "unknown",
+          "created_at": "2026-11-12T18:09:58.984162+00:00",
+          "received_at": "2026-11-12T18:09:58.973571+00:00",
+          "processed_at": "2026-11-12T18:09:58.983805+00:00"
+        },
+        {
+          "kind": "assistant",
+          "delivery": "unknown",
+          "created_at": "2026-11-12T18:09:59.160768+00:00",
+          "received_at": "2026-11-12T18:09:59.154737+00:00",
+          "processed_at": "2026-11-12T18:09:59.160360+00:00"
+        },
+        {
+          "kind": "user",
+          "delivery": "unknown",
+          "created_at": "2026-11-12T18:10:01.134852+00:00",
+          "received_at": "2026-11-12T18:10:01.126067+00:00",
+          "processed_at": "2026-11-12T18:10:01.134092+00:00"
+        },
+        {
+          "kind": "assistant",
+          "delivery": "unknown",
+          "created_at": "2026-11-12T18:10:01.294403+00:00",
+          "received_at": "2026-11-12T18:10:01.286685+00:00",
+          "processed_at": "2026-11-12T18:10:01.294127+00:00"
+        },
+        {
+          "kind": "assistant",
+          "delivery": "unknown",
+          "created_at": "2026-11-12T18:10:07.083541+00:00",
+          "received_at": "2026-11-12T18:10:07.077142+00:00",
+          "processed_at": "2026-11-12T18:10:07.083218+00:00"
+        }
+      ],
+      "delegations": [],
+      "historical_voice_model": null,
+      "historical_provider_prompt": null,
+      "provider_usage_seconds": null,
+      "voice_audio_text_tokens": null,
+      "livekit_metered_usage": null,
+      "invoice_charged_usd": null
+    },
+    {
+      "session_ref": "aaa839e1dc1f6664",
+      "thread_ref": "b7ca39c8c2ca40dc",
+      "created_at": "2026-11-12T20:34:10.107845+00:00",
+      "bridge_started_at": "2026-11-12T20:34:12.123728+00:00",
+      "ended_at": "2026-11-12T20:34:43.585981+00:00",
+      "status": "ended",
+      "created_to_ended_seconds": 33.478136,
+      "standby_state": "live",
+      "standby_at": null,
+      "resumed_at": null,
+      "events": [
+        {
+          "kind": "user",
+          "delivery": "unknown",
+          "created_at": "2026-11-12T20:34:23.535502+00:00",
+          "received_at": "2026-11-12T20:34:27.413553+00:00",
+          "processed_at": "2026-11-12T20:34:27.485693+00:00"
+        },
+        {
+          "kind": "delegation_signal",
+          "delivery": "unknown",
+          "created_at": "2026-11-12T20:34:27.543927+00:00",
+          "received_at": "2026-11-12T20:34:27.537772+00:00",
+          "processed_at": "2026-11-12T20:34:27.543283+00:00"
+        },
+        {
+          "kind": "background_status",
+          "delivery": "unknown",
+          "created_at": "2026-11-12T20:34:28.313729+00:00",
+          "received_at": "2026-11-12T20:34:28.309576+00:00",
+          "processed_at": "2026-11-12T20:34:28.313495+00:00"
+        },
+        {
+          "kind": "assistant",
+          "delivery": "unknown",
+          "created_at": "2026-11-12T20:34:27.839101+00:00",
+          "received_at": "2026-11-12T20:34:36.261376+00:00",
+          "processed_at": "2026-11-12T20:34:36.271924+00:00"
+        },
+        {
+          "kind": "user",
+          "delivery": "unknown",
+          "created_at": "2026-11-12T20:34:38.922108+00:00",
+          "received_at": "2026-11-12T20:34:41.363625+00:00",
+          "processed_at": "2026-11-12T20:34:41.380726+00:00"
+        }
+      ],
+      "delegations": [],
+      "historical_voice_model": null,
+      "historical_provider_prompt": null,
+      "provider_usage_seconds": null,
+      "voice_audio_text_tokens": null,
+      "livekit_metered_usage": null,
+      "invoice_charged_usd": null
+    },
+    {
+      "session_ref": "e2ea250c65ceea1c",
+      "thread_ref": "b7ca39c8c2ca40dc",
+      "created_at": "2026-11-12T22:46:28.523637+00:00",
+      "bridge_started_at": "2026-11-12T22:46:31.018144+00:00",
+      "ended_at": "2026-11-12T22:47:41.817867+00:00",
+      "status": "ended",
+      "created_to_ended_seconds": 73.29423,
+      "standby_state": "live",
+      "standby_at": null,
+      "resumed_at": null,
+      "events": [
+        {
+          "kind": "user",
+          "delivery": "unknown",
+          "created_at": "2026-11-12T22:46:36.351517+00:00",
+          "received_at": "2026-11-12T22:46:40.038182+00:00",
+          "processed_at": "2026-11-12T22:46:40.048630+00:00"
+        },
+        {
+          "kind": "assistant",
+          "delivery": "unknown",
+          "created_at": "2026-11-12T22:46:39.902476+00:00",
+          "received_at": "2026-11-12T22:46:52.624414+00:00",
+          "processed_at": "2026-11-12T22:46:52.639319+00:00"
+        },
+        {
+          "kind": "user",
+          "delivery": "unknown",
+          "created_at": "2026-11-12T22:46:58.226206+00:00",
+          "received_at": "2026-11-12T22:46:59.388038+00:00",
+          "processed_at": "2026-11-12T22:46:59.401972+00:00"
+        },
+        {
+          "kind": "user",
+          "delivery": "unknown",
+          "created_at": "2026-11-12T22:46:59.723234+00:00",
+          "received_at": "2026-11-12T22:47:00.987568+00:00",
+          "processed_at": "2026-11-12T22:47:01.002340+00:00"
+        },
+        {
+          "kind": "user",
+          "delivery": "unknown",
+          "created_at": "2026-11-12T22:47:01.041117+00:00",
+          "received_at": "2026-11-12T22:47:02.442790+00:00",
+          "processed_at": "2026-11-12T22:47:02.483222+00:00"
+        },
+        {
+          "kind": "delegation_signal",
+          "delivery": "unknown",
+          "created_at": "2026-11-12T22:47:06.822568+00:00",
+          "received_at": "2026-11-12T22:47:06.816492+00:00",
+          "processed_at": "2026-11-12T22:47:06.822151+00:00"
+        },
+        {
+          "kind": "user",
+          "delivery": "unknown",
+          "created_at": "2026-11-12T22:47:02.703366+00:00",
+          "received_at": "2026-11-12T22:47:07.588093+00:00",
+          "processed_at": "2026-11-12T22:47:07.598929+00:00"
+        },
+        {
+          "kind": "background_status",
+          "delivery": "unknown",
+          "created_at": "2026-11-12T22:47:08.422904+00:00",
+          "received_at": "2026-11-12T22:47:08.418688+00:00",
+          "processed_at": "2026-11-12T22:47:08.422573+00:00"
+        },
+        {
+          "kind": "assistant",
+          "delivery": "unknown",
+          "created_at": "2026-11-12T22:47:07.077528+00:00",
+          "received_at": "2026-11-12T22:47:14.351110+00:00",
+          "processed_at": "2026-11-12T22:47:14.363094+00:00"
+        }
+      ],
+      "delegations": [],
+      "historical_voice_model": null,
+      "historical_provider_prompt": null,
+      "provider_usage_seconds": null,
+      "voice_audio_text_tokens": null,
+      "livekit_metered_usage": null,
+      "invoice_charged_usd": null
+    },
+    {
+      "session_ref": "f7a613b96663cfea",
+      "thread_ref": "b7ca39c8c2ca40dc",
+      "created_at": "2026-11-13T02:10:08.483352+00:00",
+      "bridge_started_at": "2026-11-13T02:10:10.711422+00:00",
+      "ended_at": "2026-11-13T02:11:41.770793+00:00",
+      "status": "ended",
+      "created_to_ended_seconds": 93.287441,
+      "standby_state": "live",
+      "standby_at": null,
+      "resumed_at": null,
+      "events": [
+        {
+          "kind": "delegation_signal",
+          "delivery": "unknown",
+          "created_at": "2026-11-13T02:10:17.368940+00:00",
+          "received_at": "2026-11-13T02:10:17.361533+00:00",
+          "processed_at": "2026-11-13T02:10:17.368376+00:00"
+        },
+        {
+          "kind": "user",
+          "delivery": "unknown",
+          "created_at": "2026-11-13T02:10:15.630490+00:00",
+          "received_at": "2026-11-13T02:10:17.584905+00:00",
+          "processed_at": "2026-11-13T02:10:17.603959+00:00"
+        },
+        {
+          "kind": "task_status",
+          "delivery": "announcement_claimed",
+          "created_at": "2026-11-13T02:10:19.323531+00:00",
+          "received_at": "2026-11-13T02:10:19.320704+00:00",
+          "processed_at": "2026-11-13T02:10:19.320704+00:00"
+        },
+        {
+          "kind": "assistant",
+          "delivery": "unknown",
+          "created_at": "2026-11-13T02:10:17.732031+00:00",
+          "received_at": "2026-11-13T02:10:23.086135+00:00",
+          "processed_at": "2026-11-13T02:10:23.097635+00:00"
+        },
+        {
+          "kind": "user",
+          "delivery": "unknown",
+          "created_at": "2026-11-13T02:10:45.362283+00:00",
+          "received_at": "2026-11-13T02:10:47.335222+00:00",
+          "processed_at": "2026-11-13T02:10:47.346326+00:00"
+        },
+        {
+          "kind": "user",
+          "delivery": "unknown",
+          "created_at": "2026-11-13T02:10:47.547100+00:00",
+          "received_at": "2026-11-13T02:10:48.335471+00:00",
+          "processed_at": "2026-11-13T02:10:48.349084+00:00"
+        },
+        {
+          "kind": "result",
+          "delivery": "announcement_claimed",
+          "created_at": "2026-11-13T02:10:48.743652+00:00",
+          "received_at": "2026-11-13T02:10:48.742006+00:00",
+          "processed_at": "2026-11-13T02:10:48.742006+00:00"
+        },
+        {
+          "kind": "assistant",
+          "delivery": "unknown",
+          "created_at": "2026-11-13T02:10:48.355038+00:00",
+          "received_at": "2026-11-13T02:11:21.344777+00:00",
+          "processed_at": "2026-11-13T02:11:21.393777+00:00"
+        }
+      ],
+      "delegations": [
+        {
+          "created_at": "2026-11-13T02:10:18.456335+00:00",
+          "status": "answered",
+          "updated_at": "2026-11-13T02:10:48.633962+00:00",
+          "calls": [
+            {
+              "created_at": "2026-11-13T02:10:20.140450+00:00",
+              "updated_at": "2026-11-13T02:10:48.624700+00:00",
+              "status": "completed",
+              "stored_engine_type": "claude",
+              "recorded_model": "claude-opus-5-5",
+              "turns_used": 2,
+              "recorded_aggregate_tokens": {
+                "input_tokens": 4,
+                "cache_read_input_tokens": 8202,
+                "cache_creation_input_tokens": 223697,
+                "output_tokens": 2181,
+                "reasoning_tokens": 0
+              },
+              "audio_text_token_breakdown": null,
+              "recorded_cost_estimate_usd": null,
+              "actual_billed_usd": null,
+              "tools": [
+                {
+                  "kind": "tool_result",
+                  "name": "UNKNOWN",
+                  "is_error": false
+                },
+                {
+                  "kind": "tool_result",
+                  "name": "UNKNOWN",
+                  "is_error": false
+                },
+                {
+                  "kind": "tool_use",
+                  "name": "ergo_chat_history_tail",
+                  "is_error": false
+                },
+                {
+                  "kind": "tool_result",
+                  "name": "UNKNOWN",
+                  "is_error": false
+                },
+                {
+                  "kind": "tool_use",
+                  "name": "ergo_chat_history_tail",
+                  "is_error": false
+                },
+                {
+                  "kind": "tool_use",
+                  "name": "send_reply",
+                  "is_error": false
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "historical_voice_model": null,
+      "historical_provider_prompt": null,
+      "provider_usage_seconds": null,
+      "voice_audio_text_tokens": null,
+      "livekit_metered_usage": null,
+      "invoice_charged_usd": null
+    },
+    {
+      "session_ref": "88da13ff05d05e5a",
+      "thread_ref": "b7ca39c8c2ca40dc",
+      "created_at": "2026-11-13T15:51:15.139460+00:00",
+      "bridge_started_at": "2026-11-13T15:51:18.774289+00:00",
+      "ended_at": "2026-11-13T15:51:52.977595+00:00",
+      "status": "ended",
+      "created_to_ended_seconds": 37.838135,
+      "standby_state": "live",
+      "standby_at": null,
+      "resumed_at": null,
+      "events": [
+        {
+          "kind": "bridge_audio",
+          "delivery": "unknown",
+          "created_at": "2026-11-13T15:51:20.652337+00:00",
+          "received_at": "2026-11-13T15:51:20.644857+00:00",
+          "processed_at": "2026-11-13T15:51:20.651983+00:00"
+        },
+        {
+          "kind": "client_audio",
+          "delivery": "unknown",
+          "created_at": "2026-11-13T15:51:20.845135+00:00",
+          "received_at": "2026-11-13T15:51:20.839425+00:00",
+          "processed_at": "2026-11-13T15:51:20.844537+00:00"
+        },
+        {
+          "kind": "client_audio",
+          "delivery": "unknown",
+          "created_at": "2026-11-13T15:51:20.868344+00:00",
+          "received_at": "2026-11-13T15:51:20.863970+00:00",
+          "processed_at": "2026-11-13T15:51:20.868026+00:00"
+        }
+      ],
+      "delegations": [],
+      "historical_voice_model": null,
+      "historical_provider_prompt": null,
+      "provider_usage_seconds": null,
+      "voice_audio_text_tokens": null,
+      "livekit_metered_usage": null,
+      "invoice_charged_usd": null
+    }
+  ]
+}

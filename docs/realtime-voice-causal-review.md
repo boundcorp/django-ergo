@@ -1,5 +1,70 @@
 # Realtime voice delegation: offline causal review
 
+## Android Brave input audit — 2026-11-13
+
+The latest correlated realtime call was created **15:51:15.139 UTC**, claimed by
+the bridge **15:51:18.774**, and ended **15:51:52.977**. Both web replicas retain
+the realtime creation/token/End routes. A distinct composer transcription POST
+and completed `gpt-transcribe` usage row followed at **15:52:28** on the same
+owner/thread. This is route/session evidence, not an inference from “Whisper.”
+Exact private identifiers and raw logs remain protected, not in this document.
+
+Current inspected web/bridge source is `3c840afa507a8600797826bf97491d990a09b109`,
+image `sha256:c7b5a1836246dddcb0b802ee8416d8b8cb566d37afab9c03747f328578cf1d3c`.
+Public `/assets/index-BXufJawh.js` SHA256
+`c40aa09dd6aab1c62d2bb1d294094dbc9332cc6574e10f1dde129e75a21952dd` matches
+that image's actual asset. The isolated bridge reports agents/OpenAI/Silero
+**1.8.11**. Historical #299 `97be7678` / `9bc56efa` is not the current release.
+The handset's cached bundle and Brave version/tab-versus-PWA remain unknown.
+No competing implementation PR was open during inspection; #298/#302 are
+historical release-documentation drafts, not another active voice owner.
+
+| UTC | Retained pipeline observation |
+| --- | --- |
+| 15:51:20.079 | Bridge listener ready; RoomIO linked participant at 20.264. |
+| 15:51:20.644–20.868 | Browser subscribed to the assistant track and reported element playback. Neither proves generated sound or hearing. |
+| 15:51:20.883–23.584 | First actual Silero speech start/end. |
+| 15:51:25.235–27.683 | Second actual Silero start/end. |
+| 15:51:36.382–38.334 | Third actual Silero start/end. |
+| 15:51:52.998 | Explicit End POST 200; SDK then closed `CLIENT_INITIATED`. |
+| 15:51:54.415 | Bridge wall time **34.438 s**, provider-reported usage **32.0 s**; not 90-second expiry. |
+
+There were **zero retained user/assistant finals and zero delegations**. No
+provider error/traceback/generated-assistant-audio observation appears in the
+retained bridge window. **Earliest proven gap: incoming audio reached Silero
+recognition, but no provider text/output was retained.** Speech detection does
+not establish intelligibility, hardware microphone, nonzero provider input or
+successful input forwarding. Provider usage duration is not input receipt.
+There is no retained capture enabled/muted/ended/suspension history, permission/
+devicechange record, local input level, outbound RTP counter or provider input
+acknowledgment. Missing metadata means unknown, not user fault.
+
+Lee confirmed trying **both phone microphone and Bluetooth headset** at 16:05 UTC.
+Those are attempted physical inputs, not evidence the browser switched capture
+source. Android, Brave and Bluetooth are user facts; no browser-specific cause
+has been established. Input microphone, HTML output sink and Android
+communication routing are different boundaries.
+[Brave's Android permission controls](https://support.brave.app/hc/en-us/articles/35849239473037-How-do-I-change-or-manage-site-permissions-Android)
+do not prove denial here.
+[Track mute](https://developer.mozilla.org/en-US/docs/Web/API/MediaStreamTrack/muted)
+differs from intentional disable;
+[devicechange](https://developer.mozilla.org/en-US/docs/Web/API/MediaDevices/devicechange_event)
+does not establish physical routing.
+[Android's native communication-device API](https://developer.android.com/develop/connectivity/bluetooth/ble-audio/audio-manager)
+is not an HTML output selector. Sources checked November 13.
+
+A separate actual component regression reproduced the proven UI defect before
+the fix: a native ended track still displayed **Microphone: enabled**.
+The patch observes capture/publication transitions, offers explicit same-room
+recovery and a click-only local existing-track PCM probe, and records bounded
+payload-free bridge/provider stages. No SDK forwarding defect was proven, so no
+speculative forwarding/routing change is made. In SDK 1.8.11 the queued-audio
+callback occurs before `send_str`; it explicitly does not prove remote receipt.
+The original normal-task authorization, approvals, one root request and
+90-second deadline remain unchanged. Physical Android input/transcription and
+Bluetooth acceptance remain open; no paid/provider/room/hardware-capture test,
+live-owner task, merge, deployment, restart or configuration change ran.
+
 ## Current release reconciliation — 2026-11-12
 
 **PR #293 is deployed.** The prior `75234dc` evidence below described the earlier

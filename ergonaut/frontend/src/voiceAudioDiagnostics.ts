@@ -1,4 +1,5 @@
 import type { VoiceAudioOutputState } from './voiceAudioOutput'
+import { initialVoiceAudioInput, type VoiceAudioInputState } from './voiceAudioInput'
 
 export type VoiceAudioDiagnostics = {
   observed_at: string
@@ -24,6 +25,11 @@ export type VoiceAudioDiagnostics = {
   auto_gain_control: boolean | null
   noise_suppression: boolean | null
   physical_route: 'unknown'
+  capture: VoiceAudioInputState['capture']
+  publication: VoiceAudioInputState['publication']
+  input_error: VoiceAudioInputState['error']
+  input_probe: VoiceAudioInputState['probe']
+  hardware_input_source: 'unverified'
 }
 
 /** Observations only: never request capture, select a sink, or infer a physical route. */
@@ -31,6 +37,7 @@ export function collectVoiceAudioDiagnostics(
   output: VoiceAudioOutputState,
   elements: HTMLMediaElement[],
   microphone?: MediaStreamTrack,
+  input: VoiceAudioInputState = initialVoiceAudioInput,
 ): VoiceAudioDiagnostics {
   const ua = navigator.userAgent
   const browser = /(?:Firefox|FxiOS)\/(\d+)/.exec(ua)
@@ -75,5 +82,10 @@ export function collectVoiceAudioDiagnostics(
     auto_gain_control: settings?.autoGainControl ?? null,
     noise_suppression: settings?.noiseSuppression ?? null,
     physical_route: 'unknown',
+    capture: input.capture,
+    publication: input.publication,
+    input_error: input.error,
+    input_probe: input.probe,
+    hardware_input_source: 'unverified',
   }
 }
