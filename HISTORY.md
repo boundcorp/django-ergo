@@ -4,6 +4,86 @@ This document tracks the major milestones and evolution of the Django Ergo proje
 
 ## Development Timeline
 
+### Native RunPod workers (November 2026)
+
+- Registered the RunPod plugin's approved-profile/start/status/collect/terminate
+  tools and real `runpod:watch` polling Worker. Added durable Django ownership
+  and atomic installation-wide admission around the existing single-rental
+  ledger, transport, queue and H3 media/export primitives.
+- Added independent Ergonaut maintenance task/queue and management recovery
+  command, surviving Worker/chat/config removal, cancellation, unknown creates
+  and late receipts. Defaults preserve one rental, a planned $3 total and the
+  original ≤1h deadline; no provider-failure billing guarantee is claimed.
+- Worker publication now occurs after commit with a durable due time;
+  cancellation and newer step claims fence stale state/progress/finalization.
+  Collection uses stable verified storage keys and ordered partial manifests.
+- Documented server-only installation and repeatable model-image build/audit/
+  digest publication. The bounded native integration requires one durable
+  host-shared SQLite/POSIX-locking filesystem; no live deployment or rental.
+
+### Supervised H3 single-create controller (November 2026)
+
+- Wired offline profile preparation, durable one-POST intent and REST transport
+  into an executable controller. Live mode requires explicit configuration,
+  execution and a fresh independent cleaner; timeouts never replay. The
+  accepted quote is bound to the profile but is not a provider price cap.
+- Added stable-host cleaner startup and credential-boundary guidance. Actual
+  account injection, pullable image delivery and authenticated Pod access must
+  be established before the one rental; no live provider operation was performed.
+
+
+### Frozen H3 runner and independent cleaner preparation (November 2026)
+
+- Added the explicit six-shot image-conditioned FL2VA worker with pinned source
+  and checkpoint, historical prompt/version and archive validation, durable
+  submission tombstones/no replay, native/conformed artifact hashes, ordered
+  partial manifests, and a 696-frame/29-second PCM-verified export. Chapter
+  planning inputs remain non-executable.
+- Added a pinned-base image recipe and deadline-bound model entrypoint, plus
+  separately runnable cleaner supervision/freshness gating and a supervision
+  configuration. All are preparation; no image build, model download, GPU run,
+  provider mutation, secret relocation or service deployment was performed.
+- The ≤$3 estimate retains margin, single intent, early shutdown and hard
+  one-hour deadline; a provider-failure zero-overrun guarantee is not an
+  admission gate. Published warmed T2VA fit is not conditioned-run evidence.
+  See [runner commands and limits](docs/runpod-h3.md) and
+  [cleaner preparation](docs/runpod-cleaner.md).
+
+### Runpod offline create/recovery bridge (November 2026)
+
+- Added a bounded, fixture-only REST create/recovery bridge for one local test,
+  not a live plugin or rental runner. Its immutable account, attempt and request
+  fingerprint bind ownership; names alone never authorize deletion. Create
+  uncertainty is durable before the single POST and is never replayed after a
+  timeout or restart. Later cleanup scans can find late resources; absence from
+  a list never proves an unknown create clean.
+- Public Runpod docs do describe renting-account, environment and storage fields;
+  optional/null semantics and list consistency remain unknown. Known-ID GET 404
+  and ambiguous DELETE 404 are distinct, and storage liability is resolved only
+  with sufficient evidence for the strict no-volume profile. See the
+  [bridge limits and API sources](docs/plugins.md#offline-runpod-bridge).
+  `python -m django_ergo.plugins.runpod.cleanup LEDGER` remains dry-run by
+  default. No live-create credential path, generation or live eligibility is
+  enabled; no live verification or provider spending ceiling is claimed.
+
+### Offline GPU queue primitives (November 2026)
+
+- Added local SQLite queue primitives with immutable request identities,
+  serial claims, lease fencing, phase-local correction priority and inspection
+  of uncertain runner submissions; corrections cannot change their original
+  phase or bypass earlier queued test/chapter work. Added pure cost-estimation and ordered artifact-metadata
+  helpers. Added a separate singleton experiment ledger with a local fake
+  provider, durable fake exports and an independently invocable cleanup tick.
+  These are offline components, not a Runpod plugin or live rental controller:
+  no real provider calls, shared budget authorization, native Worker integration
+  or deployed independent scheduler exist. A local estimate cannot guarantee
+  a provider billing ceiling.
+  For local simulations, invoke `python -m django_ergo.plugins.runpod.experiment
+  /path/to/ledger.sqlite` as a separate process for each cleanup tick. The fake
+  provider shares the local SQLite file; clocks, eligibility and activity are
+  trusted simulator inputs, and the caller must schedule ticks and determine
+  which outputs are complete. SQLite does not provide a distributed ledger.
+
 ### Realtime voice client-delegation contract (November 2026)
 
 - Handle the SDK's opaque delegation signal with conversation context even

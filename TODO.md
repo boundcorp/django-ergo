@@ -28,6 +28,31 @@ Live on rigel from `~/p/boundcorp/django-ergo`, bots from `boundcorp/ergo-bots`.
 
 ### Next
 
+- [x] **Native RunPod plugin slice**: real `runpod:watch` Workers and scoped
+  profiles/start/status/collect/terminate tools, durable Django ownership and
+  locked installation-wide reservations around the existing external rental
+  ledger; independent maintenance queue/command, cancel/orphan/deadline cleanup,
+  no uncertain-create replay and idempotent partial attachments. See
+  [host installation and single-host storage boundary](docs/runpod.md).
+- [x] **Supervised H3 pilot preparation**: pinned six-shot image-conditioned
+  FL2VA runner, immutable archive/prompt versions and submission tombstones,
+  PCM-verified 29s export/partial manifests, independently supervised cleaner
+  freshness and deadline fixtures. See [runner](docs/runpod-h3.md) and
+  [cleaner](docs/runpod-cleaner.md). No deployment, model/GPU run or live rental.
+- [ ] **GPU execution**: the standalone controller now supports an explicitly
+  gated live one-create path, exercised only with offline HTTP fixtures. Before
+  the single pilot, install the native plugin's server policy and independent
+  maintenance consumer, scoped account credential injection, durable shared
+  single-host rental storage, and an authenticated Pod
+  access/export path; admit an actual quote with storage/margin and measure
+  cold conditioned fit under the unchanged ≤1h deadline. The request binds
+  the quote, image digest, datacenter allowlist, original absolute deadline and
+  zero optional/network volumes. Lee confirmed permitted-country operation/use;
+  the LEGAL TEAM owns review, not engineering. The ≤$3 estimate is not a
+  zero-overrun guarantee gate.
+  Distributed/multi-host resource storage and broader multi-user/project quota
+  policies are outside the bounded single-host integration.
+
 - [ ] **Realtime voice prototype**: basic phone audio and conversation accepted by Lee on 2026-11-12; Bluetooth/output routing and exact launch-thread orchestration context/tools are not yet accepted. Deployed baseline on Octo for Lee's account only (`REALTIME_VOICE_USERS`, kill switch `REALTIME_VOICE_ENABLED`, `voice-bridge` Deployment). Hosted boundary/transcription correctness, spoken truthfulness, interruption/reconnect, billing reconciliation and retention review remain open. Wake-word detection is deferred and not implemented. See `docs/realtime-voice-progress.md` for evidence, follow-up slices and deployment/device gates.
   PR #297 is live as `6b33f825` / `ffa206f6` through infra-octo #171. The newest actual 22:46 owner call had no normal grant: client signal and acoustic boundary reached the bridge, followed by a ValueError callback before any durable delegation. Its persisted read-only engine-limit restriction and identical offline admission rejection distinguish this from an actual native handler failure; full historical exception text was not retained. Standby remains flag-gated; its original 90-second cap includes standby.
   Lee approved normal originating-thread costs at 21:15:41 UTC. After natural old-consumer exit and the fresh acknowledged quiet window, exact policy #170 merged at 23:34:50 (`eff442d9`); web/bridge-only reload and READ ONLY/no-dispatch scope/grant checks passed at 23:38:39 on unchanged source #297. Queue-role UIDs stayed unchanged; no real-owner task/provider test ran. Only new logical sessions receive the grant; the retained 22:46 call is not upgraded. UX #299 separately groups thread options, warns that Resolve cancels workers, and moves technical detail into Diagnostics. Android browser/version and physical routing remain unknown.

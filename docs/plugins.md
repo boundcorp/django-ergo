@@ -58,6 +58,111 @@ redacted server-side preview for supported changes. In Ergonaut only admins
 can approve their tools. Every option is in the
 [bot reference](bots.md#official-plugins).
 
+## Native RunPod workers
+
+The `runpod` plugin exposes approved profiles, start/status/collect/terminate
+tools and a real `runpod:watch` Worker. Django admission/ownership rows and the
+existing external rental ledger survive chat/Worker deletion; a separately
+consumed Ergonaut maintenance task handles deadline, cancellation, config
+removal, unknown creates and late resources. The bounded implementation requires
+one durable host-shared filesystem with SQLite/POSIX locks, not arbitrary
+multi-host storage. It defaults to one lifetime rental and a planned $3/≤1h cap.
+See [installation, server policy and tools](runpod.md). No live deployment,
+provider call or GPU execution is implied by registration.
+
+## Offline Runpod bridge
+
+`django_ergo.plugins.runpod` also retains local queue/experiment building blocks,
+a single-create REST controller with offline fixtures, an explicit
+image-conditioned H3 pilot runner, and independent cleaner supervision.
+These are the primitives reused by the native plugin above; the standalone
+commands remain operator/fixture tools, not an alternative hosted worker path.
+The cleanup command remains dry-run by default:
+
+```bash
+python -m django_ergo.plugins.runpod.cleanup LEDGER
+```
+
+Run the no-network create/recovery fixtures locally:
+
+```bash
+PYTHONPATH=src pytest -q tests/test_runpod_create.py tests/test_runpod_cleanup.py tests/test_runpod_transport.py
+```
+
+`RESTCleanup.configure_create` binds an immutable account, attempt and exact
+request profile: one GPU, SECURE cloud, an image and container disk, explicit
+`volumeInGb: 0`, no template and no network/global-volume option. Its SHA256
+fingerprint covers the canonical request before adding
+`ERGO_ATTEMPT_FINGERPRINT`. Ownership checks require the account, attempt,
+fingerprint and matching profile; a nonunique Pod name never authorizes deletion.
+The existing `configure(Ownership)` path is cleanup-only, without a create body.
+
+`create_once` without a client is a dry run: no POST or create intent.
+The controller's fixture mode uses an injected-opener `FixtureRunpodREST`.
+Its explicit live mode additionally requires a bound live configuration,
+an executing independent fresh cleaner and a named credential callback;
+the live path has not been exercised against Runpod. The ledger durably
+records `create_unknown`/`create_started`
+before the one POST. A timeout, restart, empty response or failed receipt write
+does not authorize replay; a subsequent create attempt is rejected. A valid
+returned ID is only a receipt, never evidence of running or generation.
+
+Each reconciliation tick performs one list scan and at most ten resource
+actions. Later scans can discover owned resources after an uncertain create,
+but repeated list absence never makes that unknown create clean. A known-ID
+GET 404 establishes compute absence; DELETE 404 is ambiguous and needs a later
+GET 404. Deletion timeouts retain pending state for retry. Bounds cover request
+count, response size and per-socket timeout. The optional independent supervisor
+bounds each cleanup child process and gates the worker on heartbeat freshness;
+no scheduler has been installed or provider billing guarantee proved.
+
+### Public API evidence and remaining uncertainty
+
+- [List Pods](https://docs.runpod.io/api-reference/pods/GET/pods) and
+  [Get Pod](https://docs.runpod.io/api-reference/pods/GET/pods/podId) document
+  `consumerUserId` as the renting user, plus `env`, `id`, `image`, `volumeInGb`
+  and `networkVolume`; reads request `includeNetworkVolume=true`. Names are
+  not unique. These are documented fields, not undocumented ownership guesses.
+  The schemas leave fields optional and do not establish strong list
+  consistency or guarantee that no network volume is represented by explicit
+  null. Missing ownership evidence cannot be substituted with a name.
+- [Create Pod](https://docs.runpod.io/api-reference/pods/POST/pods) documents
+  a 201 Pod response, `imageName`, `gpuTypeIds`, `gpuCount`, `env`, optional
+  `networkVolumeId`/`templateId`, and a default `volumeInGb` of 20; the strict
+  request explicitly overrides that default with zero.
+- [Delete Pod](https://docs.runpod.io/api-reference/pods/DELETE/pods/podId)
+  documents 204 success, 400 and 401, **not** DELETE 404 as successful deletion.
+- [Storage types](https://docs.runpod.io/pods/storage/types) distinguish ephemeral
+  container storage and Pod-deleted volume disks from independently persistent
+  network/global volumes, with network storage attached at creation. Only the
+  immutable strict no-volume create profile, an ownership-checked Pod and a
+  later GET 404 permit storage absence to be concluded. That profile accepts
+  an omitted or null `networkVolume` only alongside integer-zero `volumeInGb`
+  and exact account/environment/image/disk checks: this relies on the request's
+  absence of attachment options, not a guaranteed null response. Legacy
+  cleanup-only configuration still requires explicit null for its profile
+  check; legacy or otherwise insufficient storage evidence remains
+  `storage_unverified`. This profile proves what this bridge requested, not the
+  absence of later out-of-band global-volume attachments; those need separate
+  evidence and must remain unresolved if external changes are possible.
+
+The standalone controller accepts live create only with explicit configuration
+and execution flags, bound quote and independent cleaner freshness. The
+cleanup command's `--execute --credential-env NAME` uses the same callback
+pattern. Neither route was exercised against Runpod; verify the account binding,
+image delivery and worker access before any rental.
+
+The [frozen H3 worker guide](runpod-h3.md) gives the executable validation and
+six-shot inference commands, pinned FL2VA image-conditioning schema, frame
+lattice/29-second PCM-preserving export, concrete host/price estimate, and
+remaining unmeasured conditioned-fit/startup limits. The
+[independent cleaner guide](runpod-cleaner.md) provides two-process supervision,
+freshness gates and killed-worker fixture evidence. These are local preparation,
+not a deployment or paid-call authorization. The $3 plan is an evidenced estimate
+with margin and an immutable ≤1-hour deadline, **not** a zero-overrun guarantee
+gate. Single-create/no-replay and cleanup retries remain required. Existing bot
+configurations and chapter readiness remain unchanged.
+
 ## Writing a plugin
 
 ```python

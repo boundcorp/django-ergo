@@ -16,6 +16,7 @@
 | [Browser control](browser.md)           | The `browser` plugin, a Chrome a person can sign in to, tunnels                                     |
 | [Bot reference](bots.md)                | Every bot.yaml key and official plugin option; private inference pools                              |
 | [Running Ergonaut](ergonaut.md)         | Commands, settings, the web app, reloading, containers, production, private inference               |
+| [RunPod workers](runpod.md)             | Native GPU workers, scoped admission, durable rental ownership and independent cleanup              |
 | [Realtime voice prototype](realtime-voice.md) | Off-by-default prototype on Octo for one allowlisted account: caps, kill switch, setup and known gaps |
 | [Agent skills](agent-skills.md)         | Ergo's skills for Claude Code and Codex, the `ergonaut-remote` command and API keys                 |
 
@@ -37,5 +38,7 @@
 - [Development](development.md): setup, tests, lint, CI, conventions
 - [Git releases](git-release.md): installing from a reviewed commit
 - [TODO.md](../TODO.md): the current backlog
+- [Frozen H3 runner](runpod-h3.md) and [Runpod cleaner preparation](runpod-cleaner.md):
+  explicit six-shot commands, image/checkpoint/schema, exports, estimates and independent supervision
 - [archive/](archive/README.md): earlier plans, specs and status documents, kept for history
 - [preservation/](preservation/2026-09-10/README.md): byte-identical historical evidence

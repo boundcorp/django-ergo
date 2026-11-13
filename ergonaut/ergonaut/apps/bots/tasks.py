@@ -904,14 +904,23 @@ def resume_workers() -> int:
     step_lease = timezone.timedelta(seconds=workers.STEP_LEASE_SECONDS)
     overdue = Worker.objects.filter(
         Q(step_started_at__isnull=True) | Q(step_started_at__lt=now - step_lease),
+        Q(next_poll_at__lt=now - timezone.timedelta(minutes=3))
+        | Q(next_poll_at__isnull=True, created_at__lt=now - timezone.timedelta(minutes=3)),
         status__in=["queued", "running"],
-        next_poll_at__lt=now - timezone.timedelta(minutes=3),
     )
     count = 0
     for worker in overdue[:100]:
         workers.schedule(worker, 0)
         count += 1
     return count
+
+
+@shared_task(name="ergonaut.reconcile_runpod", ignore_result=True, queue="runpod_maintenance")
+def reconcile_runpod() -> dict:
+    """Maintain durable rentals even when the bot/Worker/chat has disappeared."""
+    from django_ergo.plugins.runpod.native import reconcile_once
+
+    return reconcile_once()
 
 
 # A call still in progress, untouched this long, whose session holds no turn lock,

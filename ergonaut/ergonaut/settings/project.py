@@ -144,6 +144,7 @@ INSTALLED_APPS = [
     "django.contrib.postgres",
     "django_ergo",
     "django_ergo.knowledge",
+    "django_ergo.plugins.runpod.apps.RunpodConfig",
     "ergonaut.apps.users",
     "ergonaut.apps.bots",
 ]
@@ -437,6 +438,8 @@ CELERY_BEAT_SCHEDULE = {
     "recover-dead-turns": {"task": "ergonaut.recover_dead_turns", "schedule": 60},
     # Workers whose next step got lost (a restart) start again.
     "resume-workers": {"task": "ergonaut.resume_workers", "schedule": 60},
+    # Resource maintenance is independent of bot loading and worker cancellation.
+    "reconcile-runpod": {"task": "ergonaut.reconcile_runpod", "schedule": 60},
     # Self-wakes bots scheduled (django_ergo.bots.wakes); each fires once, never retried.
     "fire-wakes": {"task": "ergonaut.fire_wakes", "schedule": 30},
     # Each bot's schedules (bot.yaml); the task checks which are due this minute.

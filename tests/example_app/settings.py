@@ -41,6 +41,7 @@ INSTALLED_APPS = [
     # Core django-ergo plugin
     "django_ergo",
     "django_ergo.knowledge",
+    "django_ergo.plugins.runpod.apps.RunpodConfig",
     # API Example dependencies (demonstrates django-ergo usage)
     "corsheaders",
 ]
