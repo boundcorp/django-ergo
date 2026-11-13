@@ -1017,9 +1017,11 @@ no background request or verified history result exists.
 
 Voice is an interface to its exact launch thread, not a separate orchestrator
 or a global owner briefing. PR #293 (deployed `06284d4`) restores that thread's bounded
-instructions, history/summary, decisions and attachment references; other
-threads, workers and approvals are read on demand through tools that the
-owning bot already offers. Budgeted voice is explicitly restricted, and a
+instructions, history/summary, decisions and attachment references. Startup now
+also carries a bounded timestamped exact-thread work/current-session evidence
+snapshot (three active workers and two recent request/result summaries);
+recorded status is not liveness or model consumption. Unrelated threads remain
+on-demand through the owning bot's authorized tools. Budgeted voice is restricted, and a
 subscription/CLI launch thread cannot silently switch to an API model to run
 delegation. The successor's **default-off** normal-thread execution policy is
 separate from the priced voice lookup: exact chat, owner, bot and a reviewed
@@ -1030,6 +1032,16 @@ normal work uses durable provider-invocation claims; an uncertain external write
 is not automatically repeated. Causal thread updates retain the original voice
 delegation ID, including across reconnect and after End. No live policy is enabled
 by this source change; ordinary non-voice turns and budgeted-turn guards are unchanged.
+The normal grant defaults to one request. An exact scope may explicitly approve
+`max_requests: 3` with `followup_costs_approved: true` and a separate
+`followup_approval_reference`: three sequential execution attempts per logical
+call, never parallel roots, unlimited inference or increased provider duration.
+Only fresh sessions receive changed grants. Expired attempts count; reconnect
+cannot reset allowance or the original 90-second deadline. Status observation
+and persisted-result reading use no execution slot or new inference; the UI
+shows remaining allowance and an owning-text-thread continuation at exhaustion.
+Handler acceptance, result persistence and an announcement claim remain distinct
+from actual model execution/consumption, playback and physical hearing.
 See the [current release and capability evidence](realtime-voice-causal-review.md#current-release-reconciliation--2026-11-12)
 and [acceptance gates](realtime-voice-progress.md#hosted-phone-acceptance-and-follow-ups--2026-11-12).
 The web entry is the originating thread's top-bar options → Voice call.
@@ -1047,9 +1059,10 @@ playback on the existing room (not another join or microphone start) and stays
 visible until the browser confirms the assistant's audio is playing.
 Microphone state observes the existing capture track and publication instead of
 assuming a successful enable remains live. Device changes do not automatically
-capture or unmute. Explicit Recover microphone requests capture on the same
-room without resetting its deadline; a click-only local existing-track probe
-records/uploads nothing. Capture, publication, Silero speech, pre-send queueing
+capture or unmute. Recover microphone is absent from healthy/default controls;
+an explicit error-only action can request capture on the same room without
+resetting its deadline. The click-only existing-track probe records/uploads
+nothing. Capture, publication, Silero speech, pre-send queueing
 and provider transcription are separate evidence boundaries; none identifies
 phone/headset hardware or proves remote receipt by itself. See
 [microphone diagnostics and recovery](realtime-voice.md#microphone-input-evidence-and-explicit-recovery).
@@ -1062,6 +1075,14 @@ The owner/time-filtered `voice_audit` management
 command exports sanitized session/event/call metadata in JSON/CSV inside a
 PostgreSQL READ ONLY snapshot, without loading engines or dispatching tasks.
 See the [all-session audit and schema](realtime-voice-audit-20261113.md).
+
+Composer dictation is separate from voice calls: Stop finalizes into the latest
+editable draft without sending or deleting selected text; Send stops recording,
+awaits final transcription and uses the normal handler exactly once. Duplicate
+clicks/Enter share finalization. Concurrent edits survive; failed transcription
+keeps draft/recoverable audio and offers Retry/Download without a partial send.
+Cancel, navigation and unmount invalidate late callbacks and pending sends.
+
 
 ### Message identity
 

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { RefObject } from 'react'
 import { api } from '../api'
 
@@ -29,46 +29,99 @@ function acceptedType(type: string) {
   return acceptedTypes.includes(type.split(';', 1)[0].trim().toLowerCase())
 }
 
-/** Insert dictated text at the composer's selection, just like typing. */
-export function ComposerVoice({
-  sessionId,
-  disabled,
+type VoiceFinalizer = { finalize: () => Promise<boolean> }
+type SetText = (text: string | ((current: string) => string)) => void
+
+/** One submission gate for typed text and the recorder's final transcription. */
+export function useComposerVoice({
+  draftKey,
+  text,
+  setText: saveText,
   composer,
-  setText,
+  onSend,
 }: {
-  sessionId: string
-  disabled: boolean
+  draftKey: string
+  text: string
+  setText: SetText
   composer: RefObject<HTMLTextAreaElement | null>
-  setText: (text: string | ((current: string) => string)) => void
+  onSend: (text: string, mode: 'send' | 'interrupt') => void | Promise<void>
 }) {
-  return (
-    <VoiceRecorder
-      key={sessionId}
-      sessionId={sessionId}
-      disabled={disabled}
-      onText={transcript => {
+  const finalizer = useRef<VoiceFinalizer | null>(null)
+  const latest = useRef({ text, saveText, onSend })
+  latest.current = { text, saveText, onSend }
+  const scope = useRef({ key: draftKey, active: true })
+  if (scope.current.key !== draftKey) scope.current = { key: draftKey, active: true }
+  const sending = useRef<object | null>(null)
+  const [voiceActive, setVoiceActive] = useState(false)
+  useLayoutEffect(() => {
+    const current = scope.current
+    current.active = true
+    setVoiceActive(false)
+    return () => {
+      current.active = false
+      sending.current = null
+    }
+  }, [draftKey])
+
+  function setText(value: string | ((current: string) => string)) {
+    const next = typeof value === 'function' ? value(latest.current.text) : value
+    latest.current.text = next
+    latest.current.saveText(next)
+  }
+
+  async function submit(mode: 'send' | 'interrupt' = 'send') {
+    if (sending.current) return
+    const request = {}
+    sending.current = request
+    const current = scope.current
+    try {
+      const ready = await (finalizer.current?.finalize() ?? Promise.resolve(true))
+      if (!ready || !current.active || scope.current !== current) return
+      await latest.current.onSend(latest.current.text, mode)
+    } finally {
+      if (sending.current === request) sending.current = null
+    }
+  }
+
+  return {
+    setText,
+    submit,
+    voiceActive,
+    voice: {
+      finalizer,
+      onActive: setVoiceActive,
+      onText: (transcript: string) => {
         const input = composer.current
         if (!input) return
         const start = input.selectionStart
-        const end = input.selectionEnd
-        setText(current => current.slice(0, start) + transcript + current.slice(end))
+        setText(current => current.slice(0, start) + transcript + current.slice(start))
+        const current = scope.current
         requestAnimationFrame(() => {
+          if (!current.active || scope.current !== current || composer.current !== input) return
           input.focus()
           input.setSelectionRange(start + transcript.length, start + transcript.length)
         })
-      }}
-    />
-  )
+      },
+    },
+  }
+}
+
+export function ComposerVoice(props: Parameters<typeof VoiceRecorder>[0]) {
+  return <VoiceRecorder key={props.sessionId} {...props} />
 }
 
 export function VoiceRecorder({
   sessionId,
   disabled,
   onText,
+  finalizer,
+  onActive,
 }: {
   sessionId: string
   disabled: boolean
   onText: (text: string) => void
+  finalizer?: RefObject<VoiceFinalizer | null>
+  onActive?: (active: boolean) => void
 }) {
   const [config, setConfig] = useState<Config | null>(null)
   const [phase, setPhase] = useState<Phase>('idle')
@@ -88,6 +141,54 @@ export function VoiceRecorder({
   const restoreFocus = useRef(false)
   const onTextRef = useRef(onText)
   onTextRef.current = onText
+  const phaseRef = useRef<Phase>('idle')
+  const completion = useRef<{ promise: Promise<boolean>; resolve: (ready: boolean) => void } | null>(null)
+  const stopRequested = useRef(false)
+
+  function changePhase(next: Phase) {
+    phaseRef.current = next
+    setPhase(next)
+    onActive?.(next !== 'idle')
+    if (next === 'error') finish(false)
+  }
+
+  function beginFinalization() {
+    // The frontend targets ES2020, before Promise.withResolvers.
+    let resolve!: (ready: boolean) => void
+    const promise = new Promise<boolean>(done => {
+      resolve = done
+    })
+    completion.current = { promise, resolve }
+  }
+
+  function finish(ready: boolean) {
+    completion.current?.resolve(ready)
+    completion.current = null
+  }
+
+  function finalize() {
+    if (phaseRef.current === 'idle') return Promise.resolve(true)
+    if (phaseRef.current === 'error') return Promise.resolve(false)
+    stopRequested.current = true
+    const token = generation.current
+    const pending = completion.current!.promise.then(ready => ready && generation.current === token)
+    releaseWakeLock()
+    const active = recorder.current
+    if (active?.state === 'recording') {
+      changePhase('processing')
+      active.stop()
+    }
+    return pending
+  }
+
+  useLayoutEffect(() => {
+    if (!finalizer) return
+    const handle = { finalize }
+    finalizer.current = handle
+    return () => {
+      if (finalizer.current === handle) finalizer.current = null
+    }
+  })
 
   async function acquireWakeLock(token: number) {
     if (!navigator.wakeLock || document.visibilityState !== 'visible' || wakeLock.current || wakeRequest.current) return
@@ -139,6 +240,7 @@ export function VoiceRecorder({
 
   function cancel() {
     generation.current++
+    finish(false)
     upload.current?.abort()
     upload.current = null
     const active = recorder.current
@@ -149,7 +251,7 @@ export function VoiceRecorder({
     audio.current = null
     setError('')
     setElapsed(0)
-    setPhase('idle')
+    changePhase('idle')
   }
 
   useEffect(() => {
@@ -167,9 +269,10 @@ export function VoiceRecorder({
       current = false
     }
   }, [sessionId])
-  useEffect(
+  useLayoutEffect(
     () => () => {
       generation.current++
+      finish(false)
       upload.current?.abort()
       const active = recorder.current
       recorder.current = null
@@ -214,33 +317,37 @@ export function VoiceRecorder({
   async function transcribe(blob: Blob, token: number) {
     const controller = new AbortController()
     upload.current = controller
-    setPhase('processing')
+    changePhase('processing')
     try {
       const result = await api.transcribeVoice(sessionId, blob, controller.signal)
       if (generation.current !== token) return
       if (!result.text.trim()) throw new Error('No speech was detected. Retry or dismiss this recording.')
+      onTextRef.current(result.text)
       audio.current = null
       upload.current = null
-      setPhase('idle')
-      onTextRef.current(result.text)
+      changePhase('idle')
+      finish(true)
     } catch (err) {
       if (generation.current !== token) return
       upload.current = null
       setError(err instanceof Error && err.message ? err.message : 'Transcription failed. Please try again.')
-      setPhase('error')
+      changePhase('error')
     }
   }
 
   async function start() {
+    if (phaseRef.current !== 'idle' && phaseRef.current !== 'error') return
+    beginFinalization()
+    stopRequested.current = false
     const token = ++generation.current
     setError('')
     audio.current = null
     setElapsed(0)
-    setPhase('permission')
+    changePhase('permission')
     const mimeType = recordingType()
     if (!mimeType) {
       setError('Your browser does not support a compatible audio recording format.')
-      setPhase('error')
+      changePhase('error')
       return
     }
     try {
@@ -278,28 +385,29 @@ export function VoiceRecorder({
                 ? 'Recording failed. Retry transcription or download the captured audio.'
                 : 'Recording failed with an unsupported audio format. Download the captured audio.',
           )
-          setPhase('error')
+          changePhase('error')
           return
         }
         if (!acceptedType(actualType)) {
           setError('Your browser recorded an unsupported audio format.')
-          setPhase('error')
+          changePhase('error')
           return
         }
         if (!blob.size) {
           setError('No audio was captured. Try recording again.')
-          setPhase('error')
+          changePhase('error')
           return
         }
         void transcribe(blob, token)
       }
       active.start(1000)
-      setPhase('recording')
+      changePhase('recording')
       void acquireWakeLock(token)
       const started = Date.now()
       timer.current = window.setInterval(() => {
         setElapsed(Math.floor((Date.now() - started) / 1000))
       }, 250)
+      if (stopRequested.current) void finalize()
     } catch (err) {
       if (generation.current !== token) return
       release()
@@ -308,7 +416,7 @@ export function VoiceRecorder({
           ? 'Microphone access was denied. Allow microphone access in your browser and try again.'
           : 'Could not start the microphone. Check your browser permissions and try again.',
       )
-      setPhase('error')
+      changePhase('error')
     }
   }
 
@@ -366,10 +474,7 @@ export function VoiceRecorder({
           title="Stop recording"
           aria-pressed="true"
           className={buttonClass}
-          onClick={() => {
-            releaseWakeLock()
-            recorder.current?.stop()
-          }}
+          onClick={() => void finalize()}
         >
           <span aria-hidden="true" className="h-3 w-3 rounded-full bg-red-500 motion-safe:animate-pulse" />
         </button>
@@ -400,7 +505,13 @@ export function VoiceRecorder({
           className={buttonClass}
           aria-label="Retry"
           title="Retry"
-          onClick={() => (audio.current ? void transcribe(audio.current, generation.current) : void start())}
+          onClick={() => {
+            if (phaseRef.current !== 'error') return
+            if (audio.current) {
+              beginFinalization()
+              void transcribe(audio.current, generation.current)
+            } else void start()
+          }}
         >
           <span aria-hidden="true">↻</span>
         </button>

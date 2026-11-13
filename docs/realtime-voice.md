@@ -4,12 +4,12 @@ This is an **off-by-default prototype**, separate from composer dictation, enabl
 
 **Historical acceptance/release checkpoint, 2026-11-12:** Lee accepted phone audio/basic conversation, not Android Bluetooth or orchestration. Source PR #297 was live as `6b33f825` / `ffa206f6` through infra-octo #171. After all old consumers exited and a fresh acknowledged quiet window, exact scoped policy #170 merged at 23:34:50 (`eff442d9`) and matching web/bridge configuration was verified at 23:38:39. Only new logical sessions could receive the normal-thread grant; the then-newest retained 22:46 call stayed ungranted and had failed before durable delegation. Normal task costs were approved at 21:15:41; normal approvals, one root request and the 90-second voice cap remain. No hosted normal-task/provider test ran at that checkpoint, and Android output remained physically unknown. [Historical policy evidence](realtime-voice-progress.md#continuation--newest-live-session-and-ux-2026-11-12) separates policy activation from the UX frontend release.
 
-**Current investigation, 2026-11-13:** the latest correlated Android Brave input
-call reached Silero but retained no provider transcript. Phone-versus-headset
-capture and physical routing remain unverified. The
-[latest input audit](realtime-voice-causal-review.md#android-brave-input-audit--2026-11-13)
-reconciles current source `3c840afa`, the actual frontend/bridge and evidence gaps;
-this diagnostic patch is not a deployment or real-device acceptance claim.
+**Latest owner correction, 2026-11-13 18:53 UTC:** input transcription now
+works in the Android Brave/Bluetooth call. The owner withdrew the latest apparent
+playback fault: device volume was down, and playback is not broken. This call is
+not evidence of an output-pipeline defect; no speculative playback fix is made.
+Historical physical Android/Bluetooth route acceptance remains separate. See the
+[current causal audit](realtime-voice-causal-review.md#same-call-continuation-and-volume-correction--2026-11-13).
 
 The [all-session usage audit and separate draft315 safety review](realtime-voice-audit-20261113.md)
 enumerates all five production calls and three preserved paid attempts, with
@@ -23,7 +23,7 @@ The pinned direct adapter is `livekit-agents==1.8.11`, `livekit-plugins-openai==
 
 The isolated bridge requirements also pin `redis==8.1.0` for the Celery/Kombu Redis transport; the repository's OpenAI SDK constraint is unchanged. Offline preflight publishes and consumes a harmless probe on a unique isolated Redis queue, without a worker or model. A post-commit dispatch failure marks a still-queued voice message failed and reports a not-run outcome through the same session's durable outbox; if a worker has already claimed it, its state is not overwritten. The assistant may say a request was submitted, not that it is running. No paid retry is automatic.
 
-Client delegation is an opaque provider event, not a function/tool call: `session.delegation.created` with `delegation.id` and `target="client"` emits `GPTLiveDelegation(id, pending_transcript)`. Voice tools stay empty. The bridge immediately captures the first ID and collects ordered SDK transcript segments; it dispatches only after actual Python Silero VAD detects speech and an end of speech, the configurable pause grace has elapsed, the transcript has been quiet for 0.8 seconds and all observed segments are final. A resumed VAD speech event resets the boundary. No model delegation means no background task: VAD alone never submits work. Stop, session end, missing final text or the 60-second collection deadline fail closed without an automatic retry. A durable result is added as silent authoritative context before commentary correlated with the original delegation ID.
+Client delegation is an opaque provider event, not a function/tool call: `session.delegation.created` with `delegation.id` and `target="client"` emits `GPTLiveDelegation(id, pending_transcript)`. Voice tools stay empty. The bridge reserves a finite request slot and collects ordered SDK transcript segments; it dispatches only after actual Python Silero VAD detects speech and an end of speech, the pause grace has elapsed, the transcript has been quiet for 0.8 seconds and observed segments are final. A resumed VAD speech event resets the boundary. No model delegation means no background task. Stop, session end, missing final text or the 60-second collection deadline fail closed without automatic retry. A verified result is supplied as silent authoritative context before plain commentary correlated with its delegation ID; internal labels and IDs are not spoken narrative. Neither commentary enqueueing nor an announcement claim proves transmission, model consumption, playback or hearing.
 
 The LiveKit 1.8.11 integrated recognition path receives the same input frames as GPT-Live and runs the explicitly supplied Silero VAD. Its default silence threshold is 0.55 seconds; `REALTIME_VOICE_PAUSE_GRACE_SECONDS` adds 2.0 seconds by default (allowed 0.5–10). Thus dispatch waits at least roughly 2.55 seconds after acoustic silence, plus scheduling/inference overhead or any longer transcript drain. Increasing grace trades latency for tolerance of longer pauses. Acoustic silence is not semantic completion: a pause longer than the grace, missed speech, late provider fragments or transcription omissions can still truncate a request. Final SDK segments and prompt instructions are not guarantees of complete text or truthful generated speech. Queued commentary proves neither transmission nor playback. See the [causal review](realtime-voice-causal-review.md).
 
@@ -153,8 +153,8 @@ The follow-up adds **Collect route diagnostics** on the dedicated page. It reads
 
 ### Microphone input evidence and explicit recovery
 
-The November 13 input investigation is separate from the earlier output problem.
-The latest correlated realtime call reached bridge Silero three times, but retained
+The earlier November 13 **15:51 UTC** input investigation is separate from
+the later successful transcription and volume-down correction. That earlier call reached bridge Silero three times, but retained
 no provider transcript or generated assistant audio. It ended explicitly after
 34.438 seconds, not at the 90-second cap. A separate successful composer
 `gpt-transcribe` request followed on the same owner/thread. Neither observation
@@ -168,12 +168,12 @@ nonzero audio, remote receipt or transcription. Device changes only refresh
 observations and invalidate the local probe; they never select hardware,
 restart capture or unmute. Hardware input source remains **unverified**.
 
-**Recover microphone** is an explicit user action on the existing room: it
-restarts the existing SDK track, or requests microphone permission/capture if no
-track exists. A failed initial capture keeps the existing room and original
-deadline, with a visible sanitized permission/missing/busy/capture error; it
-does not automatically reconnect or retry. Recovery is disabled for intentional
-mute, pending mute/unmute and while another recovery is pending. An SDK-muted
+**Recover microphone** is not a default call control. It appears only with a
+classified capture error and requires an explicit click on the existing room:
+it restarts the existing SDK track, or requests capture if no track exists.
+A failed initial capture keeps the room and original deadline, with actionable
+permission/missing/busy/capture guidance; it never automatically recaptures or unmutes.
+Recovery is disabled for intentional mute, pending mute/unmute and while another recovery is pending. An SDK-muted
 track is restored only by the explicit recovery action while it still belongs
 to the current microphone publication. End/disconnect or lost publication
 ownership stops late returned capture, including across restart and unmute.
@@ -227,6 +227,9 @@ real owner. Its mapping key is the exact launch-chat UUID; its value requires:
 | `bot` | Exact registered bot name already accessible to that owner. |
 | `normal_task_costs_approved` | Exactly `True`, separately authorizing existing normal-task execution costs rather than claiming the prototype's API-token price covers them. |
 | `approval_reference` | Nonempty reference to that reviewed authorization; recorded durably with the task. |
+| `max_requests` | Optional; defaults to `1`. Only `1` or the reviewed finite cap `3` is accepted. |
+| `followup_costs_approved` | Must be exactly `True` when `max_requests=3`; authorizes explicit sequential follow-up execution costs, not unlimited inference. |
+| `followup_approval_reference` | Separate nonempty reviewed continuation reference when `max_requests=3`. |
 
 Web and bridge must carry the same policy. Only a **new** owner-created voice
 session receives its exact-chat/owner/bot grant and authorization timestamp.
@@ -240,15 +243,43 @@ An authorized model-selected client delegation enters the **existing exact
 thread's normal message queue**, with its authenticated user identity, normal
 engine/context/registered tools and approval semantics. It does not reroute the
 bot or broaden its allowed targets. The transport still has its original
-90-second wall-clock deadline and one root request. The root and any normally
-authorized child work are governed by the bot's existing normal turn/task
-controls, **not** the 40,000/1,500-token API lookup estimate. Normal compaction,
+90-second wall-clock deadline. The default remains one root request; a separately
+reviewed exact scope can permit **three sequential execution attempts total**.
+Only one can be collecting, queued, delivered or awaiting approval at a time.
+Duplicate IDs cannot consume another slot or replay a write. Expired collections
+consume their attempt; reconnect/resume never resets allowance or deadline.
+The UI shows remaining allowance and offers explicit continuation in the owning
+text thread at exhaustion. Read-only status observation/result reading uses no
+execution slot and launches no inference. Each root and normally authorized child
+work remains governed by the bot's existing normal turn/task controls,
+**not** the 40,000/1,500-token API lookup estimate. Normal compaction,
 task tools and their downstream costs are therefore outside that experimental
 estimate; this is why an explicit separate cost-policy decision is required.
 The audited live Boundcorp bot has a normal **50-model-turn** limit; this is
 not the prototype's four-turn limit or a new financial ceiling. Lee approved
 normal originating-thread costs at **21:15:41 UTC**, but no real-owner normal
 task was run during this investigation.
+
+Only new logical sessions receive a changed grant; increasing configured capacity
+cannot widen an existing one. Normal action approvals remain in the owning thread.
+The bridge distinguishes speech collection, durable admission, queued/handler-
+claimed work and persisted result. A handler claim does not prove model execution
+or consumption; missing terminal evidence remains pending/unknown, not success.
+
+### Composer Stop and Send
+
+Ordinary composer dictation is independent of realtime call controls. **Stop**
+ends capture, waits for final transcription and inserts it into the current editable
+draft without sending or deleting selected draft text. **Send**, including Enter,
+stops any recording, awaits that same finalization and invokes the normal send
+handler exactly once with the latest draft and final transcript. Duplicate clicks,
+Enter and reentrant sends share one gate. Edits made during finalization survive.
+Failure keeps the draft and recoverable audio, exposes Retry/Download guidance
+and sends nothing partial. Cancel, unmount or a draft-route change invalidates
+late responses and pending sends. Retry restores an editable draft; it does not
+automatically send. Offline browser coverage uses native MediaRecorder with generated
+audio and mocked transcription only, not a paid transcription or hardware test.
+
 
 Submission is serialized by the session and unique delegation ID. Opted-in
 normal tasks record a durable claim for **each external-tool invocation ID

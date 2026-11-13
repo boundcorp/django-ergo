@@ -3,7 +3,7 @@ import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { api } from '../api'
 import { clearDraft, useDraft } from '../draft'
 import ModelPicker, { useBotModels } from '../components/ModelPicker'
-import { ComposerVoice } from '../components/VoiceRecorder'
+import { ComposerVoice, useComposerVoice } from '../components/VoiceRecorder'
 
 // Start a thread by writing its first message (with files). The thread gets a title from the
 // message right away, and a generated one (new_thread_metadata) a moment later.
@@ -13,7 +13,7 @@ export function NewThread({ onChange, userId }: { onChange: () => void; userId: 
   const location = useLocation()
   // Devbox drafts can contain private chat links; do not reuse them across accounts.
   const draftKey = name === 'devbox' ? `new-thread.${name}.user.${userId}` : `new-thread.${name}`
-  const [text, setText] = useDraft(draftKey)
+  const [text, saveText] = useDraft(draftKey)
   const [files, setFiles] = useState<File[]>([])
   const [busy, setBusy] = useState(false)
   const [model, setModel] = useState('')
@@ -23,6 +23,13 @@ export function NewThread({ onChange, userId }: { onChange: () => void; userId: 
   const composer = useRef<HTMLTextAreaElement>(null)
   const picker = useRef<HTMLInputElement>(null)
   const appliedLocation = useRef<string | null>(null)
+  const { setText, submit, voiceActive, voice } = useComposerVoice({
+    draftKey,
+    text,
+    setText: saveText,
+    composer,
+    onSend: start,
+  })
 
   // Drafts do not have a session yet; use the bot's main chat for voice usage accounting.
   useEffect(() => {
@@ -76,16 +83,16 @@ export function NewThread({ onChange, userId }: { onChange: () => void; userId: 
     if (picker.current) picker.current.value = ''
   }
 
-  async function start() {
-    if ((!text.trim() && !files.length) || busy) return
+  async function start(message: string) {
+    if ((!message.trim() && !files.length) || busy) return
     setBusy(true)
     setError('')
     try {
-      const message = text.trim() || `(${files.map(f => f.name).join(', ')})`
-      const thread = await api.newThread(name, '', message, model)
+      const title = message.trim() || `(${files.map(f => f.name).join(', ')})`
+      const thread = await api.newThread(name, '', title, model)
       const ids = []
       for (const file of files) ids.push((await api.uploadAttachment(thread.id, file)).id)
-      await api.send(thread.id, text, ids)
+      await api.send(thread.id, message, ids)
       clearDraft(draftKey)
       onChange()
       navigate(`/s/${thread.id}`)
@@ -134,7 +141,7 @@ export function NewThread({ onChange, userId }: { onChange: () => void; userId: 
         }}
         onSubmit={e => {
           e.preventDefault()
-          start()
+          void submit()
         }}
       >
         <input ref={picker} type="file" multiple hidden onChange={e => add(e.target.files)} />
@@ -154,7 +161,7 @@ export function NewThread({ onChange, userId }: { onChange: () => void; userId: 
           onKeyDown={e => {
             if (e.key === 'Enter' && !e.shiftKey) {
               e.preventDefault()
-              start()
+              void submit()
             }
           }}
           rows={4}
@@ -173,10 +180,10 @@ export function NewThread({ onChange, userId }: { onChange: () => void; userId: 
             + Attach
           </button>
           {voiceSession?.bot === name && (
-            <ComposerVoice sessionId={voiceSession.id} disabled={busy} composer={composer} setText={setText} />
+            <ComposerVoice key={draftKey} sessionId={voiceSession.id} disabled={busy} {...voice} />
           )}
           <button
-            disabled={busy || (!text.trim() && !files.length)}
+            disabled={busy || (!text.trim() && !files.length && !voiceActive)}
             className="ml-auto rounded-control bg-accent px-5 py-2.5 font-semibold text-canvas disabled:opacity-50"
           >
             {busy ? 'Starting…' : 'Send'}
@@ -207,7 +214,7 @@ export function NewThread({ onChange, userId }: { onChange: () => void; userId: 
         >
           <span className="h-3 w-3 shrink-0 rounded-full bg-danger" aria-hidden="true" />
           <span className="font-semibold">Request failed</span>
-          <button type="button" className="font-semibold text-accent hover:underline" onClick={start}>
+          <button type="button" className="font-semibold text-accent hover:underline" onClick={() => void submit()}>
             Retry
           </button>
           <span className="min-w-0 flex-1 truncate text-muted">{error}</span>

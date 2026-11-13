@@ -222,25 +222,6 @@ def test_exact_thread_grant_is_default_off_revocable_and_not_inherited(normal_vo
 
 
 @pytest.mark.django_db(transaction=True)
-def test_voice_is_told_it_can_delegate_to_the_owning_bot_until_its_request_is_used(normal_voice):
-    chat, _, voice = normal_voice
-    capability = realtime_voice.startup_briefing(voice)["capability"]
-    # Lee's 2026-11-13 call: told "no callable voice tools", the voice denied having any tooling.
-    assert capability.startswith("Delegation is available") and f"ask {chat.bot_name} to do it" in capability
-    realtime_voice.delegate(voice.pk, "voice-request", "Where are we at with the work?")
-    used = realtime_voice.startup_briefing(RealtimeVoiceSession.objects.get(pk=voice.pk))["capability"]
-    assert used.startswith("Delegation is unavailable") and "one background request is already used" in used
-    # A signal whose speech never became a request still used the call's one signal.
-    other = realtime_voice.create_session(
-        SimpleNamespace(auth=chat.user), realtime_voice.CreateIn(chat_id=str(chat.pk))
-    )
-    realtime_voice.begin_pending(other["id"], "never-finished", {})
-    realtime_voice.close_pending(other["id"], "never-finished", "expired")
-    expired = realtime_voice.startup_briefing(RealtimeVoiceSession.objects.get(pk=other["id"]))["capability"]
-    assert expired.startswith("Delegation is unavailable")
-
-
-@pytest.mark.django_db(transaction=True)
 def test_normal_task_transient_failure_is_not_retried_or_reported_answered(normal_voice, use_bots):  # noqa: F811
     from django_ergo.conversation.engine import automatic_request_retries
 
@@ -302,4 +283,97 @@ def test_authorized_normal_request_cannot_start_after_original_voice_deadline(no
     voice.save(update_fields=["bridge_started_at"])
     with pytest.raises(ValueError, match="deadline expired"):
         realtime_voice.delegate(voice.pk, "expired-normal-request", "Do not run after the voice cap.")
+    assert not voice.delegations.exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_startup_has_bounded_exact_thread_work_and_current_call_observations(normal_voice):
+    from django_ergo.conversation.models import Worker
+
+    chat, target, voice = normal_voice
+    Worker.objects.create(
+        session=chat,
+        bot_name=chat.bot_name,
+        title="Current cobalt-spoon release",
+        function="offline:worker",
+        status="running",
+        progress="Reviewing synthetic result",
+    )
+    Worker.objects.create(
+        session=target,
+        bot_name=target.bot_name,
+        title="UNRELATED PRIVATE WORK",
+        function="offline:worker",
+        status="running",
+    )
+    realtime_voice.record_event(
+        voice.pk,
+        "bridge-input:transcribed:offline",
+        "bridge_input",
+        "Nonempty input transcription observed from the voice provider.",
+    )
+    before = chat.messages.count()
+    snapshot = realtime_voice.startup_briefing(voice)
+    assert "Current cobalt-spoon release" in snapshot["context"]
+    assert "Reviewing synthetic result" in snapshot["context"]
+    assert "UNRELATED PRIVATE WORK" not in snapshot["context"]
+    assert snapshot["observation"]["current_session"]["input_transcribed"] is True
+    assert snapshot["observation"]["current_session"]["physical_hearing"] == "unknown"
+    assert snapshot["observation"]["observed_at"]
+    assert chat.messages.count() == before
+
+
+@pytest.mark.django_db(transaction=True)
+def test_reviewed_followups_are_finite_sequential_idempotent_and_do_not_widen_existing_sessions(
+    normal_voice, settings, held_messages
+):
+    from ergonaut.realtime_voice_execution import request_capacity
+
+    chat, _, original = normal_voice
+    policy = settings.REALTIME_VOICE_THREAD_EXECUTION_AUTHORIZATIONS[str(chat.pk)]
+    policy["max_requests"] = 3
+    with pytest.raises(ValueError, match="cost approval"):
+        realtime_voice.create_session(SimpleNamespace(auth=chat.user), realtime_voice.CreateIn(chat_id=str(chat.pk)))
+    policy.update(followup_costs_approved=True, followup_approval_reference="offline-explicit-three")
+    with pytest.raises(ValueError, match="revoked"):
+        realtime_voice.delegate(original.pk, "must-not-widen", "Old logical sessions cannot inherit increased costs.")
+    fresh = realtime_voice.create_session(
+        SimpleNamespace(auth=chat.user), realtime_voice.CreateIn(chat_id=str(chat.pk))
+    )
+    voice = RealtimeVoiceSession.objects.get(pk=fresh["id"])
+    assert realtime_voice.claim_bridge(voice.pk, "a" * 32)
+    voice.refresh_from_db()
+    deadline_origin = voice.bridge_started_at
+    for index in range(3):
+        event_id = f"explicit-{index}"
+        assert realtime_voice.begin_pending(voice.pk, event_id, {})
+        receipt = realtime_voice.resolve_pending(voice.pk, event_id, f"Explicit user follow-up {index}")
+        message = ThreadMessage.objects.get(pk=receipt["message_id"])
+        assert receipt["status"] == "queued"
+        assert realtime_voice.delegate(voice.pk, event_id, f"Explicit user follow-up {index}").pk == message.pk
+        assert not realtime_voice.begin_pending(voice.pk, f"concurrent-{index}", {})
+        with pytest.raises(ValueError):
+            realtime_voice.delegate(voice.pk, f"bypass-{index}", "Must not execute concurrently.")
+        for _ in range(2):
+            realtime_voice.session_out(voice)  # Reading status never dispatches or consumes execution.
+        assert len(held_messages) == index + 1
+        message.status, message.reply_text = "answered", f"Verified result {index}"
+        message.save(update_fields=["status", "reply_text", "updated_at"])
+    voice.refresh_from_db()
+    assert request_capacity(voice)["remaining"] == 0
+    assert voice.bridge_started_at == deadline_origin
+    assert not realtime_voice.begin_pending(voice.pk, "fourth", {})
+    with pytest.raises(ValueError, match="cap reached"):
+        realtime_voice.delegate(voice.pk, "fourth", "Must not exceed the reviewed finite cap.")
+    assert len(held_messages) == 3
+
+
+@pytest.mark.django_db(transaction=True)
+def test_expired_collection_consumes_slot_and_cannot_replay_as_execution(normal_voice):
+    _, _, voice = normal_voice
+    assert realtime_voice.begin_pending(voice.pk, "expired-attempt", {})
+    realtime_voice.close_pending(voice.pk, "expired-attempt", "expired")
+    with pytest.raises(ValueError, match="consumed"):
+        realtime_voice.delegate(voice.pk, "expired-attempt", "Do not replay an expired attempt.")
+    assert not realtime_voice.begin_pending(voice.pk, "new-attempt", {})
     assert not voice.delegations.exists()

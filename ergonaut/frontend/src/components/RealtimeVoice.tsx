@@ -625,7 +625,8 @@ function useVoiceOwner(): VoiceCallOwner {
       phase !== 'connected' ||
       voiceRef.current?.status !== 'active' ||
       actionLock.current ||
-      muteRoom.current
+      muteRoom.current ||
+      observer.state.error === 'none'
     )
       return
     await observer.recover(muted)
@@ -1046,6 +1047,12 @@ export function VoicePage() {
             {voice.delegations?.length
               ? voice.delegations.map(task => (task.error ? 'failed' : task.status || 'unknown')).join(', ')
               : voice.state?.pending_delegation?.status || 'nothing submitted'}
+            {voice.request_budget && (
+              <>
+                {' '}
+                · {voice.request_budget.remaining} of {voice.request_budget.limit} requests remaining
+              </>
+            )}
           </summary>
           <VoiceBackgroundWork session={voice} />
         </details>
@@ -1074,13 +1081,15 @@ export function VoicePage() {
                   >
                     {muted ? 'Unmute' : 'Mute'}
                   </button>
-                  <button
-                    type="button"
-                    disabled={!!action || muted || owner.microphoneBusy || (standbyEnabled && pending)}
-                    onClick={() => void owner.recoverMicrophone()}
-                  >
-                    {owner.input.recovering ? 'Recovering microphone…' : 'Recover microphone'}
-                  </button>
+                  {(owner.input.error !== 'none' || owner.input.recovering) && (
+                    <button
+                      type="button"
+                      disabled={!!action || muted || owner.microphoneBusy || (standbyEnabled && pending)}
+                      onClick={() => void owner.recoverMicrophone()}
+                    >
+                      {owner.input.recovering ? 'Recovering microphone…' : 'Recover microphone'}
+                    </button>
+                  )}
                   {audioPlayback !== 'playing' && (
                     <button type="button" onClick={owner.enableAudio} aria-describedby="voice-playback-help">
                       Enable sound
@@ -1242,10 +1251,12 @@ export function VoicePage() {
               selected. Physical Bluetooth routing is unknown; diagnostics do not change your route.
             </p>
             <h2 className="mt-3 font-semibold">Local input check</h2>
-            <p>
-              Recovery requests microphone access on this existing call; it may prompt for permission. It does not
-              create another room or extend the call deadline. Unmute intentionally muted input yourself first.
-            </p>
+            {(owner.input.error !== 'none' || owner.input.recovering) && (
+              <p>
+                Recovery requests microphone access on this existing call; it may prompt for permission. It does not
+                create another room or extend the call deadline. Unmute intentionally muted input yourself first.
+              </p>
+            )}
             <button
               type="button"
               className="my-1 min-h-11 rounded-md border border-stroke px-3"
