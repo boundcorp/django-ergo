@@ -227,8 +227,9 @@ into the original request fingerprint before the one create.
 
 The bootstrap checks the existing absolute deadline **before apt**, kills the
 active apt process group at the same deadline-minus-120s cutoff, disables apt's
-automatic sshd startup, and starts a separate password-disabled, public-key-only
-sshd configuration. Forwarding is restricted to `127.0.0.1:30010`; SFTP/SCP and
+automatic sshd startup, and runs an explicitly foreground, separately tracked
+public-key-only sshd child with bounded listener readiness. It never waits for
+daemonization before publishing the host key. Forwarding is restricted to `127.0.0.1:30010`; SFTP/SCP and
 authenticated command execution are available. A fresh host private key is
 generated **inside** the ephemeral rental; it is not the controller private key.
 Before any checkpoint download, the wrapper records effective RAM/disk/VRAM and
@@ -259,7 +260,7 @@ Use the provider-returned direct address, not `ssh.runpod.io`:
 
 ```sh
 # All angle-bracket values come from the authenticated helper, never a model.
-ssh -F /dev/null -i <fresh-private-key> -p <port> \
+env -u "$SCOPED_CALLBACK_ENV" ssh -F /dev/null -i <fresh-private-key> -p <port> \
   -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
   -o UserKnownHostsFile=<isolated-file> -o HostKeyAlias=<host_key_alias> \
   -o ExitOnForwardFailure=yes -N \

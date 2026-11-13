@@ -17,6 +17,7 @@ import math
 import os
 import shutil
 import signal
+import socket
 import subprocess
 import time
 from pathlib import Path
@@ -29,11 +30,13 @@ cutoff = deadline - 120
 if started >= cutoff:
     raise ValueError("work cutoff reached before SSH bootstrap")
 child = None
+ssh_server = None
 
 def stop(signum=None, frame=None):
-    if child is not None and child.poll() is None:
-        os.killpg(child.pid, signal.SIGKILL)
-        child.wait()
+    for process in (child, ssh_server):
+        if process is not None and process.poll() is None:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait()
     raise SystemExit(124)
 
 for signum in (signal.SIGALRM, signal.SIGTERM, signal.SIGINT):
@@ -42,12 +45,15 @@ signal.setitimer(signal.ITIMER_REAL, cutoff - time.time())
 
 def run(argv, capture=False):
     global child
+    command_started = time.time()
+    print("ERGO_SSH_BOOTSTRAP begin " + argv[0], flush=True)
     child = subprocess.Popen(argv, start_new_session=True,
         stdout=subprocess.PIPE if capture else None)
     output, _ = child.communicate()
     if child.returncode != 0:
         raise RuntimeError("SSH bootstrap command failed; no restart")
     child = None
+    print("ERGO_SSH_BOOTSTRAP end " + argv[0] + " " + str(time.time() - command_started), flush=True)
     return output
 
 # The image already contains Python, apt and CA certificates, but no sshd.
@@ -99,7 +105,20 @@ PermitTunnel no
 Subsystem sftp internal-sftp
 """)
 run(["/usr/sbin/sshd", "-t", "-f", str(config)])
-run(["/usr/sbin/sshd", "-f", str(config)])
+# A listener is a long-running child, not a command to wait for. Explicit -D
+# avoids depending on daemonization behavior inside PID-1 containers.
+ssh_server = subprocess.Popen(
+    ["/usr/sbin/sshd", "-D", "-e", "-f", str(config)], start_new_session=True)
+for attempt in range(30):
+    if ssh_server.poll() is not None:
+        raise RuntimeError("SSH listener exited before readiness; no restart")
+    try:
+        with socket.create_connection(("127.0.0.1", 22), timeout=1):
+            break
+    except OSError:
+        time.sleep(0.1)
+else:
+    raise RuntimeError("SSH listener did not become ready")
 host_key = Path("/run/sshd/ergo_host_key.pub").read_text().split()
 print("ERGO_SSH_HOST_KEY " + os.environ["ERGO_ATTEMPT_FINGERPRINT"] + " " + " ".join(host_key[:2]), flush=True)
 Path("/workspace/h3-access-timings.json").write_text(json.dumps({
