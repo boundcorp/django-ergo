@@ -1,6 +1,8 @@
 # Examples
 
 - `*.py`: small scripts showing Ergo's knowledge base, RAG and feedback APIs.
+- `antigravity-fake-omp/`: offline, fake-only OMP provider contract
+  experiment; not a live Antigravity integration.
 - `hello/`: the smallest bot folder: `bot.yaml`, `agents.md` and one tool
   module. [Getting started](../docs/getting-started.md) runs it.
 - `pantry/`: a bot with a table, a pinned `.jhtml` page and a `@page_action`.
