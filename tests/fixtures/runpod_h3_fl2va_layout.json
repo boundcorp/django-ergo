@@ -1,0 +1,130 @@
+{
+  "model_revision": "42ed227ee7df40d41602854ae760620d6eb651fe",
+  "sglang_revision": "2511743bd784e69e5a81ca3d926a000711dae4ab",
+  "source": "https://huggingface.co/api/models/MiniMaxAI/MiniMax-H3/tree/42ed227ee7df40d41602854ae760620d6eb651fe?recursive=true&limit=1000",
+  "model_index": {
+    "_class_name": "MiniMaxH3Pipeline",
+    "_diffusers_version": "0.32.2",
+    "text_encoder": [
+      "transformers",
+      "MiniMaxH3Qwen3VLHFEncoder"
+    ],
+    "tokenizer": [
+      "transformers",
+      "Qwen2TokenizerFast"
+    ],
+    "video_vae": [
+      "diffusers",
+      "MiniMaxH3VideoVAE"
+    ],
+    "audio_vae": [
+      "diffusers",
+      "MiniMaxH3AudioVAE"
+    ],
+    "scheduler": null,
+    "transformer": [
+      "diffusers",
+      "MiniMaxH3DiTModel"
+    ],
+    "processor": [
+      "transformers",
+      "Qwen3VLProcessor"
+    ],
+    "_minimax_h3": {
+      "schema_version": 1,
+      "partition": "fl2va",
+      "tasks": [
+        "t2va",
+        "fl2va"
+      ],
+      "task_aliases": {},
+      "sigma_shift_scales": {
+        "video": 12.0,
+        "audio": 3.0
+      }
+    }
+  },
+  "files": [
+    "FL2VA/audio_vae/config.json",
+    "FL2VA/audio_vae/config.yaml",
+    "FL2VA/audio_vae/dac_activations.py",
+    "FL2VA/audio_vae/dac_alias_free_act.py",
+    "FL2VA/audio_vae/dac_alias_free_filter.py",
+    "FL2VA/audio_vae/dac_alias_free_resample.py",
+    "FL2VA/audio_vae/dac_attn_proj.py",
+    "FL2VA/audio_vae/dac_audio_vae.py",
+    "FL2VA/audio_vae/dac_bigvgan.py",
+    "FL2VA/audio_vae/dac_utils.py",
+    "FL2VA/audio_vae/metadata.json",
+    "FL2VA/audio_vae/minimax_h3_audio_vae.py",
+    "FL2VA/audio_vae/model.safetensors",
+    "FL2VA/model_index.json",
+    "FL2VA/processor/chat_template.json",
+    "FL2VA/processor/merges.txt",
+    "FL2VA/processor/preprocessor_config.json",
+    "FL2VA/processor/tokenizer.json",
+    "FL2VA/processor/tokenizer_config.json",
+    "FL2VA/processor/video_preprocessor_config.json",
+    "FL2VA/processor/vocab.json",
+    "FL2VA/text_encoder/chat_template.json",
+    "FL2VA/text_encoder/config.json",
+    "FL2VA/text_encoder/merges.txt",
+    "FL2VA/text_encoder/model-00001-of-00014.safetensors",
+    "FL2VA/text_encoder/model-00002-of-00014.safetensors",
+    "FL2VA/text_encoder/model-00003-of-00014.safetensors",
+    "FL2VA/text_encoder/model-00004-of-00014.safetensors",
+    "FL2VA/text_encoder/model-00005-of-00014.safetensors",
+    "FL2VA/text_encoder/model-00006-of-00014.safetensors",
+    "FL2VA/text_encoder/model-00007-of-00014.safetensors",
+    "FL2VA/text_encoder/model-00008-of-00014.safetensors",
+    "FL2VA/text_encoder/model-00009-of-00014.safetensors",
+    "FL2VA/text_encoder/model-00010-of-00014.safetensors",
+    "FL2VA/text_encoder/model-00011-of-00014.safetensors",
+    "FL2VA/text_encoder/model-00012-of-00014.safetensors",
+    "FL2VA/text_encoder/model-00013-of-00014.safetensors",
+    "FL2VA/text_encoder/model-00014-of-00014.safetensors",
+    "FL2VA/text_encoder/model.safetensors.index.json",
+    "FL2VA/text_encoder/preprocessor_config.json",
+    "FL2VA/text_encoder/tokenizer.json",
+    "FL2VA/text_encoder/tokenizer_config.json",
+    "FL2VA/text_encoder/video_preprocessor_config.json",
+    "FL2VA/text_encoder/vocab.json",
+    "FL2VA/tokenizer/merges.txt",
+    "FL2VA/tokenizer/tokenizer.json",
+    "FL2VA/tokenizer/tokenizer_config.json",
+    "FL2VA/tokenizer/vocab.json",
+    "FL2VA/transformer/config.json",
+    "FL2VA/transformer/model-00001-of-00013.safetensors",
+    "FL2VA/transformer/model-00002-of-00013.safetensors",
+    "FL2VA/transformer/model-00003-of-00013.safetensors",
+    "FL2VA/transformer/model-00004-of-00013.safetensors",
+    "FL2VA/transformer/model-00005-of-00013.safetensors",
+    "FL2VA/transformer/model-00006-of-00013.safetensors",
+    "FL2VA/transformer/model-00007-of-00013.safetensors",
+    "FL2VA/transformer/model-00008-of-00013.safetensors",
+    "FL2VA/transformer/model-00009-of-00013.safetensors",
+    "FL2VA/transformer/model-00010-of-00013.safetensors",
+    "FL2VA/transformer/model-00011-of-00013.safetensors",
+    "FL2VA/transformer/model-00012-of-00013.safetensors",
+    "FL2VA/transformer/model-00013-of-00013.safetensors",
+    "FL2VA/transformer/model.safetensors.index.json",
+    "FL2VA/video_vae/attention.py",
+    "FL2VA/video_vae/base_module.py",
+    "FL2VA/video_vae/config.json",
+    "FL2VA/video_vae/conv.py",
+    "FL2VA/video_vae/flash.py",
+    "FL2VA/video_vae/func.py",
+    "FL2VA/video_vae/klvae.py",
+    "FL2VA/video_vae/minimax_h3_video_vae.py",
+    "FL2VA/video_vae/norm.py",
+    "FL2VA/video_vae/normalize.py",
+    "FL2VA/video_vae/parallel.py",
+    "FL2VA/video_vae/source/config.json",
+    "FL2VA/video_vae/source/model.safetensors",
+    "FL2VA/video_vae/utils.py",
+    "FL2VA/video_vae/vae_cnn.py",
+    "FL2VA/video_vae/vae_module.py",
+    "FL2VA/video_vae/vae_processor.py",
+    "FL2VA/video_vae/vae_vit.py"
+  ]
+}

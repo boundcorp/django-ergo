@@ -141,6 +141,15 @@ def main():  # noqa: C901, PLR0912, PLR0915 — ordered download/startup/serve l
             raise RuntimeError(message)  # noqa: TRY301 -- publish terminal state below
         timings["download_seconds"] = time.time() - download_started
         persist()
+        # Pinned SGLang's generic completeness check globs video_vae/*.safetensors,
+        # but H3 ships only video_vae/source/model.safetensors, which the H3 VAE
+        # selector loads explicitly. Without a direct match SGLang calls the local
+        # partition incomplete and retries the absolute path as a Hub repo id.
+        # A relative link satisfies the check without copying the 10.4GB file.
+        video_vae = model / "FL2VA" / "video_vae"
+        nested = video_vae / "source" / "model.safetensors"
+        if nested.is_file() and not any(video_vae.glob("*.safetensors")):
+            (video_vae / "model.safetensors").symlink_to("source/model.safetensors")
         loading = time.time()
         stage = "startup"
         publish("starting")

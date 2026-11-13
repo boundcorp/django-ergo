@@ -4,6 +4,17 @@ This document tracks the major milestones and evolution of the Django Ergo proje
 
 ## Development Timeline
 
+### H3 nested video-VAE layout and Python headers (November 2026)
+
+- The launcher links `FL2VA/video_vae/model.safetensors -> source/model.safetensors`
+  after download. Pinned SGLang's generic completeness check misses the nested
+  VAE and retried the local partition as a Hub repo id. The link is the
+  Serverless experiment's fix, which reached READY on a real A100; it replaces
+  the unproven `--model-subfolder .` alternative.
+- New runtime image `ergo-h3-runtime@sha256:04b69208…` adds `python3.12-dev` in a
+  thin layer over the audited image: Triton compiles `cuda_utils.c` against
+  `Python.h` on the first denoise step. The full recipe now installs it too.
+
 ### Versioned Orca coordinator instructions (November 2026)
 
 - Added chat-scoped follow-up tools with durable versions, explicit supersession
