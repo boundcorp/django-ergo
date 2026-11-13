@@ -306,8 +306,12 @@ class Experiment:
             )
             return True
 
-    def export(self, *, now, name, content, metadata):
-        """Persist bytes and JSON metadata atomically before success is possible."""
+    def export(self, *, now, name, content, metadata, retained=False):
+        """Persist immutable off-Pod bytes and metadata.
+
+        ``retained`` archives bytes already durable on the controller host after
+        stop; it authorizes no provider operation or continuation of work.
+        """
         self._time(now)
         if (
             not isinstance(name, str)
@@ -322,10 +326,10 @@ class Experiment:
         encoded = json.dumps(metadata, sort_keys=True, allow_nan=False)
         digest = hashlib.sha256(content).hexdigest()
         with self._tx() as db:
-            row = self._running(db, now)
+            row = self._row(db) if retained else self._running(db, now)
             if row is None:
                 return False
-            if row["phase"] != "ready":
+            if not retained and row["phase"] != "ready":
                 msg = "export requires ready compute"
                 raise ValueError(msg)
             previous = db.execute(

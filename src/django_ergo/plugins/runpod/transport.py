@@ -84,6 +84,7 @@ def _safe_pod(pod):
         "containerDiskInGb",
         "volumeInGb",
         "networkVolume",
+        "costPerHr",
     )
     safe = {key: pod[key] for key in fields if key in pod}
     if isinstance(pod.get("env"), dict):

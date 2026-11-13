@@ -1,10 +1,14 @@
 # Frozen MiniMax H3 six-shot worker
 
-Local preparation, not a deployment or rental authorization. The worker never
-creates a Pod, obtains provider credentials, or downloads weights. Run the
-controller and export directory **off the rented Pod** on the stable host that
-holds the existing experiment SQLite ledger. The independent cleaner alone
-uses the already-scoped credential callback; do not move an existing secret.
+The native hosted integration is the [RunPod plugin](runpod.md), whose real
+`runpod:watch` Worker owns polling and whose independent Ergonaut maintenance
+consumer owns cleanup. This guide also retains the standalone validation/operator
+commands that supply its reused H3 primitives; do not substitute those commands
+or a temporary Kubernetes Job for the hosted native Worker.
+
+No deployment or rental authorization is implied. Keep the controller/export
+directory **off the rented Pod** on the durable rental host, and never bake or
+relocate provider credentials into an image.
 
 ## Exact runtime decision
 
@@ -71,6 +75,100 @@ requires repeated `--include` options for `model_index.json` and `FL2VA/*`;
 a second bare pattern becomes a literal filename and causes HF to ignore the
 include filter. Actual offline entrypoint and real CLI-parser capture exercised
 this boundary without downloading any checkpoint.
+
+## Repeatable image builds and different models
+
+Preserve the published audited image above; native plugin installation does not
+require overwriting it. For a rebuild or a **different model**, use a new image
+tag/digest and separate reviewed recipe/profile. Never retag a changed image as
+the audited artifact.
+
+1. **Pin the inputs.** Record the base image manifest digest, architecture,
+   runtime Git commit, model repository/immutable checkpoint revision, Python,
+   compiler/toolchain and direct package versions. Keep model weights out of
+   the image. Resolve compatible dependencies together, require `pip check`,
+   and retain the complete resolved freeze: source pins alone do not make
+   transitive package resolution bit-reproducible.
+2. **Use a minimal context.** For this recipe, only the Dockerfile and launcher
+   are needed. The paths below match its `COPY` statement; do not send the
+   checkout, private archives, `.env`, home directory or credential cache:
+
+   ```sh
+   CONTEXT=$(mktemp -d)
+   mkdir -p "$CONTEXT/examples/runpod-h3"
+   cp examples/runpod-h3/Dockerfile examples/runpod-h3/launch.py "$CONTEXT/examples/runpod-h3/"
+   docker build --platform linux/amd64 \
+     -f "$CONTEXT/examples/runpod-h3/Dockerfile" \
+     -t ergo-h3:sglang-2511743-kitchen-int8 "$CONTEXT"
+   docker image inspect ergo-h3:sglang-2511743-kitchen-int8 --format '{{.Id}} {{.Size}}'
+   ```
+
+   Use an isolated builder with explicit CPU/memory/disk/time limits, monitor
+   free disk, and preserve logs/cache for long Rust compilation. Delete only
+   this temporary context afterward; never broadly prune a shared daemon.
+3. **CPU import and CLI checks, without weights/network/GPU.**
+
+   ```sh
+   IMAGE=ergo-h3:sglang-2511743-kitchen-int8
+   docker run --rm --network none --entrypoint python "$IMAGE" \
+     -c 'import torch, sglang, huggingface_hub, comfy_kitchen; print(torch.cuda.is_available())'
+   docker run --rm --network none --entrypoint uv "$IMAGE" pip check
+   docker run --rm --network none --entrypoint sglang "$IMAGE" serve --help
+   docker run --rm --network none --entrypoint hf "$IMAGE" download --help
+   docker run --rm --network none --entrypoint cat "$IMAGE" /opt/h3-environment.txt
+   ```
+
+   Exercise the exact task schema and launcher deadline/error paths with
+   fixture-only inputs. A CPU import pass is **not** GPU initialization,
+   memory-fit, conditioned-generation, download-speed or quality evidence.
+4. **Audit before publication.** Save the image and retain its SHA-256,
+   configuration digest, layer inventory and package freeze. Scan **every
+   layer**, including subsequently deleted files, image config/history/env,
+   nested wheels/tars/archives and the build context for secrets/private assets.
+   Never print matching values. Classify every finding by path/type and
+   cryptographic provenance; upstream test keys and random checksum matches
+   need evidence, not an ignored scanner exit code. Retain the audit report.
+   Repeat after any recipe or dependency change; the previous image's audit
+   does not cover a new image.
+5. **Publish only through an approved isolated registry scope.** Use an expiring
+   project/repository-scoped robot, never a shared app's cached write credential.
+   Supply its value through an approved stdin/credential-helper route, not
+   command arguments, Dockerfile `ARG`/`ENV`, build context or shell history.
+
+   ```sh
+   # REGISTRY/REPOSITORY/ROBOT and a short-lived credential are operator supplied.
+   export DOCKER_CONFIG=$(mktemp -d)
+   docker login "$REGISTRY" --username "$ROBOT" --password-stdin
+   docker tag "$IMAGE" "$REGISTRY/$REPOSITORY:$TAG"
+   docker push "$REGISTRY/$REPOSITORY:$TAG"
+   # Record the manifest digest emitted by the push, not docker image .Id.
+   docker pull "$REGISTRY/$REPOSITORY@$MANIFEST_DIGEST"
+   docker image inspect "$REGISTRY/$REPOSITORY@$MANIFEST_DIGEST" \
+     --format '{{.Id}} {{json .RepoDigests}}'
+   docker logout "$REGISTRY"
+   ```
+
+   Independently read/pull the digest using the actual intended read authority
+   (anonymous for a public image) and compare its config digest with the local
+   audited `.Id`. Verify quota and expiry, revoke/discard the temporary robot
+   credential and remove only its isolated credential directory. A successful
+   push is not a deployment and does not establish a RunPod pull.
+6. **Add a reviewed execution profile, not arbitrary model arguments.** For a
+   different model/runtime, copy the recipe/launcher to a separate example
+   directory and replace *all* runtime/checkpoint/schema/hardware pins. Implement
+   a separate trusted native adapter with bounded readiness, durable
+   before-submit identity/no replay, cancellation/deadlines, ordered verified
+   artifacts and independent cleanup; do not pretend another model supports
+   H3's FL2VA schema. The current plugin admits only `frozen_h3`. Review hardware,
+   disk, prices, license delegation and authenticated control/artifact transport
+   for any new adapter. Add it to the host's server allowlist and bot-selected
+   profile IDs only after its mocked-provider lifecycle and actual CPU contract
+   smoke pass. Never let a model choose its own image, shell, credentials,
+   arbitrary URL, mount or deadline extension.
+
+All runtime downloads, warmup, inference and export count toward the original
+rental deadline. A launcher must stop its process group before that deadline;
+only independently confirmed provider deletion ends compute/storage liability.
 
 ## Validate the actual frozen archive — zero GPU/network calls
 

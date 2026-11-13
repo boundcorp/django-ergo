@@ -28,6 +28,12 @@ Live on rigel from `~/p/boundcorp/django-ergo`, bots from `boundcorp/ergo-bots`.
 
 ### Next
 
+- [x] **Native RunPod plugin slice**: real `runpod:watch` Workers and scoped
+  profiles/start/status/collect/terminate tools, durable Django ownership and
+  locked installation-wide reservations around the existing external rental
+  ledger; independent maintenance queue/command, cancel/orphan/deadline cleanup,
+  no uncertain-create replay and idempotent partial attachments. See
+  [host installation and single-host storage boundary](docs/runpod.md).
 - [x] **Supervised H3 pilot preparation**: pinned six-shot image-conditioned
   FL2VA runner, immutable archive/prompt versions and submission tombstones,
   PCM-verified 29s export/partial manifests, independently supervised cleaner
@@ -35,17 +41,17 @@ Live on rigel from `~/p/boundcorp/django-ergo`, bots from `boundcorp/ergo-bots`.
   [cleaner](docs/runpod-cleaner.md). No deployment, model/GPU run or live rental.
 - [ ] **GPU execution**: the standalone controller now supports an explicitly
   gated live one-create path, exercised only with offline HTTP fixtures. Before
-  the single pilot, establish pullable delivery of the validated image, scoped
-  account credential injection on the cleaner host, and an authenticated Pod
+  the single pilot, install the native plugin's server policy and independent
+  maintenance consumer, scoped account credential injection, durable shared
+  single-host rental storage, and an authenticated Pod
   access/export path; admit an actual quote with storage/margin and measure
   cold conditioned fit under the unchanged ≤1h deadline. The request binds
   the quote, image digest, datacenter allowlist, original absolute deadline and
   zero optional/network volumes. Lee confirmed permitted-country operation/use;
   the LEGAL TEAM owns review, not engineering. The ≤$3 estimate is not a
   zero-overrun guarantee gate.
-  Full multi-user bot execution still needs native Worker/shared-ledger and
-  atomic global/project reservations;
-  those are not prerequisites to this bounded local preparation.
+  Distributed/multi-host resource storage and broader multi-user/project quota
+  policies are outside the bounded single-host integration.
 
 - [ ] **Realtime voice prototype**: offline hands-free model-selected delegation now waits for Python Silero speech end, pause grace and transcript drain; the third isolated attempt proved a real owner-scoped history result. Deployed on Octo for Lee's account only (`REALTIME_VOICE_USERS`, kill switch `REALTIME_VOICE_ENABLED`, `voice-bridge` Deployment) for his own testing. Hosted boundary/transcription correctness, hands-free delegation, spoken truthfulness, browser playback, interruption/reconnect, billing reconciliation and retention review remain open. Wake-word detection is deferred and not implemented. See `docs/realtime-voice-progress.md`.
 

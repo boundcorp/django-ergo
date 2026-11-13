@@ -31,6 +31,25 @@ GPU = "NVIDIA RTX 6000 Ada Generation"
 DISK_GB = 200
 
 
+def rental_budget(config):
+    """Convert reviewed pricing/timeline evidence for the shared admission rule."""
+    pricing = config["pricing"]
+
+    def evidence(name):
+        item = pricing[name]
+        return Evidence(Decimal(item["amount"]), item["verified"])
+
+    return {
+        "timeline": RentalTimeline(**config["timeline"]),
+        "compute_hourly_usd": evidence("compute_hourly_usd"),
+        "storage_usd": evidence("storage_usd"),
+        "network_usd": evidence("network_usd"),
+        "fees_usd": evidence("fees_usd"),
+        "project_cap_usd": Decimal(pricing["project_cap_usd"]),
+        "project_committed_usd": Decimal(pricing["project_committed_usd"]),
+    }
+
+
 def prepare(path, config, *, now):
     """Reserve and bind one immutable H3 request before any POST."""
     if config.get("mode") not in ("offline-fixture", "live"):
@@ -42,25 +61,12 @@ def prepare(path, config, *, now):
     if config["mode"] == "offline-fixture" and config["live_execute"]:
         msg = "offline fixture cannot enable live execution"
         raise ValueError(msg)
-    timeline = RentalTimeline(**config["timeline"])
-    pricing = config["pricing"]
-
-    def evidence(name):
-        item = pricing[name]
-        return Evidence(Decimal(item["amount"]), item["verified"])
-
     experiment = Experiment(path)
     experiment.reserve(
         now=now,
         idle_grace=config["idle_grace"],
         eligibility=config["eligibility"],
-        timeline=timeline,
-        compute_hourly_usd=evidence("compute_hourly_usd"),
-        storage_usd=evidence("storage_usd"),
-        network_usd=evidence("network_usd"),
-        fees_usd=evidence("fees_usd"),
-        project_cap_usd=Decimal(pricing["project_cap_usd"]),
-        project_committed_usd=Decimal(pricing["project_committed_usd"]),
+        **rental_budget(config),
     )
     RESTCleanup(path).configure_create(
         account=config["account"],
@@ -68,7 +74,7 @@ def prepare(path, config, *, now):
         container_disk_gb=DISK_GB,
         gpu_type=GPU,
         data_center_ids=config["data_center_ids"],
-        quoted_hourly_usd=pricing["compute_hourly_usd"]["amount"],
+        quoted_hourly_usd=config["pricing"]["compute_hourly_usd"]["amount"],
     )
     with experiment._tx() as db:
         db.execute(

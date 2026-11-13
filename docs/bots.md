@@ -1252,15 +1252,29 @@ Ergo's own plugins live in `django_ergo.plugins`, one module each, and bot.yaml
 names them by short name. Tools that belong to one bot (like a kitchen bot's
 Tandoor tools) go in that bot folder's `tools/` instead.
 
-The `runpod` module is not an enabled bot plugin or a bot.yaml option. Its local
-queue/fixture-only create bridge now has an explicit frozen six-shot H3
-image-conditioned worker and independently supervised cleanup preparation.
-See [Offline Runpod bridge](plugins.md#offline-runpod-bridge),
-[H3 runner](runpod-h3.md), and [cleaner supervision](runpod-cleaner.md).
-No rental, deployment or chapter execution is enabled by bot configuration.
-Fixture create profiles require a full image digest, explicit datacenter
-allowlist, the reservation's absolute ≤1h deadline and zero optional/network
-volumes; they do not enable a live-create credential path.
+### runpod
+
+```yaml
+- name: runpod
+  account: gpu_jobs
+  profiles: [h3_frozen]
+  root_only: false
+```
+
+Provides `ergo_runpod_profiles`, `ergo_runpod_start`, `ergo_runpod_status`,
+`ergo_runpod_collect` and `ergo_runpod_terminate`, backed by a real
+`runpod:watch` Worker and a separate durable rental ledger. Only `account`,
+`profiles` and `root_only` are bot-editable. `root_only` defaults to true;
+false exposes tools in threads, not spending authority.
+
+The optional resource app, server-only principal/bot/profile policy, durable
+single-host rental filesystem, credential binding and independent maintenance
+consumer are required. Start needs human approval, fresh maintenance/pricing
+and an active allowlisted superuser. Defaults are one lifetime rental, a planned
+$3 total and ≤1h absolute deadline; no replacement or uncertain-create replay.
+The first reviewed adapter is the frozen six-shot H3 comparison, not chapter
+execution or arbitrary commands. See [native installation](runpod.md) and
+[image/runtime preparation](runpod-h3.md). Bot YAML alone never enables spending.
 
 ### ergo_kb
 

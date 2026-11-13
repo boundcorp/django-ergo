@@ -740,6 +740,14 @@ Run the `release` image as separate workloads with external Postgres
 | worker | `ergonaut worker -Q celery,bot_tasks` (or `infra/prod/start-celery-worker.sh`) | any |
 | beat | `ergonaut beat` | exactly one |
 | bots | `ergonaut bots` | exactly one |
+| RunPod maintenance (opt-in) | `celery -A ergonaut worker -Q runpod_maintenance --concurrency=1` (or `infra/prod/start-runpod-maintenance.sh`) | one independent supervised consumer on the rental host |
+
+Enabling the [native RunPod plugin](runpod.md) additionally requires its private
+server policy, migrations and the same durable rental filesystem/credential
+binding on the controller and maintenance consumer. Beat schedules maintenance
+every minute even if a bot or its Worker disappears. `ergonaut up` does not
+start this optional consumer: install it explicitly before enabling rentals.
+No Kubernetes Job or bot-folder schedule substitutes for it.
 
 Mount or check out the bot repo at `ERGONAUT_BOTS` in every workload, run
 `ergonaut manage ergo_bot_migrate <bot paths>` on deploy (`web` only runs

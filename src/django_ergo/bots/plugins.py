@@ -52,6 +52,7 @@ OFFICIAL_PLUGINS = {
     "attachments": "django_ergo.plugins.attachments.AttachmentsPlugin",
     "pages": "django_ergo.plugins.pages.PagesPlugin",
     "web_search": "django_ergo.plugins.web_search.WebSearchPlugin",
+    "runpod": "django_ergo.plugins.runpod.plugin.RunpodPlugin",
 }
 
 

@@ -58,13 +58,25 @@ redacted server-side preview for supported changes. In Ergonaut only admins
 can approve their tools. Every option is in the
 [bot reference](bots.md#official-plugins).
 
+## Native RunPod workers
+
+The `runpod` plugin exposes approved profiles, start/status/collect/terminate
+tools and a real `runpod:watch` Worker. Django admission/ownership rows and the
+existing external rental ledger survive chat/Worker deletion; a separately
+consumed Ergonaut maintenance task handles deadline, cancellation, config
+removal, unknown creates and late resources. The bounded implementation requires
+one durable host-shared filesystem with SQLite/POSIX locks, not arbitrary
+multi-host storage. It defaults to one lifetime rental and a planned $3/≤1h cap.
+See [installation, server policy and tools](runpod.md). No live deployment,
+provider call or GPU execution is implied by registration.
+
 ## Offline Runpod bridge
 
-`django_ergo.plugins.runpod` contains local queue/experiment building blocks,
+`django_ergo.plugins.runpod` also retains local queue/experiment building blocks,
 a single-create REST controller with offline fixtures, an explicit
-image-conditioned H3 pilot worker, and independent cleaner supervision. It is
-**not** an enabled bot plugin or deployed rental controller and adds no
-bot.yaml configuration.
+image-conditioned H3 pilot runner, and independent cleaner supervision.
+These are the primitives reused by the native plugin above; the standalone
+commands remain operator/fixture tools, not an alternative hosted worker path.
 The cleanup command remains dry-run by default:
 
 ```bash

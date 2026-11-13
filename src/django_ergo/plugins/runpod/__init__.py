@@ -1,1 +1,1 @@
-"""Experimental local Runpod controller; no deployed bot integration."""
+"""Native RunPod plugin, durable rental controllers and independent cleanup."""

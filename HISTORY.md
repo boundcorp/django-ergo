@@ -4,6 +4,23 @@ This document tracks the major milestones and evolution of the Django Ergo proje
 
 ## Development Timeline
 
+### Native RunPod workers (November 2026)
+
+- Registered the RunPod plugin's approved-profile/start/status/collect/terminate
+  tools and real `runpod:watch` polling Worker. Added durable Django ownership
+  and atomic installation-wide admission around the existing single-rental
+  ledger, transport, queue and H3 media/export primitives.
+- Added independent Ergonaut maintenance task/queue and management recovery
+  command, surviving Worker/chat/config removal, cancellation, unknown creates
+  and late receipts. Defaults preserve one rental, a planned $3 total and the
+  original ≤1h deadline; no provider-failure billing guarantee is claimed.
+- Worker publication now occurs after commit with a durable due time;
+  cancellation and newer step claims fence stale state/progress/finalization.
+  Collection uses stable verified storage keys and ordered partial manifests.
+- Documented server-only installation and repeatable model-image build/audit/
+  digest publication. The bounded native integration requires one durable
+  host-shared SQLite/POSIX-locking filesystem; no live deployment or rental.
+
 ### Supervised H3 single-create controller (November 2026)
 
 - Wired offline profile preparation, durable one-POST intent and REST transport

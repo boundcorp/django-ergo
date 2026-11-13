@@ -83,13 +83,26 @@ class WorkerContext:
         from django_ergo.conversation.models import Worker
 
         self.worker.progress = str(text)[:2000]
-        Worker.objects.filter(pk=self.worker.pk).update(progress=self.worker.progress)
-        _notify(self.worker)
+        updated = Worker.objects.filter(
+            pk=self.worker.pk,
+            status__in=["queued", "running"],
+            step_started_at=self.worker.step_started_at,
+        ).update(progress=self.worker.progress)
+        if updated:
+            _notify(self.worker)
 
     def tell(self, text: str) -> None:
         """Send the chat a message now (the bot answers it in a turn), e.g. a question
         the work is waiting on. The worker keeps running."""
         from django_ergo.bots import messaging
+        from django_ergo.conversation.models import Worker
+
+        if not Worker.objects.filter(
+            pk=self.worker.pk,
+            status__in=["queued", "running"],
+            step_started_at=self.worker.step_started_at,
+        ).exists():
+            return
 
         messaging.send_event(
             self.session,
@@ -231,39 +244,49 @@ def start(  # noqa: PLR0913
     state: dict | None = None,
 ) -> Worker:
     forbid("start a worker")
+    from django.db import transaction
+    from django.utils import timezone
+
     from django_ergo.conversation.models import Worker
 
     if ":" not in function:
         function = f"task:{function}"
     resolve(bot, function)  # fail now, in the tool call, rather than in the background
     json.dumps(args)  # arguments must survive a trip to another process
-    worker = Worker.objects.create(
-        session=session,
-        bot_name=bot.name,
-        title=(title or function)[:200],
-        function=function,
-        args=dict(args),
-        notify=notify,
-        state=dict(state or {}),
-    )
-    _notify(worker)
-    schedule(worker, 0)
+    with transaction.atomic():
+        worker = Worker.objects.create(
+            session=session,
+            bot_name=bot.name,
+            title=(title or function)[:200],
+            function=function,
+            args=dict(args),
+            notify=notify,
+            state=dict(state or {}),
+            next_poll_at=timezone.now(),
+        )
+        transaction.on_commit(lambda: _notify(worker))
+        transaction.on_commit(lambda: _publish(str(worker.pk), 0))
     return worker
 
 
 def schedule(worker: Worker, delay: float) -> None:
     """Have ``run`` called for the worker after ``delay`` seconds."""
+    from django.db import transaction
     from django.utils import timezone
 
     from django_ergo.conversation.models import Worker
 
     when = timezone.now() + timezone.timedelta(seconds=delay)
     Worker.objects.filter(pk=worker.pk).update(next_poll_at=when)
+    transaction.on_commit(lambda: _publish(str(worker.pk), delay))
+
+
+def _publish(worker_id: str, delay: float) -> None:
     runner = api_settings.WORKER_RUNNER
     if runner is not None:
-        runner(str(worker.pk), delay)
+        runner(worker_id, delay)
         return
-    timer = threading.Timer(delay, _run_in_thread, args=(str(worker.pk),))
+    timer = threading.Timer(delay, _run_in_thread, args=(worker_id,))
     timer.daemon = True
     timer.start()
 
@@ -349,35 +372,48 @@ def run(worker_id: str, registry=None) -> str:
             worker_id,
             "".join(traceback.format_exception(exc))[-4000:],
         )
-    worker.refresh_from_db(fields=["status", "progress"])
-    if worker.status == "cancelled":
-        _finish(worker, "cancelled", None, "Cancelled")
-        return worker.status
-    if not error and isinstance(outcome, Again):
-        if worker.polls >= MAX_POLLS:
-            _finish(worker, "failed", None, f"Gave up after {worker.polls} polls")
+    return _apply_step(worker, outcome, error)
+
+
+def _apply_step(worker: Worker, outcome: Any, error: str) -> str:
+    from django.db import transaction
+
+    from django_ergo.conversation.models import Worker
+
+    # Completion and rescheduling serialize with cancellation. A step whose
+    # lease expired must not publish state over its successor's claim.
+    with transaction.atomic():
+        current = Worker.objects.select_for_update().filter(pk=worker.pk).first()
+        if current is None:
+            return "missing"
+        if not current.active or current.step_started_at != worker.step_started_at:
+            return current.status
+        worker.progress = current.progress
+        if not error and isinstance(outcome, Again):
+            if worker.polls >= MAX_POLLS:
+                _finish(worker, "failed", None, f"Gave up after {worker.polls} polls")
+                return worker.status
+            if outcome.progress:
+                worker.progress = outcome.progress[:2000]
+            worker.status = "running"
+            worker.step_started_at = None
+            worker.save(
+                update_fields=[
+                    "state",
+                    "progress",
+                    "status",
+                    "step_started_at",
+                    "updated_at",
+                ]
+            )
+            transaction.on_commit(lambda: _notify(worker))
+            schedule(worker, max(1.0, float(outcome.seconds)))
             return worker.status
-        if outcome.progress:
-            worker.progress = outcome.progress[:2000]
-        worker.status = "running"
-        worker.step_started_at = None
-        worker.save(
-            update_fields=[
-                "state",
-                "progress",
-                "status",
-                "step_started_at",
-                "updated_at",
-            ]
-        )
-        _notify(worker)
-        schedule(worker, max(1.0, float(outcome.seconds)))
+        if error:
+            _finish(worker, "failed", None, error)
+        else:
+            _finish_unless_reply_pending(worker, outcome)
         return worker.status
-    if error:
-        _finish(worker, "failed", None, error)
-    else:
-        _finish_unless_reply_pending(worker, outcome)
-    return worker.status
 
 
 def _finish_unless_reply_pending(worker: Worker, outcome: Any) -> None:
