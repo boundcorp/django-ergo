@@ -1537,14 +1537,20 @@ async def resume_structured_call(  # noqa: PLR0913
             result, is_error = "The user declined this tool call.", True
         results.append((item["id"], result, is_error))
     await transcript.append_tool_results(results)
+    # A standalone transcript is only in memory until the call row is saved;
+    # session transcripts have already persisted their results above.
+    fields = ["metadata"]
+    if call.session_id is None:
+        await transcript.finish()
+        fields.append("transcript")
+    call.metadata = {k: v for k, v in call.metadata.items() if k != "pending_approvals"}
+    await call.asave(update_fields=fields)
     await sync_to_async(_lifecycle_approvals, thread_sensitive=True)(
         call, pending, "resumed"
     )
     await sync_to_async(_lifecycle_approvals, thread_sensitive=True)(
         call, pending, "blocker_resolved"
     )
-    call.status = StructuredCallStatus.IN_PROGRESS
-    call.metadata = {k: v for k, v in call.metadata.items() if k != "pending_approvals"}
     return await _loop(run)
 
 

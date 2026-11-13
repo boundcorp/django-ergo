@@ -813,10 +813,25 @@ class LifecycleEventQuerySet(models.QuerySet):
     def bulk_update(self, objs, fields, batch_size=None):
         raise TypeError("Lifecycle events are immutable")
 
-    def bulk_create(self, objs, *args, **kwargs):
-        if kwargs.get("update_conflicts"):
+    def bulk_create(  # noqa: PLR0913 - matches Django's public signature
+        self,
+        objs,
+        batch_size=None,
+        ignore_conflicts=False,
+        update_conflicts=False,
+        update_fields=None,
+        unique_fields=None,
+    ):
+        if update_conflicts:
             raise TypeError("Lifecycle events are immutable")
-        return super().bulk_create(objs, *args, **kwargs)
+        return super().bulk_create(
+            objs,
+            batch_size=batch_size,
+            ignore_conflicts=ignore_conflicts,
+            update_conflicts=update_conflicts,
+            update_fields=update_fields,
+            unique_fields=unique_fields,
+        )
 
 
 class LifecycleEvent(models.Model):
@@ -846,7 +861,11 @@ class LifecycleEvent(models.Model):
     def __str__(self):
         return f"{self.stage} ({self.id})"
 
-    def save(self, *args, **kwargs):
-        if not self._state.adding:
+    def save(
+        self, force_insert=False, force_update=False, using=None, update_fields=None
+    ):
+        if not self._state.adding or force_update or update_fields is not None:
             raise TypeError("Lifecycle events are immutable")
-        return super().save(*args, **kwargs)
+        # A new instance can still have an existing explicit primary key. Django's
+        # normal save may update that row, so additions must always be inserts.
+        return super().save(force_insert=True, using=using)

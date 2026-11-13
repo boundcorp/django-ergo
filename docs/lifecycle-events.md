@@ -2,6 +2,21 @@
 
 The lifecycle ledger is opt-in (`DJANGO_ERGO["LIFECYCLE_EVENTS_ENABLED"] = True`), independent of OpenTelemetry's provider spans and the private-inference cost ledger. It stores opaque IDs, controlled enums, retry numbers and timestamps, not message text, tool arguments, results, question bodies, account names or transcripts. The recorder is best-effort and isolates database errors in a savepoint: a missing table or invalid observation does not fail the originating work. Event loss is possible, including a process crash between a committed transition and its on-commit observation. Absence is **unknown**, not evidence that a stage never happened. Existing observations cannot be updated via the normal model and queryset APIs; retention can delete them. This is not a tamper-proof database audit log against privileged SQL.
 
+The ORM guard makes ordinary `save()` calls insert-only: even a newly
+constructed instance with an existing explicit primary key cannot overwrite
+that row. An insert with a duplicate primary or unique key fails with a
+database integrity error. Saving a loaded event, using update options on a new
+event, queryset `update()` or `bulk_update()`, and `bulk_create()` with
+`update_conflicts=True` are rejected. `update_or_create()` can create a new
+event but cannot update an existing one. Normal bulk inserts and
+`ignore_conflicts=True` remain available; ignoring conflicts can silently skip
+an insert.
+
+This is an application-level safeguard, not a database-enforced append-only
+policy. Low-level APIs such as `save_base()`, private ORM methods, raw SQL and
+privileged database access can bypass it. Model and queryset deletion remain
+available for retention, and deleting then inserting a row is not prevented.
+
 ## Observations and correlations
 
 `record_event(stage, key=..., ...)` appends at most one observation per globally unique key. Use a stage and the stable opaque object ID plus retry or poll identity where appropriate. Reusing a key does not modify the first event. UUIDs, integers and bounded hexadecimal tokens only; never put content in IDs or keys. The controlled vocabulary includes worker, handoff, approval, question, dependency, download, image, Gradle, iOS/EAS, compile, test, package, CI dispatch/queue, deploy, retry and cache categories; cache hit/miss and cold/warm are explicit measured states. Actors include model, provider, agent, worker, infrastructure, human, Lee, system and unknown; execution, idle and stall are distinct states. Absence of a heartbeat proves neither activity nor inactivity. The vocabulary is not a claim that those categories are hooked.
