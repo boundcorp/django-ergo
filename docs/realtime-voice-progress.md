@@ -2,7 +2,53 @@
 
 ## Continuation — newest live session and UX, 2026-11-12
 
-**Current activation, verified 23:38:39 UTC:** all old queue consumers were gone
+**Current deployed UX release, verified 2026-11-13 00:17:55–00:20:38 UTC:**
+[PR #299](https://github.com/boundcorp/django-ergo/pull/299) merged at 00:00:01
+as `97be767870f0e879c5839176ddbbe548e4fbaf71`, after exact-head review/CI and
+an adjacent native 20-second quiet proof. One earlier gate timed out and another
+fresh check found a resumed turn; both aborted without merging or stopping work.
+The separately announced source window began at 23:49, not before 23:54;
+a fresh delayed actual-rollout notice required not before 00:06.
+
+[Image run 43333462081](https://github.com/boundcorp/django-ergo/actions/runs/43333462081)
+built and smoke-started the release; publication completed **00:08:35**.
+Registry `sha-97be7678…` resolved to
+`sha256:9bc56efa94422eedf0f016ec4cc6cc9c8ad101c39331bb79174d095f4a39d7c8`.
+At 00:09, live roles still ran `6b33f825` / `ffa206f6`: publication was not deployment.
+After zero active voice sessions and the existing native quiet/single-flight
+gate, the normal Octo upgrader merged [infra-octo #172](https://github.com/boundcorp/infra-octo/pull/172)
+at **00:12:11**, commit `2c87f64534a039a5829216a2ce07dd0c04bc8ea5`.
+Its entire delta is deployment image pins; exact #170 policy bytes are unchanged.
+Targeted Flux applied that revision, and all seven desired role pods became
+ready with actual image IDs and `ERGONAUT_VERSION` matching the values above.
+
+Both web replicas and the actual bridge Python repeated the READ ONLY/no-dispatch
+scope checks on source #299: exact policy, unsaved new one-request grant,
+old ungranted call unchanged, other owner/thread/bot denied, no persisted session.
+The actual exact-launch native status handler also passed with hard-failing
+engine/send/Celery guards. Health/root/exact voice page and bridge readiness
+returned 200, the bridge registered, and checked new-web logs had no HTTP 500–504.
+Public `/assets/index-B5KbX8KW.js`, SHA256
+`579b4df9967675caad197f9b117888346e18fb1a4473d8b4167b407bf25cf5cf`,
+matched the file inside the deployed image.
+
+The production App bundle was also rendered with synthetic intercepted API
+responses: desktop/mobile drawer and voice/Diagnostics screenshots, zero write,
+capture or RTC attempts, no browser errors or horizontal overflow. This made
+no real API task, voice session, room, microphone or provider request.
+Two compatible source #297 queue pods remained naturally terminating after
+the UI-only source rollout; neither was force-killed or deprived of work.
+They are not the older pre-#297 consumers that blocked initial activation.
+The all-role source rollout preserved normal external Orca work.
+
+**Known operational gap:** the existing native upgrade idle gate observes turns
+and, under this deployment's configured policy, local jobs rather than external
+Orca workers. It does not itself observe active voice sessions. This release
+used explicit live-session checks and announced quiet windows; do not claim
+that the native busy gate automatically protects calls. Physical Android/
+Bluetooth and hosted normal orchestration acceptance remain open.
+
+**Initial policy activation, verified 2026-11-12 23:38:39 UTC:** all old queue consumers were gone
 at 23:28:46. The fresh policy-specific notice was acknowledged, with a quiet
 window not before 23:34; final 23:34:36 checks found source/image/scope unchanged,
 all desired roles ready, no active voice session and policy absent.
@@ -10,8 +56,8 @@ Infra-octo #170 merged **23:34:50**, commit
 `eff442d9d3d0568c43b9dcdc026e2c1685af1641`, from reviewed head `7c69a9a`.
 Flux `home-kubernetes` / `cluster-apps-ergonaut` applied that commit; only
 web and voice-bridge were gracefully reloaded at **23:36:58**.
-Both web replicas and the actual isolated bridge runtime now load the exact
-reviewed policy on unchanged source `6b33f825` / image `ffa206f6`.
+At that activation snapshot, both web replicas and the actual isolated bridge
+runtime loaded the exact reviewed policy on source `6b33f825` / image `ffa206f6`.
 All four queue-role pod UIDs were unchanged; no old-policy web/bridge pod remained.
 
 READ ONLY, hard-failing engine/send/Celery guards verified the exact loaded scope
