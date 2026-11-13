@@ -70,6 +70,7 @@ import logging
 import os
 import re
 import secrets
+import ssl
 import time
 import urllib.error
 import urllib.request
@@ -108,6 +109,7 @@ REPLAY_EVERY = 60  # seconds between looks for updates to replay
 KEEP_HANDLED = timedelta(days=7)  # handled updates are deleted after this
 KEEP_SENT = 50  # messages a conversation remembers sending, for deletion
 MAX_ATTEMPTS = 3  # tries for an update the database kept failing
+WEBHOOK_RETRY_MAX = 60  # seconds; retries continue until cleanup succeeds
 MIGRATIONS_KEY = "telegram_chat_migrations"  # old group id -> its supergroup id
 _current_job: contextvars.ContextVar = contextvars.ContextVar(
     "telegram_update_job", default=None
@@ -1985,6 +1987,36 @@ class TelegramPlugin(BotPlugin):
             allowed_updates=["message", "callback_query"],
         )
 
+    async def _delete_webhook_for_polling(self) -> bool:
+        """Keep transient Telegram failures local to this channel."""
+        delay = 1
+        while True:
+            try:
+                await self.api.call("deleteWebhook")
+                return True
+            except urllib.error.HTTPError as error:
+                transient = error.code in (408, 429) or 500 <= error.code < 600  # noqa: PLR2004
+            except urllib.error.URLError as error:
+                transient = not isinstance(error.reason, ssl.SSLCertVerificationError)
+            except (TimeoutError, ConnectionError):
+                transient = True
+            except Exception:  # noqa: BLE001 — isolate permanent startup errors
+                transient = False
+            # Exception text and tracebacks may contain the token-bearing URL.
+            if not transient:
+                logger.error(
+                    "Telegram deleteWebhook for %s failed permanently; polling disabled",
+                    self.bot.name,
+                )
+                return False
+            logger.warning(
+                "Telegram deleteWebhook for %s failed; retrying in %s seconds",
+                self.bot.name,
+                delay,
+            )
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, WEBHOOK_RETRY_MAX)
+
     async def serve(self) -> None:
         try:
             await self.replay(startup=True)
@@ -1993,7 +2025,8 @@ class TelegramPlugin(BotPlugin):
         if self.uses_webhook:
             await self.register_webhook()
             return
-        await self.api.call("deleteWebhook")
+        if not await self._delete_webhook_for_polling():
+            return
         while True:
             try:
                 await self.poll_once()

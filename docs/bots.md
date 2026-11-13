@@ -1936,6 +1936,17 @@ In `auto` mode Telegram uses a webhook when `BOT_WEBHOOK_BASE_URL` is set:
 `hooks/<bot>/telegram/update/` with Telegram's secret-token header. Without
 a public URL it long-polls.
 
+Polling first deletes any existing Telegram webhook. Transient network errors,
+HTTP 408, 429 and 5xx retry indefinitely with delays doubling from one second
+to a maximum of 60 seconds; polling starts only after deletion succeeds.
+Other failures, including authorization and configuration errors, disable
+this Telegram poller and are logged without exception details or token-bearing
+URLs; other plugins and bots continue. Correct the cause and restart the bot
+runner to retry a permanent failure. A running process is therefore not proof
+that every Telegram poller started. Cancellation interrupts the async wait;
+an in-flight standard-library HTTP request runs in a thread and can remain
+until its 60-second request timeout.
+
 **Outages.** Each update is saved (as a `BotJob`, target `plugin:telegram`)
 before Telegram is told it arrived: a webhook answers 500, and polling keeps
 its offset, when the database can't take it, so Telegram sends it again.
