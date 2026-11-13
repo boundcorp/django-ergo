@@ -99,7 +99,7 @@ def project_lifecycle(events, *, as_of):  # noqa: C901, PLR0912, PLR0915
         def first(stage, items=items):
             return next((item for item in items if item["stage"] == stage), None)
 
-        created, answer = first("blocker_created"), first("acknowledged")
+        created, answer = first("blocker_created"), first("answer_received")
         resumed, closed = first("resumed"), first("blocker_resolved")
         created_at = created["occurred_at"] if created else None
         answer_at = answer["occurred_at"] if answer else None
@@ -144,6 +144,9 @@ def project_lifecycle(events, *, as_of):  # noqa: C901, PLR0912, PLR0915
                 "task_id": task_id,
                 "question_id": question_id,
                 "status": status,
+                "pending_age_seconds": _seconds(created_at, as_of)
+                if status in ("unanswered", "answered_unconsumed")
+                else None,
                 "human_wait_seconds": human_wait,
                 "answer_to_resume_seconds": system_wait,
                 "human_attribution": "lee" if actionable else "unknown",

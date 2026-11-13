@@ -65,7 +65,7 @@ def test_approval_recorded_without_inventing_surfacing_or_human_owner(
     )
     assert [e.stage for e in events] == [
         "blocker_created",
-        "acknowledged",
+        "answer_received",
         "resumed",
         "blocker_resolved",
     ]

@@ -29,6 +29,7 @@ class Stage(StrEnum):
     RESULT_PERSISTED = "result_persisted"
     DELIVERED = "delivered"
     ACKNOWLEDGED = "acknowledged"
+    ANSWER_RECEIVED = "answer_received"
     CONSUMED = "consumed"
     RESUMED = "resumed"
     BLOCKER_CREATED = "blocker_created"

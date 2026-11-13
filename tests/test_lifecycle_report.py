@@ -87,7 +87,7 @@ def test_only_explicit_surfaced_blocker_is_human_wait_and_overlap_is_not_summed(
             actor="lee",
             state="actionable_surfaced",
         ),
-        event("acknowledged", 30, question="q1"),
+        event("answer_received", 30, question="q1"),
         event("resumed", 55, question="q1"),
         event(
             "blocker_created",
@@ -113,11 +113,11 @@ def test_only_explicit_surfaced_blocker_is_human_wait_and_overlap_is_not_summed(
 def test_answered_unconsumed_and_closure_are_distinct():
     rows = [
         event("blocker_created", 1, question="q1"),
-        event("acknowledged", 5, question="q1"),
+        event("answer_received", 5, question="q1"),
         event("blocker_created", 2, question="q2"),
         event("blocker_resolved", 7, question="q2"),
         event("blocker_created", 2, question="q3"),
-        event("acknowledged", 5, question="q3"),
+        event("answer_received", 5, question="q3"),
         event("blocker_resolved", 7, question="q3"),
         event("resumed", 4, question="missing"),
     ]
@@ -142,6 +142,11 @@ def test_worker_result_requires_followup_processing_evidence():
         report([consumed, result])["workers"][0]["result_status"] == "followup_consumed"
     )
     assert report([consumed])["workers"][0]["result_status"] == "unknown"
+    opaque_tool = event("started", 21, task="worker-a", worker="worker-a")
+    assert (
+        report([result, consumed, opaque_tool])["workers"][0]["result_status"]
+        == "followup_consumed"
+    )
 
 
 def test_explicit_dependencies_and_separate_repeated_approvals():
@@ -149,7 +154,7 @@ def test_explicit_dependencies_and_separate_repeated_approvals():
         event("dependency_added", 1, related="task-b", category="dependency"),
         event("dependency_removed", 9, related="task-b", category="dependency"),
         event("blocker_created", 2, question="approval-1", category="approval"),
-        event("acknowledged", 3, question="approval-1", category="approval"),
+        event("answer_received", 3, question="approval-1", category="approval"),
         event("resumed", 4, question="approval-1", category="approval"),
         event("blocker_created", 6, question="approval-2", category="approval"),
     ]
@@ -162,3 +167,72 @@ def test_explicit_dependencies_and_separate_repeated_approvals():
         "answered_resumed",
         "unanswered",
     ]
+
+
+def test_transport_ack_and_other_task_answer_do_not_answer_blocked_question():
+    rows = [
+        event(
+            "blocker_created",
+            1,
+            question="q1",
+            actor="lee",
+            state="actionable_surfaced",
+        ),
+        event("acknowledged", 2, question="q1"),
+        event("answer_received", 3, task="task-b", question="q1"),
+        event("queued", 4, task="task-b"),
+        event("started", 5, task="task-c"),
+        event("finished", 10, task="task-c"),
+    ]
+    tasks = {t["task_id"]: t for t in report(rows, 20)["tasks"]}
+    blocker = tasks["task-a"]["blockers"][0]
+    assert blocker["status"] == "unanswered"
+    assert blocker["human_wait_seconds"] == 19
+    assert tasks["task-a"]["blocked"] is True
+    assert tasks["task-c"]["thread_active"] == "unknown"
+    assert tasks["task-b"]["blockers"][0]["status"] == "unknown"
+
+
+def test_partial_prerequisites_pause_and_scope_are_not_human_wait():
+    rows = [
+        event("blocker_created", 1, question="approval", category="approval"),
+        event("answer_received", 2, question="approval"),
+        event("resumed", 3, question="approval"),
+        event("blocker_resolved", 3, question="approval"),
+        event("blocker_created", 1, question="credential"),
+        event("blocker_created", 1, question="pending-approval", category="approval"),
+        event(
+            "blocker_created",
+            1,
+            task="task-b",
+            question="pause",
+            state="deliberate_pause",
+        ),
+        event("blocker_created", 1, task="task-c", question="scope", state="new_scope"),
+        event("started", 2, task="task-d"),
+        event("finished", 9, task="task-d"),
+    ]
+    tasks = {t["task_id"]: t for t in report(rows)["tasks"]}
+    assert tasks["task-a"]["blocked"] is True
+    blockers = {b["question_id"]: b for b in tasks["task-a"]["blockers"]}
+    assert blockers["approval"]["status"] == "answered_resumed"
+    assert blockers["pending-approval"]["status"] == "unanswered"
+    assert blockers["pending-approval"]["human_wait_seconds"] is None
+    assert blockers["pending-approval"]["pending_age_seconds"] == 99
+    assert blockers["credential"]["status"] == "unanswered"
+    assert tasks["task-b"]["blockers"][0]["classification"] == "deliberate_pause"
+    assert tasks["task-c"]["blockers"][0]["classification"] == "new_scope"
+    assert tasks["task-b"]["blockers"][0]["human_wait_seconds"] is None
+    assert tasks["task-c"]["blockers"][0]["human_wait_seconds"] is None
+
+
+def test_answer_in_parent_does_not_answer_distinct_repeated_question():
+    rows = [
+        event("blocker_created", 1, task="parent", question="old"),
+        event("answer_received", 2, task="parent", question="old"),
+        event("blocker_created", 3, task="worker", question="new", related="parent"),
+        event("acknowledged", 4, task="worker", question="new"),
+    ]
+    tasks = {t["task_id"]: t for t in report(rows)["tasks"]}
+    assert tasks["parent"]["blockers"][0]["status"] == "answered_unconsumed"
+    assert tasks["worker"]["blockers"][0]["status"] == "unanswered"

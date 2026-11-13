@@ -1499,7 +1499,7 @@ async def resume_structured_call(  # noqa: PLR0913
     call.status = StructuredCallStatus.IN_PROGRESS
     pending = (call.metadata or {}).get("pending_approvals", [])
     await sync_to_async(_lifecycle_approvals, thread_sensitive=True)(
-        call, pending, "acknowledged"
+        call, pending, "answer_received"
     )
 
     if call.session_id is not None:
