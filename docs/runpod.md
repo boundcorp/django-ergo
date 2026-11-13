@@ -77,6 +77,18 @@ self-admit by refreshing its own heartbeat. Provider requests have five-second
 timeouts; a tick may perform multiple bounded reads/deletes and unresolved work
 remains due. Bot-folder schedules and `serve()` are not cleanup supervision.
 
+RunPod REST rate-limits each API key across all endpoints (observed November
+2026: 11 requests/minute, 225/hour, 2700/day; see the `ratelimit-policy`
+response header). A 429 raises `RateLimitError` with the bounded `Retry-After`.
+To stay inside that budget, each maintenance pass lists the account's Pods once
+and shares the list across every retained ledger. The Worker re-reads its
+owned Pod at most once a minute and treats a failed read, including a 429, as a
+wait rather than a failure. A failed SSH host-key lookup (up to three reads) is
+retried after 60 seconds. One rental hour then costs about 60 maintenance
+reads, 60 owned-Pod reads and roughly 30 lookup reads during provisioning.
+Startup and rental deadlines still apply. Don't poll the provider by hand while
+a rental is running: manual calls spend the same budget.
+
 ### Server-only policy
 
 Set `RUNPOD_ACCOUNTS` in the host's private settings. Bot YAML cannot override

@@ -7,6 +7,8 @@ import sqlite3
 import subprocess
 import time
 import wave
+from datetime import UTC
+from datetime import datetime
 from decimal import Decimal
 from types import SimpleNamespace
 from urllib.error import HTTPError
@@ -15,6 +17,7 @@ import pytest
 from asgiref.sync import async_to_sync
 from django.contrib.auth import get_user_model
 from django.db import transaction
+from django.utils import timezone
 
 from django_ergo.bots import workers
 from django_ergo.bots.tools import ToolContext
@@ -57,13 +60,30 @@ class ProviderHTTP:
         self.bodies = []
         self.catalog_reads = 0
         self.refuse_after_create = False
+        # RunPod REST shares one per-key budget across endpoints (observed
+        # 11/minute and 225/hour); enforce_limit answers 429 beyond it.
+        self.clock = time.time
+        self.enforce_limit = False
+        self.rest_calls = []
+        self.limited = 0
+        self.lists = 0
 
-    def open(self, request, timeout):
+    def open(self, request, timeout):  # noqa: C901 -- one fake REST router
         assert timeout <= 10
         if "/v2/catalog/gpus?" in request.full_url:
             self.catalog_reads += 1
             return respond({"gpus": self.stock})
         route = request.full_url.split("/v1", 1)[1]
+        now = self.clock()
+        if self.enforce_limit and (
+            sum(now - at < 60 for at in self.rest_calls) >= 11
+            or sum(now - at < 3600 for at in self.rest_calls) >= 225
+        ):
+            self.limited += 1
+            raise HTTPError(
+                request.full_url, 429, "rate limited", {"Retry-After": "30"}, None
+            )
+        self.rest_calls.append(now)
         if request.method == "POST":
             self.posts += 1
             body = json.loads(request.data)
@@ -94,6 +114,7 @@ class ProviderHTTP:
             self.pods.pop(resource, None)
             response = None
         elif route.startswith("/pods?"):
+            self.lists += 1
             response = list(self.pods.values())
         else:
             resource = route.split("?", 1)[0].rsplit("/", 1)[1]
@@ -223,6 +244,12 @@ def independent_tick(job):
 def drive(setup, job):
     independent_tick(job)
     return workers.run(str(job.worker_id), setup.bot.registry)
+
+
+def expire_owned_pod_read(job):
+    worker = Worker.objects.get(pk=job.worker_id)
+    worker.state["owned_pod"]["next"] = 0
+    worker.save(update_fields=["state"])
 
 
 def test_native_start_is_committed_idempotent_and_scoped(setup):
@@ -563,6 +590,8 @@ def test_native_readiness_question_and_failure_are_visible(setup, monkeypatch):
         ).count()
         == 1
     )
+    # The rate is re-read once the throttled owned-Pod interval has elapsed.
+    expire_owned_pod_read(job)
     setup.provider.pods["pod123"]["costPerHr"] = "99"
     assert drive(setup, job) == "failed"
     job.worker.refresh_from_db()
@@ -935,6 +964,56 @@ def test_late_pod_from_a_refused_offer_is_terminated_while_the_job_runs(setup):
     assert setup.provider.deletes == ["late456"]
     assert "pod123" in setup.provider.pods
     assert Experiment(job.ledger_path).status()["stop_reason"] is None
+
+
+def test_maintenance_lists_the_account_once_per_pass(setup):
+    setup.provider.refuse = {"EU-RO-1"}
+    job = begin(setup)
+    assert drive(setup, job) == "running"
+    invoke(setup, "terminate", job_id=str(job.pk))
+    job.refresh_from_db()
+    assert job.cleanup_complete
+    # A stopped ledger with a retired (refused) request needs both the late-Pod
+    # sweep and the liability scan; they share one Pod listing per pass.
+    setup.provider.lists = 0
+    native.reconcile_once()
+    assert setup.provider.lists == 1
+
+
+def test_generation_hour_stays_inside_the_provider_rate_limit(setup, monkeypatch):
+    clock = [time.time()]
+    monkeypatch.setattr(time, "time", lambda: clock[0])
+    # Worker heartbeats (updated_at) follow the same simulated clock.
+    aware = timezone.is_aware(timezone.now())
+
+    def now():
+        moment = datetime.fromtimestamp(clock[0], tz=UTC)
+        return moment if aware else timezone.make_naive(moment)
+
+    monkeypatch.setattr(timezone, "now", now)
+    setup.provider.clock = lambda: clock[0]
+    setup.provider.enforce_limit = True
+
+    def h3_http(request, timeout):
+        if request.method == "POST":
+            return io.BytesIO(json.dumps({"id": "video0"}).encode())
+        route = request.full_url.split(":30010", 1)[1]
+        status = {"status": "ok"} if route == "/health" else {"status": "in_progress"}
+        return io.BytesIO(json.dumps(status).encode())
+
+    monkeypatch.setattr(
+        native_h3, "H3Client", lambda base: H3Client(base, opener=h3_http)
+    )
+    job = begin(setup)
+    # Maintenance every minute and the Worker every 5s, up to the work cutoff.
+    for step in range(55 * 12):
+        if step % 12 == 0:
+            independent_tick(job)
+        assert workers.run(str(job.worker_id), setup.bot.registry) == "running"
+        clock[0] += 5
+    assert setup.provider.limited == 0
+    assert Experiment(job.ledger_path).status()["stop_reason"] is None
+    assert len(setup.provider.rest_calls) <= 225
 
 
 def test_refusals_everywhere_create_nothing_and_release_the_rental_slot(setup):

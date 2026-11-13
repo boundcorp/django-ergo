@@ -54,6 +54,9 @@ Live on rigel from `~/p/boundcorp/django-ergo`, bots from `boundcorp/ergo-bots`.
   `video_vae/source/model.safetensors` (real-GPU READY in the Serverless test),
   and a thin `python3.12-dev` image layer for Triton's `cuda_utils` build;
   actual-image CPU proofs, no weights.
+- [x] **RunPod REST rate-limit budget**: 429-aware transport, one shared Pod
+  listing per maintenance pass, a throttled owned-Pod read and SSH lookup; a
+  simulated hour under an 11/minute, 225/hour fake provider stays unthrottled.
 - [x] **Supervised H3 pilot preparation**: pinned six-shot image-conditioned
   FL2VA runner, immutable archive/prompt versions and submission tombstones,
   PCM-verified 29s export/partial manifests, independently supervised cleaner

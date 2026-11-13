@@ -76,6 +76,26 @@ class ProviderError(Exception):
     """A deliberately sanitized provider or credential failure."""
 
 
+class RateLimitError(ProviderError):
+    """HTTP 429. RunPod REST shares one per-key budget across every endpoint
+    (observed 11/minute, 225/hour, 2700/day), so callers wait instead of failing.
+
+    ``retry_after`` is the provider's Retry-After in whole seconds, bounded.
+    """
+
+    def __init__(self, message, retry_after):
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
+def _retry_after(error):
+    try:
+        seconds = int(error.headers.get("Retry-After", ""))
+    except (AttributeError, TypeError, ValueError):
+        return 60
+    return min(max(seconds, 1), 3600)
+
+
 class OwnershipError(ProviderError):
     """Provider response does not prove the expected ownership and profile."""
 
@@ -224,6 +244,9 @@ class RunpodREST:
         except HTTPError as exc:
             if absent_ok and exc.code == HTTPStatus.NOT_FOUND:
                 return _NOT_FOUND
+            if exc.code == HTTPStatus.TOO_MANY_REQUESTS:
+                msg = "provider rate limit exceeded"
+                raise RateLimitError(msg, _retry_after(exc)) from None
             # Only the body is matched; it is never stored or re-raised.
             if capacity and self._refused_for_capacity(exc):
                 msg = "provider reported no capacity"
