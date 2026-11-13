@@ -104,6 +104,9 @@ class AgentManager:
         """One look at the agent. It may use ``ctx.activity`` and ``ctx.state``."""
         raise NotImplementedError
 
+    def checkpoint(self, ctx: WorkerContext, handle: dict) -> None:
+        """Deliver control-plane guidance before potentially slow question replies."""
+
     def reply(self, ctx: ToolContext, handle: dict, question_id: str, text: str) -> str:
         """Answer one of the agent's questions."""
         msg = f"{self.name} agents can't be answered from here"
@@ -274,6 +277,9 @@ def _reply_queue(worker_id: str, question_id: str, answer: str) -> str:
     with transaction.atomic():
         worker = Worker.objects.select_for_update().get(pk=worker_id)
         args = dict(worker.args or {})
+        if not worker.active or "_agent_mail_closed" in args:
+            msg = f"Agent worker {worker_id} is no longer running"
+            raise ValueError(msg)
         replies = dict(args.get("_agent_replies") or {})
         if question_id in replies:
             return f"An answer to question {question_id} was already queued."
@@ -285,9 +291,6 @@ def _reply_queue(worker_id: str, question_id: str, answer: str) -> str:
                 if unanswered
                 else "It has no unanswered question."
             )
-            raise ValueError(msg)
-        if not worker.active:
-            msg = f"Agent worker {worker_id} is no longer running"
             raise ValueError(msg)
         replies[question_id] = {"answer": answer, "status": "queued"}
         args["_agent_replies"] = replies
@@ -382,14 +385,16 @@ def _save_seen(worker_id, seen: set[str]) -> None:
 
 def watch(ctx: WorkerContext, manager: AgentManager, handle: dict):
     """One check of an agent: pass on new questions, finish with its report."""
-    if _deliver_replies(ctx, manager, handle):
-        return ctx.again(manager.poll_seconds, progress="Sending an agent reply")
+    manager.checkpoint(ctx, handle)
+    replies_pending = _deliver_replies(ctx, manager, handle)
     check = manager.check(ctx, handle)
     if check.status not in STATUSES:
         msg = f"{manager.name} reported an unknown status {check.status!r}"
         raise ValueError(msg)
     seen = set(ctx.state.get("seen") or [])
-    new = [q for q in check.questions if q.id not in seen]
+    # Keep observing status and reconciling mail, but don't change the chat's
+    # question context while an earlier answer's delivery is still unresolved.
+    new = [] if replies_pending else [q for q in check.questions if q.id not in seen]
     if new:
         # Saved before the chat hears of them: its answer can come back
         # before this step ends, and ergo_agent_reply checks the id.

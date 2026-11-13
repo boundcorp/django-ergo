@@ -998,3 +998,80 @@ def test_a_second_runner_call_skips_a_step_in_progress(tmp_path, workers):
     assert w.run(str(worker.pk), bot.registry) == "running"
     worker.refresh_from_db()
     assert (worker.polls, worker.step_started_at) == (1, None)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_wakeup_during_step_survives_skipped_runner(tmp_path, workers):
+    from django.utils import timezone
+
+    from django_ergo.bots import workers as w
+    from django_ergo.bots.tools import ToolContext
+
+    bot, _ = make_bot(tmp_path, yaml_text=YAML, tools=TOOLS)
+    user = get_user_model().objects.create(username="w-followup")
+    session = async_to_sync(bot.main_session)(user)
+    worker = ToolContext(bot=bot, session=session, user=user).workers.start(
+        "watch", notify=False, target="x", polls=3
+    )
+    claimed, _ = w._claim(str(worker.pk))
+    assert claimed is not None
+    w.schedule(worker, 0)
+    requested_at = timezone.now()
+    # An eager runner skips the active lease; it must not consume the request.
+    assert w.run(str(worker.pk), bot.registry) == "running"
+    assert w._apply_step(claimed, w.Again(600), "") == "running"
+    worker.refresh_from_db()
+    assert worker.polls == 1
+    assert worker.step_started_at is None
+    assert worker.next_poll_at <= requested_at
+    assert workers[-1] == (str(worker.pk), 0)
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("outcome", ["completed", "failed", "cancelled"])
+def test_terminal_worker_classifies_unsent_and_uncertain_mail(
+    tmp_path, workers, outcome
+):
+    from django_ergo.bots import workers as w
+    from django_ergo.bots.tools import ToolContext
+
+    bot, _ = make_bot(tmp_path, yaml_text=YAML, tools=TOOLS)
+    user = get_user_model().objects.create(username="w-terminal-mail")
+    session = async_to_sync(bot.main_session)(user)
+    worker = ToolContext(bot=bot, session=session, user=user).workers.start(
+        "watch", notify=False, target="x", polls=3
+    )
+    worker.args["_agent_instructions"] = [
+        {"id": "old", "status": "queued", "superseded_by": "new"},
+        {"id": "new", "status": "queued"},
+        {"id": "uncertain", "status": "processing"},
+        {"id": "sent", "status": "transport_queued"},
+    ]
+    worker.args["_agent_replies"] = {
+        "q1": {"answer": "yes", "status": "queued"},
+        "q2": {"answer": "yes", "status": "processing"},
+    }
+    worker.save(update_fields=["args"])
+    if outcome == "cancelled":
+        w.cancel(worker)
+    else:
+        claimed, _ = w._claim(str(worker.pk))
+        if outcome == "completed":
+            # Orca closes mail on observed settlement before returning its report.
+            w.close_agent_mail(worker.pk, "Remote worker settled")
+        w._apply_step(claimed, None, "check failed" if outcome == "failed" else "")
+    worker.refresh_from_db()
+    assert worker.status == outcome
+    assert worker.args["_agent_mail_closed"]
+    rows = worker.args["_agent_instructions"]
+    assert [row["status"] for row in rows] == [
+        "unsent",
+        "unsent",
+        "unknown",
+        "transport_queued",
+    ]
+    assert worker.args["_agent_replies"]["q1"]["status"] == "unsent"
+    assert worker.args["_agent_replies"]["q2"]["status"] == "processing"
+    published = list(workers)
+    w.schedule(worker, 0)
+    assert workers == published

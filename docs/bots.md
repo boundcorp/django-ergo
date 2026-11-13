@@ -623,6 +623,25 @@ chat why. When a worker settles, the watcher closes its agent terminal
 (`orchestration worker-release`, or `worker-stop` if Orca hasn't settled the
 dispatch yet), and `ergo_agent_stop` runs `worker-stop`, so finished workers
 don't leave idle agent CLIs holding memory on the Orca host.
+
+Follow-up Orca guidance uses the `orca` skill's `ergo_orca_instruct` and
+`ergo_orca_instruction_status`, not raw mail or terminal input (see
+[instruction checkpoints](plugins.md#orca-instruction-checkpoints)).
+Each instruction has a durable id/version and explicit supersession. Enqueue
+persists an immediate watcher wake in `next_poll_at`, including during a running
+step, so a later normal poll does not overwrite it. This preserves the request,
+not a wall-clock delivery deadline or an interruption of an active step.
+The watcher sends instructions before question replies, rechecks Orca lifecycle
+under the local worker lock, and closes queued mail before terminal release.
+Completion, cancellation and watcher failure classify unattempted queued mail
+as `unsent`; interrupted sends remain `unknown` and are not replayed.
+This fences locally observed completion, not a remote completion racing the
+separate preflight/send calls. A status acknowledgement's sender/pane fields
+are not attested by the current Orca protocol: even matching claims remain
+`acknowledgement_claim` with `verification: "unverified"`, authenticated
+`acknowledgement` stays `null`, and model `acceptance` stays `unknown`.
+Transport consumption and claimed next actions never prove model acceptance.
+
 The watcher also scans its agent's session files on the worktree host every
 `usage_minutes` (default 10) and once after settlement. Claude Code, Codex,
 and omp tokens appear per worker on Costs, grouped by project: the scan also
@@ -726,6 +745,11 @@ class BoxPlugin(BotPlugin):
     def agent_managers(self): return {"box": self.manager}
 ```
 
+The optional `checkpoint(ctx, handle)` hook runs before question replies, so
+control-plane mail can be sent before a slow reply. Keep it bounded. A pending
+or uncertain reply does not suppress the following `check`; it is not evidence
+that the agent has accepted the answer.
+
 A bot with a manager has the `agents` skill, which loads the `models` skill
 with it (see [Model choice for tasks](#model-choice-for-tasks)):
 
@@ -753,6 +777,10 @@ question_id, answer)` queues the answer for the worker and returns without
   If delivery is interrupted, its outcome may be unknown: the worker reports
   this and keeps waiting rather than risk delivering the same answer twice.
   An operator must check the agent before intervening.
+  While an earlier reply remains uncertain, checks still observe status but defer
+  surfacing and marking later questions, preserving the original question context.
+  A terminal result closes queued replies as unsent rather than scheduling another
+  delivery after completion; interrupted replies retain their uncertain outcome.
   Orca workers retain their chat-owned mailbox and run in the dispatch handle:
   a newer dispatch replacing the chat's current mailbox does not change an older
   worker's sender. Orca still verifies the run's current consumer; a fenced or
@@ -760,6 +788,13 @@ question_id, answer)` queues the answer for the worker and returns without
   resend or rebinding. Legacy handles use the chat mailbox only for a matching
   run. If delivery times out, reconcile before any manual retry. A worker
   terminal is never used as the sender.
+  A successful Orca reply reports only that the answer was queued: neither a
+  transport read flag nor `delivered_at` proves that the model accepted guidance.
+  For follow-up changes of direction, use `ergo_orca_instruct` and inspect
+  `ergo_orca_instruction_status` from the `orca` skill. They maintain versioned
+  instructions, explicit supersession, and separate worker acknowledgements
+  naming the instruction and next action. See [instruction checkpoints](plugins.md#orca-instruction-checkpoints)
+  for delivery limits and the cooperative urgent-stop protocol.
 - Agent worker descriptions include a `dispatch_receipt`: requested and selected
   agent/model/effort, and only quota windows applicable to the selected model
   when tier routing provided them. Window names are restricted to known public

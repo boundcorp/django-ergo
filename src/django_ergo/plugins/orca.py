@@ -92,6 +92,7 @@ from django_ergo.bots.tools import BotTool
 from django_ergo.bots.tools import FunctionToolkit
 from django_ergo.bots.tools import bot_tool
 from django_ergo.conversation.context import TextContextSource
+from django_ergo.plugins import orca_instructions as instruction_protocol
 from django_ergo.plugins._common import clip
 from django_ergo.plugins._common import is_secret
 from django_ergo.plugins._common import record_agent_usage
@@ -212,6 +213,26 @@ def command_of(args: list[str]) -> tuple[str, ...]:
             break
         words.append(arg)
     return tuple(words[:2])
+
+
+def _mail_args(args: list[str]) -> tuple[tuple[str, ...], dict[str, str]]:
+    """Parse mail routing without mistaking a body value for a routing flag."""
+    # Orca accepts --key=value and --key value, with the last value winning.
+    words, flags = [], {}
+    index = 0
+    while index < len(args):
+        token = args[index]
+        index += 1
+        if not token.startswith("--"):
+            words.append(token)
+            continue
+        key, equals, value = token[2:].partition("=")
+        if not equals and key not in {"json", "help"}:
+            if index < len(args) and not args[index].startswith("--"):
+                value = args[index]
+                index += 1
+        flags[key] = value
+    return tuple(words[:2]), flags
 
 
 def is_read_only(args: list[str]) -> bool:
@@ -446,9 +467,59 @@ class OrcaPlugin(BotPlugin):
             or "(no output)"
         )
 
+    def _tracked_mail(self, args: list[str]) -> bool:
+        """Fence mail already owned by a durable worker, including settled ones.
+
+        Unknown message ids keep the CLI's normal sender authorization; this is
+        not an inventory of every remote message or permission to impersonate it.
+        """
+        from django_ergo.conversation.models import Worker
+
+        command, flags = _mail_args(args)
+        if command not in {("orchestration", "reply"), ("orchestration", "send")}:
+            return False
+        # Validate a pinned environment before consulting that environment's ids.
+        self.argv(args)
+        question_id = flags.get("id", "")
+        target = flags.get("to", "")
+        if not question_id and not target:
+            return False
+        workers = Worker.objects.filter(
+            bot_name=self.bot.name, function__in=["agent:orca", "orca:watch"]
+        ).only("args", "state", "function")
+        for worker in workers:
+            saved = worker.args or {}
+            handle = saved.get("handle") or self.manager.worker_handle(worker) or {}
+            if command == ("orchestration", "send"):
+                if (
+                    handle.get("dispatch")
+                    and target == f"dispatch:{handle['dispatch']}"
+                ):
+                    return True
+                continue
+            ids = set((worker.state or {}).get("seen") or [])
+            ids.update(saved.get("_agent_replies") or {})
+            for row in saved.get(instruction_protocol.KEY) or []:
+                receipt = row.get("receipt") or {}
+                message = receipt.get("message") or {}
+                ids.add(message.get("id"))
+                ids.add(row.get("message_id"))
+                ids.add((row.get("acknowledgement_claim") or {}).get("message_id"))
+                ids.add((row.get("acknowledgement") or {}).get("message_id"))
+            if question_id in ids:
+                return True
+        return False
+
     def change(self, args: list[str], fields: list[str] | None = None) -> str:
         """``orca_run``: any command, except starting workers by hand."""
-        if command_of(args) in TRACKED_ONLY and not is_read_only(args):
+        command = command_of(args)
+        if not is_read_only(args) and self._tracked_mail(args):
+            return (
+                "Use ergo_orca_instruct for versioned follow-up instructions, or "
+                "ergo_agent_reply for a question. Raw dispatch mail bypasses durable "
+                "tracking; transport consumption does not prove model acceptance."
+            )
+        if command in TRACKED_ONLY and not is_read_only(args):
             return (
                 "Start workers with orca_start_worker (or ergo_agent_start), not "
                 "orca_run: only those make a worker this chat tracks, with its "
@@ -799,7 +870,7 @@ class OrcaPlugin(BotPlugin):
                 "orchestration",
                 "task-create",
                 "--spec",
-                spec,
+                spec + "\n\n" + instruction_protocol.CHECKPOINT_GUIDANCE,
                 "--task-title",
                 title,
                 "--run",
@@ -1078,7 +1149,9 @@ class OrcaPlugin(BotPlugin):
         liveness = str((shown.get("observation") or {}).get("status") or "")
         report = None
         questions = []
-        for message in self.run_messages(run, dispatch, handle.get("task", "")):
+        messages = self.run_messages(run, dispatch, handle.get("task", ""))
+        instruction_protocol.reconcile(ctx, handle, shown, messages)
+        for message in messages:
             kind = message.get("type")
             if kind == "worker_done":
                 report = message
@@ -1094,6 +1167,12 @@ class OrcaPlugin(BotPlugin):
         self.record_activity(ctx, dispatch, shown)
         self.scan_usage(ctx, settled=report is not None or status in SETTLED)
         if report is not None or status in SETTLED:
+            from django_ergo.bots.workers import close_agent_mail
+
+            # Close the durable queue before releasing the remote terminal. An
+            # instruction arriving during this final check is unsent, not a
+            # reason to reopen the watcher and mail an already-settled worker.
+            close_agent_mail(ctx.worker.pk, "Orca worker settled before delivery")
             self.end_worker(dispatch, status)
             body = (report or {}).get("body") or ""
             if status == "failed" and not body:
@@ -1327,7 +1406,12 @@ class OrcaPlugin(BotPlugin):
                 "(orchestration worker-start, or a terminal with --command and sent "
                 "text): this chat can't follow that agent or get its report. If "
                 "orca_start_worker fails, tell the user its error rather than working "
-                "around it. Before stopping workers or "
+                "around it. Send follow-up guidance with ergo_orca_instruct, not raw "
+                "orca_run mail or terminal input. Inspect ergo_orca_instruction_status: "
+                "queued/delivered mail and unverified acknowledgement claims are not "
+                "authenticated model acceptance. Status sender/pane metadata is "
+                "self-asserted; acceptance remains unknown without upstream attestation. "
+                "Before stopping workers or "
                 'anything else unusual, read the CLI\'s guides with orca_read ["skills", '
                 '"get", "orca-cli"] and ["skills", "get", "orchestration"], and check '
                 "the run and worker lists so you don't duplicate work.",
@@ -1529,6 +1613,7 @@ class OrcaPlugin(BotPlugin):
             upload.__bot_tool__,
             screenshot.__bot_tool__,
             start_worker.__bot_tool__,
+            *instruction_protocol.tools(self),
         ]
 
 
@@ -1553,6 +1638,10 @@ class OrcaAgents(AgentManager):
 
     def check(self, ctx, handle: dict) -> AgentCheck:
         return self.plugin.check(ctx, handle)
+
+    def checkpoint(self, ctx, handle: dict) -> None:
+        if not ctx.stopping:
+            instruction_protocol.deliver(ctx, self.plugin, handle)
 
     def reply(self, ctx, handle: dict, question_id: str, text: str) -> str:
         place = self.plugin.environment or "local"
@@ -1595,7 +1684,10 @@ class OrcaAgents(AgentManager):
                 "Orca before any manual retry."
             )
             raise OrcaError(msg, exc.code) from exc
-        return f"Sent the answer to {question_id}."
+        return (
+            f"Answer to {question_id} queued in Orca. "
+            "Transport consumption and model acceptance are not confirmed."
+        )
 
     def stop(self, handle: dict) -> str:
         return self.plugin.end_worker(handle.get("dispatch", ""), "")
