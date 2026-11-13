@@ -18,5 +18,5 @@ RUN pip install --no-cache-dir uv==0.13.8 && \
     uv pip check && \
     uv pip freeze > /opt/h3-environment.txt
 WORKDIR /workspace
-COPY examples/runpod-h3/launch.py /opt/h3-launch.py
+COPY src/django_ergo/plugins/runpod/h3_launcher.py /opt/h3-launch.py
 ENTRYPOINT ["python", "/opt/h3-launch.py"]

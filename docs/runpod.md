@@ -24,10 +24,12 @@ arbitrary commands, caller-selected images, or caller-selected paths.
   Same request key/specification returns the existing job. A different chat or
   changed specification conflicts. No unknown create or H3 submission is
   replayed, and there is no automatic replacement/retry rental.
-- The installation defaults to **one lifetime rental**, one unresolved rental,
-  a planned USD 3 total and at most 3,600 seconds from pre-create reservation.
-  Reservations remain charged against admission after cleanup; terminating a
-  rental does not mint a top-up. Invoice cost remains explicitly unknown.
+- The installation defaults to **one real or unresolved lifetime rental**, one
+  unresolved rental, a planned USD 3 total and at most 3,600 seconds from
+  pre-create reservation. Cleanup-complete attempts that never sent a create
+  consume neither money nor a rental slot. Real or uncertain creates retain
+  their slot; terminating a rental does not mint a top-up. Invoice cost remains
+  explicitly unknown.
 - A cancelled/failed/missing Worker, closed/deleted chat, revoked principal,
   missing/disabled server policy, early work cutoff or absolute deadline requests
   stop. Provider cleanup retries independently. An accepted DELETE or empty
@@ -85,6 +87,7 @@ RUNPOD_ACCOUNTS = {
         "allowed_bots": ["storytime"],
         "allowed_users": ["approved-admin"],  # active superusers only
         "api_key_env": "ERGO_RUNPOD_API_KEY",  # existing host injection, not its value
+        "ssh_private_key_file": "/var/lib/ergonaut/keys/h3_ed25519",  # host only
         "ledger_root": "/var/lib/ergonaut/runpod",
         "max_concurrent": 1,
         "max_rentals": 1,
@@ -143,16 +146,19 @@ shell tools running as the same UID on the same writable volume.
 
 The example numbers are a plan, not current quotes or a billing guarantee.
 Admission includes prior commitments and all liable reservations under an
-account row lock. Only a cleanup-complete, terminal ledger proving no create
-was ever sent releases its financial commitment; its original reservation and
-lifetime admission count remain immutable. Created or uncertain attempts remain
-reserved after cleanup until operator review. An operator may then supply a
-`reconciled_costs` entry keyed by immutable job UUID, with `amount_usd`,
-`basis: "conservative_elapsed_rate"`, a nonempty `evidence` reference, and
-`observed_at` after admission and not in the future. Only cleanup-complete,
-terminal ledgers can use that conservative reviewed commitment; active/unknown
-rentals remain fully reserved. This is not an invoice, automatic refund or new
-rental approval, and it never changes original reservations or lifetime limits.
+account row lock, using the policy's `budget_usd` as the project cap; the USD 3
+per-rental hard authorization remains. Cleanup-complete rows proving no create
+was ever sent release their financial commitment and `max_rentals` slot,
+regardless of ledger phase. Their historical rows and original reservations
+remain immutable. Unresolved intents reserve a slot before POST to prevent
+concurrent admissions; real or uncertain creates retain their lifetime slot.
+Created or uncertain attempts remain reserved after cleanup until operator
+review. An operator may then supply a `reconciled_costs` entry keyed by immutable
+job UUID, with `amount_usd`, `basis: "conservative_elapsed_rate"`, a nonempty
+`evidence` reference, and `observed_at` after admission and not in the future.
+Only cleanup-complete, terminal ledgers can use that conservative reviewed
+commitment; active/unknown rentals remain fully reserved. This is not an invoice,
+automatic refund or new rental approval.
 Native preparation pins the operator's explicit `gpu_type`,
 one GPU, at least167GB RAM and10vCPU,200GB container disk, zero optional volume
 and no network volume; it reuses the existing reviewed create request. Before
@@ -171,14 +177,23 @@ no impossible zero-overrun guarantee is imposed as an admission gate.
 **Before enabling:** verify the actual account/quote/datacenter, approved inputs,
 filesystem locking/durability, credential injection, independently consumed
 maintenance queue and authenticated model access. The preserved published H3
-image listens only on loopback and does not run sshd. The optional reviewed
-`config.ssh_public_key` bootstrap installs direct SSH without rebuilding it;
-only the public client key enters the rental. See the
-[authenticated access and CPU proof](runpod-h3.md#authenticated-access-without-rebuilding-the-preserved-image)
-for strict provider-log host-key pinning, forwarding, timing export and runtime
-driver checks. A helper is not an established tunnel: never expose unauthenticated
-SGLang or assume proxy SSH supports forwarding/SCP. Keep policy disabled until
-the access path and exact quoted hardware are verified. Model readiness waits only within the original startup/download
+image listens only on loopback and does not run sshd. The reviewed
+`config.ssh_public_key` bootstrap installs direct SSH and delivers the corrected
+pinned launcher without rebuilding it; only the public client key enters the
+rental. The host-only `ssh_private_key_file` must be an absolute, owner-private
+file matching that public key; admission validates it before reserving a job.
+The Worker authenticates the owned direct address and public host key through
+`RunpodREST.ssh_connection`, then maintains a per-job OpenSSH control master with
+an ephemeral local loopback port. Subsequent polls reuse it; a dropped transport
+can reconnect without repeating a create or generation. Stop and confirmed
+cleanup close it; a remote watchdog bounds it to the original work cutoff.
+The Worker's SSH commands receive a minimal environment, not provider credentials.
+Provider log SSE reads have a total request budget (including partial/trickling
+lines), not only an idle timeout. A fingerprint-bound launcher failure marker
+fails the Worker promptly instead of waiting for the startup deadline. See
+[authenticated access and CPU proof](runpod-h3.md#authenticated-access-without-rebuilding-the-preserved-image).
+Keep policy disabled until the access path and exact quoted hardware are
+verified. Model readiness waits only within the original startup/download
 deadline; work stops at rental deadline minus 120 seconds.
 
 ## Opt a bot in

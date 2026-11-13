@@ -48,12 +48,13 @@ The local `.Id` is an image **configuration** digest, not a registry manifest
 digest. A provider pull requires a named registry manifest digest and a proven
 delivery route; a locally tagged image alone is not pullable.
 
-The validated image is anonymously readable at
-`registry.octo.boundcorp.net/ergo-h3-experiment/h3-runtime@sha256:7b08f5d6b56988afeab528c9524ded9052a6739df0899768294134afe1453f8b`.
+The preserved image is public at
+`ghcr.io/boundcorp/ergo-h3-runtime@sha256:7b08f5d6b56988afeab528c9524ded9052a6739df0899768294134afe1453f8b`.
 Its manifest config digest is
 `sha256:74ae80e663556a495683e8fdae6cec1981e4d48b5e237902dc4880f28b2c2f5c`.
-Registry manifest access was verified anonymously; this is not a Runpod pull or
-GPU execution test. The image remains subject to the launch prerequisites below.
+Its embedded launcher predates the partition-path fix below: use the native SSH
+entrypoint override, which delivers the corrected launcher at runtime. No image
+rebuild or retag is needed, and a published image is not GPU execution evidence.
 
 Long source builds compile native Rust extensions; use an isolated bounded
 builder and preserve verbose logs/cache rather than repeatedly cancelling short
@@ -62,19 +63,43 @@ a one-hour build deadline, not a GPU or model download.
 
 Image startup requires `ERGO_DEADLINE` equal to the ledger's **existing absolute
 Unix deadline**, established before creation; container restart never resets it.
-The entrypoint downloads only the pinned FL2VA files, starts a loopback-only
-SGLang service, records download/startup timings in `/workspace/h3-timings.json`,
-and kills the whole active subprocess group at deadline minus 120 seconds,
+The canonical `runpod/h3_launcher.py`, delivered by the native SSH entrypoint
+override and copied by new image builds, downloads only the pinned FL2VA files,
+starts a loopback-only SGLang service, records timings in
+`/workspace/h3-timings.json` and publishes fingerprint-bound state in
+`/workspace/h3-launch-state.json`. It exits immediately if download or server
+fails; the Worker observes the failed marker and requests independent cleanup.
+The active subprocess group is killed at deadline minus 120 seconds,
 even during download/load/generation. `compile_seconds=0` means Torch compile is
 disabled; any startup kernel JIT/warmup is included in startup. Independent
 provider deletion is still necessary to stop billing. There is no auto-restart,
 second rental, generation retry, or top-up.
 
-The image creates `/workspace` even with no attached volume. The pinned HF CLI
-requires repeated `--include` options for `model_index.json` and `FL2VA/*`;
-a second bare pattern becomes a literal filename and causes HF to ignore the
-include filter. Actual offline entrypoint and real CLI-parser capture exercised
-this boundary without downloading any checkpoint.
+### FL2VA directory layout at the pinned revision
+
+Download `MiniMaxAI/MiniMax-H3` at
+`42ed227ee7df40d41602854ae760620d6eb651fe` with the single HF filter
+`--include 'FL2VA/*' --local-dir /workspace/model`, then serve
+`--model-path /workspace/model/FL2VA` **without** `--model-variant` or
+`--model-subfolder`. The partition's index already names `MiniMaxH3Pipeline` and
+declares `_minimax_h3.partition: "fl2va"`.
+
+The repo-root index uses three-element modular descriptors. Pinned SGLang's
+[validator accepts only two-element component descriptors, then falls back to
+root `transformer/` and `vae/`](https://github.com/sgl-project/sglang/blob/2511743bd784e69e5a81ca3d926a000711dae4ab/python/sglang/multimodal_gen/runtime/utils/hf_diffusers_utils.py#L715-L743);
+the exact reported exception is at lines 738–739. The real partition instead
+contains `FL2VA/model_index.json` plus `audio_vae`, `processor`, `text_encoder`,
+`tokenizer`, `transformer` and `video_vae`. Its
+[pinned HF tree](https://huggingface.co/api/models/MiniMaxAI/MiniMax-H3/tree/42ed227ee7df40d41602854ae760620d6eb651fe?recursive=true&limit=1000)
+has 81 FL2VA files (144,051,182,625 bytes by metadata); no root-level transformer
+is missing from the download.
+
+Simply changing the path while retaining `--model-variant fl2va` is also wrong:
+[H3 sets the subfolder to `FL2VA`](https://github.com/sgl-project/sglang/blob/2511743bd784e69e5a81ca3d926a000711dae4ab/python/sglang/multimodal_gen/runtime/pipelines/minimax_h3_pipeline.py#L87-L103),
+and [the base loader appends it](https://github.com/sgl-project/sglang/blob/2511743bd784e69e5a81ca3d926a000711dae4ab/python/sglang/multimodal_gen/runtime/pipelines_core/composed_pipeline_base.py#L173-L206),
+yielding `FL2VA/FL2VA`. With no variant override, the partition-local index is
+validated and [all component paths resolve beneath that directory](https://github.com/sgl-project/sglang/blob/2511743bd784e69e5a81ca3d926a000711dae4ab/python/sglang/multimodal_gen/runtime/pipelines_core/composed_pipeline_base.py#L349-L361).
+CPU source/tree validation proves these paths, not weight loading or GPU fit.
 
 ## Repeatable image builds and different models
 
@@ -89,14 +114,15 @@ the audited artifact.
    the image. Resolve compatible dependencies together, require `pip check`,
    and retain the complete resolved freeze: source pins alone do not make
    transitive package resolution bit-reproducible.
-2. **Use a minimal context.** For this recipe, only the Dockerfile and launcher
-   are needed. The paths below match its `COPY` statement; do not send the
-   checkout, private archives, `.env`, home directory or credential cache:
+2. **Use a minimal context.** This recipe needs only the Dockerfile and canonical
+   stdlib launcher. Match its `COPY` statement; do not send the checkout, private
+   archives, `.env`, home directory or credential cache:
 
    ```sh
    CONTEXT=$(mktemp -d)
-   mkdir -p "$CONTEXT/examples/runpod-h3"
-   cp examples/runpod-h3/Dockerfile examples/runpod-h3/launch.py "$CONTEXT/examples/runpod-h3/"
+   mkdir -p "$CONTEXT/examples/runpod-h3" "$CONTEXT/src/django_ergo/plugins/runpod"
+   cp examples/runpod-h3/Dockerfile "$CONTEXT/examples/runpod-h3/"
+   cp src/django_ergo/plugins/runpod/h3_launcher.py "$CONTEXT/src/django_ergo/plugins/runpod/"
    docker build --platform linux/amd64 \
      -f "$CONTEXT/examples/runpod-h3/Dockerfile" \
      -t ergo-h3:sglang-2511743-kitchen-int8 "$CONTEXT"
@@ -219,9 +245,12 @@ Preparation and fixture mode do not call Runpod.
 The image itself remains loopback-only and has no sshd. The reviewed optional
 `config.ssh_public_key` enables the fixed `runpod.ssh.SSH_BOOTSTRAP` entrypoint
 override: it installs Ubuntu `openssh-server` at launch, accepts only that fresh
-ed25519 **public** client key, exposes only `22/tcp`, and then runs the original
-`/opt/h3-launch.py` unchanged. Generate and keep the private client key on the
-durable controller host, never in the image, provider environment or rental.
+ed25519 **public** client key, exposes only `22/tcp`, and delivers the corrected
+canonical launcher into `/run/sshd` before running it with the preserved image's
+Python. Generate and keep the private client key on the durable controller host,
+never in the image, provider environment or rental. Bind its absolute
+owner-private path as host-only `ssh_private_key_file`; admission checks it
+against `config.ssh_public_key`.
 Do not change account-wide SSH keys. All overrides and the public key are bound
 into the original request fingerprint before the one create.
 
@@ -230,8 +259,11 @@ active apt process group at the same deadline-minus-120s cutoff, disables apt's
 automatic sshd startup, and runs an explicitly foreground, separately tracked
 public-key-only sshd child with bounded listener readiness. It never waits for
 daemonization before publishing the host key. Forwarding is restricted to `127.0.0.1:30010`; SFTP/SCP and
-authenticated command execution are available. A fresh host private key is
-generated **inside** the ephemeral rental; it is not the controller private key.
+authenticated command execution are available. Same-attempt restarts reuse the
+fingerprint-bound private host key and recover its public file; unmarked or
+different-attempt overlay keys are replaced noninteractively. This preserves the
+authenticated log pin without ever prompting. Host private keys stay **inside**
+the rental; they are not controller private keys.
 Before any checkpoint download, the wrapper records effective RAM/disk/VRAM and
 rejects a GPU outside the explicitly verified `gpu_nvml_names` for the quoted
 `gpu_type`, less than48GB VRAM, or a driver older than major580. Runpod's catalog
@@ -255,13 +287,15 @@ The result has `host`, `port`, `host_key_alias`, and a complete `known_hosts`
 line. Save that line in an isolated file off-Pod and require
 `StrictHostKeyChecking=yes`, `HostKeyAlias=<host_key_alias>`,
 `UserKnownHostsFile=<isolated-file>`, `IdentitiesOnly=yes`, `BatchMode=yes`,
-`-F /dev/null`, and `-i <fresh-private-key>`. The helper never starts SSH,
-submits work, creates a rental or changes cleanup ownership. Missing logs,
-wrong attempt markers, changed address/ownership or API failure fail closed.
+`-F /dev/null`, and `-i <fresh-private-key>`. The helper authenticates access
+without creating resources; the native Worker uses it to start and maintain SSH.
+Missing logs, wrong attempt markers, changed address/ownership or API failure
+fail closed. Log reads have a total deadline even if an SSE line trickles forever.
 Both API origins use a fixed ordinary User-Agent; provider credentials never
 go to the Pod or SSH process.
 
-Use the provider-returned direct address, not `ssh.runpod.io`:
+The Worker uses the provider-returned direct address, not `ssh.runpod.io`.
+For manual transport diagnosis only:
 
 ```sh
 # All angle-bracket values come from the authenticated helper, never a model.
@@ -272,10 +306,14 @@ env -u "$SCOPED_CALLBACK_ENV" ssh -F /dev/null -i <fresh-private-key> -p <port> 
   -L 127.0.0.1:30010:127.0.0.1:30010 root@<host>
 ```
 
-Keep this tunnel on the native Worker's stable network namespace and bind local
-port30010 only on loopback. The **native Worker remains the sole generation
-controller**, using its existing HTTP/binary artifact client through the tunnel.
-An operator SSH process is transport/observation only, never a second runner.
+The native Worker creates a per-job OpenSSH control socket on its stable host
+and forwards an ephemeral local loopback port to the rental's `127.0.0.1:30010`.
+Subsequent polling tasks reuse the master; transport reconnection does not replay
+generation. Stop and terminal cleanup close it, and a remote watchdog retains the
+original work cutoff. The Worker probes the fingerprint-bound launcher marker
+over that authenticated connection every poll, failing promptly on startup death.
+No operator tunnel keeper is required. An operator SSH process is observation
+only, never a second runner.
 Runpod's [SSH guide](https://docs.runpod.io/pods/configuration/use-ssh) explicitly
 requires public-IP direct SSH for SCP/SFTP; basic proxy support is not assumed.
 

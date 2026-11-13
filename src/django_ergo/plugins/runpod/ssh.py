@@ -1,4 +1,4 @@
-"""Public-key-only direct SSH bootstrap for the unchanged reviewed H3 image.
+"""Public-key-only SSH bootstrap and launcher override for the reviewed H3 image.
 
 The host public key is published in authenticated provider logs, not learned
 from the unauthenticated TCP listener. No client private key enters the Pod.
@@ -9,10 +9,15 @@ from __future__ import annotations
 import base64
 import binascii
 import json
+from importlib.resources import files
 
-# This literal is the entire launch-time ENTRYPOINT override. The original
-# /opt/h3-launch.py and its absolute deadline/model pins remain unchanged.
-SSH_BOOTSTRAP = r'''
+# Deliver one maintained stdlib-only launcher to the existing immutable image.
+# No runtime source substitutions and no image rebuild are required.
+H3_LAUNCHER_SOURCE = (
+    files(__package__).joinpath("h3_launcher.py").read_text(encoding="utf-8")
+)
+SSH_BOOTSTRAP = (
+    r'''
 import json
 import math
 import os
@@ -82,8 +87,20 @@ authorized = root / "ergo_authorized_keys"
 authorized.write_text(os.environ.pop("ERGO_SSH_PUBLIC_KEY") + "\n")
 authorized.chmod(0o600)
 Path("/run/sshd").mkdir(mode=0o755, exist_ok=True)
-# Do not reuse host keys that might be present in a container/template overlay.
-run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", "/run/sshd/ergo_host_key"])
+# Preserve the pin across same-attempt restarts; never reuse template keys.
+# A different/unmarked overlay is replaced without an interactive prompt.
+key_path = Path("/run/sshd/ergo_host_key")
+key_owner = Path("/run/sshd/ergo_host_key.attempt")
+fingerprint = os.environ["ERGO_ATTEMPT_FINGERPRINT"]
+if not (key_path.is_file() and key_owner.is_file()
+        and key_owner.read_text() == fingerprint):
+    for existing in (key_path, key_path.with_suffix(".pub")):
+        existing.unlink(missing_ok=True)
+    run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key_path)])
+    key_owner.write_text(fingerprint)
+# Recover a missing/stale public file from the preserved private key.
+key_path.with_suffix(".pub").write_bytes(
+    run(["ssh-keygen", "-y", "-P", "", "-f", str(key_path)], capture=True))
 config = Path("/run/sshd/ergo_config")
 config.write_text("""Port 22
 ListenAddress 0.0.0.0
@@ -149,10 +166,39 @@ print("ERGO_H3_RESOURCE_BASELINE " + json.dumps(baseline), flush=True)
 if (name not in json.loads(os.environ.pop("ERGO_NVML_NAMES")) or int(driver.split(".")[0]) < 580
         or int(vram) < 45000):
     raise ValueError("quoted NVIDIA GPU, at least 48GB VRAM and CUDA 13 driver required before model download")
-# exec keeps the same PID and absolute alarm; the original launcher installs its
-# own handler and resets that alarm to the SAME cutoff, never a new duration.
-os.execv("/opt/venv/bin/python", ["python", "/opt/h3-launch.py"])
-'''
+# The image's old launcher remains untouched. Write the exact maintained source,
+# rather than patching strings in an already-published image.
+launcher = Path("/run/sshd/h3-launch.py")
+launcher.write_text('''
+    + repr(H3_LAUNCHER_SOURCE)
+    + r""")
+child = subprocess.Popen(
+    ["/opt/venv/bin/python", str(launcher)], start_new_session=True)
+code = child.wait()
+# The launcher exits immediately on failure. Keep SSH/status readable until the
+# ORIGINAL work cutoff, without restarting the child or replaying a download.
+state_path = Path("/workspace/h3-launch-state.json")
+state = json.loads(state_path.read_text()) if state_path.exists() else {}
+if (state.get("state") != "failed"
+        or state.get("fingerprint") != os.environ["ERGO_ATTEMPT_FINGERPRINT"]):
+    state = {
+        "fingerprint": os.environ["ERGO_ATTEMPT_FINGERPRINT"],
+        "state": "failed", "stage": "launcher", "returncode": code,
+        "reason": "launcher exited; no automatic restart",
+        "observed": time.time(), "deadline": deadline,
+    }
+    temporary = state_path.with_suffix(".next")
+    temporary.write_text(json.dumps(state))
+    temporary.replace(state_path)
+    print("ERGO_H3_FAILURE " + json.dumps(state), flush=True)
+child = None
+while time.time() < cutoff:
+    if ssh_server.poll() is not None:
+        raise RuntimeError("SSH listener exited; no restart")
+    time.sleep(min(1, max(0, cutoff - time.time())))
+stop()
+"""
+)
 
 
 def public_key(value):

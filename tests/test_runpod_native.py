@@ -149,6 +149,13 @@ def setup(tmp_path, settings, monkeypatch, admission_config, frozen):  # noqa: F
     monkeypatch.setattr(runner, "AUDIO_SHA256", digest(frozen[1]))
     provider = ProviderHTTP()
     monkeypatch.setattr(native, "client", lambda job: FixtureRunpodREST(provider))
+    monkeypatch.setattr(native, "validate_private_key", lambda policy, config: "")
+    monkeypatch.setattr(
+        native_h3,
+        "ensure_tunnel",
+        lambda job, provider, pod, *, deadline: job.profile["base_url"],
+        raising=False,
+    )
     bot, _ = make_bot(
         tmp_path,
         name="storytime",
@@ -242,9 +249,10 @@ def test_terminal_reservation_release_requires_proven_no_create(setup, created):
     job.refresh_from_db()
     assert job.cleanup_complete
     assert job.reservation_usd == Decimal("1.23")
-    with pytest.raises(ValueError, match="lifetime rental"):
-        invoke(setup, "start", profile="h3_frozen", request_key="new-approval")
-    setup.policy["max_rentals"] = 2
+    if created:
+        with pytest.raises(ValueError, match="lifetime rental"):
+            invoke(setup, "start", profile="h3_frozen", request_key="new-approval")
+        setup.policy["max_rentals"] = 2
     pricing = setup.policy["profiles"]["h3_frozen"]["config"]["pricing"]
     pricing["compute_hourly_usd"]["amount"] = "2.19"
     if created:
@@ -320,6 +328,24 @@ def test_budget_counts_only_created_rentals_against_policy_cap(setup):
     assert config["pricing"]["project_committed_usd"] == "1.00"
     assert config["pricing"]["project_cap_usd"] == "6"
     assert result["reservation_usd"] == "2.22"
+
+
+def test_cleaned_zero_create_rows_do_not_consume_rental_slots(setup):
+    first = begin(setup)
+    native.stop(first, "failed")
+    independent_tick(first)
+    # Even a ledger interrupted before reaching a terminal phase has no rental
+    # once independent cleanup proves no POST occurred.
+    with Experiment(first.ledger_path)._tx() as db:
+        db.execute("UPDATE experiment SET phase='reserved' WHERE id=1")
+    second = RunpodJob.objects.get(
+        pk=invoke(setup, "start", profile="h3_frozen", request_key="second")["job_id"]
+    )
+    assert second.profile["config"]["pricing"]["project_committed_usd"] == "0"
+    assert setup.provider.posts == 0
+    with pytest.raises(ValueError, match="lifetime rental"):
+        invoke(setup, "start", profile="h3_frozen", request_key="concurrent")
+    assert RunpodJob.objects.count() == 2
 
 
 @pytest.mark.parametrize(
@@ -773,3 +799,40 @@ def test_cancel_during_readiness_suppresses_late_question(setup, monkeypatch):
     native.reconcile_once()
     job.refresh_from_db()
     assert job.cleanup_complete
+
+
+@pytest.mark.parametrize("local_state_lost", [False, True])
+def test_launcher_failure_stops_worker_before_startup_deadline(
+    setup, monkeypatch, local_state_lost
+):
+    from django_ergo.plugins.runpod.native_tunnel import LauncherFailed
+
+    job = begin(setup)
+    assert drive(setup, job) == "running"
+    if local_state_lost:
+        from django_ergo.plugins.runpod import native_tunnel
+
+        def inaccessible(job):
+            message = "fixture filesystem unavailable"
+            raise PermissionError(message)
+
+        monkeypatch.setattr(native_tunnel, "_directory", inaccessible)
+
+    def failed_launcher(*args, **kwargs):
+        message = "H3 launcher failed"
+        raise LauncherFailed(message)
+
+    monkeypatch.setattr(native_h3, "ensure_tunnel", failed_launcher)
+    startup_deadline = (
+        job.created
+        + job.profile["config"]["timeline"]["startup_seconds"]
+        + job.profile["config"]["timeline"]["download_seconds"]
+    )
+    assert time.time() < startup_deadline
+    assert drive(setup, job) == "failed"
+    job.refresh_from_db()
+    assert job.error == "LauncherFailed"
+    assert job.cleanup_complete
+    assert Experiment(job.ledger_path).status()["stop_reason"] == "failed"
+    assert setup.provider.posts == 1
+    assert setup.provider.deletes == ["pod123"]
