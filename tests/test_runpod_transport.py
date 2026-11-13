@@ -42,7 +42,7 @@ def pod(**changes):
     result = {
         "id": "pod123",
         "consumerUserId": "account1",
-        "image": "image@sha256:123",
+        "imageName": "image@sha256:123",
         "containerDiskInGb": 120,
         "volumeInGb": 0,
         "networkVolume": None,
@@ -80,7 +80,7 @@ def test_owned_delete_requires_fresh_read_and_readback_is_independent():
     "changes",
     [
         {"consumerUserId": "other"},
-        {"image": "other"},
+        {"imageName": "other"},
         {"volumeInGb": 1},
         {"networkVolume": {"id": "foreign"}},
         {"containerDiskInGb": 121},

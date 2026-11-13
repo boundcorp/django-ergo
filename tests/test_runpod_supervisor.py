@@ -64,7 +64,7 @@ def owned_pod(owner):
     return {
         "id": "pod123",
         "consumerUserId": owner.account,
-        "image": owner.image,
+        "imageName": owner.image,
         "containerDiskInGb": owner.container_disk_gb,
         "volumeInGb": 0,
         "env": {

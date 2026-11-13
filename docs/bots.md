@@ -1311,6 +1311,8 @@ The host profile requires explicit `gpu_type` and verified `gpu_nvml_names`;
 neither is bot-editable. Provider catalog IDs and NVML names are separate.
 Admission retains the single-GPU, minimum167GB hostRAM and plannedUSD3/one-hour
 limits regardless of the selected supported NVIDIA hardware.
+Provider REST `imageName` is normalized before strict ownership checks; missing
+or mismatched image evidence never authorizes deletion.
 
 ### ergo_kb
 

@@ -86,13 +86,14 @@ def _safe_pod(pod):
     fields = (
         "id",
         "consumerUserId",
-        "image",
         "containerDiskInGb",
         "volumeInGb",
         "networkVolume",
         "costPerHr",
     )
     safe = {key: pod[key] for key in fields if key in pod}
+    if "imageName" in pod:
+        safe["image"] = pod["imageName"]
     if isinstance(pod.get("env"), dict):
         safe["env"] = {
             key: pod["env"][key]
@@ -205,7 +206,7 @@ class RunpodREST:
         if (
             not isinstance(pod, dict)
             or pod.get("id") != pod_id
-            or not ownership.matches(pod, request_bound=True)
+            or not ownership.matches(_safe_pod(pod), request_bound=True)
         ):
             msg = "SSH rental ownership unverified"
             raise OwnershipError(msg)
@@ -254,7 +255,7 @@ class RunpodREST:
             if (
                 not isinstance(current, dict)
                 or current.get("id") != pod_id
-                or not ownership.matches(current, request_bound=True)
+                or not ownership.matches(_safe_pod(current), request_bound=True)
                 or current.get("publicIp") != address
                 or current.get("portMappings", {}).get("22") != port
                 or time.time() >= deadline
