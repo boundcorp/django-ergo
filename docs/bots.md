@@ -1577,7 +1577,7 @@ returned.
 ```yaml
 - name: bash
   cwd: ~ # working directory
-  approve: true # every command waits for approval
+  approve: true # every command waits for approval (review: see below; false: none)
   timeout: 120
   root_only: true
 ```
@@ -1586,6 +1586,75 @@ Gives the bot `ergo_bash_run(command, cwd?)`, which runs `bash -lc` on the
 host as the user Ergonaut runs as. Output is stdout and stderr with the exit
 code, trimmed to its start and end when long. It is the whole machine, so
 keep `approve: true` unless you trust the bot with it.
+
+#### Reviewed approval
+
+`approve: review` keeps approval for every command except routine reads the
+user clearly asked for, which a reviewer model lets through:
+
+```yaml
+- name: bash
+  approve: review
+  reviewer: # optional; these are the defaults except ssh_hosts
+    model: auto/small # a providers.yaml model or auto/<tier>, picked by routing
+    ssh_hosts: [rigel] # ssh aliases whose remote commands may be reviewed (default none)
+    timeout: 45 # seconds; a slower review waits for the user
+```
+
+A command runs without asking only when all of this holds; anything else,
+including any error, a timeout, an unreadable verdict or a missing model,
+waits for the user's approval exactly as with `approve: true`:
+
+- **Plain read-only shell.** Programs that only read (`ls`, `cat`, `head`,
+  `tail`, `find`, `grep`, `stat`, `file`, `du`, `wc`, `sort`, `diff`, `cd`,
+  ...), joined by `;`, `&&`, `||` or `|`, with output only discarded
+  (`2>/dev/null`, `2>&1`), or `ssh <host> '<command>'` to a listed host whose
+  remote command passes the same check. `$`, backticks, `$()`, `<`,
+  heredocs, other redirections, subshells, escapes, interpreters, nested
+  ssh, options that write or recurse (`sort -o`, `find -exec`/`-delete`,
+  `grep -r`), globs in file reads, and paths that look like credentials
+  (`.ssh`, `.env`, `/proc`, keys, tokens, shell history, ...) never pass.
+- **The user's own words, this turn.** Every user message of the current
+  turn is the chat owner's: sent from a signed-in Ergonaut browser session
+  (not an API key) by an active admin, or such a message forwarded word for
+  word with `ergo_thread_forward` that no newer message in its chat has
+  superseded. A turn another bot, a worker, a schedule, an API key, voice or
+  Telegram started or steered has no authorization, and an earlier turn's
+  never carries over. Bot messages, tool output, file contents and
+  forwarding notes never reach the reviewer, so they can't grant anything.
+- **No secrets in the command.** A command or cwd that redaction would
+  change (a token, `password=...`, a credential in a URL) waits.
+- **The reviewer allows it.** The model sees the exact command, cwd, where it
+  runs and those messages (secrets redacted), and must answer
+  `{"decision": "allow"}` for a read that fits the request; it's told to
+  escalate anything that writes, touches credentials, goes beyond the
+  request or is unclear. The call is tool-less; a bot in a private pool has
+  no reviewer.
+- **Nothing changed meanwhile.** A message or stop that arrives during the
+  review, or before the command starts, means the request changed: the
+  command and the rest of that step's tool calls get a "Not run" result,
+  then the message goes in and the model decides again.
+
+Each call is reviewed on its own (no decision is cached) and every decision
+is recorded in the turn's `StructuredCall.metadata["bash_reviews"]`:
+decision, reason, model, a keyed hash of the command, the command and cwd
+with secrets redacted, the tool call, turn and message ids, and how long it
+took. The log line (`django_ergo.plugins.bash_review`) leaves out the command.
+
+Accepted residual risks (Lee, 2026-11-13):
+
+- Secret screening of the messages sent to the reviewer is best-effort:
+  known token formats, private keys, `.env`-style and `password=`
+  assignments, credentials in URLs, high-entropy strings and values of secret
+  environment variables are redacted. A secret in no recognizable form can
+  reach the reviewer model.
+- Reads are approved by path. Nothing binds the reviewed path to the file
+  the shell opens, locally or over ssh (`ssh rigel cat <path>`): a symlink
+  can make the command read a different file than the one reviewed.
+
+This is not a sandbox: Bash still runs as the Ergonaut OS user with a
+scrubbed environment and login-shell startup files. Rollback: set
+`approve: true` again.
 
 ### web_search
 
