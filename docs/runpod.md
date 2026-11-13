@@ -217,7 +217,9 @@ Admission prices the reservation at the profile's hourly ceiling
    (`no_capacity_messages` in policy can replace the built-in phrases), the
    Worker lists inventory. When nothing carries the attempt's marker the
    attempt is released (`create_started` back to 0), the refused request stays
-   in cleanup's ownership scan, and the next offer is tried at once. A refused
+   in cleanup's ownership scan (every maintenance tick terminates a Pod it
+   materializes late, even while the job runs), and the next offer is tried at
+   once. A refused
    create is not a rental: it costs $0, does not use `max_rentals`, and needs no
    ledger repair. A timeout, any other error, an inventory failure or a Pod
    carrying the marker leaves the create uncertain; it is reconciled and never
@@ -255,7 +257,9 @@ to NVML display names, compute capability and VRAM for A100 80GB (SXM4/PCIe),
 H100 (SXM/PCIe/NVL), H200, B200, L40S, L40, RTX 6000 Ada, RTX A6000, A40 and
 RTX PRO 6000 Blackwell (Server/Workstation). Only the A100 SXM4 names were
 observed on a live rental; the others follow NVIDIA's product names, and the
-compute-capability fallback covers a different string. Add or override an entry
+compute-capability fallback covers a different string. When a profile leaves
+`compute_capabilities` empty, the chosen GPU's catalog capability is that
+fallback. Add or override an entry
 (or set it to `null` to remove one) without code:
 
 ```json

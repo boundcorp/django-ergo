@@ -1328,8 +1328,10 @@ Tandoor tools) go in that bot folder's `tools/` instead.
   root_only: false
 ```
 
-Provides `ergo_runpod_profiles`, `ergo_runpod_start`, `ergo_runpod_status`,
-`ergo_runpod_collect` and `ergo_runpod_terminate`, backed by a real
+Provides `ergo_runpod_profiles`, `ergo_runpod_stock` (live stock for a
+profile's envelope), `ergo_runpod_start`, `ergo_runpod_status` (including the
+chosen offer and fallback attempts), `ergo_runpod_collect` and
+`ergo_runpod_terminate`, backed by a real
 `runpod:watch` Worker and a separate durable rental ledger. Only `account`,
 `profiles` and `root_only` are bot-editable. `root_only` defaults to true;
 false exposes tools in threads, not spending authority.

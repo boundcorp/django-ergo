@@ -346,6 +346,37 @@ class RESTCleanup:
                 )
         return self.experiment.status()
 
+    def sweep_retired(self, *, client):
+        """Terminate any Pod a refused (retired) request materialized late.
+
+        Runs on every maintenance tick, not only after stop, so a late Pod never
+        runs alongside the current offer. Returns a cleanup error or None.
+        """
+        with self.experiment._tx() as db:
+            retired = [
+                Ownership(**json.loads(row["profile"]))
+                for row in db.execute("SELECT profile FROM rest_retired_profiles")
+            ]
+        if not retired:
+            return None
+        try:
+            pods = client.list_pods()
+        except ProviderError:
+            return "provider_request_failed"
+        error = None
+        for pod in pods:
+            if not _pod_id(pod.get("id")) or not self._owner(
+                pod, retired, request_bound=True
+            ):
+                continue
+            with self.experiment._tx() as db:
+                self._remember(db, pod, retired, request_bound=True)
+            result = self._clean_resource(
+                pod["id"], client, retired, request_bound=True
+            )
+            error = error or result
+        return error
+
     @staticmethod
     def _owner(pod, profiles, request_bound):
         return next(

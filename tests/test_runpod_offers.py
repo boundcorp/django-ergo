@@ -174,8 +174,8 @@ def rules(gpu, **changes):
     ],
 )
 def test_verified_nvml_display_names_pass(gpu, row):
-    # No compute fallback: the exact catalog display name alone must match.
-    assert gpu_mismatch([row], rules(gpu, compute_capabilities=[])) is None
+    # A non-matching capability list: the exact catalog display name must match.
+    assert gpu_mismatch([row], rules(gpu, compute_capabilities=["7.0"])) is None
 
 
 def test_unlisted_display_name_falls_back_to_compute_capability_and_vram():
@@ -184,6 +184,12 @@ def test_unlisted_display_name_falls_back_to_compute_capability_and_vram():
     assert "neither a verified name" in gpu_mismatch(
         [renamed], rules(A100, compute_capabilities=["9.0"])
     )
+
+
+def test_unset_capabilities_fall_back_to_the_bound_gpus_catalog_capability():
+    renamed = "NVIDIA L40S (unexpected string), 580.95.05, 46068, 8.9"
+    assert gpu_mismatch([renamed], rules(L40S, compute_capabilities=[])) is None
+    assert gpu_mismatch([renamed], rules(A100, compute_capabilities=[])) is not None
 
 
 @pytest.mark.parametrize(

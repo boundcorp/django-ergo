@@ -236,12 +236,20 @@ def min_vram_mib(hw):
 
 
 def identity(gpu_type, hw, gpu_catalog):
-    """In-Pod acceptance rule bound into the create request for one catalog GPU."""
+    """In-Pod acceptance rule bound into the create request for one catalog GPU.
+
+    Without explicit ``compute_capabilities`` the chosen GPU's catalog
+    capability is the fallback, so an unexpected NVML display string for the
+    right hardware is never paid for and then rejected.
+    """
     entry = gpu_catalog.get(gpu_type) or {}
+    capabilities = list(hw["compute_capabilities"])
+    if not capabilities and entry.get("compute_capability"):
+        capabilities = [entry["compute_capability"]]
     return {
         "gpu_count": hw["gpu_count"],
         "nvml_names": list(entry.get("nvml_names", [])),
-        "compute_capabilities": list(hw["compute_capabilities"]),
+        "compute_capabilities": capabilities,
         "min_vram_mib": min_vram_mib(hw),
         "min_driver_major": hw["min_driver_major"],
     }

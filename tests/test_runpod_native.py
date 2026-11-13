@@ -885,6 +885,23 @@ def test_no_capacity_falls_back_to_next_offer_in_the_same_admission(setup):
     assert setup.provider.deletes == ["pod123"]
 
 
+def test_late_pod_from_a_refused_offer_is_terminated_while_the_job_runs(setup):
+    setup.provider.refuse = {"EU-RO-1"}
+    job = begin(setup)
+    assert drive(setup, job) == "running"
+    refused = setup.provider.bodies[0]
+    # The provider materializes the refused request after the inventory check.
+    setup.provider.pods["late456"] = {
+        **setup.provider.pods["pod123"],
+        "id": "late456",
+        "env": refused["env"],
+    }
+    native.reconcile_once()
+    assert setup.provider.deletes == ["late456"]
+    assert "pod123" in setup.provider.pods
+    assert Experiment(job.ledger_path).status()["stop_reason"] is None
+
+
 def test_refusals_everywhere_create_nothing_and_release_the_rental_slot(setup):
     setup.provider.refuse = {"EU-RO-1", "US-KS-2", "US-WA-1"}
     job = begin(setup)

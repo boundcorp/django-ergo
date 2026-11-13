@@ -520,7 +520,11 @@ def reconcile_job(job, *, now):
                 "UPDATE cleaner_supervision SET heartbeat=?,process_id=?,executing=1,tick_error=NULL WHERE id=1",
                 (now, os.getpid()),
             )
-        state = RESTCleanup(job.ledger_path).reconcile_once(now=now, client=client(job))
+        provider = client(job)
+        cleanup = RESTCleanup(job.ledger_path)
+        # Refused offers are swept while the job still runs, not only at stop.
+        swept = cleanup.sweep_retired(client=provider)
+        state = cleanup.reconcile_once(now=now, client=provider)
         if state["stop_reason"]:
             from .native_h3 import retain_outputs
 
@@ -534,7 +538,7 @@ def reconcile_job(job, *, now):
         if complete:
             close_tunnel(job)
         RunpodJob.objects.filter(pk=job.pk).update(cleanup_complete=complete)
-        return not state["cleanup_error"]
+        return not state["cleanup_error"] and not swept
 
 
 def attempt_cleanup(job):
