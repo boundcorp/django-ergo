@@ -217,6 +217,27 @@ does not establish playback. Reconnect restores bounded results without
 redispatching. Owner polling can persist late terminal outcomes after End,
 without a provider connection or a model request.
 
+**Result readback.** The bot's normal reply is posted in the launch thread as an
+ordinary message (that is the normal-thread contract), and the bridge's one-second
+result watcher also hands it to the live provider session: silent
+`session.thinking.append` context, then `session.commentary.append` carrying the
+original client delegation ID, which is how GPT-Live client delegation is answered
+(LiveKit's `append_commentary`). In the 2026-11-13 02:10 UTC call the 1,206-character
+answer was marked answered at 02:10:48.63, recorded as a result event at 02:10:48.74
+and queued as correlated commentary at 02:10:49.31; the next assistant turn spoke
+it. The voice's instructions now carry a `capability` statement built with the
+startup briefing: in normal-thread mode it names the owning bot, its normal tools
+and approvals and the one-request limit, and forbids claiming the voice has no
+tools (the previous "no callable voice tools" wording made it answer "I don't have
+any special tooling"). Once the call's one request is taken, the bridge appends a
+standing rule (`session.instructions.append`): a submitted request's verified
+result will be read here and further work needs a new call. If collection
+expires before submission, a correlated commentary says no result will arrive.
+A reconnected bridge applies the matching rule (submitted or never submitted),
+and the startup capability counts any recorded signal as the used request. A
+later delegation signal is answered at once with a correlated commentary saying
+a new call is needed, instead of leaving the model waiting.
+
 **Deployment gate satisfied, 23:38:39 UTC:** source #297 was deployed with policy
 absent first; all old queue consumers exited before exact policy #170 merged.
 A fresh policy-specific notice and quiet window preceded the web/bridge-only
@@ -238,9 +259,29 @@ work. Rename and pinned material remain in thread details. The mobile dialog con
 returns it on Escape; the desktop panel focuses its first action and returns
 focus to Options on Escape.
 
-**Enable sound** appears only when the connected room's SDK reports blocked
-playback. It unlocks playback on the existing call; it does not join a room,
-request microphone permission, unmute capture, or confirm physical hearing.
+The browser attaches the assistant's audio track and starts playback as soon as
+it is subscribed; audio output routing (`setSinkId`) is applied afterwards and
+never delays or blocks playback. Browser playback is tracked as not started,
+playing (an attached element fired `playing`), blocked (autoplay policy) or
+failed. **Enable sound** stays visible while connected until playback is
+confirmed playing. It runs `room.startAudio()` and plays the attached elements
+inside the tap, on the existing call; it does not join a room, request
+microphone permission, unmute capture, or confirm physical hearing. When inbound
+audio energy arrives while playback is confirmed, the page suggests the volume
+(Android uses the call volume) and speaker/Bluetooth route. If a final assistant
+turn arrives on this connection, or inbound audio arrives, while playback is not
+confirmed, the page shows an alert to tap Enable sound. The browser reports
+`track_subscribed`, `playback_started`, `playback_blocked`/`playback_failed`
+(error name only), `sound_enabled`, `audio_arriving` and `turn_unplayed` once per
+connection to `POST /api/realtime-voice/sessions/{id}/client-audio` (owner only,
+active sessions only, at most 40 per session, idempotent by report ID); they
+appear as `client_audio` runtime events under Diagnostics. The bridge adds
+`bridge_audio` events when RoomIO reports that the browser subscribed to the
+agent's audio track and when the voice model generates its first assistant audio
+frame (before RoomIO playout; not confirmed sent or played). Together these
+separate "no audio produced", "browser never subscribed", "blocked or not
+started in the browser" and "playing but inaudible on the device". None of them
+proves the user heard anything.
 Start call connects the room and enables the microphone; Mute/Unmute controls
 capture separately. IDs, transport/provider state, browser playback details,
 output configuration, route snapshots and runtime events are under

@@ -3,9 +3,9 @@ import { act, createElement } from 'react'
 import type { createRoot as CreateRoot, Root } from 'react-dom/client'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { Window } from 'happy-dom'
-import { LocalParticipant, Room, RoomEvent, Track } from 'livekit-client'
+import { LocalParticipant, RemoteAudioTrack, Room, RoomEvent, Track, TrackEvent } from 'livekit-client'
 import { Link, MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom'
-import { api, type RealtimeVoiceSession, type SessionDetail } from '../api'
+import { api, type ClientAudioReport, type RealtimeVoiceSession, type SessionDetail } from '../api'
 import { ActiveVoiceCall, VoiceCallProvider, VoicePage, VoiceTranscript } from './RealtimeVoice'
 import { VoiceSessionCard } from './VoiceSessionCard'
 import { Chat } from '../pages/Chat'
@@ -23,6 +23,7 @@ const original = {
   models: api.models,
   attachments: api.attachments,
   pins: api.pins,
+  reportAudio: api.reportRealtimeVoiceAudio,
 }
 const session: RealtimeVoiceSession = {
   id: 'voice-1',
@@ -53,6 +54,7 @@ let container: HTMLDivElement
 let createRoot: typeof CreateRoot
 let restoreOutputs = () => {}
 const restoreRoomMocks: (() => void)[] = []
+let reports: { sessionId: string; report: ClientAudioReport }[] = []
 
 function button(label: string) {
   const found = [...container.querySelectorAll('button')].find(item => item.textContent?.trim() === label)
@@ -144,6 +146,11 @@ beforeEach(async () => {
   api.models = async () => ({ models: [], default: '', default_engine_type: '' })
   api.attachments = async () => []
   api.pins = async () => []
+  reports = []
+  api.reportRealtimeVoiceAudio = async (sessionId, report) => {
+    reports.push({ sessionId, report })
+    return { recorded: true }
+  }
 })
 
 afterEach(() => {
@@ -160,6 +167,7 @@ afterEach(() => {
   api.models = original.models
   api.attachments = original.attachments
   api.pins = original.pins
+  api.reportRealtimeVoiceAudio = original.reportAudio
   restoreOutputs()
   restoreOutputs = () => {}
   restoreRoomMocks.splice(0).forEach(restore => restore())
@@ -966,7 +974,6 @@ test('mocked room events reapply outputs through reconnect and new-room standby 
   const secondTrack = {
     kind: Track.Kind.Audio,
     attach(element: HTMLMediaElement) {
-      expect(element.sinkId).toBe('bluetooth') // routed before any stream is attached/played
       secondAudio = element
       return element
     },
@@ -980,11 +987,11 @@ test('mocked room events reapply outputs through reconnect and new-room standby 
   expect(firstAudio.isConnected).toBe(false)
   expect(container.querySelector('select')?.value).toBe('bluetooth')
   expect(microphone).toHaveBeenCalledTimes(2) // only the existing explicit connect/resume path
-  let cancelledAttachments = 0
+  let cancelledAudio: HTMLMediaElement | undefined
   const cancelledTrack = {
     kind: Track.Kind.Audio,
     attach(element: HTMLMediaElement) {
-      cancelledAttachments++
+      cancelledAudio = element
       return element
     },
     detach: () => [],
@@ -993,6 +1000,209 @@ test('mocked room events reapply outputs through reconnect and new-room standby 
     rooms[1].emit(RoomEvent.TrackSubscribed, cancelledTrack)
     rooms[1].emit(RoomEvent.TrackUnsubscribed, cancelledTrack)
   })
-  expect(cancelledAttachments).toBe(0)
+  expect(cancelledAudio?.isConnected).toBe(false) // unsubscribed playback leaves no element behind
   expect(routing.captures).toBe(0)
+})
+
+function pause(ms: number) {
+  const { promise, resolve } = Promise.withResolvers<void>()
+  setTimeout(resolve, ms)
+  return act(async () => {
+    await promise
+  })
+}
+
+// A subscribed assistant track; `attach` mirrors LiveKit's: it binds the element the page passes in.
+function assistantTrack(sid = 'TR_assistant') {
+  const track = {
+    kind: Track.Kind.Audio,
+    sid,
+    element: undefined as HTMLMediaElement | undefined,
+    failed: undefined as ((error: unknown) => void) | undefined,
+    attach(element: HTMLMediaElement) {
+      this.element = element
+      return element
+    },
+    detach() {
+      return this.element ? [this.element] : []
+    },
+    on(event: string, listener: (error: unknown) => void) {
+      if (event === TrackEvent.AudioPlaybackFailed) this.failed = listener
+      return this
+    },
+  }
+  return track
+}
+
+async function connectCall() {
+  const rooms: Room[] = []
+  const originalOn = Room.prototype.on
+  const observe = spyOn(Room.prototype, 'on').mockImplementation(function (this: Room, event, listener) {
+    if (event === RoomEvent.TrackSubscribed) {
+      this.connect = async () => {
+        rooms.push(this)
+      }
+      this.disconnect = async () => {}
+    }
+    return originalOn.call(this, event, listener)
+  })
+  const microphone = spyOn(LocalParticipant.prototype, 'setMicrophoneEnabled').mockResolvedValue(undefined)
+  restoreRoomMocks.push(
+    () => observe.mockRestore(),
+    () => microphone.mockRestore(),
+  )
+  api.realtimeVoiceToken = async () => ({ url: 'wss://never-joined.invalid', token: 'not-a-real-token' })
+  await mountVoice()
+  await act(async () => {
+    button('Start call').click()
+  })
+  expect(rooms).toHaveLength(1)
+  return rooms[0]
+}
+
+const statuses = () => reports.map(item => item.report.status)
+const enableSound = () =>
+  [...container.querySelectorAll('button')].find(item => item.textContent?.trim() === 'Enable sound')
+
+test('assistant audio plays immediately even when output routing never settles, and Enable sound stays until it plays', async () => {
+  installOutputs()
+  // A stalled setSinkId: the routing queue never drains.
+  Object.defineProperty(window.HTMLMediaElement.prototype, 'setSinkId', {
+    configurable: true,
+    value: () => new Promise(() => {}),
+  })
+  api.reportRealtimeVoiceAudio = original.reportAudio
+  const fetches: { url: string; init: RequestInit }[] = []
+  const fetchSpy = spyOn(globalThis, 'fetch').mockImplementation((async (url: string, init: RequestInit) => {
+    fetches.push({ url, init })
+    return new Response(JSON.stringify({ recorded: true }))
+  }) as typeof fetch)
+  restoreRoomMocks.push(() => fetchSpy.mockRestore())
+  const room = await connectCall()
+  expect(enableSound()).toBeDefined() // connected, nothing confirmed playing yet
+  expect(container.textContent).toContain("hasn't started playing in this browser yet")
+  const track = assistantTrack()
+  await act(async () => {
+    room.emit(RoomEvent.TrackSubscribed, track)
+  })
+  expect(track.element?.isConnected).toBe(true)
+  expect(enableSound()).toBeDefined()
+  await act(async () => {
+    track.element!.dispatchEvent(new window.Event('playing'))
+    track.element!.dispatchEvent(new window.Event('playing'))
+  })
+  expect(enableSound()).toBeUndefined()
+  expect(container.textContent).toContain('Browser playback: playing; hearing unconfirmed')
+  await act(async () => {
+    track.element!.dispatchEvent(new window.Event('pause'))
+  })
+  expect(enableSound()).toBeDefined() // a paused element is no longer confirmed playback
+  await act(async () => {
+    track.element!.dispatchEvent(new window.Event('playing'))
+  })
+  const sent = fetches.map(item => ({ url: item.url, body: JSON.parse(String(item.init.body)) }))
+  expect(sent.map(item => item.body.status)).toEqual(['track_subscribed', 'playback_started'])
+  for (const item of sent) {
+    expect(item.url).toBe('/api/realtime-voice/sessions/voice-1/client-audio')
+    expect(item.body.event_id).toMatch(/^[A-Za-z0-9_-]{1,80}$/)
+  }
+  expect(fetches[0].init.method).toBe('POST')
+  expect(new Set(sent.map(item => item.body.event_id)).size).toBe(2)
+})
+
+test('blocked playback keeps Enable sound, reports once, and Enable sound unlocks inside the click', async () => {
+  const room = await connectCall()
+  const track = assistantTrack()
+  await act(async () => {
+    room.emit(RoomEvent.TrackSubscribed, track)
+    track.failed?.(new DOMException('Autoplay refused', 'NotAllowedError'))
+    room.emit(RoomEvent.AudioPlaybackStatusChanged, false)
+    room.emit(RoomEvent.AudioPlaybackStatusChanged, false)
+  })
+  expect(enableSound()).toBeDefined()
+  expect(container.textContent).toContain('Your browser blocked playback.')
+  expect(container.textContent).toContain('Browser playback: blocked by the browser')
+  const blocked = reports.filter(item => item.report.status === 'playback_blocked')
+  expect(blocked).toHaveLength(1)
+  expect(blocked[0].report.detail).toBe('NotAllowedError')
+  let unlocks = 0
+  room.startAudio = async () => {
+    unlocks++
+    if (unlocks === 1) throw new DOMException('Still refused', 'NotAllowedError')
+  }
+  // The browser refuses the element too until a gesture it accepts.
+  track.element!.play = async () => {
+    throw new DOMException('Still refused', 'NotAllowedError')
+  }
+  await act(async () => {
+    enableSound()!.click()
+  })
+  expect(unlocks).toBe(1)
+  expect(enableSound()).toBeDefined()
+  expect(container.textContent).toContain('Still refused')
+  expect(statuses()).not.toContain('sound_enabled')
+  Reflect.deleteProperty(track.element!, 'play')
+  await act(async () => {
+    enableSound()!.click()
+  })
+  expect(unlocks).toBe(2)
+  expect(track.element?.paused).toBe(false) // the click also played the attached element directly
+  expect(enableSound()).toBeUndefined()
+  expect(statuses().filter(status => status === 'sound_enabled')).toHaveLength(1)
+  expect(statuses().filter(status => status === 'playback_blocked')).toHaveLength(1)
+})
+
+test('a new final assistant turn without playback shows an alert and reports turn_unplayed once', async () => {
+  const spoken = (turn_id: string) => ({
+    turn_id,
+    role: 'assistant' as const,
+    text: `Said ${turn_id}`,
+    is_final: true,
+    delivery: 'unknown',
+    created_at: '2026-01-01T00:00:00Z',
+  })
+  let observed: RealtimeVoiceSession = { ...session, transcript: [spoken('before-call')] }
+  api.realtimeVoiceSessions = async () => [observed]
+  api.realtimeVoiceSession = async () => observed
+  const room = await connectCall()
+  const track = assistantTrack()
+  await act(async () => {
+    room.emit(RoomEvent.TrackSubscribed, track)
+  })
+  expect(container.querySelector('[role="alert"]')).toBeNull() // earlier turns were not spoken to this connection
+  observed = { ...session, transcript: [spoken('before-call'), spoken('during-call')] }
+  await pause(850)
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+    'The assistant spoke, but this browser has not started playing its audio. Tap Enable sound.',
+  )
+  observed = { ...session, transcript: [spoken('before-call'), spoken('during-call'), spoken('again')] }
+  await pause(850)
+  expect(statuses().filter(status => status === 'turn_unplayed')).toHaveLength(1)
+  expect(reports.every(item => item.sessionId === 'voice-1')).toBe(true)
+  await act(async () => {
+    track.element!.dispatchEvent(new window.Event('playing'))
+  })
+  expect(container.querySelector('[role="alert"]')).toBeNull()
+})
+
+test('rising inbound audio energy is reported once and explains volume when playback is confirmed', async () => {
+  const room = await connectCall()
+  const energies = [0, 0.4, 0.9]
+  let samples = 0
+  const track = Object.assign(Object.create(RemoteAudioTrack.prototype) as RemoteAudioTrack, assistantTrack(), {
+    _mediaStreamTrack: { enabled: true }, // read by LiveKit's event logging
+    getReceiverStats: async () => ({ type: 'audio', totalAudioEnergy: energies[Math.min(samples++, 2)] }),
+  })
+  await act(async () => {
+    room.emit(RoomEvent.TrackSubscribed, track)
+    track.element!.dispatchEvent(new window.Event('playing'))
+  })
+  expect(container.textContent).toContain('Assistant audio arriving: no')
+  await pause(2300)
+  expect(container.textContent).toContain('Assistant audio arriving: yes')
+  expect(container.textContent).toContain('Android uses the call volume')
+  const sampled = samples
+  await pause(1100)
+  expect(samples).toBe(sampled) // polling stops once arrival is known
+  expect(statuses().filter(status => status === 'audio_arriving')).toHaveLength(1)
 })
