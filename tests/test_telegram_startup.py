@@ -123,3 +123,55 @@ async def test_cancellation_during_backoff(monkeypatch):
     with pytest.raises(asyncio.CancelledError):
         await asyncio.wait_for(task, 1)
     plugin.poll_once.assert_not_awaited()
+
+
+def _retry_error(headers=None, body=None):
+    import io
+    import json
+
+    fp = io.BytesIO(json.dumps(body).encode()) if body is not None else None
+    return urllib.error.HTTPError(
+        "https://example.invalid/botSECRET/deleteWebhook",
+        429,
+        "SECRET",
+        headers or {},
+        fp,
+    )
+
+
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        (lambda: _retry_error({"Retry-After": "120"}), 120),
+        (lambda: _retry_error(body={"parameters": {"retry_after": 90}}), 90),
+        (lambda: _retry_error({"Retry-After": "99999"}), telegram.RETRY_AFTER_MAX),
+        (lambda: _retry_error({"Retry-After": "0"}), 1),
+    ],
+)
+async def test_429_honors_retry_after(monkeypatch, error, expected):
+    plugin = plugin_with(AsyncMock(side_effect=[error(), None]))
+    delays = []
+    monkeypatch.setattr(
+        telegram.asyncio, "sleep", AsyncMock(side_effect=lambda n: delays.append(n))
+    )
+    assert await plugin._delete_webhook_for_polling()
+    assert delays == [expected]
+
+
+async def test_unsupported_api_base_fails_permanently_once(monkeypatch, caplog):
+    api = telegram.TelegramAPI("SECRET", "invalid-scheme://example.invalid")
+    plugin = plugin_with(api.call)
+    sleep = AsyncMock()
+    monkeypatch.setattr(telegram.asyncio, "sleep", sleep)
+    await plugin.serve()
+    sleep.assert_not_awaited()
+    plugin.poll_once.assert_not_awaited()
+    assert caplog.text.count("failed permanently") == 1
+    assert "SECRET" not in caplog.text
+
+
+async def test_connection_error_reason_is_transient(monkeypatch):
+    err = urllib.error.URLError(ConnectionRefusedError())
+    plugin = plugin_with(AsyncMock(side_effect=[err, None]))
+    monkeypatch.setattr(telegram.asyncio, "sleep", AsyncMock())
+    assert await plugin._delete_webhook_for_polling()

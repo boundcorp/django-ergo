@@ -1938,7 +1938,9 @@ a public URL it long-polls.
 
 Polling first deletes any existing Telegram webhook. Transient network errors,
 HTTP 408, 429 and 5xx retry indefinitely with delays doubling from one second
-to a maximum of 60 seconds; polling starts only after deletion succeeds.
+to a maximum of 60 seconds (an HTTP 429 `retry_after` or `Retry-After` raises
+the wait to that value, capped at 300 seconds); polling starts only after
+deletion succeeds. An unsupported `api_base` is a permanent configuration error.
 Other failures, including authorization and configuration errors, disable
 this Telegram poller and are logged without exception details or token-bearing
 URLs; other plugins and bots continue. Correct the cause and restart the bot

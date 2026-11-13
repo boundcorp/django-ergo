@@ -65,6 +65,7 @@ import contextlib
 import contextvars
 import hashlib
 import hmac
+import http.client
 import json
 import logging
 import os
@@ -110,6 +111,7 @@ KEEP_HANDLED = timedelta(days=7)  # handled updates are deleted after this
 KEEP_SENT = 50  # messages a conversation remembers sending, for deletion
 MAX_ATTEMPTS = 3  # tries for an update the database kept failing
 WEBHOOK_RETRY_MAX = 60  # seconds; retries continue until cleanup succeeds
+RETRY_AFTER_MAX = 300  # seconds; cap on a server-requested wait
 MIGRATIONS_KEY = "telegram_chat_migrations"  # old group id -> its supergroup id
 _current_job: contextvars.ContextVar = contextvars.ContextVar(
     "telegram_update_job", default=None
@@ -126,6 +128,21 @@ def _refuse_protected(env) -> None:
     if env and is_protected_env(env):
         msg = f"{env} is reserved for private inference and can't be used by the Telegram plugin"
         raise PolicyError(msg)
+
+
+def _retry_after(error: urllib.error.HTTPError) -> int:
+    """Telegram's HTTP 429 minimum wait (header or body), capped; 0 if absent."""
+    value: Any = error.headers.get("Retry-After") if error.headers else None
+    if value is None:
+        try:
+            value = json.loads(error.read()).get("parameters", {}).get("retry_after")
+        except Exception:  # noqa: BLE001 — body is optional, never log it
+            value = None
+    try:
+        seconds = int(value)
+    except (TypeError, ValueError):
+        return 0
+    return max(0, min(seconds, RETRY_AFTER_MAX))
 
 
 class TelegramAPI:
@@ -1991,14 +2008,21 @@ class TelegramPlugin(BotPlugin):
         """Keep transient Telegram failures local to this channel."""
         delay = 1
         while True:
+            wait = delay
             try:
                 await self.api.call("deleteWebhook")
                 return True
             except urllib.error.HTTPError as error:
                 transient = error.code in (408, 429) or 500 <= error.code < 600  # noqa: PLR2004
+                if error.code == 429:  # noqa: PLR2004
+                    wait = max(wait, _retry_after(error))
             except urllib.error.URLError as error:
-                transient = not isinstance(error.reason, ssl.SSLCertVerificationError)
-            except (TimeoutError, ConnectionError):
+                # A string reason is a local configuration error (unsupported
+                # scheme, missing host); only OS-level failures are transient.
+                transient = isinstance(error.reason, OSError) and not isinstance(
+                    error.reason, ssl.SSLCertVerificationError
+                )
+            except (TimeoutError, ConnectionError, http.client.HTTPException):
                 transient = True
             except Exception:  # noqa: BLE001 — isolate permanent startup errors
                 transient = False
@@ -2012,9 +2036,9 @@ class TelegramPlugin(BotPlugin):
             logger.warning(
                 "Telegram deleteWebhook for %s failed; retrying in %s seconds",
                 self.bot.name,
-                delay,
+                wait,
             )
-            await asyncio.sleep(delay)
+            await asyncio.sleep(wait)
             delay = min(delay * 2, WEBHOOK_RETRY_MAX)
 
     async def serve(self) -> None:
