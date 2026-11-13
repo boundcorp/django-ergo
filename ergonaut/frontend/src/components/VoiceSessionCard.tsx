@@ -33,21 +33,34 @@ export function VoiceSessionCard({ session }: { session: RealtimeVoiceSession })
             <p key={event.event_id} className="mb-2 whitespace-pre-wrap">
               <strong>{event.kind === 'user' ? 'You' : event.kind === 'assistant' ? 'Assistant' : event.kind}:</strong>{' '}
               {event.text}
-              {event.kind === 'assistant' && (
-                <span className="text-muted">
-                  {' '}
-                  {event.delivery === 'interrupted'
-                    ? '(interrupted)'
-                    : event.delivery === 'delivered'
-                      ? '(playback confirmed; hearing not established)'
-                      : '(playback unconfirmed)'}
-                </span>
+              {event.kind === 'assistant' && event.delivery === 'interrupted' && (
+                <span className="text-muted"> (interrupted)</span>
+              )}
+              {event.kind === 'assistant' && event.delivery === 'delivered' && (
+                <span className="text-muted"> (playback confirmed; hearing not established)</span>
               )}
             </p>
           ))}
         </div>
       </details>
+      <details className="mt-3 text-muted">
+        <summary className="cursor-pointer">Diagnostics</summary>
+        <VoiceDeliverySummary
+          deliveries={session.events.filter(event => event.kind === 'assistant').map(event => event.delivery)}
+        />
+      </details>
     </section>
+  )
+}
+
+/** Delivery is per SDK segment, not proof of hearing or semantic response boundaries. */
+export function VoiceDeliverySummary({ deliveries }: { deliveries: string[] }) {
+  return (
+    <p className="mt-1">
+      Assistant delivery: {deliveries.length} turn fragments; playback unconfirmed{' '}
+      {deliveries.filter(delivery => delivery === 'unknown').length}, interrupted{' '}
+      {deliveries.filter(delivery => delivery === 'interrupted').length}; hearing is never established.
+    </p>
   )
 }
 
