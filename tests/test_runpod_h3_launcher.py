@@ -252,8 +252,12 @@ def test_frozen_partition_loads_with_nested_video_vae_weights(tmp_path, monkeypa
     monkeypatch.setattr(module.subprocess, "Popen", spawn)
     with pytest.raises(RuntimeError, match="SGLang stopped"):
         module.main()
-    assert accepted["generic_complete"] is False
+    # The generic completeness gate passes, so the local partition is never
+    # retried as a Hub repository id.
+    assert accepted["generic_complete"] is True
     assert accepted["config"] == layout["model_index"]
     assert accepted["model_path"] == tmp_path / "model/FL2VA"
-    assert (accepted["model_path"] / "video_vae/source/model.safetensors").is_file()
-    assert not (accepted["model_path"] / "video_vae/model.safetensors").exists()
+    vae = accepted["model_path"] / "video_vae"
+    # The link aliases the one shipped VAE file inside the partition, no copy.
+    assert (vae / "model.safetensors").resolve() == vae / "source/model.safetensors"
+    assert (vae / "source/model.safetensors").is_file()

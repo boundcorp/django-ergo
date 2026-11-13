@@ -26,8 +26,11 @@ relocate provider credentials into an image.
   container disk**, no optional/network volume. This is a capacity-oriented
   proposal, **not measured H3 image-conditioned fit or throughput**.
 - Image recipe: `examples/runpod-h3/Dockerfile`, including exact SGLang checkout,
-  Python 3.12, Rust 1.93.0, uv 0.13.8, `comfy-kitchen` 0.2.41,
-  HF client 1.28.0 and ffmpeg/ffprobe. The CUDA13 amd64 base is digest-pinned.
+  Python 3.12 with its development headers, Rust 1.93.0, uv 0.13.8,
+  `comfy-kitchen` 0.2.41, HF client 1.28.0 and ffmpeg/ffprobe. The CUDA13 amd64
+  base is digest-pinned. Triton JIT-compiles `cuda_utils.c` (`#include
+  <Python.h>`) on the first denoise step, so `python3.12-dev` is required; the
+  model loads without it and then every generation fails at step 0.
   Resolve the engine and HF client together: separately downgrading HF can leave
   an incompatible `datasets` installation. The recipe requires `uv pip check`
   before recording `/opt/h3-environment.txt`.
@@ -48,13 +51,35 @@ The local `.Id` is an image **configuration** digest, not a registry manifest
 digest. A provider pull requires a named registry manifest digest and a proven
 delivery route; a locally tagged image alone is not pullable.
 
-The preserved image is public at
-`ghcr.io/boundcorp/ergo-h3-runtime@sha256:7b08f5d6b56988afeab528c9524ded9052a6739df0899768294134afe1453f8b`.
-Its manifest config digest is
-`sha256:74ae80e663556a495683e8fdae6cec1981e4d48b5e237902dc4880f28b2c2f5c`.
-Its embedded launcher predates the partition-path fix below: use the native SSH
-entrypoint override, which delivers the corrected launcher at runtime. No image
-rebuild or retag is needed, and a published image is not GPU execution evidence.
+The current runtime image is public at
+`ghcr.io/boundcorp/ergo-h3-runtime@sha256:04b69208ac477452cf982b17e3e1eaacc2e84bf9cd824923f2c92fca472b51d9`
+(tag `2511743-73d9b0b6-pydev`, config
+`sha256:73d9b0b60d914c0f952343a553898356fe9c1c5b44d58d1cb7633170a9a174a8`).
+It is one thin layer, `examples/runpod-h3/Dockerfile.python-dev`, over the
+audited image
+`ghcr.io/boundcorp/ergo-h3-runtime@sha256:7b08f5d6b56988afeab528c9524ded9052a6739df0899768294134afe1453f8b`
+(config `sha256:74ae80e663556a495683e8fdae6cec1981e4d48b5e237902dc4880f28b2c2f5c`),
+adding `python3.12-dev`/`libpython3.12-dev` pinned to the installed interpreter
+version (apt also raised `zlib1g` to the `zlib1g-dev` version). Nothing else
+changes: rebuilding the full recipe instead re-resolves every dependency and
+needs a fresh audit.
+
+```sh
+CONTEXT=$(mktemp -d)
+cp examples/runpod-h3/Dockerfile.python-dev "$CONTEXT/Dockerfile"
+docker build --platform linux/amd64 -t ergo-h3-runtime:2511743-pydev "$CONTEXT"
+```
+
+Before pinning, prove in the built image, CPU-only and `--network none`, that
+`Python.h` exists at `sysconfig.get_paths()["include"]`, that a small C extension
+compiles and imports, and that Triton's own `CudaUtils()` build compiles and
+imports `cuda_utils` (with the toolkit's `lib64/stubs/libcuda.so` linked as
+`libcuda.so.1` on `LD_LIBRARY_PATH`). The audited image fails all three with
+`Python.h: No such file or directory`.
+
+Both images' embedded launchers predate the partition-path fix below: use the
+native SSH entrypoint override, which delivers the current launcher at runtime.
+A published image is not GPU execution evidence.
 
 Long source builds compile native Rust extensions; use an isolated bounded
 builder and preserve verbose logs/cache rather than repeatedly cancelling short
@@ -87,8 +112,8 @@ second rental, generation retry, or top-up.
 Download `MiniMaxAI/MiniMax-H3` at
 `42ed227ee7df40d41602854ae760620d6eb651fe` with the single HF filter
 `--include 'FL2VA/*' --local-dir /workspace/model`, then serve
-`--model-path /workspace/model/FL2VA --model-subfolder .`, **without**
-`--model-variant`. The partition's index already names `MiniMaxH3Pipeline` and
+`--model-path /workspace/model/FL2VA` **without** `--model-variant` or
+`--model-subfolder`. The partition's index already names `MiniMaxH3Pipeline` and
 declares `_minimax_h3.partition: "fl2va"`.
 
 The repo-root index uses three-element modular descriptors. Pinned SGLang's
@@ -106,26 +131,27 @@ Simply changing the path while retaining `--model-variant fl2va` is also wrong:
 and [the base loader appends it](https://github.com/sgl-project/sglang/blob/2511743bd784e69e5a81ca3d926a000711dae4ab/python/sglang/multimodal_gen/runtime/pipelines_core/composed_pipeline_base.py#L173-L206),
 yielding `FL2VA/FL2VA`.
 
-The explicit `--model-subfolder .` is also required at this pin. Without it,
-the base loader calls `maybe_download_model(..., force_diffusers_model=True)`.
-Its generic completeness check only globs weight files directly inside each
-component, but the real video VAE is
-`FL2VA/video_vae/source/model.safetensors`. A complete 81-file download is
-therefore misclassified as incomplete; the loader tries to download the absolute
-local path as a Hub repository ID and raises `HFValidationError`.
-The dot selects the already-local partition through the loader's supported
-explicit-subfolder branch, retaining normal index/component validation without
-moving weights, duplicating the 10.4GB VAE or adding a compatibility symlink.
-The H3-specific VAE selector already chooses `source/model.safetensors`.
+Between download and serve the launcher adds one relative link,
+`FL2VA/video_vae/model.safetensors -> source/model.safetensors`. The base loader
+calls `maybe_download_model(..., force_diffusers_model=True)`, whose generic
+completeness check only globs weight files directly inside each component. The
+real video VAE is `FL2VA/video_vae/source/model.safetensors`, so without the
+link a complete 81-file download is misclassified as incomplete; the loader
+then tries the absolute local path as a Hub repository ID and raises
+`HFValidationError` (native job `a8fce112`, durable `launcher-failure.json`).
+The link copies nothing, stays inside the partition and is created only when
+the nested file exists and no direct weight does. The H3 VAE selector
+(`select_vae_weight_files`) still loads only `source/model.safetensors`.
 
-The same nested-VAE issue was independently identified by the Serverless
-experiment, which used a root-level VAE symlink. The native launcher instead uses
-the existing explicit-subfolder API; the frozen model and runtime are unchanged.
-An offline smoke in the actual preserved image reproduced the old failure and
-resolved all six component directories plus the nested VAE weight path with the
-new arguments. The permanent CPU regression uses the pinned public 81-file
-layout and the pinned loader's local validation functions. These checks prove
-path/config resolution, **not tensor loading, GPU fit or successful generation**.
+The Serverless experiment found and fixed this with the same link; on a real
+A100-SXM4-80GB the frozen weights then loaded and SGLang reached READY in
+116.8s with these exact serve arguments. An alternative,
+`--model-subfolder .`, also bypasses the check offline, but it takes a different
+loader branch, sets `server_args.model_subfolder` (read again by H3 warmup) and
+has never reached READY on a GPU, so it is not used. The permanent CPU
+regression runs the launcher on the pinned public 81-file layout through the
+pinned loader's local validation functions; it proves path/config resolution,
+**not tensor loading, GPU fit or successful generation**.
 
 ## Repeatable image builds and different models
 

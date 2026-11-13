@@ -1,0 +1,12 @@
+# Thin, reviewable layer over the audited H3 runtime: adds CPython 3.12 headers.
+# Triton JIT-compiles cuda_utils.c (#include <Python.h>) on the first denoise
+# step; without python3.12-dev every generation fails at step 0. Only the
+# headers are added: python3.12 stays at the audited version and the existing
+# build-essential/gcc, SGLang checkout and venv are unchanged.
+ARG BASE=ghcr.io/boundcorp/ergo-h3-runtime@sha256:7b08f5d6b56988afeab528c9524ded9052a6739df0899768294134afe1453f8b
+FROM ${BASE}
+ARG PYTHON_VERSION=3.12.3-1ubuntu0.17
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.12-dev=${PYTHON_VERSION} libpython3.12-dev=${PYTHON_VERSION} && \
+    rm -rf /var/lib/apt/lists/* && \
+    test -f "$(python -c 'import sysconfig; print(sysconfig.get_paths()["include"])')/Python.h"
