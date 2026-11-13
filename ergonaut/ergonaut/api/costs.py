@@ -14,17 +14,16 @@ A call that ran for a chat without being one of its turns (a browser task's
 driver, a look at an attachment) has no session of its own but names the
 chat in ``metadata["session"]``; it counts for that chat and its bot.
 
-``private`` breaks API-billed private pool spend (``private_pools`` in
+``private`` breaks recorded private pool API spend (``private_pools`` in
 providers.yaml) down by pool, provider, exact model and bot, from the
-per-request ``InferenceRequest`` ledger. Those requests are already in the
-totals above (their calls are priced exactly); this is the billing view.
+per-request ``InferenceRequest`` ledger. It is not a reconciled invoice.
 """
 
 from __future__ import annotations
 
 import uuid
 from collections import defaultdict
-from datetime import timedelta
+from datetime import UTC, timedelta
 
 from django.db.models import CharField, Q
 from django.db.models.fields.json import KeyTextTransform
@@ -139,6 +138,10 @@ class AgentUsageRow(Schema):
     branch: str = ""
     cost: float = 0.0
     priced: bool = False
+    # Lifetime totals of this worker/model, selected because it was active in the window.
+    first_at: str | None = None
+    last_at: str | None = None
+    spillover: bool = False  # began before the window: tokens are not window-clipped
 
 
 class AgentProject(Schema):
@@ -208,6 +211,9 @@ class SessionUsageOut(Schema):
 
 class CostsOut(Schema):
     days: int
+    since: str = ""
+    until: str = ""
+    timezone: str = "UTC"
     total: Bucket
     by_kind: list[Bucket]
     chat_reply_by_bot: list[Bucket]
@@ -217,6 +223,7 @@ class CostsOut(Schema):
     agents: AgentsOut
     usage: UsageOut
     private: PrivateSpendOut
+    estimate: EstimateOut
 
 
 def _private_spend(requests) -> dict:
@@ -418,7 +425,9 @@ AGENT_PARTS = ("input", "cache_write", "cache_read", "output")
 
 
 def _agent_cost(usage: AgentUsage) -> float | None:
-    """What the agent's tokens would cost at the model's list price, or None if unpriced."""
+    """Estimate agent token cost, or None if token data or model price is missing."""
+    if not any(getattr(usage, f"{part}_tokens") for part in AGENT_PARTS):
+        return None
     price = price_for(usage.model)
     if price is None:
         return None
@@ -435,7 +444,7 @@ def _project_of(worker) -> dict:
     return project if isinstance(project, dict) else {}
 
 
-def _agents(rows: list[AgentUsage]) -> dict:
+def _agents(rows: list[AgentUsage], since=None) -> dict:
     output = []
     projects: dict[str, dict] = {}
     for usage in rows:
@@ -464,6 +473,9 @@ def _agents(rows: list[AgentUsage]) -> dict:
             "branch": str(project.get("branch") or ""),
             "cost": cost or 0.0,
             "priced": cost is not None,
+            "first_at": usage.first_at.isoformat() if usage.first_at else None,
+            "last_at": usage.last_at.isoformat() if usage.last_at else None,
+            "spillover": since is not None and (usage.first_at is None or usage.first_at < since),
         }
         row["cache_hit"] = _hit(row)
         output.append(row)
@@ -521,6 +533,165 @@ def _agents(rows: list[AgentUsage]) -> dict:
         },
         "rows": output,
         "by_project": by_project,
+    }
+
+
+class EstimateScope(Schema):
+    """Tokens and API list-price-equivalent cost for one population (bot calls, agent rows, both).
+
+    Costs cover priced rows only; ``unpriced_*`` say what they leave out. A list-price
+    estimate is not an invoice and not subscription quota use. ``cache_hit`` is
+    cache_read / (uncached input + cache writes + cache reads), output excluded; None when
+    that denominator is 0 (nothing recorded), which is not the same as a 0% hit rate."""
+
+    rows: int
+    input_tokens: int  # uncached input
+    cache_write_tokens: int
+    cache_read_tokens: int
+    output_tokens: int
+    tokens: int
+    cache_denominator: int
+    cache_hit: float | None
+    list_cost: float
+    input_cost: float
+    cache_write_cost: float
+    cache_read_cost: float
+    output_cost: float
+    priced_rows: int
+    unpriced_rows: int
+    priced_tokens: int
+    unpriced_tokens: int
+    unpriced_models: list[str]
+    no_usage_rows: int  # rows with no token data; usage and cost are unknown
+    exact_window: bool  # False: rows are lifetime totals selected by activity in the window
+    spillover_rows: int = 0  # lifetime rows that began before ``since``
+    spillover_tokens: int = 0
+    first_at: str | None = None
+    last_at: str | None = None
+
+
+class EstimateOut(Schema):
+    """List-price-equivalent view over the same window for bot calls and coding agents."""
+
+    basis: str
+    bot: EstimateScope
+    agents: EstimateScope
+    combined: EstimateScope
+
+
+def _list_parts(call: StructuredCall) -> dict[str, float] | None:
+    """Estimate aggregated tokens using model-table rates, never recorded cost provenance."""
+    if call.kind == "voice_transcription":
+        return None  # Its pricing is not token-based.
+    price = price_for(call.model_name)
+    if price is None:
+        return None
+    return price.parts(
+        call.input_tokens,
+        call.output_tokens,
+        call.cache_creation_input_tokens,
+        call.cache_read_input_tokens,
+        one_request=False,
+    )
+
+
+def _scope() -> dict:
+    return {
+        "rows": 0,
+        "tokens": 0,
+        "list_cost": 0.0,
+        "priced_rows": 0,
+        "unpriced_rows": 0,
+        "priced_tokens": 0,
+        "unpriced_tokens": 0,
+        "unpriced_models": set(),
+        "no_usage_rows": 0,
+        "spillover_rows": 0,
+        "spillover_tokens": 0,
+        "first_at": None,
+        "last_at": None,
+        **{f"{part}_tokens": 0 for part in AGENT_PARTS},
+        **{f"{part}_cost": 0.0 for part in AGENT_PARTS},
+    }
+
+
+def _scope_add(scope: dict, counts: dict[str, int], parts: dict[str, float] | None, model: str) -> None:
+    tokens = sum(counts.values())
+    scope["rows"] += 1
+    scope["tokens"] += tokens
+    for part in AGENT_PARTS:
+        scope[f"{part}_tokens"] += counts[part]
+    if not tokens:
+        scope["no_usage_rows"] += 1
+        return
+    if parts is None:
+        scope["unpriced_rows"] += 1
+        scope["unpriced_tokens"] += tokens
+        scope["unpriced_models"].add(model or "(unknown)")
+        return
+    scope["priced_rows"] += 1
+    scope["priced_tokens"] += tokens
+    for part in AGENT_PARTS:
+        scope[f"{part}_cost"] += parts.get(part, 0.0)
+    scope["list_cost"] += sum(parts.values())
+
+
+def _scope_stamp(scope: dict, first, last) -> None:
+    for key, at, better in (("first_at", first, min), ("last_at", last, max)):
+        if at is not None:
+            scope[key] = at if scope[key] is None else better(scope[key], at)
+
+
+def _scope_out(scope: dict, exact_window: bool) -> dict:
+    denominator = scope["input_tokens"] + scope["cache_write_tokens"] + scope["cache_read_tokens"]
+    return {
+        **scope,
+        "cache_denominator": denominator,
+        "cache_hit": scope["cache_read_tokens"] / denominator if denominator else None,
+        "unpriced_models": sorted(scope["unpriced_models"]),
+        "exact_window": exact_window,
+        "first_at": scope["first_at"].isoformat() if scope["first_at"] else None,
+        "last_at": scope["last_at"].isoformat() if scope["last_at"] else None,
+    }
+
+
+def _merge_scopes(*scopes: dict) -> dict:
+    merged = _scope()
+    for scope in scopes:
+        for key, value in scope.items():
+            if key == "unpriced_models":
+                merged[key] |= value
+            elif key in ("first_at", "last_at"):
+                _scope_stamp(merged, value if key == "first_at" else None, value if key == "last_at" else None)
+            else:
+                merged[key] += value
+    return merged
+
+
+def _estimate(calls: list[StructuredCall], usages: list[AgentUsage], since) -> dict:
+    bot = _scope()
+    for call in calls:
+        counts = {part: getattr(call, field) or 0 for part, field, _ in PARTS}
+        _scope_add(bot, counts, _list_parts(call), call.model_name)
+        _scope_stamp(bot, call.created_at, call.created_at)
+    agents = _scope()
+    for usage in usages:
+        counts = {part: getattr(usage, f"{part}_tokens") or 0 for part in AGENT_PARTS}
+        price = price_for(usage.model)
+        parts = (
+            None if price is None else {part: counts[part] * getattr(price, part) / 1_000_000 for part in AGENT_PARTS}
+        )
+        _scope_add(agents, counts, parts, usage.model)
+        _scope_stamp(agents, usage.first_at, usage.last_at)
+        if usage.first_at is None or usage.first_at < since:
+            agents["spillover_rows"] += 1
+            agents["spillover_tokens"] += sum(counts.values())
+    combined = _merge_scopes(bot, agents)
+    return {
+        "basis": "Model-table token estimate; aggregated totals omit per-request surcharges, billed amounts unknown",
+        "bot": _scope_out(bot, True),
+        "agents": _scope_out(agents, False),
+        "combined": _scope_out(combined, agents["rows"] == 0),
     }
 
 
@@ -596,22 +767,25 @@ def session_usage(request, session_id: str, hours: int = 6):
 @router.get("/costs", response=CostsOut)
 def costs(request, days: int = 30, bot: str = ""):
     days = max(1, min(days, 366))
-    since = timezone.now() - timedelta(days=days)
-    calls = _for_chat(StructuredCall.objects.filter(created_at__gte=since).select_related("session"))
+    until = timezone.now().astimezone(UTC)
+    # Calendar-aligned UTC window: `days` UTC dates ending with today's partial day, so the
+    # day series and the totals cover exactly the same instants.
+    since = (until - timedelta(days=days - 1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    calls = _for_chat(
+        StructuredCall.objects.filter(created_at__gte=since, created_at__lte=until).select_related("session")
+    )
     if not request.auth.is_superuser:
         calls = calls.filter(user=request.auth)
     if bot:
         calls = _of_chats(calls, ConversationSession.objects.filter(bot_name=bot))
     calls = list(calls.order_by("created_at"))
     chats = _chat_of(calls)
-    agent_rows = AgentUsage.objects.filter(last_at__gte=since, last_at__lte=timezone.now()).select_related(
-        "worker", "session"
-    )
+    agent_rows = AgentUsage.objects.filter(last_at__gte=since, last_at__lte=until).select_related("worker", "session")
     if not request.auth.is_superuser:
         agent_rows = agent_rows.filter(session__user=request.auth)
     if bot:
         agent_rows = agent_rows.filter(bot_name=bot)
-    private = InferenceRequest.objects.filter(created_at__gte=since)
+    private = InferenceRequest.objects.filter(created_at__gte=since, created_at__lte=until)
     if not request.auth.is_superuser:
         private = private.filter(user=request.auth)
     if bot:
@@ -641,24 +815,29 @@ def costs(request, days: int = 30, bot: str = ""):
         if call.kind == CHAT_REPLY_KIND:
             chat_bot = (call.session.bot_name if call.session else "") or "(no bot)"
             _add(by_bot.setdefault(chat_bot, _empty(chat_bot)), call, parts)
-        day = by_day[timezone.localtime(call.created_at).date().isoformat()]
+        day = by_day[call.created_at.astimezone(UTC).date().isoformat()]
         day["calls"] += 1
         day["cost"] += cost or 0.0
 
-    today = timezone.localdate()
+    first_day = since.date()
     series = [
         {"date": d, **by_day.get(d, {"cost": 0.0, "calls": 0})}
-        for d in ((today - timedelta(days=n)).isoformat() for n in range(days - 1, -1, -1))
+        for d in ((first_day + timedelta(days=n)).isoformat() for n in range(days))
     ]
+    agent_list = list(agent_rows)
     return {
         "days": days,
+        "since": since.isoformat(),
+        "until": until.isoformat(),
+        "timezone": "UTC",
         "total": total,
         "by_kind": _sorted(by_kind),
         "chat_reply_by_bot": _sorted(by_bot),
         "by_model": _sorted(by_model),
         "by_day": series,
         "unpriced_models": sorted(unpriced),
-        "agents": _agents(list(agent_rows)),
+        "agents": _agents(agent_list, since),
         "usage": _usage(total, by_session, main_tokens, subscription_tokens, compaction_tokens),
         "private": _private_spend(private.order_by("created_at")),
+        "estimate": _estimate(calls, agent_list, since),
     }

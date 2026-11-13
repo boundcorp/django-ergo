@@ -297,8 +297,41 @@ export type CostBucket = {
 export type UsageHour = { start: string; thread_tokens: number; agent_tokens: number }
 export type SessionUsage = { until: string; hours: UsageHour[]; thread_tokens: number; agent_tokens: number }
 
+// List-price-equivalent view of one population; not an invoice and not subscription quota.
+export type EstimateScope = {
+  rows: number
+  input_tokens: number // uncached input
+  cache_write_tokens: number
+  cache_read_tokens: number
+  output_tokens: number
+  tokens: number
+  cache_denominator: number // uncached input + cache writes + cache reads (output excluded)
+  cache_hit: number | null // null: denominator 0, nothing recorded
+  list_cost: number // priced rows only
+  input_cost: number
+  cache_write_cost: number
+  cache_read_cost: number
+  output_cost: number
+  priced_rows: number
+  unpriced_rows: number
+  priced_tokens: number
+  unpriced_tokens: number
+  unpriced_models: string[]
+  no_usage_rows: number
+  exact_window: boolean // false: lifetime totals selected by activity in the window
+  spillover_rows: number
+  spillover_tokens: number
+  first_at: string | null
+  last_at: string | null
+}
+export type CostsEstimate = { basis: string; bot: EstimateScope; agents: EstimateScope; combined: EstimateScope }
+
 export type Costs = {
   days: number
+  since?: string // explicit UTC window [since, until]
+  until?: string
+  timezone?: string
+  estimate?: CostsEstimate
   total: CostBucket
   by_kind: CostBucket[]
   chat_reply_by_bot: CostBucket[]
@@ -393,6 +426,10 @@ export type AgentUsage = {
   branch: string
   cost: number // API-equivalent list price
   priced: boolean
+  // Lifetime totals of this worker/model, selected because it was active in the window.
+  first_at?: string | null
+  last_at?: string | null
+  spillover?: boolean // began before the window: tokens are not clipped to it
 }
 
 export type BotDetail = Bot & {

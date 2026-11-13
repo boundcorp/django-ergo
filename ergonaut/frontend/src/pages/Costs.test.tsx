@@ -2,8 +2,8 @@ import { describe, expect, test } from 'bun:test'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router-dom'
-import type { AgentUsage, CostBucket, Costs } from '../api'
-import { CostsBody, Summary, itemsFor, projectItems } from './Costs'
+import type { AgentUsage, CostBucket, Costs, EstimateScope } from '../api'
+import { CostsBody, Estimate, Summary, itemsFor, projectItems } from './Costs'
 
 const bucket = (name: string, calls = 1): CostBucket => ({
   name,
@@ -132,5 +132,104 @@ describe('Costs breakdown', () => {
     expect(html).toContain('2 projects')
     expect(html).toContain('holyword')
     expect(html).toContain('aria-selected="true"')
+  })
+})
+
+const scope = (over: Partial<EstimateScope> = {}): EstimateScope => ({
+  rows: 2,
+  input_tokens: 100,
+  cache_write_tokens: 100,
+  cache_read_tokens: 800,
+  output_tokens: 5000,
+  tokens: 6000,
+  cache_denominator: 1000,
+  cache_hit: 0.8,
+  list_cost: 3,
+  input_cost: 1,
+  cache_write_cost: 0.5,
+  cache_read_cost: 0.5,
+  output_cost: 1,
+  priced_rows: 2,
+  unpriced_rows: 0,
+  priced_tokens: 6000,
+  unpriced_tokens: 0,
+  unpriced_models: [],
+  no_usage_rows: 0,
+  exact_window: true,
+  spillover_rows: 0,
+  spillover_tokens: 0,
+  first_at: null,
+  last_at: null,
+  ...over,
+})
+
+const withEstimate = (bot: EstimateScope, agents: EstimateScope, combined: EstimateScope): Costs => ({
+  ...data,
+  since: '2026-11-07T00:00:00+00:00',
+  until: '2026-11-13T12:00:00+00:00',
+  estimate: { basis: 'x', bot, agents, combined },
+})
+const render = (d: Costs) => renderToStaticMarkup(createElement(Estimate, { data: d }))
+
+describe('List-price estimate', () => {
+  test('shows uncached input, the cache denominator with output excluded, and each part cost', () => {
+    const html = render(withEstimate(scope(), scope(), scope()))
+    expect(html).toContain('100 uncached in')
+    expect(html).toContain('80% cache hit (800 reads / 1k = uncached input + writes + reads; output excluded)')
+    expect(html).toContain('out $1.00')
+    expect(html).toContain('not a verified bill')
+    expect(html).toContain('unknown without reconciliation')
+    expect(html).toContain('per-request long-context rates')
+    expect(html).toContain('2026-11-07T00:00:00+00:00 to 2026-11-13T12:00:00+00:00 (UTC)')
+  })
+
+  test('unpriced rows are unknown or a lower bound, never silently zero', () => {
+    const unknown = scope({
+      priced_rows: 0,
+      unpriced_rows: 2,
+      list_cost: 0,
+      unpriced_tokens: 6000,
+      unpriced_models: ['gpt-6.1-sol'],
+    })
+    const partial = scope({ unpriced_rows: 1, unpriced_tokens: 10, unpriced_models: ['mystery'] })
+    const html = render(withEstimate(unknown, partial, partial))
+    expect(html).toContain('Unknown')
+    expect(html).toContain('6k tokens not costed: gpt-6.1-sol')
+    expect(html).toContain('$3.00+')
+  })
+
+  test('missing usage and a zero denominator are reported, not shown as 0%', () => {
+    const empty = scope({
+      cache_hit: null,
+      cache_denominator: 0,
+      input_tokens: 0,
+      cache_write_tokens: 0,
+      cache_read_tokens: 0,
+      no_usage_rows: 2,
+    })
+    const html = render(withEstimate(empty, empty, empty))
+    expect(html).toContain('no cache denominator recorded')
+    expect(html).toContain('2 rows have no token data; usage and cost unknown')
+    expect(html).not.toContain('0% cache hit')
+  })
+
+  test('missing token data cannot produce a known zero estimate', () => {
+    const missing = scope({ priced_rows: 0, unpriced_rows: 0, no_usage_rows: 1, list_cost: 0 })
+    const html = render(withEstimate(missing, missing, missing))
+    expect(html.match(/Unknown/g)?.length).toBe(3)
+  })
+
+  test('agent lifetime spillover is labelled, bot window is exact', () => {
+    const lifetime = scope({
+      exact_window: false,
+      spillover_rows: 1,
+      spillover_tokens: 4000,
+      first_at: '2026-10-01T00:00:00+00:00',
+      last_at: '2026-11-13T00:00:00+00:00',
+    })
+    const html = render(withEstimate(scope(), lifetime, lifetime))
+    expect(html).toContain('Lifetime totals of rows active in the window, 2026-10-01 to 2026-11-13')
+    expect(html).toContain('1 began earlier (4k tokens)')
+    expect(html.match(/Lifetime totals/g)?.length).toBe(2)
   })
 })

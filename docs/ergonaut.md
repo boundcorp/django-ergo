@@ -478,7 +478,8 @@ unscoped devbox drafts are not migrated because their owner is unknown.
   and Discard.
 - **Memory**: the bot's knowledge base articles, rendered as Markdown.
 - **Sessions**: every session, searchable, including threads.
-- **Costs**: usage for the last 7, 30, or 90 days, optionally filtered by bot.
+- **Costs**: usage for the last 7, 30, or 90 UTC calendar dates, including
+  today so far, optionally filtered by bot.
   One row of headline figures: estimated bot spend and calls, bot tokens and
   cache hit rate, the share of bot tokens on a subscription, agent workers
   with their project and token counts, and what the agents' tokens would cost
@@ -859,6 +860,25 @@ to a public model.
   unknown rather than 0) and `unsettled_reserved` (worst-case reservations
   still held for those). It's a billing view: those calls are already in
   the totals. Admins see everyone's; others see their own.
+- `GET /api/costs` also returns `since`/`until`/`timezone` (one explicit UTC
+  window, frozen per request: `days` UTC dates ending with today's partial
+  day, so `by_day` sums to the totals) and an `estimate` block: model-table
+  token estimates for `bot` calls (including subscription CLI calls), `agents`
+  and `combined`. Aggregated tokens cannot recover per-request long-context
+  surcharges, so these estimates are not exact equivalents. `total.cost`
+  uses recorded or estimated API spend and excludes subscription costs; it is
+  not a verified bill. Actual billed amounts are unknown without reconciliation.
+  Neither view is an invoice or subscription quota. Each scope gives uncached
+  input, writes, reads, output, the `cache_denominator` (uncached input +
+  writes + reads, output excluded) with `cache_hit` null when it is 0,
+  per-part costs, and priced vs `unpriced_*` rows, tokens and models. Costs
+  cover priced rows only. `no_usage_rows` counts rows with no token data;
+  their usage and cost are unknown, not confirmed zero.
+  Agent rows are lifetime totals of workers active in the window, not
+  clipped: `exact_window` is false, rows carry `first_at`/`last_at`/`spillover`,
+  and the scope reports `spillover_rows`/`spillover_tokens`. The page's
+  estimate cards show all of this. A high cache hit rate is not a matching
+  saving: writes and output are priced separately.
 
 The web app's model picker and Costs page don't show `private_models` or
 the `private` block yet.
