@@ -867,6 +867,15 @@ def test_worker_whose_poll_is_queued_is_not_lost(setup):
     assert Experiment(job.ledger_path).status()["stop_reason"] is None
     assert not job.cleanup_complete
     assert setup.provider.deletes == []
+    # A long current step also counts, even with an old update and no poll due.
+    Worker.objects.filter(pk=job.worker_id).update(
+        updated_at=now - timezone.timedelta(seconds=native.OWNER_STALE_SECONDS + 100),
+        step_started_at=now - timezone.timedelta(seconds=100),
+        next_poll_at=None,
+    )
+    native.reconcile_once()
+    assert Experiment(job.ledger_path).status()["stop_reason"] is None
+    assert setup.provider.deletes == []
 
 
 def test_cancel_during_readiness_suppresses_late_question(setup, monkeypatch):
