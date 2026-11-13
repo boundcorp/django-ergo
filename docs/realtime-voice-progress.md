@@ -1,6 +1,133 @@
 # Realtime voice progress
 
+## Continuation — newest live session and UX, 2026-11-12
+
+**Current activation, verified 23:38:39 UTC:** all old queue consumers were gone
+at 23:28:46. The fresh policy-specific notice was acknowledged, with a quiet
+window not before 23:34; final 23:34:36 checks found source/image/scope unchanged,
+all desired roles ready, no active voice session and policy absent.
+Infra-octo #170 merged **23:34:50**, commit
+`eff442d9d3d0568c43b9dcdc026e2c1685af1641`, from reviewed head `7c69a9a`.
+Flux `home-kubernetes` / `cluster-apps-ergonaut` applied that commit; only
+web and voice-bridge were gracefully reloaded at **23:36:58**.
+Both web replicas and the actual isolated bridge runtime now load the exact
+reviewed policy on unchanged source `6b33f825` / image `ffa206f6`.
+All four queue-role pod UIDs were unchanged; no old-policy web/bridge pod remained.
+
+READ ONLY, hard-failing engine/send/Celery guards verified the exact loaded scope
+in all three replacement service pods: an unsaved new session received the
+one-request grant, the retained ungranted call was not upgraded, and other
+owner/thread/bot identities were denied. **Zero new persisted voice sessions**
+or owner tasks were created. Public health/root/exact voice page returned 200;
+bridge registration/readiness was 200; checked new-web startup logs contained
+no HTTP 500–504 lines. This is configuration/handler proof without paid inference,
+not hosted orchestration or physical Android/Bluetooth acceptance.
+The UX changes in [PR #299](https://github.com/boundcorp/django-ergo/pull/299)
+are a separate source release; policy activation did not deploy that frontend.
+The earlier held-state and source-preparation snapshots below are historical.
+
+The newest actual owner-bound call was created **22:46:28 UTC** and ended
+**22:47:41**, on the exact approved Boundcorp launch thread. It ran after source
+PR #297 (`6b33f825` / `ffa206f6`) was deployed through infra-octo #171, but
+the normal-execution policy was still **absent**. Its durable mode was
+`read_only`, with delegation unavailable because the existing CLI engine cannot
+enforce the experimental API request limits; it had no normal-thread grant.
+The older 20:34 call below is historical, not the latest-session diagnosis.
+
+Sanitized failure chain: client protocol signal at **22:47:06.804 UTC**,
+bridge receipt at **06.806**, acoustic/transcript boundary at **08.397**,
+callback `ValueError` at **08.418**, and generic durable status at **08.423**.
+There were **zero durable delegations/messages**, so no native orchestration
+handler ran. Production logs retain only the exception type; **[INFERENCE]**
+the underlying rejection was the admission engine-limit validation. The
+identical missing-grant/unsupported-engine configuration reproduced that exact
+validation before any message, including the actual callback's generic status.
+Outer Kubernetes timestamps use `+01:00`; embedded UTC and database times
+agree. This is timezone formatting, not an established clock fault.
+
+The deployed bridge source supplies bounded owning-bot instructions, exact
+launch-thread context/history and restrictions. GPT-Live has no callable voice
+tools: it emits the client signal, and native tools execute only in the
+delegated normal thread. The complete historical rendered provider prompt was
+not retained, so full prompt delivery is not independently proven. Raw
+transcripts/logs are protected outside the repository; only this sanitized
+chain is published.
+
+The deployed audio button calls `Room.startAudio()` only: installed LiveKit
+2.23.0 resumes its playback AudioContext and calls `play()` on attached remote
+HTML audio elements. It does **not** join a room or enable capture.
+**Start call** separately connects the room and enables the microphone.
+The UX continuation names the playback action **Enable sound**, shows it only
+when the SDK reports blocked playback, and tracks SDK playback-status events.
+
+Offline proof used actual native owned-thread/worker reads plus disposable
+PostgreSQL, isolated Redis and non-eager Celery: owner isolation, zero child
+sends before normal approval, stale/replayed approval 409, one authorized
+native send, correlated child/reply and results after End all passed with
+scripted model transport. No provider, room, microphone or real-owner task ran.
+The actual installed browser `Room.startAudio()` also played a synthetic silent
+HTML stream and reported playback allowed while its room stayed disconnected.
+One scoped live native `ergo_thread_list` check also succeeded for only the
+exact launch UUID (limit one), inside a PostgreSQL **READ ONLY** transaction.
+Engine construction and native message/Celery dispatch were hard-failing
+guards, not mocked successful results. This established the actual read
+handler's accessibility without inference, task dispatch or production writes;
+it did not test hosted voice end-to-end.
+
+Current public frontend asset `/assets/index-Dn5F36IK.js` had SHA256
+`51c934ad586fdb20944bef33f21c248544452d26cde7955266607d738d981d07`;
+web and bridge both reported source `6b33f825`, with policy absent.
+This current served-bundle observation does not prove the handset's actual
+loaded bundle or browser/version during the retained call.
+
+Desktop/mobile thread options now share purpose groups: Conversation (voice,
+files), Model & reasoning, Thread data (export), and Thread lifecycle (resolve).
+Rename, metadata, pins, model/effort, files, export and resolve remain available;
+resolve is separated with a danger label and explicit queued/running-worker
+cancellation warning. A new message reopens the thread, not cancelled work.
+The voice conversation/observed states and essential controls remain upfront.
+IDs, transport/provider/playback details, route configuration, runtime events
+and local snapshots live under **Diagnostics**. Unavailable tools, callback
+status, failed background work and normal approval links remain visible.
+
+Full actual App/Chat/VoicePage offline-fixture screenshots, before/after at
+390×844 and 1280×900, are retained in
+`artifacts/voice-ux-20261112/` inside the worktree. Browser checks exercised
+drawer focus/Escape, mobile modal focus containment, files/export/resolve,
+navigation without capture, playback-only unlock, stable partial/final DOM and
+manual-scroll preservation. Expanded mobile diagnostics left a 201 px transcript,
+44 px controls, footer bottom 840 within an 844 px viewport, and no horizontal
+overflow. These are offline browser observations, not physical Android or
+Bluetooth acceptance; that output route remains **unknown**.
+
+Final frontend verification: **287 passed**, TypeScript/Vite production build
+passed. Existing React `act` and Vite chunk-size warnings remain. Obsolete
+copy-only assertions were removed rather than pinning the new disclosure text;
+navigation/capture-isolation, partial/final and routing behavior tests remain.
+Temporary fixture/snapshot files were removed, the tab released and Vite stopped.
+
+At the earlier **23:00 UTC** snapshot, policy #170 remained held for consumer exit.
+At **23:00 UTC**, both `40d09a01` queue pods were gone; the two `3962d452`
+queue pods still had live Celery processes and self-matching preStop processes.
+Desired-ready replicas and an empty reserved queue cannot establish drain.
+Source-release notice is not policy-activation notice: a fresh heads-up and
+quiet window are required before a later web/bridge-only reload.
+
+Policy review found that GitHub's old merge preview still used the pre-171
+base and would reverse image pins if treated as a resulting tree. The held
+draft branch was updated from current main, without activation. Refreshed head
+`7c69a9a55402f63a881547ee278ed81f8d660174`, merge preview
+`b0d9a4e850c38d50809715c0ae2bccd4eddadd40`, incorporates actual infra main
+`1caa104293533c08a1978746a1fb1068406cb37a`; its complete resulting-tree delta
+is only the five-line exact authorization addition, with no deployment/image
+delta. Independent review approved these exact objects; Kustomize rendered
+successfully with the unchanged `ffa206f6` application pins and exact JSON scope.
+No stale policy checkout was applied wholesale. The reviewed refreshed policy
+was activated only after the fresh drain/readiness/scope/quiet-window gates above.
+
 ## Hosted phone acceptance and follow-ups — 2026-11-12
+
+Historical pre-activation preparation; current deployment/activation is recorded above.
 
 Lee accepted **basic phone audio and conversation**, not Android Bluetooth/output routing or orchestrator capabilities. PR #293 first shipped as `06284d4` / image `5c0ba2e4` through infra-octo #167 at 20:13:34 UTC, with web ready at 20:23:13. A later unrelated auto-upgrade, infra-octo #168 at 21:02:40, moved all six current roles to **`09e5a6a` / `40d09a01`**, inheriting #293. Lee's dedicated-page observation is valid; previous “not deployed” statements described an older snapshot. See [time-separated evidence](realtime-voice-causal-review.md#current-release-reconciliation--2026-11-12).
 

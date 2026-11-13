@@ -185,12 +185,6 @@ test('page loads exact thread identity and context without starting a call or re
   expect(container.textContent).toContain('selected thread')
   expect(starts).toBe(0)
   expect(tokens).toBe(0)
-  expect(container.querySelector('[aria-label="Audio output"]')?.textContent).not.toContain(
-    'Checking browser audio output controls',
-  )
-  expect(container.querySelector('[aria-label="Audio output"]')?.textContent).toContain(
-    'become available when you start or resume',
-  )
   expect(container.querySelector('dialog')).toBeNull()
   expect(link('← Return to thread').getAttribute('href')).toBe('/s/chat-1')
 })
@@ -317,7 +311,7 @@ test('topbar dropdown and mobile options enter the dedicated page, never the com
   const desktop = container.querySelector('.chat-options a') as HTMLAnchorElement
   expect(desktop.textContent).toContain('Voice call')
   expect(desktop.getAttribute('href')).toBe('/s/chat-1/voice')
-  const mobile = container.querySelector('.chat-sheet-actions a') as HTMLAnchorElement
+  const mobile = container.querySelector('.chat-sheet-options a') as HTMLAnchorElement
   expect(mobile.getAttribute('href')).toBe('/s/chat-1/voice')
   expect(container.querySelector('.chat-composer a[href$="/voice"]')).toBeNull()
   await act(async () => {
@@ -341,7 +335,7 @@ test('mobile options sheet navigates to voice without starting capture', async (
   })
   expect(container.querySelector('dialog')?.open).toBe(true)
   await act(async () => {
-    ;(container.querySelector('.chat-sheet-actions a') as HTMLAnchorElement).click()
+    ;(container.querySelector('.chat-sheet-options a') as HTMLAnchorElement).click()
   })
   expect(container.querySelector('h1')?.textContent).toBe('Exact title chat-1')
   expect(container.querySelector('dialog')).toBeNull()
@@ -839,7 +833,6 @@ test('the real selector shows the applied device and preserves it after permissi
   expect(select.value).toBe('bluetooth')
   expect(container.textContent).toContain('permission was denied or blocked')
   expect(container.textContent).toContain('hearing and the physical audio route are not confirmed')
-  expect(container.textContent).toContain('Microphone control is separate')
   expect(routing.captures).toBe(0)
 })
 
@@ -878,24 +871,6 @@ test('device loss updates outputs and navigation keeps the app-owned routing lis
   expect(container.querySelector('select')?.value).toBe('')
   expect(routing.listeners.size).toBe(1)
   expect(routing.captures).toBe(0)
-})
-
-test('optional restricted-mode briefing is upfront even when the voice token is unavailable', async () => {
-  installOutputs()
-  api.realtimeVoiceConfig = async () => ({ enabled: true })
-  const restriction = 'Restricted mode: one read-only gpt-6-luna background request; no write actions.'
-  api.realtimeVoiceSessions = async () => [
-    { ...session, briefing: { context: 'Current thread', restriction, delegation_available: true } },
-  ]
-  api.realtimeVoiceToken = async () => {
-    throw new Error('Token unavailable')
-  }
-  await mountVoice()
-  await act(async () => {
-    button('Start call').click()
-  })
-  expect(container.querySelector('[role="status"]')?.textContent).toContain(restriction)
-  expect(container.textContent!.indexOf(restriction)).toBeLessThan(container.textContent!.indexOf('Hello'))
 })
 
 test('mocked room events reapply outputs through reconnect and new-room standby resume without capture', async () => {

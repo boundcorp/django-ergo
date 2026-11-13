@@ -2,7 +2,7 @@
 
 This is an **off-by-default prototype**, separate from composer dictation, enabled on Octo for one allowlisted account only (see "Hosted deployment"). Wake-word and a general Stage are out of scope. Django holds session state, finalized text and task references; LiveKit carries audio, not durable memory. No audio recordings are stored by this code.
 
-**Acceptance, 2026-11-12:** Lee accepted phone audio/basic conversation, not Android Bluetooth or orchestration. PR #293 first shipped as `06284d4` / `5c0ba2e4`; latest observed release `09e5a6a` / `40d09a01` inherits its dedicated page and bounded launch-thread context. [Release evidence](realtime-voice-causal-review.md#current-release-reconciliation--2026-11-12) supersedes older undeployed statements. The latest phone delegation was engine-blocked before dispatch. Lee approved normal originating-thread execution costs at 21:15:41 UTC, preserving normal action approvals and the 90-second voice cap. The successor implements that exact-thread path with a scoped reviewed policy, not a new assistant, global grant or mandatory Send button; it has not been rolled out or device-accepted.
+**Acceptance, 2026-11-12:** Lee accepted phone audio/basic conversation, not Android Bluetooth or orchestration. Source PR #297 is live as `6b33f825` / `ffa206f6` through infra-octo #171. After all old consumers exited and a fresh acknowledged quiet window, exact scoped policy #170 merged at 23:34:50 (`eff442d9`) and matching web/bridge configuration was verified at 23:38:39. Only new logical sessions can receive the normal-thread grant; the newest retained 22:46 call stays ungranted and had failed before durable delegation. Normal task costs were approved at 21:15:41; normal approvals, one root request and the 90-second voice cap remain. No hosted normal-task/provider test ran, and Android output remains physically unknown. [Current evidence](realtime-voice-progress.md#continuation--newest-live-session-and-ux-2026-11-12) separates policy activation from the UX frontend release.
 
 ## Adapter and setup
 
@@ -148,9 +148,9 @@ The bridge, not the web process, validates the actual selected engine/model and 
 
 Bot/thread/worker lookups use the existing authorized chat toolkit and budgeted same-thread message path. Thread listing supplies bounded pending-approval tool names/status, not arguments or approval actions. Cross-thread overview is excluded only for explicitly scoped voice delegation; ordinary bot turns are unchanged. The original delegation ID travels through message/call metadata and the same logical session's durable outbox; a result claim is still not proof of spoken playback.
 
-**Implementation gap, not product contract:** automatic voice requests still cannot send/forward/start/approve; the experimental budget refuses those actions independently. Lee now requires normal authorized orchestration and action approvals. The actual Boundcorp `CodexCLIEngine` cannot enforce this API-only token budget; silently removing the budget or rerouting the bot would be unsafe. A normal exact-thread execution bridge needs durable per-request authorization separate from the bounded transport and truthful normal approval reentry, without blanket grants, duplicate dispatch or hidden spend increases. This follow-up does not change live bot configuration or claim that read-only listings satisfy that requirement.
+**Experimental-profile restriction, not the normal-thread contract:** read-only budgeted requests cannot send/forward/start/approve; the budget refuses those actions independently. The actual Boundcorp CLI engine cannot enforce that API-only token budget, and voice never silently reroutes it. The separately reviewed scoped normal-thread policy below supplies the authorized orchestration path with normal approvals and costs; read-only listings are not a substitute for that path or hosted acceptance.
 
-### Default-off normal originating-thread execution (successor; not enabled live)
+### Default-off normal originating-thread execution (enabled only for the reviewed Octo scope)
 
 `REALTIME_VOICE_THREAD_EXECUTION_AUTHORIZATIONS` defaults to `{}`. It is a
 reviewed **scoped JSON policy** supplied by settings or the same-named environment
@@ -217,17 +217,35 @@ does not establish playback. Reconnect restores bounded results without
 redispatching. Owner polling can persist late terminal outcomes after End,
 without a provider connection or a model request.
 
-**Current gate:** Lee's distinct cost-policy decision is approved and the exact
-Boundcorp policy is prepared for review. Source must roll out with policy absent
-first. Verify all old queue consumers have exited, not just desired deployment
-readiness, before activating the reviewed policy and announcing a quiet
-web/bridge reload. Code/config rollback prevents new dispatch but does not
-silently cancel accepted normal work. No normal capability or physical Android
-acceptance is claimed before that reviewed rollout and user acceptance.
+**Deployment gate satisfied, 23:38:39 UTC:** source #297 was deployed with policy
+absent first; all old queue consumers exited before exact policy #170 merged.
+A fresh policy-specific notice and quiet window preceded the web/bridge-only
+reload. Both web replicas and bridge passed no-inference READ ONLY grant/scope
+checks, including old-session no-upgrade and other owner/thread/bot denial.
+Default remains off outside that exact reviewed scope. Code/config revocation
+prevents new dispatch, not accepted work; hosted orchestration and physical
+Android acceptance still require the user's actual observation.
 
 ### Dedicated voice page and progressive text (PR #293 deployed; device acceptance open)
 
 Voice belongs to `/s/<launch-chat-id>/voice`, entered from that thread's top-bar options, not a modal or a new chat. The page keeps bot/thread identity, context and a return link visible. Merely opening the page must not activate a microphone: **Start call** and manual **Resume** are explicit. A single authenticated app-level call owner keeps an active call across ordinary in-app route/back navigation; leaving the voice page is not **End call**, and a different thread must not silently replace the active call. A continuing-call affordance must make background microphone/connection state visible. Browser/tab teardown cannot preserve a WebRTC connection; it is not the same guarantee as SPA navigation.
+
+Thread options use the same purpose groups on desktop and mobile: Conversation
+(voice and files), Model & reasoning, Thread data (JSON export), and Thread
+lifecycle. Resolve is danger-styled: it archives the thread and stops queued/
+running workers and their agents. A new message reopens the thread, not cancelled
+work. Rename and pinned material remain in thread details. The mobile dialog contains keyboard focus and
+returns it on Escape; the desktop panel focuses its first action and returns
+focus to Options on Escape.
+
+**Enable sound** appears only when the connected room's SDK reports blocked
+playback. It unlocks playback on the existing call; it does not join a room,
+request microphone permission, unmute capture, or confirm physical hearing.
+Start call connects the room and enables the microphone; Mute/Unmute controls
+capture separately. IDs, transport/provider state, browser playback details,
+output configuration, route snapshots and runtime events are under
+**Diagnostics**. Callback status, unavailable tools, failed work and approval
+links remain outside the diagnostic disclosure; speech is not action approval.
 
 **End call** stops the logical voice session/transport, not previously submitted thread work. It must not send thread cancellation, stop a worker or retract an outbox result. Standby, microphone mute and audio output remain separate controls. An ended call's finalized text/results stay readable.
 While the ended session remains on its voice page, lightweight read-only observation continues at the slower three-second interval so a final already accepted by the bridge can appear after End's first response. Navigating away stops that ended-session observation unless delegated work remains pending; it never reopens a provider or requests another microphone session.

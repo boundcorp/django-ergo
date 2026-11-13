@@ -27,6 +27,7 @@ type VoiceCallOwner = {
   phase: Phase
   muted: boolean
   microphone: 'enabled' | 'disabled' | 'unknown'
+  playback: boolean | null
   error: string
   errorChatId: string | null
   action: 'start' | 'standby' | 'resume' | 'end' | null
@@ -51,6 +52,7 @@ function useVoiceOwner(): VoiceCallOwner {
   const [phase, setPhase] = useState<Phase>('idle')
   const [muted, setMuted] = useState(false)
   const [microphone, setMicrophone] = useState<'enabled' | 'disabled' | 'unknown'>('unknown')
+  const [playback, setPlayback] = useState<boolean | null>(null)
   const [error, setError] = useState('')
   const [errorChatId, setErrorChatId] = useState<string | null>(null)
   const [action, setAction] = useState<'start' | 'standby' | 'resume' | 'end' | null>(null)
@@ -98,6 +100,7 @@ function useVoiceOwner(): VoiceCallOwner {
     setPhase('disconnected')
     setMuted(false)
     setMicrophone('unknown')
+    setPlayback(null)
   }
 
   useEffect(
@@ -206,6 +209,9 @@ function useVoiceOwner(): VoiceCallOwner {
       if (attempt !== generation.current) return
       const current = new Room()
       room.current = current
+      current.on(RoomEvent.AudioPlaybackStatusChanged, () => {
+        if (room.current === current) setPlayback(current.canPlaybackAudio)
+      })
       const subscribedAudio = new Map<Track, HTMLMediaElement>()
       current.on(RoomEvent.TrackSubscribed, track => {
         if (room.current !== current || attempt !== generation.current) return
@@ -251,6 +257,7 @@ function useVoiceOwner(): VoiceCallOwner {
       current.on(RoomEvent.Reconnected, () => {
         if (room.current === current) {
           setPhase('connected')
+          setPlayback(current.canPlaybackAudio)
           void outputRouting.current?.refresh()
         }
       })
@@ -261,6 +268,7 @@ function useVoiceOwner(): VoiceCallOwner {
           outputRouting.current?.clearTracks()
           setPhase('disconnected')
           setMicrophone('unknown')
+          setPlayback(null)
         }
       })
       await current.connect(credentials.url, credentials.token)
@@ -276,6 +284,7 @@ function useVoiceOwner(): VoiceCallOwner {
       setMuted(false)
       setMicrophone('enabled')
       setPhase('connected')
+      setPlayback(current.canPlaybackAudio)
       void outputRouting.current?.refresh()
     } catch (e) {
       if (attempt !== generation.current) return
@@ -374,7 +383,14 @@ function useVoiceOwner(): VoiceCallOwner {
   }
 
   function enableAudio() {
-    void room.current?.startAudio().catch(e => setError(e instanceof Error ? e.message : String(e)))
+    const current = room.current
+    if (!current) return
+    void current
+      .startAudio()
+      .then(() => {
+        if (room.current === current) setPlayback(current.canPlaybackAudio)
+      })
+      .catch(e => setError(e instanceof Error ? e.message : String(e)))
   }
 
   function collectAudioDiagnostics() {
@@ -389,6 +405,7 @@ function useVoiceOwner(): VoiceCallOwner {
     phase,
     muted,
     microphone,
+    playback,
     error,
     errorChatId,
     action,
@@ -538,7 +555,7 @@ export function VoiceTranscript({ voice }: { voice: RealtimeVoiceSession | null 
 export function VoicePage() {
   const { id = '' } = useParams()
   const owner = useVoiceCall()
-  const { enabled, standbyEnabled, phase, microphone, muted, action, output, outputRouting } = owner
+  const { enabled, standbyEnabled, phase, microphone, muted, playback, action, output, outputRouting } = owner
   const [loadedDetail, setDetail] = useState<SessionDetail | null>(null)
   const detail = loadedDetail?.session.id === id ? loadedDetail : null
   const [existing, setExisting] = useState<RealtimeVoiceSession | null>(null)
@@ -604,10 +621,6 @@ export function VoicePage() {
         <h1 className="break-words font-display text-xl font-bold sm:text-2xl">
           {detail?.session.title || (loading ? 'Loading thread…' : 'Thread unavailable')}
         </h1>
-        <p className="mt-1 break-all text-xs text-muted">
-          {detail?.session.role || 'Thread'} ID: {id}
-          {detail && ` · Owner: ${detail.session.username}`}
-        </p>
         <p className="mt-2 text-sm">
           <span className="font-semibold">Context: </span>
           {contextPreview || 'Context is limited to this selected thread.'}
@@ -667,8 +680,7 @@ export function VoicePage() {
                             ? 'Disconnected'
                             : 'Ready to start'}
               </strong>{' '}
-              · Microphone: {owns ? microphone : 'unknown'} · Provider:{' '}
-              {standbyEnabled && voice?.standby_state === 'standby' ? 'closed' : 'unknown'}
+              · Microphone: {owns ? microphone : 'unknown'}
             </p>
             <p>
               Last observed voice SDK · You: {runtime?.user_state || 'unknown'} · Assistant:{' '}
@@ -681,6 +693,14 @@ export function VoicePage() {
                   : 'Restricted read-only mode.'}
               </p>
             )}
+            {voice?.events
+              .filter(event => event.kind === 'background_status')
+              .slice(-1)
+              .map(event => (
+                <p key={event.event_id} role="status" className="mt-1 font-medium">
+                  {event.text}
+                </p>
+              ))}
             {voice?.briefing && voice.briefing.delegation_available !== true && (
               <p>{voice.briefing.reason || voice.briefing.restriction}</p>
             )}
@@ -703,23 +723,6 @@ export function VoicePage() {
             {voice?.status === 'ended' && standbyEnabled && pending && (
               <p>Call ended before standby completed; closing-boundary audio may have been interrupted.</p>
             )}
-            <details className="mt-1">
-              <summary className="cursor-pointer text-muted">
-                {voice?.briefing?.execution_mode === 'normal_thread'
-                  ? 'Normal thread mode · call details'
-                  : voice?.briefing?.restriction
-                    ? 'Restricted mode · call details'
-                    : 'Call details & observed status'}
-              </summary>
-              {runtime?.observed_at && (
-                <p className="text-xs text-muted">
-                  Observed{' '}
-                  <time dateTime={runtime.observed_at}>{new Date(runtime.observed_at).toLocaleTimeString()}</time>; not
-                  a bridge heartbeat.
-                </p>
-              )}
-              {voice?.briefing?.restriction && <p className="mt-1">{voice.briefing.restriction}</p>}
-            </details>
             {owner.errorChatId === id && owner.error && (
               <p className="mt-1 text-red-600" role="alert">
                 {owner.error}
@@ -730,7 +733,14 @@ export function VoicePage() {
       </div>
       <VoiceTranscript key={id} voice={voice} />
       {voice && (
-        <details className="max-h-32 min-h-0 shrink overflow-y-auto border-t border-stroke px-4 text-sm">
+        <details
+          open={
+            [...(voice.delegations ?? []), ...(voice.thread_updates ?? [])].some(
+              task => !!task.error || task.status === 'failed' || task.status === 'waiting',
+            ) || undefined
+          }
+          className="max-h-40 min-h-0 shrink overflow-y-auto border-t border-stroke px-4 text-sm"
+        >
           <summary className="cursor-pointer py-2 text-muted">
             Background work ·{' '}
             {voice.delegations?.length
@@ -745,6 +755,7 @@ export function VoicePage() {
           {(!voice || voice.status !== 'active') && (
             <button
               type="button"
+              className="bg-accent text-white"
               disabled={!enabled || !detail || loading || !!loadError || closed || !!blocked || !!action}
               onClick={() => void owner.start(id)}
             >
@@ -758,13 +769,16 @@ export function VoicePage() {
                   <button
                     type="button"
                     disabled={!!action || (standbyEnabled && pending)}
+                    aria-pressed={muted}
                     onClick={() => void owner.toggleMute()}
                   >
                     {muted ? 'Unmute' : 'Mute'}
                   </button>
-                  <button type="button" onClick={owner.enableAudio}>
-                    Enable audio
-                  </button>
+                  {playback === false && (
+                    <button type="button" onClick={owner.enableAudio} aria-describedby="voice-playback-help">
+                      Enable sound
+                    </button>
+                  )}
                 </>
               )}
               {phase !== 'connected' &&
@@ -802,67 +816,95 @@ export function VoicePage() {
                   Resume connection
                 </button>
               )}
-              <button type="button" disabled={!!action} onClick={() => void owner.end()}>
+              <button type="button" className="text-danger" disabled={!!action} onClick={() => void owner.end()}>
                 End call
               </button>
             </>
           )}
         </div>
         <p className="mt-1 text-xs text-muted">End call stops voice only; background work continues.</p>
+        {phase === 'connected' && playback === false && (
+          <p id="voice-playback-help" className="mt-1 text-xs text-muted">
+            Your browser blocked playback. Enable sound allows this call's audio; it does not join again or change the
+            microphone.
+          </p>
+        )}
+        {phase !== 'connected' && (
+          <p className="mt-1 text-xs text-muted">Start call connects voice and requests microphone access.</p>
+        )}
         <section className="mt-1 text-sm" aria-label="Audio output">
-          {output.support === 'available' && (
-            <div className="flex flex-wrap items-center gap-2">
-              <label htmlFor="voice-audio-output">Audio output</label>
-              <select
-                id="voice-audio-output"
-                value={output.applied ?? '__unknown__'}
-                disabled={output.busy}
-                onChange={event => void outputRouting.current?.select(event.target.value)}
-                className="min-h-11 max-w-full rounded-md border border-stroke bg-surface px-2"
-              >
-                <option value="">System default (phone/OS controlled)</option>
-                {output.applied === null && <option value="__unknown__">Output unknown</option>}
-                {output.applied && !output.devices.some(device => device.deviceId === output.applied) && (
-                  <option value={output.applied}>Previously selected output (availability unknown)</option>
-                )}
-                {output.devices.map(device => (
-                  <option key={device.deviceId} value={device.deviceId}>
-                    {device.label}
-                  </option>
-                ))}
-              </select>
-              {output.chooser && (
-                <button
-                  type="button"
-                  disabled={output.busy}
-                  onClick={() => void outputRouting.current?.choose()}
-                  className="min-h-11 rounded-md border border-stroke px-3"
-                >
-                  Choose another output
-                </button>
-              )}
-              <button
-                type="button"
-                disabled={output.busy}
-                onClick={() => void outputRouting.current?.refresh()}
-                className="min-h-11 rounded-md border border-stroke px-3"
-              >
-                Refresh outputs
-              </button>
-            </div>
-          )}
-          {outputRouting.current && output.support === 'available' && (
-            <p className="mt-1 text-xs text-muted">
-              Browser selection only; physical audio output and hearing are unconfirmed.
-            </p>
-          )}
           {outputRouting.current && output.message && (
             <p className="mt-1 text-xs text-muted" role="status">
               {output.message}
             </p>
           )}
-          <details className="mt-1 text-xs text-muted">
-            <summary className="cursor-pointer">Audio route diagnostics</summary>
+          <details className="mt-2 text-xs text-muted">
+            <summary className="cursor-pointer py-2">Diagnostics</summary>
+            <p className="mt-1 break-all">
+              Thread ID: {id} · Owner: {detail?.session.username || 'unknown'}
+            </p>
+            <p className="mt-1 break-all">
+              Voice session: {voice?.id || 'not started'} · Transport: {phase}
+            </p>
+            <p className="mt-1">
+              Browser playback: {playback === null ? 'unknown' : playback ? 'allowed; hearing unconfirmed' : 'blocked'}{' '}
+              · Provider: {standbyEnabled && voice?.standby_state === 'standby' ? 'closed' : 'unknown'}
+            </p>
+            {runtime?.observed_at && (
+              <p className="mt-1">
+                Observed{' '}
+                <time dateTime={runtime.observed_at}>{new Date(runtime.observed_at).toLocaleTimeString()}</time>; not a
+                bridge heartbeat.
+              </p>
+            )}
+            {voice?.briefing?.restriction && <p className="mt-1">{voice.briefing.restriction}</p>}
+            <h2 className="mt-3 font-semibold">Audio route diagnostics</h2>
+            {output.support === 'available' && (
+              <div className="flex flex-wrap items-center gap-2">
+                <label htmlFor="voice-audio-output">Audio output</label>
+                <select
+                  id="voice-audio-output"
+                  value={output.applied ?? '__unknown__'}
+                  disabled={output.busy}
+                  onChange={event => void outputRouting.current?.select(event.target.value)}
+                  className="min-h-11 max-w-full rounded-md border border-stroke bg-surface px-2"
+                >
+                  <option value="">System default (phone/OS controlled)</option>
+                  {output.applied === null && <option value="__unknown__">Output unknown</option>}
+                  {output.applied && !output.devices.some(device => device.deviceId === output.applied) && (
+                    <option value={output.applied}>Previously selected output (availability unknown)</option>
+                  )}
+                  {output.devices.map(device => (
+                    <option key={device.deviceId} value={device.deviceId}>
+                      {device.label}
+                    </option>
+                  ))}
+                </select>
+                {output.chooser && (
+                  <button
+                    type="button"
+                    disabled={output.busy}
+                    onClick={() => void outputRouting.current?.choose()}
+                    className="min-h-11 rounded-md border border-stroke px-3"
+                  >
+                    Choose another output
+                  </button>
+                )}
+                <button
+                  type="button"
+                  disabled={output.busy}
+                  onClick={() => void outputRouting.current?.refresh()}
+                  className="min-h-11 rounded-md border border-stroke px-3"
+                >
+                  Refresh outputs
+                </button>
+              </div>
+            )}
+            {outputRouting.current && output.support === 'available' && (
+              <p className="mt-1 text-xs text-muted">
+                Browser selection only; physical audio output and hearing are unconfirmed.
+              </p>
+            )}
             <p className="mt-1">
               Microphone capture can use a different communication route from media playback, even with system default
               selected. Physical Bluetooth routing is unknown; diagnostics do not change your route.
@@ -883,30 +925,26 @@ export function VoicePage() {
                 {JSON.stringify(audioDiagnostics, null, 2)}
               </pre>
             )}
-          </details>
-          {!outputRouting.current ? (
-            <p className="mt-1 text-xs text-muted">
-              Audio output controls become available when you start or resume the call. Your phone/OS may control the
-              route.
-            </p>
-          ) : (
-            <details className="mt-1 text-xs text-muted">
-              <summary className="cursor-pointer">Audio routing & microphone guidance</summary>
-              <div className="mt-1" role="status">
-                {output.support === 'available' && (
-                  <p>
-                    {output.busy ? 'Applying/checking browser output… ' : ''}Browser selection only; hearing and the
-                    physical audio route are not confirmed. Microphone control is separate. If an output is missing, use
-                    your phone or operating system audio route controls.
+            <h2 className="mt-3 font-semibold">Runtime events</h2>
+            <div className="mt-1 max-h-36 overflow-y-auto">
+              {voice?.events
+                .filter(event => event.kind !== 'user' && event.kind !== 'assistant')
+                .map(event => (
+                  <p key={event.event_id} className="mt-1 whitespace-pre-wrap break-words">
+                    <time dateTime={event.created_at}>{new Date(event.created_at).toLocaleTimeString()}</time>{' '}
+                    {event.kind}: {event.text}
                   </p>
-                )}
-                <p>
-                  Microphone access starts only after Start call or Resume. End call does not stop threads, workers, or
-                  delegated work.
-                </p>
-              </div>
-            </details>
-          )}
+                ))}
+              {!voice?.events.some(event => event.kind !== 'user' && event.kind !== 'assistant') && (
+                <p>No runtime events recorded.</p>
+              )}
+            </div>
+            <p className="mt-2">
+              Browser selection only; hearing and the physical audio route are not confirmed. If an output is missing,
+              use your phone or operating system audio controls. Microphone access starts only after Start call or
+              Resume.
+            </p>
+          </details>
         </section>
       </footer>
     </div>
