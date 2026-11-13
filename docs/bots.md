@@ -1313,6 +1313,9 @@ Admission retains the single-GPU, minimum167GB hostRAM and plannedUSD3/one-hour
 limits regardless of the selected supported NVIDIA hardware.
 Provider REST `imageName` is normalized before strict ownership checks; missing
 or mismatched image evidence never authorizes deletion.
+Host-only `reconciled_costs` can record an explicitly reviewed conservative cost
+after confirmed terminal cleanup; it never clears admission counts or
+authorizes an active/uncertain rental, replacement or top-up.
 
 ### ergo_kb
 

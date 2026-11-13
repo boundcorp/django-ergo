@@ -143,8 +143,36 @@ def profiles(account, selected, ctx):
     return result
 
 
-def _committed_reservations(jobs):
+def _reconciled_cost(job, state, item):
+    """Operator-reviewed conservative cost, never an inferred invoice."""
+    message = "Invalid reconciled Runpod cost evidence"
+    if not isinstance(item, dict):
+        raise TypeError(message)
+    observed = item.get("observed_at")
+    if (
+        state["phase"] != "terminated"
+        or item.get("basis") != "conservative_elapsed_rate"
+        or not isinstance(item.get("evidence"), str)
+        or not item["evidence"]
+        or type(observed) not in (int, float)
+        or not job.created <= observed <= time.time()
+    ):
+        raise ValueError(message)
+    try:
+        amount = Decimal(item["amount_usd"])
+    except (KeyError, TypeError, ValueError, DecimalException):
+        raise ValueError(message) from None
+    if not amount.is_finite() or amount < 0:
+        raise ValueError(message)
+    return amount
+
+
+def _committed_reservations(jobs, policy):
     committed = jobs.aggregate(total=Sum("reservation_usd"))["total"] or Decimal(0)
+    reviewed = policy.get("reconciled_costs", {})
+    if not isinstance(reviewed, dict):
+        msg = "Invalid reconciled Runpod cost mapping"
+        raise TypeError(msg)
     # Never-created terminal attempts have no provider liability. Their original
     # reservation and lifetime count remain immutable; created/unknown attempts
     # stay reserved after cleanup until billing review.
@@ -152,6 +180,11 @@ def _committed_reservations(jobs):
         state = Experiment(completed.ledger_path).status()
         if state["phase"] == "terminated" and state["create_started"] == 0:
             committed -= completed.reservation_usd
+        elif str(completed.pk) in reviewed:
+            committed += (
+                _reconciled_cost(completed, state, reviewed[str(completed.pk)])
+                - completed.reservation_usd
+            )
     return committed
 
 
@@ -186,7 +219,7 @@ def _admission_config(binding, policy, definition):
     if jobs.filter(cleanup_complete=False).count() >= policy.get("max_concurrent", 1):
         msg = "RunPod unresolved rental concurrency limit reached"
         raise ValueError(msg)
-    committed = _committed_reservations(jobs)
+    committed = _committed_reservations(jobs, policy)
     config = json.loads(json.dumps(definition["config"]))
     config["pricing"]["project_committed_usd"] = str(
         committed + Decimal(policy.get("prior_committed_usd", "0"))
