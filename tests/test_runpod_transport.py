@@ -1,6 +1,7 @@
 import io
 import json
 import socket
+import sqlite3
 from urllib.error import HTTPError
 
 import pytest
@@ -8,6 +9,7 @@ import pytest
 from django_ergo.plugins.runpod.transport import Ownership
 from django_ergo.plugins.runpod.transport import OwnershipError
 from django_ergo.plugins.runpod.transport import ProviderError
+from django_ergo.plugins.runpod.transport import RateLimitError
 from django_ergo.plugins.runpod.transport import RunpodREST
 
 
@@ -128,6 +130,22 @@ def test_errors_are_sanitized(failure):
     assert "test-secret" not in "".join(traceback.format_exception(error.value))
 
 
+@pytest.mark.parametrize(("header", "wait"), [("29", 29), ("", 60), ("99999", 3600)])
+def test_rate_limit_is_distinct_and_carries_bounded_retry_after(header, wait):
+    limited = HTTPError(
+        "https://example.invalid/test-secret",
+        429,
+        "test-secret",
+        {"Retry-After": header},
+        io.BytesIO(b"test-secret"),
+    )
+    client = RunpodREST(lambda: "test-" + "secret", opener=HTTPFake(limited))
+    with pytest.raises(RateLimitError) as error:
+        client.get_pod("pod123")
+    assert error.value.retry_after == wait
+    assert "test-secret" not in repr(error.value)
+
+
 def test_missing_storage_field_fails_closed():
     data = pod()
     del data["networkVolume"]
@@ -135,3 +153,22 @@ def test_missing_storage_field_fails_closed():
     with pytest.raises(OwnershipError):
         RunpodREST(lambda: "token", opener=fake).terminate_owned("pod123", ownership())
     assert len(fake.requests) == 1
+
+
+class BrokenBudget:
+    """A corrupt shared budget file."""
+
+    def acquire(self, *, priority=False):
+        raise sqlite3.DatabaseError
+
+    def observe(self, headers, status):
+        raise sqlite3.DatabaseError
+
+
+def test_broken_budget_store_never_blocks_teardown_reads():
+    fake = HTTPFake(pod())
+    client = RunpodREST(lambda: "token", opener=fake, budget=BrokenBudget())
+    with pytest.raises(RateLimitError):
+        client.get_pod("pod123")
+    assert fake.requests == []
+    assert client.get_pod("pod123", priority=True)["id"] == "pod123"

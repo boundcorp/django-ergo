@@ -53,7 +53,10 @@ from .native_tunnel import close as close_tunnel
 from .native_tunnel import validate_private_key
 from .queue import Conflict
 from .queue import Queue
+from .ratebudget import RestBudget
+from .ratebudget import budget_path
 from .supervisor import CleanerSupervision
+from .transport import ProviderError
 from .transport import RunpodREST
 
 FRESH_SECONDS = 180
@@ -110,18 +113,22 @@ def credential_name(policy):
     return name
 
 
-def provider_client(binding):
+def provider_client(binding, root):
+    """``root`` is the shared ledger root; every role spends one per-key budget."""
     name = credential_name(binding)
     return RunpodREST(
         lambda: os.environ.get(name),
         timeout=5,
         no_capacity_messages=binding.get("no_capacity_messages"),
+        budget=RestBudget(budget_path(root, name)),
     )
 
 
 def client(job):
     # Fixed host-owned reference, never ToolContext's user-dependent fallback.
-    return provider_client(job.profile["binding"])
+    # Ledgers live at <ledger_root>/<installation>/<job>/rental.sqlite3.
+    root = Path(job.ledger_path).resolve().parents[2]
+    return provider_client(job.profile["binding"], root)
 
 
 def profiles(account, selected, ctx):
@@ -183,7 +190,8 @@ def stock(account, selected, profile, ctx):
         raise PermissionError(msg)
     config = policy["profiles"][profile]["config"]
     requirements = hardware.requirements(config)
-    gpus = provider_client(policy).gpu_stock(offers.stock_query(requirements))
+    root = Path(policy["ledger_root"]).resolve()
+    gpus = provider_client(policy, root).gpu_stock(offers.stock_query(requirements))
     eligible, seen = offers.evaluate(
         gpus,
         requirements,
@@ -512,7 +520,38 @@ def _owner_stale(job, now):
     return now - updated.timestamp() >= OWNER_STALE_SECONDS
 
 
-def reconcile_job(job, *, now):
+class _SharedInventory:
+    """One maintenance pass reads the account's Pod list once, not once per job.
+
+    RunPod REST shares a small per-key budget across endpoints; every retained
+    ledger re-listing each minute exhausted the hourly quota by itself. Known-ID
+    reads, deletes and creates still go to the provider directly.
+    """
+
+    def __init__(self, provider, memo):
+        self._provider = provider
+        self._memo = memo
+
+    def list_pods(self, *, priority=False):
+        cached = self._memo.get("pods")
+        if isinstance(cached, list):
+            return list(cached)
+        # A failed ordinary read may be retried once with the cleanup reserve.
+        if cached is not None and (not priority or self._memo.get("priority")):
+            raise cached
+        try:
+            pods = self._provider.list_pods(priority=priority)
+        except ProviderError as error:
+            self._memo.update(pods=error, priority=priority)
+            raise
+        self._memo["pods"] = pods
+        return list(pods)
+
+    def __getattr__(self, name):
+        return getattr(self._provider, name)
+
+
+def reconcile_job(job, *, now, inventories=None):
     experiment = Experiment(job.ledger_path)
     with experiment._tx() as db:
         state = experiment._expire(db, experiment._row(db), now)
@@ -540,6 +579,9 @@ def reconcile_job(job, *, now):
                 (now, os.getpid()),
             )
         provider = client(job)
+        if inventories is not None:
+            memo = inventories.setdefault(credential_name(job.profile["binding"]), {})
+            provider = _SharedInventory(provider, memo)
         cleanup = RESTCleanup(job.ledger_path)
         # Refused offers are swept while the job still runs, not only at stop.
         swept = cleanup.sweep_retired(client=provider)
@@ -582,6 +624,7 @@ def reconcile_once(*, now=None):
         policies = {}
     keys = set(policies) | set(RunpodAccount.objects.values_list("key", flat=True))
     results = {}
+    inventories = {}
     for key in sorted(keys):
         binding, _ = RunpodAccount.objects.get_or_create(key=key)
         ok = True
@@ -590,7 +633,7 @@ def reconcile_once(*, now=None):
             "session", "worker"
         ):
             try:
-                ok = reconcile_job(job, now=now) and ok
+                ok = reconcile_job(job, now=now, inventories=inventories) and ok
             except Exception:  # noqa: BLE001 — keep cleanup durable; never leak credentials
                 RunpodJob.objects.filter(pk=job.pk).update(error="maintenance_failed")
                 ok = False

@@ -1,5 +1,62 @@
 # Realtime voice delegation: offline causal review
 
+## Same-call continuation and volume correction — 2026-11-13
+
+The owner corrected the latest apparent output failure at **18:53 UTC**:
+device volume was down and playback is not broken. This supersedes treating
+the **18:48–18:50** call as an output defect. Historical physical Android/
+Bluetooth routing acceptance remains separate; no speculative playback fix
+is included.
+
+Read-only inspection correlated the exact originating thread, bridge claim,
+source #315 image `e4c152fa`, stored events and native task metadata:
+
+| UTC | Last proven application boundary |
+| --- | --- |
+| 18:48:30.357 | Logical session created; bridge claimed 35.269. |
+| 18:48:38.498–38.804 | Track subscription and browser HTML playing observed, before generated speech. Neither establishes sound amplitude or hearing. |
+| 18:48:43.890 | Nonempty provider input transcription observed. This proves transcript receipt, not physical hearing or a particular microphone. |
+| 18:48:45.111–45.743 | Generated assistant frames followed by remote receiver-energy evidence. `audio_arriving` measures `RemoteAudioTrack` receiver `totalAudioEnergy`, not the inbound microphone. |
+| 18:49:05.724–07.330 | First delegation signal, acoustic/transcript boundary and durable task admission. |
+| 18:49:08.386–17.214 | One completed native `gpt-6.1-sol` turn; the only retained tool was `send_reply`, not a status/history lookup tool. |
+| 18:49:17.223–17.476 | Message answered, durable result persisted and correlated commentary queued. Enqueue/announcement claim does not prove provider consumption, playback or hearing. |
+| 18:49:46.665 | Second distinct delegation signal refused by the explicit one-request application gate. |
+| 18:50:03.641 | Explicit session End; bridge wall time 86.943 seconds, provider-reported usage 85 seconds. Not a 90-second timeout. |
+
+A later **18:52:48–18:53:14** session retained two user and two assistant
+finals, generated-audio/browser-energy events and no delegation. It is distinct
+from the longer call; the volume correction is owner evidence, not inferred
+from either call's playback metrics. Historical provider-transmitted startup
+prompt bytes and handset element volume/sink state were not retained.
+
+The reproduced context defect was narrower than missing all thread history:
+startup had instructions/recent text and task counts but omitted the owning
+thread's actual current worker title/progress and a timestamped current-call
+evidence snapshot. The patch supplies at most three active worker records and
+two recent exact-thread request/result summaries, bounded by character slices,
+with observation/source timestamps and explicit stale-status/liveness limits.
+No unrelated private-thread overview, billable lookup or new generic lifecycle
+ledger is introduced.
+
+Continuation is a separate reviewed scope: default one request, or three
+sequential execution attempts with an explicit follow-up cost/reference grant.
+Status/result observation is read-only and consumes no execution allowance.
+Duplicate IDs, failed collection attempts, reconnect and standby cannot reset
+budget or replay writes; the original 90-second deadline remains. At exhaustion,
+the UI links to the owning text thread rather than demanding another call.
+Speech instructions distinguish transcript receipt, durable acceptance,
+queue/handler state and persisted results; internal status labels are no longer
+supplied as spoken commentary.
+
+Independent safety review caught and closed duplicate follow-up-root results,
+old completions releasing newer pending work, and lost standby eligibility
+after consuming submitted speech. Offline coverage: **80 backend regressions**,
+**344 frontend tests**, plus **20 actual Chromium/native MediaRecorder scenarios**
+using generated audio and mocked transcription, with zero fetch attempts.
+No new paid/provider, room, physical microphone or real-owner task test ran.
+Generated speech correctness, physical Android/Bluetooth routing and hosted
+same-call task acceptance are not established by offline checks.
+
 ## Android Brave input audit — 2026-11-13
 
 The latest correlated realtime call was created **15:51:15.139 UTC**, claimed by

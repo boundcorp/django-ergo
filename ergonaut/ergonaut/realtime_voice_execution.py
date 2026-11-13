@@ -10,7 +10,7 @@ from django.utils import timezone
 from django_ergo.conversation.models import ThreadMessage
 
 NORMAL_RESTRICTION = (
-    "Normal originating-thread execution: one request, using this bot's existing tools, engine, "
+    "Normal originating-thread execution: the finite session grant bounds sequential requests, using this bot's existing tools, engine, "
     "task limits and normal action approvals. Normal task costs are separate from the live voice "
     "budget. Voice does not approve actions; use the originating thread's normal approval controls."
 )
@@ -30,12 +30,29 @@ def configured_authorization(chat, user):
         or not policy["approval_reference"].strip()
     ):
         raise ValueError("Normal thread execution authorization does not match the exact owner/chat/bot or costs.")
+    limit = policy.get("max_requests", 1)
+    if type(limit) is not int or limit not in (1, 3):
+        raise ValueError("Voice execution permits only one request or an explicitly reviewed three-request cap.")
+    if limit > 1 and (
+        policy.get("followup_costs_approved") is not True
+        or not isinstance(policy.get("followup_approval_reference"), str)
+        or not policy["followup_approval_reference"].strip()
+    ):
+        raise ValueError("Sequential voice follow-ups require separate reviewed cost approval.")
     return {
         "chat_id": str(chat.pk),
         "owner_id": str(user.pk),
         "bot": chat.bot_name,
         "approval_reference": policy["approval_reference"],
-        "max_requests": 1,
+        "max_requests": limit,
+        **(
+            {
+                "followup_approval_reference": policy["followup_approval_reference"],
+                "followup_costs_approved": True,
+            }
+            if limit > 1
+            else {}
+        ),
         "execution_mode": "normal_thread",
     }
 
@@ -70,6 +87,30 @@ def initial_state(chat, user):
     return state
 
 
+def request_capacity(session):
+    """A bounded projection of existing voice receipts, not a second task ledger."""
+    try:
+        grant = session_authorization(session)
+    except ValueError:
+        limit = 0  # Revoked/mismatched grants fail closed even in read-only status polling.
+    else:
+        limit = grant["max_requests"] if grant else 1
+    ids = list((session.state or {}).get("voice_request_ids", []))
+    ids.extend(session.delegations.values_list("event_id", flat=True))
+    pending = (session.state or {}).get("pending_delegation") or {}
+    if pending.get("id"):
+        ids.append(pending["id"])
+    ids = list(dict.fromkeys(ids))
+    return {
+        "limit": limit,
+        "used": len(ids),
+        "remaining": max(0, limit - len(ids)),
+        "request_ids": ids,
+        "collecting": pending.get("status") == "collecting",
+        "inflight": session.delegations.exclude(message__status__in=("answered", "failed")).exists(),
+    }
+
+
 def thread_updates(session, delegations):
     """Observe durable exact-thread work, not generated speech or a global owner scan."""
     normal = [d for d in delegations if (d.message.metadata or {}).get("voice_execution_mode") == "normal_thread"]
@@ -84,7 +125,7 @@ def thread_updates(session, delegations):
             | Q(recipient_session=session.chat, metadata__has_key="worker", created_at__gte=session.created_at)
         )
         .filter(Q(sender_session=session.chat) | Q(recipient_session=session.chat))
-        .exclude(pk=root.message_id)
+        .exclude(pk__in=[delegation.message_id for delegation in normal])
         .select_related("recipient_session", "sender_session")
         .order_by("created_at", "id")[:100]
     )

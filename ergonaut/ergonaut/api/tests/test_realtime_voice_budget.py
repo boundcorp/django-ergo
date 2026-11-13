@@ -53,8 +53,9 @@ def held_messages(settings, monkeypatch):
 
 
 @pytest.fixture
-def cooking(cook, use_bots):  # noqa: F811
+def cooking(cook, use_bots, settings):  # noqa: F811
     use_bots(say("Scripted fallback."))
+    settings.REALTIME_VOICE_USERS = {cook.get_username()}
     chat = ConversationSession.objects.create(user=cook, bot_name="kitchen", metadata={"bot_role": "main"})
     other = RealtimeVoiceSession.objects.create(user=cook, chat=chat)
     voice = RealtimeVoiceSession.objects.create(user=cook, chat=chat)

@@ -49,21 +49,26 @@ TRANSCRIPT_DRAIN_SECONDS = 0.8
 PENDING_TIMEOUT_SECONDS = 60
 LIVE_PUBLISH_SECONDS = 0.25
 ONE_REQUEST_USED = (
-    "This call has already used its one background request (or the attempt to collect it). Any verified result "
-    "for it will be given to you here. For another request, the user needs to start a new call."
+    "The reviewed background execution cap for this logical call is reached. Existing status and results "
+    "can still be read here without another task. For new execution, offer continuation in the owning text "
+    "thread under normal costs and approvals; do not demand a new call or claim the notes were forwarded."
 )
 REQUEST_TAKEN = (
-    "This call's one background request is now taken. If asked whether you have tools or can do more work, "
-    "say that if it was submitted its verified result will be read to the user here when it arrives, and "
-    "further background work needs a new call. Do not offer another background request in this call."
+    "A request slot is reserved for collecting speech, NOT submitted or running yet. Only a durable task "
+    "acceptance/status permits saying submitted, queued, running or done. Status observation and result "
+    "reading do not start another task. Never speak internal labels, request IDs or bracketed annotations."
 )
 REQUEST_NOT_SUBMITTED = (
-    "The background request was not submitted: the spoken request could not be completed in time. No result "
-    "will arrive. Tell the user; further background work needs a new call."
+    "The request was not submitted: speech collection expired. No result will arrive for it. "
+    "Offer explicit continuation in the owning text thread, not another call or an automatic retry."
 )
 REQUEST_LOST = (
-    "This call's one background request was used but never submitted, so no result will arrive. If asked "
-    "whether you have tools or can do more work, say further background work needs a new call."
+    "A previous request attempt was not submitted; no result will arrive for it. The call's execution "
+    "budget is not reset. Existing results remain readable; new work can continue in the owning text thread."
+)
+REQUEST_PENDING = (
+    "A background request is already pending. Read the observed status/result instead of starting another "
+    "task. Do not claim it is running unless the supplied durable state establishes that."
 )
 # Bridge-side audio evidence; neither event proves the user heard anything.
 BRIDGE_AUDIO_EVENTS = {
@@ -153,6 +158,7 @@ class Assistant(Agent):
     def __init__(self, voice_id, snapshot, http_session, *, claim_id=None):
         self.voice_id = voice_id
         self.announced = set()
+        self.terminal_tasks = set()
         self.claim_id = claim_id
         self.partials = {}
         self.finished_turns = {}
@@ -177,6 +183,7 @@ class Assistant(Agent):
         self.speech_ended_at = None
         self.transcript_changed_at = 0.0
         self.changed = asyncio.Event()
+        self.consumed_fragments = set()
         self.closing = False
         self.vad_ready = False
         self.activity_generation = 0
@@ -184,9 +191,26 @@ class Assistant(Agent):
         self.resumed_at = datetime.fromisoformat(snapshot["resumed_at"]) if snapshot.get("resumed_at") else None
         self.reconnect_latency_seconds = None
         self.grace = pause_grace()
-        # begin_pending accepts one signal per logical session, including across reconnects.
+        self.capacity = dict(
+            snapshot.get(
+                "request_budget",
+                {"limit": 1, "used": int(bool(snapshot["delegations"] or snapshot["state"].get("pending_delegation")))},
+            )
+        )
+        self.capacity.setdefault("remaining", max(0, self.capacity["limit"] - self.capacity["used"]))
+        self.seen_requests = set(self.capacity.get("request_ids", []))
         self.request_submitted = bool(snapshot["delegations"])
-        self.request_used = self.request_submitted or bool(snapshot["state"].get("pending_delegation"))
+        self.request_used = not self.capacity["remaining"]
+        self.execution_pending = self.capacity.get("inflight", False)
+        self.active_request_id = next(
+            (
+                task["event_id"]
+                for task in reversed(snapshot["delegations"])
+                if task["status"] not in ("answered", "failed")
+            ),
+            None,
+        )
+        self.consumed_speech_drained = False
         self.audio_noted = set()
         self.input_noted = set()
         self.input_error_session = None
@@ -206,6 +230,10 @@ class Assistant(Agent):
                 "Report completion only when given a verified result. On reconnect do "
                 "not repeat a saved result unless asked. Generated speech is not work evidence. "
                 "Speech marked unknown or interrupted may not have been heard."
+                " Receiving a transcript is not physical hearing. Say 'I received your transcript' when that "
+                "is all the evidence. If the user reports a fault, address that fault rather than offering "
+                "brevity or an unrelated lookup. Never say submitted until durable acceptance is supplied. "
+                "Internal status annotations and bracketed history labels are context only, never spoken narrative. "
                 " For activity durations use only supplied server-calculated elapsed "
                 "time since the user reported the activity, not a claim that it happened. "
                 "Never invent times, durations, timers or reminders."
@@ -255,6 +283,10 @@ class Assistant(Agent):
                 return
             notice = "A voice bridge action could not be confirmed. Check the durable background status."
             try:
+                if delegation_id is not None:
+                    await sync_to_async(close_pending, thread_sensitive=True)(self.voice_id, delegation_id, "failed")
+                    if self.pending_id == delegation_id:
+                        self.pending_id = None
                 await sync_to_async(record_event, thread_sensitive=True)(
                     self.voice_id, f"bridge-error:{uuid.uuid4().hex}", "background_status", notice
                 )
@@ -514,14 +546,15 @@ class Assistant(Agent):
         if event.transcript.strip():
             self.note_input("transcribed")
         self.activity_generation += 1
-        if (event.item_id not in self.fragments and len(self.fragments) >= 100) or len(event.transcript) > 4000:
-            self.fragments_overflow = True
-        if event.item_id in self.fragments or len(self.fragments) < 100:
-            self.fragments[event.item_id] = event.transcript[:MAX_TRANSCRIPT_CHARS]
-        if event.is_final and event.item_id in self.fragments:
-            self.final_fragments.add(event.item_id)
-        else:
-            self.final_fragments.discard(event.item_id)
+        if event.item_id not in self.consumed_fragments:
+            if (event.item_id not in self.fragments and len(self.fragments) >= 100) or len(event.transcript) > 4000:
+                self.fragments_overflow = True
+            if event.item_id in self.fragments or len(self.fragments) < 100:
+                self.fragments[event.item_id] = event.transcript[:MAX_TRANSCRIPT_CHARS]
+            if event.is_final and event.item_id in self.fragments:
+                self.final_fragments.add(event.item_id)
+            else:
+                self.final_fragments.discard(event.item_id)
         self.update_partial(event.item_id, "user", event.transcript)
         self.transcript_changed_at = time.monotonic()
         self.changed.set()
@@ -535,6 +568,7 @@ class Assistant(Agent):
         # With an explicitly supplied VAD, the SDK's recognition pipeline drives
         # these states from its actual Silero audio stream, not GPT-Live segments.
         if event.new_state == "speaking":
+            self.consumed_speech_drained = False
             self.note_input("speech")
             self.activity_generation += 1
             self.vad_ready = True
@@ -568,7 +602,7 @@ class Assistant(Agent):
             and self.speech_ended_at is not None
             and time.monotonic() - self.speech_ended_at >= self.grace
             and time.monotonic() - self.transcript_changed_at >= TRANSCRIPT_DRAIN_SECONDS
-            and bool(self.fragments)
+            and (bool(self.fragments) or self.consumed_speech_drained)
             and not self.fragments_overflow
             and self.final_fragments.issuperset(self.fragments)
             and pending.get("status") != "collecting"
@@ -579,20 +613,31 @@ class Assistant(Agent):
     def on_delegation(self, event):
         self.activity_generation += 1
         logger.info("voice delegation_signal_received correlation=%s", self.correlation(event.id))
-        if self.closing:
+        if self.closing or event.id in self.seen_requests:
             return
-        if self.pending_id or self.request_used:
-            # An unanswered client delegation leaves the model waiting with nothing to say.
-            if event.id != self.pending_id:
-                self.duplex_session.append_commentary(ONE_REQUEST_USED, delegation_id=event.id)
+        if self.pending_id or self.execution_pending or self.request_used:
+            self.duplex_session.append_commentary(
+                ONE_REQUEST_USED if self.request_used else REQUEST_PENDING, delegation_id=event.id
+            )
             return
+        self.seen_requests.add(event.id)
         self.pending_id = event.id
-        self.request_used = True
+        self.capacity["used"] += 1
+        self.capacity["remaining"] = max(0, self.capacity["limit"] - self.capacity["used"])
+        self.request_used = not self.capacity["remaining"]
         self.duplex_session.append_instructions(REQUEST_TAKEN)
         self.spawn(self.assemble_request(event.id, dict(self.fragments)), delegation_id=event.id)
 
     async def assemble_request(self, event_id, fragments):
-        await sync_to_async(begin_pending, thread_sensitive=True)(self.voice_id, event_id, fragments)
+        accepted = await sync_to_async(begin_pending, thread_sensitive=True)(self.voice_id, event_id, fragments)
+        if not accepted:
+            self.pending_id = None
+            snapshot = await sync_to_async(bridge_state, thread_sensitive=True)(self.voice_id, include_briefing=False)
+            self.capacity = dict(snapshot["request_budget"])
+            self.request_used = not self.capacity["remaining"]
+            self.execution_pending = self.capacity["inflight"]
+            self.duplex_session.append_commentary(REQUEST_PENDING, delegation_id=event_id)
+            return
         self.duplex_session.append_thinking(
             "A background request is being assembled from speech; it is not submitted yet."
         )
@@ -602,6 +647,7 @@ class Assistant(Agent):
             now = time.monotonic()
             if now >= deadline:
                 await sync_to_async(close_pending, thread_sensitive=True)(self.voice_id, event_id, "expired")
+                self.pending_id = None
                 self.duplex_session.append_commentary(REQUEST_NOT_SUBMITTED, delegation_id=event_id)
                 return
             if self.heard_speech and not self.speaking and self.speech_ended_at is not None:
@@ -618,7 +664,29 @@ class Assistant(Agent):
                     text = " ".join(part.strip() for part in self.fragments.values() if part.strip())
                     if text and len(text) <= 4000:
                         logger.info("voice delegation_boundary_ready correlation=%s", self.correlation(event_id))
-                        await sync_to_async(resolve_pending, thread_sensitive=True)(self.voice_id, event_id, text)
+                        submitted_fragments = dict(self.fragments)
+                        submitted_speech_end = self.speech_ended_at
+                        receipt = await sync_to_async(resolve_pending, thread_sensitive=True)(
+                            self.voice_id, event_id, text
+                        )
+                        self.request_submitted = True
+                        self.execution_pending = receipt["status"] not in ("answered", "failed")
+                        self.active_request_id = event_id if self.execution_pending else None
+                        self.consumed_speech_drained = (
+                            not self.speaking and self.speech_ended_at == submitted_speech_end
+                        )
+                        self.pending_id = None
+                        self.consumed_fragments.update(submitted_fragments)
+                        for item_id in submitted_fragments:
+                            self.fragments.pop(item_id, None)
+                            self.final_fragments.discard(item_id)
+                        self.fragments_overflow = any(
+                            len(value) > MAX_TRANSCRIPT_CHARS for value in self.fragments.values()
+                        )
+                        self.duplex_session.append_thinking(
+                            f"Durable acceptance confirmed for this request; task status: {receipt['status']}. "
+                            "Queued means not proven running; failed means not successfully submitted for execution."
+                        )
                         return
                 wait = max(0.01, ready_at - now) if now < ready_at else deadline - now
             else:
@@ -686,7 +754,17 @@ class Assistant(Agent):
             )
 
     async def deliver_results(self, snapshot):
+        for task in snapshot["delegations"]:
+            if task["event_id"] == self.active_request_id and task["status"] in ("answered", "failed"):
+                self.execution_pending = False
+                self.active_request_id = None
         for task in [*snapshot["delegations"], *snapshot.get("thread_updates", [])]:
+            identity = task["update_id"].rsplit(":", 1)[0] if "update_id" in task else f"root:{task['event_id']}"
+            terminal = task["status"] in ("answered", "failed")
+            if not terminal and identity in self.terminal_tasks:
+                continue
+            if terminal:
+                self.terminal_tasks.add(identity)
             normal = task.get("execution_mode") == "normal_thread" or "update_id" in task
             key = task.get("update_id", f"{task['event_id']}:{task['status']}" if normal else task["event_id"])
             if key in self.announced:
@@ -701,7 +779,7 @@ class Assistant(Agent):
             label = "Durable task status" if event.kind == "task_status" else "Verified background outcome"
             outcome = f"{label} for request {task['event_id']}: {event.text[:1500]}"
             self.duplex_session.append_thinking(outcome)
-            self.duplex_session.append_commentary(outcome, delegation_id=task["event_id"])
+            self.duplex_session.append_commentary(event.text[:1500], delegation_id=task["event_id"])
             self.announced.add(key)
 
     async def watch_results(self):

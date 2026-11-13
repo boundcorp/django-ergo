@@ -425,11 +425,29 @@ test('resume is single flight and a refused resume remains in standby', async ()
 
 test('observed SDK states stay separate from queued work and absent SDK observations remain unknown', async () => {
   api.realtimeVoiceSessions = async () => [
-    { ...session, delegations: [{ event_id: 'task', text: 'Lookup', status: 'queued', result: '', error: '' }] },
+    {
+      ...session,
+      request_budget: {
+        limit: 3,
+        used: 1,
+        remaining: 2,
+        collecting: false,
+        inflight: true,
+        request_ids: ['task'],
+      },
+      delegations: [{ event_id: 'task', text: 'Lookup', status: 'queued', result: '', error: '' }],
+    },
   ]
   await mountVoice()
   expect(container.textContent).toContain('You: unknown · Assistant: unknown')
   expect(container.textContent).toContain('Queued — may not have started')
+  const backgroundSummary = [...container.querySelectorAll('summary')].find(node =>
+    node.textContent?.includes('Background work'),
+  )
+  expect(backgroundSummary?.textContent).toContain('2 of 3 requests remaining')
+  expect(container.querySelector('[aria-label="Voice request allowance"]')?.textContent).toContain(
+    'A request is pending',
+  )
   expect(container.textContent).not.toContain('Assistant: thinking')
 })
 
@@ -671,25 +689,52 @@ test.each([{ delegations: undefined }, { delegations: [] }])(
   },
 )
 
-test('a queued delegation does not imply work started or expose a result as evidence', () => {
-  act(() => {
-    root.render(
-      createElement(VoiceSessionCard, {
-        session: {
-          ...session,
-          delegations: [
-            { event_id: 'task-1', text: 'Look up history', status: 'queued', result: 'Not an answer yet', error: '' },
-          ],
-        },
-      }),
-    )
-  })
+test('sequential request allowance follows durable work without implying execution or starting another request', () => {
+  const task = { event_id: 'task-1', text: 'Look up history', status: 'queued', result: 'Not an answer yet', error: '' }
+  const budget = { limit: 3, used: 1, remaining: 2, collecting: false, inflight: true, request_ids: ['task-1'] }
+  function renderWorkflow(update: Partial<RealtimeVoiceSession> = {}) {
+    act(() => {
+      root.render(
+        <MemoryRouter>
+          <VoiceSessionCard session={{ ...session, request_budget: budget, delegations: [task], ...update }} />
+        </MemoryRouter>,
+      )
+    })
+  }
+  renderWorkflow()
   const background = container.querySelector('[aria-label="Background work"]')
   expect(background?.textContent).toContain('Look up history')
   expect(background?.textContent).toContain('Queued — may not have started; no verified result.')
   expect(background?.textContent).not.toContain('Not an answer yet')
   expect(background?.textContent).not.toContain('No background request submitted')
   expect(container.querySelector('[aria-label="Durable background result"]')).toBeNull()
+  expect(background?.textContent).toContain('2 of 3 remaining')
+  expect(background?.textContent).toContain('A request is pending')
+  expect(background?.querySelector('a')).toBeNull()
+
+  renderWorkflow({ delegations: [{ ...task, status: 'delivered' }] })
+  expect(background?.textContent).toContain('Accepted by worker — execution not confirmed')
+  expect(background?.textContent).toContain('A request is pending')
+  expect(container.querySelector('[aria-label="Durable background result"]')).toBeNull()
+
+  renderWorkflow({
+    delegations: [{ ...task, status: 'answered', result: 'Verified stored answer' }],
+    request_budget: { ...budget, inflight: false },
+  })
+  expect(background?.textContent).not.toContain('A request is pending')
+  expect(background?.textContent).toContain('2 of 3 remaining')
+  expect(background?.querySelector('[aria-label="Durable background result"]')?.textContent).toBe(
+    'Verified stored answer',
+  )
+
+  renderWorkflow({
+    request_budget: { ...budget, used: 3, remaining: 0, request_ids: ['task-1', 'task-2', 'task-3'] },
+  })
+  expect(background?.textContent).toContain('0 of 3 remaining')
+  expect(background?.textContent).toContain('A request is pending')
+  expect(background?.textContent).toContain('Voice request allowance exhausted')
+  expect(background?.querySelector('a')?.getAttribute('href')).toBe('/s/chat-1')
+  expect(background?.querySelector('button')).toBeNull()
 })
 
 test('only an answered durable delegation exposes its result as background evidence', () => {
@@ -1269,12 +1314,14 @@ test('local microphone ended event clears enabled UI and reconnect observes the 
     button('Start call').click()
   })
   expect(container.textContent).toContain('Microphone: enabled')
+  expect([...container.querySelectorAll('button')].some(item => item.textContent === 'Recover microphone')).toBe(false)
   await act(async () => {
     native.readyState = 'ended'
     native.dispatchEvent(new window.Event('ended'))
   })
   expect(container.textContent).toContain('Microphone: disabled')
   expect(container.textContent).not.toContain('Microphone: enabled')
+  expect([...container.querySelectorAll('button')].some(item => item.textContent === 'Recover microphone')).toBe(false)
   await act(async () => {
     native.readyState = 'live'
     track.emit(TrackEvent.Restarted, track)
@@ -1282,6 +1329,7 @@ test('local microphone ended event clears enabled UI and reconnect observes the 
     rooms[0].emit(RoomEvent.Reconnected)
   })
   expect(container.textContent).toContain('Microphone: enabled')
+  expect([...container.querySelectorAll('button')].some(item => item.textContent === 'Recover microphone')).toBe(false)
   await act(async () => {
     await track.mute()
   })
@@ -1320,15 +1368,7 @@ test('permission failure keeps current call and explicit recovery uses same part
   expect(container.textContent).not.toContain('Microphone: enabled')
   expect(current.listenerCount(RoomEvent.LocalTrackPublished)).toBe(publicationListeners)
   expect(reports).toHaveLength(reportCount)
-  await act(async () => {
-    button('Mute').click()
-  })
-  expect(button('Recover microphone').disabled).toBe(true)
-  await act(async () => {
-    current.emit(RoomEvent.Reconnected)
-  })
-  expect(button('Unmute').getAttribute('aria-pressed')).toBe('true')
-  expect(button('Recover microphone').disabled).toBe(true)
+  expect([...container.querySelectorAll('button')].some(item => item.textContent === 'Recover microphone')).toBe(false)
 })
 
 test('successful explicit Unmute clears a prior capture failure only after live publication returns', async () => {
@@ -1336,6 +1376,7 @@ test('successful explicit Unmute clears a prior capture failure only after live 
   expect(container.textContent).toContain('Microphone permission was denied')
   await act(async () => button('Mute').click())
   expect(container.textContent).toContain('Microphone permission was denied')
+  expect(button('Recover microphone').disabled).toBe(true)
   const previousStream = globalThis.MediaStream
   class SyntheticStream {
     constructor(private tracks: MediaStreamTrack[]) {}
@@ -1368,10 +1409,11 @@ test('successful explicit Unmute clears a prior capture failure only after live 
   await act(async () => button('Unmute').click())
   expect(container.textContent).toContain('Microphone: enabled')
   expect(container.textContent).not.toContain('Microphone permission was denied')
+  expect([...container.querySelectorAll('button')].some(item => item.textContent === 'Recover microphone')).toBe(false)
 })
 
 test('pending microphone recovery disables mute controls so intentional mute cannot race restart', async () => {
-  const current = await connectCall()
+  const current = await connectCall(Object.assign(new Error('Capture unavailable'), { name: 'NotReadableError' }))
   const pending = Promise.withResolvers<undefined>()
   current.localParticipant.setMicrophoneEnabled = () => pending.promise
   await act(async () => {
@@ -1391,7 +1433,7 @@ test('pending microphone recovery disables mute controls so intentional mute can
   expect(button('Mute').getAttribute('aria-pressed')).toBe('false')
 })
 
-test('pending intentional mute blocks recovery and duplicate microphone actions through reconnect', async () => {
+test('pending intentional mute blocks duplicate microphone actions through reconnect without recapture', async () => {
   const current = await connectCall()
   const pending = Promise.withResolvers<undefined>()
   const enables: boolean[] = []
@@ -1401,12 +1443,10 @@ test('pending intentional mute blocks recovery and duplicate microphone actions 
   }
   await act(async () => {
     button('Mute').click()
-    button('Recover microphone').click()
     button('Mute').click()
   })
   expect(enables).toEqual([false])
   expect(button('Mute').disabled).toBe(true)
-  expect(button('Recover microphone').disabled).toBe(true)
   await act(async () => {
     current.emit(RoomEvent.Reconnecting)
     current.emit(RoomEvent.Reconnected)
@@ -1418,7 +1458,6 @@ test('pending intentional mute blocks recovery and duplicate microphone actions 
   })
   expect(button('Unmute').getAttribute('aria-pressed')).toBe('true')
   expect(button('Unmute').disabled).toBe(false)
-  expect(button('Recover microphone').disabled).toBe(true)
   expect(enables).toEqual([false])
 })
 

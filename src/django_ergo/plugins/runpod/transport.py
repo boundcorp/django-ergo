@@ -76,6 +76,26 @@ class ProviderError(Exception):
     """A deliberately sanitized provider or credential failure."""
 
 
+class RateLimitError(ProviderError):
+    """HTTP 429. RunPod REST shares one per-key budget across every endpoint
+    (observed 11/minute, 225/hour, 2700/day), so callers wait instead of failing.
+
+    ``retry_after`` is the provider's Retry-After in whole seconds, bounded.
+    """
+
+    def __init__(self, message, retry_after):
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
+def _retry_after(error):
+    try:
+        seconds = int(error.headers.get("Retry-After", ""))
+    except (AttributeError, TypeError, ValueError):
+        return 60
+    return min(max(seconds, 1), 3600)
+
+
 class OwnershipError(ProviderError):
     """Provider response does not prove the expected ownership and profile."""
 
@@ -160,7 +180,13 @@ class RunpodREST:
     """Small REST client; the credential callback returns a bearer token string."""
 
     def __init__(
-        self, credential, *, timeout=10, opener=None, no_capacity_messages=None
+        self,
+        credential,
+        *,
+        timeout=10,
+        opener=None,
+        no_capacity_messages=None,
+        budget=None,
     ):
         if not callable(credential):
             msg = "credential callback required"
@@ -185,6 +211,36 @@ class RunpodREST:
         self._credential = credential
         self._timeout = timeout
         self._opener = opener if opener is not None else build_opener(_NoRedirect())
+        # Optional durable per-key request budget shared across processes.
+        self._budget = budget
+
+    def _spend(self, *, priority=False):
+        if self._budget is None:
+            return
+        try:
+            self._budget.acquire(priority=priority)
+        except RateLimitError:
+            raise
+        except Exception:  # noqa: BLE001 -- budget storage errors never block teardown
+            if priority:
+                # Cleanup proceeds with the provider's own 429 as the backstop;
+                # a corrupt or stuck budget file must never strand a Pod.
+                return
+            msg = "provider request budget unavailable"
+            raise RateLimitError(msg, 60) from None
+
+    def _observe(self, headers, status):
+        if self._budget is not None:
+            with suppress(Exception):
+                self._budget.observe(headers, status)
+
+    def reserve(self):
+        """Charge an unrepeatable send (create) before the caller commits to it.
+
+        Raises RateLimitError having sent nothing; ``create_pod`` then makes its
+        request without charging the budget a second time.
+        """
+        self._spend()
 
     def _token(self):
         token = self._credential()
@@ -201,8 +257,19 @@ class RunpodREST:
         return any(message in text for message in self._no_capacity)
 
     def _request(  # noqa: PLR0913
-        self, method, path, *, body=None, absent_ok=False, capacity=False, base=_BASE
+        self,
+        method,
+        path,
+        *,
+        body=None,
+        absent_ok=False,
+        capacity=False,
+        base=_BASE,
+        priority=False,
+        spend=True,
     ):
+        if spend:
+            self._spend(priority=priority)
         try:
             token = self._token()
             data = None if body is None else json.dumps(body, allow_nan=False).encode()
@@ -217,13 +284,18 @@ class RunpodREST:
                 },
             )
             with self._opener.open(request, timeout=self._timeout) as response:
+                self._observe(getattr(response, "headers", None), 200)
                 payload = response.read(_MAX_RESPONSE + 1)
             if len(payload) > _MAX_RESPONSE:
                 raise ValueError  # noqa: TRY301
             return json.loads(payload) if payload else None
         except HTTPError as exc:
+            self._observe(exc.headers, exc.code)
             if absent_ok and exc.code == HTTPStatus.NOT_FOUND:
                 return _NOT_FOUND
+            if exc.code == HTTPStatus.TOO_MANY_REQUESTS:
+                msg = "provider rate limit exceeded"
+                raise RateLimitError(msg, _retry_after(exc)) from None
             # Only the body is matched; it is never stored or re-raised.
             if capacity and self._refused_for_capacity(exc):
                 msg = "provider reported no capacity"
@@ -234,14 +306,16 @@ class RunpodREST:
             msg = "provider request failed"
             raise ProviderError(msg) from None
 
-    def list_pods(self):
-        result = self._request("GET", "/pods?includeNetworkVolume=true")
+    def list_pods(self, *, priority=False):
+        result = self._request(
+            "GET", "/pods?includeNetworkVolume=true", priority=priority
+        )
         if not isinstance(result, list) or any(not isinstance(p, dict) for p in result):
             msg = "invalid provider response"
             raise ProviderError(msg)
         return [_safe_pod(pod) for pod in result]
 
-    def get_pod(self, pod_id):
+    def get_pod(self, pod_id, *, priority=False):
         if not isinstance(pod_id, str) or not pod_id or not pod_id.isalnum():
             msg = "invalid Pod ID"
             raise ValueError(msg)
@@ -249,6 +323,7 @@ class RunpodREST:
             "GET",
             "/pods/" + quote(pod_id, safe="") + "?includeNetworkVolume=true",
             absent_ok=True,
+            priority=priority,
         )
         if result is _NOT_FOUND:
             return None
@@ -290,6 +365,7 @@ class RunpodREST:
             port = pod["portMappings"]["22"]
             if type(port) is not int or not 1 <= port <= _MAX_PORT:
                 raise ValueError  # noqa: TRY301
+            self._spend()
             request = Request(
                 "https://api.runpod.io/v2/pods/"
                 + quote(pod_id, safe="")
@@ -361,7 +437,8 @@ class RunpodREST:
         return gpus
 
     def create_pod(self, body):
-        result = self._request("POST", "/pods", body=body, capacity=True)
+        # Charged by reserve() before create_once commits uncertainty.
+        result = self._request("POST", "/pods", body=body, capacity=True, spend=False)
         if not isinstance(result, dict):
             msg = "invalid provider create response"
             raise ProviderError(msg)
@@ -376,11 +453,11 @@ class RunpodREST:
         if not isinstance(ownership, Ownership):
             msg = "ownership profile required"
             raise TypeError(msg)
-        pod = self.get_pod(pod_id)
+        pod = self.get_pod(pod_id, priority=True)
         if pod is None or not ownership.matches(pod, request_bound=request_bound):
             msg = "ownership or storage profile unverified"
             raise OwnershipError(msg)
-        self._request("DELETE", "/pods/" + quote(pod_id, safe=""))
+        self._request("DELETE", "/pods/" + quote(pod_id, safe=""), priority=True)
 
 
 class FixtureRunpodREST(RunpodREST):
@@ -390,7 +467,7 @@ class FixtureRunpodREST(RunpodREST):
     supply an in-memory fake.
     """
 
-    def __init__(self, opener, *, no_capacity_messages=None):
+    def __init__(self, opener, *, no_capacity_messages=None, budget=None):
         if opener is None:
             msg = "offline fixture opener required"
             raise ValueError(msg)
@@ -398,4 +475,5 @@ class FixtureRunpodREST(RunpodREST):
             lambda: "offline-fixture",
             opener=opener,
             no_capacity_messages=no_capacity_messages,
+            budget=budget,
         )

@@ -56,9 +56,35 @@ export function VoiceBackgroundWork({ session }: { session: RealtimeVoiceSession
   const pending = session.state?.pending_delegation
   const delegations = session.delegations ?? []
   const tasks = [...delegations, ...(session.thread_updates ?? [])]
+  const budget = session.request_budget
   return (
     <div className="mt-3" aria-label="Background work">
       <strong>Background work · separate from voice SDK states</strong>
+      {budget && (
+        <div aria-label="Voice request allowance" className="mt-1">
+          <p>
+            Voice requests: {budget.remaining} of {budget.limit} remaining · {budget.used} used.
+          </p>
+          {budget.collecting ? (
+            <p>Collecting the current request; wait for submission before making another voice request.</p>
+          ) : budget.inflight ? (
+            <p>
+              A request is pending; wait for its result before making another voice request. Requests are sequential.
+            </p>
+          ) : (
+            budget.remaining > 0 && <p>Requests are sequential; nothing starts automatically.</p>
+          )}
+          {budget.remaining === 0 && (
+            <p>
+              Voice request allowance exhausted.{' '}
+              <Link className="underline" to={`/s/${session.chat_id}`}>
+                Continue in owning text thread
+              </Link>
+              .
+            </p>
+          )}
+        </div>
+      )}
       {delegations.length === 0 && (
         <p className="mt-1 text-muted">
           {pending?.status === 'collecting'
@@ -81,7 +107,7 @@ export function VoiceBackgroundWork({ session }: { session: RealtimeVoiceSession
                 : task.status === 'queued'
                   ? 'Queued — may not have started; no verified result.'
                   : task.status === 'delivered'
-                    ? 'Delivered to worker — no verified result yet.'
+                    ? 'Accepted by worker — execution not confirmed; no verified result yet.'
                     : task.status === 'waiting'
                       ? 'Waiting for normal thread approval — no verified result yet.'
                       : `Status: ${task.status || 'unknown'} — no verified result recorded.`}

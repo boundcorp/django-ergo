@@ -11,6 +11,16 @@ This document tracks the major milestones and evolution of the Django Ergo proje
   Missing boundaries remain unknown; rollout, retention and broader coverage
   are documented in [lifecycle events](docs/lifecycle-events.md).
 
+### RunPod REST rate-limit budget (November 2026)
+
+- RunPod now limits each API key to 11 REST requests/minute and 225/hour.
+  Native job `8896a538` was stopped early because one HTTP 429 on its
+  owned-Pod read was fatal.
+- 429 now raises `RateLimitError`, carrying `Retry-After`. Maintenance lists
+  Pods once per pass for all ledgers. The Worker reads its owned Pod at most
+  once a minute and waits through a failed read. A failed SSH lookup is retried
+  after 60s.
+
 ### H3 nested video-VAE layout and Python headers (November 2026)
 
 - The launcher links `FL2VA/video_vae/model.safetensors -> source/model.safetensors`
