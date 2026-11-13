@@ -1007,8 +1007,9 @@ model/reasoning, export and worker-stopping thread resolution. Resolve warns
 that reopening the thread does not resume cancelled work. The voice page keeps
 conversation, observed activity, capture controls and actionable failures/
 approvals visible; identifiers, transport/provider details, route configuration
-and runtime events are collapsed under Diagnostics. Enable sound is a blocked
-playback unlock on the existing room, not another join or microphone start.
+and runtime events are collapsed under Diagnostics. Enable sound unlocks
+playback on the existing room (not another join or microphone start) and stays
+visible until the browser confirms the assistant's audio is playing.
 
 ### Message identity
 

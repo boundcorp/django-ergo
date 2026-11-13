@@ -1,6 +1,7 @@
 """Authenticated realtime voice sessions and durable bridge state."""
 
 import json
+import re
 import uuid
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -674,10 +675,35 @@ def startup_briefing(session):
             + (", ".join(sorted(budget.allowed_tools)) or "none")
             + "."
         )
+    bot_name = session.chat.bot_name[:160]
+    if not available:
+        capability = (
+            f"Delegation is unavailable in this call: {reason} If asked whether you have tools or can do "
+            "something, say you cannot run background work in this call and give that reason."
+        )
+    elif authorization:
+        capability = (
+            f"Delegation is available: you have no tools of your own, but with client delegation you can hand "
+            f"one request per call to {bot_name}, the bot that owns this thread. It runs a normal turn of that "
+            "bot with its own tools (for example chat history, threads and workers) under its normal action "
+            "approvals. Its answer is posted in this thread and returned to you here as a verified result to "
+            f"speak. If asked whether you have tools or can do something, say yes: you can ask {bot_name} to do "
+            "it, once per call. Never say you have no tools."
+        )
+    else:
+        capability = (
+            f"Delegation is available: you have no tools of your own, but with client delegation you can hand "
+            f"one read-only request per call to {bot_name}, limited to these read tools: "
+            f"{', '.join(sorted(budget.allowed_tools)) or 'none'}. Its answer is returned to you here as a "
+            "verified result to speak. If asked whether you have tools, say you can run one read-only lookup "
+            "this call; never say you have no tools."
+        )
+    base = NORMAL_RESTRICTION if authorization else VOICE_RESTRICTION
     briefing = {
         "context": context[:BRIEFING_CONTEXT_CHARS],
-        "restriction": f"{NORMAL_RESTRICTION if authorization else VOICE_RESTRICTION} {reason}",
+        "restriction": base if reason == base else f"{base} {reason}",
         "reason": reason,
+        "capability": capability,
         "delegation_available": available,
         "execution_mode": "normal_thread" if authorization else "read_only",
         "instructions": instructions,
@@ -1010,3 +1036,52 @@ def token(request, session_id: str):
 @router.get("/realtime-voice/sessions/{session_id}/events")
 def events(request, session_id: str):
     return session_out(owned_session(request.auth, session_id))["events"]
+
+
+# Browser-observed playback transitions: evidence for "I heard nothing", never proof of hearing.
+CLIENT_AUDIO_STATUSES = {
+    "track_subscribed": "Browser subscribed to the assistant's audio track.",
+    "playback_started": "Browser started playing assistant audio; hearing is not confirmed.",
+    "playback_blocked": "Browser blocked assistant audio playback.",
+    "playback_failed": "Browser could not play assistant audio.",
+    "sound_enabled": "Sound was enabled from the call page.",
+    "audio_arriving": "Assistant audio is arriving in the browser (signal level detected).",
+    "turn_unplayed": "An assistant turn finished before the browser confirmed playback.",
+}
+MAX_CLIENT_AUDIO_EVENTS = 40
+CLIENT_AUDIO_ID = re.compile(r"[A-Za-z0-9_-]{1,80}")
+CLIENT_AUDIO_DETAIL = re.compile(r"[A-Za-z0-9 ._:/()-]{0,120}")
+
+
+class ClientAudioIn(Schema):
+    event_id: str
+    status: str
+    detail: str = ""
+
+
+@router.post("/realtime-voice/sessions/{session_id}/client-audio")
+def client_audio(request, session_id: str, data: ClientAudioIn):
+    """Record one bounded browser playback report for an active session."""
+    session = owned_session(request.auth, session_id)
+    if (
+        data.status not in CLIENT_AUDIO_STATUSES
+        or not CLIENT_AUDIO_ID.fullmatch(data.event_id)
+        or not CLIENT_AUDIO_DETAIL.fullmatch(data.detail)
+    ):
+        raise HttpError(400, "Invalid client audio report")
+    detail = data.detail.strip()
+    text = CLIENT_AUDIO_STATUSES[data.status] + (f" ({detail})" if detail else "")
+    event_id = f"client-audio:{data.event_id}"
+    with transaction.atomic():
+        locked = RealtimeVoiceSession.objects.select_for_update().get(pk=session.pk)
+        if locked.status != "active":
+            raise HttpError(409, "Voice session ended")
+        if not locked.events.filter(event_id=event_id).exists() and (
+            locked.events.filter(kind="client_audio").count() >= MAX_CLIENT_AUDIO_EVENTS
+        ):
+            return {"recorded": False}
+        try:
+            record_event(locked.pk, event_id, "client_audio", text)
+        except ValueError as exc:
+            raise HttpError(409, "Client audio report ID already used") from exc
+    return {"recorded": True}

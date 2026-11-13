@@ -833,6 +833,16 @@ export type RealtimeVoiceSession = {
   thread_updates?: VoiceTaskUpdate[]
   events: RealtimeVoiceEvent[]
 }
+/** Browser playback evidence a voice call reports; the server records it as a `client_audio` event. */
+export type ClientAudioStatus =
+  | 'track_subscribed'
+  | 'playback_started'
+  | 'playback_blocked'
+  | 'playback_failed'
+  | 'sound_enabled'
+  | 'audio_arriving'
+  | 'turn_unplayed'
+export type ClientAudioReport = { event_id: string; status: ClientAudioStatus; detail?: string }
 
 export const api = {
   realtimeVoiceConfig: () => request<{ enabled: boolean; standby_enabled?: boolean }>('GET', '/realtime-voice/config'),
@@ -850,6 +860,8 @@ export const api = {
     request<RealtimeVoiceSession>('POST', `/realtime-voice/sessions/${encodeURIComponent(id)}/resume`),
   endRealtimeVoice: (id: string) =>
     request<RealtimeVoiceSession>('POST', `/realtime-voice/sessions/${encodeURIComponent(id)}/end`),
+  reportRealtimeVoiceAudio: (id: string, report: ClientAudioReport) =>
+    request<{ recorded: boolean }>('POST', `/realtime-voice/sessions/${encodeURIComponent(id)}/client-audio`, report),
   apiKeys: () => request<ApiKey[]>('GET', '/auth/keys'),
   createApiKey: (name: string) => request<ApiKey & { key: string }>('POST', '/auth/keys', { name }),
   revokeApiKey: (id: string) => request<{ ok: boolean }>('DELETE', `/auth/keys/${id}`),

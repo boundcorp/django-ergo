@@ -252,6 +252,98 @@ def test_saved_context_is_not_an_implicit_user_request_or_fulfilled_lookup(cooki
 
 
 @pytest.mark.django_db(transaction=True)
+def test_once_the_calls_one_request_is_taken_the_voice_is_told_and_later_signals_are_answered(cooking, held_messages):
+    _, vid, _ = cooking
+
+    def signal(delegation_id):
+        return {"type": "session.delegation.created", "delegation": {"id": delegation_id, "target": "client"}}
+
+    def rules(events):
+        # "Do you have tools?" after the request is spent must not get "yes, I can ask the bot".
+        return [event["content"] for event in events if event["type"] == "session.instructions.append"]
+
+    async def scenario():
+        assistant = bridge.Assistant(vid, await sync_to_async(realtime_voice.bridge_state)(vid), None)
+        sdk = offline_session(assistant)
+        with patch.object(bridge.Assistant, "duplex_session", new_callable=PropertyMock, return_value=sdk):
+            await bind(assistant, sdk)
+            assert drain(sdk) == []  # a fresh session's request is still available
+            sdk._handle_event(signal("first"))
+            async with asyncio.timeout(5):  # the first signal is recorded as this call's request
+                while not (await sync_to_async(realtime_voice.bridge_state)(vid))["state"].get("pending_delegation"):
+                    await asyncio.sleep(0.01)
+            sdk._handle_event(signal("first"))  # a repeated wire event is not a second request
+            sdk._handle_event(signal("second"))
+            assistant.stop()
+            await settle(assistant)
+            events = drain(sdk)
+            assert rules(events) == [bridge.REQUEST_TAKEN]
+            answers = [event for event in events if event["type"] == "session.commentary.append"]
+            assert [(event["delegation_id"], event["content"]) for event in answers] == [
+                ("second", bridge.ONE_REQUEST_USED)
+            ]
+        # A reconnected bridge knows the logical session's request is already taken.
+        resumed = bridge.Assistant(vid, await sync_to_async(realtime_voice.bridge_state)(vid), None)
+        sdk = offline_session(resumed)
+        with patch.object(bridge.Assistant, "duplex_session", new_callable=PropertyMock, return_value=sdk):
+            await bind(resumed, sdk)
+            sdk._handle_event(signal("after-reconnect"))
+            await settle(resumed)
+            events = drain(sdk)
+            assert rules(events) == [bridge.REQUEST_TAKEN]
+            answers = [event for event in events if event["type"] == "session.commentary.append"]
+            assert [event["delegation_id"] for event in answers] == ["after-reconnect"]
+            assert not resumed.jobs and resumed.pending_id is None
+
+    async_to_sync(scenario)()
+    assert held_messages == []
+
+
+@pytest.mark.django_db(transaction=True)
+def test_bridge_audio_evidence_is_recorded_once_and_frames_pass_through_unchanged(cooking):
+    _, vid, _ = cooking
+    snapshot = realtime_voice.bridge_state(vid)
+    frames = [
+        rtc.AudioFrame(data=bytes([index, 0]) * 240, sample_rate=24000, num_channels=1, samples_per_channel=240)
+        for index in range(3)
+    ]
+
+    async def passthrough(_agent, audio, _settings):
+        async for frame in audio:
+            yield frame
+
+    async def source():
+        for frame in frames:
+            yield frame
+
+    async def scenario():
+        assistant = bridge.Assistant(vid, snapshot, None)
+        loop = asyncio.get_running_loop()
+        lost, subscribed = loop.create_future(), loop.create_future()
+        assistant.watch_audio_subscription(lost)
+        assistant.watch_audio_subscription(subscribed)
+        lost.cancel()  # a room torn down before the browser subscribed is not evidence
+        await asyncio.sleep(0)
+        with patch.object(bridge.Agent.default, "realtime_audio_output_node", passthrough):
+            played = [frame async for frame in assistant.realtime_audio_output_node(source(), None)]
+        assert played == frames
+        await settle(assistant)
+        events = await sync_to_async(realtime_voice.bridge_state)(vid)
+        assert [e["text"] for e in events["events"] if e["kind"] == "bridge_audio"] == [
+            bridge.BRIDGE_AUDIO_EVENTS["generated"]
+        ]
+        subscribed.set_result(None)
+        await asyncio.sleep(0)
+        await settle(assistant)
+        events = await sync_to_async(realtime_voice.bridge_state)(vid)
+        assert sorted(e["text"] for e in events["events"] if e["kind"] == "bridge_audio") == sorted(
+            bridge.BRIDGE_AUDIO_EVENTS.values()
+        )
+
+    async_to_sync(scenario)()
+
+
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("stop", [True, False])
 def test_stop_or_missing_final_never_dispatches(cooking, held_messages, stop):
     _, vid, _ = cooking
@@ -455,6 +547,7 @@ def test_disconnect_while_standby_waits_for_speech_is_terminal(cooking, settings
     class Session:
         def __init__(self, **_kwargs):
             self.handlers = {}
+            self.room_io = SimpleNamespace(subscribed_fut=None)
 
         def on(self, name):
             def register(handler):
@@ -538,6 +631,7 @@ def test_standby_speech_races_and_teardown(cooking, settings, speech_timing):
     class Session:
         def __init__(self, **_kwargs):
             self.handlers = {}
+            self.room_io = SimpleNamespace(subscribed_fut=None)
 
         def on(self, name):
             def register(handler):

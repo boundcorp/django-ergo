@@ -222,6 +222,17 @@ def test_exact_thread_grant_is_default_off_revocable_and_not_inherited(normal_vo
 
 
 @pytest.mark.django_db(transaction=True)
+def test_voice_is_told_it_can_delegate_to_the_owning_bot_until_its_request_is_used(normal_voice):
+    chat, _, voice = normal_voice
+    capability = realtime_voice.startup_briefing(voice)["capability"]
+    # Lee's 2026-11-13 call: told "no callable voice tools", the voice denied having any tooling.
+    assert capability.startswith("Delegation is available") and f"ask {chat.bot_name} to do it" in capability
+    realtime_voice.delegate(voice.pk, "voice-request", "Where are we at with the work?")
+    used = realtime_voice.startup_briefing(RealtimeVoiceSession.objects.get(pk=voice.pk))["capability"]
+    assert used.startswith("Delegation is unavailable") and "one background request is already used" in used
+
+
+@pytest.mark.django_db(transaction=True)
 def test_normal_task_transient_failure_is_not_retried_or_reported_answered(normal_voice, use_bots):  # noqa: F811
     from django_ergo.conversation.engine import automatic_request_retries
 
