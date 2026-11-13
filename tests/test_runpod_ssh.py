@@ -29,7 +29,7 @@ def pod(**changes):
     value = {
         "id": "pod123",
         "consumerUserId": OWNER.account,
-        "image": OWNER.image,
+        "imageName": OWNER.image,
         "containerDiskInGb": 200,
         "volumeInGb": 0,
         "env": {

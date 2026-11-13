@@ -60,7 +60,7 @@ class ProviderHTTP:
                 "id": "pod123",
                 "consumerUserId": "fixture-account",
                 "env": body["env"],
-                "image": body["imageName"],
+                "imageName": body["imageName"],
                 "containerDiskInGb": body["containerDiskInGb"],
                 "volumeInGb": 0,
                 "networkVolume": None,

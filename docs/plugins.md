@@ -95,14 +95,17 @@ request profile: one GPU, SECURE cloud, an image and container disk, explicit
 fingerprint covers the canonical request before adding
 `ERGO_ATTEMPT_FINGERPRINT`. Ownership checks require the account, attempt,
 fingerprint and matching profile; a nonunique Pod name never authorizes deletion.
+Runpod REST v1 returns the pinned image as `imageName`. The HTTP boundary
+normalizes that field to the internal ownership profile's `image` before
+strict cleanup or SSH checks; raw `image` is not a provider-field fallback.
 The existing `configure(Ownership)` path is cleanup-only, without a create body.
 
 `create_once` without a client is a dry run: no POST or create intent.
 The controller's fixture mode uses an injected-opener `FixtureRunpodREST`.
 Its explicit live mode additionally requires a bound live configuration,
 an executing independent fresh cleaner and a named credential callback;
-the live path has not been exercised against Runpod. The ledger durably
-records `create_unknown`/`create_started`
+the create receipt alone does not prove boot, model readiness or generation.
+The ledger durably records `create_unknown`/`create_started`
 before the one POST. A timeout, restart, empty response or failed receipt write
 does not authorize replay; a subsequent create attempt is rejected. A valid
 returned ID is only a receipt, never evidence of running or generation.
