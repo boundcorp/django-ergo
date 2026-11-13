@@ -31,6 +31,37 @@ from .runner import assemble
 from .runner import process_shot
 from .runner import snapshot
 from .supervisor import CleanerSupervision
+from .transport import OwnershipError
+from .transport import ProviderError
+
+# RunPod REST shares one small per-key budget (observed 11/minute, 225/hour)
+# with maintenance. The Worker steps every few seconds, so it re-reads the owned
+# Pod's ownership and rate at most once a minute and treats a failed read,
+# including HTTP 429, as a wait. Rental deadlines still apply independently.
+OWNED_POD_SECONDS = 60
+
+
+def _owned_pod_throttled(ctx, job, provider):
+    """Return ``(pod, wait_message)``; at most one provider read per interval."""
+    now = time.time()
+    cache = ctx.state.get("owned_pod") or {}
+    if now < cache.get("next", 0):
+        return cache.get("pod"), None
+    try:
+        pod = _owned_pod(job, provider)
+    except OwnershipError:
+        raise
+    except ProviderError as error:
+        wait = getattr(error, "retry_after", OWNED_POD_SECONDS)
+        ctx.state["owned_pod"] = {**cache, "next": now + wait}
+        if cache.get("pod") is None:
+            return (
+                None,
+                f"Provider read deferred ({type(error).__name__}); retry in {wait}s",
+            )
+        return cache["pod"], None
+    ctx.state["owned_pod"] = {"pod": pod, "next": now + OWNED_POD_SECONDS}
+    return pod, None
 
 
 def _owned_pod(job, provider):
@@ -158,17 +189,20 @@ def step(ctx, job):  # noqa: C901, PLR0911, PLR0912, PLR0915 — one bounded nat
         # created on; proven no-capacity refusals fall through to the next one.
         # Live calls additionally enforce the independent cleaner heartbeat gate.
         return offers.launch(job, provider, stop=native.stop)
-    pod = _owned_pod(job, provider)
-    if pod is None:
-        return "Create result unknown; inventory inspection only, no replacement"
     startup_deadline = (
         state["created"]
         + job.profile["config"]["timeline"]["startup_seconds"]
         + job.profile["config"]["timeline"]["download_seconds"]
     )
+    # Checked before any provider read, so a deferred read never outlives it.
     if state["phase"] != "ready" and time.time() >= startup_deadline:
         native.stop(job, "failed")
         return "Startup deadline reached; independent cleanup pending"
+    pod, deferred = _owned_pod_throttled(ctx, job, provider)
+    if deferred:
+        return deferred
+    if pod is None:
+        return "Create result unknown; inventory inspection only, no replacement"
     try:
         base_url = ensure_tunnel(job, provider, pod, deadline=cutoff)
     except TunnelUnavailable:

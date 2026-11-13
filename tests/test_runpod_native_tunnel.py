@@ -109,6 +109,23 @@ def ensure(tunnel):
     )
 
 
+def test_failed_ssh_lookup_waits_before_spending_more_provider_reads(
+    tunnel, monkeypatch
+):
+    clock = [time.time()]
+    monkeypatch.setattr(native_tunnel.time, "time", lambda: clock[0])
+    tunnel.provider.ssh_connection.side_effect = ProviderError("not yet")
+    for _ in range(3):
+        with pytest.raises(native_tunnel.TunnelUnavailable):
+            ensure(tunnel)
+        clock[0] += 5
+    tunnel.provider.ssh_connection.assert_called_once()
+    clock[0] += native_tunnel.CONNECT_SECONDS
+    tunnel.provider.ssh_connection.side_effect = None
+    assert ensure(tunnel).startswith("http://127.0.0.1:")
+    assert tunnel.provider.ssh_connection.call_count == 2
+
+
 def test_pins_owned_connection_and_reuses_master_across_fresh_polls(tunnel):
     first = ensure(tunnel)
     # A fresh Worker task only has the durable job, not any Popen or ctx state.
@@ -347,6 +364,6 @@ def test_worker_step_surfaces_launcher_failure_without_waiting(tunnel, monkeypat
     monkeypatch.setattr(native_h3, "H3Client", health)
     tunnel.ssh.marker["state"] = "failed"
     with pytest.raises(native_tunnel.LauncherFailed):
-        native_h3.step(SimpleNamespace(stopping=False), tunnel.job)
+        native_h3.step(SimpleNamespace(stopping=False, state={}), tunnel.job)
     health.assert_not_called()
     assert not tunnel.ssh.active

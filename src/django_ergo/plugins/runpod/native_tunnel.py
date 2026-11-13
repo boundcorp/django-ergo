@@ -29,6 +29,9 @@ from .transport import ProviderError
 
 START_SECONDS = 15
 COMMAND_SECONDS = 5
+# Each authenticated SSH lookup costs up to three RunPod REST reads (Pod, logs,
+# Pod) from a small per-key budget; retry it at most once a minute.
+CONNECT_SECONDS = 60
 
 
 class TunnelUnavailable(OSError):  # noqa: N818 -- availability signal for pre-ready polling
@@ -256,6 +259,15 @@ def ensure(job, provider, pod, *, deadline):  # noqa: C901, PLR0915 -- one bound
                 message = "Rental stopped; no new SSH connection"
                 raise TunnelUnavailable(message)
             key = validate_private_key(job.profile["binding"], job.profile["config"])
+            after = directory / "connect-after"
+            try:
+                waiting = time.time() < float(after.read_text())
+            except (OSError, ValueError):
+                waiting = False  # absent or unreadable: allow one lookup now
+            if waiting:
+                message = "Waiting to retry the authenticated SSH lookup"
+                raise TunnelUnavailable(message)
+            _write(after, repr(time.time() + CONNECT_SECONDS))
             connection = provider.ssh_connection(pod["id"], owner, deadline=end)
             if Experiment(job.ledger_path).status()["stop_reason"]:
                 message = "Rental stopped during SSH authentication"
@@ -297,6 +309,9 @@ def ensure(job, provider, pod, *, deadline):  # noqa: C901, PLR0915 -- one bound
                 "port": port,
             }
             _write(state_path, json.dumps(state))
+            # A later transport loss may reconnect at once; only lookups that
+            # did not yield a tunnel wait out CONNECT_SECONDS.
+            after.unlink(missing_ok=True)
         _launcher(directory, state, owner.fingerprint, end)
         if (
             Experiment(job.ledger_path).status()["stop_reason"]

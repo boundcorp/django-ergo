@@ -23,6 +23,7 @@ from .cleanup import RESTCleanup
 from .create import bind_offer
 from .experiment import Experiment
 from .transport import ProviderError
+from .transport import RateLimitError
 
 AVAILABILITY_RANK = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
 SEEN_LIMIT = 20
@@ -268,9 +269,15 @@ def _create_on(job, provider, offer, now):
         # A policy/catalog problem with this offer, not stock: try the next.
         outcome = f"invalid: {exc}"[:200]
     else:
-        state = RESTCleanup(job.ledger_path).create_once(
-            now=time.time(), client=provider, live_execute=config["live_execute"]
-        )
+        try:
+            state = RESTCleanup(job.ledger_path).create_once(
+                now=time.time(), client=provider, live_execute=config["live_execute"]
+            )
+        except RateLimitError:
+            # Refused by the request budget before the POST: nothing was sent.
+            # The bind stays unsent and the next launch step retires it.
+            _attempt(experiment, offer, time.time(), "deferred", seq)
+            return "deferred"
         if state["create_started"]:
             with experiment._tx() as db:
                 received = db.execute("SELECT 1 FROM experiment_receipts").fetchone()
@@ -283,7 +290,7 @@ def _create_on(job, provider, offer, now):
     return outcome
 
 
-def launch(job, provider, *, stop, now=None):
+def launch(job, provider, *, stop, now=None):  # noqa: C901, PLR0911 -- one bounded launch step
     """One launch step for a reserved job; returns Worker progress text.
 
     ``stop(job, reason)`` persists a stop intent. Polls are rate-limited by
@@ -334,6 +341,11 @@ def launch(job, provider, *, stop, now=None):
             )
         if outcome == "not_sent":
             return "Stop requested before create; no rental was sent"
+        if outcome == "deferred":
+            # Bounded like a stock wait: give up cleanly once it has elapsed.
+            if now - watch["first_poll"] < hw["stock_wait_seconds"]:
+                return "Provider request budget exhausted; create deferred to the next poll"
+            break
         refused += outcome == "no_capacity"
     seen_text = _summary(seen)
     if refused >= hw["max_create_attempts"]:
