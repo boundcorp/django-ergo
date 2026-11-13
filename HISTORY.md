@@ -4,6 +4,14 @@ This document tracks the major milestones and evolution of the Django Ergo proje
 
 ## Development Timeline
 
+### RunPod Worker liveness counts the scheduled poll (November 2026)
+
+- Maintenance treated a live H3 Worker as lost after 180s without an update.
+  That Worker's next poll was queued behind other bots' tasks in the shared
+  Celery pool, so job `eb17e7f6` was stopped after its first verified shot.
+  Liveness now counts from the latest of the last update, the current step
+  start and the scheduled poll, over 600s. Rental deadlines still bound spend.
+
 ### Correlated lifecycle evidence (November 2026)
 
 - Added an opt-in, content-free lifecycle ledger and deterministic evidence

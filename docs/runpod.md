@@ -37,9 +37,13 @@ arbitrary commands, caller-selected images, or caller-selected paths.
   missing/disabled server policy, early work cutoff or absolute deadline requests
   stop. Provider cleanup retries independently. An accepted DELETE or empty
   inventory is not final absence evidence. Unresolved creates retain liability.
-- Independent maintenance stops a controller whose active Worker row has not
-  advanced for 180 seconds, without waiting for the generic 30-minute step
-  lease. It checks startup/download deadlines independently of the watcher.
+- Independent maintenance stops a controller whose active Worker shows no sign
+  of life for 600 seconds, without waiting for the generic 30-minute step lease.
+  Its last update, current step start and scheduled next poll all count as
+  signs of life. A live Worker's poll can wait minutes in the shared Celery pool;
+  on 2026-11-13 the old 180-second rule stopped a healthy job after its first
+  shot. Maintenance checks startup/download and rental deadlines independently
+  of the watcher.
 
 ## Install on the host
 
