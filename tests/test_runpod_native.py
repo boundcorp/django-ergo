@@ -261,6 +261,84 @@ def test_terminal_reservation_release_requires_proven_no_create(setup, created):
     assert Experiment(job.ledger_path).status()["phase"] == "terminated"
 
 
+def test_operator_cost_review_preserves_reservation_and_lifetime_limit(setup):
+    job = begin(setup)
+    drive(setup, job)
+    native.stop(job, "failed")
+    independent_tick(job)
+    setup.policy["reconciled_costs"] = {
+        str(job.pk): {
+            "amount_usd": "0.20",
+            "basis": "conservative_elapsed_rate",
+            "evidence": "fixture: positive compute/storage absence",
+            "observed_at": time.time(),
+        }
+    }
+    with pytest.raises(ValueError, match="lifetime rental"):
+        invoke(setup, "start", profile="h3_frozen", request_key="approved-bounded-run")
+    setup.policy["max_rentals"] = 2
+    pricing = setup.policy["profiles"]["h3_frozen"]["config"]["pricing"]
+    pricing["compute_hourly_usd"]["amount"] = "2.19"
+    result = invoke(
+        setup, "start", profile="h3_frozen", request_key="approved-bounded-run"
+    )
+    new = RunpodJob.objects.get(pk=result["job_id"])
+    assert new.profile["config"]["pricing"]["project_committed_usd"] == "0.20"
+    job.refresh_from_db()
+    assert job.reservation_usd == Decimal("1.23")
+    assert Experiment(job.ledger_path).status()["create_started"] == 1
+    assert setup.provider.posts == 1
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        {"amount_usd": "-0.01"},
+        {"amount_usd": "NaN"},
+        {"basis": "unverified"},
+        {"observed_at": float("inf")},
+    ],
+)
+def test_invalid_operator_cost_review_blocks_admission(setup, invalid):
+    job = begin(setup)
+    drive(setup, job)
+    native.stop(job, "failed")
+    independent_tick(job)
+    setup.policy["max_rentals"] = 2
+    setup.policy["reconciled_costs"] = {
+        str(job.pk): {
+            "amount_usd": "0.20",
+            "basis": "conservative_elapsed_rate",
+            "evidence": "fixture: positive compute/storage absence",
+            "observed_at": time.time(),
+            **invalid,
+        }
+    }
+    with pytest.raises(ValueError, match="Invalid reconciled Runpod"):
+        invoke(setup, "start", profile="h3_frozen", request_key="invalid-review")
+    assert RunpodJob.objects.count() == 1
+    assert setup.provider.posts == 1
+
+
+def test_operator_cost_review_cannot_release_active_rental(setup):
+    job = begin(setup)
+    drive(setup, job)
+    setup.policy.update(max_rentals=2, max_concurrent=2)
+    setup.policy["reconciled_costs"] = {
+        str(job.pk): {
+            "amount_usd": "0.20",
+            "basis": "conservative_elapsed_rate",
+            "evidence": "fixture: not yet cleaned",
+            "observed_at": time.time(),
+        }
+    }
+    pricing = setup.policy["profiles"]["h3_frozen"]["config"]["pricing"]
+    pricing["compute_hourly_usd"]["amount"] = "2.19"
+    with pytest.raises(ValueError, match="project cap exceeded"):
+        invoke(setup, "start", profile="h3_frozen", request_key="active-review")
+    assert RunpodJob.objects.count() == 1
+
+
 @pytest.mark.parametrize("gate", ["principal", "bot", "budget", "price", "maintenance"])
 def test_admission_denies_before_provider_or_worker(setup, gate):
     if gate == "principal":

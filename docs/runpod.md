@@ -90,6 +90,7 @@ RUNPOD_ACCOUNTS = {
         "max_rentals": 1,
         "budget_usd": "3.00",
         "prior_committed_usd": "0.00",
+        "reconciled_costs": {},  # operator-reviewed terminal costs; never bot-editable
         "profiles": {
             "h3_frozen": {
                 "adapter": "frozen_h3",
@@ -145,7 +146,14 @@ Admission includes prior commitments and all liable reservations under an
 account row lock. Only a cleanup-complete, terminal ledger proving no create
 was ever sent releases its financial commitment; its original reservation and
 lifetime admission count remain immutable. Created or uncertain attempts remain
-reserved after cleanup until billing review. Native preparation pins the operator's explicit `gpu_type`,
+reserved after cleanup until operator review. An operator may then supply a
+`reconciled_costs` entry keyed by immutable job UUID, with `amount_usd`,
+`basis: "conservative_elapsed_rate"`, a nonempty `evidence` reference, and
+`observed_at` after admission and not in the future. Only cleanup-complete,
+terminal ledgers can use that conservative reviewed commitment; active/unknown
+rentals remain fully reserved. This is not an invoice, automatic refund or new
+rental approval, and it never changes original reservations or lifetime limits.
+Native preparation pins the operator's explicit `gpu_type`,
 one GPU, at least167GB RAM and10vCPU,200GB container disk, zero optional volume
 and no network volume; it reuses the existing reviewed create request. Before
 model download the SSH bootstrap verifies the observed GPU against the host's
