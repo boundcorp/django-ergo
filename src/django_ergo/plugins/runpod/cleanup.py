@@ -367,7 +367,8 @@ class RESTCleanup:
         if not retired:
             return None
         try:
-            pods = client.list_pods()
+            # The only discovery of a billed late Pod while the job still runs.
+            pods = client.list_pods(priority=True)
         except ProviderError:
             return "provider_request_failed"
         error = None

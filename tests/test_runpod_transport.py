@@ -1,6 +1,7 @@
 import io
 import json
 import socket
+import sqlite3
 from urllib.error import HTTPError
 
 import pytest
@@ -152,3 +153,22 @@ def test_missing_storage_field_fails_closed():
     with pytest.raises(OwnershipError):
         RunpodREST(lambda: "token", opener=fake).terminate_owned("pod123", ownership())
     assert len(fake.requests) == 1
+
+
+class BrokenBudget:
+    """A corrupt shared budget file."""
+
+    def acquire(self, *, priority=False):
+        raise sqlite3.DatabaseError
+
+    def observe(self, headers, status):
+        raise sqlite3.DatabaseError
+
+
+def test_broken_budget_store_never_blocks_teardown_reads():
+    fake = HTTPFake(pod())
+    client = RunpodREST(lambda: "token", opener=fake, budget=BrokenBudget())
+    with pytest.raises(RateLimitError):
+        client.get_pod("pod123")
+    assert fake.requests == []
+    assert client.get_pod("pod123", priority=True)["id"] == "pod123"

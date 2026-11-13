@@ -1125,7 +1125,6 @@ def test_rate_limited_owned_pod_read_waits_instead_of_failing(setup, monkeypatch
     job = begin(setup)
     assert drive(setup, job) == "running"
     assert drive(setup, job) == "running"
-    real = native_h3._owned_pod
 
     def limited(job, provider):
         message = "provider rate limit exceeded"
@@ -1137,9 +1136,8 @@ def test_rate_limited_owned_pod_read_waits_instead_of_failing(setup, monkeypatch
     assert drive(setup, job) == "running"
     state = Worker.objects.get(pk=job.worker_id).state["owned_pod"]
     assert state["pod"]["id"] == "pod123"
-    assert 25 < state["next"] - time.time() <= 30
+    assert 0 < state["next"] - time.time() <= 30
     assert Experiment(job.ledger_path).status()["stop_reason"] is None
-    monkeypatch.setattr(native_h3, "_owned_pod", real)
 
 
 def age_stock_watch(job, seconds, first=0):

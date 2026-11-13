@@ -30,7 +30,7 @@ from .transport import RateLimitError
 LIMITS = {"minute": (60, 11), "hour": (3600, 225), "day": (86400, 2700)}
 RESERVE = {"minute": 3, "hour": 30, "day": 100}
 JITTER_SECONDS = 5
-_HEADER = re.compile(r'"(minute|hour|day)";r=(\d+);t=(\d+)')
+_HEADER = re.compile(r'"(minute|hour|day)"\s*;\s*r=(\d+)\s*;\s*t=(\d+)')
 
 
 def budget_path(root, credential):
@@ -57,7 +57,8 @@ class RestBudget:
             yield db
             db.execute("COMMIT")
         except BaseException:
-            db.execute("ROLLBACK")
+            if db.in_transaction:
+                db.execute("ROLLBACK")
             raise
         finally:
             db.close()

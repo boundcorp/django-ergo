@@ -221,7 +221,11 @@ class RunpodREST:
             self._budget.acquire(priority=priority)
         except RateLimitError:
             raise
-        except Exception:  # noqa: BLE001 -- an unreadable budget fails closed, as a wait
+        except Exception:  # noqa: BLE001 -- budget storage errors never block teardown
+            if priority:
+                # Cleanup proceeds with the provider's own 429 as the backstop;
+                # a corrupt or stuck budget file must never strand a Pod.
+                return
             msg = "provider request budget unavailable"
             raise RateLimitError(msg, 60) from None
 
