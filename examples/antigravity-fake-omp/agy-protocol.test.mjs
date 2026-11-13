@@ -88,6 +88,20 @@ test('recognizes only inventory dispatch events, without executing them', () => 
   assert.throws(() => parse(lines([init, call, result('')])));
 });
 
+test('stages exactly one recognized inventory call as terminal, not an executed action', () => {
+  const call = step('tool', 'ACTIVE', { tool_name: 'call_mcp_tool', tool_info: { name: 'call_mcp_tool',
+    parameters: { ServerName: 'hermes', ToolName: 'lookup', Arguments: { query: 'x' } } } });
+  const parser = createAgyStreamParser({ inventory: new Set(['lookup']) });
+  assert.deepEqual([...parser.write(encoder.encode(lines([init, call]))), ...parser.end()],
+    [{ type: 'init', conversationId: 'synthetic-id' }, { type: 'tool', name: 'lookup', arguments: { query: 'x' } }]);
+  for (const bad of [{ ...call, step_update: { ...call.step_update, state: 'DONE' } }, step('tool', 'ACTIVE', { ...call.step_update, subagent_info: {} })]) {
+    const p = createAgyStreamParser({ inventory: new Set(['lookup']) });
+    assert.throws(() => p.write(encoder.encode(lines([init, bad]))));
+  }
+  const p = createAgyStreamParser({ inventory: new Set(['lookup']) });
+  assert.throws(() => p.write(encoder.encode(lines([init, call, call]))));
+});
+
 test('rejects invalid usage instead of inventing counters', () => {
   for (const usage of [{}, { input_tokens: 1 }, { input_tokens: -1, output_tokens: 0, thinking_tokens: 0, cache_read_tokens: 0, total_tokens: 0 }]) {
     assert.throws(() => parse(lines([init, result('', { usage })])));

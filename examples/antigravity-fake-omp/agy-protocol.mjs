@@ -21,7 +21,7 @@ export function recognizeHermesToolCall(event, { conversationId, inventory } = {
   if (!object(event) || event.event !== 'step_update' || !object(step) ||
       step.conversation_id !== conversationId || step.step_type !== 'tool' || step.state !== 'ACTIVE' ||
       !Number.isSafeInteger(step.step_index) || step.step_index < 0 ||
-      !object(info) || (step.tool_name ?? info.name) !== 'call_mcp_tool' ||
+      !object(info) || 'subagent_info' in step || (step.tool_name ?? info.name) !== 'call_mcp_tool' ||
       (info.name !== undefined && info.name !== 'call_mcp_tool') ||
       !object(params) || params.ServerName !== 'hermes' || !inventory.has(params.ToolName)) {
     throw new Error('Unsupported tool event');
@@ -47,7 +47,10 @@ export function encodeAgyUserMessage(content) {
   return JSON.stringify({ event: 'user', message: { content } }) + '\n';
 }
 
-export function createAgyStreamParser({ maxBytes = 256 * 1024 } = {}) {
+export function createAgyStreamParser({ maxBytes = 256 * 1024, inventory } = {}) {
+  if (inventory !== undefined && (!(inventory instanceof Set) || [...inventory].some(name => !nonempty(name)))) {
+    throw new Error('Invalid inventory');
+  }
   if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) throw new Error('Invalid byte limit');
   const decoder = new TextDecoder('utf-8', { fatal: true });
   let pending = '', bytes = 0, phase = 'init', conversationId, text = '', failed = false, ended = false;
@@ -55,7 +58,7 @@ export function createAgyStreamParser({ maxBytes = 256 * 1024 } = {}) {
     let event;
     try { event = JSON.parse(line); } catch { throw new Error('Invalid stream-json'); }
     if (!object(event) || typeof event.event !== 'string') throw new Error('Invalid event');
-    if (phase === 'done') throw new Error('Event after result');
+    if (phase === 'done' || phase === 'tool') throw new Error('Event after completion');
     if (event.event === 'init') {
       if (phase !== 'init' || !nonempty(event.conversation_id) || !object(event.init)) throw new Error('Invalid init');
       conversationId = event.conversation_id;
@@ -65,6 +68,11 @@ export function createAgyStreamParser({ maxBytes = 256 * 1024 } = {}) {
     if (phase !== 'steps') throw new Error('Missing init');
     if (event.event === 'step_update') {
       const step = event.step_update;
+      if (step?.step_type === 'tool' && inventory !== undefined) {
+        const call = recognizeHermesToolCall(event, { conversationId, inventory });
+        phase = 'tool';
+        return { type: 'tool', ...call };
+      }
       if (!object(step) || step.conversation_id !== conversationId || !Number.isSafeInteger(step.step_index) || step.step_index < 0 ||
           !['ACTIVE', 'DONE'].includes(step.state) || !['user_input', 'agent_response', 'checkpoint'].includes(step.step_type) ||
           'tool_info' in step || 'subagent_info' in step || 'tool_name' in step) throw new Error('Unsupported step');
@@ -120,7 +128,7 @@ export function createAgyStreamParser({ maxBytes = 256 * 1024 } = {}) {
       return guarded(() => {
         pending += decoder.decode();
         const events = consume(true);
-        if (phase !== 'done') throw new Error('Incomplete stream');
+        if (phase !== 'done' && phase !== 'tool') throw new Error('Incomplete stream');
         ended = true;
         return events;
       });

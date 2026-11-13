@@ -44,29 +44,28 @@ faithfully preserved.
 `agy-protocol.mjs` parses a deliberately conservative subset of documented
 stream-json; `agy-omp.mjs` connects synthetic byte chunks to OMP's event
 stream, with no child process or provider registration. The fixtures are
-**synthetic**, not recordings of real sessions. The parser refuses tool
-steps, subagents, unsupported events and inconsistent results rather than
-pretending an observed event can prevent actions that may already have run.
-It buffers replay output until successful completion. OMP compatibility is
-limited to the installed stream API; Ergonaut integration is not implemented.
-
-The separate pure `recognizeHermesToolCall` recognizes the source-described
-ACTIVE `call_mcp_tool` shape only for an explicit Hermes tool inventory; it
-does not execute, authorize, or emit OMP tool calls. The OMP replay rejects all
-tool steps. Terminal token counters are copied into OMP's corresponding
-fields; unknown usage and costs remain zero for this synthetic replay and are
-not a billing statement.
+**synthetic**, not recordings of real sessions. The parser rejects foreign tool
+steps, subagents, unsupported events and inconsistent results. An explicitly
+offered Hermes inventory tool can be staged as a single OMP tool call for the
+parent to approve and execute; this replay never executes tools. It buffers
+output until the synthetic terminal result or captured tool call. OMP
+compatibility is limited to the installed stream API; Ergonaut integration is
+not implemented. Token counters are copied into corresponding OMP fields;
+unknown usage and costs remain zero, not a billing statement.
 
 The official [headless documentation](https://antigravity.google/docs/cli/headless.md)
 (retrieved 2026-11-13; no immutable documentation revision published) describes
 newline-delimited `init`, `step_update`, and `result`, `agent_response`
 `text_delta`, token counters, errors, and `user` messages with string or text
-block content. It documents tool steps as execution reports, including
-`tool_info.parameters` and output, not a safe interception mechanism. Streaming
-input does not represent native assistant, system or tool-result messages.
-The offline OMP bridge therefore accepts only one text-only user message with
-no system prompt or tools; it rejects all other contexts rather than flattening
-or silently losing them. No truncation-safe message limit is established.
+block content. It documents tool steps as execution reports, not a safe
+interception mechanism. Streaming input does not represent native assistant,
+system or tool-result messages. Inspired by pinned Hermes `prepare_conversation`
+and `system_prompt`, the replay serializes supported system instructions, tool
+inventory, and matched text history into one user message with JSON records.
+This is flattened text, not native role semantics or a security boundary.
+Unsupported content and incomplete histories are rejected. The local byte
+limit bounds this experiment; it does not establish a truncation-safe CLI or
+model limit.
 
 The official documentation lists example CLI slugs such as
 `gemini-4-carbon-high`, `gemini-4-argon-medium`, `gemini-4-hydrogen-xhigh`,
@@ -93,15 +92,18 @@ The experiment has no live CLI path and no allowed inference channel.
 [Bubblewrap v0.8.0 documentation](https://github.com/containers/bubblewrap/blob/4ab175fe6d3a4053444b04d805a6d686f53455b9/bwrap.xml)
 describes the mechanisms; their specification alone is not proof that this
 host enforces them. This remains a shared-kernel prototype with no seccomp,
-resource limits, adversarial isolation tests, or independent review. Its
-read-only library mount and stdio are visible to the fake. A future live design
-must prove containment before any CLI, agent, tool or hook runs, and separately
-design narrowly authorized authentication and network access; it must not
-trust flags or post-event termination alone.
-
-On the development host, the bundled fake completed under this bubblewrap
-configuration during the offline smoke check. This proves only that this
-particular harmless process ran; no adversarial containment proof was performed.
+process-count or memory limits, or independent review. Its read-only library
+mount and stdio are visible to the fake. A bounded, fixed-code probe creates a
+fabricated host canary and home, then checks that the sandbox and a child cannot
+read or write the fixture, inherit the fabricated host environment or secret,
+or connect to a host loopback listener. Bubblewrap supplies its own `PWD=/`.
+It also checks that the parent cannot create an outside file.
+The launch has a time and output limit. These are specific negative probes, not
+proof of general filesystem or network containment or adversarial security.
+Missing required sandbox features cause refusal, never unsandboxed fallback.
+A future live design must prove containment before any CLI, agent, tool or hook
+runs, and separately design narrowly authorized authentication and networking;
+it must not trust flags or post-event termination alone.
 
 ## Offline checks
 
@@ -138,6 +140,28 @@ ordering, real usage/error semantics, process/platform behavior, OMP extension
 registration and integration tests, and separately authorized operational and
 billing controls. None of those is implemented by this fake. No real-client
 command should be added to this example as a shortcut.
+
+### Candidate credential and network architecture (not provisioned)
+
+Any future experiment requires separate policy and operational authorization
+before it receives credentials or reaches a service. A dedicated, ephemeral
+worker identity should receive a narrowly scoped, short-lived credential from a
+separate broker, never from the host home, inherited environment, or repository.
+The worker's private writable state and credential material must be destroyed
+after each run; the broker must enforce audience, lifetime, revocation, audit,
+and tenant boundaries. This is a proposed design, not an established ability
+of the CLI or its authentication system.
+
+Network access would require an independently enforced default-deny namespace
+and an egress proxy or gateway allowing only reviewed service destinations,
+protocols and ports, with DNS, redirects, proxy bypass, metadata endpoints and
+credential exfiltration addressed. Destination allowlisting alone does not
+prevent exfiltration to an allowed endpoint. The offline sandbox deliberately
+allows no network and no credentials, so it does not implement or validate
+either mechanism. The CLI's actual authentication storage, endpoint inventory,
+refresh behavior, hooks, telemetry, and compatibility with brokered credentials
+and restricted egress remain unknown. Shared-kernel isolation and any proposed
+gateway need independent review and host-specific adversarial verification.
 
 No Hermes code was reused. The archived
 [hermes-plugin-antigravity-agy](https://github.com/Realtyxxx/hermes-plugin-antigravity-agy)

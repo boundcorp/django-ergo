@@ -9,13 +9,17 @@
 // fail. --disable-userns also requires a non-setuid bwrap and kernel support.
 // Failures, including unavailable namespaces, never fall back to a direct run.
 //
-// This only tests a configuration with a trusted bundled fake. It does not
-// prove isolation against hostile code: no seccomp policy, resource controls,
-// hostile-process probes, or independent security review are provided. The
+// This is not proof of isolation against hostile code: there is no seccomp
+// policy, process-count or memory limit, or independent security review. The
 // read-only library directory exposes its contents, the kernel remains shared,
-// and inherited stdio remains a communication channel. Trust in host binaries,
-// libraries, repository, OS, and namespace enforcement is assumed.
+// and stdio remains a communication channel. Host binaries, libraries, the
+// repository, OS, and namespace enforcement are trusted.
 import { spawnSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
+import { mkdtempSync, readFileSync, rmSync, existsSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:net';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const FAKE = fileURLToPath(new URL('./fake-cli.cjs', import.meta.url));
@@ -58,4 +62,106 @@ export function runSandboxedFake(options = {}) {
     throw new SandboxRefusedError(`Sandbox launch or fake execution failed: ${result.error?.code ?? result.signal ?? `exit ${result.status}`}`);
   }
   return result.stdout;
+}
+
+// Fixed probe code only: callers cannot choose a program or sandbox settings.
+// The paths identify a fabricated private host fixture, not the user's home.
+const PROBE = `
+const fs = require('node:fs');
+const net = require('node:net');
+const { spawnSync } = require('node:child_process');
+const [canary, outside, port] = process.argv.slice(1);
+function denied(fn) { try { fn(); return false; } catch { return true; } }
+const results = {
+  canaryHidden: denied(() => fs.readFileSync(canary)),
+  outsideOverwriteDenied: denied(() => fs.writeFileSync(canary, 'changed')),
+  outsideCreateDenied: denied(() => fs.writeFileSync(outside, 'created')),
+  // bwrap sets PWD to --chdir even after --clearenv.
+  environmentCleared: Object.keys(process.env).length === 1 && process.env.PWD === '/',
+};
+const child = spawnSync('/usr/bin/node', ['-e', \`
+  const fs = require('node:fs');
+  const net = require('node:net');
+  function denied(fn) { try { fn(); return false; } catch { return true; } }
+  const observation = {
+    hidden: denied(() => fs.readFileSync(process.argv[1])),
+    writeDenied: denied(() => fs.writeFileSync(process.argv[2], 'created')),
+    environmentCleared: Object.keys(process.env).length === 1 && process.env.PWD === '/',
+    hostNetworkDenied: false,
+  };
+  const socket = net.createConnection({ host: '127.0.0.1', port: Number(process.argv[3]) });
+  socket.setTimeout(500);
+  socket.once('connect', () => socket.destroy());
+  socket.once('error', error => {
+    observation.hostNetworkDenied = ['ECONNREFUSED', 'ENETUNREACH', 'EHOSTUNREACH'].includes(error.code);
+  });
+  socket.once('timeout', () => socket.destroy());
+  socket.once('close', () => process.stdout.write(JSON.stringify(observation)));
+\`, canary, outside, port], { encoding: 'utf8', timeout: 1500, killSignal: 'SIGKILL', maxBuffer: 4096 });
+try {
+  const observation = JSON.parse(child.stdout);
+  results.subprocessIsolated = !child.error && child.status === 0 &&
+    observation.hidden === true && observation.writeDenied === true &&
+    observation.environmentCleared === true && observation.hostNetworkDenied === true;
+} catch { results.subprocessIsolated = false; }
+const socket = net.createConnection({ host: '127.0.0.1', port: Number(port) });
+socket.setTimeout(500);
+socket.once('connect', () => { results.hostNetworkDenied = false; socket.destroy(); });
+socket.once('error', error => {
+  results.hostNetworkDenied = ['ECONNREFUSED', 'ENETUNREACH', 'EHOSTUNREACH'].includes(error.code);
+});
+socket.once('timeout', () => { results.hostNetworkDenied = false; socket.destroy(); });
+socket.once('close', () => { process.stdout.write(JSON.stringify(results)); });
+`;
+
+// Creates only a private, synthetic host fixture and loopback listener. A
+// namespace failure or any failed/indeterminate probe is a refusal, not a
+// successful isolation result.
+export async function runSandboxIsolationProbes() {
+  if (process.platform !== 'linux' || process.arch !== 'x64' ||
+      typeof process.getuid !== 'function' || process.getuid() === 0) {
+    throw new SandboxRefusedError('Requires unprivileged Linux x86-64');
+  }
+  let dir;
+  const server = createServer(socket => socket.destroy());
+  try {
+    dir = mkdtempSync(join(tmpdir(), 'ergo-sandbox-'));
+    const canary = join(dir, 'canary');
+    const outside = join(dir, 'outside-write');
+    const secret = randomBytes(32).toString('hex');
+    writeFileSync(canary, secret, { mode: 0o600 });
+    await new Promise((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(0, '127.0.0.1', resolve);
+    });
+    const args = [
+      ...SANDBOX_ARGS.slice(0, SANDBOX_ARGS.indexOf('--')),
+      '--', '/usr/bin/node', '-e', PROBE, canary, outside, String(server.address().port),
+    ];
+    const result = spawnSync(BWRAP, args, {
+      encoding: 'utf8', env: { HOME: dir, PWD: dir, SANDBOX_CANARY_SECRET: secret }, cwd: '/',
+      timeout: 3000, killSignal: 'SIGKILL', maxBuffer: 64 * 1024,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    if (result.error || result.status !== 0 || result.signal) {
+      throw new Error('probe launch or execution failed');
+    }
+    const observations = JSON.parse(result.stdout);
+    const checks = [
+      'canaryHidden', 'outsideOverwriteDenied', 'outsideCreateDenied',
+      'environmentCleared', 'subprocessIsolated', 'hostNetworkDenied',
+    ];
+    const failed = checks.filter(key => observations[key] !== true);
+    if (readFileSync(canary, 'utf8') !== secret) failed.push('hostCanaryChanged');
+    if (existsSync(outside)) failed.push('hostOutsideWriteCreated');
+    if (failed.length) {
+      throw new Error(`isolation probe failed: ${failed.join(', ')}`);
+    }
+    return observations;
+  } catch (error) {
+    throw new SandboxRefusedError(`Sandbox isolation probes refused: ${error.message}`);
+  } finally {
+    server.close();
+    if (dir) rmSync(dir, { recursive: true, force: true });
+  }
 }

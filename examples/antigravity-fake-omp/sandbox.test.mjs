@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { SandboxRefusedError, runSandboxedFake } from './sandbox.mjs';
+import { SandboxRefusedError, runSandboxedFake, runSandboxIsolationProbes } from './sandbox.mjs';
 
 describe('fake-only prelaunch sandbox experiment', () => {
   test('rejects alternative programs, scenarios, and configuration before launch', () => {
@@ -31,5 +31,26 @@ describe('fake-only prelaunch sandbox experiment', () => {
       { type: 'text', text: 'world ☃' },
       { type: 'done' },
     ]);
+  });
+
+  test('denies synthetic host canary, outside writes, environment and loopback access', async () => {
+    try {
+      runSandboxedFake();
+    } catch (error) {
+      // An unavailable sandbox is not evidence that isolation succeeded.
+      expect(error).toBeInstanceOf(SandboxRefusedError);
+      expect(error.message).toMatch(/Requires unprivileged|Sandbox launch or fake execution failed/);
+      return;
+    }
+    // Once the sandbox launches, every failed or indeterminate probe fails.
+    const observations = await runSandboxIsolationProbes();
+    expect(observations).toEqual({
+      canaryHidden: true,
+      outsideOverwriteDenied: true,
+      outsideCreateDenied: true,
+      environmentCleared: true,
+      subprocessIsolated: true,
+      hostNetworkDenied: true,
+    });
   });
 });
