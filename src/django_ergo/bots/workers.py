@@ -354,6 +354,7 @@ def run(worker_id: str, registry=None) -> str:
         args = dict(worker.args or {})
         # Agent answers are durable worker bookkeeping, not function arguments.
         args.pop("_agent_replies", None)
+        args.pop("_agent_instructions", None)
         outcome = (
             function(ctx, **args) if params and params[0] == "ctx" else function(**args)
         )
@@ -428,6 +429,11 @@ def _finish_unless_reply_pending(worker: Worker, outcome: Any) -> None:
         pending = any(
             reply.get("status") in ("queued", "processing")
             for reply in replies.values()
+        )
+        pending = pending or any(
+            row.get("status") in ("queued", "processing")
+            for row in (current.args or {}).get("_agent_instructions", [])
+            if not row.get("superseded_by")
         )
         if current.status == "cancelled":
             worker.status = "cancelled"

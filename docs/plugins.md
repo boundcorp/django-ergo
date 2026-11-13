@@ -58,6 +58,63 @@ redacted server-side preview for supported changes. In Ergonaut only admins
 can approve their tools. Every option is in the
 [bot reference](bots.md#official-plugins).
 
+## Orca instruction checkpoints
+
+Use the `orca` skill's `ergo_orca_instruct(worker_id, instruction_id, text,
+supersedes, priority)` for follow-up coordinator guidance, not raw
+`orca_run orchestration send/reply` or terminal input. It has the same approval
+policy as worker launch. Only this chat's worker in the plugin's environment
+can be addressed; the saved dispatch-owned mailbox remains the sender.
+
+Choose a stable `instruction_id` for each instruction. Identical retries return
+the existing record; reusing an id with different content is rejected.
+`supersedes` must name the latest instruction id (empty for the first).
+Versions are assigned under a database lock. New instructions explicitly
+supersede earlier ones; they do not replace the task's authorization constraints.
+For example: queue `pause-1` with `supersedes: ""`, then queue `proceed-2`
+with `supersedes: "pause-1"` after approval to proceed.
+
+`ergo_orca_instruction_status(worker_id)` reads the durable ledger:
+
+| Field/status | Evidence, not an implied guarantee |
+| --- | --- |
+| `queued` | Persisted locally; no Orca send yet |
+| `processing` | Send claimed; a crash can leave its outcome uncertain |
+| `transport_queued` | Orca accepted mail, or its inbox contains the instruction |
+| `delivered`, `transport_read`, `delivered_at` | Observed transport consumption only |
+| `unknown` | Timeout, error or interrupted send; no automatic retransmission |
+| `acknowledgement` | Exact-worker-attributed status naming instruction id, version and concrete next action |
+| `superseded_by` | Old instruction, even if its acknowledgement arrives late |
+
+The watcher sends at most one latest instruction per step, before question
+replies; it skips superseded unsent instructions. Uncertain question replies
+no longer prevent status/acknowledgement checks. Instruction acknowledgement
+requires the exact run, task, dispatch and assignee, plus pane identity when
+Orca supplies it. It is the worker's stated acceptance/next action, **not proof
+of compliance or completion**. An old acknowledgement never acknowledges the
+latest instruction. Replayed acknowledgements are recorded once.
+
+New task briefs include cooperative inbox-check guidance: at safe checkpoints,
+after asks, before side effects, before resuming after a stop and before
+completion. The message supplies a supported `status` send with a JSON body
+`{"instructionAck":{"id":"pause-1","version":1,"nextAction":"Stop edits; inspect authorized cleanup"}}`
+and the original task/dispatch ids. Workers use their own preamble credentials.
+`priority: urgent` requests stop/cleanup at the next safe checkpoint, without
+process interrupts, PTY writes, terminal impersonation or new authorization.
+
+**Remaining upstream boundary:** follow-ups are structured inbox mail, not prompt
+injection. No local change can wake a busy or blocked model, guarantee a checkpoint
+deadline, preempt an in-flight tool or ensure it obeys the guidance. Existing
+workers do not retroactively gain the brief's checkpoint instructions.
+The watcher observes the existing bounded 100-message inbox window, not a complete
+paginated history; missing evidence remains unconfirmed. On uncertainty, inspect
+Orca's durable inbox before manual intervention; never resend merely because an
+acknowledgement is late. Watcher scheduling and the worker's next check still
+bound latency; an already running reply may finish before new guidance is sent.
+No acknowledgement after watcher completion is reconciled automatically.
+Reliable wakeups, server-side latest-version fencing, complete delivery lookup
+and hard stop deadlines require upstream Orca support.
+
 ## Native RunPod workers
 
 The `runpod` plugin exposes approved profiles, start/status/collect/terminate

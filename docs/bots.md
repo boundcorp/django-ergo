@@ -726,6 +726,11 @@ class BoxPlugin(BotPlugin):
     def agent_managers(self): return {"box": self.manager}
 ```
 
+The optional `checkpoint(ctx, handle)` hook runs before question replies, so
+control-plane mail can be sent before a slow reply. Keep it bounded. A pending
+or uncertain reply does not suppress the following `check`; it is not evidence
+that the agent has accepted the answer.
+
 A bot with a manager has the `agents` skill, which loads the `models` skill
 with it (see [Model choice for tasks](#model-choice-for-tasks)):
 
@@ -760,6 +765,13 @@ question_id, answer)` queues the answer for the worker and returns without
   resend or rebinding. Legacy handles use the chat mailbox only for a matching
   run. If delivery times out, reconcile before any manual retry. A worker
   terminal is never used as the sender.
+  A successful Orca reply reports only that the answer was queued: neither a
+  transport read flag nor `delivered_at` proves that the model accepted guidance.
+  For follow-up changes of direction, use `ergo_orca_instruct` and inspect
+  `ergo_orca_instruction_status` from the `orca` skill. They maintain versioned
+  instructions, explicit supersession, and separate worker acknowledgements
+  naming the instruction and next action. See [instruction checkpoints](plugins.md#orca-instruction-checkpoints)
+  for delivery limits and the cooperative urgent-stop protocol.
 - Agent worker descriptions include a `dispatch_receipt`: requested and selected
   agent/model/effort, and only quota windows applicable to the selected model
   when tier routing provided them. Window names are restricted to known public

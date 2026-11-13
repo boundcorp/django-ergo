@@ -104,6 +104,9 @@ class AgentManager:
         """One look at the agent. It may use ``ctx.activity`` and ``ctx.state``."""
         raise NotImplementedError
 
+    def checkpoint(self, ctx: WorkerContext, handle: dict) -> None:
+        """Deliver control-plane guidance before potentially slow question replies."""
+
     def reply(self, ctx: ToolContext, handle: dict, question_id: str, text: str) -> str:
         """Answer one of the agent's questions."""
         msg = f"{self.name} agents can't be answered from here"
@@ -382,8 +385,8 @@ def _save_seen(worker_id, seen: set[str]) -> None:
 
 def watch(ctx: WorkerContext, manager: AgentManager, handle: dict):
     """One check of an agent: pass on new questions, finish with its report."""
-    if _deliver_replies(ctx, manager, handle):
-        return ctx.again(manager.poll_seconds, progress="Sending an agent reply")
+    manager.checkpoint(ctx, handle)
+    _deliver_replies(ctx, manager, handle)
     check = manager.check(ctx, handle)
     if check.status not in STATUSES:
         msg = f"{manager.name} reported an unknown status {check.status!r}"

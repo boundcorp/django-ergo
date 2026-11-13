@@ -4,6 +4,16 @@ This document tracks the major milestones and evolution of the Django Ergo proje
 
 ## Development Timeline
 
+### Versioned Orca coordinator instructions (November 2026)
+
+- Added chat-scoped follow-up tools with durable versions, explicit supersession,
+  idempotent enqueue and separate exact-worker acknowledgements naming next actions.
+- Orca question replies now report queued transport, not model receipt. Uncertain
+  replies no longer suppress watcher checks; cooperative urgent instruction sends
+  precede question replies without terminal injection or automatic timeout replay.
+- New briefs include safe inbox checkpoints. Busy-model wakeups, hard deadlines
+  and complete delivery reconciliation remain upstream Orca boundaries.
+
 ### Bounded native RunPod deployment access (November 2026)
 
 - Added a reread-on-operation, server-owned JSON policy file for fresh quote

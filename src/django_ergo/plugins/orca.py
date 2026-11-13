@@ -92,6 +92,7 @@ from django_ergo.bots.tools import BotTool
 from django_ergo.bots.tools import FunctionToolkit
 from django_ergo.bots.tools import bot_tool
 from django_ergo.conversation.context import TextContextSource
+from django_ergo.plugins import orca_instructions as instruction_protocol
 from django_ergo.plugins._common import clip
 from django_ergo.plugins._common import is_secret
 from django_ergo.plugins._common import record_agent_usage
@@ -448,6 +449,19 @@ class OrcaPlugin(BotPlugin):
 
     def change(self, args: list[str], fields: list[str] | None = None) -> str:
         """``orca_run``: any command, except starting workers by hand."""
+        command = command_of(args)
+        if not is_read_only(args) and (
+            command == ("orchestration", "reply")
+            or (
+                command == ("orchestration", "send")
+                and any(arg.startswith(("dispatch:", "--to=dispatch:")) for arg in args)
+            )
+        ):
+            return (
+                "Use ergo_orca_instruct for versioned follow-up instructions, or "
+                "ergo_agent_reply for a question. Raw dispatch mail bypasses durable "
+                "tracking; transport consumption does not prove model acceptance."
+            )
         if command_of(args) in TRACKED_ONLY and not is_read_only(args):
             return (
                 "Start workers with orca_start_worker (or ergo_agent_start), not "
@@ -799,7 +813,7 @@ class OrcaPlugin(BotPlugin):
                 "orchestration",
                 "task-create",
                 "--spec",
-                spec,
+                spec + "\n\n" + instruction_protocol.CHECKPOINT_GUIDANCE,
                 "--task-title",
                 title,
                 "--run",
@@ -1078,7 +1092,9 @@ class OrcaPlugin(BotPlugin):
         liveness = str((shown.get("observation") or {}).get("status") or "")
         report = None
         questions = []
-        for message in self.run_messages(run, dispatch, handle.get("task", "")):
+        messages = self.run_messages(run, dispatch, handle.get("task", ""))
+        instruction_protocol.reconcile(ctx, handle, shown, messages)
+        for message in messages:
             kind = message.get("type")
             if kind == "worker_done":
                 report = message
@@ -1327,7 +1343,11 @@ class OrcaPlugin(BotPlugin):
                 "(orchestration worker-start, or a terminal with --command and sent "
                 "text): this chat can't follow that agent or get its report. If "
                 "orca_start_worker fails, tell the user its error rather than working "
-                "around it. Before stopping workers or "
+                "around it. Send follow-up guidance with ergo_orca_instruct, not raw "
+                "orca_run mail or terminal input. Inspect ergo_orca_instruction_status: "
+                "queued or delivered mail is not model acceptance; require an "
+                "acknowledgement of the latest instruction and its next action. "
+                "Before stopping workers or "
                 'anything else unusual, read the CLI\'s guides with orca_read ["skills", '
                 '"get", "orca-cli"] and ["skills", "get", "orchestration"], and check '
                 "the run and worker lists so you don't duplicate work.",
@@ -1529,6 +1549,7 @@ class OrcaPlugin(BotPlugin):
             upload.__bot_tool__,
             screenshot.__bot_tool__,
             start_worker.__bot_tool__,
+            *instruction_protocol.tools(self),
         ]
 
 
@@ -1553,6 +1574,10 @@ class OrcaAgents(AgentManager):
 
     def check(self, ctx, handle: dict) -> AgentCheck:
         return self.plugin.check(ctx, handle)
+
+    def checkpoint(self, ctx, handle: dict) -> None:
+        if not ctx.stopping:
+            instruction_protocol.deliver(ctx, self.plugin, handle)
 
     def reply(self, ctx, handle: dict, question_id: str, text: str) -> str:
         place = self.plugin.environment or "local"
@@ -1595,7 +1620,10 @@ class OrcaAgents(AgentManager):
                 "Orca before any manual retry."
             )
             raise OrcaError(msg, exc.code) from exc
-        return f"Sent the answer to {question_id}."
+        return (
+            f"Answer to {question_id} queued in Orca. "
+            "Transport consumption and model acceptance are not confirmed."
+        )
 
     def stop(self, handle: dict) -> str:
         return self.plugin.end_worker(handle.get("dispatch", ""), "")
