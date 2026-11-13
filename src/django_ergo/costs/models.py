@@ -2,11 +2,18 @@
 
 import uuid
 
+from django import VERSION as DJANGO_VERSION
 from django.conf import settings
 from django.db import models
 from django.db.models import Q
 
 from .types import CostKind
+
+
+def _constraint(*, condition, name):
+    # Django 4.2 uses check; 5.1 renamed it and 6.0 removed the old keyword.
+    keyword = "condition" if DJANGO_VERSION >= (5, 1) else "check"
+    return models.CheckConstraint(name=name, **{keyword: condition})
 
 
 class ImmutableCostQuerySet(models.QuerySet):
@@ -78,8 +85,8 @@ class CostOperation(ImmutableCostModel):
                 fields=["provider", "account_ref", "operation_key"],
                 name="cost_operation_identity",
             ),
-            models.CheckConstraint(
-                check=Q(resource_type="", resource_id="")
+            _constraint(
+                condition=Q(resource_type="", resource_id="")
                 | (~Q(resource_type="") & ~Q(resource_id="")),
                 name="cost_op_resource_pair",
             ),
@@ -133,22 +140,20 @@ class CostObservation(ImmutableCostModel):
             models.UniqueConstraint(
                 fields=["operation", "kind", "revision"], name="cost_revision_identity"
             ),
-            models.CheckConstraint(
-                check=Q(resource_type="", resource_id="")
+            _constraint(
+                condition=Q(resource_type="", resource_id="")
                 | (~Q(resource_type="") & ~Q(resource_id="")),
                 name="cost_obs_resource_pair",
             ),
-            models.CheckConstraint(
-                check=Q(revision__gte=1), name="cost_positive_revision"
-            ),
-            models.CheckConstraint(
-                check=Q(tokens_reasoning__isnull=True)
+            _constraint(condition=Q(revision__gte=1), name="cost_positive_revision"),
+            _constraint(
+                condition=Q(tokens_reasoning__isnull=True)
                 | Q(tokens_output__isnull=True)
                 | Q(tokens_reasoning__lte=models.F("tokens_output")),
                 name="cost_reasoning_subset",
             ),
-            models.CheckConstraint(
-                check=Q(period_start__isnull=True, period_end__isnull=True)
+            _constraint(
+                condition=Q(period_start__isnull=True, period_end__isnull=True)
                 | Q(
                     period_start__isnull=False,
                     period_end__isnull=False,
@@ -156,13 +161,13 @@ class CostObservation(ImmutableCostModel):
                 ),
                 name="cost_bounded_period",
             ),
-            models.CheckConstraint(
-                check=~Q(kind__in=["final", "provider_reported"])
+            _constraint(
+                condition=~Q(kind__in=["final", "provider_reported"])
                 | Q(amount__isnull=False),
                 name="cost_evidenced_money",
             ),
-            models.CheckConstraint(
-                check=~Q(kind__in=["unknown", "usage", "lifecycle", "subscription"])
+            _constraint(
+                condition=~Q(kind__in=["unknown", "usage", "lifecycle", "subscription"])
                 | Q(amount__isnull=True),
                 name="cost_nonmonetary_kind",
             ),

@@ -189,3 +189,9 @@ Remote main and lifecycle PR318 were inspected before implementation: PR318 merg
 InferenceRequest or RunPod models/behavior. Review PR and green isolated CI are
 required; this worker will not merge or touch production. API and dashboard owners
 should use owner-scoped projection/read APIs rather than summing observation rows.
+
+Constraint construction selects Django's supported keyword (`check` in 4.2,
+`condition` from 5.1; 6.0 removed `check`). The migration carries its own historical
+constructor, so it does not import mutable application helpers. The ledger suite
+is exercised offline on Django 4.2, 5.2 and 6.0; Django 6 application startup is
+also smoke-checked.

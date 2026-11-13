@@ -2,8 +2,15 @@
 
 import django.db.models.deletion
 import uuid
+from django import VERSION as DJANGO_VERSION
 from django.conf import settings
 from django.db import migrations, models
+
+
+def _constraint(*, condition, name):
+    # Keep historical migration executable across the supported Django versions.
+    keyword = "condition" if DJANGO_VERSION >= (5, 1) else "check"
+    return models.CheckConstraint(name=name, **{keyword: condition})
 
 
 class Migration(migrations.Migration):
@@ -73,7 +80,7 @@ class Migration(migrations.Migration):
         ),
         migrations.AddConstraint(
             model_name='costoperation',
-            constraint=models.CheckConstraint(check=models.Q(models.Q(('resource_id', ''), ('resource_type', '')), models.Q(models.Q(('resource_type', ''), _negated=True), models.Q(('resource_id', ''), _negated=True)), _connector='OR'), name='cost_op_resource_pair'),
+            constraint=_constraint(condition=models.Q(models.Q(('resource_id', ''), ('resource_type', '')), models.Q(models.Q(('resource_type', ''), _negated=True), models.Q(('resource_id', ''), _negated=True)), _connector='OR'), name='cost_op_resource_pair'),
         ),
         migrations.AddIndex(
             model_name='costobservation',
@@ -89,26 +96,26 @@ class Migration(migrations.Migration):
         ),
         migrations.AddConstraint(
             model_name='costobservation',
-            constraint=models.CheckConstraint(check=models.Q(models.Q(('resource_id', ''), ('resource_type', '')), models.Q(models.Q(('resource_type', ''), _negated=True), models.Q(('resource_id', ''), _negated=True)), _connector='OR'), name='cost_obs_resource_pair'),
+            constraint=_constraint(condition=models.Q(models.Q(('resource_id', ''), ('resource_type', '')), models.Q(models.Q(('resource_type', ''), _negated=True), models.Q(('resource_id', ''), _negated=True)), _connector='OR'), name='cost_obs_resource_pair'),
         ),
         migrations.AddConstraint(
             model_name='costobservation',
-            constraint=models.CheckConstraint(check=models.Q(('revision__gte', 1)), name='cost_positive_revision'),
+            constraint=_constraint(condition=models.Q(('revision__gte', 1)), name='cost_positive_revision'),
         ),
         migrations.AddConstraint(
             model_name='costobservation',
-            constraint=models.CheckConstraint(check=models.Q(('tokens_reasoning__isnull', True), ('tokens_output__isnull', True), ('tokens_reasoning__lte', models.F('tokens_output')), _connector='OR'), name='cost_reasoning_subset'),
+            constraint=_constraint(condition=models.Q(('tokens_reasoning__isnull', True), ('tokens_output__isnull', True), ('tokens_reasoning__lte', models.F('tokens_output')), _connector='OR'), name='cost_reasoning_subset'),
         ),
         migrations.AddConstraint(
             model_name='costobservation',
-            constraint=models.CheckConstraint(check=models.Q(models.Q(('period_end__isnull', True), ('period_start__isnull', True)), models.Q(('period_end__gte', models.F('period_start')), ('period_end__isnull', False), ('period_start__isnull', False)), _connector='OR'), name='cost_bounded_period'),
+            constraint=_constraint(condition=models.Q(models.Q(('period_end__isnull', True), ('period_start__isnull', True)), models.Q(('period_end__gte', models.F('period_start')), ('period_end__isnull', False), ('period_start__isnull', False)), _connector='OR'), name='cost_bounded_period'),
         ),
         migrations.AddConstraint(
             model_name='costobservation',
-            constraint=models.CheckConstraint(check=models.Q(models.Q(('kind__in', ['final', 'provider_reported']), _negated=True), ('amount__isnull', False), _connector='OR'), name='cost_evidenced_money'),
+            constraint=_constraint(condition=models.Q(models.Q(('kind__in', ['final', 'provider_reported']), _negated=True), ('amount__isnull', False), _connector='OR'), name='cost_evidenced_money'),
         ),
         migrations.AddConstraint(
             model_name='costobservation',
-            constraint=models.CheckConstraint(check=models.Q(models.Q(('kind__in', ['unknown', 'usage', 'lifecycle', 'subscription']), _negated=True), ('amount__isnull', True), _connector='OR'), name='cost_nonmonetary_kind'),
+            constraint=_constraint(condition=models.Q(models.Q(('kind__in', ['unknown', 'usage', 'lifecycle', 'subscription']), _negated=True), ('amount__isnull', True), _connector='OR'), name='cost_nonmonetary_kind'),
         ),
     ]
