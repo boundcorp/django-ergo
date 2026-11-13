@@ -295,6 +295,12 @@ class InboxControl:
 
         return await sync_to_async(self._check, thread_sensitive=True)()
 
+    def pending(self) -> bool:
+        """A stop or message is waiting (nothing is taken): checked right before an
+        automatically approved tool starts, so a later message keeps it from running."""
+        session_id = str(self.session.id)
+        return stop_requested(session_id) or inbox_waiting(session_id)
+
     def _check(self):
         from django_ergo.conversation.structured import SteeringMessage, TurnSignal
 

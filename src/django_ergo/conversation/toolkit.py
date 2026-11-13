@@ -53,6 +53,16 @@ class Toolkit(ABC):
         """
         return False
 
+    async def auto_approve(self, tool_name: str, arguments: dict, tool_id: str) -> bool:
+        """Whether a call that requires approval may run without asking.
+
+        Called once per call, with a copy of its exact arguments, before the
+        call would pause for a person. True only after reviewing that exact
+        call; any doubt or error must give False, and the call then waits
+        for a person as usual. Never cache a decision across calls.
+        """
+        return False
+
     def approval_preview(
         self, tool_name: str, arguments: dict
     ) -> ApprovalPreview | None:
