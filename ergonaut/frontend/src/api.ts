@@ -806,6 +806,14 @@ export type RealtimeVoiceSession = {
   standby_state?: 'live' | 'requested' | 'closing' | 'standby' | 'resuming'
   created_at?: string
   ended_at?: string | null
+  request_budget?: {
+    limit: number
+    used: number
+    remaining: number
+    collecting: boolean
+    inflight: boolean
+    request_ids: string[]
+  }
   briefing?: {
     context: string
     restriction: string

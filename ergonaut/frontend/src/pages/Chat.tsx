@@ -24,7 +24,7 @@ import { ActivityStrip } from '../components/ActivityStrip'
 import Files from '../components/Files'
 import { DebugShortcut } from '../components/DebugShortcut'
 import { IllustrateDialog } from '../components/IllustrateDialog'
-import { ComposerVoice } from '../components/VoiceRecorder'
+import { ComposerVoice, useComposerVoice } from '../components/VoiceRecorder'
 import Markdown from '../components/Markdown'
 import ModelPicker, { EffortSlider, modelLabel, useBotModels } from '../components/ModelPicker'
 import { PageViewer, Pins } from '../components/Pins'
@@ -133,7 +133,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
       if (timer !== undefined) window.clearInterval(timer)
     }
   }, [id])
-  const [text, setText] = useDraft(id)
+  const [text, saveText] = useDraft(id)
   const [busy, setBusy] = useState(false)
   const [showTodos, setShowTodos] = usePersistedFlag('ergonaut.todos')
   const [error, setError] = useState('')
@@ -188,6 +188,13 @@ export function Chat({ onChange }: { onChange: () => void }) {
     onChange()
   }
   const composer = useRef<HTMLTextAreaElement>(null)
+  const { setText, submit, voiceActive, voice } = useComposerVoice({
+    draftKey: id,
+    text,
+    setText: saveText,
+    composer,
+    onSend: send,
+  })
   const latest = useRef<SessionDetail | null>(null)
   latest.current = detail
 
@@ -498,7 +505,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
     }
     if (mode === 'interrupt') setStopping(true)
     toBottom()
-    run(
+    return run(
       () => api.send(id, plan.message, plan.attachmentIds, mode),
       plan.message || plan.sentFiles.map(f => f.filename).join(', '),
     )
@@ -1055,7 +1062,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
           className="chat-composer mx-4 mb-2 rounded-panel border border-stroke bg-surface px-2 pt-1.5 pb-1 focus-within:border-accent/60"
           onSubmit={e => {
             e.preventDefault()
-            send(text)
+            void submit()
           }}
         >
           <input ref={picker} type="file" multiple hidden onChange={e => attach(e.target.files)} />
@@ -1085,7 +1092,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
               onKeyDown={e => {
                 if (e.key === 'Enter' && !e.shiftKey) {
                   e.preventDefault()
-                  send(text)
+                  void submit()
                 }
               }}
               rows={1}
@@ -1103,7 +1110,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
               }
               className="min-w-0 flex-1 resize-none overflow-y-auto bg-transparent px-1 py-1.5 leading-snug focus:outline-none"
             />
-            <ComposerVoice sessionId={id} disabled={closed || !!waiting.length} composer={composer} setText={setText} />
+            <ComposerVoice sessionId={id} disabled={closed || !!waiting.length} {...voice} />
             {running && (
               <>
                 <button
@@ -1115,13 +1122,13 @@ export function Chat({ onChange }: { onChange: () => void }) {
                 >
                   Stop
                 </button>
-                {(!!text.trim() || !!outgoing.length) && (
+                {(!!text.trim() || !!outgoing.length || voiceActive) && (
                   <button
                     type="button"
                     disabled={busy || uploading || stopping}
                     title="Stop the bot and answer this message instead"
                     className="chat-stop h-8 shrink-0 rounded-control bg-accent px-2 text-xs font-semibold text-canvas disabled:opacity-50"
-                    onClick={() => send(text, 'interrupt')}
+                    onClick={() => void submit('interrupt')}
                   >
                     Stop &amp; send
                   </button>
@@ -1130,7 +1137,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
             )}
             <button
               type="submit"
-              disabled={busy || uploading || (!text.trim() && !outgoing.length)}
+              disabled={busy || uploading || (!text.trim() && !outgoing.length && !voiceActive)}
               title={running ? 'Send now; the bot sees it after the step it is on' : 'Send'}
               aria-label="Send"
               className="chat-send flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent text-canvas disabled:opacity-40"

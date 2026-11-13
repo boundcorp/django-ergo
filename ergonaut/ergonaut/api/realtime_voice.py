@@ -10,6 +10,7 @@ from asgiref.sync import async_to_sync
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 from django_ergo.bots import messaging
 from django_ergo.conversation.budget import TurnBudget, attach
@@ -17,7 +18,7 @@ from django_ergo.conversation.context import MessageContextSource
 from django_ergo.conversation.history import SessionSource
 from django_ergo.conversation.identity import bot_identity, django_user_identity
 from django_ergo.conversation.messages import add_message
-from django_ergo.conversation.models import ConversationSession
+from django_ergo.conversation.models import ConversationSession, ThreadMessage
 from ninja import Router, Schema
 from ninja.errors import HttpError
 
@@ -28,6 +29,7 @@ from ergonaut.apps.bots.models import RealtimeVoiceDelegation, RealtimeVoiceEven
 from ergonaut.realtime_voice_execution import (
     NORMAL_RESTRICTION,
     initial_state,
+    request_capacity,
     session_authorization,
     thread_updates,
 )
@@ -330,6 +332,7 @@ def bridge_state(voice_id, *, include_briefing=True):
         "transcript": transcript,
         "runtime": live.get("runtime", UNKNOWN_RUNTIME) if has_live_bridge else dict(UNKNOWN_RUNTIME),
         "activities": activities,
+        "request_budget": request_capacity(session),
         "briefing": startup_briefing(session) if include_briefing else delegation_status(session),
         "thread_updates": thread_updates(session, delegations),
         "delegations": [
@@ -573,11 +576,16 @@ def delegation_status(session):
             "restriction": f"{restriction} Background delegation unavailable: the voice session has ended.",
             "reason": "Background delegation unavailable: the voice session has ended.",
         }
-    elif session.delegations.exists():
+    elif not request_capacity(session)["remaining"]:
+        reason = (
+            "This session's one background request is already used."
+            if request_capacity(session)["limit"] == 1
+            else "This session's reviewed execution cap is reached."
+        )
         status = {
             "delegation_available": False,
-            "restriction": f"{restriction} This session's one background request is already used.",
-            "reason": "This session's one background request is already used.",
+            "restriction": f"{restriction} {reason} Existing status/results remain observable without new execution. Continue new work in the owning text thread.",
+            "reason": reason,
         }
     else:
         status = (session.state or {}).get("voice_delegation") or {
@@ -592,6 +600,61 @@ def delegation_status(session):
     }
 
 
+def _thread_observation(session):
+    """Bounded read-only projection of this thread, not another inference or a lifecycle ledger."""
+    if session.chat.user_id != session.user_id:
+        raise ValueError("Voice session owner does not own the launch chat")
+    latest = session.chat.messages.order_by("-sequence").values("sequence", "created_at").first()
+    workers = [
+        {
+            "id": str(row.pk),
+            "title": row.title[:120],
+            "status": row.status,
+            "progress": row.progress[:180],
+            "updated_at": row.updated_at.isoformat(),
+        }
+        for row in session.chat.workers.filter(status__in=("queued", "running"))
+        .only("id", "title", "status", "progress", "updated_at")
+        .order_by("-updated_at")[:3]
+    ]
+    requests = [
+        {
+            "id": str(row.pk),
+            "status": row.status,
+            "updated_at": row.updated_at.isoformat(),
+            "request": row.text[:180],
+            "result": row.reply_text[:240] if row.status == "answered" else "",
+        }
+        for row in ThreadMessage.objects.filter(recipient_session=session.chat)
+        .filter(Q(sender_session__isnull=True) | Q(sender_session__user_id=session.user_id))
+        .exclude(metadata__has_key="voice_session_id")
+        .only("id", "status", "updated_at", "text", "reply_text")
+        .order_by("-updated_at", "-id")[:2]
+    ]
+    stages = set(
+        session.events.filter(kind__in=("bridge_input", "bridge_audio", "client_audio")).values_list(
+            "event_id", flat=True
+        )[:100]
+    )
+    return {
+        "observed_at": timezone.now().isoformat(),
+        "freshness": "Database snapshot at observed_at; source updates may be older. Recorded status is not liveness or model consumption. Not a new lookup.",
+        "latest_thread_message": {"sequence": latest["sequence"], "created_at": latest["created_at"].isoformat()}
+        if latest
+        else None,
+        "workers": workers,
+        "requests": requests,
+        "current_session": {
+            "id": str(session.pk),
+            "status": session.status,
+            "input_transcribed": any(key.startswith("bridge-input:transcribed:") for key in stages),
+            "assistant_audio_generated": any(key.startswith("bridge-audio:generated:") for key in stages),
+            "provider_error_observed": any(key.startswith("bridge-input:provider_error:") for key in stages),
+            "physical_hearing": "unknown",
+        },
+    }
+
+
 def startup_briefing(session):
     """The exact launch chat's bounded normal context, never a global work briefing."""
     instructions = ""
@@ -600,6 +663,9 @@ def startup_briefing(session):
         f"User: {session.user.get_username()[:160]}. Bot: {session.chat.bot_name[:160]}. "
         f"Chat: {session.chat_id}.\n"
     )
+    observation = _thread_observation(session)
+    context += "Exact owning-thread work/current-call snapshot (bounded):\n"
+    context += json.dumps(observation, ensure_ascii=False)[:4500] + "\n"
     if session.chat.user_id != session.user_id:
         raise ValueError("Voice session owner does not own the launch chat")
     try:
@@ -654,11 +720,15 @@ def startup_briefing(session):
         authorization = normal_target(session)
         if session.status != "active":
             raise ValueError("Background delegation unavailable: the voice session has ended.")
-        # begin_pending accepts one signal per session, so an expired/cancelled collection used it too.
-        if session.delegations.exists() or (session.state or {}).get("pending_delegation"):
+        capacity = request_capacity(session)
+        if not capacity["remaining"]:
             raise ValueError(
                 "Background delegation unavailable: this session's one background request is already used."
+                if capacity["limit"] == 1
+                else "Background delegation unavailable: reviewed execution cap reached."
             )
+        if capacity["inflight"] or capacity["collecting"]:
+            raise ValueError("Background work is already pending; observe its status/result without a new execution.")
         budget = None if authorization else delegation_target(session, delegation_budget())
     except ValueError as exc:
         available, reason = False, str(exc)
@@ -685,11 +755,11 @@ def startup_briefing(session):
     elif authorization:
         capability = (
             f"Delegation is available: you have no tools of your own, but with client delegation you can hand "
-            f"one request per call to {bot_name}, the bot that owns this thread. It runs a normal turn of that "
+            f"at most {capacity['limit']} sequential request(s) per logical call to {bot_name}, the bot that owns this thread. It runs a normal turn of that "
             "bot with its own tools (for example chat history, threads and workers) under its normal action "
             "approvals. Its answer is posted in this thread and returned to you here as a verified result to "
             f"speak. If asked whether you have tools or can do something, say yes: you can ask {bot_name} to do "
-            "it, once per call. Never say you have no tools."
+            "it within that finite cap. Status observation/result reading needs no new execution. Never say you have no tools."
         )
     else:
         capability = (
@@ -709,6 +779,8 @@ def startup_briefing(session):
         "execution_mode": "normal_thread" if authorization else "read_only",
         "instructions": instructions,
         "voice_event_ids": persisted_voice_event_ids(session),
+        "observation": observation,
+        "request_budget": request_capacity(session),
     }
     # Only bridge settings establish capability; the web process has no budget.
     # Persist sanitized status, never the thread's instructions or rendered context.
@@ -735,10 +807,20 @@ def begin_pending(voice_id, event_id, fragments):
     if not event_id or len(event_id) > 180:
         raise ValueError("Invalid delegation ID")
     with transaction.atomic():
-        session = RealtimeVoiceSession.objects.select_for_update().get(pk=voice_id)
+        session = RealtimeVoiceSession.objects.select_for_update().select_related("chat", "user").get(pk=voice_id)
         state = dict(session.state)
-        if session.status != "active" or state.get("pending_delegation") or session.delegations.exists():
-            return
+        capacity = request_capacity(session)
+        if (
+            session.status != "active"
+            or deadline_expired(session)
+            or not voice_allowed(session.user)
+            or not capacity["remaining"]
+            or capacity["collecting"]
+            or capacity["inflight"]
+            or event_id in capacity["request_ids"]
+        ):
+            return False
+        state["voice_request_ids"] = [*capacity["request_ids"], event_id]
         state["pending_delegation"] = {
             "id": event_id,
             "status": "collecting",
@@ -748,6 +830,7 @@ def begin_pending(voice_id, event_id, fragments):
         session.state = state
         session.save(update_fields=["state"])
         record_event(voice_id, f"signal:{event_id}", "delegation_signal", "Client delegation signal received.")
+        return True
 
 
 def close_pending(voice_id, event_id, status="cancelled"):
@@ -779,11 +862,13 @@ def resolve_pending(voice_id, event_id, text):
             raise ValueError("Pending request expired or unavailable")
         if not text.strip() or len(text) > 4000:
             raise ValueError("Invalid assembled request")
-        delegate(voice_id, event_id, text.strip())
+        message = delegate(voice_id, event_id, text.strip())
+        session.refresh_from_db(fields=["state"])
         pending["status"] = "submitted"
-        state["pending_delegation"] = pending
-        session.state = state
+        session.state = {**session.state, "pending_delegation": pending}
         session.save(update_fields=["state"])
+    message.refresh_from_db()
+    return {"message_id": str(message.pk), "status": message.status}
 
 
 def delegate(voice_id, event_id, text):
@@ -797,8 +882,21 @@ def delegate(voice_id, event_id, text):
             if old.text != text:
                 raise ValueError("Delegation ID already used")
             return old.message
-        if session.delegations.exists():
-            raise ValueError("This voice session permits one background request")
+        capacity = request_capacity(session)
+        if capacity["limit"] == 0:
+            normal_target(session)  # Preserve the explicit revoked-authorization error.
+        pending = (session.state or {}).get("pending_delegation") or {}
+        reserved = event_id in capacity["request_ids"]
+        if reserved and (pending.get("id") != event_id or pending.get("status") != "collecting"):
+            raise ValueError("This request attempt was already consumed; it cannot be replayed")
+        if not reserved and not capacity["remaining"]:
+            raise ValueError(
+                "This voice session permits one background request"
+                if capacity["limit"] == 1
+                else "Reviewed voice execution cap reached"
+            )
+        if capacity["inflight"] or (capacity["collecting"] and not reserved):
+            raise ValueError("A background request is still pending; no concurrent execution is permitted")
         if session.status != "active" or deadline_expired(session):
             raise ValueError("Voice session ended or deadline expired")
         try:
@@ -848,6 +946,11 @@ def delegate(voice_id, event_id, text):
             metadata = attach({**metadata, "context_policy": "current_chat_only"}, budget)
         message = messaging.send(None, session.chat, prompt, metadata=metadata)
         RealtimeVoiceDelegation.objects.create(session=session, event_id=event_id, text=text, message=message)
+        session.state = {
+            **session.state,
+            "voice_request_ids": list(dict.fromkeys([*capacity["request_ids"], event_id])),
+        }
+        session.save(update_fields=["state"])
     message.refresh_from_db()
     return message
 
@@ -901,6 +1004,7 @@ def session_out(session):
         "delegations": state["delegations"],
         "thread_updates": state["thread_updates"],
         "activities": state["activities"],
+        "request_budget": state["request_budget"],
         "briefing": state["briefing"],
     }
 
