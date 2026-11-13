@@ -55,7 +55,7 @@ _ENTRIES = (
         "per rental resource period",
         "estimate = verified rate x bounded period; terminated is not reconciled; "
         "settled only by an explicit provider charge",
-        "operation key = job/compute/resource/period; one provider charge supersedes its estimate",
+        "resource/component/exact period; overlapping periods rejected, charge bound to one operation",
     ),
     CoverageEntry(
         "runpod_native_storage",

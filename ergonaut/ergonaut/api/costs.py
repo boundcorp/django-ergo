@@ -24,11 +24,13 @@ from __future__ import annotations
 import uuid
 from collections import defaultdict
 from datetime import UTC, timedelta
+from decimal import localcontext
 
 from django.db.models import CharField, Q
 from django.db.models.fields.json import KeyTextTransform
 from django.db.models.functions import Cast
 from django.utils import timezone
+from django_ergo.bots.registry import may_use
 from django_ergo.conversation.chat_reply import CHAT_REPLY_KIND
 from django_ergo.conversation.models import (
     AgentUsage,
@@ -45,7 +47,7 @@ from ninja import Router, Schema
 from ninja.errors import HttpError
 
 from ergonaut.api.auth import user_auth
-from ergonaut.api.bots import uuid_or_404, visible_sessions
+from ergonaut.api.bots import registry, uuid_or_404, visible_sessions
 
 router = Router(tags=["costs"], auth=user_auth)
 
@@ -900,11 +902,39 @@ def _decimal_text(value) -> str | None:
 
 @router.get("/costs/ledger", response=LedgerOut)
 def costs_ledger(request, days: int = 30, bot: str = ""):
-    """Passive cost-ledger projection, owner scoped (superusers see every owner)."""
+    """Project only the owner's costs for bots they may use; superusers see every owner."""
     days = max(1, min(days, 366))
     until = timezone.now().astimezone(UTC)
     since = (until - timedelta(days=days - 1)).replace(hour=0, minute=0, second=0, microsecond=0)
-    rows = summarize_costs(request.auth, bot_name=bot or None, since=since, until=until)
+    if request.auth.is_superuser:
+        rows = summarize_costs(request.auth, bot_name=bot or None, since=since, until=until)
+    else:
+        allowed = {item.name for item in registry() if may_use(item, request.auth)}
+        if bot and bot not in allowed:
+            raise HttpError(404, f"No bot {bot!r}")
+        # The projection accepts one bot at a time. Merge its currency/kind buckets
+        # without ever querying rows for a bot the owner cannot access.
+        combined = {}
+        for name in (bot,) if bot else sorted(allowed):
+            for row in summarize_costs(request.auth, bot_name=name, since=since, until=until):
+                key = (row["kind"], row["currency"])
+                if key not in combined:
+                    combined[key] = row
+                    continue
+                bucket = combined[key]
+                if row["known_amount"] is not None:
+                    with localcontext() as context:
+                        context.prec = 80
+                        bucket["known_amount"] = (bucket["known_amount"] or 0) + row["known_amount"]
+                for field in (
+                    "known_count",
+                    "unknown_count",
+                    "operation_count",
+                    "partial_period_count",
+                    "undated_count",
+                ):
+                    bucket[field] += row[field]
+        rows = [combined[key] for key in sorted(combined)]
     buckets = [{**row, "known_amount": _decimal_text(row["known_amount"])} for row in rows]
     return {
         "days": days,

@@ -75,7 +75,7 @@ def test_inference_request_maps_to_separate_reservation_and_estimate(users):
     rows = record_inference_request(actor=a, request=finished(a))
     assert [r.kind for r, _ in rows] == ["reservation", "estimate"]
     estimate = rows[1][0]
-    assert (estimate.tokens_uncached_input, estimate.tokens_cache_read) == (60, 40)
+    assert (estimate.tokens_uncached_input, estimate.tokens_cache_read) == (None, 40)
     (effective,) = effective_observations(a)
     assert effective.kind == "estimate"
     kinds = {b["kind"]: b["known_amount"] for b in summarize_costs(a)}
@@ -91,6 +91,54 @@ def test_inference_replay_is_idempotent_and_changed_facts_conflict(users):
     with pytest.raises(CostConflictError):
         record_inference_request(actor=a, request=req)
     assert CostObservation.objects.count() == 2
+
+
+def test_inference_conflict_rolls_back_new_reservation(users):
+    a, _ = users
+    req = finished(a)
+    req.reserved_usd = None
+    record_inference_request(actor=a, request=req)
+    req.reserved_usd = D("0.5")
+    req.cost_usd = D("0.2")
+    with pytest.raises(CostConflictError):
+        record_inference_request(actor=a, request=req)
+    assert list(CostObservation.objects.values_list("kind", flat=True)) == ["estimate"]
+
+
+@pytest.mark.parametrize(
+    ("prompt", "cached"), [(None, None), (100, None), (None, 40), (100, 40)]
+)
+def test_inference_preserves_unknown_token_buckets(users, prompt, cached):
+    a, _ = users
+    req = finished(a)
+    req.prompt_tokens, req.cached_tokens = prompt, cached
+    estimate = record_inference_request(actor=a, request=req)[1][0]
+    assert estimate.tokens_uncached_input is None
+    assert estimate.tokens_cache_write is None
+    assert estimate.tokens_cache_read == cached
+
+
+def test_inference_rejects_cache_read_exceeding_prompt(users):
+    a, _ = users
+    req = finished(a)
+    req.prompt_tokens, req.cached_tokens = 10, 11
+    with pytest.raises(ValueError):
+        record_inference_request(actor=a, request=req)
+    assert not CostObservation.objects.exists()
+
+
+@pytest.mark.parametrize(
+    ("status", "amount"),
+    [("unknown", D("0.1")), ("pending", D("0.1")), ("priced", None)],
+)
+def test_inference_cost_requires_priced_status_and_amount(users, status, amount):
+    a, _ = users
+    req = finished(a)
+    req.cost_status, req.cost_usd, req.finished_at = status, amount, None
+    observation = record_inference_request(actor=a, request=req)[1][0]
+    assert observation.kind == "unknown"
+    assert observation.amount is None
+    assert observation.occurred_at is None
 
 
 def test_unpriced_finished_request_is_unknown_not_zero_and_pending_has_only_reservation(
@@ -224,6 +272,77 @@ def test_runpod_denies_cross_owner_and_replay_is_idempotent(users, job):
     assert component(a, job, amount=D("1"))[1] is False
     with pytest.raises(CostConflictError):
         component(a, job, amount=D("2"))
+
+
+def test_runpod_successor_settles_same_resource_period_without_double_count(users, job):
+    a, _ = users
+    estimate, _ = component(a, job, amount=D("1"))
+    successor = RunpodJob.objects.create(
+        account=job.account,
+        bot_name=job.bot_name,
+        owner_id=job.owner_id,
+        session_identity=uuid.uuid4(),
+        request_key="successor",
+        spec_hash=job.spec_hash,
+        profile={},
+        ledger_path=job.ledger_path,
+        reservation_usd=job.reservation_usd,
+        created=job.created,
+        deadline=job.deadline,
+    )
+    final, _ = component(
+        a, successor, kind=CostKind.FINAL, amount=D("0.7"), charge_id="charge1"
+    )
+    assert final.operation_id == estimate.operation_id
+    assert final.operation.job_ref == ""
+    assert (estimate.attempt_ref, final.attempt_ref) == (str(job.pk), str(successor.pk))
+    assert [(b["kind"], b["known_amount"]) for b in summarize_costs(a)] == [
+        ("final", D("0.7"))
+    ]
+
+
+def test_runpod_rejects_overlapping_periods_and_reused_charge(users, job):
+    a, _ = users
+    component(a, job, kind=CostKind.FINAL, amount=D("1"), charge_id="charge1")
+    with pytest.raises(CostConflictError):
+        component(a, job, period_end=T0 + timedelta(minutes=30))
+    with pytest.raises(CostConflictError):
+        component(
+            a,
+            job,
+            component="storage",
+            kind=CostKind.FINAL,
+            amount=D("1"),
+            charge_id="charge1",
+        )
+    with pytest.raises(CostConflictError):
+        component(
+            a,
+            job,
+            period_start=T0 + timedelta(hours=1),
+            period_end=T0 + timedelta(hours=2),
+            kind=CostKind.FINAL,
+            amount=D("1"),
+            charge_id="charge1",
+        )
+    assert CostObservation.objects.count() == 1
+
+
+def test_runpod_fractional_adjacent_periods_remain_distinct(users, job):
+    a, _ = users
+    boundary = T0 + timedelta(microseconds=1)
+    first, _ = component(a, job, period_end=boundary, amount=D("1"))
+    second, _ = component(
+        a,
+        job,
+        period_start=boundary,
+        period_end=boundary + timedelta(microseconds=1),
+        amount=D("2"),
+    )
+    assert first.operation_id != second.operation_id
+    assert summarize_costs(a)[0]["known_amount"] == D("3")
+    with pytest.raises(ValueError):
+        component(a, job, period_end=T0)
 
 
 def make(a, key, kind, amount, **kw):

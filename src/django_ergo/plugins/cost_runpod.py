@@ -7,6 +7,8 @@ evidence; only an explicit provider charge settles an estimate. Never retries or
 alters the rental.
 """
 
+import hashlib
+import json
 from datetime import UTC
 from datetime import datetime
 from decimal import Decimal
@@ -14,11 +16,18 @@ from decimal import Decimal
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied
+from django.db import transaction
+from django.utils import timezone
 
+from django_ergo.costs.ledger import _authorize
 from django_ergo.costs.ledger import record_observation
+from django_ergo.costs.models import CostObservation
+from django_ergo.costs.types import CostConflictError
 from django_ergo.costs.types import CostKind
 from django_ergo.costs.types import ObservationSpec
 from django_ergo.costs.types import OperationSpec
+from django_ergo.costs.types import code
+from django_ergo.plugins.runpod.models import RunpodAccount
 
 SOURCE = "runpod-native-v1"
 COMPONENTS = ("compute", "storage")
@@ -48,7 +57,7 @@ def _operation(job, key, resource_id=""):
         operation_key=key,
         currency="USD",
         bot_name=job.bot_name,
-        job_ref=str(job.pk),
+        job_ref="" if resource_id else str(job.pk),
         resource_type="pod" if resource_id else "",
         resource_id=resource_id,
     )
@@ -86,6 +95,21 @@ def estimate_amount(hourly_usd, period_start, period_end):
     return Decimal(hourly_usd) * seconds / Decimal(3600)
 
 
+def _digest(*parts):
+    return hashlib.sha256(
+        json.dumps(parts, separators=(",", ":"), ensure_ascii=True).encode()
+    ).hexdigest()
+
+
+def _boundary(value):
+    if not isinstance(value, datetime) or timezone.is_aware(value) != settings.USE_TZ:
+        msg = "Event times must be datetimes matching Django USE_TZ"
+        raise ValueError(msg)
+    return (value.astimezone(UTC) if settings.USE_TZ else value).isoformat(
+        timespec="microseconds"
+    )
+
+
 def record_component(  # noqa: PLR0913 - explicit evidence, no inference from lifecycle
     *,
     actor,
@@ -102,11 +126,10 @@ def record_component(  # noqa: PLR0913 - explicit evidence, no inference from li
 ):
     """Record one compute or storage period for a pod.
 
-    Operation = job/component/resource/period start, so a provider charge for the
-    same period supersedes the estimate and storage never merges with compute.
-    `kind` ESTIMATE/UNKNOWN describe our own knowledge; PROVIDER_REPORTED/FINAL need
-    an explicit `amount` and `charge_id` from provider evidence. UNKNOWN takes no
-    amount. The caller must not use stop/delete/cleanup as reconciliation evidence.
+    Identity is the exact half-open resource/component/period, independent of job.
+    Different overlapping periods are rejected rather than prorated or guessed.
+    Provider-reported/final amounts require an explicit provider charge id; that id
+    cannot settle another operation. Stop/delete/cleanup are not money evidence.
     """
     kind = CostKind(kind)
     if component not in COMPONENTS or kind not in _KINDS:
@@ -118,28 +141,69 @@ def record_component(  # noqa: PLR0913 - explicit evidence, no inference from li
     if kind in {CostKind.PROVIDER_REPORTED, CostKind.FINAL} and not charge_id:
         msg = "Provider-reported or final money needs a provider charge id"
         raise ValueError(msg)
+    start, end = _boundary(period_start), _boundary(period_end)
+    if period_end <= period_start:
+        msg = "A nonempty provider period is required"
+        raise ValueError(msg)
+    if charge_id:
+        code(charge_id)
     owner = _owner(job)
-    start = period_start.astimezone(UTC) if period_start.tzinfo else period_start
-    key = f"{job.pk}:{component}:{resource_id}:{start:%Y%m%dT%H%M%SZ}"
-    event = f"{key}:{charge_id}" if charge_id else f"{key}:{kind.value}:{revision}"
+    _authorize(actor, owner)
+    key = "period:" + _digest(component, resource_id, start, end)
+    charge_ref = _digest(charge_id) if charge_id else ""
+    event = (
+        "charge:" + _digest(charge_ref, kind.value, revision)
+        if charge_id
+        else "observation:" + _digest(key, str(job.pk), kind.value, revision)
+    )
     provenance = {"service": f"runpod_{component}", "funding": "metered_api"}
+    if charge_ref:
+        provenance["source_ref"] = charge_ref
     if evidence_ref:
         provenance["evidence_ref"] = evidence_ref
-    return record_observation(
-        actor=actor,
-        owner=owner,
-        operation=_operation(job, key, resource_id),
-        observation=ObservationSpec(
+    with transaction.atomic():
+        # Serialize all adapter checks for this account, including initially absent
+        # periods and charge IDs. All writers must use this adapter.
+        RunpodAccount.objects.select_for_update().get(pk=job.account_id)
+        existing = CostObservation.objects.filter(
+            provider="runpod",
+            account_ref=job.account_id,
             source=SOURCE,
-            source_event_id=event,
-            kind=kind,
-            revision=revision,
-            occurred_at=period_end,
-            period_start=period_start,
-            period_end=period_end,
-            amount=amount,
+        )
+        overlaps = existing.filter(
             resource_type="pod",
             resource_id=resource_id,
-            provenance=provenance,
-        ),
-    )
+            provenance__service=f"runpod_{component}",
+            period_start__lt=period_end,
+            period_end__gt=period_start,
+        ).exclude(operation__operation_key=key)
+        if overlaps.exists():
+            msg = "RunPod component periods overlap"
+            raise CostConflictError(msg)
+        if (
+            charge_ref
+            and existing.filter(provenance__source_ref=charge_ref)
+            .exclude(operation__operation_key=key)
+            .exists()
+        ):
+            msg = "RunPod charge already belongs to another component or period"
+            raise CostConflictError(msg)
+        return record_observation(
+            actor=actor,
+            owner=owner,
+            operation=_operation(job, key, resource_id),
+            observation=ObservationSpec(
+                source=SOURCE,
+                source_event_id=event,
+                kind=kind,
+                revision=revision,
+                occurred_at=period_end,
+                period_start=period_start,
+                period_end=period_end,
+                amount=amount,
+                attempt_ref=str(job.pk),
+                resource_type="pod",
+                resource_id=resource_id,
+                provenance=provenance,
+            ),
+        )

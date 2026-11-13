@@ -7,12 +7,13 @@ external operation to be repeated. Calls are idempotent by source identity.
 """
 
 from django.core.exceptions import PermissionDenied
+from django.db import transaction
 
 from .ledger import record_observation
 from .types import CostKind
 from .types import ObservationSpec
 from .types import OperationSpec
-from .types import TokenUsage
+from .types import normalize_tokens
 
 INFERENCE_SOURCE = "inference-request-v1"
 
@@ -30,8 +31,8 @@ def record_inference_request(*, actor, request):
 
     - reservation: `reserved_usd`, a ceiling, separate from spend
     - release: only when the request was refused before any HTTP request
-    - estimate: `cost_usd` (list-price, never final), once the attempt finished
-    - unknown: a finished attempt with no cost, not zero
+    - estimate: priced `cost_usd` (list-price, never final), once finished
+    - unknown: a finished attempt without a priced cost, not zero
 
     Only `billing_mode == "api"` rows are ledger-billable; others return [] (that is
     not evidence of free usage). Returns [(CostObservation, created)].
@@ -80,23 +81,23 @@ def record_inference_request(*, actor, request):
                 request.created_at,
             )
         )
-    finished = request.finished_at or request.created_at
+    finished = request.finished_at
     if request.outcome == InferenceOutcome.NOT_SENT:
         if request.reserved_usd is not None:
             specs.append(
                 spec(CostKind.RELEASE, "release", request.reserved_usd, finished)
             )
     elif request.outcome != InferenceOutcome.PENDING:
-        prompt, cached = request.prompt_tokens, request.cached_tokens
-        tokens = TokenUsage(
-            uncached_input=None
-            if prompt is None or cached is None
-            else prompt - cached,
-            cache_read=cached,
+        # Prompt includes cache writes, but the source does not retain that
+        # bucket. It cannot be subtracted to recover disjoint uncached input.
+        tokens = normalize_tokens(
+            input_tokens=request.prompt_tokens,
+            input_semantics="total",
+            cache_read=request.cached_tokens,
             output=request.output_tokens,
             reasoning=request.reasoning_tokens,
         )
-        if request.cost_usd is not None:
+        if request.cost_status == "priced" and request.cost_usd is not None:
             specs.append(
                 spec(
                     CostKind.ESTIMATE,
@@ -110,7 +111,10 @@ def record_inference_request(*, actor, request):
             specs.append(
                 spec(CostKind.UNKNOWN, "unknown", None, finished, tokens=tokens)
             )
-    return [
-        record_observation(actor=actor, owner=owner, operation=operation, observation=s)
-        for s in specs
-    ]
+    with transaction.atomic():
+        return [
+            record_observation(
+                actor=actor, owner=owner, operation=operation, observation=s
+            )
+            for s in specs
+        ]
