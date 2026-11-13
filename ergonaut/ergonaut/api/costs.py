@@ -38,6 +38,8 @@ from django_ergo.conversation.models import (
     InferenceRequest,
     StructuredCall,
 )
+from django_ergo.costs.coverage import coverage_manifest
+from django_ergo.costs.ledger import summarize_costs
 from django_ergo.pricing import call_cost_parts, price_for
 from ninja import Router, Schema
 from ninja.errors import HttpError
@@ -840,4 +842,76 @@ def costs(request, days: int = 30, bot: str = ""):
         "usage": _usage(total, by_session, main_tokens, subscription_tokens, compaction_tokens),
         "private": _private_spend(private.order_by("created_at")),
         "estimate": _estimate(calls, agent_list, since),
+    }
+
+
+class LedgerBucket(Schema):
+    kind: str
+    currency: str
+    known_amount: str | None  # Decimal text; null = every row unknown, never "0"
+    known_count: int
+    unknown_count: int
+    operation_count: int
+    partial_period_count: int
+    undated_count: int
+
+
+class LedgerCoverageEntry(Schema):
+    source: str
+    status: str
+    granularity: str
+    uncertainty: str
+    duplicate_rule: str
+
+
+class LedgerCoverage(Schema):
+    live_ingestion: bool
+    complete: bool
+    note: str
+    sources: list[LedgerCoverageEntry]
+
+
+class LedgerOut(Schema):
+    days: int
+    since: str
+    until: str
+    timezone: str = "UTC"
+    bot: str = ""
+    basis: str
+    buckets: list[LedgerBucket]
+    coverage: LedgerCoverage
+
+
+LEDGER_BASIS = (
+    "One status per economic operation (final > provider reported > estimate > unknown), "
+    "windowed by that status's event time or overlapping resource period (not prorated). "
+    "Per currency, no FX. Reservations, releases, API-equivalent and subscription are "
+    "separate, not spend. Separate from the token estimate above: never add the two."
+)
+
+
+def _decimal_text(value) -> str | None:
+    """Plain Decimal text without storage-scale zeros; None stays None (unknown)."""
+    if value is None:
+        return None
+    text = format(value, "f")
+    return text.rstrip("0").rstrip(".") if "." in text else text
+
+
+@router.get("/costs/ledger", response=LedgerOut)
+def costs_ledger(request, days: int = 30, bot: str = ""):
+    """Passive cost-ledger projection, owner scoped (superusers see every owner)."""
+    days = max(1, min(days, 366))
+    until = timezone.now().astimezone(UTC)
+    since = (until - timedelta(days=days - 1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    rows = summarize_costs(request.auth, bot_name=bot or None, since=since, until=until)
+    buckets = [{**row, "known_amount": _decimal_text(row["known_amount"])} for row in rows]
+    return {
+        "days": days,
+        "since": since.isoformat(),
+        "until": until.isoformat(),
+        "bot": bot,
+        "basis": LEDGER_BASIS,
+        "buckets": buckets,
+        "coverage": coverage_manifest(),
     }

@@ -3,6 +3,7 @@ from datetime import timedelta
 
 import pytest
 from django.contrib.auth import get_user_model
+from django.test import Client
 from django.utils import timezone
 from django_ergo.conversation.models import AgentUsage, ConversationSession, StructuredCall, Worker
 
@@ -676,3 +677,66 @@ def test_costs_window_normalizes_non_utc_now_and_serializes_schema(client, lee, 
     assert data["until"] == now.astimezone(UTC).isoformat()
     assert [day["date"] for day in data["by_day"]] == ["2026-11-13", "2026-11-14"]
     assert data["estimate"]["bot"]["rows"] == 0
+
+
+def _ledger_row(owner, key, kind, amount, *, bot="kitchen", currency="USD", at=None, **extra):
+    from decimal import Decimal
+
+    from django_ergo.costs.ledger import record_observation
+    from django_ergo.costs.types import CostKind, ObservationSpec, OperationSpec
+
+    return record_observation(
+        actor=owner,
+        operation=OperationSpec("p", "acct", key, currency, bot_name=bot),
+        observation=ObservationSpec(
+            "s",
+            f"{key}-{kind}",
+            CostKind(kind),
+            extra.pop("revision", 1),
+            amount=None if amount is None else Decimal(amount),
+            occurred_at=at or timezone.now(),
+            **extra,
+        ),
+    )
+
+
+@pytest.mark.django_db
+def test_ledger_projection_is_owner_scoped_bot_filtered_and_keeps_unknown_null(client):
+    User = get_user_model()
+    ann = User.objects.create_user("ann", password="pw")
+    bob = User.objects.create_user("bob", password="pw")
+    _ledger_row(ann, "a1", "estimate", "1.5")
+    _ledger_row(ann, "a2", "unknown", None, currency="CREDITS", bot="ads")
+    _ledger_row(ann, "a3", "reservation", "9", bot="ads")
+    _ledger_row(bob, "b1", "estimate", "100")
+    client.post("/api/auth/login", json.dumps({"username": "ann", "password": "pw"}), content_type="application/json")
+    data = client.get("/api/costs/ledger?days=7").json()
+    rows = {(b["kind"], b["currency"]): b for b in data["buckets"]}
+    assert rows[("estimate", "USD")]["known_amount"] == "1.5"  # Bob's 100 is invisible
+    assert rows[("unknown", "CREDITS")]["known_amount"] is None
+    assert rows[("unknown", "CREDITS")]["unknown_count"] == 1
+    assert rows[("reservation", "USD")]["known_amount"] == "9"
+    assert data["coverage"]["live_ingestion"] is False and data["coverage"]["complete"] is False
+    only_ads = client.get("/api/costs/ledger?bot=ads").json()
+    assert {(b["kind"], b["currency"]) for b in only_ads["buckets"]} == {
+        ("unknown", "CREDITS"),
+        ("reservation", "USD"),
+    }
+
+
+@pytest.mark.django_db
+def test_ledger_projection_requires_authentication_and_superuser_sees_all(client, lee):
+    assert Client().get("/api/costs/ledger").status_code in (401, 403)
+    other = get_user_model().objects.create_user("zed", password="pw")
+    _ledger_row(other, "z1", "estimate", "2")
+    _ledger_row(lee, "l1", "estimate", "3")
+    (bucket,) = client.get("/api/costs/ledger").json()["buckets"]
+    assert bucket["known_amount"] == "5"
+
+
+@pytest.mark.django_db
+def test_ledger_window_excludes_old_rows_after_supersession(client, lee):
+    old = timezone.now() - timedelta(days=60)
+    _ledger_row(lee, "w1", "estimate", "1")
+    _ledger_row(lee, "w1", "final", "5", at=old, revision=2)
+    assert client.get("/api/costs/ledger?days=7").json()["buckets"] == []
