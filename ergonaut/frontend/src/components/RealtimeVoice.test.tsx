@@ -521,65 +521,51 @@ async function renderTurns(transcript: ReturnType<typeof turn>[]) {
   return [...container.querySelectorAll('[data-turn-id]')].map(node => node.textContent ?? '')
 }
 
-test('assistant fragments of one speaker run share one bubble without playback labels', async () => {
+test('distinct consecutive replies in the same claim remain separate without playback warnings', async () => {
   const bubbles = await renderTurns([
-    turn('a1', 'assistant', 'three-request allowance.', { created_at: '2026-01-01T00:00:01Z', segment: 'c1' }),
-    turn('a2', 'assistant', 'That', { created_at: '2026-01-01T00:00:02Z', segment: 'c1' }),
-    turn('a3', 'assistant', 'earlier playback issue was just volume.', {
-      created_at: '2026-01-01T00:00:03Z',
-      segment: 'c1',
-    }),
-    turn('a4', 'assistant', 'We', { is_final: false, created_at: '2026-01-01T00:00:04Z', segment: 'c1' }),
-  ])
-  expect(bubbles).toHaveLength(1)
-  expect(bubbles[0]).toContain('three-request allowance. That earlier playback issue was just volume. We')
-  expect(bubbles[0]).toContain('live transcript')
-  expect(container.textContent).not.toMatch(/Playback (unconfirmed|confirmed)/)
-})
-
-test('duplicate and out-of-order events neither repeat text nor reorder the call', async () => {
-  const user = turn('u1', 'user', 'Question', { created_at: '2026-01-01T00:00:00Z', segment: 'c1' })
-  const first = turn('a1', 'assistant', 'One', { created_at: '2026-01-01T00:00:01Z', segment: 'c1' })
-  const second = turn('a2', 'assistant', 'two.', { created_at: '2026-01-01T00:00:02Z', segment: 'c1' })
-  const bubbles = await renderTurns([
-    second,
-    { ...first, is_final: false, text: 'On' },
-    user,
-    first,
-    first,
-    { ...second, is_final: false, text: 'tw' },
+    turn('a1', 'assistant', 'First answer.', { segment: 'same-claim' }),
+    turn('a2', 'assistant', 'Second answer.', { segment: 'same-claim' }),
   ])
   expect(bubbles).toHaveLength(2)
-  expect(bubbles[0]).toContain('Question')
-  expect(bubbles[1]).toContain('One two.')
-  expect(bubbles[1]).not.toContain('One One')
-  expect(container.querySelector('[data-turn-id="u1"]')!.getAttribute('data-final')).toBe('true')
+  expect(bubbles[0]).toContain('First answer.')
+  expect(bubbles[1]).toContain('Second answer.')
+  expect(container.textContent).not.toMatch(/playback unconfirmed/i)
 })
 
-test('speaker changes, interruptions and reconnects break bubbles; interruption is labeled', async () => {
-  const bubbles = await renderTurns([
-    turn('a1', 'assistant', 'Hello', { created_at: '2026-01-01T00:00:01Z', segment: 'c1' }),
-    turn('a2', 'assistant', 'there and', {
-      created_at: '2026-01-01T00:00:02Z',
-      segment: 'c1',
-      delivery: 'interrupted',
-    }),
-    turn('a3', 'assistant', 'After interrupt', { created_at: '2026-01-01T00:00:03Z', segment: 'c1' }),
-    turn('u1', 'user', 'Hey', { created_at: '2026-01-01T00:00:04Z', segment: 'c1' }),
-    turn('u2', 'user', 'again', { created_at: '2026-01-01T00:00:05Z', segment: 'c2' }),
-    turn('a4', 'assistant', 'New call', { created_at: '2026-01-01T00:00:06Z', segment: 'c2' }),
-    turn('a5', 'assistant', 'continues', { created_at: '2026-01-01T00:00:07Z', segment: 'c3' }),
+test('legacy events with unknown boundaries stay separate', async () => {
+  await act(async () => {
+    root.render(
+      <VoiceTranscript
+        voice={{
+          ...session,
+          transcript: undefined,
+          events: [
+            { event_id: 'old-1', kind: 'assistant', text: 'One answer.', delivery: 'unknown', created_at: '' },
+            { event_id: 'old-2', kind: 'assistant', text: 'Another answer.', delivery: 'unknown', created_at: '' },
+          ],
+        }}
+      />,
+    )
+  })
+  const bubbles = [...container.querySelectorAll('[data-turn-id]')]
+  expect(bubbles.map(node => node.textContent)).toEqual([
+    expect.stringContaining('One answer.'),
+    expect.stringContaining('Another answer.'),
   ])
-  expect(bubbles.map(text => text.replace(/^(You|Assistant)/, '$1|'))).toEqual([
-    expect.stringContaining('Hello there and'),
-    expect.stringContaining('After interrupt'),
-    expect.stringContaining('Hey'),
-    expect.stringContaining('again'),
-    expect.stringContaining('New call'),
-    expect.stringContaining('continues'),
-  ])
-  expect(bubbles[0]).toContain('Interrupted')
-  expect(bubbles[1]).not.toContain('Interrupted')
+})
+
+test('legacy event delivery uncertainty remains in Diagnostics', async () => {
+  const legacy: RealtimeVoiceSession = {
+    ...session,
+    events: [{ event_id: 'old', kind: 'assistant', text: 'Legacy reply', delivery: 'unknown', created_at: '' }],
+  }
+  api.realtimeVoiceSessions = async () => [legacy]
+  await mountVoice()
+  const diagnostics = [...container.querySelectorAll('details')].find(
+    node => node.querySelector('summary')?.textContent === 'Diagnostics',
+  )
+  expect(diagnostics?.textContent).toContain('playback unconfirmed 1')
+  expect(container.querySelector('[data-turn-id="old"]')?.textContent).not.toContain('playback unconfirmed')
 })
 
 test('active page polling progressively replaces a draft without opening a transport', async () => {
@@ -718,12 +704,18 @@ test('a single durable card shows the stage and transcript without claiming play
     'Found sources',
     'Hello',
     'Working on it',
-    'playback unconfirmed',
     '(interrupted)',
     'playback confirmed; hearing not established',
   ]) {
     expect(html).toContain(text)
   }
+  const card = window.document.createElement('div')
+  card.innerHTML = html
+  const diagnostics = [...card.querySelectorAll('details')].find(
+    node => node.querySelector('summary')?.textContent === 'Diagnostics',
+  )
+  expect(diagnostics?.textContent).toContain('playback unconfirmed 1')
+  expect(card.querySelector('details')?.textContent).not.toContain('playback unconfirmed')
 })
 
 test.each([{ delegations: undefined }, { delegations: [] }])(

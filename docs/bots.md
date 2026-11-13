@@ -1014,6 +1014,8 @@ This is not a guarantee that speech or transcription is complete.
 The session card distinguishes generated speech from
 durable submitted/queued/answered/failed work and explicitly reports when
 no background request or verified history result exists.
+Voice transcripts retain individual SDK segments rather than guessing reply boundaries;
+delivery uncertainty is summarized in Diagnostics, not repeated on each bubble.
 
 Voice is an interface to its exact launch thread, not a separate orchestrator
 or a global owner briefing. PR #293 (deployed `06284d4`) restores that thread's bounded

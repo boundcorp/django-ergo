@@ -454,7 +454,6 @@ def test_progressive_transcript_is_owner_scoped_bounded_and_finalized_only(voice
     assert realtime_voice.publish_live_state(vid, "claim", drafts, runtime)
     current = client.get(url).json()
     assert len(current["transcript"]) == 4
-    assert {turn["segment"] for turn in current["transcript"]} == {"claim"}
     assert all(len(turn["text"]) == 4000 and not turn["is_final"] for turn in current["transcript"])
     assert current["events"] == []
     assert current["runtime"] == runtime
@@ -466,7 +465,6 @@ def test_progressive_transcript_is_owner_scoped_bounded_and_finalized_only(voice
     current = client.get(url).json()
     [final] = [turn for turn in current["transcript"] if turn["turn_id"] == "turn-7"]
     assert final["is_final"] and final["event_id"] == "turn-7" and final["text"] == "Final transcript"
-    assert final["segment"] == "claim"
     assert datetime.fromisoformat(final["created_at"]).tzinfo
     assert chat.messages.count() == 1
     assert len(current["events"]) == 1

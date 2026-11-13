@@ -800,7 +800,6 @@ export type RealtimeVoiceSession = {
     text: string
     is_final: boolean
     delivery: string
-    segment?: string // bridge claim; a change is a reconnect
     created_at: string
   }[]
   runtime?: { user_state: string; agent_state: string; observed_at: string | null }
