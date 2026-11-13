@@ -95,6 +95,10 @@ class Profile:
         ):
             msg = f"observability profile {name!r}: datasources must be a list of datasource uids"
             raise ValueError(msg)
+        if mode == "direct" and len(uids) > 1:
+            raise ValueError(
+                f"observability profile {name!r}: direct mode accepts at most one datasource identity"
+            )
         ownership = raw.get("ownership") or []
         if not isinstance(ownership, list):
             msg = f"observability profile {name!r}: ownership must be a list"

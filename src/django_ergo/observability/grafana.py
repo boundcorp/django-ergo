@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING
 from urllib.parse import quote
 from urllib.parse import urlencode
 
+from .errors import BOUNDS_EXCEEDED
+from .errors import FORBIDDEN
 from .errors import INVALID_QUERY
 from .errors import NOT_CONFIGURED
 from .errors import UPSTREAM_UNAVAILABLE
@@ -25,6 +27,9 @@ MAX_PAGE = 100
 MAX_ITEMS = 1000
 MAX_VARS = 20
 MAX_VAR_VALUE = 200
+MAX_VAR_VALUES = 100
+MAX_LINK_BYTES = 30000
+MAX_INVENTORY_ITEMS = 10000
 MAX_PANELS = 200
 MAX_TARGETS_PER_PANEL = 20
 EXPR_CLIP = 500
@@ -80,19 +85,28 @@ def dashboard_link(
     if tz is not None:
         params.append(("timezone", tz.key))
     variables = variables or {}
-    if len(variables) > MAX_VARS:
+    if not isinstance(variables, dict) or len(variables) > MAX_VARS:
         raise ObservabilityError(INVALID_QUERY, f"at most {MAX_VARS} variables")
-    for name, value in variables.items():
-        if not _VAR_NAME.fullmatch(str(name)):
-            raise ObservabilityError(INVALID_QUERY, f"invalid variable name {name!r}")
-        for item in value if isinstance(value, list) else [value]:
-            if len(str(item)) > MAX_VAR_VALUE:
-                raise ObservabilityError(
-                    INVALID_QUERY, f"variable {name} value too long"
-                )
-            params.append((f"var-{name}", str(item)))
     url = f"{_public(profile)}/d/{quote(uid, safe='')}"
-    return url + ("?" + urlencode(params, quote_via=quote) if params else "")
+    parts = [urlencode([p], quote_via=quote) for p in params]
+    size = len(url.encode()) + sum(len(p) + 1 for p in parts)
+    for name, value in variables.items():
+        if not isinstance(name, str) or not _VAR_NAME.fullmatch(name):
+            raise ObservabilityError(INVALID_QUERY, "invalid variable name")
+        values = value if isinstance(value, list) else [value]
+        if len(values) > MAX_VAR_VALUES:
+            raise ObservabilityError(BOUNDS_EXCEEDED, "too many variable values")
+        for item in values:
+            if not isinstance(item, str) or len(item) > MAX_VAR_VALUE:
+                raise ObservabilityError(INVALID_QUERY, "invalid variable value")
+            part = urlencode([(f"var-{name}", item)], quote_via=quote)
+            size += len(part) + 1
+            if size > MAX_LINK_BYTES:
+                raise ObservabilityError(BOUNDS_EXCEEDED, "dashboard link too long")
+            parts.append(part)
+    if size > MAX_LINK_BYTES:
+        raise ObservabilityError(BOUNDS_EXCEEDED, "dashboard link too long")
+    return url + ("?" + "&".join(parts) if parts else "")
 
 
 def explore_link(
@@ -158,29 +172,45 @@ class GrafanaClient:
             raise ObservabilityError(UPSTREAM_UNAVAILABLE, "unexpected search response")
         items = []
         for row in rows[:limit]:
-            uid = str(row.get("uid", ""))
+            if not isinstance(row, dict) or not isinstance(row.get("tags", []), list):
+                raise ObservabilityError(
+                    UPSTREAM_UNAVAILABLE, "unexpected search response"
+                )
+            safe_row = self._sanitize(row)
+            uid = str(safe_row.get("uid", ""))
             if not UID_RE.fullmatch(uid):
                 continue
             items.append(
                 {
                     "uid": uid,
-                    "title": str(row.get("title", ""))[:200],
-                    "tags": [str(t)[:50] for t in (row.get("tags") or [])][:20],
-                    "folder": str(row.get("folderTitle", ""))[:200],
+                    "title": str(safe_row.get("title", ""))[:200],
+                    "tags": [str(t)[:50] for t in (safe_row.get("tags") or [])][:20],
+                    "folder": str(safe_row.get("folderTitle", ""))[:200],
                     "link": dashboard_link(self.profile, uid)
                     if self._can_link()
                     else "",
                 }
             )
-        return {
-            "items": items,
-            "page": page,
-            "limit": limit,
-            "has_more": len(rows) >= limit,
-        }
+        return self._sanitize(
+            {
+                "items": items,
+                "page": page,
+                "limit": limit,
+                "has_more": len(rows) >= limit,
+            }
+        )
 
     def _can_link(self) -> bool:
         return bool(self.profile.public_url or self.profile.grafana_url)
+
+    def _sanitize(self, value):
+        if isinstance(value, str):
+            return self.http.sanitize(value, limit=max(len(value), 1) * 2 + 100)
+        if isinstance(value, list):
+            return [self._sanitize(v) for v in value]
+        if isinstance(value, dict):
+            return {self._sanitize(k): self._sanitize(v) for k, v in value.items()}
+        return value
 
     def datasources(self) -> list[dict]:
         """Name/uid/type/default of the datasources this profile allows. Nothing else."""
@@ -189,67 +219,170 @@ class GrafanaClient:
             raise ObservabilityError(
                 UPSTREAM_UNAVAILABLE, "unexpected datasource response"
             )
+        if any(not isinstance(r, dict) for r in rows):
+            raise ObservabilityError(
+                UPSTREAM_UNAVAILABLE, "unexpected datasource response"
+            )
         allowed = set(self.profile.datasources)
-        return [
-            {
-                "name": str(r.get("name", ""))[:100],
-                "uid": str(r.get("uid", "")),
-                "type": str(r.get("type", ""))[:100],
-                "default": bool(r.get("isDefault", False)),
-            }
-            for r in rows
-            if r.get("uid") in allowed
-        ]
+        result = []
+        for row in rows:
+            if not isinstance(row.get("uid"), str) or row["uid"] not in allowed:
+                continue
+            safe_row = self._sanitize(row)
+            result.append(
+                {
+                    "name": str(safe_row.get("name", ""))[:100],
+                    "uid": safe_row["uid"],
+                    "type": str(safe_row.get("type", ""))[:100],
+                    "default": bool(safe_row.get("isDefault", False)),
+                }
+            )
+        return result
 
-    def dashboard(self, uid: str) -> dict:
-        """Summary of one dashboard: panels, targets, datasource uids, variables, ownership."""
+    def _dashboard_data(self, uid: str):
         payload = self.http.get_json(f"/api/dashboards/uid/{_need_uid(uid)}")
-        dash = payload.get("dashboard") if isinstance(payload, dict) else None
-        if not isinstance(dash, dict):
+        if not isinstance(payload, dict) or not isinstance(
+            payload.get("dashboard"), dict
+        ):
             raise ObservabilityError(
                 UPSTREAM_UNAVAILABLE, "unexpected dashboard response"
             )
-        meta = payload.get("meta") or {}
-        panels = []
-        for panel in _walk_panels(dash.get("panels") or []):
-            if len(panels) >= MAX_PANELS:
-                break
-            panels.append(_panel_summary(panel))
-        variables = [
-            {
-                "name": str(v.get("name", ""))[:100],
-                "type": str(v.get("type", ""))[:50],
-                "query": _clip_value(v.get("query")),
-                "datasource": _ds_uid(v.get("datasource")),
-            }
-            for v in (dash.get("templating") or {}).get("list", [])
-        ]
-        uids = {d for p in panels for d in p["datasources"]}
-        uids |= {
-            t["datasource"] for p in panels for t in p["targets"] if t["datasource"]
-        }
+        dash = payload["dashboard"]
+        meta = payload.get("meta", {})
+        templating = dash.get("templating", {})
+        if not isinstance(meta, dict) or not isinstance(templating, dict):
+            raise ObservabilityError(
+                UPSTREAM_UNAVAILABLE, "unexpected dashboard response"
+            )
+        variables = templating.get("list", [])
+        if not isinstance(variables, list) or any(
+            not isinstance(v, dict) for v in variables
+        ):
+            raise ObservabilityError(
+                UPSTREAM_UNAVAILABLE, "unexpected dashboard variables"
+            )
+        if not isinstance(dash.get("tags", []), list):
+            raise ObservabilityError(UPSTREAM_UNAVAILABLE, "unexpected dashboard tags")
+        panels = list(_walk_panels(dash.get("panels", [])))
+        return dash, meta, variables, panels
+
+    def dashboard(self, uid: str) -> dict:
+        """Bounded display summary with a full, bounded datasource inventory."""
+        dash, meta, variables, all_panels = self._dashboard_data(uid)
+        dash, meta, variables, all_panels = self._sanitize(
+            [dash, meta, variables, all_panels]
+        )
+        panels = [_panel_summary(p) for p in all_panels[:MAX_PANELS]]
+        uids = set()
+        for panel in all_panels:
+            ds = _ds_uid(panel.get("datasource"))
+            if ds:
+                uids.add(ds)
+            for target in panel.get("targets", []):
+                ds = _ds_uid(target.get("datasource"))
+                if ds:
+                    uids.add(ds)
         provisioned = meta.get("provisioned")
         summary = {
             "uid": uid,
             "title": str(dash.get("title", ""))[:200],
-            "tags": [str(t)[:50] for t in (dash.get("tags") or [])][:20],
+            "tags": [str(t)[:50] for t in dash.get("tags", [])][:20],
             "folder": str(meta.get("folderTitle", ""))[:200],
             "version": dash.get("version"),
             "slug": str(meta.get("slug", ""))[:128],
             "provisioned": provisioned if isinstance(provisioned, bool) else None,
             "provisioned_file": str(meta.get("provisionedExternalId", ""))[:200],
             "panels": panels,
-            "variables": variables,
+            "panels_truncated": len(all_panels) > MAX_PANELS,
+            "variables": [
+                {
+                    "name": str(v.get("name", ""))[:100],
+                    "type": str(v.get("type", ""))[:50],
+                    "query": _clip_value(v.get("query")),
+                    "datasource": _ds_uid(v.get("datasource")),
+                }
+                for v in variables
+            ],
             "datasource_uids": sorted(uids),
             "link": dashboard_link(self.profile, uid) if self._can_link() else "",
         }
         summary["ownership"] = locate(self.profile, summary)
-        return summary
+        return self._sanitize(summary)
+
+    def authorized_render_slug(self, uid: str, panel_id: int) -> str:
+        """Authorize against the complete raw dashboard, never its display summary."""
+        if isinstance(panel_id, bool) or not isinstance(panel_id, int) or panel_id < 0:
+            raise ObservabilityError(INVALID_QUERY, "invalid panel id")
+        dash, meta, variables, panels = self._dashboard_data(uid)
+        # Grafana may evaluate dashboard variables and annotations independently of
+        # the selected panel; their datasource resolution is not available here.
+        if variables:
+            raise ObservabilityError(
+                FORBIDDEN, "dashboard variables cannot be authorized"
+            )
+        annotations = dash.get("annotations", {})
+        if not isinstance(annotations, dict) or annotations.get("list", []):
+            raise ObservabilityError(
+                FORBIDDEN, "dashboard annotations cannot be authorized"
+            )
+        matches = [p for p in panels if p.get("id") == panel_id]
+        if len(matches) != 1:
+            raise ObservabilityError(FORBIDDEN, "panel cannot be authorized")
+        panel = matches[0]
+        if panel.get("libraryPanel") is not None:
+            raise ObservabilityError(FORBIDDEN, "library panel cannot be authorized")
+
+        def check(ds):
+            if not isinstance(ds, dict) or ds.get("type") in ("mixed", "-- Mixed --"):
+                raise ObservabilityError(
+                    FORBIDDEN, "panel datasource cannot be resolved"
+                )
+            ref = ds.get("uid")
+            if (
+                not isinstance(ref, str)
+                or not UID_RE.fullmatch(ref)
+                or ref not in self.profile.datasources
+            ):
+                raise ObservabilityError(
+                    FORBIDDEN, "panel datasource is not authorized"
+                )
+
+        pending = [panel]
+        while pending:
+            value = pending.pop()
+            if isinstance(value, dict):
+                if "libraryPanel" in value:
+                    raise ObservabilityError(
+                        FORBIDDEN, "library panel cannot be authorized"
+                    )
+                for key, child in value.items():
+                    if key == "datasource":
+                        check(child)
+                    elif key in ("datasourceUid", "datasourceId"):
+                        raise ObservabilityError(
+                            FORBIDDEN, "panel datasource cannot be resolved"
+                        )
+                    else:
+                        pending.append(child)
+            elif isinstance(value, list):
+                pending.extend(value)
+        inherited = panel.get("datasource")
+        targets = panel.get("targets", [])
+        if not targets and inherited is None:
+            raise ObservabilityError(FORBIDDEN, "panel datasource cannot be resolved")
+        for target in targets:
+            if target.get("datasource", inherited) is None:
+                raise ObservabilityError(
+                    FORBIDDEN, "panel datasource cannot be resolved"
+                )
+        slug = meta.get("slug") or uid
+        if not isinstance(slug, str) or not _SLUG.fullmatch(slug):
+            raise ObservabilityError(UPSTREAM_UNAVAILABLE, "invalid dashboard slug")
+        return slug
 
     def render_panel(
         self,
         uid: str,
-        slug: str,
         panel_id: int,
         *,
         start: datetime,
@@ -260,8 +393,7 @@ class GrafanaClient:
         variables: dict | None = None,
     ):
         """Raw renderer response (caller must verify it is a real PNG)."""
-        if not _SLUG.fullmatch(slug or ""):
-            raise ObservabilityError(INVALID_QUERY, "invalid dashboard slug")
+        slug = self.authorized_render_slug(uid, panel_id)
         params = {
             "panelId": int(panel_id),
             "width": int(width),
@@ -276,7 +408,12 @@ class GrafanaClient:
                     INVALID_QUERY, f"invalid variable name {name!r}"
                 )
             params[f"var-{name}"] = str(value)[:MAX_VAR_VALUE]
-        return self.http.get(f"/render/d-solo/{_need_uid(uid)}/{slug}", params)
+        response = self.http.get(f"/render/d-solo/{_need_uid(uid)}/{slug}", params)
+        if self.http.token and self.http.token.encode() in response.body:
+            raise ObservabilityError(
+                UPSTREAM_UNAVAILABLE, "renderer returned unsafe content"
+            )
+        return response
 
 
 def locate(profile: Profile, summary: dict) -> dict:
@@ -284,11 +421,14 @@ def locate(profile: Profile, summary: dict) -> dict:
     owner = profile.owner_for(summary["uid"])
     provisioned = summary["provisioned"]
     if provisioned is True:
-        edit = "provisioned: edit the owning source in git and open a PR; Grafana edits are not persisted"
+        status = "provisioned; Grafana edits are not persisted"
     elif provisioned is False:
-        edit = "not provisioned: stored in Grafana's database; there is no git owner to PR against"
+        status = "not provisioned; stored in Grafana's database"
     else:
-        edit = "provisioning state unknown"
+        status = "provisioning state unknown"
+    edit = status + (
+        "; follow the configured ownership mapping" if owner else "; ownership unknown"
+    )
     return {
         "provisioned": provisioned,
         "provisioned_file": summary["provisioned_file"] or None,
@@ -298,11 +438,34 @@ def locate(profile: Profile, summary: dict) -> dict:
 
 
 def _walk_panels(panels: list):
-    for panel in panels:
+    if not isinstance(panels, list):
+        raise ObservabilityError(UPSTREAM_UNAVAILABLE, "unexpected dashboard panels")
+    pending = list(reversed(panels))
+    count = 0
+    while pending:
+        panel = pending.pop()
+        count += 1
+        if count > MAX_INVENTORY_ITEMS:
+            raise ObservabilityError(BOUNDS_EXCEEDED, "dashboard inventory too large")
         if not isinstance(panel, dict):
-            continue
+            raise ObservabilityError(UPSTREAM_UNAVAILABLE, "unexpected dashboard panel")
+        targets = panel.get("targets", [])
+        children = panel.get("panels", [])
+        if not isinstance(targets, list) or any(
+            not isinstance(t, dict) for t in targets
+        ):
+            raise ObservabilityError(
+                UPSTREAM_UNAVAILABLE, "unexpected dashboard targets"
+            )
+        if not isinstance(children, list):
+            raise ObservabilityError(
+                UPSTREAM_UNAVAILABLE, "unexpected dashboard panels"
+            )
+        count += len(targets)
+        if count > MAX_INVENTORY_ITEMS:
+            raise ObservabilityError(BOUNDS_EXCEEDED, "dashboard inventory too large")
         yield panel
-        yield from _walk_panels(panel.get("panels") or [])
+        pending.extend(reversed(children))
 
 
 def _ds_uid(ds) -> str:
@@ -316,16 +479,15 @@ def _ds_uid(ds) -> str:
 def _clip_value(value) -> str:
     if isinstance(value, dict):
         value = value.get("query") or value.get("expr") or ""
-    return str(value or "")[:EXPR_CLIP]
+    value = str(value or "")
+    return value[:EXPR_CLIP] + (" [clipped]" if len(value) > EXPR_CLIP else "")
 
 
 def _panel_summary(panel: dict) -> dict:
     targets = [
         {
             "ref": str(t.get("refId", ""))[:20],
-            "expr": str(t.get("expr") or t.get("rawSql") or t.get("query") or "")[
-                :EXPR_CLIP
-            ],
+            "expr": _clip_value(t.get("expr") or t.get("rawSql") or t.get("query")),
             "datasource": _ds_uid(t.get("datasource"))
             or _ds_uid(panel.get("datasource")),
         }
@@ -337,5 +499,6 @@ def _panel_summary(panel: dict) -> dict:
         "title": str(panel.get("title", ""))[:200],
         "type": str(panel.get("type", ""))[:50],
         "datasources": [d for d in [_ds_uid(panel.get("datasource"))] if d],
+        "targets_truncated": len(panel.get("targets", [])) > MAX_TARGETS_PER_PANEL,
         "targets": targets,
     }

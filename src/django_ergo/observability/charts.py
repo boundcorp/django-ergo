@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import struct
+import zlib
 from dataclasses import dataclass
 from datetime import UTC
 from datetime import datetime
@@ -52,7 +53,10 @@ def verify_render(response, width: int, height: int) -> bytes:
     Grafana answers 200 with a small "No image renderer available" PNG when no
     renderer exists, so status and content-type alone prove nothing.
     """
-    size = png_size(response.body)
+    data = response.body
+    if len(data) > MAX_PNG_BYTES:
+        raise ObservabilityError(BOUNDS_EXCEEDED, "rendered PNG is over 4 MiB")
+    size = png_size(data)
     if size is None or "png" not in response.content_type.lower():
         raise ObservabilityError(UPSTREAM_UNAVAILABLE, "renderer did not return a PNG")
     if size != (width, height):
@@ -61,9 +65,61 @@ def verify_render(response, width: int, height: int) -> bytes:
             f"renderer returned a {size[0]}x{size[1]} image, not the requested {width}x{height}: "
             "this is Grafana's 'no image renderer' placeholder or a failed render, not a panel",
         )
-    if len(response.body) > MAX_PNG_BYTES:
-        raise ObservabilityError(BOUNDS_EXCEEDED, "rendered PNG is over 4 MiB")
-    return response.body
+    if not (0 < size[0] <= MAX_WIDTH and 0 < size[1] <= MAX_HEIGHT):
+        raise ObservabilityError(
+            BOUNDS_EXCEEDED, "rendered PNG dimensions exceed the limit"
+        )
+
+    # Pillow's decoder loads pixel data, while explicit chunk checks ensure that
+    # even a missing/truncated IEND or a bad CRC cannot pass as a complete PNG.
+    try:
+        from PIL import Image
+    except ImportError:
+        raise ObservabilityError(
+            NOT_CONFIGURED,
+            "Pillow is not installed; install django-ergo[observability]",
+        ) from None
+    try:
+        view = memoryview(data)
+        pos = len(PNG_MAGIC)
+        has_data = False
+        while True:
+            if pos + 12 > len(data):
+                raise ValueError("truncated PNG chunk")  # noqa: TRY301
+            length = struct.unpack_from(">I", data, pos)[0]
+            end = pos + 12 + length
+            if end > len(data):
+                raise ValueError("truncated PNG chunk")  # noqa: TRY301
+            kind = data[pos + 4 : pos + 8]
+            has_data = has_data or kind == b"IDAT"
+            crc = struct.unpack_from(">I", data, end - 4)[0]
+            if zlib.crc32(view[pos + 4 : end - 4]) != crc:
+                raise ValueError("invalid PNG checksum")  # noqa: TRY301
+            pos = end
+            if kind == b"IEND":
+                if length != 0 or pos != len(data) or not has_data:
+                    raise ValueError("invalid PNG end")  # noqa: TRY301
+                break
+        with Image.open(io.BytesIO(data), formats=["PNG"]) as image:
+            if image.size != size or getattr(image, "n_frames", 1) != 1:
+                raise ValueError("invalid PNG dimensions or animation")  # noqa: TRY301
+            image.verify()
+        with Image.open(io.BytesIO(data), formats=["PNG"]) as image:
+            image.load()
+    except (
+        OSError,
+        ValueError,
+        SyntaxError,
+        IndexError,
+        EOFError,
+        OverflowError,
+        struct.error,
+        Image.DecompressionBombError,
+    ):
+        raise ObservabilityError(
+            UPSTREAM_UNAVAILABLE, "renderer returned an invalid PNG"
+        ) from None
+    return data
 
 
 @dataclass
@@ -152,6 +208,8 @@ def render_chart(
         ax.grid(alpha=0.3)
         ax.set_xlabel(f"time ({tz.key})")
         notes = []
+        if result.histogram_series:
+            notes.append("native histogram samples omitted")
         if len(result.series) <= MAX_LEGEND:
             ax.legend(fontsize=7, loc="upper left", framealpha=0.7)
         else:

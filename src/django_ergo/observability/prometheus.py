@@ -6,6 +6,8 @@ import math
 import re
 from dataclasses import dataclass
 from dataclasses import field
+from datetime import MAXYEAR
+from datetime import MINYEAR
 from datetime import UTC
 from datetime import datetime
 
@@ -17,6 +19,8 @@ from .http import BoundedClient
 from .http import Limits
 from .profile import UID_RE
 from .profile import Profile
+from .timeutil import DEFAULT_MAX_POINTS
+from .timeutil import MAX_POINTS
 from .timeutil import Window
 from .timeutil import resolve_instant
 from .timeutil import resolve_window
@@ -74,7 +78,7 @@ class QueryResult:
 def _number(raw) -> float:
     try:
         return float(raw)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         raise ObservabilityError(
             UPSTREAM_UNAVAILABLE, "upstream sent a malformed sample value"
         ) from None
@@ -89,57 +93,120 @@ def _tally(series: Series, value: float) -> None:
         series.neg_inf += 1
 
 
-def normalize(data: dict, kind: str, step: int | None = None) -> QueryResult:
+def _malformed() -> ObservabilityError:
+    return ObservabilityError(
+        UPSTREAM_UNAVAILABLE, "upstream sent an unexpected result shape"
+    )
+
+
+def _pair(raw):
+    if not isinstance(raw, list) or len(raw) != 2:  # noqa: PLR2004
+        raise _malformed()
+    return raw
+
+
+def _timestamp(raw) -> float:
+    stamp = _number(raw)
+    try:
+        dt = datetime.fromtimestamp(stamp, UTC)
+    except (ValueError, OverflowError, OSError):
+        raise _malformed() from None
+    # Leave room for conversion into any supported time zone.
+    if dt.year in (MINYEAR, MAXYEAR):
+        raise _malformed()
+    return stamp
+
+
+def _labels(raw) -> dict[str, str]:
+    if not isinstance(raw, dict) or not all(
+        isinstance(k, str) and isinstance(v, str) for k, v in raw.items()
+    ):
+        raise _malformed()
+    return raw
+
+
+def _warnings(payload: dict, http: BoundedClient) -> list[str]:
+    warnings = payload.get("warnings", [])
+    if not isinstance(warnings, list) or not all(isinstance(w, str) for w in warnings):
+        raise _malformed()
+    return [http.sanitize(w, limit=200) for w in warnings[:10]]
+
+
+def normalize(
+    data: dict, kind: str, step: int | None = None, *, max_points: int = MAX_POINTS
+) -> QueryResult:
     """Normalize a Prometheus ``data`` object, enforcing series/sample limits."""
-    if not isinstance(data, dict) or "resultType" not in data:
-        raise ObservabilityError(
-            UPSTREAM_UNAVAILABLE, "upstream sent an unexpected result shape"
-        )
+    if not isinstance(data, dict) or not isinstance(data.get("resultType"), str):
+        raise _malformed()
     rtype = data["resultType"]
     raw = data.get("result")
     result = QueryResult(kind=kind, result_type=rtype)
     if rtype == "scalar":
+        ts, value = _pair(raw)
         series = Series({})
-        series.points.append((_number(raw[0]), _number(raw[1])))
+        series.points.append((_timestamp(ts), _number(value)))
         _tally(series, series.points[0][1])
         result.series.append(series)
         result.total_samples = 1
         return result
     if rtype == "string":
-        result.string_value = str(raw[1])
+        ts, value = _pair(raw)
+        _timestamp(ts)
+        if not isinstance(value, str):
+            raise _malformed()
+        result.string_value = value
         return result
     if rtype not in {"vector", "matrix"} or not isinstance(raw, list):
-        raise ObservabilityError(
-            UPSTREAM_UNAVAILABLE, f"unsupported result type {rtype!r}"
-        )
+        raise _malformed()
+    if len(raw) > MAX_SERIES:
+        raise _too_many_series()
     for entry in raw:
-        labels = {str(k): str(v) for k, v in (entry.get("metric") or {}).items()}
-        if "histogram" in entry or "histograms" in entry:
-            # Native histograms are reported, never flattened into floats.
-            result.histogram_series += 1
-            if result.histogram_series + len(result.series) > MAX_SERIES:
-                raise _too_many_series()
-            continue
-        values = entry["values"] if rtype == "matrix" else [entry["value"]]
-        series = Series(labels)
-        previous = None
-        for ts, raw_value in values:
-            value = _number(raw_value)
-            stamp = _number(ts)
-            if step and previous is not None and stamp - previous > step * 1.5:
-                series.gaps += 1
-            previous = stamp
-            _tally(series, value)
-            series.points.append((stamp, value))
-        result.total_samples += len(series.points)
+        if not isinstance(entry, dict):
+            raise _malformed()
+        labels = _labels(entry.get("metric", {}))
+        float_key = "values" if rtype == "matrix" else "value"
+        hist_key = "histograms" if rtype == "matrix" else "histogram"
+        if float_key not in entry and hist_key not in entry:
+            raise _malformed()
+        values = entry.get(float_key, [] if rtype == "matrix" else None)
+        histograms = entry.get(hist_key, [] if rtype == "matrix" else None)
+        if rtype == "vector":
+            values = [values] if float_key in entry else []
+            histograms = [histograms] if hist_key in entry else []
+        if not isinstance(values, list) or not isinstance(histograms, list):
+            raise _malformed()
+        count = len(values) + len(histograms)
+        result.total_samples += count
         if result.total_samples > MAX_SAMPLES:
             raise ObservabilityError(
                 BOUNDS_EXCEEDED,
                 f"result has more than {MAX_SAMPLES} samples; narrow the window, raise the step or aggregate",
             )
+        if count > max_points:
+            raise ObservabilityError(
+                BOUNDS_EXCEEDED, f"result has more than {max_points} points per series"
+            )
+        if hist_key in entry:
+            result.histogram_series += 1
+            for sample in histograms:
+                ts, histogram = _pair(sample)
+                _timestamp(ts)
+                if not isinstance(histogram, dict):
+                    raise _malformed()
+        if float_key not in entry:
+            continue
+        series = Series(labels)
+        previous = None
+        for sample in values:
+            ts, raw_value = _pair(sample)
+            value = _number(raw_value)
+            stamp = _timestamp(ts)
+            if step and previous is not None and stamp - previous > step * 1.5:
+                series.gaps += 1
+            previous = stamp
+            _tally(series, value)
+            series.points.append((stamp, value))
         result.series.append(series)
-        if len(result.series) + result.histogram_series > MAX_SERIES:
-            raise _too_many_series()
     return result
 
 
@@ -169,7 +236,15 @@ class PromClient:
         self.profile = profile
         self.clock = clock
         if profile.mode == "direct":
-            self.datasource = datasource or ""
+            if len(profile.datasources) > 1:
+                raise ObservabilityError(
+                    INVALID_QUERY, "direct mode requires a single datasource identity"
+                )
+            self.datasource = (
+                profile.check_datasource(datasource)
+                if profile.datasources or datasource
+                else ""
+            )
             self.http = BoundedClient(
                 profile.prometheus_url,
                 allowed=[_DIRECT_PATHS],
@@ -210,20 +285,30 @@ class PromClient:
         if not isinstance(payload, dict) or payload.get("status") != "success":
             detail = ""
             if isinstance(payload, dict):
-                detail = (
-                    f"{payload.get('errorType', '')}: {payload.get('error', '')}".strip(
-                        ": "
-                    )
+                fields = (payload.get("errorType", ""), payload.get("error", ""))
+                detail = self.http.sanitize(
+                    ": ".join(field for field in fields if isinstance(field, str)),
+                    limit=300,
                 )
             raise ObservabilityError(
                 INVALID_QUERY,
-                f"query failed: {detail[:300]}" if detail else "query failed",
+                f"query failed: {detail}" if detail else "query failed",
             )
-        if not isinstance(payload.get("data"), dict | list):
+        if not isinstance(payload.get("data"), dict):
             raise ObservabilityError(
                 UPSTREAM_UNAVAILABLE, "upstream sent an unexpected response"
             )
         return payload
+
+    def _sanitize_result(self, result: QueryResult, payload: dict) -> None:
+        result.warnings += _warnings(payload, self.http)
+        if result.string_value is not None:
+            result.string_value = self.http.sanitize(result.string_value, limit=32768)
+        for series in result.series:
+            series.labels = {
+                self.http.sanitize(k, limit=32768): self.http.sanitize(v, limit=32768)
+                for k, v in series.labels.items()
+            }
 
     def instant(
         self, expr: str, *, tz: str | None, at: str | None = None
@@ -235,7 +320,7 @@ class PromClient:
             {"query": expr, "time": f"{when.timestamp():.3f}", "timeout": PROM_TIMEOUT},
         )
         result = normalize(payload["data"], "instant")
-        result.warnings += [str(w)[:200] for w in payload.get("warnings", [])][:10]
+        self._sanitize_result(result, payload)
         return result, when, zone
 
     def range(
@@ -262,30 +347,48 @@ class PromClient:
                 "timeout": PROM_TIMEOUT,
             },
         )
-        result = normalize(payload["data"], "range", win.step)
-        result.warnings += [str(w)[:200] for w in payload.get("warnings", [])][:10]
+        max_points = DEFAULT_MAX_POINTS if win.step_was_default else MAX_POINTS
+        result = normalize(payload["data"], "range", win.step, max_points=max_points)
+        self._sanitize_result(result, payload)
         return result, win
 
     def targets(self, *, job: str | None = None, namespace: str | None = None) -> dict:
         """Current scrape status from ``/api/v1/targets``. Scrape success is not app health."""
         payload = self._call("targets", {"state": "active"})
         active = payload["data"].get("activeTargets", [])
+        if not isinstance(active, list):
+            raise _malformed()
         rows = []
         for target in active:
-            labels = target.get("labels") or {}
+            if not isinstance(target, dict):
+                raise _malformed()
+            labels = _labels(target.get("labels", {}))
+            for key in ("health", "lastScrape", "lastError"):
+                if key in target and not isinstance(target[key], str):
+                    raise _malformed()
             if job and labels.get("job") != job:
                 continue
             if namespace and labels.get("namespace") != namespace:
                 continue
             rows.append(
                 {
-                    "job": labels.get("job", ""),
-                    "instance": labels.get("instance", ""),
-                    "namespace": labels.get("namespace", ""),
-                    "pod": labels.get("pod", ""),
-                    "health": target.get("health", "unknown"),
-                    "last_scrape": target.get("lastScrape", ""),
-                    "last_error": str(target.get("lastError", ""))[:300],
+                    "job": self.http.sanitize(labels.get("job", ""), limit=300),
+                    "instance": self.http.sanitize(
+                        labels.get("instance", ""), limit=300
+                    ),
+                    "namespace": self.http.sanitize(
+                        labels.get("namespace", ""), limit=300
+                    ),
+                    "pod": self.http.sanitize(labels.get("pod", ""), limit=300),
+                    "health": self.http.sanitize(
+                        target.get("health", "unknown"), limit=300
+                    ),
+                    "last_scrape": self.http.sanitize(
+                        target.get("lastScrape", ""), limit=300
+                    ),
+                    "last_error": self.http.sanitize(
+                        target.get("lastError", ""), limit=300
+                    ),
                 }
             )
         counts: dict[str, int] = {}

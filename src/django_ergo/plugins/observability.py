@@ -35,6 +35,7 @@ from django_ergo.conversation.images import ToolImage
 from django_ergo.conversation.images import ToolResult
 from django_ergo.observability import charts
 from django_ergo.observability import text
+from django_ergo.observability.errors import BOUNDS_EXCEEDED
 from django_ergo.observability.errors import INVALID_QUERY
 from django_ergo.observability.errors import NOT_CONFIGURED
 from django_ergo.observability.errors import ObservabilityError
@@ -310,7 +311,12 @@ class ObservabilityPlugin(BotPlugin):
                 variables=variables,
             )
             span = f"\n{win.describe()}" if win else ""
-            return f"profile={prof.name} link: {url}{span}"
+            result = f"profile={prof.name} link: {url}{span}"
+            if len(result.encode()) > text.MAX_TEXT_BYTES:
+                raise ObservabilityError(
+                    BOUNDS_EXCEEDED, "dashboard link output too long"
+                )
+            return result
 
         @bot_tool(name="ergo_prom_chart", takes_context=True)
         @guard
@@ -401,10 +407,8 @@ class ObservabilityPlugin(BotPlugin):
                     end=_opt(end),
                 )
                 client = plugin.grafana(ctx, prof)
-                slug = client.dashboard(uid)["slug"] or uid
                 response = client.render_panel(
                     uid,
-                    slug,
                     panel_id,
                     start=win.start,
                     end=win.end,

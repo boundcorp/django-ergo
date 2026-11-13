@@ -11,8 +11,8 @@ binds it to a bot, a token and the chat.
 
 ## Configuration
 
-Profiles belong to the host, in `bot.yaml`. The model never supplies a URL, a header,
-a credential name or a datasource uid.
+Profiles belong to the host, in `bot.yaml`. The model never supplies a URL, a header
+or a credential name; a selected datasource uid must be allowed by the profile.
 
 ```yaml
 plugins:
@@ -38,11 +38,20 @@ plugins:
   query or fragment. Unknown keys are rejected at load.
 - **proxy** mode (default) queries through Grafana's datasource proxy
   (`/api/datasources/proxy/uid/<uid>/api/v1/...`) with the token as a Bearer header.
-  **direct** mode queries `prometheus_url` with no credential. There is never a
-  fallback from one to the other, in particular not after a 401 or 403.
+  **direct** mode queries `prometheus_url` with no credential. Configure at most
+  one datasource uid in direct mode: it identifies that fixed origin, and a supplied
+  uid must match it. With none configured, do not supply a datasource uid. There is
+  never a fallback from one mode to the other, in particular not after a 401 or 403.
 - Use a Grafana **Viewer** service-account token. Viewer can query more datasources
   than Prometheus; `datasources` is the plugin-level allowlist, not credential-level
-  isolation.
+  isolation. Enable server-side rendering only when Grafana's own token permissions
+  are also appropriate for every datasource the token can reach.
+  Dashboard inspection and Grafana rendering are separate requests, so the plugin
+  cannot prevent a dashboard or datasource from changing between them. Use
+  server-side datasource permissions or a dedicated Grafana organization/proxy
+  when credential-level isolation is required.
+  The renderer rejects library panels, unresolved or mixed datasource references,
+  and dashboards with variables or annotations; provide a dashboard link instead.
 - The token comes from `token_env` (per-user `NAME__USER` first, see `ToolContext.secret`),
   else `token_file`, on every call, so rotation needs no restart. It is sent only to
   the configured origin; redirects are never followed.
@@ -57,9 +66,9 @@ plugins:
 | `ergo_grafana_dashboard` | Panels, queries, datasource uids, variables, `provisioned`, owner (from `ownership`, else `unknown`) and how to change it (PR to the owning file). |
 | `ergo_prom_query` | Instant or range PromQL with explicit `tz`; prints UTC and local endpoints, step and source. |
 | `ergo_prom_targets` | `/api/v1/targets` scrape health (job, instance, health, last scrape, last error), separate from optional `up` values. |
-| `ergo_grafana_link` | Dashboard or panel link with `from`/`to`/`timezone`/`var-*`, all encoded. |
+| `ergo_grafana_link` | Dashboard or panel link with bounded, encoded `from`/`to`/`timezone`/`var-*` parameters; oversized links are rejected. |
 | `ergo_prom_chart` | PNG line chart of a range query, saved as a chat attachment (`source="bot"`, metadata: query, range, tz, step, profile, datasource, link). |
-| `ergo_grafana_panel_render` | Only when a profile sets `renderer: true`: Grafana's server render, attached only if it is a real PNG of the requested size. |
+| `ergo_grafana_panel_render` | Only when a profile sets `renderer: true`: renders an authorized panel, with unresolved datasource references rejected, and attaches a decoded PNG of the requested size. |
 
 Errors come back as `ERROR [code] message` with `code` one of `not_configured`,
 `unauthorized` (401), `forbidden` (403), `not_found`, `invalid_query` (400/422 and bad
@@ -72,13 +81,17 @@ Messages never contain upstream HTML, headers or tokens.
 | --- | --- |
 | Window | 7 days; end not before start, not in the future |
 | Time zone | explicit IANA `tz`; naive local times in a DST gap or fold are rejected (add an offset) |
-| Step | minimum 15s; default is the smallest step giving at most 1000 points/series; an explicit step giving more than 2000 points is rejected with the required minimum, never coarsened |
-| Result | 100 series, 100,000 samples; overflow fails, nothing is truncated |
+| Step | minimum 15s; default allows at most 1000 returned points/series; an explicit step allows at most 2000 points and is rejected if the requested window exceeds that limit, never coarsened |
+| Result | 100 series, 100,000 float and histogram samples combined; overflow fails, nothing is truncated |
 | Expression | 8 KiB |
-| HTTP | 3s connect, 15s read, 20s overall, Prometheus `timeout=8s`, 4 MiB after decompression, no retries |
+| HTTP | 3s connect, 15s read, 20s deadline during network reads (see below), Prometheus `timeout=8s`, 4 MiB after decompression, no retries |
 | Tool text | 32 KiB |
 | Chart | up to 1600x900, PNG at most 4 MiB, one chart per call |
-| Inventory | 100 per page, 1000 per search |
+| Inventory | 100 per page, 1000 per search; dashboard summaries mark omitted panels and targets |
+
+The HTTP deadline is enforced during header and body reads. System DNS resolution
+and multi-address connection/TLS setup can exceed it; it is not a hard process-wide
+deadline.
 
 ## Semantics worth knowing
 
@@ -89,9 +102,8 @@ Messages never contain upstream HTML, headers or tokens.
 - The chart is a data chart, labeled "Data chart, not a Grafana panel screenshot", with
   query, range, timezone, step and source in the image. Panels that cannot be
   reproduced (other datasources, transformations, variables) get a link, not an imitation.
-- Grafana without a renderer answers 200 with a small "No image renderer available"
-  PNG. The render tool compares the real PNG size with the requested size and refuses
-  anything else.
+- Grafana without a renderer can answer 200 with a small "No image renderer available"
+  PNG. The render tool validates the image and refuses unexpected dimensions.
 
 ## Install
 

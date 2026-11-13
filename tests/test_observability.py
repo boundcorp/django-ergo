@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
+import io
 import json
 import re
-import struct
 from datetime import UTC
 from datetime import datetime
 from urllib.parse import parse_qs
 from urllib.parse import urlsplit
 
 import pytest
+from PIL import Image
 
 from django_ergo.observability import charts
 from django_ergo.observability import text
@@ -610,7 +611,7 @@ def test_dashboard_summary_and_ownership(server):
     unknown = client.dashboard("other")
     assert unknown["provisioned"] is False
     assert unknown["ownership"]["owner"] == "unknown"
-    assert "no git owner" in unknown["ownership"]["how_to_change"]
+    assert "ownership unknown" in unknown["ownership"]["how_to_change"]
     assert "unknown" in text.format_dashboard(unknown)
 
 
@@ -679,13 +680,9 @@ def test_deep_links_are_encoded(server):
 
 
 def fake_png(width, height):
-    return (
-        b"\x89PNG\r\n\x1a\n"
-        + struct.pack(">I", 13)
-        + b"IHDR"
-        + struct.pack(">II", width, height)
-        + b"\x08\x06\x00\x00\x00"
-    )
+    output = io.BytesIO()
+    Image.new("RGB", (width, height)).save(output, format="PNG")
+    return output.getvalue()
 
 
 def test_renderer_error_png_is_not_success():
@@ -710,6 +707,17 @@ def test_renderer_error_png_is_not_success():
 
 
 def test_renderer_500_html_is_an_error_not_an_image(server):
+    server.routes["/api/dashboards/uid/uid"] = Reply(
+        200,
+        {
+            "meta": {"slug": "slug"},
+            "dashboard": {
+                "panels": [
+                    {"id": 1, "datasource": {"uid": "prom", "type": "prometheus"}}
+                ]
+            },
+        },
+    )
     server.routes["/render/d-solo/uid/slug"] = Reply(
         500, b"<html>boom</html>", ctype="text/html"
     )
@@ -718,7 +726,6 @@ def test_renderer_500_html_is_an_error_not_an_image(server):
     err = fail(
         client.render_panel,
         "uid",
-        "slug",
         1,
         start=win.start,
         end=win.end,

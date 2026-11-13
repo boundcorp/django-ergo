@@ -1373,6 +1373,9 @@ Read-only Grafana and Prometheus. Keys: `profiles` (name to `grafana_url`,
 `public_url`, `token_env`, `token_file`, `datasources`, `mode` proxy|direct,
 `prometheus_url`, `renderer`, `ownership`) and `root_only` (default false). The model
 cannot supply URLs, headers, credentials or datasource uids outside `datasources`.
+Direct mode accepts at most one configured datasource uid as the fixed origin's
+identity. Renderer authorization fails closed for unresolved datasource references;
+the allowlist is not a replacement for Grafana-side token permissions.
 Tools: `ergo_grafana_search`, `ergo_grafana_dashboard`, `ergo_prom_query`,
 `ergo_prom_targets`, `ergo_grafana_link`, `ergo_prom_chart` (and
 `ergo_grafana_panel_render` when a profile has `renderer: true`). Charts need

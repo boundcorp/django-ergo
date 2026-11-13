@@ -102,7 +102,7 @@ def format_query(
             lines += _series(series, result.kind, tz)
     if result.histogram_series:
         lines.append(
-            f"UNSUPPORTED: {result.histogram_series} native-histogram series omitted "
+            f"UNSUPPORTED: {result.histogram_series} series contain omitted native-histogram samples "
             "(not plottable; query a derived value such as histogram_quantile())"
         )
     lines += [f"warning: {w}" for w in result.warnings]
@@ -159,7 +159,7 @@ def format_dashboard(summary: dict) -> str:
         f"provisioned: {own['provisioned']}  provisioned_file: {own['provisioned_file'] or '-'}",
         f"owner: {owner_text}",
         f"to change: {own['how_to_change']}",
-        f"datasource uids used: {', '.join(summary['datasource_uids']) or '-'}",
+        f"panel/target datasource references (other or unresolved sources may not appear): {', '.join(summary['datasource_uids']) or '-'}",
     ]
     if summary["variables"]:
         lines.append("variables:")
@@ -168,10 +168,14 @@ def format_dashboard(summary: dict) -> str:
             for v in summary["variables"]
         ]
     lines.append(f"panels ({len(summary['panels'])}):")
+    if summary.get("panels_truncated"):
+        lines.append("[panel summaries truncated]")
     for p in summary["panels"]:
         lines.append(f"- id={p['id']} [{p['type']}] {p['title']}")
         lines += [
             f"    {t['ref']} ds={t['datasource'] or '-'}: {t['expr']}"
             for t in p["targets"]
         ]
+        if p.get("targets_truncated"):
+            lines.append("    [target summaries truncated]")
     return trim("\n".join(lines))

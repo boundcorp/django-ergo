@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import http.client
+import io
 import json
 import re
 import time
@@ -45,11 +46,39 @@ class Response:
 _UNSAFE_PATH = re.compile(r"(^|/)\.\.?(/|$)|//|[\\\x00-\x1f?#]")
 
 
-def _clip(text: str, token: str | None) -> str:
-    text = " ".join(text.split())
-    if token:
-        text = text.replace(token, "[redacted]")
-    return text[:ERROR_TEXT_MAX]
+class _DeadlineReader(io.RawIOBase):
+    """Recalculate the socket timeout before every underlying network read."""
+
+    def __init__(self, sock, remaining):
+        super().__init__()
+        self._sock = sock
+        self._raw = sock.makefile("rb", buffering=0)
+        self._remaining = remaining
+
+    def readable(self):
+        return True
+
+    def readinto(self, buffer):
+        self._sock.settimeout(self._remaining())
+        return self._raw.readinto(buffer)
+
+    def close(self):
+        try:
+            self._raw.close()
+        finally:
+            super().close()
+
+
+class _DeadlineSocket:
+    """Supply HTTPResponse with a buffered reader that enforces the deadline."""
+
+    def __init__(self, sock, remaining):
+        self._sock = sock
+        self._remaining = remaining
+
+    def makefile(self, mode):
+        assert mode == "rb"
+        return io.BufferedReader(_DeadlineReader(self._sock, self._remaining))
 
 
 class BoundedClient:
@@ -89,6 +118,12 @@ class BoundedClient:
         self.limits = limits or Limits()
         self.clock = clock
 
+    def sanitize(self, text: str, limit: int = ERROR_TEXT_MAX) -> str:
+        """Redact the configured credential before bounding upstream text."""
+        if self.token:
+            text = text.replace(self.token, "[redacted]")
+        return text[:limit]
+
     # -- public -----------------------------------------------------------------
 
     def get_json(self, path: str, params: dict | None = None):
@@ -99,7 +134,7 @@ class BoundedClient:
             raise ObservabilityError(
                 UPSTREAM_UNAVAILABLE,
                 f"upstream returned a non-JSON response (HTTP {response.status}, "
-                f"content-type {response.content_type or 'unknown'})",
+                f"content-type {self.sanitize(response.content_type) or 'unknown'})",
             ) from None
 
     def get(self, path: str, params: dict | None = None) -> Response:
@@ -133,10 +168,15 @@ class BoundedClient:
             if self.scheme == "https"
             else http.client.HTTPConnection
         )
-        conn = conn_class(self.host, self.port, timeout=self.limits.connect_timeout)
+        connect_timeout = self._remaining(deadline, self.limits.connect_timeout)
+        conn = conn_class(self.host, self.port, timeout=connect_timeout)
+        conn.response_class = lambda sock, **kwargs: http.client.HTTPResponse(
+            _DeadlineSocket(sock, lambda: self._remaining(deadline)), **kwargs
+        )
         headers = {"Accept": "application/json, image/png", "Accept-Encoding": "gzip"}
         if self.token:
             headers["Authorization"] = f"Bearer {self.token}"
+        raw = None
         try:
             conn.connect()
             sock = conn.sock
@@ -144,6 +184,7 @@ class BoundedClient:
             conn.request("GET", target, headers=headers)
             raw = conn.getresponse()
             body = self._read_body(raw, sock, deadline)
+            self._remaining(deadline)
             return Response(raw.status, raw.getheader("Content-Type", "") or "", body)
         except ObservabilityError:
             raise
@@ -156,20 +197,24 @@ class BoundedClient:
                 UPSTREAM_UNAVAILABLE, "upstream is unreachable or sent a bad response"
             ) from None
         finally:
+            if raw is not None:
+                raw.close()
             conn.close()
 
-    def _remaining(self, deadline: float) -> float:
+    def _remaining(self, deadline: float, timeout: float | None = None) -> float:
         left = deadline - self.clock()
         if left <= 0:
             raise ObservabilityError(TIMEOUT, "overall request deadline exceeded")
-        return min(self.limits.read_timeout, left)
+        return min(self.limits.read_timeout if timeout is None else timeout, left)
 
     def _read_body(self, raw: http.client.HTTPResponse, sock, deadline: float) -> bytes:
         cap = self.limits.max_body_bytes
-        encoding = (raw.getheader("Content-Encoding") or "identity").lower()
+        encoding_header = raw.getheader("Content-Encoding") or "identity"
+        encoding = encoding_header.lower()
         if encoding not in {"identity", "gzip"}:
             raise ObservabilityError(
-                UPSTREAM_UNAVAILABLE, f"unsupported content-encoding {encoding!r}"
+                UPSTREAM_UNAVAILABLE,
+                f"unsupported content-encoding {self.sanitize(encoding_header)!r}",
             )
         inflater = (
             zlib.decompressobj(16 + zlib.MAX_WBITS) if encoding == "gzip" else None
@@ -254,5 +299,5 @@ class BoundedClient:
         if isinstance(data, dict):
             for key in ("error", "message"):
                 if isinstance(data.get(key), str):
-                    return _clip(data[key], self.token)
+                    return " ".join(self.sanitize(data[key]).split())
         return ""

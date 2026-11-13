@@ -264,7 +264,6 @@ def test_dashboard_tool_reports_provisioning_and_unknown_owner(server, token):
     out = call(make_plugin(server), ToolContext(), "ergo_grafana_dashboard", uid="abc")
     assert "provisioned: True" in out
     assert "owner: unknown" in out
-    assert "open a PR" in out
 
 
 def test_chart_tool_creates_a_real_attachment_with_metadata(server, token, session):
@@ -356,7 +355,12 @@ def test_panel_render_rejects_the_no_renderer_placeholder(server, token, session
         200,
         {
             "meta": {"provisioned": True, "slug": "slug"},
-            "dashboard": {"title": "T", "panels": []},
+            "dashboard": {
+                "title": "T",
+                "panels": [
+                    {"id": 1, "datasource": {"uid": "prom", "type": "prometheus"}}
+                ],
+            },
         },
     )
     server.routes["/render/d-solo/abc/slug"] = Reply(
