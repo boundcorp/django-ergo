@@ -108,30 +108,102 @@ describe('UsageTrigger', () => {
 })
 
 describe('UsagePanel', () => {
-  test('headline names the tightest limit and says what is missing', () => {
-    const html = renderToStaticMarkup(
-      createElement(
-        MemoryRouter,
-        null,
-        createElement(UsagePanel, {
-          now,
-          data: routing([
-            provider({
-              windows: {
-                five_hour: window({ used: null, remaining: null, status: 'reset' }),
-                weekly: window({ used: 81, resets_at: now + 5 * 86400 }),
-              },
-            }),
-            provider({ name: 'codex', type: 'openai', windows: {}, reported_at: null }),
-            provider({ name: 'anthropic-api', subscription: false }),
-          ]),
+  function render(data: Routing) {
+    return renderToStaticMarkup(createElement(MemoryRouter, null, createElement(UsagePanel, { now, data })))
+  }
+
+  test('shows compact, accessible Claude windows without redundant explanations', () => {
+    const html = render(
+      routing([
+        provider({
+          windows: {
+            five_hour: window({ used: 20 }),
+            weekly: window({ used: 81, resets_at: now + 5 * 86400 }),
+            weekly_sonnet: window({ used: 33, model: 'sonnet', resets_at: now + 3 * 86400 }),
+          },
         }),
-      ),
+      ]),
     )
-    expect(html).toContain('81% of claude-max Weekly used.')
+    expect(html.match(/role="meter"/g)?.length).toBe(3)
+    expect(html).toContain('5-hour')
+    expect(html).toContain('Weekly · Sonnet')
+    expect(html).toContain('title="Time until reset"')
+    expect(html).toContain('80% elapsed')
+    expect(html).toContain('5-hour: 20% used, resets in 1h 0m, 80% of the window has passed')
+    expect(html).not.toContain('reported just now')
+    expect(html).not.toContain('ahead of pace')
+    expect(html).not.toContain('under pace')
+    expect(html).not.toContain('burning faster')
+    expect(html).not.toContain('tightest limit')
+  })
+
+  test('includes unmapped Grok and future Google accounts and deduplicates mapped routes', () => {
+    const data = routing([provider({ name: 'route-a' }), provider({ name: 'route-b' })])
+    const makeAccount = (id: string, name: string, providers: string[]) => ({
+      id,
+      name,
+      providers,
+      status: 'ok' as const,
+      error: '',
+      fetched_at: null,
+      windows: [
+        {
+          key: 'minutes_60',
+          label: 'Hourly',
+          period: '1h',
+          used: 42,
+          remaining: 58,
+          resets_at: now + 1800,
+          status: '',
+          model: '',
+          observed_at: now,
+          stale: false,
+        },
+      ],
+    })
+    data.capacity.accounts = [
+      makeAccount('claude', 'Claude', ['route-a', 'route-b']),
+      makeAccount('xai-oauth', 'Grok', []),
+      makeAccount('google', 'Google', []),
+    ]
+    const html = render(data)
+    expect(html).toContain('Claude usage')
+    expect(html).toContain('Grok usage')
+    expect(html).toContain('Google usage')
+    expect(html).not.toContain('route-a usage')
+    expect(html).not.toContain('route-b usage')
+    expect(html.match(/role="meter"/g)?.length).toBe(3)
+    expect(html).toContain('50% elapsed')
+  })
+
+  test('distinguishes missing, reset, stale and failed usage from zero', () => {
+    const data = routing([
+      provider({ windows: { five_hour: window({ used: null, status: 'reset' }) } }),
+      provider({ name: 'api', subscription: false }),
+    ])
+    data.capacity.accounts = [
+      {
+        id: 'error',
+        name: 'Failed',
+        providers: [],
+        status: 'error',
+        error: 'failure',
+        fetched_at: null,
+        windows: [],
+      },
+    ]
+    const html = render(data)
     expect(html).toContain('Reset · not reported since')
-    expect(html).toContain('No usage reported yet')
-    expect(html).toContain('Pay per token, no limits reported: anthropic-api.')
-    expect(html).toContain('href="/routing"')
+    expect(html).toContain('Sync failed')
+    expect(html).toContain('api usage')
+    expect(html).toContain('No usage reported')
+    expect(html).not.toContain('role="meter"')
+    expect(html).not.toContain('Pay per token')
+  })
+
+  test('reports a failed source sync without treating prior data as current', () => {
+    const data = routing([provider({ windows: { weekly: window() } })])
+    data.capacity.sync.state = 'failed'
+    expect(render(data)).toContain('Usage sync failed · showing last data')
   })
 })

@@ -2,7 +2,6 @@ import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import type { Routing, RoutingProvider, RoutingWindow } from '../api'
 import { api } from '../api'
-import { agoLong } from '../time'
 import { pace } from '../usagePace'
 export { pace, windowSeconds } from '../usagePace'
 import { useDismissablePopover } from './ShellControls'
@@ -44,11 +43,41 @@ export function countdown(resetsAt: number | null, now = Date.now() / 1000): str
   return `${Math.floor(left / DAY)}d ${Math.floor((left % DAY) / HOUR)}h`
 }
 
-// "4:20 PM" within a day, else "Mon 8:00 AM".
-function resetsAt(at: number, now = Date.now() / 1000): string {
-  const when = new Date(at * 1000)
-  const time = when.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
-  return at - now < DAY ? time : `${when.toLocaleDateString([], { weekday: 'short' })} ${time}`
+// Merge account-level capacity with configured routes without showing an account twice.
+function usageProviders(data: Routing): RoutingProvider[] {
+  const matched = new Set<string>()
+  const accounts = data.capacity.accounts.map(account => {
+    const routes = data.providers.filter(p => account.providers.includes(p.name))
+    routes.forEach(p => matched.add(p.name))
+    const route = routes[0]
+    const windows: Record<string, RoutingWindow> = {}
+    for (const w of account.windows) {
+      windows[w.key] = {
+        ...w,
+        limit: routes.find(p => p.windows[w.key])?.windows[w.key].limit ?? 100,
+      }
+    }
+    for (const p of routes) {
+      for (const [key, window] of Object.entries(p.windows)) {
+        if (!(key in windows)) windows[key] = window
+      }
+    }
+    return {
+      name: account.name,
+      type: route?.type ?? account.id,
+      transport: route?.transport ?? '',
+      subscription: true,
+      api_key_env: '',
+      status: route?.status ?? 'standby',
+      reason: account.status === 'error' ? 'Sync failed' : account.status === 'unavailable' ? 'Unavailable' : '',
+      windows,
+      reported_at: account.fetched_at,
+      stale:
+        Object.keys(windows).length > 0 &&
+        (account.status === 'stale' || account.status === 'error' || account.windows.some(w => w.stale)),
+    } satisfies RoutingProvider
+  })
+  return [...accounts, ...data.providers.filter(p => !matched.has(p.name))]
 }
 
 export type Tone = 'ok' | 'warn' | 'over' | 'none'
@@ -65,10 +94,10 @@ type Entry = { provider: RoutingProvider; key: string; window: RoutingWindow }
 
 const reported = (e: Entry) => e.window.used != null
 
-// The window closest to its routing limit, across every subscription.
+// The window closest to its routing limit, across all reported providers.
 export function tightest(providers: RoutingProvider[]): Entry | null {
   let best: Entry | null = null
-  for (const provider of providers.filter(p => p.subscription))
+  for (const provider of providers)
     for (const [key, window] of Object.entries(provider.windows)) {
       const entry = { provider, key, window }
       if (!reported(entry)) continue
@@ -173,19 +202,20 @@ function Bar({ k, w, now }: { k: string; w: RoutingWindow; now?: number }) {
   const passed = pace(k, w, now)
   const used = w.used ?? 0
   return (
-    <div className={`usage-bar usage-tone-${tone(w)}`} aria-hidden="true">
+    <div
+      className={`usage-bar usage-tone-${tone(w)}`}
+      role={w.used == null ? undefined : 'meter'}
+      aria-hidden={w.used == null ? true : undefined}
+      aria-label={`${longLabel(k, w)} usage`}
+      aria-valuemin={w.used == null ? undefined : 0}
+      aria-valuemax={w.used == null ? undefined : 100}
+      aria-valuenow={w.used == null ? undefined : Math.max(0, Math.min(100, w.used))}
+      aria-valuetext={w.used == null ? undefined : windowText(k, w, now)}
+    >
       {w.used != null && <div className="usage-bar-fill" style={{ width: `${Math.max(0, Math.min(100, used))}%` }} />}
       {passed != null && <div className="usage-bar-pace" style={{ left: `${passed}%` }} />}
     </div>
   )
-}
-
-function paceNote(k: string, w: RoutingWindow, now?: number): string {
-  const passed = pace(k, w, now)
-  if (passed == null || w.used == null) return ''
-  if (w.used > passed + 10) return 'ahead of pace'
-  if (w.used < passed - 10) return 'under pace'
-  return 'on pace'
 }
 
 function windowText(k: string, w: RoutingWindow, now?: number): string {
@@ -227,16 +257,12 @@ export function UsagePanel({
   refreshing?: boolean
   onNavigate?: () => void
 }) {
-  const subs = data.providers.filter(p => p.subscription)
-  const apiKeys = data.providers.filter(p => !p.subscription)
-  const tight = tightest(subs)
+  const providers = usageProviders(data)
   return (
     <>
       <div className="usage-head">
         <span className="font-semibold text-ink">Usage</span>
-        <span className="text-xs text-muted">
-          {subs.length === 1 ? '1 subscription' : `${subs.length} subscriptions`}
-        </span>
+        <span className="text-xs text-muted">{providers.length} providers</span>
         {onRefresh && (
           <button
             type="button"
@@ -252,58 +278,51 @@ export function UsagePanel({
           </button>
         )}
       </div>
-      {tight && (
-        <div className={`usage-headline usage-tone-${tone(tight.window)}`}>
-          <div className="text-sm text-ink">
-            <strong>
-              {Math.round(tight.window.used!)}% of {tight.provider.name} {longLabel(tight.key, tight.window)} used.
-            </strong>
-            {tight.window.resets_at && <> Resets {resetsAt(tight.window.resets_at, now)}.</>}
-          </div>
-          <div className="text-xs text-muted">
-            {tone(tight.window) === 'over'
-              ? `Past its ${tight.window.limit}% routing limit, so auto tiers skip it until it resets.`
-              : 'That is your tightest limit right now.'}
-          </div>
-        </div>
-      )}
-      {!subs.length && (
-        <p className="usage-empty">
-          {data.providers.length ? 'No subscription providers configured.' : 'No providers.yaml is loaded.'}
+      {data.capacity.sync.state === 'failed' && (
+        <p className="usage-reported text-warning" role="status">
+          Usage sync failed{providers.some(p => Object.keys(p.windows).length > 0) && ' · showing last data'}
         </p>
       )}
-      {subs.map(p => {
+      {!providers.length && <p className="usage-empty">No providers available.</p>}
+      {providers.map((p, index) => {
         const windows = Object.entries(p.windows)
-        const soonest = windows
-          .map(([, w]) => w.resets_at)
-          .filter((at): at is number => !!at && at > (now ?? Date.now() / 1000))
-          .sort((a, b) => a - b)[0]
         return (
-          <section key={p.name} className="usage-section" aria-label={`${p.name} usage`}>
+          <section key={`${p.name}-${index}`} className="usage-section" aria-label={`${p.name} usage`}>
             <div className="usage-section-head">
               <span className="usage-glyph-box">
                 <Glyph type={p.type} />
               </span>
               <span className="font-semibold text-ink">{p.name}</span>
-              {soonest && <span className="text-xs text-muted">Resets in {countdown(soonest, now)}</span>}
               {p.status === 'in_use' && <span className="usage-chip">In use</span>}
               {p.status === 'skipped' && <span className="usage-chip usage-chip-danger">Skipped</span>}
             </div>
             {windows.length ? (
               <ul className="usage-rows">
                 {windows.map(([k, w]) => {
-                  const note = paceNote(k, w, now)
                   return (
                     <li key={k} className="usage-row" title={windowText(k, w, now)}>
                       <span className="usage-row-label">{longLabel(k, w)}</span>
                       <Bar k={k} w={w} now={now} />
                       <span className="usage-row-value">{w.used == null ? '–' : `${Math.round(w.used)}%`}</span>
+                      <span className="usage-row-reset" title="Time until reset">
+                        {w.resets_at && (
+                          <>
+                            <span className="sr-only">Resets in </span>
+                            {countdown(w.resets_at, now)}
+                          </>
+                        )}
+                      </span>
                       <span className="usage-row-meta">
                         {w.used == null
                           ? w.status === 'reset'
                             ? 'Reset · not reported since'
                             : 'Not reported'
-                          : [w.resets_at && countdown(w.resets_at, now), note, w.model && `${w.model} only`]
+                          : [
+                              pace(k, w, now) != null && `${Math.round(pace(k, w, now)!)}% elapsed`,
+                              w.model &&
+                                !longLabel(k, w).toLowerCase().includes(w.model.toLowerCase()) &&
+                                `${w.model} only`,
+                            ]
                               .filter(Boolean)
                               .join(' · ')}
                       </span>
@@ -312,26 +331,17 @@ export function UsagePanel({
                 })}
               </ul>
             ) : (
-              <p className="usage-empty">No usage reported yet. It shows up after the first call.</p>
+              <p className="usage-empty">{p.reason || 'No usage reported'}</p>
             )}
-            {p.reported_at && (
-              <p className={`usage-reported${p.stale ? ' text-warning' : ''}`}>
-                {p.stale ? 'Stale snapshot · ' : ''}Reported {agoLong(p.reported_at, (now ?? Date.now() / 1000) * 1000)}
-                {p.reason && ` · ${p.reason}`}
+            {(p.stale || (p.reason && windows.length > 0)) && (
+              <p className="usage-reported text-warning">
+                {p.reason && `${p.reason}${p.stale ? ' · ' : ''}`}
+                {p.stale && 'Stale data'}
               </p>
             )}
           </section>
         )
       })}
-      {apiKeys.length > 0 && (
-        <p className="usage-note">Pay per token, no limits reported: {apiKeys.map(p => p.name).join(', ')}.</p>
-      )}
-      {subs.length > 0 && (
-        <p className="usage-note usage-legend">
-          <span className="usage-legend-tick" aria-hidden="true" /> marks how much of each window has passed. A fill
-          past it is burning faster than the window allows.
-        </p>
-      )}
       <div className="usage-links">
         <Link to="/routing" onClick={onNavigate}>
           Routing &amp; limits <span aria-hidden="true">›</span>
@@ -348,6 +358,7 @@ export function UsageStatus() {
   const [data, setData] = useState<Routing | null>(null)
   const [open, setOpen] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
+  const [loadFailed, setLoadFailed] = useState(false)
   const [, setTick] = useState(0)
   const id = useId()
   const trigger = useRef<HTMLButtonElement>(null)
@@ -357,8 +368,11 @@ export function UsageStatus() {
     setRefreshing(true)
     return api
       .routing()
-      .then(setData)
-      .catch(() => {})
+      .then(result => {
+        setData(result)
+        setLoadFailed(false)
+      })
+      .catch(() => setLoadFailed(true))
       .finally(() => setRefreshing(false))
   }, [])
 
@@ -379,9 +393,9 @@ export function UsageStatus() {
   }, [])
   useDismissablePopover(open, close, trigger, panel)
 
-  if (!data || !data.providers.some(p => p.subscription)) return null
-  const summary = data.providers
-    .filter(p => p.subscription)
+  if (!data && !loadFailed) return null
+  const providers = data ? usageProviders(data) : []
+  const summary = providers
     .map(p => {
       const windows = Object.entries(p.windows)
       return `${p.name}: ${windows.length ? windows.map(([k, w]) => windowText(k, w)).join('; ') : 'no usage reported'}`
@@ -403,11 +417,21 @@ export function UsageStatus() {
           setOpen(value => !value)
         }}
       >
-        <UsageTrigger providers={data.providers} />
+        <UsageTrigger providers={providers} />
       </button>
       {open && (
         <div ref={panel} id={id} className="usage-popover" role="dialog" aria-label="Usage">
-          <UsagePanel data={data} onRefresh={load} refreshing={refreshing} onNavigate={() => close()} />
+          {loadFailed && (
+            <p className="usage-empty text-warning" role="status">
+              Refresh failed{data ? ' · showing last data' : ''}
+            </p>
+          )}
+          {data && <UsagePanel data={data} onRefresh={load} refreshing={refreshing} onNavigate={() => close()} />}
+          {!data && (
+            <button type="button" onClick={load}>
+              Retry
+            </button>
+          )}
         </div>
       )}
     </div>

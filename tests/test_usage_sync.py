@@ -185,6 +185,22 @@ def test_report_preserves_arbitrary_window_durations_and_observation_times():
     assert windows["1h"]["observed_at"] == NOW.timestamp()
 
 
+def test_duplicate_numeric_window_names_remain_distinct():
+    entry = codex()
+    entry["limits"] = [
+        limit("openai-codex:primary", f"Limit {i}", "1h", i, FIVE_HOUR_RESET)
+        for i in (10, 20, 30)
+    ]
+    windows = parse_report(report(entry), NOW.timestamp())["openai-codex"].windows
+    assert list(windows) == ["1h", "1h_2", "1h_3"]
+    assert [window["used"] for window in windows.values()] == [10, 20, 30]
+    assert [window["label"] for window in windows.values()] == [
+        "Limit 10",
+        "Limit 20",
+        "Limit 30",
+    ]
+
+
 def test_cli_snapshot_preserves_arbitrary_window_durations():
     windows = codex_windows(
         {
@@ -340,6 +356,24 @@ def test_sync_feeds_the_router_and_shows_every_account(monkeypatch):
         for account in page["accounts"]
         for window in account["windows"]
     )
+
+
+@pytest.mark.django_db
+def test_unknown_account_and_unavailable_amount_are_visible_without_inventing_capacity():
+    unknown = {
+        "provider": "google-gemini",
+        "limits": [limit("google-gemini:primary", "Gemini", "1h", 0, FIVE_HOUR_RESET)],
+    }
+    unknown["limits"][0]["amount"] = {}
+    sync(report(anthropic(), codex(), grok(), unknown))
+    page = capacity()
+    gemini = account(page, "google-gemini")
+    assert gemini["providers"] == []
+    assert gemini["status"] == "unavailable"
+    assert gemini["windows"][0]["used"] is None
+    assert gemini["windows"][0]["remaining"] is None
+    assert account(page, "xai-oauth")["windows"][0]["used"] == 32
+    assert page["sync"]["state"] == "partial"
 
 
 @pytest.mark.django_db
