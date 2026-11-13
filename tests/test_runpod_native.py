@@ -290,6 +290,38 @@ def test_operator_cost_review_preserves_reservation_and_lifetime_limit(setup):
     assert setup.provider.posts == 1
 
 
+def test_budget_counts_only_created_rentals_against_policy_cap(setup):
+    created = begin(setup)
+    drive(setup, created)
+    native.stop(created, "failed")
+    independent_tick(created)
+    setup.policy["reconciled_costs"] = {
+        str(created.pk): {
+            "amount_usd": "1.00",
+            "basis": "conservative_elapsed_rate",
+            "evidence": "fixture: positive compute/storage absence",
+            "observed_at": time.time(),
+        }
+    }
+    setup.policy["max_rentals"] = 3
+    # A lost-worker attempt cleaned up before any create, its ledger left mid-phase.
+    lost = RunpodJob.objects.get(
+        pk=invoke(setup, "start", profile="h3_frozen", request_key="lost")["job_id"]
+    )
+    RunpodJob.objects.filter(pk=lost.pk).update(cleanup_complete=True)
+    assert Experiment(lost.ledger_path).status()["phase"] != "terminated"
+    pricing = setup.policy["profiles"]["h3_frozen"]["config"]["pricing"]
+    pricing["compute_hourly_usd"]["amount"] = "2.19"
+    with pytest.raises(ValueError, match="project cap exceeded"):
+        invoke(setup, "start", profile="h3_frozen", request_key="above-three")
+    setup.policy["budget_usd"] = "6"
+    result = invoke(setup, "start", profile="h3_frozen", request_key="above-three")
+    config = RunpodJob.objects.get(pk=result["job_id"]).profile["config"]
+    assert config["pricing"]["project_committed_usd"] == "1.00"
+    assert config["pricing"]["project_cap_usd"] == "6"
+    assert result["reservation_usd"] == "2.22"
+
+
 @pytest.mark.parametrize(
     "invalid",
     [

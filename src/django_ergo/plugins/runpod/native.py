@@ -27,7 +27,6 @@ from django.core.exceptions import ValidationError
 from django.core.files.base import ContentFile
 from django.core.files.storage import default_storage
 from django.db import transaction
-from django.db.models import Sum
 from django.utils import timezone
 
 from django_ergo.conversation.attachments import guess_media_type
@@ -168,23 +167,26 @@ def _reconciled_cost(job, state, item):
 
 
 def _committed_reservations(jobs, policy):
-    committed = jobs.aggregate(total=Sum("reservation_usd"))["total"] or Decimal(0)
     reviewed = policy.get("reconciled_costs", {})
     if not isinstance(reviewed, dict):
         msg = "Invalid reconciled Runpod cost mapping"
         raise TypeError(msg)
-    # Never-created terminal attempts have no provider liability. Their original
-    # reservation and lifetime count remain immutable; created/unknown attempts
-    # stay reserved after cleanup until billing review.
-    for completed in jobs.filter(cleanup_complete=True):
-        state = Experiment(completed.ledger_path).status()
-        if state["phase"] == "terminated" and state["create_started"] == 0:
-            committed -= completed.reservation_usd
-        elif str(completed.pk) in reviewed:
-            committed += (
-                _reconciled_cost(completed, state, reviewed[str(completed.pk)])
-                - completed.reservation_usd
-            )
+    committed = Decimal(0)
+    # Only actual or possibly active rentals carry liability. A cleaned-up
+    # attempt that never started a create costs nothing, whatever its phase;
+    # its row and lifetime count stay immutable. Created attempts stay at their
+    # reservation until an operator-reviewed conservative cost replaces it.
+    for job in jobs:
+        if not job.cleanup_complete:
+            committed += job.reservation_usd
+            continue
+        state = Experiment(job.ledger_path).status()
+        if state["create_started"] == 0:
+            continue
+        if str(job.pk) in reviewed:
+            committed += _reconciled_cost(job, state, reviewed[str(job.pk)])
+        else:
+            committed += job.reservation_usd
     return committed
 
 
@@ -224,12 +226,7 @@ def _admission_config(binding, policy, definition):
     config["pricing"]["project_committed_usd"] = str(
         committed + Decimal(policy.get("prior_committed_usd", "0"))
     )
-    config["pricing"]["project_cap_usd"] = str(
-        min(
-            Decimal(policy.get("budget_usd", "3")),
-            Decimal("3"),
-        )
-    )
+    config["pricing"]["project_cap_usd"] = str(Decimal(policy.get("budget_usd", "3")))
     admission = admit_rental(**rental_budget(config))
     if not admission.allowed:
         raise ValueError(admission.reason)
