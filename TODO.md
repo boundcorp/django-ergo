@@ -41,6 +41,9 @@ Live on rigel from `~/p/boundcorp/django-ergo`, bots from `boundcorp/ergo-bots`.
   index resolution, runtime-delivered launcher, restart-safe host-key handling,
   fingerprint-bound fast failure, Worker-owned authenticated SSH tunnels,
   absolute log-stream read budgets and real-rental admission counts.
+- [x] **Retain native H3 failure evidence**: private model stderr, bounded
+  redacted failure state and timings, and immutable off-Pod diagnostic collection
+  before teardown; diagnostic storage errors never prevent rental cleanup.
 - [x] **Supervised H3 pilot preparation**: pinned six-shot image-conditioned
   FL2VA runner, immutable archive/prompt versions and submission tombstones,
   PCM-verified 29s export/partial manifests, independently supervised cleaner

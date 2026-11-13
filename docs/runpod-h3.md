@@ -69,6 +69,13 @@ starts a loopback-only SGLang service, records timings in
 `/workspace/h3-timings.json` and publishes fingerprint-bound state in
 `/workspace/h3-launch-state.json`. It exits immediately if download or server
 fails; the Worker observes the failed marker and requests independent cleanup.
+SGLang stderr is retained privately in `/workspace/h3-server-stderr.log` rather
+than depending on post-deletion provider log retention. Terminal state includes
+its last64KiB (dropping a partial leading line and redacting configured HF tokens)
+and observed timings; the native Worker durably exports `launcher-failure.json`
+before requesting teardown. `ergo_runpod_collect` exposes this diagnostic even
+when no shot was submitted. Diagnostic persistence does not extend the deadline,
+wait for log streaming, or block stop if storage fails.
 The active subprocess group is killed at deadline minus 120 seconds,
 even during download/load/generation. `compile_seconds=0` means Torch compile is
 disabled; any startup kernel JIT/warmup is included in startup. Independent

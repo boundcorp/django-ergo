@@ -802,8 +802,9 @@ def test_cancel_during_readiness_suppresses_late_question(setup, monkeypatch):
 
 
 @pytest.mark.parametrize("local_state_lost", [False, True])
+@pytest.mark.parametrize("diagnostic_write_fails", [False, True])
 def test_launcher_failure_stops_worker_before_startup_deadline(
-    setup, monkeypatch, local_state_lost
+    setup, monkeypatch, local_state_lost, diagnostic_write_fails
 ):
     from django_ergo.plugins.runpod.native_tunnel import LauncherFailed
 
@@ -818,9 +819,26 @@ def test_launcher_failure_stops_worker_before_startup_deadline(
 
         monkeypatch.setattr(native_tunnel, "_directory", inaccessible)
 
+    marker = {
+        "state": "failed",
+        "stage": "startup",
+        "returncode": 42,
+        "stderr_tail": "Traceback:\nRuntimeError: checkpoint component failed\n",
+    }
+    if diagnostic_write_fails:
+        export = Experiment.export
+
+        def fail_diagnostic(self, **kwargs):
+            if kwargs["name"] == "launcher-failure.json":
+                message = "fixture diagnostic disk unavailable"
+                raise OSError(message)
+            return export(self, **kwargs)
+
+        monkeypatch.setattr(Experiment, "export", fail_diagnostic)
+
     def failed_launcher(*args, **kwargs):
         message = "H3 launcher failed"
-        raise LauncherFailed(message)
+        raise LauncherFailed(message, marker=marker)
 
     monkeypatch.setattr(native_h3, "ensure_tunnel", failed_launcher)
     startup_deadline = (
@@ -836,3 +854,20 @@ def test_launcher_failure_stops_worker_before_startup_deadline(
     assert Experiment(job.ledger_path).status()["stop_reason"] == "failed"
     assert setup.provider.posts == 1
     assert setup.provider.deletes == ["pod123"]
+    result = invoke(setup, "collect", job_id=str(job.pk))
+    diagnostics = [
+        item
+        for item in result["attachments"]
+        if item["name"] == "launcher-failure.json"
+    ]
+    if diagnostic_write_fails:
+        assert diagnostics == []
+    else:
+        attachment = ConversationAttachment.objects.get(
+            pk=diagnostics[0]["attachment_id"]
+        )
+        with attachment.file.open("rb") as stream:
+            retained = json.load(stream)
+        assert retained["returncode"] == 42
+        assert retained["stderr_tail"] == marker["stderr_tail"]
+    assert setup.provider.pods == {}  # diagnostics never keep paid compute alive

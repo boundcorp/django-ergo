@@ -1357,6 +1357,9 @@ authorizes an active/uncertain rental, replacement or top-up. The host binds
 `ssh_private_key_file` to the approved public key; the Worker maintains an
 authenticated per-job SSH tunnel to the loopback-only model service, bounded by
 the original cutoff. Fingerprint-bound launcher failures stop work promptly.
+Collection also retains authenticated launcher failure state, observed timings
+and a bounded redacted model stderr tail as `launcher-failure.json`, before
+provider cleanup removes access to the rental's logs.
 
 ### ergo_kb
 

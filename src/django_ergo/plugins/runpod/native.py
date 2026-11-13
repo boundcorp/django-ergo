@@ -46,6 +46,7 @@ from .h3 import H3Client
 from .models import RunpodAccount
 from .models import RunpodArtifact
 from .models import RunpodJob
+from .native_tunnel import LauncherFailed
 from .native_tunnel import close as close_tunnel
 from .native_tunnel import validate_private_key
 from .queue import Conflict
@@ -396,6 +397,24 @@ def stop(job, reason="cancelled"):
     Experiment(job.ledger_path).stop(reason)
     Queue(job.ledger_path).cancel()
     close_tunnel(job)
+
+
+def fail(job, error):
+    """Retain authenticated failure evidence without obstructing durable stop."""
+    job.error = type(error).__name__
+    job.save(update_fields=["error"])
+    try:
+        if isinstance(error, LauncherFailed) and error.marker is not None:
+            Experiment(job.ledger_path).export(
+                now=time.time(),
+                name="launcher-failure.json",
+                content=json.dumps(error.marker, sort_keys=True).encode(),
+                metadata={"job_id": str(job.pk), "kind": "launcher_failure"},
+                retained=True,
+            )
+    finally:
+        # A diagnostic disk/write failure must never prevent stop.
+        stop(job, "failed")
 
 
 def invalid_owner(job):
