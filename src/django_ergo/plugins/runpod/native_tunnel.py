@@ -38,6 +38,10 @@ class TunnelUnavailable(OSError):  # noqa: N818 -- availability signal for pre-r
 class LauncherFailed(RuntimeError):  # noqa: N818 -- terminal launcher lifecycle signal
     """The authenticated rental reported a terminal launcher failure."""
 
+    def __init__(self, message, *, marker=None):
+        super().__init__(message)
+        self.marker = marker
+
 
 def validate_private_key(policy, config):
     """Validate a host-only identity path against the rental's public key.
@@ -214,7 +218,7 @@ def _launcher(directory, state, fingerprint, deadline):
         raise TunnelUnavailable(message)
     if marker.get("state") == "failed":
         message = "H3 launcher failed; no model restart or generation replay"
-        raise LauncherFailed(message)
+        raise LauncherFailed(message, marker=marker)
 
 
 def ensure(job, provider, pod, *, deadline):  # noqa: C901, PLR0915 -- one bounded tunnel lifecycle

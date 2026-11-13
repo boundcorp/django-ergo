@@ -16,9 +16,30 @@ from urllib.request import urlopen
 
 MODEL_REVISION = "42ed227ee7df40d41602854ae760620d6eb651fe"
 SGLANG_REVISION = "2511743bd784e69e5a81ca3d926a000711dae4ab"
+STDERR_LIMIT = 64 * 1024
 
 
-def main():  # noqa: C901, PLR0915 — ordered download/startup/serve lifecycle.
+def _stderr_tail(path):
+    """Bound failure evidence; provider management credentials never enter H3."""
+    try:
+        with path.open("rb") as stream:
+            stream.seek(0, os.SEEK_END)
+            offset = max(0, stream.tell() - STDERR_LIMIT)
+            stream.seek(offset)
+            text = stream.read().decode("utf-8", errors="replace")
+            if offset:
+                # Drop a cut line rather than retain a partial token or UTF-8
+                # prefix at the bounded read boundary.
+                text = text.partition("\n")[2]
+    except OSError:
+        return ""
+    for name in ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN"):
+        if token := os.environ.get(name):
+            text = text.replace(token, "[REDACTED]")
+    return text
+
+
+def main():  # noqa: C901, PLR0912, PLR0915 — ordered download/startup/serve lifecycle.
     started = time.time()
     deadline = float(os.environ["ERGO_DEADLINE"])
     # Clock is established before Pod creation. Never reset it on restart.
@@ -33,6 +54,7 @@ def main():  # noqa: C901, PLR0915 — ordered download/startup/serve lifecycle.
     model = work / "model"
     timing_path = work / "h3-timings.json"
     state_path = work / "h3-launch-state.json"
+    stderr_path = work / "h3-server-stderr.log"
     fingerprint = os.environ.get("ERGO_ATTEMPT_FINGERPRINT", "")
     timings = {
         "model_revision": MODEL_REVISION,
@@ -46,6 +68,7 @@ def main():  # noqa: C901, PLR0915 — ordered download/startup/serve lifecycle.
         "startup_seconds": None,
     }
     child = None
+    server_stderr = None
     stage = "download"
 
     def persist():
@@ -63,6 +86,10 @@ def main():  # noqa: C901, PLR0915 — ordered download/startup/serve lifecycle.
             "observed": time.time(),
             "deadline": deadline,
         }
+        if state == "failed":
+            record["timings"] = timings
+            if stage in ("startup", "serve"):
+                record["stderr_tail"] = _stderr_tail(stderr_path)
         temporary = state_path.with_suffix(".next")
         temporary.write_text(json.dumps(record))
         temporary.replace(state_path)
@@ -118,6 +145,11 @@ def main():  # noqa: C901, PLR0915 — ordered download/startup/serve lifecycle.
         stage = "startup"
         publish("starting")
         env = {**os.environ, "HF_HUB_OFFLINE": "1"}
+        # Keep the model traceback available through SSH even after the child
+        # exits. The bounded tail is copied into terminal state before cleanup.
+        server_stderr = os.fdopen(
+            os.open(stderr_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "wb"
+        )
         child = subprocess.Popen(
             [
                 "sglang",
@@ -152,6 +184,7 @@ def main():  # noqa: C901, PLR0915 — ordered download/startup/serve lifecycle.
                 "30010",
             ],
             env=env,
+            stderr=server_stderr,
             start_new_session=True,
         )
         while child.poll() is None:
@@ -179,6 +212,8 @@ def main():  # noqa: C901, PLR0915 — ordered download/startup/serve lifecycle.
         if child is not None and child.poll() is None:
             os.killpg(child.pid, signal.SIGKILL)
             child.wait()
+        if server_stderr is not None:
+            server_stderr.close()
 
 
 if __name__ == "__main__":

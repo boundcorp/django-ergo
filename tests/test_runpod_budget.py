@@ -21,6 +21,7 @@ def request(**changes):
         "fees_usd": Evidence(D("0.10"), True),
         "project_cap_usd": D("5.00"),
         "project_committed_usd": D("2.00"),
+        "rental_cap_usd": D("3.00"),
     }
     arguments.update(changes)
     return admit_rental(**arguments)
@@ -58,6 +59,13 @@ def test_global_cap_includes_ancillaries_and_rounding():
     assert result.reservation_usd == D("3.01")
 
 
+def test_per_rental_cap_is_policy_data():
+    assert request(project_cap_usd=D("10"), rental_cap_usd=D("3.01")).allowed
+    lowered = request(rental_cap_usd=D("2.99"))
+    assert not lowered.allowed
+    assert lowered.reason == "hard authorization exceeded"
+
+
 def test_project_cap_includes_existing_commitments():
     result = request(project_committed_usd=D("2.01"))
     assert not result.allowed
@@ -86,7 +94,9 @@ def test_unknown_unverified_and_invalid_pricing_fails_closed(field, evidence):
     assert result.reservation_usd is None
 
 
-@pytest.mark.parametrize("field", ["project_cap_usd", "project_committed_usd"])
+@pytest.mark.parametrize(
+    "field", ["project_cap_usd", "project_committed_usd", "rental_cap_usd"]
+)
 @pytest.mark.parametrize("amount", [None, D("-1"), D("NaN"), D("Infinity"), 1])
 def test_invalid_project_amounts_fail_closed(field, amount):
     assert not request(**{field: amount}).allowed

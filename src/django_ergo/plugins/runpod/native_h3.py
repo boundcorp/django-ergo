@@ -15,6 +15,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from . import native
+from . import offers
 from .cleanup import RESTCleanup
 from .experiment import Experiment
 from .frozen import read_frozen
@@ -153,26 +154,15 @@ def step(ctx, job):  # noqa: C901, PLR0911, PLR0912, PLR0915 — one bounded nat
         return "Waiting for an independent executing cleaner; no new provider operation"
     provider = native.client(job)
     if state["phase"] == "reserved":
-        if (
-            not 0
-            <= time.time() - job.profile["quote_observed_at"]
-            < native.FRESH_SECONDS
-        ):
-            native.stop(job, "failed")
-            return "Approved quote expired before create; no rental was sent"
-        # Fixture clients are injected only by host tests. Live calls additionally
-        # enforce the existing independent, execute-mode cleaner heartbeat gate.
-        RESTCleanup(job.ledger_path).create_once(
-            now=time.time(),
-            client=provider,
-            live_execute=job.profile["config"]["live_execute"],
-        )
-        return "Rental create attempted once; inspecting durable receipt"
+        # Live stock is read and the best offer inside the admitted envelope is
+        # created on; proven no-capacity refusals fall through to the next one.
+        # Live calls additionally enforce the independent cleaner heartbeat gate.
+        return offers.launch(job, provider, stop=native.stop)
     pod = _owned_pod(job, provider)
     if pod is None:
         return "Create result unknown; inventory inspection only, no replacement"
     startup_deadline = (
-        job.created
+        state["created"]
         + job.profile["config"]["timeline"]["startup_seconds"]
         + job.profile["config"]["timeline"]["download_seconds"]
     )

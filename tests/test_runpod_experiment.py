@@ -40,6 +40,7 @@ def reserve(e, now=0, **overrides):
         "fees_usd": Evidence(Decimal("0.10"), True),
         "project_cap_usd": Decimal("3"),
         "project_committed_usd": Decimal("0"),
+        "rental_cap_usd": Decimal("3"),
     }
     args.update(overrides)
     return e.reserve(**args)

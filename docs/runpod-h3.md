@@ -69,6 +69,13 @@ starts a loopback-only SGLang service, records timings in
 `/workspace/h3-timings.json` and publishes fingerprint-bound state in
 `/workspace/h3-launch-state.json`. It exits immediately if download or server
 fails; the Worker observes the failed marker and requests independent cleanup.
+SGLang stderr is retained privately in `/workspace/h3-server-stderr.log` rather
+than depending on post-deletion provider log retention. Terminal state includes
+its last64KiB (dropping a partial leading line and redacting configured HF tokens)
+and observed timings; the native Worker durably exports `launcher-failure.json`
+before requesting teardown. `ergo_runpod_collect` exposes this diagnostic even
+when no shot was submitted. Diagnostic persistence does not extend the deadline,
+wait for log streaming, or block stop if storage fails.
 The active subprocess group is killed at deadline minus 120 seconds,
 even during download/load/generation. `compile_seconds=0` means Torch compile is
 disabled; any startup kernel JIT/warmup is included in startup. Independent
@@ -173,6 +180,14 @@ the audited artifact.
      --format '{{.Id}} {{json .RepoDigests}}'
    docker logout "$REGISTRY"
    ```
+6. **Declare the hardware envelope, not a GPU.** In the host profile set
+   `config.image` to the new digest and `config.hardware` to what the image
+   actually supports: `compute_capabilities` from the CUDA architectures it was
+   built for, `min_driver_major`/`min_cuda_version` from its CUDA runtime,
+   `min_vram_gb`/`min_ram_per_gpu_gb` from the model's measured needs, and an
+   ordered `gpus` preference list. Set the hourly ceiling in
+   `pricing.compute_hourly_usd`. Regions, GPUs and caps are then policy edits;
+   see [change GPUs, regions and caps](runpod.md#change-gpus-regions-and-caps-without-a-deploy).
 
    Independently read/pull the digest using the actual intended read authority
    (anonymous for a public image) and compare its config digest with the local
@@ -265,17 +280,20 @@ different-attempt overlay keys are replaced noninteractively. This preserves the
 authenticated log pin without ever prompting. Host private keys stay **inside**
 the rental; they are not controller private keys.
 Before any checkpoint download, the wrapper records effective RAM/disk/VRAM and
-rejects a GPU outside the explicitly verified `gpu_nvml_names` for the quoted
-`gpu_type`, less than48GB VRAM, or a driver older than major580. Runpod's catalog
-ID `NVIDIA A100-SXM4-80GB` can correspond to NVML `A100-SXM4-80GB`; the host must
-bind both identities explicitly rather than assuming equality or fuzzy matching.
-A10080GB is supported by the pinned
-Torch CUDA build's SM80 code; that is not measured H3 fit or throughput. The NVIDIA
+compute capability, then applies the GPU rules bound into the request
+(`gpu_identity.gpu_mismatch`): the profile's GPU count, `min_driver_major`,
+`min_vram_gb`, and either a verified NVML name for the chosen catalog GPU or an
+allowed compute capability. Runpod's catalog ID `NVIDIA A100-SXM4-80GB` can
+appear as NVML `A100-SXM4-80GB` or `NVIDIA A100-SXM4-80GB`; both are in the
+catalog, and a new string passes on compute capability rather than needing a
+code change. For H3, A100 80GB is supported by the pinned Torch CUDA build's
+SM80 code; that is not measured H3 fit or throughput. The NVIDIA
 [CUDA13 compatibility table](https://docs.nvidia.com/deploy/cuda-compatibility/minor-version-compatibility.html)
-requires driver580 or later. The bound request requires `minRAMPerGPU=167` and
-`minVCPUPerGPU=10`. The live v1 schema's CUDA enum stops at13.0 while current
-catalog machines can report13.2, so no unsupported enum values are submitted;
-the pre-download driver/GPU check is mandatory.
+requires driver580 or later (`min_driver_major: 580`). The H3 profile requires
+`min_ram_per_gpu_gb: 167` and `min_vcpu_per_gpu: 10`. The live v1 schema's CUDA
+enum stops at13.0 while current catalog machines can report13.2, so no
+`allowedCudaVersions` is submitted; `min_cuda_version` filters the stock query
+and the pre-download driver/GPU check is mandatory.
 
 **No TOFU or blind `ssh-keyscan`.** The bootstrap prints only its public host
 key with the immutable attempt fingerprint. `RunpodREST.ssh_connection(pod_id,
@@ -383,7 +401,8 @@ example. The phase seconds are planning estimates, not actual-time guarantees.
   "live_execute": true,
   "account": "<renting-account-id>",
   "image": "<pullable-image>@sha256:<64-hex-manifest-digest>",
-  "data_center_ids": ["<permitted-datacenter-id>"],
+  "hardware": {"gpus": ["NVIDIA A100-SXM4-80GB"], "min_vram_gb": 48, "min_ram_per_gpu_gb": 167, "min_vcpu_per_gpu": 10, "min_driver_major": 580, "compute_capabilities": ["8.0", "9.0"]},
+  "offer": {"gpu_type": "NVIDIA A100-SXM4-80GB", "data_center_id": "<permitted-datacenter-id>", "hourly_usd": "<actual-hourly-quote>"},
   "idle_grace": 120,
   "eligibility": {"model": true, "hardware": true, "license": "delegated", "inputs": true, "budget": true},
   "timeline": {"rental_seconds": 3600, "startup_seconds": 600, "download_seconds": 600, "compile_seconds": 0, "generation_seconds": 2061, "export_seconds": 219, "termination_seconds": 120},
@@ -410,8 +429,11 @@ PYTHONPATH=src python -m django_ergo.plugins.runpod.create create "$LEDGER" "$CO
   --execute --credential-env "$SCOPED_CALLBACK_ENV"
 ```
 
-The quoted compute rate is bound into the request fingerprint and checked
-against reservation evidence; it is **not** a provider-enforced price ceiling.
+This manual CLI binds the operator's explicit `offer` at `prepare`; native
+Workers instead pick an offer from live stock at launch (see
+[offer selection](runpod.md#launch-time-offer-selection-and-stock-fallback)).
+The offer's rate is bound into the request fingerprint and must not exceed the
+admitted `compute_hourly_usd`; it is **not** a provider-enforced price ceiling.
 One failed or timed-out create leaves `create_unknown`; never rerun it, replace
 the ledger, or purchase a retry. Continue the cleaner and reconcile a late
 receipt. The SQLite `experiment_receipts` table stores received Pod IDs.
@@ -510,10 +532,11 @@ retained defects and partial/complete manifest; continue cleanup until
 compute+storage absence.
 
 `RESTCleanup.configure_create` requires a named `@sha256:` image reference with
-a full 64-hex digest and an explicit nonempty `data_center_ids` allowlist. It
-fingerprints those selected locations (`dataCenterIds`, custom order), the
-existing ledger's absolute `ERGO_DEADLINE` (at most reservation+3600s), GPU, disk
-and zero optional volume. Network volumes and templates are deliberately omitted;
+a full 64-hex digest and an explicit nonempty `data_center_ids` allowlist (the
+chosen offer's data center). It fingerprints that location (`dataCenterIds`,
+custom order), the existing ledger's absolute `ERGO_DEADLINE` (at most
+reservation+3600s), GPU, the profile's hardware fields, disk and zero optional
+volume. Network volumes and templates are deliberately omitted;
 no provider default location or storage attachment is allowed. The launcher's
 deadline−120s cutoff means work ends by minute58 of a full-hour reservation,
 including startup; a restart never renews it. The immutable request is not

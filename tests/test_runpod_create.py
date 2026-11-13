@@ -13,8 +13,11 @@ from django_ergo.plugins.runpod.budget import Evidence
 from django_ergo.plugins.runpod.budget import RentalTimeline
 from django_ergo.plugins.runpod.cleanup import RESTCleanup
 from django_ergo.plugins.runpod.experiment import Experiment
+from django_ergo.plugins.runpod.hardware import catalog
+from django_ergo.plugins.runpod.hardware import identity
 from django_ergo.plugins.runpod.transport import FixtureRunpodREST
 from django_ergo.plugins.runpod.transport import RunpodREST
+from tests.runpod_stock_fixtures import hw
 
 
 @pytest.fixture(autouse=True)
@@ -45,6 +48,7 @@ def reserved(tmp_path, request):
         fees_usd=Evidence(Decimal("0.1"), True),
         project_cap_usd=Decimal("3"),
         project_committed_usd=Decimal("0"),
+        rental_cap_usd=Decimal("3"),
     )
     return path
 
@@ -55,7 +59,7 @@ def configured(reserved):
     owner = RESTCleanup(path).configure_create(
         account="account",
         image="image@sha256:" + "1" * 64,
-        container_disk_gb=120,
+        hardware=hw(120),
         gpu_type="NVIDIA RTX A6000",
         data_center_ids=["EU-RO-1"],
     )
@@ -198,16 +202,19 @@ def test_ssh_access_bound_before_fingerprinting(reserved):
     owner = RESTCleanup(reserved).configure_create(
         account="account",
         image="image@sha256:" + "1" * 64,
-        container_disk_gb=200,
+        hardware=hw(200),
         gpu_type="NVIDIA RTX 6000 Ada Generation",
         data_center_ids=["EU-RO-1"],
         ssh_public_key=key,
-        gpu_nvml_names=["NVIDIA RTX 6000 Ada Generation"],
+        gpu_identity=identity("NVIDIA RTX 6000 Ada Generation", hw(200), catalog()),
     )
     with sqlite3.connect(reserved) as db:
         body = json.loads(
             db.execute("SELECT body FROM rest_create_profile").fetchone()[0]
         )
+    assert json.loads(body["env"]["ERGO_GPU_REQUIREMENTS"])["nvml_names"] == [
+        "NVIDIA RTX 6000 Ada Generation"
+    ]
     fingerprint = body["env"].pop("ERGO_ATTEMPT_FINGERPRINT")
     assert (
         fingerprint
@@ -455,7 +462,7 @@ def test_profile_cannot_be_rebound_before_or_after_restart(configured):
         RESTCleanup(path).configure_create(
             account="other",
             image="other@sha256:" + "2" * 64,
-            container_disk_gb=121,
+            hardware=hw(121),
             gpu_type="other",
             data_center_ids=["EU-RO-1"],
         )
@@ -567,7 +574,7 @@ def test_create_rejects_mutable_or_invalid_image_reference(reserved, image):
         RESTCleanup(reserved).configure_create(
             account="account",
             image=image,
-            container_disk_gb=200,
+            hardware=hw(200),
             gpu_type="NVIDIA RTX 6000 Ada Generation",
             data_center_ids=["EU-RO-1"],
         )
@@ -582,7 +589,7 @@ def test_create_requires_explicit_datacenter_allowlist(reserved, data_centers):
         RESTCleanup(reserved).configure_create(
             account="account",
             image="image@sha256:" + "1" * 64,
-            container_disk_gb=200,
+            hardware=hw(200),
             gpu_type="NVIDIA RTX 6000 Ada Generation",
             data_center_ids=data_centers,
         )
@@ -594,7 +601,7 @@ def test_full_hour_create_binds_original_absolute_clock_after_restart(reserved):
     RESTCleanup(reserved).configure_create(
         account="account",
         image="image@sha256:" + "1" * 64,
-        container_disk_gb=200,
+        hardware=hw(200),
         gpu_type="NVIDIA RTX 6000 Ada Generation",
         data_center_ids=["EU-RO-1", "EU-SE-1"],
     )
@@ -617,7 +624,7 @@ def test_create_rejects_invalid_or_extended_reservation_clock(reserved, deadline
         RESTCleanup(reserved).configure_create(
             account="account",
             image="image@sha256:" + "1" * 64,
-            container_disk_gb=200,
+            hardware=hw(200),
             gpu_type="NVIDIA RTX 6000 Ada Generation",
             data_center_ids=["EU-RO-1"],
         )

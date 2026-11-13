@@ -177,8 +177,12 @@ PYTHONPATH=src pytest -q tests/test_runpod_create.py tests/test_runpod_cleanup.p
 ```
 
 `RESTCleanup.configure_create` binds an immutable account, attempt and exact
-request profile: one GPU, SECURE cloud, an image and container disk, explicit
-`volumeInGb: 0`, no template and no network/global-volume option. Its SHA256
+request profile: one offer's GPU type and data center, the profile's
+`hardware` cloud type, GPU count, host RAM/vCPU minimums and container disk, an
+image, explicit `volumeInGb: 0`, no template and no network/global-volume
+option. A create refused for capacity (and absent from inventory) is retired,
+not deleted: its ownership stays in every cleanup scan while the next offer is
+bound. Its SHA256
 fingerprint covers the canonical request before adding
 `ERGO_ATTEMPT_FINGERPRINT`. Ownership checks require the account, attempt,
 fingerprint and matching profile; a nonunique Pod name never authorizes deletion.

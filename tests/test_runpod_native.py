@@ -31,6 +31,9 @@ from django_ergo.plugins.runpod.models import RunpodAccount
 from django_ergo.plugins.runpod.models import RunpodJob
 from django_ergo.plugins.runpod.queue import Conflict
 from django_ergo.plugins.runpod.transport import FixtureRunpodREST
+from tests.runpod_stock_fixtures import no_capacity
+from tests.runpod_stock_fixtures import respond
+from tests.runpod_stock_fixtures import stock
 from tests.test_bots import make_bot
 from tests.test_runpod_controller import config as admission_config  # noqa: F401
 
@@ -49,13 +52,24 @@ class ProviderHTTP:
         self.deletes = []
         self.lose_response = False
         self.fail_delete = False
+        self.stock = stock()
+        self.refuse = set()
+        self.bodies = []
+        self.catalog_reads = 0
+        self.refuse_after_create = False
 
     def open(self, request, timeout):
         assert timeout <= 10
+        if "/v2/catalog/gpus?" in request.full_url:
+            self.catalog_reads += 1
+            return respond({"gpus": self.stock})
         route = request.full_url.split("/v1", 1)[1]
         if request.method == "POST":
             self.posts += 1
             body = json.loads(request.data)
+            self.bodies.append(body)
+            if body["dataCenterIds"][0] in self.refuse:
+                raise no_capacity(request.full_url)
             pod = {
                 "id": "pod123",
                 "consumerUserId": "fixture-account",
@@ -69,6 +83,8 @@ class ProviderHTTP:
             self.pods[pod["id"]] = pod
             if self.lose_response:
                 raise TimeoutError
+            if self.refuse_after_create:
+                raise no_capacity(request.full_url)
             response = {"id": pod["id"]}
         elif request.method == "DELETE":
             if self.fail_delete:
@@ -137,7 +153,6 @@ def setup(tmp_path, settings, monkeypatch, admission_config, frozen):  # noqa: F
                     "parts": ["fixture-bound-archive"],
                     "base_url": "http://127.0.0.1:30010",
                     "max_output_bytes": 4_000_000,
-                    "quote_observed_at": time.time(),
                     "config": admission_config,
                 }
             },
@@ -148,7 +163,9 @@ def setup(tmp_path, settings, monkeypatch, admission_config, frozen):  # noqa: F
     monkeypatch.setattr(native_h3, "read_frozen", lambda parts: frozen)
     monkeypatch.setattr(runner, "AUDIO_SHA256", digest(frozen[1]))
     provider = ProviderHTTP()
-    monkeypatch.setattr(native, "client", lambda job: FixtureRunpodREST(provider))
+    monkeypatch.setattr(
+        native, "provider_client", lambda binding: FixtureRunpodREST(provider)
+    )
     monkeypatch.setattr(native, "validate_private_key", lambda policy, config: "")
     monkeypatch.setattr(
         native_h3,
@@ -397,7 +414,9 @@ def test_operator_cost_review_cannot_release_active_rental(setup):
     assert RunpodJob.objects.count() == 1
 
 
-@pytest.mark.parametrize("gate", ["principal", "bot", "budget", "price", "maintenance"])
+@pytest.mark.parametrize(
+    "gate", ["principal", "bot", "budget", "hardware", "maintenance"]
+)
 def test_admission_denies_before_provider_or_worker(setup, gate):
     if gate == "principal":
         setup.ctx.user.is_superuser = False
@@ -405,8 +424,8 @@ def test_admission_denies_before_provider_or_worker(setup, gate):
         setup.policy["allowed_bots"] = ["different"]
     elif gate == "budget":
         setup.policy["budget_usd"] = "1.00"
-    elif gate == "price":
-        setup.policy["profiles"]["h3_frozen"]["quote_observed_at"] = 0
+    elif gate == "hardware":
+        setup.policy["profiles"]["h3_frozen"]["config"]["hardware"]["gpus"] = []
     else:
         RunpodAccount.objects.update(maintenance_at=0)
     with pytest.raises((PermissionError, ValueError)):
@@ -802,8 +821,9 @@ def test_cancel_during_readiness_suppresses_late_question(setup, monkeypatch):
 
 
 @pytest.mark.parametrize("local_state_lost", [False, True])
+@pytest.mark.parametrize("diagnostic_write_fails", [False, True])
 def test_launcher_failure_stops_worker_before_startup_deadline(
-    setup, monkeypatch, local_state_lost
+    setup, monkeypatch, local_state_lost, diagnostic_write_fails
 ):
     from django_ergo.plugins.runpod.native_tunnel import LauncherFailed
 
@@ -818,9 +838,26 @@ def test_launcher_failure_stops_worker_before_startup_deadline(
 
         monkeypatch.setattr(native_tunnel, "_directory", inaccessible)
 
+    marker = {
+        "state": "failed",
+        "stage": "startup",
+        "returncode": 42,
+        "stderr_tail": "Traceback:\nRuntimeError: checkpoint component failed\n",
+    }
+    if diagnostic_write_fails:
+        export = Experiment.export
+
+        def fail_diagnostic(self, **kwargs):
+            if kwargs["name"] == "launcher-failure.json":
+                message = "fixture diagnostic disk unavailable"
+                raise OSError(message)
+            return export(self, **kwargs)
+
+        monkeypatch.setattr(Experiment, "export", fail_diagnostic)
+
     def failed_launcher(*args, **kwargs):
         message = "H3 launcher failed"
-        raise LauncherFailed(message)
+        raise LauncherFailed(message, marker=marker)
 
     monkeypatch.setattr(native_h3, "ensure_tunnel", failed_launcher)
     startup_deadline = (
@@ -836,3 +873,174 @@ def test_launcher_failure_stops_worker_before_startup_deadline(
     assert Experiment(job.ledger_path).status()["stop_reason"] == "failed"
     assert setup.provider.posts == 1
     assert setup.provider.deletes == ["pod123"]
+    result = invoke(setup, "collect", job_id=str(job.pk))
+    diagnostics = [
+        item
+        for item in result["attachments"]
+        if item["name"] == "launcher-failure.json"
+    ]
+    if diagnostic_write_fails:
+        assert diagnostics == []
+    else:
+        attachment = ConversationAttachment.objects.get(
+            pk=diagnostics[0]["attachment_id"]
+        )
+        with attachment.file.open("rb") as stream:
+            retained = json.load(stream)
+        assert retained["returncode"] == 42
+        assert retained["stderr_tail"] == marker["stderr_tail"]
+    assert setup.provider.pods == {}  # diagnostics never keep paid compute alive
+
+
+def attempts(setup, job):
+    status = invoke(setup, "status", job_id=str(job.pk))
+    return status, [
+        (row["data_center_id"], row["outcome"]) for row in status["offer_attempts"]
+    ]
+
+
+def test_no_capacity_falls_back_to_next_offer_in_the_same_admission(setup):
+    setup.provider.refuse = {"EU-RO-1"}
+    job = begin(setup)
+    assert drive(setup, job) == "running"
+    assert [body["dataCenterIds"] for body in setup.provider.bodies] == [
+        ["EU-RO-1"],
+        ["US-KS-2"],
+    ]
+    status, history = attempts(setup, job)
+    assert history == [("EU-RO-1", "no_capacity"), ("US-KS-2", "created")]
+    assert status["offer"]["data_center_id"] == "US-KS-2"
+    assert status["offer"]["hourly_usd"] == "1.19"
+    assert status["create_started"] == 1
+    # The refused request stays in cleanup's ownership scan; the real Pod is
+    # terminated and nothing needs manual ledger repair.
+    invoke(setup, "terminate", job_id=str(job.pk))
+    job.refresh_from_db()
+    assert job.cleanup_complete
+    assert setup.provider.deletes == ["pod123"]
+
+
+def test_late_pod_from_a_refused_offer_is_terminated_while_the_job_runs(setup):
+    setup.provider.refuse = {"EU-RO-1"}
+    job = begin(setup)
+    assert drive(setup, job) == "running"
+    refused = setup.provider.bodies[0]
+    # The provider materializes the refused request after the inventory check.
+    setup.provider.pods["late456"] = {
+        **setup.provider.pods["pod123"],
+        "id": "late456",
+        "env": refused["env"],
+    }
+    native.reconcile_once()
+    assert setup.provider.deletes == ["late456"]
+    assert "pod123" in setup.provider.pods
+    assert Experiment(job.ledger_path).status()["stop_reason"] is None
+
+
+def test_refusals_everywhere_create_nothing_and_release_the_rental_slot(setup):
+    setup.provider.refuse = {"EU-RO-1", "US-KS-2", "US-WA-1"}
+    job = begin(setup)
+    assert drive(setup, job) == "running"
+    assert setup.provider.posts == 3
+    status, history = attempts(setup, job)
+    assert [outcome for _, outcome in history] == ["no_capacity"] * 3
+    assert status["create_started"] == 0
+    assert status["phase"] == "reserved"
+    job.worker.refresh_from_db()
+    assert "No stock matching profile yet" in job.worker.progress
+    invoke(setup, "terminate", job_id=str(job.pk))
+    job.refresh_from_db()
+    assert job.cleanup_complete
+    # Zero-create attempts cost nothing and do not burn max_rentals=1.
+    second = invoke(setup, "start", profile="h3_frozen", request_key="after-refusals")
+    config = RunpodJob.objects.get(pk=second["job_id"]).profile["config"]
+    assert config["pricing"]["project_committed_usd"] == "0"
+
+
+@pytest.mark.parametrize("failure", ["timeout", "refused_but_created"])
+def test_uncertain_create_is_reconciled_never_retried_elsewhere(setup, failure):
+    if failure == "timeout":
+        setup.provider.lose_response = True
+    else:
+        setup.provider.refuse_after_create = True
+    job = begin(setup)
+    assert drive(setup, job) == "running"
+    for _ in range(2):
+        drive(setup, job)
+    assert setup.provider.posts == 1
+    status, history = attempts(setup, job)
+    assert history == [("EU-RO-1", "uncertain")]
+    assert status["create_started"] == 1
+    invoke(setup, "terminate", job_id=str(job.pk))
+    job.refresh_from_db()
+    assert job.cleanup_complete
+    assert setup.provider.deletes == ["pod123"]
+
+
+def age_stock_watch(job, seconds, first=0):
+    with sqlite3.connect(job.ledger_path) as db:
+        db.execute(
+            "UPDATE stock_watch SET last_poll=last_poll-?, first_poll=first_poll-?",
+            (seconds, first or seconds),
+        )
+
+
+def test_waits_for_stock_on_the_poll_interval_without_spending_the_rental(setup):
+    for gpu in setup.provider.stock:
+        gpu["availability"] = "NONE"
+        gpu.pop("dataCenters", None)
+    job = begin(setup)
+    assert drive(setup, job) == "running"
+    assert drive(setup, job) == "running"
+    assert setup.provider.catalog_reads == 1
+    job.worker.refresh_from_db()
+    assert "Waiting for stock matching profile" in job.worker.progress
+    reserved = Experiment(job.ledger_path).status()
+    age_stock_watch(job, 31)
+    setup.provider.stock = stock()
+    assert drive(setup, job) == "running"
+    assert setup.provider.catalog_reads == 2
+    assert setup.provider.posts == 1
+    created = Experiment(job.ledger_path).status()
+    # The rental clock restarts at launch, keeping the full approved interval.
+    assert created["created"] > reserved["created"]
+    assert created["deadline"] - created["created"] == pytest.approx(3600)
+    job.refresh_from_db()
+    assert job.deadline == created["deadline"]
+
+
+def test_stock_deadline_fails_cleanly_listing_what_was_seen(setup):
+    setup.provider.stock = [
+        gpu for gpu in setup.provider.stock if gpu["id"] != "NVIDIA A100-SXM4-80GB"
+    ]
+    job = begin(setup)
+    assert drive(setup, job) == "running"
+    age_stock_watch(job, 31, first=121)
+    assert drive(setup, job) == "failed"
+    job.refresh_from_db()
+    job.worker.refresh_from_db()
+    assert job.error == "no_stock"
+    assert "no_stock" in job.worker.error and "cleanup confirmed" in job.worker.error
+    assert job.cleanup_complete
+    status = invoke(setup, "status", job_id=str(job.pk))
+    assert status["outcome"] == "no_stock"
+    assert status["stock"]["polls"] == 2
+    assert status["stock"]["seen"]["gpus"][0]["reason"] == (
+        "$2.69/h is above the $1.20/h ceiling"
+    )
+    assert setup.provider.posts == 0
+
+
+def test_gpu_and_region_change_is_a_policy_edit(setup):
+    hardware = setup.policy["profiles"]["h3_frozen"]["config"]["hardware"]
+    hardware["gpus"] = ["NVIDIA RTX PRO 6000 Blackwell Server Edition"]
+    hardware["compute_capabilities"] = ["12.0"]
+    hardware["exclude_data_centers"] = ["US-MD-1"]
+    preview = invoke(setup, "stock", profile="h3_frozen")
+    assert preview["would_launch"]["data_center_id"] == "EU-RO-1"
+    job = begin(setup)
+    drive(setup, job)
+    [body] = setup.provider.bodies
+    assert body["gpuTypeIds"] == ["NVIDIA RTX PRO 6000 Blackwell Server Edition"]
+    assert body["dataCenterIds"] == ["EU-RO-1"]
+    assert body["minRAMPerGPU"] == 167 and body["cloudType"] == "SECURE"
