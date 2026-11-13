@@ -230,11 +230,13 @@ startup briefing: in normal-thread mode it names the owning bot, its normal tool
 and approvals and the one-request limit, and forbids claiming the voice has no
 tools (the previous "no callable voice tools" wording made it answer "I don't have
 any special tooling"). Once the call's one request is taken, the bridge appends a
-standing rule (`session.instructions.append`) saying its result will be read here
-and further work needs a new call; a reconnected bridge for the same logical
-session re-applies it. A later delegation signal is answered at once with a
-correlated commentary saying a new call is needed, instead of leaving the model
-waiting.
+standing rule (`session.instructions.append`): a submitted request's verified
+result will be read here and further work needs a new call. If collection
+expires before submission, a correlated commentary says no result will arrive.
+A reconnected bridge applies the matching rule (submitted or never submitted),
+and the startup capability counts any recorded signal as the used request. A
+later delegation signal is answered at once with a correlated commentary saying
+a new call is needed, instead of leaving the model waiting.
 
 **Deployment gate satisfied, 23:38:39 UTC:** source #297 was deployed with policy
 absent first; all old queue consumers exited before exact policy #170 merged.
@@ -275,10 +277,11 @@ connection to `POST /api/realtime-voice/sessions/{id}/client-audio` (owner only,
 active sessions only, at most 40 per session, idempotent by report ID); they
 appear as `client_audio` runtime events under Diagnostics. The bridge adds
 `bridge_audio` events when RoomIO reports that the browser subscribed to the
-agent's audio track and when the first assistant audio frame reaches the room
-output. Together these separate "no audio produced", "browser never subscribed",
-"blocked or not started in the browser" and "playing but inaudible on the
-device". None of them proves the user heard anything.
+agent's audio track and when the voice model generates its first assistant audio
+frame (before RoomIO playout; not confirmed sent or played). Together these
+separate "no audio produced", "browser never subscribed", "blocked or not
+started in the browser" and "playing but inaudible on the device". None of them
+proves the user heard anything.
 Start call connects the room and enables the microphone; Mute/Unmute controls
 capture separately. IDs, transport/provider state, browser playback details,
 output configuration, route snapshots and runtime events are under

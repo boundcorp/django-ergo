@@ -654,7 +654,8 @@ def startup_briefing(session):
         authorization = normal_target(session)
         if session.status != "active":
             raise ValueError("Background delegation unavailable: the voice session has ended.")
-        if session.delegations.exists():
+        # begin_pending accepts one signal per session, so an expired/cancelled collection used it too.
+        if session.delegations.exists() or (session.state or {}).get("pending_delegation"):
             raise ValueError(
                 "Background delegation unavailable: this session's one background request is already used."
             )

@@ -157,6 +157,14 @@ def test_sdk_delegation_assembles_resumed_speech_and_correlates_durable_commenta
             assert "The earlier report was pan-frying chicken." in outcomes[1]["content"]
             latest = await sync_to_async(realtime_voice.bridge_state)(vid)
             assert not any("No verified background result" in e["text"] for e in latest["events"])
+        resumed = bridge.Assistant(vid, await sync_to_async(realtime_voice.bridge_state)(vid), None)
+        sdk = offline_session(resumed)
+        with patch.object(bridge.Assistant, "duplex_session", new_callable=PropertyMock, return_value=sdk):
+            await bind(resumed, sdk)
+            # A reconnect after a submitted request says it is taken, not that it was lost.
+            assert [e["content"] for e in drain(sdk) if e["type"] == "session.instructions.append"] == [
+                bridge.REQUEST_TAKEN
+            ]
 
     async_to_sync(scenario)()
     task = realtime_voice.bridge_state(vid)["delegations"][0]
@@ -246,6 +254,18 @@ def test_saved_context_is_not_an_implicit_user_request_or_fulfilled_lookup(cooki
             assert state["delegations"] == []
             assert state["state"]["pending_delegation"]["status"] == "expired"
             assert state["state"]["pending_delegation"]["fragments"] == []
+            # The voice must not keep promising a result for a request that was never submitted.
+            told = [e for e in drain(sdk) if e["type"] in ("session.commentary.append", "session.instructions.append")]
+            assert [(e["type"], e.get("delegation_id"), e["content"]) for e in told] == [
+                ("session.instructions.append", None, bridge.REQUEST_TAKEN),
+                ("session.commentary.append", "empty-context", bridge.REQUEST_NOT_SUBMITTED),
+            ]
+        resumed = bridge.Assistant(vid, await sync_to_async(realtime_voice.bridge_state)(vid), None)
+        sdk = offline_session(resumed)
+        with patch.object(bridge.Assistant, "duplex_session", new_callable=PropertyMock, return_value=sdk):
+            await bind(resumed, sdk)
+            rules = [e["content"] for e in drain(sdk) if e["type"] == "session.instructions.append"]
+            assert rules == [bridge.REQUEST_LOST]
 
     async_to_sync(scenario)()
     assert held_messages == []
@@ -282,7 +302,7 @@ def test_once_the_calls_one_request_is_taken_the_voice_is_told_and_later_signals
             assert [(event["delegation_id"], event["content"]) for event in answers] == [
                 ("second", bridge.ONE_REQUEST_USED)
             ]
-        # A reconnected bridge knows the logical session's request is already taken.
+        # A reconnected bridge knows the logical session's request is already taken (here never submitted).
         resumed = bridge.Assistant(vid, await sync_to_async(realtime_voice.bridge_state)(vid), None)
         sdk = offline_session(resumed)
         with patch.object(bridge.Assistant, "duplex_session", new_callable=PropertyMock, return_value=sdk):
@@ -290,7 +310,7 @@ def test_once_the_calls_one_request_is_taken_the_voice_is_told_and_later_signals
             sdk._handle_event(signal("after-reconnect"))
             await settle(resumed)
             events = drain(sdk)
-            assert rules(events) == [bridge.REQUEST_TAKEN]
+            assert rules(events) == [bridge.REQUEST_LOST]
             answers = [event for event in events if event["type"] == "session.commentary.append"]
             assert [event["delegation_id"] for event in answers] == ["after-reconnect"]
             assert not resumed.jobs and resumed.pending_id is None

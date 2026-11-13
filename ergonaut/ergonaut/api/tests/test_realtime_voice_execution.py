@@ -230,6 +230,14 @@ def test_voice_is_told_it_can_delegate_to_the_owning_bot_until_its_request_is_us
     realtime_voice.delegate(voice.pk, "voice-request", "Where are we at with the work?")
     used = realtime_voice.startup_briefing(RealtimeVoiceSession.objects.get(pk=voice.pk))["capability"]
     assert used.startswith("Delegation is unavailable") and "one background request is already used" in used
+    # A signal whose speech never became a request still used the call's one signal.
+    other = realtime_voice.create_session(
+        SimpleNamespace(auth=chat.user), realtime_voice.CreateIn(chat_id=str(chat.pk))
+    )
+    realtime_voice.begin_pending(other["id"], "never-finished", {})
+    realtime_voice.close_pending(other["id"], "never-finished", "expired")
+    expired = realtime_voice.startup_briefing(RealtimeVoiceSession.objects.get(pk=other["id"]))["capability"]
+    assert expired.startswith("Delegation is unavailable")
 
 
 @pytest.mark.django_db(transaction=True)
