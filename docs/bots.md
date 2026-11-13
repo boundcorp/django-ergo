@@ -1357,6 +1357,27 @@ Ergo's own plugins live in `django_ergo.plugins`, one module each, and bot.yaml
 names them by short name. Tools that belong to one bot (like a kitchen bot's
 Tandoor tools) go in that bot folder's `tools/` instead.
 
+### observability
+
+```yaml
+- name: observability
+  profiles:
+    prod:
+      grafana_url: http://grafana.monitoring.svc
+      public_url: https://grafana.example.com
+      token_env: GRAFANA_VIEWER_TOKEN
+      datasources: [prometheus]
+```
+
+Read-only Grafana and Prometheus. Keys: `profiles` (name to `grafana_url`,
+`public_url`, `token_env`, `token_file`, `datasources`, `mode` proxy|direct,
+`prometheus_url`, `renderer`, `ownership`) and `root_only` (default false). The model
+cannot supply URLs, headers, credentials or datasource uids outside `datasources`.
+Tools: `ergo_grafana_search`, `ergo_grafana_dashboard`, `ergo_prom_query`,
+`ergo_prom_targets`, `ergo_grafana_link`, `ergo_prom_chart` (and
+`ergo_grafana_panel_render` when a profile has `renderer: true`). Charts need
+`django-ergo[observability]`. See [Observability](observability.md).
+
 ### runpod
 
 ```yaml

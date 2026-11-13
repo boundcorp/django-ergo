@@ -211,7 +211,7 @@ COPY --from=frontend /app/frontend/dist /app/frontend/dist
 # the few Ergonaut doesn't pin, which this pulls in (pure Python wheels).
 COPY pyproject.toml setup.py README.md HISTORY.md /ergo/
 COPY src/ /ergo/src/
-RUN uv pip install --no-cache-dir "/ergo[legacy,bots,browser,images]" \
+RUN uv pip install --no-cache-dir "/ergo[legacy,bots,browser,images,observability]" \
     && uv pip install --python /app/.voice-venv/bin/python --no-cache-dir --no-deps /ergo \
     && rm -rf /ergo
 
