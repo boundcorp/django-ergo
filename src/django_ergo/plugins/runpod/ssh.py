@@ -16,8 +16,13 @@ from importlib.resources import files
 H3_LAUNCHER_SOURCE = (
     files(__package__).joinpath("h3_launcher.py").read_text(encoding="utf-8")
 )
+# The in-Pod GPU rule is the same tested source the host imports.
+GPU_IDENTITY_SOURCE = (
+    files(__package__).joinpath("gpu_identity.py").read_text(encoding="utf-8")
+)
 SSH_BOOTSTRAP = (
-    r'''
+    GPU_IDENTITY_SOURCE
+    + r'''
 import json
 import math
 import os
@@ -144,11 +149,11 @@ Path("/workspace/h3-access-timings.json").write_text(json.dumps({
     "ssh_setup_seconds": time.time() - started,
 }))
 # Establish compatibility before the original launcher can download weights.
-gpu = run(["nvidia-smi", "--query-gpu=name,driver_version,memory.total",
+gpu = run(["nvidia-smi", "--query-gpu=name,driver_version,memory.total,compute_cap",
     "--format=csv,noheader,nounits"], capture=True).decode().strip().splitlines()
-if len(gpu) != 1:
-    raise ValueError("exactly one reviewed GPU required before model download")
-name, driver, vram = [part.strip() for part in gpu[0].split(",")]
+if not gpu:
+    raise ValueError("no GPU visible before model download")
+name, driver, vram, capability = [part.strip() for part in gpu[0].split(",")]
 memory = int(Path("/proc/meminfo").read_text().split("MemTotal:")[1].split()[0]) * 1024
 cgroup = Path("/sys/fs/cgroup/memory.max")
 if cgroup.exists() and cgroup.read_text().strip() != "max":
@@ -157,15 +162,17 @@ disk = shutil.disk_usage("/workspace")
 baseline = {
     "observed": time.time(), "deadline": deadline,
     "gpu": name, "driver": driver, "vram_mib": int(vram),
+    "compute_capability": capability, "gpu_count": len(gpu),
     "effective_ram_bytes": memory,
     "disk_total_bytes": disk.total, "disk_free_bytes": disk.free,
     "pre_model_seconds": time.time() - started,
 }
 Path("/workspace/h3-resource-baseline.json").write_text(json.dumps(baseline))
 print("ERGO_H3_RESOURCE_BASELINE " + json.dumps(baseline), flush=True)
-if (name not in json.loads(os.environ.pop("ERGO_NVML_NAMES")) or int(driver.split(".")[0]) < 580
-        or int(vram) < 45000):
-    raise ValueError("quoted NVIDIA GPU, at least 48GB VRAM and CUDA 13 driver required before model download")
+mismatch = gpu_mismatch(gpu, json.loads(os.environ.pop("ERGO_GPU_REQUIREMENTS")))
+if mismatch:
+    print("ERGO_H3_GPU_REJECTED " + mismatch, flush=True)
+    raise ValueError("GPU does not meet the profile before model download: " + mismatch)
 # The image's old launcher remains untouched. Write the exact maintained source,
 # rather than patching strings in an already-published image.
 launcher = Path("/run/sshd/h3-launch.py")
@@ -219,17 +226,22 @@ def public_key(value):
     return " ".join(fields[:2])
 
 
-def create_access(key, gpu_type, gpu_nvml_names):
-    """Bind provider catalog identity and separately verified NVML names."""
+def create_access(key, gpu_type, gpu_identity):
+    """Bind the provider catalog ID and the in-Pod GPU acceptance rules."""
     if not isinstance(gpu_type, str) or not gpu_type.startswith("NVIDIA "):
         msg = "NVIDIA CUDA GPU type required"
         raise ValueError(msg)
     if (
-        not isinstance(gpu_nvml_names, list | tuple)
-        or not gpu_nvml_names
-        or any(not isinstance(name, str) or not name for name in gpu_nvml_names)
+        not isinstance(gpu_identity, dict)
+        or not isinstance(gpu_identity.get("nvml_names"), list)
+        or not isinstance(gpu_identity.get("compute_capabilities"), list)
+        or not (gpu_identity["nvml_names"] or gpu_identity["compute_capabilities"])
+        or any(
+            type(gpu_identity.get(field)) is not int
+            for field in ("gpu_count", "min_vram_mib", "min_driver_major")
+        )
     ):
-        msg = "Explicit verified NVML GPU names required"
+        msg = "Verified NVML names or allowed compute capabilities required"
         raise ValueError(msg)
     return {
         "dockerEntrypoint": ["python", "-c", SSH_BOOTSTRAP],
@@ -239,6 +251,6 @@ def create_access(key, gpu_type, gpu_nvml_names):
         "env": {
             "ERGO_SSH_PUBLIC_KEY": public_key(key),
             "ERGO_GPU_TYPE": gpu_type,
-            "ERGO_NVML_NAMES": json.dumps(gpu_nvml_names),
+            "ERGO_GPU_REQUIREMENTS": json.dumps(gpu_identity, sort_keys=True),
         },
     }

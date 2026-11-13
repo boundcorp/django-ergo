@@ -143,10 +143,29 @@ def test_foreign_pod_never_reads_logs():
     assert len(http.requests) == 1
 
 
-@pytest.mark.parametrize("names", [None, [], [""], [1], "A100-SXM4-80GB"])
-def test_bootstrap_requires_explicit_nvml_names(names):
-    with pytest.raises(ValueError, match="Explicit verified NVML"):
-        create_access(KEY, "NVIDIA A100-SXM4-80GB", names)
+RULES = {
+    "gpu_count": 1,
+    "nvml_names": ["NVIDIA A100-SXM4-80GB"],
+    "compute_capabilities": [],
+    "min_vram_mib": 45000,
+    "min_driver_major": 580,
+}
+
+
+@pytest.mark.parametrize(
+    "rules",
+    [
+        None,
+        ["A100-SXM4-80GB"],
+        {**RULES, "nvml_names": []},
+        {**RULES, "nvml_names": "A100-SXM4-80GB"},
+        {**RULES, "min_vram_mib": "45000"},
+        {key: value for key, value in RULES.items() if key != "min_driver_major"},
+    ],
+)
+def test_bootstrap_requires_explicit_gpu_rules(rules):
+    with pytest.raises(ValueError, match="Verified NVML names or allowed compute"):
+        create_access(KEY, "NVIDIA A100-SXM4-80GB", rules)
 
 
 def test_expired_bootstrap_never_installs_packages(monkeypatch):

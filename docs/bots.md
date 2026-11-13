@@ -1336,19 +1336,24 @@ false exposes tools in threads, not spending authority.
 
 The optional resource app, server-only principal/bot/profile policy, durable
 single-host rental filesystem, credential binding and independent maintenance
-consumer are required. Start needs human approval, fresh maintenance/pricing
-and an active allowlisted superuser. Defaults are one real/unresolved lifetime
+consumer are required. Start needs human approval, fresh maintenance and an
+active allowlisted superuser. Defaults are one real/unresolved lifetime
 rental, a planned $3 project cap and ≤1h absolute deadline; no replacement or
-uncertain-create replay. The host's `budget_usd` sets the project cap; per-rental
-planned cost remains capped at $3. Cleanup-complete zero-create attempts cost
-$0 and do not consume `max_rentals`; unresolved intents still reserve a slot.
+uncertain-create replay. The host's `budget_usd` sets the project cap and
+`max_rental_usd` (default $3) the per-rental ceiling. Cleanup-complete
+zero-create attempts, including creates refused for capacity, cost $0 and do
+not consume `max_rentals`; unresolved intents still reserve a slot.
 The first reviewed adapter is the frozen six-shot H3 comparison, not chapter
 execution or arbitrary commands. See [native installation](runpod.md) and
 [image/runtime preparation](runpod-h3.md). Bot YAML alone never enables spending.
-The host profile requires explicit `gpu_type` and verified `gpu_nvml_names`;
-neither is bot-editable. Provider catalog IDs and NVML names are separate.
-Admission retains the single-GPU, minimum167GB hostRAM and plannedUSD3/one-hour
-limits regardless of the selected supported NVIDIA hardware.
+The host profile declares a hardware envelope (`config.hardware`: ordered GPU
+preferences, VRAM/RAM/vCPU/driver/compute-capability minimums, regions, stock
+wait) and an hourly ceiling; none of it is bot-editable. The Worker picks the
+best in-stock offer inside it at launch, falls back to the next offer when a
+create is refused for capacity, and waits for stock up to the profile's deadline
+(`ergo_runpod_stock` previews it; status shows the choice and attempts).
+Changing GPUs, regions or caps is a policy-file edit, not a deploy; see
+[offer selection](runpod.md#launch-time-offer-selection-and-stock-fallback).
 Provider REST `imageName` is normalized before strict ownership checks; missing
 or mismatched image evidence never authorizes deletion.
 Host-only `reconciled_costs` can record an explicitly reviewed conservative cost

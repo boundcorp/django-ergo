@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from http import HTTPStatus
 from urllib.error import HTTPError
 from urllib.parse import quote
+from urllib.parse import urlencode
 from urllib.request import HTTPRedirectHandler
 from urllib.request import Request
 from urllib.request import build_opener
@@ -26,6 +27,16 @@ from urllib.request import build_opener
 from .ssh import public_key
 
 _BASE = "https://rest.runpod.io/v1"
+_CATALOG = "https://api.runpod.io/v2/catalog/gpus"
+# Provider wording for a create that was refused for lack of stock. Hosts can
+# replace it with policy ``no_capacity_messages`` without a code change.
+NO_CAPACITY_MESSAGES = (
+    "no longer any instances available",
+    "no instances available",
+    "not enough free gpus",
+    "does not have the resources to deploy your pod",
+    "could not find any pods with required specifications",
+)
 _MAX_RESPONSE = 2 * 1024 * 1024
 _MAX_TIMEOUT = 30
 _MAX_SSE_LINE = 65536
@@ -67,6 +78,14 @@ class ProviderError(Exception):
 
 class OwnershipError(ProviderError):
     """Provider response does not prove the expected ownership and profile."""
+
+
+class CapacityError(ProviderError):
+    """The provider answered a create with an explicit no-capacity refusal.
+
+    This is a definitive HTTP answer, unlike a timeout, but callers must still
+    confirm from inventory that nothing exists before treating it as no create.
+    """
 
 
 class _NoRedirect(HTTPRedirectHandler):
@@ -140,7 +159,9 @@ def _safe_pod(pod):
 class RunpodREST:
     """Small REST client; the credential callback returns a bearer token string."""
 
-    def __init__(self, credential, *, timeout=10, opener=None):
+    def __init__(
+        self, credential, *, timeout=10, opener=None, no_capacity_messages=None
+    ):
         if not callable(credential):
             msg = "credential callback required"
             raise TypeError(msg)
@@ -152,6 +173,15 @@ class RunpodREST:
         ):
             msg = "timeout must be between zero and 30 seconds"
             raise ValueError(msg)
+        messages = (
+            NO_CAPACITY_MESSAGES
+            if no_capacity_messages is None
+            else tuple(no_capacity_messages)
+        )
+        if any(not isinstance(text, str) or not text for text in messages):
+            msg = "no-capacity messages must be nonempty strings"
+            raise ValueError(msg)
+        self._no_capacity = tuple(text.lower() for text in messages)
         self._credential = credential
         self._timeout = timeout
         self._opener = opener if opener is not None else build_opener(_NoRedirect())
@@ -163,12 +193,21 @@ class RunpodREST:
             raise ValueError(msg)
         return token
 
-    def _request(self, method, path, *, body=None, absent_ok=False):
+    def _refused_for_capacity(self, error):
+        try:
+            text = error.read(_MAX_RESPONSE).decode("utf-8", "replace").lower()
+        except Exception:  # noqa: BLE001 -- unreadable body is not a refusal
+            return False
+        return any(message in text for message in self._no_capacity)
+
+    def _request(  # noqa: PLR0913
+        self, method, path, *, body=None, absent_ok=False, capacity=False, base=_BASE
+    ):
         try:
             token = self._token()
             data = None if body is None else json.dumps(body, allow_nan=False).encode()
             request = Request(  # noqa: S310 -- fixed HTTPS origin
-                _BASE + path,
+                base + path,
                 data=data,
                 method=method,
                 headers={
@@ -185,6 +224,10 @@ class RunpodREST:
         except HTTPError as exc:
             if absent_ok and exc.code == HTTPStatus.NOT_FOUND:
                 return _NOT_FOUND
+            # Only the body is matched; it is never stored or re-raised.
+            if capacity and self._refused_for_capacity(exc):
+                msg = "provider reported no capacity"
+                raise CapacityError(msg) from None
             msg = "provider HTTP request failed"
             raise ProviderError(msg) from None
         except Exception:  # noqa: BLE001 -- credential and HTTP errors may contain secrets
@@ -308,8 +351,17 @@ class RunpodREST:
             msg = "authenticated SSH connection unverified"
             raise ProviderError(msg) from None
 
+    def gpu_stock(self, query):
+        """Live Pod GPU catalog with per-data-center availability (GET only)."""
+        result = self._request("GET", "?" + urlencode(query), base=_CATALOG)
+        gpus = result.get("gpus") if isinstance(result, dict) else None
+        if not isinstance(gpus, list) or any(not isinstance(g, dict) for g in gpus):
+            msg = "invalid provider catalog response"
+            raise ProviderError(msg)
+        return gpus
+
     def create_pod(self, body):
-        result = self._request("POST", "/pods", body=body)
+        result = self._request("POST", "/pods", body=body, capacity=True)
         if not isinstance(result, dict):
             msg = "invalid provider create response"
             raise ProviderError(msg)
@@ -338,8 +390,12 @@ class FixtureRunpodREST(RunpodREST):
     supply an in-memory fake.
     """
 
-    def __init__(self, opener):
+    def __init__(self, opener, *, no_capacity_messages=None):
         if opener is None:
             msg = "offline fixture opener required"
             raise ValueError(msg)
-        super().__init__(lambda: "offline-fixture", opener=opener)
+        super().__init__(
+            lambda: "offline-fixture",
+            opener=opener,
+            no_capacity_messages=no_capacity_messages,
+        )

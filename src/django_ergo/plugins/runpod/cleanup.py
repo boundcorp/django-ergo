@@ -25,6 +25,7 @@ from pathlib import Path
 from .budget import MAX_RENTAL_SECONDS
 from .experiment import Experiment
 from .ssh import create_access
+from .transport import CapacityError
 from .transport import FixtureRunpodREST
 from .transport import Ownership
 from .transport import OwnershipError
@@ -52,6 +53,10 @@ class RESTCleanup:
                 CREATE TABLE IF NOT EXISTS rest_storage_proofs (
                     resource_id TEXT PRIMARY KEY
                 );
+                CREATE TABLE IF NOT EXISTS rest_retired_profiles (
+                    fingerprint TEXT PRIMARY KEY, profile TEXT NOT NULL,
+                    body TEXT NOT NULL, reason TEXT NOT NULL
+                );
             """)
 
     def configure(self, ownership):
@@ -63,18 +68,21 @@ class RESTCleanup:
         *,
         account,
         image,
-        container_disk_gb,
         gpu_type,
         data_center_ids,
+        hardware,
         quoted_hourly_usd=None,
         ssh_public_key=None,
-        gpu_nvml_names=None,
+        gpu_identity=None,
     ):
         """Bind a digest, explicit location allowlist and existing absolute clock.
 
+        ``hardware`` is validated ``hardware.requirements()`` data: cloud type,
+        GPU count, host RAM/vCPU minimums and container disk come from policy.
         Binding a profile alone does not authorize live create.
         Omitting networkVolumeId (and any template) deliberately attaches none.
         """
+        container_disk_gb = hardware["container_disk_gb"]
         if not isinstance(image, str) or not re.fullmatch(
             r"[^@\s]+@sha256:[0-9a-f]{64}", image
         ):
@@ -111,22 +119,24 @@ class RESTCleanup:
             except (InvalidOperation, KeyError, TypeError, ValueError):
                 msg = "invalid admitted compute quote"
                 raise ValueError(msg) from None
+            # The admitted rate is the profile's hourly ceiling; a live offer
+            # may be cheaper but never above what the reservation priced.
             if (
                 not quote.is_finite()
                 or quote < 0
-                or quote != admitted
+                or quote > admitted
                 or evidence["verified"] is not True
             ):
-                msg = "compute quote does not match admission"
+                msg = "compute quote exceeds the admitted hourly ceiling"
                 raise ValueError(msg)
         body = {
             "name": "ergo-" + attempt,
             "computeType": "GPU",
-            "cloudType": "SECURE",
+            "cloudType": hardware["cloud_type"],
             "gpuTypeIds": [gpu_type],
-            "gpuCount": 1,
-            "minRAMPerGPU": 167,
-            "minVCPUPerGPU": 10,
+            "gpuCount": hardware["gpu_count"],
+            "minRAMPerGPU": hardware["min_ram_per_gpu_gb"],
+            "minVCPUPerGPU": hardware["min_vcpu_per_gpu"],
             "imageName": image,
             "containerDiskInGb": container_disk_gb,
             "volumeInGb": 0,
@@ -138,7 +148,7 @@ class RESTCleanup:
             },
         }
         if ssh_public_key is not None:
-            access = create_access(ssh_public_key, gpu_type, gpu_nvml_names)
+            access = create_access(ssh_public_key, gpu_type, gpu_identity)
             body["env"].update(access.pop("env"))
             body.update(access)
         if quoted_hourly_usd is not None:
@@ -195,8 +205,99 @@ class RESTCleanup:
             raise ValueError(msg)
         return Ownership(**json.loads(row["profile"]))
 
-    def create_once(self, *, now, client=None, live_execute=False):
-        """Commit uncertainty before the sole POST; never replay on failure."""
+    def _profiles(self, db):
+        """Current ownership first, then every retired never-created request."""
+        try:
+            current = db.execute(
+                "SELECT profile FROM rest_profile WHERE id=1"
+            ).fetchall()
+        except sqlite3.OperationalError:
+            current = []
+        retired = db.execute(
+            "SELECT profile FROM rest_retired_profiles ORDER BY rowid"
+        ).fetchall()
+        return [Ownership(**json.loads(row["profile"])) for row in current + retired]
+
+    def _retire(self, db, reason):
+        """Move the bound request aside so another offer can be bound.
+
+        Retired ownerships stay in every cleanup scan, so even a provider that
+        later materialized a refused request is still found and terminated.
+        """
+        profile = db.execute("SELECT profile FROM rest_profile WHERE id=1").fetchone()
+        body = db.execute("SELECT body FROM rest_create_profile WHERE id=1").fetchone()
+        if profile is None or body is None:
+            msg = "no bound create request to retire"
+            raise ValueError(msg)
+        db.execute(
+            "INSERT INTO rest_retired_profiles VALUES (?, ?, ?, ?)",
+            (
+                json.loads(profile["profile"])["fingerprint"],
+                profile["profile"],
+                body["body"],
+                reason,
+            ),
+        )
+        db.execute("DELETE FROM rest_profile")
+        db.execute("DELETE FROM rest_create_profile")
+
+    def retire_unsent(self):
+        """Release a bound request that was never POSTed (crash before send)."""
+        with self.experiment._tx() as db:
+            row = self.experiment._row(db)
+            try:
+                bound = db.execute("SELECT 1 FROM rest_profile").fetchone()
+            except sqlite3.OperationalError:
+                bound = None
+            if not bound:
+                return False
+            if row["create_started"]:
+                msg = "create already attempted; inspect instead of replay"
+                raise ValueError(msg)
+            self._retire(db, "unsent")
+            return True
+
+    def _release_refused(self, client):
+        """After an explicit no-capacity refusal, prove nothing exists, then release.
+
+        Any inventory failure, receipt or Pod carrying this attempt's marker
+        leaves the create uncertain: it is reconciled, never retried.
+        """
+        try:
+            pods = client.list_pods()
+        except ProviderError:
+            pods = None
+        with self.experiment._tx() as db:
+            row = self.experiment._row(db)
+            marker = row["marker"]
+            present = pods is None or any(
+                isinstance(pod.get("env"), dict)
+                and pod["env"].get("ERGO_ATTEMPT_ID") == marker
+                for pod in pods
+            )
+            if (
+                present
+                or not row["create_started"]
+                or db.execute("SELECT 1 FROM experiment_receipts").fetchone()
+            ):
+                db.execute(
+                    "UPDATE experiment SET cleanup_error='provider_request_failed' WHERE id=1"
+                )
+                return False
+            self._retire(db, "no_capacity")
+            db.execute(
+                "UPDATE experiment SET create_started=0, cleanup_error=NULL, phase=? WHERE id=1",
+                ("reserved" if row["stop_reason"] is None else "cleanup_pending",),
+            )
+            return True
+
+    def create_once(self, *, now, client=None, live_execute=False):  # noqa: C901
+        """Commit uncertainty before the sole POST; never replay on failure.
+
+        An explicit no-capacity refusal, confirmed by inventory, releases the
+        attempt (``create_started`` returns to 0) so the caller may bind the
+        next offer. Timeouts and other failures stay uncertain.
+        """
         self.experiment._time(now)
         if client is not None and not isinstance(client, FixtureRunpodREST):
             if not isinstance(client, RunpodREST) or live_execute is not True:
@@ -236,6 +337,8 @@ class RESTCleanup:
                 msg = "invalid provider create response"
                 raise ProviderError(msg)  # noqa: TRY301
             self.experiment.receipt(pod["id"])
+        except CapacityError:
+            self._release_refused(client)
         except ProviderError:
             with self.experiment._tx() as db:
                 db.execute(
@@ -243,11 +346,15 @@ class RESTCleanup:
                 )
         return self.experiment.status()
 
-    def _remember(self, db, pod, profile, request_bound, *, verified_read=False):
+    @staticmethod
+    def _owner(pod, profiles, request_bound):
+        return next(
+            (p for p in profiles if p.matches(pod, request_bound=request_bound)), None
+        )
+
+    def _remember(self, db, pod, profiles, request_bound, *, verified_read=False):
         resource_id = pod.get("id")
-        if not _pod_id(resource_id) or not profile.matches(
-            pod, request_bound=request_bound
-        ):
+        if not _pod_id(resource_id) or not self._owner(pod, profiles, request_bound):
             return False
         db.execute(
             "INSERT INTO rest_resources(resource_id) VALUES (?) ON CONFLICT(resource_id) DO UPDATE SET compute_absent=0",
@@ -261,27 +368,26 @@ class RESTCleanup:
             )
         return True
 
-    def _clean_resource(self, resource_id, client, profile, request_bound):
+    def _clean_resource(self, resource_id, client, profiles, request_bound):
         try:
             pod = client.get_pod(resource_id)
             if pod is not None:
+                owner = self._owner(pod, profiles, request_bound)
                 with self.experiment._tx() as db:
-                    if not self._remember(
-                        db, pod, profile, request_bound, verified_read=True
+                    if owner is None or not self._remember(
+                        db, pod, profiles, request_bound, verified_read=True
                     ):
                         db.execute(
                             "DELETE FROM rest_storage_proofs WHERE resource_id=?",
                             (resource_id,),
                         )
                         return "ownership_unverified"
-                client.terminate_owned(
-                    resource_id, profile, request_bound=request_bound
-                )
+                client.terminate_owned(resource_id, owner, request_bound=request_bound)
                 pod = client.get_pod(resource_id)
             if pod is not None:
                 with self.experiment._tx() as db:
                     if not self._remember(
-                        db, pod, profile, request_bound, verified_read=True
+                        db, pod, profiles, request_bound, verified_read=True
                     ):
                         db.execute(
                             "DELETE FROM rest_storage_proofs WHERE resource_id=?",
@@ -305,17 +411,34 @@ class RESTCleanup:
             return "provider_request_failed"
         return None
 
-    def reconcile_once(self, *, now, client=None):  # noqa: C901
+    def reconcile_once(self, *, now, client=None):  # noqa: C901, PLR0912
         """One inventory scan, at most ten known-ID cleanup actions, no create replay."""
         self.experiment._time(now)
         with self.experiment._tx() as db:
-            profile = self._profile(db)
+            profiles = self._profiles(db)
             row = self.experiment._expire(db, self.experiment._row(db), now)
             if not row["stop_reason"]:
                 return dict(row)
+            if not profiles:
+                # No request was ever bound, so no create could have been sent.
+                if (
+                    row["create_started"]
+                    or db.execute("SELECT 1 FROM experiment_receipts").fetchone()
+                ):
+                    msg = "REST profile not configured"
+                    raise ValueError(msg)
+                db.execute(
+                    "UPDATE experiment SET phase='terminated', outcome=?, cleanup_error=NULL, cleanup_attempts=cleanup_attempts+1 WHERE id=1",
+                    (row["stop_reason"],),
+                )
+                return dict(self.experiment._row(db))
+            current = db.execute("SELECT 1 FROM rest_profile").fetchone()
+            # Retired requests were all request-bound creates.
             request_bound = (
                 db.execute("SELECT 1 FROM rest_create_profile WHERE id=1").fetchone()
                 is not None
+                if current
+                else True
             )
             db.execute(
                 "UPDATE experiment SET phase='cleanup_pending', outcome=NULL, cleanup_error=?, cleanup_attempts=cleanup_attempts+1 WHERE id=1",
@@ -335,7 +458,7 @@ class RESTCleanup:
             error = "provider_request_failed"
         with self.experiment._tx() as db:
             for pod in pods:
-                self._remember(db, pod, profile, request_bound)
+                self._remember(db, pod, profiles, request_bound)
             cursor = self.experiment._row(db)["cleanup_cursor"]
             sql = "SELECT resource_id FROM rest_resources WHERE compute_absent=0 AND resource_id>? ORDER BY resource_id LIMIT 10"
             resources = db.execute(sql, (cursor,)).fetchall()
@@ -348,7 +471,7 @@ class RESTCleanup:
                 )
         for resource in resources:
             result = self._clean_resource(
-                resource["resource_id"], client, profile, request_bound
+                resource["resource_id"], client, profiles, request_bound
             )
             error = error or result
         with self.experiment._tx() as db:

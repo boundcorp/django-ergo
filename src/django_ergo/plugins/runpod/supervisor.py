@@ -54,9 +54,9 @@ class CleanerSupervision:
         ):
             msg = "positive timings required; freshness must exceed interval plus operation timeout"
             raise ValueError(msg)
-        cleaner = RESTCleanup(self.path)
+        # A REST ledger; its create request may be bound later, at launch time.
+        RESTCleanup(self.path)
         with self.experiment._tx() as db:
-            cleaner._profile(db)
             row = self.experiment._row(db)
             if not 0 < row["deadline"] - row["created"] <= MAX_RENTAL_SECONDS:
                 msg = (
