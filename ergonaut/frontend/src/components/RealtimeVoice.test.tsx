@@ -511,6 +511,77 @@ test('partial and final update the same bubble; manual scroll stays put until ju
   expect(scroller.scrollTop).toBe(1200)
 })
 
+function turn(id: string, role: 'user' | 'assistant', text: string, extra: Record<string, unknown> = {}) {
+  return { turn_id: id, role, text, is_final: true, delivery: 'unknown', created_at: '', ...extra }
+}
+async function renderTurns(transcript: ReturnType<typeof turn>[]) {
+  await act(async () => {
+    root.render(<VoiceTranscript voice={{ ...session, transcript }} />)
+  })
+  return [...container.querySelectorAll('[data-turn-id]')].map(node => node.textContent ?? '')
+}
+
+test('assistant fragments of one speaker run share one bubble without playback labels', async () => {
+  const bubbles = await renderTurns([
+    turn('a1', 'assistant', 'three-request allowance.', { created_at: '2026-01-01T00:00:01Z', segment: 'c1' }),
+    turn('a2', 'assistant', 'That', { created_at: '2026-01-01T00:00:02Z', segment: 'c1' }),
+    turn('a3', 'assistant', 'earlier playback issue was just volume.', {
+      created_at: '2026-01-01T00:00:03Z',
+      segment: 'c1',
+    }),
+    turn('a4', 'assistant', 'We', { is_final: false, created_at: '2026-01-01T00:00:04Z', segment: 'c1' }),
+  ])
+  expect(bubbles).toHaveLength(1)
+  expect(bubbles[0]).toContain('three-request allowance. That earlier playback issue was just volume. We')
+  expect(bubbles[0]).toContain('live transcript')
+  expect(container.textContent).not.toMatch(/Playback (unconfirmed|confirmed)/)
+})
+
+test('duplicate and out-of-order events neither repeat text nor reorder the call', async () => {
+  const user = turn('u1', 'user', 'Question', { created_at: '2026-01-01T00:00:00Z', segment: 'c1' })
+  const first = turn('a1', 'assistant', 'One', { created_at: '2026-01-01T00:00:01Z', segment: 'c1' })
+  const second = turn('a2', 'assistant', 'two.', { created_at: '2026-01-01T00:00:02Z', segment: 'c1' })
+  const bubbles = await renderTurns([
+    second,
+    { ...first, is_final: false, text: 'On' },
+    user,
+    first,
+    first,
+    { ...second, is_final: false, text: 'tw' },
+  ])
+  expect(bubbles).toHaveLength(2)
+  expect(bubbles[0]).toContain('Question')
+  expect(bubbles[1]).toContain('One two.')
+  expect(bubbles[1]).not.toContain('One One')
+  expect(container.querySelector('[data-turn-id="u1"]')!.getAttribute('data-final')).toBe('true')
+})
+
+test('speaker changes, interruptions and reconnects break bubbles; interruption is labeled', async () => {
+  const bubbles = await renderTurns([
+    turn('a1', 'assistant', 'Hello', { created_at: '2026-01-01T00:00:01Z', segment: 'c1' }),
+    turn('a2', 'assistant', 'there and', {
+      created_at: '2026-01-01T00:00:02Z',
+      segment: 'c1',
+      delivery: 'interrupted',
+    }),
+    turn('a3', 'assistant', 'After interrupt', { created_at: '2026-01-01T00:00:03Z', segment: 'c1' }),
+    turn('u1', 'user', 'Hey', { created_at: '2026-01-01T00:00:04Z', segment: 'c1' }),
+    turn('u2', 'user', 'again', { created_at: '2026-01-01T00:00:05Z', segment: 'c2' }),
+    turn('a4', 'assistant', 'New call', { created_at: '2026-01-01T00:00:06Z', segment: 'c2' }),
+    turn('a5', 'assistant', 'continues', { created_at: '2026-01-01T00:00:07Z', segment: 'c3' }),
+  ])
+  expect(bubbles.map(text => text.replace(/^(You|Assistant)/, '$1|'))).toEqual([
+    expect.stringContaining('Hello there and'),
+    expect.stringContaining('After interrupt'),
+    expect.stringContaining('Hey'),
+    expect.stringContaining('again'),
+    expect.stringContaining('New call'),
+    expect.stringContaining('continues'),
+  ])
+  expect(bubbles[0]).toContain('Interrupted')
+  expect(bubbles[1]).not.toContain('Interrupted')
+})
+
 test('active page polling progressively replaces a draft without opening a transport', async () => {
   const draft = {
     turn_id: 'progressive',

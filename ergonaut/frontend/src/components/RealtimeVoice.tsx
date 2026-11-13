@@ -751,6 +751,62 @@ export function ActiveVoiceCall() {
   )
 }
 
+type TranscriptTurn = NonNullable<RealtimeVoiceSession['transcript']>[number]
+export type TranscriptGroup = {
+  id: string
+  role: TranscriptTurn['role']
+  text: string
+  is_final: boolean
+  interrupted: boolean
+  deliveries: string[]
+}
+
+/**
+ * One bubble per speaker run. Identity comes from the stream: turn_id (SDK message id, repeated
+ * events collapse, a final beats its partial), role, segment (bridge claim; a new one is a
+ * reconnect) and the interrupted flag. Never from timestamps, which only order the entries.
+ */
+export function groupTranscript(turns: TranscriptTurn[]): TranscriptGroup[] {
+  const byId = new Map<string, TranscriptTurn>()
+  for (const turn of turns) {
+    const prior = byId.get(turn.turn_id)
+    if (!prior || !prior.is_final) byId.set(turn.turn_id, turn)
+  }
+  const ordered = [...byId.values()]
+    .map((turn, index) => ({ turn, index, at: Date.parse(turn.created_at) }))
+    .sort((x, y) => (Number.isNaN(x.at) || Number.isNaN(y.at) || x.at === y.at ? x.index - y.index : x.at - y.at))
+  const groups: TranscriptGroup[] = []
+  let last: TranscriptTurn | null = null
+  for (const { turn } of ordered) {
+    const group = groups[groups.length - 1]
+    const text = turn.text.trim()
+    if (
+      group &&
+      last &&
+      last.role === turn.role &&
+      (last.segment ?? '') === (turn.segment ?? '') &&
+      last.delivery !== 'interrupted' &&
+      !group.interrupted
+    ) {
+      if (text) group.text = group.text ? `${group.text}${/^[\s.,;:!?)]/.test(text) ? '' : ' '}${text}` : text
+      group.is_final &&= turn.is_final
+      group.interrupted = turn.delivery === 'interrupted'
+      group.deliveries.push(turn.delivery)
+    } else {
+      groups.push({
+        id: turn.turn_id,
+        role: turn.role,
+        text,
+        is_final: turn.is_final,
+        interrupted: turn.delivery === 'interrupted',
+        deliveries: [turn.delivery],
+      })
+    }
+    last = turn
+  }
+  return groups
+}
+
 export function VoiceTranscript({ voice }: { voice: RealtimeVoiceSession | null }) {
   const scroller = useRef<HTMLDivElement>(null)
   const following = useRef(true)
@@ -762,17 +818,15 @@ export function VoiceTranscript({ voice }: { voice: RealtimeVoiceSession | null 
       .map(event => ({
         turn_id: event.event_id,
         event_id: event.event_id,
-        role: event.kind,
+        role: event.kind as 'user' | 'assistant',
         text: event.text,
         is_final: true,
         delivery: event.delivery,
         created_at: event.created_at,
       })) ??
     []
-  // Prefer the final version if a stale partial and its final ever share one response.
-  const merged = new Map<string, (typeof turns)[number]>()
-  for (const turn of turns) if (!merged.get(turn.turn_id)?.is_final) merged.set(turn.turn_id, turn)
-  const signature = [...merged.values()].map(turn => `${turn.turn_id}:${turn.text}:${turn.is_final}`).join('\u0000')
+  const groups = groupTranscript(turns)
+  const signature = groups.map(group => `${group.id}:${group.text}:${group.is_final}`).join('\u0000')
   useLayoutEffect(() => {
     if (following.current && scroller.current) scroller.current.scrollTop = scroller.current.scrollHeight
   }, [signature])
@@ -789,14 +843,14 @@ export function VoiceTranscript({ voice }: { voice: RealtimeVoiceSession | null 
           setLatest(following.current)
         }}
       >
-        {merged.size === 0 && (
+        {groups.length === 0 && (
           <p className="text-sm text-muted">Your conversation will appear here after you start the call.</p>
         )}
         <div className="mx-auto flex max-w-3xl flex-col gap-4" aria-live="off">
-          {[...merged.values()].map(turn => (
+          {groups.map(turn => (
             <article
-              key={turn.turn_id}
-              data-turn-id={turn.turn_id}
+              key={turn.id}
+              data-turn-id={turn.id}
               data-final={turn.is_final}
               className={`max-w-[92%] rounded-card border border-stroke px-4 py-3 motion-safe:transition-colors motion-safe:duration-150 ${turn.role === 'user' ? 'ml-auto bg-raised' : 'mr-auto bg-surface'}`}
             >
@@ -804,16 +858,8 @@ export function VoiceTranscript({ voice }: { voice: RealtimeVoiceSession | null 
                 {turn.role === 'user' ? 'You' : 'Assistant'}
                 {!turn.is_final && ' · live transcript'}
               </div>
-              <p className="whitespace-pre-wrap break-words text-sm leading-relaxed">{turn.text.trim()}</p>
-              {turn.role === 'assistant' && turn.is_final && (
-                <p className="mt-2 text-xs text-muted">
-                  {turn.delivery === 'interrupted'
-                    ? 'Interrupted'
-                    : turn.delivery === 'delivered'
-                      ? 'Playback confirmed; hearing not established'
-                      : 'Playback unconfirmed'}
-                </p>
-              )}
+              <p className="whitespace-pre-wrap break-words text-sm leading-relaxed">{turn.text}</p>
+              {turn.role === 'assistant' && turn.interrupted && <p className="mt-2 text-xs text-muted">Interrupted</p>}
             </article>
           ))}
         </div>
@@ -1191,6 +1237,15 @@ export function VoicePage() {
               · Assistant audio arriving: {audioArriving ? 'yes' : 'no'} · Provider:{' '}
               {standbyEnabled && voice?.standby_state === 'standby' ? 'closed' : 'unknown'}
             </p>
+            {voice?.transcript && (
+              <p className="mt-1">
+                Assistant delivery: {voice.transcript.filter(t => t.role === 'assistant' && t.is_final).length} turn
+                fragments; playback unconfirmed{' '}
+                {voice.transcript.filter(t => t.role === 'assistant' && t.is_final && t.delivery === 'unknown').length},
+                interrupted {voice.transcript.filter(t => t.delivery === 'interrupted').length}; hearing is never
+                established.
+              </p>
+            )}
             {runtime?.observed_at && (
               <p className="mt-1">
                 Observed{' '}

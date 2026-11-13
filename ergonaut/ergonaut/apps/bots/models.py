@@ -130,6 +130,8 @@ class RealtimeVoiceEvent(models.Model):
     received_at = models.DateTimeField(null=True, blank=True)
     processed_at = models.DateTimeField(null=True, blank=True)
     client_event_at = models.DateTimeField(null=True, blank=True)
+    # Bridge claim that recorded this turn; a new claim is a reconnect boundary in the transcript.
+    claim_id = models.CharField(max_length=32, blank=True, default="")
 
     class Meta:
         constraints = [models.UniqueConstraint(fields=["session", "event_id"], name="unique_realtime_voice_event")]

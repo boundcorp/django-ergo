@@ -288,6 +288,7 @@ def bridge_state(voice_id, *, include_briefing=True):
             "text": e.text,
             "is_final": True,
             "delivery": e.delivery,
+            "segment": e.claim_id,
             "created_at": e.created_at.astimezone(UTC).isoformat(),
         }
         for e in reversed(events)
@@ -295,7 +296,11 @@ def bridge_state(voice_id, *, include_briefing=True):
     ]
     if has_live_bridge:
         final_ids = {e.event_id for e in events}
-        transcript.extend(p for p in live.get("partials", []) if p["turn_id"] not in final_ids)
+        transcript.extend(
+            {**p, "segment": live.get("claim_id", "")}
+            for p in live.get("partials", [])
+            if p["turn_id"] not in final_ids
+        )
     transcript.sort(key=lambda turn: turn["created_at"])
     pending = state.get("pending_delegation")
     if pending and pending["status"] == "collecting":
@@ -471,6 +476,7 @@ def record_event(
             received_at=received_at,
             processed_at=timezone.now(),
             client_event_at=client_event_at,
+            claim_id=bridge_claim_id or "",
         )
         if turn_started_at is not None and kind in ("user", "user_transcript", "assistant"):
             # auto_now_add records final receipt by default. Preserve a published
