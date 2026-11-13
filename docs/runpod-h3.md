@@ -43,6 +43,14 @@ docker image inspect ergo-h3:sglang-2511743-kitchen-int8 --format '{{.Id}}'
 The local `.Id` is an image **configuration** digest, not a registry manifest
 digest. A provider pull requires a named registry manifest digest and a proven
 delivery route; a locally tagged image alone is not pullable.
+
+The validated image is anonymously readable at
+`registry.octo.boundcorp.net/ergo-h3-experiment/h3-runtime@sha256:7b08f5d6b56988afeab528c9524ded9052a6739df0899768294134afe1453f8b`.
+Its manifest config digest is
+`sha256:74ae80e663556a495683e8fdae6cec1981e4d48b5e237902dc4880f28b2c2f5c`.
+Registry manifest access was verified anonymously; this is not a Runpod pull or
+GPU execution test. The image remains subject to the launch prerequisites below.
+
 Long source builds compile native Rust extensions; use an isolated bounded
 builder and preserve verbose logs/cache rather than repeatedly cancelling short
 attempts. CPU validation used2CPU/6GiB RAM, disk reserve/growth monitoring and
