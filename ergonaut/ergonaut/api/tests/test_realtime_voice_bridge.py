@@ -1413,9 +1413,9 @@ def test_unlimited_policy_accepts_five_fresh_speech_requests_before_results(cook
 
 
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.parametrize("expires", [False, True])
+@pytest.mark.parametrize("case", ["success", "expires", "resolve_error"])
 def test_unlimited_collection_handles_late_transcripts_without_replaying_expired_speech(
-    cooking, settings, held_messages, expires
+    cooking, settings, held_messages, case
 ):
     from ergonaut.realtime_voice_execution import initial_state
 
@@ -1445,14 +1445,22 @@ def test_unlimited_collection_handles_late_transcripts_without_replaying_expired
             await bind(assistant, sdk)
             assistant.on_user_state(SimpleNamespace(new_state="speaking"))
             assistant.on_user_state(SimpleNamespace(new_state="listening"))
-            with patch.object(bridge, "PENDING_TIMEOUT_SECONDS", 0.05 if expires else 5):
+            with (
+                patch.object(bridge, "PENDING_TIMEOUT_SECONDS", 0.05 if case == "expires" else 5),
+                patch.object(
+                    bridge,
+                    "resolve_pending",
+                    wraps=bridge.resolve_pending,
+                    side_effect=ValueError("expired") if case == "resolve_error" else None,
+                ),
+            ):
                 sdk._handle_event(
                     {
                         "type": "session.delegation.created",
                         "delegation": {"id": "late", "target": "client"},
                     }
                 )
-                if expires:
+                if case == "expires":
                     await settle(assistant)
                     assert assistant.input_tainted
                     assistant.on_user_state(SimpleNamespace(new_state="speaking"))
@@ -1468,16 +1476,21 @@ def test_unlimited_collection_handles_late_transcripts_without_replaying_expired
                     }
                 )
                 sdk._end_speech("user")
-                if expires:
+                await settle(assistant)
+                if case == "resolve_error":
+                    assert assistant.input_tainted
+                    assistant.on_user_state(SimpleNamespace(new_state="speaking"))
+                    assistant.on_user_state(SimpleNamespace(new_state="listening"))
+                if case != "success":
                     sdk._handle_event(
                         {
                             "type": "session.delegation.created",
                             "delegation": {"id": "late-replay", "target": "client"},
                         }
                     )
-                await settle(assistant)
-            assert len(held_messages) == (0 if expires else 1)
-            if expires:
+                    await settle(assistant)
+            assert len(held_messages) == (1 if case == "success" else 0)
+            if case != "success":
                 assert any("transcription did not finish" in e.get("content", "") for e in drain(sdk))
 
     async_to_sync(scenario)()

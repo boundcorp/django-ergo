@@ -271,6 +271,16 @@ class Assistant(Agent):
         for job in tuple(self.jobs):
             job.cancel()
 
+    def fence_unresolved_input(self):
+        # Unknown late transcript IDs cannot be separated from the next utterance.
+        if self.capacity["limit"] is None:
+            self.input_tainted = True
+        self.delegated_speech_generation = self.speech_generation
+        self.consumed_fragments.update(self.fragments)
+        self.fragments.clear()
+        self.final_fragments.clear()
+        self.fragments_overflow = False
+
     def spawn(self, coroutine, *, delegation_id=None):
         if self.closing:
             coroutine.close()
@@ -289,6 +299,8 @@ class Assistant(Agent):
                 return
             notice = "A voice bridge action could not be confirmed. Check the durable background status."
             try:
+                if self.pending_id == delegation_id:
+                    self.fence_unresolved_input()
                 if delegation_id is not None:
                     await sync_to_async(close_pending, thread_sensitive=True)(self.voice_id, delegation_id, "failed")
                     if self.pending_id == delegation_id:
@@ -655,6 +667,7 @@ class Assistant(Agent):
     async def assemble_request(self, event_id, fragments):
         accepted = await sync_to_async(begin_pending, thread_sensitive=True)(self.voice_id, event_id, fragments)
         if not accepted:
+            self.fence_unresolved_input()
             self.pending_id = None
             snapshot = await sync_to_async(bridge_state, thread_sensitive=True)(self.voice_id, include_briefing=False)
             self.capacity = dict(snapshot["request_budget"])
@@ -670,15 +683,7 @@ class Assistant(Agent):
             self.changed.clear()
             now = time.monotonic()
             if now >= deadline:
-                if self.capacity["limit"] is None:
-                    # Unknown late transcript IDs cannot be separated from the next utterance.
-                    # Keep this provider input epoch fail-closed until it is replaced.
-                    self.input_tainted = True
-                self.delegated_speech_generation = self.speech_generation
-                self.consumed_fragments.update(self.fragments)
-                self.fragments.clear()
-                self.final_fragments.clear()
-                self.fragments_overflow = False
+                self.fence_unresolved_input()
                 await sync_to_async(close_pending, thread_sensitive=True)(self.voice_id, event_id, "expired")
                 self.pending_id = None
                 self.duplex_session.append_commentary(REQUEST_NOT_SUBMITTED, delegation_id=event_id)

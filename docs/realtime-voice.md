@@ -258,8 +258,8 @@ removal rather than being silently downgraded.
 
 An incomplete speech collection is a transport failure, not a spent allowance.
 On that provider connection the bridge refuses further delegation after collection
-expiry: a late uncorrelated transcript cannot safely be distinguished from new
-speech. Continue in the owning text thread, or reconnect through standby when
+expiry or unconfirmed admission/submission: a late uncorrelated transcript cannot
+safely be distinguished from new speech. Continue in the owning text thread, or reconnect through standby when
 available; a new input connection retains the original logical-call deadline.
 
 An authorized model-selected client delegation enters the **existing exact
