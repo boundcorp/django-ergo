@@ -9,6 +9,7 @@ from unittest.mock import Mock
 import pytest
 
 from django_ergo.plugins.runpod.ssh import SSH_BOOTSTRAP
+from django_ergo.plugins.runpod.ssh import create_access
 from django_ergo.plugins.runpod.ssh import public_key
 from django_ergo.plugins.runpod.transport import Ownership
 from django_ergo.plugins.runpod.transport import OwnershipError
@@ -140,6 +141,12 @@ def test_foreign_pod_never_reads_logs():
             "pod123", OWNER, deadline=time.time() + 30
         )
     assert len(http.requests) == 1
+
+
+@pytest.mark.parametrize("names", [None, [], [""], [1], "A100-SXM4-80GB"])
+def test_bootstrap_requires_explicit_nvml_names(names):
+    with pytest.raises(ValueError, match="Explicit verified NVML"):
+        create_access(KEY, "NVIDIA A100-SXM4-80GB", names)
 
 
 def test_expired_bootstrap_never_installs_packages(monkeypatch):

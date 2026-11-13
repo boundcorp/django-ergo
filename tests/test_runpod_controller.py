@@ -29,6 +29,7 @@ def config():
         "account": "fixture-account",
         "image": "fixture/h3@sha256:" + "1" * 64,
         "gpu_type": "NVIDIA A100-SXM4-80GB",
+        "gpu_nvml_names": ["A100-SXM4-80GB", "NVIDIA A100-SXM4-80GB"],
         "data_center_ids": ["EU-RO-1"],
         "idle_grace": 10,
         "eligibility": {

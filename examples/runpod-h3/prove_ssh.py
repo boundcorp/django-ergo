@@ -40,7 +40,7 @@ def run(*args, payload=None, timeout=120):
 def fixture_tar():
     files = {
         "hf": "#!/bin/sh\necho 'CPU proof fixture: no checkpoint download'\nexit 0\n",
-        "nvidia-smi": "#!/bin/sh\necho 'NVIDIA RTX 6000 Ada Generation, 580.65.06, 49140'\n",
+        "nvidia-smi": "#!/bin/sh\necho 'A100-SXM4-80GB, 580.65.06, 81920'\n",
         "sglang": """#!/opt/venv/bin/python
 from http.server import BaseHTTPRequestHandler, HTTPServer
 class Handler(BaseHTTPRequestHandler):
@@ -106,7 +106,9 @@ def main():  # noqa: C901, PLR0912, PLR0915 -- ordered disposable transport proo
                 "ERGO_SSH_PUBLIC_KEY="
                 + public_key(key.with_suffix(".pub").read_text().strip()),
                 "--env",
-                "ERGO_GPU_TYPE=NVIDIA RTX 6000 Ada Generation",
+                "ERGO_GPU_TYPE=NVIDIA A100-SXM4-80GB",
+                "--env",
+                'ERGO_NVML_NAMES=["A100-SXM4-80GB","NVIDIA A100-SXM4-80GB"]',
                 "--env",
                 "PATH=/tmp/ergo-ssh-proof:" + original_path,
                 "--entrypoint",

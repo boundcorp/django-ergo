@@ -1307,7 +1307,8 @@ $3 total and ≤1h absolute deadline; no replacement or uncertain-create replay.
 The first reviewed adapter is the frozen six-shot H3 comparison, not chapter
 execution or arbitrary commands. See [native installation](runpod.md) and
 [image/runtime preparation](runpod-h3.md). Bot YAML alone never enables spending.
-The host profile requires an explicit quoted `gpu_type`; it is not bot-editable.
+The host profile requires explicit `gpu_type` and verified `gpu_nvml_names`;
+neither is bot-editable. Provider catalog IDs and NVML names are separate.
 Admission retains the single-GPU, minimum167GB hostRAM and plannedUSD3/one-hour
 limits regardless of the selected supported NVIDIA hardware.
 
