@@ -23,7 +23,10 @@ arbitrary commands, caller-selected images, or caller-selected paths.
 - Start commits reservation, job and Worker before publishing its first task.
   Same request key/specification returns the existing job. A different chat or
   changed specification conflicts. No unknown create or H3 submission is
-  replayed, and there is no automatic replacement/retry rental.
+  replayed, and there is no automatic replacement/retry rental. Within one
+  admission the Worker may try several *offers* (GPU type and data center) when
+  the provider refuses a create for lack of capacity; see
+  [launch-time offer selection](#launch-time-offer-selection-and-stock-fallback).
 - The installation defaults to **one real or unresolved lifetime rental**, one
   unresolved rental, a planned USD 3 total and at most 3,600 seconds from
   pre-create reservation. Cleanup-complete attempts that never sent a create
@@ -78,7 +81,7 @@ remains due. Bot-folder schedules and `serve()` are not cleanup supervision.
 
 Set `RUNPOD_ACCOUNTS` in the host's private settings. Bot YAML cannot override
 these credentials, principals, caps, inputs, endpoint or image. This example is
-**disabled**, with intentionally stale price evidence; it is not live admission:
+**disabled**; it is not live admission:
 
 ```python
 RUNPOD_ACCOUNTS = {
@@ -91,24 +94,42 @@ RUNPOD_ACCOUNTS = {
         "ledger_root": "/var/lib/ergonaut/runpod",
         "max_concurrent": 1,
         "max_rentals": 1,
-        "budget_usd": "3.00",
+        "budget_usd": "3.00",  # project cap across rentals
+        "max_rental_usd": "3.00",  # per-rental planned ceiling (default 3.00)
         "prior_committed_usd": "0.00",
         "reconciled_costs": {},  # operator-reviewed terminal costs; never bot-editable
+        "gpu_catalog": {},  # optional additions/overrides to the built-in GPU catalog
         "profiles": {
             "h3_frozen": {
                 "adapter": "frozen_h3",
                 "parts": ["/approved/test-ready.zip.part001", "/approved/test-ready.zip.part002"],
                 "base_url": "http://127.0.0.1:30010",
                 "max_output_bytes": 2_000_000_000,
-                "quote_observed_at": 0,  # replace with genuinely fresh evidence
                 "config": {
                     "mode": "live",
                     "live_execute": True,
                     "account": "provider-consumer-user-id",
                     "image": "registry.octo.boundcorp.net/ergo-h3-experiment/h3-runtime@sha256:7b08f5d6b56988afeab528c9524ded9052a6739df0899768294134afe1453f8b",
-                    "gpu_type": "NVIDIA A100-SXM4-80GB",  # bind the genuinely quoted GPU
-                    "gpu_nvml_names": ["A100-SXM4-80GB", "NVIDIA A100-SXM4-80GB"],
-                    "data_center_ids": ["EU-RO-1"],  # verify permitted actual capacity
+                    "hardware": {
+                        # Ordered preference; the first in-stock one inside the envelope wins.
+                        "gpus": ["NVIDIA A100-SXM4-80GB", "NVIDIA H100 80GB HBM3"],
+                        "any_gpu": False,  # True: then any other catalog GPU that fits, cheapest first
+                        "gpu_count": 1,
+                        "min_vram_gb": 48,
+                        "min_ram_per_gpu_gb": 167,
+                        "min_vcpu_per_gpu": 10,
+                        "min_cuda_version": "13.0",  # stock query filter
+                        "min_driver_major": 580,  # checked in the Pod before download
+                        "compute_capabilities": ["8.0", "9.0"],  # what the image's CUDA build runs on
+                        "cloud_type": "SECURE",
+                        "countries": [],  # e.g. ["US", "CA"]; empty = any country
+                        "data_centers": "any",  # or an allowlist such as ["US-KS-2", "EU-RO-1"]
+                        "exclude_data_centers": [],
+                        "container_disk_gb": 200,
+                        "stock_poll_seconds": 60,
+                        "stock_wait_seconds": 1800,
+                        "max_create_attempts": 10,
+                    },
                     "idle_grace": 120,
                     "eligibility": {"model": True, "hardware": True, "license": "delegated", "inputs": True, "budget": True},
                     "timeline": {
@@ -118,7 +139,8 @@ RUNPOD_ACCOUNTS = {
                         "termination_seconds": 120,
                     },
                     "pricing": {
-                        "compute_hourly_usd": {"amount": "0.99", "verified": True},
+                        # Hourly ceiling for the whole Pod; live offers above it are skipped.
+                        "compute_hourly_usd": {"amount": "1.99", "verified": True},
                         "storage_usd": {"amount": "0.03", "verified": True},
                         "network_usd": {"amount": "0", "verified": True},
                         "fees_usd": {"amount": "0.25", "verified": True},
@@ -133,8 +155,8 @@ RUNPOD_ACCOUNTS = {
 
 Ergonaut can instead set `RUNPOD_ACCOUNTS_FILE` to an operator-owned JSON file
 containing the same account mapping. The native plugin rereads it on every
-operation, so genuinely fresh quote evidence can be atomically replaced just
-before admission without restarting every role. The file takes precedence over
+operation, so GPU, region, cap and catalog edits apply to the next start
+without restarting any role. The file takes precedence over
 `RUNPOD_ACCOUNTS`: missing, malformed or non-mapping data never falls back to an
 older enabled policy. Revocation stops existing work, but independent cleanup
 continues from persisted account keys and each job's credential binding.
@@ -159,22 +181,103 @@ job UUID, with `amount_usd`, `basis: "conservative_elapsed_rate"`, a nonempty
 Only cleanup-complete, terminal ledgers can use that conservative reviewed
 commitment; active/unknown rentals remain fully reserved. This is not an invoice,
 automatic refund or new rental approval.
-Native preparation pins the operator's explicit `gpu_type`,
-one GPU, at least167GB RAM and10vCPU,200GB container disk, zero optional volume
-and no network volume; it reuses the existing reviewed create request. Before
-model download the SSH bootstrap verifies the observed GPU against the host's
-explicitly verified `gpu_nvml_names`, at least48GB VRAM and a CUDA13-capable
-driver. Provider catalog IDs are not NVML product names; no blind prefix removal
-or fuzzy matching is used. Both identities are bound into the create fingerprint.
-The preserved runtime includes
-Ampere SM80 code, so A10080GB is an alternative, not a model substitution or
-evidence of conditioned fit. A generic GPU catalog's smaller minimum RAM is not
-evidence the requested profile is available. The observed `costPerHr` must be present and
-not exceed the approved quote before model work. Storage/ancillary evidence is
-still independently required. Failed provider termination can exceed estimates;
-no impossible zero-overrun guarantee is imposed as an admission gate.
+Each create request binds the chosen offer's GPU type and single data center,
+plus `config.hardware`'s cloud type, GPU count, host RAM/vCPU minimums and
+container disk, zero optional volume and no network volume. Before model
+download the SSH bootstrap checks the observed GPUs (`nvidia-smi` name, driver,
+memory and compute capability) against rules bound into the create
+fingerprint: GPU count, `min_driver_major`, `min_vram_gb` (NVML reports slightly
+less than the marketed size, so 48 GB accepts 45000 MiB), and either a verified
+NVML display name from the GPU catalog or, as the generic fallback, one of the
+profile's `compute_capabilities`. A new display string therefore never needs a
+code change. The observed `costPerHr` must be present and not exceed the
+profile's hourly ceiling before model work. Storage/ancillary evidence is still
+independently required. Failed provider termination can exceed estimates; no
+impossible zero-overrun guarantee is imposed as an admission gate.
 
-**Before enabling:** verify the actual account/quote/datacenter, approved inputs,
+## Launch-time offer selection and stock fallback
+
+Admission prices the reservation at the profile's hourly ceiling
+(`pricing.compute_hourly_usd`) and checks it against `max_rental_usd` and
+`budget_usd`. It does not pick hardware. When the Worker launches it:
+
+1. Reads live Pod stock from the v2 catalog
+   (`GET https://api.runpod.io/v2/catalog/gpus?include=AVAILABILITY&product=POD`,
+   scoped by `cloud_type`, `gpu_count`, `countries` and `min_cuda_version`).
+2. Keeps GPU types in `gpus` (or any catalog GPU with `any_gpu`) whose catalog
+   compute capability is in `compute_capabilities`, whose VRAM meets
+   `min_vram_gb`, and whose price × `gpu_count` is within the hourly ceiling;
+   then every data center with stock that `data_centers` allows and
+   `exclude_data_centers` does not exclude.
+3. Orders offers by `gpus` preference, then price, then stock level, and
+   creates on the first one. No further human approval is needed: every offer is
+   inside the envelope the start approval covered. The chosen GPU, data center,
+   $/h and quote time are recorded in the rental ledger.
+4. If the provider answers the create with an explicit no-capacity refusal
+   (`no_capacity_messages` in policy can replace the built-in phrases), the
+   Worker lists inventory. When nothing carries the attempt's marker the
+   attempt is released (`create_started` back to 0), the refused request stays
+   in cleanup's ownership scan (every maintenance tick terminates a Pod it
+   materializes late, even while the job runs), and the next offer is tried at
+   once. A refused
+   create is not a rental: it costs $0, does not use `max_rentals`, and needs no
+   ledger repair. A timeout, any other error, an inventory failure or a Pod
+   carrying the marker leaves the create uncertain; it is reconciled and never
+   retried on another offer.
+5. With nothing eligible, the job stays queued and re-reads stock every
+   `stock_poll_seconds`. The rental clock is restarted at each poll and at
+   create, so waiting never uses the rental interval. After
+   `stock_wait_seconds` (or `max_create_attempts` refusals) it stops with
+   outcome `no_stock`, listing what it saw; cleanup confirms nothing exists.
+
+A queued job holds its concurrency/rental slot and reservation until it creates
+or stops, so two waiting jobs can never both create past `max_concurrent`.
+Admission snapshots the profile and the merged GPU catalog: a policy edit
+applies to the next start, not to a job that is already queued (terminate it and
+start again with a new `request_key`).
+
+### Change GPUs, regions and caps without a deploy
+
+Edit the account in `RUNPOD_ACCOUNTS_FILE`; nothing else restarts.
+
+| To change | Edit |
+| --- | --- |
+| Preferred GPUs and their order | `profiles.<id>.config.hardware.gpus` (`any_gpu` to accept others) |
+| Allowed regions | `hardware.countries`, `hardware.data_centers`, `hardware.exclude_data_centers` |
+| Maximum $/h for the Pod | `profiles.<id>.config.pricing.compute_hourly_usd.amount` |
+| Per-rental planned USD ceiling | account `max_rental_usd` (default 3.00) |
+| Project USD cap | account `budget_usd` |
+| What the image runs on | `hardware.compute_capabilities`, `min_vram_gb`, `min_driver_major`, `min_cuda_version` |
+| Host shape | `hardware.min_ram_per_gpu_gb`, `min_vcpu_per_gpu`, `gpu_count`, `cloud_type`, `container_disk_gb` |
+| How long to wait for stock | `hardware.stock_poll_seconds`, `stock_wait_seconds`, `max_create_attempts` |
+| A GPU the catalog does not know | account `gpu_catalog` |
+
+The built-in catalog (`hardware.DEFAULT_GPU_CATALOG`) maps RunPod catalog IDs
+to NVML display names, compute capability and VRAM for A100 80GB (SXM4/PCIe),
+H100 (SXM/PCIe/NVL), H200, B200, L40S, L40, RTX 6000 Ada, RTX A6000, A40 and
+RTX PRO 6000 Blackwell (Server/Workstation). Only the A100 SXM4 names were
+observed on a live rental; the others follow NVIDIA's product names, and the
+compute-capability fallback covers a different string. When a profile leaves
+`compute_capabilities` empty, the chosen GPU's catalog capability is that
+fallback. Add or override an entry
+(or set it to `null` to remove one) without code:
+
+```json
+"gpu_catalog": {
+  "NVIDIA GeForce RTX 5090": {
+    "nvml_names": ["NVIDIA GeForce RTX 5090"],
+    "compute_capability": "12.0",
+    "vram_gb": 32
+  }
+}
+```
+
+A GPU type missing from the catalog is never offered: its compute capability,
+and so the image's support for it, is unknown. `ergo_runpod_stock(profile)`
+shows what would launch right now and why every other listed GPU or data center
+is skipped.
+
+**Before enabling:** verify the actual account, hourly ceiling, allowed regions, approved inputs,
 filesystem locking/durability, credential injection, independently consumed
 maintenance queue and authenticated model access. The preserved published H3
 image listens only on loopback and does not run sshd. The reviewed
@@ -192,7 +295,7 @@ Provider log SSE reads have a total request budget (including partial/trickling
 lines), not only an idle timeout. A fingerprint-bound launcher failure marker
 fails the Worker promptly instead of waiting for the startup deadline. See
 [authenticated access and CPU proof](runpod-h3.md#authenticated-access-without-rebuilding-the-preserved-image).
-Keep policy disabled until the access path and exact quoted hardware are
+Keep policy disabled until the access path and the hardware envelope are
 verified. Model readiness waits only within the original startup/download
 deadline; work stops at rental deadline minus 120 seconds.
 
@@ -216,8 +319,9 @@ server policy; `local_shell.approve: false` grants no rental permission.
 | Tool | Behavior |
 | --- | --- |
 | `ergo_runpod_profiles()` | List configured approved profiles without provider access; missing host installation is explicit. |
+| `ergo_runpod_stock(profile)` | Read live stock for the profile's envelope: the offer that would launch now, eligible offers best-first, and why other GPUs/data centers are skipped. Read-only. |
 | `ergo_runpod_start(profile, request_key)` | Reserve one immutable frozen workload and create its actual native Worker; returns job/Worker IDs, not GPU readiness. |
-| `ergo_runpod_status(job_id)` | Read this bot/principal/chat's durable outcome, rental phase, cleanup error, original deadline, manifest and planned reservation. |
+| `ergo_runpod_status(job_id)` | Read this bot/principal/chat's durable outcome, rental phase, cleanup error, deadline, manifest and planned reservation, plus the chosen `offer`, every `offer_attempts` entry (`created`, `uncertain`, `no_capacity`, `not_sent`) and the last `stock` poll with what was seen. |
 | `ergo_runpod_collect(job_id)` | Idempotently publish already off-Pod files as attachments; partial/cancelled manifests keep all six original positions. Never regenerate or rent. |
 | `ergo_runpod_terminate(job_id)` | Persist stop before cancelling the watcher and attempting bounded cleanup; no second spend approval is required. Pending cleanup is not reported as terminated. |
 

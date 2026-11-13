@@ -28,9 +28,16 @@ def config():
         "live_execute": False,
         "account": "fixture-account",
         "image": "fixture/h3@sha256:" + "1" * 64,
-        "gpu_type": "NVIDIA A100-SXM4-80GB",
-        "gpu_nvml_names": ["A100-SXM4-80GB", "NVIDIA A100-SXM4-80GB"],
-        "data_center_ids": ["EU-RO-1"],
+        "hardware": {
+            "gpus": ["NVIDIA A100-SXM4-80GB", "NVIDIA H100 80GB HBM3"],
+            "min_vram_gb": 48,
+            "min_ram_per_gpu_gb": 167,
+            "min_vcpu_per_gpu": 10,
+            "min_driver_major": 580,
+            "compute_capabilities": ["8.0", "9.0"],
+            "stock_poll_seconds": 30,
+            "stock_wait_seconds": 120,
+        },
         "idle_grace": 10,
         "eligibility": {
             "model": True,
@@ -57,6 +64,13 @@ def config():
             "project_committed_usd": "0",
         },
     }
+
+
+OFFER = {
+    "gpu_type": "NVIDIA A100-SXM4-80GB",
+    "data_center_id": "EU-RO-1",
+    "hourly_usd": "1.20",
+}
 
 
 class FixtureHTTP:
@@ -96,7 +110,7 @@ def submit(path, opener):
 
 def test_profile_and_one_committed_post(tmp_path, config):
     path = tmp_path / "ledger"
-    state = prepare(path, config, now=100)
+    state = prepare(path, config, now=100, offer=OFFER)
     assert json.loads(state["evidence"])["eligibility"]["license"] == "delegated"
     fake = FixtureHTTP(path, {"id": "pod123"})
     result = submit(path, fake)
@@ -122,7 +136,7 @@ def test_profile_and_one_committed_post(tmp_path, config):
 @pytest.mark.parametrize("response", [TimeoutError(), {"id": "bad-id"}, {}])
 def test_failed_receipt_never_replays(tmp_path, config, response):
     path = tmp_path / "ledger"
-    prepare(path, config, now=100)
+    prepare(path, config, now=100, offer=OFFER)
     fake = FixtureHTTP(path, response)
     state = submit(path, fake)
     assert state["phase"] == "create_unknown"
@@ -134,7 +148,7 @@ def test_failed_receipt_never_replays(tmp_path, config, response):
 
 def test_late_receipt_survives_expiry(tmp_path, config):
     path = tmp_path / "ledger"
-    prepare(path, config, now=100)
+    prepare(path, config, now=100, offer=OFFER)
 
     def late():
         Experiment(path).begin_create(now=3700)  # expires existing intent
@@ -153,10 +167,10 @@ def test_live_gate_never_posts_or_reserves(tmp_path, config):
     path = tmp_path / "ledger"
     config["live_execute"] = True
     with pytest.raises(ValueError, match="offline"):
-        prepare(path, config, now=100)
+        prepare(path, config, now=100, offer=OFFER)
     assert not path.exists()
     config["live_execute"] = False
-    prepare(path, config, now=100)
+    prepare(path, config, now=100, offer=OFFER)
     fake = FixtureHTTP(path, {"id": "pod123"})
     with pytest.raises(ValueError, match="mode differs"):
         create_once(path, now=101, opener=fake, mode="live", live_execute=True)
@@ -166,7 +180,7 @@ def test_live_gate_never_posts_or_reserves(tmp_path, config):
 
 def test_offline_fixture_requires_cleaner(tmp_path, config):
     path = tmp_path / "ledger"
-    prepare(path, config, now=100)
+    prepare(path, config, now=100, offer=OFFER)
     fake = FixtureHTTP(path, {"id": "pod123"})
     with pytest.raises(ValueError, match="independent cleaner not configured"):
         create_once(
@@ -186,7 +200,7 @@ def test_live_requires_fresh_executing_independent_cleaner(
     path = tmp_path / "ledger"
     config["mode"] = "live"
     config["live_execute"] = True
-    prepare(path, config, now=100)
+    prepare(path, config, now=100, offer=OFFER)
     CleanerSupervision(path).configure()
     fake = FixtureHTTP(path, TimeoutError())
     monkeypatch.setenv("FIXTURE_TOKEN", "fixture")

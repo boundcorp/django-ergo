@@ -19,6 +19,7 @@ import time
 from decimal import Decimal
 from pathlib import Path
 
+from . import hardware
 from .budget import Evidence
 from .budget import RentalTimeline
 from .cleanup import RESTCleanup
@@ -26,8 +27,6 @@ from .experiment import Experiment
 from .supervisor import CleanerSupervision
 from .transport import FixtureRunpodREST
 from .transport import RunpodREST
-
-DISK_GB = 200
 
 
 def rental_budget(config):
@@ -46,11 +45,34 @@ def rental_budget(config):
         "fees_usd": evidence("fees_usd"),
         "project_cap_usd": Decimal(pricing["project_cap_usd"]),
         "project_committed_usd": Decimal(pricing["project_committed_usd"]),
+        "rental_cap_usd": Decimal(
+            pricing.get("rental_cap_usd", hardware.DEFAULT_RENTAL_CAP_USD)
+        ),
     }
 
 
-def prepare(path, config, *, now):
-    """Reserve and bind one immutable H3 request before any POST."""
+def bind_offer(path, config, offer):
+    """Bind one live offer (GPU type, data center, hourly rate) as the create request."""
+    hw = hardware.requirements(config)
+    gpus = config.get("gpu_catalog") or hardware.catalog()
+    return RESTCleanup(path).configure_create(
+        account=config["account"],
+        image=config["image"],
+        gpu_type=offer["gpu_type"],
+        data_center_ids=[offer["data_center_id"]],
+        hardware=hw,
+        quoted_hourly_usd=offer["hourly_usd"],
+        ssh_public_key=config.get("ssh_public_key"),
+        gpu_identity=hardware.identity(offer["gpu_type"], hw, gpus),
+    )
+
+
+def prepare(path, config, *, now, offer=None):
+    """Reserve one immutable intent before any POST.
+
+    The create request is bound now only for an explicit operator ``offer``;
+    native Workers bind the best live offer at launch time instead.
+    """
     if config.get("mode") not in ("offline-fixture", "live"):
         msg = "explicit offline-fixture or live mode required"
         raise ValueError(msg)
@@ -60,6 +82,7 @@ def prepare(path, config, *, now):
     if config["mode"] == "offline-fixture" and config["live_execute"]:
         msg = "offline fixture cannot enable live execution"
         raise ValueError(msg)
+    hardware.requirements(config)
     experiment = Experiment(path)
     experiment.reserve(
         now=now,
@@ -67,16 +90,9 @@ def prepare(path, config, *, now):
         eligibility=config["eligibility"],
         **rental_budget(config),
     )
-    RESTCleanup(path).configure_create(
-        account=config["account"],
-        image=config["image"],
-        container_disk_gb=DISK_GB,
-        gpu_type=config["gpu_type"],
-        data_center_ids=config["data_center_ids"],
-        quoted_hourly_usd=config["pricing"]["compute_hourly_usd"]["amount"],
-        ssh_public_key=config.get("ssh_public_key"),
-        gpu_nvml_names=config["gpu_nvml_names"],
-    )
+    RESTCleanup(path)
+    if offer is not None:
+        bind_offer(path, config, offer)
     with experiment._tx() as db:
         db.execute(
             "CREATE TABLE h3_create_mode (mode TEXT NOT NULL, live_execute INTEGER NOT NULL)"
@@ -154,7 +170,9 @@ def main(argv=None):
     args = parser.parse_args(argv)
     config = json.loads(Path(args.config).read_text())
     if args.action == "prepare":
-        state = prepare(args.database, config, now=time.time())
+        if not isinstance(config.get("offer"), dict):
+            parser.error("prepare requires an explicit operator offer in the config")
+        state = prepare(args.database, config, now=time.time(), offer=config["offer"])
     else:
         mode = config.get("mode")
         if mode == "live" and (

@@ -44,6 +44,7 @@ def make_ledger(path, *, begin_create=True):
         fees_usd=Evidence(Decimal("0.1"), True),
         project_cap_usd=Decimal("3"),
         project_committed_usd=Decimal("0"),
+        rental_cap_usd=Decimal("3"),
     )
     owner = Ownership(
         "account", state["marker"], "fingerprint", "image@sha256:123", 120

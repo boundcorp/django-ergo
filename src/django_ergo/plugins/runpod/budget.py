@@ -10,7 +10,6 @@ from dataclasses import dataclass
 from decimal import Decimal
 from fractions import Fraction
 
-HARD_AUTHORIZATION_USD = Decimal("3.00")
 MAX_RENTAL_SECONDS = 3600
 
 
@@ -76,8 +75,12 @@ def admit_rental(  # noqa: PLR0911, PLR0913
     fees_usd: Evidence,
     project_cap_usd: Decimal,
     project_committed_usd: Decimal,
+    rental_cap_usd: Decimal,
 ) -> Admission:
-    """Evaluate a single intended rental estimate against $3 and the project cap.
+    """Evaluate a single intended rental estimate against both policy caps.
+
+    rental_cap_usd is the host policy's per-rental hard authorization
+    (``max_rental_usd``, default USD 3.00); project_cap_usd is ``budget_usd``.
 
     The verified compute quote applies to the entire authorized rental interval;
     storage, network, and fees are separately evidenced estimated allowances for
@@ -113,7 +116,11 @@ def admit_rental(  # noqa: PLR0911, PLR0913
         for value in (compute_hourly_usd, storage_usd, network_usd, fees_usd)
     ):
         return Admission(allowed=False, reason="missing or unverified pricing")
-    if not _amount(project_cap_usd) or not _amount(project_committed_usd):
+    if (
+        not _amount(project_cap_usd)
+        or not _amount(project_committed_usd)
+        or not _amount(rental_cap_usd)
+    ):
         return Admission(allowed=False, reason="invalid project budget")
 
     total = (
@@ -125,7 +132,7 @@ def admit_rental(  # noqa: PLR0911, PLR0913
     cents = (total.numerator * 100 + total.denominator - 1) // total.denominator
     # Construct directly, avoiding the caller's Decimal precision and rounding.
     reservation = Decimal((0, tuple(map(int, str(cents))), -2))
-    if reservation > HARD_AUTHORIZATION_USD:
+    if reservation > rental_cap_usd:
         return Admission(
             allowed=False,
             reason="hard authorization exceeded",
