@@ -1,9 +1,9 @@
-"""Offline-only singleton rental ledger and independently invocable fake cleanup.
+"""Singleton rental ledger and independently invocable fake cleanup.
 
-This is an experiment simulator, not a provider adapter or authorization boundary.
 The fake provider and ledger share one local SQLite file so fake operations are
-atomic; those semantics must not be assumed of a real provider. No real starts
-are implemented. An external scheduler must invoke the CLI independently.
+atomic; those semantics must not be assumed of a real provider. The separate
+REST controller uses this ledger but is not an authorization boundary. An
+external scheduler must invoke cleanup independently.
 """
 
 from __future__ import annotations
@@ -126,9 +126,9 @@ class Experiment:
     def reserve(self, *, now, idle_grace, eligibility, **budget):
         """Persist authorization and start the immutable rental clock before create.
 
-        Eligibility is explicit fake-only evidence; it does not authorize a live
-        model, license, hardware, account, or spending. Budget is the exact
-        admit_rental argument set, with all-in evidence and existing commitments.
+        Eligibility records operator-supplied facts, not independent
+        authorization. A license review can be recorded as delegated rather
+        than falsely marked complete. Budget is the admit_rental argument set.
         """
         self._time(now)
         if (
@@ -143,7 +143,11 @@ class Experiment:
         if (
             not isinstance(eligibility, dict)
             or set(eligibility) != required
-            or any(value is not True for value in eligibility.values())
+            or any(eligibility[key] is not True for key in required - {"license"})
+            or (
+                eligibility["license"] is not True
+                and eligibility["license"] != "delegated"
+            )
         ):
             msg = "missing or unverified eligibility"
             raise ValueError(msg)

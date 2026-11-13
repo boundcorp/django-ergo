@@ -173,6 +173,13 @@ class RunpodREST:
             raise ProviderError(msg)
         return _safe_pod(result)
 
+    def create_pod(self, body):
+        result = self._request("POST", "/pods", body=body)
+        if not isinstance(result, dict):
+            msg = "invalid provider create response"
+            raise ProviderError(msg)
+        return _safe_pod(result)
+
     def terminate_owned(self, pod_id, ownership, *, request_bound=False):
         """Re-read exact ownership before DELETE; caller must separately read back.
 
@@ -193,7 +200,7 @@ class FixtureRunpodREST(RunpodREST):
     """Exercise POST serialization with a supplied offline opener, never credentials.
 
     This is a fixture harness, not a sandbox for untrusted openers. Callers must
-    supply an in-memory fake; no live create API or command is provided.
+    supply an in-memory fake.
     """
 
     def __init__(self, opener):
@@ -201,10 +208,3 @@ class FixtureRunpodREST(RunpodREST):
             msg = "offline fixture opener required"
             raise ValueError(msg)
         super().__init__(lambda: "offline-fixture", opener=opener)
-
-    def create_pod(self, body):
-        result = self._request("POST", "/pods", body=body)
-        if not isinstance(result, dict):
-            msg = "invalid provider create response"
-            raise ProviderError(msg)
-        return _safe_pod(result)

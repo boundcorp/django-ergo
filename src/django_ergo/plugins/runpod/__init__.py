@@ -1,1 +1,1 @@
-"""Experimental, offline building blocks; no Runpod integration or live enablement."""
+"""Experimental local Runpod controller; no deployed bot integration."""

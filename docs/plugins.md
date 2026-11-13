@@ -61,9 +61,10 @@ can approve their tools. Every option is in the
 ## Offline Runpod bridge
 
 `django_ergo.plugins.runpod` contains local queue/experiment building blocks,
-a narrow fixture-only REST create/recovery bridge, an explicit image-conditioned
-H3 pilot worker, and independent cleaner supervision. It is **not** an enabled
-bot plugin or deployed rental controller and adds no bot.yaml configuration.
+a single-create REST controller with offline fixtures, an explicit
+image-conditioned H3 pilot worker, and independent cleaner supervision. It is
+**not** an enabled bot plugin or deployed rental controller and adds no
+bot.yaml configuration.
 The cleanup command remains dry-run by default:
 
 ```bash
@@ -85,9 +86,11 @@ fingerprint and matching profile; a nonunique Pod name never authorizes deletion
 The existing `configure(Ownership)` path is cleanup-only, without a create body.
 
 `create_once` without a client is a dry run: no POST or create intent.
-Only the injected-opener `FixtureRunpodREST` client can exercise create, using
-fixed-origin HTTP serialization and a fixed fake credential, not a live-create
-credential path. The ledger durably records `create_unknown`/`create_started`
+The controller's fixture mode uses an injected-opener `FixtureRunpodREST`.
+Its explicit live mode additionally requires a bound live configuration,
+an executing independent fresh cleaner and a named credential callback;
+the live path has not been exercised against Runpod. The ledger durably
+records `create_unknown`/`create_started`
 before the one POST. A timeout, restart, empty response or failed receipt write
 does not authorize replay; a subsequent create attempt is rejected. A valid
 returned ID is only a receipt, never evidence of running or generation.
@@ -131,10 +134,11 @@ no scheduler has been installed or provider billing guarantee proved.
   absence of later out-of-band global-volume attachments; those need separate
   evidence and must remain unresolved if external changes are possible.
 
-Live-create eligibility remains disabled: `create_once` still only accepts
-in-memory fixture openers, not live HTTP. Explicit `--execute --credential-env
-NAME` permits cleanup-only REST operations with the existing scoped callback;
-it was not exercised against Runpod.
+The standalone controller accepts live create only with explicit configuration
+and execution flags, bound quote and independent cleaner freshness. The
+cleanup command's `--execute --credential-env NAME` uses the same callback
+pattern. Neither route was exercised against Runpod; verify the account binding,
+image delivery and worker access before any rental.
 
 The [frozen H3 worker guide](runpod-h3.md) gives the executable validation and
 six-shot inference commands, pinned FL2VA image-conditioning schema, frame

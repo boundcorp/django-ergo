@@ -117,6 +117,43 @@ the killed-worker fixture synchronizes over a pipe rather than waiting for a
 real rental clock. The bounded-child fixture only sleeps in a local Python
 process. No provider calls, secrets, weights, or installation are involved.
 
+### Stable-host startup and credential boundary
+
+The cleaner must run on the same durable, local filesystem as the controller's
+SQLite ledger, but as an independent process outside the rented Pod. An existing
+scoped credential must already be injected into **both** the create process and
+the cleaner process under the selected environment-variable name. The callbacks
+read that environment variable only when making a provider request; the name is
+not the value. Never pass the value in arguments, put it in the ledger or logs,
+copy it to the Pod, or expose it to the generation worker.
+
+A fresh execute-mode heartbeat only proves process liveness and configuration;
+it does **not** prove that the named variable is populated or that its account
+can terminate the eventual Pod. Before creation, establish those facts through
+the existing credential owner's scoped injection mechanism, without extracting
+or relocating a credential. If such a binding is not already available on the
+chosen host, stop: a variable name alone does not complete this prerequisite.
+
+Once the ledger is prepared, the scoped binding exists, and the paths below are
+set in that host's shell, start the following as a separate monitored process:
+
+```sh
+PYTHONPATH="$REPO_ROOT/src" nohup python3 -m django_ergo.plugins.runpod.supervisor \
+  "$LEDGER" --interval-seconds 1 --operation-timeout 5 --freshness-seconds 10 \
+  --execute --credential-env "$SCOPED_CALLBACK_ENV" \
+  </dev/null >>"$CLEANER_LOG_DIR/cleaner.log" 2>&1 &
+echo "$!" >"$CLEANER_LOG_DIR/cleaner.pid"
+PYTHONPATH="$REPO_ROOT/src" python3 -m django_ergo.plugins.runpod.supervisor \
+  "$LEDGER" --check-fresh
+```
+
+The first freshness check may race the first tick; wait for the heartbeat before
+creation. `nohup` is not a service manager: monitor the PID, restart a failed
+cleaner with the same ledger and binding, and continue cleanup after the worker
+exits. Restarting a failed host or reinjecting its existing credential requires
+an independently prepared host-level mechanism. No process or host startup
+mechanism is installed by this preparation.
+
 ## Optional existing process supervisor configuration
 
 `examples/runpod-h3/supervisord-cleaner.conf` prepares a foreground independent

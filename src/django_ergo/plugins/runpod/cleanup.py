@@ -1,6 +1,6 @@
 """Bounded single-intent recovery and independently invocable REST cleanup.
 
-Create is fixture-only; the command defaults to dry-run and cannot launch Pods.
+Live create requires explicit execution and a fresh independent cleaner.
 Inventory absence never resolves an unknown create. Known-ID GET 404 is separate
 from storage evidence and from ambiguous mutating request failures.
 """
@@ -18,6 +18,8 @@ import re
 import sqlite3
 import time
 from dataclasses import asdict
+from decimal import Decimal
+from decimal import InvalidOperation
 from pathlib import Path
 
 from .budget import MAX_RENTAL_SECONDS
@@ -55,12 +57,19 @@ class RESTCleanup:
         """Bind cleanup-only ownership; this cannot establish storage absence."""
         self._configure(ownership, None)
 
-    def configure_create(
-        self, *, account, image, container_disk_gb, gpu_type, data_center_ids
+    def configure_create(  # noqa: PLR0913
+        self,
+        *,
+        account,
+        image,
+        container_disk_gb,
+        gpu_type,
+        data_center_ids,
+        quoted_hourly_usd=None,
     ):
         """Bind a digest, explicit location allowlist and existing absolute clock.
 
-        This remains an offline fixture profile, not permission for a live create.
+        Binding a profile alone does not authorize live create.
         Omitting networkVolumeId (and any template) deliberately attaches none.
         """
         if not isinstance(image, str) or not re.fullmatch(
@@ -91,6 +100,22 @@ class RESTCleanup:
             msg = "absolute deadline must be within one hour of reservation"
             raise ValueError(msg)
         attempt = state["marker"]
+        if quoted_hourly_usd is not None:
+            try:
+                quote = Decimal(quoted_hourly_usd)
+                evidence = json.loads(state["evidence"])["budget"]["compute_hourly_usd"]
+                admitted = Decimal(evidence["amount"])
+            except (InvalidOperation, KeyError, TypeError, ValueError):
+                msg = "invalid admitted compute quote"
+                raise ValueError(msg) from None
+            if (
+                not quote.is_finite()
+                or quote < 0
+                or quote != admitted
+                or evidence["verified"] is not True
+            ):
+                msg = "compute quote does not match admission"
+                raise ValueError(msg)
         body = {
             "name": "ergo-" + attempt,
             "computeType": "GPU",
@@ -107,6 +132,8 @@ class RESTCleanup:
                 "ERGO_DEADLINE": str(deadline),
             },
         }
+        if quoted_hourly_usd is not None:
+            body["env"]["ERGO_COMPUTE_HOURLY_USD"] = str(quote)
         fingerprint = hashlib.sha256(
             json.dumps(
                 body, sort_keys=True, separators=(",", ":"), allow_nan=False
@@ -159,16 +186,16 @@ class RESTCleanup:
             raise ValueError(msg)
         return Ownership(**json.loads(row["profile"]))
 
-    def create_once(self, *, now, client=None):
-        """One fixture POST at most; commit uncertainty before invoking the opener.
-
-        A process loss before send may leave no Pod. That uncertainty is deliberate:
-        restart never replays the create. No live credential/client is accepted.
-        """
+    def create_once(self, *, now, client=None, live_execute=False):
+        """Commit uncertainty before the sole POST; never replay on failure."""
         self.experiment._time(now)
         if client is not None and not isinstance(client, FixtureRunpodREST):
-            msg = "create requires an offline fixture client; live create disabled"
-            raise ValueError(msg)
+            if not isinstance(client, RunpodREST) or live_execute is not True:
+                msg = "create requires an offline fixture client; live create disabled"
+                raise ValueError(msg)
+            from .supervisor import CleanerSupervision
+
+            CleanerSupervision(self.experiment.path).require_fresh(now=now)
         with self.experiment._tx() as db:
             self._profile(db)
             request = db.execute(
@@ -176,6 +203,10 @@ class RESTCleanup:
             ).fetchone()
             if request is None:
                 msg = "create profile not configured"
+                raise ValueError(msg)
+            body = json.loads(request["body"])
+            if live_execute and "ERGO_COMPUTE_HOURLY_USD" not in body.get("env", {}):
+                msg = "live create requires bound admitted compute quote"
                 raise ValueError(msg)
             row = self.experiment._expire(db, self.experiment._row(db), now)
             if row["create_started"]:
@@ -189,7 +220,7 @@ class RESTCleanup:
             db.execute(
                 "UPDATE experiment SET phase='create_unknown', create_started=1 WHERE id=1"
             )
-            body = json.loads(request["body"])
+            # The exact request is immutable and was committed with the profile.
         try:
             pod = client.create_pod(body)
             if not _pod_id(pod.get("id")):

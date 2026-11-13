@@ -41,8 +41,8 @@ docker image inspect ergo-h3:sglang-2511743-kitchen-int8 --format '{{.Id}}'
 ```
 
 The local `.Id` is an image **configuration** digest, not a registry manifest
-digest. No registry publication occurred; a later provider pull requires a real
-pullable named manifest digest from a separately authorized delivery route.
+digest. A provider pull requires a named registry manifest digest and a proven
+delivery route; a locally tagged image alone is not pullable.
 Long source builds compile native Rust extensions; use an isolated bounded
 builder and preserve verbose logs/cache rather than repeatedly cancelling short
 attempts. CPU validation used2CPU/6GiB RAM, disk reserve/growth monitoring and
@@ -99,20 +99,77 @@ is preserved as a separately hashed original and muxed as PCM in
 No AAC substitution or silent audio replacement is permitted. A short,
 wrong-canvas, malformed or non-video result fails; fake MP4 is never success.
 
-## Two independent processes — launch preparation only
+## Controller and independently monitored cleaner
 
-Prerequisites: existing account-bound REST ledger and actual resource receipt;
-sole approved launch supervisor; prepared image digest; explicit quote admitted
-through `budget.admit_rental`; stable off-Pod ledger/export filesystem; authorized
-tunnel to the Pod's **loopback** port30010. No public model ingress is required.
-The bridge still has no live-create credential path; `create_once` only accepts
-the in-memory fixture transport. These commands do not create a Pod.
+Prerequisites: a genuinely pullable named image manifest, an actual accepted
+quote and permitted datacenter, an account-matched existing scoped credential
+binding on the stable host, and a durable off-Pod ledger/export filesystem.
+The controller commits a single create intent before sending the POST; explicit
+live configuration and a fresh independent execute-mode cleaner are required.
+Preparation and fixture mode do not call Runpod.
+
+**Do not start a rental while the Pod access path is unproved.** The prepared
+image listens only on Pod loopback and does not declare a TCP port or start an
+SSH daemon. A hypothetical tunnel is not evidence that this image can be
+reached or its timing file copied out. Runpod's
+[SSH guide](https://docs.runpod.io/pods/configuration/use-ssh) says its basic
+proxy does not support SCP/SFTP; full SSH needs an SSH daemon, exposed port and
+configured key. Its [v2 command API](https://docs.runpod.io/api-reference-v2/pods/run-a-command-in-a-pod)
+is another documented possibility, but its availability, transfers and fit
+with this worker have not been verified. Establish and test an appropriate
+authenticated route before creating the only Pod; do not expose the model
+service unauthenticated.
 
 Use the already-injected scoped credential environment-variable **name**, not
 a secret value, for `$SCOPED_CALLBACK_ENV`. Establish cleaner freshness before
 any create/start decision and leave it running independently after the worker
 returns. A dry-run heartbeat does not qualify. See [cleaner supervision](runpod-cleaner.md)
 for service/supervision configuration and fixture proof.
+
+The create configuration is a JSON file containing no secrets. For a live run,
+replace every angle-bracket value with the verified selected account, manifest,
+datacenter and quoted/estimated amounts; the boolean evidence fields mean the
+operator has actually verified the associated fact, not merely copied this
+example. The phase seconds are planning estimates, not actual-time guarantees.
+
+```json
+{
+  "mode": "live",
+  "live_execute": true,
+  "account": "<renting-account-id>",
+  "image": "<pullable-image>@sha256:<64-hex-manifest-digest>",
+  "data_center_ids": ["<permitted-datacenter-id>"],
+  "idle_grace": 120,
+  "eligibility": {"model": true, "hardware": true, "license": "delegated", "inputs": true, "budget": true},
+  "timeline": {"rental_seconds": 3600, "startup_seconds": 600, "download_seconds": 600, "compile_seconds": 0, "generation_seconds": 2061, "export_seconds": 219, "termination_seconds": 120},
+  "pricing": {
+    "compute_hourly_usd": {"amount": "<actual-hourly-quote>", "verified": true},
+    "storage_usd": {"amount": "<one-hour-storage-estimate>", "verified": true},
+    "network_usd": {"amount": "<network-estimate>", "verified": true},
+    "fees_usd": {"amount": "<fees-and-margin-estimate>", "verified": true},
+    "project_cap_usd": "3.00",
+    "project_committed_usd": "<existing-actual-and-outstanding-commitments>"
+  }
+}
+```
+
+Run `prepare` **only when all prerequisites are ready**: it starts the
+irrevocable pre-create clock. Use a new absolute ledger path on local durable
+storage; never replace it after a failed or uncertain request.
+
+```sh
+PYTHONPATH=src python -m django_ergo.plugins.runpod.create prepare "$LEDGER" "$CONFIG"
+# Start the independent cleaner shown below and check its fresh heartbeat.
+PYTHONPATH=src python -m django_ergo.plugins.runpod.supervisor "$LEDGER" --check-fresh
+PYTHONPATH=src python -m django_ergo.plugins.runpod.create create "$LEDGER" "$CONFIG" \
+  --execute --credential-env "$SCOPED_CALLBACK_ENV"
+```
+
+The quoted compute rate is bound into the request fingerprint and checked
+against reservation evidence; it is **not** a provider-enforced price ceiling.
+One failed or timed-out create leaves `create_unknown`; never rerun it, replace
+the ledger, or purchase a retry. Continue the cleaner and reconcile a late
+receipt. The SQLite `experiment_receipts` table stores received Pod IDs.
 
 ```sh
 # Process1: stable host, not a child/background task of the GPU worker.
@@ -214,11 +271,11 @@ existing ledger's absolute `ERGO_DEADLINE` (at most reservation+3600s), GPU, dis
 and zero optional volume. Network volumes and templates are deliberately omitted;
 no provider default location or storage attachment is allowed. The launcher's
 deadline−120s cutoff means work ends by minute58 of a full-hour reservation,
-including startup; a restart never renews it. These are fixture-payload controls,
-not evidence of actual placement or a live provider TTL.
+including startup; a restart never renews it. The immutable request is not
+evidence of actual placement or a provider-enforced TTL.
 
 Operator update: Lee confirmed at22:42 that operation/video use is in permitted
 countries; at22:43 the LEGAL TEAM owns review. The prior pending operator/use
 question is closed, not a new engineering approval gate or a legal-clearance
-claim. Select the actual permitted datacenter allowlist before any separately
-authorized launch; this preparation performs no rental or legal investigation.
+claim. Select the actual permitted datacenter allowlist before launch; this
+preparation performs no rental or legal investigation.

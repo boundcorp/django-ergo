@@ -4,6 +4,17 @@ This document tracks the major milestones and evolution of the Django Ergo proje
 
 ## Development Timeline
 
+### Supervised H3 single-create controller (November 2026)
+
+- Wired offline profile preparation, durable one-POST intent and REST transport
+  into an executable controller. Live mode requires explicit configuration,
+  execution and a fresh independent cleaner; timeouts never replay. The
+  accepted quote is bound to the profile but is not a provider price cap.
+- Added stable-host cleaner startup and credential-boundary guidance. Actual
+  account injection, pullable image delivery and authenticated Pod access must
+  be established before the one rental; no live provider operation was performed.
+
+
 ### Frozen H3 runner and independent cleaner preparation (November 2026)
 
 - Added the explicit six-shot image-conditioned FL2VA worker with pinned source
