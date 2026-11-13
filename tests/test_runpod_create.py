@@ -202,6 +202,7 @@ def test_ssh_access_bound_before_fingerprinting(reserved):
         gpu_type="NVIDIA RTX 6000 Ada Generation",
         data_center_ids=["EU-RO-1"],
         ssh_public_key=key,
+        gpu_nvml_names=["NVIDIA RTX 6000 Ada Generation"],
     )
     with sqlite3.connect(reserved) as db:
         body = json.loads(

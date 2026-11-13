@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import json
 
 # This literal is the entire launch-time ENTRYPOINT override. The original
 # /opt/h3-launch.py and its absolute deadline/model pins remain unchanged.
@@ -145,7 +146,7 @@ baseline = {
 }
 Path("/workspace/h3-resource-baseline.json").write_text(json.dumps(baseline))
 print("ERGO_H3_RESOURCE_BASELINE " + json.dumps(baseline), flush=True)
-if (name != os.environ.pop("ERGO_GPU_TYPE") or int(driver.split(".")[0]) < 580
+if (name not in json.loads(os.environ.pop("ERGO_NVML_NAMES")) or int(driver.split(".")[0]) < 580
         or int(vram) < 45000):
     raise ValueError("quoted NVIDIA GPU, at least 48GB VRAM and CUDA 13 driver required before model download")
 # exec keeps the same PID and absolute alarm; the original launcher installs its
@@ -172,10 +173,17 @@ def public_key(value):
     return " ".join(fields[:2])
 
 
-def create_access(key, gpu_type):
-    """Bind the quoted NVIDIA GPU and public client key before fingerprinting."""
+def create_access(key, gpu_type, gpu_nvml_names):
+    """Bind provider catalog identity and separately verified NVML names."""
     if not isinstance(gpu_type, str) or not gpu_type.startswith("NVIDIA "):
         msg = "NVIDIA CUDA GPU type required"
+        raise ValueError(msg)
+    if (
+        not isinstance(gpu_nvml_names, list | tuple)
+        or not gpu_nvml_names
+        or any(not isinstance(name, str) or not name for name in gpu_nvml_names)
+    ):
+        msg = "Explicit verified NVML GPU names required"
         raise ValueError(msg)
     return {
         "dockerEntrypoint": ["python", "-c", SSH_BOOTSTRAP],
@@ -185,5 +193,6 @@ def create_access(key, gpu_type):
         "env": {
             "ERGO_SSH_PUBLIC_KEY": public_key(key),
             "ERGO_GPU_TYPE": gpu_type,
+            "ERGO_NVML_NAMES": json.dumps(gpu_nvml_names),
         },
     }

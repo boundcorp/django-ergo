@@ -103,6 +103,7 @@ RUNPOD_ACCOUNTS = {
                     "account": "provider-consumer-user-id",
                     "image": "registry.octo.boundcorp.net/ergo-h3-experiment/h3-runtime@sha256:7b08f5d6b56988afeab528c9524ded9052a6739df0899768294134afe1453f8b",
                     "gpu_type": "NVIDIA A100-SXM4-80GB",  # bind the genuinely quoted GPU
+                    "gpu_nvml_names": ["A100-SXM4-80GB", "NVIDIA A100-SXM4-80GB"],
                     "data_center_ids": ["EU-RO-1"],  # verify permitted actual capacity
                     "idle_grace": 120,
                     "eligibility": {"model": True, "hardware": True, "license": "delegated", "inputs": True, "budget": True},
@@ -147,8 +148,11 @@ lifetime admission count remain immutable. Created or uncertain attempts remain
 reserved after cleanup until billing review. Native preparation pins the operator's explicit `gpu_type`,
 one GPU, at least167GB RAM and10vCPU,200GB container disk, zero optional volume
 and no network volume; it reuses the existing reviewed create request. Before
-model download the SSH bootstrap verifies the exact quoted NVIDIA GPU,
-at least48GB VRAM and a CUDA13-capable driver. The preserved runtime includes
+model download the SSH bootstrap verifies the observed GPU against the host's
+explicitly verified `gpu_nvml_names`, at least48GB VRAM and a CUDA13-capable
+driver. Provider catalog IDs are not NVML product names; no blind prefix removal
+or fuzzy matching is used. Both identities are bound into the create fingerprint.
+The preserved runtime includes
 Ampere SM80 code, so A10080GB is an alternative, not a model substitution or
 evidence of conditioned fit. A generic GPU catalog's smaller minimum RAM is not
 evidence the requested profile is available. The observed `costPerHr` must be present and

@@ -68,6 +68,7 @@ class RESTCleanup:
         data_center_ids,
         quoted_hourly_usd=None,
         ssh_public_key=None,
+        gpu_nvml_names=None,
     ):
         """Bind a digest, explicit location allowlist and existing absolute clock.
 
@@ -137,7 +138,7 @@ class RESTCleanup:
             },
         }
         if ssh_public_key is not None:
-            access = create_access(ssh_public_key, gpu_type)
+            access = create_access(ssh_public_key, gpu_type, gpu_nvml_names)
             body["env"].update(access.pop("env"))
             body.update(access)
         if quoted_hourly_usd is not None:
