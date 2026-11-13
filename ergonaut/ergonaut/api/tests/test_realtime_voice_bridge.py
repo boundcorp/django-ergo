@@ -1321,3 +1321,91 @@ def test_actual_sdk_accepts_two_distinct_sequential_requests_without_replaying_p
             ]
 
     async_to_sync(scenario)()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_unlimited_policy_accepts_five_fresh_speech_requests_before_results(cooking, settings, held_messages, use_bots):
+    from ergonaut.realtime_voice_execution import initial_state
+
+    chat, vid, other = cooking
+    policy = {
+        "owner": chat.user.get_username(),
+        "bot": chat.bot_name,
+        "normal_task_costs_approved": True,
+        "approval_reference": "offline-root",
+        "max_requests": 3,
+        "followup_costs_approved": True,
+        "followup_approval_reference": "offline-three",
+    }
+    settings.REALTIME_VOICE_THREAD_EXECUTION_AUTHORIZATIONS = {str(chat.pk): policy}
+    row = RealtimeVoiceSession.objects.get(pk=vid)
+    row.state = {**row.state, **initial_state(chat, chat.user)}
+    row.save(update_fields=["state"])
+    policy.update(unlimited_intentional_requests=True, unlimited_approval_reference="offline-explicit-new-policy")
+    use_bots(*(say(f"Verified offline result {i}.") for i in range(5)))
+
+    async def scenario():
+        assistant = bridge.Assistant(vid, await sync_to_async(realtime_voice.bridge_state)(vid), None)
+        assistant.grace = 0.01
+        sdk = offline_session(assistant)
+        with patch.object(bridge.Assistant, "duplex_session", new_callable=PropertyMock, return_value=sdk):
+            await bind(assistant, sdk)
+            for index in range(5):
+                assistant.on_user_state(SimpleNamespace(new_state="speaking"))
+                sdk._handle_event(
+                    {
+                        "type": "session.input_transcript.delta",
+                        "delta": f"Please start distinct offline task {index}.",
+                        "start_ms": index * 2000,
+                        "end_ms": index * 2000 + 1000,
+                    }
+                )
+                sdk._end_speech("user")
+                assistant.on_user_state(SimpleNamespace(new_state="listening"))
+                if index:
+                    sdk._handle_event(
+                        {
+                            "type": "session.delegation.created",
+                            "delegation": {"id": f"loop-{index - 1}", "target": "client"},
+                        }
+                    )
+                    await settle(assistant)
+                    assert len(held_messages) == index
+                wire = {
+                    "type": "session.delegation.created",
+                    "delegation": {"id": f"intent-{index}", "target": "client"},
+                }
+                sdk._handle_event(wire)
+                sdk._handle_event(wire)
+                await settle(assistant)
+                assert len(held_messages) == index + 1
+                # A model-generated new ID without fresh user speech cannot start another job.
+                sdk._handle_event(
+                    {
+                        "type": "session.delegation.created",
+                        "delegation": {"id": f"loop-{index}", "target": "client"},
+                    }
+                )
+                await settle(assistant)
+                assert len(held_messages) == index + 1
+            snapshot = await sync_to_async(realtime_voice.bridge_state)(vid)
+            assert snapshot["request_budget"]["limit"] is None
+            assert len(snapshot["delegations"]) == 5
+            queued = list(reversed(held_messages[:]))
+            cursor = len(held_messages)
+            for _ in range(50):
+                if not queued:
+                    break
+                await sync_to_async(messaging.deliver)(queued.pop(0), registry=webhooks.get_registry())
+                queued.extend(held_messages[cursor:])
+                cursor = len(held_messages)
+                snapshot = await sync_to_async(realtime_voice.bridge_state)(vid)
+                await assistant.deliver_results(snapshot)
+                await assistant.deliver_results(snapshot)
+                if all(task["status"] == "answered" for task in snapshot["delegations"]):
+                    break
+            assert len(snapshot["delegations"]) == 5
+            assert all(task["status"] == "answered" for task in snapshot["delegations"])
+
+    async_to_sync(scenario)()
+    assert not RealtimeVoiceSession.objects.get(pk=other).delegations.exists()

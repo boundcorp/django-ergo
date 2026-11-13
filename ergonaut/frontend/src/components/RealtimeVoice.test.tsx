@@ -737,6 +737,25 @@ test('sequential request allowance follows durable work without implying executi
   expect(background?.querySelector('button')).toBeNull()
 })
 
+test('unlimited policy shows pending work without a false remaining count', () => {
+  act(() => {
+    root.render(
+      <MemoryRouter>
+        <VoiceSessionCard
+          session={{
+            ...session,
+            request_budget: { limit: null, used: 5, remaining: null, collecting: false, inflight: true, request_ids: [] },
+          }}
+        />
+      </MemoryRouter>,
+    )
+  })
+  const background = container.querySelector('[aria-label="Background work"]')
+  expect(background?.textContent).toContain('You can request another task without waiting for its result')
+  expect(background?.textContent).not.toContain('remaining')
+  expect(background?.textContent).not.toContain('exhausted')
+})
+
 test('only an answered durable delegation exposes its result as background evidence', () => {
   act(() => {
     root.render(

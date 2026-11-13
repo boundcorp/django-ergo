@@ -180,6 +180,8 @@ class Assistant(Agent):
         self.final_fragments = set()
         self.speaking = False
         self.heard_speech = False
+        self.speech_generation = 0
+        self.delegated_speech_generation = 0
         self.speech_ended_at = None
         self.transcript_changed_at = 0.0
         self.changed = asyncio.Event()
@@ -197,10 +199,13 @@ class Assistant(Agent):
                 {"limit": 1, "used": int(bool(snapshot["delegations"] or snapshot["state"].get("pending_delegation")))},
             )
         )
-        self.capacity.setdefault("remaining", max(0, self.capacity["limit"] - self.capacity["used"]))
+        self.capacity.setdefault(
+            "remaining",
+            None if self.capacity["limit"] is None else max(0, self.capacity["limit"] - self.capacity["used"]),
+        )
         self.seen_requests = set(self.capacity.get("request_ids", []))
         self.request_submitted = bool(snapshot["delegations"])
-        self.request_used = not self.capacity["remaining"]
+        self.request_used = self.capacity["remaining"] == 0
         self.execution_pending = self.capacity.get("inflight", False)
         self.active_request_id = next(
             (
@@ -568,6 +573,7 @@ class Assistant(Agent):
         # With an explicitly supplied VAD, the SDK's recognition pipeline drives
         # these states from its actual Silero audio stream, not GPT-Live segments.
         if event.new_state == "speaking":
+            self.speech_generation += 1
             self.consumed_speech_drained = False
             self.note_input("speech")
             self.activity_generation += 1
@@ -615,16 +621,27 @@ class Assistant(Agent):
         logger.info("voice delegation_signal_received correlation=%s", self.correlation(event.id))
         if self.closing or event.id in self.seen_requests:
             return
-        if self.pending_id or self.execution_pending or self.request_used:
+        if self.capacity["limit"] is None and (
+            self.speech_generation == self.delegated_speech_generation or (not self.speaking and not self.fragments)
+        ):
+            self.seen_requests.add(event.id)
+            self.duplex_session.append_commentary(
+                "No new spoken request was received; do not start another task without the user's request.",
+                delegation_id=event.id,
+            )
+            return
+        if self.pending_id or (self.execution_pending and self.capacity["limit"] is not None) or self.request_used:
             self.duplex_session.append_commentary(
                 ONE_REQUEST_USED if self.request_used else REQUEST_PENDING, delegation_id=event.id
             )
             return
         self.seen_requests.add(event.id)
+        self.delegated_speech_generation = self.speech_generation
         self.pending_id = event.id
         self.capacity["used"] += 1
-        self.capacity["remaining"] = max(0, self.capacity["limit"] - self.capacity["used"])
-        self.request_used = not self.capacity["remaining"]
+        if self.capacity["limit"] is not None:
+            self.capacity["remaining"] = max(0, self.capacity["limit"] - self.capacity["used"])
+        self.request_used = self.capacity["remaining"] == 0
         self.duplex_session.append_instructions(REQUEST_TAKEN)
         self.spawn(self.assemble_request(event.id, dict(self.fragments)), delegation_id=event.id)
 
@@ -634,7 +651,7 @@ class Assistant(Agent):
             self.pending_id = None
             snapshot = await sync_to_async(bridge_state, thread_sensitive=True)(self.voice_id, include_briefing=False)
             self.capacity = dict(snapshot["request_budget"])
-            self.request_used = not self.capacity["remaining"]
+            self.request_used = self.capacity["remaining"] == 0
             self.execution_pending = self.capacity["inflight"]
             self.duplex_session.append_commentary(REQUEST_PENDING, delegation_id=event_id)
             return
@@ -666,10 +683,12 @@ class Assistant(Agent):
                         logger.info("voice delegation_boundary_ready correlation=%s", self.correlation(event_id))
                         submitted_fragments = dict(self.fragments)
                         submitted_speech_end = self.speech_ended_at
+                        submitted_generation = self.speech_generation
                         receipt = await sync_to_async(resolve_pending, thread_sensitive=True)(
                             self.voice_id, event_id, text
                         )
                         self.request_submitted = True
+                        self.delegated_speech_generation = submitted_generation
                         self.execution_pending = receipt["status"] not in ("answered", "failed")
                         self.active_request_id = event_id if self.execution_pending else None
                         self.consumed_speech_drained = (

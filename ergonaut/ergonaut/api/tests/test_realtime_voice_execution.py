@@ -155,14 +155,29 @@ def test_normal_tools_dispatch_once_while_voice_continues_and_results_restore(
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("decision", ["approve", "deny", "uncertain"])
+@pytest.mark.parametrize("unlimited", [False, True])
 def test_real_thread_send_preserves_normal_owner_approval_and_uncertain_write_claim(
     normal_voice,
     use_bots,
     client,
     monkeypatch,
+    settings,
+    unlimited,
     decision,  # noqa: F811
 ):
     chat, target, voice = normal_voice
+    if unlimited:
+        from ergonaut.realtime_voice_execution import initial_state
+
+        settings.REALTIME_VOICE_THREAD_EXECUTION_AUTHORIZATIONS[str(chat.pk)].update(
+            max_requests=3,
+            followup_costs_approved=True,
+            followup_approval_reference="offline-three",
+            unlimited_intentional_requests=True,
+            unlimited_approval_reference="offline-unlimited",
+        )
+        voice.state = {**voice.state, **initial_state(chat, chat.user)}
+        voice.save(update_fields=["state"])
     # Apply the normal toolkit's approval policy to the real registered orchestration handler.
     monkeypatch.setattr(orchestrator.ergo_thread_send.__bot_tool__, "requires_approval", True)
     write = tool_call("ergo_thread_send", {"thread": str(target.pk), "message": "Owner-approved disposable action."})
@@ -377,3 +392,20 @@ def test_expired_collection_consumes_slot_and_cannot_replay_as_execution(normal_
         realtime_voice.delegate(voice.pk, "expired-attempt", "Do not replay an expired attempt.")
     assert not realtime_voice.begin_pending(voice.pk, "new-attempt", {})
     assert not voice.delegations.exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_unlimited_policy_upgrades_only_matching_existing_three_request_grants(normal_voice, settings):
+    from ergonaut.realtime_voice_execution import initial_state, request_capacity
+
+    chat, _, old_one = normal_voice
+    policy = settings.REALTIME_VOICE_THREAD_EXECUTION_AUTHORIZATIONS[str(chat.pk)]
+    policy.update(max_requests=3, followup_costs_approved=True, followup_approval_reference="offline-three")
+    voice = RealtimeVoiceSession.objects.create(user=chat.user, chat=chat, state=initial_state(chat, chat.user))
+    policy["unlimited_intentional_requests"] = True
+    assert request_capacity(voice)["limit"] == 0
+    policy["unlimited_approval_reference"] = "offline-unlimited"
+    assert request_capacity(voice)["limit"] is None
+    assert request_capacity(old_one)["limit"] == 0
+    policy["owner"] = "someone-else"
+    assert request_capacity(voice)["limit"] == 0

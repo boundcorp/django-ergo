@@ -807,9 +807,9 @@ export type RealtimeVoiceSession = {
   created_at?: string
   ended_at?: string | null
   request_budget?: {
-    limit: number
+    limit: number | null
     used: number
-    remaining: number
+    remaining: number | null
     collecting: boolean
     inflight: boolean
     request_ids: string[]

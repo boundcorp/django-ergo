@@ -62,17 +62,30 @@ export function VoiceBackgroundWork({ session }: { session: RealtimeVoiceSession
       <strong>Background work · separate from voice SDK states</strong>
       {budget && (
         <div aria-label="Voice request allowance" className="mt-1">
-          <p>
-            Voice requests: {budget.remaining} of {budget.limit} remaining · {budget.used} used.
-          </p>
-          {budget.collecting ? (
-            <p>Collecting the current request; wait for submission before making another voice request.</p>
-          ) : budget.inflight ? (
-            <p>
-              A request is pending; wait for its result before making another voice request. Requests are sequential.
-            </p>
+          {budget.limit === null ? (
+            budget.collecting ? (
+              <p>Collecting the current request; wait for submission before making another voice request.</p>
+            ) : budget.inflight ? (
+              <p>Background work is pending. You can request another task without waiting for its result.</p>
+            ) : (
+              <p>Request background work when you need it; nothing starts automatically.</p>
+            )
           ) : (
-            budget.remaining > 0 && <p>Requests are sequential; nothing starts automatically.</p>
+            <>
+              <p>
+                Voice requests: {budget.remaining} of {budget.limit} remaining · {budget.used} used.
+              </p>
+              {budget.collecting ? (
+                <p>Collecting the current request; wait for submission before making another voice request.</p>
+              ) : budget.inflight ? (
+                <p>
+                  A request is pending; wait for its result before making another voice request. Requests are sequential.
+                </p>
+              ) : (
+                budget.remaining !== null &&
+                budget.remaining > 0 && <p>Requests are sequential; nothing starts automatically.</p>
+              )}
+            </>
           )}
           {budget.remaining === 0 && (
             <p>
