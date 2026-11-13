@@ -1,8 +1,8 @@
 """One native polling step for the reviewed frozen H3 workload.
 
 Reuses the original no-replay queue, H3 submissions, media validation and export
-protocol. Model access is an operator-provisioned authenticated loopback tunnel;
-this adapter neither exposes an unauthenticated Pod port nor invents SSH access.
+protocol. The Worker maintains authenticated, ownership-bound SSH access to the
+rental's loopback listener without exposing a public inference port.
 """
 
 # Existing ledger controllers intentionally share transaction primitives.
@@ -23,6 +23,8 @@ from .h3 import H3Client
 from .h3 import Submissions
 from .h3 import file_record
 from .h3 import request_body
+from .native_tunnel import TunnelUnavailable
+from .native_tunnel import ensure as ensure_tunnel
 from .queue import Queue
 from .runner import assemble
 from .runner import process_shot
@@ -169,7 +171,24 @@ def step(ctx, job):  # noqa: C901, PLR0911, PLR0912, PLR0915 — one bounded nat
     pod = _owned_pod(job, provider)
     if pod is None:
         return "Create result unknown; inventory inspection only, no replacement"
-    h3 = H3Client(job.profile["base_url"])
+    startup_deadline = (
+        job.created
+        + job.profile["config"]["timeline"]["startup_seconds"]
+        + job.profile["config"]["timeline"]["download_seconds"]
+    )
+    if state["phase"] != "ready" and time.time() >= startup_deadline:
+        native.stop(job, "failed")
+        return "Startup deadline reached; independent cleanup pending"
+    try:
+        base_url = ensure_tunnel(job, provider, pod, deadline=cutoff)
+    except TunnelUnavailable:
+        if state["phase"] == "ready":
+            raise
+        if time.time() >= startup_deadline:
+            native.stop(job, "failed")
+            return "Startup deadline reached; independent cleanup pending"
+        return "Waiting for authenticated direct SSH access to the owned rental"
+    h3 = H3Client(base_url)
     if state["phase"] != "ready":
         try:
             healthy = h3.call("GET", "/health", deadline=cutoff).get("status") == "ok"
@@ -178,14 +197,12 @@ def step(ctx, job):  # noqa: C901, PLR0911, PLR0912, PLR0915 — one bounded nat
         if not healthy:
             if not ctx.state.get("tunnel_notice"):
                 ctx.tell(
-                    "RunPod is provisioning. The approved authenticated H3 tunnel "
-                    "must connect to this rental before its original startup deadline; "
-                    "there is no public inference port or automatic replacement."
+                    "RunPod is provisioning. The Worker maintains authenticated "
+                    "SSH access to this rental's loopback model listener; there "
+                    "is no public inference port or automatic replacement."
                 )
                 ctx.state["tunnel_notice"] = True
-            startup = job.profile["config"]["timeline"]["startup_seconds"]
-            download = job.profile["config"]["timeline"]["download_seconds"]
-            if time.time() >= job.created + startup + download:
+            if time.time() >= startup_deadline:
                 native.stop(job, "failed")
                 return "Startup deadline reached; independent cleanup pending"
             return "Waiting for model readiness through the approved rental tunnel"

@@ -37,6 +37,10 @@ Live on rigel from `~/p/boundcorp/django-ergo`, bots from `boundcorp/ergo-bots`.
 - [x] **Explicit quoted H3 hardware**: host profiles bind the GPU type into
   create ownership and the pre-download CUDA/VRAM check; suitable NVIDIA
   alternatives are not blocked by an incidental exact-Ada default.
+- [x] **Offline H3 startup and native transport fixes**: partition-local model
+  index resolution, runtime-delivered launcher, restart-safe host-key handling,
+  fingerprint-bound fast failure, Worker-owned authenticated SSH tunnels,
+  absolute log-stream read budgets and real-rental admission counts.
 - [x] **Supervised H3 pilot preparation**: pinned six-shot image-conditioned
   FL2VA runner, immutable archive/prompt versions and submission tombstones,
   PCM-verified 29s export/partial manifests, independently supervised cleaner

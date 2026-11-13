@@ -10,7 +10,11 @@ from __future__ import annotations
 import ipaddress
 import json
 import math
+import socket
+import threading
 import time
+from contextlib import contextmanager
+from contextlib import suppress
 from dataclasses import dataclass
 from http import HTTPStatus
 from urllib.error import HTTPError
@@ -27,6 +31,34 @@ _MAX_TIMEOUT = 30
 _MAX_SSE_LINE = 65536
 _MAX_PORT = 65535
 _NOT_FOUND = object()
+
+
+@contextmanager
+def _sse_deadline(response, seconds):
+    """Interrupt a partial/trickling line, not merely an idle socket.
+
+    urllib's timeout is per socket operation; a log producer can keep resetting
+    it without ever finishing readline(). Shutdown wakes that read without
+    waiting for BufferedReader's lock (close alone can block behind readline).
+    """
+    raw = getattr(getattr(response, "fp", None), "raw", None)
+    connection = getattr(raw, "_sock", None)
+
+    def interrupt():
+        if connection is not None:
+            with suppress(OSError):
+                connection.shutdown(socket.SHUT_RDWR)
+        else:
+            response.close()
+
+    timer = threading.Timer(max(0, seconds), interrupt)
+    timer.daemon = True
+    timer.start()
+    try:
+        yield
+    finally:
+        timer.cancel()
+        timer.join()
 
 
 class ProviderError(Exception):
@@ -229,10 +261,14 @@ class RunpodREST:
             prefix = "ERGO_SSH_HOST_KEY " + ownership.fingerprint + " "
             size = 0
             key = None
-            with self._opener.open(
-                request, timeout=min(self._timeout, deadline - time.time())
-            ) as response:
-                while time.time() < deadline:
+            log_deadline = min(deadline, time.time() + self._timeout)
+            with (
+                self._opener.open(
+                    request, timeout=max(0.001, log_deadline - time.time())
+                ) as response,
+                _sse_deadline(response, log_deadline - time.time()),
+            ):
+                while time.time() < log_deadline:
                     line = response.readline(_MAX_SSE_LINE + 1)
                     size += len(line)
                     if not line or len(line) > _MAX_SSE_LINE or size > _MAX_RESPONSE:

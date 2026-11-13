@@ -1337,8 +1337,11 @@ false exposes tools in threads, not spending authority.
 The optional resource app, server-only principal/bot/profile policy, durable
 single-host rental filesystem, credential binding and independent maintenance
 consumer are required. Start needs human approval, fresh maintenance/pricing
-and an active allowlisted superuser. Defaults are one lifetime rental, a planned
-$3 total and ≤1h absolute deadline; no replacement or uncertain-create replay.
+and an active allowlisted superuser. Defaults are one real/unresolved lifetime
+rental, a planned $3 project cap and ≤1h absolute deadline; no replacement or
+uncertain-create replay. The host's `budget_usd` sets the project cap; per-rental
+planned cost remains capped at $3. Cleanup-complete zero-create attempts cost
+$0 and do not consume `max_rentals`; unresolved intents still reserve a slot.
 The first reviewed adapter is the frozen six-shot H3 comparison, not chapter
 execution or arbitrary commands. See [native installation](runpod.md) and
 [image/runtime preparation](runpod-h3.md). Bot YAML alone never enables spending.
@@ -1349,8 +1352,11 @@ limits regardless of the selected supported NVIDIA hardware.
 Provider REST `imageName` is normalized before strict ownership checks; missing
 or mismatched image evidence never authorizes deletion.
 Host-only `reconciled_costs` can record an explicitly reviewed conservative cost
-after confirmed terminal cleanup; it never clears admission counts or
-authorizes an active/uncertain rental, replacement or top-up.
+after confirmed terminal cleanup; it never clears real-rental admission counts or
+authorizes an active/uncertain rental, replacement or top-up. The host binds
+`ssh_private_key_file` to the approved public key; the Worker maintains an
+authenticated per-job SSH tunnel to the loopback-only model service, bounded by
+the original cutoff. Fingerprint-bound launcher failures stop work promptly.
 
 ### ergo_kb
 

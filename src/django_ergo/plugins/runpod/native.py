@@ -46,6 +46,8 @@ from .h3 import H3Client
 from .models import RunpodAccount
 from .models import RunpodArtifact
 from .models import RunpodJob
+from .native_tunnel import close as close_tunnel
+from .native_tunnel import validate_private_key
 from .queue import Conflict
 from .queue import Queue
 from .supervisor import CleanerSupervision
@@ -166,28 +168,30 @@ def _reconciled_cost(job, state, item):
     return amount
 
 
-def _committed_reservations(jobs, policy):
+def _rental_commitments(jobs, policy):
     reviewed = policy.get("reconciled_costs", {})
     if not isinstance(reviewed, dict):
         msg = "Invalid reconciled Runpod cost mapping"
         raise TypeError(msg)
     committed = Decimal(0)
-    # Only actual or possibly active rentals carry liability. A cleaned-up
-    # attempt that never started a create costs nothing, whatever its phase;
-    # its row and lifetime count stay immutable. Created attempts stay at their
-    # reservation until an operator-reviewed conservative cost replaces it.
+    rentals = 0
+    # Unresolved intents reserve a slot even before POST; cleanup-complete
+    # attempts with no create reserve neither money nor a rental slot. Real or
+    # uncertain creates retain their lifetime slot and reviewed/reserved cost.
     for job in jobs:
         if not job.cleanup_complete:
+            rentals += 1
             committed += job.reservation_usd
             continue
         state = Experiment(job.ledger_path).status()
         if state["create_started"] == 0:
             continue
+        rentals += 1
         if str(job.pk) in reviewed:
             committed += _reconciled_cost(job, state, reviewed[str(job.pk)])
         else:
             committed += job.reservation_usd
-    return committed
+    return committed, rentals
 
 
 def _admission_config(binding, policy, definition):
@@ -215,13 +219,13 @@ def _admission_config(binding, policy, definition):
         msg = "RunPod credential binding is missing"
         raise ValueError(msg)
     jobs = RunpodJob.objects.filter(account=binding)
-    if jobs.count() >= policy.get("max_rentals", 1):
+    committed, rentals = _rental_commitments(jobs, policy)
+    if rentals >= policy.get("max_rentals", 1):
         message = "RunPod lifetime rental limit reached; no replacement or top-up"
         raise ValueError(message)
     if jobs.filter(cleanup_complete=False).count() >= policy.get("max_concurrent", 1):
         msg = "RunPod unresolved rental concurrency limit reached"
         raise ValueError(msg)
-    committed = _committed_reservations(jobs, policy)
     config = json.loads(json.dumps(definition["config"]))
     config["pricing"]["project_committed_usd"] = str(
         committed + Decimal(policy.get("prior_committed_usd", "0"))
@@ -230,6 +234,7 @@ def _admission_config(binding, policy, definition):
     admission = admit_rental(**rental_budget(config))
     if not admission.allowed:
         raise ValueError(admission.reason)
+    validate_private_key(policy, config)
     return config
 
 
@@ -281,7 +286,10 @@ def start(ctx, account, selected, profile, request_key):
         snapshot = {
             **definition,
             "config": config,
-            "binding": {"api_key_env": name},
+            "binding": {
+                "api_key_env": name,
+                "ssh_private_key_file": policy.get("ssh_private_key_file", ""),
+            },
             "profile_id": profile,
         }
         job = RunpodJob(
@@ -387,6 +395,7 @@ def stop(job, reason="cancelled"):
     # Never wait on an in-flight Worker before making stop durable.
     Experiment(job.ledger_path).stop(reason)
     Queue(job.ledger_path).cancel()
+    close_tunnel(job)
 
 
 def invalid_owner(job):
@@ -464,6 +473,8 @@ def reconcile_job(job, *, now):
                     error="partial_export_failed"
                 )
         complete = state["phase"] == "terminated"
+        if complete:
+            close_tunnel(job)
         RunpodJob.objects.filter(pk=job.pk).update(cleanup_complete=complete)
         return not state["cleanup_error"]
 
