@@ -24,6 +24,7 @@ from pathlib import Path
 
 from .budget import MAX_RENTAL_SECONDS
 from .experiment import Experiment
+from .ssh import create_access
 from .transport import FixtureRunpodREST
 from .transport import Ownership
 from .transport import OwnershipError
@@ -66,6 +67,7 @@ class RESTCleanup:
         gpu_type,
         data_center_ids,
         quoted_hourly_usd=None,
+        ssh_public_key=None,
     ):
         """Bind a digest, explicit location allowlist and existing absolute clock.
 
@@ -122,6 +124,8 @@ class RESTCleanup:
             "cloudType": "SECURE",
             "gpuTypeIds": [gpu_type],
             "gpuCount": 1,
+            "minRAMPerGPU": 167,
+            "minVCPUPerGPU": 10,
             "imageName": image,
             "containerDiskInGb": container_disk_gb,
             "volumeInGb": 0,
@@ -132,6 +136,10 @@ class RESTCleanup:
                 "ERGO_DEADLINE": str(deadline),
             },
         }
+        if ssh_public_key is not None:
+            access = create_access(ssh_public_key)
+            body["env"].update(access.pop("env"))
+            body.update(access)
         if quoted_hourly_usd is not None:
             body["env"]["ERGO_COMPUTE_HOURLY_USD"] = str(quote)
         fingerprint = hashlib.sha256(

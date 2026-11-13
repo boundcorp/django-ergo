@@ -1,3 +1,4 @@
+import base64
 import hashlib
 import io
 import json
@@ -152,6 +153,9 @@ def test_serialized_create_intent_is_durable_before_post_and_never_starts_work(
         assert body["gpuCount"] == 1
         assert body["cloudType"] == "SECURE"
         assert body["volumeInGb"] == 0
+        assert body["minRAMPerGPU"] == 167
+        assert body["minVCPUPerGPU"] == 10
+        assert "allowedCudaVersions" not in body
         assert body["dataCenterIds"] == ["EU-RO-1"]
         assert body["dataCenterPriority"] == "custom"
         assert float(body["env"]["ERGO_DEADLINE"]) == 60
@@ -182,6 +186,41 @@ def test_serialized_create_intent_is_durable_before_post_and_never_starts_work(
     with pytest.raises(ValueError, match="already attempted"):
         RESTCleanup(path).create_once(now=2, client=FixtureRunpodREST(fake))
     assert fake.methods == ["POST"]
+
+
+def test_ssh_access_bound_before_fingerprinting(reserved):
+    from django_ergo.plugins.runpod.ssh import create_access
+
+    key = (
+        "ssh-ed25519 "
+        + base64.b64encode(
+            b"\x00\x00\x00\x0bssh-ed25519\x00\x00\x00\x20" + b"k" * 32
+        ).decode()
+    )
+    owner = RESTCleanup(reserved).configure_create(
+        account="account",
+        image="image@sha256:" + "1" * 64,
+        container_disk_gb=200,
+        gpu_type="NVIDIA RTX 6000 Ada Generation",
+        data_center_ids=["EU-RO-1"],
+        ssh_public_key=key,
+    )
+    with sqlite3.connect(reserved) as db:
+        body = json.loads(
+            db.execute("SELECT body FROM rest_create_profile").fetchone()[0]
+        )
+    access = create_access(key)
+    assert body["env"]["ERGO_SSH_PUBLIC_KEY"] == access["env"]["ERGO_SSH_PUBLIC_KEY"]
+    assert body["dockerEntrypoint"] == access["dockerEntrypoint"]
+    assert body["ports"] == ["22/tcp"]
+    fingerprint = body["env"].pop("ERGO_ATTEMPT_FINGERPRINT")
+    assert (
+        fingerprint
+        == owner.fingerprint
+        == hashlib.sha256(
+            json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+    )
 
 
 def test_accepted_post_lost_response_empty_scan_then_late_owned_cleanup(configured):
