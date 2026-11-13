@@ -366,17 +366,14 @@ unscoped devbox drafts are not migrated because their owner is unknown.
   as links, then its title; bot pages show the bot name; the home page shows
   Workspace. When queued or running workers exist, its Work control names
   the active count and opens their status (queued or running) and reported progress,
-  including on narrow screens. When subscription providers (Claude Code or Codex
-  CLIs) are configured, a usage control summarizes the reported window closest
-  to its routing limit: the ring fills with the percentage used and turns amber
-  within 15 points of the routing skip threshold and red past it, and a tick
-  marks how much of the window has passed, so a fill ahead of the tick is
-  burning faster than the window allows. Clicking it opens the detail: the
-  tightest limit, each window's bar, reset countdown and pace, when it was
-  last reported, and links to Routing and Costs. Providers only report
-  utilization percentages, so there are no token or message counts left,
-  and a window shows "not reported" from its reset until the next usage
-  report.
+  including on narrow screens. The usage control summarizes the reported
+  window closest to its routing limit; its ring shows usage and a tick marks
+  elapsed window time. The dropdown combines synced provider accounts with
+  configured routes, showing each reported window's usage, reset countdown and
+  elapsed percentage. Missing usage stays unknown; stale snapshots and sync
+  failures are marked. The source may report providers without a configured
+  route, and does not imply quotas for providers that report none. Links lead
+  to Routing and Costs.
 - **Narrow screens**: the sidebar becomes a modal navigation drawer. Opening
   it moves focus into the drawer; Tab stays inside it and Escape or its
   backdrop closes it and returns focus to Menu.

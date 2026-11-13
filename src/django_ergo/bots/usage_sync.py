@@ -183,11 +183,12 @@ def parse_limits(provider: str, entry: dict, seen: float) -> Account:
         window = limit.get("window") if isinstance(limit.get("window"), dict) else {}
         amount = limit.get("amount") if isinstance(limit.get("amount"), dict) else {}
         period = _period(window)
-        name = _name(provider, limit, window, period)
+        base = _name(provider, limit, window, period)
+        name = base
         count = 1
         while name in account.windows:
             count += 1
-            name = f"{name.rstrip('_0123456789')}_{count}"
+            name = f"{base}_{count}"
         resets = _number(window.get("resetsAt"))
         duration = _number(window.get("durationMs"))
         scope = limit.get("scope") if isinstance(limit.get("scope"), dict) else {}
@@ -359,7 +360,7 @@ def capacity_report(providers: Providers, clock: float | None = None) -> dict:
         live = [w for w in windows if w["status"] != "reset"]
         if error:
             status = "error"
-        elif not windows:
+        elif not any(w["used"] is not None for w in live):
             status = "unavailable"
         elif any(w["stale"] for w in live):
             status = "stale"
