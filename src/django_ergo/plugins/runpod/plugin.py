@@ -35,11 +35,17 @@ class RunpodPlugin(BotPlugin):
     def skill_instructions(self):
         return (
             "List reviewed profiles before starting. Start requires explicit human "
-            "spend approval and a stable request_key. A Worker reports progress and "
-            "completion; cancelling it requests stop through independent maintenance. "
-            "Only cleanup_complete proves rental cleanup. Never retry an unknown "
-            "create or generation, invent a replacement or use a standalone Job. "
-            "Collect preserves ordered partial outputs; reservation is not an invoice."
+            "spend approval and a stable request_key. The Worker picks the GPU and "
+            "region from live stock inside the profile's declared envelope, falls "
+            "back to the next offer when one is refused for capacity, and waits for "
+            "stock up to the profile's deadline; no further approval is needed for "
+            "that choice. Use ergo_runpod_stock to see what would launch now and "
+            "status for the chosen offer and fallback attempts. A Worker reports "
+            "progress and completion; cancelling it requests stop through "
+            "independent maintenance. Only cleanup_complete proves rental cleanup. "
+            "Never retry an unknown create or generation, invent a replacement or "
+            "use a standalone Job. Collect preserves ordered partial outputs; "
+            "reservation is not an invoice."
         )
 
     def worker_functions(self):
@@ -54,6 +60,11 @@ class RunpodPlugin(BotPlugin):
             """List the bot's approved workload profiles without provider access."""
             return native.profiles(self.account, self.profiles, ctx)
 
+        @bot_tool(name="ergo_runpod_stock", takes_context=True)
+        def stock(ctx, profile: str):
+            """Read live RunPod stock for a profile: eligible offers best-first and why others are skipped."""
+            return native.stock(self.account, self.profiles, profile, ctx)
+
         @bot_tool(name="ergo_runpod_start", requires_approval=True, takes_context=True)
         def start(ctx, profile: str, request_key: str):
             """Start one approved frozen workload as a native Worker, never a replacement rental."""
@@ -61,7 +72,7 @@ class RunpodPlugin(BotPlugin):
 
         @bot_tool(name="ergo_runpod_status", takes_context=True)
         def status(ctx, job_id: str):
-            """Read this chat's durable job and rental/cleanup state."""
+            """Read this chat's durable job, rental/cleanup state, chosen offer, stock polls and fallback attempts."""
             return native.status(native.owned(ctx, self.account, job_id))
 
         @bot_tool(name="ergo_runpod_collect", takes_context=True)
@@ -81,7 +92,7 @@ class RunpodPlugin(BotPlugin):
 
         return [
             FunctionToolkit.from_functions(
-                [profiles, start, status, collect, terminate], ctx
+                [profiles, stock, start, status, collect, terminate], ctx
             )
         ]
 

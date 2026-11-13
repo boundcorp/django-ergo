@@ -36,6 +36,8 @@ from django_ergo.conversation.models import ConversationSession
 from django_ergo.conversation.models import Worker
 from django_ergo.protected_env import is_protected_env
 
+from . import hardware
+from . import offers
 from .budget import admit_rental
 from .cleanup import RESTCleanup
 from .create import prepare
@@ -108,10 +110,18 @@ def credential_name(policy):
     return name
 
 
+def provider_client(binding):
+    name = credential_name(binding)
+    return RunpodREST(
+        lambda: os.environ.get(name),
+        timeout=5,
+        no_capacity_messages=binding.get("no_capacity_messages"),
+    )
+
+
 def client(job):
     # Fixed host-owned reference, never ToolContext's user-dependent fallback.
-    name = credential_name(job.profile["binding"])
-    return RunpodREST(lambda: os.environ.get(name), timeout=5)
+    return provider_client(job.profile["binding"])
 
 
 def profiles(account, selected, ctx):
@@ -132,17 +142,61 @@ def profiles(account, selected, ctx):
             reason = str(exc)
         except (KeyError, TypeError, DecimalException):
             reason = "Invalid host RunPod profile"
+        config = definition.get("config", {}) if isinstance(definition, dict) else {}
+        try:
+            requirements = hardware.requirements(config)
+        except (ValueError, TypeError):
+            requirements = None
         result.append(
             {
                 "id": name,
-                "image": definition.get("config", {}).get("image"),
+                "image": config.get("image"),
                 "usable": not reason,
-                "reason": reason or "Human approval and atomic admission required",
-                "maximum_rental_seconds": 3600,
-                "maximum_planned_usd": "3.00",
+                "reason": reason
+                or "Human approval and atomic admission required; GPU/region chosen at launch",
+                "maximum_rental_seconds": config.get("timeline", {}).get(
+                    "rental_seconds"
+                ),
+                "maximum_planned_usd": str(_rental_cap(account)),
+                "maximum_hourly_usd": config.get("pricing", {})
+                .get("compute_hourly_usd", {})
+                .get("amount"),
+                "hardware": requirements,
             }
         )
     return result
+
+
+def _rental_cap(account):
+    try:
+        return hardware.rental_cap(account_policy(account))
+    except (ValueError, TypeError):
+        return None
+
+
+def stock(account, selected, profile, ctx):
+    """Live stock for one profile's envelope: what would launch now, and why not."""
+    policy = account_policy(account)
+    authorize(policy, ctx.bot.name, ctx.user)
+    if profile not in selected or profile not in policy.get("profiles", {}):
+        msg = "RunPod profile is not allowed"
+        raise PermissionError(msg)
+    config = policy["profiles"][profile]["config"]
+    requirements = hardware.requirements(config)
+    gpus = provider_client(policy).gpu_stock(offers.stock_query(requirements))
+    eligible, seen = offers.evaluate(
+        gpus,
+        requirements,
+        hardware.catalog(policy.get("gpu_catalog")),
+        offers.ceiling(config),
+    )
+    return {
+        "profile": profile,
+        "observed_at": time.time(),
+        "would_launch": eligible[0] if eligible else None,
+        "eligible_offers": eligible[:10],
+        "seen": seen,
+    }
 
 
 def _reconciled_cost(job, state, item):
@@ -213,8 +267,13 @@ def _admission_config(binding, policy, definition):
     ):
         msg = "Independent RunPod maintenance is missing, stale or failing"
         raise ValueError(msg)
-    if not 0 <= now - definition.get("quote_observed_at", 0) < FRESH_SECONDS:
-        msg = "RunPod price evidence is stale"
+    requirements = hardware.requirements(definition["config"])
+    timeline = definition["config"]["timeline"]
+    if (
+        requirements["stock_poll_seconds"]
+        >= timeline["startup_seconds"] + timeline["download_seconds"]
+    ):
+        msg = "stock_poll_seconds must be shorter than startup plus download time"
         raise ValueError(msg)
     if not os.environ.get(credential_name(policy)):
         msg = "RunPod credential binding is missing"
@@ -232,6 +291,9 @@ def _admission_config(binding, policy, definition):
         committed + Decimal(policy.get("prior_committed_usd", "0"))
     )
     config["pricing"]["project_cap_usd"] = str(Decimal(policy.get("budget_usd", "3")))
+    config["pricing"]["rental_cap_usd"] = str(hardware.rental_cap(policy))
+    # Snapshot identities so a running job is unaffected by later catalog edits.
+    config["gpu_catalog"] = hardware.catalog(policy.get("gpu_catalog"))
     admission = admit_rental(**rental_budget(config))
     if not admission.allowed:
         raise ValueError(admission.reason)
@@ -260,14 +322,7 @@ def start(ctx, account, selected, profile, request_key):
     name = credential_name(policy)
     now = time.time()
     spec_hash = hashlib.sha256(
-        json.dumps(
-            {
-                key: value
-                for key, value in definition.items()
-                if key != "quote_observed_at"
-            },
-            sort_keys=True,
-        ).encode()
+        json.dumps(definition, sort_keys=True).encode()
     ).hexdigest()
     with transaction.atomic():
         binding, _ = RunpodAccount.objects.get_or_create(key=account)
@@ -290,6 +345,7 @@ def start(ctx, account, selected, profile, request_key):
             "binding": {
                 "api_key_env": name,
                 "ssh_private_key_file": policy.get("ssh_private_key_file", ""),
+                "no_capacity_messages": policy.get("no_capacity_messages"),
             },
             "profile_id": profile,
         }
@@ -389,6 +445,7 @@ def status(job):
         "cost_basis": "planned reservation; invoice unavailable",
         "manifest": job.manifest,
         "error": job.error,
+        **offers.history(job.ledger_path),
     }
 
 
@@ -463,7 +520,8 @@ def reconcile_job(job, *, now):
         if invalid_owner(job) or _owner_stale(job, now):
             stop(job, "worker_lost")
         elif state["phase"] != "ready" and now >= (
-            job.created
+            # The ledger clock restarts while waiting for stock, before create.
+            state["created"]
             + job.profile["config"]["timeline"]["startup_seconds"]
             + job.profile["config"]["timeline"]["download_seconds"]
         ):
@@ -481,7 +539,11 @@ def reconcile_job(job, *, now):
                 "UPDATE cleaner_supervision SET heartbeat=?,process_id=?,executing=1,tick_error=NULL WHERE id=1",
                 (now, os.getpid()),
             )
-        state = RESTCleanup(job.ledger_path).reconcile_once(now=now, client=client(job))
+        provider = client(job)
+        cleanup = RESTCleanup(job.ledger_path)
+        # Refused offers are swept while the job still runs, not only at stop.
+        swept = cleanup.sweep_retired(client=provider)
+        state = cleanup.reconcile_once(now=now, client=provider)
         if state["stop_reason"]:
             from .native_h3 import retain_outputs
 
@@ -495,7 +557,7 @@ def reconcile_job(job, *, now):
         if complete:
             close_tunnel(job)
         RunpodJob.objects.filter(pk=job.pk).update(cleanup_complete=complete)
-        return not state["cleanup_error"]
+        return not state["cleanup_error"] and not swept
 
 
 def attempt_cleanup(job):

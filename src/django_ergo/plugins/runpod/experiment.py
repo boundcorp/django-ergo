@@ -359,8 +359,45 @@ class Experiment:
             self._stop(db, "success")
             return True
 
+    def rebase(self, *, now):
+        """Restart a rental clock that has not started at the provider.
+
+        Allowed only before any create (or after a proven no-capacity refusal
+        released it) and before a create request is bound, so waiting for
+        stock never consumes the rental interval. Returns None once stopped.
+        """
+        self._time(now)
+        with self._tx() as db:
+            row = self._running(db, now)
+            if row is None:
+                return None
+            bound = (
+                db.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='rest_profile'"
+                ).fetchone()
+                and db.execute("SELECT 1 FROM rest_profile").fetchone()
+            )
+            if (
+                row["phase"] != "reserved"
+                or row["create_started"]
+                or bound
+                or db.execute("SELECT 1 FROM experiment_receipts").fetchone()
+            ):
+                msg = "rental clock already bound to a create"
+                raise ValueError(msg)
+            span = row["deadline"] - row["created"]
+            deadline = now + span
+            # Float addition can widen the interval; never lengthen the rental.
+            while deadline - now > span:
+                deadline = math.nextafter(deadline, now)
+            db.execute(
+                "UPDATE experiment SET created=?, deadline=? WHERE id=1",
+                (now, deadline),
+            )
+        return self.status()
+
     def stop(self, reason="cancelled"):
-        if reason not in {"cancelled", "failed", "worker_lost"}:
+        if reason not in {"cancelled", "failed", "worker_lost", "no_stock"}:
             msg = "invalid stop reason"
             raise ValueError(msg)
         with self._tx() as db:

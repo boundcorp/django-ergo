@@ -327,7 +327,11 @@ def test_worker_step_surfaces_launcher_failure_without_waiting(tunnel, monkeypat
         "startup_seconds": 600,
         "download_seconds": 600,
     }
-    state = {"deadline": tunnel.deadline + 120, "phase": "provisioning"}
+    state = {
+        "deadline": tunnel.deadline + 120,
+        "phase": "provisioning",
+        "created": tunnel.job.created,
+    }
     monkeypatch.setattr(
         native_h3, "Experiment", lambda path: SimpleNamespace(status=lambda: state)
     )

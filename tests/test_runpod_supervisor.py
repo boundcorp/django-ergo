@@ -20,6 +20,7 @@ from django_ergo.plugins.runpod.experiment import Experiment
 from django_ergo.plugins.runpod.supervisor import CleanerSupervision
 from django_ergo.plugins.runpod.supervisor import main
 from django_ergo.plugins.runpod.transport import FixtureRunpodREST
+from tests.runpod_stock_fixtures import hw
 
 
 @pytest.fixture(autouse=True)
@@ -49,11 +50,12 @@ def prepared(tmp_path):
         fees_usd=Evidence(Decimal("0.1"), True),
         project_cap_usd=Decimal("3"),
         project_committed_usd=Decimal("0"),
+        rental_cap_usd=Decimal("3"),
     )
     owner = RESTCleanup(path).configure_create(
         account="account",
         image="image@sha256:" + "1" * 64,
-        container_disk_gb=120,
+        hardware=hw(120),
         gpu_type="NVIDIA RTX A6000",
         data_center_ids=["EU-RO-1"],
     )

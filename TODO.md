@@ -37,6 +37,12 @@ Live on rigel from `~/p/boundcorp/django-ergo`, bots from `boundcorp/ergo-bots`.
 - [x] **Explicit quoted H3 hardware**: host profiles bind the GPU type into
   create ownership and the pre-download CUDA/VRAM check; suitable NVIDIA
   alternatives are not blocked by an incidental exact-Ada default.
+- [x] **RunPod hardware envelope and stock fallback**: profiles declare GPU
+  preferences, VRAM/RAM/vCPU/driver/compute-capability minimums, regions and an
+  hourly ceiling as policy data; the Worker picks the best live offer, falls back
+  on proven no-capacity refusals without counting a rental, and waits for stock
+  to a deadline. GPU/region/cap changes are policy edits. See
+  [offer selection](docs/runpod.md#launch-time-offer-selection-and-stock-fallback).
 - [x] **Offline H3 startup and native transport fixes**: partition-local model
   index resolution, runtime-delivered launcher, restart-safe host-key handling,
   fingerprint-bound fast failure, Worker-owned authenticated SSH tunnels,
