@@ -90,6 +90,23 @@ The three new safety regressions also ran against an isolated copy of draft315 h
 
 Branch `leewardbound/voice-all-session-audit` starts from draft315 **15a2cb5**; prior315 source/artifacts and all paid markers/databases preserved. No merge, deploy, restart, live config/secret/policy/cap/billing mutation, paid inference, real microphone or real-owner task performed.
 
+## Independent successor review — 2026-11-13
+
+The successor preserves both earlier commits and publishes their combined changes into the existing PR315 rather than opening a competing implementation. Current `main` changes through `3f4c733` were merged cleanly before validation. Separate read-only microphone and bridge reviews found no bounded-observer privacy defect; the microphone review found two further recovery defects:
+
+- An SDK-muted track stayed muted after explicit Recover because `restartTrack()` preserves the SDK mute state. Recover now restores that track only after confirming it is still the current published microphone; intentional owner mute remains a hard guard.
+- Successful explicit Unmute could leave a stale capture-permission alert. The observer now clears that error only after observing live capture and a published microphone.
+
+Follow-up review caught an ownership race across the new asynchronous unmute: unpublication during restart or unmute could orphan capture. Current-publication ownership is checked before unmute, after completion and on failure; lost or disposed capture is stopped. Two original correctness regressions and both ownership-race cases failed before their respective fixes and passed afterward; disposal during SDK unmute has its own regression.
+
+Actual local Chromium at390×844 used real synthetic SDK audio tracks, a local-only browser allowlist and no hardware capture. Pending Mute disabled competing actions; End during pending Unmute left its returned native track `ended`. A separate denied-capture→Mute→Unmute scenario cleared the stale alert, and SDK mute→explicit Recover restored live publication on the original connection. **Zero `getUserMedia` calls**, no hosted room/provider connection and no persisted owner session. Sanitized screenshots: [pending mute](../artifacts/voice-audit-20261113/successor-pending-mute.webp), [late capture stopped](../artifacts/voice-audit-20261113/successor-late-unmute-ended.webp), [SDK-muted recovery](../artifacts/voice-audit-20261113/successor-sdk-muted-recovered.webp). Temporary browser entrypoints and servers were removed.
+
+Application observation/device/reconnect callbacks do not request capture or unmute. This does not disable LiveKit's pre-existing SDK-managed reacquisition during full reconnect, and the synthetic checks do not establish physical Android Brave source selection. The latest actual call's missing provider transcript/output and all billing UNKNOWNs remain unresolved.
+
+The audit command was also exercised as a real JSON/CSV management command against a disposable local PostgreSQL schema without creating any owner/session row. Owner/thread filtering, payload exclusion, formula-safe machine labels and database-enforced read-only transactions were reviewed independently. No web/API export route, extra role permission, runtime policy, spending budget or secret was added.
+
+Combined local verification: **324 frontend tests passed**, TypeScript/Vite production build passed; **62 targeted actual-SDK/audit/API/execution tests passed**; the full pinned-SDK Ergonaut suite passed **350 with6 skipped**, migration drift check found none; the library suite passed **2,235 with4 skipped**. Changed-file pre-commit hooks passed. Existing React `act`, Vite chunk-size and disposable-test database teardown warnings remain. Initial local attempts exposed missing isolated test dependencies (`livekit` in the base interpreter; `httpx`/Jinja/MarkupSafe in the SDK environment); final results use the complete isolated environment, without changing application dependency constraints.
+
 ## Deferred architecture seam — recommendation only
 
 Use one durable exact-thread runtime with four adapters: **Live**, **async STT+TTS** (ordinary request then actual-reply synthesis), **STT→text** (composer; ordinary explicit submission), **wake standby** (explicit foreground opt-in local mic/wake detection, visible listening; no live provider until activation). Wake standby is **not mic-off**. All share thread history/tools/approvals/tasks; switching modes grants no authority.

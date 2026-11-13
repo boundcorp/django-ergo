@@ -1331,6 +1331,45 @@ test('permission failure keeps current call and explicit recovery uses same part
   expect(button('Recover microphone').disabled).toBe(true)
 })
 
+test('successful explicit Unmute clears a prior capture failure only after live publication returns', async () => {
+  const current = await connectCall(Object.assign(new Error('Private denial'), { name: 'NotAllowedError' }))
+  expect(container.textContent).toContain('Microphone permission was denied')
+  await act(async () => button('Mute').click())
+  expect(container.textContent).toContain('Microphone permission was denied')
+  const previousStream = globalThis.MediaStream
+  class SyntheticStream {
+    constructor(private tracks: MediaStreamTrack[]) {}
+    getTracks() {
+      return this.tracks
+    }
+    getAudioTracks() {
+      return this.tracks
+    }
+  }
+  Object.assign(globalThis, { MediaStream: SyntheticStream })
+  restoreRoomMocks.push(() => {
+    globalThis.MediaStream = previousStream
+  })
+  const native = Object.assign(new window.EventTarget(), {
+    id: 'synthetic-unmute',
+    kind: 'audio',
+    enabled: true,
+    muted: false,
+    readyState: 'live',
+    getConstraints: () => ({}),
+    getSettings: () => ({}),
+    stop() {},
+  })
+  const track = new LocalAudioTrack(native as unknown as MediaStreamTrack)
+  track.source = Track.Source.Microphone
+  const publication = { source: Track.Source.Microphone, track, isMuted: false } as LocalTrackPublication
+  current.localParticipant.setMicrophoneEnabled = async () => publication
+  current.localParticipant.getTrackPublication = () => publication
+  await act(async () => button('Unmute').click())
+  expect(container.textContent).toContain('Microphone: enabled')
+  expect(container.textContent).not.toContain('Microphone permission was denied')
+})
+
 test('pending microphone recovery disables mute controls so intentional mute cannot race restart', async () => {
   const current = await connectCall()
   const pending = Promise.withResolvers<undefined>()

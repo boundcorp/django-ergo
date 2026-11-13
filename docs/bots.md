@@ -1054,8 +1054,11 @@ and provider transcription are separate evidence boundaries; none identifies
 phone/headset hardware or proves remote receipt by itself. See
 [microphone diagnostics and recovery](realtime-voice.md#microphone-input-evidence-and-explicit-recovery).
 
-Mute/unmute and recovery exclude one another per room; End/disconnect stops a
-late Unmute's returned capture. The owner/time-filtered `voice_audit` management
+Mute/unmute and recovery exclude one another per room; End/disconnect or lost
+publication ownership stops late capture. Explicit recovery can restore an
+SDK-muted track without overriding intentional owner mute, and a successful
+Unmute clears stale capture errors only after live publication is observed.
+The owner/time-filtered `voice_audit` management
 command exports sanitized session/event/call metadata in JSON/CSV inside a
 PostgreSQL READ ONLY snapshot, without loading engines or dispatching tasks.
 See the [all-session audit and schema](realtime-voice-audit-20261113.md).

@@ -139,6 +139,64 @@ test('only explicit recovery restarts existing SDK track and errors are sanitize
   expect(captures).toBe(0)
 })
 
+test('explicit recovery restores an SDK-muted track without overriding intentional mute', async () => {
+  await track.mute() // SDK fallback after failed automatic reacquisition; not an owner Mute click.
+  expect(state.capture).toBe('disabled')
+  expect(state.publication).toBe('muted')
+  await input.recover(true)
+  expect(track.isMuted).toBe(true)
+  expect(restarts).toBe(0)
+  await input.recover(false)
+  expect(state.capture).toBe('live')
+  expect(state.publication).toBe('published')
+  expect(track.isMuted).toBe(false)
+  expect(captures).toBe(0)
+})
+
+test('ending recovery during SDK unmute stops the returned track', async () => {
+  await track.mute()
+  const pending = Promise.withResolvers<LocalAudioTrack>()
+  track.unmute = () => pending.promise
+  native.stop = () => {
+    Object.assign(native, { readyState: 'ended' })
+  }
+  const recovery = input.recover(false)
+  await Promise.resolve()
+  input.dispose()
+  pending.resolve(track)
+  await recovery
+  expect(native.readyState).toBe('ended')
+})
+
+test.each(['restart', 'unmute'] as const)('unpublication during recovery %s stops orphaned capture', async stage => {
+  await track.mute()
+  const pending = Promise.withResolvers<void>()
+  const unmuteEntered = Promise.withResolvers<void>()
+  let unmutes = 0
+  track.restartTrack = async () => {
+    if (stage === 'restart') await pending.promise
+  }
+  track.unmute = async () => {
+    unmutes++
+    unmuteEntered.resolve()
+    if (stage === 'unmute') await pending.promise
+    return track
+  }
+  native.stop = () => {
+    Object.assign(native, { readyState: 'ended' })
+  }
+  const recovery = input.recover(false)
+  if (stage === 'unmute') await unmuteEntered.promise
+  room.emit(RoomEvent.LocalTrackUnpublished, publication!, room.localParticipant)
+  publication = undefined
+  input.refresh()
+  pending.resolve()
+  await recovery
+  expect(unmutes).toBe(stage === 'restart' ? 0 : 1)
+  expect(native.readyState).toBe('ended')
+  expect(state.capture).toBe('absent')
+})
+
 test('disposal removes room/native/device listeners and ignores late recovery failure', async () => {
   const { promise, reject } = Promise.withResolvers<void>()
   track.restartTrack = () => promise

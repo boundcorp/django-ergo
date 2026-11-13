@@ -173,9 +173,14 @@ restarts the existing SDK track, or requests microphone permission/capture if no
 track exists. A failed initial capture keeps the existing room and original
 deadline, with a visible sanitized permission/missing/busy/capture error; it
 does not automatically reconnect or retry. Recovery is disabled for intentional
-mute, pending mute/unmute and while another recovery is pending. End/disconnect
-also stops capture returned by a late Unmute. Microphone actions are serialized
-per room; none is triggered by reconnect/device events. Normal task/action
+mute, pending mute/unmute and while another recovery is pending. An SDK-muted
+track is restored only by the explicit recovery action while it still belongs
+to the current microphone publication. End/disconnect or lost publication
+ownership stops late returned capture, including across restart and unmute.
+Successful Unmute clears a prior capture error only after live publication is
+observed. Microphone actions are serialized per room; application reconnect/
+device callbacks never request capture. LiveKit's existing SDK-managed full
+reconnect may reacquire previously permitted tracks. Normal task/action
 approvals and costs are unchanged.
 
 **Check existing microphone locally**, under Diagnostics, examines at most one

@@ -604,7 +604,7 @@ function useVoiceOwner(): VoiceCallOwner {
         return
       }
       setMuted(!muted)
-      inputObserver.current?.refresh()
+      observer.captureSucceeded()
     } catch (e) {
       if (room.current !== current) track?.stop()
       else observer.failed(e)

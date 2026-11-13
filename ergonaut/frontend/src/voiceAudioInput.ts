@@ -168,6 +168,14 @@ export class VoiceAudioInput {
     if (capture !== 'live' || publicationState !== 'published') this.cancelProbe()
     this.update({ capture, publication: publicationState })
   }
+  captureSucceeded() {
+    this.refresh()
+    if (this.state.capture === 'live' && this.state.publication === 'published') this.update({ error: 'none' })
+  }
+  private ownsCapture(track: LocalTrackPublication['track']) {
+    const publication = this.room.localParticipant.getTrackPublication(Track.Source.Microphone)
+    return !this.disposed && !!track && publication?.track === track && publication !== this.unpublished
+  }
   /** User gesture only: restart the existing track or ask the current SDK participant to recover capture. */
   async recover(intentionallyMuted: boolean) {
     if (this.disposed || this.recovering || intentionallyMuted) return
@@ -178,13 +186,18 @@ export class VoiceAudioInput {
     try {
       if (track && this.state.publication !== 'unpublished') {
         await track.restartTrack()
-        if (this.disposed) track.stop()
+        if (!this.ownsCapture(track)) {
+          track.stop()
+          return
+        }
+        if (track.isMuted) await track.unmute()
+        if (!this.ownsCapture(track)) track.stop()
       } else {
         const publication = await this.room.localParticipant.setMicrophoneEnabled(true)
-        if (this.disposed) publication?.track?.stop()
+        if (publication?.track && !this.ownsCapture(publication.track)) publication.track.stop()
       }
     } catch (error) {
-      if (this.disposed) track?.stop()
+      if (track && !this.ownsCapture(track)) track.stop()
       else if (this.track === track) this.failed(error)
     } finally {
       this.recovering = false
