@@ -859,6 +859,22 @@ to a public model.
   unknown rather than 0) and `unsettled_reserved` (worst-case reservations
   still held for those). It's a billing view: those calls are already in
   the totals. Admins see everyone's; others see their own.
+- `GET /api/costs` also returns `since`/`until`/`timezone` (one explicit UTC
+  window, frozen per request: `days` UTC dates ending with today's partial
+  day, so `by_day` sums to the totals) and an `estimate` block: the API
+  list-price equivalent of the same tokens for `bot` calls (subscription CLI
+  calls priced at list, not $0), `agents` and `combined`. It is not an
+  invoice and not subscription quota; `total.cost` still bills subscription
+  calls at $0. Each scope gives uncached input, writes, reads, output, the
+  `cache_denominator` (uncached input + writes + reads, output excluded) with
+  `cache_hit` null when it is 0, per-part list costs, and priced vs
+  `unpriced_*` rows, tokens and models (unknown, never $0). Costs cover
+  priced rows only. `no_usage_rows` counts rows with no recorded tokens.
+  Agent rows are lifetime totals of workers active in the window, not
+  clipped: `exact_window` is false, rows carry `first_at`/`last_at`/`spillover`,
+  and the scope reports `spillover_rows`/`spillover_tokens`. The page's
+  estimate cards show all of this. A high cache hit rate is not a matching
+  saving: writes and output are priced separately.
 
 The web app's model picker and Costs page don't show `private_models` or
 the `private` block yet.

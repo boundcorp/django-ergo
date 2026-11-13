@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import type { AgentProject, AgentUsage, CostBucket, Costs, UsageThread } from '../api'
+import type { AgentProject, AgentUsage, CostBucket, Costs, EstimateScope, UsageThread } from '../api'
 import { api } from '../api'
 
 const RANGES = [7, 30, 90]
@@ -93,7 +93,9 @@ function agentItem(row: AgentUsage, withProject = true): Item {
     name: row.worker_title,
     sub: [where, row.agent, row.model, row.worker_status].filter(Boolean).join(' · '),
     href: `/s/${row.chat_id}`,
-    title: `${row.chat_title} · ${row.requests.toLocaleString()} requests`,
+    title:
+      `${row.chat_title} · ${row.requests.toLocaleString()} requests` +
+      (row.spillover ? ` · lifetime totals; began ${row.first_at ?? 'at an unknown time'}, before this window` : ''),
     parts: partsOf(row),
     cacheHit: row.cache_hit,
     cost: row.cost,
@@ -435,6 +437,69 @@ export function Summary({ data }: { data: Costs }) {
   )
 }
 
+function utcDay(value?: string | null) {
+  return value ? value.slice(0, 10) : 'unknown'
+}
+
+function EstimateCard({ title, scope }: { title: string; scope: EstimateScope }) {
+  const unknown = scope.priced_rows === 0 && scope.unpriced_rows > 0
+  const hit =
+    scope.cache_hit === null
+      ? 'no cache denominator recorded'
+      : `${percent(scope.cache_hit)} cache hit (${tokens(scope.cache_read_tokens)} reads / ${tokens(scope.cache_denominator)} = uncached input + writes + reads; output excluded)`
+  return (
+    <div className="min-w-0 bg-surface px-4 py-3" aria-label={`${title} list-price estimate`}>
+      <div className="text-xs font-medium text-muted">{title}</div>
+      <div className="mt-0.5 font-display text-xl font-semibold tabular-nums">
+        {unknown ? 'Unknown' : `${money(scope.list_cost)}${scope.unpriced_rows ? '+' : ''}`}
+      </div>
+      <div className="text-xs text-muted">
+        {scope.priced_rows} priced · {scope.unpriced_rows} unpriced rows
+        {scope.unpriced_rows > 0 &&
+          ` (${tokens(scope.unpriced_tokens)} tokens not costed: ${scope.unpriced_models.join(', ')})`}
+      </div>
+      <div className="mt-1 text-xs text-muted" title={hit}>
+        {tokens(scope.input_tokens)} uncached in · {tokens(scope.cache_write_tokens)} write ·{' '}
+        {tokens(scope.cache_read_tokens)} read · {tokens(scope.output_tokens)} out
+      </div>
+      <div className="text-xs text-muted">
+        Cost: in {money(scope.input_cost)} · write {money(scope.cache_write_cost)} · read {money(scope.cache_read_cost)}{' '}
+        · out {money(scope.output_cost)}
+      </div>
+      <div className="text-xs text-muted">{hit}</div>
+      {scope.no_usage_rows > 0 && (
+        <div className="text-xs text-warning">{scope.no_usage_rows} rows recorded no token usage</div>
+      )}
+      {!scope.exact_window && (
+        <div className="text-xs text-warning">
+          Lifetime totals of rows active in the window, {utcDay(scope.first_at)} to {utcDay(scope.last_at)};{' '}
+          {scope.spillover_rows} began earlier ({tokens(scope.spillover_tokens)} tokens), so not clipped to the window.
+        </div>
+      )}
+    </div>
+  )
+}
+
+export function Estimate({ data }: { data: Costs }) {
+  const estimate = data.estimate
+  if (!estimate) return null
+  return (
+    <section className="mt-4" aria-label="List-price estimate">
+      <div className="grid grid-cols-1 gap-px overflow-hidden rounded-card border border-stroke bg-stroke lg:grid-cols-3">
+        <EstimateCard title="Bot calls (list price)" scope={estimate.bot} />
+        <EstimateCard title="Coding agents (list price)" scope={estimate.agents} />
+        <EstimateCard title="Combined (list price)" scope={estimate.combined} />
+      </div>
+      <p className="mt-2 text-xs text-muted">
+        API list-price equivalent for the same tokens, including subscription traffic; unpriced rows are left out, not
+        counted as $0. It is not an invoice or subscription quota, and Bot spend above is what Ergo bills (subscription
+        calls $0). A high cache hit rate does not mean a matching saving: writes and output are priced separately.
+        Window: {utcDay(data.since)} to {utcDay(data.until)} UTC.
+      </p>
+    </section>
+  )
+}
+
 export function CostsBody({
   data,
   view,
@@ -449,6 +514,7 @@ export function CostsBody({
   return (
     <div className={dim ? 'opacity-60' : ''}>
       <Summary data={data} />
+      <Estimate data={data} />
       <div className="surface-card mt-4 px-4 py-3">
         <Daily days={data.by_day} />
       </div>
@@ -460,8 +526,8 @@ export function CostsBody({
         </p>
       )}
       <p className="mt-2 text-xs text-muted">
-        Costs are estimates from token counts and list prices, each part at the model's own rate. Hover a bar for its
-        token mix and what each part cost.
+        Costs are estimates from token counts and list prices, each part at the model's own rate; days are UTC. Hover a
+        bar for its token mix and what each part cost.
       </p>
     </div>
   )
