@@ -188,6 +188,10 @@ not duplicate Generation rows or multiply the reservation across outputs.
 
 ## Verification without spend
 
+The real-media regression requires `ffmpeg` and `ffprobe` on PATH (Debian/Ubuntu:
+`apt-get install ffmpeg`). The library CI installs this dependency explicitly;
+the media path is not skipped or replaced by fake success when tools are absent.
+
 `tests/test_runpod_native.py` exercises the real plugin tools, real Worker rows
 and dispatcher, an injected in-memory provider/H3 HTTP transport, real
 ffmpeg/ffprobe media validation and off-Pod attachment collection. It covers
