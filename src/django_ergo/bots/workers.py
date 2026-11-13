@@ -57,6 +57,59 @@ STEP_LEASE_SECONDS = 30 * 60
 MAX_RESULT_CHARS = 6000
 
 
+def _record_worker_event(
+    worker: Worker, stage: str, key: str, *, state: str, attempt: int | None = None
+) -> None:
+    """Record only committed worker transitions, without affecting the worker."""
+    try:
+        if not api_settings.LIFECYCLE_EVENTS_ENABLED:
+            return
+        from django.db import transaction
+        from django.utils import timezone
+
+        from django_ergo.conversation.lifecycle import record_event
+
+        worker_id = str(worker.pk)
+        thread_id = str(worker.session_id)
+        occurred_at = timezone.now()
+        event_attempt = max(1, worker.polls if attempt is None else attempt)
+
+        def record() -> None:
+            try:
+                record_event(
+                    stage,
+                    key=key,
+                    occurred_at=occurred_at,
+                    task_id=worker_id,
+                    thread_id=thread_id,
+                    worker_id=worker_id,
+                    category="worker",
+                    actor="worker",
+                    state=state,
+                    attempt=event_attempt,
+                )
+            except Exception:  # noqa: BLE001 — lifecycle recording is best-effort
+                logger.debug("Could not record worker lifecycle event")
+
+        transaction.on_commit(record)
+    except Exception:  # noqa: BLE001 — lifecycle recording is best-effort
+        logger.debug("Could not schedule worker lifecycle event")
+
+
+def _queue_event(worker: Worker) -> None:
+    # The persisted next-poll timestamp identifies the durable scheduling request.
+    try:
+        scheduled_us = int(worker.next_poll_at.timestamp() * 1_000_000)
+        _record_worker_event(
+            worker,
+            "queued",
+            f"queued:{worker.pk}:{worker.polls}:{scheduled_us}",
+            state="queued",
+        )
+    except Exception:  # noqa: BLE001 — lifecycle recording is best-effort
+        logger.debug("Could not record worker queue event")
+
+
 @dataclass
 class Again:
     """Run the worker function again after ``seconds``."""
@@ -77,6 +130,7 @@ class WorkerContext:
         self.user = worker.session.user
         self.state: dict = dict(worker.state or {})
         self._tools = ToolContext(bot=bot, session=worker.session, user=self.user)
+        self._progress_events = 0
 
     def progress(self, text: str) -> None:
         """Show what it's doing now (the chat shows the latest line)."""
@@ -89,6 +143,13 @@ class WorkerContext:
             step_started_at=self.worker.step_started_at,
         ).update(progress=self.worker.progress)
         if updated:
+            self._progress_events += 1
+            _record_worker_event(
+                self.worker,
+                "progress",
+                f"progress:{self.worker.pk}:{self.worker.polls}:{self._progress_events}",
+                state="running",
+            )
             _notify(self.worker)
 
     def tell(self, text: str) -> None:
@@ -264,6 +325,10 @@ def start(  # noqa: PLR0913
             state=dict(state or {}),
             next_poll_at=timezone.now(),
         )
+        _record_worker_event(
+            worker, "requested", f"requested:{worker.pk}", state="queued"
+        )
+        _queue_event(worker)
         transaction.on_commit(lambda: _notify(worker))
         transaction.on_commit(lambda: _publish(str(worker.pk), 0))
     return worker
@@ -286,6 +351,7 @@ def schedule(worker: Worker, delay: float) -> None:
             delay = max(0.0, (when - timezone.now()).total_seconds())
         current.next_poll_at = when
         current.save(update_fields=["next_poll_at"])
+        _queue_event(current)
         # The active step publishes the durable request after releasing its lease.
         # Publishing now alone would let an eager runner skip and lose the wakeup.
         if not current.step_started_at:
@@ -345,6 +411,12 @@ def _claim(worker_id: str) -> tuple[Worker | None, str]:
                 "next_poll_at",
                 "updated_at",
             ]
+        )
+        _record_worker_event(
+            worker,
+            "started",
+            f"started:{worker.pk}:{worker.polls}",
+            state="running",
         )
     return worker, ""
 
@@ -421,6 +493,13 @@ def _apply_step(worker: Worker, outcome: Any, error: str) -> str:
                     "updated_at",
                 ]
             )
+            if outcome.progress:
+                _record_worker_event(
+                    worker,
+                    "progress",
+                    f"progress:{worker.pk}:{worker.polls}:0",
+                    state="running",
+                )
             transaction.on_commit(lambda: _notify(worker))
             schedule(worker, max(1.0, float(outcome.seconds)))
             return worker.status
@@ -447,6 +526,9 @@ def cancel(worker: Worker, bot: Bot | None = None) -> str:
         current.status = "cancelled"
         current.next_poll_at = None
         current.save(update_fields=["status", "next_poll_at"])
+        _record_worker_event(
+            current, "finished", f"finished:{current.pk}", state="cancelled"
+        )
         close_agent_mail(worker.pk, "Worker cancelled before delivery")
     _notify(worker)
     found = None
@@ -513,6 +595,14 @@ def _finish(worker: Worker, status: str, result: Any, error: str) -> None:
             "updated_at",
         ]
     )
+    _record_worker_event(worker, "finished", f"finished:{worker.pk}", state=status)
+    if status == "completed":
+        _record_worker_event(
+            worker,
+            "result_persisted",
+            f"result_persisted:{worker.pk}",
+            state=status,
+        )
     _notify(worker)
     if status == "completed":
         from django_ergo.conversation.links import record_outputs

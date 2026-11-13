@@ -5,6 +5,10 @@ a validated response. Every call is a `StructuredCall` row with a `kind`. A
 call can stand alone or be one turn of a conversation session. The code is
 in `django_ergo.conversation.structured`.
 
+Optional content-free approval and turn-boundary observations are described in
+[lifecycle events](lifecycle-events.md); pending approval alone does not prove
+that a person saw it.
+
 ```python
 from pydantic import BaseModel
 from django_ergo.conversation.structured import (

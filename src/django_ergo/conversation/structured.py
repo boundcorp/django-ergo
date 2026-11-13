@@ -72,6 +72,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import hashlib
 import json
 import logging
 import uuid
@@ -941,6 +942,73 @@ current_call: ContextVar[StructuredCall | None] = ContextVar(
 )
 
 
+def _lifecycle_approvals(call, approvals, stage):
+    """Record approval evidence without persisting tool arguments or decisions."""
+    try:
+        from django_ergo.conversation.lifecycle import record_event
+
+        for item in approvals:
+            tool_id = (
+                item.tool_use_id if isinstance(item, PendingApproval) else item["id"]
+            )
+            question_id = hashlib.sha256(f"{call.pk}:{tool_id}".encode()).hexdigest()
+            record_event(
+                stage,
+                key=f"{stage}:{question_id}",
+                task_id=str((call.metadata or {}).get("thread_message") or call.pk),
+                thread_id=str(call.session_id or ""),
+                turn_id=str(call.pk),
+                question_id=question_id,
+                tool_id=question_id,
+                category="approval",
+            )
+    except Exception:  # noqa: BLE001 - instrumentation must never affect the turn
+        log.debug("Could not record approval lifecycle")
+
+
+def _lifecycle_thread_turn(call, stage):
+    """Record the input boundary, not semantic acceptance of the message."""
+    try:
+        from django_ergo.conversation.lifecycle import record_event
+        from django_ergo.conversation.models import ThreadMessage
+        from django_ergo.settings import api_settings
+
+        message_id = (call.metadata or {}).get("thread_message")
+        if not message_id or not api_settings.LIFECYCLE_EVENTS_ENABLED:
+            return
+        message = ThreadMessage.objects.filter(pk=message_id).first()
+        if message is None:
+            return
+        record_event(
+            stage,
+            key=f"{stage}:{message.pk}:{call.pk}",
+            task_id=str(message.pk),
+            message_id=str(message.pk),
+            thread_id=str(call.session_id or ""),
+            related_thread_id=str(message.sender_session_id or ""),
+            turn_id=str(call.pk),
+            category="handoff",
+        )
+        metadata = message.metadata or {}
+        if (
+            stage == "resumed"
+            and metadata.get("worker_finished")
+            and metadata.get("worker")
+        ):
+            record_event(
+                stage,
+                key=f"{stage}:{message.pk}:{call.pk}:{metadata['worker']}",
+                task_id=str(metadata["worker"]),
+                worker_id=str(metadata["worker"]),
+                message_id=str(message.pk),
+                thread_id=str(call.session_id or ""),
+                turn_id=str(call.pk),
+                category="worker_result",
+            )
+    except Exception:  # noqa: BLE001 - instrumentation must never affect the turn
+        log.debug("Could not record thread turn lifecycle")
+
+
 async def _loop(run: _Run) -> StructuredCallResult:
     """Run the call to its end; a crash marks it FAILED instead of leaving it in progress."""
     token = current_call.set(run.call)
@@ -1003,6 +1071,11 @@ async def _run_loop(run: _Run) -> StructuredCallResult:  # noqa: C901, PLR0912, 
             _fail(call, f"API call failed: {e}", _error_category(e))
             finished = True
             break
+
+        if call.turns_used == 1:
+            await sync_to_async(_lifecycle_thread_turn, thread_sensitive=True)(
+                call, "resumed"
+            )
 
         stop = next(
             (
@@ -1205,6 +1278,10 @@ async def _run_loop(run: _Run) -> StructuredCallResult:  # noqa: C901, PLR0912, 
     await transcript.finish()
     call.error = call.error[:MAX_ERROR_CHARS]
     await call.asave()
+    if approvals:
+        await sync_to_async(_lifecycle_approvals, thread_sensitive=True)(
+            call, approvals, "blocker_created"
+        )
     return StructuredCallResult(call=call, parsed=parsed, approvals=approvals)
 
 
@@ -1380,6 +1457,10 @@ async def run_structured_call(  # noqa: PLR0913
     await _record_tools(call, spec)
     if session is not None:
         await transcript.append_initial_user(message, attachments)
+        if (call.metadata or {}).get("thread_message"):
+            await sync_to_async(_lifecycle_thread_turn, thread_sensitive=True)(
+                call, "started"
+            )
     else:
         await transcript.append_user(message, attachments)
     if seed and pre_seeds:
@@ -1417,6 +1498,9 @@ async def resume_structured_call(  # noqa: PLR0913
         raise StructuredCallError(msg)
     call.status = StructuredCallStatus.IN_PROGRESS
     pending = (call.metadata or {}).get("pending_approvals", [])
+    await sync_to_async(_lifecycle_approvals, thread_sensitive=True)(
+        call, pending, "acknowledged"
+    )
 
     if call.session_id is not None:
         session = await ConversationSession.objects.aget(pk=call.session_id)
@@ -1453,6 +1537,12 @@ async def resume_structured_call(  # noqa: PLR0913
             result, is_error = "The user declined this tool call.", True
         results.append((item["id"], result, is_error))
     await transcript.append_tool_results(results)
+    await sync_to_async(_lifecycle_approvals, thread_sensitive=True)(
+        call, pending, "resumed"
+    )
+    await sync_to_async(_lifecycle_approvals, thread_sensitive=True)(
+        call, pending, "blocker_resolved"
+    )
     call.status = StructuredCallStatus.IN_PROGRESS
     call.metadata = {k: v for k, v in call.metadata.items() if k != "pending_approvals"}
     return await _loop(run)

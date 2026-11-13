@@ -4,6 +4,13 @@ This document tracks the major milestones and evolution of the Django Ergo proje
 
 ## Development Timeline
 
+### Correlated lifecycle evidence (November 2026)
+
+- Added an opt-in, content-free lifecycle ledger and deterministic evidence
+  projection for cross-thread handoffs, worker results and approval resumes.
+  Missing boundaries remain unknown; rollout, retention and broader coverage
+  are documented in [lifecycle events](docs/lifecycle-events.md).
+
 ### Versioned Orca coordinator instructions (November 2026)
 
 - Added chat-scoped follow-up tools with durable versions, explicit supersession

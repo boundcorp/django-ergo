@@ -28,6 +28,10 @@ Live on rigel from `~/p/boundcorp/django-ergo`, bots from `boundcorp/ergo-bots`.
 
 ### Next
 
+- [ ] **Iteration lifecycle**: opt-in correlated handoff, worker and approval
+  evidence plus a deterministic projection; production trace and broader
+  question, provider, build, dependency and deployment instrumentation remain.
+  See [lifecycle events](docs/lifecycle-events.md).
 - [x] **Native RunPod plugin slice**: real `runpod:watch` Workers and scoped
   profiles/start/status/collect/terminate tools, durable Django ownership and
   locked installation-wide reservations around the existing external rental
