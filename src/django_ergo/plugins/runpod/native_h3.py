@@ -189,19 +189,20 @@ def step(ctx, job):  # noqa: C901, PLR0911, PLR0912, PLR0915 — one bounded nat
         # created on; proven no-capacity refusals fall through to the next one.
         # Live calls additionally enforce the independent cleaner heartbeat gate.
         return offers.launch(job, provider, stop=native.stop)
-    pod, deferred = _owned_pod_throttled(ctx, job, provider)
-    if deferred:
-        return deferred
-    if pod is None:
-        return "Create result unknown; inventory inspection only, no replacement"
     startup_deadline = (
         state["created"]
         + job.profile["config"]["timeline"]["startup_seconds"]
         + job.profile["config"]["timeline"]["download_seconds"]
     )
+    # Checked before any provider read, so a deferred read never outlives it.
     if state["phase"] != "ready" and time.time() >= startup_deadline:
         native.stop(job, "failed")
         return "Startup deadline reached; independent cleanup pending"
+    pod, deferred = _owned_pod_throttled(ctx, job, provider)
+    if deferred:
+        return deferred
+    if pod is None:
+        return "Create result unknown; inventory inspection only, no replacement"
     try:
         base_url = ensure_tunnel(job, provider, pod, deadline=cutoff)
     except TunnelUnavailable:

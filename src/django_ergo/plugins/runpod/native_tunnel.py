@@ -260,7 +260,11 @@ def ensure(job, provider, pod, *, deadline):  # noqa: C901, PLR0915 -- one bound
                 raise TunnelUnavailable(message)
             key = validate_private_key(job.profile["binding"], job.profile["config"])
             after = directory / "connect-after"
-            if after.is_file() and time.time() < float(after.read_text()):
+            try:
+                waiting = time.time() < float(after.read_text())
+            except (OSError, ValueError):
+                waiting = False  # absent or unreadable: allow one lookup now
+            if waiting:
                 message = "Waiting to retry the authenticated SSH lookup"
                 raise TunnelUnavailable(message)
             _write(after, repr(time.time() + CONNECT_SECONDS))

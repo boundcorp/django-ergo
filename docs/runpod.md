@@ -79,15 +79,27 @@ remains due. Bot-folder schedules and `serve()` are not cleanup supervision.
 
 RunPod REST rate-limits each API key across all endpoints (observed November
 2026: 11 requests/minute, 225/hour, 2700/day; see the `ratelimit-policy`
-response header). A 429 raises `RateLimitError` with the bounded `Retry-After`.
-To stay inside that budget, each maintenance pass lists the account's Pods once
+response header). Every request from the controller, maintenance and stock
+checks first draws on one durable budget per key:
+`<ledger_root>/.rest-budget-<api_key_env>.sqlite3` on the shared rental mount
+(`ratebudget.RestBudget`). Ordinary reads stop 3/minute, 30/hour and 100/day
+short of the limits. DELETE, the ownership read before it, the read-back after
+it, and unfinished cleanup scans may spend that reserve. The provider's own
+remaining counts from the `ratelimit` header are honored until their reset, so
+calls from other processes on the same key are counted too. A 429 blocks every
+role until `Retry-After` plus up to 5 seconds of jitter. Nothing sleeps: a
+refused request raises `RateLimitError`, and its caller keeps its retry state.
+The Worker waits. Cleanup reports `provider_request_failed` and retries on the
+next pass. An ambiguous create is never replayed.
+
+To keep within that budget, each maintenance pass lists the account's Pods once
 and shares the list across every retained ledger. The Worker re-reads its
-owned Pod at most once a minute and treats a failed read, including a 429, as a
-wait rather than a failure. A failed SSH host-key lookup (up to three reads) is
-retried after 60 seconds. One rental hour then costs about 60 maintenance
-reads, 60 owned-Pod reads and roughly 30 lookup reads during provisioning.
-Startup and rental deadlines still apply. Don't poll the provider by hand while
-a rental is running: manual calls spend the same budget.
+owned Pod at most once a minute. A failed SSH host-key lookup (up to three
+reads) is retried after 60 seconds. One rental hour then costs about 60
+maintenance reads, 60 owned-Pod reads and roughly 30 lookup reads during
+provisioning. Startup and rental deadlines are checked before any provider
+read. Don't poll the provider by hand while a rental runs: manual calls spend
+the same provider quota.
 
 ### Server-only policy
 

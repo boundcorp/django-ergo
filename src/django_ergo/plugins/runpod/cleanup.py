@@ -401,7 +401,8 @@ class RESTCleanup:
 
     def _clean_resource(self, resource_id, client, profiles, request_bound):
         try:
-            pod = client.get_pod(resource_id)
+            # Teardown reads may spend the provider budget's cleanup reserve.
+            pod = client.get_pod(resource_id, priority=True)
             if pod is not None:
                 owner = self._owner(pod, profiles, request_bound)
                 with self.experiment._tx() as db:
@@ -414,7 +415,7 @@ class RESTCleanup:
                         )
                         return "ownership_unverified"
                 client.terminate_owned(resource_id, owner, request_bound=request_bound)
-                pod = client.get_pod(resource_id)
+                pod = client.get_pod(resource_id, priority=True)
             if pod is not None:
                 with self.experiment._tx() as db:
                     if not self._remember(
@@ -483,7 +484,9 @@ class RESTCleanup:
 
         error = None
         try:
-            pods = client.list_pods()
+            # Unfinished cleanup may use the reserve; terminated ledgers rescan
+            # for late receipts from the ordinary budget.
+            pods = client.list_pods(priority=row["phase"] != "terminated")
         except ProviderError:
             pods = []
             error = "provider_request_failed"

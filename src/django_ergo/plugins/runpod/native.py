@@ -53,6 +53,8 @@ from .native_tunnel import close as close_tunnel
 from .native_tunnel import validate_private_key
 from .queue import Conflict
 from .queue import Queue
+from .ratebudget import RestBudget
+from .ratebudget import budget_path
 from .supervisor import CleanerSupervision
 from .transport import ProviderError
 from .transport import RunpodREST
@@ -111,18 +113,22 @@ def credential_name(policy):
     return name
 
 
-def provider_client(binding):
+def provider_client(binding, root):
+    """``root`` is the shared ledger root; every role spends one per-key budget."""
     name = credential_name(binding)
     return RunpodREST(
         lambda: os.environ.get(name),
         timeout=5,
         no_capacity_messages=binding.get("no_capacity_messages"),
+        budget=RestBudget(budget_path(root, name)),
     )
 
 
 def client(job):
     # Fixed host-owned reference, never ToolContext's user-dependent fallback.
-    return provider_client(job.profile["binding"])
+    # Ledgers live at <ledger_root>/<installation>/<job>/rental.sqlite3.
+    root = Path(job.ledger_path).resolve().parents[2]
+    return provider_client(job.profile["binding"], root)
 
 
 def profiles(account, selected, ctx):
@@ -184,7 +190,8 @@ def stock(account, selected, profile, ctx):
         raise PermissionError(msg)
     config = policy["profiles"][profile]["config"]
     requirements = hardware.requirements(config)
-    gpus = provider_client(policy).gpu_stock(offers.stock_query(requirements))
+    root = Path(policy["ledger_root"]).resolve()
+    gpus = provider_client(policy, root).gpu_stock(offers.stock_query(requirements))
     eligible, seen = offers.evaluate(
         gpus,
         requirements,
@@ -525,15 +532,20 @@ class _SharedInventory:
         self._provider = provider
         self._memo = memo
 
-    def list_pods(self):
-        if "pods" not in self._memo:
-            try:
-                self._memo["pods"] = self._provider.list_pods()
-            except ProviderError as error:
-                self._memo["pods"] = error
-        if isinstance(self._memo["pods"], ProviderError):
-            raise self._memo["pods"]
-        return list(self._memo["pods"])
+    def list_pods(self, *, priority=False):
+        cached = self._memo.get("pods")
+        if isinstance(cached, list):
+            return list(cached)
+        # A failed ordinary read may be retried once with the cleanup reserve.
+        if cached is not None and (not priority or self._memo.get("priority")):
+            raise cached
+        try:
+            pods = self._provider.list_pods(priority=priority)
+        except ProviderError as error:
+            self._memo.update(pods=error, priority=priority)
+            raise
+        self._memo["pods"] = pods
+        return list(pods)
 
     def __getattr__(self, name):
         return getattr(self._provider, name)
