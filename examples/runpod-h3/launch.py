@@ -1,10 +1,10 @@
-"""Prepared image entrypoint; only run after operator/region arrangement.
+"""Prepared image entrypoint; run only after launch authorization.
 
 No provider credential is needed or accepted. The independent off-Pod cleaner
 still owns billing cleanup; killing local children alone does not end billing.
 """
 
-# Fixed model/runtime executables; this file is prepared, not run by the worker.
+# Fixed model/runtime executables; offline image smoke never downloads weights.
 # ruff: noqa: S603, S607
 import json
 import os
@@ -70,6 +70,7 @@ def main():  # noqa: C901, PLR0915 — ordered download/startup/serve lifecycle.
                 MODEL_REVISION,
                 "--include",
                 "model_index.json",
+                "--include",
                 "FL2VA/*",
                 "--local-dir",
                 str(model),

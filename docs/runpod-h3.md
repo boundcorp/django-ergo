@@ -22,19 +22,31 @@ uses the already-scoped credential callback; do not move an existing secret.
   container disk**, no optional/network volume. This is a capacity-oriented
   proposal, **not measured H3 image-conditioned fit or throughput**.
 - Image recipe: `examples/runpod-h3/Dockerfile`, including exact SGLang checkout,
-  Python 3.12, `comfy-kitchen`, HF client 1.28.0, ffmpeg/ffprobe. The CUDA13
-  amd64 base is digest-pinned. Build before starting the rental clock and record
-  the **resulting** image digest and `/opt/h3-environment.txt`; the final image
-  has not been built/validated here and dependency resolution is not locked.
-  No model is downloaded by the image build.
+  Python 3.12, Rust 1.93.0, uv 0.13.8, `comfy-kitchen` 0.2.41,
+  HF client 1.28.0 and ffmpeg/ffprobe. The CUDA13 amd64 base is digest-pinned.
+  Resolve the engine and HF client together: separately downgrading HF can leave
+  an incompatible `datasets` installation. The recipe requires `uv pip check`
+  before recording `/opt/h3-environment.txt`.
+  Local CPU build/import/CLI/schema validation passed without weights or GPU;
+  conditioned fit, kernel execution and cold runtime are **not** measured.
+  Rebuilds still resolve transitive dependencies; retain the resulting immutable
+  image and its full package freeze rather than assuming bit-identical rebuilds.
 
-Preparation command (not run by this worker):
+Build before starting the rental clock:
 
 ```sh
 docker build -f examples/runpod-h3/Dockerfile \
   -t ergo-h3:sglang-2511743-kitchen-int8 .
 docker image inspect ergo-h3:sglang-2511743-kitchen-int8 --format '{{.Id}}'
 ```
+
+The local `.Id` is an image **configuration** digest, not a registry manifest
+digest. No registry publication occurred; a later provider pull requires a real
+pullable named manifest digest from a separately authorized delivery route.
+Long source builds compile native Rust extensions; use an isolated bounded
+builder and preserve verbose logs/cache rather than repeatedly cancelling short
+attempts. CPU validation used2CPU/6GiB RAM, disk reserve/growth monitoring and
+a one-hour build deadline, not a GPU or model download.
 
 Image startup requires `ERGO_DEADLINE` equal to the ledger's **existing absolute
 Unix deadline**, established before creation; container restart never resets it.
@@ -45,6 +57,12 @@ even during download/load/generation. `compile_seconds=0` means Torch compile is
 disabled; any startup kernel JIT/warmup is included in startup. Independent
 provider deletion is still necessary to stop billing. There is no auto-restart,
 second rental, generation retry, or top-up.
+
+The image creates `/workspace` even with no attached volume. The pinned HF CLI
+requires repeated `--include` options for `model_index.json` and `FL2VA/*`;
+a second bare pattern becomes a literal filename and causes HF to ignore the
+include filter. Actual offline entrypoint and real CLI-parser capture exercised
+this boundary without downloading any checkpoint.
 
 ## Validate the actual frozen archive — zero GPU/network calls
 
@@ -182,11 +200,12 @@ deadline enforcement can legitimately yield a hashed partial manifest.
 - [Pinned offload recipe/benchmarks](https://github.com/sgl-project/sglang/blob/2511743bd784e69e5a81ca3d926a000711dae4ab/docs/cookbook/diffusion/MiniMax/MiniMax-H3.mdx).
 - [Public pinned CUDA base digest](https://hub.docker.com/v2/repositories/nvidia/cuda/tags/13.0.0-cudnn-devel-ubuntu24.04).
 
-Engineering launch checklist: build/record final image and dependency snapshot;
-read accepted live quote/profile; retain the same scoped callback and existing
-ledger; verify independently supervised cleaner freshness and tunnel; record cold
-timings; run only this six-shot batch; inspect retained defects and partial/complete
-manifest; continue cleanup until compute+storage absence.
+Engineering launch checklist: retain the validated image/freeze and establish an
+authorized pullable image delivery; read accepted live quote/profile; retain the
+same scoped callback and existing ledger; verify independently supervised cleaner
+freshness and tunnel; record cold timings; run only this six-shot batch; inspect
+retained defects and partial/complete manifest; continue cleanup until
+compute+storage absence.
 
 `RESTCleanup.configure_create` requires a named `@sha256:` image reference with
 a full 64-hex digest and an explicit nonempty `data_center_ids` allowlist. It
