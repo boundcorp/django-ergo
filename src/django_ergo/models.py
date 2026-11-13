@@ -802,3 +802,70 @@ class ChatMessage(TimeStampedMixin):
     def is_assistant_message(self) -> bool:
         """Check if this is an assistant message."""
         return self.message_type == MessageType.ASSISTANT_MESSAGE
+
+
+class LifecycleEventQuerySet(models.QuerySet):
+    """Disallow changing existing observations through the ordinary ORM."""
+
+    def update(self, **kwargs):
+        raise TypeError("Lifecycle events are immutable")
+
+    def bulk_update(self, objs, fields, batch_size=None):
+        raise TypeError("Lifecycle events are immutable")
+
+    def bulk_create(  # noqa: PLR0913 - matches Django's public signature
+        self,
+        objs,
+        batch_size=None,
+        ignore_conflicts=False,
+        update_conflicts=False,
+        update_fields=None,
+        unique_fields=None,
+    ):
+        if update_conflicts:
+            raise TypeError("Lifecycle events are immutable")
+        return super().bulk_create(
+            objs,
+            batch_size=batch_size,
+            ignore_conflicts=ignore_conflicts,
+            update_conflicts=update_conflicts,
+            update_fields=update_fields,
+            unique_fields=unique_fields,
+        )
+
+
+class LifecycleEvent(models.Model):
+    """Content-free, append-only lifecycle observation."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    key = models.CharField(max_length=255, unique=True)
+    stage = models.CharField(max_length=64)
+    occurred_at = models.DateTimeField()
+    observed_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    task_id = models.CharField(max_length=128, blank=True, default="", db_index=True)
+    thread_id = models.CharField(max_length=128, blank=True, default="", db_index=True)
+    turn_id = models.CharField(max_length=128, blank=True, default="", db_index=True)
+    tool_id = models.CharField(max_length=128, blank=True, default="")
+    worker_id = models.CharField(max_length=128, blank=True, default="", db_index=True)
+    question_id = models.CharField(max_length=128, blank=True, default="")
+    message_id = models.CharField(max_length=128, blank=True, default="")
+    related_thread_id = models.CharField(max_length=128, blank=True, default="")
+    related_task_id = models.CharField(max_length=128, blank=True, default="")
+    category = models.CharField(max_length=32, default="unknown")
+    actor = models.CharField(max_length=32, default="unknown")
+    state = models.CharField(max_length=32, default="unknown")
+    attempt = models.PositiveIntegerField(default=1)
+
+    objects = LifecycleEventQuerySet.as_manager()
+
+    def __str__(self):
+        return f"{self.stage} ({self.id})"
+
+    def save(
+        self, force_insert=False, force_update=False, using=None, update_fields=None
+    ):
+        if not self._state.adding or force_update or update_fields is not None:
+            raise TypeError("Lifecycle events are immutable")
+        # A new instance can still have an existing explicit primary key. Django's
+        # normal save may update that row, so additions must always be inserts.
+        return super().save(force_insert=True, using=using)

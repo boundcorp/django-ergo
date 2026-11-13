@@ -50,6 +50,7 @@ from django_ergo.conversation.identity import session_label
 from django_ergo.conversation.identity import session_origin
 from django_ergo.conversation.identity import system_identity
 from django_ergo.conversation.identity import thread_message_identity
+from django_ergo.conversation.lifecycle import record_event
 from django_ergo.conversation.models import ConversationSession
 from django_ergo.conversation.models import StructuredCallStatus
 from django_ergo.conversation.models import ThreadMessage
@@ -160,6 +161,42 @@ def files_note(message: ThreadMessage) -> str:
     )
 
 
+def _record_handoff(
+    stage: str, message: ThreadMessage, *, turn_id="", occurred_at=None
+):
+    """Record identifiers only; message text and metadata are never event data."""
+    metadata = message.metadata if isinstance(message.metadata, dict) else {}
+    record_event(
+        stage,
+        key=f"{stage}:{message.pk}",
+        occurred_at=occurred_at,
+        task_id=str(message.pk),
+        message_id=str(message.pk),
+        thread_id=str(message.recipient_session_id),
+        related_thread_id=str(message.sender_session_id or ""),
+        related_task_id=str(message.in_reply_to_id or ""),
+        turn_id=str(turn_id or ""),
+        worker_id=str(metadata.get("worker") or "")
+        if metadata.get("worker_finished")
+        else "",
+        category="handoff",
+    )
+
+
+def _record_dispatched(message_id: str) -> None:
+    if not api_settings.LIFECYCLE_EVENTS_ENABLED:
+        return
+    # A dispatch can race the claim; its acceptance is evidence regardless of
+    # which status the row has reached by the time it is read here.
+    try:
+        with transaction.atomic():
+            message = ThreadMessage.objects.filter(pk=message_id).first()
+            if message is not None:
+                _record_handoff("dispatched", message)
+    except Exception:  # noqa: BLE001 - instrumentation is best-effort
+        logger.debug("Could not record thread message dispatch")
+
+
 # -- sending -----------------------------------------------------------------
 
 
@@ -237,6 +274,7 @@ def send(  # noqa: PLR0913
         depth=depth,
         metadata=metadata or {},
     )
+    _record_handoff("queued", message, occurred_at=message.created_at)
     transaction.on_commit(lambda: dispatch(str(message.id), registry))
     return message
 
@@ -285,6 +323,7 @@ def dispatch(message_id: str, registry: BotRegistry | None = None) -> None:
     if runner is not None:
         try:
             runner(message_id)
+            _record_dispatched(message_id)
         except Exception:
             # A publish can fail after the message transaction committed. A
             # conditional transition prevents a worker which already claimed
@@ -305,6 +344,7 @@ def dispatch(message_id: str, registry: BotRegistry | None = None) -> None:
     start_daemon(
         deliver, message_id, registry, name=f"ergo-thread-message-{message_id}"
     )
+    _record_dispatched(message_id)
 
 
 # -- delivering ----------------------------------------------------------------
@@ -410,9 +450,11 @@ def _claim_next(recipient_id) -> ThreadMessage | None:
         id=head, status=ThreadMessageStatus.QUEUED
     ).update(status=ThreadMessageStatus.DELIVERED):
         return None
-    return ThreadMessage.objects.select_related(
+    message = ThreadMessage.objects.select_related(
         "recipient_session__user", "sender_session", "in_reply_to"
     ).get(id=head)
+    _record_handoff("delivered", message)
+    return message
 
 
 def _run_turn(message: ThreadMessage, registry: BotRegistry | None) -> None:
@@ -571,6 +613,8 @@ def _route_reply(bot: Bot, session: ConversationSession, result: TurnResult) -> 
     message.status = ThreadMessageStatus.ANSWERED
     message.reply_text = text
     message.save(update_fields=["status", "reply_text", "updated_at"])
+    if result.reply is not None:
+        _record_handoff("result_persisted", message, turn_id=call.pk)
     report = (message.metadata or {}).get("report")  # a one-way report: no reply back
     if message.sender_session_id and message.in_reply_to_id is None and not report:
         reply(message, text, registry=bot.registry)

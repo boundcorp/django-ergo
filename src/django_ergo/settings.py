@@ -18,6 +18,8 @@ from django.utils.module_loading import import_string
 
 DEFAULTS = {
     "KNOWLEDGE_REPOSITORIES": {},
+    # Opt in to content-free lifecycle observations. Disabled by default.
+    "LIFECYCLE_EVENTS_ENABLED": False,
     # OpenAI Configuration
     "OPENAI_API_KEY": None,  # Can be overridden by environment variable
     "OPENAI_MODEL": "gpt-6-luna",
