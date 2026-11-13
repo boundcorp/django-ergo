@@ -4,6 +4,18 @@ This document tracks the major milestones and evolution of the Django Ergo proje
 
 ## Development Timeline
 
+### Bounded native RunPod deployment access (November 2026)
+
+- Added a reread-on-operation, server-owned JSON policy file for fresh quote
+  admission; missing/malformed/revoked policy fails closed without losing
+  independently persisted cleanup authority.
+- Bound the reviewed Ada profile's 167 GB RAM/10 vCPU minima and optional
+  public-key-only direct SSH bootstrap into immutable create intent. The
+  published image and original absolute launcher deadline are unchanged.
+- Added authenticated provider-log host-key pinning, driver/VRAM baseline
+  evidence and an unchanged-image CPU transport proof. Synthetic transport
+  fixtures are not GPU/model fit or throughput evidence.
+
 ### Native RunPod workers (November 2026)
 
 - Registered the RunPod plugin's approved-profile/start/status/collect/terminate

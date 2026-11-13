@@ -64,6 +64,9 @@ REALTIME_VOICE_DELEGATION_BUDGET = None
 REALTIME_VOICE_THREAD_EXECUTION_AUTHORIZATIONS = json.loads(
     os.environ.get("REALTIME_VOICE_THREAD_EXECUTION_AUTHORIZATIONS", "{}")
 )
+# Server-owned policy is read on each native operation so a genuine fresh quote
+# can be installed atomically without redeploying every Ergonaut role.
+RUNPOD_ACCOUNTS_FILE = os.environ.get("RUNPOD_ACCOUNTS_FILE", "")
 # Extra silence after Silero's own end-of-speech threshold, before background dispatch.
 REALTIME_VOICE_PAUSE_GRACE_SECONDS = 2.0
 ROOT_URLCONF = "ergonaut.settings.urls"

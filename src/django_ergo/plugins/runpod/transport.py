@@ -7,8 +7,10 @@ that a mutating request failed; callers must reconcile rather than replay it.
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import math
+import time
 from dataclasses import dataclass
 from http import HTTPStatus
 from urllib.error import HTTPError
@@ -17,9 +19,13 @@ from urllib.request import HTTPRedirectHandler
 from urllib.request import Request
 from urllib.request import build_opener
 
+from .ssh import public_key
+
 _BASE = "https://rest.runpod.io/v1"
 _MAX_RESPONSE = 2 * 1024 * 1024
 _MAX_TIMEOUT = 30
+_MAX_SSE_LINE = 65536
+_MAX_PORT = 65535
 _NOT_FOUND = object()
 
 
@@ -117,16 +123,16 @@ class RunpodREST:
         self._timeout = timeout
         self._opener = opener if opener is not None else build_opener(_NoRedirect())
 
+    def _token(self):
+        token = self._credential()
+        if not isinstance(token, str) or not token or "\n" in token or "\r" in token:
+            msg = "invalid provider credential"
+            raise ValueError(msg)
+        return token
+
     def _request(self, method, path, *, body=None, absent_ok=False):
         try:
-            token = self._credential()
-            if (
-                not isinstance(token, str)
-                or not token
-                or "\n" in token
-                or "\r" in token
-            ):
-                raise ValueError  # noqa: TRY301
+            token = self._token()
             data = None if body is None else json.dumps(body, allow_nan=False).encode()
             request = Request(  # noqa: S310 -- fixed HTTPS origin
                 _BASE + path,
@@ -135,6 +141,7 @@ class RunpodREST:
                 headers={
                     "Authorization": "Bearer " + token,
                     "Content-Type": "application/json",
+                    "User-Agent": "Ergonaut-native-preflight",
                 },
             )
             with self._opener.open(request, timeout=self._timeout) as response:
@@ -173,6 +180,96 @@ class RunpodREST:
             msg = "invalid provider response"
             raise ProviderError(msg)
         return _safe_pod(result)
+
+    def ssh_connection(self, pod_id, ownership, *, deadline):  # noqa: C901 -- bounded ownership/log/address handshake
+        """Read an owned direct address and authenticate its host key via logs.
+
+        This performs GETs only; it neither starts SSH nor authorizes work.
+        The caller writes ``known_hosts`` and uses ``HostKeyAlias`` with strict
+        checking. A missing marker, mapping, access permission or log API fails
+        closed. Never substitute ssh-keyscan or accept-new.
+        """
+        if (
+            not isinstance(pod_id, str)
+            or not pod_id.isascii()
+            or not pod_id.isalnum()
+            or not isinstance(ownership, Ownership)
+            or not isinstance(deadline, int | float)
+            or not math.isfinite(deadline)
+            or deadline <= time.time()
+        ):
+            msg = "owned Pod and future connection deadline required"
+            raise ValueError(msg)
+        path = "/pods/" + quote(pod_id, safe="") + "?includeNetworkVolume=true"
+        pod = self._request("GET", path)
+        if (
+            not isinstance(pod, dict)
+            or pod.get("id") != pod_id
+            or not ownership.matches(pod, request_bound=True)
+        ):
+            msg = "SSH rental ownership unverified"
+            raise OwnershipError(msg)
+        try:
+            address = str(ipaddress.ip_address(pod["publicIp"]))
+            port = pod["portMappings"]["22"]
+            if type(port) is not int or not 1 <= port <= _MAX_PORT:
+                raise ValueError  # noqa: TRY301
+            request = Request(
+                "https://api.runpod.io/v2/pods/"
+                + quote(pod_id, safe="")
+                + "/logs?source=container&tail=5000",
+                method="GET",
+                headers={
+                    "Authorization": "Bearer " + self._token(),
+                    "Accept": "text/event-stream",
+                    "User-Agent": "Ergonaut-native-preflight",
+                },
+            )
+            prefix = "ERGO_SSH_HOST_KEY " + ownership.fingerprint + " "
+            size = 0
+            key = None
+            with self._opener.open(
+                request, timeout=min(self._timeout, deadline - time.time())
+            ) as response:
+                while time.time() < deadline:
+                    line = response.readline(_MAX_SSE_LINE + 1)
+                    size += len(line)
+                    if not line or len(line) > _MAX_SSE_LINE or size > _MAX_RESPONSE:
+                        break
+                    if not line.startswith(b"data:"):
+                        continue
+                    event = json.loads(line[5:])
+                    text = event.get("line", "")
+                    if (
+                        event.get("source") == "container"
+                        and isinstance(text, str)
+                        and text.startswith(prefix)
+                    ):
+                        key = public_key(text[len(prefix) :])
+                        break
+            if key is None or time.time() >= deadline:
+                raise ValueError  # noqa: TRY301
+            # An address change while authenticating is not a usable binding.
+            current = self._request("GET", path)
+            if (
+                not isinstance(current, dict)
+                or current.get("id") != pod_id
+                or not ownership.matches(current, request_bound=True)
+                or current.get("publicIp") != address
+                or current.get("portMappings", {}).get("22") != port
+                or time.time() >= deadline
+            ):
+                raise ValueError  # noqa: TRY301
+            alias = "ergo-" + ownership.fingerprint
+            return {
+                "host": address,
+                "port": port,
+                "host_key_alias": alias,
+                "known_hosts": alias + " " + key + "\n",
+            }
+        except Exception:  # noqa: BLE001 -- provider errors may contain credentials
+            msg = "authenticated SSH connection unverified"
+            raise ProviderError(msg) from None
 
     def create_pod(self, body):
         result = self._request("POST", "/pods", body=body)

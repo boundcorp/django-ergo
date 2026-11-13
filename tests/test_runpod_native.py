@@ -265,6 +265,44 @@ def test_cancelled_worker_cleanup_survives_removed_config_and_chat(setup, settin
     assert setup.provider.deletes == ["pod123"]
 
 
+@pytest.mark.parametrize(
+    "revocation", ["disabled", "malformed", "missing", "not_mapping"]
+)
+def test_live_policy_file_revokes_admission_without_losing_cleanup(
+    setup, settings, tmp_path, revocation
+):
+    path = tmp_path / "accounts.json"
+    settings.RUNPOD_ACCOUNTS_FILE = str(path)
+    policy = json.loads(json.dumps(settings.RUNPOD_ACCOUNTS))
+    policy["gpu_jobs"]["enabled"] = False
+    path.write_text(json.dumps(policy))
+    with pytest.raises(PermissionError, match="not authorized"):
+        invoke(setup, "start", profile="h3_frozen", request_key="approved-comparison")
+    assert not RunpodJob.objects.exists()
+    policy["gpu_jobs"]["enabled"] = True
+    path.write_text(json.dumps(policy))
+    job = begin(setup)
+    assert drive(setup, job) == "running"
+    if revocation == "disabled":
+        policy["gpu_jobs"]["enabled"] = False
+        path.write_text(json.dumps(policy))
+    elif revocation == "malformed":
+        path.write_text("{")
+    elif revocation == "missing":
+        path.unlink()
+    else:
+        path.write_text("[]")
+    # The enabled in-memory policy must not become a fallback after file loss.
+    with pytest.raises((PermissionError, ValueError, TypeError)):
+        invoke(setup, "start", profile="h3_frozen", request_key="replacement")
+    native.reconcile_once()
+    job.refresh_from_db()
+    assert job.cleanup_complete
+    assert Experiment(job.ledger_path).status()["stop_reason"] == "worker_lost"
+    assert setup.provider.posts == 1
+    assert setup.provider.deletes == ["pod123"]
+
+
 def test_lost_create_restart_and_late_resource_never_replays(setup):
     job = begin(setup)
     setup.provider.lose_response = True

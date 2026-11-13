@@ -58,8 +58,24 @@ MAX_REQUEST_KEY = 200
 MAX_OUTPUT_BYTES = 2_000_000_000
 
 
+def _account_policies():
+    path = getattr(settings, "RUNPOD_ACCOUNTS_FILE", "")
+    if path:
+        try:
+            policies = json.loads(Path(path).read_text())
+        except (OSError, ValueError):
+            msg = "RunPod host policy file is missing or invalid"
+            raise ValueError(msg) from None
+    else:
+        policies = getattr(settings, "RUNPOD_ACCOUNTS", {})
+    if not isinstance(policies, dict):
+        msg = "RunPod host policies must be a mapping"
+        raise TypeError(msg)
+    return policies
+
+
 def account_policy(key):
-    policy = getattr(settings, "RUNPOD_ACCOUNTS", {}).get(key)
+    policy = _account_policies().get(key)
     if policy is None:
         msg = "RunPod account is not installed"
         raise ValueError(msg)
@@ -425,9 +441,12 @@ def attempt_cleanup(job):
 def reconcile_once(*, now=None):
     """Independent host maintenance: no bot registry, plugin instance or user ctx."""
     now = time.time() if now is None else now
-    keys = set(getattr(settings, "RUNPOD_ACCOUNTS", {})) | set(
-        RunpodAccount.objects.values_list("key", flat=True)
-    )
+    try:
+        policies = _account_policies()
+    except (ValueError, TypeError):
+        # Revoking or losing admission policy must not disable existing cleanup.
+        policies = {}
+    keys = set(policies) | set(RunpodAccount.objects.values_list("key", flat=True))
     results = {}
     for key in sorted(keys):
         binding, _ = RunpodAccount.objects.get_or_create(key=key)

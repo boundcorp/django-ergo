@@ -214,17 +214,112 @@ The controller commits a single create intent before sending the POST; explicit
 live configuration and a fresh independent execute-mode cleaner are required.
 Preparation and fixture mode do not call Runpod.
 
-**Do not start a rental while the Pod access path is unproved.** The prepared
-image listens only on Pod loopback and does not declare a TCP port or start an
-SSH daemon. A hypothetical tunnel is not evidence that this image can be
-reached or its timing file copied out. Runpod's
-[SSH guide](https://docs.runpod.io/pods/configuration/use-ssh) says its basic
-proxy does not support SCP/SFTP; full SSH needs an SSH daemon, exposed port and
-configured key. Its [v2 command API](https://docs.runpod.io/api-reference-v2/pods/run-a-command-in-a-pod)
-is another documented possibility, but its availability, transfers and fit
-with this worker have not been verified. Establish and test an appropriate
-authenticated route before creating the only Pod; do not expose the model
-service unauthenticated.
+### Authenticated access without rebuilding the preserved image
+
+The image itself remains loopback-only and has no sshd. The reviewed optional
+`config.ssh_public_key` enables the fixed `runpod.ssh.SSH_BOOTSTRAP` entrypoint
+override: it installs Ubuntu `openssh-server` at launch, accepts only that fresh
+ed25519 **public** client key, exposes only `22/tcp`, and then runs the original
+`/opt/h3-launch.py` unchanged. Generate and keep the private client key on the
+durable controller host, never in the image, provider environment or rental.
+Do not change account-wide SSH keys. All overrides and the public key are bound
+into the original request fingerprint before the one create.
+
+The bootstrap checks the existing absolute deadline **before apt**, kills the
+active apt process group at the same deadline-minus-120s cutoff, disables apt's
+automatic sshd startup, and starts a separate password-disabled, public-key-only
+sshd configuration. Forwarding is restricted to `127.0.0.1:30010`; SFTP/SCP and
+authenticated command execution are available. A fresh host private key is
+generated **inside** the ephemeral rental; it is not the controller private key.
+Before any checkpoint download, the wrapper records effective RAM/disk/VRAM and
+rejects a non-Ada-48GB GPU or driver older than major580. The NVIDIA
+[CUDA13 compatibility table](https://docs.nvidia.com/deploy/cuda-compatibility/minor-version-compatibility.html)
+requires driver580 or later. The bound request requires `minRAMPerGPU=167` and
+`minVCPUPerGPU=10`. The live v1 schema's CUDA enum stops at13.0 while current
+catalog machines can report13.2, so no unsupported enum values are submitted;
+the pre-download driver/GPU check is mandatory.
+
+**No TOFU or blind `ssh-keyscan`.** The bootstrap prints only its public host
+key with the immutable attempt fingerprint. `RunpodREST.ssh_connection(pod_id,
+ownership, deadline=...)` performs exact-owned v1 GET, authenticated
+[v2 container-log GET](https://docs.runpod.io/api-reference-v2/pods/stream-pod-logs)
+at `https://api.runpod.io/v2/pods/{id}/logs?source=container&tail=5000`, and another
+exact-owned GET to bind the returned `publicIp` and `portMappings["22"]`.
+The result has `host`, `port`, `host_key_alias`, and a complete `known_hosts`
+line. Save that line in an isolated file off-Pod and require
+`StrictHostKeyChecking=yes`, `HostKeyAlias=<host_key_alias>`,
+`UserKnownHostsFile=<isolated-file>`, `IdentitiesOnly=yes`, `BatchMode=yes`,
+`-F /dev/null`, and `-i <fresh-private-key>`. The helper never starts SSH,
+submits work, creates a rental or changes cleanup ownership. Missing logs,
+wrong attempt markers, changed address/ownership or API failure fail closed.
+Both API origins use a fixed ordinary User-Agent; provider credentials never
+go to the Pod or SSH process.
+
+Use the provider-returned direct address, not `ssh.runpod.io`:
+
+```sh
+# All angle-bracket values come from the authenticated helper, never a model.
+ssh -F /dev/null -i <fresh-private-key> -p <port> \
+  -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+  -o UserKnownHostsFile=<isolated-file> -o HostKeyAlias=<host_key_alias> \
+  -o ExitOnForwardFailure=yes -N \
+  -L 127.0.0.1:30010:127.0.0.1:30010 root@<host>
+```
+
+Keep this tunnel on the native Worker's stable network namespace and bind local
+port30010 only on loopback. The **native Worker remains the sole generation
+controller**, using its existing HTTP/binary artifact client through the tunnel.
+An operator SSH process is transport/observation only, never a second runner.
+Runpod's [SSH guide](https://docs.runpod.io/pods/configuration/use-ssh) explicitly
+requires public-IP direct SSH for SCP/SFTP; basic proxy support is not assumed.
+
+**Pre-create CPU proof (no provider, weights or GPU):**
+
+```sh
+PYTHONPATH=src python examples/runpod-h3/prove_ssh.py
+```
+
+This requires Docker access, a local `ssh-keygen`, and Ubuntu package-download
+access. It checks the preserved local image config digest, starts its **exact**
+bootstrap override in a2CPU/6GB local container without publishing public ports,
+and leaves the original launcher untouched. Explicit synthetic `hf`,
+`nvidia-smi` and `sglang` executables prevent checkpoint/GPU calls. A separate
+CPU client container holds a disposable proof key; the server receives only
+its public key. Trusted local Docker logs supply the host pin (the same public
+marker used by authenticated provider logs). Real OpenSSH tests correct/wrong
+client keys, rejects a wrong host pin, forwards loopback health and binary
+bytes, and SCPs timing/baseline files. Its JSON labels GPU/resource observations
+synthetic. Both containers and disposable proof keys are removed on exit.
+This is an operator proof command, not a claim that it has already passed.
+
+**Runtime evidence:** SCP `/workspace/h3-access-timings.json`,
+`/workspace/h3-resource-baseline.json` and `/workspace/h3-timings.json` to durable
+off-Pod storage using the same strict SSH options (`scp -P <port> ...`).
+The first records SSH apt/setup duration, the baseline records effective RAM,
+free/total disk, GPU/VRAM and driver before downloads, and the original launcher
+records actual download/startup durations with Torch compile disabled. Sample
+`nvidia-smi --query-gpu=timestamp,name,driver_version,memory.total,memory.used,utilization.gpu --format=csv`,
+`cat /proc/meminfo`, `cat /sys/fs/cgroup/memory.current`,
+`cat /sys/fs/cgroup/memory.peak`, and `df -B1 /workspace` through authenticated
+SSH during download/load/generation; timestamp and retain results **off-Pod**.
+Also retain native request/export elapsed times. None of these measurements is
+an invoice, and a48GB model-fit proposal is not measured fit or throughput.
+
+**Residual pre-create limits:** authenticated read-only account/catalog calls
+can prove key permissions, current GPU/datacenter price/availability, driver
+advertisement and requested hardware constraints, but cannot reserve stock or
+prove the eventual public port mapping, Runpod registry pull, apt throughput,
+target-specific logs, cold model download/load, RAM/VRAM fit or generation
+speed. Secure Cloud's public IP is documented, while the external TCP22 mapping
+exists only after allocation. With no existing Pod, target log authorization
+cannot be exercised before creation; a synthetic404 probe proves at most API
+routing, not log permission or execution. If exact167GB stock, the authenticated
+log pin route, or CPU transport proof is unavailable, keep starts disabled.
+Never buy a smaller host, expose SGLang, retry an unknown create or rely on the
+[v2 exec API](https://docs.runpod.io/api-reference-v2/pods/run-a-command-in-a-pod):
+that API explicitly permits503 for machines not yet exec-enabled. Independent
+off-Pod maintenance must continue regardless of tunnel/controller failure.
+
 
 Use the already-injected scoped credential environment-variable **name**, not
 a secret value, for `$SCOPED_CALLBACK_ENV`. Establish cleaner freshness before

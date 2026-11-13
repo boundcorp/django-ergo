@@ -75,6 +75,7 @@ def prepare(path, config, *, now):
         gpu_type=GPU,
         data_center_ids=config["data_center_ids"],
         quoted_hourly_usd=config["pricing"]["compute_hourly_usd"]["amount"],
+        ssh_public_key=config.get("ssh_public_key"),
     )
     with experiment._tx() as db:
         db.execute(
