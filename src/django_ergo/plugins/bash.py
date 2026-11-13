@@ -3,7 +3,13 @@
     plugins:
       - name: bash
         cwd: ~                     # working directory (default: the user's home)
-        approve: true              # every command waits for the user's approval
+        approve: true              # true: every command waits for the user's approval
+                                   # review: a reviewer may let routine reads through
+                                   # false: commands run without approval
+        reviewer:                  # only with approve: review (all keys optional)
+          model: auto/small        # providers.yaml model or auto/<tier>
+          ssh_hosts: [rigel]       # ssh aliases whose remote reads may be reviewed
+          timeout: 45              # seconds; a slower review waits for the user
         timeout: 120               # seconds per command
         root_only: true            # only the root session gets the tool
 
@@ -12,6 +18,11 @@ runs as, with that user's environment and permissions. That is a lot of
 power: keep ``approve: true`` unless the bot is trusted with the machine.
 Output is stdout and stderr together, with the exit code, trimmed to the
 first and last part when it is long.
+
+``approve: review`` keeps human approval for everything except commands the
+reviewer (``plugins.bash_review``) finds read-only, clearly asked for by the
+user in the current turn, and low-risk; any doubt or failure waits for the
+user as with ``approve: true``.
 
 Protected variables (``FIREWORKS_*`` and ``DJANGO_ERGO["PROTECTED_ENV_PREFIXES"]``)
 are removed from the command's environment. That is defense-in-depth, not a
@@ -39,6 +50,21 @@ if TYPE_CHECKING:
     from django_ergo.conversation.toolkit import Toolkit
 
 from django_ergo.plugins._common import trim
+from django_ergo.plugins.bash_review import ReviewerConfig
+from django_ergo.plugins.bash_review import review
+
+
+class _ReviewedBashToolkit(FunctionToolkit):
+    """The bash tool with ``approve: review``: each call is reviewed on its own."""
+
+    def __init__(self, plugin: BashPlugin, ctx: ToolContext):
+        super().__init__(plugin._tools(), ctx)  # noqa: SLF001 — toolkit belongs to this plugin
+        self.plugin = plugin
+
+    async def auto_approve(self, tool_name: str, arguments: dict, tool_id: str) -> bool:
+        return tool_name == "ergo_bash_run" and await review(
+            self.context, self.plugin, tool_id, arguments
+        )
 
 
 class BashPlugin(BotPlugin):
@@ -47,7 +73,20 @@ class BashPlugin(BotPlugin):
 
     def on_load(self) -> None:
         self.cwd = Path(str(self.config.get("cwd") or "~")).expanduser()
-        self.approve = bool(self.config.get("approve", True))
+        approve = self.config.get("approve", True)
+        if approve not in (True, False, "review"):
+            msg = f"bash: approve must be true, false or review, not {approve!r}"
+            raise ValueError(msg)
+        # review still requires approval: the reviewer may only waive it per call.
+        self.approve = approve is not False
+        self.reviewer = (
+            ReviewerConfig.parse(self.config.get("reviewer"))
+            if approve == "review"
+            else None
+        )
+        if self.reviewer is None and self.config.get("reviewer") is not None:
+            msg = "bash: reviewer needs approve: review"
+            raise ValueError(msg)
         self.timeout = int(self.config.get("timeout", 120))
         self.root_only = bool(self.config.get("root_only", True))
 
@@ -79,16 +118,23 @@ class BashPlugin(BotPlugin):
     def toolkits(self, ctx: ToolContext) -> list[Toolkit]:
         if not self._applies(ctx):
             return []
+        if self.reviewer is not None:
+            return [_ReviewedBashToolkit(self, ctx)]
         return [FunctionToolkit(self._tools(), ctx)]
 
     def context_sources(self, ctx: ToolContext, message: str) -> list[ContextSource]:
         if not self._applies(ctx):
             return []
-        approval = (
-            "Each command waits for the user's approval, so say what it does and why."
-            if self.approve
-            else "Commands run without approval."
-        )
+        if self.reviewer is not None:
+            approval = (
+                "A reviewer lets routine read-only commands the user clearly asked for "
+                "run at once; every other command waits for the user's approval, so "
+                "say what it does and why."
+            )
+        elif self.approve:
+            approval = "Each command waits for the user's approval, so say what it does and why."
+        else:
+            approval = "Commands run without approval."
         return [
             TextContextSource(
                 "Shell",

@@ -9,8 +9,14 @@ import {
   type RefObject,
 } from 'react'
 import { Link, useLocation, useParams } from 'react-router-dom'
-import { Room, RoomEvent, Track } from 'livekit-client'
-import { api, type RealtimeVoiceSession, type SessionDetail, type VoiceTaskUpdate } from '../api'
+import { RemoteAudioTrack, Room, RoomEvent, Track, TrackEvent, type RemoteTrack } from 'livekit-client'
+import {
+  api,
+  type ClientAudioStatus,
+  type RealtimeVoiceSession,
+  type SessionDetail,
+  type VoiceTaskUpdate,
+} from '../api'
 import { initialVoiceAudioOutput, VoiceAudioOutput, type VoiceAudioOutputState } from '../voiceAudioOutput'
 import { VoiceBackgroundWork } from './VoiceSessionCard'
 import { collectVoiceAudioDiagnostics, type VoiceAudioDiagnostics } from '../voiceAudioDiagnostics'
@@ -20,6 +26,51 @@ const storageKey = (chatId: string) => `ergonaut.realtimeVoice.${chatId}`
 const taskPending = (task: VoiceTaskUpdate) =>
   task.status === 'queued' || task.status === 'delivered' || task.status === 'waiting'
 
+/** Browser playback of the assistant's audio. `none`: no connected call; `waiting`: connected, no
+ * attached element confirmed playing; `playing`: an element fired `playing` (hearing still unknown);
+ * `blocked`: autoplay policy refused playback; `failed`: any other playback error. */
+export type AudioPlayback = 'none' | 'waiting' | 'playing' | 'blocked' | 'failed'
+// totalAudioEnergy grows by roughly level² per second; comfort noise stays far below this.
+const arrivingEnergy = 1e-5
+
+/** One connected room. Reports and guards key off this identity, so a stale room cannot write. */
+type CallAudio = {
+  room: Room
+  sessionId: string
+  live: boolean
+  elements: Map<RemoteTrack, HTMLMediaElement>
+  playing: Set<HTMLMediaElement>
+  problem: 'blocked' | 'failed' | null
+  reported: Set<string>
+  /** Last totalAudioEnergy per subscribed receiver; inbound audio has arrived once it rises. */
+  energy: Map<RemoteAudioTrack, number>
+  arriving: boolean
+  sampling: boolean
+  poll: ReturnType<typeof setInterval> | undefined
+}
+
+function audioEventId() {
+  const id =
+    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`
+  return id.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 80)
+}
+
+/** Report detail: the error's name only (e.g. NotAllowedError), never its message. */
+function errorName(error: unknown) {
+  return typeof error === 'object' && error !== null && 'name' in error && typeof error.name === 'string'
+    ? error.name.slice(0, 120)
+    : 'Error'
+}
+
+/** Final assistant turn ids, from the transcript or (older sessions) assistant events. */
+function finalAssistantTurns(voice: RealtimeVoiceSession | null) {
+  if (!voice) return []
+  return voice.transcript
+    ? voice.transcript.filter(turn => turn.role === 'assistant' && turn.is_final).map(turn => turn.turn_id)
+    : voice.events.filter(event => event.kind === 'assistant').map(event => event.event_id)
+}
 type VoiceCallOwner = {
   enabled: boolean | null
   standbyEnabled: boolean
@@ -27,7 +78,9 @@ type VoiceCallOwner = {
   phase: Phase
   muted: boolean
   microphone: 'enabled' | 'disabled' | 'unknown'
-  playback: boolean | null
+  audioPlayback: AudioPlayback
+  audioArriving: boolean
+  unplayedTurn: boolean
   error: string
   errorChatId: string | null
   action: 'start' | 'standby' | 'resume' | 'end' | null
@@ -52,7 +105,11 @@ function useVoiceOwner(): VoiceCallOwner {
   const [phase, setPhase] = useState<Phase>('idle')
   const [muted, setMuted] = useState(false)
   const [microphone, setMicrophone] = useState<'enabled' | 'disabled' | 'unknown'>('unknown')
-  const [playback, setPlayback] = useState<boolean | null>(null)
+  const [audioPlayback, setAudioPlayback] = useState<AudioPlayback>('none')
+  const [audioArriving, setAudioArriving] = useState(false)
+  // Final assistant turns already known when this connection went live; later ones were spoken to it.
+  const [knownTurns, setKnownTurns] = useState<ReadonlySet<string> | null>(null)
+  const call = useRef<CallAudio | null>(null)
   const [error, setError] = useState('')
   const [errorChatId, setErrorChatId] = useState<string | null>(null)
   const [action, setAction] = useState<'start' | 'standby' | 'resume' | 'end' | null>(null)
@@ -90,6 +147,73 @@ function useVoiceOwner(): VoiceCallOwner {
     }
   }, [])
 
+  function endCall() {
+    if (call.current) clearInterval(call.current.poll)
+    call.current = null
+    setAudioPlayback('none')
+    setAudioArriving(false)
+    setKnownTurns(null)
+  }
+
+  /** Fire-and-forget evidence for the current call only; each key is sent at most once per call. */
+  function report(target: CallAudio, status: ClientAudioStatus, detail = '', key: string = status) {
+    const session = voiceRef.current
+    if (call.current !== target || target.reported.has(key)) return
+    if (session?.id !== target.sessionId || session.status !== 'active') return
+    target.reported.add(key)
+    void api
+      .reportRealtimeVoiceAudio(target.sessionId, {
+        event_id: audioEventId(),
+        status,
+        ...(detail ? { detail: detail.slice(0, 120) } : {}),
+      })
+      .catch(() => {
+        /* Evidence is best effort; playback never depends on it. */
+      })
+  }
+
+  function refreshPlayback(target: CallAudio) {
+    if (call.current !== target || !target.live) return
+    setAudioPlayback(target.playing.size ? 'playing' : (target.problem ?? 'waiting'))
+  }
+
+  function playbackProblem(target: CallAudio, error: unknown) {
+    if (call.current !== target) return
+    const name = errorName(error)
+    target.problem = name === 'NotAllowedError' ? 'blocked' : 'failed'
+    report(target, target.problem === 'blocked' ? 'playback_blocked' : 'playback_failed', name)
+    refreshPlayback(target)
+  }
+
+  /** Polls receiver stats about once a second until inbound audio energy rises once. */
+  function watchArrival(target: CallAudio) {
+    if (target.poll !== undefined || target.arriving) return
+    target.poll = setInterval(() => {
+      if (call.current !== target) {
+        clearInterval(target.poll)
+        return
+      }
+      if (target.sampling) return
+      const tracks = [...target.energy.keys()]
+      if (!tracks.length) return
+      target.sampling = true
+      void Promise.all(tracks.map(track => track.getReceiverStats().catch(() => undefined))).then(samples => {
+        target.sampling = false
+        if (call.current !== target || target.arriving) return
+        samples.forEach((sample, index) => {
+          const energy = sample?.totalAudioEnergy
+          if (energy === undefined || !target.energy.has(tracks[index])) return
+          if (energy - (target.energy.get(tracks[index]) ?? 0) > arrivingEnergy) target.arriving = true
+          target.energy.set(tracks[index], energy)
+        })
+        if (!target.arriving) return
+        clearInterval(target.poll)
+        setAudioArriving(true)
+        report(target, 'audio_arriving')
+      })
+    }, 1000)
+  }
+
   function disconnect() {
     generation.current++
     const current = room.current
@@ -100,7 +224,7 @@ function useVoiceOwner(): VoiceCallOwner {
     setPhase('disconnected')
     setMuted(false)
     setMicrophone('unknown')
-    setPlayback(null)
+    endCall()
   }
 
   useEffect(
@@ -110,6 +234,7 @@ function useVoiceOwner(): VoiceCallOwner {
       room.current = null
       if (current) void current.disconnect()
       outputRouting.current?.dispose()
+      if (call.current) clearInterval(call.current.poll)
     },
     [],
   )
@@ -209,44 +334,84 @@ function useVoiceOwner(): VoiceCallOwner {
       if (attempt !== generation.current) return
       const current = new Room()
       room.current = current
-      current.on(RoomEvent.AudioPlaybackStatusChanged, () => {
-        if (room.current === current) setPlayback(current.canPlaybackAudio)
+      if (call.current) clearInterval(call.current.poll)
+      const target: CallAudio = {
+        room: current,
+        sessionId: session.id,
+        live: false,
+        elements: new Map(),
+        playing: new Set(),
+        problem: null,
+        reported: new Set(),
+        energy: new Map(),
+        arriving: false,
+        sampling: false,
+        poll: undefined,
+      }
+      call.current = target
+      // The argument is the room's new canPlaybackAudio.
+      current.on(RoomEvent.AudioPlaybackStatusChanged, (playing: boolean) => {
+        if (room.current !== current) return
+        if (!playing) playbackProblem(target, { name: 'NotAllowedError' })
+        else if (target.problem === 'blocked') {
+          target.problem = null
+          refreshPlayback(target)
+        }
       })
-      const subscribedAudio = new Map<Track, HTMLMediaElement>()
       current.on(RoomEvent.TrackSubscribed, track => {
         if (room.current !== current || attempt !== generation.current) return
-        if (track.kind === Track.Kind.Audio && audio.current) {
-          const element = document.createElement('audio')
-          const routing = outputRouting.current
-          subscribedAudio.set(track, element)
-          void (routing?.attach(element) ?? Promise.resolve())
-            .then(() => {
-              if (
-                room.current !== current ||
-                attempt !== generation.current ||
-                subscribedAudio.get(track) !== element ||
-                !audio.current
-              ) {
-                routing?.detach(element)
-                return
-              }
-              audio.current.appendChild(track.attach(element))
-            })
-            .catch(e => {
-              routing?.detach(element)
-              if (room.current === current) setError(e instanceof Error ? e.message : String(e))
-            })
+        if (track.kind !== Track.Kind.Audio || !audio.current) return
+        // Playback never waits on output routing: a stalled or refused setSinkId only
+        // surfaces through the output message while the default route keeps playing.
+        const element = document.createElement('audio')
+        const key = track.sid || String(target.elements.size)
+        const mine = () => call.current === target && target.elements.get(track) === element
+        element.addEventListener('playing', () => {
+          if (!mine()) return
+          target.playing.add(element)
+          target.problem = null
+          report(target, 'playback_started', '', `playback_started:${key}`)
+          refreshPlayback(target)
+        })
+        const stopped = () => {
+          if (!mine()) return
+          target.playing.delete(element)
+          refreshPlayback(target)
         }
+        element.addEventListener('pause', stopped)
+        element.addEventListener('ended', stopped)
+        element.addEventListener('error', () => {
+          if (!mine()) return
+          target.playing.delete(element)
+          playbackProblem(target, { name: 'MediaError' })
+        })
+        if (typeof track.on === 'function') {
+          track.on(TrackEvent.AudioPlaybackFailed, (e: unknown) => {
+            if (mine()) playbackProblem(target, e)
+          })
+        }
+        target.elements.set(track, element)
+        if (track instanceof RemoteAudioTrack) target.energy.set(track, 0)
+        audio.current.appendChild(track.attach(element))
+        void outputRouting.current?.attach(element)
+        report(target, 'track_subscribed', '', `track_subscribed:${key}`)
+        watchArrival(target)
       })
       current.on(RoomEvent.TrackUnsubscribed, track => {
         if (room.current !== current || attempt !== generation.current) return
-        const element = subscribedAudio.get(track)
-        subscribedAudio.delete(track)
-        if (element) outputRouting.current?.detach(element)
+        const element = target.elements.get(track)
+        target.elements.delete(track)
+        if (track instanceof RemoteAudioTrack) target.energy.delete(track)
+        if (element) {
+          target.playing.delete(element)
+          outputRouting.current?.detach(element)
+          element.remove()
+        }
         track.detach().forEach(element => {
           outputRouting.current?.detach(element)
           element.remove()
         })
+        refreshPlayback(target)
       })
       current.on(RoomEvent.Reconnecting, () => {
         if (room.current === current) {
@@ -257,7 +422,8 @@ function useVoiceOwner(): VoiceCallOwner {
       current.on(RoomEvent.Reconnected, () => {
         if (room.current === current) {
           setPhase('connected')
-          setPlayback(current.canPlaybackAudio)
+          if (!current.canPlaybackAudio) playbackProblem(target, { name: 'NotAllowedError' })
+          else refreshPlayback(target)
           void outputRouting.current?.refresh()
         }
       })
@@ -268,7 +434,7 @@ function useVoiceOwner(): VoiceCallOwner {
           outputRouting.current?.clearTracks()
           setPhase('disconnected')
           setMicrophone('unknown')
-          setPlayback(null)
+          endCall()
         }
       })
       await current.connect(credentials.url, credentials.token)
@@ -284,7 +450,10 @@ function useVoiceOwner(): VoiceCallOwner {
       setMuted(false)
       setMicrophone('enabled')
       setPhase('connected')
-      setPlayback(current.canPlaybackAudio)
+      setKnownTurns(new Set(finalAssistantTurns(voiceRef.current)))
+      target.live = true
+      if (!current.canPlaybackAudio) playbackProblem(target, { name: 'NotAllowedError' })
+      else refreshPlayback(target)
       void outputRouting.current?.refresh()
     } catch (e) {
       if (attempt !== generation.current) return
@@ -384,14 +553,37 @@ function useVoiceOwner(): VoiceCallOwner {
 
   function enableAudio() {
     const current = room.current
-    if (!current) return
-    void current
-      .startAudio()
+    const target = call.current
+    if (!current || target?.room !== current) return
+    // Both start inside the click gesture: the room's audio unlock and play() on every attached element.
+    const elements = [...target.elements.values()]
+    void Promise.all([current.startAudio(), ...elements.map(element => element.play())])
       .then(() => {
-        if (room.current === current) setPlayback(current.canPlaybackAudio)
+        if (call.current !== target) return
+        target.problem = null
+        for (const element of elements) if (!element.paused && element.isConnected) target.playing.add(element)
+        report(target, 'sound_enabled')
+        refreshPlayback(target)
       })
-      .catch(e => setError(e instanceof Error ? e.message : String(e)))
+      .catch(e => {
+        if (call.current !== target) return
+        // AbortError: a newer play() or detach superseded this one; nothing failed.
+        if (errorName(e) === 'AbortError') return refreshPlayback(target)
+        playbackProblem(target, e)
+        setError(e instanceof Error ? e.message : String(e))
+      })
   }
+
+  // A final assistant turn spoken to this connection while its audio is not playing here.
+  const unplayedTurn =
+    phase === 'connected' &&
+    voice?.status === 'active' &&
+    audioPlayback !== 'playing' &&
+    knownTurns !== null &&
+    finalAssistantTurns(voice).some(id => !knownTurns.has(id))
+  useEffect(() => {
+    if (unplayedTurn && call.current) report(call.current, 'turn_unplayed')
+  }, [unplayedTurn])
 
   function collectAudioDiagnostics() {
     const track = room.current?.localParticipant.getTrackPublication(Track.Source.Microphone)?.track?.mediaStreamTrack
@@ -405,7 +597,9 @@ function useVoiceOwner(): VoiceCallOwner {
     phase,
     muted,
     microphone,
-    playback,
+    audioPlayback,
+    audioArriving,
+    unplayedTurn,
     error,
     errorChatId,
     action,
@@ -555,7 +749,8 @@ export function VoiceTranscript({ voice }: { voice: RealtimeVoiceSession | null 
 export function VoicePage() {
   const { id = '' } = useParams()
   const owner = useVoiceCall()
-  const { enabled, standbyEnabled, phase, microphone, muted, playback, action, output, outputRouting } = owner
+  const { enabled, standbyEnabled, phase, microphone, muted, action, output, outputRouting } = owner
+  const { audioPlayback, audioArriving, unplayedTurn } = owner
   const [loadedDetail, setDetail] = useState<SessionDetail | null>(null)
   const detail = loadedDetail?.session.id === id ? loadedDetail : null
   const [existing, setExisting] = useState<RealtimeVoiceSession | null>(null)
@@ -774,7 +969,7 @@ export function VoicePage() {
                   >
                     {muted ? 'Unmute' : 'Mute'}
                   </button>
-                  {playback === false && (
+                  {audioPlayback !== 'playing' && (
                     <button type="button" onClick={owner.enableAudio} aria-describedby="voice-playback-help">
                       Enable sound
                     </button>
@@ -823,10 +1018,25 @@ export function VoicePage() {
           )}
         </div>
         <p className="mt-1 text-xs text-muted">End call stops voice only; background work continues.</p>
-        {phase === 'connected' && playback === false && (
+        {owns && phase === 'connected' && (unplayedTurn || (audioArriving && audioPlayback !== 'playing')) && (
+          <p role="alert" className="mt-1 text-sm font-medium text-red-600">
+            The assistant spoke, but this browser has not started playing its audio. Tap Enable sound.
+          </p>
+        )}
+        {phase === 'connected' && audioPlayback !== 'playing' && (
           <p id="voice-playback-help" className="mt-1 text-xs text-muted">
-            Your browser blocked playback. Enable sound allows this call's audio; it does not join again or change the
-            microphone.
+            {audioPlayback === 'blocked'
+              ? 'Your browser blocked playback.'
+              : audioPlayback === 'failed'
+                ? "This browser could not play the assistant's audio."
+                : "The assistant's audio hasn't started playing in this browser yet. Tap Enable sound."}{' '}
+            Enable sound allows this call's audio; it does not join again or change the microphone.
+          </p>
+        )}
+        {phase === 'connected' && audioPlayback === 'playing' && audioArriving && (
+          <p className="mt-1 text-xs text-muted">
+            Assistant audio is playing in this browser. If you can't hear it, raise the volume during the call (Android
+            uses the call volume) or check the speaker/Bluetooth route.
           </p>
         )}
         {phase !== 'connected' && (
@@ -847,8 +1057,18 @@ export function VoicePage() {
               Voice session: {voice?.id || 'not started'} · Transport: {phase}
             </p>
             <p className="mt-1">
-              Browser playback: {playback === null ? 'unknown' : playback ? 'allowed; hearing unconfirmed' : 'blocked'}{' '}
-              · Provider: {standbyEnabled && voice?.standby_state === 'standby' ? 'closed' : 'unknown'}
+              Browser playback:{' '}
+              {audioPlayback === 'none'
+                ? 'not connected'
+                : audioPlayback === 'waiting'
+                  ? 'not started yet'
+                  : audioPlayback === 'playing'
+                    ? 'playing; hearing unconfirmed'
+                    : audioPlayback === 'blocked'
+                      ? 'blocked by the browser'
+                      : 'failed'}{' '}
+              · Assistant audio arriving: {audioArriving ? 'yes' : 'no'} · Provider:{' '}
+              {standbyEnabled && voice?.standby_state === 'standby' ? 'closed' : 'unknown'}
             </p>
             {runtime?.observed_at && (
               <p className="mt-1">

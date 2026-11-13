@@ -54,8 +54,10 @@ danger-styled. Rename and pins remain in thread details. Keyboard focus enters
 the panel/dialog and Escape returns it.
 
 Start call joins voice and requests microphone access. **Enable sound** is
-different: it appears only for SDK-reported blocked playback and unlocks sound
-on the existing call without joining again or changing capture. Mute/Unmute
+different: it stays visible while connected until the browser confirms the
+assistant's audio is playing, and unlocks sound on the existing call
+without joining again or changing capture. If the assistant speaks while
+playback is not confirmed, the page shows an alert. Mute/Unmute
 controls the microphone separately. The conversation and actionable failures/
 normal approval links remain upfront; IDs, transport/provider/playback details,
 route settings and runtime events are under **Diagnostics**.

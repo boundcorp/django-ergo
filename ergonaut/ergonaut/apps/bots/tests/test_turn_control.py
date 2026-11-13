@@ -273,3 +273,18 @@ def test_usage_is_saved_per_request_and_counted_once_across_an_approval(session,
     tasks.run_turn(str(session.id), approve=True)
     call.refresh_from_db()
     assert (call.status, call.input_tokens, call.output_tokens) == ("completed", 30, 15)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_pending_sees_a_waiting_message_or_stop_without_taking_it(session):
+    """The fence an automatically approved command checks right before it starts."""
+    control = tasks.InboxControl(session)
+    assert not control.pending()
+    tasks.push_message(session.id, "Wait, not that")
+    assert control.pending()
+    assert [item["text"] for item in tasks.peek_inbox(session.id)] == ["Wait, not that"]
+    tasks.drain_inbox(session.id)
+    assert not control.pending()
+    tasks.set_stop(session.id)
+    assert control.pending()
+    tasks.clear_stop(session.id)

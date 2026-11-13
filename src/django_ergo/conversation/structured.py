@@ -58,11 +58,20 @@ before every model call, so after a tool step's results are in::
   history like any other message.
 - ``stop`` ends the call with status ``stopped``. A tool that is already
   running finishes first; the call stops at the next step.
+
+Automatic approval: a tool that requires approval asks its toolkit's
+``auto_approve`` first. A True answer runs it without pausing, but only if
+the control has nothing waiting: a message or stop that arrived during the
+review (``check()``), or right before the tool starts (``pending()``), means
+the request changed. The call's remaining tool calls then get "not run"
+results, before the messages go into the history, and the model decides
+again.
 """
 
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import logging
 import uuid
@@ -173,6 +182,11 @@ _INVALID_TOOL_ARGUMENTS = (
     "happened. Retry the call with valid JSON arguments; if they are long, "
     "split the work across several smaller calls."
 )
+# A tool call's result when the request changed (a message or stop) after the
+# call was approved automatically and before it ran.
+_NOT_RUN = "Not run: the request changed or was stopped before this tool call started."
+# What ``_Run.run_tool`` returns when its fence kept the tool from starting.
+_REVOKED = object()
 
 
 def _submit_nudge(tool_name: str, events) -> str:
@@ -265,6 +279,7 @@ class SteeringMessage:
 
     text: str
     attachments: list[Attachment] | None = None
+    author: dict | None = None
 
 
 @dataclass
@@ -279,7 +294,13 @@ class TurnSignal:
 
 
 class TurnControl(Protocol):
-    """Checked before each model call; see the module docstring."""
+    """Checked before each model call; see the module docstring.
+
+    A control may also have a synchronous ``pending() -> bool``: whether a
+    stop or message is waiting, without taking it. An automatically approved
+    tool call checks it on the tool's thread right before it starts; with a
+    control that lacks it, nothing is approved automatically.
+    """
 
     async def check(self) -> TurnSignal: ...
 
@@ -507,7 +528,9 @@ class _MemoryTranscript:
         self.call = call
         self.messages = list(history)
 
-    async def append_user(self, text: str, attachments=None, *, system=False) -> None:
+    async def append_user(
+        self, text: str, attachments=None, *, system=False, author=None
+    ) -> None:
         self.messages.append(self.engine.user_message(text, attachments))
 
     async def append_tool_exchange(self, calls: list[SeededToolCall]) -> None:
@@ -572,9 +595,15 @@ class _SessionTranscript:
     def _rows(self):
         return self.session.messages
 
-    async def append_user(self, text: str, attachments=None, *, system=False) -> None:
+    async def append_user(
+        self, text: str, attachments=None, *, system=False, author=None
+    ) -> None:
         # Ergo's own nudges are stored as authored by Ergo, not the chat's user.
-        identity = {"author": system_identity()} if system else {}
+        identity = (
+            {"author": system_identity() if system else author}
+            if system or author
+            else {}
+        )
         await self.engine.append_user_message(
             self.session, text, attachments, **identity
         )
@@ -771,6 +800,7 @@ class _Run:
     allow_approvals: bool
     control: TurnControl | None = None
     meter: BudgetMeter | None = field(init=False, default=None)
+    review_signal: TurnSignal | None = field(init=False, default=None)
 
     def __post_init__(self):
         spec = self.spec
@@ -799,26 +829,83 @@ class _Run:
     def needs_approval(self, name: str) -> bool:
         return requires_approval(name, self.toolkits)
 
-    async def run_tool(self, name: str, args: dict, tool_id: str) -> tuple[Any, bool]:
+    @property
+    def fence(self) -> Callable[[], bool] | None:
+        return getattr(self.control, "pending", None)
+
+    async def autoapprove(self, name: str, args: dict, tool_id: str) -> bool:
+        """The toolkit's automatic review of this exact call; False means a person decides."""
+        toolkit = find_toolkit(self.toolkits, name)
+        if toolkit is None:
+            return False
+        if self.control is not None and not callable(self.fence):
+            # A control that can't say what's waiting can't stop the tool right
+            # before it starts: a person decides.
+            return False
+        original = copy.deepcopy(args)
+        try:
+            allowed = await toolkit.auto_approve(name, copy.deepcopy(args), tool_id)
+        except Exception as exc:  # noqa: BLE001 — any reviewer failure needs a person
+            # The type only: an exception's text can carry the command or the task.
+            log.warning(
+                "Automatic review failed (%s): call=%s",
+                type(exc).__name__,
+                self.call.pk,
+            )
+            return False
+        if allowed is not True or args != original:
+            return False
+        if self.control is not None:
+            signal = await self.control.check()
+            if signal.stop or signal.messages:
+                # The request changed during the review; the loop closes the
+                # batch with results before the messages go in.
+                self.review_signal = signal
+                log.info(
+                    "Automatic approval superseded by a message or stop: call=%s",
+                    self.call.pk,
+                )
+                return False
+        log.info("Automatic approval: call=%s tool_use=%s", self.call.pk, tool_id)
+        return True
+
+    async def run_tool(
+        self,
+        name: str,
+        args: dict,
+        tool_id: str,
+        *,
+        fence: Callable[[], bool] | None = None,
+    ) -> tuple[Any, bool]:
+        """Run one tool call. With ``fence``, the call first checks it on the
+        tool's thread and returns ``(_REVOKED, True)`` without running when
+        it's true (or fails)."""
         retry_token = automatic_request_retries.set(
             automatic_request_retries.get()
             and (self.call.metadata or {}).get("model_retry_policy") != "never"
         )
+        # Output validation has no external effect and must repopulate the
+        # fresh submit toolkit's accepted value after approval continuation.
+        once = (self.call.metadata or {}).get(
+            "tool_execution_policy"
+        ) == "at_most_once" and (
+            self.submit is None or find_toolkit(self.toolkits, name) is not self.submit
+        )
+
+        def start() -> tuple[Any, bool]:
+            if fence is not None:
+                try:
+                    revoked = fence()
+                except Exception:  # noqa: BLE001 — can't tell: don't start it
+                    revoked = True
+                if revoked:
+                    return _REVOKED, True
+            if once:
+                return dispatch_tool_once(self.call, tool_id, name, args, self.toolkits)
+            return dispatch_tool(name, args, self.toolkits)
+
         try:
-            # Output validation has no external effect and must repopulate the
-            # fresh submit toolkit's accepted value after approval continuation.
-            if (self.call.metadata or {}).get(
-                "tool_execution_policy"
-            ) == "at_most_once" and (
-                self.submit is None
-                or find_toolkit(self.toolkits, name) is not self.submit
-            ):
-                return await sync_to_async(dispatch_tool_once, thread_sensitive=True)(
-                    self.call, tool_id, name, args, self.toolkits
-                )
-            return await sync_to_async(dispatch_tool, thread_sensitive=True)(
-                name, args, self.toolkits
-            )
+            return await sync_to_async(start, thread_sensitive=True)()
         finally:
             automatic_request_retries.reset(retry_token)
 
@@ -841,7 +928,9 @@ class _Run:
             return False
         signal = await self.control.check()
         for message in signal.messages:
-            await self.transcript.append_user(message.text, message.attachments)
+            await self.transcript.append_user(
+                message.text, message.attachments, author=message.author
+            )
         return signal.stop
 
 
@@ -953,7 +1042,8 @@ async def _run_loop(run: _Run) -> StructuredCallResult:  # noqa: C901, PLR0912, 
             break
         if tool_events:
             results = []
-            for event in tool_events:
+            interrupted = False
+            for index, event in enumerate(tool_events):
                 name, args = run.adapter.parse_tool_call(event.tool_use)
                 tool_id = event.tool_use["id"]
                 if stop in _MAX_TOKENS_STOPS:
@@ -971,7 +1061,41 @@ async def _run_loop(run: _Run) -> StructuredCallResult:  # noqa: C901, PLR0912, 
                     # The engine couldn't parse the arguments: don't guess.
                     results.append((tool_id, _INVALID_TOOL_ARGUMENTS, True))
                     continue
-                if run.needs_approval(name):
+                needs_approval = run.needs_approval(name)
+                if (
+                    needs_approval
+                    and run.allow_approvals
+                    and await run.autoapprove(name, args, tool_id)
+                ):
+                    result, is_error = await run.run_tool(
+                        name, args, tool_id, fence=run.fence
+                    )
+                    if result is not _REVOKED:
+                        results.append((tool_id, result, is_error))
+                        continue
+                    # A message or stop arrived between the review and the start.
+                    run.review_signal = await run.control.check()
+                if run.review_signal is not None:
+                    signal, run.review_signal = run.review_signal, None
+                    # Every tool call gets its result before the messages that
+                    # changed the request go into the history.
+                    results.extend((a.tool_use_id, _NOT_RUN, True) for a in approvals)
+                    approvals.clear()
+                    results.extend(
+                        (pending.tool_use["id"], _NOT_RUN, True)
+                        for pending in tool_events[index:]
+                    )
+                    await transcript.append_tool_results(results)
+                    for message in signal.messages:
+                        await transcript.append_user(
+                            message.text, message.attachments, author=message.author
+                        )
+                    if signal.stop:
+                        _stop(call)
+                        finished = True
+                    interrupted = True
+                    break
+                if needs_approval:
                     if run.allow_approvals:
                         preview = await run.approval_preview(name, args)
                         approvals.append(
@@ -991,6 +1115,10 @@ async def _run_loop(run: _Run) -> StructuredCallResult:  # noqa: C901, PLR0912, 
                 else:
                     result, is_error = await run.run_tool(name, args, tool_id)
                 results.append((tool_id, result, is_error))
+            if interrupted:
+                if finished:
+                    break
+                continue
             if results:
                 await transcript.append_tool_results(results)
             if approvals:

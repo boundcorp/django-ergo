@@ -587,6 +587,39 @@ def test_run_turn_answers_and_resumes(cook, use_bots):
 
 
 @pytest.mark.django_db(transaction=True)
+def test_only_interactive_messages_receive_authenticated_author(client, cook, use_bots):
+    from django.test import Client
+    from django_ergo.conversation.models import ConversationSession
+
+    from ergonaut.apps.users.models import ApiKey
+
+    use_bots(say("First."), say("Second."))
+    session_id = post(client, "/api/bots/kitchen/root").json()["id"]
+    url = f"/api/sessions/{session_id}/messages"
+    assert post(client, url, {"text": "Interactive request"}).status_code == 200
+    _, key = ApiKey.issue(cook, "automation")
+    api = Client()
+    assert (
+        api.post(
+            url,
+            json.dumps({"text": "Automated request"}),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {key}",
+        ).status_code
+        == 200
+    )
+    rows = (
+        ConversationSession.objects.get(id=session_id)
+        .messages.filter(role="user", content_blocks__block_type="text")
+        .order_by("sequence")
+    )
+    first, second = list(rows)
+    assert first.author.get("authenticated_by") == "ergonaut_session"
+    assert first.author.get("ref") == str(cook.pk)
+    assert "authenticated_by" not in second.author
+
+
+@pytest.mark.django_db(transaction=True)
 def test_files_sent_with_a_message_reach_the_model(client, cook, use_bots, settings, tmp_path):
     from django.core.files.uploadedfile import SimpleUploadedFile
     from django_ergo.conversation.models import ConversationSession

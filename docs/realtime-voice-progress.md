@@ -1,5 +1,57 @@
 # Realtime voice progress
 
+## First normal-thread call — 2026-11-13 02:10 UTC
+
+Voice session `088f761f-fcba-4907-8eb1-c8e39939247a` on the Boundcorp main
+thread, source `97be7678` (#299), Android Chrome 157 in a browser tab (ingress
+user agent). The bridge job ran 02:10:10–02:11:41 and ended at the 90-second cap.
+
+| UTC | Durable evidence |
+| --- | --- |
+| 02:10:17.35 | bridge `delegation_wire_received client_target=True correlation=d150ced6e16a687f`; event `signal:item_Ejb21OajZHh03tPa48c7F` |
+| 02:10:18.45 | normal-thread request created (one per session) from "Okay, uh, where are we at with the work" |
+| 02:10:19.32 | `task_status` "Task delivered; no final result yet." claimed and queued as correlated commentary |
+| 02:10:23.09 | assistant turn final: "I'm putting that together, but I don't have a verified update yet." |
+| 02:10:48.36 | next assistant turn starts (answering "Do you have tooling available") |
+| 02:10:48.63 | request answered (1,206 characters, also posted in the thread as the bot's reply) |
+| 02:10:48.74 / 02:10:49.31 | `result` event claimed; commentary queued, correlation `d150ced6e16a687f` |
+| 02:11:21.34 | assistant turn final: "I don't have any special tooling available right now. But here's where things stand: …" covering the whole answer |
+
+**Result readback worked.** The answer reached the provider session 0.7 seconds
+after the bot finished and the voice spoke it. The wrong "no special tooling"
+came from the voice instructions ("There are no callable voice tools"), read
+before the result arrived. Fixed: the startup briefing now gives the voice a
+capability statement (owning bot, its normal tools and approvals, one request
+per call) and the instructions no longer deny tools. Once the request is taken
+the voice gets a standing rule that further work needs a new call (re-applied on
+reconnect), and a further delegation signal is answered with a correlated
+"start a new call" commentary.
+
+**Audio was produced and played out server-side; the browser left no evidence.**
+Both assistant turns opened audible GPT-Live bursts (no "transcript outlived the
+audio" text-only fallback) and finished `interrupted=False` after real-time
+playout. LiveKit RoomIO's `capture_frame` waits for a subscriber, so playout
+finishing means the browser subscribed to the agent's track. Whether the tab
+played it is unknown: the client recorded nothing, `canPlaybackAudio` only turns
+false after a rejected `play()`, and #299 hid **Enable sound** unless that
+happened. Playback also waited on the output-routing `setSinkId` queue (#293).
+Fixed: synchronous attach, routing best effort, Enable sound until an element is
+confirmed playing, an alert when the assistant speaks without confirmed playback,
+and durable `client_audio` / `bridge_audio` events. A real Chromium loopback
+(RTCPeerConnection → livekit-client `RemoteAudioTrack`) confirmed the `playing`
+event fires on synchronous attach and inbound `totalAudioEnergy` rises; this is
+not a phone, Bluetooth or hearing test.
+
+**Next call (Lee):** start from the Boundcorp thread's voice page. If **Enable
+sound** is showing, tap it. If the red "assistant spoke" alert appears, tap
+Enable sound. If the page says audio is playing and you still hear nothing, raise
+the volume while the call is active (Android uses the call volume) and check the
+Bluetooth/speaker route, then open Diagnostics → Runtime events and note the
+`client_audio`/`bridge_audio` lines. Ask "do you have tools?" first (expected: it
+can ask Boundcorp, once this call), then make one request, then ask again
+(expected: the result will be read here and more work needs a new call). The
+call still ends after 90 seconds and allows one background request.
+
 ## Continuation — newest live session and UX, 2026-11-12
 
 **Current activation, verified 23:38:39 UTC:** all old queue consumers were gone

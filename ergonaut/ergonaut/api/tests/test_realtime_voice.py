@@ -477,6 +477,37 @@ def test_progressive_transcript_is_owner_scoped_bounded_and_finalized_only(voice
         assert post(client, f"{url}/{path}", {"text": "forged", "agent_state": "speaking"}).status_code == 404
 
 
+def test_browser_playback_reports_are_owner_scoped_bounded_and_never_history(voice_setup, django_user_model):
+    user, client, chat = voice_setup
+    voice, url = create(client, chat)
+    report = url + "/client-audio"
+    blocked = {"event_id": "r-1", "status": "playback_blocked", "detail": "NotAllowedError"}
+    assert post(client, report, blocked).json() == {"recorded": True}
+    assert post(client, report, blocked).json() == {"recorded": True}  # a retried report is idempotent
+    assert post(client, report, {"event_id": "r-1", "status": "playback_started"}).status_code == 409
+    for invalid in (
+        {"event_id": "r-2", "status": "delivered"},  # cannot claim assistant delivery
+        {"event_id": "r 2!", "status": "playback_started"},
+        {"event_id": "r-2", "status": "playback_failed", "detail": "<speaker name>"},
+    ):
+        assert post(client, report, invalid).status_code == 400
+    current = client.get(url).json()
+    assert [(e["kind"], e["text"]) for e in current["events"]] == [
+        ("client_audio", "Browser blocked assistant audio playback. (NotAllowedError)")
+    ]
+    assert current["transcript"] == [] and not chat.messages.exists()
+    for index in range(realtime_voice.MAX_CLIENT_AUDIO_EVENTS - 1):
+        assert post(client, report, {"event_id": f"n-{index}", "status": "track_subscribed"}).json()["recorded"]
+    assert post(client, report, {"event_id": "over", "status": "turn_unplayed"}).json() == {"recorded": False}
+    assert post(client, report, blocked).json() == {"recorded": True}  # an existing report is still acknowledged
+    other = django_user_model.objects.create_user("playback-other", password="pw")
+    client.force_login(other)
+    assert post(client, report, {"event_id": "x", "status": "playback_started"}).status_code == 404
+    client.force_login(user)
+    post(client, url + "/end", {})
+    assert post(client, report, {"event_id": "late", "status": "playback_started"}).status_code == 409
+
+
 def test_live_state_and_final_callbacks_are_claim_scoped_across_standby_stop_and_deadline(voice_setup, settings):
     _, client, chat = voice_setup
     settings.REALTIME_VOICE_STANDBY_ENABLED = True
