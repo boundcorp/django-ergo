@@ -140,8 +140,11 @@ bot checkout. Mode `0600` is useful operator hygiene, not isolation from bot
 shell tools running as the same UID on the same writable volume.
 
 The example numbers are a plan, not current quotes or a billing guarantee.
-Admission includes prior commitments and all recorded reservations under an
-account row lock. Native preparation pins the operator's explicit `gpu_type`,
+Admission includes prior commitments and all liable reservations under an
+account row lock. Only a cleanup-complete, terminal ledger proving no create
+was ever sent releases its financial commitment; its original reservation and
+lifetime admission count remain immutable. Created or uncertain attempts remain
+reserved after cleanup until billing review. Native preparation pins the operator's explicit `gpu_type`,
 one GPU, at least167GB RAM and10vCPU,200GB container disk, zero optional volume
 and no network volume; it reuses the existing reviewed create request. Before
 model download the SSH bootstrap verifies the exact quoted NVIDIA GPU,

@@ -42,8 +42,8 @@ class RunpodJob(models.Model):
     reservation_usd = models.DecimalField(max_digits=12, decimal_places=2)
     created = models.FloatField()
     deadline = models.FloatField()
-    # Kept charged against the installation cap after termination until actual
-    # billing is reconciled by an operator; restarting cannot top up the cap.
+    # Created/uncertain rentals stay charged after termination until billing is
+    # reconciled; a proven never-created terminal attempt has no liability.
     cleanup_complete = models.BooleanField(default=False)
     manifest = models.JSONField(default=dict)
     error = models.CharField(max_length=100, blank=True)
