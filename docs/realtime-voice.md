@@ -11,6 +11,12 @@ capture and physical routing remain unverified. The
 reconciles current source `3c840afa`, the actual frontend/bridge and evidence gaps;
 this diagnostic patch is not a deployment or real-device acceptance claim.
 
+The [all-session usage audit and separate draft315 safety review](realtime-voice-audit-20261113.md)
+enumerates all five production calls and three preserved paid attempts, with
+UNKNOWN billing/allowance boundaries and a reusable owner/time-filtered
+`voice_audit` READ ONLY metadata export. The completed 02:10 backend call records
+`claude-opus-5-5`, not the earlier reconstructed Codex route.
+
 ## Adapter and setup
 
 The pinned direct adapter is `livekit-agents==1.8.11`, `livekit-plugins-openai==1.8.11` and `livekit-plugins-silero==1.8.11`; it uses `GPTLiveModel(model="gpt-live-1", delegation="client")`, not the older Realtime adapter or a dictation pipeline. [LiveKit](https://docs.livekit.io/agents/models/realtime/gpt-live.md) and [OpenAI](https://developers.openai.com/api/docs/guides/live) document this combination. The adapter's OpenAI SDK 3.x requirement conflicts with Ergo's `<3` dependency; use a separate bridge environment with the Ergonaut source on `PYTHONPATH`, not a production dependency upgrade. `livekit-api==1.2.2` provides Ergonaut's room token signer.
@@ -167,8 +173,10 @@ restarts the existing SDK track, or requests microphone permission/capture if no
 track exists. A failed initial capture keeps the existing room and original
 deadline, with a visible sanitized permission/missing/busy/capture error; it
 does not automatically reconnect or retry. Recovery is disabled for intentional
-mute and while another recovery is pending. End/disconnect cleans up capture
-that completes late. Normal task/action approvals and costs are unchanged.
+mute, pending mute/unmute and while another recovery is pending. End/disconnect
+also stops capture returned by a late Unmute. Microphone actions are serialized
+per room; none is triggered by reconnect/device events. Normal task/action
+approvals and costs are unchanged.
 
 **Check existing microphone locally**, under Diagnostics, examines at most one
 second of the existing track through an isolated analyser. It requests no new

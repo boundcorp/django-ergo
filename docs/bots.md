@@ -1054,6 +1054,12 @@ and provider transcription are separate evidence boundaries; none identifies
 phone/headset hardware or proves remote receipt by itself. See
 [microphone diagnostics and recovery](realtime-voice.md#microphone-input-evidence-and-explicit-recovery).
 
+Mute/unmute and recovery exclude one another per room; End/disconnect stops a
+late Unmute's returned capture. The owner/time-filtered `voice_audit` management
+command exports sanitized session/event/call metadata in JSON/CSV inside a
+PostgreSQL READ ONLY snapshot, without loading engines or dispatching tasks.
+See the [all-session audit and schema](realtime-voice-audit-20261113.md).
+
 ### Message identity
 
 Forwarded and cross-chat messages store the words separately from their

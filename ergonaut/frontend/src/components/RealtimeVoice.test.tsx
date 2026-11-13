@@ -3,7 +3,16 @@ import { act, createElement } from 'react'
 import type { createRoot as CreateRoot, Root } from 'react-dom/client'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { Window } from 'happy-dom'
-import { LocalAudioTrack, LocalParticipant, RemoteAudioTrack, Room, RoomEvent, Track, TrackEvent } from 'livekit-client'
+import {
+  LocalAudioTrack,
+  LocalParticipant,
+  RemoteAudioTrack,
+  Room,
+  RoomEvent,
+  Track,
+  TrackEvent,
+  type LocalTrackPublication,
+} from 'livekit-client'
 import { Link, MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom'
 import { api, type ClientAudioReport, type RealtimeVoiceSession, type SessionDetail } from '../api'
 import { ActiveVoiceCall, VoiceCallProvider, VoicePage, VoiceTranscript } from './RealtimeVoice'
@@ -1342,3 +1351,83 @@ test('pending microphone recovery disables mute controls so intentional mute can
   expect(button('Mute').disabled).toBe(false)
   expect(button('Mute').getAttribute('aria-pressed')).toBe('false')
 })
+
+test('pending intentional mute blocks recovery and duplicate microphone actions through reconnect', async () => {
+  const current = await connectCall()
+  const pending = Promise.withResolvers<undefined>()
+  const enables: boolean[] = []
+  current.localParticipant.setMicrophoneEnabled = enabled => {
+    enables.push(enabled)
+    return pending.promise
+  }
+  await act(async () => {
+    button('Mute').click()
+    button('Recover microphone').click()
+    button('Mute').click()
+  })
+  expect(enables).toEqual([false])
+  expect(button('Mute').disabled).toBe(true)
+  expect(button('Recover microphone').disabled).toBe(true)
+  await act(async () => {
+    current.emit(RoomEvent.Reconnecting)
+    current.emit(RoomEvent.Reconnected)
+  })
+  expect(enables).toEqual([false])
+  await act(async () => {
+    pending.resolve()
+    await pending.promise
+  })
+  expect(button('Unmute').getAttribute('aria-pressed')).toBe('true')
+  expect(button('Unmute').disabled).toBe(false)
+  expect(button('Recover microphone').disabled).toBe(true)
+  expect(enables).toEqual([false])
+})
+
+test.each(['end', 'disconnect'] as const)(
+  'late Unmute capture stops after %s without reviving the call',
+  async exit => {
+    const current = await connectCall()
+    await act(async () => {
+      button('Mute').click()
+    })
+    const pending = Promise.withResolvers<LocalTrackPublication | undefined>()
+    const enables: boolean[] = []
+    let stopped = 0
+    let tokens = 0
+    api.realtimeVoiceToken = async () => {
+      tokens++
+      throw new Error('Unmute must not request another token')
+    }
+    current.localParticipant.setMicrophoneEnabled = enabled => {
+      enables.push(enabled)
+      return pending.promise
+    }
+    await act(async () => {
+      button('Unmute').click()
+    })
+    expect(button('Unmute').disabled).toBe(true)
+    await act(async () => {
+      if (exit === 'end') {
+        api.endRealtimeVoice = async () => ({ ...session, status: 'ended' })
+        button('End call').click()
+      } else current.emit(RoomEvent.Disconnected)
+    })
+    expect(container.textContent).toContain(exit === 'end' ? 'Call ended' : 'Disconnected')
+    await act(async () => {
+      pending.resolve({
+        source: Track.Source.Microphone,
+        track: {
+          stop() {
+            stopped++
+          },
+        },
+      } as unknown as LocalTrackPublication)
+      await pending.promise
+    })
+    expect(stopped).toBe(1)
+    expect(enables).toEqual([true])
+    expect(tokens).toBe(0)
+    expect(container.textContent).toContain(exit === 'end' ? 'Call ended' : 'Disconnected')
+    expect(container.textContent).not.toContain('Microphone: enabled')
+  },
+)

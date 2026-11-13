@@ -85,6 +85,7 @@ type VoiceCallOwner = {
   phase: Phase
   muted: boolean
   microphone: 'enabled' | 'disabled' | 'unknown'
+  microphoneBusy: boolean
   input: VoiceAudioInputState
   recoverMicrophone: () => Promise<void>
   probeMicrophone: () => void
@@ -114,6 +115,8 @@ function useVoiceOwner(): VoiceCallOwner {
   const voiceRef = useRef<RealtimeVoiceSession | null>(null)
   const [phase, setPhase] = useState<Phase>('idle')
   const [muted, setMuted] = useState(false)
+  const [mutePending, setMutePending] = useState(false)
+  const muteRoom = useRef<Room | null>(null)
   const [input, setInput] = useState(initialVoiceAudioInput)
   const inputObserver = useRef<VoiceAudioInput | null>(null)
   const microphone =
@@ -235,6 +238,8 @@ function useVoiceOwner(): VoiceCallOwner {
     generation.current++
     const current = room.current
     room.current = null
+    muteRoom.current = null
+    setMutePending(false)
     inputObserver.current?.dispose()
     inputObserver.current = null
     if (current) void current.disconnect()
@@ -251,6 +256,7 @@ function useVoiceOwner(): VoiceCallOwner {
       generation.current++
       const current = room.current
       room.current = null
+      muteRoom.current = null
       inputObserver.current?.dispose()
       if (current) void current.disconnect()
       outputRouting.current?.dispose()
@@ -457,6 +463,8 @@ function useVoiceOwner(): VoiceCallOwner {
           inputObserver.current?.dispose()
           inputObserver.current = null
           room.current = null
+          muteRoom.current = null
+          setMutePending(false)
           audio.current?.replaceChildren()
           outputRouting.current?.clearTracks()
           setPhase('disconnected')
@@ -574,21 +582,51 @@ function useVoiceOwner(): VoiceCallOwner {
 
   async function toggleMute() {
     const current = room.current
-    if (!current) return
+    const observer = inputObserver.current
+    if (
+      !current ||
+      !observer ||
+      phase !== 'connected' ||
+      voiceRef.current?.status !== 'active' ||
+      actionLock.current ||
+      muteRoom.current ||
+      observer.state.recovering
+    )
+      return
+    muteRoom.current = current
+    setMutePending(true)
+    const track = current.localParticipant.getTrackPublication(Track.Source.Microphone)?.track
     try {
-      await current.localParticipant.setMicrophoneEnabled(muted)
-      if (room.current !== current) return
+      const publication = await current.localParticipant.setMicrophoneEnabled(muted)
+      if (room.current !== current || voiceRef.current?.status !== 'active') {
+        const lateTrack = publication?.track ?? track
+        lateTrack?.stop()
+        return
+      }
       setMuted(!muted)
       inputObserver.current?.refresh()
     } catch (e) {
-      if (room.current === current) inputObserver.current?.failed(e)
+      if (room.current !== current) track?.stop()
+      else observer.failed(e)
+    } finally {
+      if (muteRoom.current === current) {
+        muteRoom.current = null
+        setMutePending(false)
+      }
     }
   }
 
   async function recoverMicrophone() {
     const current = room.current
     const observer = inputObserver.current
-    if (!current || !observer || phase !== 'connected' || voiceRef.current?.status !== 'active' || actionLock.current)
+    if (
+      !current ||
+      !observer ||
+      phase !== 'connected' ||
+      voiceRef.current?.status !== 'active' ||
+      actionLock.current ||
+      muteRoom.current
+    )
       return
     await observer.recover(muted)
   }
@@ -644,6 +682,7 @@ function useVoiceOwner(): VoiceCallOwner {
     phase,
     muted,
     microphone,
+    microphoneBusy: mutePending || input.recovering,
     input,
     recoverMicrophone,
     probeMicrophone,
@@ -1029,7 +1068,7 @@ export function VoicePage() {
                 <>
                   <button
                     type="button"
-                    disabled={!!action || owner.input.recovering || (standbyEnabled && pending)}
+                    disabled={!!action || owner.microphoneBusy || (standbyEnabled && pending)}
                     aria-pressed={muted}
                     onClick={() => void owner.toggleMute()}
                   >
@@ -1037,7 +1076,7 @@ export function VoicePage() {
                   </button>
                   <button
                     type="button"
-                    disabled={!!action || muted || owner.input.recovering || (standbyEnabled && pending)}
+                    disabled={!!action || muted || owner.microphoneBusy || (standbyEnabled && pending)}
                     onClick={() => void owner.recoverMicrophone()}
                   >
                     {owner.input.recovering ? 'Recovering microphone…' : 'Recover microphone'}
