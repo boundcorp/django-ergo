@@ -18,7 +18,7 @@ import {
   type VoiceTaskUpdate,
 } from '../api'
 import { initialVoiceAudioOutput, VoiceAudioOutput, type VoiceAudioOutputState } from '../voiceAudioOutput'
-import { VoiceBackgroundWork } from './VoiceSessionCard'
+import { VoiceBackgroundWork, VoiceDeliverySummary } from './VoiceSessionCard'
 import { collectVoiceAudioDiagnostics, type VoiceAudioDiagnostics } from '../voiceAudioDiagnostics'
 import {
   bridgeInputEvidence,
@@ -762,14 +762,14 @@ export function VoiceTranscript({ voice }: { voice: RealtimeVoiceSession | null 
       .map(event => ({
         turn_id: event.event_id,
         event_id: event.event_id,
-        role: event.kind,
+        role: event.kind as 'user' | 'assistant',
         text: event.text,
         is_final: true,
         delivery: event.delivery,
         created_at: event.created_at,
       })) ??
     []
-  // Prefer the final version if a stale partial and its final ever share one response.
+  // Only a final and partial with the same SDK segment ID are known to be the same entry.
   const merged = new Map<string, (typeof turns)[number]>()
   for (const turn of turns) if (!merged.get(turn.turn_id)?.is_final) merged.set(turn.turn_id, turn)
   const signature = [...merged.values()].map(turn => `${turn.turn_id}:${turn.text}:${turn.is_final}`).join('\u0000')
@@ -805,14 +805,11 @@ export function VoiceTranscript({ voice }: { voice: RealtimeVoiceSession | null 
                 {!turn.is_final && ' · live transcript'}
               </div>
               <p className="whitespace-pre-wrap break-words text-sm leading-relaxed">{turn.text.trim()}</p>
-              {turn.role === 'assistant' && turn.is_final && (
-                <p className="mt-2 text-xs text-muted">
-                  {turn.delivery === 'interrupted'
-                    ? 'Interrupted'
-                    : turn.delivery === 'delivered'
-                      ? 'Playback confirmed; hearing not established'
-                      : 'Playback unconfirmed'}
-                </p>
+              {turn.role === 'assistant' && turn.is_final && turn.delivery === 'interrupted' && (
+                <p className="mt-2 text-xs text-muted">Interrupted</p>
+              )}
+              {turn.role === 'assistant' && turn.is_final && turn.delivery === 'delivered' && (
+                <p className="mt-2 text-xs text-muted">Playback confirmed; hearing not established</p>
               )}
             </article>
           ))}
@@ -1191,6 +1188,15 @@ export function VoicePage() {
               · Assistant audio arriving: {audioArriving ? 'yes' : 'no'} · Provider:{' '}
               {standbyEnabled && voice?.standby_state === 'standby' ? 'closed' : 'unknown'}
             </p>
+            {voice && (
+              <VoiceDeliverySummary
+                deliveries={
+                  voice.transcript
+                    ? voice.transcript.filter(t => t.role === 'assistant' && t.is_final).map(t => t.delivery)
+                    : voice.events.filter(e => e.kind === 'assistant').map(e => e.delivery)
+                }
+              />
+            )}
             {runtime?.observed_at && (
               <p className="mt-1">
                 Observed{' '}

@@ -511,6 +511,63 @@ test('partial and final update the same bubble; manual scroll stays put until ju
   expect(scroller.scrollTop).toBe(1200)
 })
 
+function turn(id: string, role: 'user' | 'assistant', text: string, extra: Record<string, unknown> = {}) {
+  return { turn_id: id, role, text, is_final: true, delivery: 'unknown', created_at: '', ...extra }
+}
+async function renderTurns(transcript: ReturnType<typeof turn>[]) {
+  await act(async () => {
+    root.render(<VoiceTranscript voice={{ ...session, transcript }} />)
+  })
+  return [...container.querySelectorAll('[data-turn-id]')].map(node => node.textContent ?? '')
+}
+
+test('distinct consecutive replies in the same claim remain separate without playback warnings', async () => {
+  const bubbles = await renderTurns([
+    turn('a1', 'assistant', 'First answer.', { segment: 'same-claim' }),
+    turn('a2', 'assistant', 'Second answer.', { segment: 'same-claim' }),
+  ])
+  expect(bubbles).toHaveLength(2)
+  expect(bubbles[0]).toContain('First answer.')
+  expect(bubbles[1]).toContain('Second answer.')
+  expect(container.textContent).not.toMatch(/playback unconfirmed/i)
+})
+
+test('legacy events with unknown boundaries stay separate', async () => {
+  await act(async () => {
+    root.render(
+      <VoiceTranscript
+        voice={{
+          ...session,
+          transcript: undefined,
+          events: [
+            { event_id: 'old-1', kind: 'assistant', text: 'One answer.', delivery: 'unknown', created_at: '' },
+            { event_id: 'old-2', kind: 'assistant', text: 'Another answer.', delivery: 'unknown', created_at: '' },
+          ],
+        }}
+      />,
+    )
+  })
+  const bubbles = [...container.querySelectorAll('[data-turn-id]')]
+  expect(bubbles.map(node => node.textContent)).toEqual([
+    expect.stringContaining('One answer.'),
+    expect.stringContaining('Another answer.'),
+  ])
+})
+
+test('legacy event delivery uncertainty remains in Diagnostics', async () => {
+  const legacy: RealtimeVoiceSession = {
+    ...session,
+    events: [{ event_id: 'old', kind: 'assistant', text: 'Legacy reply', delivery: 'unknown', created_at: '' }],
+  }
+  api.realtimeVoiceSessions = async () => [legacy]
+  await mountVoice()
+  const diagnostics = [...container.querySelectorAll('details')].find(
+    node => node.querySelector('summary')?.textContent === 'Diagnostics',
+  )
+  expect(diagnostics?.textContent).toContain('playback unconfirmed 1')
+  expect(container.querySelector('[data-turn-id="old"]')?.textContent).not.toContain('playback unconfirmed')
+})
+
 test('active page polling progressively replaces a draft without opening a transport', async () => {
   const draft = {
     turn_id: 'progressive',
@@ -647,12 +704,18 @@ test('a single durable card shows the stage and transcript without claiming play
     'Found sources',
     'Hello',
     'Working on it',
-    'playback unconfirmed',
     '(interrupted)',
     'playback confirmed; hearing not established',
   ]) {
     expect(html).toContain(text)
   }
+  const card = window.document.createElement('div')
+  card.innerHTML = html
+  const diagnostics = [...card.querySelectorAll('details')].find(
+    node => node.querySelector('summary')?.textContent === 'Diagnostics',
+  )
+  expect(diagnostics?.textContent).toContain('playback unconfirmed 1')
+  expect(card.querySelector('details')?.textContent).not.toContain('playback unconfirmed')
 })
 
 test.each([{ delegations: undefined }, { delegations: [] }])(
