@@ -4,6 +4,17 @@ This document tracks the major milestones and evolution of the Django Ergo proje
 
 ## Development Timeline
 
+### Passive generic cost ledger (November 2026)
+
+- Added durable owner-scoped economic operations and immutable source observations
+  for arbitrary currencies/units, typed token buckets and safe provenance.
+- Exact replay, conflicting replay and economic revisions are transactional;
+  reconciled/provider-reported money supersedes matching estimates without
+  combining reservations, subscription coverage or API-equivalent values as spend.
+- Added offline concurrency/privacy/projection coverage and a
+  [source integration and coverage contract](docs/cost-ledger.md). No adapters,
+  historical imports, financial dispatch or new budget authority are enabled.
+
 ### Correlated lifecycle evidence (November 2026)
 
 - Added an opt-in, content-free lifecycle ledger and deterministic evidence
