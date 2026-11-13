@@ -25,6 +25,7 @@ if TYPE_CHECKING:
 
 MAX_PAGE = 100
 MAX_ITEMS = 1000
+MAX_DATASOURCES = 1000
 MAX_VARS = 20
 MAX_VAR_VALUE = 200
 MAX_VAR_VALUES = 100
@@ -219,6 +220,8 @@ class GrafanaClient:
             raise ObservabilityError(
                 UPSTREAM_UNAVAILABLE, "unexpected datasource response"
             )
+        if len(rows) > MAX_DATASOURCES:
+            raise ObservabilityError(BOUNDS_EXCEEDED, "datasource inventory too large")
         if any(not isinstance(r, dict) for r in rows):
             raise ObservabilityError(
                 UPSTREAM_UNAVAILABLE, "unexpected datasource response"

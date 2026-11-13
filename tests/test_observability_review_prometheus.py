@@ -182,6 +182,12 @@ def test_direct_source_identity_is_host_owned(server):
         {"resultType": "vector", "result": [None]},
         {"resultType": "vector", "result": [{"metric": [], "value": [1]}]},
         {"resultType": "matrix", "result": [{"metric": {}, "values": [[1]]}]},
+        {"resultType": "matrix", "result": [{"metric": {}, "values": []}]},
+        {"resultType": "matrix", "result": [{"metric": {}, "histograms": []}]},
+        {
+            "resultType": "matrix",
+            "result": [{"metric": {}, "values": [], "histograms": []}],
+        },
         {
             "resultType": "vector",
             "result": [{"metric": {}, "value": [float("nan"), "1"]}],
@@ -194,6 +200,32 @@ def test_malformed_nested_results_are_typed(data):
     with pytest.raises(ObservabilityError) as exc:
         normalize(data, "range")
     assert exc.value.code == "upstream_unavailable"
+
+
+@pytest.mark.parametrize("field", ["warning", "label"])
+def test_invalid_upstream_unicode_is_typed(server, field):
+    data = {"resultType": "vector", "result": [{"metric": {}, "value": [1, "1"]}]}
+    extra = {}
+    if field == "warning":
+        extra["warnings"] = ["\ud800"]
+    else:
+        data["result"][0]["metric"] = {"\ud800": "value"}
+    server.routes[BASE + "/query"] = success(data, **extra)
+    with pytest.raises(ObservabilityError) as exc:
+        client(server).instant("up", tz="UTC")
+    assert exc.value.code == "upstream_unavailable"
+
+
+def test_matrix_with_empty_float_samples_and_histograms():
+    result = normalize(
+        {
+            "resultType": "matrix",
+            "result": [{"metric": {}, "values": [], "histograms": [[1, {}]]}],
+        },
+        "instant",
+    )
+    assert result.histograms_only
+    assert result.total_samples == 1
 
 
 @pytest.mark.parametrize(

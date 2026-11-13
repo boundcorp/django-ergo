@@ -181,7 +181,9 @@ class ObservabilityPlugin(BotPlugin):
                     f"- {r['name']} uid={r['uid']} type={r['type']}{' (default)' if r['default'] else ''}"
                     for r in rows
                 )
-                return f"profile={prof.name} allowed datasources:\n{body or '(none visible)'}"
+                return text.trim(
+                    f"profile={prof.name} allowed datasources:\n{body or '(none visible)'}"
+                )
             if kind != "dashboards":
                 raise ObservabilityError(
                     INVALID_QUERY, "kind must be dashboards or datasources"

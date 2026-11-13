@@ -12,6 +12,7 @@ import pytest
 from django_ergo.observability.errors import ObservabilityError
 from django_ergo.observability.http import BoundedClient
 from django_ergo.observability.http import Limits
+from django_ergo.observability.http import Response
 
 
 @contextmanager
@@ -126,3 +127,33 @@ def test_sanitizer_redacts_before_clipping_and_preserves_other_text():
     bounded = client("http://127.0.0.1:1", token="s e c r e t")
     assert bounded.sanitize(" s e c r e t   detail", limit=20) == " [redacted]   detail"
     assert bounded.sanitize("s e c r e t", limit=5) == "[reda"
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        b"[" * 600 + b"0" + b"]" * 600,
+        b"[" * 1100 + b"0" + b"]" * 1100,
+        b'{"\\ud800":"value"}',
+        b'{"value":"\\udfff"}',
+    ],
+)
+def test_malformed_json_and_error_detail_are_typed(body, monkeypatch):
+    bounded = client("http://127.0.0.1:1")
+    monkeypatch.setattr(
+        bounded, "get", lambda *args: Response(200, "application/json", body)
+    )
+    with pytest.raises(ObservabilityError) as exc:
+        bounded.get_json("/test")
+    assert exc.value.code == "upstream_unavailable"
+    assert bounded._detail(Response(400, "application/json", body)) == ""
+
+
+def test_json_accepts_valid_unicode_pair(monkeypatch):
+    bounded = client("http://127.0.0.1:1")
+    monkeypatch.setattr(
+        bounded,
+        "get",
+        lambda *args: Response(200, "application/json", b'{"value":"\\ud83d\\ude00"}'),
+    )
+    assert bounded.get_json("/test") == {"value": "\U0001f600"}

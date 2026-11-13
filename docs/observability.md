@@ -68,7 +68,7 @@ plugins:
 | `ergo_prom_targets` | `/api/v1/targets` scrape health (job, instance, health, last scrape, last error), separate from optional `up` values. |
 | `ergo_grafana_link` | Dashboard or panel link with bounded, encoded `from`/`to`/`timezone`/`var-*` parameters; oversized links are rejected. |
 | `ergo_prom_chart` | PNG line chart of a range query, saved as a chat attachment (`source="bot"`, metadata: query, range, tz, step, profile, datasource, link). |
-| `ergo_grafana_panel_render` | Only when a profile sets `renderer: true`: renders an authorized panel, with unresolved datasource references rejected, and attaches a decoded PNG of the requested size. |
+| `ergo_grafana_panel_render` | Only when a profile sets `renderer: true`: renders an authorized panel, rejects unresolved datasource references, and attaches a validated, pixel-only PNG of the requested size. |
 
 Errors come back as `ERROR [code] message` with `code` one of `not_configured`,
 `unauthorized` (401), `forbidden` (403), `not_found`, `invalid_query` (400/422 and bad
@@ -84,10 +84,10 @@ Messages never contain upstream HTML, headers or tokens.
 | Step | minimum 15s; default allows at most 1000 returned points/series; an explicit step allows at most 2000 points and is rejected if the requested window exceeds that limit, never coarsened |
 | Result | 100 series, 100,000 float and histogram samples combined; overflow fails, nothing is truncated |
 | Expression | 8 KiB |
-| HTTP | 3s connect, 15s read, 20s deadline during network reads (see below), Prometheus `timeout=8s`, 4 MiB after decompression, no retries |
+| HTTP | 3s connect, 15s read, 20s deadline during network reads (see below), Prometheus `timeout=8s`, 4 MiB after decompression, no retries; JSON nesting at most 100 and valid Unicode scalar text required |
 | Tool text | 32 KiB |
 | Chart | up to 1600x900, PNG at most 4 MiB, one chart per call |
-| Inventory | 100 per page, 1000 per search; dashboard summaries mark omitted panels and targets |
+| Inventory | 100 per dashboard page, 1000 per search or datasource response; oversized datasource inventories fail, and dashboard summaries mark omitted panels and targets |
 
 The HTTP deadline is enforced during header and body reads. System DNS resolution
 and multi-address connection/TLS setup can exceed it; it is not a hard process-wide
@@ -103,7 +103,9 @@ deadline.
   query, range, timezone, step and source in the image. Panels that cannot be
   reproduced (other datasources, transformations, variables) get a link, not an imitation.
 - Grafana without a renderer can answer 200 with a small "No image renderer available"
-  PNG. The render tool validates the image and refuses unexpected dimensions.
+  PNG. The render tool validates the complete raster and requested dimensions, then
+  reencodes the pixels without ancillary metadata. Sensitive information drawn into
+  image pixels is not removed.
 
 ## Install
 

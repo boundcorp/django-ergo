@@ -229,6 +229,29 @@ def test_malformed_nested_data_is_typed(server, path, body, method):
     assert exc.value.code == "upstream_unavailable"
 
 
+@pytest.mark.parametrize("depth", [600, 1100])
+def test_deep_dashboard_json_is_typed(server, depth):
+    body = b'{"dashboard":{"unused":' + b"[" * depth + b"0" + b"]" * depth + b"}}"
+    server.routes["/api/dashboards/uid/u"] = Reply(200, body)
+    with pytest.raises(ObservabilityError) as exc:
+        GrafanaClient(profile(server), token=TOKEN).dashboard("u")
+    assert exc.value.code == "upstream_unavailable"
+
+
+@pytest.mark.parametrize(
+    "count", [grafana.MAX_DATASOURCES, grafana.MAX_DATASOURCES + 1]
+)
+def test_datasource_inventory_limit(server, count):
+    server.routes["/api/datasources"] = Reply(200, [DS] * count)
+    client = GrafanaClient(profile(server), token=TOKEN)
+    if count == grafana.MAX_DATASOURCES:
+        assert len(client.datasources()) == count
+    else:
+        with pytest.raises(ObservabilityError) as exc:
+            client.datasources()
+        assert exc.value.code == "bounds_exceeded"
+
+
 def test_upstream_text_redacted_before_clipping(server):
     dashboard(
         server,

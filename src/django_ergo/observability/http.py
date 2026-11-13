@@ -9,6 +9,7 @@ import re
 import time
 import zlib
 from dataclasses import dataclass
+from itertools import chain
 from urllib.parse import quote
 from urllib.parse import urlencode
 from urllib.parse import urlsplit
@@ -26,6 +27,31 @@ from .errors import ObservabilityError
 
 MAX_BODY_BYTES = 4 * 1024 * 1024
 ERROR_TEXT_MAX = 300
+MAX_JSON_DEPTH = 100
+_SURROGATE = re.compile(r"[\ud800-\udfff]")
+
+
+def _load_json(body: bytes):
+    """Decode upstream JSON and reject excessive nesting and invalid Unicode."""
+    data = json.loads(body)
+    stack = [iter((data,))]
+    while stack:
+        try:
+            value = next(stack[-1])
+        except StopIteration:
+            stack.pop()
+            continue
+        if isinstance(value, str):
+            if _SURROGATE.search(value):
+                raise ValueError("invalid Unicode scalar")
+        elif isinstance(value, list | dict):
+            if len(stack) > MAX_JSON_DEPTH:
+                raise ValueError("JSON nesting too deep")
+            children = (
+                chain.from_iterable(value.items()) if isinstance(value, dict) else value
+            )
+            stack.append(iter(children))
+    return data
 
 
 @dataclass(frozen=True)
@@ -129,8 +155,8 @@ class BoundedClient:
     def get_json(self, path: str, params: dict | None = None):
         response = self.get(path, params)
         try:
-            return json.loads(response.body)
-        except ValueError:
+            return _load_json(response.body)
+        except (ValueError, RecursionError):
             raise ObservabilityError(
                 UPSTREAM_UNAVAILABLE,
                 f"upstream returned a non-JSON response (HTTP {response.status}, "
@@ -293,8 +319,8 @@ class BoundedClient:
         if "json" not in response.content_type.lower():
             return ""
         try:
-            data = json.loads(response.body)
-        except ValueError:
+            data = _load_json(response.body)
+        except (ValueError, RecursionError):
             return ""
         if isinstance(data, dict):
             for key in ("error", "message"):

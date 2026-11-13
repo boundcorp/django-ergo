@@ -176,6 +176,8 @@ def normalize(
         if not isinstance(values, list) or not isinstance(histograms, list):
             raise _malformed()
         count = len(values) + len(histograms)
+        if not count:
+            raise _malformed()
         result.total_samples += count
         if result.total_samples > MAX_SAMPLES:
             raise ObservabilityError(
@@ -186,14 +188,14 @@ def normalize(
             raise ObservabilityError(
                 BOUNDS_EXCEEDED, f"result has more than {max_points} points per series"
             )
-        if hist_key in entry:
+        if histograms:
             result.histogram_series += 1
             for sample in histograms:
                 ts, histogram = _pair(sample)
                 _timestamp(ts)
                 if not isinstance(histogram, dict):
                     raise _malformed()
-        if float_key not in entry:
+        if not values:
             continue
         series = Series(labels)
         previous = None

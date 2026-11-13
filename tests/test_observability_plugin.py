@@ -135,6 +135,34 @@ def test_non_allowlisted_datasource_fails_closed(server, token):
     assert server.requests == []
 
 
+def test_datasource_inventory_output_is_bounded(server, token):
+    server.routes["/api/datasources"] = Reply(
+        200,
+        [{"uid": "prom", "name": "é" * 100, "type": "prometheus"}] * 500,
+    )
+    out = call(
+        make_plugin(server), ToolContext(), "ergo_grafana_search", kind="datasources"
+    )
+    assert out.startswith("profile=main allowed datasources:")
+    assert len(out.encode()) <= 32 * 1024
+    assert "[truncated: output exceeded 32768 bytes]" in out
+
+
+def test_instant_matrix_reports_multiple_samples(server, token):
+    server.routes[f"{PROXY}/query"] = success(
+        matrix(
+            ({"job": "a"}, [(1749967200, "1"), (1749967260, "2")]),
+        )
+    )
+    out = call(
+        make_plugin(server), ToolContext(), "ergo_prom_query", expr="up[5m]", tz="UTC"
+    )
+    assert "result type: matrix" in out
+    assert "n=2 min=1 max=2 avg=1.5 last=2" in out
+    assert "2025-06-15T06:00:00+00:00=1" in out
+    assert "2025-06-15T06:01:00+00:00=2" in out
+
+
 def test_token_is_read_per_call_from_env_or_file_and_never_echoed(
     server, monkeypatch, tmp_path
 ):

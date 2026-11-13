@@ -47,6 +47,60 @@ def check_size(width: int, height: int) -> tuple[int, int]:
     return width, height
 
 
+def _raster_rows(width: int, height: int, depth: int, color: int, interlace: int):
+    """Yield encoded row lengths, including filter bytes, for every PNG pass."""
+    depths = {
+        0: (1, 2, 4, 8, 16),
+        2: (8, 16),
+        3: (1, 2, 4, 8),
+        4: (8, 16),
+        6: (8, 16),
+    }
+    channels = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}
+    if color not in depths or depth not in depths[color] or interlace not in (0, 1):
+        raise ValueError("invalid PNG raster format")
+    passes = (
+        ((0, 0, 1, 1),)
+        if interlace == 0
+        else (
+            (0, 0, 8, 8),
+            (4, 0, 8, 8),
+            (0, 4, 4, 8),
+            (2, 0, 4, 4),
+            (0, 2, 2, 4),
+            (1, 0, 2, 2),
+            (0, 1, 1, 2),
+        )
+    )
+    for x, y, dx, dy in passes:
+        pass_width = max(0, (width - x + dx - 1) // dx)
+        pass_height = max(0, (height - y + dy - 1) // dy)
+        if pass_width and pass_height:
+            row_length = 1 + (pass_width * channels[color] * depth + 7) // 8
+            yield row_length, pass_height
+
+
+def _validate_raster(compressed: bytes, rows) -> None:
+    """Require exactly one complete zlib stream containing exactly the raster."""
+    rows = list(rows)
+    expected = sum(length * count for length, count in rows)
+    decoder = zlib.decompressobj()
+    raster = decoder.decompress(compressed, expected + 1)
+    if (
+        len(raster) != expected
+        or not decoder.eof
+        or decoder.unused_data
+        or decoder.unconsumed_tail
+    ):
+        raise ValueError("invalid PNG compressed raster")
+    pos = 0
+    for length, count in rows:
+        for _ in range(count):
+            if raster[pos] > 4:  # noqa: PLR2004
+                raise ValueError("invalid PNG filter")
+            pos += length
+
+
 def verify_render(response, width: int, height: int) -> bytes:
     """Accept a server render only if it is a real PNG of exactly the requested size.
 
@@ -70,8 +124,9 @@ def verify_render(response, width: int, height: int) -> bytes:
             BOUNDS_EXCEEDED, "rendered PNG dimensions exceed the limit"
         )
 
-    # Pillow's decoder loads pixel data, while explicit chunk checks ensure that
-    # even a missing/truncated IEND or a bad CRC cannot pass as a complete PNG.
+    # Validate framing and raster independently of Pillow: its decoder can
+    # accept truncated zlib streams and ignores data after the raster. Feed it
+    # only pixel-relevant chunks so untrusted metadata is never decompressed.
     try:
         from PIL import Image
     except ImportError:
@@ -83,6 +138,11 @@ def verify_render(response, width: int, height: int) -> bytes:
         view = memoryview(data)
         pos = len(PNG_MAGIC)
         has_data = False
+        data_ended = False
+        seen = set()
+        compressed = bytearray()
+        clean = bytearray(PNG_MAGIC)
+        rows = None
         while True:
             if pos + 12 > len(data):
                 raise ValueError("truncated PNG chunk")  # noqa: TRY301
@@ -91,21 +151,63 @@ def verify_render(response, width: int, height: int) -> bytes:
             if end > len(data):
                 raise ValueError("truncated PNG chunk")  # noqa: TRY301
             kind = data[pos + 4 : pos + 8]
-            has_data = has_data or kind == b"IDAT"
+            if (
+                len(kind) != 4  # noqa: PLR2004
+                or any(not (65 <= b <= 90 or 97 <= b <= 122) for b in kind)  # noqa: PLR2004
+                or kind[2] & 32
+            ):
+                raise ValueError("invalid PNG chunk type")  # noqa: TRY301
+            if pos == len(PNG_MAGIC) and kind != b"IHDR":
+                raise ValueError("missing PNG header")  # noqa: TRY301
+            if kind in (b"IHDR", b"PLTE", b"tRNS", b"IEND"):
+                if kind in seen:
+                    raise ValueError("duplicate PNG chunk")  # noqa: TRY301
+                seen.add(kind)
+            if kind == b"IHDR":
+                if length != 13 or pos != len(PNG_MAGIC):  # noqa: PLR2004
+                    raise ValueError("invalid PNG header")  # noqa: TRY301
+                _, _, depth, color, compression, filtering, interlace = (
+                    struct.unpack_from(">IIBBBBB", data, pos + 8)
+                )
+                if compression != 0 or filtering != 0:
+                    raise ValueError("invalid PNG methods")  # noqa: TRY301
+                rows = _raster_rows(*size, depth, color, interlace)
+            elif kind == b"IDAT":
+                if data_ended:
+                    raise ValueError("noncontiguous PNG data")  # noqa: TRY301
+                has_data = True
+                compressed.extend(view[pos + 8 : end - 4])
+            else:
+                if has_data:
+                    data_ended = True
+                if kind in (b"PLTE", b"tRNS") and has_data:
+                    raise ValueError("invalid PNG chunk order")  # noqa: TRY301
+                if kind in (b"acTL", b"fcTL", b"fdAT"):
+                    raise ValueError("animated PNG")  # noqa: TRY301
+                if kind not in (b"PLTE", b"tRNS", b"IEND") and not kind[0] & 32:
+                    raise ValueError("unknown critical PNG chunk")  # noqa: TRY301
             crc = struct.unpack_from(">I", data, end - 4)[0]
             if zlib.crc32(view[pos + 4 : end - 4]) != crc:
                 raise ValueError("invalid PNG checksum")  # noqa: TRY301
+            if kind in (b"IHDR", b"PLTE", b"tRNS", b"IDAT", b"IEND"):
+                clean.extend(view[pos:end])
             pos = end
             if kind == b"IEND":
                 if length != 0 or pos != len(data) or not has_data:
                     raise ValueError("invalid PNG end")  # noqa: TRY301
                 break
-        with Image.open(io.BytesIO(data), formats=["PNG"]) as image:
+        _validate_raster(bytes(compressed), rows)
+        with Image.open(io.BytesIO(clean), formats=["PNG"]) as image:
             if image.size != size or getattr(image, "n_frames", 1) != 1:
                 raise ValueError("invalid PNG dimensions or animation")  # noqa: TRY301
             image.verify()
-        with Image.open(io.BytesIO(data), formats=["PNG"]) as image:
+        with Image.open(io.BytesIO(clean), formats=["PNG"]) as image:
             image.load()
+            pixels = image.convert("RGBA")
+            # A fresh image carries no metadata, even for palette/transparency input.
+            fresh = Image.frombytes("RGBA", size, pixels.tobytes())
+            output = io.BytesIO()
+            fresh.save(output, format="PNG")
     except (
         OSError,
         ValueError,
@@ -114,12 +216,16 @@ def verify_render(response, width: int, height: int) -> bytes:
         EOFError,
         OverflowError,
         struct.error,
+        zlib.error,
         Image.DecompressionBombError,
     ):
         raise ObservabilityError(
             UPSTREAM_UNAVAILABLE, "renderer returned an invalid PNG"
         ) from None
-    return data
+    result = output.getvalue()
+    if len(result) > MAX_PNG_BYTES:
+        raise ObservabilityError(BOUNDS_EXCEEDED, "rendered PNG is over 4 MiB")
+    return result
 
 
 @dataclass

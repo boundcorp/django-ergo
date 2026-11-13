@@ -703,7 +703,9 @@ def test_renderer_error_png_is_not_success():
         == "upstream_unavailable"
     )
     real = Response(200, "image/png", fake_png(1000, 500))
-    assert charts.verify_render(real, 1000, 500) == real.body
+    with Image.open(io.BytesIO(charts.verify_render(real, 1000, 500))) as rendered:
+        assert rendered.size == (1000, 500)
+        assert rendered.getpixel((0, 0)) == (0, 0, 0, 255)
 
 
 def test_renderer_500_html_is_an_error_not_an_image(server):

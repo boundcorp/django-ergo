@@ -99,7 +99,9 @@ def format_query(
     else:
         lines.append(f"{len(result.series)} series, {result.total_samples} samples")
         for series in result.series:
-            lines += _series(series, result.kind, tz)
+            lines += _series(
+                series, "range" if result.result_type == "matrix" else result.kind, tz
+            )
     if result.histogram_series:
         lines.append(
             f"UNSUPPORTED: {result.histogram_series} series contain omitted native-histogram samples "
