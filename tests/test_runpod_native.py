@@ -836,9 +836,10 @@ def test_independent_maintenance_stops_stale_process_with_active_worker_row(setu
 
     job = begin(setup)
     assert drive(setup, job) == "running"
+    stale = timezone.now() - timezone.timedelta(seconds=native.OWNER_STALE_SECONDS + 1)
+    # A dead controller: no update, step or scheduled poll within the window.
     Worker.objects.filter(pk=job.worker_id).update(
-        updated_at=timezone.now()
-        - timezone.timedelta(seconds=native.OWNER_STALE_SECONDS + 1),
+        updated_at=stale, step_started_at=None, next_poll_at=stale
     )
     native.reconcile_once()
     job.refresh_from_db()
@@ -846,6 +847,35 @@ def test_independent_maintenance_stops_stale_process_with_active_worker_row(setu
     assert job.cleanup_complete
     assert Experiment(job.ledger_path).status()["stop_reason"] == "worker_lost"
     assert setup.provider.posts == 1 and setup.provider.deletes == ["pod123"]
+
+
+def test_worker_whose_poll_is_queued_is_not_lost(setup):
+    from django.utils import timezone
+
+    job = begin(setup)
+    assert drive(setup, job) == "running"
+    # Observed on Octo: the last update was 200s ago but the next poll is only
+    # waiting in a busy shared Celery pool. That Worker is alive.
+    now = timezone.now()
+    Worker.objects.filter(pk=job.worker_id).update(
+        updated_at=now - timezone.timedelta(seconds=200),
+        step_started_at=None,
+        next_poll_at=now - timezone.timedelta(seconds=195),
+    )
+    native.reconcile_once()
+    job.refresh_from_db()
+    assert Experiment(job.ledger_path).status()["stop_reason"] is None
+    assert not job.cleanup_complete
+    assert setup.provider.deletes == []
+    # A long current step also counts, even with an old update and no poll due.
+    Worker.objects.filter(pk=job.worker_id).update(
+        updated_at=now - timezone.timedelta(seconds=native.OWNER_STALE_SECONDS + 100),
+        step_started_at=now - timezone.timedelta(seconds=100),
+        next_poll_at=None,
+    )
+    native.reconcile_once()
+    assert Experiment(job.ledger_path).status()["stop_reason"] is None
+    assert setup.provider.deletes == []
 
 
 def test_cancel_during_readiness_suppresses_late_question(setup, monkeypatch):
