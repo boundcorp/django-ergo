@@ -270,15 +270,26 @@ def start(  # noqa: PLR0913
 
 
 def schedule(worker: Worker, delay: float) -> None:
-    """Have ``run`` called for the worker after ``delay`` seconds."""
+    """Request a step, preserving the earliest request across an active lease."""
     from django.db import transaction
     from django.utils import timezone
 
     from django_ergo.conversation.models import Worker
 
     when = timezone.now() + timezone.timedelta(seconds=delay)
-    Worker.objects.filter(pk=worker.pk).update(next_poll_at=when)
-    transaction.on_commit(lambda: _publish(str(worker.pk), delay))
+    with transaction.atomic():
+        current = Worker.objects.select_for_update().get(pk=worker.pk)
+        if not current.active:
+            return
+        if current.next_poll_at and current.next_poll_at < when:
+            when = current.next_poll_at
+            delay = max(0.0, (when - timezone.now()).total_seconds())
+        current.next_poll_at = when
+        current.save(update_fields=["next_poll_at"])
+        # The active step publishes the durable request after releasing its lease.
+        # Publishing now alone would let an eager runner skip and lose the wakeup.
+        if not current.step_started_at:
+            transaction.on_commit(lambda: _publish(str(worker.pk), delay))
 
 
 def _publish(worker_id: str, delay: float) -> None:
@@ -324,12 +335,14 @@ def _claim(worker_id: str) -> tuple[Worker | None, str]:
         worker.polls += 1
         worker.started_at = worker.started_at or now
         worker.step_started_at = now
+        worker.next_poll_at = None
         worker.save(
             update_fields=[
                 "status",
                 "polls",
                 "started_at",
                 "step_started_at",
+                "next_poll_at",
                 "updated_at",
             ]
         )
@@ -355,6 +368,7 @@ def run(worker_id: str, registry=None) -> str:
         # Agent answers are durable worker bookkeeping, not function arguments.
         args.pop("_agent_replies", None)
         args.pop("_agent_instructions", None)
+        args.pop("_agent_mail_closed", None)
         outcome = (
             function(ctx, **args) if params and params[0] == "ctx" else function(**args)
         )
@@ -413,38 +427,8 @@ def _apply_step(worker: Worker, outcome: Any, error: str) -> str:
         if error:
             _finish(worker, "failed", None, error)
         else:
-            _finish_unless_reply_pending(worker, outcome)
-        return worker.status
-
-
-def _finish_unless_reply_pending(worker: Worker, outcome: Any) -> None:
-    from django.db import transaction
-
-    from django_ergo.conversation.models import Worker
-
-    # Serialize completion with a reply being queued for this worker.
-    with transaction.atomic():
-        current = Worker.objects.select_for_update().get(pk=worker.pk)
-        replies = (current.args or {}).get("_agent_replies", {})
-        pending = any(
-            reply.get("status") in ("queued", "processing")
-            for reply in replies.values()
-        )
-        pending = pending or any(
-            row.get("status") in ("queued", "processing")
-            for row in (current.args or {}).get("_agent_instructions", [])
-            if not row.get("superseded_by")
-        )
-        if current.status == "cancelled":
-            worker.status = "cancelled"
-            _finish(worker, "cancelled", None, "Cancelled")
-        elif pending:
-            worker.step_started_at = None
-            worker.save(update_fields=["state", "step_started_at", "updated_at"])
-        else:
             _finish(worker, "completed", jsonable(outcome), "")
-    if pending and worker.status != "cancelled":
-        schedule(worker, 1)
+        return worker.status
 
 
 def cancel(worker: Worker, bot: Bot | None = None) -> str:
@@ -454,9 +438,16 @@ def cancel(worker: Worker, bot: Bot | None = None) -> str:
 
     if not worker.active:
         return f"{worker.title} already {worker.status}."
-    Worker.objects.filter(pk=worker.pk, status__in=["queued", "running"]).update(
-        status="cancelled"
-    )
+    from django.db import transaction
+
+    with transaction.atomic():
+        current = Worker.objects.select_for_update().get(pk=worker.pk)
+        if not current.active:
+            return f"{worker.title} already {current.status}."
+        current.status = "cancelled"
+        current.next_poll_at = None
+        current.save(update_fields=["status", "next_poll_at"])
+        close_agent_mail(worker.pk, "Worker cancelled before delivery")
     _notify(worker)
     found = None
     if bot is not None:
@@ -473,11 +464,37 @@ def cancel(worker: Worker, bot: Bot | None = None) -> str:
     return f"Cancelled {worker.title}. {stopped}"
 
 
+def close_agent_mail(worker_id, reason: str) -> None:
+    """Fence local agent mail before release; uncertain sends remain uncertain."""
+    from django.db import transaction
+
+    from django_ergo.conversation.models import Worker
+
+    with transaction.atomic():
+        current = Worker.objects.select_for_update().get(pk=worker_id)
+        args = dict(current.args or {})
+        args.setdefault("_agent_mail_closed", reason)
+        for row in args.get("_agent_instructions", []):
+            if row.get("status") == "queued":
+                row.update(status="unsent", error=reason)
+            elif row.get("status") == "processing":
+                row.update(
+                    status="unknown",
+                    error=f"{reason}; interrupted send may have reached transport",
+                )
+        for reply in args.get("_agent_replies", {}).values():
+            if reply.get("status") == "queued":
+                reply.update(status="unsent", result=reason, reported=False)
+        current.args = args
+        current.save(update_fields=["args", "updated_at"])
+
+
 def _finish(worker: Worker, status: str, result: Any, error: str) -> None:
     from django.utils import timezone
 
     from django_ergo.bots import messaging
 
+    close_agent_mail(worker.pk, f"Watcher {status} before delivery")
     worker.status = status
     worker.result = result
     worker.error = error[:4000]

@@ -79,20 +79,48 @@ with `supersedes: "pause-1"` after approval to proceed.
 | Field/status | Evidence, not an implied guarantee |
 | --- | --- |
 | `queued` | Persisted locally; no Orca send yet |
-| `processing` | Send claimed; a crash can leave its outcome uncertain |
+| `processing` | Durable send claim; a crash can leave its outcome uncertain |
 | `transport_queued` | Orca accepted mail, or its inbox contains the instruction |
 | `delivered`, `transport_read`, `delivered_at` | Observed transport consumption only |
-| `unknown` | Timeout, error or interrupted send; no automatic retransmission |
-| `acknowledgement` | Exact-worker-attributed status naming instruction id, version and concrete next action |
-| `superseded_by` | Old instruction, even if its acknowledgement arrives late |
+| `unsent` | No send attempted: preflight failed, worker closed/inactive, or instruction superseded before send |
+| `unknown` | Send timeout/error or interrupted claim; no automatic retransmission |
+| `acknowledgement_claim` | Unverified status claim naming id, version, claimed sender/pane and concrete next action |
+| `acknowledgement` | Authenticated acknowledgement; remains `null` with the current Orca status protocol |
+| `acceptance` | Remains `unknown`; neither transport evidence nor a claim establishes model acceptance |
+| `superseded_by` | Old instruction, even if an acknowledgement claim arrives late |
 
 The watcher sends at most one latest instruction per step, before question
 replies; it skips superseded unsent instructions. Uncertain question replies
-no longer prevent status/acknowledgement checks. Instruction acknowledgement
-requires the exact run, task, dispatch and assignee, plus pane identity when
-Orca supplies it. It is the worker's stated acceptance/next action, **not proof
-of compliance or completion**. An old acknowledgement never acknowledges the
-latest instruction. Replayed acknowledgements are recorded once.
+do not prevent status/claim checks. Claims are correlated by run, task, dispatch,
+instruction id and version; stale/foreign attempt metadata does not apply to the
+current instruction. Matching sender/pane metadata is **not authentication**:
+the inspected installed Orca send handler accepts a caller-selected `from` and
+can derive the pane from that handle; its dispatch-capability check for lifecycle
+messages does not attest ordinary `status` acknowledgements. Even matching
+metadata therefore stays an `acknowledgement_claim` with
+`verification: "unverified"` and a claimed next action. Mismatching sender/pane
+claims are also unverified, never upgraded. No claim establishes acceptance,
+compliance or completion. An old claim never applies to the latest instruction;
+replayed claims are recorded once.
+Historical self-asserted `acknowledgement` records are downgraded to unverified
+claims on reads and subsequent ledger writes; they do not retain trusted status.
+
+Enqueue requests an immediate watcher step through a durable `next_poll_at`.
+When a step is already running, that request survives its normal delayed poll
+and is published after the step yields; it does not start a concurrent step or
+interrupt an active reply. Runner availability, recovery scheduling and the
+worker's cooperative inbox check still affect latency; this is not a hard-time
+delivery guarantee.
+
+Before a send, the watcher rechecks local activity/closure and Orca's current
+dispatch status, worker state and terminal-release evidence. A database row lock
+serializes that preflight and send with local mail closure. Observed settled or
+released workers are closed to new instructions; queued mail becomes `unsent`,
+while interrupted sends remain `unknown`. The final watcher check closes mail
+before releasing the terminal, and completion, failure or cancellation also
+closes queued mail. Instructions queued during the final check are not retried
+after release. A failed preflight before any send is `unsent`, not an implied
+transport attempt; neither it nor an uncertain send is retried automatically.
 
 New task briefs include cooperative inbox-check guidance: at safe checkpoints,
 after asks, before side effects, before resuming after a stop and before
@@ -109,11 +137,13 @@ workers do not retroactively gain the brief's checkpoint instructions.
 The watcher observes the existing bounded 100-message inbox window, not a complete
 paginated history; missing evidence remains unconfirmed. On uncertainty, inspect
 Orca's durable inbox before manual intervention; never resend merely because an
-acknowledgement is late. Watcher scheduling and the worker's next check still
-bound latency; an already running reply may finish before new guidance is sent.
-No acknowledgement after watcher completion is reconciled automatically.
-Reliable wakeups, server-side latest-version fencing, complete delivery lookup
-and hard stop deadlines require upstream Orca support.
+acknowledgement claim is late. The preflight/local closure fence prevents mail
+after a **locally observed** terminal state, not completion that happens remotely
+between preflight and send: these are separate Orca calls, with no atomic remote
+send-if-active guarantee. No claim after watcher completion is reconciled
+automatically. Busy-model wakeups, authenticated status attestation, server-side
+latest-version/lifecycle fencing, complete delivery lookup and hard stop deadlines
+require upstream Orca support.
 
 ## Native RunPod workers
 

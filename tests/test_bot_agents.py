@@ -248,7 +248,8 @@ def test_reply_failure_is_reported_and_not_retried(tmp_path, workers):  # noqa: 
     manager.checks = [AgentCheck("done", report="Final report")]
     assert w.run(started["id"], bot.registry) == "completed"
     assert calls == ["q"]
-    assert "already queued" in kit.execute_tool("ergo_agent_reply", answer)
+    with pytest.raises(ValueError, match="no longer running"):
+        kit.execute_tool("ergo_agent_reply", answer)
     texts = list(
         ThreadMessage.objects.filter(metadata__worker=started["id"]).values_list(
             "text", flat=True
@@ -267,11 +268,26 @@ def test_interrupted_reply_is_reported_without_redelivery(tmp_path, workers):  #
     bot, _, manager, kit = setup(tmp_path)
     started = start(kit, {"brief": "Fix", "workspace": "site"})
     worker = Worker.objects.get(pk=started["id"])
+    worker.state["seen"] = ["q"]
     worker.args["_agent_replies"] = {"q": {"answer": "yes", "status": "processing"}}
-    worker.save(update_fields=["args"])
+    worker.save(update_fields=["args", "state"])
+    question = AgentQuestion(id="next", body="Which option next?")
+    manager.checks = [
+        AgentCheck(progress="first observation", questions=[question]),
+        AgentCheck(progress="second observation", questions=[question]),
+    ]
     assert w.run(started["id"], bot.registry) == "running"
     assert w.run(started["id"], bot.registry) == "running"
     assert manager.replies == []
+    assert manager.checks == []  # Observation/reconciliation still ran both times.
+    worker.refresh_from_db()
+    assert worker.progress == "second observation"
+    assert worker.state["seen"] == ["q"]
+    with pytest.raises(ValueError, match="isn't a question this agent asked"):
+        kit.execute_tool(
+            "ergo_agent_reply",
+            {"worker_id": started["id"], "question_id": "next", "answer": "yes"},
+        )
     texts = list(
         ThreadMessage.objects.filter(metadata__worker=started["id"]).values_list(
             "text", flat=True
@@ -279,12 +295,79 @@ def test_interrupted_reply_is_reported_without_redelivery(tmp_path, workers):  #
     )
     assert len(texts) == 1
     assert "unknown" in texts[0] and "interrupted" in texts[0]
+    # Reconciliation can resolve the old delivery; only then expose the next one.
+    worker.args["_agent_replies"]["q"].update(status="sent", result="Reconciled")
+    worker.save(update_fields=["args"])
+    manager.checks = [AgentCheck(questions=[question])]
+    assert w.run(started["id"], bot.registry) == "running"
+    worker.refresh_from_db()
+    assert worker.state["seen"] == ["next", "q"]
+    messages = ThreadMessage.objects.filter(metadata__worker=started["id"])
+    assert messages.count() == 3
+    assert "Reconciled" in messages[1].text
+    assert "Which option next?" in messages[2].text
 
 
 @pytest.mark.django_db(transaction=True)
-def test_answer_queued_during_final_check_is_delivered(tmp_path, workers):  # noqa: F811
+@pytest.mark.usefixtures("workers")
+@pytest.mark.parametrize("status", ["done", "failed"])
+def test_pending_reply_still_observes_terminal_status(tmp_path, status):
     from django_ergo.bots import workers as w
     from django_ergo.conversation.models import ThreadMessage
+    from django_ergo.conversation.models import Worker
+
+    bot, _, manager, kit = setup(tmp_path)
+    started = start(kit, {"brief": "Fix", "workspace": "site"})
+    worker = Worker.objects.get(pk=started["id"])
+    worker.state["seen"] = ["q"]
+    worker.args["_agent_replies"] = {"q": {"answer": "yes", "status": "processing"}}
+    worker.save(update_fields=["args", "state"])
+    manager.checks = [
+        AgentCheck(
+            status,
+            report="Final report",
+            error="Final failure",
+            questions=[AgentQuestion(id="next", body="Unsafe new question")],
+        )
+    ]
+    assert w.run(started["id"], bot.registry) == (
+        "completed" if status == "done" else "failed"
+    )
+    assert manager.checks == []
+    assert manager.replies == []
+    worker.refresh_from_db()
+    assert worker.state["seen"] == ["q"]
+    assert not ThreadMessage.objects.filter(
+        metadata__worker=started["id"], text__contains="Unsafe new question"
+    ).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.usefixtures("workers")
+def test_reply_queue_rejects_observed_terminal_mail_fence(tmp_path):
+    from django_ergo.conversation.models import Worker
+
+    _, _, _, kit = setup(tmp_path)
+    started = start(kit, {"brief": "Fix", "workspace": "site"})
+    asked(started["id"], "q")
+    worker = Worker.objects.get(pk=started["id"])
+    worker.args["_agent_mail_closed"] = "Remote completion observed"
+    worker.save(update_fields=["args"])
+    assert worker.active
+    with pytest.raises(ValueError, match="no longer running"):
+        kit.execute_tool(
+            "ergo_agent_reply",
+            {"worker_id": started["id"], "question_id": "q", "answer": "yes"},
+        )
+    worker.refresh_from_db()
+    assert "_agent_replies" not in worker.args
+
+
+@pytest.mark.django_db(transaction=True)
+def test_answer_queued_during_final_check_is_closed_without_delivery(tmp_path, workers):  # noqa: F811
+    from django_ergo.bots import workers as w
+    from django_ergo.conversation.models import ThreadMessage
+    from django_ergo.conversation.models import Worker
 
     bot, _, manager, kit = setup(tmp_path)
     started = start(kit, {"brief": "Fix", "workspace": "site"})
@@ -298,9 +381,15 @@ def test_answer_queued_during_final_check_is_delivered(tmp_path, workers):  # no
         return AgentCheck("done", report="Final report")
 
     manager.check = check
-    assert w.run(started["id"], bot.registry) == "running"
     assert w.run(started["id"], bot.registry) == "completed"
-    assert manager.replies == [("job_1", "q", "yes")]
+    assert manager.replies == []
+    worker = Worker.objects.get(pk=started["id"])
+    assert worker.args["_agent_replies"]["q"]["status"] == "unsent"
+    with pytest.raises(ValueError, match="no longer running"):
+        kit.execute_tool(
+            "ergo_agent_reply",
+            {"worker_id": started["id"], "question_id": "q", "answer": "yes"},
+        )
     assert any(
         "Final report" in text
         for text in ThreadMessage.objects.filter(

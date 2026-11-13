@@ -215,6 +215,26 @@ def command_of(args: list[str]) -> tuple[str, ...]:
     return tuple(words[:2])
 
 
+def _mail_args(args: list[str]) -> tuple[tuple[str, ...], dict[str, str]]:
+    """Parse mail routing without mistaking a body value for a routing flag."""
+    # Orca accepts --key=value and --key value, with the last value winning.
+    words, flags = [], {}
+    index = 0
+    while index < len(args):
+        token = args[index]
+        index += 1
+        if not token.startswith("--"):
+            words.append(token)
+            continue
+        key, equals, value = token[2:].partition("=")
+        if not equals and key not in {"json", "help"}:
+            if index < len(args) and not args[index].startswith("--"):
+                value = args[index]
+                index += 1
+        flags[key] = value
+    return tuple(words[:2]), flags
+
+
 def is_read_only(args: list[str]) -> bool:
     # Help only as `<subcommand words> --help`: anywhere else "--help" or "-h"
     # could be the value of a flag (`--text -h`), and the command would run.
@@ -447,22 +467,59 @@ class OrcaPlugin(BotPlugin):
             or "(no output)"
         )
 
+    def _tracked_mail(self, args: list[str]) -> bool:
+        """Fence mail already owned by a durable worker, including settled ones.
+
+        Unknown message ids keep the CLI's normal sender authorization; this is
+        not an inventory of every remote message or permission to impersonate it.
+        """
+        from django_ergo.conversation.models import Worker
+
+        command, flags = _mail_args(args)
+        if command not in {("orchestration", "reply"), ("orchestration", "send")}:
+            return False
+        # Validate a pinned environment before consulting that environment's ids.
+        self.argv(args)
+        question_id = flags.get("id", "")
+        target = flags.get("to", "")
+        if not question_id and not target:
+            return False
+        workers = Worker.objects.filter(
+            bot_name=self.bot.name, function__in=["agent:orca", "orca:watch"]
+        ).only("args", "state", "function")
+        for worker in workers:
+            saved = worker.args or {}
+            handle = saved.get("handle") or self.manager.worker_handle(worker) or {}
+            if command == ("orchestration", "send"):
+                if (
+                    handle.get("dispatch")
+                    and target == f"dispatch:{handle['dispatch']}"
+                ):
+                    return True
+                continue
+            ids = set((worker.state or {}).get("seen") or [])
+            ids.update(saved.get("_agent_replies") or {})
+            for row in saved.get(instruction_protocol.KEY) or []:
+                receipt = row.get("receipt") or {}
+                message = receipt.get("message") or {}
+                ids.add(message.get("id"))
+                ids.add(row.get("message_id"))
+                ids.add((row.get("acknowledgement_claim") or {}).get("message_id"))
+                ids.add((row.get("acknowledgement") or {}).get("message_id"))
+            if question_id in ids:
+                return True
+        return False
+
     def change(self, args: list[str], fields: list[str] | None = None) -> str:
         """``orca_run``: any command, except starting workers by hand."""
         command = command_of(args)
-        if not is_read_only(args) and (
-            command == ("orchestration", "reply")
-            or (
-                command == ("orchestration", "send")
-                and any(arg.startswith(("dispatch:", "--to=dispatch:")) for arg in args)
-            )
-        ):
+        if not is_read_only(args) and self._tracked_mail(args):
             return (
                 "Use ergo_orca_instruct for versioned follow-up instructions, or "
                 "ergo_agent_reply for a question. Raw dispatch mail bypasses durable "
                 "tracking; transport consumption does not prove model acceptance."
             )
-        if command_of(args) in TRACKED_ONLY and not is_read_only(args):
+        if command in TRACKED_ONLY and not is_read_only(args):
             return (
                 "Start workers with orca_start_worker (or ergo_agent_start), not "
                 "orca_run: only those make a worker this chat tracks, with its "
@@ -1110,6 +1167,12 @@ class OrcaPlugin(BotPlugin):
         self.record_activity(ctx, dispatch, shown)
         self.scan_usage(ctx, settled=report is not None or status in SETTLED)
         if report is not None or status in SETTLED:
+            from django_ergo.bots.workers import close_agent_mail
+
+            # Close the durable queue before releasing the remote terminal. An
+            # instruction arriving during this final check is unsent, not a
+            # reason to reopen the watcher and mail an already-settled worker.
+            close_agent_mail(ctx.worker.pk, "Orca worker settled before delivery")
             self.end_worker(dispatch, status)
             body = (report or {}).get("body") or ""
             if status == "failed" and not body:
@@ -1345,8 +1408,9 @@ class OrcaPlugin(BotPlugin):
                 "orca_start_worker fails, tell the user its error rather than working "
                 "around it. Send follow-up guidance with ergo_orca_instruct, not raw "
                 "orca_run mail or terminal input. Inspect ergo_orca_instruction_status: "
-                "queued or delivered mail is not model acceptance; require an "
-                "acknowledgement of the latest instruction and its next action. "
+                "queued/delivered mail and unverified acknowledgement claims are not "
+                "authenticated model acceptance. Status sender/pane metadata is "
+                "self-asserted; acceptance remains unknown without upstream attestation. "
                 "Before stopping workers or "
                 'anything else unusual, read the CLI\'s guides with orca_read ["skills", '
                 '"get", "orca-cli"] and ["skills", "get", "orchestration"], and check '

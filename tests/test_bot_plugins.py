@@ -2227,6 +2227,148 @@ def test_orca_run_refuses_to_start_untracked_workers(tmp_path, orca_calls):
     ]
 
 
+@pytest.fixture
+def orca_mail_worker(tmp_path):
+    from asgiref.sync import async_to_sync
+
+    from django_ergo.conversation.models import Worker
+
+    bot, _, plugin = orca_bot(tmp_path)
+    user = User.objects.create(username="orca-mail-owner")
+    session = async_to_sync(bot.main_session)(user)
+    worker = Worker.objects.create(
+        bot_name=bot.name,
+        session=session,
+        function="agent:orca",
+        status="running",
+        args={
+            "handle": {
+                "dispatch": "d1",
+                "task": "t1",
+                "run": "r1",
+                "mailbox": "term_owner",
+            },
+            "_agent_replies": {"reply_q": {"status": "processing", "answer": "yes"}},
+            "_agent_instructions": [
+                {
+                    "receipt": {"message": {"id": "instruction_mail"}},
+                    "acknowledgement": {"message_id": "ack_mail"},
+                    "message_id": "reconciled_mail",
+                    "acknowledgement_claim": {"message_id": "claim_mail"},
+                }
+            ],
+        },
+        state={"seen": ["question_q"]},
+    )
+    return plugin, worker
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("equals", [False, True])
+@pytest.mark.parametrize("status", ["running", "completed"])
+@pytest.mark.parametrize(
+    "message_id",
+    [
+        "question_q",
+        "reply_q",
+        "instruction_mail",
+        "ack_mail",
+        "reconciled_mail",
+        "claim_mail",
+    ],
+)
+def test_orca_raw_reply_requires_durable_api_for_known_worker_mail(
+    orca_mail_worker, orca_calls, equals, status, message_id
+):
+    plugin, worker = orca_mail_worker
+    worker.status = status
+    worker.save(update_fields=["status"])
+    args = ["orchestration", "reply"]
+    args += [f"--id={message_id}"] if equals else ["--id", message_id]
+    args += ["--body", "yes"]
+    assert "ergo_agent_reply" in plugin.change(args)
+    assert orca_calls == []
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("equals", [False, True])
+@pytest.mark.parametrize("explicit_sender", [False, True])
+def test_orca_raw_unrelated_reply_keeps_cli_sender_authorization(
+    orca_mail_worker, orca_calls, equals, explicit_sender
+):
+    plugin, _ = orca_mail_worker
+    args = ["orchestration", "reply"]
+    args += ["--id=untracked_question"] if equals else ["--id", "untracked_question"]
+    args += ["--body", "Legitimate unrelated answer"]
+    if explicit_sender:
+        args += (
+            ["--from=term_unrelated_owner"]
+            if equals
+            else ["--from", "term_unrelated_owner"]
+        )
+    assert plugin.change(args) == '{"ok":true}'
+    assert orca_calls == [["orca-test", *args, "--environment", "devbox", "--json"]]
+    assert all("term_owner" not in arg for arg in orca_calls[0])
+    assert sum(arg.split("=")[0] == "--from" for arg in orca_calls[0]) == (
+        1 if explicit_sender else 0
+    )
+
+
+@pytest.mark.django_db
+def test_orca_raw_tracked_reply_cannot_bypass_guard_with_global_or_repeated_flags(
+    orca_mail_worker, orca_calls
+):
+    plugin, _ = orca_mail_worker
+    args = [
+        "--json",
+        "orchestration",
+        "reply",
+        "--id=unrelated",
+        "--id",
+        "question_q",
+        "--body=--id=unrelated",
+    ]
+    assert "ergo_agent_reply" in plugin.change(args)
+    assert orca_calls == []
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("equals", [False, True])
+def test_orca_raw_dispatch_guard_only_blocks_tracked_dispatches(
+    orca_mail_worker, orca_calls, equals
+):
+    plugin, _ = orca_mail_worker
+    for dispatch, tracked in [("d1", True), ("untracked", False)]:
+        args = ["orchestration", "send"]
+        args += (
+            [f"--to=dispatch:{dispatch}"]
+            if equals
+            else ["--to", f"dispatch:{dispatch}"]
+        )
+        args += ["--body", "Follow-up"]
+        result = plugin.change(args)
+        if tracked:
+            assert "ergo_orca_instruct" in result
+            assert orca_calls == []
+        else:
+            assert result == '{"ok":true}'
+            assert orca_calls == [
+                ["orca-test", *args, "--environment", "devbox", "--json"]
+            ]
+
+
+@pytest.mark.django_db
+def test_orca_raw_legacy_worker_questions_stay_guarded(orca_mail_worker, orca_calls):
+    plugin, worker = orca_mail_worker
+    worker.function = "orca:watch"
+    worker.args = {"run": "r1", "dispatch": "d1"}
+    worker.save(update_fields=["function", "args"])
+    assert "ergo_agent_reply" in plugin.change(
+        ["orchestration", "reply", "--id", "question_q", "--body", "yes"]
+    )
+    assert orca_calls == []
+
+
 @pytest.mark.django_db
 def test_orca_closes_the_agent_terminal_of_a_stopped_worker(tmp_path, orca_calls):
     _, _, plugin = orca_bot(tmp_path)

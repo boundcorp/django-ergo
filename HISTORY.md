@@ -6,13 +6,21 @@ This document tracks the major milestones and evolution of the Django Ergo proje
 
 ### Versioned Orca coordinator instructions (November 2026)
 
-- Added chat-scoped follow-up tools with durable versions, explicit supersession,
-  idempotent enqueue and separate exact-worker acknowledgements naming next actions.
-- Orca question replies now report queued transport, not model receipt. Uncertain
-  replies no longer suppress watcher checks; cooperative urgent instruction sends
-  precede question replies without terminal injection or automatic timeout replay.
-- New briefs include safe inbox checkpoints. Busy-model wakeups, hard deadlines
-  and complete delivery reconciliation remain upstream Orca boundaries.
+- Added chat-scoped follow-up tools with durable versions, explicit supersession
+  and idempotent enqueue. Review correction: status sender/pane metadata is not
+  attested by Orca; next-action reports remain unverified acknowledgement claims,
+  authenticated acknowledgement stays absent and model acceptance stays unknown.
+- Orca question replies report queued transport, not model receipt. Uncertain
+  replies no longer suppress checks; cooperative urgent instruction sends precede
+  question replies without terminal injection or automatic timeout replay.
+- Review correction: durable immediate watcher requests survive active steps.
+  Locked preflight/send and mail closure before terminal release prevent sends
+  after locally observed settlement; queued mail becomes unsent on completion,
+  failure or cancellation, while interrupted sends remain unknown. Separate
+  remote preflight/send calls are not an atomic send-if-active guarantee.
+- New briefs include safe inbox checkpoints. Busy-model wakeups, authenticated
+  status attestation, hard deadlines, server-side lifecycle fencing and complete
+  delivery reconciliation remain upstream Orca boundaries.
 
 ### Bounded native RunPod deployment access (November 2026)
 

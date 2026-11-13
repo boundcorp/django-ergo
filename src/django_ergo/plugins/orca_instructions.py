@@ -13,6 +13,7 @@ from contextlib import contextmanager
 from django.db import transaction
 from django.utils import timezone
 
+from django_ergo.bots.workers import close_agent_mail
 from django_ergo.bots.workers import schedule
 from django_ergo.conversation.models import Worker
 
@@ -39,10 +40,10 @@ idempotently on replay; never re-execute side effects because mail was replayed.
 def ledger(worker_id):
     with transaction.atomic():
         worker = Worker.objects.select_for_update().get(pk=worker_id)
-        args = dict(worker.args or {})
-        rows = args.setdefault(KEY, [])
+        worker.args = dict(worker.args or {})
+        rows = worker.args.setdefault(KEY, [])
+        normalize_claims(rows)
         yield worker, rows
-        worker.args = args
         worker.save(update_fields=["args", "updated_at"])
 
 
@@ -55,6 +56,9 @@ def enqueue(worker_id, instruction_id, text, supersedes="", priority="normal"):
         msg = "priority must be normal or urgent"
         raise ValueError(msg)
     with ledger(worker_id) as (worker, rows):
+        if not worker.active or worker.args.get("_agent_mail_closed"):
+            msg = "The agent worker is no longer running"
+            raise ValueError(msg)
         for row in rows:
             if row["id"] == instruction_id:
                 if (row["text"], row["supersedes"], row["priority"]) != (
@@ -65,9 +69,6 @@ def enqueue(worker_id, instruction_id, text, supersedes="", priority="normal"):
                     msg = "instruction_id already names different content"
                     raise ValueError(msg)
                 return dict(row)
-        if not worker.active:
-            msg = "The agent worker is no longer running"
-            raise ValueError(msg)
         latest = rows[-1]["id"] if rows else ""
         if supersedes != latest:
             msg = f"supersedes must name the latest instruction: {latest!r}"
@@ -82,6 +83,8 @@ def enqueue(worker_id, instruction_id, text, supersedes="", priority="normal"):
             "status": "queued",
             "created_at": timezone.now().isoformat(),
             "acknowledgement": None,
+            "acknowledgement_claim": None,
+            "acceptance": "unknown",
         }
         if rows:
             rows[-1]["superseded_by"] = instruction_id
@@ -92,7 +95,26 @@ def enqueue(worker_id, instruction_id, text, supersedes="", priority="normal"):
 
 def snapshot(worker_id):
     rows = (Worker.objects.get(pk=worker_id).args or {}).get(KEY, [])
+    normalize_claims(rows)
     return {"latest": rows[-1] if rows else None, "instructions": rows}
+
+
+def normalize_claims(rows):
+    """Downgrade historical self-asserted acknowledgements on read and write."""
+    for row in rows:
+        claim = row.get("acknowledgement_claim")
+        if not isinstance(claim, dict):
+            old = row.get("acknowledgement")
+            claim = dict(old) if isinstance(old, dict) else None
+        if claim is not None:
+            claim["verification"] = "unverified"
+            claim.setdefault("claimed_sender", None)
+            claim.setdefault("claimed_pane", None)
+        row.update(
+            acknowledgement=None,
+            acknowledgement_claim=claim,
+            acceptance="unknown",
+        )
 
 
 def body(row, handle):
@@ -133,7 +155,7 @@ def body(row, handle):
 
 
 def deliver(ctx, plugin, handle):
-    """One bounded send per watcher step, before question replies. Never inject."""
+    """Durably claim once, then lock across preflight and send before replies."""
     with ledger(ctx.worker.pk) as (_, rows):
         if not rows:
             return
@@ -147,47 +169,92 @@ def deliver(ctx, plugin, handle):
             return
         row["status"] = "processing"
         claimed = dict(row)
-    status, receipt, error = "unknown", None, ""
-    try:
-        require_owner(handle)
-        receipt = plugin.cli_json(
-            [
-                "orchestration",
-                "send",
-                "--to",
-                f"dispatch:{handle['dispatch']}",
-                "--run",
-                handle["run"],
-                "--from",
-                handle["mailbox"],
-                "--type",
-                "status",
-                "--subject",
-                f"Ergo instruction v{claimed['version']}",
-                "--body",
-                body(claimed, handle),
-                "--priority",
-                claimed["priority"],
-                "--payload",
-                json.dumps(
-                    {
-                        "taskId": handle["task"],
-                        "dispatchId": handle["dispatch"],
-                        "ergoInstruction": claimed,
-                    }
-                ),
-            ]
-        )
-        status = "transport_queued"
-    except Exception as exc:  # noqa: BLE001 — preserve uncertainty, never replay a send
-        error = f"{type(exc).__name__}: {exc}"
-    with ledger(ctx.worker.pk) as (_, rows):
+    with ledger(ctx.worker.pk) as (worker, rows):
         row = next(r for r in rows if r["id"] == claimed["id"])
-        row.update(status=status, receipt=receipt, error=error)
+        if row["status"] != "processing":
+            return
+        if row.get("superseded_by"):
+            row.update(status="unsent", error="Superseded before send")
+            return
+        attempted = False
+        try:
+            reason = worker.args.get("_agent_mail_closed")
+            if not worker.active:
+                reason = reason or "The agent worker is no longer running"
+            if not reason:
+                require_owner(handle)
+                shown = plugin.cli_json(
+                    ["orchestration", "worker-show", "--dispatch", handle["dispatch"]]
+                )
+                reason = terminal_reason(shown)
+            if reason:
+                # No send was attempted. Persist that distinction before the shared
+                # closer classifies interrupted processing rows as uncertain.
+                row.update(status="unsent", error=reason)
+                worker.save(update_fields=["args", "updated_at"])
+                close_agent_mail(worker.pk, reason)
+                worker.refresh_from_db(fields=["args"])
+                return
+            attempted = True
+            receipt = plugin.cli_json(
+                [
+                    "orchestration",
+                    "send",
+                    "--to",
+                    f"dispatch:{handle['dispatch']}",
+                    "--run",
+                    handle["run"],
+                    "--from",
+                    handle["mailbox"],
+                    "--type",
+                    "status",
+                    "--subject",
+                    f"Ergo instruction v{claimed['version']}",
+                    "--body",
+                    body(claimed, handle),
+                    "--priority",
+                    claimed["priority"],
+                    "--payload",
+                    json.dumps(
+                        {
+                            "taskId": handle["task"],
+                            "dispatchId": handle["dispatch"],
+                            "ergoInstruction": claimed,
+                        }
+                    ),
+                ]
+            )
+            row.update(status="transport_queued", receipt=receipt, error="")
+        except Exception as exc:  # noqa: BLE001 — never replay an uncertain send
+            row.update(
+                status="unknown" if attempted else "unsent",
+                error=f"{type(exc).__name__}: {exc}",
+            )
+        result = row["status"]
     ctx.tell(
-        f"Instruction {claimed['id']} v{claimed['version']}: {status}. "
-        "Model acceptance is unacknowledged; use ergo_orca_instruction_status."
+        f"Instruction {claimed['id']} v{claimed['version']}: {result}. "
+        "Model acceptance is unknown; use ergo_orca_instruction_status."
     )
+
+
+def terminal_reason(shown):
+    # Dispatch states mirror OrcaPlugin.SETTLED without importing the plugin
+    # (which imports this protocol). Worker states use Orca's worker ledger.
+    dispatch = str((shown.get("dispatch") or {}).get("status") or "")
+    state = str((shown.get("worker") or {}).get("state") or "")
+    resource = shown.get("terminalResource") or {}
+    if dispatch in ("completed", "failed", "cancelled", "abandoned"):
+        return f"Orca dispatch is settled: {dispatch}"
+    if state in ("succeeded", "failed", "stopped", "abandoned", "released"):
+        return f"Orca worker is no longer running: {state}"
+    if resource.get("releaseState") in ("requested", "releasing", "released"):
+        return f"Orca worker terminal release: {resource['releaseState']}"
+    if not dispatch or not state:
+        msg = (
+            "Worker preflight lacks dispatch status or worker state; no send attempted"
+        )
+        raise ValueError(msg)
+    return ""
 
 
 def require_owner(handle):
@@ -222,15 +289,7 @@ def record_transport(rows, message, payload, handle):
 
 
 def record_ack(rows, message, shown):
-    dispatch = shown.get("dispatch") or {}
-    sender = dispatch.get("assignee_handle")
-    pane = dispatch.get("assignee_pane_key")
-    if (
-        not sender
-        or message.get("from_handle") != sender
-        or (pane and message.get("sender_pane_key") != pane)
-        or message.get("type") != "status"
-    ):
+    if message.get("type") != "status":
         return None
     ack = object_value(object_value(message.get("body")).get("instructionAck"))
     row = rows.get(ack.get("id")) if isinstance(ack.get("id"), str) else None
@@ -241,27 +300,41 @@ def record_ack(rows, message, shown):
         or not isinstance(action, str)
         or not action.strip()
         or action.startswith("REPLACE")
-        or row["acknowledgement"]
+        or row.get("acknowledgement_claim")
     ):
         return None
-    row["acknowledgement"] = {
+    dispatch = shown.get("dispatch") or {}
+    sender = dispatch.get("assignee_handle")
+    pane = dispatch.get("assignee_pane_key")
+    # Orca status sends do not attest the caller: --from is caller-controlled,
+    # and sender_pane_key can be looked up from that claimed handle. Matching
+    # metadata is useful context, never authentication or model acceptance.
+    row["acknowledgement"] = None
+    row["acceptance"] = "unknown"
+    row["acknowledgement_claim"] = {
+        "verification": "unverified",
         "message_id": message["id"],
         "instruction_id": row["id"],
         "version": row["version"],
         "next_action": action,
+        "claimed_sender": message.get("from_handle"),
+        "claimed_pane": message.get("sender_pane_key"),
+        "sender_matches_assignee": bool(
+            sender and message.get("from_handle") == sender
+        ),
+        "pane_matches_assignee": bool(pane and message.get("sender_pane_key") == pane),
         "at": message.get("created_at"),
     }
-    qualifier = (
-        "superseded; NOT acceptance of latest" if row.get("superseded_by") else "latest"
-    )
+    qualifier = "superseded" if row.get("superseded_by") else "latest"
     return (
-        f"Agent acknowledged instruction {row['id']} v{row['version']} ({qualifier}); "
-        f"next action: {action}"
+        f"Unverified acknowledgement claim for instruction {row['id']} "
+        f"v{row['version']} ({qualifier}); claimed next action: {action}. "
+        "Sender metadata is not authenticated; model acceptance remains unknown."
     )
 
 
 def reconcile(ctx, handle, shown, messages):
-    """Non-consuming, bounded observation; accept only the exact worker's ack."""
+    """Non-consuming, bounded observation; status messages are unverified claims."""
     notices = []
     with ledger(ctx.worker.pk) as (_, rows):
         if not rows:
@@ -306,7 +379,7 @@ def tools(plugin):
             "worker. Reuse instruction_id only for identical retries; supersedes must "
             "name the latest id (empty for first). Urgent stop/cleanup is cooperative "
             "at safe checkpoints, NOT a process interrupt or expanded authorization. "
-            "A queued/delivered receipt is NOT model acceptance."
+            "Receipts and unverified acknowledgement claims are NOT model acceptance."
         ),
         parameters={
             "worker_id": {"type": "string"},
@@ -334,8 +407,9 @@ def tools(plugin):
         takes_context=True,
         description=(
             "Read the durable instruction ledger, including transport status and "
-            "worker-attributed acknowledgements with next actions. Latest ack absent "
-            "means model acceptance remains unconfirmed. No active delivery or polling."
+            "unverified acknowledgement claims and claimed next actions. Sender/pane "
+            "metadata is not authentication; model acceptance remains unknown. "
+            "No active delivery or polling."
         ),
         parameters={"worker_id": {"type": "string"}},
         required=["worker_id"],
