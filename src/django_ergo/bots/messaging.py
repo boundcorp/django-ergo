@@ -43,6 +43,7 @@ from django_ergo.conversation.budget import ERROR_CATEGORY as BUDGET_ERROR_CATEG
 from django_ergo.conversation.budget import NOT_RUN_PREFIX
 from django_ergo.conversation.budget import forbid
 from django_ergo.conversation.budget import from_metadata as budget_of
+from django_ergo.conversation.engine import automatic_request_retries
 from django_ergo.conversation.identity import attributed_text
 from django_ergo.conversation.identity import bot_identity
 from django_ergo.conversation.identity import session_label
@@ -177,17 +178,36 @@ def send(  # noqa: PLR0913
     ``depth``: the hops a message with no sender continues (a self-wake keeps
     the depth of the message its turn was answering)."""
     forbid("send a thread message")
+    handling = (
+        current_thread_message(sender)
+        if sender is not None and in_reply_to is None
+        else None
+    )
     if in_reply_to is not None:
         depth = in_reply_to.depth
     elif sender is not None:
         # One more hop than the message this turn is answering (a request or a
         # reply), so a chain of sends that reacts to replies is capped too.
-        handling = current_thread_message(sender)
         depth = handling.depth + 1 if handling else 1
     if depth > MAX_DEPTH:
         msg = f"Too many hops of delegation ({depth}); answer with what you have."
         raise ValueError(msg)
     metadata = dict(metadata or {})
+    cause = in_reply_to or handling
+    if (
+        cause
+        and (cause.metadata or {}).get("voice_execution_mode") == "normal_thread"
+        and (sender is None or sender.user_id == recipient.user_id)
+    ):
+        for key in (
+            "voice_session_id",
+            "voice_event_id",
+            "voice_execution_mode",
+            "tool_execution_policy",
+            "model_retry_policy",
+        ):
+            metadata.setdefault(key, cause.metadata[key])
+        metadata["parent_thread_message"] = str(cause.pk)
     if sender is not None and not (
         metadata.get("message_provenance") or metadata.get("forwarded")
     ):
@@ -423,6 +443,10 @@ def _run_turn(message: ThreadMessage, registry: BotRegistry | None) -> None:
         return
     factory = api_settings.TURN_CONTROL
     control = factory(recipient, delegated=True) if factory else None
+    retry_token = automatic_request_retries.set(
+        automatic_request_retries.get()
+        and (message.metadata or {}).get("model_retry_policy") != "never"
+    )
     try:
         archival.reopen(recipient)
         async_to_sync(bot.ask)(
@@ -436,6 +460,7 @@ def _run_turn(message: ThreadMessage, registry: BotRegistry | None) -> None:
         logger.exception("Delivering thread message %s failed", message.id)
         fail(message, str(exc))
     finally:
+        automatic_request_retries.reset(retry_token)
         if callable(getattr(control, "finish", None)):
             control.finish()
 
@@ -527,9 +552,13 @@ def _route_reply(bot: Bot, session: ConversationSession, result: TurnResult) -> 
         message.status = ThreadMessageStatus.WAITING
         message.save(update_fields=["status", "updated_at"])
         return
-    if result.reply is None and call.error_category == BUDGET_ERROR_CATEGORY:
-        # A budget limit ended the turn: the message fails with the real reason,
-        # not with "(no reply)" as if the model had answered.
+    scoped_failure = (call.metadata or {}).get(
+        "voice_execution_mode"
+    ) == "normal_thread" and call.status != "completed"
+    if result.reply is None and (
+        call.error_category == BUDGET_ERROR_CATEGORY or scoped_failure
+    ):
+        # A scoped failure is not an answered result, including a normal voice task.
         fail(message, call.error)
         return
     if result.reply is not None:

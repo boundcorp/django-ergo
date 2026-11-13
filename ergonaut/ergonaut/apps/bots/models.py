@@ -112,8 +112,12 @@ class RealtimeVoiceSession(models.Model):
     state = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     ended_at = models.DateTimeField(null=True, blank=True)
-    # Set once, when a bridge job takes the session: one provider connection per logical session.
+    # Root wall-clock deadline anchor, never reset by a resumed connection.
     bridge_started_at = models.DateTimeField(null=True, blank=True)
+    standby_state = models.CharField(max_length=16, default="live")
+    standby_at = models.DateTimeField(null=True, blank=True)
+    resumed_at = models.DateTimeField(null=True, blank=True)
+    bridge_claim_id = models.CharField(max_length=32, blank=True, default="")
 
 
 class RealtimeVoiceEvent(models.Model):

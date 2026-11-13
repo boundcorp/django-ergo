@@ -17,6 +17,12 @@ REALTIME_VOICE_DELEGATION_BUDGET = {
     "start_within_seconds": 30,
     # The engine must be on exactly this model, so the price in the docs is the one that applies.
     "model": "gpt-6-luna",
-    # Read-only: they read stored chat history and change nothing.
-    "allowed_tools": ["ergo_chat_history_read", "ergo_chat_history_search"],
+    # Read-only, and still intersected with the selected chat's already offered tools.
+    "allowed_tools": [
+        "ergo_chat_history_read",
+        "ergo_chat_history_search",
+        "ergo_bot_list",
+        "ergo_thread_list",
+        "ergo_worker_list",
+    ],
 }

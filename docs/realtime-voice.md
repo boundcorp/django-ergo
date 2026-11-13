@@ -2,6 +2,8 @@
 
 This is an **off-by-default prototype**, separate from composer dictation, enabled on Octo for one allowlisted account only (see "Hosted deployment"). Wake-word and a general Stage are out of scope. Django holds session state, finalized text and task references; LiveKit carries audio, not durable memory. No audio recordings are stored by this code.
 
+**Acceptance, 2026-11-12:** Lee accepted phone audio/basic conversation, not Android Bluetooth or orchestration. Source PR #297 is live as `6b33f825` / `ffa206f6` through infra-octo #171. After all old consumers exited and a fresh acknowledged quiet window, exact scoped policy #170 merged at 23:34:50 (`eff442d9`) and matching web/bridge configuration was verified at 23:38:39. Only new logical sessions can receive the normal-thread grant; the newest retained 22:46 call stays ungranted and had failed before durable delegation. Normal task costs were approved at 21:15:41; normal approvals, one root request and the 90-second voice cap remain. No hosted normal-task/provider test ran, and Android output remains physically unknown. [Current evidence](realtime-voice-progress.md#continuation--newest-live-session-and-ux-2026-11-12) separates policy activation from the UX frontend release.
+
 ## Adapter and setup
 
 The pinned direct adapter is `livekit-agents==1.8.11`, `livekit-plugins-openai==1.8.11` and `livekit-plugins-silero==1.8.11`; it uses `GPTLiveModel(model="gpt-live-1", delegation="client")`, not the older Realtime adapter or a dictation pipeline. [LiveKit](https://docs.livekit.io/agents/models/realtime/gpt-live.md) and [OpenAI](https://developers.openai.com/api/docs/guides/live) document this combination. The adapter's OpenAI SDK 3.x requirement conflicts with Ergo's `<3` dependency; use a separate bridge environment with the Ergonaut source on `PYTHONPATH`, not a production dependency upgrade. `livekit-api==1.2.2` provides Ergonaut's room token signer.
@@ -47,7 +49,7 @@ source /tmp/ergo-voice-isolated-e1cy2fyd/environment.sh
 
 The approved command first checks both OpenAI model metadata endpoints and the LiveKit rooms API, then creates a persistent exclusive launch marker and runs the bridge with an outer 115-second timeout. These read-only checks prove neither paid entitlement nor a hard spend limit. A second exclusive cap file is consumed on the first admitted job; one provider WebSocket attempt and 90 seconds of voice runtime are allowed. Neither marker should be removed for a retry without fresh approval.
 
-The bridge environment must already contain the pinned SDK packages and Django/Ergonaut runtime dependencies. Do not pass secrets on the command line. Start the browser and isolated Django separately; the bridge, that Django and its worker all run with `DJANGO_SETTINGS_MODULE=ergonaut.settings.voice_live_test`, which adds the delegation budget priced below (the bridge creates the delegation, the worker runs it under the budget the message carries). Background delegation is off under any settings that do not set `REALTIME_VOICE_DELEGATION_BUDGET`. The cap file remains after the run: do not remove it to retry without fresh approval. The bridge logs elapsed time to finalized assistant transcript and elapsed wall time plus an estimated voice charge; these are **not** provider-billed usage or verified first-audio latency. Reconcile provider and LiveKit dashboards separately; logs contain no transcript by design.
+The bridge environment must already contain the pinned SDK packages and Django/Ergonaut runtime dependencies. Do not pass secrets on the command line. Start the browser and isolated Django separately; the bridge, that Django and its worker all run with `DJANGO_SETTINGS_MODULE=ergonaut.settings.voice_live_test`, which adds the delegation budget priced below (the bridge creates the delegation, the worker runs it under the budget the message carries). Background delegation is off under any settings that do not set `REALTIME_VOICE_DELEGATION_BUDGET`. The cap file remains after the run: do not remove it to retry without fresh approval. The bridge logs elapsed wall time, provider-reported session usage if available, and elapsed time to finalized assistant transcript; these are **not** verified provider billing or first-audio latency. Reconcile provider and LiveKit dashboards separately; logs contain no transcript by design.
 
 Delegated work has a server-side budget (next section), but its input estimator has not been validated against provider usage, so this is not a guaranteed full-stack maximum. The conditional 90-second direct-provider estimate is **$0.08575**; with a 115-second provider duration it is **$0.10659** rounded up, before taxes and any costs outside the listed assumptions. The shared LiveKit Build allowance was unknown and disclosed. Three separately approved attempts have been used; billing remains unreconciled, and no fourth attempt is authorized.
 
@@ -70,7 +72,7 @@ When a limit is hit the call ends `failed` with `error_category` `budget`, the t
 
 Not covered, and why that is acceptable here: a tool that calls a provider or starts a subprocess itself (web search, bash, local shell, orca, kubectl) is held back only by the allowlist, so never allow one; plugin before/after-turn hooks and context sources run as for any turn (server code, not chosen by the model); a worker that dies mid-turn leaves its message `delivered` (never retried, since the claim is a one-way update, but also never reported as failed, so the voice session would show it pending until its 90 seconds end). A first request measured with the cooking scenario, the two history tools and `send_reply` was 6,621 bytes, so the estimator reads 7,621 against the 40,000 cap; a real chat adds its instructions, skill list and history, so measure a dry run of the actual test chat first.
 
-The profile used for the live test is `ergonaut/settings/voice_live_test.py`:
+The PR #293 profile in `ergonaut/settings/voice_live_test.py` is deployed at `06284d4`, including the listing tools below. The earlier `75234dc` image allowed only the two history tools.
 
 ```python
 REALTIME_VOICE_DELEGATION_BUDGET = {
@@ -80,11 +82,14 @@ REALTIME_VOICE_DELEGATION_BUDGET = {
     "deadline_seconds": 45,
     "start_within_seconds": 30,
     "model": "gpt-6-luna",
-    "allowed_tools": ["ergo_chat_history_read", "ergo_chat_history_search"],
+    "allowed_tools": [
+        "ergo_chat_history_read", "ergo_chat_history_search",
+        "ergo_bot_list", "ergo_thread_list", "ergo_worker_list",
+    ],
 }
 ```
 
-The chat the voice session belongs to must be a bot on the OpenAI API engine (`engine: {type: openai, ...}`) and `gpt-6-luna`; Ergonaut's default routing (`auto/<tier>` on the Claude and Codex subscriptions) is refused because a subscription CLI can't hold a request to a budget. The history tools read the user's stored chats; they change nothing. The delegation runs in the voice session's own chat, so its history is part of every request: a chat too large for 40,000 input tokens fails with the input limit instead of running, so use a fresh test chat.
+The selected chat must resolve to a request-limited API engine and exactly `gpt-6-luna`; Ergonaut's default subscription/CLI routes cannot hold a request to this budget. The draft preflights the actual selected engine instead of trusting a stored `engine_type` label, never reroutes the thread, and narrows configured tools against both a hard read-only ceiling and the chat's already-offered non-approval tools. Listing bots/threads/workers is read-only; pending approvals are summarized by existing thread listing, never approved. History and listings retain existing owner/bot access checks. The turn still runs in the exact launch thread: a context too large for 40,000 input tokens fails rather than escaping the budget. A populated-thread continuity test therefore needs a bounded fitting history/compaction, not a silently fresh unrelated chat.
 
 ## Conditional cost estimate for one live test
 
@@ -119,12 +124,150 @@ Lee approved a hosted rollout for his own testing on 2026-11-12. It runs on Octo
 
 Access: `REALTIME_VOICE_USERS` is a comma-separated list of exact usernames; everyone else gets `enabled: false` from `/api/realtime-voice/config` and 404 from every voice endpoint, the token included. An empty list allows nobody. The bridge re-checks the allowlist and the kill switch when it takes a job.
 
-Limits (unchanged from the prototype): each logical voice session gets one bridge job, recorded in `RealtimeVoiceSession.bridge_started_at` (a second dispatch for the same session is refused, so there is one provider connection per session). When the job ends (90 seconds, the user leaving, an error) the bridge ends the session, so the next Start creates a new one; a claimed session gets no new room token (409), and one whose bridge died without ending it is ended by the next token request once 120 seconds have passed; a job lasts at most 90 seconds; `record=False`; provider connection `max_retry=0`; the delegation budget and its allowlist as above. The local paid-test harness still also caps a whole bridge launch at one job with `ERGO_VOICE_CALL_CAP_FILE`; the hosted bridge does not set it.
+With the standby flag off, each logical voice session gets one bridge job, recorded in `RealtimeVoiceSession.bridge_started_at`. When the job ends (90 seconds, the user leaving, an error) the bridge ends the session; a claimed session gets no new room token (409), and one whose bridge died without ending it is ended by the next token request once 120 seconds have passed. The bridge uses `record=False` and provider connection `max_retry=0`; the delegation budget and its allowlist remain as above. The local paid-test harness also caps a whole bridge launch at one job with `ERGO_VOICE_CALL_CAP_FILE`; the hosted bridge does not set it.
 
 Delegation only runs in a chat whose bot is on the OpenAI API engine and `gpt-6-luna` (the budget's pinned model); in any other chat the request is not run and the session hears that it failed.
+
+### Output routing (PR #293 deployed; Android acceptance open)
+
+The UI probes a detached silent audio element without playing media or requesting microphone permission. A selector appears only after `setSinkId('')` succeeds and the element reports the default sink; a native `selectAudioOutput` button additionally requires that API. Selection awaits current playback elements and reads their applied sink IDs; failure restores the previous confirmed selection where possible, otherwise exposes unknown/mixed state. A chooser's returned device ID is applied separately; permission alone is not routing.
+
+Remote audio stays on HTML audio elements (`webAudioMix=false`). A newly subscribed track gets its sink before LiveKit attaches/plays its stream. Track unsubscribe/close races cannot attach stale audio. Network reconnect rechecks devices; standby resume and in-app page navigation keep the app-owned sink selection and apply it to new room tracks. The selection lives with the authenticated call owner, not the page; a fresh owner starts at system default. `devicechange` refreshes exposed output devices and falls back to default if the selected one disappears; failures are shown rather than relabeled successful. Microphone input/mute stays separate and capture constraints are unchanged.
+
+Unsupported/blocked browsers show **output controlled by your phone/operating system** guidance, not a Bluetooth/speakerphone imitation. The selector confirms **browser state only**, not a physical speaker or hearing: current iOS WebRTC reports include false-success sink changes. System default is not synonymous with speakerphone. See the [platform matrix and citations](realtime-voice-causal-review.md#browser-and-bluetooth-restrictions); only Lee's real-device test can accept the route.
+
+The follow-up adds **Collect route diagnostics** on the dedicated page. It reads browser family/major, platform/tab mode, sink capability and applied selection category, attached HTML element state, optional audio-session intent and the existing microphone track's non-identifying processing settings. It never requests capture, selects output or connects a room; it contains no device IDs/names and remains local to the page. Collect again after mute, reconnect, Bluetooth loss or changing the OS default. It reports physical route as **unknown**, including when `setSinkId` succeeds. Android communication routing while capture is open can differ from normal media playback; the already-selected OS headset is not evidence of user misconfiguration.
+
+### Launch-thread continuity and experimental read-only execution (PR #293 deployed)
+
+On initial bridge startup and each authorized resume, voice reuses the owning bot's normal `context_builder`, chat identity and configured sources. The global orchestration overview and duplicate native-history source are excluded: other private threads are not a startup briefing. Startup includes at most **8,000 characters of owning instructions** and **16,000 context characters**: bounded configured context, the stored compaction (up to 2,000 characters), recent 40 exact-thread messages within a bounded render budget, durable reported decisions/current step, this thread's task/approval status, and five attachment references (not file contents). No paid compaction or global scan is introduced. Truncation is explicit; older detail remains an authorized history lookup, not a claim that all historic/actionable content fits.
+
+Finalized user and assistant voice events are written idempotently into the **same launch thread's normal history**, with owner/bot identity, voice session/event provenance and server receipt timestamps. Assistant text retains generated-speech/delivery uncertainty. Extracted user decisions and current task persist with that thread and seed a later voice session. Reconnect restores persisted voice text through thread history once; pre-cutover voice events without a history row retain a bounded fallback. This does not duplicate the transcript into every live provider turn.
+
+The bridge, not the web process, validates the actual selected engine/model and publishes a sanitized durable availability/restriction status. This matters because the deployed web uses default settings with no delegation budget while the bridge uses `voice_live_test`. Before validation the UI says **Bridge has not validated delegation for this session**, not a false failure based on web-only settings. Afterwards the UI and voice instructions name restricted read-only mode and the actual unavailability reason or offered read tools. Polling, transcript updates and delegation assembly do not rerender expensive startup context.
+
+Bot/thread/worker lookups use the existing authorized chat toolkit and budgeted same-thread message path. Thread listing supplies bounded pending-approval tool names/status, not arguments or approval actions. Cross-thread overview is excluded only for explicitly scoped voice delegation; ordinary bot turns are unchanged. The original delegation ID travels through message/call metadata and the same logical session's durable outbox; a result claim is still not proof of spoken playback.
+
+**Experimental-profile restriction, not the normal-thread contract:** read-only budgeted requests cannot send/forward/start/approve; the budget refuses those actions independently. The actual Boundcorp CLI engine cannot enforce that API-only token budget, and voice never silently reroutes it. The separately reviewed scoped normal-thread policy below supplies the authorized orchestration path with normal approvals and costs; read-only listings are not a substitute for that path or hosted acceptance.
+
+### Default-off normal originating-thread execution (enabled only for the reviewed Octo scope)
+
+`REALTIME_VOICE_THREAD_EXECUTION_AUTHORIZATIONS` defaults to `{}`. It is a
+reviewed **scoped JSON policy** supplied by settings or the same-named environment
+variable, not a blanket boolean/browser toggle and not permission to test on the
+real owner. Its mapping key is the exact launch-chat UUID; its value requires:
+
+| Field | Required authorization |
+| --- | --- |
+| `owner` | Exact authenticated username owning this chat. |
+| `bot` | Exact registered bot name already accessible to that owner. |
+| `normal_task_costs_approved` | Exactly `True`, separately authorizing existing normal-task execution costs rather than claiming the prototype's API-token price covers them. |
+| `approval_reference` | Nonempty reference to that reviewed authorization; recorded durably with the task. |
+
+Web and bridge must carry the same policy. Only a **new** owner-created voice
+session receives its exact-chat/owner/bot grant and authorization timestamp.
+Conversational restore state cannot inherit or mint one. The bridge rechecks
+the matching current policy and normal bot access before dispatch; revocation
+refuses new requests, not cancellation of already accepted normal work.
+No grant means the existing priced read-only path and its engine gate remain
+unchanged. No mandatory Send button or new callable GPT-Live tools are added.
+
+An authorized model-selected client delegation enters the **existing exact
+thread's normal message queue**, with its authenticated user identity, normal
+engine/context/registered tools and approval semantics. It does not reroute the
+bot or broaden its allowed targets. The transport still has its original
+90-second wall-clock deadline and one root request. The root and any normally
+authorized child work are governed by the bot's existing normal turn/task
+controls, **not** the 40,000/1,500-token API lookup estimate. Normal compaction,
+task tools and their downstream costs are therefore outside that experimental
+estimate; this is why an explicit separate cost-policy decision is required.
+The audited live Boundcorp bot has a normal **50-model-turn** limit; this is
+not the prototype's four-turn limit or a new financial ceiling. Lee approved
+normal originating-thread costs at **21:15:41 UTC**, but no real-owner normal
+task was run during this investigation.
+
+Submission is serialized by the session and unique delegation ID. Opted-in
+normal tasks record a durable claim for **each external-tool invocation ID
+within a structured call**, bound to the tool name and canonical argument hash,
+before running its actual handler. Duplicate IDs reuse the receipt; conflicting
+arguments are refused. A crash after claim has an unknown outcome and is never
+automatically replayed. A new ID is a new normal tool invocation, not a promise
+that an external API supports exactly-once effects. Existing approval checks
+happen **before** any handler claim; approval/denial and stale-answer protection
+use the normal thread endpoint, including its admin-only restrictions. Speech,
+a provider signal or status lookup cannot approve an action.
+The local structured-output validator has no external effect and is revalidated
+instead of cached, so a repeated final reply can complete after approval or denial.
+Automatic Ergo request retries and API-SDK retries are disabled for the scoped
+normal task, its normal approval continuation and causally delegated messages.
+Asynchronous `Worker`/`BotTasks` handoffs retain their existing normal controls;
+they do not inherit these invocation receipts or retry-policy metadata. This is
+not end-to-end retry suppression or exactly-once execution across worker tasks.
+The actual Codex CLI still owns its internal provider transport behavior; this
+is not a claim to count or financially bound hidden provider attempts, and no
+provider configuration or route is changed.
+
+Causal normal thread sends/replies retain the original session/delegation IDs.
+The bounded observer follows those durable rows and existing worker reports
+arriving in the launch thread; existing reports are labeled observations, not
+proof voice started that worker. Queued, delivered, waiting-for-approval and
+answered results are distinct. A same-session outbox transition can be claimed
+for commentary only once, with the original provider delegation ID; receipt
+does not establish playback. Reconnect restores bounded results without
+redispatching. Owner polling can persist late terminal outcomes after End,
+without a provider connection or a model request.
+
+**Deployment gate satisfied, 23:38:39 UTC:** source #297 was deployed with policy
+absent first; all old queue consumers exited before exact policy #170 merged.
+A fresh policy-specific notice and quiet window preceded the web/bridge-only
+reload. Both web replicas and bridge passed no-inference READ ONLY grant/scope
+checks, including old-session no-upgrade and other owner/thread/bot denial.
+Default remains off outside that exact reviewed scope. Code/config revocation
+prevents new dispatch, not accepted work; hosted orchestration and physical
+Android acceptance still require the user's actual observation.
+
+### Dedicated voice page and progressive text (PR #293 deployed; device acceptance open)
+
+Voice belongs to `/s/<launch-chat-id>/voice`, entered from that thread's top-bar options, not a modal or a new chat. The page keeps bot/thread identity, context and a return link visible. Merely opening the page must not activate a microphone: **Start call** and manual **Resume** are explicit. A single authenticated app-level call owner keeps an active call across ordinary in-app route/back navigation; leaving the voice page is not **End call**, and a different thread must not silently replace the active call. A continuing-call affordance must make background microphone/connection state visible. Browser/tab teardown cannot preserve a WebRTC connection; it is not the same guarantee as SPA navigation.
+
+Thread options use the same purpose groups on desktop and mobile: Conversation
+(voice and files), Model & reasoning, Thread data (JSON export), and Thread
+lifecycle. Resolve is danger-styled: it archives the thread and stops queued/
+running workers and their agents. A new message reopens the thread, not cancelled
+work. Rename and pinned material remain in thread details. The mobile dialog contains keyboard focus and
+returns it on Escape; the desktop panel focuses its first action and returns
+focus to Options on Escape.
+
+**Enable sound** appears only when the connected room's SDK reports blocked
+playback. It unlocks playback on the existing call; it does not join a room,
+request microphone permission, unmute capture, or confirm physical hearing.
+Start call connects the room and enables the microphone; Mute/Unmute controls
+capture separately. IDs, transport/provider state, browser playback details,
+output configuration, route snapshots and runtime events are under
+**Diagnostics**. Callback status, unavailable tools, failed work and approval
+links remain outside the diagnostic disclosure; speech is not action approval.
+
+**End call** stops the logical voice session/transport, not previously submitted thread work. It must not send thread cancellation, stop a worker or retract an outbox result. Standby, microphone mute and audio output remain separate controls. An ended call's finalized text/results stay readable.
+While the ended session remains on its voice page, lightweight read-only observation continues at the slower three-second interval so a final already accepted by the bridge can appear after End's first response. Navigating away stops that ended-session observation unless delegated work remains pending; it never reopens a provider or requests another microphone session.
+
+Progressive transcript drafts are bounded server-owned state, not finalized history or tool results. User partials retain their SDK item ID; assistant partials use the adapter's identified message-generation stream, because raw duplex transcript deltas do not carry a reliable final message ID. Finalization replaces the same speaker turn rather than creating a second bubble. Finalized text retains timestamp/provenance and delivery uncertainty; partial text must never be called heard or complete. Coalesced state publication limits per-token database work.
+
+Displayed user/agent states come only from observed framework state-change events with timestamps. Missing transport/microphone evidence, standby, reconnect and teardown require unknown/disconnected rather than stale “listening.” Assistant-generated transcript text is not evidence of “thinking,” and queued background work is not evidence that a model/worker is running. Transcript follow-latest scroll must yield to manual reading; new text must not pull a reader away from an older turn.
+
+### Explicit standby (off by default)
+
+`REALTIME_VOICE_STANDBY_ENABLED` gates standby independently of the voice kill switch and owner allowlist. It defaults to false; enable it consistently for web and bridge only through an approved deployment. With the flag off, the current single-connection behavior remains unchanged. This branch does not itself enable or deploy the flag.
+
+The default is **Stay connected**. **Standby while waiting** requests a pause; the bridge defers it until its actual Silero VAD has observed speech and its end, the pause grace and transcript drain have elapsed, all observed transcript fragments are final, and no request assembly or bridge job is in flight. Unknown speech state does not qualify. Detection has latency and can miss speech, so the boundary protects only speech already observed by the VAD; it is not a guarantee against lost speech.
+
+The bridge confirms standby only after the provider session, HTTP client and room have closed and the request is still valid. If speech resumes before teardown commits, the bridge defers the request. Once irreversible teardown starts, the UI shows Disconnecting and warns that microphone input may become unavailable and speech may be cut off. If speech or transcript activity is detected during teardown, the session still enters resumable standby and records that the boundary audio is uncertain; it cannot establish how much speech, if any, was lost. The browser disconnects after confirmation. Already queued background work continues, and its IDs, results, bounded context and at-most-once announcement claims stay with the same logical session. **Resume** is manual; opening the panel does not wake a standby session. End remains terminal. Unexpected disconnects, errors and expiry end the session, not standby.
+
+The original `bridge_started_at` is never reset. The 90-second deadline is wall-clock time from the first bridge claim, including time in standby; resuming receives only the remaining time. An expired standby session is ended on the next access, and its durable work remains readable. Resume cannot acquire another live bridge concurrently, cannot reset the one-delegation limit or budget, and does not enable SDK/provider retries. Provider teardown and billing can outlast the local deadline, so this is not a billing ceiling.
+
+Session metadata exposes the observed standby and resume timestamps and last standby duration, when available. Bridge logs distinguish elapsed wall-clock time from provider-reported session usage seconds; missing provider usage remains unknown. Reconnect latency is wall-clock time from the resume request to the provider's `session.started` event, or unknown if that event is not observed; it is not first-audio or playback latency. These measurements do not establish input audio duration, silence savings, lost speech, playback or hearing. Finalized text, task references and results remain in Django history; the code does not store audio recordings. Standby is not inactivity detection, auto wake, browser wake detection or pre-roll: a disconnected microphone cannot be monitored by the server VAD.
 
 **Kill switch.** Set `REALTIME_VOICE_ENABLED: "false"` in `ergonaut-config` (infra-octo) and restart web and the bridge (`kubectl --context octo -n ergonaut rollout restart deploy/web deploy/voice-bridge`); no image deploy is needed. With it off the web app hides voice and refuses tokens, and the bridge refuses every job. For an immediate stop before the commit lands, `kubectl --context octo -n ergonaut scale deploy/voice-bridge --replicas=0` leaves no agent to join a room; Flux restores the replica on its next reconcile (≤5 min), so commit the flag too. Persisted Django history and already queued bot work remain.
 
 ## Known gaps
 
-Known gaps before acceptance: the third hosted synthetic attempt produced a real owner-scoped history search and same-session durable result, but delegated before the request ended and generated contradictory status after the answer. The hands-free VAD correction is offline only; hosted speech boundaries, transcript completeness, model delegation and spoken truthfulness remain unverified. Adapter reconnect, browser microphone/playback and interruption are not proven. Automatic compact state uses conservative extractive rules, not a semantic summarizer: unrecognized facts can fall outside the bounded restore window. User-reported activities are anchored to server receipt, not the physical action; client timestamps are separately stored, with unknown clock error. The bridge provides server-calculated time since reports to GPT-Live as silent context; live response timing has not been verified. A durable claim permits at most one commentary attempt per result across reconnects. A crash after the claim can lose the spoken announcement, but the result remains in the session card; the claim does not indicate playback. GPT-Live's `append_commentary` asks the model to speak in its own words and returns no speech identifier, so it cannot be correlated to browser playback with the inspected adapter. No browser acknowledgment or human hearing is claimed. The model is instructed not to repeat restored results unless asked, but this is not a deterministic guarantee. A reconnect after the bridge job ends is refused (one job per voice session); start a new voice session instead. End-to-end delegation usage/spend and provider billing are not capped by this prototype. Do not represent it as production-ready.
+Known gaps beyond the accepted basic phone audio/conversation: the third hosted synthetic attempt produced a real owner-scoped history search and same-session durable result, but delegated before the request ended and generated contradictory status after the answer. Lee's later phone session submitted no delegation. Hosted speech-boundary/transcription correctness, useful orchestration, Bluetooth routing, interruption and standby/resume remain unaccepted. Automatic voice compact state uses conservative extractive rules, not a semantic summarizer: unrecognized facts can fall outside its bounded restore window. User-reported activities are anchored to server receipt, not the physical action; client timestamps have unknown clock error. The bridge provides server-calculated time since reports as silent context; live response timing has not been verified. A durable claim permits at most one commentary attempt per result across reconnects. A crash after the claim can lose the spoken announcement, but the result remains in the session card; the claim does not indicate playback. GPT-Live's `append_commentary` returns no speech identifier, so it cannot be correlated to browser playback with the inspected adapter. No per-utterance browser acknowledgment is claimed. The model is instructed not to repeat restored results unless asked, but this is not a deterministic guarantee. With standby off, a reconnect after the bridge job ends is refused. End-to-end delegation usage/spend and provider billing are not capped by this prototype. Do not represent it as production-ready.

@@ -974,10 +974,41 @@ unbudgeted. The realtime voice prototype is the user:
 [realtime-voice.md](realtime-voice.md) has the limits table and conditional
 cost estimate, not a provider-billing ceiling. Its client-delegation voice
 adapter has no function tools; provider signals open a pending request that
-the owner must review and explicitly confirm before a budgeted turn is queued.
+is queued after a detected speech boundary, pause grace and transcript drain.
+This is not a guarantee that speech or transcription is complete.
 The session card distinguishes generated speech from
 durable submitted/queued/answered/failed work and explicitly reports when
 no background request or verified history result exists.
+
+Voice is an interface to its exact launch thread, not a separate orchestrator
+or a global owner briefing. PR #293 (deployed `06284d4`) restores that thread's bounded
+instructions, history/summary, decisions and attachment references; other
+threads, workers and approvals are read on demand through tools that the
+owning bot already offers. Budgeted voice is explicitly restricted, and a
+subscription/CLI launch thread cannot silently switch to an API model to run
+delegation. The successor's **default-off** normal-thread execution policy is
+separate from the priced voice lookup: exact chat, owner, bot and a reviewed
+normal-task-cost approval reference are required in settings and in the durable
+session grant. It uses the existing normal bot engine/tools/context and action
+approval path, never voice-approved actions or globally granted tools. Accepted
+normal work uses durable provider-invocation claims; an uncertain external write
+is not automatically repeated. Causal thread updates retain the original voice
+delegation ID, including across reconnect and after End. No live policy is enabled
+by this source change; ordinary non-voice turns and budgeted-turn guards are unchanged.
+See the [current release and capability evidence](realtime-voice-causal-review.md#current-release-reconciliation--2026-11-12)
+and [acceptance gates](realtime-voice-progress.md#hosted-phone-acceptance-and-follow-ups--2026-11-12).
+The web entry is the originating thread's top-bar options → Voice call.
+Its dedicated page keeps one app-owned connection across in-tab navigation;
+End call stops voice, not submitted thread work. Progressive drafts are not
+normal chat history until finalized, and displayed SDK activity is an
+observation, not proof of playback or background execution.
+Thread options share desktop/mobile purpose groups for conversation actions,
+model/reasoning, export and worker-stopping thread resolution. Resolve warns
+that reopening the thread does not resume cancelled work. The voice page keeps
+conversation, observed activity, capture controls and actionable failures/
+approvals visible; identifiers, transport/provider details, route configuration
+and runtime events are collapsed under Diagnostics. Enable sound is a blocked
+playback unlock on the existing room, not another join or microphone start.
 
 ### Message identity
 
@@ -1661,6 +1692,8 @@ Setting up Chrome and SSH: [Browser control](browser.md).
 ```yaml
 - name: attachments
   max_bytes: 5000000 # largest file the bot may write
+  # Optional, off by default; absolute artifact roots on configured SSH aliases.
+  import_roots: {rigel: /home/linked/artifacts}
   max_look_bytes: 20000000 # largest file ergo_attachments_look sends to the model
   other_sessions: true # may read files in the user's other sessions
   video_model: gemini-flash-latest # watches videos for ergo_attachments_look
@@ -1675,6 +1708,17 @@ gets `ergo_attachments_list`, `ergo_attachments_read`,
 `ergo_attachments_create` and `ergo_attachments_update`. It writes text
 files only in its own session, reads files in the same user's other
 sessions, and sees the session's file list in every turn's context.
+When `import_roots` is configured, `ergo_attachments_import(host, path)` asks
+for approval, then copies one file from the configured absolute root on the
+named SSH host (`local` means this host) into this chat. It rejects paths
+outside the root, secret-looking filenames, oversized files and malformed
+common image/PDF formats. The original is unchanged; only metadata, not file
+bytes or base64, is returned to the bot. Imported files are visible in the
+chat and downloadable. The source host needs Python 3 and a POSIX filesystem
+with `O_NOFOLLOW`. Imports reject symlinks in any path component, including
+the configured root and its ancestors, and reject non-normalized paths.
+Grant roots narrowly: the host account's file access is not an OS sandbox,
+and a source file can change between approval and reading.
 `ergo_attachments_look(attachment_id, question)` lets it see an image or PDF.
 An image comes back in the tool result, so the bot looks at it itself. A PDF
 or other file goes to the bot's own model as an attachment in a separate call

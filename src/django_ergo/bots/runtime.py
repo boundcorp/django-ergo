@@ -1323,6 +1323,15 @@ class Bot:
         metadata = {}
         if thread_message is not None:
             metadata["thread_message"] = str(thread_message.id)
+            for key in (
+                "voice_session_id",
+                "voice_event_id",
+                "voice_execution_mode",
+                "tool_execution_policy",
+                "model_retry_policy",
+            ):
+                if key in (thread_message.metadata or {}):
+                    metadata[key] = thread_message.metadata[key]
             author, provenance = await sync_to_async(
                 thread_message_identity, thread_sensitive=True
             )(thread_message)
@@ -1337,6 +1346,22 @@ class Bot:
         for plugin in self.plugins:
             await _maybe_await(plugin.before_turn(session, message))
         toolkits, builder = await self._prepare(session, message)
+        if (
+            budget is not None
+            and thread_message is not None
+            and (thread_message.metadata or {}).get("context_policy")
+            == "current_chat_only"
+        ):
+            from django_ergo.bots.overview import OverviewSource
+
+            # Explicitly scoped requests query other chats on demand instead of
+            # receiving the ordinary orchestration overview as implicit context.
+            builder.sources = [
+                source
+                for source in builder.sources
+                if not isinstance(source, OverviewSource)
+            ]
+            metadata["context_policy"] = "current_chat_only"
         if budget is None:  # routing may move the chat to another (priced) model
             await sync_to_async(self.route, thread_sensitive=True)(session)
         outcome = await run_structured_call(

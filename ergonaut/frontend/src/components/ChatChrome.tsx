@@ -302,7 +302,7 @@ export function MobileSessionBar({
         ref={dialog}
         id="chat-session-sheet"
         className="chat-session-sheet"
-        aria-label="Session details"
+        aria-label="Thread options"
         onClose={() => onOpenChange(false)}
       >
         <div className="chat-sheet-head">
@@ -313,17 +313,17 @@ export function MobileSessionBar({
           <button
             type="button"
             className="chat-sheet-close"
-            aria-label="Close session details"
+            aria-label="Close thread options"
             onClick={() => onOpenChange(false)}
           >
             Close
           </button>
         </div>
         <div className="chat-sheet-body">
-          {options && <div className="chat-sheet-options">{options}</div>}
           <div className="chat-sheet-meta">{meta}</div>
           {resolved}
-          <div className="chat-sheet-actions">{actions}</div>
+          {options && <div className="chat-sheet-options">{options}</div>}
+          {actions && <div className="chat-sheet-actions">{actions}</div>}
           <div className="chat-sheet-panels">{children}</div>
         </div>
       </dialog>
@@ -369,11 +369,18 @@ export function ThreadOptions({
   }, [open, onOpenChange])
 
   return (
-    <div ref={root} className="chat-options relative">
+    <div
+      ref={root}
+      className="chat-options relative"
+      onBlur={event => {
+        if (event.relatedTarget instanceof Node && !event.currentTarget.contains(event.relatedTarget))
+          onOpenChange(false)
+      }}
+    >
       <button
         type="button"
         data-options-button
-        className={`rounded-md border px-2 py-0.5 text-xs ${open ? 'border-indigo-400 text-indigo-700 dark:text-indigo-300' : 'border-zinc-300 text-zinc-600 dark:border-zinc-700 dark:text-zinc-400'}`}
+        className="min-h-9 rounded-control border border-stroke px-3 text-sm text-ink hover:bg-raised focus-visible:outline-2 focus-visible:outline-accent"
         aria-expanded={open}
         aria-controls={panelId}
         aria-haspopup="true"
@@ -387,7 +394,7 @@ export function ThreadOptions({
           data-options-panel
           role="group"
           aria-label="Thread options"
-          className="absolute right-0 top-full z-30 mt-2 w-80 max-w-[90vw] rounded-card border border-stroke bg-surface p-3 shadow-lg"
+          className="absolute right-0 top-full z-30 mt-2 max-h-[min(75dvh,48rem)] w-96 max-w-[calc(100vw-2rem)] overflow-y-auto rounded-card border border-stroke bg-surface p-4 shadow-lg"
         >
           {children}
         </div>

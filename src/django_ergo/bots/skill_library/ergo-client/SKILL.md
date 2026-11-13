@@ -74,8 +74,14 @@ quick questions and for asking an orchestrating bot to route work.
 ergonaut-remote new devbox "Fix the flaky upload test in django-ergo; open a PR" --title "Flaky upload test"
 ergonaut-remote new devbox "..." --wait                  # block until the reply (default limit 900s)
 ergonaut-remote send <session> "Also add a regression test" --wait
+ergonaut-remote send <session> "Here are the deliverables" --attach preview.png --attach artwork.svg
 ergonaut-remote wait <session>                           # wait for whatever runs now, then print the reply
 ```
+`--attach` uploads each local file to that same chat, then sends the message
+with its attachment IDs. Run the client on the host holding the artifacts; it
+does not put base64 or file contents into the message. The server's upload limit
+also applies. Do not upload the same deliverable twice.
+
 
 - A message sent while a turn runs steers that turn. `--interrupt` stops
   the running turn first, so your message starts a new one.

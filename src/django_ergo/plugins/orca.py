@@ -488,49 +488,15 @@ class OrcaPlugin(BotPlugin):
 
     def fetch(self, root: str, path: str) -> tuple[str, bytes]:
         """A file inside the worktree at ``root``: its resolved path and bytes."""
-        import posixpath
-        import shlex
+        from django_ergo.plugins._common import fetch_file
 
-        target = posixpath.normpath(
-            path if path.startswith("/") else posixpath.join(root, path)
-        )
-        if not target.startswith(root.rstrip("/") + "/"):
-            msg = f"{path} is outside the worktree"
-            raise ValueError(msg)
-        if is_secret(posixpath.basename(target)):
-            msg = f"{posixpath.basename(target)} looks like a secret; it can't be attached"
-            raise ValueError(msg)
-        limit = self.max_attach_bytes
-        script = (
-            f"set -e; r=$(realpath -e -- {shlex.quote(root)}); f=$(realpath -e -- {shlex.quote(target)}); "
-            'case "$f" in "$r"/*) ;; *) echo "outside the worktree" >&2; exit 3;; esac; '
-            'test -f "$f" || { echo "not a file" >&2; exit 4; }; '
-            f'printf "%s\\0" "$f"; head -c {limit + 1} -- "$f"'
-        )
-        argv = (
-            ["ssh", "-o", "BatchMode=yes", self.files_host, script]
-            if self.files_host
-            else ["sh", "-c", script]
-        )
-        proc = subprocess.run(  # noqa: S603 — fixed script; paths are shell-quoted
-            argv,
-            capture_output=True,
+        return fetch_file(
+            root,
+            path,
+            host=self.files_host,
+            limit=self.max_attach_bytes,
             timeout=self.timeout,
-            check=False,
-            env=scrubbed_env(),
         )
-        if proc.returncode:
-            msg = f"Couldn't read {path}: {proc.stderr.decode(errors='replace').strip()[:300]}"
-            raise ValueError(msg)
-        resolved, _, data = proc.stdout.partition(b"\0")
-        if len(data) > limit:
-            msg = f"{path} is larger than {limit} bytes"
-            raise ValueError(msg)
-        resolved = resolved.decode(errors="replace")
-        if is_secret(posixpath.basename(resolved)):  # a symlink to a secret
-            msg = f"{path} points at a secret-looking file; it can't be attached"
-            raise ValueError(msg)
-        return resolved, data
 
     def screenshot(
         self,

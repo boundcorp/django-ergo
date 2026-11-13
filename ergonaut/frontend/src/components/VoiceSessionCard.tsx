@@ -1,9 +1,9 @@
 import type { RealtimeVoiceSession } from '../api'
+import { Link } from 'react-router-dom'
 
 /** One durable entry per voice session; generated speech proves neither playback nor work. */
 export function VoiceSessionCard({ session }: { session: RealtimeVoiceSession }) {
   const state = session.state
-  const delegations = session.delegations ?? []
   return (
     <section className="mt-6 rounded-card border border-stroke bg-surface p-4 text-sm" aria-label="Voice session">
       <div className="flex flex-wrap items-center gap-2">
@@ -24,40 +24,7 @@ export function VoiceSessionCard({ session }: { session: RealtimeVoiceSession })
           <p className="mt-1">Reported completed steps: {state.completed_steps.join('; ')}</p>
         )}
       </div>
-      <div className="mt-3" aria-label="Background work">
-        <strong>Background work</strong>
-        {delegations.length === 0 && (
-          <p className="mt-1 text-muted">
-            {state?.pending_delegation?.status === 'collecting'
-              ? 'Collecting the spoken request; nothing submitted yet.'
-              : state?.pending_delegation?.status === 'expired' || state?.pending_delegation?.status === 'cancelled'
-                ? `Request ${state.pending_delegation.status}; nothing submitted.`
-                : 'No background request submitted; no verified history lookup result.'}
-          </p>
-        )}
-        {delegations.map(task => (
-          <div key={task.event_id} className="mt-2 rounded-control border border-stroke p-2">
-            <div>{task.text}</div>
-            <div className="text-muted">
-              {task.error || task.status === 'failed' || task.status === 'error'
-                ? 'Failed — no verified result.'
-                : task.status === 'answered'
-                  ? task.result
-                    ? 'Answered — durable background result recorded.'
-                    : 'Answered — no text result recorded.'
-                  : task.status === 'queued'
-                    ? 'Queued — may not have started; no verified result.'
-                    : `Status: ${task.status || 'unknown'} — no verified result recorded.`}
-            </div>
-            {task.status === 'answered' && !task.error && task.result && (
-              <p className="whitespace-pre-wrap" aria-label="Durable background result">
-                {task.result}
-              </p>
-            )}
-            {task.error && <p className="whitespace-pre-wrap text-danger">{task.error}</p>}
-          </div>
-        ))}
-      </div>
+      <VoiceBackgroundWork session={session} />
       <details className="mt-3">
         <summary className="cursor-pointer text-muted">Transcript ({session.events.length})</summary>
         <p className="mt-2 text-muted">Assistant speech is generated and unverified as work evidence.</p>
@@ -81,5 +48,57 @@ export function VoiceSessionCard({ session }: { session: RealtimeVoiceSession })
         </div>
       </details>
     </section>
+  )
+}
+
+/** Durable request records, never inferred from generated assistant speech. */
+export function VoiceBackgroundWork({ session }: { session: RealtimeVoiceSession }) {
+  const pending = session.state?.pending_delegation
+  const delegations = session.delegations ?? []
+  const tasks = [...delegations, ...(session.thread_updates ?? [])]
+  return (
+    <div className="mt-3" aria-label="Background work">
+      <strong>Background work · separate from voice SDK states</strong>
+      {delegations.length === 0 && (
+        <p className="mt-1 text-muted">
+          {pending?.status === 'collecting'
+            ? 'Collecting the spoken request; nothing submitted yet.'
+            : pending?.status === 'expired' || pending?.status === 'cancelled'
+              ? `Request ${pending.status}; nothing submitted.`
+              : 'No background request submitted; no verified history lookup result.'}
+        </p>
+      )}
+      {tasks.map(task => (
+        <div key={task.update_id ?? task.event_id} className="mt-2 rounded-control border border-stroke p-2">
+          <div>{task.text}</div>
+          <div className="text-muted">
+            {task.error || task.status === 'failed' || task.status === 'error'
+              ? 'Failed — no verified result.'
+              : task.status === 'answered'
+                ? task.result
+                  ? 'Answered — durable background result recorded.'
+                  : 'Answered — no text result recorded.'
+                : task.status === 'queued'
+                  ? 'Queued — may not have started; no verified result.'
+                  : task.status === 'delivered'
+                    ? 'Delivered to worker — no verified result yet.'
+                    : task.status === 'waiting'
+                      ? 'Waiting for normal thread approval — no verified result yet.'
+                      : `Status: ${task.status || 'unknown'} — no verified result recorded.`}
+          </div>
+          {task.status === 'answered' && !task.error && task.result && (
+            <p className="whitespace-pre-wrap" aria-label="Durable background result">
+              {task.result}
+            </p>
+          )}
+          {task.status === 'waiting' && (
+            <Link className="underline" to={`/s/${task.chat_id ?? session.chat_id}`}>
+              Review normal thread approval
+            </Link>
+          )}
+          {task.error && <p className="whitespace-pre-wrap text-danger">{task.error}</p>}
+        </div>
+      ))}
+    </div>
   )
 }

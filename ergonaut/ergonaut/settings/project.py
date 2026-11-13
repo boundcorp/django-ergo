@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 
@@ -43,6 +44,7 @@ VOICE_TRANSCRIPTION_PER_DAY = int(os.environ.get("VOICE_TRANSCRIPTION_PER_DAY", 
 # REALTIME_VOICE_USERS lists the usernames (comma-separated, exact) who may use it.
 # An empty list allows nobody.
 REALTIME_VOICE_ENABLED = env_variable_truthy("REALTIME_VOICE_ENABLED")
+REALTIME_VOICE_STANDBY_ENABLED = env_variable_truthy("REALTIME_VOICE_STANDBY_ENABLED")
 REALTIME_VOICE_USERS = {name.strip() for name in os.environ.get("REALTIME_VOICE_USERS", "").split(",") if name.strip()}
 REALTIME_VOICE_ROOM_PREFIX = os.environ.get("REALTIME_VOICE_ROOM_PREFIX", "voice-")
 REALTIME_VOICE_AGENT_NAME = os.environ.get("REALTIME_VOICE_AGENT_NAME", "ergo-voice")
@@ -55,6 +57,13 @@ LIVEKIT_API_SECRET = os.environ.get("LIVEKIT_API_SECRET", "")
 # model (the engine must be on exactly this one), start_within_seconds. Not an environment
 # switch: set it in a settings module reviewed together with its priced cost (docs/realtime-voice.md).
 REALTIME_VOICE_DELEGATION_BUDGET = None
+# Default-off scoped JSON policies keyed by exact launch-chat UUID, reviewed in GitOps.
+# Each requires owner username, bot, normal_task_costs_approved=True and a reviewed
+# approval_reference. Both web and bridge must carry the same policy; see realtime-voice.md.
+# This authorizes normal task costs, NOT a wider GPT-Live budget or tool approvals.
+REALTIME_VOICE_THREAD_EXECUTION_AUTHORIZATIONS = json.loads(
+    os.environ.get("REALTIME_VOICE_THREAD_EXECUTION_AUTHORIZATIONS", "{}")
+)
 # Extra silence after Silero's own end-of-speech threshold, before background dispatch.
 REALTIME_VOICE_PAUSE_GRACE_SECONDS = 2.0
 ROOT_URLCONF = "ergonaut.settings.urls"

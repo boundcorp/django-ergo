@@ -26,6 +26,52 @@ work and write long content in smaller pieces: one file per call and documents
 in parts of about 2,000 words. An unfinished tool call was not saved or run.
 Resuming is manual, including after a repeated output-limit failure.
 
+## Markdown attachments
+
+Markdown attachments in chat appear as document cards. Open the card to read
+the document without leaving the conversation; Escape or Close returns to chat.
+The reader offers **Copy raw source** and **Download original**. It fetches the
+existing authenticated download only when opened, and limits the reader to
+500,000 bytes; larger files can still be downloaded. Images are not loaded,
+raw HTML is shown as text, and unsafe links are disabled. Fragment links scroll
+within the reader to headings: lowercase heading text becomes an ID with
+punctuation removed, spaces replaced by hyphens, and duplicate IDs suffixed
+`-1`, `-2`, and so on. Relative and root-relative links are marked unsupported;
+absolute HTTP, HTTPS, and mail links open separately. Downloading always uses
+the original file and the existing attachment access controls.
+
+## Realtime voice calls
+
+The originating thread's options → **Voice call** opens its dedicated page.
+Opening it does not capture a microphone; Start/Resume are explicit, and an
+active call survives in-tab navigation. End call stops voice, not accepted
+background work. The original 90-second deadline still applies.
+The desktop panel and mobile drawer group Conversation (voice/files),
+Model & reasoning, Thread data (export) and Thread lifecycle (resolve).
+Resolve archives the thread and stops queued/running workers and their agents;
+a new message reopens the thread, not cancelled work. It is separated and
+danger-styled. Rename and pins remain in thread details. Keyboard focus enters
+the panel/dialog and Escape returns it.
+
+Start call joins voice and requests microphone access. **Enable sound** is
+different: it appears only for SDK-reported blocked playback and unlocks sound
+on the existing call without joining again or changing capture. Mute/Unmute
+controls the microphone separately. The conversation and actionable failures/
+normal approval links remain upfront; IDs, transport/provider/playback details,
+route settings and runtime events are under **Diagnostics**.
+
+**Collect route diagnostics** is user-triggered and local: it reads existing
+element/capture state and redacted browser capabilities, never device IDs or
+names, and never opens capture/a room. Physical Bluetooth output stays unknown.
+The known handset is Android; browser-specific output restrictions and
+communication-versus-media routing must not be presented as user setup errors.
+
+Normal Boundcorp task execution is separate from the experimental API-only
+read budget. Its successor policy is default-off, exact-chat/owner/bot scoped,
+requires distinct reviewed normal-task-cost authorization, and preserves the
+existing normal action approval UI. Voice speech does not approve actions.
+See [release evidence, limits and policy contract](realtime-voice.md).
+
 ## Voice input
 
 In a chat or on the new-thread page, the microphone records only after you press
