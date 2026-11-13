@@ -1,5 +1,6 @@
 # Preparation only: no checkpoint is downloaded at build time.
 FROM nvidia/cuda:13.0.0-cudnn-devel-ubuntu24.04@sha256:e3fd439288969c0c78d52768cda4a10ab20f408180d6fa2933f94f7af7810cb0
+ENV DEBIAN_FRONTEND=noninteractive HF_HOME=/workspace/hf-cache
 # python3.12-dev: Triton JIT-compiles cuda_utils.c (#include <Python.h>) on the
 # first denoise step; without the headers every generation fails at step 0.
 RUN apt-get update && apt-get install -y --no-install-recommends \

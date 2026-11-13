@@ -1,8 +1,8 @@
 # Thin, reviewable layer over the audited H3 runtime: adds CPython 3.12 headers.
 # Triton JIT-compiles cuda_utils.c (#include <Python.h>) on the first denoise
-# step; without python3.12-dev every generation fails at step 0. Only the
-# headers are added: python3.12 stays at the audited version and the existing
-# build-essential/gcc, SGLang checkout and venv are unchanged.
+# step; without python3.12-dev every generation fails at step 0. python3.12
+# stays at the audited version; apt also raises zlib1g to match zlib1g-dev.
+# build-essential/gcc, the SGLang checkout and the venv are unchanged.
 ARG BASE=ghcr.io/boundcorp/ergo-h3-runtime@sha256:7b08f5d6b56988afeab528c9524ded9052a6739df0899768294134afe1453f8b
 FROM ${BASE}
 ARG PYTHON_VERSION=3.12.3-1ubuntu0.17
