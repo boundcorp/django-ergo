@@ -517,6 +517,14 @@ test('distinct consecutive replies in the same claim remain separate without pla
   expect(container.textContent).not.toMatch(/playback unconfirmed/i)
 })
 
+test('replayed final segment stays one bubble without changing a distinct reply', async () => {
+  const first = turn('a1', 'assistant', 'First answer.')
+  const second = turn('a2', 'assistant', 'Second answer.')
+  const initial = await renderTurns([first, second])
+  const replayed = await renderTurns([first, second, first])
+  expect(replayed).toEqual(initial)
+})
+
 test('legacy events with unknown boundaries stay separate', async () => {
   await act(async () => {
     root.render(
