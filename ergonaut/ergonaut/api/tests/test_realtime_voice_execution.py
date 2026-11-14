@@ -273,17 +273,24 @@ def test_concurrent_normal_delegation_claims_one_durable_request(normal_voice):
 
 
 @pytest.mark.django_db(transaction=True)
-def test_authorized_normal_request_cannot_start_after_original_voice_deadline(normal_voice):
+def test_authorized_normal_request_can_start_after_ninety_seconds_but_not_after_end(normal_voice):
     from datetime import timedelta
+    from unittest.mock import patch
 
     from django.utils import timezone
 
     _, _, voice = normal_voice
-    voice.bridge_started_at = timezone.now() - timedelta(seconds=realtime_voice.BRIDGE_JOB_SECONDS + 1)
-    voice.save(update_fields=["bridge_started_at"])
-    with pytest.raises(ValueError, match="deadline expired"):
-        realtime_voice.delegate(voice.pk, "expired-normal-request", "Do not run after the voice cap.")
-    assert not voice.delegations.exists()
+    start = timezone.now()
+    with patch.object(timezone, "now", return_value=start) as clock:
+        assert realtime_voice.claim_bridge(voice.pk, "healthy")
+        clock.return_value = start + timedelta(seconds=91)
+        assert realtime_voice.renew_bridge_lease(voice.pk, "healthy")
+        message = realtime_voice.delegate(voice.pk, "long-call-request", "Keep the original task approval.")
+        assert message.recipient_session_id == voice.chat_id
+        realtime_voice.end_voice_session(voice.pk)
+        with pytest.raises(ValueError):
+            realtime_voice.delegate(voice.pk, "after-end", "Do not run.")
+    assert voice.delegations.count() == 1
 
 
 @pytest.mark.django_db(transaction=True)
@@ -321,3 +328,26 @@ def test_startup_has_bounded_exact_thread_work_and_current_call_observations(nor
     assert snapshot["observation"]["current_session"]["physical_hearing"] == "unknown"
     assert snapshot["observation"]["observed_at"]
     assert chat.messages.count() == before
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize(
+    "policy_change",
+    [
+        {"max_requests": 3, "followup_costs_approved": True, "followup_approval_reference": "old-bounded"},
+        {"unlimited_intentional_requests": True},
+        {"unlimited_intentional_requests": True, "followup_costs_approved": True},
+        {
+            "unlimited_intentional_requests": "true",
+            "followup_costs_approved": True,
+            "followup_approval_reference": "new",
+        },
+    ],
+)
+def test_old_or_incomplete_cost_policy_cannot_silently_mint_uncapped_grant(normal_voice, settings, policy_change):
+    from ergonaut.realtime_voice_execution import initial_state
+
+    chat, _, _ = normal_voice
+    settings.REALTIME_VOICE_THREAD_EXECUTION_AUTHORIZATIONS[str(chat.pk)].update(policy_change)
+    with pytest.raises(ValueError):
+        initial_state(chat, chat.user)

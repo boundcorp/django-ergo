@@ -430,11 +430,17 @@ def test_reconnect_latency_requires_provider_session_started(cooking):
 
 
 @pytest.mark.django_db(transaction=True)
-def test_disconnect_while_standby_waits_for_speech_is_terminal(cooking, settings):
+@pytest.mark.parametrize("termination", ["disconnect", "end"])
+def test_bridge_past_ninety_seconds_closes_on_disconnect_or_explicit_end(cooking, settings, termination):
     chat, vid, _ = cooking
     settings.REALTIME_VOICE_STANDBY_ENABLED = True
     settings.REALTIME_VOICE_USERS = {chat.user.get_username()}
     participant = SimpleNamespace(identity=f"user-{chat.user_id}", track_publications={})
+    original_claim = realtime_voice.claim_bridge
+
+    def claim_long_running(voice_id, claim_id):
+        with patch.object(realtime_voice.timezone, "now", return_value=datetime.now(UTC) - timedelta(seconds=91)):
+            return original_claim(voice_id, claim_id)
 
     class Room:
         def __init__(self):
@@ -491,13 +497,20 @@ def test_disconnect_while_standby_waits_for_speech_is_terminal(cooking, settings
             patch.object(bridge, "AgentSession", Session),
             patch.object(bridge.silero.VAD, "load", return_value=None),
             patch.object(realtime_voice, "get_bot", return_value=object()),
+            patch.object(bridge, "claim_bridge", side_effect=claim_long_running),
         ):
             task = asyncio.create_task(bridge.voice_session(Context()))
             await asyncio.wait_for(started.wait(), timeout=5)
             request = SimpleNamespace(auth=chat.user)
-            result = await sync_to_async(realtime_voice.request_standby)(request, vid)
-            assert result["standby_state"] == "requested"
-            room.handlers["participant_disconnected"](participant)
+            snapshot = await sync_to_async(realtime_voice.bridge_state)(vid, include_briefing=False)
+            assert snapshot["status"] == "active"
+            assert (datetime.now(UTC) - datetime.fromisoformat(snapshot["bridge_started_at"])).total_seconds() >= 91
+            if termination == "disconnect":
+                result = await sync_to_async(realtime_voice.request_standby)(request, vid)
+                assert result["standby_state"] == "requested"
+                room.handlers["participant_disconnected"](participant)
+            else:
+                await sync_to_async(realtime_voice.end_voice_session)(vid)
             await asyncio.wait_for(task, timeout=5)
             state = await sync_to_async(realtime_voice.bridge_state)(vid)
             assert state["status"] == "ended"

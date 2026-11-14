@@ -15,8 +15,7 @@ NORMAL_RESTRICTION = (
     "budget. Voice does not approve actions; use the originating thread's normal approval controls."
 )
 
-# This is backpressure, not a lifetime request allowance. Direct-client grants
-# retain their separately reviewed finite limits.
+# Backpressure is independent of the reviewed follow-up cost authorization.
 NATIVE_MAX_INFLIGHT = 4
 
 
@@ -25,10 +24,7 @@ def native_request_capacity(session):
     inflight = session.delegations.exclude(message__status__in=("answered", "failed")).count()
     followups_available = bool(
         authorization
-        and (
-            authorization.get("followup_costs_approved") is True
-            or not ((session.state or {}).get("voice_request_ids") or session.delegations.exists())
-        )
+        and (authorization.get("unlimited_intentional_requests") is True or not session.delegations.exists())
     )
     return {
         "authorized": bool(authorization),
@@ -39,21 +35,20 @@ def native_request_capacity(session):
 
 
 def native_budget_projection(session):
-    """UI-only native allowance; never used by the direct-client admission path."""
-    legacy = request_capacity(session)
+    """Bounded native projection; no lifetime request counter or identity array."""
     try:
         authorization = session_authorization(session)
+        native = native_request_capacity(session)
     except ValueError:
-        return legacy
-    if not authorization or authorization.get("followup_costs_approved") is not True:
-        return legacy
-    native = native_request_capacity(session)
+        authorization, native = None, {"remaining": 0, "inflight": 0}
+    unlimited = bool(authorization and authorization.get("unlimited_intentional_requests") is True)
     return {
-        **legacy,
-        "limit": None,
-        "remaining": None,
+        "limit": None if unlimited else 1 if authorization else 0,
+        "remaining": None if unlimited else min(1, native["remaining"]),
         "inflight_limit": NATIVE_MAX_INFLIGHT,
         "inflight_count": native["inflight"],
+        "inflight": bool(native["inflight"]),
+        "collecting": False,
     }
 
 
@@ -71,27 +66,29 @@ def configured_authorization(chat, user):
         or not policy["approval_reference"].strip()
     ):
         raise ValueError("Normal thread execution authorization does not match the exact owner/chat/bot or costs.")
-    limit = policy.get("max_requests", 1)
-    if type(limit) is not int or limit not in (1, 3):
-        raise ValueError("Voice execution permits only one request or an explicitly reviewed three-request cap.")
-    if limit > 1 and (
+    if "max_requests" in policy:
+        raise ValueError("Retired max_requests policy requires explicit scoped native follow-up authorization.")
+    unlimited = policy.get("unlimited_intentional_requests", False)
+    if type(unlimited) is not bool:
+        raise ValueError("unlimited_intentional_requests must be an explicit boolean.")
+    if unlimited and (
         policy.get("followup_costs_approved") is not True
         or not isinstance(policy.get("followup_approval_reference"), str)
         or not policy["followup_approval_reference"].strip()
     ):
-        raise ValueError("Sequential voice follow-ups require separate reviewed cost approval.")
+        raise ValueError("Uncapped intentional follow-ups require separate reviewed cost approval.")
     return {
         "chat_id": str(chat.pk),
         "owner_id": str(user.pk),
         "bot": chat.bot_name,
         "approval_reference": policy["approval_reference"],
-        "max_requests": limit,
+        "unlimited_intentional_requests": unlimited,
         **(
             {
                 "followup_approval_reference": policy["followup_approval_reference"],
                 "followup_costs_approved": True,
             }
-            if limit > 1
+            if unlimited
             else {}
         ),
         "execution_mode": "normal_thread",
@@ -131,11 +128,11 @@ def initial_state(chat, user):
 def request_capacity(session):
     """A bounded projection of existing voice receipts, not a second task ledger."""
     try:
-        grant = session_authorization(session)
+        session_authorization(session)
     except ValueError:
         limit = 0  # Revoked/mismatched grants fail closed even in read-only status polling.
     else:
-        limit = grant["max_requests"] if grant else 1
+        limit = 1
     ids = list((session.state or {}).get("voice_request_ids", []))
     ids.extend(session.delegations.values_list("event_id", flat=True))
     pending = (session.state or {}).get("pending_delegation") or {}

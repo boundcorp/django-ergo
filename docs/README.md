@@ -19,7 +19,7 @@
 | [Running Ergonaut](ergonaut.md)         | Commands, settings, the web app, reloading, containers, production, private inference               |
 | [Observability](observability.md)       | Read-only Grafana and Prometheus: bounded PromQL, target health, dashboard links, chart attachments |
 | [RunPod workers](runpod.md)             | Native GPU workers, scoped admission, durable rental ownership and independent cleanup              |
-| [Realtime voice prototype](realtime-voice.md) | Off-by-default prototype on Octo for one allowlisted account: caps, kill switch, setup and known gaps |
+| [Realtime voice prototype](realtime-voice.md) | Native intent, uncapped-request/call candidate, scoped costs, kill switch and release gates |
 | [Agent skills](agent-skills.md)         | Ergo's skills for Claude Code and Codex, the `ergonaut-remote` command and API keys                 |
 
 ## Library

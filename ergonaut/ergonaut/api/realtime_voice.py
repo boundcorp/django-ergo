@@ -89,8 +89,8 @@ def event_out(event):
     }
 
 
-# A bridge job (one GPT-Live connection) lasts at most this long; the bridge enforces it.
-BRIDGE_JOB_SECONDS = 90
+# A renewable liveness lease reaps abandoned bridges, never limits a healthy call.
+BRIDGE_LEASE_SECONDS = 120
 
 LIVE_STATE_KEY = "_voice_live"
 MAX_PARTIAL_TURNS = 4
@@ -113,7 +113,7 @@ def publish_live_state(voice_id, claim_id, partials, runtime):
             or session.status != "active"
             or session.bridge_claim_id != claim_id
             or session.standby_state not in ("live", "requested")
-            or deadline_expired(session)
+            or bridge_lease_expired(session)
         ):
             return False
         partials = partials[-MAX_PARTIAL_TURNS:]
@@ -136,7 +136,7 @@ def publish_live_state(voice_id, claim_id, partials, runtime):
 
 
 def end_voice_session(voice_id):
-    """End an active session: Stop, or its bridge job finishing (timeout, disconnect, error)."""
+    """End an active session: explicit End, or bridge disconnect/error."""
     with transaction.atomic():
         session = RealtimeVoiceSession.objects.select_for_update().filter(pk=voice_id, status="active").first()
         if session:
@@ -160,11 +160,47 @@ def end_bridge_session(voice_id, claim_id):
             session.save(update_fields=["state", "status", "ended_at"])
 
 
-def deadline_expired(session, now=None):
-    return bool(
-        session.bridge_started_at
-        and (now or timezone.now()) >= session.bridge_started_at + timedelta(seconds=BRIDGE_JOB_SECONDS)
+def bridge_lease_expired(session, now=None):
+    if not session.bridge_started_at or session.standby_state == "standby":
+        return False
+    lease = (session.state or {}).get("_voice_bridge_lease", {})
+    stamp = lease.get("seen_at") if lease.get("claim_id") == session.bridge_claim_id else None
+    return not stamp or (now or timezone.now()) >= datetime.fromisoformat(stamp) + timedelta(
+        seconds=BRIDGE_LEASE_SECONDS
     )
+
+
+def reap_abandoned_bridge(voice_id):
+    """Lease observation and terminal transition must use the same locked row."""
+    with transaction.atomic():
+        session = RealtimeVoiceSession.objects.select_for_update().filter(pk=voice_id, status="active").first()
+        if session is None or not bridge_lease_expired(session):
+            return False
+        clear_live_state(session)
+        session.status, session.ended_at = "ended", timezone.now()
+        session.save(update_fields=["state", "status", "ended_at"])
+        return True
+
+
+def renew_bridge_lease(voice_id, claim_id):
+    """A stale, ended or abandoned worker cannot revive a session."""
+    with transaction.atomic():
+        session = RealtimeVoiceSession.objects.select_for_update().select_related("user").get(pk=voice_id)
+        now = timezone.now()
+        if (
+            session.status != "active"
+            or session.bridge_claim_id != claim_id
+            or session.standby_state not in ("live", "requested", "closing")
+            or not voice_allowed(session.user)
+            or bridge_lease_expired(session, now)
+        ):
+            return False
+        session.state = {
+            **session.state,
+            "_voice_bridge_lease": {"claim_id": claim_id, "seen_at": now.isoformat()},
+        }
+        session.save(update_fields=["state"])
+        return True
 
 
 def claim_bridge(voice_id, claim_id=None):
@@ -185,13 +221,17 @@ def claim_bridge(voice_id, claim_id=None):
         if session is None:
             return False
         now = timezone.now()
-        if deadline_expired(session, now):
+        if bridge_lease_expired(session, now):
             session.status = "ended"
             session.ended_at = now
             clear_live_state(session)
             session.save(update_fields=["state", "status", "ended_at"])
             return False
         session.bridge_claim_id = claim_id or uuid.uuid4().hex
+        session.state = {
+            **session.state,
+            "_voice_bridge_lease": {"claim_id": session.bridge_claim_id, "seen_at": now.isoformat()},
+        }
         clear_live_state(session)
         if session.bridge_started_at is None:
             session.bridge_started_at = now
@@ -211,16 +251,23 @@ def begin_standby_close(voice_id, claim_id):
     ):
         return False
     field = get_user_model().USERNAME_FIELD
-    return bool(
-        RealtimeVoiceSession.objects.filter(
-            pk=voice_id,
-            status="active",
-            standby_state="requested",
-            bridge_claim_id=claim_id,
-            bridge_started_at__gt=timezone.now() - timedelta(seconds=BRIDGE_JOB_SECONDS),
-            **{f"user__{field}__in": getattr(settings, "REALTIME_VOICE_USERS", set())},
-        ).update(standby_state="closing")
-    )
+    with transaction.atomic():
+        session = (
+            RealtimeVoiceSession.objects.select_for_update()
+            .filter(
+                pk=voice_id,
+                status="active",
+                standby_state="requested",
+                bridge_claim_id=claim_id,
+                **{f"user__{field}__in": getattr(settings, "REALTIME_VOICE_USERS", set())},
+            )
+            .first()
+        )
+        if session is None or bridge_lease_expired(session):
+            return False
+        session.standby_state = "closing"
+        session.save(update_fields=["standby_state"])
+        return True
 
 
 def cancel_standby_close(voice_id, claim_id):
@@ -245,12 +292,11 @@ def finish_standby_close(voice_id, claim_id, *, audio_uncertain=False):
                 status="active",
                 standby_state="closing",
                 bridge_claim_id=claim_id,
-                bridge_started_at__gt=now - timedelta(seconds=BRIDGE_JOB_SECONDS),
                 **{f"user__{field}__in": getattr(settings, "REALTIME_VOICE_USERS", set())},
             )
             .first()
         )
-        if session is None:
+        if session is None or bridge_lease_expired(session, now):
             return False
         session.standby_state = "standby"
         session.standby_at = now
@@ -272,12 +318,13 @@ def bridge_state(voice_id, *, include_briefing=True):
     state = {"decisions": [], "constraints": [], "current_step": "", **session.state}
     live = state.pop(LIVE_STATE_KEY, {})
     state.pop("_voice_native", None)
+    state.pop("_voice_bridge_lease", None)
     has_live_bridge = (
         session.status == "active"
         and bool(session.bridge_started_at and session.bridge_claim_id)
         and session.standby_state in ("live", "requested")
         and live.get("claim_id") == session.bridge_claim_id
-        and not deadline_expired(session)
+        and not bridge_lease_expired(session)
     )
     transcript = [
         {
@@ -427,14 +474,14 @@ def record_event(
     with transaction.atomic():
         session = RealtimeVoiceSession.objects.select_for_update().get(pk=voice_id)
         if bridge_claim_id is not None:
-            # An accepted final may flush after Stop, but callbacks from an old claim
-            # or after the deadline cannot resurrect a session or change its history.
+            # An accepted final may flush after End, but an old claim or callbacks
+            # received after End cannot resurrect a session or change its history.
             if (
                 session.bridge_claim_id != bridge_claim_id
                 or not bridge_claim_id
                 or not session.bridge_started_at
                 or not voice_allowed(session.user)
-                or deadline_expired(session, received_at)
+                or bridge_lease_expired(session, received_at)
                 or session.standby_state in ("standby", "resuming")
                 or (session.status != "active" and (not session.ended_at or received_at > session.ended_at))
             ):
@@ -574,7 +621,7 @@ def delegation_status(session):
         capacity = native_request_capacity(session)
     except ValueError:
         capacity = {"remaining": 0}
-    if session.status != "active" or deadline_expired(session):
+    if session.status != "active" or bridge_lease_expired(session):
         status = {
             "delegation_available": False,
             "restriction": f"{restriction} Background delegation unavailable: the voice session has ended.",
@@ -796,18 +843,21 @@ def delegate(voice_id, event_id, text, *, native_identity=None):
             ):
                 raise ValueError("Native request identity collides with existing thread work.")
             return old.message
-        capacity = request_capacity(session)
+        capacity = None if native_identity is not None else request_capacity(session)
         if native_identity is not None:
             authorization = normal_target(session)
             if not authorization:
                 raise ValueError("Native execution requires reviewed normal originating-thread authorization.")
-            if capacity["request_ids"] and authorization.get("followup_costs_approved") is not True:
+            if session.delegations.exists() and authorization.get("unlimited_intentional_requests") is not True:
                 raise ValueError("Further native requests require separately reviewed normal-task follow-up costs.")
             if not native_request_capacity(session)["remaining"]:
                 raise ValueError(
                     "Four background requests are already in flight; wait for capacity before a new request."
                 )
         else:
+            grant = session_authorization(session)
+            if grant and grant.get("unlimited_intentional_requests") is True:
+                raise ValueError("Uncapped requests require completed native interpreter arguments.")
             if capacity["limit"] == 0:
                 normal_target(session)  # Preserve the explicit revoked-authorization error.
             pending = (session.state or {}).get("pending_delegation") or {}
@@ -822,8 +872,8 @@ def delegate(voice_id, event_id, text, *, native_identity=None):
                 )
             if capacity["inflight"] or (capacity["collecting"] and not reserved):
                 raise ValueError("A background request is still pending; no concurrent execution is permitted")
-        if session.status != "active" or deadline_expired(session):
-            raise ValueError("Voice session ended or deadline expired")
+        if session.status != "active" or bridge_lease_expired(session):
+            raise ValueError("Voice session ended or bridge disconnected")
         try:
             authorization = normal_target(session)
             budget = None if authorization else delegation_target(session, delegation_budget())
@@ -883,23 +933,20 @@ def delegate(voice_id, event_id, text, *, native_identity=None):
             metadata = attach({**metadata, "context_policy": "current_chat_only"}, budget)
         message = messaging.send(None, session.chat, prompt, metadata=metadata)
         RealtimeVoiceDelegation.objects.create(session=session, event_id=event_id, text=text, message=message)
-        session.state = {
-            **session.state,
-            "voice_request_ids": list(dict.fromkeys([*capacity["request_ids"], event_id])),
-        }
-        session.save(update_fields=["state"])
+        if native_identity is None:
+            session.state = {
+                **session.state,
+                "voice_request_ids": list(dict.fromkeys([*capacity["request_ids"], event_id])),
+            }
+            session.save(update_fields=["state"])
     message.refresh_from_db()
     return message
 
 
 def session_out(session):
     session.refresh_from_db()
-    if (
-        (standby_allowed(session.user) or session.standby_state != "live")
-        and session.status == "active"
-        and deadline_expired(session)
-    ):
-        end_voice_session(session.id)
+    if session.status == "active" and bridge_lease_expired(session):
+        reap_abandoned_bridge(session.id)
         session.refresh_from_db()
     state = bridge_state(session.id, include_briefing=False)
     # Task completion is independent of a live provider. Owner polling can persist
@@ -1005,16 +1052,13 @@ def end_session(request, session_id: str):
 def request_standby(request, session_id: str):
     session = owned_session(request.auth, session_id)
     require_standby(request.auth)
-    now = timezone.now()
     updated = RealtimeVoiceSession.objects.filter(
         pk=session.pk,
         status="active",
         standby_state="live",
-        bridge_started_at__gt=now - timedelta(seconds=BRIDGE_JOB_SECONDS),
+        bridge_started_at__isnull=False,
     ).update(standby_state="requested")
     if not updated:
-        if deadline_expired(session, now):
-            end_voice_session(session.pk)
         raise HttpError(409, "Standby unavailable")
     return session_out(session)
 
@@ -1023,17 +1067,17 @@ def request_standby(request, session_id: str):
 def resume_session(request, session_id: str):
     session = owned_session(request.auth, session_id)
     require_standby(request.auth)
-    now = timezone.now()
-    updated = RealtimeVoiceSession.objects.filter(
-        pk=session.pk,
-        status="active",
-        standby_state="standby",
-        bridge_started_at__gt=now - timedelta(seconds=BRIDGE_JOB_SECONDS),
-    ).update(standby_state="resuming", resumed_at=now)
-    if not updated:
-        if deadline_expired(session, now):
-            end_voice_session(session.pk)
-        raise HttpError(409, "Resume unavailable")
+    with transaction.atomic():
+        session = RealtimeVoiceSession.objects.select_for_update().get(pk=session.pk)
+        if session.status != "active" or session.standby_state != "standby" or not session.bridge_started_at:
+            raise HttpError(409, "Resume unavailable")
+        now = timezone.now()
+        session.standby_state, session.resumed_at = "resuming", now
+        session.state = {
+            **session.state,
+            "_voice_bridge_lease": {"claim_id": session.bridge_claim_id, "seen_at": now.isoformat()},
+        }
+        session.save(update_fields=["standby_state", "resumed_at", "state"])
     return session_out(session)
 
 
@@ -1042,13 +1086,14 @@ def token(request, session_id: str):
     session = owned_session(request.auth, session_id)
     if session.status != "active":
         raise HttpError(409, "Voice session ended")
+    if bridge_lease_expired(session):
+        if reap_abandoned_bridge(session.pk):
+            raise HttpError(409, "Voice bridge disconnected")
+        session.refresh_from_db()
+        if session.status != "active":
+            raise HttpError(409, "Voice session ended")
     if session.bridge_started_at:
-        if standby_allowed(request.auth) and deadline_expired(session):
-            end_voice_session(session.pk)
-            raise HttpError(409, "Voice session expired")
         if not standby_allowed(request.auth) or session.standby_state != "resuming":
-            if timezone.now() - session.bridge_started_at > timedelta(seconds=BRIDGE_JOB_SECONDS + 30):
-                end_voice_session(session.pk)
             raise HttpError(409, "Voice session already connected; start a new one")
     url, key, secret = settings.LIVEKIT_URL, settings.LIVEKIT_API_KEY, settings.LIVEKIT_API_SECRET
     if not all((url, key, secret)):

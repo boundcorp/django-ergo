@@ -64,8 +64,8 @@ export function VoiceBackgroundWork({ session }: { session: RealtimeVoiceSession
         <div aria-label="Voice request allowance" className="mt-1">
           <p>
             {budget.limit === null
-              ? `Intentional requests: no cumulative cap · ${budget.used} submitted.`
-              : `Voice requests: ${budget.remaining} of ${budget.limit} remaining · ${budget.used} used.`}
+              ? 'Intentional requests: no cumulative cap.'
+              : `Voice requests: ${budget.remaining} of ${budget.limit} remaining.`}
           </p>
           {budget.limit === null ? (
             <p>

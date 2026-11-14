@@ -920,9 +920,9 @@ export function VoicePage() {
                 : 'Context is not available yet.')}
           </p>
           <p className="mt-2 text-muted">
-            Navigating away does not end an active call. End call stops voice only; background work continues. The
-            original 90-second deadline includes standby. Navigation preserves calls within this tab; closing or
-            reloading the tab may disconnect the call.
+            Navigating away does not end an active call. End call stops voice only; background work continues. Calls
+            have no application maximum duration. Navigation preserves calls within this tab; closing or reloading the
+            tab may disconnect the call. Provider disconnects end voice without automatic reconnect.
           </p>
         </details>
       </header>
@@ -990,7 +990,7 @@ export function VoicePage() {
             {voice?.briefing?.restriction && (
               <p>
                 {voice.briefing.execution_mode === 'normal_thread'
-                  ? 'Normal thread execution: task costs are separate from the 90-second voice limit. Normal action approvals still apply.'
+                  ? 'Normal thread execution: task costs are separate from voice and managed interpretation costs. Normal action approvals still apply.'
                   : 'Restricted read-only mode.'}
               </p>
             )}

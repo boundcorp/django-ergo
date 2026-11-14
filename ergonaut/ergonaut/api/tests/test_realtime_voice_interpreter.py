@@ -33,7 +33,7 @@ from ergonaut.api.tests.test_realtime_voice_bridge import (  # noqa: F401
 )
 from ergonaut.api.tests.test_realtime_voice_budget import bot_folder, cook, held_messages, use_bots  # noqa: F401
 from ergonaut.api.tests.test_realtime_voice_execution import deliver, normal_voice, post  # noqa: F401
-from ergonaut.apps.bots.models import RealtimeVoiceSession
+from ergonaut.apps.bots.models import RealtimeVoiceLedgerEntry, RealtimeVoiceSession
 from ergonaut.apps.bots.tests.fakes import say, tool_call
 from ergonaut.realtime_voice_interpreter import process_native_event
 
@@ -129,7 +129,7 @@ def interpreter_voice(normal_voice, settings):
     chat, target, voice = normal_voice
     policy = settings.REALTIME_VOICE_THREAD_EXECUTION_AUTHORIZATIONS[str(chat.pk)]
     policy.update(
-        max_requests=3,
+        unlimited_intentional_requests=True,
         followup_costs_approved=True,
         followup_approval_reference="disposable-native-followups",
     )
@@ -226,16 +226,19 @@ def test_raw_completion_is_durable_before_any_task_dispatch(interpreter_voice, h
     original_send = messaging.send
 
     def inspect_then_send(*args, **kwargs):
-        saved = RealtimeVoiceSession.objects.get(pk=voice.pk).state["_voice_native"]["raw"]
-        assert any(row["payload"] == events[-1] for row in saved)
+        assert RealtimeVoiceLedgerEntry.objects.filter(
+            session=voice, namespace="raw", data__payload=events[-1]
+        ).exists()
         return original_send(*args, **kwargs)
 
     with patch.object(messaging, "send", side_effect=inspect_then_send):
         result = consume(voice, events)
     assert receipt(result)["status"] == "submitted"
     assert len(held_messages) == 1
-    voice.refresh_from_db()
-    assert [row["payload"] for row in voice.state["_voice_native"]["raw"]] == events
+    assert (
+        list(voice.native_ledger.filter(namespace="raw").order_by("id").values_list("data__payload", flat=True))
+        == events
+    )
 
 
 @pytest.mark.django_db(transaction=True)
@@ -462,7 +465,7 @@ def test_more_than_three_intentional_asks_and_multiple_queued_jobs_are_independe
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize(
     "boundary",
-    ["revoked", "owner_mismatch", "bot_mismatch", "kill_switch", "allowlist", "expired", "ended", "stale_claim"],
+    ["revoked", "owner_mismatch", "bot_mismatch", "kill_switch", "allowlist", "ended", "stale_claim"],
 )
 def test_authorization_and_session_boundaries_fail_closed_at_completion(
     interpreter_voice, held_messages, settings, boundary
@@ -482,10 +485,6 @@ def test_authorization_and_session_boundaries_fail_closed_at_completion(
         settings.REALTIME_VOICE_ENABLED = False
     elif boundary == "allowlist":
         settings.REALTIME_VOICE_USERS = set()
-    elif boundary == "expired":
-        RealtimeVoiceSession.objects.filter(pk=voice.pk).update(
-            bridge_started_at=timezone.now() - timedelta(seconds=realtime_voice.BRIDGE_JOB_SECONDS + 1)
-        )
     elif boundary == "ended":
         realtime_voice.end_voice_session(voice.pk)
     elif boundary == "stale_claim":
@@ -715,3 +714,160 @@ def test_response_restart_before_prior_terminal_cannot_admit_either_interpretati
     consume(voice, restarted)
     consume(voice, original[-1:])
     assert held_messages == [] and not voice.delegations.exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_healthy_native_call_has_no_fixed_lifetime_cutoff(interpreter_voice, held_messages):
+    _, _, voice = interpreter_voice
+    assert realtime_voice.claim_bridge(voice.pk, "long-running-claim")
+    RealtimeVoiceSession.objects.filter(pk=voice.pk).update(bridge_started_at=timezone.now() - timedelta(hours=2))
+    result = consume(voice, native_events(), claim_id="long-running-claim")
+    assert receipt(result)["status"] == "submitted"
+    assert len(held_messages) == 1
+
+
+@pytest.mark.django_db(transaction=True)
+def test_raw_evidence_survives_admission_transaction_rollback(interpreter_voice, held_messages):
+    _, _, voice = interpreter_voice
+    events = native_events()
+    consume(voice, events[:-1])
+    with patch("ergonaut.realtime_voice_interpreter._process", side_effect=RuntimeError("offline rollback")):
+        with pytest.raises(RuntimeError, match="offline rollback"):
+            process_native_event(voice.pk, events[-1])
+    close_old_connections()
+    assert RealtimeVoiceLedgerEntry.objects.filter(session=voice, namespace="raw", data__payload=events[-1]).exists()
+    assert held_messages == []
+    restored = RealtimeVoiceSession.objects.get(pk=voice.pk)
+    accepted = process_native_event(restored.pk, events[-1])
+    assert receipt(accepted)["status"] == "submitted"
+    assert receipt(process_native_event(restored.pk, events[-1])) == receipt(accepted)
+    assert len(held_messages) == 1
+
+
+@pytest.mark.django_db(transaction=True)
+def test_archive_exceeds_old_lifetime_limit_without_forgetting_earliest_receipt(interpreter_voice, held_messages):
+    _, _, voice = interpreter_voice
+    earliest_events = native_events()
+    earliest = receipt(consume(voice, earliest_events))
+    voice.refresh_from_db()
+    initial_state_bytes = len(json.dumps(voice.state).encode())
+    evidence_bytes = 0
+    # Completed clarification envelopes grow real persisted evidence, not task
+    # execution or provider traffic. Forty bounded events alone exceed 2 MiB.
+    for index in range(40):
+        events = native_events(
+            arguments(f"clarify-{index}", "clarify", text="Which task?", clarification="Please specify."),
+            identity=f"archive-{index}",
+        )
+        events[1]["event"]["response"]["metadata"] = {"offline_padding": "x" * 58000}
+        evidence_bytes += sum(len(json.dumps(event, ensure_ascii=False).encode()) for event in events)
+        result = consume(voice, events)
+        assert receipt(result, f"call-archive-{index}")["status"] == "clarification"
+    assert evidence_bytes > 2 * 1024 * 1024
+    assert len(result["context"]["intents"]) == 12
+    assert "intent-A" not in {row["intent_id"] for row in result["context"]["intents"]}
+    close_old_connections()
+    restored = RealtimeVoiceSession.objects.get(pk=voice.pk)
+    assert len(json.dumps(restored.state).encode()) <= initial_state_bytes + 4096
+    assert receipt(consume(restored, earliest_events)) == earliest
+    replay = consume(restored, native_events(identity="late-replay"))
+    assert receipt(replay, "call-late-replay") == earliest
+    changed = consume(
+        restored, native_events(arguments(text="Changed old arguments must not run."), identity="late-conflict")
+    )
+    assert receipt(changed, "call-late-conflict")["status"] == "rejected"
+    changed_wire = copy.deepcopy(earliest_events[2])
+    changed_wire["event"]["item"]["arguments"] = json.dumps(arguments(text="Changed earliest wire arguments."))
+    assert process_native_event(restored.pk, changed_wire)["status"] == "rejected"
+    old_target = consume(
+        restored,
+        native_events(arguments("old-target", "status", "intent-A"), identity="old-target"),
+    )
+    assert receipt(old_target, "call-old-target")["status"] == "clarification"
+    continuation = consume(
+        restored,
+        native_events(
+            arguments("hidden-late-request", text="Continuation must not select another task."),
+            identity="late-continuation",
+            delegation_id="delegation-A",
+        )[1:],
+    )
+    assert receipt(continuation, "call-late-continuation")["status"] == "rejected"
+    fresh = consume(
+        restored, native_events(arguments("fresh-task", text="A fresh intentional request."), identity="fresh")
+    )
+    assert receipt(fresh, "call-fresh")["status"] == "submitted"
+    assert len(held_messages) == 2 and len(tasks(voice)) == 2
+
+
+@pytest.mark.django_db(transaction=True)
+def test_oversized_event_denial_is_durable_but_does_not_poison_the_call(interpreter_voice, held_messages):
+    _, _, voice = interpreter_voice
+    oversized = native_events(identity="oversized")[0]
+    oversized["padding"] = "x" * 70000
+    denied = process_native_event(voice.pk, oversized)
+    assert denied["status"] == "rejected"
+    close_old_connections()
+    repeated = process_native_event(voice.pk, oversized)
+    assert {key: value for key, value in repeated.items() if key != "context"} == {
+        key: value for key, value in denied.items() if key != "context"
+    }
+    changed = copy.deepcopy(oversized)
+    changed.pop("padding")
+    assert process_native_event(voice.pk, changed)["status"] == "rejected"
+    accepted = consume(voice, native_events())
+    assert receipt(accepted)["status"] == "submitted"
+    assert len(held_messages) == 1
+
+
+@pytest.mark.django_db(transaction=True)
+def test_one_response_argument_flood_is_bounded_and_cannot_admit_work(interpreter_voice, held_messages):
+    _, _, voice = interpreter_voice
+    events = native_events()
+    consume(voice, events[:3])
+    for index in range(12):
+        item = native_events(
+            arguments(f"extra-{index}", text="An ambiguous extra task."),
+            identity=f"extra-{index}",
+            delegation_id="delegation-A",
+        )[2]
+        result = process_native_event(voice.pk, item)
+        if index >= 1:
+            assert result["status"] == "rejected"
+    completed = process_native_event(voice.pk, events[-1])
+    assert completed["status"] == "rejected"
+    assert len(completed["receipts"]) == 2
+    assert all(row["status"] == "rejected" for row in completed["receipts"].values())
+    assert held_messages == [] and not voice.delegations.exists()
+    fresh = consume(voice, native_events(arguments("fresh", text="A separate valid task."), identity="fresh"))
+    assert receipt(fresh, "call-fresh")["status"] == "submitted"
+    assert len(held_messages) == 1
+
+
+@pytest.mark.django_db(transaction=True)
+def test_oversized_function_evidence_denies_only_its_own_delegation(interpreter_voice, held_messages):
+    _, _, voice = interpreter_voice
+    events = native_events()
+    consume(voice, events[:3])
+    oversized = native_events(identity="extra", delegation_id="delegation-A")[2]
+    oversized["padding"] = "x" * 70000
+    assert process_native_event(voice.pk, oversized)["status"] == "rejected"
+    denied = process_native_event(voice.pk, events[-1])
+    assert receipt(denied)["status"] == "rejected"
+    assert held_messages == []
+    fresh = consume(voice, native_events(arguments("fresh", text="An independent valid task."), identity="fresh"))
+    assert receipt(fresh, "call-fresh")["status"] == "submitted"
+    assert len(held_messages) == 1
+
+
+@pytest.mark.django_db(transaction=True)
+def test_orphan_terminal_cannot_leave_old_interpretation_pending_after_continuation(interpreter_voice, held_messages):
+    _, _, voice = interpreter_voice
+    first = consume(voice, native_events())
+    assert first["context"]["interpretation_pending"]
+    orphan = native_events(identity="orphan", delegation_id="delegation-A")[-1]
+    assert process_native_event(voice.pk, orphan)["status"] == "rejected"
+    continuation = native_events(identity="continuation", delegation_id="delegation-A")
+    completed = consume(voice, [continuation[1], continuation[-1]])
+    assert not completed["context"]["interpretation_pending"]
+    assert len(held_messages) == 1

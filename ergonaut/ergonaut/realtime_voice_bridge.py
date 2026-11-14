@@ -25,7 +25,6 @@ from livekit.agents import Agent, AgentServer, AgentSession, APIConnectOptions, 
 from livekit.plugins import openai, silero  # noqa: E402
 
 from ergonaut.api.realtime_voice import (  # noqa: E402
-    BRIDGE_JOB_SECONDS,
     MAX_PARTIAL_TURNS,
     MAX_TRANSCRIPT_CHARS,
     UNKNOWN_RUNTIME,
@@ -38,12 +37,12 @@ from ergonaut.api.realtime_voice import (  # noqa: E402
     finish_standby_close,
     publish_live_state,
     record_event,
+    renew_bridge_lease,
 )
 from ergonaut.realtime_voice_interpreter import process_native_event  # noqa: E402
 from ergonaut.realtime_voice_outbox import claim_announcement, completion_event, thread_update_event  # noqa: E402
 
 logger = logging.getLogger(__name__)
-MAX_SECONDS = BRIDGE_JOB_SECONDS
 _job_claimed = False
 TRANSCRIPT_DRAIN_SECONDS = 0.8
 LIVE_PUBLISH_SECONDS = 0.25
@@ -633,6 +632,16 @@ class Assistant(Agent):
                 key = hashlib.sha256(json.dumps([*scope, *signature]).encode()).hexdigest()
                 self.native_call_keys[signature] = key
                 self.native_scope_calls.setdefault(scope, {}).setdefault(item["call_id"], set()).add(key)
+        # These are invocation bindings, not replay authority. Durable indexed
+        # receipts remain in Django after an inactive transport cache entry ages out.
+        for cache in (
+            self.native_response_ids,
+            self.native_response_versions,
+            self.native_call_keys,
+            self.native_scope_calls,
+        ):
+            while len(cache) > 128:
+                cache.pop(next(iter(cache)))
         previous = self.native_tail
         task = asyncio.create_task(self.process_native_event(previous, event, scope))
         self.native_tail = task
@@ -653,6 +662,11 @@ class Assistant(Agent):
             for call_id, receipt in result.get("receipts", {}).items():
                 for key in self.native_scope_calls.get(scope, {}).get(call_id, ()):
                     self.native_receipts[key] = {**receipt, "context": context}
+            if inner := event.get("event"):
+                if inner.get("type") in ("response.completed", "response.failed", "response.incomplete"):
+                    self.native_scope_calls.pop(scope, None)
+            while len(self.native_receipts) > 128:
+                self.native_receipts.pop(next(iter(self.native_receipts)))
         except Exception as exc:
             self.native_failed = True
             logger.error("voice native admission failed exception_type=%s", type(exc).__name__)
@@ -666,7 +680,7 @@ class Assistant(Agent):
     def on_native_function(self, call):
         # The pinned adapter forwards this same FunctionCall into RunContext.
         # Bind before its async tool task runs; a later response cannot reuse a prior receipt.
-        key = self.native_call_keys.get((call.id, call.call_id, call.arguments))
+        key = self.native_call_keys.pop((call.id, call.call_id, call.arguments), None)
         if key is not None:
             call.extra["_ergo_native_invocation"] = key
 
@@ -782,6 +796,20 @@ class Assistant(Agent):
             )
 
     async def deliver_results(self, snapshot):
+        visible = [*snapshot["delegations"], *snapshot.get("thread_updates", [])]
+        self.terminal_tasks.intersection_update(
+            task["update_id"].rsplit(":", 1)[0] if "update_id" in task else f"root:{task['event_id']}"
+            for task in visible
+        )
+        self.announced.intersection_update(
+            task.get(
+                "update_id",
+                f"{task['event_id']}:{task['status']}"
+                if task.get("execution_mode") == "normal_thread"
+                else task["event_id"],
+            )
+            for task in visible
+        )
         for task in [*snapshot["delegations"], *snapshot.get("thread_updates", [])]:
             identity = task["update_id"].rsplit(":", 1)[0] if "update_id" in task else f"root:{task['event_id']}"
             terminal = task["status"] in ("answered", "failed")
@@ -954,41 +982,37 @@ async def voice_session(ctx: agents.JobContext):
     standby_requested = False
     generation = None
     try:
-        deadline = datetime.fromisoformat(snapshot["bridge_started_at"])
-        remaining = max(0, (deadline - datetime.now(UTC)).total_seconds() + MAX_SECONDS)
-        async with asyncio.timeout(remaining):
-            await session.start(room=ctx.room, agent=assistant, record=False)
-            if session.room_io.subscribed_fut is not None:
-                assistant.watch_audio_subscription(session.room_io.subscribed_fut)
-            while not session_closed.is_set():
-                snapshot = await sync_to_async(bridge_state, thread_sensitive=True)(voice_id, include_briefing=False)
-                if snapshot["status"] != "active":
+        await session.start(room=ctx.room, agent=assistant, record=False)
+        if session.room_io.subscribed_fut is not None:
+            assistant.watch_audio_subscription(session.room_io.subscribed_fut)
+        lease_renewed = 0.0
+        while not session_closed.is_set():
+            if time.monotonic() - lease_renewed >= 5:
+                if not await sync_to_async(renew_bridge_lease, thread_sensitive=True)(voice_id, claim_id):
                     break
-                if (
-                    snapshot["standby_state"] == "requested"
-                    and microphone_live()
-                    and assistant.safe_to_standby(snapshot)
-                ):
-                    generation = assistant.activity_generation
-                    reserved = await sync_to_async(begin_standby_close, thread_sensitive=True)(voice_id, claim_id)
-                    if reserved:
-                        # A speech callback or a disconnect may have raced the database claim.
-                        if (
-                            not session_closed.is_set()
-                            and not unexpected_close
-                            and microphone_live()
-                            and generation == assistant.activity_generation
-                            and assistant.safe_to_standby(snapshot)
-                        ):
-                            standby_requested = True
-                            break
-                        await sync_to_async(cancel_standby_close, thread_sensitive=True)(voice_id, claim_id)
-                try:
-                    await asyncio.wait_for(session_closed.wait(), timeout=0.2)
-                except TimeoutError:
-                    pass
-    except TimeoutError:
-        pass
+                lease_renewed = time.monotonic()
+            snapshot = await sync_to_async(bridge_state, thread_sensitive=True)(voice_id, include_briefing=False)
+            if snapshot["status"] != "active":
+                break
+            if snapshot["standby_state"] == "requested" and microphone_live() and assistant.safe_to_standby(snapshot):
+                generation = assistant.activity_generation
+                reserved = await sync_to_async(begin_standby_close, thread_sensitive=True)(voice_id, claim_id)
+                if reserved:
+                    # A speech callback or a disconnect may have raced the database claim.
+                    if (
+                        not session_closed.is_set()
+                        and not unexpected_close
+                        and microphone_live()
+                        and generation == assistant.activity_generation
+                        and assistant.safe_to_standby(snapshot)
+                    ):
+                        standby_requested = True
+                        break
+                    await sync_to_async(cancel_standby_close, thread_sensitive=True)(voice_id, claim_id)
+            try:
+                await asyncio.wait_for(session_closed.wait(), timeout=0.2)
+            except TimeoutError:
+                pass
     finally:
         closed_cleanly = False
         try:

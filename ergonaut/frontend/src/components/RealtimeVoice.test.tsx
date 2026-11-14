@@ -427,27 +427,12 @@ test('observed SDK states stay separate from queued work and absent SDK observat
   api.realtimeVoiceSessions = async () => [
     {
       ...session,
-      request_budget: {
-        limit: 3,
-        used: 1,
-        remaining: 2,
-        collecting: false,
-        inflight: true,
-        request_ids: ['task'],
-      },
       delegations: [{ event_id: 'task', text: 'Lookup', status: 'queued', result: '', error: '' }],
     },
   ]
   await mountVoice()
   expect(container.textContent).toContain('You: unknown · Assistant: unknown')
   expect(container.textContent).toContain('Queued — may not have started')
-  const backgroundSummary = [...container.querySelectorAll('summary')].find(node =>
-    node.textContent?.includes('Background work'),
-  )
-  expect(backgroundSummary?.textContent).toContain('2 of 3 requests remaining')
-  expect(container.querySelector('[aria-label="Voice request allowance"]')?.textContent).toContain(
-    'A request is pending',
-  )
   expect(container.textContent).not.toContain('Assistant: thinking')
 })
 
@@ -688,54 +673,6 @@ test.each([{ delegations: undefined }, { delegations: [] }])(
     expect(transcript?.textContent).toContain('playback confirmed; hearing not established')
   },
 )
-
-test('sequential request allowance follows durable work without implying execution or starting another request', () => {
-  const task = { event_id: 'task-1', text: 'Look up history', status: 'queued', result: 'Not an answer yet', error: '' }
-  const budget = { limit: 3, used: 1, remaining: 2, collecting: false, inflight: true, request_ids: ['task-1'] }
-  function renderWorkflow(update: Partial<RealtimeVoiceSession> = {}) {
-    act(() => {
-      root.render(
-        <MemoryRouter>
-          <VoiceSessionCard session={{ ...session, request_budget: budget, delegations: [task], ...update }} />
-        </MemoryRouter>,
-      )
-    })
-  }
-  renderWorkflow()
-  const background = container.querySelector('[aria-label="Background work"]')
-  expect(background?.textContent).toContain('Look up history')
-  expect(background?.textContent).toContain('Queued — may not have started; no verified result.')
-  expect(background?.textContent).not.toContain('Not an answer yet')
-  expect(background?.textContent).not.toContain('No background request submitted')
-  expect(container.querySelector('[aria-label="Durable background result"]')).toBeNull()
-  expect(background?.textContent).toContain('2 of 3 remaining')
-  expect(background?.textContent).toContain('A request is pending')
-  expect(background?.querySelector('a')).toBeNull()
-
-  renderWorkflow({ delegations: [{ ...task, status: 'delivered' }] })
-  expect(background?.textContent).toContain('Accepted by worker — execution not confirmed')
-  expect(background?.textContent).toContain('A request is pending')
-  expect(container.querySelector('[aria-label="Durable background result"]')).toBeNull()
-
-  renderWorkflow({
-    delegations: [{ ...task, status: 'answered', result: 'Verified stored answer' }],
-    request_budget: { ...budget, inflight: false },
-  })
-  expect(background?.textContent).not.toContain('A request is pending')
-  expect(background?.textContent).toContain('2 of 3 remaining')
-  expect(background?.querySelector('[aria-label="Durable background result"]')?.textContent).toBe(
-    'Verified stored answer',
-  )
-
-  renderWorkflow({
-    request_budget: { ...budget, used: 3, remaining: 0, request_ids: ['task-1', 'task-2', 'task-3'] },
-  })
-  expect(background?.textContent).toContain('0 of 3 remaining')
-  expect(background?.textContent).toContain('A request is pending')
-  expect(background?.textContent).toContain('Voice request allowance exhausted')
-  expect(background?.querySelector('a')?.getAttribute('href')).toBe('/s/chat-1')
-  expect(background?.querySelector('button')).toBeNull()
-})
 
 test('only an answered durable delegation exposes its result as background evidence', () => {
   act(() => {

@@ -19,18 +19,24 @@ UNKNOWN billing/allowance boundaries and a reusable owner/time-filtered
 
 ## Native interpreter cutover — offline draft, not deployed
 
-The interpreter/coordinator prototype replaces caption/VAD task assembly with supported
-**same-connection Responses delegation**. It does not repair or contain the deployed
-cap-three bridge. The previously observed release `7b4b852c` / image `322a747a` remains
-an unrepaired P1: synthetic replay of its exact served source mixes late earlier text
-into a later request. That is a demonstrated unsafe selection, not observed owner harm.
-PR #332 remains an unsafe draft; this implementation is based separately on `origin/main`.
+The interpreter/coordinator candidate replaces caption/VAD task assembly with supported
+**same-connection Responses delegation**. It has not repaired or contained the deployed
+client bridge, which remains unsafe for attribution. Fresh read-only Nov14 inspection found
+live source `c7c328f` / image `c8cb043b`, still client delegation/caption assembly,
+fixed 90s and cap3 with the old bounded-three approval. Prior exact-served-source
+synthetic replay demonstrated late-text contamination, not observed owner harm or
+incidence. PR #332 remains an unsafe draft; PR #335 is separate and not deployed.
 
 `GPTLiveModel(model="gpt-live-1", delegation="responses", responses_options=...)`
 exposes only `ergo_voice_intent` to managed backend `gpt-5.6-luna` (default tier,
 reasoning `none`, at most 1,024 output tokens per response). The normal owning bot
 still executes accepted work; the interpreter does not receive its action tools.
-One application provider socket and the original 90-second deadline are unchanged.
+One application provider socket is retained, with no SDK retries or automatic
+reconnect. The owner-requested native cutover removes the application maximum
+call duration as well as the cumulative intentional-request cap. This does not
+promise an unlimited provider connection: GPT-Live documents `expired` session
+closure and `expires_at`, but a numerical provider maximum has not been verified.
+See [provider lifecycle](https://developers.openai.com/api/docs/guides/live-conversations#usage-and-graceful-close).
 
 The coordinator first commits the exact raw envelope, then admits only a completed
 function item inside a successfully completed, identified response. It retains
@@ -53,14 +59,30 @@ do not create work. Corrections/cancellation after submission fail closed with n
 thread-control guidance; the prototype does not pretend it can safely stop or rewrite
 already accepted work. Function arguments are never action approval.
 
-With separately reviewed follow-up costs, native admission has **no cumulative
-intentional-request count cap**. Four in-flight requests provide backpressure; a new
-independent request need not wait for an earlier task's completion. A single-request
-cost grant is not silently widened. Owner/bot/thread access, normal engine/tools,
-costs, action approvals and async execution after End are retained. Exact raw evidence
-has explicit safety bounds: 64 KiB per event and 2 MiB per logical session; overflow
-fails closed without discarding earlier identities. The transient bridge queue holds
-at most 128 relevant envelopes; overload disables further admission on that connection.
+An exact scoped `unlimited_intentional_requests: true` grant, reviewed follow-up
+cost approval and a new approval reference permit **no cumulative intentional-request
+count cap**. Old `max_requests` policy is rejected, not silently widened. Four
+in-flight requests provide backpressure; another distinct request can start after
+capacity frees. A single-request cost grant is not widened. Owner/bot/thread
+access, normal engine/tools, costs, action approvals and async execution after End
+are retained. The native UI/admission path has no lifetime request counter.
+
+Indexed durable rows retain raw envelopes, identity conflicts and original receipts;
+neither session JSON nor each operation loads/rewrites the whole archive. Context
+queries only the 12 most recent intents. There is no 2MiB session-total cutoff:
+replay identities survive context eviction. Individual evidence is bounded at 64KiB
+per envelope and 256KiB per identity row, with bounded pending function arguments per
+response; oversized evidence rejects its own delegation, not later unrelated asks.
+The transient bridge queue and invocation caches are bounded at 128 entries; cache
+eviction is not deletion of durable replay authority.
+
+A bridge renews its 120-second liveness lease every 5 seconds. This reaps an
+abandoned worker, not a healthy long call; lease expiry is rechecked under the
+same row lock as ending the session. True provider/room/owner disconnect or explicit
+End still closes voice. Explicit standby releases provider resources, preserves
+the logical session indefinitely, and requires manual Resume; `bridge_started_at`
+is only the first-connection timestamp and never resets. There is no new inactivity
+timer, reconnect loop or financial ceiling.
 
 Native transport and scripted handlers prove source selection and lifecycle safety,
 not correct semantic interpretation of every utterance. No provider inference,
@@ -71,6 +93,14 @@ charges backend inference separately from `$0.05/min` GPT-Live duration; the for
 client-mode full-stack estimate below is historical and does not price this cutover.
 See `artifacts/voice-interpreter-20261114/` for the native replay, synthetic timing,
 actual disposable-session browser fixtures and cost evidence.
+
+**Release gates remain closed:** owner authorization removes both product limits,
+not the missing managed-model entitlement/cost contract or permission for paid tests.
+Before first native activation, establish the exact project/model entitlement,
+approved managed inference/continuation/input scope and LiveKit cost basis, then
+obtain the fresh announced quiet gate for source migration/policy rollout.
+PR #335 must not merge as a staging step: main publication auto-promotes.
+No production ConfigMap, schema, image, process or provider session was changed.
 
 
 ## Adapter and setup
@@ -285,34 +315,34 @@ real owner. Its mapping key is the exact launch-chat UUID; its value requires:
 | `bot` | Exact registered bot name already accessible to that owner. |
 | `normal_task_costs_approved` | Exactly `True`, separately authorizing existing normal-task execution costs rather than claiming the prototype's API-token price covers them. |
 | `approval_reference` | Nonempty reference to that reviewed authorization; recorded durably with the task. |
-| `max_requests` | Optional; defaults to `1`. Only `1` or the reviewed finite cap `3` is accepted. |
-| `followup_costs_approved` | Must be exactly `True` when `max_requests=3`; authorizes explicit sequential follow-up execution costs, not unlimited inference. |
-| `followup_approval_reference` | Separate nonempty reviewed continuation reference when `max_requests=3`. |
+| `unlimited_intentional_requests` | Optional boolean, default `false` (one original normal request). Exactly `true` opts the exact scope into native intentional follow-ups without a cumulative count cap. |
+| `followup_costs_approved` | Exactly `True` for uncapped follow-ups; does not approve actions or independently authorize managed interpreter generation. |
+| `followup_approval_reference` | New nonempty reviewed reference for the uncapped scope; the historical bounded-three reference must not be reused. |
+
+The retired `max_requests` field is an error. Update the exact durable infra-octo
+ConfigMap policy only in the separately authorized coordinated cutover; do not
+activate it against a caption-assembling bridge. No policy/config was applied here.
 
 Web and bridge must carry the same policy. Only a **new** owner-created voice
 session receives its exact-chat/owner/bot grant and authorization timestamp.
 Conversational restore state cannot inherit or mint one. The bridge rechecks
 the matching current policy and normal bot access before dispatch; revocation
 refuses new requests, not cancellation of already accepted normal work.
-No grant means the existing priced read-only path and its engine gate remain
-unchanged. No mandatory Send button or new callable GPT-Live tools are added.
+No grant means native task admission is unavailable; the native interpreter never
+falls back to the historical priced client/caption path. The internal read-only
+test path remains separately bounded and is not a voice product-limit substitute.
 
-An authorized model-selected client delegation enters the **existing exact
-thread's normal message queue**, with its authenticated user identity, normal
-engine/context/registered tools and approval semantics. It does not reroute the
-bot or broaden its allowed targets. The transport still has its original
-90-second wall-clock deadline. The default remains one root request; a separately
-reviewed exact scope can permit **three sequential execution attempts total**.
-Only one can be collecting, queued, delivered or awaiting approval at a time.
-Duplicate IDs cannot consume another slot or replay a write. Expired collections
-consume their attempt; reconnect/resume never resets allowance or deadline.
-The UI shows remaining allowance and offers explicit continuation in the owning
-text thread at exhaustion. Read-only status observation/result reading uses no
-execution slot and launches no inference. Each root and normally authorized child
-work remains governed by the bot's existing normal turn/task controls,
-**not** the 40,000/1,500-token API lookup estimate. Normal compaction,
-task tools and their downstream costs are therefore outside that experimental
-estimate; this is why an explicit separate cost-policy decision is required.
+A completed native request enters the **existing exact thread's normal message
+queue**, with its authenticated user identity, normal engine/context/registered
+tools and approval semantics. It does not reroute the bot or broaden targets.
+There is no application fixed call deadline and no cumulative request-count limit
+for the explicitly authorized follow-up scope. Four requests may be in flight,
+including queued or awaiting approval; a fifth waits for capacity, not a new call.
+Status/result reading does not create a task. Accepted work survives explicit
+End, true disconnect and explicit standby/resume. Duplicate native IDs preserve
+the original durable receipt; corrections cannot silently rewrite submitted work.
+Each root and normally authorized child remains governed by the bot's existing
+normal turn/task/cost controls, not the historical 40,000/1,500-token lookup estimate.
 The audited live Boundcorp bot has a normal **50-model-turn** limit; this is
 not the prototype's four-turn limit or a new financial ceiling. Lee approved
 normal originating-thread costs at **21:15:41 UTC**, but no real-owner normal
@@ -456,7 +486,13 @@ The default is **Stay connected**. **Standby while waiting** requests a pause; t
 
 The bridge confirms standby only after the provider session, HTTP client and room have closed and the request is still valid. If speech resumes before teardown commits, the bridge defers the request. Once irreversible teardown starts, the UI shows Disconnecting and warns that microphone input may become unavailable and speech may be cut off. If speech or transcript activity is detected during teardown, the session still enters resumable standby and records that the boundary audio is uncertain; it cannot establish how much speech, if any, was lost. The browser disconnects after confirmation. Already queued background work continues, and its IDs, results, bounded context and at-most-once announcement claims stay with the same logical session. **Resume** is manual; opening the panel does not wake a standby session. End remains terminal. Unexpected disconnects, errors and expiry end the session, not standby.
 
-The original `bridge_started_at` is never reset. The 90-second deadline is wall-clock time from the first bridge claim, including time in standby; resuming receives only the remaining time. An expired standby session is ended on the next access, and its durable work remains readable. Resume cannot acquire another live bridge concurrently, cannot reset the one-delegation limit or budget, and does not enable SDK/provider retries. Provider teardown and billing can outlast the local deadline, so this is not a billing ceiling.
+For this offline native candidate, `bridge_started_at` remains stable but no longer
+sets a call deadline. Healthy renewable leases survive beyond 90 seconds; standby
+does not age out. Resume cannot acquire another concurrent bridge, mint a new grant,
+erase replay evidence, or enable SDK/provider retries. Lease expiry detects an
+abandoned live/resuming worker only and is checked under lock before reaping.
+Explicit End and real disconnect remain terminal. No duration-based billing ceiling
+is claimed; provider close/finalization and already-active managed work may overhang.
 
 Session metadata exposes the observed standby and resume timestamps and last standby duration, when available. Bridge logs distinguish elapsed wall-clock time from provider-reported session usage seconds; missing provider usage remains unknown. Reconnect latency is wall-clock time from the resume request to the provider's `session.started` event, or unknown if that event is not observed; it is not first-audio or playback latency. These measurements do not establish input audio duration, silence savings, lost speech, playback or hearing. Finalized text, task references and results remain in Django history; the code does not store audio recordings. Standby is not inactivity detection, auto wake, browser wake detection or pre-roll: a disconnected microphone cannot be monitored by the server VAD.
 

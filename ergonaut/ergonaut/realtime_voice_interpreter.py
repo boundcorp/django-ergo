@@ -2,8 +2,8 @@
 
 The raw envelope commits before lifecycle processing. All lifecycle, argument and
 receipt changes share the session lock and the normal delegation transaction.
-The ledger is deliberately non-evicting: reaching a resource bound disables new
-admission rather than forgetting a replay identity.
+Indexed identity rows retain exact replay evidence without loading or rewriting
+the archive. Only the current envelope and twelve recent intents enter memory.
 """
 
 import copy
@@ -12,12 +12,12 @@ import json
 
 from django.db import transaction
 
-from ergonaut.apps.bots.models import RealtimeVoiceSession
+from ergonaut.apps.bots.models import RealtimeVoiceLedgerEntry, RealtimeVoiceSession
 from ergonaut.realtime_voice_execution import native_request_capacity
 
-STATE_KEY = "_voice_native"
-MAX_RAW_BYTES = 2 * 1024 * 1024
 MAX_EVENT_BYTES = 65536
+MAX_RECORD_BYTES = 4 * MAX_EVENT_BYTES
+MAX_RESPONSE_CALLS = 2
 MAX_CONTEXT_INTENTS = 12
 KINDS = {"new_request", "clarify", "correct", "cancel", "status", "continue"}
 ARG_KEYS = {"kind", "intent_id", "target_intent_id", "request_text", "clarification"}
@@ -32,34 +32,100 @@ def _identity(value):
     return isinstance(value, str) and 0 < len(value) <= 160 and value.strip() == value
 
 
+class _Records:
+    """Lazy identity lookups with one operation's mutable working set."""
+
+    def __init__(self, session, namespace):
+        self.session = session
+        self.namespace = namespace
+        self.loaded = {}
+        self.original = {}
+
+    def get(self, identity, default=None):
+        if identity is None:
+            return default
+        if identity not in self.loaded:
+            row = RealtimeVoiceLedgerEntry.objects.filter(
+                session=self.session,
+                namespace=self.namespace,
+                key_sha256=hashlib.sha256(identity.encode()).hexdigest(),
+            ).first()
+            if row is not None and row.identity != identity:
+                raise ValueError("Native ledger identity digest collision.")
+            self.loaded[identity] = row.data if row is not None else None
+            self.original[identity] = copy.deepcopy(self.loaded[identity])
+        value = self.loaded[identity]
+        return default if value is None else value
+
+    def __getitem__(self, identity):
+        value = self.get(identity)
+        if value is None:
+            raise KeyError(identity)
+        return value
+
+    def __setitem__(self, identity, value):
+        self.get(identity)
+        self.loaded[identity] = value
+
+    def flush(self):
+        for identity, data in self.loaded.items():
+            if data == self.original[identity]:
+                continue
+            if len(_encoded(data).encode()) > MAX_RECORD_BYTES:
+                raise ValueError("Native identity payload exceeds its individual evidence bound.")
+            pending = (
+                self.namespace == "delegations" and not data.get("conflict") and not data.get("initial_response_id")
+            ) or (
+                self.namespace == "responses"
+                and data.get("_active", False)
+                and (
+                    data["state"] == "open"
+                    or ((data.get("terminal") or {}).get("type") == "response.completed" and bool(data.get("calls")))
+                )
+            )
+            RealtimeVoiceLedgerEntry.objects.update_or_create(
+                session=self.session,
+                namespace=self.namespace,
+                key_sha256=hashlib.sha256(identity.encode()).hexdigest(),
+                defaults={"identity": identity, "data": data, "pending": pending},
+            )
+            self.original[identity] = copy.deepcopy(data)
+
+
+class _Ledger(dict):
+    def __init__(self, session):
+        super().__init__(
+            (namespace, _Records(session, namespace))
+            for namespace in ("responses", "active", "calls", "items", "intents", "delegations", "wire")
+        )
+
+    def flush(self):
+        for records in self.values():
+            records.flush()
+
+
 def _ledger(session):
-    return session.state.setdefault(
-        STATE_KEY,
-        {
-            "raw": [],
-            "bytes": 0,
-            "responses": {},
-            "active": {},
-            "calls": {},
-            "items": {},
-            "intents": {},
-            "intent_order": [],
-            "delegations": {},
-        },
+    if not hasattr(session, "_native_ledger"):
+        session._native_ledger = _Ledger(session)
+    return session._native_ledger
+
+
+def _recent_intents(session):
+    return list(
+        reversed(
+            list(
+                session.native_ledger.filter(namespace="intents")
+                .order_by("-id")
+                .values_list("identity", "data")[:MAX_CONTEXT_INTENTS]
+            )
+        )
     )
-
-
-def _save(session):
-    session.save(update_fields=["state"])
 
 
 def context_for_session(session):
     """Bounded authoritative task projection, never raw provider payloads."""
-    ledger = (session.state or {}).get(STATE_KEY, {})
-    # JSONB object key order is not chronological; only the durable array is.
-    intents = [
-        (intent_id, ledger["intents"][intent_id]) for intent_id in ledger.get("intent_order", [])[-MAX_CONTEXT_INTENTS:]
-    ]
+    _ledger(session).flush()
+    intents = _recent_intents(session)
     messages = {
         row.event_id: row.message
         for row in session.delegations.select_related("message").filter(
@@ -88,19 +154,11 @@ def context_for_session(session):
         capacity = native_request_capacity(session)
     except ValueError:
         capacity = {"authorized": False, "max_inflight": 4, "remaining": 0}
-    responses = ledger.get("responses", {})
-    interpretation_pending = any(
-        not record.get("conflict") and not record.get("initial_response_id")
-        for record in ledger.get("delegations", {}).values()
-    ) or any(
-        (response := responses.get(key, {})).get("state") == "open"
-        or ((response.get("terminal") or {}).get("type") == "response.completed" and bool(response.get("calls")))
-        for key in ledger.get("active", {}).values()
-    )
+    interpretation_pending = session.native_ledger.filter(pending=True).exists()
     return {
         "intents": projected,
         "capacity": capacity,
-        "blocked": ledger.get("blocked", ""),
+        "blocked": "",
         "interpretation_pending": interpretation_pending,
     }
 
@@ -119,10 +177,10 @@ def _result(session, status, receipts=None, explanation=""):
 
 
 def _live_error(session, claim_id):
-    from ergonaut.api.realtime_voice import deadline_expired, voice_allowed
+    from ergonaut.api.realtime_voice import bridge_lease_expired, voice_allowed
 
-    if session.status != "active" or deadline_expired(session):
-        return "Voice session ended or expired; no new work was admitted."
+    if session.status != "active" or bridge_lease_expired(session):
+        return "Voice session ended or its bridge disconnected; no new work was admitted."
     if not voice_allowed(session.user):
         return "Voice authorization is disabled; no new work was admitted."
     if session.bridge_claim_id and claim_id != session.bridge_claim_id:
@@ -154,75 +212,96 @@ def process_native_event(voice_id, event, *, claim_id=None):
             snapshot = inner.get("response")
             response_id = snapshot.get("id") if isinstance(snapshot, dict) else None
             response_id = response_id or inner.get("response_id")
-            scope = _encoded([claim_id, payload.get("delegation_id")])
+            response_id = response_id if _identity(response_id) else None
+            delegation_id = payload.get("delegation_id")
+            delegation_id = delegation_id if _identity(delegation_id) else None
+            scope = _encoded([claim_id, delegation_id])
             response_scope = (
-                _encoded([claim_id, payload.get("delegation_id"), response_id])
-                if response_id
-                else ledger["active"].get(scope)
+                _encoded([claim_id, delegation_id, response_id]) if response_id else ledger["active"].get(scope)
             )
-        existing = next(
-            (
-                i
-                for i, row in enumerate(ledger["raw"])
-                if row["fingerprint"] == fingerprint
-                and row["claim_id"] == claim_id
-                and row.get("response_scope") == response_scope
-            ),
-            None,
-        )
-        if existing is not None:
-            index = existing
-            cached = ledger["raw"][index].get("receipt")
+        raw_identity = _encoded([claim_id, response_scope, fingerprint])
+        raw_key = hashlib.sha256(raw_identity.encode()).hexdigest()
+        raw = RealtimeVoiceLedgerEntry.objects.filter(session=session, namespace="raw", key_sha256=raw_key).first()
+        if raw is not None:
+            if raw.identity != raw_identity:
+                raise ValueError("Native raw identity digest collision.")
+            cached = raw.data.get("receipt")
             if cached is not None:
                 return {**copy.deepcopy(cached), "context": context_for_session(session)}
         else:
-            size = len(encoded.encode())
-            if size > MAX_EVENT_BYTES or ledger["bytes"] + size > MAX_RAW_BYTES:
-                ledger["blocked"] = "Native evidence capacity exceeded; this call cannot admit further work."
-                # Never truncate a payload and later treat it as admission evidence.
-                ledger["overflow"] = {"sha256": fingerprint, "bytes": size, "claim_id": claim_id}
-                _save(session)
-                return _result(session, "rejected", explanation=ledger["blocked"])
             wire_id = payload.get("event_id")
-            if wire_id and any(
-                row["payload"].get("event_id") == wire_id and row["fingerprint"] != fingerprint for row in ledger["raw"]
-            ):
-                ledger["blocked"] = "Native wire event identity was reused with conflicting payloads."
-            index = len(ledger["raw"])
-            ledger["raw"].append(
-                {
-                    "payload": payload,
-                    "claim_id": claim_id,
-                    "response_scope": response_scope,
-                    "fingerprint": fingerprint,
-                    "receipt": None,
-                }
+            conflict = False
+            if _identity(wire_id):
+                previous = ledger["wire"].get(wire_id)
+                conflict = previous is not None and previous["fingerprint"] != fingerprint
+                if previous is None:
+                    ledger["wire"][wire_id] = {"fingerprint": fingerprint}
+            size = len(encoded.encode())
+            if size > MAX_EVENT_BYTES:
+                # Retain the identity and denial, not a truncated payload that
+                # might later be mistaken for complete admission evidence.
+                _invalidate_delegation(ledger, payload)
+                result = _result(session, "rejected", explanation="Native event exceeds the individual evidence bound.")
+                RealtimeVoiceLedgerEntry.objects.create(
+                    session=session,
+                    namespace="raw",
+                    key_sha256=raw_key,
+                    identity=raw_identity,
+                    data={
+                        "sha256": fingerprint,
+                        "bytes": size,
+                        "claim_id": claim_id,
+                        "receipt": {key: value for key, value in result.items() if key != "context"},
+                    },
+                )
+                return result
+            raw = RealtimeVoiceLedgerEntry.objects.create(
+                session=session,
+                namespace="raw",
+                key_sha256=raw_key,
+                identity=raw_identity,
+                data={"payload": payload, "claim_id": claim_id, "conflict": conflict, "receipt": None},
             )
-            ledger["bytes"] += size
-            _save(session)
+            ledger.flush()
+        raw_id = raw.pk
     # Separate durable transaction: a failed normal admission cannot erase raw evidence.
     with transaction.atomic(durable=True):
         session = RealtimeVoiceSession.objects.select_for_update().select_related("chat", "user").get(pk=voice_id)
         ledger = _ledger(session)
-        cached = ledger["raw"][index].get("receipt")
+        raw = RealtimeVoiceLedgerEntry.objects.get(pk=raw_id)
+        cached = raw.data.get("receipt")
         if cached is not None:
             return {**copy.deepcopy(cached), "context": context_for_session(session)}
-        result = _process(session, ledger, payload, claim_id)
-        # delegate() refreshes its own instance; preserve its state updates without
-        # replacing the lifecycle ledger this transaction currently owns.
-        latest = RealtimeVoiceSession.objects.get(pk=voice_id).state
-        session.state = {**latest, STATE_KEY: ledger}
-        # Context is a live projection, not replay identity. Avoid multiplying a
-        # full task snapshot by every raw streaming event in the durable ledger.
-        ledger["raw"][index]["receipt"] = copy.deepcopy(
-            {key: value for key, value in result.items() if key != "context"}
-        )
-        _save(session)
+        result = _process(session, ledger, payload, claim_id, wire_conflict=raw.data.get("conflict", False))
+        ledger.flush()
+        # Context is a live projection, not part of the immutable replay receipt.
+        raw.data["receipt"] = copy.deepcopy({key: value for key, value in result.items() if key != "context"})
+        if len(_encoded(raw.data).encode()) > MAX_RECORD_BYTES:
+            raise ValueError("Native receipt exceeds its individual evidence bound.")
+        raw.save(update_fields=["data"])
         return result
 
 
-def _process(session, ledger, envelope, claim_id):
-    error = ledger.get("blocked") or _live_error(session, claim_id)
+def _invalidate_delegation(ledger, envelope):
+    """Incomplete/conflicting evidence closes only its own native envelope."""
+    delegation_id = envelope.get("delegation_id")
+    if envelope["type"] == "session.delegation.created":
+        payload = envelope.get("delegation")
+        delegation_id = payload.get("id") if isinstance(payload, dict) else None
+    if _identity(delegation_id):
+        record = ledger["delegations"].get(delegation_id)
+        if record is None:
+            ledger["delegations"][delegation_id] = {"payload": None, "intent_id": None, "conflict": True}
+        else:
+            record["conflict"] = True
+
+
+def _process(session, ledger, envelope, claim_id, *, wire_conflict=False):
+    error = _live_error(session, claim_id)
+    if wire_conflict:
+        error = "Native wire event identity was reused with conflicting payloads."
+        _invalidate_delegation(ledger, envelope)
+        return _result(session, "rejected", explanation=error)
     if not _identity(envelope.get("event_id")):
         error = error or "Native envelope is missing a valid server event identity."
     if envelope["type"] == "session.delegation.created":
@@ -277,6 +356,7 @@ def _process(session, ledger, envelope, claim_id):
         previous = ledger["active"].get(scope)
         if previous and previous != response_key:
             interrupted = ledger["responses"][previous]
+            interrupted["_active"] = False
             if interrupted["state"] == "open":
                 interrupted["state"] = "interrupted"
                 interrupted["error"] = "A new response replaced an unfinished response."
@@ -293,6 +373,7 @@ def _process(session, ledger, envelope, claim_id):
             ledger["responses"][response_key] = response
         elif response["created"] != inner:
             response["error"] = "Conflicting response.created identity."
+        response["_active"] = True
         ledger["active"][scope] = response_key
         return _result(
             session, "rejected" if response.get("error") else "staged", explanation=response.get("error", "")
@@ -318,6 +399,14 @@ def _process(session, ledger, envelope, claim_id):
             "error": "Orphan native event without response.created; no work was admitted.",
         }
         ledger["responses"][response_key] = response
+        previous = ledger["active"].get(scope)
+        if previous and previous != response_key:
+            interrupted = ledger["responses"][previous]
+            interrupted["_active"] = False
+            if interrupted["state"] == "open":
+                interrupted["state"] = "interrupted"
+                interrupted["error"] = "An orphan response replaced an unfinished response."
+        response["_active"] = True
         ledger["active"][scope] = response_key
     if explicit_id and explicit_id != response["response_id"]:
         response["error"] = "Native response identity mismatch."
@@ -346,6 +435,11 @@ def _process(session, ledger, envelope, claim_id):
             response["error"] = "Conflicting function argument payload."
         elif response["state"] != "open" and old_item is None:
             response["error"] = "Function arrived after the response was closed."
+        elif old_item is None and (
+            len(response["calls"]) >= MAX_RESPONSE_CALLS
+            or len(_encoded(response["calls"]).encode()) + len(_encoded(item).encode()) > MAX_EVENT_BYTES
+        ):
+            response["error"] = "Native response has too many pending function arguments; no work was admitted."
         else:
             response["calls"][call_id] = copy.deepcopy(item)
         return _result(
@@ -446,7 +540,7 @@ def _admit(session, ledger, item, identity, error):
         )
         return receipt
     kind, target_id = args["kind"], args["target_intent_id"]
-    visible_ids = set(ledger.get("intent_order", [])[-MAX_CONTEXT_INTENTS:])
+    visible_ids = {intent_id for intent_id, _ in _recent_intents(session)}
     target = ledger["intents"].get(target_id) if target_id in visible_ids else None
     if kind != "new_request" and (kind != "clarify" or target_id is not None) and target is None:
         receipt.update(
@@ -511,5 +605,4 @@ def _admit(session, ledger, item, identity, error):
         "receipt": copy.deepcopy(receipt),
         "state": "awaiting_clarification" if kind == "clarify" else receipt["status"],
     }
-    ledger.setdefault("intent_order", []).append(args["intent_id"])
     return receipt

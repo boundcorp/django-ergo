@@ -890,11 +890,9 @@ export type RealtimeVoiceSession = {
   ended_at?: string | null
   request_budget?: {
     limit: number | null
-    used: number
     remaining: number | null
     collecting: boolean
     inflight: boolean
-    request_ids: string[]
     inflight_limit?: number
     inflight_count?: number
   }
