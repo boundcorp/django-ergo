@@ -768,6 +768,49 @@ def test_ledger_denies_inaccessible_and_unknown_bots_even_for_owned_rows(client,
     assert client.get("/api/costs/ledger?bot=nonexistent").status_code == 404
 
 
+@pytest.mark.django_db(transaction=True)
+def test_hooked_inference_rows_respect_owner_and_bot_access(client, monkeypatch, settings):
+    from decimal import Decimal
+    from types import SimpleNamespace
+
+    from django_ergo.conversation.inference_ledger import _finish, _open
+    from django_ergo.conversation.models import InferenceOutcome
+
+    settings.DJANGO_ERGO = {**getattr(settings, "DJANGO_ERGO", {}), "INFERENCE_COST_LEDGER_ENABLED": True}
+    ann = get_user_model().objects.create_user("ann", password="pw")
+    bob = get_user_model().objects.create_user("bob", password="pw")
+    bots = [
+        SimpleNamespace(name="public", definition=SimpleNamespace(allowed_users=[])),
+        SimpleNamespace(name="private", definition=SimpleNamespace(allowed_users=["bob"])),
+    ]
+    monkeypatch.setattr("ergonaut.api.costs.registry", lambda: bots)
+    pool = SimpleNamespace(provider="fireworks", name="private", daily_usd_cap=None)
+    for owner, bot, amount in [(ann, "public", "2"), (ann, "private", "100"), (bob, "public", "1000")]:
+        grant = SimpleNamespace(
+            pool=pool,
+            model_id="accounts/fireworks/models/deepseek-v4p1-flash-1017",
+            session_id=None,
+            user_id=owner.pk,
+            bot=bot,
+            selector="private",
+            purpose="chat",
+        )
+        entry = _open(grant, {"max_tokens": 100}, 1, None)
+        _finish(
+            entry.pk,
+            outcome=InferenceOutcome.OK,
+            cost_status="priced",
+            cost_usd=Decimal(amount),
+            finished_at=timezone.now(),
+        )
+    client.post("/api/auth/login", json.dumps({"username": "ann", "password": "pw"}), content_type="application/json")
+    response = client.get("/api/costs/ledger")
+    rows = {bucket["kind"]: bucket for bucket in response.json()["buckets"]}
+    assert Decimal(rows["estimate"]["known_amount"]) == Decimal("2")
+    assert rows["estimate"]["operation_count"] == 1
+    assert client.get("/api/costs/ledger?bot=private").status_code == 404
+
+
 @pytest.mark.django_db
 def test_ledger_window_excludes_rows_after_supersession_outside_window(client, lee):
     now = timezone.now()

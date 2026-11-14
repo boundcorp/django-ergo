@@ -522,6 +522,8 @@ const SPEND_KINDS = new Set(['final', 'provider_reported', 'estimate', 'unknown'
 
 const COVERAGE_LABEL: Record<string, string> = {
   adapter_callable_not_wired: 'Adapter exists, not wired',
+  automatic_private_inference_opt_in: 'Private inference enabled for new attempts',
+  automatic_private_inference_disabled: 'Private inference disabled for new attempts',
   aggregate_only: 'Aggregate only',
   not_integrated: 'Not integrated',
   external_unknown: 'External, unknown billing',
@@ -537,7 +539,7 @@ export function LedgerPanel({ ledger }: { ledger: Ledger }) {
       <h2 className="text-sm font-semibold">Cost ledger (passive, partial)</h2>
       {!buckets.length ? (
         <p className="mt-2 text-sm text-muted">
-          Nothing recorded in this window. That is not zero spend: no source writes to the ledger automatically.
+          Nothing recorded in this window. That is not zero spend; ledger coverage is incomplete.
         </p>
       ) : (
         <div className="mt-2 grid grid-cols-1 gap-px overflow-hidden rounded-card border border-stroke bg-stroke sm:grid-cols-2 lg:grid-cols-3">
@@ -566,8 +568,10 @@ export function LedgerPanel({ ledger }: { ledger: Ledger }) {
       </p>
       <details className="mt-2 text-xs">
         <summary className="cursor-pointer text-muted">
-          Coverage: live ingestion is off and this list is not complete
+          Coverage: private inference enrollment is {ledger.coverage.live_ingestion ? 'on' : 'off'}; coverage is
+          incomplete
         </summary>
+        <p className="mt-2 text-muted">{ledger.coverage.note}</p>
         <div className="mt-2 overflow-x-auto">
           <table className="w-full min-w-[40rem] text-left">
             <thead className="text-muted">

@@ -1180,6 +1180,8 @@ class InferenceRequest(TimeStampedMixin):
     )
     error = models.TextField(blank=True, default="")
     finished_at = models.DateTimeField(null=True, blank=True)
+    # Empty means not enrolled; pending is durable accounting work, not provider work.
+    cost_ledger_state = models.CharField(max_length=16, default="", db_index=True)
 
     class Meta:
         ordering = ["created_at"]
