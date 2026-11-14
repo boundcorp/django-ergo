@@ -210,6 +210,11 @@ Migration `0047_recurring_wakes` adds three scheduler tables and nullable
 with no data backfill. Older code ignores these additions. No production schema
 or runtime flag was changed during validation.
 
+Concurrent private-inference accounting PR #337 also added a migration numbered
+`0047`. The no-operation `0048_merge_recurring_wakes_inference_costs` joins both
+additive branches; it adds no schema operation, data rewrite or runtime flag.
+Deploy from a revision containing this merge migration so Django has one leaf.
+
 Normal reviewed merge and automatic deployment are authorized under the standing
 Ergonaut workflow, after independent meaningful review and green CI. This includes
 the additive migration run by the existing web init container; there is no extra
