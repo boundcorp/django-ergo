@@ -1007,10 +1007,11 @@ numbers. A budget that can't be read, or whose start window passed while the
 chat was busy, fails the message ("Not run: ...") rather than running it
 unbudgeted. The realtime voice prototype is the user:
 [realtime-voice.md](realtime-voice.md) has the limits table and conditional
-cost estimate, not a provider-billing ceiling. Its client-delegation voice
-adapter has no function tools; provider signals open a pending request that
-is queued after a detected speech boundary, pause grace and transcript drain.
-This is not a guarantee that speech or transcription is complete.
+cost estimate, not a provider-billing ceiling. Its offline native interpreter uses
+same-connection GPT-Live Responses delegation and one narrow `ergo_voice_intent`
+function. Only completed native arguments can become task text; display captions
+and VAD are never assembled into requests. The deployed client bridge remains
+unsafe for cross-turn attribution; the prototype is not containment or a rollout.
 The session card distinguishes generated speech from
 durable submitted/queued/answered/failed work and explicitly reports when
 no background request or verified history result exists.
@@ -1032,14 +1033,17 @@ normal work uses durable provider-invocation claims; an uncertain external write
 is not automatically repeated. Causal thread updates retain the original voice
 delegation ID, including across reconnect and after End. No live policy is enabled
 by this source change; ordinary non-voice turns and budgeted-turn guards are unchanged.
-The normal grant defaults to one request. An exact scope may explicitly approve
-`max_requests: 3` with `followup_costs_approved: true` and a separate
-`followup_approval_reference`: three sequential execution attempts per logical
-call, never parallel roots, unlimited inference or increased provider duration.
-Only fresh sessions receive changed grants. Expired attempts count; reconnect
-cannot reset allowance or the original 90-second deadline. Status observation
-and persisted-result reading use no execution slot or new inference; the UI
-shows remaining allowance and an owning-text-thread continuation at exhaustion.
+The durable normal grant still requires reviewed costs. For native interpretation,
+separately approved follow-up costs remove the cumulative intentional-request cap:
+four in-flight tasks provide backpressure, not a job-completion lock. An original
+single-request grant cannot silently acquire more cost authority. Exact envelope
+identity/payload is committed before admission; replay returns the original receipt.
+Clarification, status, continuation and reading results start no new work. Known
+corrections/cancellation that cannot safely change submitted work are refused with
+normal thread-control guidance. Unknown or evicted referents clarify rather than
+inventing a target. Native model arguments are not action approval or semantic proof.
+Only fresh sessions receive changed grants; reconnect never resets the 90-second
+deadline. See the native cutover section for bounded context and evidence limits.
 Handler acceptance, result persistence and an announcement claim remain distinct
 from actual model execution/consumption, playback and physical hearing.
 See the [current release and capability evidence](realtime-voice-causal-review.md#current-release-reconciliation--2026-11-12)

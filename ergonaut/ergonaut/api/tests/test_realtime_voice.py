@@ -254,46 +254,6 @@ def test_concurrent_delegations_create_one_message(voice_setup, settings):
     assert ThreadMessage.objects.count() == 1
 
 
-@pytest.mark.parametrize("ending", ["cancel", "expire", "end", "bridge_shutdown"])
-def test_pending_request_fails_closed(voice_setup, settings, ending):
-    from django.utils import timezone
-
-    _, client, chat = voice_setup
-    settings.REALTIME_VOICE_DELEGATION_BUDGET = BUDGET
-    voice, url = create(client, chat)
-    realtime_voice.begin_pending(voice["id"], "request", {"segment": "partial"})
-    if ending == "expire":
-        from ergonaut.apps.bots.models import RealtimeVoiceSession
-
-        row = RealtimeVoiceSession.objects.get(pk=voice["id"])
-        row.state["pending_delegation"]["expires_at"] = (timezone.now() - timedelta(seconds=1)).isoformat()
-        row.save(update_fields=["state"])
-        assert client.get(url).json()["state"]["pending_delegation"]["status"] == "expired"
-    elif ending == "end":
-        assert post(client, url + "/end", {}).status_code == 200
-    else:
-        realtime_voice.close_pending(voice["id"], "request")
-    with pytest.raises(ValueError, match="expired or unavailable"):
-        realtime_voice.resolve_pending(voice["id"], "request", "Search history")
-    assert not ThreadMessage.objects.exists()
-
-
-def test_only_server_recorded_live_signal_can_submit_once(voice_setup, settings):
-    _, client, chat = voice_setup
-    settings.REALTIME_VOICE_DELEGATION_BUDGET = BUDGET
-    voice, url = create(client, chat)
-    text = "Search history; do not claim success early."
-    with pytest.raises(ValueError, match="expired or unavailable"):
-        realtime_voice.resolve_pending(voice["id"], "request", text)
-    realtime_voice.begin_pending(voice["id"], "request", {})
-    assert post(client, url + "/confirm-delegation", {"event_id": "request", "text": text}).status_code == 404
-    with patch("django_ergo.bots.messaging.dispatch"):
-        realtime_voice.resolve_pending(voice["id"], "request", text)
-        with pytest.raises(ValueError, match="expired or unavailable"):
-            realtime_voice.resolve_pending(voice["id"], "request", text)
-    assert ThreadMessage.objects.count() == 1
-
-
 def test_standby_is_flagged_owner_scoped_and_requires_confirmed_close(voice_setup, settings, django_user_model):
     user, client, chat = voice_setup
     voice, url = create(client, chat)
