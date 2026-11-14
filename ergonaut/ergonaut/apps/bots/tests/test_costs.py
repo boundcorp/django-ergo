@@ -3,6 +3,7 @@ from datetime import timedelta
 
 import pytest
 from django.contrib.auth import get_user_model
+from django.test import Client
 from django.utils import timezone
 from django_ergo.conversation.models import AgentUsage, ConversationSession, StructuredCall, Worker
 
@@ -676,3 +677,107 @@ def test_costs_window_normalizes_non_utc_now_and_serializes_schema(client, lee, 
     assert data["until"] == now.astimezone(UTC).isoformat()
     assert [day["date"] for day in data["by_day"]] == ["2026-11-13", "2026-11-14"]
     assert data["estimate"]["bot"]["rows"] == 0
+
+
+def _ledger_row(owner, key, kind, amount, *, bot="kitchen", currency="USD", at=None, **extra):
+    from decimal import Decimal
+
+    from django_ergo.costs.ledger import record_observation
+    from django_ergo.costs.types import CostKind, ObservationSpec, OperationSpec
+
+    return record_observation(
+        actor=owner,
+        operation=OperationSpec("p", "acct", key, currency, bot_name=bot),
+        observation=ObservationSpec(
+            "s",
+            f"{key}-{kind}",
+            CostKind(kind),
+            extra.pop("revision", 1),
+            amount=None if amount is None else Decimal(amount),
+            occurred_at=at or timezone.now(),
+            **extra,
+        ),
+    )
+
+
+@pytest.mark.django_db
+def test_ledger_projection_is_owner_scoped_bot_filtered_and_keeps_unknown_null(client, monkeypatch):
+    from types import SimpleNamespace
+
+    bots = [SimpleNamespace(name=name, definition=SimpleNamespace(allowed_users=[])) for name in ("kitchen", "ads")]
+    monkeypatch.setattr("ergonaut.api.costs.registry", lambda: bots)
+    User = get_user_model()
+    ann = User.objects.create_user("ann", password="pw")
+    bob = User.objects.create_user("bob", password="pw")
+    _ledger_row(ann, "a1", "estimate", "1.5")
+    _ledger_row(ann, "a2", "unknown", None, currency="CREDITS", bot="ads")
+    _ledger_row(ann, "a3", "reservation", "9", bot="ads")
+    _ledger_row(bob, "b1", "estimate", "100")
+    client.post("/api/auth/login", json.dumps({"username": "ann", "password": "pw"}), content_type="application/json")
+    data = client.get("/api/costs/ledger?days=7").json()
+    rows = {(b["kind"], b["currency"]): b for b in data["buckets"]}
+    assert rows[("estimate", "USD")]["known_amount"] == "1.5"  # Bob's 100 is invisible
+    assert rows[("unknown", "CREDITS")]["known_amount"] is None
+    assert rows[("unknown", "CREDITS")]["unknown_count"] == 1
+    assert rows[("reservation", "USD")]["known_amount"] == "9"
+    assert data["coverage"]["live_ingestion"] is False and data["coverage"]["complete"] is False
+    only_ads = client.get("/api/costs/ledger?bot=ads").json()
+    assert {(b["kind"], b["currency"]) for b in only_ads["buckets"]} == {
+        ("unknown", "CREDITS"),
+        ("reservation", "USD"),
+    }
+
+
+@pytest.mark.django_db
+def test_ledger_projection_requires_authentication_and_superuser_sees_all(client, lee):
+    assert Client().get("/api/costs/ledger").status_code == 401
+    other = get_user_model().objects.create_user("zed", password="pw")
+    _ledger_row(other, "z1", "estimate", "2")
+    _ledger_row(lee, "l1", "estimate", "3")
+    (bucket,) = client.get("/api/costs/ledger").json()["buckets"]
+    assert bucket["known_amount"] == "5"
+
+
+@pytest.mark.django_db
+def test_ledger_denies_inaccessible_and_unknown_bots_even_for_owned_rows(client, monkeypatch):
+    from types import SimpleNamespace
+
+    User = get_user_model()
+    ann = User.objects.create_user("ann", password="pw")
+    bob = User.objects.create_user("bob", password="pw")
+    bots = [
+        SimpleNamespace(name="public", definition=SimpleNamespace(allowed_users=[])),
+        SimpleNamespace(name="shared", definition=SimpleNamespace(allowed_users=["ann"])),
+        SimpleNamespace(name="private", definition=SimpleNamespace(allowed_users=["bob"])),
+    ]
+    monkeypatch.setattr("ergonaut.api.costs.registry", lambda: bots)
+    _ledger_row(ann, "public", "estimate", "2", bot="public")
+    _ledger_row(ann, "shared", "estimate", "3", bot="shared")
+    _ledger_row(ann, "private", "estimate", "100", bot="private")
+    _ledger_row(ann, "removed", "estimate", "1000", bot="removed")
+    _ledger_row(bob, "other", "estimate", "10000", bot="public")
+    client.post("/api/auth/login", json.dumps({"username": "ann", "password": "pw"}), content_type="application/json")
+
+    (bucket,) = client.get("/api/costs/ledger").json()["buckets"]
+    assert bucket["known_amount"] == "5"
+    assert bucket["operation_count"] == 2
+    (bucket,) = client.get("/api/costs/ledger?bot=public").json()["buckets"]
+    assert bucket["known_amount"] == "2"
+    assert client.get("/api/costs/ledger?bot=private").status_code == 404
+    assert client.get("/api/costs/ledger?bot=removed").status_code == 404
+    assert client.get("/api/costs/ledger?bot=nonexistent").status_code == 404
+
+
+@pytest.mark.django_db
+def test_ledger_window_excludes_rows_after_supersession_outside_window(client, lee):
+    now = timezone.now()
+    _ledger_row(lee, "old-final", "estimate", "1", at=now)
+    _ledger_row(lee, "old-final", "final", "5", at=now - timedelta(days=60), revision=2)
+    _ledger_row(lee, "future-final", "estimate", "2", at=now)
+    _ledger_row(lee, "future-final", "final", "6", at=now + timedelta(days=1), revision=2)
+    _ledger_row(lee, "in-window", "estimate", "3", at=now)
+    _ledger_row(lee, "in-window", "final", "7", at=now, revision=2)
+    (bucket,) = client.get("/api/costs/ledger?days=7").json()["buckets"]
+    assert bucket["kind"] == "final"
+    assert bucket["known_amount"] == "7"
+    assert bucket["operation_count"] == 1

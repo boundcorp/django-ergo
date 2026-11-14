@@ -2,8 +2,8 @@ import { describe, expect, test } from 'bun:test'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router-dom'
-import type { AgentUsage, CostBucket, Costs, EstimateScope } from '../api'
-import { CostsBody, Estimate, Summary, itemsFor, projectItems } from './Costs'
+import type { AgentUsage, CostBucket, Costs, EstimateScope, Ledger } from '../api'
+import { CostsBody, Estimate, LedgerPanel, Summary, itemsFor, projectItems } from './Costs'
 
 const bucket = (name: string, calls = 1): CostBucket => ({
   name,
@@ -231,5 +231,55 @@ describe('List-price estimate', () => {
     expect(html).toContain('Lifetime totals of rows active in the window, 2026-10-01 to 2026-11-13')
     expect(html).toContain('1 began earlier (4k tokens)')
     expect(html.match(/Lifetime totals/g)?.length).toBe(2)
+  })
+})
+
+describe('ledger panel', () => {
+  const base: Ledger = {
+    days: 7,
+    since: '2026-11-07T00:00:00+00:00',
+    until: '2026-11-13T12:00:00+00:00',
+    timezone: 'UTC',
+    bot: '',
+    basis: 'One status per operation.',
+    buckets: [],
+    coverage: {
+      live_ingestion: false,
+      complete: false,
+      note: '',
+      sources: [
+        {
+          source: 'ads_mediagen_central',
+          status: 'not_integrated',
+          granularity: 'per operation',
+          uncertainty: 'central budget is the authority',
+          duplicate_rule: 'link, do not re-bill',
+        },
+      ],
+    },
+  }
+  const bucket = { known_count: 0, unknown_count: 0, operation_count: 1, partial_period_count: 0, undated_count: 0 }
+  const render = (ledger: Ledger) => renderToStaticMarkup(createElement(LedgerPanel, { ledger }))
+
+  test('an empty ledger is not zero spend and coverage is explicit', () => {
+    const html = render(base)
+    expect(html).toContain('not zero spend')
+    expect(html).toContain('Not integrated')
+    expect(html).not.toContain('$0')
+  })
+
+  test('unknown stays unknown, currencies stay apart, reservations are not spend', () => {
+    const html = render({
+      ...base,
+      buckets: [
+        { ...bucket, kind: 'unknown', currency: 'USD', known_amount: null, unknown_count: 1 },
+        { ...bucket, kind: 'estimate', currency: 'CREDITS', known_amount: '2.5', known_count: 1 },
+        { ...bucket, kind: 'reservation', currency: 'USD', known_amount: '1.5', known_count: 1 },
+      ],
+    })
+    expect(html).toContain('Unknown')
+    expect(html).toContain('2.5 CREDITS')
+    expect(html).toContain('1.5 USD')
+    expect(html).toContain('not added to spend')
   })
 })
