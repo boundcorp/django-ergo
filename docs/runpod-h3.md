@@ -1,5 +1,95 @@
 # Frozen MiniMax H3 six-shot worker
 
+## Parked backup: operator runbook (2026-11-14)
+
+Lee parked all native and serverless RunPod generation at 01:24 on November 14;
+Ryan is primary. RunPod is backup only, **not an automatic fallback**. Older
+launch plans and amounts below are historical evidence, not authorization.
+Do not create, retry, benchmark, build, enable admission, or spend remaining
+budget without explicit new owner approval covering scope, duration, budget and
+teardown. The host Docker/BuildKit build hold remains in effect; neither a
+backup designation nor this document grants build or deploy clearance.
+
+### Preservation and current safety state
+
+- The server-only policy is `/home/dev/.local/share/ergonaut/runpod/accounts.json`,
+  keyed by `gpu_jobs`; on 2026-11-14 at 01:28 UTC `enabled` was false.
+  The key includes `allowed_bots`, `allowed_users`, `api_key_env`,
+  `ssh_private_key_file`, `ledger_root`, concurrency/rental/budget limits,
+  `prior_committed_usd`, `profiles`, and `reconciled_costs`. This is the actual
+  JSON schema, not an `accounts` array. Preserve it, the financial entries, the
+  shared REST budget, all job rows and all rental ledgers; never print secrets.
+- At 01:28 UTC authenticated native checks returned Pods `[]`, exact prior Pod
+  `zl0imr42s2n63n` absent, network volumes `[]` with no next page, and account
+  `currentSpendPerHr=0`. The independently supervised `runpod-maintenance`
+  deployment was 1/1, and its ledger heartbeat was about 55 seconds old with
+  no error. The spend value is account-wide, not a final invoice. Serverless
+  endpoints and templates are reconciled separately by their owner.
+- Leave the independent cleaner running even with admission disabled. If an
+  unexpected resource appears, identify the account and establish ownership from
+  the immutable request and ledger first; preserve evidence and terminate only
+  owned resources. Do not touch unrelated resources. Use the shared per-key
+  REST budget and its cleanup reserve; minimize authenticated reads.
+- [PR #326](https://github.com/boundcorp/django-ergo/pull/326) is open, not
+  merged, at `b8cf4045ca8b08c30ec4ea04f159f781faa05fbd`; its recorded checks
+  passed. It fixes maintenance mistaking a queued poll or a long current step
+  for a lost Worker. Do not merge it while the build hold applies.
+- The successful native MS-01 observation took 975.6 seconds from create to
+  READY and 694.9 seconds to generate five seconds of video. Poll/controller
+  liveness is not inference progress; the six-shot batch would exceed the
+  one-hour hard deadline at that observed rate. Never extend deadlines or assume
+  the incomplete 29-second comparison exists.
+
+### Image, source and retained evidence
+
+- Corrected runtime:
+  `ghcr.io/boundcorp/ergo-h3-runtime@sha256:04b69208ac477452cf982b17e3e1eaacc2e84bf9cd824923f2c92fca472b51d9`.
+  The thin `examples/runpod-h3/Dockerfile.python-dev` layer adds pinned
+  `python3.12-dev` and `libpython3.12-dev` over audited base
+  `ghcr.io/boundcorp/ergo-h3-runtime@sha256:7b08f5d6b56988afeab528c9524ded9052a6739df0899768294134afe1453f8b`.
+  Source recipe and launcher are `examples/runpod-h3/Dockerfile` and
+  `src/django_ergo/plugins/runpod/h3_launcher.py`; SGLang is pinned below.
+  The build context and logs are in `runpod-experiment-queue/.worktrees/`
+  `h3-build-ctx-d6f69dc4172f-*`, and the observed 236-package freeze is
+  `h3-environment.txt` (SHA256 `b546fe85f9f274da85b6104903f0e873076d66edc124ee6517aabd31253a3574`).
+  It is an observed freeze, **not a transitive lockfile**; rebuilding may resolve
+  differently and is not authorized by this runbook.
+- `runpod-stock-fallback/.worktrees/h3-run/REPORT.md` describes the attempts,
+  receipts, diagnostics and `clips/MS-01-v1.{native,conformed}.mp4` plus contact
+  sheet. `runpod-stock-fallback/.worktrees/h3-image/` contains image proof and
+  audit evidence. These paths are under `/home/dev/orca/workspaces/django-ergo/`;
+  `.worktrees` is ignored by Git, so preserve it and durable ledger exports.
+- `runpod-experiment-queue/.worktrees/production-input/` holds both approved
+  source parts and validation. Their concatenated SHA256 is
+  `ca4adf0852b44eb7b88300e73ffd4a37afb0c614dbc29d2760afa191d9f00efe`;
+  approved audio SHA256 is
+  `a6656bd050cc85869b81924d146cf35a97e7fa3affb537bc802ab5e0277b0536`.
+  Preserve inputs, ordered manifests, keyframes, audio, clips and diagnostic
+  exports; do not confuse them with disposable model downloads.
+- The portable audited image archive
+  `runpod-experiment-queue/.worktrees/h3-image-2511743-config-74ae80e6.tar`
+  has logical size 22,141,526,528 bytes and recorded SHA256
+  `c880edf1829551be5a24768b0387a0b4ca2cc7872b7d667d5b0cc19140885050`.
+  It was explicitly preserved by the earlier handoff and is referenced by the
+  publication audit; retain it despite published copies until that preservation
+  ambiguity is resolved. No shared Docker image, volume, BuildKit cache or
+  migration/rollback data may be removed.
+
+### Financial reconciliation and reactivation
+
+Native cumulative cost is estimated at $3.42, including $1.98 estimated against
+the additional $10 envelope. Serverless v2 posted $1.25 against that envelope:
+$6.77 remains unreserved, not authorized for spending. Earlier serverless v1
+$0.90094 is outside that envelope. Estimates and prior reservations are not
+invoices; reconcile final provider billing before treating any amount as final.
+
+For any future reactivation, first obtain explicit owner approval and a fresh
+budget; reconcile provider inventory, invoices and existing commitments; verify
+the independent cleaner and policy/ledger state; review PR #326 and actual build
+hold/deployment status; validate immutable inputs, image digest and achievable
+deadline. Only then may an authorized operator change admission for the approved
+scope. Do not automate a switch from Ryan to RunPod.
+
 The native hosted integration is the [RunPod plugin](runpod.md), whose real
 `runpod:watch` Worker owns polling and whose independent Ergonaut maintenance
 consumer owns cleanup. This guide also retains the standalone validation/operator
