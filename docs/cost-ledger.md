@@ -2,9 +2,9 @@
 
 ## Decision and boundaries
 
-The ledger is a passive, owner-scoped accounting observation store, not a spend
+The ledger is an owner-scoped accounting observation store, not a spend
 permission system. No provider calls, financial dispatch/retries, credentials,
-automatic ingestion/backfill, rate discovery, or new budget enforcement run from it. Existing private
+historical ingestion/backfill, rate discovery, or new budget enforcement run from it. Existing private
 inference, Storytime central Ads, and native RunPod authorities remain authoritative.
 An estimate is never an invoice; reservation/release is never a charge. Unknown is
 NULL, not zero. Currency is explicit; there is no implicit FX or pooled cap.
@@ -142,12 +142,11 @@ No paid/provider probes or historical data are used.
 
 ## Adapter coverage and non-duplication
 
-No adapters are instrumented by this core slice; every row below is a follow-on
-contract, not evidence of live coverage. No historical import is authorized.
+Coverage varies by source and configuration; no historical import is authorized.
 
 | Source | Canonical identity and mapping | Coverage / authority |
 | --- | --- | --- |
-| InferenceRequest | one operation per request UUID; attempt UUID source event; reserved_usd is reservation; cost_usd derived from rates is estimate, never final | Follow-on adapter; existing inference admission unchanged |
+| InferenceRequest | one operation per request UUID; attempt UUID source event; reserved_usd is reservation; cost_usd derived from rates is estimate, never final | Private pool attempt hooks are opt-in; existing inference admission unchanged |
 | StructuredCall / AgentUsage | aggregate/cumulative projections, references only; do not ingest alongside constituent requests as new costs | Unsupported charge sources |
 | AgentUsageEvent / native CLI | canonical native request/delta key, not transcript/cumulative replay; API-equivalent and subscription funding explicitly distinct | Follow-on codex_cli owner; no chat extraction |
 | Native RunPod | provider/account/resource type/provider resource ID; native job UUID, worker UUID, attempt/create-intent references; component/resource-period economic key | Follow-on RunPod owner; durable rental ledger authoritative |
@@ -199,9 +198,8 @@ also smoke-checked.
 
 ## Adoption slice: projection, adapters and coverage (stacked)
 
-Stacked on PR328 (`c8e71d9`, ledger core) and PR323 (`5cd0ae1`, Costs estimate
-dashboard); both stay independent PRs, this slice only merges after them. Nothing
-here is scheduled, auto-ingested, backfilled or wired into a live code path.
+The following projection and adapters remain distinct from existing spend authorities.
+Automatic private inference accounting is opt-in; nothing is backfilled.
 
 - `GET /api/costs/ledger?days=&bot=` (Ergonaut) returns `summarize_costs` for the
   authenticated user and registered bots they may use (superusers see every owner),
@@ -238,10 +236,29 @@ here is scheduled, auto-ingested, backfilled or wired into a live code path.
   Conflicting owner/bot attribution is rejected, not reassigned. Stop, delete,
   cleanup and the REST request budget are not money evidence. Does not touch
   lifecycle, budget or `native.py`.
-- `django_ergo.costs.coverage.coverage_manifest()` declares per-source status
-  (adapter callable but not wired, aggregate only, not integrated, external unknown,
-  unsupported). It is served with the projection and never claims complete.
+- `django_ergo.costs.coverage.coverage_manifest()` reports the private inference
+  hook's current configured state; all coverage is incomplete.
 
-Remaining gaps: wiring adapters into inference/RunPod flows (separate review),
-mapping the rental `Experiment` row to `record_component` evidence, native CLI
-per-request keys, Ads/MediaSpend, Gemini, MiniMax/Sume/HeyGen/Grok, Meta delivery.
+### Private inference opt-in and recovery
+
+Set `DJANGO_ERGO["INFERENCE_COST_LEDGER_ENABLED"] = True` to enroll new
+private-pool `InferenceRequest` attempts. The default is false. This covers only
+the existing private inference attempt lifecycle, not other API engines, native
+CLI, subscriptions or arbitrary bot tools. Enrolled attempts remain enrolled if
+the flag is disabled while in flight. No existing rows are backfilled.
+
+Each enrolled admission/outcome transition commits a durable pending marker with
+the source row. After commit, the hook writes observations under a row lock and
+clears the marker atomically. Accounting exceptions log only the request UUID and
+exception class, leave the marker pending, and never cause provider dispatch or
+replay. A process crash may also leave pending work; monitor pending rows and logs.
+Run `python manage.py reconcile_inference_costs --batch-size 100` to retry a
+bounded batch of accounting only, or `--request-id UUID` for a specific pending
+row. A nonzero exit indicates failures; repair attribution or source data before
+retrying. Permanently failing oldest rows can occupy a batch, so inspect them
+and target later pending UUIDs explicitly. This is operator-driven, not scheduled.
+Both pending and recorded states are local accounting state, not billing proof.
+
+Remaining gaps include other API engines, RunPod lifecycle, rental `Experiment`
+mapping, native CLI per-request keys, Ads/MediaSpend, Gemini, MiniMax/Sume/HeyGen/Grok,
+and Meta delivery.

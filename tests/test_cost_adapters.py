@@ -420,7 +420,7 @@ def test_coverage_manifest_never_claims_live_or_complete():
     manifest = coverage_manifest()
     assert manifest["live_ingestion"] is False and manifest["complete"] is False
     status = {s["source"]: s["status"] for s in manifest["sources"]}
-    assert status["llm_inference_request"] == "adapter_callable_not_wired"
+    assert status["llm_inference_request"] == "automatic_private_inference_disabled"
     assert status["ads_mediagen_central"] == "not_integrated"
     assert status["ryan_minimax_proxy"] == "external_unknown"
     assert status["runpod_rest_api_quota"] == "unsupported"

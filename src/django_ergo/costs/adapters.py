@@ -21,11 +21,18 @@ INFERENCE_SOURCE = "inference-request-v1"
 def require_owned(owner, *records):
     """Every referenced record must belong to the owner; opaque ids grant nothing."""
     for record in records:
-        if record is not None and record.user_id != owner.pk:
+        if record is not None and (
+            record.__class__.objects.select_for_update()
+            .filter(pk=record.pk)
+            .values_list("user_id", flat=True)
+            .first()
+            != owner.pk
+        ):
             msg = "Referenced record belongs to another owner"
             raise PermissionDenied(msg)
 
 
+@transaction.atomic
 def record_inference_request(*, actor, request):
     """Record one `InferenceRequest` as per-request observations.
 
@@ -42,6 +49,19 @@ def record_inference_request(*, actor, request):
     owner = request.user
     if owner is None:
         msg = "A request without an owner cannot be attributed"
+        raise PermissionDenied(msg)
+    persisted = (
+        request.__class__.objects.select_for_update()
+        .filter(pk=request.pk)
+        .values("user_id", "session_id", "structured_call_id")
+        .first()
+    )
+    if persisted != {
+        "user_id": owner.pk,
+        "session_id": request.session_id,
+        "structured_call_id": request.structured_call_id,
+    }:
+        msg = "Request ownership changed"
         raise PermissionDenied(msg)
     require_owned(owner, request.session, request.structured_call)
     if request.billing_mode != "api":

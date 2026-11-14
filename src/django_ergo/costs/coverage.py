@@ -1,12 +1,12 @@
-"""Static, honest coverage manifest for the passive cost ledger.
-
-This is a declaration reviewed with the code, not a measurement. It never says a
-source is complete: nothing here is wired to automatic ingestion, and an empty
-ledger means "nothing recorded", not "nothing spent".
-"""
+"""Configuration-aware, deliberately incomplete cost ledger coverage."""
 
 from dataclasses import asdict
 from dataclasses import dataclass
+
+from django_ergo.settings import api_settings
+
+INFERENCE_HOOK_ENABLED = "automatic_private_inference_opt_in"
+INFERENCE_HOOK_DISABLED = "automatic_private_inference_disabled"
 
 # Statuses, strongest first. None of them means live or complete coverage.
 ADAPTER_CALLABLE = (
@@ -30,7 +30,7 @@ class CoverageEntry:
 _ENTRIES = (
     CoverageEntry(
         "llm_inference_request",
-        ADAPTER_CALLABLE,
+        INFERENCE_HOOK_DISABLED,
         "per request",
         "cost_usd is a list-price estimate, never a provider bill; reservation is a ceiling",
         "operation per InferenceRequest id; StructuredCall/AgentUsage aggregates must not also be ingested",
@@ -132,8 +132,19 @@ _ENTRIES = (
 
 def coverage_manifest() -> dict:
     return {
-        "live_ingestion": False,
+        "live_ingestion": bool(api_settings.INFERENCE_COST_LEDGER_ENABLED),
         "complete": False,
-        "note": "Declared coverage; an empty or small ledger is not zero spend.",
-        "sources": [asdict(entry) for entry in _ENTRIES],
+        "note": "Private inference enrollment is configured per process; in-flight work and pending reconciliation may continue after disabling. Coverage is incomplete; an empty ledger is not zero spend.",
+        "sources": [
+            {
+                **asdict(entry),
+                "status": (
+                    INFERENCE_HOOK_ENABLED
+                    if entry.source == "llm_inference_request"
+                    and api_settings.INFERENCE_COST_LEDGER_ENABLED
+                    else entry.status
+                ),
+            }
+            for entry in _ENTRIES
+        ],
     }
