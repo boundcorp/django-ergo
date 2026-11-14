@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from types import SimpleNamespace
 
 import pytest
+from asgiref.sync import async_to_sync
 from django.contrib.auth import get_user_model
 from pydantic import BaseModel
 
+from django_ergo.bots.tools import FunctionToolkit
+from django_ergo.bots.tools import ToolContext
+from django_ergo.bots.tools import bot_tool
 from django_ergo.conversation import structured
 from django_ergo.conversation.compaction import native_turn_start
 from django_ergo.conversation.engines.claude_api import ClaudeAPIEngine
@@ -1107,3 +1112,93 @@ async def test_a_session_moves_between_engines_with_its_history(user):
         "Again",
         "Once more",
     ]
+
+
+@pytest.mark.parametrize("decision", ["false", "truthy", "error", "mutate", "missing"])
+async def test_bot_tool_automatic_review_fails_closed(user, decision):
+    session = await _chat_session(user)
+    ctx = ToolContext(user=user, session=session)
+    seen = []
+
+    def review(context, name, arguments, tool_id):
+        seen.append((context, name, dict(arguments), tool_id, context.auto_approved))
+        if decision == "error":
+            raise ValueError("private")  # noqa: EM101
+        if decision == "mutate":
+            arguments["nested"]["value"] = "changed"
+            return True
+        return {"false": False, "truthy": 1}.get(decision, True)
+
+    @bot_tool(
+        requires_approval=True, auto_approve=None if decision == "missing" else review
+    )
+    def guarded(nested: dict):
+        raise AssertionError("not approved")  # noqa: EM101, TRY003
+
+    toolkit = FunctionToolkit.from_functions([guarded], ctx)
+    args = {"nested": {"value": "original"}}
+    engine = claude_engine(claude_tool("guarded", args, tool_id="guard-1"))
+    spec = StructuredCallSpec(kind="planner", response_model=Plan, toolkits=[toolkit])
+    result = await run_structured_call(
+        spec, "Do it", user=user, engine=engine, allow_approvals=True
+    )
+    assert result.status == StructuredCallStatus.AWAITING_APPROVAL
+    assert result.approvals[0].arguments == {"nested": {"value": "original"}}
+    if decision != "missing":
+        assert seen[0][0] is ctx
+        assert seen[0][1] == "guarded"
+        assert seen[0][3:] == ("guard-1", False)
+
+
+async def test_bot_tool_auto_and_human_execution_context_is_isolated(user):
+    session = await _chat_session(user)
+    ctx = ToolContext(user=user, session=session)
+    seen = []
+    reviews = []
+    propagated = []
+
+    async def nested_context():
+        return ctx.auto_approved, await asyncio.to_thread(lambda: ctx.auto_approved)
+
+    def review(context, name, arguments, tool_id):
+        reviews.append((context, name, arguments, tool_id, context.auto_approved))
+        return arguments["scope"] == "auto"
+
+    @bot_tool(requires_approval=True, takes_context=True, auto_approve=review)
+    def guarded(context, scope: str):
+        seen.append((scope, context.auto_approved))
+        propagated.append(async_to_sync(nested_context)())
+        if scope == "auto":
+            raise ValueError("expected tool failure")  # noqa: EM101, TRY003
+        return "done"
+
+    @bot_tool(takes_context=True)
+    def ordinary(context):
+        seen.append(("ordinary", context.auto_approved))
+        return "done"
+
+    toolkit = FunctionToolkit.from_functions([guarded, ordinary], ctx)
+    engine = claude_engine(
+        claude_tool("guarded", {"scope": "auto"}, tool_id="auto-id"),
+        claude_tool("ordinary", {}, tool_id="normal-id"),
+        claude_tool("guarded", {"scope": "human"}, tool_id="human-id"),
+        claude_tool("submit_output", VALID_PLAN, tool_id="submit-id"),
+    )
+    spec = StructuredCallSpec(kind="planner", response_model=Plan, toolkits=[toolkit])
+    paused = await run_structured_call(
+        spec, "Do it", user=user, engine=engine, allow_approvals=True
+    )
+    assert paused.status == StructuredCallStatus.AWAITING_APPROVAL
+    assert seen == [("auto", True), ("ordinary", False)]
+    assert reviews == [
+        (ctx, "guarded", {"scope": "auto"}, "auto-id", False),
+        (ctx, "guarded", {"scope": "human"}, "human-id", False),
+    ]
+    assert ctx.auto_approved is False
+    done = await structured.resume_structured_call(
+        spec, paused.call, {"human-id": True}, engine=engine
+    )
+    assert done.ok
+    assert seen == [("auto", True), ("ordinary", False), ("human", False)]
+    assert propagated == [(True, True), (False, False)]
+    assert ctx.auto_approved is False

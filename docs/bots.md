@@ -98,6 +98,16 @@ def add_to_list(ctx, item: str) -> str:
     ...   # ctx.bot, ctx.session, ctx.user, ctx.is_root
 ```
 
+An approval-required tool may opt into automatic review with
+`auto_approve=review`, where the synchronous `review(ctx, tool_name, arguments,
+tool_id)` returns `True` only for an exact call it authorizes. `ctx` carries the
+bot, session and user; arguments are a copy. Errors, modified arguments and
+anything other than `True` leave the normal human approval flow in place.
+The tool sees `ctx.auto_approved` only while executing an automatically
+approved call; it is false for human approvals and ordinary calls. Review is
+not a durable grant: tools whose authority can change must revalidate it at
+execution under the appropriate locks.
+
 Parameters come from type hints (`str`, `int`, `float`, `bool`, `list`,
 `dict`), or pass `parameters=` as JSON Schema properties. Non-string results
 are sent back as JSON. A tool can also return images, which the model sees
