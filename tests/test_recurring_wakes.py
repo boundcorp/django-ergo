@@ -908,12 +908,18 @@ def test_explicit_resume_retires_stale_claim_but_preserves_count_expiry_and_futu
     assert schedule.scheduled_occurrences.count() == 2
 
 
+@pytest.mark.parametrize("second_offset", [0, 5])
 def test_same_interval_schedules_rotate_service_without_exceeding_thread_rate(
-    session, now
+    session, now, second_offset
 ):
     expiry = now + timedelta(minutes=10)
     first = create(session, now, max_occurrences=None, expires_at=expiry)
-    second = create(session, now, max_occurrences=None, expires_at=expiry)
+    second = create(
+        session,
+        now + timedelta(seconds=second_offset),
+        max_occurrences=None,
+        expires_at=expiry,
+    )
     served = []
     for minute in range(1, 5):
         moment = now + timedelta(minutes=minute)
@@ -1001,6 +1007,54 @@ def test_full_exhausted_lifecycle_batch_cannot_starve_new_thread(
         )
     else:
         assert RecurringWakeOccurrence.objects.filter(status="waiting").count() == size
+
+
+@pytest.mark.parametrize("state", ["in_progress", "awaiting_approval"])
+def test_busy_unserved_batch_cannot_starve_previously_served_thread(
+    session, now, settings, state
+):
+    size = recurring_wakes.FIRE_BATCH
+    settings.DJANGO_ERGO = {
+        "RECURRING_WAKE_MAX_GLOBAL": size + 10,
+        "RECURRING_WAKE_MIN_INTERVAL_SECONDS": 30,
+    }
+    ready = create(session, now - timedelta(seconds=30), interval_minutes=0.5)
+    assert recurring_wakes.fire_due(now) == [str(ready.pk)]
+    answer(ready.scheduled_occurrences.get().thread_message, now)
+    busy_threads = ConversationSession.objects.bulk_create(
+        [
+            ConversationSession(user=session.user, status="active", bot_name="test-bot")
+            for _ in range(size)
+        ]
+    )
+    RecurringWake.objects.bulk_create(
+        [
+            RecurringWake(
+                session=thread,
+                bot_name="test-bot",
+                note="A check waiting for the thread to be free",
+                interval_seconds=30,
+                next_run_at=now + timedelta(seconds=30),
+                max_occurrences=2,
+            )
+            for thread in busy_threads
+        ]
+    )
+    StructuredCall.objects.bulk_create(
+        [
+            StructuredCall(session=thread, kind="chat_reply", status=state)
+            for thread in busy_threads
+        ]
+    )
+    served = []
+    for seconds in (30, 60):
+        moment = now + timedelta(seconds=seconds)
+        served.extend(recurring_wakes.fire_due(moment))
+    assert str(ready.pk) in served
+    assert ready.scheduled_occurrences.count() == 2
+    assert not RecurringWakeOccurrence.objects.filter(
+        schedule__session__in=busy_threads
+    ).exists()
 
 
 @pytest.mark.parametrize("completed_call", [False, True])

@@ -10,6 +10,8 @@ This document tracks the major milestones and evolution of the Django Ergo proje
   duplicate-safe delivery, busy-thread coalescing and bounded outage catch-up.
 - Added recurring chat tools and owner-scoped live UI pause/resume/cancel controls,
   visible timing/limits, quiet unchanged checks and explicit failure blocking.
+- Independent integration review hardened delayed approval resumption, atomic
+  archive/cancellation and fairness beyond the scheduler's dispatch batch.
 - Reused normal thread-message permissions, approvals and lifecycle timing.
   See [the acceptance and rollout contract](docs/recurring-thread-wakes.md).
 

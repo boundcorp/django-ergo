@@ -98,6 +98,79 @@ def test_archive_cancels_queued_recurring_checks_and_never_reopens_thread(tmp_pa
     assert recurring_wakes.list_schedules(session)[0]["status"] == "cancelled"
 
 
+def test_old_recurring_approval_stays_live_during_approved_tool(tmp_path, monkeypatch):
+    from asgiref.sync import async_to_sync
+
+    from django_ergo.bots.tools import FunctionToolkit
+    from django_ergo.conversation.models import RecurringWakeOccurrence
+    from django_ergo.conversation.models import StructuredCall
+
+    bot, engine, session = chat(
+        tmp_path,
+        "old-approval",
+        claude_tool("add_to_list", {"item": "milk", "qty": 2}, tool_id="approved"),
+        say("Added the milk."),
+    )
+    now = timezone.now()
+    schedule = recurring_wakes.create(
+        session,
+        "Check the shopping list",
+        interval_minutes=1,
+        max_occurrences=1,
+        now=now - timedelta(minutes=1),
+    )
+    recurring_wakes.fire_due(now)
+    occurrence = RecurringWakeOccurrence.objects.get(schedule_id=schedule["id"])
+    message = occurrence.thread_message
+    messaging.deliver(str(message.pk))
+    message.refresh_from_db()
+    assert message.status == "waiting"
+    call = StructuredCall.objects.get(
+        session=session, metadata__thread_message=str(message.pk)
+    )
+    assert call.status == "awaiting_approval"
+    old = timezone.now() - timedelta(seconds=messaging.STALE_TURN_SECONDS + 60)
+    StructuredCall.objects.filter(pk=call.pk).update(updated_at=old)
+    ThreadMessage.objects.filter(pk=message.pk).update(updated_at=old)
+    observed = []
+    execute_tool = FunctionToolkit.execute_tool
+
+    def execute_with_sweep(toolkit, tool_name, arguments):
+        if tool_name == "add_to_list":
+            # Run the real approved action, then sweep before returning its result
+            # to the resumed model. An old claim timestamp retires this live turn.
+            result = execute_tool(toolkit, tool_name, arguments)
+            fired = recurring_wakes.fire_due(timezone.now())
+            occurrence.refresh_from_db()
+            message.refresh_from_db()
+            observed.append(
+                (
+                    fired,
+                    occurrence.status,
+                    occurrence.completed_at,
+                    message.status,
+                    recurring_wakes.list_schedules(session)[0]["status"],
+                    len(engine._client.calls),
+                )
+            )
+            return result
+        return execute_tool(toolkit, tool_name, arguments)
+
+    monkeypatch.setattr(FunctionToolkit, "execute_tool", execute_with_sweep)
+    done = async_to_sync(bot.resume)(session, {"approved": True})
+    assert observed == [([], "waiting", None, "waiting", "active", 1)]
+    assert done.text == "Added the milk."
+    message.refresh_from_db()
+    occurrence.refresh_from_db()
+    assert message.status == "answered"
+    assert message.reply_text == "Added the milk."
+    assert occurrence.status == "answered"
+    assert recurring_wakes.list_schedules(session)[0]["status"] == "completed"
+    assert len(engine._client.calls) == 2
+    tool_result = engine._client.calls[-1]["messages"][-1]["content"][0]
+    assert tool_result["content"] == "old-approval added 2 milk"
+
+
 def test_dispatch_failure_blocks_recurring_schedule_without_retry(
     tmp_path, monkeypatch
 ):

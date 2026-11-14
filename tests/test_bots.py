@@ -1937,6 +1937,113 @@ async def test_archiving_a_thread_cancels_its_workers(tmp_path):
     assert (running.status, done.status) == ("cancelled", "completed")
 
 
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("cancel_before_crash", [False, True])
+def test_archive_and_recurring_cancellation_roll_back_together(
+    monkeypatch, cancel_before_crash
+):
+    from django.utils import timezone
+
+    from django_ergo.bots import archival
+    from django_ergo.bots import recurring_wakes
+    from django_ergo.conversation.models import RecurringWake
+
+    monkeypatch.setattr("django_ergo.bots.todos.notify_session", lambda session: None)
+    user = User.objects.create(username="archive-rollback")
+    thread = ConversationSession.objects.create(
+        user=user,
+        bot_name="test-bot",
+        engine_type="claude",
+        transport_type="api",
+        status="active",
+        metadata={"bot_role": "thread"},
+    )
+    now = timezone.now()
+    created = recurring_wakes.create(
+        thread, "Check progress", interval_minutes=1, max_occurrences=3, now=now
+    )
+    schedule = RecurringWake.objects.get(pk=created["id"])
+    original_metadata = dict(thread.metadata)
+    original_status = thread.status
+    cancel_session = recurring_wakes.cancel_session
+    stopped = []
+    monkeypatch.setattr(
+        archival, "stop_workers", lambda session: stopped.append(session)
+    )
+
+    def crash(session):
+        if cancel_before_crash:
+            cancel_session(session)
+        msg = "simulated archive crash"
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr(recurring_wakes, "cancel_session", crash)
+    with pytest.raises(RuntimeError, match="simulated archive crash"):
+        archival.archive(thread, "user resolved")
+
+    # Neither half may survive a failure at either side of cancellation.
+    assert thread.status == original_status
+    assert thread.metadata == original_metadata
+    thread.refresh_from_db()
+    schedule.refresh_from_db()
+    assert thread.status == original_status
+    assert thread.metadata == original_metadata
+    assert schedule.status == "active"
+    assert stopped == []
+
+
+@pytest.mark.django_db(transaction=True)
+def test_archive_cancels_recurring_wakes_permanently_on_reopen(monkeypatch):
+    from datetime import timedelta
+
+    from django.db import connection
+    from django.utils import timezone
+
+    from django_ergo.bots import archival
+    from django_ergo.bots import recurring_wakes
+    from django_ergo.conversation.models import RecurringWake
+
+    monkeypatch.setattr("django_ergo.bots.todos.notify_session", lambda session: None)
+    user = User.objects.create(username="archive-recurring")
+    thread = ConversationSession.objects.create(
+        user=user,
+        bot_name="test-bot",
+        engine_type="claude",
+        transport_type="api",
+        status="active",
+        metadata={"bot_role": "thread"},
+    )
+    now = timezone.now()
+    created = recurring_wakes.create(
+        thread, "Check progress", interval_minutes=1, max_occurrences=3, now=now
+    )
+    schedule = RecurringWake.objects.get(pk=created["id"])
+    stopped = []
+
+    def stop_workers(session):
+        assert not connection.in_atomic_block
+        persisted = ConversationSession.objects.get(pk=session.pk)
+        schedule.refresh_from_db()
+        assert persisted.status == "completed"
+        assert persisted.metadata["archived_reason"] == "user resolved"
+        assert schedule.status == "cancelled"
+        stopped.append(session.pk)
+
+    monkeypatch.setattr(archival, "stop_workers", stop_workers)
+    archival.archive(thread, "user resolved")
+    assert thread.status == "completed"
+    assert thread.metadata["archived_at"]
+    assert thread.metadata["archived_reason"] == "user resolved"
+    assert stopped == [thread.pk]
+    assert archival.reopen(thread)
+    assert thread.status == "active"
+    assert "archived_at" not in thread.metadata
+    assert recurring_wakes.fire_due(now + timedelta(minutes=2)) == []
+    schedule.refresh_from_db()
+    assert schedule.status == "cancelled"
+    assert not schedule.scheduled_occurrences.exists()
+
+
 TASK_TOOLS = textwrap.dedent(
     """
     from django_ergo.bots import bot_task, bot_tool

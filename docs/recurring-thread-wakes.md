@@ -180,6 +180,28 @@ re-reviews reported no remaining actionable blockers; execution is a separate ga
   192-pixel scrollable list and a visible composer ending at pixel 844. This is
   component/layout evidence, not production-chat acceptance.
 
+### Independent integration review
+
+A fresh review against current main (including #330 and #333) found three further
+correctness defects and reproduced them without provider calls:
+
+- An approval older than the running-turn stale threshold was falsely retired
+  while its approved tool executed. Approval claiming now atomically refreshes
+  the call's liveness timestamp.
+- Archive state could commit before recurring cancellation. Both now commit in
+  one session-first transaction; worker stop effects run after commit.
+- Never-served busy schedules could fill the entire dispatch batch indefinitely
+  above the configured default global quota. Uncapped maintenance now coalesces
+  busy schedules before candidate selection, preserving service-based rotation.
+  Regression coverage includes running/approval waits and staggered schedules;
+  eligibility-first sorting alone is insufficient and was rejected.
+
+The original handoff's zero-provider PostgreSQL smoke was independently repeated:
+two answered occurrences, one interrupted claim blocked with unknown outcome,
+duplicate ticks/claims rejected, cancellation prevents future ticks, no model
+execution. This exercises scheduler persistence and claim/recovery, not production
+storage failover or a paid model acceptance run.
+
 
 ## Rollout and review gates
 

@@ -86,6 +86,7 @@ from typing import get_args
 from typing import get_origin
 
 from asgiref.sync import sync_to_async
+from django.utils import timezone
 from pydantic import BaseModel
 from pydantic import ValidationError
 
@@ -1492,13 +1493,15 @@ async def resume_structured_call(  # noqa: PLR0913
         msg = f"Call {call.pk} is not waiting for approval"
         raise StructuredCallError(msg)
     # Claim it, so a second answer (a double tap, two devices) can't run the tools again.
+    claimed_at = timezone.now()
     claimed = await StructuredCall.objects.filter(
         pk=call.pk, status=StructuredCallStatus.AWAITING_APPROVAL
-    ).aupdate(status=StructuredCallStatus.IN_PROGRESS)
+    ).aupdate(status=StructuredCallStatus.IN_PROGRESS, updated_at=claimed_at)
     if not claimed:
         msg = f"Call {call.pk} was already answered"
         raise StructuredCallError(msg)
     call.status = StructuredCallStatus.IN_PROGRESS
+    call.updated_at = claimed_at
     pending = (call.metadata or {}).get("pending_approvals", [])
     await sync_to_async(_lifecycle_approvals, thread_sensitive=True)(
         call, pending, "answer_received"

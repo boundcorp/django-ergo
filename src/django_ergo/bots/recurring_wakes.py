@@ -763,10 +763,16 @@ def _fire(  # noqa: C901, PLR0911, PLR0912, PLR0915 — atomic sweep state machi
     return str(schedule.id)
 
 
-def _outstanding_blocker(outstanding: list[tuple]) -> str:
+def _thread_blocker(session: ConversationSession, outstanding: list[tuple]) -> str:
+    from django_ergo.bots import messaging
+
     if any(status == OccurrenceStatus.WAITING for _, status in outstanding):
         return "awaiting_approval"
-    return "previous_occurrence_outstanding" if outstanding else ""
+    if outstanding:
+        return "previous_occurrence_outstanding"
+    if session.structured_calls.filter(messaging.awaiting_approval()).exists():
+        return "awaiting_approval"
+    return "thread_busy" if messaging.busy(session) else ""
 
 
 def _maintain_session(session_id, now: datetime) -> None:
@@ -789,7 +795,8 @@ def _maintain_session(session_id, now: datetime) -> None:
             ).values_list("schedule_id", "status")
         )
         outstanding_ids = {schedule_id for schedule_id, _ in outstanding}
-        blocker = _outstanding_blocker(outstanding)
+        blocker = _thread_blocker(session, outstanding)
+        thread_busy = not outstanding and bool(blocker)
         schedules = RecurringWake.objects.select_for_update().filter(
             session=session, status__in=LIVE
         )
@@ -811,9 +818,19 @@ def _maintain_session(session_id, now: datetime) -> None:
             elif schedule.status == Status.ACTIVE and (
                 blocker
                 or schedule.blocked_reason
-                in ("awaiting_approval", "previous_occurrence_outstanding")
+                in (
+                    "awaiting_approval",
+                    "previous_occurrence_outstanding",
+                    "thread_busy",
+                )
             ):
-                if schedule.blocked_reason != blocker:
+                schedule_changed = schedule.blocked_reason != blocker
+                if thread_busy and schedule.next_run_at <= now:
+                    # Coalesce all busy threads before applying the dispatch batch
+                    # limit, so never-served busy schedules cannot monopolize it.
+                    _advance(schedule, now)
+                    schedule_changed = True
+                if schedule_changed:
                     schedule.blocked_reason = blocker
                     _save(schedule, now)
                     changed = True
