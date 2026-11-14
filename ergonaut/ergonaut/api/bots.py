@@ -58,6 +58,7 @@ from ergonaut.apps.bots.tasks import (
     queue_turn,
     recover_stopped_session,
     request_stop,
+    revalidate_pending,
     unsend,
 )
 
@@ -419,6 +420,14 @@ class ApprovalIn(Schema):
     approval_ids: list[str] | None = None
     # Or one answer per waiting tool call, by id, in place of ``approve``/``approval_ids``.
     decisions: dict[str, bool] | None = None
+    # Exact batch rendered to the approver, not merely its reusable tool IDs.
+    shown_approvals: list[dict] | None = None
+    shown_call_id: str | None = None
+
+
+class RevalidatePendingIn(Schema):
+    call_id: str
+    shown_approvals: list[dict]
 
 
 class TurnOut(Schema):
@@ -821,6 +830,7 @@ def requests_out(session: ConversationSession, limit: int = 20) -> list[dict]:
                 "reply": snippet(row.reply_text or row.error),
                 # What the other chat waits for the user to approve before it can answer.
                 "approvals": (paused.metadata or {}).get("pending_approvals", []) if paused else [],
+                "approval_call_id": str(paused.pk) if paused else None,
                 "created_at": row.created_at,
                 "updated_at": row.updated_at,
             }
@@ -1566,6 +1576,12 @@ def record_authenticated_approval(call_id, user, approve, approval_ids, expected
             or (approval_ids is not None and sorted(approval_ids) != waiting)
         ):
             raise HttpError(409, "That approval was already answered")
+        shown = request_payload.get("shown_approvals")
+        if shown is not None and approval_pending_digest(shown) != approval_pending_digest(pending):
+            raise HttpError(409, "The displayed approval no longer matches the pending call")
+        shown_call_id = request_payload.get("shown_call_id")
+        if shown_call_id is not None and shown_call_id != str(call.pk):
+            raise HttpError(409, "The displayed call is no longer current")
         decisions = approve if isinstance(approve, dict) else dict.fromkeys(waiting, approve)
         if sorted(decisions) != waiting:
             raise HttpError(409, "That approval was already answered")
@@ -1576,6 +1592,7 @@ def record_authenticated_approval(call_id, user, approve, approval_ids, expected
             "decisions": decisions,
             "request": request_payload,
             "pending_sha256": approval_pending_digest(pending),
+            "shown_verified": shown is not None and shown_call_id == str(call.pk),
             "decided_at": timezone.now().isoformat(),
         }
         metadata = dict(call.metadata or {})
@@ -1616,6 +1633,29 @@ async def answer_approval(request, session_id: str, data: ApprovalIn):
     return await sync_to_async(queue_and_report)(
         session, approve=approve, approval_ids=waiting, authenticated_approval_id=entry["id"]
     )
+
+
+@router.post("/sessions/{session_id}/approvals/revalidate", response=TurnOut)
+async def revalidate_approval(request, session_id: str, data: RevalidatePendingIn):
+    """Ask the current automatic policy to revalidate this exact pending batch."""
+    from django_ergo.conversation.toolkit import approval_pending_digest
+
+    session = await get_session(request, session_id)
+    if str(session.user_id) != str(request.auth.pk) or not request.auth.is_active:
+        raise HttpError(403, "Only the active session owner can revalidate a pending call")
+    bot = get_bot(session.bot_name, request.auth)
+    require_admin_for_risky_tools(bot, request.auth)
+    pending = await bot.pending_call(session)
+    if (
+        pending is None
+        or str(pending.pk) != data.call_id
+        or approval_pending_digest((pending.metadata or {}).get("pending_approvals", []))
+        != approval_pending_digest(data.shown_approvals)
+    ):
+        raise HttpError(409, "The displayed pending call is no longer current")
+    digest = approval_pending_digest(data.shown_approvals)
+    await sync_to_async(revalidate_pending.delay)(str(session.pk), data.call_id, digest)
+    return await sync_to_async(latest_turn)(session, queued=True)
 
 
 def models_out(bot: Bot) -> dict:

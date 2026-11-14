@@ -432,6 +432,32 @@ def run_turn(  # noqa: PLR0913
     queue_waiting(session_id)
 
 
+@shared_task(name="ergonaut.revalidate_pending", ignore_result=True, bind=True, max_retries=None)
+def revalidate_pending(self, session_id: str, call_id: str, digest: str) -> None:
+    """Revalidate one explicitly identified current call under the session turn lock."""
+    from django_ergo.conversation.models import ConversationSession
+
+    eager = getattr(self.request, "is_eager", False)
+    with session_lock(session_id, wait=eager) as locked:
+        if not locked:
+            raise self.retry(countdown=3)
+        session = ConversationSession.objects.select_related("user").get(pk=session_id)
+        if not session.user or not session.user.is_active:
+            return
+        bot = loaded_bot(session)
+        control = InboxControl(session)
+        try:
+            async_to_sync(bot.resume)(
+                session,
+                {},
+                control=control,
+                revalidate_call_id=call_id,
+                revalidate_digest=digest,
+            )
+        finally:
+            notify(session_id)
+
+
 @shared_task(
     name="ergonaut.generate_illustration",
     bind=True,

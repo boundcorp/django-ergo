@@ -112,18 +112,21 @@ For authenticated web approvals, `ctx.approval_decision` contains the persisted
 decision ID, actor ID, structured-call ID and tool-use ID for that exact human
 decision. It is `None` for automatic approvals and approval paths without
 authenticated evidence; a session owner alone is not evidence of an approval.
-The stored decision binds the server-selected pending batch by hash and retains
-the submitted request fields. The API accepts requests without approval IDs;
-even with IDs it does not receive a client-supplied argument hash. The evidence
-therefore proves the authenticated request and the server-selected batch, not
-which arguments were actually displayed to the requester.
+The web client shows each tool's complete input and submits the displayed batch
+and structured-call ID with its decision. The API rejects a batch or call ID
+that differs from the locked current pending call; only a match supplies `ctx.approval_decision`.
+Legacy approval requests without the displayed batch can still answer ordinary
+tools, but cannot supply authenticated approval evidence to a tool.
 
-Changing a grant does not automatically re-review a pending approval. A caller
-must not replay an old pending call after a grant change: the core cannot
-atomically establish that the call is still current and bind execution to
-bot-specific grant and lane locks. A new call may be reviewed under the new
-grant; pre-existing and future pending calls retain the normal human approval
-flow. This does not recover a call that was already waiting when a grant changed.
+After a scoped policy changes, the active session owner may explicitly POST
+`/api/sessions/{session_id}/approvals/revalidate` with `call_id` and
+`shown_approvals` for the exact currently displayed pending batch. This is not
+a human approval and cannot revive a grant. The worker holds the session turn
+lock, checks the latest call and durable tool-use transcript, and asks the
+current automatic policy about every item. Any changed, superseded, already
+invoked, mixed out-of-scope or unapproved batch stays pending. The actual tool
+must recheck its mutable grant at execution under its own locks; execution uses
+a durable at-most-once receipt, so an uncertain invocation is not resent.
 
 Parameters come from type hints (`str`, `int`, `float`, `bool`, `list`,
 `dict`), or pass `parameters=` as JSON Schema properties. Non-string results

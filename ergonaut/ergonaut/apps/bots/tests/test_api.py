@@ -837,16 +837,29 @@ def order(ctx, item: str) -> str:
     root = post(client, "/api/bots/kitchen/root").json()
     turn = post(client, f"/api/sessions/{root['id']}/messages", {"text": "Order milk and eggs"}).json()
     milk, eggs = (item["id"] for item in turn["approvals"])
+    call_id = str(StructuredCall.objects.get(session_id=root["id"]).pk)
     queued = {}
     monkeypatch.setattr(bots_api, "queue_turn", lambda session_id, **kwargs: queued.update(kwargs) or True)
-    response = post(client, f"/api/sessions/{root['id']}/approvals", {"decisions": {milk: True, eggs: False}})
+    response = post(
+        client,
+        f"/api/sessions/{root['id']}/approvals",
+        {
+            "decisions": {milk: True, eggs: False},
+            "shown_approvals": turn["approvals"],
+            "shown_call_id": call_id,
+        },
+    )
     assert response.status_code == 200
     call = StructuredCall.objects.get(session_id=root["id"])
     [evidence] = call.metadata["authenticated_approval_decisions"]
     assert evidence["actor_id"] == str(cook.pk)
     assert evidence["call_id"] == str(call.pk)
     assert evidence["decisions"] == {milk: True, eggs: False}
-    assert evidence["request"] == {"decisions": {milk: True, eggs: False}}
+    assert evidence["request"] == {
+        "decisions": {milk: True, eggs: False},
+        "shown_approvals": turn["approvals"],
+        "shown_call_id": call_id,
+    }
     # Read from a fresh process against the pytest database, without inheriting
     # request context or the worker's Python state.
     config = connection.settings_dict
@@ -919,6 +932,136 @@ def order(ctx, item: str) -> str:
     run_turn(str(session.pk), approve=True, approval_ids=[approval["id"]])
     [result] = fake.calls[-1]["messages"][-1]["content"]
     assert json.loads(result["content"]) is None
+
+
+@pytest.mark.django_db(transaction=True)
+def test_revalidate_exact_current_call_after_policy_change(client, cook, bot_folder, use_bots, tmp_path, settings):
+    from django_ergo.conversation.models import StructuredCall
+
+    allowed, output = tmp_path / "allowed", tmp_path / "executions"
+    (bot_folder / "tools" / "pantry.py").write_text(f"""
+from pathlib import Path
+from django_ergo.bots import bot_tool
+def review(ctx, name, args, tool_id):
+    return Path({str(allowed)!r}).exists() and args == {{"item": "milk"}}
+@bot_tool(requires_approval=True, auto_approve=review)
+def order(item: str) -> str:
+    with Path({str(output)!r}).open("a") as f:
+        f.write(item + "\\n")
+    return "ordered " + item
+""")
+    use_bots(tool_call("order", {"item": "milk"}), say("Done."))
+    root = post(client, "/api/bots/kitchen/root").json()
+    turn = post(client, f"/api/sessions/{root['id']}/messages", {"text": "Order milk"}).json()
+    call = StructuredCall.objects.get(session_id=root["id"])
+    endpoint = f"/api/sessions/{root['id']}/approvals/revalidate"
+    request = {"call_id": str(call.pk), "shown_approvals": turn["approvals"]}
+    settings.CELERY_TASK_ALWAYS_EAGER = True
+    assert post(client, endpoint, request).status_code == 200
+    call.refresh_from_db()
+    assert call.status == "awaiting_approval" and not output.exists()
+    allowed.touch()
+    assert post(client, endpoint, {**request, "call_id": "stale"}).status_code == 409
+    assert post(client, endpoint, request).status_code == 200
+    call.refresh_from_db()
+    assert call.status == "completed"
+    assert output.read_text().splitlines() == ["milk"]
+    assert post(client, endpoint, request).status_code == 409
+    assert output.read_text().splitlines() == ["milk"]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_revalidation_rejects_mixed_scope_and_superseded_call(client, cook, bot_folder, use_bots, tmp_path, settings):
+    from types import SimpleNamespace
+
+    from django_ergo.conversation.models import StructuredCall
+
+    allowed, output = tmp_path / "allowed", tmp_path / "executions"
+    (bot_folder / "tools" / "pantry.py").write_text(f"""
+from pathlib import Path
+from django_ergo.bots import bot_tool
+def review(ctx, name, args, tool_id):
+    return Path({str(allowed)!r}).exists() and (args == {{"item": "milk"}} or Path({str(allowed)!r}).read_text() == "all")
+@bot_tool(requires_approval=True, auto_approve=review)
+def order(item: str) -> str:
+    Path({str(output)!r}).write_text(item)
+    return item
+""")
+    milk, eggs = tool_call("order", {"item": "milk"}), tool_call("order", {"item": "eggs"})
+    both = SimpleNamespace(content=milk.content + eggs.content, stop_reason="tool_use", usage=milk.usage)
+    use_bots(both, say("Done."))
+    root = post(client, "/api/bots/kitchen/root").json()
+    turn = post(client, f"/api/sessions/{root['id']}/messages", {"text": "Order both"}).json()
+    call = StructuredCall.objects.get(session_id=root["id"])
+    request = {"call_id": str(call.pk), "shown_approvals": turn["approvals"]}
+    endpoint = f"/api/sessions/{root['id']}/approvals/revalidate"
+    settings.CELERY_TASK_ALWAYS_EAGER = True
+    allowed.touch()
+    assert post(client, endpoint, request).status_code == 200
+    call.refresh_from_db()
+    assert call.status == "awaiting_approval" and not output.exists()
+    allowed.write_text("all")
+    StructuredCall.objects.create(
+        session_id=root["id"], user=cook, kind="chat_reply", request="later", status="completed"
+    )
+    assert post(client, endpoint, request).status_code == 409
+    call.refresh_from_db()
+    assert call.status == "awaiting_approval" and not output.exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_revalidation_claim_is_one_shot_under_postgres(client, cook, use_bots):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    from django.db import connection, connections
+    from django_ergo.conversation.models import StructuredCall
+    from django_ergo.conversation.structured import _claim_pending_review
+
+    if connection.vendor != "postgresql":
+        pytest.skip("requires PostgreSQL row locking")
+    use_bots(tool_call("order", {"item": "milk"}), say("Done."))
+    root = post(client, "/api/bots/kitchen/root").json()
+    post(client, f"/api/sessions/{root['id']}/messages", {"text": "Order milk"})
+    call = StructuredCall.objects.get(session_id=root["id"])
+    pending = call.metadata["pending_approvals"]
+    barrier = Barrier(2)
+
+    def claim():
+        try:
+            barrier.wait(timeout=5)
+            return _claim_pending_review(call, pending, timezone.now())
+        finally:
+            connections.close_all()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda _: claim(), range(2)))
+    assert sorted(results) == [False, True]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_approval_rejects_changed_arguments_since_display(client, cook, use_bots):
+    from django_ergo.conversation.models import StructuredCall
+
+    use_bots(tool_call("order", {"item": "milk"}), say("Done."))
+    root = post(client, "/api/bots/kitchen/root").json()
+    turn = post(client, f"/api/sessions/{root['id']}/messages", {"text": "Order milk"}).json()
+    call = StructuredCall.objects.get(session_id=root["id"])
+    call.metadata["pending_approvals"][0]["input"]["item"] = "eggs"
+    call.save(update_fields=["metadata"])
+    response = post(
+        client,
+        f"/api/sessions/{root['id']}/approvals",
+        {
+            "decisions": {turn["approvals"][0]["id"]: True},
+            "shown_approvals": turn["approvals"],
+            "shown_call_id": str(call.pk),
+        },
+    )
+    assert response.status_code == 409
+    call.refresh_from_db()
+    assert call.status == "awaiting_approval"
+    assert not call.metadata.get("authenticated_approval_decisions")
 
 
 @pytest.mark.django_db(transaction=True)

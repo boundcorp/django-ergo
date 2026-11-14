@@ -1283,6 +1283,7 @@ async def test_authenticated_approval_binds_persisted_batch_and_pending(user, ta
         "call_id": str(call.pk),
         "decisions": {"d1": True},
         "pending_sha256": approval_pending_digest(call.metadata["pending_approvals"]),
+        "shown_verified": True,
     }
     call.metadata["authenticated_approval_decisions"] = [batch]
     await call.asave(update_fields=["metadata"])
