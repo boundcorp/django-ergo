@@ -60,7 +60,8 @@ from .transport import ProviderError
 from .transport import RunpodREST
 
 FRESH_SECONDS = 180
-OWNER_STALE_SECONDS = 180
+# Ten minutes without an update, step start or scheduled poll: the Worker is gone.
+OWNER_STALE_SECONDS = 600
 MAX_REQUEST_KEY = 200
 MAX_OUTPUT_BYTES = 2_000_000_000
 
@@ -508,16 +509,27 @@ def invalid_owner(job):
 
 
 def _owner_stale(job, now):
-    updated = (
+    """No sign of the Worker for OWNER_STALE_SECONDS: no step, update or poll due.
+
+    A live Worker's next poll can sit in a busy shared Celery pool for minutes
+    (observed: ~3 minutes behind other bots' 70-100s tasks), so staleness counts
+    from the latest of its last update, current step start and scheduled poll.
+    Rental deadlines bound spend independently of this check.
+    """
+    row = (
         Worker.objects.filter(pk=job.worker_id)
-        .values_list("updated_at", flat=True)
+        .values_list("updated_at", "step_started_at", "next_poll_at")
         .first()
     )
-    if updated is None:
+    if row is None:
         return True
-    if timezone.is_naive(updated):
-        updated = timezone.make_aware(updated, timezone.get_default_timezone())
-    return now - updated.timestamp() >= OWNER_STALE_SECONDS
+    zone = timezone.get_default_timezone()
+    seen = [
+        (timezone.make_aware(m, zone) if timezone.is_naive(m) else m).timestamp()
+        for m in row
+        if m is not None
+    ]
+    return not seen or now - max(seen) >= OWNER_STALE_SECONDS
 
 
 class _SharedInventory:

@@ -836,9 +836,10 @@ def test_independent_maintenance_stops_stale_process_with_active_worker_row(setu
 
     job = begin(setup)
     assert drive(setup, job) == "running"
+    stale = timezone.now() - timezone.timedelta(seconds=native.OWNER_STALE_SECONDS + 1)
+    # A dead controller: no update, step or scheduled poll within the window.
     Worker.objects.filter(pk=job.worker_id).update(
-        updated_at=timezone.now()
-        - timezone.timedelta(seconds=native.OWNER_STALE_SECONDS + 1),
+        updated_at=stale, step_started_at=None, next_poll_at=stale
     )
     native.reconcile_once()
     job.refresh_from_db()
@@ -846,6 +847,115 @@ def test_independent_maintenance_stops_stale_process_with_active_worker_row(setu
     assert job.cleanup_complete
     assert Experiment(job.ledger_path).status()["stop_reason"] == "worker_lost"
     assert setup.provider.posts == 1 and setup.provider.deletes == ["pod123"]
+
+
+def test_worker_whose_poll_is_queued_is_not_lost(setup):
+    from django.utils import timezone
+
+    job = begin(setup)
+    assert drive(setup, job) == "running"
+    # Observed on Octo: the last update was 200s ago but the next poll is only
+    # waiting in a busy shared Celery pool. That Worker is alive.
+    now = timezone.now()
+    Worker.objects.filter(pk=job.worker_id).update(
+        updated_at=now - timezone.timedelta(seconds=200),
+        step_started_at=None,
+        next_poll_at=now - timezone.timedelta(seconds=195),
+    )
+    native.reconcile_once()
+    job.refresh_from_db()
+    assert Experiment(job.ledger_path).status()["stop_reason"] is None
+    assert not job.cleanup_complete
+    assert setup.provider.deletes == []
+    # A long current step also counts, even with an old update and no poll due.
+    Worker.objects.filter(pk=job.worker_id).update(
+        updated_at=now - timezone.timedelta(seconds=native.OWNER_STALE_SECONDS + 100),
+        step_started_at=now - timezone.timedelta(seconds=100),
+        next_poll_at=None,
+    )
+    native.reconcile_once()
+    assert Experiment(job.ledger_path).status()["stop_reason"] is None
+    assert setup.provider.deletes == []
+
+
+def test_queued_poll_has_finite_grace_despite_rescheduling(setup):
+    job = begin(setup)
+    assert drive(setup, job) == "running"
+    now = timezone.now()
+    due = now - timezone.timedelta(seconds=native.OWNER_STALE_SECONDS - 1)
+    Worker.objects.filter(pk=job.worker_id).update(
+        updated_at=now - timezone.timedelta(seconds=900),
+        step_started_at=now - timezone.timedelta(seconds=900),
+        next_poll_at=due,
+    )
+    # Repeated scheduling while a step is leased keeps the earliest due time;
+    # it cannot indefinitely renew a stalled owner.
+    worker = Worker.objects.get(pk=job.worker_id)
+    workers.schedule(worker, 300)
+    workers.schedule(worker, 300)
+    worker.refresh_from_db()
+    assert worker.next_poll_at == due
+    native.reconcile_once(now=now.timestamp())
+    assert Experiment(job.ledger_path).status()["stop_reason"] is None
+    assert setup.provider.deletes == []
+    native.reconcile_once(now=(now + timezone.timedelta(seconds=1)).timestamp())
+    job.refresh_from_db()
+    assert Experiment(job.ledger_path).status()["stop_reason"] == "worker_lost"
+    assert job.cleanup_complete
+    assert setup.provider.deletes == ["pod123"]
+
+
+@pytest.mark.parametrize("active_step", [False, True])
+def test_dead_or_hung_worker_is_cleaned_at_liveness_boundary(setup, active_step):
+    job = begin(setup)
+    assert drive(setup, job) == "running"
+    now = timezone.now()
+    last_seen = now - timezone.timedelta(seconds=native.OWNER_STALE_SECONDS - 1)
+    Worker.objects.filter(pk=job.worker_id).update(
+        updated_at=last_seen,
+        step_started_at=last_seen if active_step else None,
+        next_poll_at=None,
+    )
+    native.reconcile_once(now=now.timestamp())
+    assert Experiment(job.ledger_path).status()["stop_reason"] is None
+    native.reconcile_once(now=(now + timezone.timedelta(seconds=1)).timestamp())
+    job.refresh_from_db()
+    assert Experiment(job.ledger_path).status()["stop_reason"] == "worker_lost"
+    assert job.cleanup_complete
+    assert setup.provider.deletes == ["pod123"]
+
+
+def test_hung_operation_persists_stop_then_cleans_after_lock_release(setup):
+    job = begin(setup)
+    assert drive(setup, job) == "running"
+    stale = timezone.now() - timezone.timedelta(seconds=native.OWNER_STALE_SECONDS + 1)
+    Worker.objects.filter(pk=job.worker_id).update(
+        updated_at=stale, step_started_at=stale, next_poll_at=None
+    )
+    with native.operation(job) as acquired:
+        assert acquired
+        native.reconcile_once()
+        job.refresh_from_db()
+        assert Experiment(job.ledger_path).status()["stop_reason"] == "worker_lost"
+        assert not job.cleanup_complete
+        assert setup.provider.deletes == []
+    native.reconcile_once()
+    job.refresh_from_db()
+    assert job.cleanup_complete
+    assert setup.provider.deletes == ["pod123"]
+
+
+def test_future_scheduled_poll_does_not_extend_rental_deadline(setup):
+    job = begin(setup)
+    assert drive(setup, job) == "running"
+    Worker.objects.filter(pk=job.worker_id).update(
+        next_poll_at=timezone.now() + timezone.timedelta(days=1)
+    )
+    native.reconcile_once(now=job.deadline + 1)
+    job.refresh_from_db()
+    assert Experiment(job.ledger_path).status()["stop_reason"] == "deadline"
+    assert job.cleanup_complete
+    assert setup.provider.deletes == ["pod123"]
 
 
 def test_cancel_during_readiness_suppresses_late_question(setup, monkeypatch):
