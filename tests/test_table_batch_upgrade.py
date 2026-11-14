@@ -29,6 +29,91 @@ def item_model(table_upgrade_bot):  # noqa: F811
     return Bot.load(folder, engine_factory=lambda: engine).table("House")
 
 
+def test_generic_write_policy_blocks_tools_and_pages_but_not_trusted_orm(item_model):
+    import json
+    from types import SimpleNamespace
+
+    from django_ergo.bots.tables import page_add
+    from django_ergo.bots.tables import page_delete
+    from django_ergo.bots.tables import page_update
+    from django_ergo.bots.tables import table_tools
+    from django_ergo.bots.tools import FunctionToolkit
+
+    row = item_model.objects.create(sku="protected", address="Original")
+    toolkit = FunctionToolkit(table_tools([item_model]))
+    bot = SimpleNamespace(table=lambda name: item_model)
+    item_model.generic_writes = False
+    try:
+        calls = [
+            (
+                "ergo_table_add",
+                {"table": "House", "values": {"sku": "new", "address": "New"}},
+            ),
+            (
+                "ergo_table_update",
+                {"table": "House", "id": row.pk, "values": {"address": "Changed"}},
+            ),
+            ("ergo_table_delete", {"table": "House", "id": row.pk}),
+            (
+                "ergo_table_batch",
+                {
+                    "table": "House",
+                    "operations": [
+                        {"op": "add", "values": {"sku": "new", "address": "New"}}
+                    ],
+                },
+            ),
+            (
+                "ergo_table_batch",
+                {
+                    "table": "House",
+                    "operations": [
+                        {"op": "update", "id": row.pk, "values": {"address": "Changed"}}
+                    ],
+                },
+            ),
+            (
+                "ergo_table_batch",
+                {
+                    "table": "House",
+                    "operations": [
+                        {
+                            "op": "upsert",
+                            "match": {"sku": "protected"},
+                            "values": {"address": "Changed"},
+                        }
+                    ],
+                },
+            ),
+        ]
+        for name, args in calls:
+            with pytest.raises(ValueError, match="does not allow generic table writes"):
+                toolkit.execute_tool(name, args)
+        for action in (
+            lambda: page_add(bot, "House", {"sku": "new", "address": "New"}),
+            lambda: page_update(bot, "House", row.pk, {"address": "Changed"}),
+            lambda: page_delete(bot, "House", row.pk),
+        ):
+            with pytest.raises(ValueError, match="does not allow generic table writes"):
+                action()
+        assert "Original" in toolkit.execute_tool(
+            "ergo_table_query", {"table": "House"}
+        )
+        schema = json.loads(
+            toolkit.execute_tool("ergo_table_schema", {"table": "House"})
+        )
+        assert not any(field["writable"] for field in schema["fields"])
+        row.refresh_from_db()
+        assert row.address == "Original"
+        assert item_model.objects.count() == 1
+        row.address = "Trusted"
+        row.save()
+        row.refresh_from_db()
+        assert row.address == "Trusted"
+    finally:
+        del item_model.generic_writes
+
+
 def test_batch_saves_each_operation_and_returns_rows(item_model):
     events = []
 
