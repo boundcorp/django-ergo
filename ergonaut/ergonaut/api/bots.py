@@ -1544,7 +1544,7 @@ async def dismiss_call(request, call_id: str):
     return call_out(call)
 
 
-def record_authenticated_approval(call_id, user, approve, approval_ids, expected_pending):
+def record_authenticated_approval(call_id, user, approve, approval_ids, expected_pending, request_payload):
     """Persist the authenticated answer before handing it to a worker."""
     from django_ergo.conversation.toolkit import approval_pending_digest
 
@@ -1574,6 +1574,7 @@ def record_authenticated_approval(call_id, user, approve, approval_ids, expected
             "actor_id": str(user.pk),
             "call_id": str(call.pk),
             "decisions": decisions,
+            "request": request_payload,
             "pending_sha256": approval_pending_digest(pending),
             "decided_at": timezone.now().isoformat(),
         }
@@ -1610,6 +1611,7 @@ async def answer_approval(request, session_id: str, data: ApprovalIn):
         approve,
         approval_ids,
         approval_pending_digest((pending.metadata or {}).get("pending_approvals", [])),
+        data.model_dump(exclude_unset=True),
     )
     return await sync_to_async(queue_and_report)(
         session, approve=approve, approval_ids=waiting, authenticated_approval_id=entry["id"]

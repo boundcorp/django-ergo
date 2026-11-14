@@ -1410,14 +1410,11 @@ class Bot:
         decisions: dict[str, bool] | bool,
         *,
         control: TurnControl | None = None,
-        rereview_pending: bool = False,
     ) -> TurnResult:
         """Continue a turn that stopped for approval.
 
         ``decisions`` maps tool_use_id to approve/deny, or is one bool for
         every pending tool call. ``control`` works as in ``ask``.
-        ``rereview_pending`` explicitly re-reviews a current pending batch
-        after grant changes; pass empty decisions, not an approval.
         """
         call = await self.pending_call(session)
         if call is None:
@@ -1438,7 +1435,6 @@ class Bot:
                 engine=self.make_engine(session),
                 context_builder=builder,
                 control=control,
-                rereview_pending=rereview_pending,
             )
         except StructuredCallError:
             return TurnResult(session=session)  # someone else answered it first

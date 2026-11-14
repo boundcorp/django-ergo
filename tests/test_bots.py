@@ -363,32 +363,6 @@ async def test_approval_tool_pauses_then_resumes_with_context(tmp_path):
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_public_resume_explicitly_rereviews_pending_call(tmp_path, monkeypatch):
-    user = await User.objects.acreate(username="reviewer")
-    bot, engine = make_bot(
-        tmp_path,
-        claude_tool("add_to_list", {"item": "milk", "qty": 2}, tool_id="review-t1"),
-        say("Added."),
-    )
-    root = await bot.root_session(user)
-    assert (await bot.ask(root, "We need milk")).needs_approval
-
-    async def review(self, name, arguments, tool_id):
-        return (
-            name == "add_to_list"
-            and arguments == {"item": "milk", "qty": 2}
-            and tool_id == "review-t1"
-        )
-
-    monkeypatch.setattr(FunctionToolkit, "auto_approve", review)
-    done = await bot.resume(root, {}, rereview_pending=True)
-    assert done.text == "Added."
-    assert engine._client.calls[-1]["messages"][-1]["content"][0]["content"] == (
-        "reviewer added 2 milk"
-    )
-
-
-@pytest.mark.django_db(transaction=True)
 async def test_a_newer_turn_replaces_one_left_waiting_for_approval(tmp_path):
     """A turn the user wrote past (no card, can't be answered) must not keep the
     chat busy: queued thread messages and worker reports would never go out."""

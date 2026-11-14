@@ -112,14 +112,18 @@ For authenticated web approvals, `ctx.approval_decision` contains the persisted
 decision ID, actor ID, structured-call ID and tool-use ID for that exact human
 decision. It is `None` for automatic approvals and approval paths without
 authenticated evidence; a session owner alone is not evidence of an approval.
-The stored decision also binds the complete pending batch by hash.
+The stored decision binds the server-selected pending batch by hash and retains
+the submitted request fields. The API accepts requests without approval IDs;
+even with IDs it does not receive a client-supplied argument hash. The evidence
+therefore proves the authenticated request and the server-selected batch, not
+which arguments were actually displayed to the requester.
 
-After an authority change a trusted caller may explicitly request
-`bot.resume(session, {}, rereview_pending=True, control=control)`. This does not
-create a human approval: every pending call must pass its automatic review and
-execution-time checks. Only a current, hash-bound, unexecuted session batch is
-eligible; historical, ambiguous and pre-binding pending calls fail closed.
-Use the live turn control to fence queued messages and stops.
+Changing a grant does not automatically re-review a pending approval. A caller
+must not replay an old pending call after a grant change: the core cannot
+atomically establish that the call is still current and bind execution to
+bot-specific grant and lane locks. A new call may be reviewed under the new
+grant; pre-existing and future pending calls retain the normal human approval
+flow. This does not recover a call that was already waiting when a grant changed.
 
 Parameters come from type hints (`str`, `int`, `float`, `bool`, `list`,
 `dict`), or pass `parameters=` as JSON Schema properties. Non-string results

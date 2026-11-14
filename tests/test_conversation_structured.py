@@ -1204,67 +1204,54 @@ async def test_bot_tool_auto_and_human_execution_context_is_isolated(user):
     assert ctx.auto_approved is False
 
 
-@pytest.mark.parametrize(
-    "alteration", ["none", "binding", "arguments", "receipt", "later_message"]
-)
-async def test_rereview_only_current_bound_unexecuted_session_call(user, alteration):
+async def test_grant_change_does_not_resume_pending_but_reviews_new_calls(user):
     session = await _chat_session(user)
     state = {"grant": False}
-    ran = []
-    ctx = ToolContext(user=user, session=session)
+    effects = []
 
     def review(context, name, arguments, tool_id):
-        return state["grant"] and name == "guarded" and tool_id == "review-1"
+        return state["grant"]
 
     @bot_tool(requires_approval=True, takes_context=True, auto_approve=review)
     def guarded(context, scope: str):
-        ran.append((scope, context.auto_approved, state["grant"]))
+        effects.append((scope, context.auto_approved))
         return "done"
 
-    toolkit = FunctionToolkit.from_functions([guarded], ctx)
-    engine = claude_engine(
-        claude_tool("guarded", {"scope": "one"}, tool_id="review-1"),
-        claude_tool("submit_output", VALID_PLAN, tool_id="output-1"),
+    toolkit = FunctionToolkit.from_functions(
+        [guarded], ToolContext(user=user, session=session)
     )
     spec = StructuredCallSpec(kind="planner", response_model=Plan, toolkits=[toolkit])
+    first_engine = claude_engine(
+        claude_tool("guarded", {"scope": "old"}, tool_id="old")
+    )
     paused = await run_structured_call(
-        spec, "Do it", user=user, session=session, engine=engine, allow_approvals=True
+        spec,
+        "Old call",
+        user=user,
+        session=session,
+        engine=first_engine,
+        allow_approvals=True,
     )
     assert paused.status == StructuredCallStatus.AWAITING_APPROVAL
     state["grant"] = True
-    call = paused.call
-    if alteration == "binding":
-        call.metadata.pop("pending_review_binding")
-    elif alteration == "arguments":
-        call.metadata["pending_approvals"][0]["input"]["scope"] = "other"
-    elif alteration == "receipt":
-        call.metadata["tool_invocations"] = {"review-1": {"status": "claimed"}}
-    elif alteration == "later_message":
-        await engine.append_user_message(session, "Actually, stop")
-    if alteration in {"binding", "arguments", "receipt"}:
-        await call.asave(update_fields=["metadata"])
-    if alteration != "none":
-        with pytest.raises(StructuredCallError):
-            await structured.resume_structured_call(
-                spec, call, {}, engine=engine, rereview_pending=True
-            )
-        assert ran == []
-        assert (
-            await StructuredCall.objects.aget(pk=call.pk)
-        ).status == "awaiting_approval"
-    else:
-        done = await structured.resume_structured_call(
-            spec, call, {}, engine=engine, rereview_pending=True
-        )
-        assert done.ok
-        assert ran == [("one", True, True)]
-        assert (
-            done.call.metadata["tool_invocations"]["review-1"]["status"] == "completed"
-        )
-        with pytest.raises(StructuredCallError):
-            await structured.resume_structured_call(
-                spec, call, {}, engine=engine, rereview_pending=True
-            )
+    old = await StructuredCall.objects.aget(pk=paused.call.pk)
+    assert old.status == StructuredCallStatus.AWAITING_APPROVAL
+    assert effects == []
+
+    next_engine = claude_engine(
+        claude_tool("guarded", {"scope": "new"}, tool_id="new"),
+        claude_tool("submit_output", VALID_PLAN, tool_id="output"),
+    )
+    done = await run_structured_call(
+        spec,
+        "New call",
+        user=user,
+        session=session,
+        engine=next_engine,
+        allow_approvals=True,
+    )
+    assert done.ok
+    assert effects == [("new", True)]
 
 
 @pytest.mark.parametrize("tamper", [False, True])
@@ -1326,41 +1313,3 @@ async def test_authenticated_approval_binds_persisted_batch_and_pending(user, ta
             ]
     finally:
         authenticated_approval_batch.reset(token)
-
-
-async def test_rereview_execution_rechecks_revoked_grant(user):
-    session = await _chat_session(user)
-    ctx = ToolContext(user=user, session=session)
-    state = {"grant": False, "revoke_on_review": False}
-    effects = []
-
-    def review(context, name, arguments, tool_id):
-        allowed = state["grant"]
-        if state["revoke_on_review"]:
-            state["grant"] = False
-        return allowed
-
-    @bot_tool(requires_approval=True, takes_context=True, auto_approve=review)
-    def guarded(context, scope: str):
-        if context.auto_approved and not state["grant"]:
-            msg = "grant revoked"
-            raise ValueError(msg)
-        effects.append(scope)
-        return "done"
-
-    toolkit = FunctionToolkit.from_functions([guarded], ctx)
-    engine = claude_engine(
-        claude_tool("guarded", {"scope": "one"}, tool_id="review-1"),
-        claude_tool("submit_output", VALID_PLAN, tool_id="output-1"),
-    )
-    spec = StructuredCallSpec(kind="planner", response_model=Plan, toolkits=[toolkit])
-    paused = await run_structured_call(
-        spec, "Do it", user=user, session=session, engine=engine, allow_approvals=True
-    )
-    state.update(grant=True, revoke_on_review=True)
-    done = await structured.resume_structured_call(
-        spec, paused.call, {}, engine=engine, rereview_pending=True
-    )
-    assert done.ok
-    assert effects == []
-    assert done.call.metadata["tool_invocations"]["review-1"]["is_error"] is True

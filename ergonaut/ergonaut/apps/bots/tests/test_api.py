@@ -1,6 +1,8 @@
 import hashlib
 import json
 import shutil
+import subprocess
+import sys
 import textwrap
 import time
 
@@ -813,6 +815,7 @@ def test_authenticated_approval_provenance_survives_queue_and_is_per_tool(
 ):
     from types import SimpleNamespace
 
+    from django.db import connection
     from django_ergo.conversation.models import StructuredCall
 
     from ergonaut.api import bots as bots_api
@@ -843,6 +846,40 @@ def order(ctx, item: str) -> str:
     assert evidence["actor_id"] == str(cook.pk)
     assert evidence["call_id"] == str(call.pk)
     assert evidence["decisions"] == {milk: True, eggs: False}
+    assert evidence["request"] == {"decisions": {milk: True, eggs: False}}
+    # Read from a fresh process against the pytest database, without inheriting
+    # request context or the worker's Python state.
+    config = connection.settings_dict
+    if config["ENGINE"].endswith("postgresql"):
+        child = """
+import json, sys
+import psycopg
+from psycopg import sql
+data = json.load(sys.stdin)
+with psycopg.connect(**data["connection"]) as db, db.cursor() as cursor:
+    cursor.execute(
+        sql.SQL("SELECT metadata FROM {} WHERE id = %s").format(sql.Identifier(data["table"])),
+        (data["call_id"],),
+    )
+    print(json.dumps(cursor.fetchone()[0]["authenticated_approval_decisions"]))
+"""
+        db_options = {
+            key: config[name]
+            for key, name in (
+                ("dbname", "NAME"),
+                ("user", "USER"),
+                ("password", "PASSWORD"),
+                ("host", "HOST"),
+                ("port", "PORT"),
+            )
+            if config.get(name)
+        }
+        persisted = subprocess.check_output(
+            [sys.executable, "-c", child],
+            input=json.dumps({"connection": db_options, "table": call._meta.db_table, "call_id": str(call.pk)}),
+            text=True,
+        )
+        assert json.loads(persisted) == [evidence]
     # The worker receives only the queued decision id and reloads the evidence
     # from the database, rather than inheriting request-local authentication.
     run_turn(root["id"], **queued)
@@ -941,6 +978,23 @@ def test_decision_actor_is_authenticated_approver_not_session_owner(client, cook
     [evidence] = call.metadata["authenticated_approval_decisions"]
     assert evidence["actor_id"] == str(admin.pk)
     assert evidence["actor_id"] != str(cook.pk)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_approval_without_ids_preserves_submitted_request(client, cook, use_bots, monkeypatch):
+    from django_ergo.conversation.models import StructuredCall
+
+    from ergonaut.api import bots as bots_api
+
+    use_bots(tool_call("order", {"item": "milk"}), say("Done."))
+    root = post(client, "/api/bots/kitchen/root").json()
+    turn = post(client, f"/api/sessions/{root['id']}/messages", {"text": "Order milk"}).json()
+    monkeypatch.setattr(bots_api, "queue_turn", lambda session_id, **kwargs: True)
+    assert post(client, f"/api/sessions/{root['id']}/approvals", {"approve": True}).status_code == 200
+    [evidence] = StructuredCall.objects.get(session_id=root["id"]).metadata["authenticated_approval_decisions"]
+    assert evidence["request"] == {"approve": True}
+    assert evidence["decisions"] == {turn["approvals"][0]["id"]: True}
+    assert evidence["actor_id"] == str(cook.pk)
 
 
 @pytest.mark.django_db(transaction=True)
