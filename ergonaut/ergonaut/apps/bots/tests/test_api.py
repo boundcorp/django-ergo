@@ -935,7 +935,10 @@ def order(ctx, item: str) -> str:
 
 
 @pytest.mark.django_db(transaction=True)
-def test_revalidate_exact_current_call_after_policy_change(client, cook, bot_folder, use_bots, tmp_path, settings):
+@pytest.mark.parametrize("opt_in", [False, True])
+def test_revalidate_exact_current_call_after_policy_change(
+    client, cook, bot_folder, use_bots, tmp_path, settings, opt_in
+):
     from django_ergo.conversation.models import StructuredCall
 
     allowed, output = tmp_path / "allowed", tmp_path / "executions"
@@ -944,7 +947,7 @@ from pathlib import Path
 from django_ergo.bots import bot_tool
 def review(ctx, name, args, tool_id):
     return Path({str(allowed)!r}).exists() and args == {{"item": "milk"}}
-@bot_tool(requires_approval=True, auto_approve=review)
+@bot_tool(requires_approval=True, auto_approve=review, revalidate_pending={opt_in!r})
 def order(item: str) -> str:
     with Path({str(output)!r}).open("a") as f:
         f.write(item + "\\n")
@@ -964,6 +967,9 @@ def order(item: str) -> str:
     assert post(client, endpoint, {**request, "call_id": "stale"}).status_code == 409
     assert post(client, endpoint, request).status_code == 200
     call.refresh_from_db()
+    if not opt_in:
+        assert call.status == "awaiting_approval" and not output.exists()
+        return
     assert call.status == "completed"
     assert output.read_text().splitlines() == ["milk"]
     assert post(client, endpoint, request).status_code == 409
@@ -982,7 +988,7 @@ from pathlib import Path
 from django_ergo.bots import bot_tool
 def review(ctx, name, args, tool_id):
     return Path({str(allowed)!r}).exists() and (args == {{"item": "milk"}} or Path({str(allowed)!r}).read_text() == "all")
-@bot_tool(requires_approval=True, auto_approve=review)
+@bot_tool(requires_approval=True, auto_approve=review, revalidate_pending=True)
 def order(item: str) -> str:
     Path({str(output)!r}).write_text(item)
     return item

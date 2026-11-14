@@ -1634,7 +1634,12 @@ async def resume_structured_call(  # noqa: C901, PLR0912, PLR0913, PLR0915
     if revalidate_digest:
         for item in pending:
             toolkit = find_toolkit(run.toolkits, item["name"])
-            if not run.needs_approval(item["name"]) or toolkit is None:
+            supports = getattr(toolkit, "supports_pending_revalidation", None)
+            if (
+                not run.needs_approval(item["name"])
+                or not callable(supports)
+                or supports(item["name"]) is not True
+            ):
                 msg = "Pending call cannot be automatically approved"
                 raise StructuredCallError(msg)
             review_input = copy.deepcopy(item["input"])

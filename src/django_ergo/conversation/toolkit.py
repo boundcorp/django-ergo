@@ -68,6 +68,10 @@ class Toolkit(ABC):
         """
         return False
 
+    def supports_pending_revalidation(self, tool_name: str) -> bool:
+        """Opt in only when execution revalidates mutable authority under its own locks."""
+        return False
+
     async def auto_approve(self, tool_name: str, arguments: dict, tool_id: str) -> bool:
         """Whether a call that requires approval may run without asking.
 

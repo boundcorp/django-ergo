@@ -124,9 +124,10 @@ After a scoped policy changes, the active session owner may explicitly POST
 a human approval and cannot revive a grant. The worker holds the session turn
 lock, checks the latest call and durable tool-use transcript, and asks the
 current automatic policy about every item. Any changed, superseded, already
-invoked, mixed out-of-scope or unapproved batch stays pending. The actual tool
-must recheck its mutable grant at execution under its own locks; execution uses
-a durable at-most-once receipt, so an uncertain invocation is not resent.
+invoked, mixed out-of-scope or unapproved batch stays pending. Tools are not
+eligible by default: a tool must explicitly set `revalidate_pending=True` and
+recheck its mutable grant at execution under its own locks. Execution uses a
+durable at-most-once receipt, so an uncertain invocation is not resent.
 
 Parameters come from type hints (`str`, `int`, `float`, `bool`, `list`,
 `dict`), or pass `parameters=` as JSON Schema properties. Non-string results
