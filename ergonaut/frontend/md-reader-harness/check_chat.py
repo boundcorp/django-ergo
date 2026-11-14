@@ -54,7 +54,7 @@ def main():
                 headless=True, executable_path=os.environ.get("ERGONAUT_TEST_CHROMIUM"), args=["--no-sandbox"]
             )
             try:
-                for name, width, height in [("desktop", 1440, 900), ("mobile", 390, 844)]:
+                for name, width, height in [("desktop", 1440, 900), ("wide", 1920, 1080), ("mobile", 390, 844)]:
                     context = browser.new_context(viewport={"width": width, "height": height}, device_scale_factor=1)
                     page = context.new_page()
                     unexpected = []
@@ -86,6 +86,19 @@ def main():
                     page.keyboard.press("Enter")
                     dialog = page.get_by_role("dialog", name="release-plan.md")
                     dialog.get_by_role("heading", name="Release plan", exact=True).wait_for()
+                    geometry = dialog.evaluate("""el => {
+                        const rect = el.getBoundingClientRect()
+                        const content = el.querySelector('.markdown').getBoundingClientRect()
+                        return {x: rect.x, y: rect.y, width: rect.width, height: rect.height,
+                                proseWidth: content.width, proseLeft: content.left}
+                    }""")
+                    if width > 600:
+                        assert geometry["x"] == geometry["y"] == 0, geometry
+                        assert geometry["width"] == width and geometry["height"] == height, geometry
+                        assert geometry["proseWidth"] <= 832, geometry
+                        assert abs(geometry["proseLeft"] - (width - geometry["proseWidth"]) / 2) < 1, geometry
+                    else:
+                        assert geometry["width"] < width and geometry["height"] < height, geometry
                     assert composer.input_value() == "Unsent draft: review the release plan."
                     assert scroll.evaluate("el => el.scrollTop") == before["top"]
                     page.screenshot(path=str(OUTPUT / f"{name}-chat-reader.png"))
@@ -125,6 +138,12 @@ def main():
                     assert opener.evaluate("el => el === document.activeElement")
                     assert scroll.evaluate("el => el.scrollTop") == before["top"]
                     assert composer.input_value() == "Unsent draft: review the release plan."
+                    opener.click()
+                    dialog.wait_for()
+                    dialog.get_by_role("button", name="Close reader").click()
+                    dialog.wait_for(state="detached")
+                    assert composer.input_value() == "Unsent draft: review the release plan."
+                    assert scroll.evaluate("el => el.scrollTop") == before["top"]
                     assert not unexpected, unexpected
                     print(
                         f"{name}: real Chat, scrolled-up reader, fragment/relative links, live event, focus/scroll and draft passed"

@@ -102,7 +102,8 @@ function Reader({ id, label, onClose }: { id: string; label: string; onClose: ()
       <header className="md-reader-header">
         <h2 id={titleId}>{label}</h2>
         <button type="button" autoFocus onClick={close} aria-label="Close reader">
-          Close
+          <span className="md-reader-return-desktop">Return to chat</span>
+          <span className="md-reader-return-mobile">Close</span>
         </button>
       </header>
       <div className="md-reader-actions">
