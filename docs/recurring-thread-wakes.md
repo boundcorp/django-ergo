@@ -188,10 +188,13 @@ Migration `0047_recurring_wakes` adds three scheduler tables and nullable
 with no data backfill. Older code ignores these additions. No production schema
 or runtime flag was changed during validation.
 
-Draft PR only. Independent meaningful review and green CI are required before any
-merge decision. No merge, production migration, restart, deployment, image dispatch
-or infrastructure/secret change is performed by this task. An ordinary future
-merge can auto-deploy Ergonaut and run additive migrations through its existing
-init containers; account for that schema effect during review. Roll back code
-without reversing the additive migration; reversal deletes schedule history and
-requires a separate backup/approval decision.
+Normal reviewed merge and automatic deployment are authorized under the standing
+Ergonaut workflow, after independent meaningful review and green CI. This includes
+the additive migration run by the existing web init container; there is no extra
+proposal-only merge gate. Manual runtime restarts, secret/configuration/shared-
+infrastructure edits and paid polling acceptance are outside this authorization.
+Never restart devbox. If automatic rollout does not occur, report runtime
+verification as pending rather than forcing it.
+
+Roll back code without reversing the additive migration; reversal deletes schedule
+history and requires a separate backup/approval decision.
