@@ -17,7 +17,6 @@ from unittest.mock import PropertyMock, patch
 
 import pytest
 from asgiref.sync import async_to_sync, sync_to_async
-from django_ergo.bots import messaging, webhooks
 from ninja.errors import HttpError
 
 pytest.importorskip("livekit.plugins.openai.realtime.gpt_live_model")
@@ -39,7 +38,6 @@ from ergonaut.api.tests.test_realtime_voice_budget import (  # noqa: F401
     use_bots,
 )
 from ergonaut.apps.bots.models import RealtimeVoiceSession
-from ergonaut.apps.bots.tests.fakes import say, tool_call
 
 
 @pytest.fixture(autouse=True)
@@ -95,86 +93,6 @@ def drain(session):
 
 
 @pytest.mark.django_db(transaction=True)
-def test_sdk_delegation_assembles_resumed_speech_and_correlates_durable_commentary(cooking, use_bots, held_messages):
-    chat, vid, other = cooking
-    client = use_bots(tool_call("ergo_chat_history_sources", {}), say("The earlier report was pan-frying chicken."))
-    snapshot = realtime_voice.bridge_state(vid)
-
-    async def scenario():
-        assistant = bridge.Assistant(vid, snapshot, None)
-        assistant.grace = 0.2
-        sdk = offline_session(assistant)
-        with patch.object(bridge.Assistant, "duplex_session", new_callable=PropertyMock, return_value=sdk):
-            await bind(assistant, sdk)
-            config = sdk._session_start_event().model_dump(exclude_none=True)
-            assert config["session"]["delegation"] == {"type": "client"}
-            await sdk._update_tools([])
-            assistant.on_user_state(SimpleNamespace(new_state="speaking"))
-            sdk._handle_event(
-                {"type": "session.input_transcript.delta", "delta": "Search my history. ", "start_ms": 0, "end_ms": 100}
-            )
-            wire = {"type": "session.delegation.created", "delegation": {"id": "offline-task", "target": "client"}}
-            sdk._handle_event(wire)
-            sdk._end_speech("user")
-            assistant.on_user_state(SimpleNamespace(new_state="listening"))
-            await asyncio.sleep(0.08)  # internal pause, shorter than the acoustic grace
-            assert not held_messages
-            assistant.on_user_state(SimpleNamespace(new_state="speaking"))
-            sdk._handle_event(
-                {
-                    "type": "session.input_transcript.delta",
-                    "delta": "Do not claim you checked",
-                    "start_ms": 1000,
-                    "end_ms": 1100,
-                }
-            )
-            assistant.on_user_state(SimpleNamespace(new_state="listening"))
-            await asyncio.sleep(0.08)
-            assert not held_messages
-            # A late transcript tail must be drained and finalized, not dropped at VAD EOS.
-            sdk._handle_event(
-                {
-                    "type": "session.input_transcript.delta",
-                    "delta": " before the result.",
-                    "start_ms": 1100,
-                    "end_ms": 1200,
-                }
-            )
-            sdk._end_speech("user")
-            sdk._handle_event(wire)
-            await settle(assistant)
-            queued = await sync_to_async(realtime_voice.bridge_state)(vid)
-            assert queued["delegations"][0]["text"] == "Search my history. Do not claim you checked before the result."
-            assert len(held_messages) == 1
-            await sync_to_async(messaging.deliver)(held_messages[0], registry=webhooks.get_registry())
-            result = await sync_to_async(realtime_voice.bridge_state)(vid)
-            await assistant.deliver_results(result)
-            await assistant.deliver_results(result)  # reconnect/poll duplicate cannot announce twice
-            await assistant.persist_turn(llm.ChatMessage(role="assistant", content=["Delayed speech."]))
-            events = drain(sdk)
-            outcomes = [e for e in events if e["type"] == "session.commentary.append"]
-            assert [(e["delegation_id"], e["content"]) for e in outcomes] == [
-                ("offline-task", "The earlier report was pan-frying chicken.")
-            ]
-            latest = await sync_to_async(realtime_voice.bridge_state)(vid)
-            assert not any("No verified background result" in e["text"] for e in latest["events"])
-        resumed = bridge.Assistant(vid, await sync_to_async(realtime_voice.bridge_state)(vid), None)
-        sdk = offline_session(resumed)
-        with patch.object(bridge.Assistant, "duplex_session", new_callable=PropertyMock, return_value=sdk):
-            await bind(resumed, sdk)
-
-    async_to_sync(scenario)()
-    task = realtime_voice.bridge_state(vid)["delegations"][0]
-    assert task["status"] == "answered"
-    assert chat.structured_calls.get().metadata["budget"]["used"]["model_turns"] == 2
-    assert all(options["max_retries"] == 0 for options in client.options)
-    assert (
-        RealtimeVoiceSession.objects.get(pk=vid).events.filter(kind="result", delivery="announcement_claimed").exists()
-    )
-    assert not RealtimeVoiceSession.objects.get(pk=other).events.exists()
-
-
-@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("wire_delegation", [None, {"id": "wrong-target", "target": "responses"}, {"target": "client"}])
 def test_no_client_signal_cannot_establish_background_success(cooking, held_messages, wire_delegation):
     _, vid, _ = cooking
@@ -193,110 +111,6 @@ def test_no_client_signal_cannot_establish_background_success(cooking, held_mess
             assert state["delegations"] == []
             assert not any(event["kind"] == "result" for event in state["events"])
             assert not any("Verified background outcome" in event.get("content", "") for event in drain(sdk))
-
-    async_to_sync(scenario)()
-    assert held_messages == []
-
-
-@pytest.mark.django_db(transaction=True)
-def test_callback_exception_is_consumed_and_durable_without_leaking_error(cooking, held_messages):
-    _, vid, _ = cooking
-    snapshot = realtime_voice.bridge_state(vid)
-
-    async def scenario():
-        assistant = bridge.Assistant(vid, snapshot, None)
-        sdk = offline_session(assistant)
-        with patch.object(bridge.Assistant, "duplex_session", new_callable=PropertyMock, return_value=sdk):
-            await bind(assistant, sdk)
-            sdk._history.add_message(role="user", content="Check history.")
-            with patch.object(bridge, "begin_pending", side_effect=RuntimeError("sensitive-provider-detail")):
-                sdk._handle_event(
-                    {"type": "session.delegation.created", "delegation": {"id": "offline-error", "target": "client"}}
-                )
-                await settle(assistant)
-            state = await sync_to_async(realtime_voice.bridge_state)(vid)
-            assert any(
-                event["kind"] == "background_status" and "could not be confirmed" in event["text"]
-                for event in state["events"]
-            )
-            commentary = drain(sdk)
-            assert any(
-                "Check the durable background status" in event["content"] and event["delegation_id"] == "offline-error"
-                for event in commentary
-            )
-            assert "sensitive-provider-detail" not in str(state) + str(commentary)
-
-    async_to_sync(scenario)()
-    assert held_messages == []
-
-
-@pytest.mark.django_db(transaction=True)
-def test_saved_context_is_not_an_implicit_user_request_or_fulfilled_lookup(cooking, held_messages):
-    _, vid, _ = cooking
-    snapshot = realtime_voice.bridge_state(vid)
-    snapshot["events"] = []
-    snapshot["state"] = {"current_step": "History checked"}
-
-    async def scenario():
-        assistant = bridge.Assistant(vid, snapshot, None)
-        sdk = offline_session(assistant)
-        with patch.object(bridge.Assistant, "duplex_session", new_callable=PropertyMock, return_value=sdk):
-            await bind(assistant, sdk)
-            sdk._handle_event(
-                {"type": "session.delegation.created", "delegation": {"id": "empty-context", "target": "client"}}
-            )
-            with patch.object(bridge, "PENDING_TIMEOUT_SECONDS", 0.1):
-                await settle(assistant)
-            state = await sync_to_async(realtime_voice.bridge_state)(vid)
-            assert state["delegations"] == []
-            assert state["state"]["pending_delegation"]["status"] == "expired"
-            assert state["state"]["pending_delegation"]["fragments"] == []
-        resumed = bridge.Assistant(vid, await sync_to_async(realtime_voice.bridge_state)(vid), None)
-        sdk = offline_session(resumed)
-        with patch.object(bridge.Assistant, "duplex_session", new_callable=PropertyMock, return_value=sdk):
-            await bind(resumed, sdk)
-
-    async_to_sync(scenario)()
-    assert held_messages == []
-
-
-@pytest.mark.django_db(transaction=True)
-def test_once_the_calls_one_request_is_taken_the_voice_is_told_and_later_signals_are_answered(cooking, held_messages):
-    _, vid, _ = cooking
-
-    def signal(delegation_id):
-        return {"type": "session.delegation.created", "delegation": {"id": delegation_id, "target": "client"}}
-
-    async def scenario():
-        assistant = bridge.Assistant(vid, await sync_to_async(realtime_voice.bridge_state)(vid), None)
-        sdk = offline_session(assistant)
-        with patch.object(bridge.Assistant, "duplex_session", new_callable=PropertyMock, return_value=sdk):
-            await bind(assistant, sdk)
-            assert drain(sdk) == []  # a fresh session's request is still available
-            sdk._handle_event(signal("first"))
-            async with asyncio.timeout(5):  # the first signal is recorded as this call's request
-                while not (await sync_to_async(realtime_voice.bridge_state)(vid))["state"].get("pending_delegation"):
-                    await asyncio.sleep(0.01)
-            sdk._handle_event(signal("first"))  # a repeated wire event is not a second request
-            sdk._handle_event(signal("second"))
-            assistant.stop()
-            await settle(assistant)
-            events = drain(sdk)
-            answers = [event for event in events if event["type"] == "session.commentary.append"]
-            assert [(event["delegation_id"], event["content"]) for event in answers] == [
-                ("second", bridge.ONE_REQUEST_USED)
-            ]
-        # A reconnected bridge knows the logical session's request is already taken (here never submitted).
-        resumed = bridge.Assistant(vid, await sync_to_async(realtime_voice.bridge_state)(vid), None)
-        sdk = offline_session(resumed)
-        with patch.object(bridge.Assistant, "duplex_session", new_callable=PropertyMock, return_value=sdk):
-            await bind(resumed, sdk)
-            sdk._handle_event(signal("after-reconnect"))
-            await settle(resumed)
-            events = drain(sdk)
-            answers = [event for event in events if event["type"] == "session.commentary.append"]
-            assert [event["delegation_id"] for event in answers] == ["after-reconnect"]
-            assert not resumed.jobs and resumed.pending_id is None
 
     async_to_sync(scenario)()
     assert held_messages == []
@@ -365,9 +179,6 @@ def test_input_evidence_uses_real_sdk_wire_boundaries_and_is_bounded_and_sanitiz
         sdk._session_id = None
         with patch.object(bridge.Assistant, "duplex_session", new_callable=PropertyMock, return_value=sdk):
             await bind(assistant, sdk)
-            assert sdk._session_start_event().model_dump(exclude_none=True)["session"]["delegation"] == {
-                "type": "client"
-            }
             sdk._handle_event({"type": "session.input_transcript.delta", "delta": " \t", "start_ms": 0, "end_ms": 10})
             await settle(assistant)
             assert not assistant.input_noted  # whitespace is not provider transcription evidence
@@ -432,46 +243,6 @@ def test_input_evidence_uses_real_sdk_wire_boundaries_and_is_bounded_and_sanitiz
     assert evidence.count() == 4
     assert not RealtimeVoiceSession.objects.get(pk=other).events.exists()
     assert held_messages == []
-
-
-@pytest.mark.django_db(transaction=True)
-@pytest.mark.parametrize("stop", [True, False])
-def test_stop_or_missing_final_never_dispatches(cooking, held_messages, stop):
-    _, vid, _ = cooking
-
-    async def scenario():
-        assistant = bridge.Assistant(vid, await sync_to_async(realtime_voice.bridge_state)(vid), None)
-        assistant.grace = 0.05
-        sdk = offline_session(assistant)
-        with patch.object(bridge.Assistant, "duplex_session", new_callable=PropertyMock, return_value=sdk):
-            await bind(assistant, sdk)
-            assistant.on_user_state(SimpleNamespace(new_state="speaking"))
-            sdk._handle_event(
-                {"type": "session.input_transcript.delta", "delta": "Search", "start_ms": 0, "end_ms": 100}
-            )
-            with patch.object(bridge, "PENDING_TIMEOUT_SECONDS", 0.3):
-                sdk._handle_event(
-                    {"type": "session.delegation.created", "delegation": {"id": "unfinished", "target": "client"}}
-                )
-                assistant.on_user_state(SimpleNamespace(new_state="listening"))
-                if stop:
-                    # Wait for durable signal before shutting the bridge down.
-                    async with asyncio.timeout(5):
-                        while not (await sync_to_async(realtime_voice.bridge_state)(vid))["state"].get(
-                            "pending_delegation"
-                        ):
-                            await asyncio.sleep(0.01)
-                    assistant.stop()
-                    await settle(assistant)
-                    await sync_to_async(realtime_voice.close_pending)(vid, "unfinished")
-                else:
-                    await settle(assistant)  # no SDK final, so the deadline must expire
-            state = await sync_to_async(realtime_voice.bridge_state)(vid)
-            assert state["state"]["pending_delegation"]["status"] == ("cancelled" if stop else "expired")
-            assert state["delegations"] == []
-
-    async_to_sync(scenario)()
-    assert not held_messages
 
 
 @pytest.mark.django_db(transaction=True)
@@ -617,9 +388,6 @@ def test_standby_requires_observed_vad_end_and_final_drained_transcript(cooking)
                 clock.return_value = 102.0
                 assert not assistant.safe_to_standby(snapshot)
                 assistant.final_fragments.add("speech")
-                snapshot["state"]["pending_delegation"] = {"status": "collecting"}
-                assert not assistant.safe_to_standby(snapshot)
-                snapshot["state"]["pending_delegation"]["status"] = "submitted"
                 assert assistant.safe_to_standby(snapshot)
                 assistant.on_user_state(SimpleNamespace(new_state="speaking"))
                 assert not assistant.safe_to_standby(snapshot)
@@ -1026,8 +794,6 @@ def test_sdk_user_drafts_coalesce_and_final_flush_survives_stop_without_history_
         sdk = offline_session(assistant)
         with patch.object(bridge.Assistant, "duplex_session", new_callable=PropertyMock, return_value=sdk):
             await bind(assistant, sdk)
-            assistant.pending_id = "pending"
-            await sync_to_async(realtime_voice.begin_pending)(vid, "pending", {})
             with patch.object(bridge, "publish_live_state", wraps=realtime_voice.publish_live_state) as publish:
                 for index in range(200):
                     sdk._handle_event(
@@ -1045,14 +811,13 @@ def test_sdk_user_drafts_coalesce_and_final_flush_survives_stop_without_history_
                 partial = await sync_to_async(realtime_voice.bridge_state)(vid, include_briefing=False)
                 [draft] = [t for t in partial["transcript"] if t["turn_id"] == turn_id]
                 assert not draft["is_final"] and draft["text"] == "x" * 200
-                assert partial["state"]["pending_delegation"]["fragments"] == [{"id": turn_id, "text": "x" * 200}]
                 assert await sync_to_async(chat.messages.count)() == baseline
                 sdk._end_speech("user")
                 # The framework's conversation_item_added is the sole final-record path.
                 item = llm.ChatMessage(id=turn_id, role="user", content=["x" * 200])
                 assistant.queue_turn(item)
                 assistant.queue_turn(item)
-                assistant.stop()  # queued final is not one of the cancelled assembly jobs
+                assistant.stop()  # already accepted final history writes survive shutdown
                 assistant.on_transcription(SimpleNamespace(item_id=turn_id, transcript="late", is_final=False))
                 await assistant.finish_live()
                 assert publish.call_count <= 3
@@ -1234,90 +999,5 @@ def test_delayed_final_write_never_removes_visible_draft_before_atomic_final_rep
             release.set()
             assistant.stop()
             await assistant.finish_live()
-
-    async_to_sync(scenario)()
-
-
-@pytest.mark.django_db(transaction=True)
-def test_actual_sdk_accepts_two_distinct_sequential_requests_without_replaying_prior_speech(
-    cooking, settings, held_messages, use_bots
-):
-    from ergonaut.realtime_voice_execution import initial_state
-
-    chat, vid, _ = cooking
-    settings.REALTIME_VOICE_THREAD_EXECUTION_AUTHORIZATIONS = {
-        str(chat.pk): {
-            "owner": chat.user.get_username(),
-            "bot": chat.bot_name,
-            "normal_task_costs_approved": True,
-            "approval_reference": "offline-root",
-            "max_requests": 3,
-            "followup_costs_approved": True,
-            "followup_approval_reference": "offline-sequential",
-        }
-    }
-    row = RealtimeVoiceSession.objects.get(pk=vid)
-    row.state = {**row.state, **initial_state(chat, chat.user)}
-    row.save(update_fields=["state"])
-    use_bots(say("First verified result."), say("Second verified result."))
-
-    async def scenario():
-        assistant = bridge.Assistant(vid, await sync_to_async(realtime_voice.bridge_state)(vid), None)
-        assistant.grace = 0.01
-        sdk = offline_session(assistant)
-        with patch.object(bridge.Assistant, "duplex_session", new_callable=PropertyMock, return_value=sdk):
-            await bind(assistant, sdk)
-            previous_result = None
-            for index, text in enumerate(("Inspect the current status.", "Forward this distinct follow-up.")):
-                assistant.on_user_state(SimpleNamespace(new_state="speaking"))
-                assert not assistant.safe_to_standby(await sync_to_async(realtime_voice.bridge_state)(vid))
-                sdk._handle_event(
-                    {
-                        "type": "session.input_transcript.delta",
-                        "delta": text,
-                        "start_ms": index * 2000,
-                        "end_ms": index * 2000 + 1000,
-                    }
-                )
-                sdk._end_speech("user")
-                assistant.on_user_state(SimpleNamespace(new_state="listening"))
-                wire = {
-                    "type": "session.delegation.created",
-                    "delegation": {"id": f"sequential-{index}", "target": "client"},
-                }
-                sdk._handle_event(wire)
-                sdk._handle_event(wire)  # Duplicate provider event is not another execution.
-                await settle(assistant)
-                assert assistant.request_submitted
-                queued = await sync_to_async(realtime_voice.bridge_state)(vid)
-                await assistant.deliver_results(queued)
-                if previous_result is not None:
-                    await assistant.deliver_results(previous_result)  # An old completion cannot release newer work.
-                assert assistant.execution_pending
-                assert assistant.safe_to_standby(queued)  # Consumed speech stays drained, not reusable.
-                sdk._handle_event(
-                    {
-                        "type": "session.delegation.created",
-                        "delegation": {"id": f"concurrent-{index}", "target": "client"},
-                    }
-                )
-                await settle(assistant)
-                assert len(held_messages) == index + 1
-                assert assistant.capacity["used"] == index + 1
-                await sync_to_async(messaging.deliver)(held_messages[-1], registry=webhooks.get_registry())
-                snapshot = await sync_to_async(realtime_voice.bridge_state)(vid)
-                await assistant.deliver_results(snapshot)
-                await assistant.deliver_results(snapshot)  # No replayed announcement.
-                assert snapshot["delegations"][-1]["text"] == text
-                assert not assistant.execution_pending
-                previous_result = snapshot
-            snapshot = await sync_to_async(realtime_voice.bridge_state)(vid)
-            assert snapshot["request_budget"]["remaining"] == 1
-            comments = [e for e in drain(sdk) if e["type"] == "session.commentary.append"]
-            results = [e for e in comments if e["content"] in ("First verified result.", "Second verified result.")]
-            assert [(e["delegation_id"], e["content"]) for e in results] == [
-                ("sequential-0", "First verified result."),
-                ("sequential-1", "Second verified result."),
-            ]
 
     async_to_sync(scenario)()

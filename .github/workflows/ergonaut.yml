@@ -56,6 +56,48 @@ jobs:
       - name: Check migrations
         run: env -u DATABASE_URL .venv/bin/python manage.py makemigrations --check --dry-run
 
+  # A separate environment is required: the native voice SDK pins OpenAI 3,
+  # while the normal web/library environment deliberately remains on OpenAI <3.
+  native-voice:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    services:
+      redis:
+        image: redis:7
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 5s
+          --health-timeout 3s --health-retries 5
+    env:
+      VOICE_TEST_BROKER_URL: redis://127.0.0.1:6379/0
+      VOICE_TEST_BRIDGE_PYTHON: .voice-venv/bin/python
+      PYTHONPATH: ".:../src"
+    defaults:
+      run:
+        working-directory: ergonaut
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install isolated native voice runtime
+        run: |
+          python -m pip install --upgrade pip uv
+          uv venv -p 3.12 .voice-venv
+          uv pip install --python .voice-venv/bin/python -e "..[legacy,bots,images,observability]" -e .
+          uv pip install --python .voice-venv/bin/python -r realtime-voice-requirements.txt
+      - name: Exercise native parser and durable normal-thread admission offline
+        run: >-
+          env -u DATABASE_URL -u OPENAI_API_KEY -u ANTHROPIC_API_KEY -u TEST_OPENAI
+          .voice-venv/bin/python -m pytest -q
+          ergonaut/api/tests/test_realtime_voice_interpreter.py
+          ergonaut/api/tests/test_realtime_voice_execution.py
+          ergonaut/api/tests/test_realtime_voice_outbox.py
+          ergonaut/api/tests/test_realtime_voice_broker.py
+          ../artifacts/voice-interpreter-20261114/test_native_timing.py
+
+
   # The web app: type check and every *.test.ts(x) under src (bun runs the
   # node:test suites too).
   frontend:

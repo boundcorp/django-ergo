@@ -1,0 +1,33 @@
+{
+  "evidence_kind": "public documentation and pinned local SDK; not an invoice or measured provider usage",
+  "voice_model": "gpt-live-1",
+  "backend_model_selected_by_prototype": "gpt-5.6-luna",
+  "backend_entitlement_verified": false,
+  "backend_service_tier": "default",
+  "backend_reasoning_effort": "none",
+  "backend_max_output_tokens_per_response": 1024,
+  "voice_usd_per_minute": 0.05,
+  "voice_billing_granularity": "per second; backend model and tool usage separate",
+  "backend_standard_short_context_usd_per_million_tokens": {"uncached_input": 0.2, "cached_input": 0.02, "output": 1.2, "cache_write_30m": 0.25, "cache_write_12h": 0.5},
+  "backend_standard_long_context_usd_per_million_tokens": {"uncached_input": 0.4, "cached_input": 0.04, "output": 1.8, "cache_write_30m": 0.5, "cache_write_12h": 1.0},
+  "short_context_maximum_input_tokens": 272000,
+  "backend_documented_maximum_input_tokens": 922000,
+  "conditional_output_only_usd_per_response_at_1024_tokens": {"short_context": 0.0012288, "long_context": 0.0018432},
+  "conditional_voice_only_usd_at_90_seconds": 0.075,
+  "actual_backend_input_tokens": null,
+  "actual_backend_output_tokens": null,
+  "actual_backend_response_count": null,
+  "actual_backend_latency_seconds": null,
+  "actual_normal_task_model": null,
+  "actual_invoice": null,
+  "livekit_project_allowance_and_incremental_fee": null,
+  "sources": [
+    "https://developers.openai.com/api/docs/pricing",
+    "https://developers.openai.com/api/docs/models/gpt-5.6-luna",
+    "https://developers.openai.com/api/docs/models/gpt-live-1",
+    "https://developers.openai.com/api/docs/guides/live-delegation",
+    "artifacts/voice-causal-20261114/deployed_sdk_gpt_live.py:176-205",
+    "ergonaut/realtime-voice-requirements.txt"
+  ],
+  "limits": "Output-only figures exclude input/cache writes, continuation responses, normal bot task inference, LiveKit, taxes and billing adjustments. Offline scripted function arguments and replies are not provider token-usage evidence. No provider API request or generation was made."
+}

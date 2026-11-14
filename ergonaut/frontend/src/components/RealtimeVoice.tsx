@@ -1050,7 +1050,10 @@ export function VoicePage() {
             {voice.request_budget && (
               <>
                 {' '}
-                · {voice.request_budget.remaining} of {voice.request_budget.limit} requests remaining
+                ·{' '}
+                {voice.request_budget.limit === null
+                  ? 'no cumulative request cap'
+                  : `${voice.request_budget.remaining} of ${voice.request_budget.limit} requests remaining`}
               </>
             )}
           </summary>

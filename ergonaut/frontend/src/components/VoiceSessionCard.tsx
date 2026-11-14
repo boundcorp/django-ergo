@@ -63,16 +63,23 @@ export function VoiceBackgroundWork({ session }: { session: RealtimeVoiceSession
       {budget && (
         <div aria-label="Voice request allowance" className="mt-1">
           <p>
-            Voice requests: {budget.remaining} of {budget.limit} remaining · {budget.used} used.
+            {budget.limit === null
+              ? `Intentional requests: no cumulative cap · ${budget.used} submitted.`
+              : `Voice requests: ${budget.remaining} of ${budget.limit} remaining · ${budget.used} used.`}
           </p>
-          {budget.collecting ? (
+          {budget.limit === null ? (
+            <p>
+              {budget.inflight_count ?? 0} of {budget.inflight_limit ?? 4} concurrent requests pending. Independent
+              requests need not wait for another result; nothing starts automatically.
+            </p>
+          ) : budget.collecting ? (
             <p>Collecting the current request; wait for submission before making another voice request.</p>
           ) : budget.inflight ? (
             <p>
               A request is pending; wait for its result before making another voice request. Requests are sequential.
             </p>
           ) : (
-            budget.remaining > 0 && <p>Requests are sequential; nothing starts automatically.</p>
+            (budget.remaining ?? 0) > 0 && <p>Requests are sequential; nothing starts automatically.</p>
           )}
           {budget.remaining === 0 && (
             <p>

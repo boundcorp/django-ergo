@@ -17,15 +17,67 @@ UNKNOWN billing/allowance boundaries and a reusable owner/time-filtered
 `voice_audit` READ ONLY metadata export. The completed 02:10 backend call records
 `claude-opus-5-5`, not the earlier reconstructed Codex route.
 
+## Native interpreter cutover — offline draft, not deployed
+
+The interpreter/coordinator prototype replaces caption/VAD task assembly with supported
+**same-connection Responses delegation**. It does not repair or contain the deployed
+cap-three bridge. The previously observed release `7b4b852c` / image `322a747a` remains
+an unrepaired P1: synthetic replay of its exact served source mixes late earlier text
+into a later request. That is a demonstrated unsafe selection, not observed owner harm.
+PR #332 remains an unsafe draft; this implementation is based separately on `origin/main`.
+
+`GPTLiveModel(model="gpt-live-1", delegation="responses", responses_options=...)`
+exposes only `ergo_voice_intent` to managed backend `gpt-5.6-luna` (default tier,
+reasoning `none`, at most 1,024 output tokens per response). The normal owning bot
+still executes accepted work; the interpreter does not receive its action tools.
+One application provider socket and the original 90-second deadline are unchanged.
+
+The coordinator first commits the exact raw envelope, then admits only a completed
+function item inside a successfully completed, identified response. It retains
+session/bridge/delegation/response/call/item identity, exact arguments and original
+receipts across replay and response restarts. Missing, orphaned, partial, conflicting,
+failed, interrupted or multi-call responses cannot start work. A continuation of a
+delegation is not a new intention. Captions remain display/history evidence only.
+
+The five arguments are `kind`, `intent_id`, `target_intent_id`, `request_text`,
+`clarification`. Kinds are `new_request`, `clarify`, `correct`, `cancel`, `status`,
+`continue`. Uncertain intent and unknown/evicted targets require useful clarification;
+clear requests do not require mandatory confirmation. Bounded context retains the
+12 most recent authoritative intents in explicit chronological order, not JSON-object
+order. Durable dedup identities are never evicted. Status/continuation/result reading
+do not create work. Corrections/cancellation after submission fail closed with normal
+thread-control guidance; the prototype does not pretend it can safely stop or rewrite
+already accepted work. Function arguments are never action approval.
+
+With separately reviewed follow-up costs, native admission has **no cumulative
+intentional-request count cap**. Four in-flight requests provide backpressure; a new
+independent request need not wait for an earlier task's completion. A single-request
+cost grant is not silently widened. Owner/bot/thread access, normal engine/tools,
+costs, action approvals and async execution after End are retained. Exact raw evidence
+has explicit safety bounds: 64 KiB per event and 2 MiB per logical session; overflow
+fails closed without discarding earlier identities. The transient bridge queue holds
+at most 128 relevant envelopes; overload disables further admission on that connection.
+
+Native transport and scripted handlers prove source selection and lifecycle safety,
+not correct semantic interpretation of every utterance. No provider inference,
+microphone/room/device test, rollout or billing change is included in offline approval.
+Managed backend token usage, real latency, project entitlement, invoices and LiveKit
+allowance remain unmeasured. [OpenAI pricing](https://developers.openai.com/api/docs/pricing)
+charges backend inference separately from `$0.05/min` GPT-Live duration; the former
+client-mode full-stack estimate below is historical and does not price this cutover.
+See `artifacts/voice-interpreter-20261114/` for the native replay, synthetic timing,
+actual disposable-session browser fixtures and cost evidence.
+
+
 ## Adapter and setup
 
-The pinned direct adapter is `livekit-agents==1.8.11`, `livekit-plugins-openai==1.8.11` and `livekit-plugins-silero==1.8.11`; it uses `GPTLiveModel(model="gpt-live-1", delegation="client")`, not the older Realtime adapter or a dictation pipeline. [LiveKit](https://docs.livekit.io/agents/models/realtime/gpt-live.md) and [OpenAI](https://developers.openai.com/api/docs/guides/live) document this combination. The adapter's OpenAI SDK 3.x requirement conflicts with Ergo's `<3` dependency; use a separate bridge environment with the Ergonaut source on `PYTHONPATH`, not a production dependency upgrade. `livekit-api==1.2.2` provides Ergonaut's room token signer.
+The pinned direct adapter is `livekit-agents==1.8.11`, `livekit-plugins-openai==1.8.11`, `livekit-plugins-silero==1.8.11` and `openai==3.49.0`. The native prototype uses `GPTLiveModel` Responses delegation, not the older Realtime adapter or a dictation pipeline. [LiveKit](https://docs.livekit.io/agents/models/realtime/gpt-live.md) and [OpenAI](https://developers.openai.com/api/docs/guides/live-delegation) document the supported combination. OpenAI SDK 3 conflicts with Ergo's `<3` dependency; use the separate bridge environment with the source on `PYTHONPATH`, not a production dependency upgrade. `livekit-api==1.2.2` remains Ergonaut's room token signer.
 
 The isolated bridge requirements also pin `redis==8.1.0` for the Celery/Kombu Redis transport; the repository's OpenAI SDK constraint is unchanged. Offline preflight publishes and consumes a harmless probe on a unique isolated Redis queue, without a worker or model. A post-commit dispatch failure marks a still-queued voice message failed and reports a not-run outcome through the same session's durable outbox; if a worker has already claimed it, its state is not overwritten. The assistant may say a request was submitted, not that it is running. No paid retry is automatic.
 
-Client delegation is an opaque provider event, not a function/tool call: `session.delegation.created` with `delegation.id` and `target="client"` emits `GPTLiveDelegation(id, pending_transcript)`. Voice tools stay empty. The bridge reserves a finite request slot and collects ordered SDK transcript segments; it dispatches only after actual Python Silero VAD detects speech and an end of speech, the pause grace has elapsed, the transcript has been quiet for 0.8 seconds and observed segments are final. A resumed VAD speech event resets the boundary. No model delegation means no background task. Stop, session end, missing final text or the 60-second collection deadline fail closed without automatic retry. A verified result is supplied as silent authoritative context before plain commentary correlated with its delegation ID; internal labels and IDs are not spoken narrative. Neither commentary enqueueing nor an announcement claim proves transmission, model consumption, playback or hearing.
+The deployed client-mode path is historical and unsafe for intentional task text: `GPTLiveDelegation(id, pending_transcript)` is an opaque signal, not explicit task arguments. Caption segments and acoustic silence cannot establish which earlier/later text belongs to an intention. The native bridge has no client assembly listener or pending-collection fallback. Only its completed native function arguments can supply `request_text`. Verified task outcomes return as general voice context/commentary; Responses delegation IDs must not be supplied to the client-only commentary correlation field.
 
-The LiveKit 1.8.11 integrated recognition path receives the same input frames as GPT-Live and runs the explicitly supplied Silero VAD. Its default silence threshold is 0.55 seconds; `REALTIME_VOICE_PAUSE_GRACE_SECONDS` adds 2.0 seconds by default (allowed 0.5–10). Thus dispatch waits at least roughly 2.55 seconds after acoustic silence, plus scheduling/inference overhead or any longer transcript drain. Increasing grace trades latency for tolerance of longer pauses. Acoustic silence is not semantic completion: a pause longer than the grace, missed speech, late provider fragments or transcription omissions can still truncate a request. Final SDK segments and prompt instructions are not guarantees of complete text or truthful generated speech. Queued commentary proves neither transmission nor playback. See the [causal review](realtime-voice-causal-review.md).
+Silero VAD, pause grace and final caption drain remain observations used for safe standby, never task admission or semantic-completion proof. `REALTIME_VOICE_PAUSE_GRACE_SECONDS` remains 2.0 by default (allowed 0.5–10). Native task admission does not wait for this acoustic window. Generated speech, queued commentary and announcement claims still prove neither transmission, playback nor physical hearing.
 
 Example isolated bridge setup from the repository root (Python 3.12 and `uv` required):
 
