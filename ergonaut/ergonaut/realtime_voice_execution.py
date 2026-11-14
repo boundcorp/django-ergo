@@ -10,10 +10,51 @@ from django.utils import timezone
 from django_ergo.conversation.models import ThreadMessage
 
 NORMAL_RESTRICTION = (
-    "Normal originating-thread execution: the finite session grant bounds sequential requests, using this bot's existing tools, engine, "
+    "Normal originating-thread execution uses this bot's existing tools, engine, "
     "task limits and normal action approvals. Normal task costs are separate from the live voice "
     "budget. Voice does not approve actions; use the originating thread's normal approval controls."
 )
+
+# This is backpressure, not a lifetime request allowance. Direct-client grants
+# retain their separately reviewed finite limits.
+NATIVE_MAX_INFLIGHT = 4
+
+
+def native_request_capacity(session):
+    authorization = session_authorization(session)
+    inflight = session.delegations.exclude(message__status__in=("answered", "failed")).count()
+    followups_available = bool(
+        authorization
+        and (
+            authorization.get("followup_costs_approved") is True
+            or not ((session.state or {}).get("voice_request_ids") or session.delegations.exists())
+        )
+    )
+    return {
+        "authorized": bool(authorization),
+        "max_inflight": NATIVE_MAX_INFLIGHT,
+        "inflight": inflight,
+        "remaining": max(0, NATIVE_MAX_INFLIGHT - inflight) if followups_available else 0,
+    }
+
+
+def native_budget_projection(session):
+    """UI-only native allowance; never used by the direct-client admission path."""
+    legacy = request_capacity(session)
+    try:
+        authorization = session_authorization(session)
+    except ValueError:
+        return legacy
+    if not authorization or authorization.get("followup_costs_approved") is not True:
+        return legacy
+    native = native_request_capacity(session)
+    return {
+        **legacy,
+        "limit": None,
+        "remaining": None,
+        "inflight_limit": NATIVE_MAX_INFLIGHT,
+        "inflight_count": native["inflight"],
+    }
 
 
 def configured_authorization(chat, user):
