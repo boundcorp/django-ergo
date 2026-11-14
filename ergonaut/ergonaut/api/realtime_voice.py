@@ -29,6 +29,7 @@ from ergonaut.apps.bots.models import RealtimeVoiceDelegation, RealtimeVoiceEven
 from ergonaut.realtime_voice_execution import (
     NORMAL_RESTRICTION,
     initial_state,
+    pin_unlimited_authorization,
     request_capacity,
     session_authorization,
     thread_updates,
@@ -195,14 +196,20 @@ def claim_bridge(voice_id, claim_id=None):
             clear_live_state(session)
             session.save(update_fields=["state", "status", "ended_at"])
             return False
+        if session.bridge_started_at is not None and (
+            not standby_allowed(session.user) or session.standby_state != "resuming"
+        ):
+            return False
+        try:
+            pin_unlimited_authorization(session)
+        except ValueError:
+            pass  # A revoked grant disables delegation, not the voice conversation.
         session.bridge_claim_id = claim_id or uuid.uuid4().hex
         clear_live_state(session)
         if session.bridge_started_at is None:
             session.bridge_started_at = now
             session.save(update_fields=["state", "bridge_started_at", "bridge_claim_id"])
             return True
-        if not standby_allowed(session.user) or session.standby_state != "resuming":
-            return False
         session.standby_state = "live"
         session.save(update_fields=["state", "standby_state", "bridge_claim_id"])
         return True
@@ -576,7 +583,7 @@ def delegation_status(session):
             "restriction": f"{restriction} Background delegation unavailable: the voice session has ended.",
             "reason": "Background delegation unavailable: the voice session has ended.",
         }
-    elif not request_capacity(session)["remaining"]:
+    elif request_capacity(session)["remaining"] == 0:
         reason = (
             "This session's one background request is already used."
             if request_capacity(session)["limit"] == 1
@@ -721,13 +728,13 @@ def startup_briefing(session):
         if session.status != "active":
             raise ValueError("Background delegation unavailable: the voice session has ended.")
         capacity = request_capacity(session)
-        if not capacity["remaining"]:
+        if capacity["remaining"] == 0:
             raise ValueError(
                 "Background delegation unavailable: this session's one background request is already used."
                 if capacity["limit"] == 1
                 else "Background delegation unavailable: reviewed execution cap reached."
             )
-        if capacity["inflight"] or capacity["collecting"]:
+        if capacity["collecting"] or (capacity["inflight"] and capacity["limit"] is not None):
             raise ValueError("Background work is already pending; observe its status/result without a new execution.")
         budget = None if authorization else delegation_target(session, delegation_budget())
     except ValueError as exc:
@@ -753,13 +760,18 @@ def startup_briefing(session):
             "something, say you cannot run background work in this call and give that reason."
         )
     elif authorization:
+        allowance = (
+            "intentional requests"
+            if capacity["limit"] is None
+            else f"at most {capacity['limit']} sequential request(s) per logical call"
+        )
         capability = (
             f"Delegation is available: you have no tools of your own, but with client delegation you can hand "
-            f"at most {capacity['limit']} sequential request(s) per logical call to {bot_name}, the bot that owns this thread. It runs a normal turn of that "
+            f"{allowance} to {bot_name}, the bot that owns this thread. It runs a normal turn of that "
             "bot with its own tools (for example chat history, threads and workers) under its normal action "
             "approvals. Its answer is posted in this thread and returned to you here as a verified result to "
             f"speak. If asked whether you have tools or can do something, say yes: you can ask {bot_name} to do "
-            "it within that finite cap. Status observation/result reading needs no new execution. Never say you have no tools."
+            "it within that allowance. Only delegate when the user requests new work; never start work merely because a result arrived. Status observation/result reading needs no new execution. Never say you have no tools."
         )
     else:
         capability = (
@@ -808,15 +820,15 @@ def begin_pending(voice_id, event_id, fragments):
         raise ValueError("Invalid delegation ID")
     with transaction.atomic():
         session = RealtimeVoiceSession.objects.select_for_update().select_related("chat", "user").get(pk=voice_id)
-        state = dict(session.state)
         capacity = request_capacity(session)
+        state = dict(session.state)
         if (
             session.status != "active"
             or deadline_expired(session)
             or not voice_allowed(session.user)
-            or not capacity["remaining"]
+            or capacity["remaining"] == 0
             or capacity["collecting"]
-            or capacity["inflight"]
+            or (capacity["inflight"] and capacity["limit"] is not None)
             or event_id in capacity["request_ids"]
         ):
             return False
@@ -889,13 +901,13 @@ def delegate(voice_id, event_id, text):
         reserved = event_id in capacity["request_ids"]
         if reserved and (pending.get("id") != event_id or pending.get("status") != "collecting"):
             raise ValueError("This request attempt was already consumed; it cannot be replayed")
-        if not reserved and not capacity["remaining"]:
+        if not reserved and capacity["remaining"] == 0:
             raise ValueError(
                 "This voice session permits one background request"
                 if capacity["limit"] == 1
                 else "Reviewed voice execution cap reached"
             )
-        if capacity["inflight"] or (capacity["collecting"] and not reserved):
+        if (capacity["inflight"] and capacity["limit"] is not None) or (capacity["collecting"] and not reserved):
             raise ValueError("A background request is still pending; no concurrent execution is permitted")
         if session.status != "active" or deadline_expired(session):
             raise ValueError("Voice session ended or deadline expired")

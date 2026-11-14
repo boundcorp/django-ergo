@@ -10,7 +10,7 @@ from django.utils import timezone
 from django_ergo.conversation.models import ThreadMessage
 
 NORMAL_RESTRICTION = (
-    "Normal originating-thread execution: the finite session grant bounds sequential requests, using this bot's existing tools, engine, "
+    "Normal originating-thread execution uses this bot's existing tools, engine, "
     "task limits and normal action approvals. Normal task costs are separate from the live voice "
     "budget. Voice does not approve actions; use the originating thread's normal approval controls."
 )
@@ -39,12 +39,27 @@ def configured_authorization(chat, user):
         or not policy["followup_approval_reference"].strip()
     ):
         raise ValueError("Sequential voice follow-ups require separate reviewed cost approval.")
+    unlimited = policy.get("unlimited_intentional_requests") is True
+    if unlimited and (
+        limit != 3
+        or not isinstance(policy.get("unlimited_approval_reference"), str)
+        or not policy["unlimited_approval_reference"].strip()
+    ):
+        raise ValueError("Unlimited intentional voice requests require explicit reviewed cost approval.")
     return {
         "chat_id": str(chat.pk),
         "owner_id": str(user.pk),
         "bot": chat.bot_name,
         "approval_reference": policy["approval_reference"],
         "max_requests": limit,
+        **(
+            {
+                "unlimited_intentional_requests": True,
+                "unlimited_approval_reference": policy["unlimited_approval_reference"],
+            }
+            if unlimited
+            else {}
+        ),
         **(
             {
                 "followup_approval_reference": policy["followup_approval_reference"],
@@ -58,13 +73,37 @@ def configured_authorization(chat, user):
 
 
 def session_authorization(session):
-    grant = (session.state or {}).get("normal_thread_authorization")
+    # Read the durable grant even if the caller holds a stale session object.
+    state = type(session).objects.values_list("state", flat=True).get(pk=session.pk) or {}
+    grant = state.get("normal_thread_authorization")
     if not grant:
         return None
     expected = configured_authorization(session.chat, session.user)
-    if not expected or any(grant.get(key) != value for key, value in expected.items()):
+    if not expected:
         raise ValueError("Normal thread execution authorization was revoked or no longer matches this session.")
+    upgraded_keys = {"unlimited_intentional_requests", "unlimited_approval_reference"}
+    if any(grant.get(key) != value for key, value in expected.items() if key not in upgraded_keys) or (
+        grant.get("unlimited_intentional_requests")
+        and any(grant.get(key) != expected.get(key) for key in upgraded_keys)
+    ):
+        raise ValueError("Normal thread execution authorization was revoked or no longer matches this session.")
+    if not grant.get("unlimited_intentional_requests"):
+        return {key: value for key, value in expected.items() if key not in upgraded_keys}
     return expected
+
+
+def pin_unlimited_authorization(session):
+    """Pin an explicit upgrade on a bridge claim; the caller holds the session row lock."""
+    grant = session_authorization(session)
+    expected = configured_authorization(session.chat, session.user) if grant else None
+    if expected and expected.get("unlimited_intentional_requests") and not grant.get("unlimited_intentional_requests"):
+        state = dict(session.state)
+        state["normal_thread_authorization"] = {
+            **state["normal_thread_authorization"],
+            "unlimited_intentional_requests": True,
+            "unlimited_approval_reference": expected["unlimited_approval_reference"],
+        }
+        session.state = state
 
 
 def initial_state(chat, user):
@@ -94,7 +133,7 @@ def request_capacity(session):
     except ValueError:
         limit = 0  # Revoked/mismatched grants fail closed even in read-only status polling.
     else:
-        limit = grant["max_requests"] if grant else 1
+        limit = None if grant and grant.get("unlimited_intentional_requests") else grant["max_requests"] if grant else 1
     ids = list((session.state or {}).get("voice_request_ids", []))
     ids.extend(session.delegations.values_list("event_id", flat=True))
     pending = (session.state or {}).get("pending_delegation") or {}
@@ -104,7 +143,7 @@ def request_capacity(session):
     return {
         "limit": limit,
         "used": len(ids),
-        "remaining": max(0, limit - len(ids)),
+        "remaining": None if limit is None else max(0, limit - len(ids)),
         "request_ids": ids,
         "collecting": pending.get("status") == "collecting",
         "inflight": session.delegations.exclude(message__status__in=("answered", "failed")).exists(),

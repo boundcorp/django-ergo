@@ -230,28 +230,53 @@ real owner. Its mapping key is the exact launch-chat UUID; its value requires:
 | `max_requests` | Optional; defaults to `1`. Only `1` or the reviewed finite cap `3` is accepted. |
 | `followup_costs_approved` | Must be exactly `True` when `max_requests=3`; authorizes explicit sequential follow-up execution costs, not unlimited inference. |
 | `followup_approval_reference` | Separate nonempty reviewed continuation reference when `max_requests=3`. |
+| `unlimited_intentional_requests` | Optional explicit `True` for this exact scope; removes the cumulative request ceiling. Requires the reviewed three-request policy and the new approval reference below. |
+| `unlimited_approval_reference` | Nonempty reference to the separate authorization for intentional requests without a cumulative ceiling. |
 
-Web and bridge must carry the same policy. Only a **new** owner-created voice
-session receives its exact-chat/owner/bot grant and authorization timestamp.
-Conversational restore state cannot inherit or mint one. The bridge rechecks
-the matching current policy and normal bot access before dispatch; revocation
-refuses new requests, not cancellation of already accepted normal work.
-No grant means the existing priced read-only path and its engine gate remain
-unchanged. No mandatory Send button or new callable GPT-Live tools are added.
+Web and bridge must carry the same policy. An owner-created voice session receives
+its exact-chat/owner/bot grant and authorization timestamp. Conversational restore
+state cannot inherit or mint one. When the explicit unlimited policy is added without
+changing the original three-request authorization, an existing matching three-request
+grant also uses it; a one-request grant is not upgraded. Other policy changes or
+revocation refuse new requests, not cancellation of accepted normal work. No grant
+means the existing priced read-only path and its engine gate remain unchanged.
+No mandatory Send button or new callable GPT-Live tools are added.
+
+Rollout requires a separately reviewed GitOps policy change for the exact scope:
+retain the existing three-request fields and add
+`"unlimited_intentional_requests": true` and a nonempty
+`"unlimited_approval_reference"`. Source alone leaves the old cap in force.
+Deploy compatible source to all web and bridge consumers before enabling the
+policy; coordinate any reload separately. Existing processes keep their loaded
+environment and cannot change an already running old-code bridge. A matching
+durable three-request grant is upgraded and pinned on the next eligible bridge
+claim under the new policy and code; polling alone does not upgrade it. No database
+migration is required. Rollback the policy first, then return to
+the prior source after compatible consumers are drained. Already accepted tasks
+continue under normal controls; active unlimited grants fail closed on policy
+removal rather than being silently downgraded.
+
+An incomplete speech collection is a transport failure, not a spent allowance.
+On that provider connection the bridge refuses further delegation after collection
+expiry or unconfirmed admission/submission: a late uncorrelated transcript cannot
+safely be distinguished from new speech. Continue in the owning text thread, or reconnect through standby when
+available; a new input connection retains the original logical-call deadline.
 
 An authorized model-selected client delegation enters the **existing exact
 thread's normal message queue**, with its authenticated user identity, normal
 engine/context/registered tools and approval semantics. It does not reroute the
 bot or broaden its allowed targets. The transport still has its original
-90-second wall-clock deadline. The default remains one root request; a separately
-reviewed exact scope can permit **three sequential execution attempts total**.
-Only one can be collecting, queued, delivered or awaiting approval at a time.
-Duplicate IDs cannot consume another slot or replay a write. Expired collections
-consume their attempt; reconnect/resume never resets allowance or deadline.
-The UI shows remaining allowance and offers explicit continuation in the owning
-text thread at exhaustion. Read-only status observation/result reading uses no
-execution slot and launches no inference. Each root and normally authorized child
-work remains governed by the bot's existing normal turn/task controls,
+90-second wall-clock deadline. Without the new explicit authorization, the default
+remains one request or the separately reviewed three sequential attempts; their
+existing exhaustion and UI behavior remain. With it, there is no cumulative ceiling:
+only speech collection is serialized, and a new intentional request need not wait
+for previous jobs to finish. Fresh speech is required for a new model-selected
+delegation, and already consumed speech cannot start another job. This prevents
+result-triggered loops, but the model still interprets the user's spoken intent;
+speech detection alone does not prove authorization or action approval. Duplicate
+IDs cannot replay a write; expired collections cannot be replayed. Reconnect/resume
+does not reset the deadline. Status observation/result reading launches no inference.
+Each root and normally authorized child work remains governed by the bot's existing normal turn/task controls,
 **not** the 40,000/1,500-token API lookup estimate. Normal compaction,
 task tools and their downstream costs are therefore outside that experimental
 estimate; this is why an explicit separate cost-policy decision is required.
@@ -260,8 +285,7 @@ not the prototype's four-turn limit or a new financial ceiling. Lee approved
 normal originating-thread costs at **21:15:41 UTC**, but no real-owner normal
 task was run during this investigation.
 
-Only new logical sessions receive a changed grant; increasing configured capacity
-cannot widen an existing one. Normal action approvals remain in the owning thread.
+Normal action approvals remain in the owning thread.
 The bridge distinguishes speech collection, durable admission, queued/handler-
 claimed work and persisted result. A handler claim does not prove model execution
 or consumption; missing terminal evidence remains pending/unknown, not success.
