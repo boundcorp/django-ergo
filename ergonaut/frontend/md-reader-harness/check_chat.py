@@ -6,14 +6,14 @@ ERGONAUT_TEST_CHROMIUM. No backend or external services are used.
 """
 
 import os
+import signal
 import subprocess
 import time
 import urllib.request
 
-from check import FRONTEND, OUTPUT, SOURCE
+from check import FRONTEND, OUTPUT, PORT, SOURCE
 from playwright.sync_api import sync_playwright
 
-PORT = 41740
 ORIGIN = f"http://127.0.0.1:{PORT}"
 SOURCE += f"""
 
@@ -37,6 +37,7 @@ def main():
         cwd=FRONTEND,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
+        start_new_session=True,
     )
     try:
         for _ in range(100):
@@ -152,7 +153,7 @@ def main():
             finally:
                 browser.close()
     finally:
-        server.terminate()
+        os.killpg(server.pid, signal.SIGTERM)
         server.wait(timeout=10)
 
 
