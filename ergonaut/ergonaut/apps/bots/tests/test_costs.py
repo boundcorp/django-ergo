@@ -1,4 +1,5 @@
 import json
+from datetime import timedelta
 
 import pytest
 from django.contrib.auth import get_user_model
@@ -280,7 +281,8 @@ def test_agent_usage_has_its_own_scoped_and_filtered_costs_block(client):
     assert agents["headline"]["cache_hit"] == pytest.approx(5 / 15)
     assert agents["headline"]["unpriced_rows"] == 1
     assert agents["headline"]["billed_usd"] is None
-    assert agents["rows"] == [
+    rows = [{k: v for k, v in r.items() if k not in ("first_at", "last_at", "spillover")} for r in agents["rows"]]
+    assert rows == [
         {
             "worker_id": str(Worker.objects.get(title="Fix recipe").id),
             "worker_title": "Fix recipe",
@@ -511,3 +513,166 @@ def test_calls_that_ran_for_a_chat_count_for_it_and_its_bot(client, lee):
 
     usage = client.get(f"/api/sessions/{chat.id}/usage?hours=1").json()
     assert usage["thread_tokens"] == 1000
+
+
+@pytest.mark.django_db
+def test_estimate_prices_subscription_bot_calls_and_agents_at_list_and_reports_coverage(client, lee):
+    million = 1_000_000
+    cli = ConversationSession.objects.create(user=lee, bot_name="helper", engine_type="claude", transport_type="cli")
+    api = ConversationSession.objects.create(user=lee, bot_name="helper", engine_type="claude", transport_type="api")
+    # claude-sonnet-5-5: input $2, cache write $2.50, cache read $0.20, output $10.
+    for session in (cli, api):
+        StructuredCall.objects.create(
+            user=lee,
+            session=session,
+            kind="chat_reply",
+            model_name="claude-sonnet-5-5",
+            input_tokens=million,
+            cache_creation_input_tokens=million,
+            cache_read_input_tokens=2 * million,
+            output_tokens=million,
+        )
+    StructuredCall.objects.create(user=lee, session=cli, kind="chat_reply", model_name="mystery", input_tokens=10)
+    StructuredCall.objects.create(user=lee, session=api, kind="title", model_name="claude-sonnet-5-5")
+    now = timezone.now()
+    for model, last in (("gpt-6-sol", now), ("mystery-agent", now)):
+        AgentUsage.objects.create(
+            session=api,
+            bot_name="helper",
+            agent="codex",
+            model=model,
+            input_tokens=million,
+            requests=1,
+            first_at=now - timedelta(days=30),  # began before the window: lifetime totals
+            last_at=last,
+        )
+
+    data = client.get("/api/costs?days=7").json()
+    # The actual-cost helper still bills the subscription call at $0.
+    assert data["total"]["cost"] == pytest.approx(14.9)
+    bot = data["estimate"]["bot"]
+    assert bot["list_cost"] == pytest.approx(29.8)  # the CLI call counts at list price
+    assert bot["output_cost"] == pytest.approx(20)
+    assert bot["cache_write_cost"] == pytest.approx(5)
+    assert (bot["unpriced_rows"], bot["priced_rows"], bot["no_usage_rows"]) == (1, 2, 1)
+    assert bot["unpriced_tokens"] == 10
+    assert bot["unpriced_models"] == ["mystery"]
+    assert bot["exact_window"] is True
+    # Weighted over all rows, not an average of per-row ratios: output excluded.
+    denominator = 2 * (million + million + 2 * million) + 10
+    assert bot["cache_denominator"] == denominator
+    assert bot["cache_hit"] == pytest.approx(4 * million / denominator)
+    agents = data["estimate"]["agents"]
+    assert agents["list_cost"] == pytest.approx(2)
+    assert agents["unpriced_models"] == ["mystery-agent"]
+    assert (agents["spillover_rows"], agents["spillover_tokens"], agents["exact_window"]) == (2, 2 * million, False)
+    combined = data["estimate"]["combined"]
+    assert combined["list_cost"] == pytest.approx(31.8)
+    assert combined["unpriced_rows"] == 2
+    assert combined["priced_tokens"] + combined["unpriced_tokens"] == combined["tokens"]
+    assert all(row["spillover"] for row in data["agents"]["rows"])
+
+
+@pytest.mark.django_db
+def test_estimate_without_cache_denominator_has_no_hit_rate(client, lee):
+    StructuredCall.objects.create(user=lee, kind="chat_reply", model_name="gpt-6-luna", output_tokens=5)
+    estimate = client.get("/api/costs").json()["estimate"]
+    assert estimate["bot"]["cache_hit"] is None
+    assert estimate["agents"]["cache_hit"] is None
+    assert estimate["agents"]["rows"] == 0
+
+
+@pytest.mark.django_db
+def test_window_is_explicit_utc_days_and_series_reconciles_with_totals(client, lee):
+    now = timezone.now()
+    since = (now - timedelta(days=2)).replace(hour=0, minute=0, second=0, microsecond=0)
+    inside = StructuredCall.objects.create(user=lee, kind="title", model_name="gpt-6-luna", input_tokens=1)
+    before = StructuredCall.objects.create(user=lee, kind="title", model_name="gpt-6-luna", input_tokens=1)
+    StructuredCall.objects.filter(pk=inside.pk).update(created_at=since)  # first instant of the first day
+    StructuredCall.objects.filter(pk=before.pk).update(created_at=since - timedelta(microseconds=1))
+    data = client.get("/api/costs?days=3").json()
+    assert data["timezone"] == "UTC"
+    assert data["since"] == since.isoformat()
+    assert [d["date"] for d in data["by_day"]] == [
+        since.date().isoformat(),
+        (since + timedelta(days=1)).date().isoformat(),
+        now.date().isoformat(),
+    ]
+    assert data["by_day"][0]["calls"] == 1
+    assert sum(d["calls"] for d in data["by_day"]) == data["total"]["calls"] == 1
+
+
+@pytest.mark.django_db
+def test_agent_rows_outside_the_window_are_dropped_and_spillover_is_flagged(client, lee):
+    session = ConversationSession.objects.create(user=lee, bot_name="devbox", engine_type="claude")
+    now = timezone.now()
+    since = (now - timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    for model, first, last in (
+        ("gpt-6-sol", now - timedelta(hours=1), now),
+        ("gpt-6-luna", since - timedelta(days=5), now),
+        ("gpt-6-terra", since - timedelta(days=5), since - timedelta(days=4)),
+    ):
+        AgentUsage.objects.create(
+            session=session,
+            bot_name="devbox",
+            agent="codex",
+            model=model,
+            input_tokens=10,
+            first_at=first,
+            last_at=last,
+        )
+    rows = {r["model"]: r for r in client.get("/api/costs?days=2").json()["agents"]["rows"]}
+    assert set(rows) == {"gpt-6-sol", "gpt-6-luna"}
+    assert rows["gpt-6-sol"]["spillover"] is False
+    assert rows["gpt-6-luna"]["spillover"] is True
+
+
+@pytest.mark.django_db
+def test_estimate_uses_table_not_recorded_cost_and_missing_tokens_are_unknown(client, lee):
+    StructuredCall.objects.create(
+        user=lee,
+        kind="title",
+        model_name="gpt-6-sol",
+        input_tokens=1_000_000,
+        cost_usd=99,
+        metadata={"cost_parts": {"input": 99}},
+    )
+    StructuredCall.objects.create(user=lee, kind="title", model_name="gpt-6-sol")
+    session = ConversationSession.objects.create(user=lee, bot_name="helper", engine_type="claude")
+    AgentUsage.objects.create(
+        session=session,
+        bot_name="helper",
+        agent="codex",
+        model="gpt-6-sol",
+        requests=1,
+        last_at=timezone.now(),
+    )
+    response = client.get("/api/costs")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total"]["cost"] == pytest.approx(99)
+    bot = data["estimate"]["bot"]
+    assert bot["list_cost"] == pytest.approx(2)
+    assert (bot["priced_rows"], bot["unpriced_rows"], bot["no_usage_rows"]) == (1, 0, 1)
+    assert "per-request surcharges" in data["estimate"]["basis"]
+    assert data["estimate"]["agents"]["no_usage_rows"] == 1
+    assert data["agents"]["headline"]["priced_rows"] == 0
+    assert data["agents"]["rows"][0]["priced"] is False
+
+
+@pytest.mark.django_db
+def test_costs_window_normalizes_non_utc_now_and_serializes_schema(client, lee, settings):
+    from datetime import UTC, datetime
+    from datetime import timezone as dt_timezone
+    from unittest.mock import patch
+
+    settings.TIME_ZONE = "America/Los_Angeles"
+    now = datetime(2026, 11, 13, 18, 30, tzinfo=dt_timezone(timedelta(hours=-8)))
+    with patch("ergonaut.api.costs.timezone.now", return_value=now):
+        response = client.get("/api/costs?days=2")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["since"] == datetime(2026, 11, 13, tzinfo=UTC).isoformat()
+    assert data["until"] == now.astimezone(UTC).isoformat()
+    assert [day["date"] for day in data["by_day"]] == ["2026-11-13", "2026-11-14"]
+    assert data["estimate"]["bot"]["rows"] == 0

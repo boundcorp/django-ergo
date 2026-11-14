@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import type { AgentProject, AgentUsage, CostBucket, Costs, UsageThread } from '../api'
+import type { AgentProject, AgentUsage, CostBucket, Costs, EstimateScope, UsageThread } from '../api'
 import { api } from '../api'
 
 const RANGES = [7, 30, 90]
@@ -93,11 +93,13 @@ function agentItem(row: AgentUsage, withProject = true): Item {
     name: row.worker_title,
     sub: [where, row.agent, row.model, row.worker_status].filter(Boolean).join(' · '),
     href: `/s/${row.chat_id}`,
-    title: `${row.chat_title} · ${row.requests.toLocaleString()} requests`,
+    title:
+      `${row.chat_title} · ${row.requests.toLocaleString()} requests` +
+      (row.spillover ? ` · lifetime totals; began ${row.first_at ?? 'at an unknown time'}, before this window` : ''),
     parts: partsOf(row),
     cacheHit: row.cache_hit,
     cost: row.cost,
-    unpriced: row.priced ? undefined : `No list price for ${row.model}`,
+    unpriced: row.priced ? undefined : row.tokens ? `No list price for ${row.model}` : 'No token data; cost unknown',
   }
 }
 
@@ -118,7 +120,9 @@ export function projectItems(data: Costs): Item[] {
       parts: partsOf(project),
       cacheHit: project.cache_hit,
       cost: project.cost,
-      unpriced: project.unpriced_models.length ? `No list price for ${project.unpriced_models.join(', ')}` : undefined,
+      unpriced: project.unpriced_models.length
+        ? `Missing price or token data: ${project.unpriced_models.join(', ')}`
+        : undefined,
       children: data.agents.rows.filter(row => row.project_key === project.key).map(row => agentItem(row, false)),
     }
   })
@@ -435,6 +439,74 @@ export function Summary({ data }: { data: Costs }) {
   )
 }
 
+function utcDay(value?: string | null) {
+  return value ? value.slice(0, 10) : 'unknown'
+}
+
+function EstimateCard({ title, scope }: { title: string; scope: EstimateScope }) {
+  const incomplete = scope.unpriced_rows > 0 || scope.no_usage_rows > 0
+  const unknown = scope.priced_rows === 0 && incomplete
+  const hit =
+    scope.cache_hit === null
+      ? 'no cache denominator recorded'
+      : `${percent(scope.cache_hit)} cache hit (${tokens(scope.cache_read_tokens)} reads / ${tokens(scope.cache_denominator)} = uncached input + writes + reads; output excluded)`
+  return (
+    <div className="min-w-0 bg-surface px-4 py-3" aria-label={`${title} list-price estimate`}>
+      <div className="text-xs font-medium text-muted">{title}</div>
+      <div className="mt-0.5 font-display text-xl font-semibold tabular-nums">
+        {unknown ? 'Unknown' : `${money(scope.list_cost)}${incomplete ? '+' : ''}`}
+      </div>
+      <div className="text-xs text-muted">
+        {scope.priced_rows} priced · {scope.unpriced_rows} unpriced rows
+        {scope.unpriced_rows > 0 &&
+          ` (${tokens(scope.unpriced_tokens)} tokens not costed: ${scope.unpriced_models.join(', ')})`}
+      </div>
+      <div className="mt-1 text-xs text-muted" title={hit}>
+        {tokens(scope.input_tokens)} uncached in · {tokens(scope.cache_write_tokens)} write ·{' '}
+        {tokens(scope.cache_read_tokens)} read · {tokens(scope.output_tokens)} out
+      </div>
+      <div className="text-xs text-muted">
+        Cost: in {money(scope.input_cost)} · write {money(scope.cache_write_cost)} · read {money(scope.cache_read_cost)}{' '}
+        · out {money(scope.output_cost)}
+      </div>
+      <div className="text-xs text-muted">{hit}</div>
+      {scope.no_usage_rows > 0 && (
+        <div className="text-xs text-warning">
+          {scope.no_usage_rows} rows have no token data; usage and cost unknown
+        </div>
+      )}
+      {!scope.exact_window && (
+        <div className="text-xs text-warning">
+          Lifetime totals of rows active in the window, {utcDay(scope.first_at)} to {utcDay(scope.last_at)};{' '}
+          {scope.spillover_rows} began earlier ({tokens(scope.spillover_tokens)} tokens), so not clipped to the window.
+        </div>
+      )}
+    </div>
+  )
+}
+
+export function Estimate({ data }: { data: Costs }) {
+  const estimate = data.estimate
+  if (!estimate) return null
+  return (
+    <section className="mt-4" aria-label="List-price estimate">
+      <div className="grid grid-cols-1 gap-px overflow-hidden rounded-card border border-stroke bg-stroke lg:grid-cols-3">
+        <EstimateCard title="Bot calls (list price)" scope={estimate.bot} />
+        <EstimateCard title="Coding agents (list price)" scope={estimate.agents} />
+        <EstimateCard title="Combined (list price)" scope={estimate.combined} />
+      </div>
+      <p className="mt-2 text-xs text-muted">
+        Model-table estimates include subscription traffic. Unpriced rows and rows with no token data are omitted, not
+        counted as $0. Aggregated bot and agent tokens cannot account for per-request long-context rates. Bot spend
+        above is recorded or estimated API spend excluding subscriptions, not a verified bill; actual billed amounts are
+        unknown without reconciliation. These estimates are not an invoice or subscription quota. A high cache hit rate
+        does not imply matching savings: writes and output are priced separately. Window: {data.since || 'unknown'} to{' '}
+        {data.until || 'unknown'} (UTC).
+      </p>
+    </section>
+  )
+}
+
 export function CostsBody({
   data,
   view,
@@ -449,6 +521,7 @@ export function CostsBody({
   return (
     <div className={dim ? 'opacity-60' : ''}>
       <Summary data={data} />
+      <Estimate data={data} />
       <div className="surface-card mt-4 px-4 py-3">
         <Daily days={data.by_day} />
       </div>
@@ -460,8 +533,8 @@ export function CostsBody({
         </p>
       )}
       <p className="mt-2 text-xs text-muted">
-        Costs are estimates from token counts and list prices, each part at the model's own rate. Hover a bar for its
-        token mix and what each part cost.
+        Bot spend uses recorded API costs where available, otherwise model-table estimates; billed amounts are unknown.
+        Hover a bar for its token mix and cost breakdown.
       </p>
     </div>
   )
@@ -539,7 +612,10 @@ export function CostsPage() {
               </option>
             ))}
           </select>
-          <div className="flex gap-0.5 rounded-control border border-stroke bg-surface p-0.5" aria-label="Period">
+          <div
+            className="flex gap-0.5 rounded-control border border-stroke bg-surface p-0.5"
+            aria-label="Last N UTC dates including partial today"
+          >
             {RANGES.map(r => (
               <button
                 key={r}
@@ -548,7 +624,7 @@ export function CostsPage() {
                 aria-pressed={r === days}
                 className={`rounded-control px-3 py-1 text-sm ${r === days ? 'bg-accent font-semibold text-canvas' : 'text-muted hover:bg-raised'}`}
               >
-                {r}d
+                Last {r} UTC dates (including partial today)
               </button>
             ))}
           </div>
