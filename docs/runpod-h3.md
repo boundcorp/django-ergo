@@ -10,6 +10,11 @@ No deployment or rental authorization is implied. Keep the controller/export
 directory **off the rented Pod** on the durable rental host, and never bake or
 relocate provider credentials into an image.
 
+**RunPod generation is parked as backup.** Ryan is the default; there is no
+automatic fallback. The historical [Serverless manifest and worker](../examples/runpod-h3/serverless/README.md)
+require explicit Lee approval and fresh budget, quota and capacity checks before
+any reactivation. Nothing in this guide authorizes a rental, build or deployment.
+
 ## Exact runtime decision
 
 - Official `MiniMaxAI/MiniMax-H3` revision
