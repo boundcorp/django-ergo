@@ -4,6 +4,8 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import type { Root } from 'react-dom/client'
 import { Window } from 'happy-dom'
 import { AttachmentView } from './MediaGallery'
+import { MemoryRouter } from 'react-router-dom'
+import { MarkdownReaderOwner } from './MarkdownReaderOwner'
 
 const originalFetch = globalThis.fetch
 let win: Window
@@ -47,6 +49,12 @@ async function click(name: string) {
   })
 }
 
+function renderAttachment(props: { id: string; label: string }) {
+  root.render(
+    createElement(MemoryRouter, null, createElement(MarkdownReaderOwner, null, createElement(AttachmentView, props))),
+  )
+}
+
 describe('Markdown attachments', () => {
   test('recognizes filename and MIME but leaves missing and media attachments unchanged', () => {
     for (const props of [
@@ -81,7 +89,7 @@ describe('Markdown attachments', () => {
         },
       },
     })
-    act(() => root.render(createElement(AttachmentView, { id: 'one', label: 'notes.md' })))
+    act(() => renderAttachment({ id: 'one', label: 'notes.md' }))
     expect(calls).toBe(0)
     await click('Read notes.md')
     expect(calls).toBe(1)
@@ -94,7 +102,7 @@ describe('Markdown attachments', () => {
 
   test('keeps download on fetch and clipboard failures', async () => {
     globalThis.fetch = (async () => new Response('', { status: 404 })) as typeof fetch
-    act(() => root.render(createElement(AttachmentView, { id: 'one', label: 'notes.md' })))
+    act(() => renderAttachment({ id: 'one', label: 'notes.md' }))
     await click('Read notes.md')
     expect(win.document.querySelector('[role=alert]')?.textContent).toContain('Could not load')
     expect(win.document.querySelector('dialog a')?.getAttribute('href')).toBe('/api/attachments/one/download')
@@ -115,7 +123,7 @@ describe('Markdown attachments', () => {
 
   test('rejects oversized streams and leaves the original download available', async () => {
     globalThis.fetch = (async () => new Response('x'.repeat(500_001))) as typeof fetch
-    act(() => root.render(createElement(AttachmentView, { id: 'one', label: 'large.md' })))
+    act(() => renderAttachment({ id: 'one', label: 'large.md' }))
     await click('Read large.md')
     expect(win.document.querySelector('[role=alert]')?.textContent).toContain('too large')
     expect(win.document.querySelector('dialog a')?.getAttribute('href')).toBe('/api/attachments/one/download')
@@ -132,7 +140,7 @@ describe('Markdown attachments', () => {
       const body = new ReadableStream<Uint8Array>({ pull: () => new Promise(() => {}) })
       return new Response(body, { headers: { 'Content-Length': '500001' } })
     }) as typeof fetch
-    act(() => root.render(createElement(AttachmentView, { id: 'one', label: 'large.md' })))
+    act(() => renderAttachment({ id: 'one', label: 'large.md' }))
     await click('Read large.md')
     expect(win.document.querySelector('[role=alert]')?.textContent).toContain('too large')
     expect(signal?.aborted).toBe(true)
@@ -144,7 +152,7 @@ describe('Markdown attachments', () => {
     const pending = Promise.withResolvers<Response>()
     let calls = 0
     globalThis.fetch = (async () => (++calls === 1 ? pending.promise : new Response('# New'))) as typeof fetch
-    act(() => root.render(createElement(AttachmentView, { id: 'one', label: 'notes.md' })))
+    act(() => renderAttachment({ id: 'one', label: 'notes.md' }))
     await click('Read notes.md')
     await click('Close reader')
     await click('Read notes.md')

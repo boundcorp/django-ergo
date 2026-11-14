@@ -6,6 +6,7 @@ import { ApiError, api } from './api'
 import { Sidebar } from './components/Sidebar'
 import { Chat } from './pages/Chat'
 import { ActiveVoiceCall, VoiceCallProvider, VoicePage } from './components/RealtimeVoice'
+import { MarkdownReaderOwner } from './components/MarkdownReaderOwner'
 import { Login } from './pages/Login'
 import { Sessions } from './pages/Sessions'
 import { BotPage } from './pages/BotPage'
@@ -108,27 +109,29 @@ function App() {
     <BrowserRouter>
       <DirectoryContext.Provider value={{ bots, sessions }}>
         <VoiceCallProvider>
-          <Routes>
-            {/* The full-screen page viewer has no sidebar or top bar. */}
-            <Route path="/pages/view" element={<PageView />} />
-            <Route
-              path="*"
-              element={
-                <Shell
-                  user={user}
-                  bots={bots}
-                  sessions={sessions}
-                  pins={pins}
-                  botErrors={botErrors}
-                  workers={workers}
-                  workerState={workerState}
-                  refresh={refresh}
-                  directoryState={directoryState}
-                  onSignOut={() => api.logout().finally(() => setUser(null))}
-                />
-              }
-            />
-          </Routes>
+          <MarkdownReaderOwner>
+            <Routes>
+              {/* The full-screen page viewer has no sidebar or top bar. */}
+              <Route path="/pages/view" element={<PageView />} />
+              <Route
+                path="*"
+                element={
+                  <Shell
+                    user={user}
+                    bots={bots}
+                    sessions={sessions}
+                    pins={pins}
+                    botErrors={botErrors}
+                    workers={workers}
+                    workerState={workerState}
+                    refresh={refresh}
+                    directoryState={directoryState}
+                    onSignOut={() => api.logout().finally(() => setUser(null))}
+                  />
+                }
+              />
+            </Routes>
+          </MarkdownReaderOwner>
         </VoiceCallProvider>
       </DirectoryContext.Provider>
     </BrowserRouter>

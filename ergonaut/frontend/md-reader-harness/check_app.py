@@ -11,13 +11,15 @@ import signal
 import subprocess
 import time
 import urllib.request
+from pathlib import Path
 from urllib.parse import urlsplit
 
 from check import FRONTEND, PORT, ROOT, SOURCE
 from playwright.sync_api import sync_playwright
 
 ORIGIN = f"http://127.0.0.1:{PORT}"
-OUTPUT = ROOT / "docs" / "md-reader-desktop" / "after"
+OUTPUT = os.environ.get("MD_READER_APP_OUTPUT")
+OUTPUT = ROOT / "docs" / "md-reader-desktop" / "after" if OUTPUT is None else Path(OUTPUT)
 VISUAL_SOURCE = SOURCE.split("\n[Project website]")[0]
 SESSION = {
     "id": "fixture",
@@ -38,6 +40,12 @@ MESSAGES = [
         "blocks": (
             [
                 {"type": "text", "text": "Please review the attached release plan."},
+                {
+                    "type": "attachment",
+                    "id": "fixture-markdown",
+                    "label": "release-plan.md",
+                    "media_type": "text/markdown",
+                },
                 {
                     "type": "attachment",
                     "id": "fixture-markdown",
@@ -99,6 +107,7 @@ def main():
                         "/api/bot-errors": [],
                         "/api/workers": [],
                         "/api/realtime-voice/config": {"enabled": False},
+                        "/api/realtime-voice/sessions": [],
                         "/api/sessions/fixture": {
                             "session": SESSION,
                             "messages": MESSAGES,
@@ -136,7 +145,12 @@ def main():
                     page.route("**/*", route_request)
                     page.goto(ORIGIN + "/", wait_until="networkidle")
                     page.goto(ORIGIN + "/s/fixture?fixture=1#host-fragment", wait_until="networkidle")
-                    opener = page.get_by_role("button", name="Read release-plan.md")
+                    page.evaluate("""() => history.replaceState({...history.state, usr: {
+                      existing: 'preserved', __ergonautMarkdownReader: 'occupied'
+                    }}, '')""")
+                    # Reload so BrowserRouter reads the fixture location state.
+                    page.reload(wait_until="networkidle")
+                    opener = page.get_by_role("button", name="Read release-plan.md").first
                     opener.wait_for()
                     composer = page.get_by_role("textbox", name="Message")
                     composer.fill("Unsent draft: verify the release.")
@@ -154,6 +168,9 @@ def main():
                         proseLeft: prose.left, padding: style.padding, radius: getComputedStyle(el).borderRadius,
                         scrollable: content.scrollHeight > content.clientHeight};
                     }""")
+                    if width > 600:
+                        assert page.evaluate("history.state.usr.existing") == "preserved"
+                        assert page.evaluate("history.state.usr.__ergonautMarkdownReader") == "occupied"
                     if width > 600:
                         assert (geometry["x"], geometry["y"], geometry["width"], geometry["height"]) == (
                             0,
@@ -180,6 +197,65 @@ def main():
                     assert scroll.evaluate("el => el.scrollTop") == before
                     assert composer.input_value() == "Unsent draft: verify the release."
                     assert page.url.endswith("/s/fixture?fixture=1#host-fragment")
+                    if width > 600:
+                        assert page.evaluate("history.state.usr") == {
+                            "existing": "preserved",
+                            "__ergonautMarkdownReader": "occupied",
+                        }
+                        page.go_forward()
+                        dialog.wait_for()
+                        page.go_back()
+                        dialog.wait_for(state="detached")
+                        assert composer.input_value() == "Unsent draft: verify the release."
+                        second = page.get_by_role("button", name="Read release-plan.md").nth(1)
+                        second.click()
+                        dialog.wait_for()
+                        dialog.get_by_role("button", name="Close reader").click()
+                        dialog.wait_for(state="detached")
+                        assert second.evaluate("el => el === document.activeElement")
+                        page.go_back()
+                        page.wait_for_url(ORIGIN + "/")
+                        page.go_forward()
+                        page.wait_for_url("**/s/fixture?fixture=1#host-fragment")
+                        second = page.get_by_role("button", name="Read release-plan.md").nth(1)
+                        second.click()
+                        dialog.wait_for()
+                        # Navigate through an actual React Router link while the dialog is open.
+                        page.locator("a.topbar-brand").evaluate("el => el.click()")
+                        page.wait_for_url(ORIGIN + "/")
+                        dialog.wait_for(state="detached")
+                        page.go_back()
+                        dialog.wait_for()
+                        dialog.get_by_role("button", name="Close reader").click()
+                        dialog.wait_for(state="detached")
+                        page.wait_for_function("document.activeElement === document.querySelector('main')")
+                        # Voice route remains an ordinary Router navigation.
+                        page.get_by_role("button", name="Options").click()
+                        page.get_by_role("link", name="Voice call").click()
+                        page.wait_for_url("**/s/fixture/voice")
+                        page.go_back()
+                        page.wait_for_url("**/s/fixture?fixture=1#host-fragment")
+                        second = page.get_by_role("button", name="Read release-plan.md").nth(1)
+                        second.click()
+                        dialog.wait_for()
+                        page.reload(wait_until="networkidle")
+                        dialog.wait_for(state="detached")
+                        assert page.evaluate("history.state.usr") == {
+                            "existing": "preserved",
+                            "__ergonautMarkdownReader": "occupied",
+                        }
+                        assert page.url.endswith("/s/fixture?fixture=1#host-fragment")
+                        # A non-object state must survive both opening and closing.
+                        page.evaluate("history.replaceState({...history.state, usr: 'opaque state'}, '')")
+                        page.reload(wait_until="networkidle")
+                        page.get_by_role("button", name="Read release-plan.md").first.click()
+                        dialog.wait_for()
+                        dialog.get_by_role("button", name="Close reader").click()
+                        dialog.wait_for(state="detached")
+                        assert page.evaluate("history.state.usr") == "opaque state"
+                    else:
+                        page.go_back()
+                        assert page.url == ORIGIN + "/"
                     assert not unexpected, unexpected
                     assert not errors, errors
                     print(

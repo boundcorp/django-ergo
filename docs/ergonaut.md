@@ -31,8 +31,9 @@ Resuming is manual, including after a repeated output-limit failure.
 Markdown attachments in chat appear as document cards. Open the card to read
 the document without leaving the conversation; Escape or Close returns to chat.
 On desktop the reader fills the viewport, with a separate document scroll area.
-Browser Back navigates the chat history rather than closing the reader; use
-Return to chat or Escape to keep the current chat and draft.
+On desktop, browser Back closes the reader without leaving chat, and Forward
+reopens it. Return to chat and Escape also close the reader. Reloading a reader
+entry returns to chat; on mobile the reader does not add a history entry.
 The reader offers **Copy raw source** and **Download original**. It fetches the
 existing authenticated download only when opened, and limits the reader to
 500,000 bytes; larger files can still be downloaded. Images are not loaded,
