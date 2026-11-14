@@ -162,6 +162,8 @@ re-reviews reported no remaining actionable blockers; execution is a separate ga
 - PostgreSQL tests use isolated temporary pgserver instances, with test-only
   `fsync`/synchronous-commit durability settings disabled. They prove real row-lock
   concurrency, not production storage durability or failover behavior.
+- Django 5.2.13 on Python 3.11: 160 focused scheduler/delivery/one-shot/budget/
+  lifecycle/import-layer/natural-worker/Telegram regressions passed.
 - Django 4.2.30 on Python 3.11: 99 focused wake/delivery/one-shot tests passed;
   migration drift check passed. Django 5.2.13 is the primary local test runtime.
 - Ergonaut owner/API/stream regressions: 69 passed. The isolated suite emitted
