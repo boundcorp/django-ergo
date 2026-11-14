@@ -925,6 +925,26 @@ def test_dead_or_hung_worker_is_cleaned_at_liveness_boundary(setup, active_step)
     assert setup.provider.deletes == ["pod123"]
 
 
+def test_hung_operation_persists_stop_then_cleans_after_lock_release(setup):
+    job = begin(setup)
+    assert drive(setup, job) == "running"
+    stale = timezone.now() - timezone.timedelta(seconds=native.OWNER_STALE_SECONDS + 1)
+    Worker.objects.filter(pk=job.worker_id).update(
+        updated_at=stale, step_started_at=stale, next_poll_at=None
+    )
+    with native.operation(job) as acquired:
+        assert acquired
+        native.reconcile_once()
+        job.refresh_from_db()
+        assert Experiment(job.ledger_path).status()["stop_reason"] == "worker_lost"
+        assert not job.cleanup_complete
+        assert setup.provider.deletes == []
+    native.reconcile_once()
+    job.refresh_from_db()
+    assert job.cleanup_complete
+    assert setup.provider.deletes == ["pod123"]
+
+
 def test_future_scheduled_poll_does_not_extend_rental_deadline(setup):
     job = begin(setup)
     assert drive(setup, job) == "running"

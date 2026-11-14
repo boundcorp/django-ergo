@@ -44,6 +44,10 @@ arbitrary commands, caller-selected images, or caller-selected paths.
   on 2026-11-13 the old 180-second rule stopped a healthy job after its first
   shot. Maintenance checks startup/download and rental deadlines independently
   of the watcher.
+  Stop intent is durable even if the controller holds the per-job operation
+  lock, but provider cleanup must wait until that lock is released. A hung
+  lock holder can therefore delay deletion beyond the rental deadline; a
+  deadline or launcher cutoff is not proof that provider billing has stopped.
 
 ## Install on the host
 
