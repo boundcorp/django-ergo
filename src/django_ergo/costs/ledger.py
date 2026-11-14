@@ -225,9 +225,7 @@ def _window_filter(queryset, since, until):
     it (its amount is NOT prorated; see `partial`). Otherwise `occurred_at` decides.
     Rows with neither are undated: never silently assigned to any window.
     """
-    dated = Q(
-        period_start__isnull=False, period_start__lte=until, period_end__gte=since
-    )
+    dated = Q(period_start__isnull=False, period_start__lte=until, period_end__gt=since)
     dated |= Q(
         period_start__isnull=True, occurred_at__gte=since, occurred_at__lte=until
     )

@@ -650,6 +650,7 @@ export function CostsPage() {
   const [bots, setBots] = useState<string[]>([])
   const [view, setView] = useState<View>(savedView)
   const [ledger, setLedger] = useState<Ledger | null>(null)
+  const [ledgerError, setLedgerError] = useState('')
 
   useEffect(() => {
     api
@@ -678,12 +679,15 @@ export function CostsPage() {
     // The ledger is separate and optional: its failure must not hide the token estimates.
     let active = true
     setLedger(null)
+    setLedgerError('')
     api
       .costsLedger(days, bot)
       .then(result => {
         if (active) setLedger(result)
       })
-      .catch(() => {})
+      .catch(() => {
+        if (active) setLedgerError('Cost ledger unavailable; coverage and recorded costs could not be loaded.')
+      })
     return () => {
       active = false
     }
@@ -737,6 +741,11 @@ export function CostsPage() {
           </div>
         </div>
       </div>
+      {ledgerError && (
+        <div role="alert" className="mt-4 text-sm text-warning">
+          {ledgerError}
+        </div>
+      )}
 
       {!data ? (
         <div className="mt-6 text-sm text-muted">{error || 'Loading…'}</div>

@@ -229,6 +229,7 @@ here is scheduled, auto-ingested, backfilled or wired into a live code path.
   provider evidence. Compute and storage use distinct exact half-open periods
   keyed by provider/account/resource/component/start/end, at microsecond precision;
   a successor job is recorded as observation `attempt_ref`, not economic identity.
+  The optional hourly estimate is rounded half-even to 18 decimal places.
   Overlapping nonidentical periods are rejected rather than prorated or inferred.
   Provider charge IDs are unique to one component/period within an account;
   provider-reported/final requires explicit amount and charge ID. Revisions for the

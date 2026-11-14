@@ -252,6 +252,27 @@ def test_runpod_compute_and_storage_are_separate_and_charge_supersedes_estimate(
     assert by_kind["reservation"]["known_amount"] == D("1.50")
 
 
+def test_fractional_hour_estimate_can_be_recorded(users, job):
+    a, _ = users
+    end = T0 + timedelta(seconds=1)
+    amount = estimate_amount(D("1"), T0, end)
+    row, _ = component(a, job, period_end=end, amount=amount)
+    assert row.amount == D("0.000277777777777778")
+
+
+def test_period_ending_at_window_start_is_excluded(users):
+    a, _ = users
+    make(
+        a,
+        "ended",
+        CostKind.ESTIMATE,
+        D("1"),
+        period_start=WINDOW[0] - timedelta(hours=1),
+        period_end=WINDOW[0],
+    )
+    assert summarize_costs(a, since=WINDOW[0], until=WINDOW[1]) == []
+
+
 def test_runpod_missing_rate_is_unknown_and_unreconciled_cannot_be_final(users, job):
     a, _ = users
     assert estimate_amount(None, T0, T0 + timedelta(hours=1)) is None

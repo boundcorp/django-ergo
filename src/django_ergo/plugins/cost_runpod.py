@@ -11,7 +11,9 @@ import hashlib
 import json
 from datetime import UTC
 from datetime import datetime
+from decimal import ROUND_HALF_EVEN
 from decimal import Decimal
+from decimal import localcontext
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -22,6 +24,7 @@ from django.utils import timezone
 from django_ergo.costs.ledger import _authorize
 from django_ergo.costs.ledger import record_observation
 from django_ergo.costs.models import CostObservation
+from django_ergo.costs.types import DECIMAL_PLACES
 from django_ergo.costs.types import CostConflictError
 from django_ergo.costs.types import CostKind
 from django_ergo.costs.types import ObservationSpec
@@ -88,11 +91,15 @@ def _utc(epoch):
 
 
 def estimate_amount(hourly_usd, period_start, period_end):
-    """rate x bounded period, or None when either is missing (unknown, not zero)."""
+    """Rate times bounded period, rounded half-even to ledger precision; None if unknown."""
     if hourly_usd is None or period_start is None or period_end is None:
         return None
     seconds = Decimal(str((period_end - period_start).total_seconds()))
-    return Decimal(hourly_usd) * seconds / Decimal(3600)
+    with localcontext() as context:
+        context.prec = 60
+        return (Decimal(hourly_usd) * seconds / Decimal(3600)).quantize(
+            Decimal(1).scaleb(-DECIMAL_PLACES), rounding=ROUND_HALF_EVEN
+        )
 
 
 def _digest(*parts):
