@@ -1534,9 +1534,6 @@ def _current_pending_review(call_id, pending, *, claimed=False, tool_id=None):  
         .filter(created_at__gte=row.created_at)
         .exists()
         or row.session.messages.filter(sequence__gt=row.last_sequence).exists()
-        or row.session.structured_calls.exclude(pk=row.pk)
-        .filter(status=StructuredCallStatus.AWAITING_APPROVAL)
-        .exists()
     ):
         return False
     blocks = MessageBlock.objects.filter(message__session_id=row.session_id)

@@ -963,6 +963,17 @@ def order(item: str) -> str:
     assert post(client, endpoint, request).status_code == 200
     call.refresh_from_db()
     assert call.status == "awaiting_approval" and not output.exists()
+    from datetime import timedelta
+
+    old = StructuredCall.objects.create(
+        session_id=root["id"],
+        user=cook,
+        kind="chat_reply",
+        request="superseded",
+        status="awaiting_approval",
+        metadata={"pending_approvals": [{"id": "old", "name": "order", "input": {"item": "old"}}]},
+    )
+    StructuredCall.objects.filter(pk=old.pk).update(created_at=call.created_at - timedelta(seconds=1))
     allowed.touch()
     assert post(client, endpoint, {**request, "call_id": "stale"}).status_code == 409
     assert post(client, endpoint, request).status_code == 200

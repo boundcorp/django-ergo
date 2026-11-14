@@ -920,7 +920,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
               className="rounded-control border border-warning/50 px-3 py-2 text-sm text-ink disabled:opacity-50"
               onClick={revalidate}
             >
-              Re-check current permissions for these calls
+              Re-check permissions and run if authorized
             </button>
             {waiting.map(approval => (
               <section key={approval.id} className="rounded-card border border-warning/40 bg-amber-tint p-4 text-sm">
