@@ -65,6 +65,7 @@ from django_ergo.conversation.images import as_tool_result
 from django_ergo.conversation.inference_policy import PolicyError
 from django_ergo.conversation.toolkit import ApprovalPreview
 from django_ergo.conversation.toolkit import Toolkit
+from django_ergo.conversation.toolkit import approval_decision
 from django_ergo.conversation.toolkit import auto_approved
 from django_ergo.protected_env import is_protected_env
 
@@ -102,6 +103,15 @@ class ToolContext:
     def auto_approved(self) -> bool:
         """Whether this execution was automatically, rather than human, approved."""
         return auto_approved.get()
+
+    @property
+    def approval_decision(self) -> dict | None:
+        """Authenticated human decision for this exact tool call, if available.
+
+        Session ownership and automatic approval do not constitute evidence of
+        a human decision. Other approval channels may not provide provenance.
+        """
+        return approval_decision.get()
 
     @property
     def tasks(self):
@@ -188,6 +198,7 @@ class BotTool:
     takes_context: bool = False
     seed: bool = False  # run before the chat's first model call (see FunctionToolkit)
     auto_approve: Callable | None = None
+    revalidate_pending: bool = False
 
     def json_schema(self) -> dict:
         return {
@@ -248,6 +259,7 @@ def bot_tool(  # noqa: PLR0913
     required: list[str] | None = None,
     requires_approval: bool = False,
     auto_approve: Callable | None = None,
+    revalidate_pending: bool = False,
     approval_preview: Callable | None = None,
     takes_context: bool = False,
     seed: bool = False,
@@ -281,6 +293,7 @@ def bot_tool(  # noqa: PLR0913
             required=req,
             requires_approval=requires_approval,
             auto_approve=auto_approve,
+            revalidate_pending=revalidate_pending,
             approval_preview=approval_preview,
             takes_context=takes_context,
             seed=seed,
@@ -432,6 +445,15 @@ class FunctionToolkit(Toolkit):
 
     def requires_approval(self, tool_name: str) -> bool:
         return self.tools[tool_name].requires_approval
+
+    def supports_pending_revalidation(self, tool_name: str) -> bool:
+        tool = self.tools.get(tool_name)
+        return bool(
+            tool
+            and tool.requires_approval
+            and tool.auto_approve
+            and tool.revalidate_pending
+        )
 
     async def auto_approve(self, tool_name: str, arguments: dict, tool_id: str) -> bool:
         tool = self.tools.get(tool_name)

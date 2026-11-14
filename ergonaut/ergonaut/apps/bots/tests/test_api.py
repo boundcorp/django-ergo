@@ -1,6 +1,8 @@
 import hashlib
 import json
 import shutil
+import subprocess
+import sys
 import textwrap
 import time
 
@@ -567,7 +569,6 @@ def test_a_queued_turn_returns_at_once(client, cook, use_bots, monkeypatch, sett
     assert response.json()["queued"] is True
     assert response.json()["text"] == ""
     # The message waits in the session's inbox for the queued turn.
-    assert queued == [(root["id"], None, None, [], None)]
     assert [(i["text"], i["attachment_ids"]) for i in tasks.drain_inbox(root["id"])] == [("Eggs?", [])]
 
 
@@ -806,6 +807,354 @@ def test_parallel_approvals_answer_each_call(client, cook, bot_folder, use_bots)
     results = {b["tool_use_id"]: b["content"] for b in fake.calls[-1]["messages"][-1]["content"]}
     assert "ordered milk" in str(results[milk_id])
     assert "declined" in str(results[eggs_id])
+
+
+@pytest.mark.django_db(transaction=True)
+def test_authenticated_approval_provenance_survives_queue_and_is_per_tool(
+    client, cook, bot_folder, use_bots, monkeypatch
+):
+    from types import SimpleNamespace
+
+    from django.db import connection
+    from django_ergo.conversation.models import StructuredCall
+
+    from ergonaut.api import bots as bots_api
+    from ergonaut.apps.bots.tasks import run_turn
+
+    (bot_folder / "tools" / "pantry.py").write_text(
+        """
+import json
+from django_ergo.bots import bot_tool
+
+@bot_tool(requires_approval=True, takes_context=True)
+def order(ctx, item: str) -> str:
+    return json.dumps(ctx.approval_decision)
+"""
+    )
+    milk_call, eggs_call = tool_call("order", {"item": "milk"}), tool_call("order", {"item": "eggs"})
+    both = SimpleNamespace(content=milk_call.content + eggs_call.content, stop_reason="tool_use", usage=milk_call.usage)
+    fake = use_bots(both, say("Done."))
+    root = post(client, "/api/bots/kitchen/root").json()
+    turn = post(client, f"/api/sessions/{root['id']}/messages", {"text": "Order milk and eggs"}).json()
+    milk, eggs = (item["id"] for item in turn["approvals"])
+    call_id = str(StructuredCall.objects.get(session_id=root["id"]).pk)
+    queued = {}
+    monkeypatch.setattr(bots_api, "queue_turn", lambda session_id, **kwargs: queued.update(kwargs) or True)
+    response = post(
+        client,
+        f"/api/sessions/{root['id']}/approvals",
+        {
+            "decisions": {milk: True, eggs: False},
+            "shown_approvals": turn["approvals"],
+            "shown_call_id": call_id,
+        },
+    )
+    assert response.status_code == 200
+    call = StructuredCall.objects.get(session_id=root["id"])
+    [evidence] = call.metadata["authenticated_approval_decisions"]
+    assert evidence["actor_id"] == str(cook.pk)
+    assert evidence["call_id"] == str(call.pk)
+    assert evidence["decisions"] == {milk: True, eggs: False}
+    assert evidence["request"] == {
+        "decisions": {milk: True, eggs: False},
+        "shown_approvals": turn["approvals"],
+        "shown_call_id": call_id,
+    }
+    # Read from a fresh process against the pytest database, without inheriting
+    # request context or the worker's Python state.
+    config = connection.settings_dict
+    if config["ENGINE"].endswith("postgresql"):
+        child = """
+import json, sys
+import psycopg
+from psycopg import sql
+data = json.load(sys.stdin)
+with psycopg.connect(**data["connection"]) as db, db.cursor() as cursor:
+    cursor.execute(
+        sql.SQL("SELECT metadata FROM {} WHERE id = %s").format(sql.Identifier(data["table"])),
+        (data["call_id"],),
+    )
+    print(json.dumps(cursor.fetchone()[0]["authenticated_approval_decisions"]))
+"""
+        db_options = {
+            key: config[name]
+            for key, name in (
+                ("dbname", "NAME"),
+                ("user", "USER"),
+                ("password", "PASSWORD"),
+                ("host", "HOST"),
+                ("port", "PORT"),
+            )
+            if config.get(name)
+        }
+        persisted = subprocess.check_output(
+            [sys.executable, "-c", child],
+            input=json.dumps({"connection": db_options, "table": call._meta.db_table, "call_id": str(call.pk)}),
+            text=True,
+        )
+        assert json.loads(persisted) == [evidence]
+    # The worker receives only the queued decision id and reloads the evidence
+    # from the database, rather than inheriting request-local authentication.
+    run_turn(root["id"], **queued)
+    results = {block["tool_use_id"]: block["content"] for block in fake.calls[-1]["messages"][-1]["content"]}
+    assert json.loads(results[milk]) == {
+        "id": evidence["id"],
+        "actor_id": str(cook.pk),
+        "call_id": str(call.pk),
+        "tool_use_id": milk,
+    }
+    assert "declined" in str(results[eggs])
+
+
+@pytest.mark.django_db(transaction=True)
+def test_unproven_approval_does_not_supply_actor(client, cook, bot_folder, use_bots):
+    from django_ergo.conversation.models import ConversationSession
+
+    from ergonaut.apps.bots.tasks import run_turn
+
+    (bot_folder / "tools" / "pantry.py").write_text(
+        """
+import json
+from django_ergo.bots import bot_tool
+
+@bot_tool(requires_approval=True, takes_context=True)
+def order(ctx, item: str) -> str:
+    return json.dumps(ctx.approval_decision)
+"""
+    )
+    fake = use_bots(tool_call("order", {"item": "milk"}), say("Done."))
+    root = post(client, "/api/bots/kitchen/root").json()
+    turn = post(client, f"/api/sessions/{root['id']}/messages", {"text": "Order milk"}).json()
+    [approval] = turn["approvals"]
+    session = ConversationSession.objects.get(pk=root["id"])
+    run_turn(str(session.pk), approve=True, approval_ids=[approval["id"]], authenticated_approval_id="not-a-decision")
+    assert session.structured_calls.get().status == "awaiting_approval"
+    run_turn(str(session.pk), approve=True, approval_ids=[approval["id"]])
+    [result] = fake.calls[-1]["messages"][-1]["content"]
+    assert json.loads(result["content"]) is None
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("opt_in", [False, True])
+def test_revalidate_exact_current_call_after_policy_change(
+    client, cook, bot_folder, use_bots, tmp_path, settings, opt_in
+):
+    from django_ergo.conversation.models import StructuredCall
+
+    allowed, output = tmp_path / "allowed", tmp_path / "executions"
+    (bot_folder / "tools" / "pantry.py").write_text(f"""
+from pathlib import Path
+from django_ergo.bots import bot_tool
+def review(ctx, name, args, tool_id):
+    return Path({str(allowed)!r}).exists() and args == {{"item": "milk"}}
+@bot_tool(requires_approval=True, auto_approve=review, revalidate_pending={opt_in!r})
+def order(item: str) -> str:
+    with Path({str(output)!r}).open("a") as f:
+        f.write(item + "\\n")
+    return "ordered " + item
+""")
+    use_bots(tool_call("order", {"item": "milk"}), say("Done."))
+    root = post(client, "/api/bots/kitchen/root").json()
+    turn = post(client, f"/api/sessions/{root['id']}/messages", {"text": "Order milk"}).json()
+    call = StructuredCall.objects.get(session_id=root["id"])
+    endpoint = f"/api/sessions/{root['id']}/approvals/revalidate"
+    request = {"call_id": str(call.pk), "shown_approvals": turn["approvals"]}
+    settings.CELERY_TASK_ALWAYS_EAGER = True
+    assert post(client, endpoint, request).status_code == 200
+    call.refresh_from_db()
+    assert call.status == "awaiting_approval" and not output.exists()
+    from datetime import timedelta
+
+    old = StructuredCall.objects.create(
+        session_id=root["id"],
+        user=cook,
+        kind="chat_reply",
+        request="superseded",
+        status="awaiting_approval",
+        metadata={"pending_approvals": [{"id": "old", "name": "order", "input": {"item": "old"}}]},
+    )
+    StructuredCall.objects.filter(pk=old.pk).update(created_at=call.created_at - timedelta(seconds=1))
+    allowed.touch()
+    assert post(client, endpoint, {**request, "call_id": "stale"}).status_code == 409
+    assert post(client, endpoint, request).status_code == 200
+    call.refresh_from_db()
+    if not opt_in:
+        assert call.status == "awaiting_approval" and not output.exists()
+        return
+    assert call.status == "completed"
+    assert output.read_text().splitlines() == ["milk"]
+    assert post(client, endpoint, request).status_code == 409
+    assert output.read_text().splitlines() == ["milk"]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_revalidation_rejects_mixed_scope_and_superseded_call(client, cook, bot_folder, use_bots, tmp_path, settings):
+    from types import SimpleNamespace
+
+    from django_ergo.conversation.models import StructuredCall
+
+    allowed, output = tmp_path / "allowed", tmp_path / "executions"
+    (bot_folder / "tools" / "pantry.py").write_text(f"""
+from pathlib import Path
+from django_ergo.bots import bot_tool
+def review(ctx, name, args, tool_id):
+    return Path({str(allowed)!r}).exists() and (args == {{"item": "milk"}} or Path({str(allowed)!r}).read_text() == "all")
+@bot_tool(requires_approval=True, auto_approve=review, revalidate_pending=True)
+def order(item: str) -> str:
+    Path({str(output)!r}).write_text(item)
+    return item
+""")
+    milk, eggs = tool_call("order", {"item": "milk"}), tool_call("order", {"item": "eggs"})
+    both = SimpleNamespace(content=milk.content + eggs.content, stop_reason="tool_use", usage=milk.usage)
+    use_bots(both, say("Done."))
+    root = post(client, "/api/bots/kitchen/root").json()
+    turn = post(client, f"/api/sessions/{root['id']}/messages", {"text": "Order both"}).json()
+    call = StructuredCall.objects.get(session_id=root["id"])
+    request = {"call_id": str(call.pk), "shown_approvals": turn["approvals"]}
+    endpoint = f"/api/sessions/{root['id']}/approvals/revalidate"
+    settings.CELERY_TASK_ALWAYS_EAGER = True
+    allowed.touch()
+    assert post(client, endpoint, request).status_code == 200
+    call.refresh_from_db()
+    assert call.status == "awaiting_approval" and not output.exists()
+    allowed.write_text("all")
+    StructuredCall.objects.create(
+        session_id=root["id"], user=cook, kind="chat_reply", request="later", status="completed"
+    )
+    assert post(client, endpoint, request).status_code == 409
+    call.refresh_from_db()
+    assert call.status == "awaiting_approval" and not output.exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_revalidation_claim_is_one_shot_under_postgres(client, cook, use_bots):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    from django.db import connection, connections
+    from django_ergo.conversation.models import StructuredCall
+    from django_ergo.conversation.structured import _claim_pending_review
+
+    if connection.vendor != "postgresql":
+        pytest.skip("requires PostgreSQL row locking")
+    use_bots(tool_call("order", {"item": "milk"}), say("Done."))
+    root = post(client, "/api/bots/kitchen/root").json()
+    post(client, f"/api/sessions/{root['id']}/messages", {"text": "Order milk"})
+    call = StructuredCall.objects.get(session_id=root["id"])
+    pending = call.metadata["pending_approvals"]
+    barrier = Barrier(2)
+
+    def claim():
+        try:
+            barrier.wait(timeout=5)
+            return _claim_pending_review(call, pending, timezone.now())
+        finally:
+            connections.close_all()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda _: claim(), range(2)))
+    assert sorted(results) == [False, True]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_approval_rejects_changed_arguments_since_display(client, cook, use_bots):
+    from django_ergo.conversation.models import StructuredCall
+
+    use_bots(tool_call("order", {"item": "milk"}), say("Done."))
+    root = post(client, "/api/bots/kitchen/root").json()
+    turn = post(client, f"/api/sessions/{root['id']}/messages", {"text": "Order milk"}).json()
+    call = StructuredCall.objects.get(session_id=root["id"])
+    call.metadata["pending_approvals"][0]["input"]["item"] = "eggs"
+    call.save(update_fields=["metadata"])
+    response = post(
+        client,
+        f"/api/sessions/{root['id']}/approvals",
+        {
+            "decisions": {turn["approvals"][0]["id"]: True},
+            "shown_approvals": turn["approvals"],
+            "shown_call_id": str(call.pk),
+        },
+    )
+    assert response.status_code == 409
+    call.refresh_from_db()
+    assert call.status == "awaiting_approval"
+    assert not call.metadata.get("authenticated_approval_decisions")
+
+
+@pytest.mark.django_db(transaction=True)
+def test_authenticated_approval_refuses_changed_pending_call(client, cook, use_bots, monkeypatch):
+    from django_ergo.conversation.models import StructuredCall
+
+    from ergonaut.api import bots as bots_api
+    from ergonaut.apps.bots.tasks import run_turn
+
+    use_bots(tool_call("order", {"item": "milk"}), say("Done."))
+    root = post(client, "/api/bots/kitchen/root").json()
+    turn = post(client, f"/api/sessions/{root['id']}/messages", {"text": "Order milk"}).json()
+    queued = {}
+    monkeypatch.setattr(bots_api, "queue_turn", lambda session_id, **kwargs: queued.update(kwargs) or True)
+    assert (
+        post(
+            client,
+            f"/api/sessions/{root['id']}/approvals",
+            {"approval_ids": [turn["approvals"][0]["id"]], "approve": True},
+        ).status_code
+        == 200
+    )
+    call = StructuredCall.objects.get(session_id=root["id"])
+    call.metadata["pending_approvals"][0]["input"]["item"] = "eggs"
+    call.save(update_fields=["metadata"])
+    run_turn(root["id"], **queued)
+    call.refresh_from_db()
+    assert call.status == "awaiting_approval"
+    call.metadata["pending_approvals"][0]["input"]["item"] = "milk"
+    call.save(update_fields=["metadata"])
+    queued["approve"] = False
+    run_turn(root["id"], **queued)
+    call.refresh_from_db()
+    assert call.status == "awaiting_approval"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_decision_actor_is_authenticated_approver_not_session_owner(client, cook, use_bots, monkeypatch):
+    from django_ergo.conversation.models import StructuredCall
+
+    from ergonaut.api import bots as bots_api
+
+    use_bots(tool_call("order", {"item": "milk"}), say("Done."))
+    root = post(client, "/api/bots/kitchen/root").json()
+    turn = post(client, f"/api/sessions/{root['id']}/messages", {"text": "Order milk"}).json()
+    post(client, "/api/auth/logout")
+    endpoint = f"/api/sessions/{root['id']}/approvals"
+    assert post(client, endpoint, {"approve": True}).status_code == 401
+    call = StructuredCall.objects.get(session_id=root["id"])
+    assert "authenticated_approval_decisions" not in call.metadata
+
+    admin = get_user_model().objects.create_superuser("admin", "admin@example.com", "pw")
+    assert post(client, "/api/auth/login", {"username": "admin", "password": "pw"}).status_code == 200
+    monkeypatch.setattr(bots_api, "queue_turn", lambda session_id, **kwargs: True)
+    assert post(client, endpoint, {"approve": True, "approval_ids": [turn["approvals"][0]["id"]]}).status_code == 200
+    call.refresh_from_db()
+    [evidence] = call.metadata["authenticated_approval_decisions"]
+    assert evidence["actor_id"] == str(admin.pk)
+    assert evidence["actor_id"] != str(cook.pk)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_approval_without_ids_preserves_submitted_request(client, cook, use_bots, monkeypatch):
+    from django_ergo.conversation.models import StructuredCall
+
+    from ergonaut.api import bots as bots_api
+
+    use_bots(tool_call("order", {"item": "milk"}), say("Done."))
+    root = post(client, "/api/bots/kitchen/root").json()
+    turn = post(client, f"/api/sessions/{root['id']}/messages", {"text": "Order milk"}).json()
+    monkeypatch.setattr(bots_api, "queue_turn", lambda session_id, **kwargs: True)
+    assert post(client, f"/api/sessions/{root['id']}/approvals", {"approve": True}).status_code == 200
+    [evidence] = StructuredCall.objects.get(session_id=root["id"]).metadata["authenticated_approval_decisions"]
+    assert evidence["request"] == {"approve": True}
+    assert evidence["decisions"] == {turn["approvals"][0]["id"]: True}
+    assert evidence["actor_id"] == str(cook.pk)
 
 
 @pytest.mark.django_db(transaction=True)

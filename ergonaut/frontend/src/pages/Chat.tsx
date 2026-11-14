@@ -157,6 +157,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
   const [stopping, setStopping] = useState(false)
   // Answers to the tool calls a turn waits on, sent together once every one has one.
   const [choices, setChoices] = useState<Record<string, boolean>>({})
+  const choicesBatch = useRef('')
   // The Files panel stays open or closed across sessions, per browser.
   const [showFiles, toggleFiles] = usePersistedFlag('ergonaut.files')
   // The pinned page shown in place of the transcript, if any.
@@ -576,12 +577,27 @@ export function Chat({ onChange }: { onChange: () => void }) {
 
   const lastCall = lastTurn(detail.calls)
   const waiting = lastCall?.status === 'awaiting_approval' ? lastCall.pending_approvals : []
+  async function revalidate() {
+    if (!lastCall || busy || pending) return
+    setBusy(true)
+    setError('')
+    try {
+      await api.revalidateApproval(id, lastCall.id, waiting)
+      await load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
   function decide(approvalId: string, approve: boolean) {
-    const next = { ...choices, [approvalId]: approve }
+    const batch = JSON.stringify([lastCall?.id, waiting])
+    const next = { ...(choicesBatch.current === batch ? choices : {}), [approvalId]: approve }
+    choicesBatch.current = batch
     if (waiting.every(a => a.id in next)) {
       setChoices({})
       const decisions = Object.fromEntries(waiting.map(a => [a.id, next[a.id]]))
-      run(() => api.decide(id, decisions))
+      run(() => api.decide(id, decisions, waiting, lastCall?.id))
     } else {
       setChoices(next)
     }
@@ -899,10 +915,20 @@ export function Chat({ onChange }: { onChange: () => void }) {
         </div>
         {!!waiting.length && (
           <div className="mx-4 mb-3 grid max-h-[45dvh] gap-2 overflow-y-auto sm:mx-6">
+            <button
+              disabled={busy || !!pending}
+              className="rounded-control border border-warning/50 px-3 py-2 text-sm text-ink disabled:opacity-50"
+              onClick={revalidate}
+            >
+              Re-check permissions and run if authorized
+            </button>
             {waiting.map(approval => (
               <section key={approval.id} className="rounded-card border border-warning/40 bg-amber-tint p-4 text-sm">
                 <div className="font-medium">Tool approval requested: {approval.name}</div>
                 <p className="mt-1 text-muted">Review this tool call; the composer waits for its decision.</p>
+                <pre className="mt-3 max-h-56 overflow-auto whitespace-pre-wrap rounded-control border border-warning/30 bg-canvas p-3 text-xs text-ink">
+                  {JSON.stringify(approval.input, null, 2)}
+                </pre>
                 {approval.preview && (
                   <pre className="mt-3 max-h-56 overflow-auto whitespace-pre-wrap rounded-control border border-warning/30 bg-canvas p-3 text-xs text-ink">
                     {approval.preview}
@@ -1276,7 +1302,12 @@ function Requests({ requests, onAnswered }: { requests: DelegatedRequest[]; onAn
     setAnswering(r.id)
     setFailed('')
     try {
-      await api.decide(r.other_session_id, Object.fromEntries((r.approvals ?? []).map(a => [a.id, approve])))
+      await api.decide(
+        r.other_session_id,
+        Object.fromEntries((r.approvals ?? []).map(a => [a.id, approve])),
+        r.approvals ?? [],
+        r.approval_call_id,
+      )
       onAnswered()
     } catch (e) {
       setFailed(e instanceof Error ? e.message : String(e))
@@ -1317,7 +1348,7 @@ function Requests({ requests, onAnswered }: { requests: DelegatedRequest[]; onAn
                 <div key={a.id} className="mb-1">
                   <span className="font-medium">{a.name}</span>
                   <pre className="mt-1 max-h-32 overflow-auto whitespace-pre-wrap text-ink">
-                    {a.preview || JSON.stringify(a.input, null, 2)}
+                    {JSON.stringify(a.input, null, 2)}
                   </pre>
                 </div>
               ))}
