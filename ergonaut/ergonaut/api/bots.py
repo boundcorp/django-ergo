@@ -24,7 +24,7 @@ from django.db.models.functions import Coalesce, Greatest, Lower, NullIf, StrInd
 from django.http import FileResponse, HttpResponse
 from django.shortcuts import aget_object_or_404
 from django.utils import timezone
-from django_ergo.bots import archival, messaging, webhooks
+from django_ergo.bots import archival, messaging, recurring_wakes, webhooks
 from django_ergo.bots.pages import text_page, view_kind
 from django_ergo.bots.registry import may_use
 from django_ergo.bots.runtime import Bot
@@ -225,6 +225,7 @@ class SessionDetailOut(Schema):
     todos: list[dict] = []
     # Self-wakes the bot scheduled here (django_ergo.bots.wakes): [{id, due_at, note, chain, status}].
     wakes: list[dict] = []
+    recurring_wakes: list[dict] = []
     # Messages sent while a turn runs that the model hasn't taken yet (they can be unsent).
     inbox: list[dict] = []
     # Paging: the first line returned, and whether older messages exist (ask with before=first_line).
@@ -1294,6 +1295,7 @@ def session_detail(
         "workers": workers_out(session),
         "todos": get_todos(session),
         "wakes": pending_wakes(session),
+        "recurring_wakes": recurring_wakes.list_schedules(session),
         "inbox": [
             {"id": item.get("id", ""), "text": item.get("text", ""), "files": len(item.get("attachment_ids") or [])}
             for item in peek_inbox(session.id)
@@ -1305,6 +1307,37 @@ def session_detail(
         "retry_model": retry_model_for(session, request.auth),
         "prs": session_prs(session),
     }
+
+
+class RecurringWakeControlIn(Schema):
+    action: Literal["pause", "resume", "cancel"]
+
+
+def recurring_wake_session(request, session_id: str) -> ConversationSession:
+    session = visible_sessions(request.auth).filter(id=uuid_or_404(session_id)).first()
+    if session is None:
+        raise HttpError(404, "No such session")
+    get_bot(session.bot_name, request.auth)
+    return session
+
+
+@router.get("/sessions/{session_id}/recurring-wakes")
+def list_recurring_wakes(request, session_id: str):
+    return recurring_wakes.list_schedules(recurring_wake_session(request, session_id))
+
+
+@router.post("/sessions/{session_id}/recurring-wakes/{schedule_id}")
+def control_recurring_wake(request, session_id: str, schedule_id: str, data: RecurringWakeControlIn):
+    session = recurring_wake_session(request, session_id)
+    schedule_id = uuid_or_404(schedule_id, "recurring wake")
+    try:
+        result = recurring_wakes.control(session, schedule_id, data.action)
+    except LookupError as exc:
+        raise HttpError(404, str(exc)) from exc
+    except ValueError as exc:
+        raise HttpError(409, str(exc)) from exc
+    notify(session.id)
+    return result
 
 
 @router.get("/sessions/{session_id}/debug-shortcut")

@@ -53,6 +53,7 @@ OFFICIAL_PLUGINS = {
     "pages": "django_ergo.plugins.pages.PagesPlugin",
     "web_search": "django_ergo.plugins.web_search.WebSearchPlugin",
     "runpod": "django_ergo.plugins.runpod.plugin.RunpodPlugin",
+    "observability": "django_ergo.plugins.observability.ObservabilityPlugin",
 }
 
 

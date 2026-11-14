@@ -21,4 +21,5 @@ class DjangoErgoConfig(AppConfig):
             raise
 
     def ready(self):
-        import django_ergo.conversation.models  # noqa: F401
+        import django_ergo.conversation.models
+        import django_ergo.costs.models  # noqa: F401

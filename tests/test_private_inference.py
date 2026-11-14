@@ -811,6 +811,58 @@ async def test_public_openai_engine_refuses_a_client_redirected_after_constructi
 
 
 @pytest.mark.django_db(transaction=True)
+async def test_cost_hook_records_private_attempt_after_mocked_send(
+    found, fireworks, settings
+):
+    from django_ergo.costs.models import CostObservation
+
+    settings.DJANGO_ERGO = {"INFERENCE_COST_LEDGER_ENABLED": True}
+    user = await User.objects.acreate(username="accounting-success")
+    personal = bots(found, personal={"config": {"model": "personal"}})["personal"]
+    session = await personal.create_session(user)
+    events = [
+        event async for event in personal.make_engine(session).send(session, "hello")
+    ]
+    assert any(event.text == "hello" for event in events)
+    assert len(fireworks.requests) == 1
+    row = await InferenceRequest.objects.aget()
+    assert row.outcome == "ok" and row.cost_ledger_state == "recorded"
+    assert {
+        kind async for kind in CostObservation.objects.values_list("kind", flat=True)
+    } == {
+        "reservation",
+        "estimate",
+    }
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_cost_hook_failure_does_not_repeat_private_dispatch(
+    found, fireworks, settings, monkeypatch
+):
+    from django_ergo.costs import adapters
+    from django_ergo.costs.models import CostObservation
+
+    settings.DJANGO_ERGO = {"INFERENCE_COST_LEDGER_ENABLED": True}
+
+    def fail(**kwargs):
+        raise ValueError
+
+    monkeypatch.setattr(adapters, "record_inference_request", fail)
+    user = await User.objects.acreate(username="accounting-failure")
+    personal = bots(found, personal={"config": {"model": "personal"}})["personal"]
+    session = await personal.create_session(user)
+    events = [
+        event async for event in personal.make_engine(session).send(session, "hello")
+    ]
+    assert any(event.text == "hello" for event in events)
+    assert len(fireworks.requests) == 1
+    row = await InferenceRequest.objects.aget()
+    assert row.outcome == "ok"
+    assert row.cost_ledger_state == "pending"
+    assert not await CostObservation.objects.aexists()
+
+
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize(
     ("selector", "model_id"), [("personal", FLASH), ("personal/heavy", KIMI)]
 )

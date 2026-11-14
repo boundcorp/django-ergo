@@ -42,6 +42,7 @@ filesystem = ["pyyaml>=6.0"]
 bots = ["pyyaml>=6.0", "jinja2>=3.1", "markdown-it-py>=3.0"]
 browser = ["playwright>=1.64"]  # the browser plugin (connects to Chrome over CDP)
 images = ["Pillow"]  # downscale images before they go to the model
+observability = ["matplotlib>=3.8"]  # data charts for the observability plugin (Agg, lazy-imported)
 telemetry = [
     "opentelemetry-api",
     "opentelemetry-sdk",
@@ -63,6 +64,7 @@ dev = [
     "pytest-xdist",
     "playwright>=1.64",  # the browser extra, so CI runs the browser plugin tests
     "Pillow",  # the images extra, so CI runs the image-downscaling tests
+    "matplotlib>=3.8",  # the observability extra, so CI runs the chart tests
     "ruff==0.12.5",  # keep in step with .pre-commit-config.yaml
     "coverage",
     "djlint",
@@ -254,6 +256,9 @@ dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
 "src/django_ergo/indexing.py" = ["TRY003", "EM101", "EM102", "C901", "PERF401"]
 "src/django_ergo/repository_index.py" = ["TRY003", "EM101", "EM102", "C901", "PLR0913"]
 "src/django_ergo/bots/tables.py" = ["SLF001"]  # Django model _meta
+# Observability: messages are model-facing text carried by ObservabilityError; tool signatures mirror their JSON schemas.
+"src/django_ergo/observability/*.py" = ["TRY003", "EM101", "EM102", "C901", "PLR0911", "PLR0912", "PLR0913", "PLR0915"]
+"src/django_ergo/plugins/observability.py" = ["TRY003", "EM101", "EM102", "C901", "PLR0913", "PLR0915"]
 "tests/*.py" = ["PT018", "FBT003", "PLR2004", "SLF001", "S603", "S607"]
 # Standalone scripts for agents (the ergo client, the skill installer) and the client's bot tools.
 "src/django_ergo/bots/skill_library/**/*.py" = ["T201", "S310", "PLR2004", "C901", "PLR0912", "PLR0915", "EM101", "EM102", "TRY003", "PLW0603", "INP001", "FBT001", "FBT002"]

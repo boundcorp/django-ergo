@@ -172,6 +172,11 @@ class WorkerContext:
             source_label=f"Worker: {self.worker.title}",
             registry=self.bot.registry,
             metadata={
+                **(
+                    {"recurring_origin": str(self.worker.recurring_origin)}
+                    if self.worker.recurring_origin
+                    else {}
+                ),
                 "worker": str(self.worker.pk),
                 "worker_title": self.worker.title,
                 "update": True,
@@ -308,12 +313,20 @@ def start(  # noqa: PLR0913
     from django.db import transaction
     from django.utils import timezone
 
+    from django_ergo.bots.messaging import current_thread_message
     from django_ergo.conversation.models import Worker
 
     if ":" not in function:
         function = f"task:{function}"
     resolve(bot, function)  # fail now, in the tool call, rather than in the background
     json.dumps(args)  # arguments must survive a trip to another process
+    handling = current_thread_message(session)
+    metadata = (
+        handling.metadata if handling and isinstance(handling.metadata, dict) else {}
+    )
+    recurring_origin = metadata.get("recurring_wake") or metadata.get(
+        "recurring_origin"
+    )
     with transaction.atomic():
         worker = Worker.objects.create(
             session=session,
@@ -322,6 +335,7 @@ def start(  # noqa: PLR0913
             function=function,
             args=dict(args),
             notify=notify,
+            recurring_origin=recurring_origin or None,
             state=dict(state or {}),
             next_poll_at=timezone.now(),
         )
@@ -637,6 +651,11 @@ def _finish(worker: Worker, status: str, result: Any, error: str) -> None:
         source_label=f"Worker: {worker.title}",
         registry=registry,
         metadata={
+            **(
+                {"recurring_origin": str(worker.recurring_origin)}
+                if worker.recurring_origin
+                else {}
+            ),
             "worker": str(worker.pk),
             "worker_title": worker.title,
             "worker_finished": True,

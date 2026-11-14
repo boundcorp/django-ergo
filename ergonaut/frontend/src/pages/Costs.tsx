@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import type { AgentProject, AgentUsage, CostBucket, Costs, UsageThread } from '../api'
+import type { AgentProject, AgentUsage, CostBucket, Costs, EstimateScope, Ledger, UsageThread } from '../api'
 import { api } from '../api'
 
 const RANGES = [7, 30, 90]
@@ -93,11 +93,13 @@ function agentItem(row: AgentUsage, withProject = true): Item {
     name: row.worker_title,
     sub: [where, row.agent, row.model, row.worker_status].filter(Boolean).join(' · '),
     href: `/s/${row.chat_id}`,
-    title: `${row.chat_title} · ${row.requests.toLocaleString()} requests`,
+    title:
+      `${row.chat_title} · ${row.requests.toLocaleString()} requests` +
+      (row.spillover ? ` · lifetime totals; began ${row.first_at ?? 'at an unknown time'}, before this window` : ''),
     parts: partsOf(row),
     cacheHit: row.cache_hit,
     cost: row.cost,
-    unpriced: row.priced ? undefined : `No list price for ${row.model}`,
+    unpriced: row.priced ? undefined : row.tokens ? `No list price for ${row.model}` : 'No token data; cost unknown',
   }
 }
 
@@ -118,7 +120,9 @@ export function projectItems(data: Costs): Item[] {
       parts: partsOf(project),
       cacheHit: project.cache_hit,
       cost: project.cost,
-      unpriced: project.unpriced_models.length ? `No list price for ${project.unpriced_models.join(', ')}` : undefined,
+      unpriced: project.unpriced_models.length
+        ? `Missing price or token data: ${project.unpriced_models.join(', ')}`
+        : undefined,
       children: data.agents.rows.filter(row => row.project_key === project.key).map(row => agentItem(row, false)),
     }
   })
@@ -435,20 +439,184 @@ export function Summary({ data }: { data: Costs }) {
   )
 }
 
+function utcDay(value?: string | null) {
+  return value ? value.slice(0, 10) : 'unknown'
+}
+
+function EstimateCard({ title, scope }: { title: string; scope: EstimateScope }) {
+  const incomplete = scope.unpriced_rows > 0 || scope.no_usage_rows > 0
+  const unknown = scope.priced_rows === 0 && incomplete
+  const hit =
+    scope.cache_hit === null
+      ? 'no cache denominator recorded'
+      : `${percent(scope.cache_hit)} cache hit (${tokens(scope.cache_read_tokens)} reads / ${tokens(scope.cache_denominator)} = uncached input + writes + reads; output excluded)`
+  return (
+    <div className="min-w-0 bg-surface px-4 py-3" aria-label={`${title} list-price estimate`}>
+      <div className="text-xs font-medium text-muted">{title}</div>
+      <div className="mt-0.5 font-display text-xl font-semibold tabular-nums">
+        {unknown ? 'Unknown' : `${money(scope.list_cost)}${incomplete ? '+' : ''}`}
+      </div>
+      <div className="text-xs text-muted">
+        {scope.priced_rows} priced · {scope.unpriced_rows} unpriced rows
+        {scope.unpriced_rows > 0 &&
+          ` (${tokens(scope.unpriced_tokens)} tokens not costed: ${scope.unpriced_models.join(', ')})`}
+      </div>
+      <div className="mt-1 text-xs text-muted" title={hit}>
+        {tokens(scope.input_tokens)} uncached in · {tokens(scope.cache_write_tokens)} write ·{' '}
+        {tokens(scope.cache_read_tokens)} read · {tokens(scope.output_tokens)} out
+      </div>
+      <div className="text-xs text-muted">
+        Cost: in {money(scope.input_cost)} · write {money(scope.cache_write_cost)} · read {money(scope.cache_read_cost)}{' '}
+        · out {money(scope.output_cost)}
+      </div>
+      <div className="text-xs text-muted">{hit}</div>
+      {scope.no_usage_rows > 0 && (
+        <div className="text-xs text-warning">
+          {scope.no_usage_rows} rows have no token data; usage and cost unknown
+        </div>
+      )}
+      {!scope.exact_window && (
+        <div className="text-xs text-warning">
+          Lifetime totals of rows active in the window, {utcDay(scope.first_at)} to {utcDay(scope.last_at)};{' '}
+          {scope.spillover_rows} began earlier ({tokens(scope.spillover_tokens)} tokens), so not clipped to the window.
+        </div>
+      )}
+    </div>
+  )
+}
+
+export function Estimate({ data }: { data: Costs }) {
+  const estimate = data.estimate
+  if (!estimate) return null
+  return (
+    <section className="mt-4" aria-label="List-price estimate">
+      <div className="grid grid-cols-1 gap-px overflow-hidden rounded-card border border-stroke bg-stroke lg:grid-cols-3">
+        <EstimateCard title="Bot calls (list price)" scope={estimate.bot} />
+        <EstimateCard title="Coding agents (list price)" scope={estimate.agents} />
+        <EstimateCard title="Combined (list price)" scope={estimate.combined} />
+      </div>
+      <p className="mt-2 text-xs text-muted">
+        Model-table estimates include subscription traffic. Unpriced rows and rows with no token data are omitted, not
+        counted as $0. Aggregated bot and agent tokens cannot account for per-request long-context rates. Bot spend
+        above is recorded or estimated API spend excluding subscriptions, not a verified bill; actual billed amounts are
+        unknown without reconciliation. These estimates are not an invoice or subscription quota. A high cache hit rate
+        does not imply matching savings: writes and output are priced separately. Window: {data.since || 'unknown'} to{' '}
+        {data.until || 'unknown'} (UTC).
+      </p>
+    </section>
+  )
+}
+
+const LEDGER_KINDS: Record<string, string> = {
+  final: 'Settled',
+  provider_reported: 'Provider reported',
+  estimate: 'Estimated',
+  unknown: 'Unknown amount',
+  reservation: 'Reserved (ceiling)',
+  release: 'Released',
+  api_equivalent: 'API-equivalent (not spent)',
+  subscription: 'Subscription (not metered)',
+}
+const LEDGER_ORDER = Object.keys(LEDGER_KINDS)
+const SPEND_KINDS = new Set(['final', 'provider_reported', 'estimate', 'unknown'])
+
+const COVERAGE_LABEL: Record<string, string> = {
+  adapter_callable_not_wired: 'Adapter exists, not wired',
+  automatic_private_inference_opt_in: 'Private inference enabled for new attempts',
+  automatic_private_inference_disabled: 'Private inference disabled for new attempts',
+  aggregate_only: 'Aggregate only',
+  not_integrated: 'Not integrated',
+  external_unknown: 'External, unknown billing',
+  unsupported: 'Unsupported',
+}
+
+export function LedgerPanel({ ledger }: { ledger: Ledger }) {
+  const buckets = [...ledger.buckets].sort(
+    (a, b) => LEDGER_ORDER.indexOf(a.kind) - LEDGER_ORDER.indexOf(b.kind) || a.currency.localeCompare(b.currency),
+  )
+  return (
+    <section className="mt-4" aria-label="Cost ledger">
+      <h2 className="text-sm font-semibold">Cost ledger (passive, partial)</h2>
+      {!buckets.length ? (
+        <p className="mt-2 text-sm text-muted">
+          Nothing recorded in this window. That is not zero spend; ledger coverage is incomplete.
+        </p>
+      ) : (
+        <div className="mt-2 grid grid-cols-1 gap-px overflow-hidden rounded-card border border-stroke bg-stroke sm:grid-cols-2 lg:grid-cols-3">
+          {buckets.map(b => (
+            <div key={`${b.kind}-${b.currency}`} className="bg-surface px-4 py-3">
+              <div className="text-xs text-muted">
+                {LEDGER_KINDS[b.kind] ?? b.kind} · {b.currency}
+              </div>
+              <div className="mt-1 text-lg font-semibold tabular-nums">
+                {b.known_amount === null ? 'Unknown' : `${b.known_amount} ${b.currency}`}
+              </div>
+              <div className="text-xs text-muted">
+                {b.operation_count} operation{b.operation_count === 1 ? '' : 's'}
+                {b.unknown_count > 0 && ` · ${b.unknown_count} unknown amount`}
+                {b.known_amount !== null && b.unknown_count > 0 && ' (subtotal is incomplete)'}
+                {b.partial_period_count > 0 && ` · ${b.partial_period_count} cross the window edge, whole amount`}
+                {b.undated_count > 0 && ` · ${b.undated_count} undated, excluded`}
+                {!SPEND_KINDS.has(b.kind) && ' · not added to spend'}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      <p className="mt-2 text-xs text-muted">
+        {ledger.basis} Currencies are never converted or summed. Window: {ledger.since} to {ledger.until} (UTC).
+      </p>
+      <details className="mt-2 text-xs">
+        <summary className="cursor-pointer text-muted">
+          Coverage: private inference enrollment is {ledger.coverage.live_ingestion ? 'on' : 'off'}; coverage is
+          incomplete
+        </summary>
+        <p className="mt-2 text-muted">{ledger.coverage.note}</p>
+        <div className="mt-2 overflow-x-auto">
+          <table className="w-full min-w-[40rem] text-left">
+            <thead className="text-muted">
+              <tr>
+                <th className="py-1 pr-3">Source</th>
+                <th className="py-1 pr-3">Status</th>
+                <th className="py-1 pr-3">Uncertainty</th>
+                <th className="py-1">No double count</th>
+              </tr>
+            </thead>
+            <tbody>
+              {ledger.coverage.sources.map(s => (
+                <tr key={s.source} className="border-t border-stroke align-top">
+                  <td className="py-1 pr-3">{s.source}</td>
+                  <td className="py-1 pr-3">{COVERAGE_LABEL[s.status] ?? s.status}</td>
+                  <td className="py-1 pr-3">{s.uncertainty}</td>
+                  <td className="py-1">{s.duplicate_rule}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </details>
+    </section>
+  )
+}
+
 export function CostsBody({
   data,
   view,
   onView,
   dim = false,
+  ledger = null,
 }: {
   data: Costs
   view: View
   onView: (view: View) => void
   dim?: boolean
+  ledger?: Ledger | null
 }) {
   return (
     <div className={dim ? 'opacity-60' : ''}>
       <Summary data={data} />
+      <Estimate data={data} />
+      {ledger && <LedgerPanel ledger={ledger} />}
       <div className="surface-card mt-4 px-4 py-3">
         <Daily days={data.by_day} />
       </div>
@@ -460,8 +628,8 @@ export function CostsBody({
         </p>
       )}
       <p className="mt-2 text-xs text-muted">
-        Costs are estimates from token counts and list prices, each part at the model's own rate. Hover a bar for its
-        token mix and what each part cost.
+        Bot spend uses recorded API costs where available, otherwise model-table estimates; billed amounts are unknown.
+        Hover a bar for its token mix and cost breakdown.
       </p>
     </div>
   )
@@ -485,6 +653,8 @@ export function CostsPage() {
   const [bot, setBot] = useState('')
   const [bots, setBots] = useState<string[]>([])
   const [view, setView] = useState<View>(savedView)
+  const [ledger, setLedger] = useState<Ledger | null>(null)
+  const [ledgerError, setLedgerError] = useState('')
 
   useEffect(() => {
     api
@@ -503,6 +673,24 @@ export function CostsPage() {
       })
       .catch(e => {
         if (active) setError(String(e.message ?? e))
+      })
+    return () => {
+      active = false
+    }
+  }, [days, bot])
+
+  useEffect(() => {
+    // The ledger is separate and optional: its failure must not hide the token estimates.
+    let active = true
+    setLedger(null)
+    setLedgerError('')
+    api
+      .costsLedger(days, bot)
+      .then(result => {
+        if (active) setLedger(result)
+      })
+      .catch(() => {
+        if (active) setLedgerError('Cost ledger unavailable; coverage and recorded costs could not be loaded.')
       })
     return () => {
       active = false
@@ -539,7 +727,10 @@ export function CostsPage() {
               </option>
             ))}
           </select>
-          <div className="flex gap-0.5 rounded-control border border-stroke bg-surface p-0.5" aria-label="Period">
+          <div
+            className="flex gap-0.5 rounded-control border border-stroke bg-surface p-0.5"
+            aria-label="Last N UTC dates including partial today"
+          >
             {RANGES.map(r => (
               <button
                 key={r}
@@ -548,17 +739,22 @@ export function CostsPage() {
                 aria-pressed={r === days}
                 className={`rounded-control px-3 py-1 text-sm ${r === days ? 'bg-accent font-semibold text-canvas' : 'text-muted hover:bg-raised'}`}
               >
-                {r}d
+                Last {r} UTC dates (including partial today)
               </button>
             ))}
           </div>
         </div>
       </div>
+      {ledgerError && (
+        <div role="alert" className="mt-4 text-sm text-warning">
+          {ledgerError}
+        </div>
+      )}
 
       {!data ? (
         <div className="mt-6 text-sm text-muted">{error || 'Loading…'}</div>
       ) : (
-        <CostsBody data={data} view={view} onView={choose} dim={!!error} />
+        <CostsBody data={data} view={view} onView={choose} dim={!!error} ledger={ledger} />
       )}
     </div>
   )

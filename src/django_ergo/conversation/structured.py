@@ -86,6 +86,7 @@ from typing import get_args
 from typing import get_origin
 
 from asgiref.sync import sync_to_async
+from django.utils import timezone
 from pydantic import BaseModel
 from pydantic import ValidationError
 
@@ -125,6 +126,7 @@ from django_ergo.conversation.tool_results import budget_chars
 from django_ergo.conversation.tool_results import trim_tool_results
 from django_ergo.conversation.toolkit import ApprovalPreview
 from django_ergo.conversation.toolkit import Toolkit
+from django_ergo.conversation.toolkit import auto_approved
 from django_ergo.pricing import add_request_cost
 
 if TYPE_CHECKING:
@@ -877,6 +879,7 @@ class _Run:
         tool_id: str,
         *,
         fence: Callable[[], bool] | None = None,
+        automatically_approved: bool = False,
     ) -> tuple[Any, bool]:
         """Run one tool call. With ``fence``, the call first checks it on the
         tool's thread and returns ``(_REVOKED, True)`` without running when
@@ -901,9 +904,15 @@ class _Run:
                     revoked = True
                 if revoked:
                     return _REVOKED, True
-            if once:
-                return dispatch_tool_once(self.call, tool_id, name, args, self.toolkits)
-            return dispatch_tool(name, args, self.toolkits)
+            token = auto_approved.set(automatically_approved)
+            try:
+                if once:
+                    return dispatch_tool_once(
+                        self.call, tool_id, name, args, self.toolkits
+                    )
+                return dispatch_tool(name, args, self.toolkits)
+            finally:
+                auto_approved.reset(token)
 
         try:
             return await sync_to_async(start, thread_sensitive=True)()
@@ -1141,7 +1150,11 @@ async def _run_loop(run: _Run) -> StructuredCallResult:  # noqa: C901, PLR0912, 
                     and await run.autoapprove(name, args, tool_id)
                 ):
                     result, is_error = await run.run_tool(
-                        name, args, tool_id, fence=run.fence
+                        name,
+                        args,
+                        tool_id,
+                        fence=run.fence,
+                        automatically_approved=True,
                     )
                     if result is not _REVOKED:
                         results.append((tool_id, result, is_error))
@@ -1292,7 +1305,9 @@ async def _accept(run: _Run) -> BaseModel:
     call.status = StructuredCallStatus.COMPLETED
     # Close the turn with the response as plain assistant text, so chat turns
     # and history readers see the answer.
-    await run.transcript.append_response_text(_response_text(parsed, call.response))
+    response_text = _response_text(parsed, call.response)
+    if response_text:
+        await run.transcript.append_response_text(response_text)
     return parsed
 
 
@@ -1490,13 +1505,15 @@ async def resume_structured_call(  # noqa: PLR0913
         msg = f"Call {call.pk} is not waiting for approval"
         raise StructuredCallError(msg)
     # Claim it, so a second answer (a double tap, two devices) can't run the tools again.
+    claimed_at = timezone.now()
     claimed = await StructuredCall.objects.filter(
         pk=call.pk, status=StructuredCallStatus.AWAITING_APPROVAL
-    ).aupdate(status=StructuredCallStatus.IN_PROGRESS)
+    ).aupdate(status=StructuredCallStatus.IN_PROGRESS, updated_at=claimed_at)
     if not claimed:
         msg = f"Call {call.pk} was already answered"
         raise StructuredCallError(msg)
     call.status = StructuredCallStatus.IN_PROGRESS
+    call.updated_at = claimed_at
     pending = (call.metadata or {}).get("pending_approvals", [])
     await sync_to_async(_lifecycle_approvals, thread_sensitive=True)(
         call, pending, "answer_received"

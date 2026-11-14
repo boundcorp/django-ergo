@@ -42,6 +42,7 @@ PolicyError: they belong to private inference, not tools.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import importlib.util
 import inspect
@@ -56,12 +57,15 @@ from typing import TYPE_CHECKING
 from typing import Any
 from typing import get_type_hints
 
+from asgiref.sync import sync_to_async
+
 from django_ergo.conversation.adapters import OpenAIToolAdapter
 from django_ergo.conversation.images import ToolResult
 from django_ergo.conversation.images import as_tool_result
 from django_ergo.conversation.inference_policy import PolicyError
 from django_ergo.conversation.toolkit import ApprovalPreview
 from django_ergo.conversation.toolkit import Toolkit
+from django_ergo.conversation.toolkit import auto_approved
 from django_ergo.protected_env import is_protected_env
 
 if TYPE_CHECKING:
@@ -93,6 +97,11 @@ class ToolContext:
     user: Any = None
     # The page a page action was called from: a bot-folder path or a chat file's id.
     page: str | None = None
+
+    @property
+    def auto_approved(self) -> bool:
+        """Whether this execution was automatically, rather than human, approved."""
+        return auto_approved.get()
 
     @property
     def tasks(self):
@@ -178,6 +187,7 @@ class BotTool:
     approval_preview: Callable | None = None
     takes_context: bool = False
     seed: bool = False  # run before the chat's first model call (see FunctionToolkit)
+    auto_approve: Callable | None = None
 
     def json_schema(self) -> dict:
         return {
@@ -237,6 +247,7 @@ def bot_tool(  # noqa: PLR0913
     parameters: dict | None = None,
     required: list[str] | None = None,
     requires_approval: bool = False,
+    auto_approve: Callable | None = None,
     approval_preview: Callable | None = None,
     takes_context: bool = False,
     seed: bool = False,
@@ -247,6 +258,10 @@ def bot_tool(  # noqa: PLR0913
     chat's first model call while its skill is loaded, and writes the result
     into the history as if the model had called it (every turn in window
     chats).
+
+    ``auto_approve(ctx, tool_name, arguments, tool_id)`` may synchronously
+    approve an exact call requiring approval. Anything other than True, or an
+    error, leaves the usual human approval in place.
     """
 
     def decorate(fn: Callable) -> Callable:
@@ -265,6 +280,7 @@ def bot_tool(  # noqa: PLR0913
             parameters=props,
             required=req,
             requires_approval=requires_approval,
+            auto_approve=auto_approve,
             approval_preview=approval_preview,
             takes_context=takes_context,
             seed=seed,
@@ -416,6 +432,20 @@ class FunctionToolkit(Toolkit):
 
     def requires_approval(self, tool_name: str) -> bool:
         return self.tools[tool_name].requires_approval
+
+    async def auto_approve(self, tool_name: str, arguments: dict, tool_id: str) -> bool:
+        tool = self.tools.get(tool_name)
+        if tool is None or not tool.requires_approval or tool.auto_approve is None:
+            return False
+        try:
+            reviewed = copy.deepcopy(arguments)
+            allowed = await sync_to_async(tool.auto_approve, thread_sensitive=True)(
+                self.context, tool_name, reviewed, tool_id
+            )
+            return allowed is True and reviewed == arguments
+        except Exception:  # noqa: BLE001 — review failures require human approval
+            logger.warning("Automatic bot tool review failed")
+            return False
 
     def approval_preview(
         self, tool_name: str, arguments: dict

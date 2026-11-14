@@ -1329,6 +1329,9 @@ class Bot:
                 "voice_execution_mode",
                 "tool_execution_policy",
                 "model_retry_policy",
+                "recurring_wake",
+                "recurring_occurrence",
+                "periodic_checkins",
             ):
                 if key in (thread_message.metadata or {}):
                     metadata[key] = thread_message.metadata[key]
@@ -1364,8 +1367,13 @@ class Bot:
             metadata["context_policy"] = "current_chat_only"
         if budget is None:  # routing may move the chat to another (priced) model
             await sync_to_async(self.route, thread_sensitive=True)(session)
+        from django_ergo.bots.recurring_reply import apply_notification_policy
+
+        spec = apply_notification_policy(
+            self.reply_spec(toolkits, session, budget), metadata
+        )
         outcome = await run_structured_call(
-            self.reply_spec(toolkits, session, budget),
+            spec,
             message,
             session=session,
             engine=self.make_engine(session),
@@ -1416,9 +1424,12 @@ class Bot:
             decisions = {item["id"]: decisions for item in pending}
         toolkits, builder = await self._prepare(session, "", incoming=False)
         await sync_to_async(self.route, thread_sensitive=True)(session)
+        from django_ergo.bots.recurring_reply import apply_notification_policy
+
+        spec = apply_notification_policy(self.reply_spec(toolkits), call.metadata or {})
         try:
             outcome = await resume_structured_call(
-                self.reply_spec(toolkits),
+                spec,
                 call,
                 decisions,
                 engine=self.make_engine(session),

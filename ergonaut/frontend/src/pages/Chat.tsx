@@ -8,6 +8,7 @@ import type {
   Message,
   Pin,
   PrLink,
+  RecurringWake,
   RealtimeVoiceSession,
   SentCard,
   SessionDetail,
@@ -32,6 +33,7 @@ import { AttachmentView, isAudio, replySuggestions, Transcript } from '../compon
 import { ModelLink, MobileSessionBar, SessionTitle, SuggestionChips, ThreadOptions } from '../components/ChatChrome'
 import { TodoButton, TodoList } from '../components/TodoList'
 import { WakeNotice } from '../components/WakeNotice'
+import { RecurringWakeNotice } from '../components/RecurringWakeNotice'
 import { usePersistedFlag } from '../persistedFlag'
 import { WorkerActivityView, WorkerPulse } from '../components/WorkerActivity'
 import { UsageBars, useSessionUsage } from '../components/UsageSparkline'
@@ -339,7 +341,9 @@ export function Chat({ onChange }: { onChange: () => void }) {
     const after = messages.length ? messages[messages.length - 1].line : -1
     const events = new EventSource(`/api/sessions/${id}/events?after=${after}`)
     events.onmessage = e => {
-      const { messages, calls, requests, title, workers, sent, prs, todos, wakes } = JSON.parse(e.data) as {
+      const { messages, calls, requests, title, workers, sent, prs, todos, wakes, recurring_wakes } = JSON.parse(
+        e.data,
+      ) as {
         messages: Message[]
         calls: Call[]
         requests?: DelegatedRequest[]
@@ -349,6 +353,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
         prs?: PrLink[]
         todos?: Todo[]
         wakes?: Wake[]
+        recurring_wakes?: RecurringWake[]
       }
       setDetail(d =>
         d
@@ -367,6 +372,7 @@ export function Chat({ onChange }: { onChange: () => void }) {
               ...(prs ? { prs } : {}),
               ...(todos ? { todos } : {}),
               ...(wakes ? { wakes } : {}),
+              ...(recurring_wakes ? { recurring_wakes } : {}),
             }
           : d,
       )
@@ -1038,6 +1044,21 @@ export function Chat({ onChange }: { onChange: () => void }) {
           </aside>
         )}
         <WakeNotice wakes={detail.wakes ?? []} />
+        <RecurringWakeNotice
+          key={id}
+          sessionId={id}
+          schedules={detail.recurring_wakes ?? []}
+          onChange={schedule =>
+            setDetail(d =>
+              d && d.session.id === id
+                ? {
+                    ...d,
+                    recurring_wakes: (d.recurring_wakes ?? []).map(row => (row.id === schedule.id ? schedule : row)),
+                  }
+                : d,
+            )
+          }
+        />
         {showTodos && <TodoList id="chat-todos" todos={detail.todos ?? []} />}
         <div className="chat-floating-actions mx-5 mt-2 mb-2 flex flex-wrap justify-end gap-2">
           <TodoButton

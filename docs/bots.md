@@ -98,6 +98,16 @@ def add_to_list(ctx, item: str) -> str:
     ...   # ctx.bot, ctx.session, ctx.user, ctx.is_root
 ```
 
+An approval-required tool may opt into automatic review with
+`auto_approve=review`, where the synchronous `review(ctx, tool_name, arguments,
+tool_id)` returns `True` only for an exact call it authorizes. `ctx` carries the
+bot, session and user; arguments are a copy. Errors, modified arguments and
+anything other than `True` leave the normal human approval flow in place.
+The tool sees `ctx.auto_approved` only while executing an automatically
+approved call; it is false for human approvals and ordinary calls. Review is
+not a durable grant: tools whose authority can change must revalidate it at
+execution under the appropriate locks.
+
 Parameters come from type hints (`str`, `int`, `float`, `bool`, `list`,
 `dict`), or pass `parameters=` as JSON Schema properties. Non-string results
 are sent back as JSON. A tool can also return images, which the model sees
@@ -713,6 +723,21 @@ from beat every 30 seconds (`ergonaut.fire_wakes`) and shows the pending one
 above the composer and in the phone session bar. Without Ergonaut, call
 `django_ergo.bots.wakes.fire_due()` every 30-60 seconds.
 
+### Recurring checks
+
+For an explicit user request such as “check this chat every 5 minutes for the
+next 10 hours”, the same built-in skill provides `ergo_wake_recurring`,
+`ergo_wake_recurring_list` and `ergo_wake_recurring_control`. A finite expiry or
+maximum occurrence count is mandatory; minimum interval and per-thread/global
+quotas are configurable. Pause/resume/cancel and next run/expiry/count/status
+are visible in the chat. Busy and approval-waiting threads coalesce checks;
+final failures block rather than retry automatically. Unchanged updates stay
+quiet unless periodic check-ins were requested. These are ordinary turns, not
+new permissions, approval grants or financial authority. Worker/task results
+continue to arrive naturally. See [recurring thread wakes](recurring-thread-wakes.md)
+for settings, timezone and cancellation semantics, durability and acceptance.
+
+
 ## Agents
 
 A coding agent (Codex, Claude Code, omp) works on a brief for minutes to
@@ -1007,10 +1032,11 @@ numbers. A budget that can't be read, or whose start window passed while the
 chat was busy, fails the message ("Not run: ...") rather than running it
 unbudgeted. The realtime voice prototype is the user:
 [realtime-voice.md](realtime-voice.md) has the limits table and conditional
-cost estimate, not a provider-billing ceiling. Its client-delegation voice
-adapter has no function tools; provider signals open a pending request that
-is queued after a detected speech boundary, pause grace and transcript drain.
-This is not a guarantee that speech or transcription is complete.
+cost estimate, not a provider-billing ceiling. Its offline native interpreter uses
+same-connection GPT-Live Responses delegation and one narrow `ergo_voice_intent`
+function. Only completed native arguments can become task text; display captions
+and VAD are never assembled into requests. The deployed client bridge remains
+unsafe for cross-turn attribution; the prototype is not containment or a rollout.
 The session card distinguishes generated speech from
 durable submitted/queued/answered/failed work and explicitly reports when
 no background request or verified history result exists.
@@ -1032,14 +1058,22 @@ normal work uses durable provider-invocation claims; an uncertain external write
 is not automatically repeated. Causal thread updates retain the original voice
 delegation ID, including across reconnect and after End. No live policy is enabled
 by this source change; ordinary non-voice turns and budgeted-turn guards are unchanged.
-The normal grant defaults to one request. An exact scope may explicitly approve
-`max_requests: 3` with `followup_costs_approved: true` and a separate
-`followup_approval_reference`: three sequential execution attempts per logical
-call, never parallel roots, unlimited inference or increased provider duration.
-Only fresh sessions receive changed grants. Expired attempts count; reconnect
-cannot reset allowance or the original 90-second deadline. Status observation
-and persisted-result reading use no execution slot or new inference; the UI
-shows remaining allowance and an owning-text-thread continuation at exhaustion.
+The durable normal grant still requires reviewed costs. Native follow-ups require
+explicit `unlimited_intentional_requests: true` and a new reviewed cost reference;
+the retired `max_requests` policy is rejected, not silently widened. Four in-flight
+tasks provide backpressure, not a lifetime quota. A single-request grant stays single.
+Exact envelope identity/payload is committed before admission; replay returns the original receipt.
+Clarification, status, continuation and reading results start no new work. Known
+corrections/cancellation that cannot safely change submitted work are refused with
+normal thread-control guidance. Unknown or evicted referents clarify rather than
+inventing a target. Native model arguments are not action approval or semantic proof.
+Only fresh sessions receive changed grants. The native candidate removes the fixed
+90-second application cutoff: healthy calls renew a liveness lease, while abandoned
+workers, true disconnects and explicit End still close voice. Explicit standby keeps
+the logical session without a maximum age. Durable indexed replay identities outlive
+bounded context/cache eviction; there is no replacement session-total evidence quota.
+Managed model entitlement/cost approval and a fresh quiet release gate remain unmet;
+no paid inference or production rollout is authorized. See the native cutover section.
 Handler acceptance, result persistence and an announcement claim remain distinct
 from actual model execution/consumption, playback and physical hearing.
 See the [current release and capability evidence](realtime-voice-causal-review.md#current-release-reconciliation--2026-11-12)
@@ -1356,6 +1390,30 @@ service. Handlers check their own secrets.
 Ergo's own plugins live in `django_ergo.plugins`, one module each, and bot.yaml
 names them by short name. Tools that belong to one bot (like a kitchen bot's
 Tandoor tools) go in that bot folder's `tools/` instead.
+
+### observability
+
+```yaml
+- name: observability
+  profiles:
+    prod:
+      grafana_url: http://grafana.monitoring.svc
+      public_url: https://grafana.example.com
+      token_env: GRAFANA_VIEWER_TOKEN
+      datasources: [prometheus]
+```
+
+Read-only Grafana and Prometheus. Keys: `profiles` (name to `grafana_url`,
+`public_url`, `token_env`, `token_file`, `datasources`, `mode` proxy|direct,
+`prometheus_url`, `renderer`, `ownership`) and `root_only` (default false). The model
+cannot supply URLs, headers, credentials or datasource uids outside `datasources`.
+Direct mode accepts at most one configured datasource uid as the fixed origin's
+identity. Renderer authorization fails closed for unresolved datasource references;
+the allowlist is not a replacement for Grafana-side token permissions.
+Tools: `ergo_grafana_search`, `ergo_grafana_dashboard`, `ergo_prom_query`,
+`ergo_prom_targets`, `ergo_grafana_link`, `ergo_prom_chart` (and
+`ergo_grafana_panel_render` when a profile has `renderer: true`). Charts need
+`django-ergo[observability]`. See [Observability](observability.md).
 
 ### runpod
 
@@ -1935,6 +1993,19 @@ In `auto` mode Telegram uses a webhook when `BOT_WEBHOOK_BASE_URL` is set:
 `bot.serve()` registers it and returns, and updates arrive at
 `hooks/<bot>/telegram/update/` with Telegram's secret-token header. Without
 a public URL it long-polls.
+
+Polling first deletes any existing Telegram webhook. Transient network errors,
+HTTP 408, 429 and 5xx retry indefinitely with delays doubling from one second
+to a maximum of 60 seconds (an HTTP 429 `retry_after` or `Retry-After` raises
+the wait to that value, capped at 300 seconds); polling starts only after
+deletion succeeds. An unsupported `api_base` is a permanent configuration error.
+Other failures, including authorization and configuration errors, disable
+this Telegram poller and are logged without exception details or token-bearing
+URLs; other plugins and bots continue. Correct the cause and restart the bot
+runner to retry a permanent failure. A running process is therefore not proof
+that every Telegram poller started. Cancellation interrupts the async wait;
+an in-flight standard-library HTTP request runs in a thread and can remain
+until its 60-second request timeout.
 
 **Outages.** Each update is saved (as a `BotJob`, target `plugin:telegram`)
 before Telegram is told it arrived: a webhook answers 500, and polling keeps

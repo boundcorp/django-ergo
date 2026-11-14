@@ -9,6 +9,7 @@
 | [Skills](skills.md)                     | Skill folders, tool files and plugins as skills; loading and unloading                              |
 | [Tools](tools.md)                       | `@bot_tool`, the tool context, secrets, approvals, images, background tasks, workers, toolkits      |
 | [Schedules](schedules.md)               | Cron, targets, Python/prompt workflows, conditions, model discovery and run audit                   |
+| [Recurring thread wakes](recurring-thread-wakes.md) | Finite recurring checks, quiet updates, quotas, pause/resume/cancel and durability |
 | [Memory and knowledge bases](memory.md) | Chat history, the `kb/` folder, prefetch, bots that take notes, other KBs                           |
 | [Data tables](tables.md)                | `BotTable` models, migrations, the `tables` skill, pages over tables                                |
 | [Attachments](attachments.md)           | Files in chats, the attachments plugin, images and audio                                            |
@@ -16,8 +17,9 @@
 | [Browser control](browser.md)           | The `browser` plugin, a Chrome a person can sign in to, tunnels                                     |
 | [Bot reference](bots.md)                | Every bot.yaml key and official plugin option; private inference pools                              |
 | [Running Ergonaut](ergonaut.md)         | Commands, settings, the web app, reloading, containers, production, private inference               |
+| [Observability](observability.md)       | Read-only Grafana and Prometheus: bounded PromQL, target health, dashboard links, chart attachments |
 | [RunPod workers](runpod.md)             | Native GPU workers, scoped admission, durable rental ownership and independent cleanup              |
-| [Realtime voice prototype](realtime-voice.md) | Off-by-default prototype on Octo for one allowlisted account: caps, kill switch, setup and known gaps |
+| [Realtime voice prototype](realtime-voice.md) | Native intent, uncapped-request/call candidate, scoped costs, kill switch and release gates |
 | [Agent skills](agent-skills.md)         | Ergo's skills for Claude Code and Codex, the `ergonaut-remote` command and API keys                 |
 
 ## Library
@@ -26,6 +28,7 @@
 | ------------------------------------------------------------- | ------------------------------------------------------------------------- |
 | [Structured calls](structured-calls.md)                       | `StructuredCall`, typed responses with tools, revisions                   |
 | [Lifecycle events](lifecycle-events.md)                       | Opt-in event ledger, evidence reports, retention and rollout              |
+| [Cost ledger](cost-ledger.md)                                 | Passive economic observations, idempotency, settlement projections and adapter coverage |
 | [Compaction](compaction.md)                                   | Session compaction modes and summaries                                    |
 | [Context builder and window chats](context-builder.md)        | Budgeted context blocks; chats with a fixed-size window                   |
 | [Message history](message-history.md)                         | Reading sessions and Claude Code / Codex transcripts; the history toolkit |

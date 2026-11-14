@@ -297,8 +297,70 @@ export type CostBucket = {
 export type UsageHour = { start: string; thread_tokens: number; agent_tokens: number }
 export type SessionUsage = { until: string; hours: UsageHour[]; thread_tokens: number; agent_tokens: number }
 
+// List-price-equivalent view of one population; not an invoice and not subscription quota.
+// Passive cost-ledger projection. known_amount is Decimal text; null means every row is unknown, never 0.
+export type LedgerBucket = {
+  kind: string
+  currency: string
+  known_amount: string | null
+  known_count: number
+  unknown_count: number
+  operation_count: number
+  partial_period_count: number
+  undated_count: number
+}
+export type LedgerCoverageEntry = {
+  source: string
+  status: string
+  granularity: string
+  uncertainty: string
+  duplicate_rule: string
+}
+export type Ledger = {
+  days: number
+  since: string
+  until: string
+  timezone: string
+  bot: string
+  basis: string
+  buckets: LedgerBucket[]
+  coverage: { live_ingestion: boolean; complete: boolean; note: string; sources: LedgerCoverageEntry[] }
+}
+
+export type EstimateScope = {
+  rows: number
+  input_tokens: number // uncached input
+  cache_write_tokens: number
+  cache_read_tokens: number
+  output_tokens: number
+  tokens: number
+  cache_denominator: number // uncached input + cache writes + cache reads (output excluded)
+  cache_hit: number | null // null: denominator 0, nothing recorded
+  list_cost: number // priced rows only
+  input_cost: number
+  cache_write_cost: number
+  cache_read_cost: number
+  output_cost: number
+  priced_rows: number
+  unpriced_rows: number
+  priced_tokens: number
+  unpriced_tokens: number
+  unpriced_models: string[]
+  no_usage_rows: number
+  exact_window: boolean // false: lifetime totals selected by activity in the window
+  spillover_rows: number
+  spillover_tokens: number
+  first_at: string | null
+  last_at: string | null
+}
+export type CostsEstimate = { basis: string; bot: EstimateScope; agents: EstimateScope; combined: EstimateScope }
+
 export type Costs = {
   days: number
+  since?: string // explicit UTC window [since, until]
+  until?: string
+  timezone?: string
+  estimate?: CostsEstimate
   total: CostBucket
   by_kind: CostBucket[]
   chat_reply_by_bot: CostBucket[]
@@ -393,6 +455,10 @@ export type AgentUsage = {
   branch: string
   cost: number // API-equivalent list price
   priced: boolean
+  // Lifetime totals of this worker/model, selected because it was active in the window.
+  first_at?: string | null
+  last_at?: string | null
+  spillover?: boolean // began before the window: tokens are not clipped to it
 }
 
 export type BotDetail = Bot & {
@@ -620,6 +686,21 @@ export type Wake = {
   status: string
 }
 
+export type RecurringWakeAction = 'pause' | 'resume' | 'cancel'
+
+export type RecurringWake = {
+  id: string
+  note: string
+  status: 'active' | 'paused' | 'blocked' | 'cancelled' | 'completed'
+  interval_seconds: number
+  next_run_at: string | null
+  expires_at: string | null
+  max_occurrences: number | null
+  occurrences: number
+  periodic_checkins: boolean
+  blocked_reason: string
+}
+
 export type SessionDetail = {
   debug_shortcut: boolean
   compactions?: Compaction[]
@@ -630,6 +711,7 @@ export type SessionDetail = {
   workers?: Worker[]
   todos?: Todo[] // the chat's todo list, kept by the model
   wakes?: Wake[] // the bot's pending self-wake, if it scheduled one
+  recurring_wakes?: RecurringWake[]
   inbox?: { id: string; text: string; files: number }[] // sent mid-turn, not yet given to the model
   first_line?: number | null // the oldest line returned
   has_more?: boolean // older messages exist: ask with before=first_line
@@ -807,12 +889,12 @@ export type RealtimeVoiceSession = {
   created_at?: string
   ended_at?: string | null
   request_budget?: {
-    limit: number
-    used: number
-    remaining: number
+    limit: number | null
+    remaining: number | null
     collecting: boolean
     inflight: boolean
-    request_ids: string[]
+    inflight_limit?: number
+    inflight_count?: number
   }
   briefing?: {
     context: string
@@ -879,6 +961,8 @@ export const api = {
   logout: () => request<{ ok: boolean }>('POST', '/auth/logout'),
   bots: () => request<Bot[]>('GET', '/bots'),
   bot: (name: string) => request<BotDetail>('GET', `/bots/${name}`),
+  costsLedger: (days: number, bot = '') =>
+    request<Ledger>('GET', `/costs/ledger?days=${days}${bot ? `&bot=${encodeURIComponent(bot)}` : ''}`),
   costs: (days: number, bot = '') =>
     request<Costs>('GET', `/costs?days=${days}${bot ? `&bot=${encodeURIComponent(bot)}` : ''}`),
   version: () => request<Version>('GET', '/version'),
@@ -912,6 +996,9 @@ export const api = {
     const qs = query.toString()
     return request<SessionDetail>('GET', `/sessions/${id}${qs ? `?${qs}` : ''}`)
   },
+  recurringWakes: (id: string) => request<RecurringWake[]>('GET', `/sessions/${id}/recurring-wakes`),
+  controlRecurringWake: (id: string, scheduleId: string, action: RecurringWakeAction) =>
+    request<RecurringWake>('POST', `/sessions/${id}/recurring-wakes/${scheduleId}`, { action }),
   voiceConfig: (id: string) =>
     request<{ enabled: boolean; max_duration: number }>('GET', `/sessions/${encodeURIComponent(id)}/voice`),
   transcribeVoice,

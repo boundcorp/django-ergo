@@ -1,7 +1,9 @@
 import json
+from datetime import timedelta
 
 import pytest
 from django.contrib.auth import get_user_model
+from django.test import Client
 from django.utils import timezone
 from django_ergo.conversation.models import AgentUsage, ConversationSession, StructuredCall, Worker
 
@@ -280,7 +282,8 @@ def test_agent_usage_has_its_own_scoped_and_filtered_costs_block(client):
     assert agents["headline"]["cache_hit"] == pytest.approx(5 / 15)
     assert agents["headline"]["unpriced_rows"] == 1
     assert agents["headline"]["billed_usd"] is None
-    assert agents["rows"] == [
+    rows = [{k: v for k, v in r.items() if k not in ("first_at", "last_at", "spillover")} for r in agents["rows"]]
+    assert rows == [
         {
             "worker_id": str(Worker.objects.get(title="Fix recipe").id),
             "worker_title": "Fix recipe",
@@ -511,3 +514,313 @@ def test_calls_that_ran_for_a_chat_count_for_it_and_its_bot(client, lee):
 
     usage = client.get(f"/api/sessions/{chat.id}/usage?hours=1").json()
     assert usage["thread_tokens"] == 1000
+
+
+@pytest.mark.django_db
+def test_estimate_prices_subscription_bot_calls_and_agents_at_list_and_reports_coverage(client, lee):
+    million = 1_000_000
+    cli = ConversationSession.objects.create(user=lee, bot_name="helper", engine_type="claude", transport_type="cli")
+    api = ConversationSession.objects.create(user=lee, bot_name="helper", engine_type="claude", transport_type="api")
+    # claude-sonnet-5-5: input $2, cache write $2.50, cache read $0.20, output $10.
+    for session in (cli, api):
+        StructuredCall.objects.create(
+            user=lee,
+            session=session,
+            kind="chat_reply",
+            model_name="claude-sonnet-5-5",
+            input_tokens=million,
+            cache_creation_input_tokens=million,
+            cache_read_input_tokens=2 * million,
+            output_tokens=million,
+        )
+    StructuredCall.objects.create(user=lee, session=cli, kind="chat_reply", model_name="mystery", input_tokens=10)
+    StructuredCall.objects.create(user=lee, session=api, kind="title", model_name="claude-sonnet-5-5")
+    now = timezone.now()
+    for model, last in (("gpt-6-sol", now), ("mystery-agent", now)):
+        AgentUsage.objects.create(
+            session=api,
+            bot_name="helper",
+            agent="codex",
+            model=model,
+            input_tokens=million,
+            requests=1,
+            first_at=now - timedelta(days=30),  # began before the window: lifetime totals
+            last_at=last,
+        )
+
+    data = client.get("/api/costs?days=7").json()
+    # The actual-cost helper still bills the subscription call at $0.
+    assert data["total"]["cost"] == pytest.approx(14.9)
+    bot = data["estimate"]["bot"]
+    assert bot["list_cost"] == pytest.approx(29.8)  # the CLI call counts at list price
+    assert bot["output_cost"] == pytest.approx(20)
+    assert bot["cache_write_cost"] == pytest.approx(5)
+    assert (bot["unpriced_rows"], bot["priced_rows"], bot["no_usage_rows"]) == (1, 2, 1)
+    assert bot["unpriced_tokens"] == 10
+    assert bot["unpriced_models"] == ["mystery"]
+    assert bot["exact_window"] is True
+    # Weighted over all rows, not an average of per-row ratios: output excluded.
+    denominator = 2 * (million + million + 2 * million) + 10
+    assert bot["cache_denominator"] == denominator
+    assert bot["cache_hit"] == pytest.approx(4 * million / denominator)
+    agents = data["estimate"]["agents"]
+    assert agents["list_cost"] == pytest.approx(2)
+    assert agents["unpriced_models"] == ["mystery-agent"]
+    assert (agents["spillover_rows"], agents["spillover_tokens"], agents["exact_window"]) == (2, 2 * million, False)
+    combined = data["estimate"]["combined"]
+    assert combined["list_cost"] == pytest.approx(31.8)
+    assert combined["unpriced_rows"] == 2
+    assert combined["priced_tokens"] + combined["unpriced_tokens"] == combined["tokens"]
+    assert all(row["spillover"] for row in data["agents"]["rows"])
+
+
+@pytest.mark.django_db
+def test_estimate_without_cache_denominator_has_no_hit_rate(client, lee):
+    StructuredCall.objects.create(user=lee, kind="chat_reply", model_name="gpt-6-luna", output_tokens=5)
+    estimate = client.get("/api/costs").json()["estimate"]
+    assert estimate["bot"]["cache_hit"] is None
+    assert estimate["agents"]["cache_hit"] is None
+    assert estimate["agents"]["rows"] == 0
+
+
+@pytest.mark.django_db
+def test_window_is_explicit_utc_days_and_series_reconciles_with_totals(client, lee):
+    now = timezone.now()
+    since = (now - timedelta(days=2)).replace(hour=0, minute=0, second=0, microsecond=0)
+    inside = StructuredCall.objects.create(user=lee, kind="title", model_name="gpt-6-luna", input_tokens=1)
+    before = StructuredCall.objects.create(user=lee, kind="title", model_name="gpt-6-luna", input_tokens=1)
+    StructuredCall.objects.filter(pk=inside.pk).update(created_at=since)  # first instant of the first day
+    StructuredCall.objects.filter(pk=before.pk).update(created_at=since - timedelta(microseconds=1))
+    data = client.get("/api/costs?days=3").json()
+    assert data["timezone"] == "UTC"
+    assert data["since"] == since.isoformat()
+    assert [d["date"] for d in data["by_day"]] == [
+        since.date().isoformat(),
+        (since + timedelta(days=1)).date().isoformat(),
+        now.date().isoformat(),
+    ]
+    assert data["by_day"][0]["calls"] == 1
+    assert sum(d["calls"] for d in data["by_day"]) == data["total"]["calls"] == 1
+
+
+@pytest.mark.django_db
+def test_agent_rows_outside_the_window_are_dropped_and_spillover_is_flagged(client, lee):
+    session = ConversationSession.objects.create(user=lee, bot_name="devbox", engine_type="claude")
+    now = timezone.now()
+    since = (now - timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    for model, first, last in (
+        ("gpt-6-sol", now - timedelta(hours=1), now),
+        ("gpt-6-luna", since - timedelta(days=5), now),
+        ("gpt-6-terra", since - timedelta(days=5), since - timedelta(days=4)),
+    ):
+        AgentUsage.objects.create(
+            session=session,
+            bot_name="devbox",
+            agent="codex",
+            model=model,
+            input_tokens=10,
+            first_at=first,
+            last_at=last,
+        )
+    rows = {r["model"]: r for r in client.get("/api/costs?days=2").json()["agents"]["rows"]}
+    assert set(rows) == {"gpt-6-sol", "gpt-6-luna"}
+    assert rows["gpt-6-sol"]["spillover"] is False
+    assert rows["gpt-6-luna"]["spillover"] is True
+
+
+@pytest.mark.django_db
+def test_estimate_uses_table_not_recorded_cost_and_missing_tokens_are_unknown(client, lee):
+    StructuredCall.objects.create(
+        user=lee,
+        kind="title",
+        model_name="gpt-6-sol",
+        input_tokens=1_000_000,
+        cost_usd=99,
+        metadata={"cost_parts": {"input": 99}},
+    )
+    StructuredCall.objects.create(user=lee, kind="title", model_name="gpt-6-sol")
+    session = ConversationSession.objects.create(user=lee, bot_name="helper", engine_type="claude")
+    AgentUsage.objects.create(
+        session=session,
+        bot_name="helper",
+        agent="codex",
+        model="gpt-6-sol",
+        requests=1,
+        last_at=timezone.now(),
+    )
+    response = client.get("/api/costs")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total"]["cost"] == pytest.approx(99)
+    bot = data["estimate"]["bot"]
+    assert bot["list_cost"] == pytest.approx(2)
+    assert (bot["priced_rows"], bot["unpriced_rows"], bot["no_usage_rows"]) == (1, 0, 1)
+    assert "per-request surcharges" in data["estimate"]["basis"]
+    assert data["estimate"]["agents"]["no_usage_rows"] == 1
+    assert data["agents"]["headline"]["priced_rows"] == 0
+    assert data["agents"]["rows"][0]["priced"] is False
+
+
+@pytest.mark.django_db
+def test_costs_window_normalizes_non_utc_now_and_serializes_schema(client, lee, settings):
+    from datetime import UTC, datetime
+    from datetime import timezone as dt_timezone
+    from unittest.mock import patch
+
+    settings.TIME_ZONE = "America/Los_Angeles"
+    now = datetime(2026, 11, 13, 18, 30, tzinfo=dt_timezone(timedelta(hours=-8)))
+    with patch("ergonaut.api.costs.timezone.now", return_value=now):
+        response = client.get("/api/costs?days=2")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["since"] == datetime(2026, 11, 13, tzinfo=UTC).isoformat()
+    assert data["until"] == now.astimezone(UTC).isoformat()
+    assert [day["date"] for day in data["by_day"]] == ["2026-11-13", "2026-11-14"]
+    assert data["estimate"]["bot"]["rows"] == 0
+
+
+def _ledger_row(owner, key, kind, amount, *, bot="kitchen", currency="USD", at=None, **extra):
+    from decimal import Decimal
+
+    from django_ergo.costs.ledger import record_observation
+    from django_ergo.costs.types import CostKind, ObservationSpec, OperationSpec
+
+    return record_observation(
+        actor=owner,
+        operation=OperationSpec("p", "acct", key, currency, bot_name=bot),
+        observation=ObservationSpec(
+            "s",
+            f"{key}-{kind}",
+            CostKind(kind),
+            extra.pop("revision", 1),
+            amount=None if amount is None else Decimal(amount),
+            occurred_at=at or timezone.now(),
+            **extra,
+        ),
+    )
+
+
+@pytest.mark.django_db
+def test_ledger_projection_is_owner_scoped_bot_filtered_and_keeps_unknown_null(client, monkeypatch):
+    from types import SimpleNamespace
+
+    bots = [SimpleNamespace(name=name, definition=SimpleNamespace(allowed_users=[])) for name in ("kitchen", "ads")]
+    monkeypatch.setattr("ergonaut.api.costs.registry", lambda: bots)
+    User = get_user_model()
+    ann = User.objects.create_user("ann", password="pw")
+    bob = User.objects.create_user("bob", password="pw")
+    _ledger_row(ann, "a1", "estimate", "1.5")
+    _ledger_row(ann, "a2", "unknown", None, currency="CREDITS", bot="ads")
+    _ledger_row(ann, "a3", "reservation", "9", bot="ads")
+    _ledger_row(bob, "b1", "estimate", "100")
+    client.post("/api/auth/login", json.dumps({"username": "ann", "password": "pw"}), content_type="application/json")
+    data = client.get("/api/costs/ledger?days=7").json()
+    rows = {(b["kind"], b["currency"]): b for b in data["buckets"]}
+    assert rows[("estimate", "USD")]["known_amount"] == "1.5"  # Bob's 100 is invisible
+    assert rows[("unknown", "CREDITS")]["known_amount"] is None
+    assert rows[("unknown", "CREDITS")]["unknown_count"] == 1
+    assert rows[("reservation", "USD")]["known_amount"] == "9"
+    assert data["coverage"]["live_ingestion"] is False and data["coverage"]["complete"] is False
+    only_ads = client.get("/api/costs/ledger?bot=ads").json()
+    assert {(b["kind"], b["currency"]) for b in only_ads["buckets"]} == {
+        ("unknown", "CREDITS"),
+        ("reservation", "USD"),
+    }
+
+
+@pytest.mark.django_db
+def test_ledger_projection_requires_authentication_and_superuser_sees_all(client, lee):
+    assert Client().get("/api/costs/ledger").status_code == 401
+    other = get_user_model().objects.create_user("zed", password="pw")
+    _ledger_row(other, "z1", "estimate", "2")
+    _ledger_row(lee, "l1", "estimate", "3")
+    (bucket,) = client.get("/api/costs/ledger").json()["buckets"]
+    assert bucket["known_amount"] == "5"
+
+
+@pytest.mark.django_db
+def test_ledger_denies_inaccessible_and_unknown_bots_even_for_owned_rows(client, monkeypatch):
+    from types import SimpleNamespace
+
+    User = get_user_model()
+    ann = User.objects.create_user("ann", password="pw")
+    bob = User.objects.create_user("bob", password="pw")
+    bots = [
+        SimpleNamespace(name="public", definition=SimpleNamespace(allowed_users=[])),
+        SimpleNamespace(name="shared", definition=SimpleNamespace(allowed_users=["ann"])),
+        SimpleNamespace(name="private", definition=SimpleNamespace(allowed_users=["bob"])),
+    ]
+    monkeypatch.setattr("ergonaut.api.costs.registry", lambda: bots)
+    _ledger_row(ann, "public", "estimate", "2", bot="public")
+    _ledger_row(ann, "shared", "estimate", "3", bot="shared")
+    _ledger_row(ann, "private", "estimate", "100", bot="private")
+    _ledger_row(ann, "removed", "estimate", "1000", bot="removed")
+    _ledger_row(bob, "other", "estimate", "10000", bot="public")
+    client.post("/api/auth/login", json.dumps({"username": "ann", "password": "pw"}), content_type="application/json")
+
+    (bucket,) = client.get("/api/costs/ledger").json()["buckets"]
+    assert bucket["known_amount"] == "5"
+    assert bucket["operation_count"] == 2
+    (bucket,) = client.get("/api/costs/ledger?bot=public").json()["buckets"]
+    assert bucket["known_amount"] == "2"
+    assert client.get("/api/costs/ledger?bot=private").status_code == 404
+    assert client.get("/api/costs/ledger?bot=removed").status_code == 404
+    assert client.get("/api/costs/ledger?bot=nonexistent").status_code == 404
+
+
+@pytest.mark.django_db(transaction=True)
+def test_hooked_inference_rows_respect_owner_and_bot_access(client, monkeypatch, settings):
+    from decimal import Decimal
+    from types import SimpleNamespace
+
+    from django_ergo.conversation.inference_ledger import _finish, _open
+    from django_ergo.conversation.models import InferenceOutcome
+
+    settings.DJANGO_ERGO = {**getattr(settings, "DJANGO_ERGO", {}), "INFERENCE_COST_LEDGER_ENABLED": True}
+    ann = get_user_model().objects.create_user("ann", password="pw")
+    bob = get_user_model().objects.create_user("bob", password="pw")
+    bots = [
+        SimpleNamespace(name="public", definition=SimpleNamespace(allowed_users=[])),
+        SimpleNamespace(name="private", definition=SimpleNamespace(allowed_users=["bob"])),
+    ]
+    monkeypatch.setattr("ergonaut.api.costs.registry", lambda: bots)
+    pool = SimpleNamespace(provider="fireworks", name="private", daily_usd_cap=None)
+    for owner, bot, amount in [(ann, "public", "2"), (ann, "private", "100"), (bob, "public", "1000")]:
+        grant = SimpleNamespace(
+            pool=pool,
+            model_id="accounts/fireworks/models/deepseek-v4p1-flash-1017",
+            session_id=None,
+            user_id=owner.pk,
+            bot=bot,
+            selector="private",
+            purpose="chat",
+        )
+        entry = _open(grant, {"max_tokens": 100}, 1, None)
+        _finish(
+            entry.pk,
+            outcome=InferenceOutcome.OK,
+            cost_status="priced",
+            cost_usd=Decimal(amount),
+            finished_at=timezone.now(),
+        )
+    client.post("/api/auth/login", json.dumps({"username": "ann", "password": "pw"}), content_type="application/json")
+    response = client.get("/api/costs/ledger")
+    rows = {bucket["kind"]: bucket for bucket in response.json()["buckets"]}
+    assert Decimal(rows["estimate"]["known_amount"]) == Decimal("2")
+    assert rows["estimate"]["operation_count"] == 1
+    assert client.get("/api/costs/ledger?bot=private").status_code == 404
+
+
+@pytest.mark.django_db
+def test_ledger_window_excludes_rows_after_supersession_outside_window(client, lee):
+    now = timezone.now()
+    _ledger_row(lee, "old-final", "estimate", "1", at=now)
+    _ledger_row(lee, "old-final", "final", "5", at=now - timedelta(days=60), revision=2)
+    _ledger_row(lee, "future-final", "estimate", "2", at=now)
+    _ledger_row(lee, "future-final", "final", "6", at=now + timedelta(days=1), revision=2)
+    _ledger_row(lee, "in-window", "estimate", "3", at=now)
+    _ledger_row(lee, "in-window", "final", "7", at=now, revision=2)
+    (bucket,) = client.get("/api/costs/ledger?days=7").json()["buckets"]
+    assert bucket["kind"] == "final"
+    assert bucket["known_amount"] == "7"
+    assert bucket["operation_count"] == 1

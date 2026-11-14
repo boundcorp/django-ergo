@@ -4,8 +4,11 @@ from __future__ import annotations
 
 from abc import ABC
 from abc import abstractmethod
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
+
+auto_approved = ContextVar("tool_auto_approved", default=False)
 
 
 @dataclass(frozen=True)

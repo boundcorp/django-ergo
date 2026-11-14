@@ -11,6 +11,7 @@ from django.db import transaction
 from django_ergo.bots.table_query import _safe
 from django_ergo.bots.tables import BotTable
 from django_ergo.bots.tables import _row
+from django_ergo.bots.tables import check_generic_writes
 from django_ergo.bots.tables import clean_values
 from django_ergo.bots.tables import full_clean
 
@@ -131,6 +132,7 @@ def batch(model: type[BotTable], operations: list[dict]) -> list[dict]:
     ):
         msg = "model must be a concrete bot table"
         raise ValueError(msg)
+    check_generic_writes(model)
     if (
         not isinstance(operations, list)
         or not 1 <= len(operations) <= MAX_BATCH_OPERATIONS

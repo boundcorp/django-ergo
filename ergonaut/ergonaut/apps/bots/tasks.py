@@ -784,11 +784,13 @@ def redispatch_thread_messages() -> int:
 
 @shared_task(name="ergonaut.fire_wakes", ignore_result=True)
 def fire_wakes() -> list[str]:
-    """Send the self-wakes bots scheduled that are due (beat runs this). Each fires once:
-    a duplicate run finds it already claimed, and a failure is never retried."""
-    from django_ergo.bots import wakes, webhooks
+    """Send due one-shot and recurring self-wakes using the existing beat sweep.
+    Each occurrence is claimed once; a failure is never retried automatically."""
+    from django_ergo.bots import recurring_wakes, wakes, webhooks
 
-    fired = wakes.fire_due(registry=webhooks.get_registry())
+    registry = webhooks.get_registry()
+    fired = wakes.fire_due(registry=registry)
+    fired.extend(recurring_wakes.fire_due(registry=registry))
     if fired:
         logger.info("Fired %d self-wakes", len(fired))
     return fired

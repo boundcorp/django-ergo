@@ -1,11 +1,10 @@
-"""Offline checks and explicitly approved, one-shot isolated bridge launch.
+"""Offline checks for the historical isolated voice profile.
 
-Run with the same private environment as the isolated Django and worker. The
-unapproved invocation does not contact any service or start a LiveKit worker.
+The retired paid launcher does not cover managed Responses interpreter costs.
+This module never contacts provider APIs or starts a LiveKit worker.
 """
 
 import argparse
-import asyncio
 import os
 import re
 import subprocess
@@ -15,7 +14,6 @@ from urllib.parse import parse_qs, urlparse
 from uuid import uuid4
 
 import jwt
-import requests
 import yaml
 from livekit import api
 
@@ -125,40 +123,13 @@ def preflight():
     return url, key, secret
 
 
-async def check_livekit(url, key, secret):
-    async with api.LiveKitAPI(url, key, secret) as client:
-        await client.room.list_rooms(api.ListRoomsRequest())
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--approve-paid", action="store_true", help="explicitly approve one conditional paid attempt")
-    args = parser.parse_args()
+    parser.parse_args()
     try:
-        url, key, secret = preflight()
-        if not args.approve_paid:
-            print("No paid approval: bridge not started.")
-            return 0
-        # Metadata is a read-only credential check, not an inference or entitlement check.
-        for model in ("gpt-6-luna", "gpt-live-1"):
-            response = requests.get(
-                f"https://api.openai.com/v1/models/{model}",
-                headers={"Authorization": f"Bearer {os.environ['OPENAI_API_KEY']}"},
-                timeout=10,
-                allow_redirects=False,
-            )
-            require(
-                response.status_code == 200 and response.json().get("id") == model, "OpenAI model metadata check failed"
-            )
-        asyncio.run(check_livekit(url, key, secret))
-        launch_marker = Path(os.environ["ERGO_VOICE_CALL_CAP_FILE"]).with_name("bridge-launch")
-        fd = os.open(launch_marker, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-        os.close(fd)
-        print("Read-only credential checks passed; starting one capped bridge.", flush=True)
-        return subprocess.run(
-            ["timeout", "--kill-after=5s", "115s", sys.executable, "-m", "ergonaut.realtime_voice_bridge", "start"],
-            check=False,
-        ).returncode
+        preflight()
+        print("Offline checks only: native Responses live testing requires its separately approved bounded proposal.")
+        return 0
     except Exception:
         print("Preflight failed; bridge not started. Check isolated configuration and credentials.", file=sys.stderr)
         return 1

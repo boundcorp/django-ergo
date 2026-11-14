@@ -1,0 +1,11 @@
+{
+  "native_parser_path": "/tmp/ergo-voice-test/lib/python3.12/site-packages/livekit/agents/llm/_realtime/gpt_live.py",
+  "native_parser_sha256": "eca187493acd43ea5e5e6c3c1fb8c305efbc841de303271a4dfae76677b101f5",
+  "versions": {
+    "livekit-agents": "1.8.11",
+    "livekit-plugins-openai": "1.8.11",
+    "livekit-plugins-silero": "1.8.11",
+    "openai": "3.49.0",
+    "redis": "8.1.0"
+  }
+}

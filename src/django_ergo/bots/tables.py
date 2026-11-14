@@ -106,6 +106,9 @@ class BotTable(models.Model, metaclass=BotTableBase):
     class Meta:
         abstract = True
 
+    # Controls generic table tools and page forms, not trusted ORM writes.
+    generic_writes = True
+
     @classmethod
     def touch(cls) -> None:
         """Announce that this table changed: call it after bulk writes (``.update()``,
@@ -280,7 +283,7 @@ def table_schema(model: type[BotTable]) -> dict:
 
     from django.core.serializers.json import DjangoJSONEncoder
 
-    writable = set(writable_fields(model))
+    writable = set(writable_fields(model)) if model.generic_writes else set()
     fields = []
     for field in model._meta.concrete_fields:
         if field.is_relation and not safe_relation(model, field):
@@ -302,7 +305,11 @@ def table_schema(model: type[BotTable]) -> dict:
         if field.is_relation:
             info["related_table"] = field.related_model.__name__
         fields.append(info)
-    unique = [[field.attname] for field in writable_fields(model) if field.unique]
+    unique = [
+        [field.attname]
+        for field in writable_fields(model)
+        if field in writable and field.unique
+    ]
     for names in model._meta.unique_together:
         fields_for_key = [model._meta.get_field(name) for name in names]
         if all(field in writable for field in fields_for_key):
@@ -405,10 +412,18 @@ def full_clean(obj: BotTable) -> None:
         raise ValidationError(errors) from None
 
 
+def check_generic_writes(model: type[BotTable]) -> None:
+    """Reject generic mutations of tables reserved for dedicated tools."""
+    if not model.generic_writes:
+        msg = f"{model.__name__} does not allow generic table writes"
+        raise ValueError(msg)
+
+
 def add_row(model: type[BotTable], values: dict) -> dict:
     """Create one row with the same validation used by table tools and page forms."""
     from django_ergo.bots.table_query import _safe
 
+    check_generic_writes(model)
     obj = model(**clean_values(model, values))
     full_clean(obj)
     obj.save()
@@ -419,6 +434,7 @@ def update_row(model: type[BotTable], id: int, values: dict) -> dict:  # noqa: A
     """Update one row with the same validation used by table tools and page forms."""
     from django_ergo.bots.table_query import _safe
 
+    check_generic_writes(model)
     try:
         obj = model.objects.get(pk=id)
     except model.DoesNotExist:
@@ -433,6 +449,8 @@ def update_row(model: type[BotTable], id: int, values: dict) -> dict:  # noqa: A
 
 def delete_row(model: type[BotTable], id: int) -> str:  # noqa: A002
     """Delete one row, reporting a clear missing-row error to a page or tool."""
+    check_generic_writes(model)
+
     try:
         obj = model.objects.get(pk=id)
     except model.DoesNotExist:

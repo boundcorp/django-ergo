@@ -12,6 +12,29 @@ This document tracks the major milestones and evolution of the Django Ergo proje
   Liveness now counts from the latest of the last update, the current step
   start and the scheduled poll, over 600s. Rental deadlines still bound spend.
 
+### Finite recurring thread wakes (November 2026)
+
+- Added durable finite schedules and occurrence identities with atomic admission,
+  duplicate-safe delivery, busy-thread coalescing and bounded outage catch-up.
+- Added recurring chat tools and owner-scoped live UI pause/resume/cancel controls,
+  visible timing/limits, quiet unchanged checks and explicit failure blocking.
+- Independent integration review hardened delayed approval resumption, atomic
+  archive/cancellation and fairness beyond the scheduler's dispatch batch.
+- Reused normal thread-message permissions, approvals and lifecycle timing.
+  See [the acceptance and rollout contract](docs/recurring-thread-wakes.md).
+
+
+### Passive generic cost ledger (November 2026)
+
+- Added durable owner-scoped economic operations and immutable source observations
+  for arbitrary currencies/units, typed token buckets and safe provenance.
+- Exact replay, conflicting replay and economic revisions are transactional;
+  reconciled/provider-reported money supersedes matching estimates without
+  combining reservations, subscription coverage or API-equivalent values as spend.
+- Added offline concurrency/privacy/projection coverage and a
+  [source integration and coverage contract](docs/cost-ledger.md). No adapters,
+  historical imports, financial dispatch or new budget authority are enabled.
+
 ### Correlated lifecycle evidence (November 2026)
 
 - Added an opt-in, content-free lifecycle ledger and deterministic evidence

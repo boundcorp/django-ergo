@@ -14,6 +14,7 @@ an attempt that may have reached the provider.
 from __future__ import annotations
 
 import json
+import logging
 import os
 from dataclasses import dataclass
 from datetime import UTC
@@ -30,12 +31,42 @@ from django_ergo.conversation.inference_policy import FIREWORKS_KEY_ENV
 from django_ergo.conversation.inference_policy import SpendCapError
 from django_ergo.pricing import ExactPrice
 from django_ergo.pricing import exact_price
+from django_ergo.settings import api_settings
 
 if TYPE_CHECKING:
     from django_ergo.conversation.inference_policy import PrivateGrant
 
 MILLION = Decimal(1_000_000)
 MAX_ERROR_CHARS = 2000
+logger = logging.getLogger(__name__)
+
+
+def reconcile_cost_ledger(pk) -> bool:
+    """Process only durable accounting work; never repeat provider dispatch."""
+    from django_ergo.conversation.models import InferenceRequest
+    from django_ergo.costs.adapters import record_inference_request
+
+    try:
+        with transaction.atomic():
+            request = InferenceRequest.objects.select_for_update().get(pk=pk)
+            if request.cost_ledger_state != "pending":
+                return True
+            record_inference_request(actor=request.user, request=request)
+            request.cost_ledger_state = "recorded"
+            request.save(update_fields=["cost_ledger_state"])
+        return True
+    except Exception as exc:  # noqa: BLE001 - accounting must not fail dispatch
+        # The pending marker was committed with the source transition. Avoid
+        # logging arbitrary exception text, which could contain sensitive data.
+        logger.error(  # noqa: TRY400 - exception details can be sensitive
+            "Inference cost accounting failed for %s (%s)", pk, type(exc).__name__
+        )
+        return False
+
+
+def _schedule_accounting(row):
+    if row.cost_ledger_state:
+        transaction.on_commit(lambda: reconcile_cost_ledger(row.pk))
 
 
 @dataclass
@@ -116,10 +147,16 @@ def _open(grant: PrivateGrant, kwargs: dict, attempt: int, call) -> LedgerEntry:
         "rates": price.snapshot() if price else {},
         "reserved_usd": reserved,
         "cost_status": "pending",
+        "cost_ledger_state": "pending"
+        if api_settings.INFERENCE_COST_LEDGER_ENABLED
+        else "",
     }
     cap = pool.daily_usd_cap
     if cap is None:
-        return LedgerEntry(InferenceRequest.objects.create(**fields).pk, price)
+        with transaction.atomic():
+            row = InferenceRequest.objects.create(**fields)
+            _schedule_accounting(row)
+        return LedgerEntry(row.pk, price)
     if price is None:
         msg = (
             f"{grant.model_id} has no exact price, so private pool {pool.name!r} "
@@ -140,6 +177,7 @@ def _open(grant: PrivateGrant, kwargs: dict, attempt: int, call) -> LedgerEntry:
             )
             raise SpendCapError(msg)
         row = InferenceRequest.objects.create(**fields)
+        _schedule_accounting(row)
     return LedgerEntry(row.pk, price)
 
 
@@ -180,12 +218,26 @@ def _usage_fields(response, price: ExactPrice | None) -> dict:
     }
 
 
-async def finish_attempt(entry: LedgerEntry, response) -> None:
-    from django_ergo.conversation.models import InferenceOutcome
+def _finish(pk, **fields):
     from django_ergo.conversation.models import InferenceRequest
 
+    with transaction.atomic():
+        row = InferenceRequest.objects.select_for_update().filter(pk=pk).first()
+        if row is None:
+            return
+        if row.cost_ledger_state:
+            fields["cost_ledger_state"] = "pending"
+            row.cost_ledger_state = "pending"
+        InferenceRequest.objects.filter(pk=pk).update(**fields)
+        _schedule_accounting(row)
+
+
+async def finish_attempt(entry: LedgerEntry, response) -> None:
+    from django_ergo.conversation.models import InferenceOutcome
+
     request_id = getattr(response, "_request_id", None) or getattr(response, "id", "")
-    await InferenceRequest.objects.filter(pk=entry.pk).aupdate(
+    await sync_to_async(_finish, thread_sensitive=True)(
+        entry.pk,
         outcome=InferenceOutcome.OK,
         upstream_request_id=str(request_id or "")[:200],
         finished_at=timezone.now(),
@@ -197,10 +249,10 @@ async def fail_attempt(entry: LedgerEntry, exc: BaseException, *, sent: bool) ->
     """An attempt that raised: refused before HTTP costs nothing; one that may
     have reached the provider keeps its reservation and an unknown cost."""
     from django_ergo.conversation.models import InferenceOutcome
-    from django_ergo.conversation.models import InferenceRequest
 
     error = redact(f"{type(exc).__name__}: {exc}")[:MAX_ERROR_CHARS]
-    await InferenceRequest.objects.filter(pk=entry.pk).aupdate(
+    await sync_to_async(_finish, thread_sensitive=True)(
+        entry.pk,
         outcome=InferenceOutcome.ERROR if sent else InferenceOutcome.NOT_SENT,
         cost_usd=None if sent else Decimal(0),
         cost_status="unknown" if sent else "not_sent",

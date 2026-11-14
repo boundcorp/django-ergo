@@ -160,6 +160,10 @@ FRONTEND_DIST = os.environ.get("FRONTEND_DIST", os.path.join(os.path.dirname(__f
 ERGONAUT_PUBLIC_URL = os.environ.get("ERGONAUT_PUBLIC_URL", "").rstrip("/")
 ERGONAUT_DEBUG_USERS = {name.strip() for name in os.environ.get("ERGONAUT_DEBUG_USERS", "").split(",") if name.strip()}
 DJANGO_ERGO = {
+    # Opt in only after migration 0045 has been applied.
+    "LIFECYCLE_EVENTS_ENABLED": (
+        os.environ.get("ERGONAUT_LIFECYCLE_EVENTS", "").strip().lower() in {"1", "true", "yes", "on"}
+    ),
     "BOT_WEBHOOK_BASE_URL": f"{ERGONAUT_PUBLIC_URL}/hooks" if ERGONAUT_PUBLIC_URL else None,
     # Bot-to-bot thread messages are delivered by a Celery worker.
     "THREAD_MESSAGE_RUNNER": "ergonaut.apps.bots.tasks.queue_thread_message",
@@ -443,7 +447,7 @@ CELERY_BEAT_SCHEDULE = {
     "resume-workers": {"task": "ergonaut.resume_workers", "schedule": 60},
     # Resource maintenance is independent of bot loading and worker cancellation.
     "reconcile-runpod": {"task": "ergonaut.reconcile_runpod", "schedule": 60},
-    # Self-wakes bots scheduled (django_ergo.bots.wakes); each fires once, never retried.
+    # Due one-shot and recurring thread wakes; occurrence failures are never retried automatically.
     "fire-wakes": {"task": "ergonaut.fire_wakes", "schedule": 30},
     # Each bot's schedules (bot.yaml); the task checks which are due this minute.
     "run-bot-schedules": {"task": "ergonaut.run_schedules", "schedule": crontab()},
