@@ -126,6 +126,7 @@ from django_ergo.conversation.tool_results import budget_chars
 from django_ergo.conversation.tool_results import trim_tool_results
 from django_ergo.conversation.toolkit import ApprovalPreview
 from django_ergo.conversation.toolkit import Toolkit
+from django_ergo.conversation.toolkit import auto_approved
 from django_ergo.pricing import add_request_cost
 
 if TYPE_CHECKING:
@@ -878,6 +879,7 @@ class _Run:
         tool_id: str,
         *,
         fence: Callable[[], bool] | None = None,
+        automatically_approved: bool = False,
     ) -> tuple[Any, bool]:
         """Run one tool call. With ``fence``, the call first checks it on the
         tool's thread and returns ``(_REVOKED, True)`` without running when
@@ -902,9 +904,15 @@ class _Run:
                     revoked = True
                 if revoked:
                     return _REVOKED, True
-            if once:
-                return dispatch_tool_once(self.call, tool_id, name, args, self.toolkits)
-            return dispatch_tool(name, args, self.toolkits)
+            token = auto_approved.set(automatically_approved)
+            try:
+                if once:
+                    return dispatch_tool_once(
+                        self.call, tool_id, name, args, self.toolkits
+                    )
+                return dispatch_tool(name, args, self.toolkits)
+            finally:
+                auto_approved.reset(token)
 
         try:
             return await sync_to_async(start, thread_sensitive=True)()
@@ -1142,7 +1150,11 @@ async def _run_loop(run: _Run) -> StructuredCallResult:  # noqa: C901, PLR0912, 
                     and await run.autoapprove(name, args, tool_id)
                 ):
                     result, is_error = await run.run_tool(
-                        name, args, tool_id, fence=run.fence
+                        name,
+                        args,
+                        tool_id,
+                        fence=run.fence,
+                        automatically_approved=True,
                     )
                     if result is not _REVOKED:
                         results.append((tool_id, result, is_error))
