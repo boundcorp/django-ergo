@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { useMarkdownReader } from './MarkdownReaderOwner'
 import { api } from '../api'
 import Markdown from './Markdown'
 import './MarkdownAttachment.css'
@@ -36,33 +37,21 @@ async function readSource(response: Response, controller: AbortController): Prom
 }
 
 export function MarkdownAttachment({ id, label }: { id: string; label: string }) {
-  const [open, setOpen] = useState(false)
-  const opener = useRef<HTMLButtonElement>(null)
+  const open = useMarkdownReader()
   return (
     <div className="md-attachment-card">
-      <button ref={opener} type="button" onClick={() => setOpen(true)} aria-label={`Read ${label}`}>
+      <button type="button" onClick={event => open(id, label, event.currentTarget)} aria-label={`Read ${label}`}>
         <span aria-hidden="true">▤</span> <span>{label}</span>
         <small>Markdown document · Read</small>
       </button>
       <a href={api.downloadUrl(id)} aria-label={`Download ${label}`}>
         Download original
       </a>
-      {open && (
-        <Reader
-          key={id}
-          id={id}
-          label={label}
-          onClose={() => {
-            setOpen(false)
-            opener.current?.focus({ preventScroll: true })
-          }}
-        />
-      )}
     </div>
   )
 }
 
-function Reader({ id, label, onClose }: { id: string; label: string; onClose: () => void }) {
+export function Reader({ id, label, onClose }: { id: string; label: string; onClose: () => void }) {
   const dialog = useRef<HTMLDialogElement>(null)
   const titleId = useId()
   const [source, setSource] = useState<string | null>(null)
@@ -102,7 +91,8 @@ function Reader({ id, label, onClose }: { id: string; label: string; onClose: ()
       <header className="md-reader-header">
         <h2 id={titleId}>{label}</h2>
         <button type="button" autoFocus onClick={close} aria-label="Close reader">
-          Close
+          <span className="md-reader-return-desktop">Return to chat</span>
+          <span className="md-reader-return-mobile">Close</span>
         </button>
       </header>
       <div className="md-reader-actions">

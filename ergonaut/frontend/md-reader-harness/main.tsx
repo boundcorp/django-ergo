@@ -7,6 +7,7 @@ import '@fontsource/inter/700.css'
 import '@fontsource/space-grotesk/700.css'
 import '../src/index.css'
 import { AttachmentView } from '../src/components/MediaGallery'
+import { MarkdownReaderOwner } from '../src/components/MarkdownReaderOwner'
 import { Transcript } from '../src/components/Transcript'
 import type { Message } from '../src/api'
 import './visual.css'
@@ -44,4 +45,4 @@ function Harness() {
   </div>
 }
 
-createRoot(document.getElementById('root')!).render(<MemoryRouter><Harness /></MemoryRouter>)
+createRoot(document.getElementById('root')!).render(<MemoryRouter><MarkdownReaderOwner><Harness /></MarkdownReaderOwner></MemoryRouter>)
