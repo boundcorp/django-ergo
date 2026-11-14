@@ -901,3 +901,8 @@ A separate, credential-isolated private inference service: its own
 workload and service user, the key mounted only there, signed short-lived
 grants from Ergonaut, and network egress limited to Fireworks. The bot and
 tool processes then never see the key.
+
+The Costs page also shows a passive cost-ledger panel from `GET /api/costs/ledger`:
+per category and currency, unknown amounts shown as unknown, reservations and
+subscription/API-equivalent values marked not spend, plus the declared source
+coverage. See [cost-ledger.md](cost-ledger.md).
