@@ -13,6 +13,7 @@ from django.db import IntegrityError
 from django.db import transaction
 from django.db.models import Case
 from django.db.models import F
+from django.db.models import Q
 from django.db.models import Value
 from django.db.models import When
 from django.db.models import Window
@@ -217,13 +218,38 @@ def effective_observations(actor):
     )
 
 
-def summarize_costs(actor, *, bot_name=None, project_ref=None):
+def _window_filter(queryset, since, until):
+    """Window by the selected row's own event time, after ranking and ownership.
+
+    A row with a bounded resource period is in the window when the period overlaps
+    it (its amount is NOT prorated; see `partial`). Otherwise `occurred_at` decides.
+    Rows with neither are undated: never silently assigned to any window.
+    """
+    dated = Q(period_start__isnull=False, period_start__lte=until, period_end__gt=since)
+    dated |= Q(
+        period_start__isnull=True, occurred_at__gte=since, occurred_at__lte=until
+    )
+    undated = queryset.filter(period_start__isnull=True, occurred_at__isnull=True)
+    return queryset.filter(dated), undated
+
+
+def summarize_costs(  # noqa: C901 - one pass keeps ranking, window and counts together
+    actor, *, bot_name=None, project_ref=None, since=None, until=None
+):
     """Return category/currency buckets, including unknown counts, never FX totals.
 
     known_amount is a subtotal, NOT a complete billed/spent total when unknown_count
     is nonzero. Reservation/release/API-equivalent/subscription buckets are separate
     informational observations, not additional spend. No permission decisions here.
+
+    With `since` and `until` (aware datetimes) each bucket also carries
+    `partial_period_count` (resource period crossing a window edge, amount whole) and
+    `undated_count` (selected rows with no event time, excluded from the other counts).
     """
+    windowed = since is not None or until is not None
+    if windowed and (since is None or until is None or since > until):
+        msg = "A window needs both bounds in order"
+        raise ValueError(msg)
     filters = {}
     if bot_name is not None:
         filters["operation__bot_name"] = bot_name
@@ -234,23 +260,39 @@ def summarize_costs(actor, *, bot_name=None, project_ref=None):
         latest_observations(actor).filter(kind__in=_SEPARATE, **filters),
     ]
     buckets = {}
+
+    def bucket_for(row):
+        key = (row.kind, row.operation.currency)
+        return buckets.setdefault(
+            key,
+            {
+                "kind": row.kind,
+                "currency": row.operation.currency,
+                "known_amount": None,
+                "known_count": 0,
+                "unknown_count": 0,
+                "operation_count": 0,
+                **({"partial_period_count": 0, "undated_count": 0} if windowed else {}),
+            },
+        )
+
     with localcontext() as context:
         context.prec = 80
-        for queryset in rows:
+        for ranked in rows:
+            queryset = ranked
+            if windowed:
+                queryset, undated = _window_filter(ranked, since, until)
+                for row in undated.select_related("operation").iterator():
+                    bucket_for(row)["undated_count"] += 1
             for row in queryset.select_related("operation").iterator():
-                key = (row.kind, row.operation.currency)
-                bucket = buckets.setdefault(
-                    key,
-                    {
-                        "kind": row.kind,
-                        "currency": row.operation.currency,
-                        "known_amount": None,
-                        "known_count": 0,
-                        "unknown_count": 0,
-                        "operation_count": 0,
-                    },
-                )
+                bucket = bucket_for(row)
                 bucket["operation_count"] += 1
+                if (
+                    windowed
+                    and row.period_start is not None
+                    and (row.period_start < since or row.period_end > until)
+                ):
+                    bucket["partial_period_count"] += 1
                 if row.amount is None:
                     bucket["unknown_count"] += 1
                 else:

@@ -167,8 +167,9 @@ accepted/uncertain/rejected, running/stopped/deleted, storage liability, revised
 estimate and posted/reconciled charge. Stock polls and rejected zero-create are not
 rentals. Stopped is not deleted; storage liability remains separate. Estimate only
 rate × bounded observed lifetime; missing rates/times stay unknown. A posted charge
-supersedes its matching estimate through the same documented provider charge ID or
-resource-period operation key. Cleanup is not invoice reconciliation. Uncertain
+supersedes an estimate only when the caller supplies the same exact resource,
+component and bounded period; a charge ID alone does not establish that match.
+Cleanup is not invoice reconciliation. Uncertain
 creates retain liability; no replay or inferred no-charge after cancellation/error.
 PR320 ratebudget limits REST requests, not financial exposure. Native database
 history is incomplete after authorized deletion/export; summaries are not charges.
@@ -195,3 +196,52 @@ Constraint construction selects Django's supported keyword (`check` in 4.2,
 constructor, so it does not import mutable application helpers. The ledger suite
 is exercised offline on Django 4.2, 5.2 and 6.0; Django 6 application startup is
 also smoke-checked.
+
+## Adoption slice: projection, adapters and coverage (stacked)
+
+Stacked on PR328 (`c8e71d9`, ledger core) and PR323 (`5cd0ae1`, Costs estimate
+dashboard); both stay independent PRs, this slice only merges after them. Nothing
+here is scheduled, auto-ingested, backfilled or wired into a live code path.
+
+- `GET /api/costs/ledger?days=&bot=` (Ergonaut) returns `summarize_costs` for the
+  authenticated user and registered bots they may use (superusers see every owner),
+  UTC calendar-day window, optional bot filter. Ordinary users get 404 for an
+  inaccessible or unregistered requested bot; unfiltered results omit both. The Costs
+  page shows it separately from the token estimate; the two are never added.
+  `known_amount` is Decimal text, `null` when every row is unknown.
+- Window semantics: ranking and ownership run first, then the window applies to the
+  *selected* row: a bounded resource period overlaps the window (amount not
+  prorated, counted in `partial_period_count`), otherwise `occurred_at`. Rows with
+  no time are `undated_count`, never assigned to a window. A settled row outside
+  the window therefore cannot be replaced by an in-window estimate.
+- `django_ergo.costs.adapters.record_inference_request(actor, request)`: one
+  operation per `InferenceRequest` id; `reserved_usd` is a reservation, a
+  `priced` `cost_usd` is a list-price estimate (never final), and a finished
+  request without both is `unknown`. A `not_sent` request also records a release;
+  non-`api` billing is skipped (not evidence of free). Cache-read tokens remain
+  nullable; uncached input is unknown because prompt includes cache writes that
+  the source does not retain separately. Missing completion times remain undated.
+  Owner, session and structured call ownership are validated, and all observations
+  from one invocation are committed atomically. A local failure never warrants
+  retrying the external request.
+- `django_ergo.plugins.cost_runpod` (`record_job_reservation`, `record_component`,
+  `estimate_amount`): reads only the durable `RunpodJob` fields; the caller supplies
+  provider evidence. Compute and storage use distinct exact half-open periods
+  keyed by provider/account/resource/component/start/end, at microsecond precision;
+  a successor job is recorded as observation `attempt_ref`, not economic identity.
+  The optional hourly estimate is rounded half-even to 18 decimal places.
+  Overlapping nonidentical periods are rejected rather than prorated or inferred.
+  Provider charge IDs are unique to one component/period within an account;
+  provider-reported/final requires explicit amount and charge ID. Revisions for the
+  same kind must be coordinated across attempts. Account-row locking serializes these
+  checks among callers of this adapter; bypassing it invalidates that guarantee.
+  Conflicting owner/bot attribution is rejected, not reassigned. Stop, delete,
+  cleanup and the REST request budget are not money evidence. Does not touch
+  lifecycle, budget or `native.py`.
+- `django_ergo.costs.coverage.coverage_manifest()` declares per-source status
+  (adapter callable but not wired, aggregate only, not integrated, external unknown,
+  unsupported). It is served with the projection and never claims complete.
+
+Remaining gaps: wiring adapters into inference/RunPod flows (separate review),
+mapping the rental `Experiment` row to `record_component` evidence, native CLI
+per-request keys, Ads/MediaSpend, Gemini, MiniMax/Sume/HeyGen/Grok, Meta delivery.

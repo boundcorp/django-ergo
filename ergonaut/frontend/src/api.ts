@@ -298,6 +298,35 @@ export type UsageHour = { start: string; thread_tokens: number; agent_tokens: nu
 export type SessionUsage = { until: string; hours: UsageHour[]; thread_tokens: number; agent_tokens: number }
 
 // List-price-equivalent view of one population; not an invoice and not subscription quota.
+// Passive cost-ledger projection. known_amount is Decimal text; null means every row is unknown, never 0.
+export type LedgerBucket = {
+  kind: string
+  currency: string
+  known_amount: string | null
+  known_count: number
+  unknown_count: number
+  operation_count: number
+  partial_period_count: number
+  undated_count: number
+}
+export type LedgerCoverageEntry = {
+  source: string
+  status: string
+  granularity: string
+  uncertainty: string
+  duplicate_rule: string
+}
+export type Ledger = {
+  days: number
+  since: string
+  until: string
+  timezone: string
+  bot: string
+  basis: string
+  buckets: LedgerBucket[]
+  coverage: { live_ingestion: boolean; complete: boolean; note: string; sources: LedgerCoverageEntry[] }
+}
+
 export type EstimateScope = {
   rows: number
   input_tokens: number // uncached input
@@ -918,6 +947,8 @@ export const api = {
   logout: () => request<{ ok: boolean }>('POST', '/auth/logout'),
   bots: () => request<Bot[]>('GET', '/bots'),
   bot: (name: string) => request<BotDetail>('GET', `/bots/${name}`),
+  costsLedger: (days: number, bot = '') =>
+    request<Ledger>('GET', `/costs/ledger?days=${days}${bot ? `&bot=${encodeURIComponent(bot)}` : ''}`),
   costs: (days: number, bot = '') =>
     request<Costs>('GET', `/costs?days=${days}${bot ? `&bot=${encodeURIComponent(bot)}` : ''}`),
   version: () => request<Version>('GET', '/version'),

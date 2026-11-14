@@ -19,7 +19,7 @@ Live on rigel from `~/p/boundcorp/django-ergo`, bots from `boundcorp/ergo-bots`.
   Decimal/currency projections, revised estimates and authoritative settlement,
   typed token/media measurements, offline concurrency/privacy tests and
   [adapter coverage contract](docs/cost-ledger.md).
-- [ ] **Cost adapter adoption**: reviewed native CLI, inference, RunPod, Ads and
+- [ ] **Cost adapter adoption**: passive projection, InferenceRequest and RunPod adapters landed unwired; still open: wiring, native CLI, Ads and
   media adapters plus dashboard; no historical imports or budget-authority replacement.
 
 - [x] **Toolkit pre-seeding**: toolkits declare tool calls run and written into the chat before the first completion; orchestration pre-seeds `ergo_bot_list` (names + YAML descriptions); skills use the same path; boundcorp's instructions stop listing bots.
