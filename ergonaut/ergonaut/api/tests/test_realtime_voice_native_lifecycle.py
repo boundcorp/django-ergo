@@ -37,7 +37,10 @@ from ergonaut.api.tests.test_realtime_voice_interpreter import (  # noqa: F401
 
 
 @pytest.mark.django_db(transaction=True)
-def test_standby_waits_for_native_interpretation_and_its_tool_continuation(interpreter_voice, held_messages, settings):
+@pytest.mark.parametrize("multiple_calls", [False, True], ids=["admitted", "multicall-rejected"])
+def test_standby_waits_for_native_interpretation_and_its_tool_continuation(
+    interpreter_voice, held_messages, settings, multiple_calls
+):
     chat, _, voice = interpreter_voice
     settings.REALTIME_VOICE_STANDBY_ENABLED = True
     assert realtime_voice.claim_bridge(voice.pk, "native-standby")
@@ -81,24 +84,30 @@ def test_standby_waits_for_native_interpretation_and_its_tool_continuation(inter
             assert snapshot["standby_state"] == "requested"
             assert not assistant.safe_to_standby(snapshot)
             assert held_messages == []
-            for event in events[2:]:
-                wire(assistant, sdk, event)
+            wire(assistant, sdk, events[2])
+            if multiple_calls:
+                second = native_events(arguments("intent-B"), identity="B", delegation_id="delegation-A")[2]
+                wire(assistant, sdk, second)
+            wire(assistant, sdk, events[-1])
             await assistant.flush_native_events()
             await asyncio.sleep(0)
             assert not assistant.native_jobs
             assert not assistant.safe_to_standby(snapshot)
-            reply = await assistant.ergo_voice_intent(SimpleNamespace(function_call=calls[-1]), **arguments())
-            assert json.loads(reply)["status"] == "submitted"
-            await sdk._append_items(
-                [
+            outputs = []
+            for call in calls:
+                reply = await assistant.ergo_voice_intent(
+                    SimpleNamespace(function_call=call), **json.loads(call.arguments)
+                )
+                assert json.loads(reply)["status"] == ("rejected" if multiple_calls else "submitted")
+                outputs.append(
                     llm.FunctionCallOutput(
-                        call_id=calls[-1].call_id,
+                        call_id=call.call_id,
                         name="ergo_voice_intent",
                         output=reply,
                         is_error=False,
                     )
-                ]
-            )
+                )
+            await sdk._append_items(outputs)
             assert any(event["type"] == "response.create" for event in drain(sdk))
             assert not assistant.safe_to_standby(snapshot)
             continuation = native_events(identity="continuation", delegation_id="delegation-A")
@@ -107,7 +116,7 @@ def test_standby_waits_for_native_interpretation_and_its_tool_continuation(inter
             await assistant.flush_native_events()
             await asyncio.sleep(0)
             assert assistant.safe_to_standby(snapshot)
-            assert len(held_messages) == 1
+            assert len(held_messages) == (0 if multiple_calls else 1)
             await settle(assistant)
 
     async_to_sync(scenario)()

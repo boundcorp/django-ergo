@@ -94,7 +94,7 @@ def context_for_session(session):
         for record in ledger.get("delegations", {}).values()
     ) or any(
         (response := responses.get(key, {})).get("state") == "open"
-        or (response.get("state") == "completed" and bool(response.get("calls")))
+        or ((response.get("terminal") or {}).get("type") == "response.completed" and bool(response.get("calls")))
         for key in ledger.get("active", {}).values()
     )
     return {
