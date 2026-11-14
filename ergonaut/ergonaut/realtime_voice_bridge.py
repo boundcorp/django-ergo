@@ -182,6 +182,11 @@ class Assistant(Agent):
         self.native_tail = None
         self.native_jobs = set()
         self.native_receipts = {}
+        self.native_response_ids = {}
+        self.native_response_versions = {}
+        self.native_scope_calls = {}
+        self.native_call_keys = {}
+        self.native_interpreting = snapshot.get("native_context", {}).get("interpretation_pending", False)
         self.native_changed = asyncio.Event()
         self.native_failed = False
         self.fragments = {}
@@ -399,6 +404,7 @@ class Assistant(Agent):
         self.duplex_session.on("input_audio_transcription_completed", self.on_transcription)
         self.duplex_session.on("openai_server_event_received", self.on_protocol_event)
         self.duplex_session.on("openai_client_event_queued", self.on_client_event)
+        self.duplex_session.on("function_call", self.on_native_function)
         self.input_error_session = self.duplex_session
         self.input_error_session.on("error", self.on_provider_error)
         try:
@@ -587,6 +593,7 @@ class Assistant(Agent):
             and not self.fragments_overflow
             and self.final_fragments.issuperset(self.fragments)
             and not self.native_jobs
+            and not self.native_interpreting
             and not self.native_failed
             and not self.jobs
             and not self.closing
@@ -599,13 +606,40 @@ class Assistant(Agent):
             self.native_failed = True
             self.native_changed.set()
             return
+        delegation = event.get("delegation")
+        inner = event.get("event")
+        inner = inner if isinstance(inner, dict) else {}
+        delegation_id = delegation.get("id") if isinstance(delegation, dict) else event.get("delegation_id")
+        if not isinstance(delegation_id, str):
+            delegation_id = None
+        response = inner.get("response")
+        response_id = response.get("id") if isinstance(response, dict) else None
+        if not isinstance(response_id, str):
+            response_id = None
+        if inner.get("type") == "response.created" and isinstance(response_id, str):
+            self.native_response_ids[delegation_id] = response_id
+            self.native_response_versions[delegation_id] = self.native_response_versions.get(delegation_id, 0) + 1
+        scope = (
+            delegation_id,
+            response_id or self.native_response_ids.get(delegation_id),
+            self.native_response_versions.get(delegation_id, 0),
+        )
+        item = inner.get("item")
+        if inner.get("type") == "response.output_item.done" and isinstance(item, dict):
+            signature = (item.get("id"), item.get("call_id"), item.get("arguments"))
+            if item.get("type") == "function_call" and all(
+                isinstance(value, str) for value in (*scope[:2], *signature)
+            ):
+                key = hashlib.sha256(json.dumps([*scope, *signature]).encode()).hexdigest()
+                self.native_call_keys[signature] = key
+                self.native_scope_calls.setdefault(scope, {}).setdefault(item["call_id"], set()).add(key)
         previous = self.native_tail
-        task = asyncio.create_task(self.process_native_event(previous, event))
+        task = asyncio.create_task(self.process_native_event(previous, event, scope))
         self.native_tail = task
         self.native_jobs.add(task)
         task.add_done_callback(self.native_jobs.discard)
 
-    async def process_native_event(self, previous, event):
+    async def process_native_event(self, previous, event, scope):
         try:
             if previous is not None:
                 await asyncio.shield(previous)
@@ -614,8 +648,11 @@ class Assistant(Agent):
             result = await sync_to_async(process_native_event, thread_sensitive=True)(
                 self.voice_id, event, claim_id=self.claim_id
             )
+            context = result.get("context", {})
+            self.native_interpreting = context.get("interpretation_pending", True)
             for call_id, receipt in result.get("receipts", {}).items():
-                self.native_receipts[call_id] = {**receipt, "context": result.get("context", {})}
+                for key in self.native_scope_calls.get(scope, {}).get(call_id, ()):
+                    self.native_receipts[key] = {**receipt, "context": context}
         except Exception as exc:
             self.native_failed = True
             logger.error("voice native admission failed exception_type=%s", type(exc).__name__)
@@ -625,6 +662,13 @@ class Assistant(Agent):
     async def flush_native_events(self):
         if self.native_tail is not None:
             await asyncio.shield(self.native_tail)
+
+    def on_native_function(self, call):
+        # The pinned adapter forwards this same FunctionCall into RunContext.
+        # Bind before its async tool task runs; a later response cannot reuse a prior receipt.
+        key = self.native_call_keys.get((call.id, call.call_id, call.arguments))
+        if key is not None:
+            call.extra["_ergo_native_invocation"] = key
 
     @llm.function_tool()
     async def ergo_voice_intent(
@@ -644,11 +688,27 @@ class Assistant(Agent):
         Correct/cancel request revision/cancellation, not a new task. No argument approves actions.
         """
         call = context.function_call
+        key = call.extra.get("_ergo_native_invocation")
+        argument_hash = hashlib.sha256(call.arguments.encode()).hexdigest()
+        if key is None:
+            return json.dumps(
+                {
+                    "status": "unconfirmed",
+                    "clarification": "This native invocation has no authoritative envelope binding; no new work is confirmed.",
+                }
+            )
         deadline = time.monotonic() + 10
         while not self.closing and not self.native_failed:
             self.native_changed.clear()
-            receipt = self.native_receipts.get(call.call_id)
+            receipt = self.native_receipts.get(key)
             if receipt is not None:
+                if receipt.get("arguments_sha256") != argument_hash:
+                    return json.dumps(
+                        {
+                            "status": "rejected",
+                            "clarification": "Native invocation arguments conflict with the durable receipt; no new work is confirmed.",
+                        }
+                    )
                 return json.dumps(receipt, ensure_ascii=False)
             remaining = deadline - time.monotonic()
             if remaining <= 0:

@@ -38,6 +38,10 @@ session/bridge/delegation/response/call/item identity, exact arguments and origi
 receipts across replay and response restarts. Missing, orphaned, partial, conflicting,
 failed, interrupted or multi-call responses cannot start work. A continuation of a
 delegation is not a new intention. Captions remain display/history evidence only.
+Standby waits through outstanding interpreter responses and their tool-result
+continuations, not merely database callback drain. Tool receipts are bound to the
+current response/item invocation and exact argument hash; a reused SDK call ID
+cannot return an earlier request's acceptance for conflicting arguments.
 
 The five arguments are `kind`, `intent_id`, `target_intent_id`, `request_text`,
 `clarification`. Kinds are `new_request`, `clarify`, `correct`, `cancel`, `status`,
