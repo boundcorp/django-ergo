@@ -20,6 +20,17 @@ from playwright.sync_api import sync_playwright
 ORIGIN = f"http://127.0.0.1:{PORT}"
 OUTPUT = os.environ.get("MD_READER_APP_OUTPUT")
 OUTPUT = ROOT / "docs" / "md-reader-desktop" / "after" if OUTPUT is None else Path(OUTPUT)
+COLLISION = {
+    "existing": "preserved",
+    "__ergonautMarkdownReader": {
+        "kind": "ergonaut-markdown-reader",
+        "owner": "another-feature",
+        "token": "not-registered",
+        "id": "keep",
+        "label": "keep",
+        "original": {"must": "not replace the rest of the state"},
+    },
+}
 VISUAL_SOURCE = SOURCE.split("\n[Project website]")[0]
 SESSION = {
     "id": "fixture",
@@ -145,11 +156,10 @@ def main():
                     page.route("**/*", route_request)
                     page.goto(ORIGIN + "/", wait_until="networkidle")
                     page.goto(ORIGIN + "/s/fixture?fixture=1#host-fragment", wait_until="networkidle")
-                    page.evaluate("""() => history.replaceState({...history.state, usr: {
-                      existing: 'preserved', __ergonautMarkdownReader: 'occupied'
-                    }}, '')""")
+                    page.evaluate("(state) => history.replaceState({...history.state, usr: state}, '')", COLLISION)
                     # Reload so BrowserRouter reads the fixture location state.
                     page.reload(wait_until="networkidle")
+                    assert page.evaluate("history.state.usr") == COLLISION
                     opener = page.get_by_role("button", name="Read release-plan.md").first
                     opener.wait_for()
                     composer = page.get_by_role("textbox", name="Message")
@@ -170,7 +180,10 @@ def main():
                     }""")
                     if width > 600:
                         assert page.evaluate("history.state.usr.existing") == "preserved"
-                        assert page.evaluate("history.state.usr.__ergonautMarkdownReader") == "occupied"
+                        assert (
+                            page.evaluate("history.state.usr.__ergonautMarkdownReader")
+                            == COLLISION["__ergonautMarkdownReader"]
+                        )
                     if width > 600:
                         assert (geometry["x"], geometry["y"], geometry["width"], geometry["height"]) == (
                             0,
@@ -198,10 +211,7 @@ def main():
                     assert composer.input_value() == "Unsent draft: verify the release."
                     assert page.url.endswith("/s/fixture?fixture=1#host-fragment")
                     if width > 600:
-                        assert page.evaluate("history.state.usr") == {
-                            "existing": "preserved",
-                            "__ergonautMarkdownReader": "occupied",
-                        }
+                        assert page.evaluate("history.state.usr") == COLLISION
                         page.go_forward()
                         dialog.wait_for()
                         page.go_back()
@@ -240,10 +250,7 @@ def main():
                         dialog.wait_for()
                         page.reload(wait_until="networkidle")
                         dialog.wait_for(state="detached")
-                        assert page.evaluate("history.state.usr") == {
-                            "existing": "preserved",
-                            "__ergonautMarkdownReader": "occupied",
-                        }
+                        assert page.evaluate("history.state.usr") == COLLISION
                         assert page.url.endswith("/s/fixture?fixture=1#host-fragment")
                         # A non-object state must survive both opening and closing.
                         page.evaluate("history.replaceState({...history.state, usr: 'opaque state'}, '')")

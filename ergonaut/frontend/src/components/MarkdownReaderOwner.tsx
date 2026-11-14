@@ -18,7 +18,17 @@ const ReaderContext = createContext<(id: string, label: string, opener: HTMLElem
 
 export const useMarkdownReader = () => useContext(ReaderContext)
 
-function markerIn(state: unknown): Marker | undefined {
+const registryKey = (token: string) => `ergonaut.markdown-reader.${token}`
+
+function registered(marker: Marker): boolean {
+  try {
+    return sessionStorage.getItem(registryKey(marker.token)) === marker.owner
+  } catch {
+    return false
+  }
+}
+
+function markerIn(state: unknown, owner: string, requests: Map<string, Request>): Marker | undefined {
   if (!state || typeof state !== 'object') return undefined
   return Object.entries(state).find(
     ([key, value]) =>
@@ -30,7 +40,8 @@ function markerIn(state: unknown): Marker | undefined {
       typeof value.token === 'string' &&
       typeof value.id === 'string' &&
       typeof value.label === 'string' &&
-      Object.prototype.hasOwnProperty.call(value, 'original'),
+      Object.prototype.hasOwnProperty.call(value, 'original') &&
+      ((value.owner === owner && requests.has(value.token)) || registered(value as Marker)),
   )?.[1] as Marker | undefined
 }
 
@@ -40,7 +51,7 @@ export function MarkdownReaderOwner({ children }: { children: ReactNode }) {
   const owner = useRef(crypto.randomUUID())
   const requests = useRef(new Map<string, Request>())
   const [mobile, setMobile] = useState<(Request & { locationKey: string }) | null>(null)
-  const marker = markerIn(location.state)
+  const marker = markerIn(location.state, owner.current, requests.current)
   const owned = marker?.owner === owner.current && requests.current.has(marker.token) ? marker : undefined
   const request = owned ? requests.current.get(owned.token) : mobile?.locationKey === location.key ? mobile : undefined
   const previous = useRef<Request | undefined>(undefined)
@@ -83,6 +94,11 @@ export function MarkdownReaderOwner({ children }: { children: ReactNode }) {
         return
       }
       const token = crypto.randomUUID()
+      try {
+        sessionStorage.setItem(registryKey(token), owner.current)
+      } catch {
+        // Without session storage, never identify an entry from a previous page lifetime.
+      }
       requests.current.set(token, next)
       const original = location.state
       const state: Record<string, unknown> =
