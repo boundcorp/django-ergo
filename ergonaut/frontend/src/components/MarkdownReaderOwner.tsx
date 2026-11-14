@@ -20,6 +20,19 @@ export const useMarkdownReader = () => useContext(ReaderContext)
 
 const registryKey = (token: string) => `ergonaut.markdown-reader.${token}`
 
+let idSequence = 0
+function readerId(): string {
+  const bytes = new Uint8Array(16)
+  try {
+    globalThis.crypto.getRandomValues(bytes)
+    return `${Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('')}-${++idSequence}`
+  } catch {
+    // These IDs identify history entries, not credentials. Retain a per-page
+    // sequence as well as time and randomness when Web Crypto is unavailable.
+    return `${Date.now().toString(36)}-${++idSequence}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`
+  }
+}
+
 function registered(marker: Marker): boolean {
   try {
     return sessionStorage.getItem(registryKey(marker.token)) === marker.owner
@@ -48,11 +61,11 @@ function markerIn(state: unknown, owner: string, requests: Map<string, Request>)
 export function MarkdownReaderOwner({ children }: { children: ReactNode }) {
   const location = useLocation()
   const navigate = useNavigate()
-  const owner = useRef(crypto.randomUUID())
+  const [owner] = useState(readerId)
   const requests = useRef(new Map<string, Request>())
   const [mobile, setMobile] = useState<(Request & { locationKey: string }) | null>(null)
-  const marker = markerIn(location.state, owner.current, requests.current)
-  const owned = marker?.owner === owner.current && requests.current.has(marker.token) ? marker : undefined
+  const marker = markerIn(location.state, owner, requests.current)
+  const owned = marker?.owner === owner && requests.current.has(marker.token) ? marker : undefined
   const request = owned ? requests.current.get(owned.token) : mobile?.locationKey === location.key ? mobile : undefined
   const previous = useRef<Request | undefined>(undefined)
 
@@ -93,9 +106,10 @@ export function MarkdownReaderOwner({ children }: { children: ReactNode }) {
         setMobile({ ...next, locationKey: location.key })
         return
       }
-      const token = crypto.randomUUID()
+      let token = readerId()
+      while (requests.current.has(token)) token = readerId()
       try {
-        sessionStorage.setItem(registryKey(token), owner.current)
+        sessionStorage.setItem(registryKey(token), owner)
       } catch {
         // Without session storage, never identify an entry from a previous page lifetime.
       }
@@ -107,7 +121,7 @@ export function MarkdownReaderOwner({ children }: { children: ReactNode }) {
       while (Object.prototype.hasOwnProperty.call(state, key)) key += '_'
       state[key] = {
         kind: 'ergonaut-markdown-reader',
-        owner: owner.current,
+        owner,
         token,
         id,
         label,
@@ -115,7 +129,7 @@ export function MarkdownReaderOwner({ children }: { children: ReactNode }) {
       } satisfies Marker
       navigate({ pathname: location.pathname, search: location.search, hash: location.hash }, { state })
     },
-    [location, navigate],
+    [location, navigate, owner],
   )
 
   const close = useCallback(() => {

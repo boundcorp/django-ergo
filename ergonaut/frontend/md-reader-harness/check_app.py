@@ -20,6 +20,8 @@ from playwright.sync_api import sync_playwright
 ORIGIN = f"http://127.0.0.1:{PORT}"
 OUTPUT = os.environ.get("MD_READER_APP_OUTPUT")
 OUTPUT = ROOT / "docs" / "md-reader-desktop" / "after" if OUTPUT is None else Path(OUTPUT)
+MODE = os.environ.get("MD_READER_APP_MODE", "normal")
+assert MODE in ("normal", "no-uuid", "no-crypto", "blocked-storage")
 COLLISION = {
     "existing": "preserved",
     "__ergonautMarkdownReader": {
@@ -100,6 +102,18 @@ def main():
                 for name, width, height in [("desktop", 1440, 900), ("wide", 1920, 1080), ("mobile", 390, 844)]:
                     context = browser.new_context(viewport={"width": width, "height": height}, device_scale_factor=1)
                     page = context.new_page()
+                    if MODE in ("no-uuid", "no-crypto"):
+                        context.add_init_script(
+                            "Object.defineProperty(Crypto.prototype, 'randomUUID', {value: undefined})"
+                        )
+                    if MODE == "no-crypto":
+                        context.add_init_script(
+                            "Object.defineProperty(Crypto.prototype, 'getRandomValues', {value: undefined})"
+                        )
+                    if MODE == "blocked-storage":
+                        context.add_init_script(
+                            "Object.defineProperty(window, 'sessionStorage', {get() {throw new DOMException('blocked', 'SecurityError')}})"
+                        )
                     unexpected = []
                     errors = []
                     page.on("pageerror", lambda error: errors.append(str(error)))
@@ -250,7 +264,10 @@ def main():
                         dialog.wait_for()
                         page.reload(wait_until="networkidle")
                         dialog.wait_for(state="detached")
-                        assert page.evaluate("history.state.usr") == COLLISION
+                        if MODE == "blocked-storage":
+                            assert page.evaluate("history.state.usr.__ergonautMarkdownReader_.original") == COLLISION
+                        else:
+                            assert page.evaluate("history.state.usr") == COLLISION
                         assert page.url.endswith("/s/fixture?fixture=1#host-fragment")
                         # A non-object state must survive both opening and closing.
                         page.evaluate("history.replaceState({...history.state, usr: 'opaque state'}, '')")
@@ -266,7 +283,7 @@ def main():
                     assert not unexpected, unexpected
                     assert not errors, errors
                     print(
-                        f"{name}: actual App+Chat, geometry={geometry}; scrolling, Escape, focus, draft and host URL passed"
+                        f"{MODE} {name}: actual App+Chat, geometry={geometry}; scrolling, Escape, focus, draft and host URL passed"
                     )
                     context.close()
             finally:
