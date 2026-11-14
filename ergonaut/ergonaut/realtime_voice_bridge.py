@@ -299,7 +299,7 @@ class Assistant(Agent):
                 return
             notice = "A voice bridge action could not be confirmed. Check the durable background status."
             try:
-                if self.pending_id == delegation_id:
+                if delegation_id is not None and self.pending_id == delegation_id:
                     self.fence_unresolved_input()
                 if delegation_id is not None:
                     await sync_to_async(close_pending, thread_sensitive=True)(self.voice_id, delegation_id, "failed")

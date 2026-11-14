@@ -1494,3 +1494,57 @@ def test_unlimited_collection_handles_late_transcripts_without_replaying_expired
                 assert any("transcription did not finish" in e.get("content", "") for e in drain(sdk))
 
     async_to_sync(scenario)()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_failed_final_turn_does_not_disable_unrelated_voice_request(cooking, settings, held_messages):
+    from ergonaut.realtime_voice_execution import initial_state
+
+    chat, vid, _ = cooking
+    settings.REALTIME_VOICE_THREAD_EXECUTION_AUTHORIZATIONS = {
+        str(chat.pk): {
+            "owner": chat.user.get_username(),
+            "bot": chat.bot_name,
+            "normal_task_costs_approved": True,
+            "approval_reference": "offline-root",
+            "max_requests": 3,
+            "followup_costs_approved": True,
+            "followup_approval_reference": "offline-three",
+            "unlimited_intentional_requests": True,
+            "unlimited_approval_reference": "offline-unlimited",
+        }
+    }
+    row = RealtimeVoiceSession.objects.get(pk=vid)
+    row.state = initial_state(chat, chat.user)
+    row.save(update_fields=["state"])
+
+    async def scenario():
+        assistant = bridge.Assistant(vid, await sync_to_async(realtime_voice.bridge_state)(vid), None)
+        assistant.grace = 0.01
+        sdk = offline_session(assistant)
+        with patch.object(bridge.Assistant, "duplex_session", new_callable=PropertyMock, return_value=sdk):
+            await bind(assistant, sdk)
+            with patch.object(assistant, "persist_turn", side_effect=RuntimeError("offline")):
+                assistant.queue_turn(llm.ChatMessage(id="failed-final", role="assistant", content=["offline"]))
+                await settle(assistant)
+            assistant.on_user_state(SimpleNamespace(new_state="speaking"))
+            sdk._handle_event(
+                {
+                    "type": "session.input_transcript.delta",
+                    "delta": "Start the next offline task.",
+                    "start_ms": 0,
+                    "end_ms": 1000,
+                }
+            )
+            sdk._end_speech("user")
+            assistant.on_user_state(SimpleNamespace(new_state="listening"))
+            sdk._handle_event(
+                {
+                    "type": "session.delegation.created",
+                    "delegation": {"id": "next-request", "target": "client"},
+                }
+            )
+            await settle(assistant)
+            assert len(held_messages) == 1
+
+    async_to_sync(scenario)()
