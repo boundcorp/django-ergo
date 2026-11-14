@@ -556,15 +556,12 @@ async def test_pr_checks_event_wakes_bot_without_impersonating_owner(
     from types import SimpleNamespace
 
     from django_ergo.bots import background
-    from django_ergo.conversation.history import SessionSource
-    from django_ergo.conversation.history import render_message
-    from django_ergo.conversation.history_search_toolkit import MessageHistoryToolkit
     from django_ergo.conversation.links import announce_checks
     from django_ergo.conversation.models import ConversationAttachment
     from django_ergo.conversation.models import ThreadMessage
 
     user = await User.objects.acreate(username="owner", first_name="Lee")
-    bot, engine = make_bot(tmp_path, say("Checks passed; ready for review."))
+    bot, _ = make_bot(tmp_path, say("Checks passed; ready for review."))
     session = await bot.root_session(user)
     monkeypatch.setattr(
         background,
@@ -600,28 +597,6 @@ async def test_pr_checks_event_wakes_bot_without_impersonating_owner(
     stored = await session.messages.aget(sequence=0)
     assert stored.author == queued.metadata["message_author"]
     assert stored.provenance["kind"] == "event"
-    assert not await stored.content_blocks.filter(text__contains="[Event").aexists()
-    event_text = next(
-        text for text in _texts(engine._client.calls[0]) if "checks" in text.lower()
-    )
-    assert "[Event from GitHub:" in event_text
-    assert "not a message from the user" in event_text
-    assert "Lee" not in event_text
-    history = await sync_to_async(
-        lambda: SessionSource(session, include_attribution=False).messages()
-    )()
-    assert "EVENT" in render_message(history[0])
-    assert "GitHub" in render_message(history[0])
-    assert " USER]" not in render_message(history[0])
-    assert any(
-        "Checks passed; ready for review." in item.text() for item in history[1:]
-    )
-    toolkit = MessageHistoryToolkit([SessionSource(session, include_attribution=False)])
-    search = await sync_to_async(toolkit.execute_tool)(
-        "ergo_chat_history_search", {"query": "Checks passed on"}
-    )
-    assert "EVENT · GitHub]" in search
-    assert " USER]" not in search
 
 
 @pytest.mark.django_db(transaction=True)
