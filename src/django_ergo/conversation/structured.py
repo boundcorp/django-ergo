@@ -1292,7 +1292,9 @@ async def _accept(run: _Run) -> BaseModel:
     call.status = StructuredCallStatus.COMPLETED
     # Close the turn with the response as plain assistant text, so chat turns
     # and history readers see the answer.
-    await run.transcript.append_response_text(_response_text(parsed, call.response))
+    response_text = _response_text(parsed, call.response)
+    if response_text:
+        await run.transcript.append_response_text(response_text)
     return parsed
 
 

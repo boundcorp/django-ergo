@@ -200,7 +200,7 @@ def _record_dispatched(message_id: str) -> None:
 # -- sending -----------------------------------------------------------------
 
 
-def send(  # noqa: PLR0913
+def send(  # noqa: C901, PLR0913 - provenance and inherited execution restrictions
     sender: ConversationSession | None,
     recipient: ConversationSession,
     text: str,
@@ -231,6 +231,14 @@ def send(  # noqa: PLR0913
         raise ValueError(msg)
     metadata = dict(metadata or {})
     cause = in_reply_to or handling
+    if cause:
+        origin = (cause.metadata or {}).get("recurring_origin") or (
+            cause.metadata or {}
+        ).get("recurring_wake")
+        if origin:
+            # Restrictions follow requests and replies; this is not a recurring
+            # occurrence and must not acquire quiet output or scheduler hooks.
+            metadata["recurring_origin"] = origin
     if (
         cause
         and (cause.metadata or {}).get("voice_execution_mode") == "normal_thread"
@@ -325,6 +333,21 @@ def dispatch(message_id: str, registry: BotRegistry | None = None) -> None:
             runner(message_id)
             _record_dispatched(message_id)
         except Exception:
+            from django_ergo.bots import recurring_wakes
+
+            recurring = ThreadMessage.objects.filter(
+                id=message_id,
+                status=ThreadMessageStatus.QUEUED,
+                metadata__has_key="recurring_wake",
+            ).first()
+            if recurring is not None:
+                error = f"{NOT_RUN_PREFIX} the recurring check could not be dispatched."
+                if ThreadMessage.objects.filter(
+                    id=message_id, status=ThreadMessageStatus.QUEUED
+                ).update(status=ThreadMessageStatus.FAILED, error=error):
+                    recurring_wakes.delivery_failed(recurring, error)
+                logger.exception("Dispatching recurring check %s failed", message_id)
+                return
             # A publish can fail after the message transaction committed. A
             # conditional transition prevents a worker which already claimed
             # the message from being mistaken for work that did not start.
@@ -446,13 +469,21 @@ def _claim_next(recipient_id) -> ThreadMessage | None:
         .values_list("id", flat=True)
         .first()
     )
-    if head is None or not ThreadMessage.objects.filter(
-        id=head, status=ThreadMessageStatus.QUEUED
-    ).update(status=ThreadMessageStatus.DELIVERED):
+    if head is None:
         return None
     message = ThreadMessage.objects.select_related(
         "recipient_session__user", "sender_session", "in_reply_to"
     ).get(id=head)
+    if (message.metadata or {}).get("recurring_wake"):
+        from django_ergo.bots.recurring_wakes import validate_delivery
+
+        if not validate_delivery(message, claim=True):
+            return None
+        message.refresh_from_db()
+    elif not ThreadMessage.objects.filter(
+        id=head, status=ThreadMessageStatus.QUEUED
+    ).update(status=ThreadMessageStatus.DELIVERED):
+        return None
     _record_handoff("delivered", message)
     return message
 
@@ -460,6 +491,11 @@ def _claim_next(recipient_id) -> ThreadMessage | None:
 def _run_turn(message: ThreadMessage, registry: BotRegistry | None) -> None:
     """The recipient's turn for a claimed message; a failure fails the message."""
     recipient = message.recipient_session
+    if (message.metadata or {}).get("recurring_wake"):
+        from django_ergo.bots.recurring_wakes import validate_delivery
+
+        if not validate_delivery(message):
+            return
     if registry is not None and recipient.bot_name in registry:
         bot = registry.get(recipient.bot_name)
     else:
@@ -547,6 +583,9 @@ def fail(message: ThreadMessage, error: str) -> None:
     message.error = error
     message.save(update_fields=["status", "error", "updated_at"])
     wakes.delivery_failed(message, error)
+    from django_ergo.bots.recurring_wakes import delivery_failed
+
+    delivery_failed(message, error)
     if message.sender_session_id and message.in_reply_to_id is None:
         reply(message, f"(Could not deliver your message: {error})")
 
@@ -593,6 +632,9 @@ def _route_reply(bot: Bot, session: ConversationSession, result: TurnResult) -> 
     if result.needs_approval:
         message.status = ThreadMessageStatus.WAITING
         message.save(update_fields=["status", "updated_at"])
+        from django_ergo.bots.recurring_wakes import delivery_finished
+
+        delivery_finished(message)
         return
     scoped_failure = (call.metadata or {}).get(
         "voice_execution_mode"
@@ -610,9 +652,15 @@ def _route_reply(bot: Bot, session: ConversationSession, result: TurnResult) -> 
     else:
         text = f"(no reply: {result.error or 'the turn did not answer'})"
         wakes.delivery_failed(message, result.error)
+        from django_ergo.bots.recurring_wakes import delivery_failed
+
+        delivery_failed(message, result.error)
     message.status = ThreadMessageStatus.ANSWERED
     message.reply_text = text
     message.save(update_fields=["status", "reply_text", "updated_at"])
+    from django_ergo.bots.recurring_wakes import delivery_finished
+
+    delivery_finished(message)
     if result.reply is not None:
         _record_handoff("result_persisted", message, turn_id=call.pk)
     report = (message.metadata or {}).get("report")  # a one-way report: no reply back
@@ -653,7 +701,15 @@ def _report_worker_result(
             starter,
             f"[Result of {title}]\n\n{text}",
             registry=registry,
-            metadata={"report": True, "worker": message.metadata.get("worker")},
+            metadata={
+                "report": True,
+                "worker": message.metadata.get("worker"),
+                **(
+                    {"recurring_origin": message.metadata["recurring_origin"]}
+                    if message.metadata.get("recurring_origin")
+                    else {}
+                ),
+            },
         )
     except ValueError:
         logger.warning("Couldn't report a worker result to %s", starter_id)

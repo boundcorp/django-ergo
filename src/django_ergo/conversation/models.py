@@ -1,5 +1,6 @@
 import uuid
 
+from django import VERSION as DJANGO_VERSION
 from django.contrib.auth import get_user_model
 from django.db import models
 from django.db.models import Q
@@ -617,6 +618,9 @@ class Worker(TimeStampedMixin):
     result = models.JSONField(null=True, blank=True)
     error = models.TextField(blank=True, default="")
     notify = models.BooleanField(default=True)
+    # Restricts renewal after a recurring turn's worker result, even if its
+    # originating schedule has since been deleted.
+    recurring_origin = models.UUIDField(null=True, blank=True)
     polls = models.PositiveIntegerField(default=0)
     next_poll_at = models.DateTimeField(null=True, blank=True)
     # Set while one step runs, so a late or duplicate runner call skips it.
@@ -688,6 +692,134 @@ class Wake(TimeStampedMixin):
 
     def __str__(self):
         return f"{self.bot_name} wake {self.due_at:%Y-%m-%d %H:%M} ({self.status})"
+
+
+def _recurring_constraint(condition, name):
+    keyword = "condition" if DJANGO_VERSION >= (5, 1) else "check"
+    return models.CheckConstraint(name=name, **{keyword: condition})
+
+
+class RecurringWakeStatus(models.TextChoices):
+    ACTIVE = "active", "Active"
+    PAUSED = "paused", "Paused"
+    BLOCKED = "blocked", "Blocked (explicit resume required)"
+    CANCELLED = "cancelled", "Cancelled"
+    COMPLETED = "completed", "Completed"
+
+
+class RecurringWakeLock(models.Model):
+    """One durable admission mutex, including when there are no schedules yet."""
+
+    id = models.PositiveSmallIntegerField(primary_key=True, default=1, editable=False)
+
+    class Meta:
+        constraints = [_recurring_constraint(Q(id=1), "recurring_wake_single_lock")]
+
+    def __str__(self):
+        return "Recurring wake admission lock"
+
+
+class RecurringWake(TimeStampedMixin):
+    """A finite UTC elapsed-time schedule owned by one conversation thread."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    session = models.ForeignKey(
+        ConversationSession, on_delete=models.CASCADE, related_name="recurring_wakes"
+    )
+    bot_name = models.CharField(max_length=100)
+    note = models.TextField()
+    status = models.CharField(
+        max_length=20,
+        choices=RecurringWakeStatus.choices,
+        default=RecurringWakeStatus.ACTIVE,
+    )
+    interval_seconds = models.PositiveIntegerField()
+    next_run_at = models.DateTimeField()
+    expires_at = models.DateTimeField(null=True, blank=True)
+    max_occurrences = models.PositiveIntegerField(null=True, blank=True)
+    occurrences = models.PositiveIntegerField(default=0)
+    periodic_checkins = models.BooleanField(default=False)
+    blocked_reason = models.TextField(blank=True, default="")
+    depth = models.PositiveIntegerField(default=0)
+    # Execution restrictions inherited from the scheduling turn, never its text.
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ["created_at", "id"]
+        indexes = [
+            models.Index(
+                fields=["status", "next_run_at"], name="recurring_wake_due_idx"
+            ),
+            models.Index(
+                fields=["session", "status"], name="recurring_wake_session_idx"
+            ),
+        ]
+        constraints = [
+            _recurring_constraint(
+                Q(expires_at__isnull=False) | Q(max_occurrences__isnull=False),
+                "recurring_wake_finite",
+            ),
+            _recurring_constraint(
+                Q(interval_seconds__gte=1), "recurring_wake_interval"
+            ),
+            _recurring_constraint(
+                Q(max_occurrences__isnull=True) | Q(max_occurrences__gte=1),
+                "recurring_wake_positive_max",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.bot_name} recurring wake {self.id} ({self.status})"
+
+
+class RecurringWakeOccurrenceStatus(models.TextChoices):
+    QUEUED = "queued", "Queued"
+    DELIVERED = "delivered", "Delivered"
+    WAITING = "waiting", "Waiting for approval"
+    ANSWERED = "answered", "Answered"
+    FAILED = "failed", "Failed (not retried)"
+    CANCELLED = "cancelled", "Cancelled before delivery"
+
+
+class RecurringWakeOccurrence(TimeStampedMixin):
+    """One claimed slot, committed atomically with its automated ThreadMessage."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    schedule = models.ForeignKey(
+        RecurringWake, on_delete=models.CASCADE, related_name="scheduled_occurrences"
+    )
+    scheduled_for = models.DateTimeField()
+    dispatched_at = models.DateTimeField()
+    completed_at = models.DateTimeField(null=True, blank=True)
+    status = models.CharField(
+        max_length=20,
+        choices=RecurringWakeOccurrenceStatus.choices,
+        default=RecurringWakeOccurrenceStatus.QUEUED,
+    )
+    thread_message = models.OneToOneField(
+        ThreadMessage,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="recurring_wake_occurrence",
+    )
+    error = models.TextField(blank=True, default="")
+
+    class Meta:
+        ordering = ["scheduled_for", "id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["schedule", "scheduled_for"], name="recurring_wake_unique_slot"
+            ),
+            models.UniqueConstraint(
+                fields=["schedule"],
+                condition=Q(status__in=["queued", "delivered", "waiting"]),
+                name="recurring_wake_one_outstanding",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.schedule_id} occurrence {self.scheduled_for.isoformat()} ({self.status})"
 
 
 class AgentUsage(TimeStampedMixin):

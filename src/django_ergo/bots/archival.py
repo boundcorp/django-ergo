@@ -49,6 +49,9 @@ def archive(session: ConversationSession, reason: str = "") -> None:
         **({"archived_reason": reason} if reason else {}),
     }
     session.save(update_fields=["status", "metadata", "updated_at"])
+    from django_ergo.bots.recurring_wakes import cancel_session
+
+    cancel_session(session)
     stop_workers(session)
 
 

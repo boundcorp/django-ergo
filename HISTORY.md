@@ -4,6 +4,16 @@ This document tracks the major milestones and evolution of the Django Ergo proje
 
 ## Development Timeline
 
+### Finite recurring thread wakes (November 2026)
+
+- Added durable finite schedules and occurrence identities with atomic admission,
+  duplicate-safe delivery, busy-thread coalescing and bounded outage catch-up.
+- Added recurring chat tools and owner-scoped live UI pause/resume/cancel controls,
+  visible timing/limits, quiet unchanged checks and explicit failure blocking.
+- Reused normal thread-message permissions, approvals and lifecycle timing.
+  See [the acceptance and rollout contract](docs/recurring-thread-wakes.md).
+
+
 ### Passive generic cost ledger (November 2026)
 
 - Added durable owner-scoped economic operations and immutable source observations

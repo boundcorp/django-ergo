@@ -713,6 +713,21 @@ from beat every 30 seconds (`ergonaut.fire_wakes`) and shows the pending one
 above the composer and in the phone session bar. Without Ergonaut, call
 `django_ergo.bots.wakes.fire_due()` every 30-60 seconds.
 
+### Recurring checks
+
+For an explicit user request such as “check this chat every 5 minutes for the
+next 10 hours”, the same built-in skill provides `ergo_wake_recurring`,
+`ergo_wake_recurring_list` and `ergo_wake_recurring_control`. A finite expiry or
+maximum occurrence count is mandatory; minimum interval and per-thread/global
+quotas are configurable. Pause/resume/cancel and next run/expiry/count/status
+are visible in the chat. Busy and approval-waiting threads coalesce checks;
+final failures block rather than retry automatically. Unchanged updates stay
+quiet unless periodic check-ins were requested. These are ordinary turns, not
+new permissions, approval grants or financial authority. Worker/task results
+continue to arrive naturally. See [recurring thread wakes](recurring-thread-wakes.md)
+for settings, timezone and cancellation semantics, durability and acceptance.
+
+
 ## Agents
 
 A coding agent (Codex, Claude Code, omp) works on a brief for minutes to
