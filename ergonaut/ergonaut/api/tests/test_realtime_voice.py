@@ -108,7 +108,7 @@ def test_a_voice_session_gets_one_bridge_job(voice_setup, settings):
     assert not realtime_voice.claim_bridge(ended["id"])
 
 
-def test_a_claimed_session_gets_no_new_token_and_a_dead_bridge_job_ends_it(voice_setup, settings):
+def test_claimed_session_refuses_new_token_and_reaps_only_a_stale_bridge_lease(voice_setup, settings):
     _, client, chat = voice_setup
     settings.LIVEKIT_URL = "wss://example.invalid"
     settings.LIVEKIT_API_KEY = "test-key"
@@ -118,12 +118,9 @@ def test_a_claimed_session_gets_no_new_token_and_a_dead_bridge_job_ends_it(voice
     # The job is (or may still be) running: no second room, but the session stays.
     assert post(client, url + "/token", {}).status_code == 409
     assert client.get(url).json()["status"] == "active"
-    # A bridge that died without ending it: once the job is surely over, the session ends,
-    # so the next Start creates a new one instead of reusing it.
-    realtime_voice.RealtimeVoiceSession.objects.filter(pk=voice["id"]).update(
-        bridge_started_at=datetime.now(UTC) - timedelta(seconds=realtime_voice.BRIDGE_JOB_SECONDS + 31)
-    )
-    assert post(client, url + "/token", {}).status_code == 409
+    # A renewable heartbeat, not elapsed call age, detects an abandoned worker.
+    with patch.object(realtime_voice.timezone, "now", return_value=datetime.now(UTC) + timedelta(seconds=121)):
+        assert post(client, url + "/token", {}).status_code == 409
     assert client.get(url).json()["status"] == "ended"
     fresh, fresh_url = create(client, chat)
     assert fresh["id"] != voice["id"]
@@ -254,46 +251,6 @@ def test_concurrent_delegations_create_one_message(voice_setup, settings):
     assert ThreadMessage.objects.count() == 1
 
 
-@pytest.mark.parametrize("ending", ["cancel", "expire", "end", "bridge_shutdown"])
-def test_pending_request_fails_closed(voice_setup, settings, ending):
-    from django.utils import timezone
-
-    _, client, chat = voice_setup
-    settings.REALTIME_VOICE_DELEGATION_BUDGET = BUDGET
-    voice, url = create(client, chat)
-    realtime_voice.begin_pending(voice["id"], "request", {"segment": "partial"})
-    if ending == "expire":
-        from ergonaut.apps.bots.models import RealtimeVoiceSession
-
-        row = RealtimeVoiceSession.objects.get(pk=voice["id"])
-        row.state["pending_delegation"]["expires_at"] = (timezone.now() - timedelta(seconds=1)).isoformat()
-        row.save(update_fields=["state"])
-        assert client.get(url).json()["state"]["pending_delegation"]["status"] == "expired"
-    elif ending == "end":
-        assert post(client, url + "/end", {}).status_code == 200
-    else:
-        realtime_voice.close_pending(voice["id"], "request")
-    with pytest.raises(ValueError, match="expired or unavailable"):
-        realtime_voice.resolve_pending(voice["id"], "request", "Search history")
-    assert not ThreadMessage.objects.exists()
-
-
-def test_only_server_recorded_live_signal_can_submit_once(voice_setup, settings):
-    _, client, chat = voice_setup
-    settings.REALTIME_VOICE_DELEGATION_BUDGET = BUDGET
-    voice, url = create(client, chat)
-    text = "Search history; do not claim success early."
-    with pytest.raises(ValueError, match="expired or unavailable"):
-        realtime_voice.resolve_pending(voice["id"], "request", text)
-    realtime_voice.begin_pending(voice["id"], "request", {})
-    assert post(client, url + "/confirm-delegation", {"event_id": "request", "text": text}).status_code == 404
-    with patch("django_ergo.bots.messaging.dispatch"):
-        realtime_voice.resolve_pending(voice["id"], "request", text)
-        with pytest.raises(ValueError, match="expired or unavailable"):
-            realtime_voice.resolve_pending(voice["id"], "request", text)
-    assert ThreadMessage.objects.count() == 1
-
-
 def test_standby_is_flagged_owner_scoped_and_requires_confirmed_close(voice_setup, settings, django_user_model):
     user, client, chat = voice_setup
     voice, url = create(client, chat)
@@ -328,7 +285,7 @@ def test_standby_is_flagged_owner_scoped_and_requires_confirmed_close(voice_setu
     assert client.get(url).json()["status"] == "ended"
 
 
-def test_end_and_expiry_beat_standby_cleanup_and_preserve_late_result(voice_setup, settings):
+def test_end_beats_standby_cleanup_and_standby_has_no_call_age_limit(voice_setup, settings):
     from ergonaut.realtime_voice_outbox import claim_announcement, completion_event
 
     _, client, chat = voice_setup
@@ -369,8 +326,9 @@ def test_end_and_expiry_beat_standby_cleanup_and_preserve_late_result(voice_setu
     realtime_voice.RealtimeVoiceSession.objects.filter(pk=fresh["id"]).update(
         bridge_started_at=datetime.now(UTC) - timedelta(seconds=90)
     )
-    assert client.get(fresh_url).json()["status"] == "ended"
-    assert post(client, fresh_url + "/resume", {}).status_code == 409
+    assert client.get(fresh_url).json()["status"] == "active"
+    assert post(client, fresh_url + "/resume", {}).status_code == 200
+    assert realtime_voice.claim_bridge(fresh["id"], "e" * 32)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -508,7 +466,7 @@ def test_browser_playback_reports_are_owner_scoped_bounded_and_never_history(voi
     assert post(client, report, {"event_id": "late", "status": "playback_started"}).status_code == 409
 
 
-def test_live_state_and_final_callbacks_are_claim_scoped_across_standby_stop_and_deadline(voice_setup, settings):
+def test_live_state_and_final_callbacks_are_claim_scoped_across_standby_stop_and_abandonment(voice_setup, settings):
     _, client, chat = voice_setup
     settings.REALTIME_VOICE_STANDBY_ENABLED = True
     voice, url = create(client, chat)
@@ -541,14 +499,14 @@ def test_live_state_and_final_callbacks_are_claim_scoped_across_standby_stop_and
     assert chat.messages.count() == 1
     fresh, fresh_url = create(client, chat)
     assert fresh["transcript"] == [] and fresh["runtime"] == realtime_voice.UNKNOWN_RUNTIME
-    assert realtime_voice.claim_bridge(fresh["id"], "deadline")
-    realtime_voice.RealtimeVoiceSession.objects.filter(pk=fresh["id"]).update(
-        bridge_started_at=datetime.now(UTC) - timedelta(seconds=realtime_voice.BRIDGE_JOB_SECONDS)
-    )
-    assert not realtime_voice.publish_live_state(fresh["id"], "deadline", [draft("expired")], runtime)
-    assert (
-        realtime_voice.record_event(fresh["id"], "expired", "assistant", "Expired", bridge_claim_id="deadline") is None
-    )
+    assert realtime_voice.claim_bridge(fresh["id"], "abandoned")
+    with patch.object(realtime_voice.timezone, "now", return_value=datetime.now(UTC) + timedelta(seconds=121)):
+        assert not realtime_voice.publish_live_state(fresh["id"], "abandoned", [draft("expired")], runtime)
+        assert (
+            realtime_voice.record_event(fresh["id"], "expired", "assistant", "Expired", bridge_claim_id="abandoned")
+            is None
+        )
+        assert client.get(fresh_url).json()["status"] == "ended"
     assert client.get(fresh_url).json()["runtime"] == realtime_voice.UNKNOWN_RUNTIME
 
 
@@ -583,3 +541,64 @@ def test_live_publisher_and_late_finals_obey_voice_access_switches(voice_setup, 
     assert client.get(url).status_code == 404
     assert not chat.messages.exists()
     assert not realtime_voice.RealtimeVoiceSession.objects.get(pk=vid).events.exists()
+
+
+def test_healthy_bridge_renews_past_ninety_seconds_without_reopening_or_resetting_identity(voice_setup):
+    _, client, chat = voice_setup
+    voice, url = create(client, chat)
+    start = datetime.now(UTC)
+    with patch.object(realtime_voice.timezone, "now", return_value=start) as clock:
+        assert realtime_voice.claim_bridge(voice["id"], "long-call")
+        for elapsed in range(60, 601, 60):
+            clock.return_value = start + timedelta(seconds=elapsed)
+            assert realtime_voice.renew_bridge_lease(voice["id"], "long-call")
+            observed = client.get(url).json()
+            assert observed["status"] == "active" and observed["id"] == voice["id"]
+            assert datetime.fromisoformat(observed["bridge_started_at"]) == start
+            assert not realtime_voice.claim_bridge(voice["id"], "second-connection")
+        assert post(client, url + "/end", {}).json()["status"] == "ended"
+        assert not realtime_voice.renew_bridge_lease(voice["id"], "long-call")
+        assert not realtime_voice.claim_bridge(voice["id"], "restart-ended")
+
+
+@pytest.mark.parametrize("observer", ["poll", "token"])
+@pytest.mark.parametrize("concurrent_transition", ["renew", "standby"])
+def test_stale_poll_or_token_cannot_end_a_renewed_or_standby_session(
+    voice_setup, settings, observer, concurrent_transition
+):
+    _, client, chat = voice_setup
+    settings.REALTIME_VOICE_STANDBY_ENABLED = True
+    voice, url = create(client, chat)
+    assert realtime_voice.claim_bridge(voice["id"], "racing-lease")
+    original_expired = realtime_voice.bridge_lease_expired
+    stale_seen = False
+
+    def observed_stale_snapshot(session, now=None):
+        nonlocal stale_seen
+        if not stale_seen:
+            stale_seen = True
+            # Simulate a renewal/standby commit between the observer's SELECT and
+            # its decision to reap. The observer still holds the old snapshot.
+            if concurrent_transition == "standby":
+                realtime_voice.RealtimeVoiceSession.objects.filter(pk=session.pk).update(standby_state="standby")
+            else:
+                realtime_voice.RealtimeVoiceSession.objects.filter(pk=session.pk).update(
+                    state={
+                        **session.state,
+                        "_voice_bridge_lease": {
+                            "claim_id": session.bridge_claim_id,
+                            "seen_at": datetime.now(UTC).isoformat(),
+                        },
+                    }
+                )
+            return True
+        return original_expired(session, now)
+
+    with patch.object(realtime_voice, "bridge_lease_expired", side_effect=observed_stale_snapshot):
+        if observer == "poll":
+            assert client.get(url).json()["status"] == "active"
+        else:
+            assert post(client, url + "/token", {}).status_code == 409
+    retained = client.get(url).json()
+    assert retained["status"] == "active"
+    assert retained["standby_state"] == ("standby" if concurrent_transition == "standby" else "live")

@@ -1,7 +1,7 @@
 """Load the existing Octo and SOPS credentials into this isolated process only.
 
-Source the disposable environment before invoking this module. No inference
-occurs unless the preflight's explicit --approve-paid flag is supplied.
+Source the disposable environment before invoking this module. This helper
+only loads credentials for offline checks; it cannot authorize or start inference.
 """
 
 import base64
@@ -13,8 +13,13 @@ from pathlib import Path
 
 import yaml
 
+from ergonaut.realtime_voice_preflight import main as preflight
+
 
 def main():
+    # Reject retired/unknown launch options before reading any credentials.
+    if sys.argv[1:]:
+        return preflight()
     try:
         config = Path.home() / ".local/share/ergo-livekit/app-config.sops.yaml"
         livekit = yaml.safe_load(
@@ -35,7 +40,6 @@ def main():
     except Exception:
         print("Could not load isolated-process credentials; bridge not started.", file=sys.stderr)
         return 1
-    from ergonaut.realtime_voice_preflight import main as preflight
 
     return preflight()
 
