@@ -76,6 +76,14 @@ fields, then offers:
 | `ergo_table_update(table, id, values)` | change fields of one row |
 | `ergo_table_delete(table, id)` | delete one row, after approval |
 
+Tables reserved for dedicated tools can declare `generic_writes = False`.
+This rejects add, update, delete and batch (including upsert) through generic
+table tools and page actions, while queries remain available. Ordinary tables
+remain writable by default. This is a boundary for those generic interfaces,
+not database authorization: trusted bot code, ORM, shell and custom tools can
+still write and must enforce their own invariants. `page_writes = False` alone
+only disables page actions.
+
 Use `ergo_table_schema` for writable field names. Foreign keys to another
 table of the same bot use the ID attname (for example `goal_id`); for a
 `to_field` foreign key, supply the target field's value rather than its primary

@@ -160,6 +160,10 @@ FRONTEND_DIST = os.environ.get("FRONTEND_DIST", os.path.join(os.path.dirname(__f
 ERGONAUT_PUBLIC_URL = os.environ.get("ERGONAUT_PUBLIC_URL", "").rstrip("/")
 ERGONAUT_DEBUG_USERS = {name.strip() for name in os.environ.get("ERGONAUT_DEBUG_USERS", "").split(",") if name.strip()}
 DJANGO_ERGO = {
+    # Opt in only after migration 0045 has been applied.
+    "LIFECYCLE_EVENTS_ENABLED": (
+        os.environ.get("ERGONAUT_LIFECYCLE_EVENTS", "").strip().lower() in {"1", "true", "yes", "on"}
+    ),
     "BOT_WEBHOOK_BASE_URL": f"{ERGONAUT_PUBLIC_URL}/hooks" if ERGONAUT_PUBLIC_URL else None,
     # Bot-to-bot thread messages are delivered by a Celery worker.
     "THREAD_MESSAGE_RUNNER": "ergonaut.apps.bots.tasks.queue_thread_message",

@@ -54,7 +54,7 @@ Task blockers do not imply thread inactivity. Intervals may overlap independent 
 
 ## Retention, rollout and rollback
 
-Migration `0045_lifecycle_event` is additive and must be applied before enabling the setting. The default is off; changing a deployed service requires the normal coordinated change window. This PR does not apply migrations, deploy, restart services or schedule jobs. Assess table/index growth, backup retention and access controls before enabling. Existing application code remains functional if observations fail, but missing observations cannot be reconstructed reliably.
+Migration `0045_lifecycle_event` is additive and must be applied before enabling the setting. Ergonaut enables it with `ERGONAUT_LIFECYCLE_EVENTS=1` (default: off). Changing a deployed service requires the normal coordinated change window. This PR does not apply migrations, deploy, restart services or schedule jobs. Assess table/index growth, backup retention and access controls before enabling. Existing application code remains functional if observations fail, but missing observations cannot be reconstructed reliably.
 
 Schedule `manage.py prune_lifecycle_events --days 90 --batch-size 1000` under the deployment's normal operations policy. It deletes **one** oldest batch by `observed_at`, never newer than the configured age; repeat on a bounded schedule until caught up. Days must be positive; batch size is capped at 10,000. Default retention is 90 days only when the command is actually scheduled; there is no autonomous cleanup. Backups and downstream exports need their own retention. Pruning truncates histories and prevents complete reports across the cutoff.
 

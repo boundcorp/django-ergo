@@ -1357,6 +1357,30 @@ Ergo's own plugins live in `django_ergo.plugins`, one module each, and bot.yaml
 names them by short name. Tools that belong to one bot (like a kitchen bot's
 Tandoor tools) go in that bot folder's `tools/` instead.
 
+### observability
+
+```yaml
+- name: observability
+  profiles:
+    prod:
+      grafana_url: http://grafana.monitoring.svc
+      public_url: https://grafana.example.com
+      token_env: GRAFANA_VIEWER_TOKEN
+      datasources: [prometheus]
+```
+
+Read-only Grafana and Prometheus. Keys: `profiles` (name to `grafana_url`,
+`public_url`, `token_env`, `token_file`, `datasources`, `mode` proxy|direct,
+`prometheus_url`, `renderer`, `ownership`) and `root_only` (default false). The model
+cannot supply URLs, headers, credentials or datasource uids outside `datasources`.
+Direct mode accepts at most one configured datasource uid as the fixed origin's
+identity. Renderer authorization fails closed for unresolved datasource references;
+the allowlist is not a replacement for Grafana-side token permissions.
+Tools: `ergo_grafana_search`, `ergo_grafana_dashboard`, `ergo_prom_query`,
+`ergo_prom_targets`, `ergo_grafana_link`, `ergo_prom_chart` (and
+`ergo_grafana_panel_render` when a profile has `renderer: true`). Charts need
+`django-ergo[observability]`. See [Observability](observability.md).
+
 ### runpod
 
 ```yaml
@@ -1935,6 +1959,19 @@ In `auto` mode Telegram uses a webhook when `BOT_WEBHOOK_BASE_URL` is set:
 `bot.serve()` registers it and returns, and updates arrive at
 `hooks/<bot>/telegram/update/` with Telegram's secret-token header. Without
 a public URL it long-polls.
+
+Polling first deletes any existing Telegram webhook. Transient network errors,
+HTTP 408, 429 and 5xx retry indefinitely with delays doubling from one second
+to a maximum of 60 seconds (an HTTP 429 `retry_after` or `Retry-After` raises
+the wait to that value, capped at 300 seconds); polling starts only after
+deletion succeeds. An unsupported `api_base` is a permanent configuration error.
+Other failures, including authorization and configuration errors, disable
+this Telegram poller and are logged without exception details or token-bearing
+URLs; other plugins and bots continue. Correct the cause and restart the bot
+runner to retry a permanent failure. A running process is therefore not proof
+that every Telegram poller started. Cancellation interrupts the async wait;
+an in-flight standard-library HTTP request runs in a thread and can remain
+until its 60-second request timeout.
 
 **Outages.** Each update is saved (as a `BotJob`, target `plugin:telegram`)
 before Telegram is told it arrived: a webhook answers 500, and polling keeps
