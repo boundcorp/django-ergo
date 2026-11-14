@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from abc import ABC
 from abc import abstractmethod
 from contextvars import ContextVar
@@ -9,6 +11,16 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 auto_approved = ContextVar("tool_auto_approved", default=False)
+authenticated_approval_batch = ContextVar("authenticated_approval_batch", default=None)
+approval_decision = ContextVar("tool_approval_decision", default=None)
+
+
+def approval_pending_digest(pending: list[dict]) -> str:
+    """Bind an authenticated answer to the exact displayed pending batch."""
+    encoded = json.dumps(
+        pending, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    )
+    return hashlib.sha256(encoded.encode()).hexdigest()
 
 
 @dataclass(frozen=True)

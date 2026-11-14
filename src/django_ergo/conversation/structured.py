@@ -86,6 +86,7 @@ from typing import get_args
 from typing import get_origin
 
 from asgiref.sync import sync_to_async
+from django.db import transaction
 from django.utils import timezone
 from pydantic import BaseModel
 from pydantic import ValidationError
@@ -110,6 +111,7 @@ from django_ergo.conversation.messages import OUTPUT_ACCEPTED
 from django_ergo.conversation.messages import anext_sequence
 from django_ergo.conversation.messages import text_to_tool_use
 from django_ergo.conversation.models import ConversationSession
+from django_ergo.conversation.models import MessageBlock
 from django_ergo.conversation.models import StructuredCall
 from django_ergo.conversation.models import StructuredCallStatus
 from django_ergo.conversation.runner import PendingApproval
@@ -126,6 +128,9 @@ from django_ergo.conversation.tool_results import budget_chars
 from django_ergo.conversation.tool_results import trim_tool_results
 from django_ergo.conversation.toolkit import ApprovalPreview
 from django_ergo.conversation.toolkit import Toolkit
+from django_ergo.conversation.toolkit import approval_decision
+from django_ergo.conversation.toolkit import approval_pending_digest
+from django_ergo.conversation.toolkit import authenticated_approval_batch
 from django_ergo.conversation.toolkit import auto_approved
 from django_ergo.pricing import add_request_cost
 
@@ -872,7 +877,7 @@ class _Run:
         log.info("Automatic approval: call=%s tool_use=%s", self.call.pk, tool_id)
         return True
 
-    async def run_tool(
+    async def run_tool(  # noqa: PLR0913
         self,
         name: str,
         args: dict,
@@ -880,6 +885,7 @@ class _Run:
         *,
         fence: Callable[[], bool] | None = None,
         automatically_approved: bool = False,
+        force_once: bool = False,
     ) -> tuple[Any, bool]:
         """Run one tool call. With ``fence``, the call first checks it on the
         tool's thread and returns ``(_REVOKED, True)`` without running when
@@ -890,9 +896,10 @@ class _Run:
         )
         # Output validation has no external effect and must repopulate the
         # fresh submit toolkit's accepted value after approval continuation.
-        once = (self.call.metadata or {}).get(
-            "tool_execution_policy"
-        ) == "at_most_once" and (
+        once = (
+            force_once
+            or (self.call.metadata or {}).get("tool_execution_policy") == "at_most_once"
+        ) and (
             self.submit is None or find_toolkit(self.toolkits, name) is not self.submit
         )
 
@@ -1222,6 +1229,9 @@ async def _run_loop(run: _Run) -> StructuredCallResult:  # noqa: C901, PLR0912, 
                         for a in approvals
                     ],
                 }
+                call.metadata["pending_review_binding"] = _pending_review_binding(
+                    call, call.metadata["pending_approvals"]
+                )
                 finished = True
                 break
             if run.submit is not None and run.submit.accepted is not None:
@@ -1483,8 +1493,103 @@ async def run_structured_call(  # noqa: PLR0913
     return await _loop(run)
 
 
+def _pending_review_binding(call, pending):
+    payload = [str(call.pk), pending]
+    return hashlib.sha256(
+        json.dumps(
+            payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+        ).encode()
+    ).hexdigest()
+
+
+def _current_reviewable(call_id, pending, *, claimed=False, tool_id=None):  # noqa: PLR0911
+    """Require an unambiguous, unexecuted, current session tool call."""
+    row = StructuredCall.objects.get(pk=call_id)
+    expected_status = (
+        StructuredCallStatus.IN_PROGRESS
+        if claimed
+        else StructuredCallStatus.AWAITING_APPROVAL
+    )
+    metadata = row.metadata or {}
+    if (
+        row.status != expected_status
+        or row.session_id is None
+        or row.first_sequence is None
+        or row.last_sequence is None
+        or not isinstance(pending, list)
+        or not pending
+        or _pending_review_binding(row, metadata.get("pending_approvals"))
+        != _pending_review_binding(row, pending)
+        or metadata.get("pending_review_binding")
+        != _pending_review_binding(row, pending)
+    ):
+        return False
+    if any(
+        not isinstance(item, dict)
+        or not isinstance(item.get("id"), str)
+        or not item["id"]
+        or not isinstance(item.get("name"), str)
+        or not isinstance(item.get("input"), dict)
+        or item.get("preview_error")
+        for item in pending
+    ):
+        return False
+    ids = [item["id"] for item in pending]
+    if len(ids) != len(set(ids)) or (tool_id is not None and tool_id not in ids):
+        return False
+    receipts = metadata.get("tool_invocations", {})
+    if not isinstance(receipts, dict) or any(
+        key in receipts for key in ([tool_id] if tool_id else ids)
+    ):
+        return False
+    if (
+        row.session.structured_calls.exclude(pk=row.pk)
+        .filter(created_at__gte=row.created_at)
+        .exists()
+        or row.session.messages.filter(sequence__gt=row.last_sequence).exists()
+    ):
+        return False
+    if (
+        row.session.structured_calls.exclude(pk=row.pk)
+        .filter(status=StructuredCallStatus.AWAITING_APPROVAL)
+        .exists()
+    ):
+        return False
+    blocks = MessageBlock.objects.filter(message__session_id=row.session_id)
+    for item in pending:
+        uses = list(
+            blocks.filter(block_type="tool_use", tool_use_id=item["id"]).values_list(
+                "message__sequence", "tool_name", "tool_input"
+            )
+        )
+        if (
+            len(uses) != 1
+            or not row.first_sequence <= uses[0][0] <= row.last_sequence
+            or uses[0][1] != item["name"]
+            or approval_pending_digest(uses[0][2])
+            != approval_pending_digest(item["input"])
+            or blocks.filter(
+                block_type="tool_result", tool_result_for=item["id"]
+            ).exists()
+        ):
+            return False
+    return True
+
+
+def _claim_review(call, pending, claimed_at):
+    with transaction.atomic():
+        StructuredCall.objects.select_for_update().get(pk=call.pk)
+        if not _current_reviewable(call.pk, pending):
+            return False
+        return bool(
+            StructuredCall.objects.filter(
+                pk=call.pk, status=StructuredCallStatus.AWAITING_APPROVAL
+            ).update(status=StructuredCallStatus.IN_PROGRESS, updated_at=claimed_at)
+        )
+
+
 @budgeted
-async def resume_structured_call(  # noqa: PLR0913
+async def resume_structured_call(  # noqa: C901, PLR0912, PLR0913, PLR0915
     spec: StructuredCallSpec,
     call: StructuredCall,
     decisions: dict[str, bool],
@@ -1494,30 +1599,30 @@ async def resume_structured_call(  # noqa: PLR0913
     workflow=None,
     context_builder: ContextBuilder | None = None,
     control: TurnControl | None = None,
+    rereview_pending: bool = False,
 ) -> StructuredCallResult:
     """Continue a call that stopped for approval.
 
     ``decisions`` maps tool_use_id to True (approved) or False (denied).
     Approved tools run; the rest go back to the model as declined.
     ``control`` works as in ``run_structured_call``.
+    ``rereview_pending`` is an explicit, non-human re-review of a current,
+    hash-bound session batch; it requires empty decisions and leaves a
+    non-reviewable or unapproved batch untouched.
     """
     if call.status != StructuredCallStatus.AWAITING_APPROVAL:
         msg = f"Call {call.pk} is not waiting for approval"
         raise StructuredCallError(msg)
-    # Claim it, so a second answer (a double tap, two devices) can't run the tools again.
-    claimed_at = timezone.now()
-    claimed = await StructuredCall.objects.filter(
-        pk=call.pk, status=StructuredCallStatus.AWAITING_APPROVAL
-    ).aupdate(status=StructuredCallStatus.IN_PROGRESS, updated_at=claimed_at)
-    if not claimed:
-        msg = f"Call {call.pk} was already answered"
-        raise StructuredCallError(msg)
-    call.status = StructuredCallStatus.IN_PROGRESS
-    call.updated_at = claimed_at
     pending = (call.metadata or {}).get("pending_approvals", [])
-    await sync_to_async(_lifecycle_approvals, thread_sensitive=True)(
-        call, pending, "answer_received"
-    )
+    if rereview_pending and (
+        decisions
+        or authenticated_approval_batch.get() is not None
+        or not await sync_to_async(_current_reviewable, thread_sensitive=True)(
+            call.pk, pending
+        )
+    ):
+        msg = "Pending call is not eligible for automatic re-review"
+        raise StructuredCallError(msg)
 
     if call.session_id is not None:
         session = await ConversationSession.objects.aget(pk=call.session_id)
@@ -1542,12 +1647,97 @@ async def resume_structured_call(  # noqa: PLR0913
         allow_approvals=True,
         control=control,
     )
+    if rereview_pending:
+        for item in pending:
+            if not run.needs_approval(item["name"]) or not await run.autoapprove(
+                item["name"], item["input"], item["id"]
+            ):
+                msg = "Pending call was not automatically approved"
+                raise StructuredCallError(msg)
+    claimed_at = timezone.now()
+    if rereview_pending:
+        claimed = await sync_to_async(_claim_review, thread_sensitive=True)(
+            call, pending, claimed_at
+        )
+    else:
+        claimed = await StructuredCall.objects.filter(
+            pk=call.pk, status=StructuredCallStatus.AWAITING_APPROVAL
+        ).aupdate(status=StructuredCallStatus.IN_PROGRESS, updated_at=claimed_at)
+    if not claimed:
+        msg = f"Call {call.pk} was already answered or superseded"
+        raise StructuredCallError(msg)
+    call.status = StructuredCallStatus.IN_PROGRESS
+    call.updated_at = claimed_at
+    batch = authenticated_approval_batch.get()
+    if batch is not None:
+        fresh = await StructuredCall.objects.aget(pk=call.pk)
+        fresh_metadata = fresh.metadata or {}
+        if (
+            not isinstance(batch, dict)
+            or approval_pending_digest(fresh_metadata.get("pending_approvals"))
+            != approval_pending_digest(pending)
+            or batch not in fresh_metadata.get("authenticated_approval_decisions", [])
+            or batch.get("call_id") != str(call.pk)
+            or batch.get("decisions") != decisions
+            or batch.get("pending_sha256") != approval_pending_digest(pending)
+            or not batch.get("id")
+            or not batch.get("actor_id")
+        ):
+            await StructuredCall.objects.filter(
+                pk=call.pk, status=StructuredCallStatus.IN_PROGRESS
+            ).aupdate(status=StructuredCallStatus.AWAITING_APPROVAL)
+            call.status = StructuredCallStatus.AWAITING_APPROVAL
+            msg = "Authenticated approval no longer matches the pending call"
+            raise StructuredCallError(msg)
+        call.metadata = fresh_metadata
+    await sync_to_async(_lifecycle_approvals, thread_sensitive=True)(
+        call, pending, "answer_received"
+    )
+    authenticated = (
+        not rereview_pending
+        and isinstance(batch, dict)
+        and batch.get("call_id") == str(call.pk)
+        and batch.get("decisions") == decisions
+        and batch.get("pending_sha256") == approval_pending_digest(pending)
+        and bool(batch.get("id"))
+        and bool(batch.get("actor_id"))
+    )
     results = []
     for item in pending:
-        if decisions.get(item["id"]) and not item.get("preview_error"):
+        if rereview_pending:
+
+            def fence(item=item):
+                return (callable(run.fence) and run.fence()) or not _current_reviewable(
+                    call.pk, pending, claimed=True, tool_id=item["id"]
+                )
+
             result, is_error = await run.run_tool(
-                item["name"], item["input"], item["id"]
+                item["name"],
+                item["input"],
+                item["id"],
+                fence=fence,
+                automatically_approved=True,
+                force_once=True,
             )
+            if result is _REVOKED:
+                result, is_error = _NOT_RUN, True
+        elif decisions.get(item["id"]) and not item.get("preview_error"):
+            token = approval_decision.set(
+                {
+                    "id": batch["id"],
+                    "actor_id": batch["actor_id"],
+                    "call_id": batch["call_id"],
+                    "tool_use_id": item["id"],
+                }
+                if authenticated and batch["decisions"].get(item["id"]) is True
+                else None
+            )
+            try:
+                result, is_error = await run.run_tool(
+                    item["name"], item["input"], item["id"]
+                )
+            finally:
+                approval_decision.reset(token)
         elif item.get("preview_error"):
             result, is_error = "The preview failed; the tool was not executed.", True
         else:
@@ -1560,7 +1750,11 @@ async def resume_structured_call(  # noqa: PLR0913
     if call.session_id is None:
         await transcript.finish()
         fields.append("transcript")
-    call.metadata = {k: v for k, v in call.metadata.items() if k != "pending_approvals"}
+    call.metadata = {
+        k: v
+        for k, v in call.metadata.items()
+        if k not in {"pending_approvals", "pending_review_binding"}
+    }
     await call.asave(update_fields=fields)
     await sync_to_async(_lifecycle_approvals, thread_sensitive=True)(
         call, pending, "resumed"

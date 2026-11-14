@@ -108,6 +108,19 @@ approved call; it is false for human approvals and ordinary calls. Review is
 not a durable grant: tools whose authority can change must revalidate it at
 execution under the appropriate locks.
 
+For authenticated web approvals, `ctx.approval_decision` contains the persisted
+decision ID, actor ID, structured-call ID and tool-use ID for that exact human
+decision. It is `None` for automatic approvals and approval paths without
+authenticated evidence; a session owner alone is not evidence of an approval.
+The stored decision also binds the complete pending batch by hash.
+
+After an authority change a trusted caller may explicitly request
+`bot.resume(session, {}, rereview_pending=True, control=control)`. This does not
+create a human approval: every pending call must pass its automatic review and
+execution-time checks. Only a current, hash-bound, unexecuted session batch is
+eligible; historical, ambiguous and pre-binding pending calls fail closed.
+Use the live turn control to fence queued messages and stops.
+
 Parameters come from type hints (`str`, `int`, `float`, `bool`, `list`,
 `dict`), or pass `parameters=` as JSON Schema properties. Non-string results
 are sent back as JSON. A tool can also return images, which the model sees

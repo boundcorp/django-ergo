@@ -18,6 +18,7 @@ from typing import Any, Literal
 
 from asgiref.sync import async_to_sync, sync_to_async
 from django.conf import settings
+from django.db import transaction
 from django.db.models import Case, CharField, Count, OuterRef, Q, Subquery, Value, When
 from django.db.models.fields.json import KeyTextTransform
 from django.db.models.functions import Coalesce, Greatest, Lower, NullIf, StrIndex, Substr
@@ -1543,6 +1544,49 @@ async def dismiss_call(request, call_id: str):
     return call_out(call)
 
 
+def record_authenticated_approval(call_id, user, approve, approval_ids, expected_pending):
+    """Persist the authenticated answer before handing it to a worker."""
+    from django_ergo.conversation.toolkit import approval_pending_digest
+
+    with transaction.atomic():
+        call = StructuredCall.objects.select_for_update().get(pk=call_id)
+        pending = (call.metadata or {}).get("pending_approvals", [])
+        waiting = sorted(item["id"] for item in pending)
+        latest = (
+            StructuredCall.objects.filter(session_id=call.session_id)
+            .filter(messaging.awaiting_approval())
+            .order_by("-created_at")
+            .values_list("pk", flat=True)
+            .first()
+        )
+        if (
+            latest != call.pk
+            or approval_pending_digest(pending) != expected_pending
+            or not waiting
+            or (approval_ids is not None and sorted(approval_ids) != waiting)
+        ):
+            raise HttpError(409, "That approval was already answered")
+        decisions = approve if isinstance(approve, dict) else dict.fromkeys(waiting, approve)
+        if sorted(decisions) != waiting:
+            raise HttpError(409, "That approval was already answered")
+        entry = {
+            "id": str(uuid.uuid4()),
+            "actor_id": str(user.pk),
+            "call_id": str(call.pk),
+            "decisions": decisions,
+            "pending_sha256": approval_pending_digest(pending),
+            "decided_at": timezone.now().isoformat(),
+        }
+        metadata = dict(call.metadata or {})
+        metadata["authenticated_approval_decisions"] = [
+            *metadata.get("authenticated_approval_decisions", []),
+            entry,
+        ]
+        call.metadata = metadata
+        call.save(update_fields=["metadata"])
+    return entry, waiting
+
+
 @router.post("/sessions/{session_id}/approvals", response=TurnOut)
 async def answer_approval(request, session_id: str, data: ApprovalIn):
     session = await get_session(request, session_id)
@@ -1558,7 +1602,18 @@ async def answer_approval(request, session_id: str, data: ApprovalIn):
     waiting = sorted(a["id"] for a in (pending.metadata or {}).get("pending_approvals", []))
     if approval_ids is not None and sorted(approval_ids) != waiting:
         raise HttpError(409, "That approval was already answered")
-    return await sync_to_async(queue_and_report)(session, approve=approve, approval_ids=approval_ids)
+    from django_ergo.conversation.toolkit import approval_pending_digest
+
+    entry, waiting = await sync_to_async(record_authenticated_approval, thread_sensitive=True)(
+        pending.pk,
+        request.auth,
+        approve,
+        approval_ids,
+        approval_pending_digest((pending.metadata or {}).get("pending_approvals", [])),
+    )
+    return await sync_to_async(queue_and_report)(
+        session, approve=approve, approval_ids=waiting, authenticated_approval_id=entry["id"]
+    )
 
 
 def models_out(bot: Bot) -> dict:

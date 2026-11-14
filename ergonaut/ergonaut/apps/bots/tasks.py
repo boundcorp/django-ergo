@@ -399,6 +399,7 @@ def run_turn(  # noqa: PLR0913
     attachment_ids: list[str] | None = None,
     approval_ids: list[str] | None = None,
     stop: bool = False,
+    authenticated_approval_id: str | None = None,
 ) -> None:
     """Answer the session's inbox, or answer the approval the user saw (then the inbox).
 
@@ -424,7 +425,9 @@ def run_turn(  # noqa: PLR0913
             if not locked:
                 # Another turn of this session is running; try again shortly.
                 raise self.retry(countdown=3)
-            answer_approval(session, approve, approval_ids, stop=stop)
+            answer_approval(
+                session, approve, approval_ids, stop=stop, authenticated_approval_id=authenticated_approval_id
+            )
             answer_inbox(session)
     queue_waiting(session_id)
 
@@ -460,7 +463,12 @@ def loaded_bot(session):
 
 
 def answer_approval(
-    session, approve: bool | dict[str, bool], approval_ids: list[str] | None, *, stop: bool = False
+    session,
+    approve: bool | dict[str, bool],
+    approval_ids: list[str] | None,
+    *,
+    stop: bool = False,
+    authenticated_approval_id: str | None = None,
 ) -> None:
     session_id = str(session.id)
     if stop:
@@ -472,8 +480,33 @@ def answer_approval(
         pending = async_to_sync(bot.pending_call)(session)
         waiting = sorted(a["id"] for a in (pending.metadata or {}).get("pending_approvals", [])) if pending else []
         if pending is not None and (approval_ids is None or sorted(approval_ids) == waiting):
+            from django_ergo.conversation.toolkit import approval_pending_digest, authenticated_approval_batch
+
+            batch = None
+            if authenticated_approval_id is not None:
+                batch = next(
+                    (
+                        item
+                        for item in (pending.metadata or {}).get("authenticated_approval_decisions", [])
+                        if item.get("id") == authenticated_approval_id
+                    ),
+                    None,
+                )
+                decisions = approve if isinstance(approve, dict) else dict.fromkeys(waiting, approve)
+                if (
+                    batch is None
+                    or batch.get("call_id") != str(pending.pk)
+                    or batch.get("decisions") != decisions
+                    or batch.get("pending_sha256")
+                    != approval_pending_digest((pending.metadata or {}).get("pending_approvals", []))
+                ):
+                    return
             control = InboxControl(session)
-            async_to_sync(bot.resume)(session, approve, control=control)
+            token = authenticated_approval_batch.set(batch)
+            try:
+                async_to_sync(bot.resume)(session, approve, control=control)
+            finally:
+                authenticated_approval_batch.reset(token)
             remove_uploads(control.uploads)
     except Exception as exc:
         logger.exception("Turn for session %s failed", session_id)
@@ -595,11 +628,12 @@ def queue_turn(
     *,
     approve: bool | dict[str, bool] | None = None,
     approval_ids: list[str] | None = None,
+    authenticated_approval_id: str | None = None,
 ) -> bool:
     """Queue a turn. Returns True when a worker will run it, False when it already ran."""
     from django.conf import settings
 
-    result = run_turn.delay(str(session_id), None, approve, [], approval_ids)
+    result = run_turn.delay(str(session_id), None, approve, [], approval_ids, False, authenticated_approval_id)
     notify(session_id)
     eager = getattr(settings, "CELERY_TASK_ALWAYS_EAGER", False)
     # Eager, a message for a turn running in another request waits for that turn.

@@ -65,6 +65,7 @@ from django_ergo.conversation.images import as_tool_result
 from django_ergo.conversation.inference_policy import PolicyError
 from django_ergo.conversation.toolkit import ApprovalPreview
 from django_ergo.conversation.toolkit import Toolkit
+from django_ergo.conversation.toolkit import approval_decision
 from django_ergo.conversation.toolkit import auto_approved
 from django_ergo.protected_env import is_protected_env
 
@@ -102,6 +103,15 @@ class ToolContext:
     def auto_approved(self) -> bool:
         """Whether this execution was automatically, rather than human, approved."""
         return auto_approved.get()
+
+    @property
+    def approval_decision(self) -> dict | None:
+        """Authenticated human decision for this exact tool call, if available.
+
+        Session ownership and automatic approval do not constitute evidence of
+        a human decision. Other approval channels may not provide provenance.
+        """
+        return approval_decision.get()
 
     @property
     def tasks(self):

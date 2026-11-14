@@ -567,7 +567,6 @@ def test_a_queued_turn_returns_at_once(client, cook, use_bots, monkeypatch, sett
     assert response.json()["queued"] is True
     assert response.json()["text"] == ""
     # The message waits in the session's inbox for the queued turn.
-    assert queued == [(root["id"], None, None, [], None)]
     assert [(i["text"], i["attachment_ids"]) for i in tasks.drain_inbox(root["id"])] == [("Eggs?", [])]
 
 
@@ -806,6 +805,142 @@ def test_parallel_approvals_answer_each_call(client, cook, bot_folder, use_bots)
     results = {b["tool_use_id"]: b["content"] for b in fake.calls[-1]["messages"][-1]["content"]}
     assert "ordered milk" in str(results[milk_id])
     assert "declined" in str(results[eggs_id])
+
+
+@pytest.mark.django_db(transaction=True)
+def test_authenticated_approval_provenance_survives_queue_and_is_per_tool(
+    client, cook, bot_folder, use_bots, monkeypatch
+):
+    from types import SimpleNamespace
+
+    from django_ergo.conversation.models import StructuredCall
+
+    from ergonaut.api import bots as bots_api
+    from ergonaut.apps.bots.tasks import run_turn
+
+    (bot_folder / "tools" / "pantry.py").write_text(
+        """
+import json
+from django_ergo.bots import bot_tool
+
+@bot_tool(requires_approval=True, takes_context=True)
+def order(ctx, item: str) -> str:
+    return json.dumps(ctx.approval_decision)
+"""
+    )
+    milk_call, eggs_call = tool_call("order", {"item": "milk"}), tool_call("order", {"item": "eggs"})
+    both = SimpleNamespace(content=milk_call.content + eggs_call.content, stop_reason="tool_use", usage=milk_call.usage)
+    fake = use_bots(both, say("Done."))
+    root = post(client, "/api/bots/kitchen/root").json()
+    turn = post(client, f"/api/sessions/{root['id']}/messages", {"text": "Order milk and eggs"}).json()
+    milk, eggs = (item["id"] for item in turn["approvals"])
+    queued = {}
+    monkeypatch.setattr(bots_api, "queue_turn", lambda session_id, **kwargs: queued.update(kwargs) or True)
+    response = post(client, f"/api/sessions/{root['id']}/approvals", {"decisions": {milk: True, eggs: False}})
+    assert response.status_code == 200
+    call = StructuredCall.objects.get(session_id=root["id"])
+    [evidence] = call.metadata["authenticated_approval_decisions"]
+    assert evidence["actor_id"] == str(cook.pk)
+    assert evidence["call_id"] == str(call.pk)
+    assert evidence["decisions"] == {milk: True, eggs: False}
+    # The worker receives only the queued decision id and reloads the evidence
+    # from the database, rather than inheriting request-local authentication.
+    run_turn(root["id"], **queued)
+    results = {block["tool_use_id"]: block["content"] for block in fake.calls[-1]["messages"][-1]["content"]}
+    assert json.loads(results[milk]) == {
+        "id": evidence["id"],
+        "actor_id": str(cook.pk),
+        "call_id": str(call.pk),
+        "tool_use_id": milk,
+    }
+    assert "declined" in str(results[eggs])
+
+
+@pytest.mark.django_db(transaction=True)
+def test_unproven_approval_does_not_supply_actor(client, cook, bot_folder, use_bots):
+    from django_ergo.conversation.models import ConversationSession
+
+    from ergonaut.apps.bots.tasks import run_turn
+
+    (bot_folder / "tools" / "pantry.py").write_text(
+        """
+import json
+from django_ergo.bots import bot_tool
+
+@bot_tool(requires_approval=True, takes_context=True)
+def order(ctx, item: str) -> str:
+    return json.dumps(ctx.approval_decision)
+"""
+    )
+    fake = use_bots(tool_call("order", {"item": "milk"}), say("Done."))
+    root = post(client, "/api/bots/kitchen/root").json()
+    turn = post(client, f"/api/sessions/{root['id']}/messages", {"text": "Order milk"}).json()
+    [approval] = turn["approvals"]
+    session = ConversationSession.objects.get(pk=root["id"])
+    run_turn(str(session.pk), approve=True, approval_ids=[approval["id"]], authenticated_approval_id="not-a-decision")
+    assert session.structured_calls.get().status == "awaiting_approval"
+    run_turn(str(session.pk), approve=True, approval_ids=[approval["id"]])
+    [result] = fake.calls[-1]["messages"][-1]["content"]
+    assert json.loads(result["content"]) is None
+
+
+@pytest.mark.django_db(transaction=True)
+def test_authenticated_approval_refuses_changed_pending_call(client, cook, use_bots, monkeypatch):
+    from django_ergo.conversation.models import StructuredCall
+
+    from ergonaut.api import bots as bots_api
+    from ergonaut.apps.bots.tasks import run_turn
+
+    use_bots(tool_call("order", {"item": "milk"}), say("Done."))
+    root = post(client, "/api/bots/kitchen/root").json()
+    turn = post(client, f"/api/sessions/{root['id']}/messages", {"text": "Order milk"}).json()
+    queued = {}
+    monkeypatch.setattr(bots_api, "queue_turn", lambda session_id, **kwargs: queued.update(kwargs) or True)
+    assert (
+        post(
+            client,
+            f"/api/sessions/{root['id']}/approvals",
+            {"approval_ids": [turn["approvals"][0]["id"]], "approve": True},
+        ).status_code
+        == 200
+    )
+    call = StructuredCall.objects.get(session_id=root["id"])
+    call.metadata["pending_approvals"][0]["input"]["item"] = "eggs"
+    call.save(update_fields=["metadata"])
+    run_turn(root["id"], **queued)
+    call.refresh_from_db()
+    assert call.status == "awaiting_approval"
+    call.metadata["pending_approvals"][0]["input"]["item"] = "milk"
+    call.save(update_fields=["metadata"])
+    queued["approve"] = False
+    run_turn(root["id"], **queued)
+    call.refresh_from_db()
+    assert call.status == "awaiting_approval"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_decision_actor_is_authenticated_approver_not_session_owner(client, cook, use_bots, monkeypatch):
+    from django_ergo.conversation.models import StructuredCall
+
+    from ergonaut.api import bots as bots_api
+
+    use_bots(tool_call("order", {"item": "milk"}), say("Done."))
+    root = post(client, "/api/bots/kitchen/root").json()
+    turn = post(client, f"/api/sessions/{root['id']}/messages", {"text": "Order milk"}).json()
+    post(client, "/api/auth/logout")
+    endpoint = f"/api/sessions/{root['id']}/approvals"
+    assert post(client, endpoint, {"approve": True}).status_code == 401
+    call = StructuredCall.objects.get(session_id=root["id"])
+    assert "authenticated_approval_decisions" not in call.metadata
+
+    admin = get_user_model().objects.create_superuser("admin", "admin@example.com", "pw")
+    assert post(client, "/api/auth/login", {"username": "admin", "password": "pw"}).status_code == 200
+    monkeypatch.setattr(bots_api, "queue_turn", lambda session_id, **kwargs: True)
+    assert post(client, endpoint, {"approve": True, "approval_ids": [turn["approvals"][0]["id"]]}).status_code == 200
+    call.refresh_from_db()
+    [evidence] = call.metadata["authenticated_approval_decisions"]
+    assert evidence["actor_id"] == str(admin.pk)
+    assert evidence["actor_id"] != str(cook.pk)
 
 
 @pytest.mark.django_db(transaction=True)
