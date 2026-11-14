@@ -90,8 +90,9 @@ jobs:
       - name: Exercise native parser and durable normal-thread admission offline
         run: >-
           env -u DATABASE_URL -u OPENAI_API_KEY -u ANTHROPIC_API_KEY -u TEST_OPENAI
-          .voice-venv/bin/python -m pytest -q
+          .voice-venv/bin/python -m pytest -c pyproject.toml -q
           ergonaut/api/tests/test_realtime_voice_interpreter.py
+          ergonaut/api/tests/test_realtime_voice_native_lifecycle.py
           ergonaut/api/tests/test_realtime_voice_execution.py
           ergonaut/api/tests/test_realtime_voice_outbox.py
           ergonaut/api/tests/test_realtime_voice_broker.py

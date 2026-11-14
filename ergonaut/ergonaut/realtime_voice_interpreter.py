@@ -88,7 +88,21 @@ def context_for_session(session):
         capacity = native_request_capacity(session)
     except ValueError:
         capacity = {"authorized": False, "max_inflight": 4, "remaining": 0}
-    return {"intents": projected, "capacity": capacity, "blocked": ledger.get("blocked", "")}
+    responses = ledger.get("responses", {})
+    interpretation_pending = any(
+        not record.get("conflict") and not record.get("initial_response_id")
+        for record in ledger.get("delegations", {}).values()
+    ) or any(
+        (response := responses.get(key, {})).get("state") == "open"
+        or (response.get("state") == "completed" and bool(response.get("calls")))
+        for key in ledger.get("active", {}).values()
+    )
+    return {
+        "intents": projected,
+        "capacity": capacity,
+        "blocked": ledger.get("blocked", ""),
+        "interpretation_pending": interpretation_pending,
+    }
 
 
 def native_context(voice_id):
@@ -408,6 +422,9 @@ def _arguments(item):
 
 def _admit(session, ledger, item, identity, error):
     receipt = {**identity, "status": "rejected", "intent_id": None, "target_intent_id": None, "clarification": error}
+    receipt["arguments_sha256"] = (
+        hashlib.sha256(item["arguments"].encode()).hexdigest() if isinstance(item.get("arguments"), str) else None
+    )
     try:
         args = _arguments(item)
     except ValueError as exc:

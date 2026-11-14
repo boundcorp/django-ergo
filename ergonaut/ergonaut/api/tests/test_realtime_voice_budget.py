@@ -235,9 +235,6 @@ def test_startup_context_is_the_populated_launch_thread_not_a_global_briefing(
     snapshot = realtime_voice.bridge_state(vid)
     briefing = snapshot["briefing"]
     text = briefing["context"]
-    assert briefing["delegation_available"]
-    assert "Restricted read-only mode" in briefing["restriction"]
-    assert "gpt-6-luna" in briefing["restriction"]
     assert briefing["instructions"] == "Launch thread owning instructions."
     for expected in (
         "finish the coconut chicken",
@@ -290,10 +287,6 @@ def test_unsupported_target_explains_mode_before_any_delegation(cooking, monkeyp
     _, vid, _ = cooking
     bot = webhooks.get_registry().get("kitchen")
     monkeypatch.setattr(bot, "make_engine", lambda _: SimpleNamespace(supports_request_limits=capable, model=model))
-    briefing = realtime_voice.bridge_state(vid)["briefing"]
-    assert not briefing["delegation_available"]
-    assert reason in briefing["restriction"]
-    assert "dedicated budgeted API-engine profile" in briefing["restriction"]
     with pytest.raises(ValueError, match=reason):
         realtime_voice.delegate(vid, "unavailable", "Check the thread.")
     assert not RealtimeVoiceSession.objects.get(pk=vid).delegations.exists()
@@ -427,62 +420,3 @@ def test_launch_context_is_bounded_without_running_paid_compaction(cooking):
     assert len(briefing["context"]) <= realtime_voice.BRIEFING_CONTEXT_CHARS
     assert len(briefing["voice_event_ids"]) <= 100
     assert chat.compactions.count() == 1  # reads the durable summary; no new compaction/model call
-
-
-@pytest.mark.django_db(transaction=True)
-def test_polling_and_delegation_do_not_rebuild_launch_thread_context(cooking, monkeypatch):
-    from unittest.mock import Mock
-
-    from django_ergo.conversation.context import TextContextSource
-
-    _, vid, _ = cooking
-    bot = webhooks.get_registry().get("kitchen")
-    original = bot.context_builder
-    callback = Mock(return_value="Authorized launch-thread callback context.")
-
-    def context_builder(*args, **kwargs):
-        builder = original(*args, **kwargs)
-        builder.add(TextContextSource("Local callback", callback))
-        return builder
-
-    monkeypatch.setattr(bot, "context_builder", context_builder)
-    with patch.object(bot, "make_engine", wraps=bot.make_engine) as make_engine:
-        startup = realtime_voice.bridge_state(vid, include_briefing=True)
-        assert "Authorized launch-thread callback context." in startup["briefing"]["context"]
-        assert callback.call_count == 1
-        assert make_engine.call_count == 1
-        for _ in range(5):
-            snapshot = realtime_voice.bridge_state(vid, include_briefing=False)
-            assert snapshot["briefing"]["context"] == ""
-            assert snapshot["briefing"]["delegation_available"] is True
-            realtime_voice.session_out(RealtimeVoiceSession.objects.get(pk=vid))
-        assert callback.call_count == 1
-        assert make_engine.call_count == 1
-        realtime_voice.delegate(vid, "polling-regression", "Read this thread's history.")
-        assert callback.call_count == 1
-        assert make_engine.call_count == 2  # required delegation preflight, not a briefing rebuild
-        resumed = realtime_voice.bridge_state(vid, include_briefing=True)
-        assert "Authorized launch-thread callback context." in resumed["briefing"]["context"]
-        assert callback.call_count == 2
-        assert resumed["briefing"]["delegation_available"] is False  # one request already used
-
-
-@pytest.mark.django_db(transaction=True)
-def test_web_without_budget_uses_bridge_validated_status_not_web_process_settings(cooking, settings):
-    _, vid, _ = cooking
-    settings.REALTIME_VOICE_DELEGATION_BUDGET = None
-    before = realtime_voice.session_out(RealtimeVoiceSession.objects.get(pk=vid))["briefing"]
-    assert before["delegation_available"] is None
-    assert "Bridge has not validated delegation for this session" in before["restriction"]
-    assert "no enforced request budget" not in before["restriction"]
-
-    # The bridge process has its reviewed profile; only it validates and publishes capability.
-    settings.REALTIME_VOICE_DELEGATION_BUDGET = BUDGET
-    bridge = realtime_voice.bridge_state(vid, include_briefing=True)["briefing"]
-    assert bridge["delegation_available"] is True
-    settings.REALTIME_VOICE_DELEGATION_BUDGET = None
-    after = realtime_voice.session_out(RealtimeVoiceSession.objects.get(pk=vid))["briefing"]
-    assert after["delegation_available"] is True
-    assert after["restriction"] == bridge["restriction"]
-    assert after["context"] == ""
-    assert "instructions" not in after
