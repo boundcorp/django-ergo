@@ -387,7 +387,17 @@ class TelegramPlugin(BotPlugin):
         found, user = await sync_to_async(lookup)()
         is_reply = found.get("in_reply_to_id") is not None
         scheduled = bool((found.get("metadata") or {}).get("schedule"))
-        if not (is_reply or scheduled or result.approvals):
+        recurring = bool((found.get("metadata") or {}).get("recurring_wake"))
+        if (
+            recurring
+            and getattr(result.reply, "unchanged", False)
+            and not result.text
+            and not result.approvals
+            and not result.error
+            and not result.reply.attachments
+        ):
+            return  # An explicit quiet result must not become "(no reply)".
+        if not (is_reply or scheduled or recurring or result.approvals):
             return  # a request answered back to its sender: nothing for the user here
         chat_id = self.chat_for(user)
         if chat_id is None:

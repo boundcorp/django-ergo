@@ -201,6 +201,7 @@ Still to do:
 - [x] Reviewed bash approval: `approve: review` lets a reviewer model (routed, tool-less) pass plain read-only commands the chat owner asked for in the current turn (signed-in browser messages or verified forwards only), fails closed on any doubt, checks for a message or stop right before the command starts, and records every decision in `bash_reviews`. Accepted residual risks (Lee, 2026-11-13): best-effort secret redaction of the messages sent to the reviewer, and path-based approval with no symlink binding.
 
 - [x] Self-wakes in every chat and thread: the built-in `wake` skill (`ergo_wake_later`, `ergo_wake_cancel`) schedules one later turn with a note, fired once from beat as an automated event (never retried), capped at one pending per chat, 1 minute to 24 hours ahead and 3 in a row without a human message; shown above the composer and in the admin.
+- [x] Finite recurring thread wakes: durable schedule/occurrence identity, configurable interval and quotas, coalesced idempotent delivery, owner-scoped pause/resume/cancel, visible timing/limits, quiet unchanged checks and explicit final-failure blocking. [Acceptance and rollout](docs/recurring-thread-wakes.md); epic #334.
 
 - [x] Todo lists in every chat and thread: the built-in `todos` skill (`ergo_todo_write`, `ergo_todo_update`, like Claude Code's TodoWrite) keeps a checklist in the session's metadata, in context every turn, shown in Ergonaut's thread view; `todos: false` in bot.yaml turns it off.
 

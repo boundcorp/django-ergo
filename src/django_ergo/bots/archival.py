@@ -17,6 +17,7 @@ from __future__ import annotations
 from datetime import timedelta
 from typing import TYPE_CHECKING
 
+from django.db import transaction
 from django.db.models import Max
 from django.db.models.functions import Greatest
 from django.utils import timezone
@@ -42,14 +43,22 @@ OPEN_MESSAGES = [
 
 
 def archive(session: ConversationSession, reason: str = "") -> None:
-    session.status = "completed"
-    session.metadata = {
-        **(session.metadata or {}),
-        "archived_at": timezone.now().isoformat(),
-        **({"archived_reason": reason} if reason else {}),
-    }
-    session.save(update_fields=["status", "metadata", "updated_at"])
-    stop_workers(session)
+    from django_ergo.bots.recurring_wakes import cancel_session
+
+    with transaction.atomic():
+        locked = ConversationSession.objects.select_for_update().get(pk=session.pk)
+        locked.status = "completed"
+        locked.metadata = {
+            **(locked.metadata or {}),
+            "archived_at": timezone.now().isoformat(),
+            **({"archived_reason": reason} if reason else {}),
+        }
+        locked.save(update_fields=["status", "metadata", "updated_at"])
+        cancel_session(locked)
+        session.status = locked.status
+        session.metadata = locked.metadata
+        session.updated_at = locked.updated_at
+        transaction.on_commit(lambda: stop_workers(session))
 
 
 def stop_workers(session: ConversationSession) -> list[str]:

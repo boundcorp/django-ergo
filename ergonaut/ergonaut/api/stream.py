@@ -26,6 +26,7 @@ from asgiref.sync import sync_to_async
 from django.core.serializers.json import DjangoJSONEncoder
 from django.db.models import Q
 from django.http import HttpResponse, StreamingHttpResponse
+from django_ergo.bots.recurring_wakes import list_schedules
 from django_ergo.bots.todos import get_todos
 from django_ergo.bots.wakes import pending_wakes
 from django_ergo.conversation import roles
@@ -103,6 +104,7 @@ def _snapshot(session_id, after: int, seen: dict):
         ("prs", session_prs(session)),
         ("todos", get_todos(session)),
         ("wakes", pending_wakes(session)),
+        ("recurring_wakes", list_schedules(session)),
     ):
         key = json.dumps(value, cls=DjangoJSONEncoder)
         if seen.get(name) != key:

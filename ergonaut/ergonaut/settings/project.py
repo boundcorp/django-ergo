@@ -447,7 +447,7 @@ CELERY_BEAT_SCHEDULE = {
     "resume-workers": {"task": "ergonaut.resume_workers", "schedule": 60},
     # Resource maintenance is independent of bot loading and worker cancellation.
     "reconcile-runpod": {"task": "ergonaut.reconcile_runpod", "schedule": 60},
-    # Self-wakes bots scheduled (django_ergo.bots.wakes); each fires once, never retried.
+    # Due one-shot and recurring thread wakes; occurrence failures are never retried automatically.
     "fire-wakes": {"task": "ergonaut.fire_wakes", "schedule": 30},
     # Each bot's schedules (bot.yaml); the task checks which are due this minute.
     "run-bot-schedules": {"task": "ergonaut.run_schedules", "schedule": crontab()},

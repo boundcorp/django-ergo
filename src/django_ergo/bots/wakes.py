@@ -234,6 +234,15 @@ def schedule(  # noqa: PLR0913
     # The wake continues whatever chain of delegation this turn is part of, so
     # waking can't reset messaging.MAX_DEPTH across threads.
     handling = current_thread_message(session)
+    if handling and (
+        (handling.metadata or {}).get("recurring_wake")
+        or (handling.metadata or {}).get("recurring_origin")
+    ):
+        msg = (
+            "A recurring check cannot schedule one-shot wakes to extend its "
+            "finite lifetime. Ask the user for a new schedule instead."
+        )
+        raise ValueError(msg)
     try:
         with transaction.atomic():
             wake = Wake.objects.create(
@@ -401,7 +410,7 @@ def _notify(session: ConversationSession) -> None:
 # -- the skill ---------------------------------------------------------------
 
 
-def wake_toolkit(ctx: ToolContext) -> FunctionToolkit:
+def wake_toolkit(ctx: ToolContext) -> FunctionToolkit:  # noqa: C901 - tool registration
     """The ``wake`` skill's tools for one chat."""
     from django_ergo.bots.tools import FunctionToolkit
     from django_ergo.bots.tools import bot_tool
@@ -452,7 +461,115 @@ def wake_toolkit(ctx: ToolContext) -> FunctionToolkit:
             "note": "Cancelled." if count else "This chat had no pending wake.",
         }
 
-    return FunctionToolkit([later.__bot_tool__, cancel_wake.__bot_tool__], ctx)
+    from django_ergo.bots import recurring_wakes
+
+    @bot_tool(
+        name="ergo_wake_recurring",
+        description=(
+            "Check this chat repeatedly only when the user asks for recurring "
+            "checks, e.g. every 5 minutes for 10 hours. Give a finite duration, "
+            "explicit-offset expiry, or max_occurrences; never renew it yourself. "
+            "Unchanged checks are quiet unless periodic_checkins is true. "
+            "Worker/task results already arrive naturally: don't poll for them. "
+            "This grants no new tool permissions, approvals, or spend authority."
+        ),
+        parameters={
+            "note": {
+                "type": "string",
+                "description": "What to check and what changes matter",
+            },
+            "interval_minutes": {"type": "number"},
+            "duration_minutes": {
+                "type": "number",
+                "description": "Finite elapsed duration from now",
+            },
+            "expires_at": {
+                "type": "string",
+                "description": "ISO 8601 expiry with UTC offset",
+            },
+            "max_occurrences": {
+                "type": "integer",
+                "description": "Maximum dispatched checks",
+            },
+            "periodic_checkins": {
+                "type": "boolean",
+                "description": "Only true if user asks for unchanged updates",
+            },
+        },
+        required=["note", "interval_minutes"],
+    )
+    def recurring(  # noqa: PLR0913 - tool schema
+        note: str,
+        interval_minutes: float,
+        duration_minutes: float | None = None,
+        expires_at: str = "",
+        max_occurrences: int | None = None,
+        periodic_checkins: bool = False,
+    ) -> dict:
+        now = datetime.now(UTC)
+        if duration_minutes is not None and expires_at:
+            msg = "Give duration_minutes or expires_at, not both"
+            raise ValueError(msg)
+        expiry = None
+        if duration_minutes is not None:
+            try:
+                expiry = now + timedelta(minutes=float(duration_minutes))
+            except (TypeError, ValueError, OverflowError):
+                msg = "duration_minutes must be a finite positive number"
+                raise ValueError(msg) from None
+        elif expires_at:
+            try:
+                expiry = datetime.fromisoformat(expires_at)
+            except ValueError:
+                msg = "expires_at must be an ISO 8601 time with UTC offset"
+                raise ValueError(msg) from None
+            if timezone.is_naive(expiry):
+                msg = "expires_at requires an explicit UTC offset"
+                raise ValueError(msg)
+        return recurring_wakes.create(
+            ctx.session,
+            note,
+            interval_minutes=interval_minutes,
+            expires_at=expiry,
+            max_occurrences=max_occurrences,
+            periodic_checkins=periodic_checkins,
+            now=now,
+        )
+
+    @bot_tool(
+        name="ergo_wake_recurring_list",
+        description="List this chat's recurring checks, finite limits, next run and blocking reason.",
+        parameters={},
+    )
+    def recurring_list() -> dict:
+        return {"schedules": recurring_wakes.list_schedules(ctx.session)}
+
+    @bot_tool(
+        name="ergo_wake_recurring_control",
+        description=(
+            "Pause, resume, or cancel a recurring check in this chat by schedule_id. "
+            "Resume never extends expiry or count or approves blocked tools. "
+            "Cancellation prevents queued checks; a running turn must be stopped separately."
+        ),
+        parameters={
+            "schedule_id": {"type": "string"},
+            "action": {"type": "string", "enum": ["pause", "resume", "cancel"]},
+        },
+        required=["schedule_id", "action"],
+    )
+    def recurring_control(schedule_id: str, action: str) -> dict:
+        return recurring_wakes.control(ctx.session, schedule_id, action)
+
+    return FunctionToolkit(
+        [
+            later.__bot_tool__,
+            cancel_wake.__bot_tool__,
+            recurring.__bot_tool__,
+            recurring_list.__bot_tool__,
+            recurring_control.__bot_tool__,
+        ],
+        ctx,
+    )
 
 
 def wake_context(ctx: ToolContext, message: str) -> list:
@@ -470,7 +587,17 @@ def wake_context(ctx: ToolContext, message: str) -> list:
             "if it is no longer needed."
         )
 
-    return [TextContextSource("Pending self-wake", text, weight=2)]
+    def recurring_text() -> str:
+        import json
+
+        from django_ergo.bots.recurring_wakes import list_schedules
+
+        return json.dumps(list_schedules(ctx.session), default=str)
+
+    return [
+        TextContextSource("Pending self-wake", text, weight=2),
+        TextContextSource("Recurring checks", recurring_text, weight=2),
+    ]
 
 
 def wake_skills() -> list[SkillDef]:

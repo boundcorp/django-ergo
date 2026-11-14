@@ -686,6 +686,21 @@ export type Wake = {
   status: string
 }
 
+export type RecurringWakeAction = 'pause' | 'resume' | 'cancel'
+
+export type RecurringWake = {
+  id: string
+  note: string
+  status: 'active' | 'paused' | 'blocked' | 'cancelled' | 'completed'
+  interval_seconds: number
+  next_run_at: string | null
+  expires_at: string | null
+  max_occurrences: number | null
+  occurrences: number
+  periodic_checkins: boolean
+  blocked_reason: string
+}
+
 export type SessionDetail = {
   debug_shortcut: boolean
   compactions?: Compaction[]
@@ -696,6 +711,7 @@ export type SessionDetail = {
   workers?: Worker[]
   todos?: Todo[] // the chat's todo list, kept by the model
   wakes?: Wake[] // the bot's pending self-wake, if it scheduled one
+  recurring_wakes?: RecurringWake[]
   inbox?: { id: string; text: string; files: number }[] // sent mid-turn, not yet given to the model
   first_line?: number | null // the oldest line returned
   has_more?: boolean // older messages exist: ask with before=first_line
@@ -980,6 +996,9 @@ export const api = {
     const qs = query.toString()
     return request<SessionDetail>('GET', `/sessions/${id}${qs ? `?${qs}` : ''}`)
   },
+  recurringWakes: (id: string) => request<RecurringWake[]>('GET', `/sessions/${id}/recurring-wakes`),
+  controlRecurringWake: (id: string, scheduleId: string, action: RecurringWakeAction) =>
+    request<RecurringWake>('POST', `/sessions/${id}/recurring-wakes/${scheduleId}`, { action }),
   voiceConfig: (id: string) =>
     request<{ enabled: boolean; max_duration: number }>('GET', `/sessions/${encodeURIComponent(id)}/voice`),
   transcribeVoice,
