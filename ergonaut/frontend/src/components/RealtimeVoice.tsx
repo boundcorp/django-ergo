@@ -13,6 +13,7 @@ import { RemoteAudioTrack, Room, RoomEvent, Track, TrackEvent, type RemoteTrack 
 import {
   api,
   type ClientAudioStatus,
+  type ClientLifecycleReport,
   type RealtimeVoiceSession,
   type SessionDetail,
   type VoiceTaskUpdate,
@@ -45,6 +46,8 @@ type CallAudio = {
   room: Room
   sessionId: string
   live: boolean
+  lifecycleCount: number
+  disconnectedReported: boolean
   elements: Map<RemoteTrack, HTMLMediaElement>
   playing: Set<HTMLMediaElement>
   problem: 'blocked' | 'failed' | null
@@ -130,6 +133,8 @@ function useVoiceOwner(): VoiceCallOwner {
   // Final assistant turns already known when this connection went live; later ones were spoken to it.
   const [knownTurns, setKnownTurns] = useState<ReadonlySet<string> | null>(null)
   const call = useRef<CallAudio | null>(null)
+  // Retain the connection identity through End's asynchronous SDK disconnect callback.
+  const lifecycleCall = useRef<CallAudio | null>(null)
   const [error, setError] = useState('')
   const [errorChatId, setErrorChatId] = useState<string | null>(null)
   const [action, setAction] = useState<'start' | 'standby' | 'resume' | 'end' | null>(null)
@@ -191,6 +196,38 @@ function useVoiceOwner(): VoiceCallOwner {
         /* Evidence is best effort; playback never depends on it. */
       })
   }
+
+  function reportLifecycle(target: CallAudio, boundary: ClientLifecycleReport['boundary'], reason?: number) {
+    const limit = boundary === 'browser_disconnected' ? 40 : 39
+    if (lifecycleCall.current !== target || target.lifecycleCount >= limit) return
+    target.lifecycleCount++
+    const visibility = document.visibilityState
+    void api
+      .reportRealtimeVoiceLifecycle(target.sessionId, {
+        event_id: audioEventId(),
+        boundary,
+        visibility: visibility === 'visible' || visibility === 'hidden' ? visibility : 'unknown',
+        ...(typeof reason === 'number' && Number.isInteger(reason) ? { reason } : {}),
+      })
+      .catch(() => {
+        /* Receipt is best effort; transport and teardown never depend on it. */
+      })
+  }
+
+  useEffect(() => {
+    const observe = (boundary: 'browser_visibility' | 'browser_pagehide') => {
+      const target = call.current
+      if (target?.live && room.current === target.room) reportLifecycle(target, boundary)
+    }
+    const visibility = () => observe('browser_visibility')
+    const pagehide = () => observe('browser_pagehide')
+    document.addEventListener('visibilitychange', visibility)
+    window.addEventListener('pagehide', pagehide)
+    return () => {
+      document.removeEventListener('visibilitychange', visibility)
+      window.removeEventListener('pagehide', pagehide)
+    }
+  }, [])
 
   function refreshPlayback(target: CallAudio) {
     if (call.current !== target || !target.live) return
@@ -254,6 +291,7 @@ function useVoiceOwner(): VoiceCallOwner {
   useEffect(
     () => () => {
       generation.current++
+      lifecycleCall.current = null
       const current = room.current
       room.current = null
       muteRoom.current = null
@@ -370,6 +408,8 @@ function useVoiceOwner(): VoiceCallOwner {
         room: current,
         sessionId: session.id,
         live: false,
+        lifecycleCount: 0,
+        disconnectedReported: false,
         elements: new Map(),
         playing: new Set(),
         problem: null,
@@ -380,6 +420,7 @@ function useVoiceOwner(): VoiceCallOwner {
         poll: undefined,
       }
       call.current = target
+      lifecycleCall.current = target
       // The argument is the room's new canPlaybackAudio.
       current.on(RoomEvent.AudioPlaybackStatusChanged, (playing: boolean) => {
         if (room.current !== current) return
@@ -458,7 +499,11 @@ function useVoiceOwner(): VoiceCallOwner {
           void outputRouting.current?.refresh()
         }
       })
-      current.on(RoomEvent.Disconnected, () => {
+      current.on(RoomEvent.Disconnected, reason => {
+        if (lifecycleCall.current === target && !target.disconnectedReported) {
+          target.disconnectedReported = true
+          reportLifecycle(target, 'browser_disconnected', reason)
+        }
         if (room.current === current) {
           inputObserver.current?.dispose()
           inputObserver.current = null

@@ -1,0 +1,436 @@
+{
+  "runtime": "Actual pinned SDK and bridge; in-memory fake WebSocket, omitted RoomIO/VAD, disposable PostgreSQL and Kombu memory broker; no provider/device/Redis/Celery-worker proof",
+  "result": "8 passed in217.11s",
+  "cases": [
+    {
+      "accepted_work_survived_end": true,
+      "case": "explicit_end",
+      "healthy_real_seconds": 180.02,
+      "native_tool_outputs": 1,
+      "provider_reconnects": 0,
+      "provider_sockets": 1,
+      "result_announcements": 1,
+      "stalled_writer_did_not_block_end": false,
+      "usage_seconds": 0.0,
+      "virtual_bridge_seconds": 601,
+      "observations": [
+        {
+          "boundary": "provider_started",
+          "source": "provider",
+          "teardown": false
+        },
+        {
+          "boundary": "session_ended",
+          "source": "application",
+          "reason": "explicit_end",
+          "teardown": false
+        },
+        {
+          "boundary": "bridge_exit",
+          "source": "application",
+          "reason": "session_ended",
+          "teardown": false
+        },
+        {
+          "boundary": "provider_close_sent",
+          "source": "application",
+          "teardown": true
+        },
+        {
+          "boundary": "provider_closed",
+          "source": "provider",
+          "reason": "close_requested",
+          "teardown": true
+        },
+        {
+          "boundary": "provider_wire_closed",
+          "source": "transport",
+          "teardown": true,
+          "wire_close_code": 1000
+        },
+        {
+          "boundary": "agent_session_closed",
+          "source": "sdk",
+          "reason": "user_initiated",
+          "teardown": true
+        },
+        {
+          "boundary": "room_disconnected",
+          "source": "room",
+          "reason": "CLIENT_INITIATED",
+          "teardown": true
+        }
+      ]
+    },
+    {
+      "accepted_work_survived_end": false,
+      "case": "room",
+      "healthy_real_seconds": null,
+      "native_tool_outputs": 0,
+      "provider_reconnects": 0,
+      "provider_sockets": 1,
+      "result_announcements": 0,
+      "stalled_writer_did_not_block_end": false,
+      "usage_seconds": 0.0,
+      "virtual_bridge_seconds": 0,
+      "observations": [
+        {
+          "boundary": "provider_started",
+          "source": "provider",
+          "teardown": false
+        },
+        {
+          "boundary": "room_disconnected",
+          "source": "room",
+          "reason": "SERVER_SHUTDOWN",
+          "teardown": false
+        },
+        {
+          "boundary": "bridge_exit",
+          "source": "application",
+          "reason": "room_disconnected",
+          "teardown": false
+        },
+        {
+          "boundary": "provider_close_sent",
+          "source": "application",
+          "teardown": true
+        },
+        {
+          "boundary": "provider_closed",
+          "source": "provider",
+          "reason": "close_requested",
+          "teardown": true
+        },
+        {
+          "boundary": "provider_wire_closed",
+          "source": "transport",
+          "teardown": true,
+          "wire_close_code": 1000
+        },
+        {
+          "boundary": "agent_session_closed",
+          "source": "sdk",
+          "reason": "user_initiated",
+          "teardown": true
+        },
+        {
+          "boundary": "session_ended",
+          "source": "application",
+          "reason": "bridge_closed",
+          "teardown": true
+        }
+      ]
+    },
+    {
+      "accepted_work_survived_end": false,
+      "case": "owner",
+      "healthy_real_seconds": null,
+      "native_tool_outputs": 0,
+      "provider_reconnects": 0,
+      "provider_sockets": 1,
+      "result_announcements": 0,
+      "stalled_writer_did_not_block_end": false,
+      "usage_seconds": 0.0,
+      "virtual_bridge_seconds": 0,
+      "observations": [
+        {
+          "boundary": "provider_started",
+          "source": "provider",
+          "teardown": false
+        },
+        {
+          "boundary": "owner_disconnected",
+          "source": "room",
+          "reason": "CLIENT_INITIATED",
+          "teardown": false
+        },
+        {
+          "boundary": "bridge_exit",
+          "source": "application",
+          "reason": "owner_disconnected",
+          "teardown": false
+        },
+        {
+          "boundary": "provider_close_sent",
+          "source": "application",
+          "teardown": true
+        },
+        {
+          "boundary": "provider_closed",
+          "source": "provider",
+          "reason": "close_requested",
+          "teardown": true
+        },
+        {
+          "boundary": "provider_wire_closed",
+          "source": "transport",
+          "teardown": true,
+          "wire_close_code": 1000
+        },
+        {
+          "boundary": "agent_session_closed",
+          "source": "sdk",
+          "reason": "user_initiated",
+          "teardown": true
+        },
+        {
+          "boundary": "room_disconnected",
+          "source": "room",
+          "reason": "CLIENT_INITIATED",
+          "teardown": true
+        },
+        {
+          "boundary": "session_ended",
+          "source": "application",
+          "reason": "bridge_closed",
+          "teardown": true
+        }
+      ]
+    },
+    {
+      "accepted_work_survived_end": false,
+      "case": "sdk",
+      "healthy_real_seconds": null,
+      "native_tool_outputs": 0,
+      "provider_reconnects": 0,
+      "provider_sockets": 1,
+      "result_announcements": 0,
+      "stalled_writer_did_not_block_end": false,
+      "usage_seconds": 0.0,
+      "virtual_bridge_seconds": 0,
+      "observations": [
+        {
+          "boundary": "provider_started",
+          "source": "provider",
+          "teardown": false
+        },
+        {
+          "boundary": "provider_close_sent",
+          "source": "application",
+          "teardown": false
+        },
+        {
+          "boundary": "provider_closed",
+          "source": "provider",
+          "reason": "close_requested",
+          "teardown": false
+        },
+        {
+          "boundary": "provider_wire_closed",
+          "source": "transport",
+          "teardown": false,
+          "wire_close_code": 1000
+        },
+        {
+          "boundary": "agent_session_closed",
+          "source": "sdk",
+          "reason": "user_initiated",
+          "teardown": false
+        },
+        {
+          "boundary": "bridge_exit",
+          "source": "application",
+          "reason": "agent_session_closed",
+          "teardown": true
+        },
+        {
+          "boundary": "room_disconnected",
+          "source": "room",
+          "reason": "CLIENT_INITIATED",
+          "teardown": true
+        },
+        {
+          "boundary": "session_ended",
+          "source": "application",
+          "reason": "bridge_closed",
+          "teardown": true
+        }
+      ]
+    },
+    {
+      "accepted_work_survived_end": false,
+      "case": "provider",
+      "healthy_real_seconds": null,
+      "native_tool_outputs": 0,
+      "provider_reconnects": 0,
+      "provider_sockets": 1,
+      "result_announcements": 0,
+      "stalled_writer_did_not_block_end": false,
+      "usage_seconds": 12.5,
+      "virtual_bridge_seconds": 0,
+      "observations": [
+        {
+          "boundary": "provider_started",
+          "source": "provider",
+          "teardown": false
+        },
+        {
+          "boundary": "provider_closed",
+          "source": "provider",
+          "reason": "remote_hangup",
+          "teardown": false
+        },
+        {
+          "boundary": "provider_wire_closed",
+          "source": "transport",
+          "teardown": false,
+          "wire_close_code": 1000
+        },
+        {
+          "boundary": "provider_error",
+          "source": "sdk",
+          "exception_class": "APIConnectionError",
+          "recoverable": false,
+          "teardown": false
+        },
+        {
+          "boundary": "agent_session_closed",
+          "source": "sdk",
+          "reason": "error",
+          "exception_class": "APIConnectionError",
+          "teardown": false
+        },
+        {
+          "boundary": "bridge_exit",
+          "source": "application",
+          "reason": "agent_session_closed",
+          "teardown": true
+        },
+        {
+          "boundary": "room_disconnected",
+          "source": "room",
+          "reason": "CLIENT_INITIATED",
+          "teardown": true
+        },
+        {
+          "boundary": "session_ended",
+          "source": "application",
+          "reason": "bridge_closed",
+          "teardown": true
+        }
+      ]
+    },
+    {
+      "accepted_work_survived_end": false,
+      "case": "wire",
+      "healthy_real_seconds": null,
+      "native_tool_outputs": 0,
+      "provider_reconnects": 0,
+      "provider_sockets": 1,
+      "result_announcements": 0,
+      "stalled_writer_did_not_block_end": false,
+      "usage_seconds": null,
+      "virtual_bridge_seconds": 0,
+      "observations": [
+        {
+          "boundary": "provider_started",
+          "source": "provider",
+          "teardown": false
+        },
+        {
+          "boundary": "provider_wire_closed",
+          "source": "transport",
+          "teardown": false,
+          "wire_close_code": 1006
+        },
+        {
+          "boundary": "provider_error",
+          "source": "sdk",
+          "exception_class": "APIConnectionError",
+          "recoverable": false,
+          "teardown": false
+        },
+        {
+          "boundary": "agent_session_closed",
+          "source": "sdk",
+          "reason": "error",
+          "exception_class": "APIConnectionError",
+          "teardown": false
+        },
+        {
+          "boundary": "bridge_exit",
+          "source": "application",
+          "reason": "agent_session_closed",
+          "teardown": true
+        },
+        {
+          "boundary": "room_disconnected",
+          "source": "room",
+          "reason": "CLIENT_INITIATED",
+          "teardown": true
+        },
+        {
+          "boundary": "session_ended",
+          "source": "application",
+          "reason": "bridge_closed",
+          "teardown": true
+        }
+      ]
+    },
+    {
+      "accepted_work_survived_end": false,
+      "case": "diagnostic_stall",
+      "healthy_real_seconds": null,
+      "native_tool_outputs": 0,
+      "provider_reconnects": 0,
+      "provider_sockets": 1,
+      "result_announcements": 0,
+      "stalled_writer_did_not_block_end": true,
+      "usage_seconds": 0.0,
+      "virtual_bridge_seconds": 0,
+      "observations": [
+        {
+          "boundary": "session_ended",
+          "source": "application",
+          "reason": "explicit_end",
+          "teardown": false
+        },
+        {
+          "boundary": "bridge_exit",
+          "source": "application",
+          "reason": "session_ended",
+          "teardown": false
+        },
+        {
+          "boundary": "provider_close_sent",
+          "source": "application",
+          "teardown": true
+        },
+        {
+          "boundary": "provider_closed",
+          "source": "provider",
+          "reason": "close_requested",
+          "teardown": true
+        },
+        {
+          "boundary": "provider_wire_closed",
+          "source": "transport",
+          "teardown": true,
+          "wire_close_code": 1000
+        },
+        {
+          "boundary": "agent_session_closed",
+          "source": "sdk",
+          "reason": "user_initiated",
+          "teardown": true
+        },
+        {
+          "boundary": "room_disconnected",
+          "source": "room",
+          "reason": "CLIENT_INITIATED",
+          "teardown": true
+        }
+      ]
+    },
+    {
+      "browser_entries": 40,
+      "case": "durable_bounds",
+      "deduplicated": true,
+      "expired_report_rejected": true,
+      "privacy_allowlist": true,
+      "stale_claim_rejected": true,
+      "teardown_after_end": true
+    }
+  ]
+}

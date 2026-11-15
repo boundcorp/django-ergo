@@ -17,15 +17,13 @@ UNKNOWN billing/allowance boundaries and a reusable owner/time-filtered
 `voice_audit` READ ONLY metadata export. The completed 02:10 backend call records
 `claude-opus-5-5`, not the earlier reconstructed Codex route.
 
-## Native interpreter cutover — offline draft, not deployed
+## Native interpreter cutover — deployed baseline
 
-The interpreter/coordinator candidate replaces caption/VAD task assembly with supported
-**same-connection Responses delegation**. It has not repaired or contained the deployed
-client bridge, which remains unsafe for attribution. Fresh read-only Nov14 inspection found
-live source `c7c328f` / image `c8cb043b`, still client delegation/caption assembly,
-fixed 90s and cap3 with the old bounded-three approval. Prior exact-served-source
-synthetic replay demonstrated late-text contamination, not observed owner harm or
-incidence. PR #332 remains an unsafe draft; PR #335 is separate and not deployed.
+PR #335 deployed as `b8053d0` on November 14; PR #321 subsequently moved playback
+uncertainty into Diagnostics without changing call lifetime. Read-only November 15
+inspection found served source `2a29a3d`, same-connection Responses interpretation,
+uncapped intentional requests, and no fixed application call deadline. The earlier
+caption-based attribution defect is historical; PR #332 was closed unmerged.
 
 `GPTLiveModel(model="gpt-live-1", delegation="responses", responses_options=...)`
 exposes only `ergo_voice_intent` to managed backend `gpt-5.6-luna` (default tier,
@@ -94,13 +92,42 @@ client-mode full-stack estimate below is historical and does not price this cuto
 See `artifacts/voice-interpreter-20261114/` for the native replay, synthetic timing,
 actual disposable-session browser fixtures and cost evidence.
 
-**Release gates remain closed:** owner authorization removes both product limits,
-not the missing managed-model entitlement/cost contract or permission for paid tests.
-Before first native activation, establish the exact project/model entitlement,
-approved managed inference/continuation/input scope and LiveKit cost basis, then
-obtain the fresh announced quiet gate for source migration/policy rollout.
-PR #335 must not merge as a staging step: main publication auto-promotes.
-No production ConfigMap, schema, image, process or provider session was changed.
+Further releases still require an announced quiet window because main publication
+auto-promotes. Removal of product limits is not permission for arbitrary paid tests.
+Real semantic quality, physical device behavior, invoices and remaining LiveKit
+allowance are separate from offline lifecycle proof.
+
+### Close-cause diagnostics
+
+The November 15 premature hangup remains **unattributed**: the retained call ended
+after about 51 seconds, with a fresh bridge lease and an answered originating-thread
+task. Its old callbacks discarded provider, SDK and room close reasons. No fixed
+45/60/90-second timer, explicit End request, standby transition or contemporaneous
+application rollout was established. Do not infer user hangup or provider expiry.
+
+New `lifecycle` events in Diagnostics retain allowlisted provider close reasons,
+outbound close and WebSocket close codes, SDK exception classes/close reasons,
+owner/room disconnect reasons, bridge-loop exit and logical End/lease expiry.
+Each observation carries server timing, bridge-claim correlation and a teardown
+marker. Compare `observed_at`, not asynchronous database insertion order: a provider
+`close_requested` received during teardown can be a consequence, not the cause.
+Unknown values become `unknown`/`other`; no exception message, provider payload,
+transcript, audio or credential is retained. Storage failure never prevents End;
+pool-thread writes have database timeouts and a bounded drain after terminal state.
+
+Browser observations add numeric SDK disconnect reason and visibility/pagehide
+facts, not proof of user intent. They retain unknown bridge-claim attribution
+because an in-flight report can race manual resume. Reports are owner-authenticated
+and use authenticated keepalive fetch, still best effort during page shutdown.
+At most 39 visibility/pagehide reports and one reserved disconnect slot are retained
+per logical session; reports may arrive for 120 seconds after End. These are
+diagnostic retention bounds, not call/request limits. Bridge observations retain
+the first of each boundary per claim, including post-End teardown; replaced claims
+cannot append.
+
+This is an observability improvement, **not a demonstrated hangup fix**. There is
+no automatic reconnect, new provider socket, timeout replacement or permission
+change. Explicit End, manual standby/resume and accepted thread work are unchanged.
 
 
 ## Adapter and setup
@@ -227,9 +254,15 @@ Lee approved a hosted rollout for his own testing on 2026-11-12. It runs on Octo
 
 Access: `REALTIME_VOICE_USERS` is a comma-separated list of exact usernames; everyone else gets `enabled: false` from `/api/realtime-voice/config` and 404 from every voice endpoint, the token included. An empty list allows nobody. The bridge re-checks the allowlist and the kill switch when it takes a job.
 
-With the standby flag off, each logical voice session gets one bridge job, recorded in `RealtimeVoiceSession.bridge_started_at`. When the job ends (90 seconds, the user leaving, an error) the bridge ends the session; a claimed session gets no new room token (409), and one whose bridge died without ending it is ended by the next token request once 120 seconds have passed. The bridge uses `record=False` and provider connection `max_retry=0`; the delegation budget and its allowlist remain as above. The local paid-test harness also caps a whole bridge launch at one job with `ERGO_VOICE_CALL_CAP_FILE`; the hosted bridge does not set it.
-
-Delegation only runs in a chat whose bot is on the OpenAI API engine and `gpt-6-luna` (the budget's pinned model); in any other chat the request is not run and the session hears that it failed.
+With the standby flag off, each logical voice session gets one bridge job, recorded
+in `RealtimeVoiceSession.bridge_started_at`. Healthy calls have no application
+maximum duration. True disconnect/error or explicit End ends voice; abandoned
+workers are reaped after their renewable 120-second lease expires, not 120 seconds
+after call start. A claimed session gets no new room token (409). The bridge uses
+`record=False`, `max_session_duration=None`, provider `max_retry=0` and a one-socket
+guard. Hosted startup does not set the local one-shot `ERGO_VOICE_CALL_CAP_FILE`.
+Normal originating-thread grants and approvals govern work; the old pinned
+`gpt-6-luna` read-only lookup budget is historical, not the native admission rule.
 
 ### Output routing (PR #293 deployed; Android acceptance open)
 

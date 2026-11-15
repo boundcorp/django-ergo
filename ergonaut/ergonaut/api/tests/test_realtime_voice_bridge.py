@@ -82,6 +82,7 @@ async def settle(assistant):
         await asyncio.gather(*assistant.final_jobs, return_exceptions=True)
     if assistant.publisher:
         await asyncio.gather(assistant.publisher, return_exceptions=True)
+    await assistant.flush_lifecycle()
     await asyncio.sleep(0)  # run done callbacks
 
 

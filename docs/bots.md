@@ -1103,13 +1103,18 @@ Clarification, status, continuation and reading results start no new work. Known
 corrections/cancellation that cannot safely change submitted work are refused with
 normal thread-control guidance. Unknown or evicted referents clarify rather than
 inventing a target. Native model arguments are not action approval or semantic proof.
-Only fresh sessions receive changed grants. The native candidate removes the fixed
-90-second application cutoff: healthy calls renew a liveness lease, while abandoned
-workers, true disconnects and explicit End still close voice. Explicit standby keeps
-the logical session without a maximum age. Durable indexed replay identities outlive
-bounded context/cache eviction; there is no replacement session-total evidence quota.
-Managed model entitlement/cost approval and a fresh quiet release gate remain unmet;
-no paid inference or production rollout is authorized. See the native cutover section.
+Only fresh sessions receive changed grants. Native PR #335 deployed November 14,
+removing the fixed 90-second application cutoff: healthy calls renew a liveness
+lease, while abandoned workers, true disconnects and explicit End still close voice.
+Explicit standby keeps the logical session without a maximum age. Durable indexed
+replay identities outlive bounded context/cache eviction; no session-total evidence
+quota replaces the removed limits. Further main releases auto-promote and require
+a fresh announced quiet gate; no arbitrary paid test is authorized.
+Payload-free `lifecycle` events in Diagnostics distinguish provider/socket, SDK,
+room, browser and application close observations, with server timing and teardown
+markers. Unknown causes stay unknown; a browser `CLIENT_INITIATED` SDK reason is
+not proof of a user hangup. This adds observability, not a demonstrated repair of
+the November 15 premature hangup. See [close-cause diagnostics](realtime-voice.md#close-cause-diagnostics).
 Handler acceptance, result persistence and an announcement claim remain distinct
 from actual model execution/consumption, playback and physical hearing.
 See the [current release and capability evidence](realtime-voice-causal-review.md#current-release-reconciliation--2026-11-12)

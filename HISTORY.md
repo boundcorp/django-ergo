@@ -4,6 +4,14 @@ This document tracks the major milestones and evolution of the Django Ergo proje
 
 ## Development Timeline
 
+### Realtime voice close-cause evidence (November 2026)
+
+- Added bounded, payload-free durable provider/socket/SDK/room/end observations
+  with timing, claim correlation and teardown markers, plus owner-scoped browser
+  disconnect/visibility evidence that survives the End-report race.
+- The November 15 premature hangup remains unattributed; this instrumentation is
+  not a demonstrated fix. No call/request cap, reconnect or approval change.
+
 ### RunPod Worker liveness counts the scheduled poll (November 2026)
 
 - Maintenance treated a live H3 Worker as lost after 180s without an update.
