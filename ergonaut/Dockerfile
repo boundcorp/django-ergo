@@ -116,6 +116,13 @@ COPY ergonaut/infra/ /app/infra
 # Release Stage
 FROM base AS release
 
+# Agent shells can choose the base interpreter rather than /app/.venv.
+# Keep its YAML parser on the same locked version used by the application.
+COPY ergonaut/requirements.freeze.txt /tmp/ergonaut-requirements.txt
+RUN /usr/local/bin/python3 -m pip install --no-cache-dir \
+        "$(grep -i '^pyyaml==' /tmp/ergonaut-requirements.txt)" \
+    && rm /tmp/ergonaut-requirements.txt
+
 # ffmpeg supplies ffprobe for voice validation and supports agent video jobs.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \

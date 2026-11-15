@@ -1730,6 +1730,9 @@ that would move an agent CLI onto API billing (`ANTHROPIC_API_KEY`,
 is an error. The bot's other secrets never reach it. A listed secret that
 isn't set in the process launching the run is left out, and
 `ergo_agent_start` (as `warnings`) or the reply's result says which ones.
+The Ergonaut release image also installs its pinned PyYAML version for the base
+`/usr/local/bin/python3`, so job shells that select that interpreter can parse
+YAML without relying on the application's virtualenv.
 Processes read their environment when they start, so after adding a key to a
 deployment's secret, restart every process that runs tools and workers, not
 just one of them. Job runs live in the process that launched them, so a
