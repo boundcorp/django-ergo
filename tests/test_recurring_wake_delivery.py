@@ -76,6 +76,60 @@ def test_recurring_unchanged_is_quiet_but_changes_and_questions_remain_visible(
     assert recurring_wakes.fire_due(now + timedelta(minutes=5)) == []
 
 
+@pytest.mark.parametrize(
+    ("outcome", "expected_calls", "reason"),
+    [
+        ("unchanged", 3, "invocation_limit"),
+        (None, 3, "invocation_limit"),
+        ("progress", 3, "invocation_limit"),
+        ("wait_ended", 1, "wait_ended"),
+    ],
+)
+def test_recurring_breaker_limits_actual_model_invocations(
+    tmp_path, monkeypatch, outcome, expected_calls, reason
+):
+    response = {"type": "message", "text": "No change", "unchanged": True}
+    if outcome is not None:
+        response["wake_outcome"] = outcome
+    _, engine, session = chat(
+        tmp_path,
+        "breaker",
+        *(claude_tool("send_reply", response.copy()) for _ in range(4)),
+    )
+    clock = [timezone.now().replace(microsecond=0)]
+    monkeypatch.setattr(timezone, "now", lambda: clock[0])
+    schedule = recurring_wakes.create(
+        session,
+        "Check deployment",
+        interval_minutes=1,
+        max_occurrences=4,
+        now=clock[0],
+    )
+    for index in range(1, expected_calls + 1):
+        clock[0] += timedelta(minutes=1)
+        assert recurring_wakes.fire_due(clock[0]) == [schedule["id"]]
+        message = ThreadMessage.objects.filter(recipient_session=session).latest(
+            "created_at"
+        )
+        messaging.deliver(str(message.pk))
+        message.refresh_from_db()
+        assert message.status == "answered"
+        assert len(engine._client.calls) == index
+        # Redelivery of the same message must not invoke the model again.
+        messaging.deliver(str(message.pk))
+        assert len(engine._client.calls) == index
+
+    clock[0] += timedelta(minutes=1)
+    assert recurring_wakes.fire_due(clock[0]) == []
+    assert len(engine._client.calls) == expected_calls
+    stored = recurring_wakes.list_schedules(session)[0]
+    assert stored["blocked_reason"] == reason
+    assert (
+        ThreadMessage.objects.filter(recipient_session=session).count()
+        == expected_calls
+    )
+
+
 def test_archive_cancels_queued_recurring_checks_and_never_reopens_thread(tmp_path):
     _, engine, session = chat(tmp_path, "archive-check", say("must not run"))
     now = timezone.now()

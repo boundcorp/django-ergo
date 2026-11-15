@@ -755,7 +755,10 @@ are visible in the chat. Busy and approval-waiting threads coalesce checks;
 final failures block rather than retry automatically. Unchanged updates stay
 quiet unless periodic check-ins were requested. These are ordinary turns, not
 new permissions, approval grants or financial authority. Worker/task results
-continue to arrive naturally. See [recurring thread wakes](recurring-thread-wakes.md)
+continue to arrive naturally. A hard cap stops the timer after three model wakes;
+an explicit ended wait stops it immediately. Periodic check-ins and model claims
+of progress do not bypass the cap. This may stop useful monitoring; it is not a
+semantic progress verifier. See [recurring thread wakes](recurring-thread-wakes.md)
 for settings, timezone and cancellation semantics, durability and acceptance.
 
 

@@ -469,9 +469,10 @@ def wake_toolkit(ctx: ToolContext) -> FunctionToolkit:  # noqa: C901 - tool regi
             "Check this chat repeatedly only when the user asks for recurring "
             "checks, e.g. every 5 minutes for 10 hours. Give a finite duration, "
             "explicit-offset expiry, or max_occurrences; never renew it yourself. "
-            "Unchanged checks are quiet unless periodic_checkins is true. "
-            "Worker/task results already arrive naturally: don't poll for them. "
-            "This grants no new tool permissions, approvals, or spend authority."
+            "The platform stops the schedule after three checks, even when "
+            "periodic_checkins is true. Worker/task results already arrive "
+            "naturally; don't poll for them. This grants no permissions, "
+            "approvals, or spend authority."
         ),
         parameters={
             "note": {
