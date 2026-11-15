@@ -908,6 +908,13 @@ still refers to the chat by name.
 To turn an existing thread into a named chat without changing its ID, see
 the [adoption and rollback commands](building-bots.md#chats-and-threads).
 
+Ergonaut loads thread messages in bounded pages; older history and live updates
+keep their existing sequence boundaries. Navigation counts incoming and outgoing
+requests independently, and repeated sent-request cards reuse recipient status
+within one response (not across requests). See
+[request performance](ergonaut.md#request-performance) for privacy-bounded
+Server-Timing and Prometheus diagnostics.
+
 ## Knowledge base folder
 
 A `kb/` folder in the bot folder is the bot's knowledge base: Markdown

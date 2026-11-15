@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router-dom'
-import type { Message, SentCard } from './api'
+import type { Message, SentCard, Worker } from './api'
 import { Transcript } from './components/Transcript'
 
 const id = '12345678-1234-1234-1234-123456789abc'
@@ -199,4 +199,46 @@ describe('messaging tool transcript', () => {
   test('bot listing remains readable', () => {
     expect(renderTool('ergo_bot_list', {}, 'Bots you can message:\nResearch bot')).toContain('Research bot')
   })
+})
+
+describe('tool result presentation', () => {
+  test('keeps an ordinary tool collapsed even when its JSON result resembles a worker', () => {
+    const html = renderTool(
+      'read_file',
+      { path: '/tmp/example.txt' },
+      {
+        id: 'worker',
+        title: 'Not a delegated task',
+        status: 'queued',
+        content: 'The result stays hidden until the tool opens',
+      },
+    )
+    expect(html).toContain('title="read_file"')
+    expect(html).toContain('aria-expanded="false"')
+    expect(html).not.toContain('Not a delegated task')
+    expect(html).not.toContain('The result stays hidden until the tool opens')
+  })
+
+  test.each(['ergo_agent_start', 'orca_start_worker', 'ergo_worker_start'])(
+    '%s renders its returned worker as a specialized card',
+    name => {
+      const worker: Worker = {
+        id: 'worker',
+        session_id: id,
+        title: 'Delegated task',
+        function: 'agent:research',
+        status: 'queued',
+        progress: '',
+        result: null,
+        error: '',
+        created_at: '2026-11-14T00:00:00Z',
+        completed_at: null,
+      }
+      const html = renderTool(name, {}, worker)
+      expect(html).toContain('Delegated task')
+      expect(html).toContain('Queued')
+      expect(html).toContain('<summary')
+      expect(html).not.toContain(`title="${name}"`)
+    },
+  )
 })
