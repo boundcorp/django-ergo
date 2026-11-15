@@ -7,6 +7,7 @@ import '@fontsource/space-grotesk/700.css'
 import '../src/index.css'
 import { api, type Message, type SessionDetail } from '../src/api'
 import { Chat } from '../src/pages/Chat'
+import { MarkdownReaderOwner } from '../src/components/MarkdownReaderOwner'
 import './visual.css'
 
 const messages: Message[] = Array.from({ length: 30 }, (_, i) => ({
@@ -41,6 +42,6 @@ window.EventSource = FixtureEventSource as unknown as typeof EventSource
 
 createRoot(document.getElementById('root')!).render(
   <MemoryRouter initialEntries={['/s/fixture']}>
-    <Routes><Route path="/s/:id" element={<Chat onChange={() => undefined} />} /></Routes>
+    <MarkdownReaderOwner><Routes><Route path="/s/:id" element={<Chat onChange={() => undefined} />} /></Routes></MarkdownReaderOwner>
   </MemoryRouter>,
 )

@@ -324,6 +324,10 @@ class SkillSet(Toolkit):
         found = self.owner_of(tool_name)
         return bool(found and found[1].requires_approval(tool_name))
 
+    def supports_pending_revalidation(self, tool_name: str) -> bool:
+        found = self.owner_of(tool_name)
+        return bool(found and found[1].supports_pending_revalidation(tool_name))
+
     async def auto_approve(self, tool_name: str, arguments: dict, tool_id: str) -> bool:
         found = self.owner_of(tool_name)
         return bool(

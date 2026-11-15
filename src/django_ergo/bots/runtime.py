@@ -1410,6 +1410,8 @@ class Bot:
         decisions: dict[str, bool] | bool,
         *,
         control: TurnControl | None = None,
+        revalidate_call_id: str = "",
+        revalidate_digest: str = "",
     ) -> TurnResult:
         """Continue a turn that stopped for approval.
 
@@ -1418,6 +1420,8 @@ class Bot:
         """
         call = await self.pending_call(session)
         if call is None:
+            return TurnResult(session=session)
+        if revalidate_digest and str(call.pk) != revalidate_call_id:
             return TurnResult(session=session)
         if isinstance(decisions, bool):
             pending = (call.metadata or {}).get("pending_approvals", [])
@@ -1435,6 +1439,7 @@ class Bot:
                 engine=self.make_engine(session),
                 context_builder=builder,
                 control=control,
+                revalidate_digest=revalidate_digest,
             )
         except StructuredCallError:
             return TurnResult(session=session)  # someone else answered it first

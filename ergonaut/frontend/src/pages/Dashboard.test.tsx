@@ -62,6 +62,7 @@ describe('dashboard presentation', () => {
       session('active-first', { bucket: 'waiting', last_activity: '2026-10-13T10:00:00Z' }),
       session('pinned', { pinned: true }),
     ]
+    Object.freeze(rows)
     const html = renderToStaticMarkup(
       <MemoryRouter>
         <ThreadGroups sessions={rows} scope="dashboard-test" full />
@@ -70,6 +71,38 @@ describe('dashboard presentation', () => {
     expect(html.indexOf('href="/s/pinned"')).toBeLessThan(html.indexOf('href="/s/active-first"'))
     expect(html.indexOf('href="/s/active-first"')).toBeLessThan(html.indexOf('href="/s/older"'))
     expect(rows.map(s => s.id)).toEqual(['older', 'active-first', 'pinned'])
+  })
+  test('keeps capped groups sorted and collapsed sidebar groups hidden with locally appended rows', () => {
+    const rows = Array.from({ length: 8 }, (_, index) =>
+      session(`idle-${index}`, {
+        updated_at: `2026-10-${10 + index}T10:00:00Z`,
+      }),
+    )
+    rows.push(session('resolved', { status: 'completed' }))
+    Object.freeze(rows)
+    const html = renderToStaticMarkup(
+      <MemoryRouter>
+        <ThreadGroups sessions={rows} scope="sidebar-append-test" />
+      </MemoryRouter>,
+    )
+    expect(html).toContain('href="/s/idle-7"')
+    expect(html).toContain('href="/s/idle-6"')
+    expect(html).toContain('href="/s/idle-5"')
+    expect(html).not.toContain('href="/s/idle-4"')
+    expect(html).toContain('Show 5 more')
+    expect(html).toContain('aria-controls="sidebar-append-test-resolved-rows" aria-expanded="false"')
+    expect(html).not.toContain('href="/s/resolved"')
+    expect(rows.map(row => row.id)).toEqual([
+      'idle-0',
+      'idle-1',
+      'idle-2',
+      'idle-3',
+      'idle-4',
+      'idle-5',
+      'idle-6',
+      'idle-7',
+      'resolved',
+    ])
   })
   test('presents actionable PR navigation, worker progress and unread/busy semantics together', () => {
     const row = session('working', {

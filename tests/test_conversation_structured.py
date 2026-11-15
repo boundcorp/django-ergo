@@ -1202,3 +1202,115 @@ async def test_bot_tool_auto_and_human_execution_context_is_isolated(user):
     assert seen == [("auto", True), ("ordinary", False), ("human", False)]
     assert propagated == [(True, True), (False, False)]
     assert ctx.auto_approved is False
+
+
+async def test_grant_change_does_not_resume_pending_but_reviews_new_calls(user):
+    session = await _chat_session(user)
+    state = {"grant": False}
+    effects = []
+
+    def review(context, name, arguments, tool_id):
+        return state["grant"]
+
+    @bot_tool(requires_approval=True, takes_context=True, auto_approve=review)
+    def guarded(context, scope: str):
+        effects.append((scope, context.auto_approved))
+        return "done"
+
+    toolkit = FunctionToolkit.from_functions(
+        [guarded], ToolContext(user=user, session=session)
+    )
+    spec = StructuredCallSpec(kind="planner", response_model=Plan, toolkits=[toolkit])
+    first_engine = claude_engine(
+        claude_tool("guarded", {"scope": "old"}, tool_id="old")
+    )
+    paused = await run_structured_call(
+        spec,
+        "Old call",
+        user=user,
+        session=session,
+        engine=first_engine,
+        allow_approvals=True,
+    )
+    assert paused.status == StructuredCallStatus.AWAITING_APPROVAL
+    state["grant"] = True
+    old = await StructuredCall.objects.aget(pk=paused.call.pk)
+    assert old.status == StructuredCallStatus.AWAITING_APPROVAL
+    assert effects == []
+
+    next_engine = claude_engine(
+        claude_tool("guarded", {"scope": "new"}, tool_id="new"),
+        claude_tool("submit_output", VALID_PLAN, tool_id="output"),
+    )
+    done = await run_structured_call(
+        spec,
+        "New call",
+        user=user,
+        session=session,
+        engine=next_engine,
+        allow_approvals=True,
+    )
+    assert done.ok
+    assert effects == [("new", True)]
+
+
+@pytest.mark.parametrize("tamper", [False, True])
+async def test_authenticated_approval_binds_persisted_batch_and_pending(user, tamper):
+    from django_ergo.conversation.toolkit import approval_decision
+    from django_ergo.conversation.toolkit import approval_pending_digest
+    from django_ergo.conversation.toolkit import authenticated_approval_batch
+
+    seen = []
+
+    class EvidenceToolkit(ApprovalToolkit):
+        def execute_tool(self, tool_name, arguments):
+            seen.append(approval_decision.get())
+            return "deleted"
+
+    toolkit = EvidenceToolkit()
+    engine = claude_engine(
+        claude_tool("delete_all", {"scope": "tmp"}, tool_id="d1"),
+        claude_tool("submit_output", VALID_PLAN, tool_id="s1"),
+    )
+    spec = StructuredCallSpec(kind="planner", response_model=Plan, toolkits=[toolkit])
+    paused = await run_structured_call(
+        spec, "Clean up", user=user, engine=engine, allow_approvals=True
+    )
+    call = paused.call
+    batch = {
+        "id": "batch-1",
+        "actor_id": str(user.pk),
+        "call_id": str(call.pk),
+        "decisions": {"d1": True},
+        "pending_sha256": approval_pending_digest(call.metadata["pending_approvals"]),
+        "shown_verified": True,
+    }
+    call.metadata["authenticated_approval_decisions"] = [batch]
+    await call.asave(update_fields=["metadata"])
+    if tamper:
+        changed = await StructuredCall.objects.aget(pk=call.pk)
+        changed.metadata["pending_approvals"][0]["input"] = {"scope": "other"}
+        await changed.asave(update_fields=["metadata"])
+    token = authenticated_approval_batch.set(batch)
+    try:
+        if tamper:
+            with pytest.raises(StructuredCallError):
+                await structured.resume_structured_call(
+                    spec, call, {"d1": True}, engine=engine
+                )
+            assert seen == []
+        else:
+            done = await structured.resume_structured_call(
+                spec, call, {"d1": True}, engine=engine
+            )
+            assert done.ok
+            assert seen == [
+                {
+                    "id": "batch-1",
+                    "actor_id": str(user.pk),
+                    "call_id": str(call.pk),
+                    "tool_use_id": "d1",
+                }
+            ]
+    finally:
+        authenticated_approval_batch.reset(token)

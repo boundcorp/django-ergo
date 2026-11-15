@@ -19,6 +19,7 @@ import { ToolCard, copyText } from './ToolCard'
 import { pretty, resultText } from '../toolFormat'
 import { clock } from '../time'
 import { messageAnchor, messageLink } from '../messageLink'
+import { contextPlacement } from '../contextPlacement'
 import { eventSummary } from '../eventSummary'
 import { ContextPanel, CompactionDivider } from './ContextPanel'
 import { AttachmentView, MediaGallery, isAudio, resolveFiles } from './MediaGallery'
@@ -358,10 +359,10 @@ function MessagingCall({ use, result, pending }: { use: ToolUse; result?: ToolRe
 function ToolCall({ use, result, pending }: { use: ToolUse; result?: ToolResult; pending: boolean }) {
   const { workers } = useContext(DelegatedContext)
   const { durations, folded } = useContext(FoldContext)
-  const data = resultJson(result)
   if (THREAD_TOOLS[use.name]) return <MessagingCall use={use} result={result} pending={pending} />
-  if (data && WORKER_TOOLS.has(use.name)) {
-    const worker = workers.get(String(data.id ?? '')) ?? (data.title && data.status ? (data as Worker) : null)
+  if (WORKER_TOOLS.has(use.name)) {
+    const data = resultJson(result)
+    const worker = data && (workers.get(String(data.id ?? '')) ?? (data.title && data.status ? (data as Worker) : null))
     if (worker) {
       const status = workerStatus(worker)
       return (
@@ -991,6 +992,7 @@ export function Transcript({
 }) {
   const { sessions } = useContext(DirectoryContext)
   const messages = useMemo(() => uniqueToolIds(rawMessages), [rawMessages])
+  const contexts = useMemo(() => contextPlacement(messages, calls), [messages, calls])
   const [openFolds, setOpenFolds] = useState<Set<string>>(new Set())
   const results = new Map<string, ToolResult>()
   for (const message of messages)
@@ -1066,26 +1068,7 @@ export function Transcript({
                       </div>
                     )}
                     {made.has(message.line) && <BotFiles files={made.get(message.line)!} />}
-                    {message.role === 'assistant' &&
-                      (() => {
-                        const call = calls.find(
-                          c =>
-                            c.first_sequence != null &&
-                            c.first_sequence <= message.line &&
-                            (c.last_sequence ?? Infinity) >= message.line,
-                        )
-                        const last =
-                          call &&
-                          messages
-                            .filter(
-                              m =>
-                                m.role === 'assistant' &&
-                                m.line >= call.first_sequence! &&
-                                m.line <= (call.last_sequence ?? Infinity),
-                            )
-                            .slice(-1)[0]
-                        return call && last?.line === message.line ? <ContextPanel call={call} /> : null
-                      })()}
+                    {contexts.has(message.line) && <ContextPanel call={contexts.get(message.line)!} />}
                     {compactions
                       .filter(c => c.upto_sequence === message.line)
                       .map(c => (

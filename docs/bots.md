@@ -108,6 +108,27 @@ approved call; it is false for human approvals and ordinary calls. Review is
 not a durable grant: tools whose authority can change must revalidate it at
 execution under the appropriate locks.
 
+For authenticated web approvals, `ctx.approval_decision` contains the persisted
+decision ID, actor ID, structured-call ID and tool-use ID for that exact human
+decision. It is `None` for automatic approvals and approval paths without
+authenticated evidence; a session owner alone is not evidence of an approval.
+The web client shows each tool's complete input and submits the displayed batch
+and structured-call ID with its decision. The API rejects a batch or call ID
+that differs from the locked current pending call; only a match supplies `ctx.approval_decision`.
+Legacy approval requests without the displayed batch can still answer ordinary
+tools, but cannot supply authenticated approval evidence to a tool.
+
+After a scoped policy changes, the active session owner may explicitly POST
+`/api/sessions/{session_id}/approvals/revalidate` with `call_id` and
+`shown_approvals` for the exact currently displayed pending batch. This is not
+a human approval and cannot revive a grant. The worker holds the session turn
+lock, checks the latest call and durable tool-use transcript, and asks the
+current automatic policy about every item. Any changed, superseded, already
+invoked, mixed out-of-scope or unapproved batch stays pending. Tools are not
+eligible by default: a tool must explicitly set `revalidate_pending=True` and
+recheck its mutable grant at execution under its own locks. Execution uses a
+durable at-most-once receipt, so an uncertain invocation is not resent.
+
 Parameters come from type hints (`str`, `int`, `float`, `bool`, `list`,
 `dict`), or pass `parameters=` as JSON Schema properties. Non-string results
 are sent back as JSON. A tool can also return images, which the model sees
@@ -886,6 +907,13 @@ still refers to the chat by name.
 
 To turn an existing thread into a named chat without changing its ID, see
 the [adoption and rollback commands](building-bots.md#chats-and-threads).
+
+Ergonaut loads thread messages in bounded pages; older history and live updates
+keep their existing sequence boundaries. Navigation counts incoming and outgoing
+requests independently, and repeated sent-request cards reuse recipient status
+within one response (not across requests). See
+[request performance](ergonaut.md#request-performance) for privacy-bounded
+Server-Timing and Prometheus diagnostics.
 
 ## Knowledge base folder
 

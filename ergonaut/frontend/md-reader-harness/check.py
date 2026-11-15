@@ -6,6 +6,8 @@ ERGONAUT_TEST_CHROMIUM to a Chromium executable. Uses only local synthetic data.
 """
 
 import os
+import signal
+import socket
 import subprocess
 import time
 import urllib.request
@@ -15,12 +17,20 @@ from playwright.sync_api import sync_playwright
 
 ROOT = Path(__file__).resolve().parents[3]
 FRONTEND = ROOT / "ergonaut" / "frontend"
-OUTPUT = ROOT / "docs" / "md-reader" / "after"
-PORT = 41739
+OUTPUT = Path(os.environ.get("MD_READER_OUTPUT", ROOT / "docs" / "md-reader" / "after"))
+with socket.socket() as sock:
+    sock.bind(("127.0.0.1", 0))
+    PORT = sock.getsockname()[1]
 ORIGIN = f"http://127.0.0.1:{PORT}"
 SOURCE = """# Release plan
 
-A synthetic document for a focused reading experience.
+This synthetic release plan gives reviewers a single place to check the scope, the rollout
+sequence, and the evidence needed before a change reaches production. The original file
+remains available for download, and this reading view keeps the conversation in place.
+
+The release should proceed only after the owner confirms that the checklist is complete.
+If a verification step fails, pause the rollout, record the observation, and return to
+the conversation so the team can decide whether to retry or roll back.
 
 ## Milestones
 
@@ -43,6 +53,30 @@ def release(approved):
     audit_log = "A deliberately long line to verify that a code block can scroll horizontally on a narrow mobile screen"
 ```
 
+## Verification
+
+The owner reviews the notes, checks the scheduled window, and confirms that the
+rollback instructions are available. Record the outcome next to the relevant
+milestone so that anyone joining later can reconstruct the decision.
+
+### Before rollout
+
+1. Check that the candidate has passed the agreed automated checks.
+2. Confirm that the deployment window and responsible reviewer are available.
+3. Verify the rollback procedure and identify the signals that would trigger it.
+
+### During rollout
+
+Watch the service health signals and compare them with the normal operating range.
+Stop if the change produces unexpected errors or if the available evidence does
+not support proceeding. Keep the team informed in the original conversation.
+
+### After rollout
+
+Review the final health checks, link the evidence, and note any follow-up work.
+The release is complete only when the owner has recorded the outcome and the
+team has confirmed that no additional intervention is needed.
+
 [Project website](https://example.org/release) · [unsafe](javascript:alert(1))
 
 ![Remote image](https://remote-image.example.invalid/track.png)
@@ -62,6 +96,7 @@ def main():
         cwd=FRONTEND,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
+        start_new_session=True,
     )
     try:
         for _ in range(100):
@@ -178,7 +213,7 @@ def main():
             finally:
                 browser.close()
     finally:
-        server.terminate()
+        os.killpg(server.pid, signal.SIGTERM)
         server.wait(timeout=10)
 
 

@@ -175,6 +175,7 @@ export type DelegatedRequest = {
   status: 'queued' | 'delivered' | 'waiting' | 'answered' | 'failed'
   reply: string
   approvals?: Approval[] // an out request: what the other chat waits for you to approve before it answers
+  approval_call_id?: string | null
   created_at: string
   updated_at: string
 }
@@ -1033,8 +1034,14 @@ export const api = {
   unsend: (id: string, itemId: string) =>
     request<{ text: string; attachment_ids: string[] }>('DELETE', `/sessions/${id}/inbox/${itemId}`),
   // One answer per waiting tool call, by its id.
-  decide: (id: string, decisions: Record<string, boolean>) =>
-    request<Turn>('POST', `/sessions/${id}/approvals`, { decisions }),
+  decide: (
+    id: string,
+    decisions: Record<string, boolean>,
+    shown_approvals: Approval[],
+    shown_call_id?: string | null,
+  ) => request<Turn>('POST', `/sessions/${id}/approvals`, { decisions, shown_approvals, shown_call_id }),
+  revalidateApproval: (id: string, call_id: string, shown_approvals: Approval[]) =>
+    request<Turn>('POST', `/sessions/${id}/approvals/revalidate`, { call_id, shown_approvals }),
   close: (id: string) => request<Session>('POST', `/sessions/${id}/close`),
   pinSession: (id: string, pinned: boolean) => request<Session>('POST', `/sessions/${id}/pin`, { pinned }),
   changes: (bot: string) => request<Changes>('GET', `/bots/${bot}/changes`),

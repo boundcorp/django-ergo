@@ -18,6 +18,7 @@ from typing import Any, Literal
 
 from asgiref.sync import async_to_sync, sync_to_async
 from django.conf import settings
+from django.db import transaction
 from django.db.models import Case, CharField, Count, OuterRef, Q, Subquery, Value, When
 from django.db.models.fields.json import KeyTextTransform
 from django.db.models.functions import Coalesce, Greatest, Lower, NullIf, StrIndex, Substr
@@ -57,8 +58,10 @@ from ergonaut.apps.bots.tasks import (
     queue_turn,
     recover_stopped_session,
     request_stop,
+    revalidate_pending,
     unsend,
 )
+from ergonaut.observability.middleware import request_phase
 
 logger = logging.getLogger(__name__)
 
@@ -354,10 +357,13 @@ def sent_out(session: ConversationSession, limit: int = 30) -> list[dict]:
     ):
         prs.setdefault(pr.session_id, []).append(pr)
     out = []
+    summaries: dict = {}
     for row in rows:
         thread = threads.get(row.recipient_session_id)
         if thread is None:
             continue
+        if thread.id not in summaries:
+            summaries[thread.id] = thread_summary(thread)
         done = row.status in ("answered", "failed")
         reported = [
             pr.url
@@ -373,7 +379,7 @@ def sent_out(session: ConversationSession, limit: int = 30) -> list[dict]:
                 "status": CARD_STATUS.get(row.status, row.status),
                 "text": snippet(row.text),
                 "reply": snippet(row.reply_text or row.error),
-                "thread": thread_summary(thread),
+                "thread": summaries[thread.id],
                 "prs": prs_by_url(list(dict.fromkeys(reported + linked))),
             }
         )
@@ -418,6 +424,14 @@ class ApprovalIn(Schema):
     approval_ids: list[str] | None = None
     # Or one answer per waiting tool call, by id, in place of ``approve``/``approval_ids``.
     decisions: dict[str, bool] | None = None
+    # Exact batch rendered to the approver, not merely its reusable tool IDs.
+    shown_approvals: list[dict] | None = None
+    shown_call_id: str | None = None
+
+
+class RevalidatePendingIn(Schema):
+    call_id: str
+    shown_approvals: list[dict]
 
 
 class TurnOut(Schema):
@@ -753,6 +767,27 @@ def with_open_counts(qs):
         metadata__report=True,
         status__in=["delivered", "waiting", "answered"],
     )
+    # Independent indexed counts avoid multiplying incoming × outgoing rows.
+    # The former two joins also repeated every status subquery for that product.
+    incoming = (
+        ThreadMessage.objects.filter(
+            recipient_session=OuterRef("pk"),
+            status__in=OPEN_REQUESTS,
+            in_reply_to__isnull=True,
+            sender_session__isnull=False,
+        )
+        .order_by()
+        .values("recipient_session")
+        .annotate(n=Count("pk"))
+        .values("n")
+    )
+    outgoing = (
+        ThreadMessage.objects.filter(sender_session=OuterRef("pk"), status__in=OPEN_REQUESTS, in_reply_to__isnull=True)
+        .order_by()
+        .values("sender_session")
+        .annotate(n=Count("pk"))
+        .values("n")
+    )
     return qs.annotate(
         busy=Exists(running) | Exists(working),
         blocked=Exists(blocked),
@@ -771,23 +806,8 @@ def with_open_counts(qs):
             .annotate(n=Count("pk"))
             .values("n")[:1]
         ),
-        open_in=Count(
-            "thread_messages",
-            filter=Q(
-                thread_messages__status__in=OPEN_REQUESTS,
-                thread_messages__in_reply_to__isnull=True,
-                thread_messages__sender_session__isnull=False,
-            ),
-            distinct=True,
-        ),
-        open_out=Count(
-            "sent_thread_messages",
-            filter=Q(
-                sent_thread_messages__status__in=OPEN_REQUESTS,
-                sent_thread_messages__in_reply_to__isnull=True,
-            ),
-            distinct=True,
-        ),
+        open_in=Coalesce(Subquery(incoming), Value(0)),
+        open_out=Coalesce(Subquery(outgoing), Value(0)),
     )
 
 
@@ -820,6 +840,7 @@ def requests_out(session: ConversationSession, limit: int = 20) -> list[dict]:
                 "reply": snippet(row.reply_text or row.error),
                 # What the other chat waits for the user to approve before it can answer.
                 "approvals": (paused.metadata or {}).get("pending_approvals", []) if paused else [],
+                "approval_call_id": str(paused.pk) if paused else None,
                 "created_at": row.created_at,
                 "updated_at": row.updated_at,
             }
@@ -1104,8 +1125,9 @@ def list_sessions(request, bot: str = "", q: str = "", status: str = ""):
             | Q(user_title__icontains=q)
             | (Q(user_title__isnull=True) & Q(metadata__title__icontains=q))
         ).distinct()
-    rows = attach_prs(list(with_open_counts(qs).order_by("-updated_at")[:200]))
-    return [session_out(s) for s in rows]
+    with request_phase("sidebar"):
+        rows = attach_prs(list(with_open_counts(qs).order_by("-updated_at")[:200]))
+        return [session_out(s) for s in rows]
 
 
 @router.get("/workers")
@@ -1253,60 +1275,67 @@ def session_detail(
 ):
     """The session with its newest ``limit`` messages, or the ``limit`` before line ``before``,
     or the ``limit`` around line ``around`` (a message link, /s/<id>#m-<line>)."""
-    session = visible_sessions(request.auth).filter(id=uuid_or_404(session_id)).first()
-    if session is None:
-        raise HttpError(404, "No such session")
-    limit = max(1, min(limit, 500))
-    if around is not None and before is None:
-        before = page_end_around(session, around, limit)
-    first_line = page_start(session, before, limit)
-    messages = [
-        {
-            "line": m.line,
-            "role": m.role,
-            "blocks": m.blocks,
-            "timestamp": m.timestamp,
-            "author": m.author,
-            "provenance": m.provenance,
-        }
-        for m in SessionSource(session, first_line=first_line, before_line=before, include_attribution=False).messages()
-    ]
-    calls = [call_out(c) for c in calls_in(session, first_line, before)]
-    if session.user_id == request.auth.pk:
-        ConversationSession.objects.filter(id=session.id).update(read_at=timezone.now())
-    session = with_open_counts(visible_sessions(request.auth).filter(id=session.id)).first()
-    return {
-        "session": session_out(session),
-        "debug_shortcut": debug_shortcut_available(request.auth, session),
-        "messages": messages,
-        "calls": calls,
-        "compactions": [
+    with request_phase("session_lookup"):
+        session = visible_sessions(request.auth).filter(id=uuid_or_404(session_id)).first()
+        if session is None:
+            raise HttpError(404, "No such session")
+    with request_phase("history"):
+        limit = max(1, min(limit, 500))
+        if around is not None and before is None:
+            before = page_end_around(session, around, limit)
+        first_line = page_start(session, before, limit)
+        messages = [
             {
-                "id": str(c.pk),
-                "upto_sequence": c.upto_sequence,
-                "from_sequence": c.from_sequence,
-                "message_count": c.message_count,
-                "reason": c.reason,
-                "created_at": c.created_at,
+                "line": m.line,
+                "role": m.role,
+                "blocks": m.blocks,
+                "timestamp": m.timestamp,
+                "author": m.author,
+                "provenance": m.provenance,
             }
-            for c in session.compactions.all()
-        ],
-        "requests": requests_out(session),
-        "workers": workers_out(session),
-        "todos": get_todos(session),
-        "wakes": pending_wakes(session),
-        "recurring_wakes": recurring_wakes.list_schedules(session),
-        "inbox": [
-            {"id": item.get("id", ""), "text": item.get("text", ""), "files": len(item.get("attachment_ids") or [])}
-            for item in peek_inbox(session.id)
-        ],
-        "first_line": messages[0]["line"] if messages else first_line,
-        "has_more": first_line is not None,
-        "message_count": session.messages.count(),
-        "sent": sent_out(session),
-        "retry_model": retry_model_for(session, request.auth),
-        "prs": session_prs(session),
-    }
+            for m in SessionSource(
+                session, first_line=first_line, before_line=before, include_attribution=False
+            ).messages()
+        ]
+    with request_phase("serialization"):
+        calls = [call_out(c) for c in calls_in(session, first_line, before)]
+    with request_phase("session_lookup"):
+        if session.user_id == request.auth.pk:
+            ConversationSession.objects.filter(id=session.id).update(read_at=timezone.now())
+        session = with_open_counts(visible_sessions(request.auth).filter(id=session.id)).first()
+    with request_phase("sidebar"):
+        return {
+            "session": session_out(session),
+            "debug_shortcut": debug_shortcut_available(request.auth, session),
+            "messages": messages,
+            "calls": calls,
+            "compactions": [
+                {
+                    "id": str(c.pk),
+                    "upto_sequence": c.upto_sequence,
+                    "from_sequence": c.from_sequence,
+                    "message_count": c.message_count,
+                    "reason": c.reason,
+                    "created_at": c.created_at,
+                }
+                for c in session.compactions.all()
+            ],
+            "requests": requests_out(session),
+            "workers": workers_out(session),
+            "todos": get_todos(session),
+            "wakes": pending_wakes(session),
+            "recurring_wakes": recurring_wakes.list_schedules(session),
+            "inbox": [
+                {"id": item.get("id", ""), "text": item.get("text", ""), "files": len(item.get("attachment_ids") or [])}
+                for item in peek_inbox(session.id)
+            ],
+            "first_line": messages[0]["line"] if messages else first_line,
+            "has_more": first_line is not None,
+            "message_count": session.messages.count(),
+            "sent": sent_out(session),
+            "retry_model": retry_model_for(session, request.auth),
+            "prs": session_prs(session),
+        }
 
 
 class RecurringWakeControlIn(Schema):
@@ -1543,6 +1572,57 @@ async def dismiss_call(request, call_id: str):
     return call_out(call)
 
 
+def record_authenticated_approval(call_id, user, approve, approval_ids, expected_pending, request_payload):
+    """Persist the authenticated answer before handing it to a worker."""
+    from django_ergo.conversation.toolkit import approval_pending_digest
+
+    with transaction.atomic():
+        call = StructuredCall.objects.select_for_update().get(pk=call_id)
+        pending = (call.metadata or {}).get("pending_approvals", [])
+        waiting = sorted(item["id"] for item in pending)
+        latest = (
+            StructuredCall.objects.filter(session_id=call.session_id)
+            .filter(messaging.awaiting_approval())
+            .order_by("-created_at")
+            .values_list("pk", flat=True)
+            .first()
+        )
+        if (
+            latest != call.pk
+            or approval_pending_digest(pending) != expected_pending
+            or not waiting
+            or (approval_ids is not None and sorted(approval_ids) != waiting)
+        ):
+            raise HttpError(409, "That approval was already answered")
+        shown = request_payload.get("shown_approvals")
+        if shown is not None and approval_pending_digest(shown) != approval_pending_digest(pending):
+            raise HttpError(409, "The displayed approval no longer matches the pending call")
+        shown_call_id = request_payload.get("shown_call_id")
+        if shown_call_id is not None and shown_call_id != str(call.pk):
+            raise HttpError(409, "The displayed call is no longer current")
+        decisions = approve if isinstance(approve, dict) else dict.fromkeys(waiting, approve)
+        if sorted(decisions) != waiting:
+            raise HttpError(409, "That approval was already answered")
+        entry = {
+            "id": str(uuid.uuid4()),
+            "actor_id": str(user.pk),
+            "call_id": str(call.pk),
+            "decisions": decisions,
+            "request": request_payload,
+            "pending_sha256": approval_pending_digest(pending),
+            "shown_verified": shown is not None and shown_call_id == str(call.pk),
+            "decided_at": timezone.now().isoformat(),
+        }
+        metadata = dict(call.metadata or {})
+        metadata["authenticated_approval_decisions"] = [
+            *metadata.get("authenticated_approval_decisions", []),
+            entry,
+        ]
+        call.metadata = metadata
+        call.save(update_fields=["metadata"])
+    return entry, waiting
+
+
 @router.post("/sessions/{session_id}/approvals", response=TurnOut)
 async def answer_approval(request, session_id: str, data: ApprovalIn):
     session = await get_session(request, session_id)
@@ -1558,7 +1638,42 @@ async def answer_approval(request, session_id: str, data: ApprovalIn):
     waiting = sorted(a["id"] for a in (pending.metadata or {}).get("pending_approvals", []))
     if approval_ids is not None and sorted(approval_ids) != waiting:
         raise HttpError(409, "That approval was already answered")
-    return await sync_to_async(queue_and_report)(session, approve=approve, approval_ids=approval_ids)
+    from django_ergo.conversation.toolkit import approval_pending_digest
+
+    entry, waiting = await sync_to_async(record_authenticated_approval, thread_sensitive=True)(
+        pending.pk,
+        request.auth,
+        approve,
+        approval_ids,
+        approval_pending_digest((pending.metadata or {}).get("pending_approvals", [])),
+        data.model_dump(exclude_unset=True),
+    )
+    return await sync_to_async(queue_and_report)(
+        session, approve=approve, approval_ids=waiting, authenticated_approval_id=entry["id"]
+    )
+
+
+@router.post("/sessions/{session_id}/approvals/revalidate", response=TurnOut)
+async def revalidate_approval(request, session_id: str, data: RevalidatePendingIn):
+    """Ask the current automatic policy to revalidate this exact pending batch."""
+    from django_ergo.conversation.toolkit import approval_pending_digest
+
+    session = await get_session(request, session_id)
+    if str(session.user_id) != str(request.auth.pk) or not request.auth.is_active:
+        raise HttpError(403, "Only the active session owner can revalidate a pending call")
+    bot = get_bot(session.bot_name, request.auth)
+    require_admin_for_risky_tools(bot, request.auth)
+    pending = await bot.pending_call(session)
+    if (
+        pending is None
+        or str(pending.pk) != data.call_id
+        or approval_pending_digest((pending.metadata or {}).get("pending_approvals", []))
+        != approval_pending_digest(data.shown_approvals)
+    ):
+        raise HttpError(409, "The displayed pending call is no longer current")
+    digest = approval_pending_digest(data.shown_approvals)
+    await sync_to_async(revalidate_pending.delay)(str(session.pk), data.call_id, digest)
+    return await sync_to_async(latest_turn)(session, queued=True)
 
 
 def models_out(bot: Bot) -> dict:

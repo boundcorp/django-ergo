@@ -199,6 +199,14 @@ Still to do:
 
 ### Done
 
+- [x] Ergonaut page latency: remove incoming × outgoing request join fanout,
+  reuse repeated recipient-card status within a response, bound transcript
+  context-placement work and sidebar grouping, and expose privacy-bounded
+  request/DB/phase timings. Local production-shaped benchmark: sidebar
+  4,036→23 ms; long thread 3,582→214 ms, 260→28 queries. These are local
+  measurements, not deployed production improvements; sustainable per-pod
+  authenticated scraping/Grafana integration remains deployment-owner work.
+
 - [x] Reviewed bash approval: `approve: review` lets a reviewer model (routed, tool-less) pass plain read-only commands the chat owner asked for in the current turn (signed-in browser messages or verified forwards only), fails closed on any doubt, checks for a message or stop right before the command starts, and records every decision in `bash_reviews`. Accepted residual risks (Lee, 2026-11-13): best-effort secret redaction of the messages sent to the reviewer, and path-based approval with no symlink binding.
 
 - [x] Self-wakes in every chat and thread: the built-in `wake` skill (`ergo_wake_later`, `ergo_wake_cancel`) schedules one later turn with a note, fired once from beat as an automated event (never retried), capped at one pending per chat, 1 minute to 24 hours ahead and 3 in a row without a human message; shown above the composer and in the admin.
