@@ -862,6 +862,8 @@ def order(ctx, item: str) -> str:
     }
     url = f"/api/calls/{call.pk}/approval-decisions/{evidence['id']}/tools/{milk}"
     expected = {
+        "evidence_class": "authenticated_owner_tool_decision",
+        "decision_transport": "django_session",
         "decision_id": evidence["id"],
         "call_id": str(call.pk),
         "session_id": root["id"],
@@ -884,6 +886,36 @@ def order(ctx, item: str) -> str:
     client.force_login(other)
     assert client.get(url).status_code == 404
     client.force_login(cook)
+    # Even with a logged-in session, a valid bearer key takes precedence.
+    bearer = client.post(
+        f"/api/sessions/{root['id']}/approvals",
+        json.dumps(
+            {"decisions": {milk: True, eggs: False}, "shown_approvals": turn["approvals"], "shown_call_id": call_id}
+        ),
+        content_type="application/json",
+        HTTP_AUTHORIZATION=f"Bearer {key}",
+    )
+    assert bearer.status_code == 200
+    call.refresh_from_db()
+    [session_decision, bearer_decision] = call.metadata["authenticated_approval_decisions"]
+    assert session_decision["decision_transport"] == "django_session"
+    assert bearer_decision["decision_transport"] == "api_key"
+    bearer_url = url.replace(evidence["id"], bearer_decision["id"])
+    assert client.get(bearer_url).json()["decision_transport"] == "api_key"
+    # The worker test below continues with the original session decision.
+    queued["authenticated_approval_id"] = evidence["id"]
+    # Missing or unrecognized historical markers remain explicitly unknown.
+    for transport in (None, "unrecognized"):
+        historical = {**evidence}
+        if transport is None:
+            historical.pop("decision_transport")
+        else:
+            historical["decision_transport"] = transport
+        call.metadata = {**call.metadata, "authenticated_approval_decisions": [historical]}
+        call.save(update_fields=["metadata"])
+        assert client.get(url).json()["decision_transport"] == "unknown"
+    call.metadata = {**call.metadata, "authenticated_approval_decisions": [evidence]}
+    call.save(update_fields=["metadata"])
     # Corrupt or unverified records must not turn into authority.
     original = call.metadata
     for change in (

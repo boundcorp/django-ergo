@@ -5,6 +5,7 @@ from django.middleware.csrf import get_token
 from ninja import Router, Schema
 from ninja.errors import HttpError
 from ninja.security import HttpBearer, django_auth
+from ninja.security import SessionAuth as NinjaSessionAuth
 from ninja_jwt.authentication import JWTAuth
 
 from ergonaut.utils.throttle import login_blocked, login_failed, login_succeeded
@@ -22,11 +23,22 @@ class ApiKeyAuth(HttpBearer):
         user = ApiKey.user_for(token)
         if user is not None:
             request.user = user
+            request.ergonaut_auth_transport = "api_key"
+        return user
+
+
+class SessionAuth(NinjaSessionAuth):
+    """Record the successful session mechanism without inferring a human actor."""
+
+    def __call__(self, request):
+        user = super().__call__(request)
+        if user:
+            request.ergonaut_auth_transport = "django_session"
         return user
 
 
 # The API's own endpoints: an API key, else the web app's session (with CSRF).
-user_auth = [ApiKeyAuth(), django_auth]
+user_auth = [ApiKeyAuth(), SessionAuth()]
 
 
 class UserProfileSchema(Schema):

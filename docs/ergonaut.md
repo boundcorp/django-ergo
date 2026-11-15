@@ -657,6 +657,22 @@ were verified against the pending call when the answer was recorded. The
 lookup also checks the recorded batch digest and rejects ambiguous tool IDs.
 Older approvals without a verified shown batch cannot be recovered this way.
 
+The response's `evidence_class` is `authenticated_owner_tool_decision`.
+`decision_transport` is `api_key` or `django_session`, based on the successful
+authentication mechanism for the **decision POST**, not for this lookup.
+Records predating transport capture and unrecognized values return `unknown`;
+they are never upgraded from actor identity. Both mechanisms can be used by
+automation, and neither proves a human acted or independently reauthenticated.
+A receiver must default-deny unknown or unapproved evidence classes, issuers
+and transports and explicitly configure any acceptance; an allowlist expresses
+operator policy, not proof of human consent. The receiver must derive the
+issuer from its authenticated, independently configured server connection, not
+from a claim in this response.
+Where an action requires independent human-owner consent, the receiver must
+verify a separate owner-authority proof bound to the action; this endpoint
+does not supply it. Without such proof, fail closed even if a decision
+transport has been explicitly allowed.
+
 An executing approved tool receives `ctx.approval_decision` with the decision,
 actor, call and tool-use IDs only for a verified displayed batch. A receiver
 must independently trust the Ergonaut issuer and authenticated TLS, map the

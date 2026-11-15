@@ -197,6 +197,8 @@ class OriginalUserMessageOut(Schema):
 
 
 class ApprovalDecisionEvidenceOut(Schema):
+    evidence_class: Literal["authenticated_owner_tool_decision"]
+    decision_transport: Literal["api_key", "django_session", "unknown"]
     decision_id: str
     call_id: str
     session_id: str
@@ -1629,7 +1631,7 @@ async def dismiss_call(request, call_id: str):
     return call_out(call)
 
 
-def record_authenticated_approval(call_id, user, approve, approval_ids, expected_pending, request_payload):
+def record_authenticated_approval(call_id, user, approve, approval_ids, expected_pending, request_payload, transport):
     """Persist the authenticated answer before handing it to a worker."""
     from django_ergo.conversation.toolkit import approval_pending_digest
 
@@ -1668,6 +1670,7 @@ def record_authenticated_approval(call_id, user, approve, approval_ids, expected
             "request": request_payload,
             "pending_sha256": approval_pending_digest(pending),
             "shown_verified": shown is not None and shown_call_id == str(call.pk),
+            "decision_transport": transport if transport in ("api_key", "django_session") else "unknown",
             "decided_at": timezone.now().isoformat(),
         }
         metadata = dict(call.metadata or {})
@@ -1736,6 +1739,12 @@ def approval_decision_evidence(request, call_id: str, decision_id: str, tool_id:
     ):
         raise not_found
     return {
+        "evidence_class": "authenticated_owner_tool_decision",
+        "decision_transport": (
+            entry.get("decision_transport")
+            if entry.get("decision_transport") in ("api_key", "django_session")
+            else "unknown"
+        ),
         "decision_id": decision_id,
         "call_id": str(call.pk),
         "session_id": str(call.session_id),
@@ -1771,6 +1780,7 @@ async def answer_approval(request, session_id: str, data: ApprovalIn):
         approval_ids,
         approval_pending_digest((pending.metadata or {}).get("pending_approvals", [])),
         data.model_dump(exclude_unset=True),
+        getattr(request, "ergonaut_auth_transport", "unknown"),
     )
     return await sync_to_async(queue_and_report)(
         session, approve=approve, approval_ids=waiting, authenticated_approval_id=entry["id"]
