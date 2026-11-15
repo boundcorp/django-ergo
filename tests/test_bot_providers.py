@@ -41,6 +41,166 @@ def bot_with(found: Providers, engine: dict | None = None) -> Bot:
     return bot
 
 
+def worker_provider_data():
+    data = yaml.safe_load(PROVIDERS)
+    data["providers"]["xai-oauth"] = {
+        "type": "omp",
+        "transport": "cli",
+        "account": "xai-oauth",
+    }
+    data["agents"] = {
+        "small": [
+            {
+                "agent": "omp",
+                "provider": "xai-oauth",
+                "model": "xai-oauth/grok-4",
+            }
+        ]
+    }
+    return data
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"transport": "api"},
+        {"transport": None},
+        {"models": ["grok-4"]},
+        {"api_key_env": "TEST_XAI_KEY"},
+        {"config": {"command": "omp"}},
+        {"config": {"api_key": "not-a-credential"}},
+        {"account": "xai"},
+        {"account": ""},
+        {"account": None},
+    ],
+    ids=[
+        "api-transport",
+        "omitted-transport",
+        "chat-models",
+        "credential-env",
+        "cli-config",
+        "credential-config",
+        "unsupported-account",
+        "empty-account",
+        "omitted-account",
+    ],
+)
+def test_worker_provider_rejects_unsupported_configuration(change):
+    data = worker_provider_data()
+    spec = data["providers"]["xai-oauth"]
+    for key, value in change.items():
+        if value is None:
+            spec.pop(key)
+        else:
+            spec[key] = value
+    with pytest.raises(ProvidersError):
+        Providers.from_dict(data)
+
+
+@pytest.mark.parametrize("name", ["anthropic", "openai-codex"])
+def test_worker_alias_cannot_overwrite_another_accounts_canonical_usage(name):
+    with pytest.raises(ProvidersError):
+        Providers.from_dict(
+            {
+                "providers": {
+                    name: {
+                        "type": "omp",
+                        "transport": "cli",
+                        "account": "xai-oauth",
+                    }
+                }
+            }
+        )
+
+
+@pytest.mark.parametrize("kind", ["openai", "claude"])
+@pytest.mark.parametrize("account", ["xai-oauth", ""])
+@pytest.mark.parametrize("transport", ["api", "cli"])
+def test_account_is_not_accepted_on_chat_providers(kind, account, transport):
+    data = worker_provider_data()
+    data["providers"]["ordinary"] = {
+        "type": kind,
+        "transport": transport,
+        "account": account,
+        "models": ["ordinary-model"],
+    }
+    with pytest.raises(ProvidersError):
+        Providers.from_dict(data)
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"agent": "claude"},
+        {"agent": "codex"},
+        {"model": "grok-4"},
+        {"model": "xai/grok-4"},
+        {"model": "anthropic/grok-4"},
+        {"model": "xai-oauth/"},
+        {"model": "xai-oauth/grok-4/extra"},
+        {"model": ""},
+    ],
+)
+def test_worker_provider_requires_omp_and_an_exact_account_model(change):
+    data = worker_provider_data()
+    data["agents"]["small"][0].update(change)
+    with pytest.raises(ProvidersError):
+        Providers.from_dict(data)
+
+
+@pytest.mark.parametrize("reference", ["default", "auto-default", "tier"])
+def test_worker_models_cannot_be_default_or_chat_tier_candidates(reference):
+    data = worker_provider_data()
+    if reference == "default":
+        data["default"] = "xai-oauth/grok-4"
+    elif reference == "auto-default":
+        data["default"] = "auto/small"
+    else:
+        data["tiers"] = {"small": ["xai-oauth/grok-4"]}
+    with pytest.raises(ProvidersError):
+        Providers.from_dict(data)
+
+
+def test_worker_provider_is_never_a_chat_engine_or_model_picker_option(monkeypatch):
+    monkeypatch.setenv("TEST_OPENAI_KEY", "sk-test")
+    found = Providers.from_dict(worker_provider_data())
+    worker = found.providers["xai-oauth"]
+    assert worker.worker_only
+    assert worker.account == "xai-oauth"
+    assert not found.providers["openai"].worker_only
+    assert found.providers["openai"].account == ""
+    assert [m.id for m in found.models()] == [
+        "openai/gpt-6-luna",
+        "openai/gpt-6-sol",
+        "anthropic/claude-opus-5-5",
+    ]
+    assert found.find("xai-oauth/grok-4") is None
+    assert not found.knows("xai-oauth/grok-4")
+    # Configured worker tiers do not make an ordinary auto chat tier usable.
+    assert not found.knows("auto/small")
+    with pytest.raises(ProvidersError):
+        found.engine("xai-oauth/grok-4")
+
+    bot = bot_with(found)
+    assert bot.session_model_ref("xai-oauth/grok-4") == ""
+    chat = SimpleNamespace(engine_type="openai", model="xai-oauth/grok-4")
+    spec = bot.engine_spec(chat)
+    assert (spec.engine_type, spec.config["model"]) == ("openai", "gpt-6-luna")
+    assert spec.config["provider"] == "openai"
+
+
+def test_worker_provider_requires_an_executable_omp_on_path(monkeypatch, tmp_path):
+    worker = Providers.from_dict(worker_provider_data()).providers["xai-oauth"]
+    monkeypatch.setenv("PATH", str(tmp_path))
+    assert not worker.available
+    executable = tmp_path / "omp"
+    executable.write_text("#!/bin/sh\nexit 0\n")
+    executable.chmod(0o644)
+    assert not worker.available
+    executable.chmod(0o755)
+    assert worker.available
+
+
 def test_providers_yaml_lists_models_and_builds_their_engines(tmp_path, monkeypatch):
     found = providers(tmp_path)
     assert [m.id for m in found.models()] == [
@@ -221,3 +381,22 @@ def test_retry_route_is_discarded_when_model_changes_or_becomes_unavailable(
     assert bot.route(chat) == "openai/gpt-6-sol"
     chat.refresh_from_db()
     assert "retry_route" not in chat.metadata
+
+
+@pytest.mark.django_db
+def test_chat_model_selection_cannot_switch_to_a_worker_provider(
+    django_user_model, monkeypatch
+):
+    from django_ergo.conversation.models import ConversationSession
+
+    monkeypatch.setenv("TEST_OPENAI_KEY", "sk-test")
+    bot = bot_with(Providers.from_dict(worker_provider_data()))
+    user = django_user_model.objects.create(username="worker-model-picker")
+    chat = ConversationSession.objects.create(
+        user=user, bot_name="kitchen", model="openai/gpt-6-sol", engine_type="openai"
+    )
+    bot.pick_model(chat, "xai-oauth/grok-4")
+    chat.refresh_from_db()
+    assert chat.model == ""
+    assert (chat.engine_type, chat.transport_type) == ("openai", "api")
+    assert bot.engine_spec(chat).config["model"] == "gpt-6-luna"

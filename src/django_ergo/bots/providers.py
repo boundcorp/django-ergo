@@ -41,6 +41,12 @@ logged in with: Claude models through the Claude Code CLI
 on a ChatGPT login (``conversation.engines.codex_cli``). It needs no key,
 and is available when the CLI is installed.
 
+``type: omp`` with ``transport: cli`` and ``account: xai-oauth`` declares a
+worker-only Grok subscription. It has no chat models, credentials or engine
+config; explicit ``agents`` entries use ``agent: omp`` and an
+``xai-oauth/<model>`` selector. Availability means omp is installed, not that
+its login or inference has been verified.
+
 ``private_pools`` lists API-billed models that only named bots may use (see
 ``conversation.inference_policy`` and docs/bots.md, "Private inference")::
 
@@ -63,6 +69,7 @@ and no public provider, tier, agent or default may name one.
 from __future__ import annotations
 
 import os
+import shutil
 from dataclasses import dataclass
 from dataclasses import field
 from decimal import Decimal
@@ -90,7 +97,12 @@ from django_ergo.protected_env import is_protected_env
 PROVIDERS_FILE = "providers.yaml"
 ROUTING_FILE = "routing.md"
 ENGINE_TYPES = ("openai", "claude")
-TRANSPORTS = {"openai": ("api", "cli"), "claude": ("api", "cli")}
+PROVIDER_TYPES = (*ENGINE_TYPES, "omp")
+TRANSPORTS = {
+    "openai": ("api", "cli"),
+    "claude": ("api", "cli"),
+    "omp": ("cli",),
+}
 PRIVATE_POOLS_KEY = "private_pools"
 POOL_KEYS = frozenset(
     {"enabled", "provider", "allowed_bots", "default", "models", "daily_usd_cap"}
@@ -149,10 +161,17 @@ class Provider:
     transport: str = "api"
     config: dict = field(default_factory=dict)
     models: dict[str, Model] = field(default_factory=dict)
+    account: str = ""
+
+    @property
+    def worker_only(self) -> bool:
+        return self.type == "omp"
 
     @property
     def available(self) -> bool:
         """Its key is set (or it needs none); for the CLI, the CLI is installed."""
+        if self.worker_only:
+            return shutil.which("omp") is not None
         if self.transport == "cli" and self.type == "openai":
             from django_ergo.conversation.engines.codex_cli import codex_installed
 
@@ -258,10 +277,8 @@ class Providers:
         for name, given in (data.get("providers") or {}).items():
             spec = given or {}
             kind = spec.get("type") or name
-            if kind not in ENGINE_TYPES:
-                msg = (
-                    f"Provider {name!r}: type must be one of {', '.join(ENGINE_TYPES)}"
-                )
+            if kind not in PROVIDER_TYPES:
+                msg = f"Provider {name!r}: type must be one of {', '.join(PROVIDER_TYPES)}"
                 raise ProvidersError(msg)
             transport = str(spec.get("transport") or "api")
             if transport not in TRANSPORTS[kind]:
@@ -273,6 +290,7 @@ class Providers:
                 transport=transport,
                 api_key_env=str(spec.get("api_key_env") or ""),
                 config=dict(spec.get("config") or {}),
+                account=_worker_account(name, kind, spec),
             )
             for listed in spec.get("models") or []:
                 entry = listed if isinstance(listed, dict) else {"name": listed}
@@ -396,6 +414,18 @@ class Providers:
                         "listed subscription (transport: cli)"
                     )
                     raise ProvidersError(msg)
+                if provider.worker_only and (
+                    choice.agent != "omp"
+                    or choice.model.partition("/")[0] != provider.account
+                    or not choice.model.partition("/")[2]
+                    or "/" in choice.model.partition("/")[2]
+                    or any(c.isspace() for c in choice.model)
+                ):
+                    msg = (
+                        f"agents.{tier}: worker-only provider {choice.provider!r} needs "
+                        f"agent: omp and model: {provider.account}/<model>"
+                    )
+                    raise ProvidersError(msg)
         try:
             rules = RoutingRules.model_validate(data.get("routing") or {})
         except ValueError as exc:
@@ -414,6 +444,25 @@ class Providers:
         if is_auto(ref):
             return bool(self.routing.tiers.get(tier_of(ref)))
         return self.find(ref) is not None
+
+
+def _worker_account(name: str, kind: str, spec: dict) -> str:
+    """An explicit subscription identity, never an unsupported chat engine."""
+    if kind != "omp":
+        if "account" in spec:
+            msg = f"Provider {name!r}: account is only supported for worker-only omp"
+            raise ProvidersError(msg)
+        return ""
+    if spec.get("account") != "xai-oauth":
+        msg = f"Provider {name!r}: omp account must be xai-oauth"
+        raise ProvidersError(msg)
+    if name in ("anthropic", "openai-codex"):
+        msg = f"Provider {name!r}: worker-only alias would overwrite another subscription's usage"
+        raise ProvidersError(msg)
+    if any(spec.get(key) for key in ("models", "api_key_env", "config")):
+        msg = f"Provider {name!r}: worker-only omp has no models, api_key_env or config"
+        raise ProvidersError(msg)
+    return "xai-oauth"
 
 
 def _private_pools(raw, providers: dict[str, Provider]) -> dict[str, PrivatePool]:

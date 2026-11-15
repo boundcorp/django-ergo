@@ -513,6 +513,160 @@ def paced(now, used, hours_left, period="7d"):
     }
 
 
+@pytest.fixture
+def grok_workers(monkeypatch):
+    data = yaml.safe_load(PROVIDERS)
+    data["providers"]["xai-oauth"] = {
+        "type": "omp",
+        "transport": "cli",
+        "account": "xai-oauth",
+    }
+    # Explicit low/small worker membership must not change the chat tier.
+    data["agents"]["low"] = [
+        {"agent": "claude", "model": "claude-sonnet-5-5", "provider": "claude"},
+        {"agent": "codex", "model": "gpt-6-luna", "provider": "chatgpt"},
+        {"agent": "omp", "model": "xai-oauth/grok-4", "provider": "xai-oauth"},
+    ]
+    original_which = shutil.which
+    monkeypatch.setattr(
+        shutil,
+        "which",
+        lambda command: "/test/bin/omp"
+        if command == "omp"
+        else original_which(command),
+    )
+    return Providers.from_dict(data)
+
+
+def record_grok_worker_budgets(now):
+    hours_left = 168 * (1 - 0.144)
+    record_usage_windows("claude", {"weekly": paced(now, 100, hours_left)})
+    record_usage_windows("chatgpt", {"weekly": paced(now, 54, hours_left)})
+    record_usage_windows(
+        "xai-oauth",
+        {"weekly_credits": {**paced(now, 0, hours_left), "model": ""}},
+    )
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("tier", ["low", "small"])
+def test_underused_grok_subscription_wins_only_for_eligible_workers(
+    grok_workers, pace_clock, tier
+):
+    record_grok_worker_budgets(pace_clock)
+    choice = pick_agent(grok_workers, tier)
+    assert (choice.agent, choice.provider, choice.model) == (
+        "omp",
+        "xai-oauth",
+        "xai-oauth/grok-4",
+    )
+    # Local managers cannot run omp, even when Grok has the freshest budget.
+    local = pick_agent(grok_workers, tier, ("claude", "codex"))
+    assert (local.agent, local.provider) == ("codex", "chatgpt")
+    assert pick_model(grok_workers, tier) == "chatgpt/gpt-6-luna"
+
+    report = routing.routing_report(grok_workers)
+    providers = {row["name"]: row for row in report["providers"]}
+    grok = providers["xai-oauth"]
+    assert grok["worker_only"] is True
+    assert grok["account"] == "xai-oauth"
+    assert grok["subscription"] is True
+    assert "worker-only" in grok["reason"].lower()
+    assert providers["chatgpt"]["worker_only"] is False
+    assert providers["chatgpt"]["account"] == ""
+    assert grok["windows"]["weekly_credits"]["used"] == 0
+    codex = providers["chatgpt"]["windows"]["weekly"]
+    assert codex["used"] == 54
+    assert codex["elapsed_frac"] == pytest.approx(0.144)
+    assert codex["pace_delta"] < 0
+    workers = next(row for row in report["agents"] if row["name"] == "small")
+    assert [(row["provider"], row["state"]) for row in workers["candidates"]] == [
+        ("claude", "skip"),
+        ("chatgpt", "ok"),
+        ("xai-oauth", "pick"),
+    ]
+    assert all(
+        candidate["provider"] != "xai-oauth"
+        for row in report["tiers"]
+        for candidate in row["candidates"]
+    )
+
+    record_usage_windows("chatgpt", {"weekly": paced(pace_clock, 100, 1)})
+    with pytest.raises(ValueError, match="No safe subscription"):
+        pick_agent(grok_workers, tier, ("claude", "codex"))
+    # The exhausted local-manager set must not gain an omp fallback.
+    assert pick_agent(grok_workers, tier).provider == "xai-oauth"
+
+
+@pytest.mark.django_db
+def test_missing_omp_excludes_grok_but_preserves_remote_cli_workers(
+    grok_workers, pace_clock, monkeypatch
+):
+    record_grok_worker_budgets(pace_clock)
+    monkeypatch.setattr(shutil, "which", lambda command: None)
+    # Existing remote Codex workers do not require a local Codex installation.
+    assert pick_agent(grok_workers, "low").provider == "chatgpt"
+    report = routing.routing_report(grok_workers)
+    workers = next(row for row in report["agents"] if row["name"] == "small")
+    grok = next(row for row in workers["candidates"] if row["provider"] == "xai-oauth")
+    assert grok["state"] == "unavailable"
+    assert "omp" in grok["reason"].lower()
+    assert (
+        next(row for row in report["providers"] if row["name"] == "xai-oauth")["status"]
+        == "unavailable"
+    )
+    record_usage_windows("chatgpt", {"weekly": paced(pace_clock, 100, 1)})
+    with pytest.raises(ValueError, match="No safe subscription"):
+        pick_agent(grok_workers, "low")
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("window", "model", "expected"),
+    [
+        ("weekly_credits", "", "chatgpt"),
+        ("weekly_images", "grok-imagine", "xai-oauth"),
+        ("weekly_other_model", "other-model", "xai-oauth"),
+    ],
+)
+def test_grok_workers_apply_generic_credits_but_ignore_unrelated_scopes(
+    grok_workers, pace_clock, window, model, expected
+):
+    record_grok_worker_budgets(pace_clock)
+    record_usage_windows(
+        "xai-oauth",
+        {window: {**paced(pace_clock, 100, 1), "model": model}},
+    )
+    assert pick_agent(grok_workers, "small").provider == expected
+    workers = next(
+        row
+        for row in routing.routing_report(grok_workers)["agents"]
+        if row["name"] == "small"
+    )
+    grok = next(row for row in workers["candidates"] if row["provider"] == "xai-oauth")
+    assert grok["state"] == ("skip" if expected == "chatgpt" else "pick")
+
+
+@pytest.mark.django_db
+def test_grok_short_window_ahead_of_pace_blocks_fresh_weekly_credits(
+    grok_workers, pace_clock
+):
+    record_grok_worker_budgets(pace_clock)
+    record_usage_windows(
+        "xai-oauth",
+        {"five_hour": {**paced(pace_clock, 60, 4, "5h"), "model": ""}},
+    )
+    assert pick_agent(grok_workers, "small").provider == "chatgpt"
+    workers = next(
+        row
+        for row in routing.routing_report(grok_workers)["agents"]
+        if row["name"] == "small"
+    )
+    grok = next(row for row in workers["candidates"] if row["provider"] == "xai-oauth")
+    assert grok["state"] == "skip"
+    assert "five_hour" in grok["reason"]
+
+
 @pytest.mark.django_db
 @pytest.mark.parametrize("codex_hours", [82 / 60, 46.8])
 def test_lee_example_prefers_codex_for_chat_and_worker_even_with_claude_cache(

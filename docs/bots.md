@@ -812,6 +812,12 @@ manager)` asks the manager to start the agent and starts a polling Worker,
   `claude` and `codex` candidates for `local_shell`, `omp` for Orca), so a
   used-up subscription falls back to another one. `manager` is needed only when the
   chat has more than one.
+  Worker-only Grok subscriptions use `type: omp`, `transport: cli`,
+  `account: xai-oauth` and explicit `agent: omp` / `xai-oauth/<model>`
+  worker entries. They cannot list chat models or be a chat tier/default;
+  the routing host must have `omp` installed. See
+  [Worker-only Grok subscription](building-bots.md#worker-only-grok-subscription)
+  for a proposed low-tier configuration and the limits of availability checks.
 - Each check (`AgentManager.check`) passes new questions to the chat once,
   as a message naming the worker and question. `ergo_agent_reply(worker_id,
 question_id, answer)` queues the answer for the worker and returns without
