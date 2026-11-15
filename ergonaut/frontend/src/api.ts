@@ -762,10 +762,11 @@ function csrfToken(): string {
   return document.cookie.match(/(?:^|; )csrftoken=([^;]+)/)?.[1] ?? ''
 }
 
-async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+async function request<T>(method: string, path: string, body?: unknown, keepalive = false): Promise<T> {
   const response = await fetch(`/api${path}`, {
     method,
     credentials: 'same-origin',
+    keepalive,
     headers: {
       'Content-Type': 'application/json',
       ...(method === 'GET' ? {} : { 'X-CSRFToken': csrfToken() }),
@@ -934,6 +935,12 @@ export type ClientAudioStatus =
   | 'audio_arriving'
   | 'turn_unplayed'
 export type ClientAudioReport = { event_id: string; status: ClientAudioStatus; detail?: string }
+export type ClientLifecycleReport = {
+  event_id: string
+  boundary: 'browser_disconnected' | 'browser_visibility' | 'browser_pagehide'
+  reason?: number
+  visibility: 'visible' | 'hidden' | 'unknown'
+}
 
 export const api = {
   realtimeVoiceConfig: () => request<{ enabled: boolean; standby_enabled?: boolean }>('GET', '/realtime-voice/config'),
@@ -953,6 +960,13 @@ export const api = {
     request<RealtimeVoiceSession>('POST', `/realtime-voice/sessions/${encodeURIComponent(id)}/end`),
   reportRealtimeVoiceAudio: (id: string, report: ClientAudioReport) =>
     request<{ recorded: boolean }>('POST', `/realtime-voice/sessions/${encodeURIComponent(id)}/client-audio`, report),
+  reportRealtimeVoiceLifecycle: (id: string, report: ClientLifecycleReport) =>
+    request<{ recorded: boolean }>(
+      'POST',
+      `/realtime-voice/sessions/${encodeURIComponent(id)}/client-lifecycle`,
+      report,
+      true,
+    ),
   apiKeys: () => request<ApiKey[]>('GET', '/auth/keys'),
   createApiKey: (name: string) => request<ApiKey & { key: string }>('POST', '/auth/keys', { name }),
   revokeApiKey: (id: string) => request<{ ok: boolean }>('DELETE', `/auth/keys/${id}`),

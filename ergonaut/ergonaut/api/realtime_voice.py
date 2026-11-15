@@ -26,6 +26,7 @@ from ergonaut.api.auth import user_auth
 from ergonaut.api.bots import get_bot, uuid_or_404, visible_sessions
 from ergonaut.api.realtime_voice_state import apply_user_event, current_time
 from ergonaut.apps.bots.models import RealtimeVoiceDelegation, RealtimeVoiceEvent, RealtimeVoiceSession
+from ergonaut.realtime_voice_diagnostics import record_lifecycle, rtc_reason
 from ergonaut.realtime_voice_execution import (
     NORMAL_RESTRICTION,
     initial_state,
@@ -140,6 +141,7 @@ def end_voice_session(voice_id):
     with transaction.atomic():
         session = RealtimeVoiceSession.objects.select_for_update().filter(pk=voice_id, status="active").first()
         if session:
+            record_lifecycle(session.pk, session.bridge_claim_id or None, "session_ended", reason="explicit_end")
             clear_live_state(session)
             session.status, session.ended_at = "ended", timezone.now()
             session.save(update_fields=["state", "status", "ended_at"])
@@ -155,6 +157,7 @@ def end_bridge_session(voice_id, claim_id):
             .first()
         )
         if session:
+            record_lifecycle(session.pk, claim_id, "session_ended", reason="bridge_closed", teardown=True)
             clear_live_state(session)
             session.status, session.ended_at = "ended", timezone.now()
             session.save(update_fields=["state", "status", "ended_at"])
@@ -176,6 +179,7 @@ def reap_abandoned_bridge(voice_id):
         session = RealtimeVoiceSession.objects.select_for_update().filter(pk=voice_id, status="active").first()
         if session is None or not bridge_lease_expired(session):
             return False
+        record_lifecycle(session.pk, session.bridge_claim_id, "session_ended", reason="lease_expired")
         clear_live_state(session)
         session.status, session.ended_at = "ended", timezone.now()
         session.save(update_fields=["state", "status", "ended_at"])
@@ -222,6 +226,7 @@ def claim_bridge(voice_id, claim_id=None):
             return False
         now = timezone.now()
         if bridge_lease_expired(session, now):
+            record_lifecycle(session.pk, session.bridge_claim_id, "session_ended", reason="lease_expired")
             session.status = "ended"
             session.ended_at = now
             clear_live_state(session)
@@ -1172,3 +1177,31 @@ def client_audio(request, session_id: str, data: ClientAudioIn):
         except ValueError as exc:
             raise HttpError(409, "Client audio report ID already used") from exc
     return {"recorded": True}
+
+
+class ClientLifecycleIn(Schema):
+    event_id: str
+    boundary: str
+    reason: int | None = None
+    visibility: str = "unknown"
+
+
+@router.post("/realtime-voice/sessions/{session_id}/client-lifecycle")
+def client_lifecycle(request, session_id: str, data: ClientLifecycleIn):
+    """Owner-reported transport facts, never a lifecycle command or proof of user action."""
+    session = owned_session(request.auth, session_id)
+    if (
+        not CLIENT_AUDIO_ID.fullmatch(data.event_id)
+        or data.boundary not in ("browser_disconnected", "browser_visibility", "browser_pagehide")
+        or data.visibility not in ("visible", "hidden", "unknown")
+    ):
+        raise HttpError(400, "Invalid client lifecycle report")
+    event = record_lifecycle(
+        session.pk,
+        None,
+        data.boundary,
+        event_id=data.event_id,
+        reason=rtc_reason(data.reason),
+        visibility=data.visibility,
+    )
+    return {"recorded": event is not None}

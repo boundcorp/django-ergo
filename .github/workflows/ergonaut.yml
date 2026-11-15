@@ -93,6 +93,7 @@ jobs:
           .voice-venv/bin/python -m pytest -c pyproject.toml -q
           ergonaut/api/tests/test_realtime_voice.py
           ergonaut/api/tests/test_realtime_voice_bridge.py
+          ergonaut/api/tests/test_realtime_voice_diagnostics.py
           ergonaut/api/tests/test_realtime_voice_budget.py
           ergonaut/api/tests/test_realtime_voice_interpreter.py
           ergonaut/api/tests/test_realtime_voice_native_lifecycle.py

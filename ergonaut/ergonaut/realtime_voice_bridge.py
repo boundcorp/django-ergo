@@ -39,6 +39,7 @@ from ergonaut.api.realtime_voice import (  # noqa: E402
     record_event,
     renew_bridge_lease,
 )
+from ergonaut.realtime_voice_diagnostics import record_worker_lifecycle, rtc_reason  # noqa: E402
 from ergonaut.realtime_voice_interpreter import process_native_event  # noqa: E402
 from ergonaut.realtime_voice_outbox import claim_announcement, completion_event, thread_update_event  # noqa: E402
 
@@ -92,18 +93,41 @@ def pause_grace():
     return float(value)
 
 
+class ObservedWebSocket:
+    """Delegate the SDK socket unchanged, retaining only closure metadata."""
+
+    def __init__(self, socket, observe):
+        self.socket, self.observe = socket, observe
+
+    def __getattr__(self, name):
+        return getattr(self.socket, name)
+
+    async def receive(self, *args, **kwargs):
+        try:
+            message = await self.socket.receive(*args, **kwargs)
+        except BaseException as exc:
+            self.observe("provider_wire_closed", error_type=type(exc).__name__)
+            raise
+        if message.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.CLOSING):
+            code = message.data if type(message.data) is int else self.socket.close_code
+            self.observe("provider_wire_closed", code=code)
+        return message
+
+
 class OneConnection:
     """Cap provider WebSocket creation, including SDK-initiated reconnects."""
 
-    def __init__(self, session):
+    def __init__(self, session, observe=None):
         self.session = session
+        self.observe = observe
         self.used = False
 
     async def ws_connect(self, *args, **kwargs):
         if self.used:
             raise RuntimeError("provider connection limit reached")
         self.used = True
-        return await self.session.ws_connect(*args, **kwargs)
+        socket = await self.session.ws_connect(*args, **kwargs)
+        return ObservedWebSocket(socket, self.observe) if self.observe else socket
 
 
 def startup_context(snapshot):
@@ -167,6 +191,8 @@ class Assistant(Agent):
         self.partials = {}
         self.finished_turns = {}
         self.final_jobs = set()
+        self.lifecycle_jobs = set()
+        self.lifecycle_noted = set()
         self.finalizing = set()
         self.accept_finals = True
         self.live_finished = False
@@ -253,11 +279,40 @@ class Assistant(Agent):
                     "parallel_tool_calls": False,
                     "max_output_tokens": 1024,
                 },
-                http_session=OneConnection(http_session),
+                http_session=OneConnection(http_session, self.note_lifecycle),
                 max_session_duration=None,
                 conn_options=APIConnectOptions(max_retry=0),
             ),
         )
+
+    def note_lifecycle(self, boundary, **facts):
+        if not self.claim_id:
+            return
+        if boundary in self.lifecycle_noted:
+            return
+        self.lifecycle_noted.add(boundary)
+        facts.setdefault("teardown", self.closing)
+        facts["observed_at"] = datetime.now(UTC)
+
+        async def persist():
+            try:
+                await sync_to_async(record_worker_lifecycle, thread_sensitive=False)(
+                    self.voice_id, self.claim_id, boundary, **facts
+                )
+            except Exception as exc:
+                logger.error("voice lifecycle evidence failed exception_type=%s", type(exc).__name__)
+
+        task = asyncio.create_task(persist())
+        self.lifecycle_jobs.add(task)
+        task.add_done_callback(self.lifecycle_jobs.discard)
+
+    async def flush_lifecycle(self):
+        pending = set(self.lifecycle_jobs)
+        if not pending:
+            return
+        _, unfinished = await asyncio.wait(pending, timeout=1)
+        for task in unfinished:
+            task.cancel()
 
     def stop(self):
         self.closing = True
@@ -434,9 +489,12 @@ class Assistant(Agent):
                 return  # Delta/argument fragments are never admission or authoritative task text.
             self.queue_native_event(event)
         if event.get("type") == "session.started":
+            self.note_lifecycle("provider_started")
             self.note_input("provider_started")
         elif event.get("type") == "error":
             self.note_input("provider_error")
+        elif event.get("type") == "session.closed":
+            self.note_lifecycle("provider_closed", reason=event.get("reason"))
         if event.get("type") == "session.started" and self.resumed_at and self.reconnect_latency_seconds is None:
             self.reconnect_latency_seconds = max(0.0, (datetime.now(UTC) - self.resumed_at).total_seconds())
         if event.get("type") in ("session.usage.updated", "session.closed"):
@@ -466,12 +524,19 @@ class Assistant(Agent):
     def on_client_event(self, event):
         # In 1.8.11 this public event fires immediately before ws.send_str, not
         # when audio first enters the SDK queue and not after a remote receipt.
+        if event.get("type") == "session.close":
+            self.note_lifecycle("provider_close_sent")
         if event.get("type") == "session.input_audio.append" and event.get("audio"):
             self.note_input("forwarded")
         if event.get("type") == "session.commentary.append":
             logger.info("voice commentary_queued correlation=%s", self.correlation(event.get("delegation_id")))
 
-    def on_provider_error(self, _event):
+    def on_provider_error(self, event):
+        self.note_lifecycle(
+            "provider_error",
+            error_type=type(getattr(event, "error", None)).__name__,
+            recoverable=getattr(event, "recoverable", None),
+        )
         self.note_input("provider_error")
 
     def note_input(self, stage):
@@ -907,10 +972,25 @@ async def voice_session(ctx: agents.JobContext):
         http_session = aiohttp.ClientSession()
         assistant = Assistant(voice_id, snapshot, http_session, claim_id=claim_id)
         session = AgentSession(vad=silero.VAD.load())
-    except BaseException:
+    except BaseException as exc:
+        failed_at = datetime.now(UTC)
         if http_session is not None:
             await http_session.close()
         await sync_to_async(end_bridge_session, thread_sensitive=True)(voice_id, claim_id)
+        try:
+            await asyncio.wait_for(
+                sync_to_async(record_worker_lifecycle, thread_sensitive=False)(
+                    voice_id,
+                    claim_id,
+                    "bridge_exit",
+                    reason="exception",
+                    error_type=type(exc).__name__,
+                    observed_at=failed_at,
+                ),
+                timeout=1,
+            )
+        except (Exception, asyncio.CancelledError):
+            pass  # Diagnostic loss must not prevent the original initialization cleanup.
         ctx.shutdown(reason="voice initialization failed")
         raise
     session_closed = asyncio.Event()
@@ -918,6 +998,7 @@ async def voice_session(ctx: agents.JobContext):
     teardown_session = False
     teardown_room = False
     unexpected_close = False
+    close_reason = None
 
     def microphone_live():
         participant = ctx.room.remote_participants.get(owner_identity)
@@ -936,17 +1017,28 @@ async def voice_session(ctx: agents.JobContext):
 
     @ctx.room.on("participant_disconnected")
     def on_participant_disconnected(participant):
+        nonlocal close_reason
+        if participant.identity == owner_identity:
+            assistant.note_lifecycle(
+                "owner_disconnected",
+                reason=rtc_reason(getattr(participant, "disconnect_reason", None)),
+                teardown=teardown_room,
+            )
         nonlocal unexpected_close
         if participant.identity == owner_identity and not teardown_room:
+            close_reason = close_reason or "owner_disconnected"
             unexpected_close = True
             assistant.vad_ready = False
             assistant.invalidate_runtime()
             session_closed.set()
 
     @ctx.room.on("disconnected")
-    def on_room_disconnected(*_args):
+    def on_room_disconnected(reason=None):
+        nonlocal close_reason
+        assistant.note_lifecycle("room_disconnected", reason=rtc_reason(reason), teardown=teardown_room)
         nonlocal unexpected_close
         if not teardown_room:
+            close_reason = close_reason or "room_disconnected"
             unexpected_close = True
             assistant.vad_ready = False
             assistant.invalidate_runtime()
@@ -955,9 +1047,19 @@ async def voice_session(ctx: agents.JobContext):
     watch_microphone(ctx.room, assistant, owner_identity)
 
     @session.on("close")
-    def on_close(_event):
+    def on_close(event):
+        nonlocal close_reason
+        error = getattr(event, "error", None)
+        reason = getattr(event, "reason", None)
+        assistant.note_lifecycle(
+            "agent_session_closed",
+            reason=getattr(reason, "value", reason),
+            error_type=type(getattr(error, "error", error)).__name__ if error is not None else None,
+            teardown=teardown_session,
+        )
         nonlocal unexpected_close
         if not teardown_session:
+            close_reason = close_reason or "agent_session_closed"
             unexpected_close = True
         assistant.stop()
         session_closed.set()
@@ -989,10 +1091,12 @@ async def voice_session(ctx: agents.JobContext):
         while not session_closed.is_set():
             if time.monotonic() - lease_renewed >= 5:
                 if not await sync_to_async(renew_bridge_lease, thread_sensitive=True)(voice_id, claim_id):
+                    close_reason = "lease_rejected"
                     break
                 lease_renewed = time.monotonic()
             snapshot = await sync_to_async(bridge_state, thread_sensitive=True)(voice_id, include_briefing=False)
             if snapshot["status"] != "active":
+                close_reason = "session_ended"
                 break
             if snapshot["standby_state"] == "requested" and microphone_live() and assistant.safe_to_standby(snapshot):
                 generation = assistant.activity_generation
@@ -1007,13 +1111,19 @@ async def voice_session(ctx: agents.JobContext):
                         and assistant.safe_to_standby(snapshot)
                     ):
                         standby_requested = True
+                        close_reason = "standby"
                         break
                     await sync_to_async(cancel_standby_close, thread_sensitive=True)(voice_id, claim_id)
             try:
                 await asyncio.wait_for(session_closed.wait(), timeout=0.2)
             except TimeoutError:
                 pass
+    except BaseException as exc:
+        close_reason = "cancelled" if isinstance(exc, asyncio.CancelledError) else "exception"
+        assistant.note_lifecycle("bridge_exit", reason=close_reason, error_type=type(exc).__name__)
+        raise
     finally:
+        assistant.note_lifecycle("bridge_exit", reason=close_reason or "cancelled")
         closed_cleanly = False
         try:
             assistant.stop()
@@ -1039,6 +1149,7 @@ async def voice_session(ctx: agents.JobContext):
             await assistant.finish_live()
             if not closed_cleanly:
                 await sync_to_async(end_bridge_session, thread_sensitive=True)(voice_id, claim_id)
+            await assistant.flush_lifecycle()
             seconds = time.monotonic() - started
             logger.info(
                 "voice bridge wall_seconds=%.3f provider_usage_seconds=%s reconnect_latency_seconds=%s",

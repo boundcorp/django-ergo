@@ -4,6 +4,7 @@ import type { createRoot as CreateRoot, Root } from 'react-dom/client'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { Window } from 'happy-dom'
 import {
+  DisconnectReason,
   LocalAudioTrack,
   LocalParticipant,
   RemoteAudioTrack,
@@ -14,7 +15,13 @@ import {
   type LocalTrackPublication,
 } from 'livekit-client'
 import { Link, MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom'
-import { api, type ClientAudioReport, type RealtimeVoiceSession, type SessionDetail } from '../api'
+import {
+  api,
+  type ClientAudioReport,
+  type ClientLifecycleReport,
+  type RealtimeVoiceSession,
+  type SessionDetail,
+} from '../api'
 import { ActiveVoiceCall, VoiceCallProvider, VoicePage, VoiceTranscript } from './RealtimeVoice'
 import { VoiceSessionCard } from './VoiceSessionCard'
 import { Chat } from '../pages/Chat'
@@ -33,6 +40,7 @@ const original = {
   attachments: api.attachments,
   pins: api.pins,
   reportAudio: api.reportRealtimeVoiceAudio,
+  reportLifecycle: api.reportRealtimeVoiceLifecycle,
 }
 const session: RealtimeVoiceSession = {
   id: 'voice-1',
@@ -64,6 +72,7 @@ let createRoot: typeof CreateRoot
 let restoreOutputs = () => {}
 const restoreRoomMocks: (() => void)[] = []
 let reports: { sessionId: string; report: ClientAudioReport }[] = []
+let lifecycleReports: { sessionId: string; report: ClientLifecycleReport }[] = []
 
 function button(label: string) {
   const found = [...container.querySelectorAll('button')].find(item => item.textContent?.trim() === label)
@@ -160,6 +169,11 @@ beforeEach(async () => {
     reports.push({ sessionId, report })
     return { recorded: true }
   }
+  lifecycleReports = []
+  api.reportRealtimeVoiceLifecycle = async (sessionId, report) => {
+    lifecycleReports.push({ sessionId, report })
+    return { recorded: true }
+  }
 })
 
 afterEach(() => {
@@ -177,6 +191,7 @@ afterEach(() => {
   api.attachments = original.attachments
   api.pins = original.pins
   api.reportRealtimeVoiceAudio = original.reportAudio
+  api.reportRealtimeVoiceLifecycle = original.reportLifecycle
   restoreOutputs()
   restoreOutputs = () => {}
   restoreRoomMocks.splice(0).forEach(restore => restore())
@@ -1517,3 +1532,59 @@ test.each(['end', 'disconnect'] as const)(
     expect(container.textContent).not.toContain('Microphone: enabled')
   },
 )
+
+test('disconnect reports the SDK reason and visibility against its connection even after End returns', async () => {
+  const current = await connectCall()
+  api.endRealtimeVoice = async () => ({ ...session, status: 'ended' })
+  await act(async () => button('End call').click())
+  Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' })
+  await act(async () => {
+    current.emit(RoomEvent.Disconnected, DisconnectReason.CLIENT_INITIATED)
+  })
+  expect(lifecycleReports).toHaveLength(1)
+  expect(lifecycleReports[0].sessionId).toBe(session.id)
+  expect(lifecycleReports[0].report).toMatchObject({
+    boundary: 'browser_disconnected',
+    reason: DisconnectReason.CLIENT_INITIATED,
+    visibility: 'hidden',
+  })
+  expect(lifecycleReports[0].report.event_id.length).toBeGreaterThan(0)
+})
+
+test('stale room disconnect cannot report into a newer connection', async () => {
+  const previous = await connectCall()
+  api.endRealtimeVoice = async () => ({ ...session, status: 'ended' })
+  await act(async () => button('End call').click())
+  expect(lifecycleReports).toHaveLength(0)
+  await act(async () => button('Start call').click())
+  lifecycleReports = []
+  await act(async () => {
+    previous.emit(RoomEvent.Disconnected, DisconnectReason.CLIENT_INITIATED)
+    document.dispatchEvent(new Event('visibilitychange'))
+  })
+  expect(lifecycleReports).toHaveLength(1)
+  expect(lifecycleReports[0].report.boundary).toBe('browser_visibility')
+})
+
+test('browser lifecycle observations reserve the fortieth report for disconnect and require a live room', async () => {
+  await mountVoice()
+  document.dispatchEvent(new Event('visibilitychange'))
+  window.dispatchEvent(new Event('pagehide'))
+  expect(lifecycleReports).toHaveLength(0)
+  // connectCall mounts the same provider and connects its existing session.
+  const current = await connectCall()
+  Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' })
+  window.dispatchEvent(new Event('pagehide'))
+  expect(lifecycleReports[0].report).toMatchObject({ boundary: 'browser_pagehide', visibility: 'hidden' })
+  for (let index = 0; index < 45; index++) document.dispatchEvent(new Event('visibilitychange'))
+  expect(lifecycleReports).toHaveLength(39)
+  await act(async () => current.emit(RoomEvent.Disconnected, DisconnectReason.SERVER_SHUTDOWN))
+  expect(lifecycleReports).toHaveLength(40)
+  expect(lifecycleReports[39].report).toMatchObject({
+    boundary: 'browser_disconnected',
+    reason: DisconnectReason.SERVER_SHUTDOWN,
+  })
+  document.dispatchEvent(new Event('visibilitychange'))
+  window.dispatchEvent(new Event('pagehide'))
+  expect(lifecycleReports).toHaveLength(40)
+})
