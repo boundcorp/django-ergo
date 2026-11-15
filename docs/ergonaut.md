@@ -561,6 +561,44 @@ path segment valid for an hour for that user and bot folder. It never serves
 `.jhtml` files, and allows cross-origin loading so module scripts and CSS
 `url()` work from the opaque origin.
 
+### Request performance
+
+With `TELEMETRY_METRICS_ENABLED` (on by default), responses include
+`Server-Timing`: `total`, `db`, `db_queries`, and measured page phases.
+`session_lookup` covers permission-scoped session/status lookups, `history`
+covers the requested message window, `serialization` covers call normalization,
+and `sidebar` covers navigation or thread accessory/status assembly. Framework
+JSON encoding and middleware overhead remain in `total`, not `serialization`.
+Database time measures SQL execution, not Python model/JSON conversion.
+Streaming responses measure setup only; their bodies are never consumed for
+telemetry. Buffered response bytes are measured before compression.
+
+The protected `/metrics/` endpoint exposes the existing
+`ergonaut_http_requests_total` and `ergonaut_http_request_duration_seconds`,
+plus `ergonaut_http_request_db_queries`, `ergonaut_http_request_db_duration_seconds`,
+`ergonaut_http_request_phase_duration_seconds`, and `ergonaut_http_response_size_bytes`
+histograms (`TELEMETRY_NAMESPACE` changes the prefix). Labels contain route
+templates, an allowlisted HTTP method, and fixed `host="all"`; the counter also
+has HTTP status and the phase histogram has one of the four phase names.
+Unresolved paths use `unmatched`. No usernames, session/bot IDs, request bodies,
+SQL text/parameters or message contents are recorded.
+
+For example, after configuring an authorized Prometheus scrape:
+
+```promql
+histogram_quantile(0.95, sum by (le, route) (rate(ergonaut_http_request_duration_seconds_bucket[5m])))
+sum by (route, phase) (rate(ergonaut_http_request_phase_duration_seconds_sum[5m]))
+sum by (route, status_code) (rate(ergonaut_http_requests_total{status_code=~"5.."}[5m]))
+```
+
+Each web process has its own in-memory registry. Scrape each pod directly, not
+the load-balanced Service, and aggregate in Prometheus; a single-process
+cumulative mean is not a fleet percentile. Configure a dedicated scrape bearer
+token through the deployment's secret/GitOps workflow rather than an expiring
+admin cookie. Neither enabled metrics nor a healthy scrape proves that pages
+are fast or usable. Browser Network timing separates TTFB, transfer and client
+rendering; `Server-Timing` explains the server portion.
+
 ## API keys
 
 Scripts and agents use the API with a key instead of a login:

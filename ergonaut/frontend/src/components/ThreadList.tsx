@@ -140,7 +140,9 @@ export function ThreadGroups({
   const grouped = new Map<GroupKey, Session[]>()
   for (const session of sessions) {
     const key = groupOf(session)
-    grouped.set(key, [...(grouped.get(key) ?? []), session])
+    const rows = grouped.get(key)
+    if (rows) rows.push(session)
+    else grouped.set(key, [session])
   }
   return (
     <div className={full ? 'space-y-4' : 'space-y-0.5'}>
