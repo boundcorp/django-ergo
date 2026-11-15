@@ -97,6 +97,20 @@ def ergo_client_send(ctx, session: str, message: str, wait_seconds: int = 0) -> 
 
 
 @bot_tool(takes_context=True, requires_approval=True)
-def ergo_client_approve(ctx, session: str, approve: bool = True) -> str:
-    """Approve (or deny) the tool calls a remote chat is waiting on."""
-    return run(ctx, "approve", session, *([] if approve else ["--deny"]))
+def ergo_client_approve(
+    ctx, session: str, shown_call_id: str, shown_approvals: str, approve: bool = True
+) -> str:
+    """Approve or deny the exact pending batch returned by ergo_client_show.
+
+    Copy its Approval call ID and complete Approval batch JSON unchanged.
+    """
+    return run(
+        ctx,
+        "approve",
+        session,
+        "--shown-call-id",
+        shown_call_id,
+        "--shown-approvals",
+        shown_approvals,
+        *([] if approve else ["--deny"]),
+    )

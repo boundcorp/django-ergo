@@ -1,6 +1,7 @@
 """The Ergo client skill's ``ergonaut-remote`` command against a live server, with an API key."""
 
 import importlib.util
+import json
 import textwrap
 
 import django_ergo.bots
@@ -82,7 +83,18 @@ def test_ergo_client_runs_a_thread_end_to_end(ergo, kitchen, capsys):
     out = capsys.readouterr().out
     assert "Waiting for approval" in out and "order" in out
 
-    assert ergo.main(["approve", thread, "--wait", "--timeout", "20"]) == 0
+    call_id = next(
+        line.removeprefix("Approval call ID: ") for line in out.splitlines() if line.startswith("Approval call ID: ")
+    )
+    batch = next(
+        line.removeprefix("Approval batch: ") for line in out.splitlines() if line.startswith("Approval batch: ")
+    )
+    assert (
+        ergo.main(
+            ["approve", thread, "--shown-call-id", call_id, "--shown-approvals", batch, "--wait", "--timeout", "20"]
+        )
+        == 0
+    )
     assert "Ordered the eggs." in capsys.readouterr().out
 
     assert ergo.main(["show", thread]) == 0
@@ -98,6 +110,56 @@ def test_ergo_client_runs_a_thread_end_to_end(ergo, kitchen, capsys):
     assert ergo.main(["threads", "--bot", "kitchen", "--json"]) == 0
     assert thread in capsys.readouterr().out
     assert ergo.main(["close", thread]) == 0
+
+
+@pytest.mark.django_db(transaction=True)
+def test_remote_approval_carries_reviewed_batch_to_tool(ergo, kitchen, capsys, tmp_path):
+    from django_ergo.conversation.models import StructuredCall
+
+    (tmp_path / "kitchen" / "tools" / "pantry.py").write_text("""
+import json
+from django_ergo.bots import bot_tool
+@bot_tool(requires_approval=True, takes_context=True)
+def order(ctx, item: str) -> str:
+    return json.dumps(ctx.approval_decision)
+""")
+    fake = kitchen(
+        say("Hello from the kitchen."),
+        tool_call("order", {"item": "eggs"}),
+        say("Ordered the eggs.", status="Eggs ordered"),
+    )
+    assert ergo.main(["new", "kitchen", "Hello", "--title", "Hello", "--wait", "--timeout", "20"]) == 0
+    thread = capsys.readouterr().err.split()[1]
+    assert ergo.main(["send", thread, "Order eggs", "--wait", "--timeout", "20"]) == 0
+    capsys.readouterr()
+    assert ergo.main(["show", thread]) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert any(line.startswith("Approval call ID: ") for line in lines), "\n".join(lines)
+    call_id = next(line.removeprefix("Approval call ID: ") for line in lines if line.startswith("Approval call ID: "))
+    batch = next(line.removeprefix("Approval batch: ") for line in lines if line.startswith("Approval batch: "))
+    changed = json.loads(batch)
+    changed[0]["input"]["item"] = "milk"
+    assert ergo.main(["approve", thread, "--shown-call-id", call_id, "--shown-approvals", json.dumps(changed)]) == 1
+    assert ergo.main(["approve", thread]) == 1
+    assert StructuredCall.objects.get(pk=call_id).status == "awaiting_approval"
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    spec = importlib.util.spec_from_file_location("remote_tools", Path(SCRIPT).parents[1] / "tools.py")
+    tools = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(tools)
+    url, key = ergo.server("")
+    ctx = SimpleNamespace(secret=lambda name: {"ERGONAUT_URL": url, "ERGONAUT_API_KEY": key}[name])
+    assert "Approved" in tools.ergo_client_approve(ctx, thread, call_id, batch)
+    call = StructuredCall.objects.get(pk=call_id)
+    [decision] = call.metadata["authenticated_approval_decisions"]
+    [result] = fake.calls[-1]["messages"][-1]["content"]
+    assert json.loads(result["content"]) == {
+        "id": decision["id"],
+        "actor_id": decision["actor_id"],
+        "call_id": call_id,
+        "tool_use_id": json.loads(batch)[0]["id"],
+    }
 
 
 @pytest.mark.django_db(transaction=True)

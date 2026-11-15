@@ -47,9 +47,12 @@ ergonaut-remote new devbox "Fix the flaky upload test; open a PR" --wait
 ergonaut-remote threads --bucket waiting
 ergonaut-remote show <session>
 ergonaut-remote send <session> "Also add a regression test" --wait
-ergonaut-remote approve <session>
+ergonaut-remote approve <session> --shown-call-id '<id>' --shown-approvals '<batch JSON>'
 ergonaut-remote api GET /bots/devbox/tree                      # any endpoint
 ```
+Copy the exact call ID and complete batch shown by `show` when approving; stale
+or changed calls are rejected.
+
 
 A session can be given as an id, a 6+ character id prefix, `BOT` for your
 main chat with it, or `BOT:CHAT`. `ERGONAUT_URL` with `ERGONAUT_API_KEY` override

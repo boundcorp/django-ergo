@@ -14,7 +14,7 @@ ERGONAUT_URL and ERGONAUT_API_KEY override the saved server.
     ergonaut-remote show <session>                                 # transcript, workers, approvals
     ergonaut-remote show https://ergo.example.com/s/<id>#m-12      # a linked message, with the ones around it
     ergonaut-remote send <session> "Yes, go ahead" --wait
-    ergonaut-remote approve <session>                              # or --deny
+    ergonaut-remote approve <session> --shown-call-id '<id>' --shown-approvals '<batch JSON>'
 
 Make a key in the web app (API keys, at the bottom of the sidebar) or with
 ``ergonaut manage api_key create <user> --name <where>``. Run ``ergonaut-remote -h`` or
@@ -259,7 +259,14 @@ def print_reply(call: dict, session_id: str) -> None:
             echo(
                 f"  - {item.get('name')} {json.dumps(item.get('input', item.get('arguments', {})))[:300]}"
             )
-        echo(f"Answer with: ergonaut-remote approve {session_id}   (or --deny)")
+        echo("Approval call ID: " + call["id"])
+        echo(
+            "Approval batch: "
+            + json.dumps(call["pending_approvals"], ensure_ascii=True)
+        )
+        echo(
+            f"Answer with: ergonaut-remote approve {session_id} --shown-call-id <id> --shown-approvals '<batch>'"
+        )
     elif call.get("status") != "completed":
         echo(
             f"\n[{call.get('status')}] {call.get('error_summary') or call.get('error') or ''}".rstrip()
@@ -574,7 +581,16 @@ def cmd_wait(client, args) -> int:
 def cmd_approve(client, args) -> int:
     session_id = resolve_session(client, args.session)
     before = snapshot(client, session_id)
-    turn = client.post(f"/sessions/{session_id}/approvals", {"approve": not args.deny})
+    if not args.shown_call_id or not args.shown_approvals:
+        raise ValueError(
+            "Review the pending batch and supply --shown-call-id and --shown-approvals"
+        )
+    body = {
+        "approve": not args.deny,
+        "shown_call_id": args.shown_call_id,
+        "shown_approvals": json.loads(args.shown_approvals),
+    }
+    turn = client.post(f"/sessions/{session_id}/approvals", body)
     echo(
         ("Denied." if args.deny else "Approved.")
         + (" The turn continues." if turn.get("queued") else "")
@@ -741,6 +757,8 @@ def parser() -> argparse.ArgumentParser:
     )
     c.add_argument("session")
     c.add_argument("--deny", action="store_true")
+    c.add_argument("--shown-call-id", default="")
+    c.add_argument("--shown-approvals", default="")
     waits(c)
     for name, path, done, text in [
         ("stop", "/sessions/{}/stop", "Stopping.", "stop the running turn"),

@@ -100,14 +100,20 @@ also applies. Do not upload the same deliverable twice.
 ## Approvals, failures and control
 
 ```bash
-ergonaut-remote approve <session> --wait     # run the tool calls the turn is waiting on
-ergonaut-remote approve <session> --deny
+ergonaut-remote show <session>               # inspect the complete pending batch and call ID
+ergonaut-remote approve <session> --shown-call-id '<id>' --shown-approvals '<batch JSON>' --wait
+ergonaut-remote approve <session> --shown-call-id '<id>' --shown-approvals '<batch JSON>' --deny
 ergonaut-remote resume <session>             # retry a turn that failed or hit its step limit
 ergonaut-remote stop <session>               # stop the running turn
 ergonaut-remote close <session>              # archive a finished thread
 ergonaut-remote models devbox                # models the bot's chats can use
 ergonaut-remote models --session <session> --set openai/gpt-6-sol
 ```
+
+Copy the displayed call ID and complete batch unchanged. The server rejects a
+different or stale batch; never reconstruct it from a summary. The bot tool
+`ergo_client_approve` takes the same values, so its own approval shows exactly
+what will be approved remotely.
 
 Approve only what the person asked for or would clearly want. Tool calls
 that spend money, message people, merge, deploy or delete need the
