@@ -860,6 +860,46 @@ def order(ctx, item: str) -> str:
         "shown_approvals": turn["approvals"],
         "shown_call_id": call_id,
     }
+    url = f"/api/calls/{call.pk}/approval-decisions/{evidence['id']}/tools/{milk}"
+    expected = {
+        "decision_id": evidence["id"],
+        "call_id": str(call.pk),
+        "session_id": root["id"],
+        "actor_id": str(cook.pk),
+        "tool_use_id": milk,
+        "decided_at": evidence["decided_at"],
+        "pending_sha256": evidence["pending_sha256"],
+        "reviewed_item": turn["approvals"][0],
+    }
+    assert client.get(url).json() == expected
+    assert client.get(url.replace(f"/tools/{milk}", f"/tools/{eggs}")).status_code == 404
+    assert client.get(url.replace(evidence["id"], "not-a-decision")).status_code == 404
+    from ergonaut.apps.users.models import ApiKey
+
+    _, key = ApiKey.issue(cook, "approval-evidence-reader")
+    client.logout()
+    assert client.get(url).status_code == 401
+    assert client.get(url, HTTP_AUTHORIZATION=f"Bearer {key}").json() == expected
+    other = get_user_model().objects.create_user("other-evidence-reader", password="pw")
+    client.force_login(other)
+    assert client.get(url).status_code == 404
+    client.force_login(cook)
+    # Corrupt or unverified records must not turn into authority.
+    original = call.metadata
+    for change in (
+        {"actor_id": str(other.pk)},
+        {"shown_verified": False},
+        {"pending_sha256": "wrong"},
+        {"call_id": "wrong"},
+        {"decisions": {milk: True}},
+        {"request": {**evidence["request"], "shown_call_id": "wrong"}},
+        {"request": {**evidence["request"], "shown_approvals": [turn["approvals"][1]]}},
+    ):
+        call.metadata = {**original, "authenticated_approval_decisions": [{**evidence, **change}]}
+        call.save(update_fields=["metadata"])
+        assert client.get(url).status_code == 404
+    call.metadata = original
+    call.save(update_fields=["metadata"])
     # Read from a fresh process against the pytest database, without inheriting
     # request context or the worker's Python state.
     config = connection.settings_dict
@@ -904,6 +944,7 @@ with psycopg.connect(**data["connection"]) as db, db.cursor() as cursor:
         "tool_use_id": milk,
     }
     assert "declined" in str(results[eggs])
+    assert client.get(url).json() == expected
 
 
 @pytest.mark.django_db(transaction=True)
@@ -2266,6 +2307,69 @@ def test_a_turn_refused_at_its_limit_offers_a_retry_on_another_model(
     failed.refresh_from_db()
     assert failed.metadata["resumed"] is True
     assert client.get(f"/api/sessions/{root['id']}").json()["retry_model"] == ""
+
+
+@pytest.mark.django_db
+def test_original_user_message_lookup_is_scoped_and_returns_exact_stored_text(client, cook):
+    from django_ergo.conversation.models import ConversationSession
+
+    from ergonaut.apps.users.models import ApiKey
+
+    session = ConversationSession.objects.create(user=cook, bot_name="kitchen", engine_type="claude")
+    message = session.messages.create(
+        role="user",
+        sequence=5615,
+        author={"kind": "django_user", "ref": str(cook.pk), "authenticated_by": "ergonaut_session"},
+        provenance={},
+    )
+    message.content_blocks.create(block_type="text", text="First line\n  exact text", sequence=0)
+    message.content_blocks.create(block_type="text", text="Second block ", sequence=1)
+    url = f"/api/messages/{message.pk}/original-user"
+    response = client.get(url)
+    assert response.status_code == 200
+    assert response.json() == {
+        "message_id": str(message.pk),
+        "session_id": str(session.pk),
+        "sequence": 5615,
+        "actor_id": str(cook.pk),
+        "timestamp": message.created_at.isoformat().replace("+00:00", "Z"),
+        "text_blocks": ["First line\n  exact text", "Second block "],
+    }
+    _, key = ApiKey.issue(cook, "test-reader")
+    client.logout()
+    assert client.get(url).status_code == 401
+    assert client.get(url, HTTP_AUTHORIZATION=f"Bearer {key}").json() == response.json()
+    other = get_user_model().objects.create_user("other", password="pw")
+    client.force_login(other)
+    assert client.get(url).status_code == 404
+    assert client.get("/api/messages/not-a-uuid/original-user").status_code == 404
+    assert client.get(f"/api/messages/{session.pk}/original-user").status_code == 404
+    admin = get_user_model().objects.create_superuser("admin", password="pw", email="admin@example.com")
+    client.force_login(admin)
+    assert client.get(url).json() == response.json()
+
+
+@pytest.mark.django_db
+def test_original_user_message_lookup_rejects_untrusted_attribution_and_nontext(client, cook):
+    from django_ergo.conversation.models import ConversationSession
+
+    session = ConversationSession.objects.create(user=cook, bot_name="kitchen", engine_type="claude")
+    author = {"kind": "django_user", "ref": str(cook.pk), "authenticated_by": "ergonaut_session"}
+    cases = [
+        {"role": "assistant", "author": author, "provenance": {}},
+        {"role": "user", "author": {}, "provenance": {}},
+        {"role": "user", "author": {**author, "ref": "someone-else"}, "provenance": {}},
+        {"role": "user", "author": author, "provenance": {"kind": "forwarded"}},
+        {"role": "user", "author": author, "provenance": {"kind": "event"}},
+    ]
+    for sequence, values in enumerate(cases):
+        message = session.messages.create(sequence=sequence, **values)
+        message.content_blocks.create(block_type="text", text="not admissible", sequence=0)
+        assert client.get(f"/api/messages/{message.pk}/original-user").status_code == 404
+    message = session.messages.create(role="user", sequence=10, author=author, provenance={})
+    assert client.get(f"/api/messages/{message.pk}/original-user").status_code == 404
+    message.content_blocks.create(block_type="tool_result", sequence=0, tool_result_content="not user text")
+    assert client.get(f"/api/messages/{message.pk}/original-user").status_code == 404
 
 
 @pytest.mark.django_db(transaction=True)
