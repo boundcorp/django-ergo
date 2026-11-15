@@ -417,6 +417,7 @@ def pick_agent(
         if (p := providers.providers.get(c.provider)) is not None
         and p.transport == "cli"
         and not providers.is_private(c.model)
+        and (not p.worker_only or p.available)
     ]
     if not candidates:
         msg = f"No subscription provider in the {tier!r} agents tier"
@@ -718,6 +719,8 @@ def record_agent_pick(
 
 
 def _unavailable(provider) -> str:
+    if provider.worker_only:
+        return "omp CLI isn't installed (worker-only subscription)"
     if provider.transport == "cli":
         cli = "Codex" if provider.type == "openai" else "Claude Code"
         return f"{cli} CLI isn't installed"
@@ -738,7 +741,7 @@ class _Now:
         provider = self.providers.providers.get(name)
         if provider is None:
             return "unavailable", f"{name} isn't in providers.yaml"
-        if not remote and not provider.available:
+        if (not remote or provider.worker_only) and not provider.available:
             return "unavailable", _unavailable(provider)
         why = why_over(name, self.usage, self.rules, model)
         if is_pick:
@@ -851,6 +854,8 @@ def _provider_rows(now: _Now, in_use: set[str]) -> list[dict]:
             for window, seen in ((row.windows or {}) if row else {}).items()
         }
         state, reason = now.state(name)
+        if provider.worker_only:
+            reason = f"Worker-only subscription ({provider.account}); no chat engine. {reason}"
         status = {"unavailable": "unavailable", "skip": "skipped"}.get(state)
         if status is None:
             status = (
@@ -863,6 +868,8 @@ def _provider_rows(now: _Now, in_use: set[str]) -> list[dict]:
                 "name": name,
                 "type": provider.type,
                 "transport": provider.transport,
+                "worker_only": provider.worker_only,
+                "account": provider.account,
                 "subscription": provider.transport == "cli",
                 "api_key_env": provider.api_key_env,
                 "status": status,

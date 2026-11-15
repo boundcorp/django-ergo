@@ -18,6 +18,7 @@ from django_ergo.bots.usage_sync import capacity_report
 from django_ergo.bots.usage_sync import fetch_report
 from django_ergo.bots.usage_sync import parse_report
 from django_ergo.bots.usage_sync import sync_usage
+from django_ergo.bots.usage_sync import targets_for
 from django_ergo.conversation.models import ProviderUsage
 from django_ergo.conversation.models import UsageSync
 from django_ergo.conversation.usage_windows import codex_windows
@@ -111,6 +112,17 @@ def providers() -> Providers:
     return Providers.from_dict(yaml.safe_load(PROVIDERS))
 
 
+def worker_providers(*names: str) -> Providers:
+    data = yaml.safe_load(PROVIDERS)
+    for name in names:
+        data["providers"][name] = {
+            "type": "omp",
+            "transport": "cli",
+            "account": "xai-oauth",
+        }
+    return Providers.from_dict(data)
+
+
 def sync(data, *, now=NOW, found=None):
     return sync_usage(found or providers(), fetch=lambda: data, now=now.timestamp())
 
@@ -126,6 +138,71 @@ def account(page: dict, id_: str) -> dict:
 def capacity(clock=None):
     found = providers()
     return capacity_report(found, NOW.timestamp() if clock is None else clock)
+
+
+@pytest.mark.parametrize("names", [("grok-worker",), ("xai-oauth", "grok-worker")])
+def test_subscription_targets_keep_worker_accounts_separate(names):
+    found = worker_providers(*names)
+    assert targets_for(found, "anthropic") == ["claude"]
+    assert targets_for(found, "openai-codex") == ["chatgpt"]
+    assert targets_for(found, "xai-oauth") == list(names)
+    assert targets_for(found, "unknown") == []
+    assert targets_for(providers(), "xai-oauth") == []
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("names", [("grok-worker",), ("xai-oauth", "grok-worker")])
+def test_worker_aliases_receive_grok_usage_without_clobbering_other_accounts(names):
+    found = worker_providers(*names)
+    state = sync(report(grok(used=32), codex(week=13), anthropic(week=52)), found=found)
+    assert state.accounts["xai-oauth"]["targets"] == list(names)
+    assert set(ProviderUsage.objects.values_list("provider", flat=True)) == {
+        "claude",
+        "chatgpt",
+        *names,
+    }
+    assert windows_of("claude")["weekly"]["used"] == 52
+    assert windows_of("chatgpt")["weekly"]["used"] == 13
+    for name in names:
+        assert set(windows_of(name)) == {"weekly_credits", "weekly_grokbuild"}
+        assert windows_of(name)["weekly_credits"]["used"] == 32
+    page = capacity_report(found, NOW.timestamp())
+    assert page["sync"]["state"] == "healthy"
+    assert account(page, "xai-oauth")["providers"] == list(names)
+    assert account(page, "xai-oauth")["windows"][0]["used"] == 32
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("entry", "error"),
+    [
+        (None, "missing from usage output"),
+        ({"provider": "xai-oauth", "error": "login expired"}, "login expired"),
+    ],
+)
+def test_worker_account_failure_keeps_alias_windows_aging(entry, error):
+    found = worker_providers("xai-oauth", "grok-worker")
+    earlier = NOW - timedelta(hours=1)
+    sync(report(anthropic(), codex(), grok()), found=found, now=earlier)
+    entries = [anthropic(week=61), codex(week=24)]
+    if entry is not None:
+        entries.append(entry)
+    state = sync(report(*entries), found=found)
+    assert state.accounts["xai-oauth"]["error"] == error
+    assert state.accounts["xai-oauth"]["fetched_at"] == earlier.timestamp()
+    assert windows_of("claude")["weekly"]["used"] == 61
+    assert windows_of("chatgpt")["weekly"]["used"] == 24
+    for name in ("xai-oauth", "grok-worker"):
+        window = windows_of(name)["weekly_credits"]
+        assert window["used"] == 32
+        assert window["observed_at"] == earlier.timestamp()
+    page = capacity_report(found, NOW.timestamp())
+    card = account(page, "xai-oauth")
+    assert card["status"] == "error"
+    assert card["error"] == error
+    assert all(w["stale"] for w in card["windows"])
+    assert account(page, "anthropic")["status"] == "ok"
+    assert account(page, "openai-codex")["status"] == "ok"
 
 
 # -- parsing -----------------------------------------------------------------

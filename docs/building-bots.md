@@ -229,15 +229,60 @@ in the chat picker), and `tier: research` when starting an agent. Edit the
 deployment's providers.yaml to change defaults or add tiers, then restart
 Ergonaut and its bot workers so both reload the configuration.
 
+#### Worker-only Grok subscription
+
+Grok can be an explicit low-tier **worker** candidate without adding a chat
+engine. Proposed deployment configuration (merge these entries into the existing
+file; `agents.low` replaces that entire worker list, so retain its current
+fallbacks):
+
+```yaml
+providers:
+  xai-oauth:
+    type: omp
+    transport: cli
+    account: xai-oauth
+agents:
+  low:
+    - {agent: omp, model: xai-oauth/grok-4.7, provider: xai-oauth}
+    # Retain the existing low-tier Claude/Codex worker candidates here.
+```
+
+This declaration allows only the `xai-oauth` account, requires explicit
+`transport: cli`, and rejects nonempty `models`, `api_key_env` and `config`.
+Aliases are allowed, except `anthropic` and `openai-codex`: those canonical
+usage identities belong to other subscriptions and must not be overwritten.
+Worker entries must use `agent: omp` and an `xai-oauth/<model>` selector.
+It never adds Grok to built-in tiers, chat `tiers`, `default`, the model picker,
+or ordinary chat engines; referencing it as a chat model is rejected.
+Only configure Grok for capability-appropriate work, not automatically for
+difficult/frontier tasks or higher tiers.
+
+Eligibility checks that `omp` is installed on the routing host, in addition
+to the usual manager-agent filter and quota guards. A `local_shell` manager
+supporting only `claude`/`codex` cannot select it; an Orca manager supporting
+`omp` can. Existing remote Claude/Codex candidates do not start requiring
+their CLIs on the routing host. The Routing report labels the provider
+worker-only and includes its account; catalog discovery uses the same xAI
+account without enabling a chat engine.
+
+The example is configuration guidance, not an enabled deployment. Neither CLI
+presence nor a successful quota fetch proves a callable model, valid inference
+authentication, or subscription billing coverage. Verify those separately
+under appropriate authorization; no paid probes or budget changes are implied.
+
+
 Windows come from two places, both stored in `ProviderUsage`. A periodic
 sync runs `omp usage --redact --json` (`DJANGO_ERGO["USAGE_COMMAND"]`; the
 Ergonaut worker runs it every 5 minutes, `ERGONAUT_USAGE_SYNC_SECONDS`, `0`
 turns it off) and maps each account's limits: `anthropic` feeds the CLI
 providers of type `claude` (`five_hour`, `weekly`, and scoped windows such as
 `weekly_fable`), `openai-codex` those of type `openai` (Codex reports only
-`weekly` on some plans), and accounts with no provider here (Grok:
-`weekly_credits`, `weekly_grokbuild`) are stored under their own name and only
-shown. Ergo does not assume that a subscription has a 5-hour/weekly pair. The
+`weekly` on some plans), and `xai-oauth` matching `type: omp` worker providers
+by their `account`. Grok's `weekly_credits` applies across its models; an
+explicit model scope restricts only that model/product. Accounts with no
+configured provider are stored under their own name and only shown.
+Ergo does not assume that a subscription has a 5-hour/weekly pair. The
 CLIs also report the windows of the call they just made (Claude's
 `rate_limit_event`, Codex's `account/rateLimits`); those are merged in between
 syncs. The Fable window only applies to Fable candidates, so an exhausted

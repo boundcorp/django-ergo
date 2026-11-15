@@ -157,7 +157,13 @@ def _local_configuration() -> set[str]:
 def _sources(providers) -> list[Source]:
     sources = []
     for alias, provider in providers.providers.items():
-        canonical = "anthropic" if provider.type == "claude" else provider.type
+        canonical = (
+            provider.account
+            if provider.worker_only
+            else "anthropic"
+            if provider.type == "claude"
+            else provider.type
+        )
         if provider.transport == "cli" and canonical == "openai":
             canonical = "openai-codex"
         sources.append(

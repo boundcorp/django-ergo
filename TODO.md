@@ -15,6 +15,9 @@ Live on rigel from `~/p/boundcorp/django-ergo`, bots from `boundcorp/ergo-bots`.
 - [x] **Auditable schedule workflows**: trusted Python steps, named JSON context, safe conditions, message-only prompts, fixed timezones, silent no-op runs and failure notices.
 - [x] **Read-only model discovery**: core catalog/list checks, persisted idempotent diffs, pricing/capability provenance and private/coding policy flags; new-thread review prompts never enable routing.
 - [x] **Model report snapshot safety**: compact warning references and validate the exact workflow payload before committing the catalog baseline; oversized reports roll back rather than consuming the diff.
+- [x] **Worker-only Grok routing**: explicit `omp` / `xai-oauth` subscription
+  declaration, quota-account mapping and manager/short-window guards without a
+  chat engine; proposed low-tier config documented, deployment not enabled.
 - [x] **Generic cost ledger core**: immutable economic/source identities, owner-scoped
   Decimal/currency projections, revised estimates and authoritative settlement,
   typed token/media measurements, offline concurrency/privacy tests and

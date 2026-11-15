@@ -11,9 +11,10 @@ a window and stores it in :class:`ProviderUsage`::
     xai-oauth     credits:1w -> weekly_credits   product:grokbuild:1w -> weekly_grokbuild
 
 ``anthropic`` feeds the CLI providers of type ``claude``, ``openai-codex`` those
-of type ``openai``; an account with no such provider (Grok) is stored under
-its own name and only shown. Every stored window carries ``observed_at``, so a
-window that stops being refreshed is shown as stale, never as current.
+of type ``openai``, and ``xai-oauth`` those of type ``omp`` with the matching
+``account``. An account with no configured provider is stored under its own
+name and only shown. Every stored window carries ``observed_at``, so a window
+that stops being refreshed is shown as stale, never as current.
 :func:`sync_usage` never raises: a failed fetch leaves the old windows (now
 aging) and records why in :class:`UsageSync`; one account that errors leaves
 the other accounts' fresh values alone. An account whose login omp disabled
@@ -51,7 +52,7 @@ logger = logging.getLogger(__name__)
 ACCOUNTS = {
     "anthropic": ("Anthropic · Claude", "claude"),
     "openai-codex": ("OpenAI · Codex", "openai"),
-    "xai-oauth": ("xAI · Grok", ""),
+    "xai-oauth": ("xAI · Grok", "omp"),
 }
 PERIODS = {"5h": "five_hour", "7d": "weekly", "1w": "weekly"}
 PERIOD_MS = {18_000_000: "5h", 604_800_000: "7d"}
@@ -238,7 +239,9 @@ def targets_for(providers: Providers, account: str) -> list[str]:
     return [
         name
         for name, p in providers.providers.items()
-        if p.transport == "cli" and p.type == kind
+        if p.transport == "cli"
+        and p.type == kind
+        and (kind != "omp" or p.account == account)
     ]
 
 

@@ -67,6 +67,27 @@ def model(name="coding-one", **extra):
     }
 
 
+def test_worker_subscription_discovers_account_without_enabling_chat_models(discovery):
+    context, rows = discovery
+    rows["xai-oauth"] = [model("grok-4.7")]
+    context["bot"].providers = Providers.from_dict(
+        {
+            "providers": {
+                "grok-workers": {
+                    "type": "omp",
+                    "transport": "cli",
+                    "account": "xai-oauth",
+                }
+            }
+        }
+    )
+    result = catalog.check_available(context)
+    grok = next(item for item in result["new"] if item["id"] == "grok-4.7")
+    assert grok["selector"] == "grok-workers/grok-4.7"
+    assert grok["provider"] == "xai-oauth"
+    assert context["bot"].providers.find(grok["selector"]) is None
+
+
 @pytest.mark.parametrize("model_count", [0, 2])
 def test_first_baseline_seeds_once_without_a_catalog_dump(discovery, model_count):
     from django_ergo.bots.schedules import Action
