@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from contextvars import ContextVar
 from typing import TYPE_CHECKING
 from typing import Any
 
@@ -18,6 +19,10 @@ from asgiref.sync import sync_to_async
 if TYPE_CHECKING:
     from django_ergo.conversation.models import ConversationSession
     from django_ergo.conversation.toolkit import Toolkit
+
+
+# Only the dispatcher that durably acquired a claim can enter that invocation.
+current_tool_invocation = ContextVar("current_tool_invocation", default=None)
 
 
 def collect_toolkit_schemas(toolkits: list[Toolkit], adapter) -> list[dict]:
@@ -105,7 +110,11 @@ def dispatch_tool_once(
         row.metadata = call.metadata
         row.save(update_fields=["metadata"])
 
-    result, is_error = dispatch_tool(name, args, toolkits)
+    token = current_tool_invocation.set((str(call.pk), tool_id, signature))
+    try:
+        result, is_error = dispatch_tool(name, args, toolkits)
+    finally:
+        current_tool_invocation.reset(token)
     # Replay uses the same normal tool-result representation where JSON supports it.
     # Rich results retain a bounded textual receipt instead of replaying side effects.
     try:

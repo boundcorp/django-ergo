@@ -58,7 +58,6 @@ from typing import TYPE_CHECKING
 
 from django.utils import timezone
 
-from django_ergo.bots import messaging
 from django_ergo.bots.plugins import BotPlugin
 from django_ergo.bots.registry import closed_to
 from django_ergo.bots.tools import BotTool
@@ -214,16 +213,18 @@ class AttachmentsPlugin(BotPlugin):
         try:
             uuid.UUID(str(attachment_id))
         except ValueError:
-            return find_session_file(self.session_for(ctx, session_id), attachment_id)
-        row = (
-            ConversationAttachment.objects.select_related("session")
-            .filter(id=attachment_id, session__user_id=ctx.session.user_id)
-            .first()
-        )
-        # A private bot's file opens elsewhere only when a message shared it.
-        if row is None or (
-            closed_to(ctx.bot, row.session)
-            and not messaging.shared_with(ctx.session, str(row.id))
+            row = find_session_file(self.session_for(ctx, session_id), attachment_id)
+        else:
+            row = (
+                ConversationAttachment.objects.select_related("session")
+                .filter(id=attachment_id, session__user_id=ctx.session.user_id)
+                .first()
+            )
+        # Private source IDs never grant access; approved exports are local copies.
+        if (
+            row is None
+            or closed_to(ctx.bot, row.session)
+            or (row.private_export_id and row.session_id != ctx.session.id)
         ):
             msg = f"No file {attachment_id}"
             raise ValueError(msg)
@@ -239,6 +240,8 @@ class AttachmentsPlugin(BotPlugin):
     ) -> list[dict]:
         session = self.session_for(ctx, session_id)
         rows = session.attachments.all()
+        if session.id != ctx.session.id:
+            rows = rows.filter(private_export__isnull=True)
         if not include_archived:
             rows = rows.filter(archived_at__isnull=True)
         return [describe_row(r) for r in rows.order_by("-updated_at")[:MAX_LISTED]]

@@ -50,6 +50,7 @@ OFFICIAL_PLUGINS = {
     "browser": "django_ergo.plugins.browser.BrowserPlugin",
     "kubectl": "django_ergo.plugins.kubectl.KubectlPlugin",
     "attachments": "django_ergo.plugins.attachments.AttachmentsPlugin",
+    "private_exports": "django_ergo.plugins.private_exports.PrivateExportsPlugin",
     "pages": "django_ergo.plugins.pages.PagesPlugin",
     "web_search": "django_ergo.plugins.web_search.WebSearchPlugin",
     "runpod": "django_ergo.plugins.runpod.plugin.RunpodPlugin",
