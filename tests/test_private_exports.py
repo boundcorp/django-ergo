@@ -350,12 +350,23 @@ def test_private_same_bot_send_and_legitimate_child_reply_remain_available(world
     w = world
     local = async_to_sync(w.personal.create_session)(w.user, title="Private local")
     result = orchestrator.ergo_thread_send(
-        w.ctx, "Local synthetic message", thread=str(local.pk)
+        w.ctx,
+        "Local synthetic message",
+        thread=str(local.pk),
+        attachments=[str(w.artifact.pk)],
     )
     assert (
         ThreadMessage.objects.get(pk=result["message_id"]).recipient_session_id
         == local.pk
     )
+    same_bot = orchestrator.ergo_thread_send(
+        w.personal.tool_context(local),
+        "Return selected private file",
+        thread=str(w.source.pk),
+        attachments=[str(w.artifact.pk)],
+    )
+    returned = ThreadMessage.objects.get(pk=same_bot["message_id"])
+    assert returned.metadata["attachments"][0]["id"] == str(w.artifact.pk)
     child = async_to_sync(w.worker.create_session)(
         w.user,
         title="Requested worker",

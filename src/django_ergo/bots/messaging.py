@@ -200,7 +200,7 @@ def find_shareable_file(session: ConversationSession, ref: str):
     if (
         row is None
         or row.private_export_id
-        or private_source(row.session)
+        or (row.session.bot_name != session.bot_name and private_source(row.session))
         or not shared_with(session, file_id)
     ):
         raise not_shared_error(ref)
