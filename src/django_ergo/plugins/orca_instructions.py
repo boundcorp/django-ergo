@@ -96,6 +96,15 @@ def enqueue(worker_id, instruction_id, text, supersedes="", priority="normal"):
 def snapshot(worker_id):
     rows = (Worker.objects.get(pk=worker_id).args or {}).get(KEY, [])
     normalize_claims(rows)
+    for row in rows:
+        if row.get("delivered_at"):
+            row["transport_observation"] = "delivered_at"
+        elif row.get("transport_read"):
+            row["transport_observation"] = "read"
+        elif row.get("status") in ("transport_queued", "delivered"):
+            row["transport_observation"] = "queued"
+        else:
+            row["transport_observation"] = "not_observed"
     return {"latest": rows[-1] if rows else None, "instructions": rows}
 
 
@@ -154,17 +163,29 @@ def body(row, handle):
     )
 
 
+def _recover_superseded_and_interrupted(ctx, rows):
+    for stale in rows[:-1]:
+        if stale["status"] == "queued":
+            stale.update(status="unsent", error="Superseded before send")
+    for interrupted in rows:
+        if interrupted["status"] == "processing":
+            interrupted["status"] = "unknown"
+            interrupted["error"] = (
+                "Interrupted send; reconcile inbox, do not resend automatically"
+            )
+            ctx.tell(
+                f"Instruction {interrupted['id']} v{interrupted['version']}: unknown. "
+                f"{interrupted['error']}; use ergo_orca_instruction_status."
+            )
+
+
 def deliver(ctx, plugin, handle):
     """Durably claim once, then lock across preflight and send before replies."""
     with ledger(ctx.worker.pk) as (_, rows):
         if not rows:
             return
+        _recover_superseded_and_interrupted(ctx, rows)
         row = rows[-1]
-        if row["status"] == "processing":
-            row["status"] = "unknown"
-            row["error"] = (
-                "Interrupted send; reconcile inbox, do not resend automatically"
-            )
         if row["status"] != "queued":
             return
         row["status"] = "processing"
@@ -194,6 +215,10 @@ def deliver(ctx, plugin, handle):
                 worker.save(update_fields=["args", "updated_at"])
                 close_agent_mail(worker.pk, reason)
                 worker.refresh_from_db(fields=["args"])
+                ctx.tell(
+                    f"Instruction {claimed['id']} v{claimed['version']}: unsent. "
+                    f"{reason}; use ergo_orca_instruction_status."
+                )
                 return
             attempted = True
             receipt = plugin.cli_json(
@@ -225,15 +250,16 @@ def deliver(ctx, plugin, handle):
                 ]
             )
             row.update(status="transport_queued", receipt=receipt, error="")
+            return
         except Exception as exc:  # noqa: BLE001 — never replay an uncertain send
             row.update(
                 status="unknown" if attempted else "unsent",
                 error=f"{type(exc).__name__}: {exc}",
             )
-        result = row["status"]
+        result, error = row["status"], row.get("error", "")
     ctx.tell(
         f"Instruction {claimed['id']} v{claimed['version']}: {result}. "
-        "Model acceptance is unknown; use ergo_orca_instruction_status."
+        f"{error}; use ergo_orca_instruction_status."
     )
 
 
@@ -290,7 +316,7 @@ def record_transport(rows, message, payload, handle):
 
 def record_ack(rows, message, shown):
     if message.get("type") != "status":
-        return None
+        return
     ack = object_value(object_value(message.get("body")).get("instructionAck"))
     row = rows.get(ack.get("id")) if isinstance(ack.get("id"), str) else None
     action = ack.get("nextAction")
@@ -302,7 +328,7 @@ def record_ack(rows, message, shown):
         or action.startswith("REPLACE")
         or row.get("acknowledgement_claim")
     ):
-        return None
+        return
     dispatch = shown.get("dispatch") or {}
     sender = dispatch.get("assignee_handle")
     pane = dispatch.get("assignee_pane_key")
@@ -325,17 +351,10 @@ def record_ack(rows, message, shown):
         "pane_matches_assignee": bool(pane and message.get("sender_pane_key") == pane),
         "at": message.get("created_at"),
     }
-    qualifier = "superseded" if row.get("superseded_by") else "latest"
-    return (
-        f"Unverified acknowledgement claim for instruction {row['id']} "
-        f"v{row['version']} ({qualifier}); claimed next action: {action}. "
-        "Sender metadata is not authenticated; model acceptance remains unknown."
-    )
 
 
 def reconcile(ctx, handle, shown, messages):
     """Non-consuming, bounded observation; status messages are unverified claims."""
-    notices = []
     with ledger(ctx.worker.pk) as (_, rows):
         if not rows:
             return
@@ -349,10 +368,7 @@ def reconcile(ctx, handle, shown, messages):
             ) != (handle["run"], handle["dispatch"], handle.get("task")):
                 continue
             record_transport(by_id, message, payload, handle)
-            if notice := record_ack(by_id, message, shown):
-                notices.append(notice)
-    for notice in notices:
-        ctx.tell(notice)
+            record_ack(by_id, message, shown)
 
 
 def tools(plugin):
@@ -406,7 +422,8 @@ def tools(plugin):
         name="ergo_orca_instruction_status",
         takes_context=True,
         description=(
-            "Read the durable instruction ledger, including transport status and "
+            "Read the durable instruction ledger, including transport_observation "
+            "(queued, read, delivered_at, or not_observed), delivery timestamp, and "
             "unverified acknowledgement claims and claimed next actions. Sender/pane "
             "metadata is not authentication; model acceptance remains unknown. "
             "No active delivery or polling."
