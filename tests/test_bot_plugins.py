@@ -3135,8 +3135,13 @@ def test_the_browser_moves_off_a_tab_the_user_keeps_using(tmp_path, chrome):
 
 @pytest.mark.usefixtures("workers")
 @pytest.mark.django_db(transaction=True)
-async def test_a_browser_task_runs_its_driver_model_in_a_worker(tmp_path, chrome):
+async def test_a_browser_task_runs_its_driver_model_in_a_worker(
+    tmp_path, chrome, monkeypatch
+):
     from django_ergo.bots import workers as w
+    from django_ergo.bots.providers import Provider
+    from django_ergo.bots.providers import parse_providers
+    from django_ergo.bots.registry import BotRegistry
     from django_ergo.conversation.models import StructuredCall
     from django_ergo.conversation.models import Worker
 
@@ -3168,6 +3173,20 @@ async def test_a_browser_task_runs_its_driver_model_in_a_worker(tmp_path, chrome
         ),
         config=f"cdp_url: {chrome}, sessions: false, driver_model: auto/small",
     )
+    registry = BotRegistry()
+    registry.providers = parse_providers(
+        """
+providers:
+  chatgpt:
+    type: openai
+    transport: cli
+    models: [gpt-6.1-terra]
+tiers:
+  small: [chatgpt/gpt-6.1-terra]
+"""
+    )
+    registry.add(bot)
+    monkeypatch.setattr(Provider, "available", property(lambda self: True))
     user = await User.objects.acreate(username="surfer-user")
     root = await bot.root_session(user)
     done = await bot.ask(root, "Search for tacos")

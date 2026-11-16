@@ -2038,9 +2038,11 @@ with `approve_actions: true`, as do `ergo_browser_batch` (several steps in
 one call, one snapshot at the end) and `ergo_browser_task` (a goal handed
 to `driver_model`, which drives the other tools in its own loop in a
 `browser:task` worker and reports back in the chat; its `model` argument
-picks another driver for one task, checked as in
-[Model choice for tasks](#model-choice-for-tasks)). A bot in a private pool always drives with that pool (its
-default, or a `driver_model` of the pool such as `personal/flash`). Actions refuse to run in a tab the user has taken over (navigated
+picks another driver for one task). Public browser tasks route only to
+available CLI subscriptions, using the tier's normal quota rules; an API
+provider model name resolves to the same model on a CLI subscription, or
+fails if none is safe. A private-pool bot's browser uses the chat's exact
+private model, not a different pool member. Actions refuse to run in a tab the user has taken over (navigated
 since the bot last looked, or scrolled, clicked or typed in between 3 of
 the bot's calls within 5 minutes). With `sessions: false`
 there are no start and stop tools and the browser tools always work.
