@@ -486,6 +486,121 @@ def test_session_usage_is_only_for_visible_chats(client):
 
 
 @pytest.mark.django_db
+def test_session_usage_history_utc_days_all_time_and_agent_fallback(client, lee, settings, monkeypatch):
+    from datetime import UTC, datetime
+    from datetime import timezone as dt_timezone
+
+    from django_ergo.conversation.models import AgentSession, AgentSessionThreadLink, AgentUsageEvent
+
+    settings.TIME_ZONE = "America/Los_Angeles"
+    now = datetime(2026, 11, 13, 18, 30, tzinfo=dt_timezone(timedelta(hours=-8)))
+    monkeypatch.setattr("ergonaut.api.costs.timezone.now", lambda: now)
+    chat = ConversationSession.objects.create(user=lee, bot_name="devbox", engine_type="claude")
+    other = ConversationSession.objects.create(user=lee, bot_name="devbox", engine_type="claude")
+
+    def call(at, **kwargs):
+        row = StructuredCall.objects.create(user=lee, kind="chat_reply", **kwargs)
+        StructuredCall.objects.filter(pk=row.pk).update(created_at=at)
+
+    start = datetime(2026, 11, 8, tzinfo=UTC)
+    call(start, session=chat, model_name="chat-model", input_tokens=10, cache_creation_input_tokens=2)
+    call(start - timedelta(microseconds=1), session=chat, model_name="chat-model", output_tokens=7)
+    call(
+        now.astimezone(UTC),
+        session=None,
+        metadata={"session": str(chat.id)},
+        model_name="chat-model",
+        cache_read_input_tokens=3,
+    )
+    call(start, session=other, model_name="other", input_tokens=999)
+    captured = Worker.objects.create(session=chat, bot_name="devbox", title="captured", function="orca:watch")
+    fallback = Worker.objects.create(session=chat, bot_name="devbox", title="fallback", function="orca:watch")
+    native = AgentSession.objects.create(cli="omp", host_namespace="local", native_session_id="history")
+    AgentSessionThreadLink.objects.create(session=native, conversation=chat, worker=captured)
+    AgentSessionThreadLink.objects.create(session=native, conversation=other)
+    AgentUsageEvent.objects.create(
+        session=native,
+        source_event_key="dated",
+        occurred_at=start,
+        model="agent-model",
+        input_tokens=20,
+        output_tokens=5,
+    )
+    AgentUsageEvent.objects.create(
+        session=native,
+        source_event_key="undated",
+        model="agent-model",
+        cache_read_tokens=4,
+    )
+    AgentUsage.objects.create(
+        worker=captured,
+        session=chat,
+        bot_name="devbox",
+        agent="omp",
+        model="agent-model",
+        input_tokens=1000,
+        first_at=start,
+        last_at=start + timedelta(days=1),
+    )
+    AgentUsage.objects.create(
+        worker=fallback,
+        session=chat,
+        bot_name="devbox",
+        agent="omp",
+        model="agent-model",
+        output_tokens=48,
+        first_at=start,
+        last_at=start + timedelta(days=2),
+    )
+    AgentUsage.objects.create(
+        session=chat,
+        bot_name="devbox",
+        agent="omp",
+        model="undated",
+        input_tokens=9,
+    )
+    response = client.get(f"/api/sessions/{chat.id}/usage/history")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["until"] == now.astimezone(UTC).isoformat()
+    assert data["timezone"] == "UTC"
+    assert [row["date"] for row in data["days"]] == [
+        "2026-11-08",
+        "2026-11-09",
+        "2026-11-10",
+        "2026-11-11",
+        "2026-11-12",
+        "2026-11-13",
+        "2026-11-14",
+    ]
+    assert [row["thread_tokens"] for row in data["days"]] == [12, 0, 0, 0, 0, 0, 3]
+    assert [row["agent_tokens"] for row in data["days"]] == [49, 24, 0, 0, 0, 0, 0]
+    assert data["all_time"] == {
+        "thread": {"input_tokens": 10, "output_tokens": 7, "cache_write_tokens": 2, "cache_read_tokens": 3},
+        "agents": {"input_tokens": 29, "output_tokens": 53, "cache_write_tokens": 0, "cache_read_tokens": 4},
+    }
+    assert data["models"] == [
+        {"model": "agent-model", "thread_tokens": 0, "agent_tokens": 77},
+        {"model": "chat-model", "thread_tokens": 22, "agent_tokens": 0},
+        {"model": "undated", "thread_tokens": 0, "agent_tokens": 9},
+    ]
+
+
+@pytest.mark.django_db
+def test_session_usage_history_requires_visible_session(client):
+    owner = get_user_model().objects.create_user("owner", "owner@example.com", "pw")
+    chat = ConversationSession.objects.create(user=owner, bot_name="devbox")
+    url = f"/api/sessions/{chat.id}/usage/history"
+    assert client.get(url).status_code == 401
+    get_user_model().objects.create_user("viewer", "viewer@example.com", "pw")
+    client.post(
+        "/api/auth/login", json.dumps({"username": "viewer", "password": "pw"}), content_type="application/json"
+    )
+    assert client.get(url).status_code == 404
+    assert client.get("/api/sessions/not-a-uuid/usage/history").status_code == 404
+
+
+@pytest.mark.django_db
 def test_calls_that_ran_for_a_chat_count_for_it_and_its_bot(client, lee):
     # A browser task's driver call has no session of its own; its metadata
     # names the chat it ran for.

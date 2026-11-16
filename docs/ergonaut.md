@@ -395,7 +395,14 @@ unscoped devbox drafts are not migrated because their owner is unknown.
   on narrow screens. It reads `GET /api/sessions/{id}/usage?hours=6`. Agent
   tokens come from per-request events when the worker's transcript was
   captured, otherwise from the worker's running totals spread evenly over the
-  time it was active. When the chat has a todo list (see
+  time it was active. Select the sparkline for six-hour detail, seven UTC
+  calendar days (including today), and all-time totals and model/token-part
+  breakdowns for that thread. Daily agent totals from worker aggregates are
+  estimates spread across their active time; captured request events use their
+  recorded times. Undated events and worker totals appear only in all-time
+  totals. The history includes only recorded usage, not costs, and
+  reads `GET /api/sessions/{id}/usage/history` with the same session visibility
+  rules. When the chat has a todo list (see
   [Bots](bots.md#todo-lists)), a floating "Todo X/Y" button (done/total) sits
   beside Illustrate above the composer; it shows or hides the list, with each
   item and its status, at the bottom of the chat, and the browser remembers
