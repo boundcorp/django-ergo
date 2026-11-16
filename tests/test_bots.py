@@ -3106,6 +3106,226 @@ def test_introspection_rejects_escapes_with_repository_and_source_guidance(
 
 
 @pytest.mark.django_db(transaction=True)
+async def test_explicit_peer_notifications_queue_and_do_not_return(
+    tmp_path, thread_messages
+):
+    from django_ergo.bots import orchestrator
+    from django_ergo.conversation.models import ThreadMessage
+
+    user = await User.objects.acreate(username="peer-notifications")
+    bot, engine = make_bot(tmp_path, say("ok"))
+    root = await bot.root_session(user)
+    peer = await bot.create_session(user, parent=root, title="Peer")
+    engine._client.responses = [
+        claude_tool(
+            "ergo_thread_send",
+            {
+                "thread": str(peer.id),
+                "message": "First update",
+                "reply_mode": "notification",
+            },
+            tool_id="notification-1",
+        ),
+        claude_tool(
+            "ergo_thread_send",
+            {
+                "thread": str(peer.id),
+                "message": "Second update",
+                "reply_mode": "notification",
+            },
+            tool_id="notification-2",
+        ),
+        say("Updates sent."),
+    ]
+    await bot.ask(root, "Send updates")
+    sent = [json.loads(r["content"]) for r in _tool_results(engine)[-2:]]
+    assert all(result["reply_mode"] == "notification" for result in sent)
+    assert sent[1]["status"] == "queued"
+    sender_status = await sync_to_async(orchestrator.thread_status)(root)
+    recipient_status = await sync_to_async(orchestrator.thread_status)(peer)
+    assert sender_status["waiting_on"] == 0
+    assert sender_status["blocked_on"] == []
+    assert recipient_status["working_for"] == 2
+    engine._client.responses = [say("First noted."), say("Second noted.")]
+    while SENT:
+        await thread_messages()
+        assert "No reply goes back to it" in str(engine._client.calls[-1]["messages"])
+    messages = [
+        await ThreadMessage.objects.aget(id=result["message_id"]) for result in sent
+    ]
+    assert [m.text for m in messages] == ["First update", "Second update"]
+    assert all(m.recipient_session_id == peer.id for m in messages)
+    assert all(m.metadata.get("report") is True for m in messages)
+    assert all(m.status == "answered" for m in messages)
+    assert not await ThreadMessage.objects.filter(in_reply_to__in=messages).aexists()
+    assert SENT == []
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_explicit_upward_response_returns_despite_ask_false(
+    tmp_path, thread_messages
+):
+    from django_ergo.conversation.models import ThreadMessage
+
+    user = await User.objects.acreate(username="explicit-upward-response")
+    bot, engine = make_bot(tmp_path, say("ok"))
+    root = await bot.root_session(user)
+    thread = await bot.create_session(user, parent=root, title="Worker")
+    engine._client.responses = [
+        claude_tool(
+            "ergo_thread_send",
+            {
+                "thread": "main",
+                "message": "Which cluster?",
+                "ask": False,
+                "reply_mode": "response",
+            },
+            tool_id="explicit-response",
+        ),
+        say("Asked."),
+    ]
+    await bot.ask(thread, "Check the cluster")
+    sent = json.loads(_tool_results(engine)[-1]["content"])
+    assert sent["reply_mode"] == "response"
+    request = await ThreadMessage.objects.aget(id=sent["message_id"])
+    assert not request.metadata.get("report")
+    engine._client.responses = [say("Use octo."), say("I'll use octo.")]
+    await thread_messages()
+    reply = await ThreadMessage.objects.aget(in_reply_to=request)
+    assert reply.recipient_session_id == thread.id
+    assert reply.text == "Use octo."
+    await thread_messages()
+    assert SENT == []
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_reply_mode_auto_and_invalid_notification_ask(tmp_path, thread_messages):
+    from django_ergo.bots import orchestrator
+    from django_ergo.conversation.models import ThreadMessage
+
+    user = await User.objects.acreate(username="reply-mode-defaults")
+    bot, _ = make_bot(tmp_path, say("ok"))
+    root = await bot.root_session(user)
+    thread = await bot.create_session(user, parent=root, title="Worker")
+    root_ctx = ToolContext(bot=bot, session=root, user=user)
+    thread_ctx = ToolContext(bot=bot, session=thread, user=user)
+    for ctx, target, kwargs, is_report in (
+        (root_ctx, str(thread.id), {}, False),
+        (root_ctx, str(thread.id), {"ask": False}, False),
+        (root_ctx, str(thread.id), {"reply_mode": "auto"}, False),
+        (thread_ctx, "main", {}, True),
+        (thread_ctx, "main", {"reply_mode": "auto"}, True),
+        (thread_ctx, "main", {"reply_mode": "auto", "ask": True}, False),
+    ):
+        result = await sync_to_async(orchestrator.ergo_thread_send)(
+            ctx, message="A distinct update", thread=target, **kwargs
+        )
+        row = await ThreadMessage.objects.aget(id=result["message_id"])
+        assert bool(row.metadata.get("report")) is is_report
+        assert result["reply_mode"] == ("notification" if is_report else "response")
+
+    count = await ThreadMessage.objects.acount()
+    with pytest.raises(ValueError, match="cannot be combined"):
+        await sync_to_async(orchestrator.ergo_thread_send)(
+            root_ctx,
+            message="Invalid combination",
+            thread=str(thread.id),
+            ask=True,
+            reply_mode="notification",
+        )
+    assert await ThreadMessage.objects.acount() == count
+    with pytest.raises(ValueError, match="reply_mode"):
+        await sync_to_async(orchestrator.ergo_thread_send)(
+            root_ctx,
+            message="Invalid mode",
+            thread=str(thread.id),
+            reply_mode="invalid",
+        )
+    assert await ThreadMessage.objects.acount() == count
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_notification_delivery_failure_does_not_reply(tmp_path, thread_messages):
+    from django_ergo.bots import messaging
+    from django_ergo.bots import orchestrator
+    from django_ergo.conversation.models import ThreadMessage
+
+    user = await User.objects.acreate(username="notification-failure")
+    bot, _ = make_bot(tmp_path, say("ok"))
+    root = await bot.root_session(user)
+    thread = await bot.create_session(user, parent=root, title="Peer")
+    ctx = ToolContext(bot=bot, session=root, user=user)
+    result = await sync_to_async(orchestrator.ergo_thread_send)(
+        ctx, message="An update", thread=str(thread.id), reply_mode="notification"
+    )
+    notification = await ThreadMessage.objects.aget(id=result["message_id"])
+    SENT.clear()
+    await sync_to_async(messaging.fail)(notification, "delivery failed")
+    await notification.arefresh_from_db()
+    assert notification.status == "failed"
+    assert notification.error == "delivery failed"
+    assert not await ThreadMessage.objects.filter(in_reply_to=notification).aexists()
+    assert SENT == []
+
+    # An implicit upward report retains its historical failure reply.
+    ctx = ToolContext(bot=bot, session=thread, user=user)
+    result = await sync_to_async(orchestrator.ergo_thread_send)(
+        ctx, message="An upward report", thread="main"
+    )
+    report = await ThreadMessage.objects.aget(id=result["message_id"])
+    assert report.metadata.get("report") is True
+    SENT.clear()
+    await sync_to_async(messaging.fail)(report, "delivery failed")
+    reply = await ThreadMessage.objects.aget(in_reply_to=report)
+    assert reply.recipient_session_id == thread.id
+    assert "delivery failed" in reply.text
+    assert len(SENT) == 1
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_notification_waits_for_approval_without_returning(
+    tmp_path, thread_messages
+):
+    from django_ergo.bots import orchestrator
+    from django_ergo.conversation.models import ThreadMessage
+
+    user = await User.objects.acreate(username="notification-approver")
+    bot, engine = make_bot(tmp_path, say("ok"))
+    root = await bot.root_session(user)
+    thread = await bot.create_session(user, parent=root, title="Shopping")
+    engine._client.responses = [
+        claude_tool(
+            "ergo_thread_send",
+            {
+                "thread": str(thread.id),
+                "message": "Add milk",
+                "reply_mode": "notification",
+            },
+            tool_id="notify-shopping",
+        ),
+        say("Notified."),
+        claude_tool("add_to_list", {"item": "milk"}, tool_id="approve-milk"),
+        say("Added milk."),
+    ]
+    await bot.ask(root, "Notify shopping")
+    await thread_messages()
+    notification = await ThreadMessage.objects.aget(in_reply_to__isnull=True)
+    assert notification.metadata.get("report") is True
+    assert notification.status == "waiting"
+    assert SENT == []
+    sender_status = await sync_to_async(orchestrator.thread_status)(root)
+    recipient_status = await sync_to_async(orchestrator.thread_status)(thread)
+    assert sender_status["waiting_on"] == 0
+    assert sender_status["blocked_on"] == []
+    assert recipient_status["working_for"] == 1
+    await bot.resume(thread, True)
+    await notification.arefresh_from_db()
+    assert notification.status == "answered"
+    assert not await ThreadMessage.objects.filter(in_reply_to=notification).aexists()
+    assert SENT == []
+
+
+@pytest.mark.django_db(transaction=True)
 async def test_a_report_upward_gets_no_reply_unless_it_asks(tmp_path, thread_messages):
     from django_ergo.conversation.models import ThreadMessage
 
@@ -3131,8 +3351,6 @@ async def test_a_report_upward_gets_no_reply_unless_it_asks(tmp_path, thread_mes
         "## This chat\nYou are kitchen · Deploy, a thread started by kitchen · Main."
         in system
     )
-    sent = json.loads(_tool_results(engine)[-1]["content"])
-    assert sent["note"].startswith("Sent as a report")
 
     engine._client.responses = [say("Noted: deployed.")]
     await thread_messages()  # main reads the report...
@@ -3202,7 +3420,6 @@ async def test_cross_bot_starter_report_and_question(tmp_path, thread_messages):
     await design.ask(worker, "Report the result")
     sent = json.loads(_tool_results(engine)[-1]["content"])
     assert sent["thread_id"] == str(starter.id)
-    assert sent["note"].startswith("Sent as a report")
 
     engine._client.responses = [say("Noted.")]
     await thread_messages(registry)
@@ -3365,7 +3582,6 @@ async def test_child_thread_can_report_to_its_parents_cross_bot_starter(
     sent = json.loads(_tool_results(engine)[-1]["content"])
     assert sent["thread_id"] == str(starter.id)
     assert (sent["session_id"], sent["bot"]) == (str(starter.id), "boundcorp")
-    assert sent["note"].startswith("Sent as a report")
     await thread_messages(registry)
     report = await ThreadMessage.objects.aget(id=sent["message_id"])
     assert report.sender_session_id == child.id

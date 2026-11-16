@@ -8,8 +8,8 @@ thread-to-thread delegation.
 
 - A message with no sender session came from a person or an automated event:
   its structured author identifies which; nothing is routed back.
-- A reply is never answered back, so two bots can't ping-pong; a report upward
-  (``metadata["report"]``, see ``bots.orchestrator``) gets no reply at all; ``depth``
+- A reply is never answered back, so two bots can't ping-pong; a report or
+  notification (``metadata["report"]``, see ``bots.orchestrator``) gets no reply; ``depth``
   caps chains of delegation (A asks B, which asks C...) at ``MAX_DEPTH``.
 - A recipient that is mid-turn or waiting for approval keeps the message
   queued until it is free. A busy recipient never makes a send fail: the queue
@@ -650,7 +650,11 @@ def fail(message: ThreadMessage, error: str) -> None:
     from django_ergo.bots.recurring_wakes import delivery_failed
 
     delivery_failed(message, error)
-    if message.sender_session_id and message.in_reply_to_id is None:
+    if (
+        message.sender_session_id
+        and message.in_reply_to_id is None
+        and not (message.metadata or {}).get("notification")
+    ):
         reply(message, f"(Could not deliver your message: {error})")
 
 
