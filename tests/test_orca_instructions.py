@@ -12,6 +12,7 @@ from django_ergo.bots import agents
 from django_ergo.bots import workers as runner
 from django_ergo.bots.tools import FunctionToolkit
 from django_ergo.bots.tools import ToolContext
+from django_ergo.conversation.models import ThreadMessage
 from django_ergo.conversation.models import Worker
 from django_ergo.plugins import orca_instructions as protocol
 from tests.test_bot_plugins import orca_bot
@@ -200,6 +201,92 @@ def test_transport_and_matching_forged_claim_never_authenticate_acceptance(
     assert latest["acknowledgement"] is None
     assert latest["acceptance"] == "unknown"
     assert len(env.state["sends"]) == 1
+
+
+def test_transport_observations_and_claim_do_not_wake_chat(instruction_worker):
+    env = instruction_worker
+    queue(env)
+    run(env)
+    latest = status(env)["latest"]
+    assert latest["status"] == "transport_queued"
+    assert latest["transport_observation"] == "queued"
+    args = env.state["sends"][0]
+    outgoing = {
+        "id": "msg_out",
+        "run_id": "run_1",
+        "from_handle": "term_owner",
+        "payload": args[-1],
+        "read": 1,
+        "delivered_at": None,
+    }
+    env.state["messages"] = [outgoing, ack(env)]
+    run(env)
+    latest = status(env)["latest"]
+    assert latest["status"] == "transport_queued"
+    assert latest["transport_observation"] == "read"
+    assert latest["delivered_at"] is None
+    assert latest["acknowledgement_claim"]["verification"] == "unverified"
+    assert latest["acknowledgement"] is None
+    assert latest["acceptance"] == "unknown"
+    outgoing["delivered_at"] = "2026-11-12T00:00:00Z"
+    run(env)
+    latest = status(env)["latest"]
+    assert latest["status"] == "delivered"
+    assert latest["transport_observation"] == "delivered_at"
+    assert latest["acceptance"] == "unknown"
+    assert len(env.state["sends"]) == 1
+    assert not ThreadMessage.objects.filter(
+        metadata__worker=str(env.worker.pk)
+    ).exists()
+
+
+def test_status_does_not_deliver_or_reconcile(instruction_worker, monkeypatch):
+    env = instruction_worker
+    queue(env)
+
+    def unexpected_cli(args):
+        msg = f"Status called Orca: {args}"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(env.plugin, "cli_json", unexpected_cli)
+    latest = status(env)["latest"]
+    assert latest["status"] == "queued"
+    assert latest["transport_observation"] == "not_observed"
+    assert env.state["sends"] == []
+
+
+@pytest.mark.parametrize("failure", ["send", "preflight", "interrupted"])
+def test_delivery_failure_notifies_once_without_replay(
+    instruction_worker, monkeypatch, failure
+):
+    env = instruction_worker
+    queue(env)
+    notices = []
+    monkeypatch.setattr(
+        runner.WorkerContext, "tell", lambda self, text: notices.append(text)
+    )
+    original = env.plugin.cli_json
+    if failure == "send":
+        env.state["timeout"] = True
+    elif failure == "preflight":
+
+        def unavailable(args):
+            if args[:2] == ["orchestration", "worker-show"]:
+                raise subprocess.TimeoutExpired(args, 1)
+            return original(args)
+
+        monkeypatch.setattr(env.plugin, "cli_json", unavailable)
+    else:
+        with protocol.ledger(env.worker.pk) as (_, rows):
+            rows[-1]["status"] = "processing"
+    ctx = runner.WorkerContext(env.bot, env.worker)
+    protocol.deliver(ctx, env.plugin, env.handle)
+    protocol.deliver(ctx, env.plugin, env.handle)
+    expected = "unsent" if failure == "preflight" else "unknown"
+    assert status(env)["latest"]["status"] == expected
+    assert len(notices) == 1
+    assert expected in notices[0]
+    assert len(env.state["sends"]) == (1 if failure == "send" else 0)
 
 
 @pytest.mark.parametrize(

@@ -82,7 +82,8 @@ with `supersedes: "pause-1"` after approval to proceed.
 | `queued` | Persisted locally; no Orca send yet |
 | `processing` | Durable send claim; a crash can leave its outcome uncertain |
 | `transport_queued` | Orca accepted mail, or its inbox contains the instruction |
-| `delivered`, `transport_read`, `delivered_at` | Observed transport consumption only |
+| `transport_observation` | Derived display state: `not_observed`, `queued` (accepted/in inbox), `read` (transport fetched), or `delivered_at` (timestamp observed) |
+| `delivered`, `transport_read`, `delivered_at` | Existing transport status, read flag, and delivery timestamp; none establish model acceptance |
 | `unsent` | No send attempted: preflight failed, worker closed/inactive, or instruction superseded before send |
 | `unknown` | Send timeout/error or interrupted claim; no automatic retransmission |
 | `acknowledgement_claim` | Unverified status claim naming id, version, claimed sender/pane and concrete next action |
@@ -105,6 +106,10 @@ compliance or completion. An old claim never applies to the latest instruction;
 replayed claims are recorded once.
 Historical self-asserted `acknowledgement` records are downgraded to unverified
 claims on reads and subsequent ledger writes; they do not retain trusted status.
+
+Normal queue, read, delivery and unverified claim updates stay in the ledger
+and do not wake the chat. Send failures and uncertain outcomes notify the chat
+once; the status tool only reads the ledger and never reconciles or sends mail.
 
 Enqueue requests an immediate watcher step through a durable `next_poll_at`.
 When a step is already running, that request survives its normal delayed poll

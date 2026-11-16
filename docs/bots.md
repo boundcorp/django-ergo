@@ -672,6 +672,9 @@ are not attested by the current Orca protocol: even matching claims remain
 `acknowledgement_claim` with `verification: "unverified"`, authenticated
 `acknowledgement` stays `null`, and model `acceptance` stays `unknown`.
 Transport consumption and claimed next actions never prove model acceptance.
+The status ledger distinguishes transport queue, read and timestamp evidence;
+normal bookkeeping does not wake the chat, while send failures and uncertain
+outcomes remain actionable notifications.
 
 The watcher also scans its agent's session files on the worktree host every
 `usage_minutes` (default 10) and once after settlement. Claude Code, Codex,

@@ -4,6 +4,12 @@ This document tracks the major milestones and evolution of the Django Ergo proje
 
 ## Development Timeline
 
+### Orca instruction transport clarity (November 2026)
+
+- Normal transport and unverified acknowledgement bookkeeping no longer wakes
+  the chat. Instruction status distinguishes queue, transport read, and a
+  delivery timestamp without claiming authenticated model acceptance.
+
 ### Thread token usage history (November 2026)
 
 - The chat usage sparkline opens a thread-scoped history with rolling six-hour
