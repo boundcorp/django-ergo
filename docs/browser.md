@@ -202,6 +202,9 @@ model call, and its whole context, on every click. Two tools cut that down:
   stored as a `browser_task` structured call, which Ergonaut's Costs page
   counts for the chat that started it and its bot. With `approve_actions` the
   user approves the goal and the steps, not each action inside them.
+  Public browser drivers use eligible CLI subscriptions, never a paid API
+  fallback. A model named through an API provider resolves to the same model
+  on a CLI subscription or fails; a private-pool chat keeps its exact model.
 
 ### Working alongside a person
 

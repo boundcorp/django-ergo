@@ -13,7 +13,7 @@
         timeout: 30                # seconds per browser call
         max_snapshot_chars: 20000
         driver_model: auto/small   # the model ergo_browser_task drives the browser with
-                                   # (a bot in a private pool always drives with that pool)
+                                   # (a private chat always uses its own model)
         driver_steps: 30           # its tool calls per task, at most
 
 The bot attaches to a Chrome someone already started, with Playwright's
@@ -41,8 +41,8 @@ Tools:
 - ``ergo_browser_task``: hand a goal to a fast model (``driver_model``) that
   drives the tools above in its own loop and reports back, so a big model
   states the intent once instead of making a call per click. ``model``
-  picks another driver for one task (a tier or model ``ergo_models_list``
-  shows, checked by ``bots.model_choice``). The driver
+  picks a tier or model on a CLI subscription; private chats keep their own
+  model and public tasks never fall back to an API. The driver
   stops before sign-ins, payments and anything that submits, publishes,
   saves or deletes unless the goal asks for it. With ``approve_actions`` the
   user approves the goal instead of each action.
@@ -211,15 +211,75 @@ class BrowserPlugin(BotPlugin):
     name = "browser"
     description = "Drive a Chrome browser (open pages, read them, click and type)"
 
-    @property
-    def driver_model(self) -> str:
-        """The model ergo_browser_task drives with. A bot in a private pool keeps
-        the goal and the pages in that pool: a ``driver_model`` of the pool
-        (``personal/flash``), else the pool's default; never a public model."""
-        pool = self.bot.private_pool
-        if pool and not self.bot.providers.is_private(self.configured_driver):
-            return pool.name
-        return self.configured_driver
+    def task_model(self, session, model: str = "") -> str:  # noqa: C901, PLR0912
+        """Resolve the browser's model at execution, without an API fallback."""
+        from django_ergo.bots import routing
+        from django_ergo.conversation.inference_policy import PolicyError
+
+        providers = self.bot.providers
+        if pool := self.bot.private_pool:
+            current = getattr(session, "model", "") or self.bot.model_ref() or pool.name
+            if not providers.is_private(current):
+                msg = "Browser tasks must use the chat's private model"
+                raise PolicyError(msg)
+            _, _, current_id = self.bot.private_target(current)
+            if model:
+                _, _, requested_id = self.bot.private_target(model)
+                if requested_id != current_id:
+                    msg = "Browser tasks must use the chat's private model"
+                    raise PolicyError(msg)
+            return current
+
+        ref = str(model or self.configured_driver).strip()
+        providers.check_public(ref, where="Browser")
+        if routing.is_auto(ref):
+            tier = routing.tier_of(ref)
+            if tier not in providers.routing.tiers:
+                msg = f"Unknown browser model tier {tier!r}"
+                raise ValueError(msg)
+            refs = providers.routing.tiers[tier]
+        else:
+            provider_name, sep, name = ref.partition("/")
+            if sep:
+                found = providers.find(ref)
+                if not found:
+                    msg = f"Unknown browser model {ref!r}"
+                    raise ValueError(msg)
+                provider, selected = found
+                name = selected.name
+                refs = [
+                    m.id
+                    for m in providers.models()
+                    if m.name == name
+                    and providers.providers[m.provider].type == provider.type
+                    and (provider.transport != "cli" or m.provider == provider_name)
+                ]
+            else:
+                refs = [m.id for m in providers.models() if m.name == ref]
+        usage = routing.current_usage()
+        candidates = []
+        for candidate in refs:
+            found = providers.find(candidate)
+            if found and not providers.is_private(candidate):
+                provider, selected = found
+                if (
+                    provider.transport == "cli"
+                    and not provider.worker_only
+                    and provider.available
+                    and not routing.pace_block(provider.name, usage, selected.name)
+                ):
+                    candidates.append(candidate)
+        picked = routing.choose(
+            candidates,
+            lambda r: r.partition("/")[0],
+            usage,
+            routing.active_rules(providers.routing),
+            model_of=lambda r: r.partition("/")[2],
+        )
+        if picked is None:
+            msg = f"No safe subscription available for browser model {ref!r}"
+            raise ValueError(msg)
+        return picked
 
     @property
     def skill_requires(self) -> list[str]:
@@ -886,7 +946,11 @@ class BrowserPlugin(BotPlugin):
         if not goal.strip():
             msg = "Say what the browser should get done."
             raise ValueError(msg)
-        driver = check(self.bot, model, MODEL) or self.driver_model
+        driver = (
+            check(self.bot, model, MODEL)
+            if "/" in model or self.bot.private_pool
+            else model
+        )
         if ctx.session is None:
             msg = "A browser task belongs to a chat"
             raise ValueError(msg)
@@ -961,7 +1025,7 @@ class BrowserPlugin(BotPlugin):
             request,
             user=ctx.user,
             engine=self.bot.make_engine(
-                ctx.session, model or self.driver_model, purpose="browser"
+                ctx.session, self.task_model(ctx.session, model), purpose="browser"
             ),
             control=Stop(),
             metadata={"session": str(ctx.session.pk), "worker": str(ctx.worker.pk)},
@@ -1301,9 +1365,12 @@ class BrowserPlugin(BotPlugin):
                 "tab": tab_param,
                 "model": {
                     "type": "string",
-                    "description": "The model that drives it, for a task that needs "
-                    "a stronger or cheaper one: a tier or model from ergo_models_list "
-                    f"(default {plugin.driver_model})",
+                    "description": (
+                        "Uses this chat's private model; it cannot be changed for a task."
+                        if plugin.bot.private_pool
+                        else "A tier or model on an eligible CLI subscription "
+                        f"(default {plugin.configured_driver}); no API fallback."
+                    ),
                 },
             },
             required=["goal"],
