@@ -92,7 +92,8 @@ with `supersedes: "pause-1"` after approval to proceed.
 | `superseded_by` | Old instruction, even if an acknowledgement claim arrives late |
 
 The watcher sends at most one latest instruction per step, before question
-replies; it skips superseded unsent instructions. Uncertain question replies
+replies. It records superseded unsent instructions as `unsent` and reports
+interrupted claims as `unknown`, even when superseded. Uncertain question replies
 do not prevent status/claim checks. Claims are correlated by run, task, dispatch,
 instruction id and version; stale/foreign attempt metadata does not apply to the
 current instruction. Matching sender/pane metadata is **not authentication**:

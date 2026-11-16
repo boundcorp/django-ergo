@@ -161,7 +161,31 @@ def test_supersession_is_atomic_idempotent_and_skips_stale_unsent(instruction_wo
     assert len(env.state["sends"]) == 1
     payload = json.loads(env.state["sends"][0][-1])
     assert payload["ergoInstruction"]["id"] == "i2"
+    assert status(env)["instructions"][0]["status"] == "unsent"
     assert status(env)["instructions"][0]["superseded_by"] == "i2"
+
+
+def test_superseded_interrupted_send_is_reported_without_replay(
+    instruction_worker, monkeypatch
+):
+    env = instruction_worker
+    queue(env)
+    with protocol.ledger(env.worker.pk) as (_, rows):
+        rows[-1]["status"] = "processing"
+    queue(env, instruction_id="i2", text="Proceed carefully", supersedes="i1")
+    notices = []
+    monkeypatch.setattr(
+        runner.WorkerContext, "tell", lambda self, text: notices.append(text)
+    )
+    run(env)
+    run(env)
+    first, latest = status(env)["instructions"]
+    assert first["status"] == "unknown"
+    assert latest["status"] == "transport_queued"
+    assert len(notices) == 1
+    assert "i1" in notices[0] and "unknown" in notices[0]
+    assert len(env.state["sends"]) == 1
+    assert json.loads(env.state["sends"][0][-1])["ergoInstruction"]["id"] == "i2"
 
 
 def test_transport_and_matching_forged_claim_never_authenticate_acceptance(

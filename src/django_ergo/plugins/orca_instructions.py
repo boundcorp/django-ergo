@@ -163,21 +163,29 @@ def body(row, handle):
     )
 
 
+def _recover_superseded_and_interrupted(ctx, rows):
+    for stale in rows[:-1]:
+        if stale["status"] == "queued":
+            stale.update(status="unsent", error="Superseded before send")
+    for interrupted in rows:
+        if interrupted["status"] == "processing":
+            interrupted["status"] = "unknown"
+            interrupted["error"] = (
+                "Interrupted send; reconcile inbox, do not resend automatically"
+            )
+            ctx.tell(
+                f"Instruction {interrupted['id']} v{interrupted['version']}: unknown. "
+                f"{interrupted['error']}; use ergo_orca_instruction_status."
+            )
+
+
 def deliver(ctx, plugin, handle):
     """Durably claim once, then lock across preflight and send before replies."""
     with ledger(ctx.worker.pk) as (_, rows):
         if not rows:
             return
+        _recover_superseded_and_interrupted(ctx, rows)
         row = rows[-1]
-        if row["status"] == "processing":
-            row["status"] = "unknown"
-            row["error"] = (
-                "Interrupted send; reconcile inbox, do not resend automatically"
-            )
-            ctx.tell(
-                f"Instruction {row['id']} v{row['version']}: unknown. "
-                f"{row['error']}; use ergo_orca_instruction_status."
-            )
         if row["status"] != "queued":
             return
         row["status"] = "processing"
