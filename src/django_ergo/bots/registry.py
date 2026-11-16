@@ -46,9 +46,10 @@ def may_use(bot: Bot, user) -> bool:
 
 
 def closed_to(bot: Bot, session) -> bool:
-    """Whether ``session`` is a chat of a private bot other than ``bot``, so
-    ``bot`` may not read it or its files (a file shared with a message is the
-    exception, see ``messaging.shared_with``)."""
+    """Whether ``session`` belongs to another private bot.
+
+    Approved exports are destination-owned snapshots, never source-ID grants.
+    """
     registry = bot.registry
     return bool(
         registry is not None

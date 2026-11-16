@@ -1493,6 +1493,8 @@ async def run_structured_call(  # noqa: PLR0913
 
 def _current_pending_review(call_id, pending, *, claimed=False, tool_id=None):  # noqa: PLR0911
     """Verify the current unexecuted batch against its durable transcript."""
+    from django_ergo.conversation.tool_dispatch import current_tool_invocation
+
     row = StructuredCall.objects.select_related("session").get(pk=call_id)
     expected = (
         StructuredCallStatus.IN_PROGRESS
@@ -1526,7 +1528,13 @@ def _current_pending_review(call_id, pending, *, claimed=False, tool_id=None):  
         return False
     receipts = metadata.get("tool_invocations", {})
     if not isinstance(receipts, dict) or any(
-        key in receipts for key in ([tool_id] if tool_id else ids)
+        key in receipts
+        and not (
+            receipts[key].get("status") == "claimed"
+            and current_tool_invocation.get()
+            == (str(row.pk), key, receipts[key].get("signature"))
+        )
+        for key in ([tool_id] if tool_id else ids)
     ):
         return False
     if (

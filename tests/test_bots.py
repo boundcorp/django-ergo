@@ -4073,7 +4073,7 @@ async def test_a_private_bot_is_closed_to_other_bots_but_reaches_out(tmp_path):
         assert boundcorp.linked_source(root, str(main.id)) is None
         assert devbox.linked_source(work, str(main.id)) is None
         assert devbox.linked_source(work, str(root.id)) is not None
-        # Its files open elsewhere only when a message shared them.
+        # Historical source-ID shares no longer widen private file access.
         files = devbox.plugin("attachments")
         ThreadMessage.objects.create(
             sender_session=main,
@@ -4081,7 +4081,8 @@ async def test_a_private_bot_is_closed_to_other_bots_but_reaches_out(tmp_path):
             text="Here",
             metadata={"attachments": [messaging.shared_file(shared)]},
         )
-        assert files.file_for(worker, str(shared.id)).id == shared.id
+        with pytest.raises(ValueError, match="No file"):
+            files.file_for(worker, str(shared.id))
         with pytest.raises(ValueError, match="No file"):
             files.file_for(worker, str(secret.id))
         with pytest.raises(ValueError, match="No session"):

@@ -1118,6 +1118,7 @@ class LocalShellPlugin(BotPlugin):
 
         from django_ergo.bots.messaging import not_shared_error
         from django_ergo.bots.messaging import shared_with
+        from django_ergo.conversation.attachments import check_snapshot_access
         from django_ergo.conversation.attachments import find_session_file
 
         try:
@@ -1134,6 +1135,7 @@ class LocalShellPlugin(BotPlugin):
                 msg = "Reading a shared file requires the attachments plugin"
                 raise ValueError(msg) from None
             row = attachments.file_for(ctx, file_id)
+        check_snapshot_access(row, ctx.session, transfer=True)
         if session_id and str(row.session_id) != session_id:
             msg = f"No file {ref!r} in that session"
             raise ValueError(msg)

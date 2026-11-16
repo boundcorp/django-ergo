@@ -643,6 +643,7 @@ class TelegramPlugin(BotPlugin):
             reply: bool = False,
             session_id: str = "",
         ) -> str:
+            from django_ergo.conversation.attachments import check_snapshot_access
             from django_ergo.conversation.attachments import find_session_file
 
             link = plugin.chat_link(ctx.session)
@@ -656,6 +657,7 @@ class TelegramPlugin(BotPlugin):
                     raise ValueError(msg)
                 source = attachments.session_for(ctx, session_id)
             row = find_session_file(source, attachment_id)
+            check_snapshot_access(row, ctx.session, transfer=True)
             if not row.file:
                 msg = "This attachment has no saved file to send."
                 raise ValueError(msg)
